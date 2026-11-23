@@ -5,7 +5,7 @@
 use super::format::{format_cost, format_tokens};
 use crate::events::{
     CallStats, ContextView, InstructionFileView, InstructionStatus, JobView, PolicyView,
-    QueuedItemView, SessionTotals, TodoState, TodoView,
+    QueuedItemView, SessionTotals, SourceUsage, TodoState, TodoView,
 };
 use crate::mode_command::{ApprovalLevel, PermissionMode};
 
@@ -229,6 +229,38 @@ impl Hud {
     }
 }
 
+/// The `/cost` lines saying who paid for the session's tokens, summed
+/// over `turns` (each turn's split by sign-in, as its reply footer shows
+/// it). Empty when no turn says.
+pub fn sources_report<'a>(turns: impl IntoIterator<Item = &'a [SourceUsage]>) -> String {
+    let mut totals: Vec<(String, u64, Option<f64>)> = Vec::new();
+    for source in turns.into_iter().flatten() {
+        let at = match totals.iter().position(|(label, ..)| *label == source.label) {
+            Some(at) => at,
+            None => {
+                totals.push((source.label.clone(), 0, None));
+                totals.len() - 1
+            }
+        };
+        let total = &mut totals[at];
+        total.1 += source.tokens;
+        if let Some(cost) = source.cost_usd {
+            total.2 = Some(total.2.unwrap_or(0.0) + cost);
+        }
+    }
+    if totals.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\nBy sign-in:");
+    for (label, tokens, cost) in totals {
+        out.push_str(&format!("\n  {label:<14}{:>8} tok", format_tokens(tokens)));
+        if let Some(cost) = cost {
+            out.push_str(&format!("  {}", format_cost(cost)));
+        }
+    }
+    out
+}
+
 /// The `/context` lines listing the project instruction files.
 fn instructions_report(files: &[InstructionFileView]) -> String {
     if files.is_empty() {
@@ -313,6 +345,34 @@ mod tests {
         assert_eq!(stats.cache_hit_percent(), Some(45));
         assert!((stats.cost_usd - 0.06).abs() < 1e-9);
         assert!(stats.priced);
+    }
+
+    #[test]
+    fn sources_report_sums_each_sign_in_across_turns() {
+        let source = |label: &str, tokens, cost_usd| SourceUsage {
+            label: label.to_string(),
+            tokens,
+            cost_usd,
+        };
+        let first = [
+            source("Claude plan", 20_000, None),
+            source("OpenRouter", 1_000, Some(0.5)),
+        ];
+        let second = [source("OpenRouter", 2_000, Some(0.25))];
+        let report = sources_report([&first[..], &second[..]]);
+        assert!(report.starts_with("\nBy sign-in:"), "{report}");
+        let claude = report.lines().find(|l| l.contains("Claude plan")).unwrap();
+        assert!(
+            claude.contains("20.0k tok") || claude.contains("20k tok"),
+            "{report}"
+        );
+        let openrouter = report.lines().find(|l| l.contains("OpenRouter")).unwrap();
+        assert!(
+            openrouter.contains("3.0k tok") || openrouter.contains("3k tok"),
+            "{report}"
+        );
+        assert!(openrouter.contains("$0.75"), "{report}");
+        assert_eq!(sources_report(std::iter::empty::<&[SourceUsage]>()), "");
     }
 
     #[test]

@@ -32,7 +32,7 @@ pub(super) async fn handle(state: &LoopState<'_>, agent_id: AgentId, request: Lo
         let registry = lock(&state.hub.registry);
         let name = registry
             .find(agent_id)
-            .map(|agent| agent.display_name().to_string())
+            .map(|agent| agent.display_name().into_owned())
             .unwrap_or_default();
         let also = benchmark_runs(&registry, agent_id, state.compare.running_host());
         (name, also)

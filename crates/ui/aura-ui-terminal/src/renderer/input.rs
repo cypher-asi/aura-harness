@@ -8,10 +8,18 @@
 //! │ →  Add a follow-up                   │
 //! └──────────────────────────────────────┘
 //! ```
+//!
+//! Typed newlines (Shift+Enter) start a new row. While a turn runs, a
+//! stop button sits at the right end of the first row and the text wraps
+//! before it:
+//!
+//! ```text
+//! │ →  Add a follow-up            ■ Stop │
+//! ```
 
 use super::text::display_width;
 use crate::{
-    app::{AppState, PanelFocus},
+    app::{AppState, HoverTarget, PanelFocus},
     App, Theme,
 };
 use ratatui::{
@@ -39,6 +47,13 @@ const FOLLOW_UP_PLACEHOLDER: &str = "Add a follow-up";
 /// Blank columns between the cursor and the placeholder, so the cursor
 /// does not sit on top of the placeholder's first letter.
 const PLACEHOLDER_GAP: u16 = 1;
+/// Label of the button that stops the running turn.
+const STOP_LABEL: &str = "■ Stop";
+/// Blank columns between the typed text and the stop button.
+const STOP_GAP: u16 = 1;
+/// Fewest columns the stop button leaves for typing; a narrower box
+/// goes without the button (Ctrl+C still stops the turn).
+const MIN_TYPING_WITH_STOP: u16 = 8;
 
 /// Where the input goes in a box spanning `area`'s columns.
 struct Plan<'a> {
@@ -51,6 +66,9 @@ struct Plan<'a> {
     cursor: (usize, usize),
     /// Shown in place of the text while nothing is typed.
     placeholder: Option<&'static str>,
+    /// Column of the stop button, shown on the first row while a turn
+    /// runs and the box has room for it.
+    stop_x: Option<u16>,
 }
 
 /// Lay out the input in a box spanning `area`'s columns.
@@ -75,7 +93,7 @@ fn plan<'a>(area: Rect, app: &'a App, theme: &Theme) -> Plan<'a> {
             "•".repeat(input.chars().count()),
             "•".repeat(before_cursor.chars().count()),
         ),
-        _ => (CHAT_PROMPT, one_line(input), one_line(before_cursor)),
+        _ => (CHAT_PROMPT, input.to_string(), before_cursor.to_string()),
     };
     let prompt_width = u16::try_from(display_width(prompt)).unwrap_or(u16::MAX);
     let placeholder = (input.is_empty() && prompt == CHAT_PROMPT).then(|| {
@@ -88,7 +106,11 @@ fn plan<'a>(area: Rect, app: &'a App, theme: &Theme) -> Plan<'a> {
 
     let prompt_x = area.x + 1 + PAD;
     let typing_x = prompt_x.saturating_add(prompt_width);
-    let right = (area.x + area.width).saturating_sub(1 + PAD);
+    let full_right = (area.x + area.width).saturating_sub(1 + PAD);
+    let stop_x = stop_button_x(app, typing_x, full_right);
+    // The text wraps before the button, so the layout's height (from
+    // `input_rows`) and the drawn rows agree while it is shown.
+    let right = stop_x.map_or(full_right, |x| x.saturating_sub(STOP_GAP));
     let width = usize::from(right.saturating_sub(typing_x).max(1));
 
     let spans = if command {
@@ -115,25 +137,43 @@ fn plan<'a>(area: Rect, app: &'a App, theme: &Theme) -> Plan<'a> {
         rows,
         cursor,
         placeholder,
+        stop_x,
     }
 }
 
+/// Column where the stop button starts, right-aligned before the box's
+/// right padding, while the agent on screen is busy and the box leaves
+/// [`MIN_TYPING_WITH_STOP`] columns to type in beside it.
+fn stop_button_x(app: &App, typing_x: u16, right: u16) -> Option<u16> {
+    if !app.is_busy() {
+        return None;
+    }
+    let label = u16::try_from(display_width(STOP_LABEL)).ok()?;
+    let x = right.checked_sub(label)?;
+    let typing = x.checked_sub(STOP_GAP)?.checked_sub(typing_x)?;
+    (typing >= MIN_TYPING_WITH_STOP).then_some(x)
+}
+
 /// Char indices where each row of `text` starts when wrapped at `width`;
-/// the first is always 0. A word that does not fit on the current row
-/// moves to the next one whole, and is only broken mid-word when it is
-/// wider than a full row. Every char, whitespace included, stays on some
+/// the first is always 0. A newline ends its row, and the next row starts
+/// just after it. A word that does not fit on the current row moves to
+/// the next one whole, and is only broken mid-word when it is wider than
+/// a full row. Every char, whitespace and newlines included, stays on some
 /// row, so a char offset maps straight to a row and column.
 fn row_starts(text: &str, width: usize) -> Vec<usize> {
-    let chars: Vec<(bool, usize)> = text
-        .chars()
-        .map(|c| (c.is_whitespace(), c.width().unwrap_or(0)))
-        .collect();
+    let chars: Vec<(char, usize)> = text.chars().map(|c| (c, c.width().unwrap_or(0))).collect();
     let mut starts = vec![0];
     let mut used = 0;
     let mut i = 0;
     while i < chars.len() {
-        let (is_space, w) = chars[i];
-        if is_space {
+        let (c, w) = chars[i];
+        if c == '\n' {
+            starts.push(i + 1);
+            used = 0;
+            i += 1;
+            continue;
+        }
+        if c.is_whitespace() {
             if used + w > width && used > 0 {
                 starts.push(i);
                 used = 0;
@@ -142,7 +182,10 @@ fn row_starts(text: &str, width: usize) -> Vec<usize> {
             i += 1;
             continue;
         }
-        let end = i + chars[i..].iter().take_while(|(space, _)| !space).count();
+        let end = i + chars[i..]
+            .iter()
+            .take_while(|(c, _)| !c.is_whitespace())
+            .count();
         let word: usize = chars[i..end].iter().map(|(_, w)| w).sum();
         if used > 0 && used + word > width {
             starts.push(i);
@@ -160,7 +203,10 @@ fn row_starts(text: &str, width: usize) -> Vec<usize> {
     starts
 }
 
-/// Cut `spans` into rows at the char offsets in `starts`.
+/// Cut `spans` into rows at the char offsets in `starts`, one row per
+/// start even when the text ends in a newline. Newlines count as chars for
+/// the offsets but are not drawn: ratatui would show them as a blank cell
+/// at best.
 fn split_rows(spans: Vec<Span<'static>>, starts: &[usize]) -> Vec<Vec<Span<'static>>> {
     let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
     let mut next = starts.iter().skip(1).peekable();
@@ -171,21 +217,27 @@ fn split_rows(spans: Vec<Span<'static>>, starts: &[usize]) -> Vec<Vec<Span<'stat
                 next.next();
                 rows.push(Vec::new());
             }
+            index += 1;
+            if c == '\n' {
+                continue;
+            }
             if let Some(row) = rows.last_mut() {
                 match row.last_mut() {
                     Some(last) if last.style == span.style => last.content.to_mut().push(c),
                     _ => row.push(Span::styled(c.to_string(), span.style)),
                 }
             }
-            index += 1;
         }
     }
+    rows.resize_with(starts.len().max(rows.len()), Vec::new);
     rows
 }
 
 /// Row and column of the cursor `offset` chars into `text`, wrapped at
-/// the row `starts` from [`row_starts`]. A full last row puts the cursor
-/// at the start of the next one.
+/// the row `starts` from [`row_starts`]. A full row puts the cursor at
+/// the start of the next one, unless a newline ends the row there: then
+/// the next row's start is where the cursor goes after the newline, so it
+/// stays in the padding column past the row's end to tell the two apart.
 fn wrapped_cursor(text: &str, starts: &[usize], offset: usize, width: usize) -> (usize, usize) {
     let row = starts.iter().rposition(|&s| s <= offset).unwrap_or(0);
     let start = starts.get(row).copied().unwrap_or(0);
@@ -195,7 +247,8 @@ fn wrapped_cursor(text: &str, starts: &[usize], offset: usize, width: usize) -> 
         .take(offset.saturating_sub(start))
         .map(|c| c.width().unwrap_or(0))
         .sum();
-    if col >= width {
+    let before_newline = text.chars().nth(offset) == Some('\n');
+    if col >= width && !before_newline {
         (row + 1, 0)
     } else {
         (row, col)
@@ -215,10 +268,16 @@ pub(super) fn input_rows(area: Rect, app: &App, theme: &Theme, max_rows: u16) ->
 
 /// Render the input box into `area`, whose height is the rows of text
 /// it gets (see [`input_rows`]) and the bottom border's. The row above
-/// `area` is the Chat body's bottom border, already drawn.
-pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+/// `area` is the Chat body's bottom border, already drawn. Returns where
+/// the stop button was drawn, if it was.
+pub(super) fn render_input(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    theme: &Theme,
+) -> Option<Rect> {
     if area.height < BOX_ROWS + 1 || area.width < 2 * (1 + PAD) + 2 {
-        return;
+        return None;
     }
     let block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
@@ -252,7 +311,13 @@ pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &The
         },
     );
 
-    let typing_width = right.saturating_sub(plan.typing_x);
+    let typing_right = plan
+        .stop_x
+        .map_or(right, |x| x.saturating_sub(STOP_GAP).min(right));
+    let typing_width = typing_right.saturating_sub(plan.typing_x);
+    let stop = plan
+        .stop_x
+        .map(|x| render_stop_button(frame, x, inner, app, theme));
     if let Some(placeholder) = plan.placeholder {
         // Start one column past the cursor so its blink lands on a blank
         // cell instead of covering the placeholder's first letter.
@@ -294,6 +359,30 @@ pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &The
             .saturating_add(u16::try_from(col).unwrap_or(u16::MAX));
         frame.set_cursor_position((x, y));
     }
+    stop
+}
+
+/// Draw the stop button at column `x` on the box's first row and return
+/// its cells. It is in the error color, and lit while the pointer is on
+/// it like the other buttons.
+fn render_stop_button(frame: &mut Frame, x: u16, inner: Rect, app: &App, theme: &Theme) -> Rect {
+    let width = u16::try_from(display_width(STOP_LABEL)).unwrap_or(u16::MAX);
+    let cell = Rect {
+        x,
+        y: inner.y,
+        width: width.min(inner.right().saturating_sub(x)),
+        height: 1,
+    };
+    let style = Style::default()
+        .fg(theme.colors.error)
+        .add_modifier(Modifier::BOLD);
+    let style = if app.hover() == Some(HoverTarget::StopTurn) {
+        style.bg(theme.colors.surface_hover)
+    } else {
+        style
+    };
+    frame.render_widget(Paragraph::new(Span::styled(STOP_LABEL, style)), cell);
+    cell
 }
 
 /// Turn the bottom corners of the border above `area` into joints, so
@@ -310,12 +399,6 @@ pub(super) fn join_divider(frame: &mut Frame, area: Rect) {
             cell.set_symbol(joint);
         }
     }
-}
-
-/// The input on one row: a pasted or edited newline shows as `↵`, which
-/// is one column wide like the cursor math expects.
-fn one_line(text: &str) -> String {
-    text.replace('\n', "↵")
 }
 
 /// Typed text in the reply color, with `@path` mentions and `[image N]`
@@ -426,5 +509,35 @@ mod wrap_tests {
         let text = "abcde";
         let starts = row_starts(text, 5);
         assert_eq!(wrapped_cursor(text, &starts, 5, 5), (1, 0));
+    }
+
+    #[test]
+    fn newlines_start_rows_and_are_not_drawn() {
+        assert_eq!(rows("ab\ncd", 10), vec!["ab", "cd"]);
+        assert_eq!(rows("ab\n", 10), vec!["ab", ""]);
+        assert_eq!(rows("\n\nx", 10), vec!["", "", "x"]);
+        assert_eq!(rows("abc de\nf", 4), vec!["abc ", "de", "f"]);
+    }
+
+    #[test]
+    fn cursor_after_a_newline_is_at_the_next_row_start() {
+        let text = "ab\ncd";
+        let starts = row_starts(text, 10);
+        assert_eq!(wrapped_cursor(text, &starts, 2, 10), (0, 2));
+        assert_eq!(wrapped_cursor(text, &starts, 3, 10), (1, 0));
+        assert_eq!(wrapped_cursor(text, &starts, 5, 10), (1, 2));
+
+        let trailing = "ab\n";
+        let starts = row_starts(trailing, 10);
+        assert_eq!(starts.len(), 2);
+        assert_eq!(wrapped_cursor(trailing, &starts, 3, 10), (1, 0));
+    }
+
+    #[test]
+    fn cursor_before_a_newline_ending_a_full_row_stays_on_it() {
+        let text = "abcde\nf";
+        let starts = row_starts(text, 5);
+        assert_eq!(wrapped_cursor(text, &starts, 5, 5), (0, 5));
+        assert_eq!(wrapped_cursor(text, &starts, 6, 5), (1, 0));
     }
 }

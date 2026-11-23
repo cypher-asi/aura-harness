@@ -1,9 +1,10 @@
 use super::api_types::{ApiContent, ApiImageSource, ApiMessage, ApiToolChoice};
 use super::convert::{
-    build_system_block, convert_messages_to_api, convert_tool_choice, convert_tools_to_api,
-    dedupe_tool_results, drop_misplaced_tool_results, resolve_output_config, resolve_thinking,
+    api_tool_id, build_system_block, capability_model, convert_messages_to_api,
+    convert_tool_choice, convert_tools_to_api, dedupe_tool_results, drop_misplaced_tool_results,
+    resolve_output_config, resolve_thinking, tool_choice_for,
 };
-use super::{AnthropicConfig, AnthropicProvider, ApiError};
+use super::{AnthropicConfig, AnthropicProvider, ApiError, ReasoningOrigin};
 use crate::{
     ContentBlock, Message, ModelProvider, ModelRequest, ModelRequestKind, PromptCacheRetention,
     ReasonerError, Role, StopReason, StreamEvent, ThinkingConfig, ThinkingEffort, ToolChoice,
@@ -24,7 +25,7 @@ fn test_config_new() {
 fn test_convert_messages() {
     let messages = vec![Message::user("Hello"), Message::assistant("Hi there!")];
 
-    let api_msgs = convert_messages_to_api(&messages, true);
+    let api_msgs = convert_messages_to_api(&messages, true, ReasoningOrigin::Anthropic);
     assert_eq!(api_msgs.len(), 2);
     assert_eq!(api_msgs[0].role, "user");
     assert_eq!(api_msgs[1].role, "assistant");
@@ -198,7 +199,7 @@ fn test_cache_control_on_last_user_message() {
         Message::user("How are you?"),
     ];
 
-    let api_msgs = convert_messages_to_api(&messages, true);
+    let api_msgs = convert_messages_to_api(&messages, true, ReasoningOrigin::Anthropic);
 
     let last_user = &api_msgs[2];
     assert_eq!(last_user.role, "user");
@@ -220,7 +221,7 @@ fn test_cache_control_on_last_two_user_messages_only() {
         Message::user("third"),
     ];
 
-    let api_msgs = convert_messages_to_api(&messages, true);
+    let api_msgs = convert_messages_to_api(&messages, true, ReasoningOrigin::Anthropic);
     let marked: Vec<bool> = api_msgs
         .iter()
         .map(|m| {
@@ -263,7 +264,7 @@ fn test_cache_control_omitted_when_prompt_caching_disabled() {
         Message::assistant("Hi!"),
         Message::user("How are you?"),
     ];
-    let api_msgs = convert_messages_to_api(&messages, false);
+    let api_msgs = convert_messages_to_api(&messages, false, ReasoningOrigin::Anthropic);
     if let ApiContent::Text { cache_control, .. } = &api_msgs[2].content[0] {
         assert!(cache_control.is_none());
     } else {
@@ -2418,7 +2419,7 @@ fn convert_messages_to_api_invokes_dedupe() {
         ),
     ];
 
-    let api_messages = convert_messages_to_api(&messages, false);
+    let api_messages = convert_messages_to_api(&messages, false, ReasoningOrigin::Anthropic);
 
     let survivors = count_tool_results_with_id(&api_messages, "toolu_dup");
     assert_eq!(
@@ -2469,7 +2470,7 @@ fn dedupe_regression_synthetic_max_tokens_placeholder() {
         ),
     ];
 
-    let api_messages = convert_messages_to_api(&messages, true);
+    let api_messages = convert_messages_to_api(&messages, true, ReasoningOrigin::Anthropic);
 
     let survivors = count_tool_results_with_id(&api_messages, "toolu_X");
     assert_eq!(
@@ -2640,7 +2641,7 @@ fn convert_repairs_leading_orphan_tool_result_end_to_end() {
         ),
     ];
 
-    let api_messages = convert_messages_to_api(&messages, true);
+    let api_messages = convert_messages_to_api(&messages, true, ReasoningOrigin::Anthropic);
 
     assert!(
         positional_pairing_holds(&api_messages),
@@ -2653,4 +2654,330 @@ fn convert_repairs_leading_orphan_tool_result_end_to_end() {
         "the trailing tool_use must get a synthetic result so it isn't unpaired"
     );
     assert_eq!(survivors[0].1, Some(true), "synthetic result is an error");
+}
+
+// ============================================================================
+// Cross-provider reasoning filtering and tool id sanitizing
+// ============================================================================
+
+fn thinking(text: &str, signature: Option<&str>) -> ContentBlock {
+    ContentBlock::Thinking {
+        thinking: text.to_string(),
+        signature: signature.map(str::to_string),
+    }
+}
+
+/// A turn holding reasoning from every provider, then a tool call.
+fn mixed_reasoning_conversation() -> Vec<Message> {
+    let openrouter_sig = format!("{}or-sig", super::OPENROUTER_REASONING_PREFIX);
+    vec![
+        Message::user("Read the file."),
+        Message::new(
+            Role::Assistant,
+            vec![
+                thinking("claude", Some("claude-sig")),
+                thinking("openrouter", Some(&openrouter_sig)),
+                thinking("unsigned", None),
+                thinking("openai", Some("openai-responses:blob")),
+                ContentBlock::ToolUse {
+                    id: "toolu_1".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                },
+            ],
+        ),
+        Message::tool_results(vec![(
+            "toolu_1".to_string(),
+            ToolResultContent::Text("ok".to_string()),
+            false,
+        )]),
+    ]
+}
+
+fn sent_thinking(messages: &[ApiMessage]) -> Vec<(String, Option<String>)> {
+    messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .filter_map(|block| match block {
+            ApiContent::Thinking {
+                thinking,
+                signature,
+            } => Some((thinking.clone(), signature.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn each_reasoning_origin_receives_only_its_own_thinking() {
+    let owned = |text: &str, sig: Option<&str>| (text.to_string(), sig.map(str::to_string));
+    let cases = [
+        (
+            ReasoningOrigin::Anthropic,
+            vec![owned("claude", Some("claude-sig"))],
+        ),
+        (
+            ReasoningOrigin::Local,
+            vec![owned("claude", Some("claude-sig")), owned("unsigned", None)],
+        ),
+        (
+            ReasoningOrigin::OpenRouter,
+            vec![owned("openrouter", Some("or-sig"))],
+        ),
+    ];
+    for (origin, expected) in cases {
+        let api = convert_messages_to_api(&mixed_reasoning_conversation(), false, origin);
+        assert_eq!(sent_thinking(&api), expected, "origin {origin:?}");
+        assert_eq!(api.len(), 3, "origin {origin:?}");
+        assert!(
+            matches!(api[1].content.last(), Some(ApiContent::ToolUse { id, .. }) if id == "toolu_1"),
+            "origin {origin:?}"
+        );
+    }
+}
+
+#[test]
+fn anthropic_origin_drops_empty_signatures() {
+    let messages = vec![
+        Message::user("hi"),
+        Message::new(
+            Role::Assistant,
+            vec![thinking("empty", Some("")), ContentBlock::text("hello")],
+        ),
+    ];
+    let api = convert_messages_to_api(&messages, false, ReasoningOrigin::Anthropic);
+    assert!(sent_thinking(&api).is_empty());
+    assert_eq!(api[1].content.len(), 1);
+}
+
+#[test]
+fn assistant_turn_emptied_by_filtering_is_removed_when_alternation_survives() {
+    let messages = vec![
+        Message::user("hi"),
+        Message::new(
+            Role::Assistant,
+            vec![thinking("openai", Some("openai-responses:x"))],
+        ),
+    ];
+    let api = convert_messages_to_api(&messages, false, ReasoningOrigin::Anthropic);
+    assert_eq!(api.len(), 1);
+    assert_eq!(api[0].role, "user");
+}
+
+#[test]
+fn assistant_turn_emptied_between_user_turns_keeps_a_placeholder() {
+    let messages = vec![
+        Message::user("hi"),
+        Message::new(Role::Assistant, vec![thinking("unsigned", None)]),
+        Message::user("again"),
+    ];
+    let api = convert_messages_to_api(&messages, false, ReasoningOrigin::Anthropic);
+    let roles: Vec<&str> = api.iter().map(|m| m.role.as_str()).collect();
+    assert_eq!(roles, ["user", "assistant", "user"]);
+    assert!(matches!(
+        api[1].content.as_slice(),
+        [ApiContent::Text { text, .. }] if text == "(reasoning omitted)"
+    ));
+}
+
+#[test]
+fn invalid_tool_ids_are_sanitized_on_both_sides_of_the_pair() {
+    let messages = vec![
+        Message::user("go"),
+        Message::new(
+            Role::Assistant,
+            vec![
+                ContentBlock::ToolUse {
+                    id: "call.1/x".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                },
+                ContentBlock::ToolUse {
+                    id: "toolu_01-Ab".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                },
+            ],
+        ),
+        Message::tool_results(vec![
+            (
+                "call.1/x".to_string(),
+                ToolResultContent::Text("a".to_string()),
+                false,
+            ),
+            (
+                "toolu_01-Ab".to_string(),
+                ToolResultContent::Text("b".to_string()),
+                false,
+            ),
+        ]),
+    ];
+    let api = convert_messages_to_api(&messages, false, ReasoningOrigin::Anthropic);
+    let use_ids: Vec<&str> = api[1]
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ApiContent::ToolUse { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let result_ids: Vec<&str> = api[2]
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ApiContent::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(use_ids, ["call_1_x", "toolu_01-Ab"]);
+    assert_eq!(result_ids, ["call_1_x", "toolu_01-Ab"]);
+}
+
+#[test]
+fn api_tool_id_maps_only_invalid_characters() {
+    assert_eq!(api_tool_id("toolu_01ABC-xyz"), "toolu_01ABC-xyz");
+    assert_eq!(api_tool_id("call.1/x"), "call_1_x");
+    assert_eq!(api_tool_id("fc:é"), "fc__");
+    assert_eq!(api_tool_id(""), "toolu_empty");
+}
+
+/// Serve one SSE `body` over raw TCP after draining the request.
+async fn serve_sse_once(body: &'static str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut raw = Vec::new();
+        let mut buf = vec![0u8; 65536];
+        loop {
+            let n = socket.read(&mut buf).await.unwrap();
+            raw.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&raw).to_ascii_lowercase();
+            if let Some(end) = text.find("\r\n\r\n") {
+                let length = text[..end]
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+                if raw.len() >= end + 4 + length || n == 0 {
+                    break;
+                }
+            }
+        }
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                     Content-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn openrouter_thinking_round_trips_only_to_openrouter() {
+    let body = concat!(
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-opus-4-7\",\"stop_reason\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n",
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm\"}}\n\n",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig1\"}}\n\n",
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    );
+    let config = AnthropicConfig {
+        base_url: serve_sse_once(body).await,
+        max_retries: 0,
+        ..AnthropicConfig::anthropic_direct()
+    };
+    let provider = AnthropicProvider::new(config)
+        .unwrap()
+        .with_sse_for_all_models()
+        .without_router_body_extensions()
+        .with_reasoning_origin(ReasoningOrigin::OpenRouter);
+    let request = ModelRequest::builder("claude-opus-4-7", "system")
+        .message(Message::user("hi"))
+        .request_kind(ModelRequestKind::Chat)
+        .try_build()
+        .unwrap();
+    let mut stream = provider.complete_streaming(request).await.unwrap();
+    let mut accumulator = crate::StreamAccumulator::new();
+    while let Some(event) = stream.next().await {
+        accumulator.process(&event.unwrap());
+    }
+    let response = accumulator.into_response(0, 0).unwrap();
+    let returned = response
+        .message
+        .content
+        .iter()
+        .find_map(|block| match block {
+            ContentBlock::Thinking { signature, .. } => Some(signature.clone()),
+            _ => None,
+        });
+    assert_eq!(returned, Some(Some("openrouter:sig1".to_string())));
+
+    let conversation = vec![Message::user("hi"), response.message, Message::user("next")];
+    let anthropic = convert_messages_to_api(&conversation, false, ReasoningOrigin::Anthropic);
+    assert_eq!(sent_thinking(&anthropic), []);
+    let openrouter = convert_messages_to_api(&conversation, false, ReasoningOrigin::OpenRouter);
+    assert_eq!(
+        sent_thinking(&openrouter),
+        [("hmm".to_string(), Some("sig1".to_string()))]
+    );
+}
+
+/// OpenRouter names models `vendor/model` (with dots, and maybe a
+/// `:variant`); thinking, effort and forced tool choice follow the model
+/// it names, as they do for the same model on any other route.
+#[test]
+fn openrouter_slugs_get_the_capabilities_of_the_model_they_name() {
+    assert_eq!(
+        capability_model("anthropic/claude-sonnet-4.6:nitro"),
+        "claude-sonnet-4.6"
+    );
+    assert_eq!(capability_model("claude-opus-4-7"), "claude-opus-4-7");
+    assert_eq!(capability_model("anthropic/"), "anthropic/");
+
+    let request = |model: &str| {
+        ModelRequest::builder(model, "system")
+            .max_tokens(8192)
+            .thinking_effort(Some(ThinkingEffort::High))
+            .try_build()
+            .unwrap()
+    };
+    for (slug, direct) in [
+        ("anthropic/claude-opus-4.7", "claude-opus-4-7"),
+        ("anthropic/claude-sonnet-4.6", "claude-sonnet-4-6"),
+    ] {
+        let via_openrouter = resolve_thinking(&request(slug), slug).expect(slug);
+        let direct_thinking = resolve_thinking(&request(direct), direct).unwrap();
+        assert_eq!(
+            via_openrouter.thinking_type, direct_thinking.thinking_type,
+            "{slug}"
+        );
+        assert_eq!(
+            resolve_output_config(&request(slug), slug).map(|c| c.effort),
+            resolve_output_config(&request(direct), direct).map(|c| c.effort),
+            "{slug}"
+        );
+    }
+
+    let forced = ToolChoice::Required;
+    assert!(
+        matches!(
+            tool_choice_for(&forced, false, "anthropic/claude-sonnet-5.5"),
+            Some(ApiToolChoice::Auto { .. })
+        ),
+        "Sonnet 5.5 takes no forced tool choice on OpenRouter either"
+    );
+    assert!(matches!(
+        tool_choice_for(&forced, false, "anthropic/claude-sonnet-4.6"),
+        Some(ApiToolChoice::Any { .. })
+    ));
 }

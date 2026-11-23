@@ -20,9 +20,38 @@ use std::time::Duration;
 /// Columns before a block's marker.
 const INDENT: &str = "  ";
 
-/// Columns a step inside a group takes before its marker: its number,
-/// right-aligned, and a space.
-const NUMBER_WIDTH: usize = 5;
+/// Columns before a block's label: the indent, the marker and a space.
+/// Steps inside a group, and the hint under a collapsed one, start here,
+/// so they sit under the group's summary rather than beside its marker.
+const LABEL_COLUMN: usize = INDENT.len() + 2;
+
+/// A step's number inside a group. Numbers are right-aligned to the
+/// widest one in the group, so every marker in it shares one column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct StepNumber {
+    value: usize,
+    width: usize,
+}
+
+impl StepNumber {
+    /// Step `value` of a group whose last step is numbered `last`.
+    pub(super) fn new(value: usize, last: usize) -> Self {
+        Self {
+            value,
+            width: digits(last.max(value)),
+        }
+    }
+
+    /// Columns the step takes before its marker.
+    fn lead_width(self) -> usize {
+        LABEL_COLUMN + self.width + 1
+    }
+}
+
+/// Decimal digits in `n`.
+fn digits(n: usize) -> usize {
+    n.checked_ilog10().map_or(1, |log| log as usize + 1)
+}
 
 /// Thinking lines shown under a collapsed block while it streams.
 const LIVE_THINKING_LINES: usize = 3;
@@ -55,7 +84,7 @@ pub(super) enum GroupView {
 pub(super) fn activity_lines(
     activity: &Activity,
     expanded: bool,
-    number: Option<usize>,
+    number: Option<StepNumber>,
     spinner: &str,
     width: usize,
     theme: &Theme,
@@ -68,7 +97,13 @@ pub(super) fn activity_lines(
         "▸"
     };
     let lead = match number {
-        Some(n) => format!("{n:>w$} ", w = NUMBER_WIDTH - 1),
+        Some(n) => format!(
+            "{:pad$}{:>w$} ",
+            "",
+            n.value,
+            pad = LABEL_COLUMN,
+            w = n.width
+        ),
         None => INDENT.to_string(),
     };
     let marker = Span::styled(
@@ -83,17 +118,17 @@ pub(super) fn activity_lines(
 }
 
 /// Columns before the marker of a step, numbered or not.
-fn body_indent(number: Option<usize>) -> usize {
-    if number.is_some() {
-        NUMBER_WIDTH
-    } else {
-        INDENT.len()
-    }
+fn body_indent(number: Option<StepNumber>) -> usize {
+    number.map_or(INDENT.len(), StepNumber::lead_width)
 }
 
 /// `→ records for this turn`, under an open thinking step: the row that
 /// jumps to the kernel records the turn wrote.
-pub(super) fn records_link(number: Option<usize>, width: usize, theme: &Theme) -> Line<'static> {
+pub(super) fn records_link(
+    number: Option<StepNumber>,
+    width: usize,
+    theme: &Theme,
+) -> Line<'static> {
     Body::new(body_indent(number), width).line(
         "→ records for this turn".to_string(),
         Style::default().fg(theme.colors.muted),
@@ -106,7 +141,7 @@ pub(super) fn collapsed_hint(steps: usize, theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         format!(
             "{}{} (click to expand)",
-            " ".repeat(NUMBER_WIDTH + 2),
+            " ".repeat(LABEL_COLUMN),
             count(steps, "step", "steps")
         ),
         Style::default().fg(theme.colors.muted),
@@ -728,11 +763,34 @@ mod tests {
     fn nested_step_is_numbered_with_its_body_under_the_label() {
         let step = tool(ToolStatus::Success, Some("fn main() {}"));
         let theme = Theme::default();
-        let collapsed = activity_lines(&step, false, Some(3), "⠋", 80, &theme);
-        assert_eq!(texts(&collapsed), ["   3 ▸ Read main.rs"]);
-        let expanded = activity_lines(&step, true, Some(12), "⠋", 80, &theme);
-        assert_eq!(texts(&expanded)[0], "  12 ▾ Read main.rs");
-        assert_eq!(texts(&expanded).last().unwrap(), "       │ fn main() {}");
+        let collapsed = activity_lines(&step, false, Some(StepNumber::new(3, 3)), "⠋", 80, &theme);
+        assert_eq!(texts(&collapsed), ["    3 ▸ Read main.rs"]);
+        let expanded = activity_lines(&step, true, Some(StepNumber::new(12, 12)), "⠋", 80, &theme);
+        assert_eq!(texts(&expanded)[0], "    12 ▾ Read main.rs");
+        assert_eq!(texts(&expanded).last().unwrap(), "         │ fn main() {}");
+    }
+
+    #[test]
+    fn numbers_in_a_group_share_one_marker_column_under_the_summary() {
+        let step = tool(ToolStatus::Success, None);
+        let theme = Theme::default();
+        let header = text(&group_header(
+            &[&step],
+            GroupView::Full,
+            false,
+            "",
+            "⠋",
+            80,
+            &theme,
+        ));
+        let row = |n| {
+            text(&activity_lines(&step, false, Some(StepNumber::new(n, 10)), "⠋", 80, &theme)[0])
+        };
+        assert_eq!(header, "  ▾ Explored main.rs");
+        assert_eq!(row(9), "     9 ▸ Read main.rs");
+        assert_eq!(row(10), "    10 ▸ Read main.rs");
+        let label = display_width(&header[..header.find("Explored").unwrap()]);
+        assert_eq!(row(10).find("10"), Some(label));
     }
 
     #[test]
@@ -744,19 +802,20 @@ mod tests {
             running: false,
         });
         let theme = Theme::default();
-        let closed = activity_lines(&step, false, Some(1), "⠋", 80, &theme);
-        assert_eq!(texts(&closed), ["   1 ▸ Thought 5s"]);
-        let open = activity_lines(&step, true, Some(1), "⠋", 80, &theme);
+        let one = Some(StepNumber::new(1, 1));
+        let closed = activity_lines(&step, false, one, "⠋", 80, &theme);
+        assert_eq!(texts(&closed), ["    1 ▸ Thought 5s"]);
+        let open = activity_lines(&step, true, one, "⠋", 80, &theme);
         assert_eq!(
             texts(&open),
             [
-                "   1 ▾ Thought 5s",
-                "       │ the model shared no reasoning text"
+                "    1 ▾ Thought 5s",
+                "        │ the model shared no reasoning text"
             ]
         );
         assert_eq!(
-            text(&records_link(Some(1), 80, &theme)),
-            "       │ → records for this turn"
+            text(&records_link(one, 80, &theme)),
+            "        │ → records for this turn"
         );
     }
 
@@ -939,8 +998,15 @@ mod tests {
         if let Activity::Tool(tool) = &mut step {
             tool.duration_ms = Some(28_400);
         }
-        let lines = activity_lines(&step, false, Some(2), "⠋", 80, &Theme::default());
-        assert_eq!(texts(&lines), ["   2 ▸ Wrote types.ts · 28s"]);
+        let lines = activity_lines(
+            &step,
+            false,
+            Some(StepNumber::new(2, 2)),
+            "⠋",
+            80,
+            &Theme::default(),
+        );
+        assert_eq!(texts(&lines), ["    2 ▸ Wrote types.ts · 28s"]);
     }
 
     #[test]
@@ -1001,7 +1067,7 @@ mod tests {
         let theme = Theme::default();
         assert_eq!(
             text(&collapsed_hint(5, &theme)),
-            "       5 steps (click to expand)"
+            "    5 steps (click to expand)"
         );
     }
 

@@ -211,6 +211,23 @@ impl AnthropicConfig {
         }
     }
 
+    /// Build a config for OpenRouter's Anthropic-compatible Messages API,
+    /// used with the user's OpenRouter key. Reads `AURA_OPENROUTER_URL`
+    /// (default `https://openrouter.ai/api`; the provider appends
+    /// `/v1/messages`). Router-edge protections (body cap, Cloudflare
+    /// retries, fallback model) are disabled.
+    #[must_use]
+    pub fn openrouter() -> Self {
+        let defaults = Self::from_env();
+        Self {
+            base_url: openrouter_api_base(),
+            fallback_model: None,
+            emergency_body_cap_bytes: 0,
+            cloudflare_max_retries: 0,
+            ..defaults
+        }
+    }
+
     /// Build a config with an explicit default model. Other fields take
     /// the same defaults as [`from_env`].
     #[must_use]
@@ -239,6 +256,63 @@ pub fn anthropic_api_base() -> String {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "https://api.anthropic.com".to_string())
+}
+
+/// OpenRouter API base for its Anthropic-compatible Messages endpoint:
+/// `AURA_OPENROUTER_URL` (trimmed, trailing `/` removed), else
+/// `https://openrouter.ai/api`.
+///
+/// Every request to it carries the user's OpenRouter key, so the
+/// override is held to the same rule as OpenRouter sign-in
+/// (`aura-auth-openrouter`): HTTPS, or plain HTTP only to a loopback
+/// host, with no query or fragment. Any other value is ignored with a
+/// warning and the production base is used, so a bad value can never
+/// send the key in the clear.
+#[must_use]
+pub fn openrouter_api_base() -> String {
+    const DEFAULT: &str = "https://openrouter.ai/api";
+    let Some(value) = std::env::var("AURA_OPENROUTER_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return DEFAULT.to_string();
+    };
+    if is_safe_openrouter_base(&value) {
+        value
+    } else {
+        tracing::warn!(
+            value = %value,
+            "AURA_OPENROUTER_URL must be HTTPS (or HTTP to a loopback host) without a query; using {DEFAULT}"
+        );
+        DEFAULT.to_string()
+    }
+}
+
+/// Whether `base` may receive the OpenRouter key: see [`openrouter_api_base`].
+fn is_safe_openrouter_base(base: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base) else {
+        return false;
+    };
+    let loopback = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+    let secure = url.scheme() == "https" || (url.scheme() == "http" && loopback);
+    secure && url.query().is_none() && url.fragment().is_none()
+}
+
+#[cfg(test)]
+mod openrouter_base_tests {
+    use super::is_safe_openrouter_base;
+
+    #[test]
+    fn only_https_or_loopback_http_may_carry_the_key() {
+        assert!(is_safe_openrouter_base("https://openrouter.ai/api"));
+        assert!(is_safe_openrouter_base("https://proxy.example/api"));
+        assert!(is_safe_openrouter_base("http://127.0.0.1:8080/api"));
+        assert!(is_safe_openrouter_base("http://localhost:8080/api"));
+        assert!(!is_safe_openrouter_base("http://proxy.example/api"));
+        assert!(!is_safe_openrouter_base("https://openrouter.ai/api?x=1"));
+        assert!(!is_safe_openrouter_base("not a url"));
+    }
 }
 
 #[cfg(test)]

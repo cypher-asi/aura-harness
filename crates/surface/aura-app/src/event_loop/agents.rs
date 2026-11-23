@@ -495,7 +495,7 @@ fn busy_agent(state: &LoopState<'_>, agents: &[AgentId]) -> Option<String> {
     Some(
         lock(&state.hub.registry)
             .find(*busy)
-            .map_or_else(|| "an agent".to_string(), |a| a.display_name().to_string()),
+            .map_or_else(|| "an agent".to_string(), |a| a.display_name().into_owned()),
     )
 }
 
@@ -514,7 +514,7 @@ async fn stop_busy(state: &mut LoopState<'_>, agents: &[AgentId]) -> Vec<String>
         if state.hub.cancel(id) {
             let name = lock(&state.hub.registry)
                 .find(id)
-                .map_or_else(|| "an agent".to_string(), |a| a.display_name().to_string());
+                .map_or_else(|| "an agent".to_string(), |a| a.display_name().into_owned());
             stopped.push(name);
         }
     }
@@ -544,7 +544,7 @@ pub(super) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &
             registry.subtree(agent_id),
             registry
                 .find(agent_id)
-                .map(|a| a.display_name().to_string()),
+                .map(|a| a.display_name().into_owned()),
         )
     };
     let Some(name) = name else {
@@ -580,7 +580,7 @@ pub(super) async fn handle_restore_agent(state: &mut LoopState<'_>, agent_hex: &
         Ok(()) => {
             let name = lock(&state.hub.registry)
                 .find(agent_id)
-                .map(|a| a.display_name().to_string())
+                .map(|a| a.display_name().into_owned())
                 .unwrap_or_default();
             info!(%agent_id, %name, "Restored agent");
             activate_agent(state, agent_id, Chat::Reload).await;
@@ -789,10 +789,26 @@ pub(super) fn open_session(
 }
 
 /// Show `agent_id`. Agents keep working while another one is shown.
+///
+/// A UI switches on screen before it asks, so every select gets an
+/// answer it can end its wait on: the agent's chat, [`UiCommand::ChatReady`]
+/// for a live one, or [`UiCommand::SwitchFailed`].
 async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId, chat: Chat) {
     state.park_finished_spawns().await;
     if agent_id == state.active {
-        state.hub.send_agent_list().await;
+        if chat == Chat::Reload {
+            // A UI that showed another agent in the meantime asks for this
+            // one's chat again.
+            show_active_agent(state, chat).await;
+        } else {
+            // Confirm it all the same: a UI that switched on screen ahead
+            // waits for this answer before taking the session's next one.
+            let _ = state
+                .commands
+                .send(UiCommand::SetActiveAgent(agent_id.to_hex()))
+                .await;
+            state.hub.send_agent_list().await;
+        }
         return;
     }
     if !state.idle.contains_key(&agent_id) && !state.hub.is_running(agent_id) {
@@ -802,6 +818,10 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId, chat: Chat
             }
             Err(problem) => {
                 show_error(state, problem).await;
+                let _ = state
+                    .commands
+                    .send(UiCommand::SwitchFailed(agent_id.to_hex()))
+                    .await;
                 return;
             }
         }
@@ -830,6 +850,26 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
     // The lists go first: a new or restored agent shows up in them, and an
     // archived one leaves them, before its history has been read.
     state.hub.send_agent_list().await;
+    // The chat next: it is what the UI waits on, blank, while the rest
+    // (records, traces) can fill in after it.
+    if chat == Chat::Reload {
+        if state.hub.is_running(agent_id) {
+            // Its chat is live in the UI already; say so, so a UI that
+            // switched to it ahead of this answer stops waiting.
+            AgentUi::new(state.commands.clone(), agent_id)
+                .send(UiCommand::ChatReady)
+                .await;
+        } else {
+            let history = conversation_history(store, agent_id).unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to rebuild conversation from record");
+                Vec::new()
+            });
+            AgentUi::new(state.commands.clone(), agent_id)
+                .send(UiCommand::LoadConversation(history))
+                .await;
+            super::hud::send_session_of(state, agent_id).await;
+        }
+    }
     // One replace-all command: clears the previous agent's records even
     // when this agent's history can't be read.
     let (records, problem) = match recent_record_summaries(store, agent_id) {
@@ -853,16 +893,6 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
         state.hub.traces.send_history(agent_id).await;
     }
 
-    if chat == Chat::Reload && !state.hub.is_running(agent_id) {
-        let history = conversation_history(store, agent_id).unwrap_or_else(|e| {
-            warn!(error = %e, "Failed to rebuild conversation from record");
-            Vec::new()
-        });
-        AgentUi::new(state.commands.clone(), agent_id)
-            .send(UiCommand::LoadConversation(history))
-            .await;
-        super::hud::send_session_of(state, agent_id).await;
-    }
     super::modes::send_mode(state, agent_id).await;
     super::policies::send_policies_of(state, agent_id).await;
     super::hud::send_instructions_of(state, agent_id).await;

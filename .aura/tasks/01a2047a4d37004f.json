@@ -1,0 +1,11 @@
+{
+  "id": "01a2047a4d37004f",
+  "title": "Working here task list should use shimmer effect on working [image 1]",
+  "state": "completed",
+  "agent_id": "37fc165a7d8c00f5a7f041cf5cda155a9efa886b05762c802036ebf9e9294de1",
+  "agent_name": "Agent 928",
+  "items": [],
+  "summary": "Small change; I'll do it directly. Adding an animation-frame parameter to `todo_checklist` and shimmering \"Working\" the same way the `⬢ Thinking…` line does.",
+  "updated_ms": 1795371518396,
+  "created_ms": 1795371453751
+}

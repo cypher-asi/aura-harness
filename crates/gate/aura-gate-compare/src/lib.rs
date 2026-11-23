@@ -1,12 +1,14 @@
 //! Layer: gate
 //!
 //! `/compare` and the BENCH tab: running the same work on two arms, each
-//! Gate or a pinned model, side by side, and reading the result.
+//! Gate, a pinned model or a model per difficulty, side by side, and
+//! reading the result.
 //!
 //! This crate holds the parts that need no model, kernel or UI:
 //!
 //! - `args`: reading `/compare`'s arguments
-//! - `arms`: what each arm runs on, and the model Gate is compared with
+//! - `arms`: what each arm runs on ([`DifficultyRoutes`] for an arm with
+//!   a model per difficulty), and the model Gate is compared with
 //! - `estimate`: list prices, and the cost estimate shown before anything runs
 //! - `schedule`: the order runs start in, and when the budget stops them
 //! - `tokens`: the tokens and cost per model of a run
@@ -30,7 +32,7 @@ mod summary;
 mod tokens;
 
 pub use args::{parse, CompareCommand, CompareRequest, SessionPick};
-pub use arms::{default_against, resolve_arms, NO_DELEGATE};
+pub use arms::{default_against, resolve_arms, DifficultyRoutes, NO_DELEGATE};
 pub use estimate::{estimate, list_price, Estimate};
 pub use pairs::{judge_pairs, judge_task, seed, EndedRun};
 pub use plan_shares::{plan_shares, PlanReading};

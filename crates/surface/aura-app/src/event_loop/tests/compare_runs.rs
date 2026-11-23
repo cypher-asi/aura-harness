@@ -562,6 +562,34 @@ async fn a_comparison_asked_from_another_goes_beside_it() {
 }
 
 #[tokio::test]
+async fn an_untitled_agent_that_runs_a_benchmark_is_named_after_it() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    state.sync_turn_base();
+    state.compare = compare::CompareState::new(fixture._dirs[0].path().join("compare"), 1);
+    let user = state.active;
+    assert!(subagents::lock(&state.hub.registry)
+        .find(user)
+        .is_some_and(RegisteredAgent::needs_title));
+
+    run_comparison(
+        &mut state,
+        &links,
+        &mut commands,
+        "--budget 0.001 write the answer",
+    )
+    .await;
+
+    let registry = subagents::lock(&state.hub.registry);
+    let agent = registry.find(user).unwrap();
+    assert_eq!(agent.display_name(), "write the answer");
+    assert!(!agent.needs_title());
+}
+
+#[tokio::test]
 async fn subtasks_of_a_run_follow_its_arm_not_the_users_selection() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);
@@ -629,6 +657,95 @@ async fn subtasks_of_a_run_follow_its_arm_not_the_users_selection() {
         route_of(plain),
         Route::subtask("mock-model", RouteReason::Pinned)
     );
+}
+
+#[tokio::test]
+async fn a_by_difficulty_arm_runs_each_turn_and_subtask_on_its_difficultys_model() {
+    const HAIKU: &str = "aura-claude-haiku-4-5";
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = gate_on_zos(&fixture);
+    state.sync_turn_base();
+
+    compare(
+        &mut state,
+        &links,
+        "what does gate do? (hard) --repeats 1 --a sonnet \
+         --against difficulty:easy=haiku,medium=sonnet,hard=opus",
+    )
+    .await;
+    let estimate = system_texts(&drain(&mut commands));
+    for part in [
+        format!("B             by difficulty: easy → {HAIKU} (cloud)"),
+        format!("medium →\n                {SONNET} (cloud)"),
+        format!("hard → {OPUS}"),
+    ] {
+        assert!(estimate.contains(&part), "{part:?} in {estimate}");
+    }
+    compare(&mut state, &links, "go").await;
+    tokio::time::timeout(Duration::from_secs(60), state.compare.finished())
+        .await
+        .expect("the comparison did not end");
+    let payload = latest(&state);
+
+    assert_eq!(
+        payload.arm_b,
+        ArmSpec::ByDifficulty {
+            easy: HAIKU.to_string(),
+            medium: SONNET.to_string(),
+            hard: OPUS.to_string(),
+        }
+    );
+    let run = payload.run("b-1").unwrap();
+    assert_eq!(run.error, None);
+    assert_eq!(run.model, OPUS, "hard work runs on the hard model");
+    let prompt = entries(&state, run.agent_id)
+        .iter()
+        .find_map(|e| e.tx.prompt_payload())
+        .unwrap();
+    assert_eq!(prompt.route.model, OPUS);
+    assert_eq!(prompt.route.reason, RouteReason::Compare);
+    assert_eq!(prompt.difficulty, Some(Difficulty::Hard));
+    assert_eq!(payload.run("a-1").unwrap().model, SONNET);
+
+    // Its subtasks are classified and go to their difficulty's model too.
+    let runnable = state.models.runnable_models();
+    let routes = aura_gate::compare::DifficultyRoutes::of(&payload.arm_b, &runnable).unwrap();
+    let first = fixture.first;
+    fixture
+        .hub
+        .begin_compare_run(first, subagents::ArmRouting::ByDifficulty(routes));
+    for (prompt, model) in [("what changed? (easy)", HAIKU), ("what changed?", SONNET)] {
+        let request: aura_core_types::SubagentDispatchRequest =
+            serde_json::from_value(serde_json::json!({
+                "parent_agent_id": first,
+                "subagent_type": "reviewer",
+                "prompt": prompt,
+                "parent_permissions": aura_core_types::AgentPermissions::full_access(),
+                "user_tool_defaults": aura_core_types::UserToolDefaults::default(),
+            }))
+            .unwrap();
+        let child = fixture
+            .dispatcher
+            .dispatch(request)
+            .await
+            .unwrap()
+            .child_agent_id
+            .unwrap();
+        let route = entries(&state, child)
+            .iter()
+            .find_map(|e| e.tx.prompt_payload())
+            .unwrap()
+            .route;
+        assert_eq!(
+            (route.model.as_str(), route.reason),
+            (model, RouteReason::Compare),
+            "{prompt}"
+        );
+    }
+    fixture.hub.end_compare_run(first);
 }
 
 #[tokio::test]

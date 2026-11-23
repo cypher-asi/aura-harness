@@ -4,7 +4,7 @@ use aura_agent_kernel::{Kernel, KernelConfig};
 use aura_context_skills::SkillLoader;
 use aura_core_types::{AgentPermissions, UserToolDefaults};
 use aura_exec_tools::ToolConfig;
-use aura_model::{MockProvider, ModelProvider};
+use aura_model::{MockProvider, MockResponse, ModelProvider};
 use aura_store_db::RocksStore;
 use tempfile::TempDir;
 
@@ -25,6 +25,17 @@ fn fixture(reply: &str) -> Fixture {
 
 /// [`fixture`] whose model takes `latency_ms` to answer.
 fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
+    fixture_with(reply, latency_ms, "")
+}
+
+/// [`fixture`] that names subtasks with `title_model`, Gate's classifier
+/// (none when empty). With a title model every call is answered `reply`,
+/// so the subtitle call and the turn can run in either order.
+fn titled_fixture(reply: &str, title_model: &str) -> Fixture {
+    fixture_with(reply, 0, title_model)
+}
+
+fn fixture_with(reply: &str, latency_ms: u64, title_model: &str) -> Fixture {
     let data = TempDir::new().unwrap();
     let db = TempDir::new().unwrap();
     let workspace = TempDir::new().unwrap();
@@ -53,7 +64,10 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
                 .into_iter()
                 .filter(|t| t.name != TASK_TOOL_NAME)
                 .collect(),
-            gate: GateBase::default(),
+            gate: GateBase {
+                classifier: title_model.to_string(),
+                candidates: None,
+            },
         },
         commands: tx,
         long_run: crate::long_run::LongRunSettings::default(),
@@ -68,6 +82,7 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         traces,
     };
     let reply = reply.to_string();
+    let answers_all = !title_model.is_empty();
     let workspace_root = workspace.path().to_path_buf();
     let mut captured = None;
     let hub = AgentHub::new(parts, |dispatcher| {
@@ -76,8 +91,12 @@ fn slow_fixture(reply: &str, latency_ms: u64) -> Fixture {
         KernelFactory::new(
             store,
             Box::new(move |agent_id, _parent_chain, folder| {
-                let provider: Arc<dyn ModelProvider + Send + Sync> =
-                    Arc::new(MockProvider::simple_response(reply.clone()).with_latency(latency_ms));
+                let mut mock =
+                    MockProvider::simple_response(reply.clone()).with_latency(latency_ms);
+                if answers_all {
+                    mock = mock.with_default_response(MockResponse::text(reply.clone()));
+                }
+                let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::new(mock);
                 Ok(Kernel::new(
                     Arc::clone(&kernel_store) as Arc<dyn aura_store_db::Store>,
                     provider,
@@ -278,7 +297,8 @@ async fn spawn_runs_an_instance_under_its_parent() {
     assert!(fixture.hub.take_finished().is_empty());
 
     let summaries = fixture.hub.agent_summaries();
-    let child_row = summaries.iter().find(|s| s.name == "reviewer #1").unwrap();
+    let child_hex = child_id.to_hex();
+    let child_row = summaries.iter().find(|s| s.id == child_hex).unwrap();
     assert_eq!(child_row.depth, 1);
     assert!(!child_row.running);
 
@@ -287,7 +307,7 @@ async fn spawn_runs_an_instance_under_its_parent() {
     while let Ok(command) = fixture.commands.try_recv() {
         match command {
             UiCommand::SetAgents(rows) => {
-                saw_running |= rows.iter().any(|r| r.name == "reviewer #1" && r.running);
+                saw_running |= rows.iter().any(|r| r.id == child_hex && r.running);
             }
             UiCommand::ForAgent { agent_id, command } if agent_id == child_id.to_hex() => {
                 child_chat.push(*command);
@@ -305,6 +325,221 @@ async fn spawn_runs_an_instance_under_its_parent() {
         Some(UiCommand::TurnStarted { prompt: Some(p) }) if p == "Review the diff"
     ));
     assert!(matches!(child_chat.last(), Some(UiCommand::Complete)));
+}
+
+/// The row `SetAgents` lists for `child` once it has a subtitle, waiting
+/// for the background job that names it.
+async fn row_once_named(fixture: &mut Fixture, child: AgentId) -> AgentSummary {
+    let child = child.to_hex();
+    let wait = async {
+        loop {
+            match fixture.commands.recv().await {
+                Some(UiCommand::SetAgents(rows)) => {
+                    if let Some(row) = rows
+                        .into_iter()
+                        .find(|r| r.id == child && r.subtitle.is_some())
+                    {
+                        return row;
+                    }
+                }
+                Some(_) => {}
+                None => panic!("the hub went away before the subtask was named"),
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), wait)
+        .await
+        .expect("the subtask was never named")
+}
+
+#[tokio::test]
+async fn a_spawned_task_is_named_after_its_subtask_by_the_title_model() {
+    let mut fixture = titled_fixture("Fix parser escapes", "mock-title");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+
+    let result = fixture
+        .dispatcher
+        .dispatch(request(
+            parent,
+            "reviewer",
+            "The parser mangles backslash escapes in strings; fix it",
+        ))
+        .await
+        .unwrap();
+    let child = result.child_agent_id.unwrap();
+    let row = row_once_named(&mut fixture, child).await;
+
+    let (name, code) = {
+        let registry = lock(&fixture.hub.registry);
+        let agent = registry.find(child).unwrap();
+        assert_eq!(agent.subtitle.as_deref(), Some("Fix parser escapes"));
+        (agent.name.clone(), agent.code.clone().unwrap())
+    };
+    assert_eq!(name, "reviewer #1", "the name stays the agent's identity");
+    assert_eq!(row.subtitle.as_deref(), Some("Fix parser escapes"));
+    assert_eq!(row.name, format!("{code}: Fix parser escapes"));
+    let listed = fixture.hub.agent_summaries();
+    let listed = listed.iter().find(|r| r.id == child.to_hex()).unwrap();
+    assert_eq!(listed.name, row.name);
+}
+
+#[tokio::test]
+async fn without_a_title_model_a_subtask_is_named_from_its_prompt() {
+    let mut fixture = fixture("Looks good.");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+
+    let result = fixture
+        .dispatcher
+        .dispatch(request(
+            parent,
+            "reviewer",
+            "review the diff\nthen the tests",
+        ))
+        .await
+        .unwrap();
+    let child = result.child_agent_id.unwrap();
+    let row = row_once_named(&mut fixture, child).await;
+
+    assert_eq!(row.subtitle.as_deref(), Some("review the diff"));
+    assert!(row.name.ends_with(": review the diff"), "{}", row.name);
+}
+
+#[tokio::test]
+async fn subtasks_of_a_benchmark_run_are_named_without_a_model_call() {
+    let fixture = titled_fixture("Model subtitle", "mock-title");
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+    fixture
+        .hub
+        .traces
+        .start(parent, RunMeta::new("mock-model", RunSource::Bench))
+        .unwrap();
+
+    let result = fixture
+        .dispatcher
+        .dispatch(request(parent, "reviewer", "check the build\nand report"))
+        .await
+        .unwrap();
+
+    let child = result.child_agent_id.unwrap();
+    let registry = lock(&fixture.hub.registry);
+    let agent = registry.find(child).unwrap();
+    assert_eq!(agent.subtitle.as_deref(), Some("check the build"));
+}
+
+#[tokio::test]
+async fn subtasks_nested_under_a_benchmark_run_are_named_without_a_model_call() {
+    let fixture = titled_fixture("Model subtitle", "mock-title");
+    let (run, run_zns) = {
+        let registry = lock(&fixture.hub.registry);
+        let run = registry.active();
+        (run.agent_id(), run.zns_id.clone())
+    };
+    fixture
+        .hub
+        .traces
+        .start(run, RunMeta::new("mock-model", RunSource::Bench))
+        .unwrap();
+    // A subtask of the run (`RE1`), working on a trace of its own that is
+    // no bench run, as a spawned instance's is.
+    let middle = lock(&fixture.hub.registry)
+        .create_instance("rust-engineer", Some(run_zns))
+        .unwrap()
+        .agent_id();
+    fixture
+        .hub
+        .traces
+        .start(middle, RunMeta::new("mock-model", RunSource::Tui))
+        .unwrap();
+    assert!(fixture.hub.in_bench(middle));
+
+    let result = fixture
+        .dispatcher
+        .dispatch(request(middle, "reviewer", "check the build\nand report"))
+        .await
+        .unwrap();
+
+    // Named at once from the prompt; a model call would have answered
+    // "Model subtitle", and only later.
+    let child = result.child_agent_id.unwrap();
+    assert!(fixture.hub.in_bench(child));
+    let registry = lock(&fixture.hub.registry);
+    let agent = registry.find(child).unwrap();
+    assert_eq!(
+        agent.parent.as_deref(),
+        registry.find(middle).map(|a| a.zns_id.as_str())
+    );
+    assert_eq!(agent.subtitle.as_deref(), Some("check the build"));
+}
+
+#[tokio::test]
+async fn in_bench_needs_a_bench_run_above_and_survives_a_parent_cycle() {
+    let fixture = fixture("unused");
+    let root = lock(&fixture.hub.registry).active().clone();
+    let child = lock(&fixture.hub.registry)
+        .create_instance("reviewer", Some(root.zns_id.clone()))
+        .unwrap();
+    assert!(!fixture.hub.in_bench(root.agent_id()));
+    assert!(!fixture.hub.in_bench(child.agent_id()));
+    let unknown = AgentId::new([7; 32]);
+    assert!(!fixture.hub.in_bench(unknown));
+
+    // A hand-edited registry can make the root its child's child.
+    {
+        let path = fixture._data.path().join("agents.json");
+        let body = std::fs::read_to_string(&path).unwrap();
+        let mut file: serde_json::Value = serde_json::from_str(&body).unwrap();
+        for agent in file["agents"].as_array_mut().unwrap() {
+            if agent["zns_id"] == root.zns_id.as_str() {
+                agent["parent"] = child.zns_id.clone().into();
+            }
+        }
+        std::fs::write(&path, file.to_string()).unwrap();
+        *lock(&fixture.hub.registry) =
+            AgentRegistry::load_or_init_in(fixture._data.path(), fixture.workspace.path()).unwrap();
+    }
+    assert!(!fixture.hub.in_bench(child.agent_id()));
+    fixture
+        .hub
+        .traces
+        .start(
+            root.agent_id(),
+            RunMeta::new("mock-model", RunSource::Bench),
+        )
+        .unwrap();
+    assert!(fixture.hub.in_bench(child.agent_id()));
+}
+
+#[tokio::test]
+async fn apply_subtitle_names_only_spawned_instances_once() {
+    let fixture = fixture("unused");
+    let parent = lock(&fixture.hub.registry).active().clone();
+    let spawned = lock(&fixture.hub.registry)
+        .create_instance("reviewer", Some(parent.zns_id.clone()))
+        .unwrap();
+
+    fixture
+        .hub
+        .apply_subtitle(parent.agent_id(), "Not a subtask")
+        .await;
+    fixture
+        .hub
+        .apply_subtitle(spawned.agent_id(), "Fix parser")
+        .await;
+    fixture
+        .hub
+        .apply_subtitle(spawned.agent_id(), "Renamed")
+        .await;
+
+    let rows = fixture.hub.agent_summaries();
+    let row = |id: AgentId| rows.iter().find(|r| r.id == id.to_hex()).unwrap();
+    assert_eq!(row(parent.agent_id()).subtitle, None);
+    assert_eq!(row(parent.agent_id()).name, parent.display_name());
+    let code = spawned.code.as_deref().unwrap();
+    assert_eq!(
+        row(spawned.agent_id()).subtitle.as_deref(),
+        Some("Fix parser")
+    );
+    assert_eq!(row(spawned.agent_id()).name, format!("{code}: Fix parser"));
 }
 
 #[tokio::test]

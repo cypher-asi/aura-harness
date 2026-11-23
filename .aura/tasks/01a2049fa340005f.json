@@ -1,0 +1,15 @@
+{
+  "id": "01a2049fa340005f",
+  "title": "Repo: /home/n3o/code/aura-harness. Work fast. Many files here carry unrelated uncommitted changes from other work (incl…",
+  "state": "failed",
+  "agent_id": "2e8a09930ad6797a5739bf3eb38abf96b1a39f2c059b3bc900fa37e66864c84b",
+  "agent_name": "rust-engineer #60",
+  "assignee": "rust-engineer",
+  "parent": "01a2045abd210040",
+  "plan": ".aura/plans/openrouter-integration_0f77685d.plan.md",
+  "items": [],
+  "summary": "ran out of time: it stopped after 0 minutes without a reply",
+  "updated_ms": 1795374469522,
+  "created_ms": 1795373900608,
+  "tool_use_id": "toolu_01XE8RCDEH5M8XYzXtj3Y3HP"
+}

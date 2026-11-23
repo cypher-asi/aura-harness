@@ -1,0 +1,11 @@
+{
+  "id": "01a204c6ae58000b",
+  "title": "this should be better aligned [image 1]",
+  "state": "completed",
+  "agent_id": "89ec40f6736380dd232fd275135de5ca37d37987003ff28d376eb1a85119efc6",
+  "agent_name": "Agent 949",
+  "items": [],
+  "summary": "Now the caller in `chat_lines.rs`.",
+  "updated_ms": 1795376627937,
+  "created_ms": 1795376459352
+}

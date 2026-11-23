@@ -29,6 +29,8 @@ wgpu = { version = "27", default-features = false, features = ["std", "parking_l
 winit = "0.30"
 softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+# Hashes every row and run drawn each frame, faster than the default
+rustc-hash = { workspace = true }
 
 anyhow = { workspace = true }
 chrono = { workspace = true }

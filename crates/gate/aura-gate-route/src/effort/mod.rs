@@ -26,12 +26,13 @@ const fn start_effort(difficulty: Option<Difficulty>) -> ThinkingEffort {
     }
 }
 
-/// The reasoning effort `work` starts at on `model`: that of its
-/// difficulty ([`start_effort`]), except on the fast tier, where code
-/// work ([`verifiable`]) reasons at medium effort or above and other work
-/// does not think. At low effort a model may skip thinking on steps it
+/// The reasoning effort `work` starts at on `model`: low for easy work,
+/// high for hard work and medium for the rest, except on the fast tier,
+/// where code work ([`verifiable`]) reasons at medium effort or above and
+/// other work does not think. At low effort a model may skip thinking on steps it
 /// finds simple, and code is where that costs a failed attempt.
-pub(crate) const fn effort_on(work: &Work<'_>, model: &Candidate) -> ThinkingEffort {
+#[must_use]
+pub const fn effort_on(work: &Work<'_>, model: &Candidate) -> ThinkingEffort {
     let effort = start_effort(work.difficulty);
     match model.tier {
         ModelTier::Fast if !verifiable(work.category) => ThinkingEffort::Off,

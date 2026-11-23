@@ -1,0 +1,14 @@
+{
+  "id": "01a204efdcab0026",
+  "title": "Wire the new model-alias resolver into model switching so `/model opus` picks the best available Opus, `/model deepseek…",
+  "state": "failed",
+  "agent_id": "6711d9e3348ae34bc6e544a6065946640446fdd026261e9084f97b6fbe65116e",
+  "agent_name": "rust-engineer #69",
+  "assignee": "rust-engineer",
+  "parent": "01a204e87e5a0021",
+  "items": [],
+  "summary": "ran out of time: it stopped after 4 minutes without a reply",
+  "updated_ms": 1795379728523,
+  "created_ms": 1795379158187,
+  "tool_use_id": "toolu_012jBrDti8c15b62hagnzTqt"
+}

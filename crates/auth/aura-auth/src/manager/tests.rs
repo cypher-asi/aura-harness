@@ -424,3 +424,242 @@ async fn failed_exchange_and_unlink() {
         .unwrap()
         .is_none());
 }
+
+// ---- OpenRouter ----------------------------------------------------------
+
+use aura_auth_openrouter::OpenRouterProvider;
+
+/// Test-only key; the fixture accepts nothing else.
+const OPENROUTER_KEY: &str = "sk-or-test-manager-key";
+
+/// Bodies of `POST /api/v1/auth/keys` code exchanges the fixture saw.
+type Exchanges = Arc<Mutex<Vec<serde_json::Value>>>;
+
+/// Loopback OpenRouter fixture: exchanges any code for
+/// [`OPENROUTER_KEY`] and describes that key on `GET /api/v1/key`.
+async fn openrouter_fixture() -> (String, Exchanges) {
+    use axum::http::{header::AUTHORIZATION, HeaderMap, StatusCode};
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use serde_json::{json, Value};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let exchanges = Exchanges::default();
+    let log = exchanges.clone();
+    let app = Router::new()
+        .route(
+            "/api/v1/auth/keys",
+            post(move |Json(body): Json<Value>| {
+                let log = log.clone();
+                async move {
+                    log.lock().unwrap().push(body);
+                    Json(json!({"key": OPENROUTER_KEY, "user_id": "user-or"}))
+                }
+            }),
+        )
+        .route(
+            "/api/v1/key",
+            get(|headers: HeaderMap| async move {
+                let bearer = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok());
+                if bearer != Some(format!("Bearer {OPENROUTER_KEY}").as_str()) {
+                    return (StatusCode::UNAUTHORIZED, Json(json!({"error": "no"})));
+                }
+                (
+                    StatusCode::OK,
+                    Json(json!({"data": {"label": "Aura key", "limit_remaining": null}})),
+                )
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (base, exchanges)
+}
+
+fn openrouter_manager(dir: &std::path::Path, base: &str) -> AuthManager {
+    AuthManager::with_identity(Vault::files_at(dir), Arc::new(FakeZos))
+        .with_subscription(Arc::new(OpenRouterProvider::fixture(base).unwrap()))
+}
+
+/// [`OpenRouterProvider`] that counts refresh calls.
+struct CountingOpenRouter {
+    inner: OpenRouterProvider,
+    refreshes: AtomicUsize,
+}
+
+#[async_trait]
+impl SubscriptionProvider for CountingOpenRouter {
+    fn kind(&self) -> ProviderKind {
+        self.inner.kind()
+    }
+
+    fn redirect(&self) -> RedirectStrategy {
+        self.inner.redirect()
+    }
+
+    fn client_id(&self, previous: Option<&str>) -> String {
+        self.inner.client_id(previous)
+    }
+
+    fn authorization_url(&self, request: &AuthorizationRequest) -> Result<String, ProviderError> {
+        self.inner.authorization_url(request)
+    }
+
+    async fn exchange(
+        &self,
+        request: &AuthorizationRequest,
+        callback: &CallbackParams,
+    ) -> Result<LinkGrant, ProviderError> {
+        self.inner.exchange(request, callback).await
+    }
+
+    async fn refresh(
+        &self,
+        account: &LinkedAccount,
+        tokens: &OAuthTokens,
+    ) -> Result<LinkGrant, ProviderError> {
+        self.refreshes.fetch_add(1, Ordering::SeqCst);
+        self.inner.refresh(account, tokens).await
+    }
+
+    async fn plan_tier(&self, tokens: &OAuthTokens) -> Option<String> {
+        self.inner.plan_tier(tokens).await
+    }
+
+    fn credential(&self, tokens: &OAuthTokens) -> InferenceCredential {
+        self.inner.credential(tokens)
+    }
+
+    async fn accept_api_key(&self, key: &str) -> Result<LinkGrant, ProviderError> {
+        self.inner.accept_api_key(key).await
+    }
+
+    fn is_api_key(&self, pasted: &str) -> bool {
+        self.inner.is_api_key(pasted)
+    }
+}
+
+#[tokio::test]
+async fn openrouter_pasted_key_links_and_persists() {
+    let (base, exchanges) = openrouter_fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let manager = openrouter_manager(dir.path(), &base);
+    let pending = manager
+        .begin_link(ProviderKind::OpenRouter, LinkMode::Paste)
+        .await
+        .unwrap();
+    assert!(pending.needs_paste());
+    let link = manager
+        .finish_link(pending, Some(&format!("  {OPENROUTER_KEY}\n")))
+        .await
+        .unwrap();
+    assert!(
+        exchanges.lock().unwrap().is_empty(),
+        "a key is not exchanged"
+    );
+    assert_eq!(link.provider, ProviderKind::OpenRouter);
+    assert_eq!(link.owner, Owner::Local);
+    assert_eq!(link.label, "Aura key");
+    assert_eq!(link.plan.as_deref(), Some("credits"));
+
+    let reopened = openrouter_manager(dir.path(), &base);
+    assert_eq!(
+        reopened.link(ProviderKind::OpenRouter).map(|l| l.id),
+        Some(link.id)
+    );
+    assert!(reopened
+        .summary()
+        .subscriptions
+        .contains(&ProviderKind::OpenRouter));
+    assert_eq!(
+        reopened.summary().plan_names,
+        ["OpenRouter"],
+        "the badge omits the OpenRouter tier"
+    );
+    let credential = reopened
+        .inference_credential(ProviderKind::OpenRouter)
+        .await
+        .unwrap();
+    assert_eq!(credential.bearer, OPENROUTER_KEY);
+    assert!(credential
+        .headers
+        .contains(&("X-Title".into(), aura_auth_openrouter::APP_TITLE.into())));
+}
+
+#[tokio::test]
+async fn openrouter_key_is_used_without_refresh() {
+    let (base, _) = openrouter_fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let provider = Arc::new(CountingOpenRouter {
+        inner: OpenRouterProvider::fixture(&base).unwrap(),
+        refreshes: AtomicUsize::new(0),
+    });
+    let manager = AuthManager::with_identity(Vault::files_at(dir.path()), Arc::new(FakeZos))
+        .with_subscription(provider.clone());
+    let link = manager
+        .link_api_key(ProviderKind::OpenRouter, OPENROUTER_KEY)
+        .await
+        .unwrap();
+    let tokens = manager.vault().tokens(&link).unwrap();
+    assert_eq!(tokens.refresh_token, None);
+    assert!(!tokens.expires_within(Utc::now(), REFRESH_MARGIN_SECS));
+
+    for _ in 0..2 {
+        let credential = manager
+            .inference_credential(ProviderKind::OpenRouter)
+            .await
+            .unwrap();
+        assert_eq!(credential.bearer, OPENROUTER_KEY);
+    }
+    assert_eq!(provider.refreshes.load(Ordering::SeqCst), 0);
+    assert!(manager.link(ProviderKind::OpenRouter).unwrap().usable());
+}
+
+#[tokio::test]
+async fn openrouter_unlink_and_rejected_key() {
+    let (base, _) = openrouter_fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let manager = openrouter_manager(dir.path(), &base);
+
+    let err = manager
+        .link_api_key(ProviderKind::OpenRouter, "sk-or-test-unknown-key")
+        .await
+        .unwrap_err();
+    assert!(!err.to_string().contains("sk-or-test-unknown-key"), "{err}");
+    assert!(manager.links().is_empty());
+
+    manager
+        .link_api_key(ProviderKind::OpenRouter, OPENROUTER_KEY)
+        .await
+        .unwrap();
+    let removed = manager.unlink(ProviderKind::OpenRouter).await.unwrap();
+    assert_eq!(removed.map(|l| l.provider), Some(ProviderKind::OpenRouter));
+    assert!(manager.link(ProviderKind::OpenRouter).is_none());
+    assert!(matches!(
+        manager.inference_credential(ProviderKind::OpenRouter).await,
+        Err(ProviderError::NotLinked(ProviderKind::OpenRouter))
+    ));
+}
+
+#[tokio::test]
+async fn openrouter_pasted_code_is_exchanged() {
+    let (base, exchanges) = openrouter_fixture().await;
+    let dir = tempfile::tempdir().unwrap();
+    let manager = openrouter_manager(dir.path(), &base);
+    let pending = manager
+        .begin_link(ProviderKind::OpenRouter, LinkMode::Paste)
+        .await
+        .unwrap();
+    let link = manager
+        .finish_link(pending, Some("the-code"))
+        .await
+        .unwrap();
+    let sent = exchanges.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["code"], "the-code");
+    assert_eq!(link.subject, "user-or");
+    let credential = manager
+        .inference_credential(ProviderKind::OpenRouter)
+        .await
+        .unwrap();
+    assert_eq!(credential.bearer, OPENROUTER_KEY);
+}

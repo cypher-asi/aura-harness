@@ -9,11 +9,38 @@
 //!   to the user's linked Claude plan.
 //! - [`CHATGPT_PREFIX`] (`chatgpt/gpt-5.4`): OpenAI Responses API billed
 //!   to the user's linked ChatGPT plan.
+//! - [`OPENROUTER_PREFIX`] (`openrouter/anthropic/claude-sonnet-4.6`):
+//!   OpenRouter, billed to the user's OpenRouter key. The rest of the id
+//!   is OpenRouter's own `vendor/model[:variant]` slug.
 //! - anything else: an aura-router alias that needs a zOS JWT from `/login`.
 //!
 //! [`GATE_MODEL_ID`] is not a model: the surface resolves it to one of
 //! these before a request is built.
+//!
+//! # Live model info
+//!
+//! The curated tables here (prices, output limits, tiers) only know the
+//! models aura ships with. Providers that list their models with limits
+//! and prices (OpenRouter's `/models`) can fill the gaps through a
+//! process-wide table, [`replace_live_models`] / [`live_model_info`].
+//!
+//! Invariants:
+//!
+//! - It is written only by the surface, after it fetched a provider's
+//!   model listing, one backend at a time: every entry of a backend comes
+//!   from the latest [`replace_live_models`] call for that backend.
+//! - It is read only as a fallback: a curated price always wins, and a
+//!   curated output limit wins except on OpenRouter ids, whose listing is
+//!   the authority for what that route accepts.
+//! - Its values only stand in for defaults the catalog would otherwise
+//!   guess; entries that are not finite and positive are dropped on write,
+//!   so a bad listing can never produce a zero limit or a negative price.
+//! - A poisoned lock is recovered rather than propagated: the table holds
+//!   plain fallback data, and a half-applied write leaves it no worse than
+//!   an empty one.
 
+use std::collections::BTreeMap;
+use std::sync::{PoisonError, RwLock};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -30,6 +57,12 @@ pub const CLAUDE_PREFIX: &str = "claude/";
 
 /// Prefix that marks a model as served directly with a ChatGPT subscription.
 pub const CHATGPT_PREFIX: &str = "chatgpt/";
+
+/// Prefix that marks a model as served by OpenRouter with the user's
+/// OpenRouter key. What follows is OpenRouter's model slug,
+/// `vendor/model` with an optional `:variant` (`:nitro`, `:free`), sent
+/// upstream unchanged.
+pub const OPENROUTER_PREFIX: &str = "openrouter/";
 
 /// Model id of Gate, the router that picks a model for each turn from
 /// what the user's sign-ins allow.
@@ -63,12 +96,30 @@ const UNKNOWN_OUTPUT_TOKENS: u32 = 32_000;
 
 /// The most tokens one reply of `model` may hold: the limit its API
 /// publishes, which requests are sent with unless a caller asks for less.
+/// OpenRouter ids take the limit OpenRouter listed for them; other models
+/// fall back to a listed limit only when the curated table does not know
+/// them (see [the module docs](self#live-model-info)).
 #[must_use]
 pub fn max_output_tokens(model: &str) -> u32 {
-    if backend_for(model) == ModelBackend::Local {
+    let backend = backend_for(model);
+    if backend == ModelBackend::Local {
         return DEFAULT_LOCAL_MAX_OUTPUT_TOKENS;
     }
-    let key = model_key(model);
+    let live = live_model_info(model).and_then(|info| info.max_output);
+    if backend == ModelBackend::OpenRouter {
+        if let Some(limit) = live {
+            return limit;
+        }
+    }
+    match curated_max_output_tokens(&model_key(model)) {
+        UNKNOWN_OUTPUT_TOKENS => live.unwrap_or(UNKNOWN_OUTPUT_TOKENS),
+        limit => limit,
+    }
+}
+
+/// Output limit the curated table gives the model named by `key` (a
+/// [`model_key`]), or [`UNKNOWN_OUTPUT_TOKENS`].
+fn curated_max_output_tokens(key: &str) -> u32 {
     let has = |words: &[&str]| words.iter().any(|w| key.contains(w));
     if key.contains("claude") {
         return if has(&["opus-4-5", "sonnet-4-5", "haiku-4-5", "3-7-sonnet"]) {
@@ -118,6 +169,8 @@ pub enum ModelBackend {
     Claude,
     /// OpenAI Responses API with the user's ChatGPT subscription.
     Chatgpt,
+    /// OpenRouter's Anthropic-compatible API with the user's OpenRouter key.
+    OpenRouter,
 }
 
 impl ModelBackend {
@@ -129,6 +182,19 @@ impl ModelBackend {
             Self::Router => "cloud",
             Self::Claude => "claude plan",
             Self::Chatgpt => "chatgpt plan",
+            Self::OpenRouter => "openrouter",
+        }
+    }
+
+    /// Who pays for the tokens a call on this backend uses.
+    #[must_use]
+    pub const fn source_label(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Router => "aura-router",
+            Self::Claude => "Claude plan",
+            Self::Chatgpt => "ChatGPT plan",
+            Self::OpenRouter => "OpenRouter",
         }
     }
 
@@ -140,6 +206,7 @@ impl ModelBackend {
             Self::Router => Some(ProviderKind::Zos),
             Self::Claude => Some(ProviderKind::Claude),
             Self::Chatgpt => Some(ProviderKind::Chatgpt),
+            Self::OpenRouter => Some(ProviderKind::OpenRouter),
         }
     }
 }
@@ -258,6 +325,26 @@ const CLAUDE_MODELS: &[(&str, &str, ModelTier)] = &[
 const CHATGPT_MODELS: &[(&str, &str, ModelTier)] =
     &[("chatgpt/gpt-5.4", "GPT-5.4", ModelTier::Frontier)];
 
+/// Curated models offered through OpenRouter.
+const OPENROUTER_MODELS: &[(&str, &str, ModelTier)] = &[
+    (
+        "openrouter/anthropic/claude-opus-4.7",
+        "Claude Opus 4.7",
+        ModelTier::Frontier,
+    ),
+    (
+        "openrouter/anthropic/claude-sonnet-4.6",
+        "Claude Sonnet 4.6",
+        ModelTier::Standard,
+    ),
+    (
+        "openrouter/anthropic/claude-haiku-4.5",
+        "Claude Haiku 4.5",
+        ModelTier::Fast,
+    ),
+    ("openrouter/openai/gpt-5.4", "GPT-5.4", ModelTier::Frontier),
+];
+
 /// Backend serving `model`.
 #[must_use]
 pub fn backend_for(model: &str) -> ModelBackend {
@@ -267,20 +354,28 @@ pub fn backend_for(model: &str) -> ModelBackend {
         ModelBackend::Claude
     } else if model.starts_with(CHATGPT_PREFIX) {
         ModelBackend::Chatgpt
+    } else if model.starts_with(OPENROUTER_PREFIX) {
+        ModelBackend::OpenRouter
     } else {
         ModelBackend::Router
     }
 }
 
 /// Model name as the serving backend knows it: strips the `local/`,
-/// `claude/` or `chatgpt/` route prefix; router aliases are unchanged.
+/// `claude/`, `chatgpt/` or `openrouter/` route prefix (leaving
+/// OpenRouter's `vendor/model` slug); router aliases are unchanged.
 #[must_use]
 pub fn upstream_model_name(model: &str) -> &str {
-    [LOCAL_PREFIX, CLAUDE_PREFIX, CHATGPT_PREFIX]
-        .iter()
-        .find_map(|prefix| model.strip_prefix(prefix))
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or(model)
+    [
+        LOCAL_PREFIX,
+        CLAUDE_PREFIX,
+        CHATGPT_PREFIX,
+        OPENROUTER_PREFIX,
+    ]
+    .iter()
+    .find_map(|prefix| model.strip_prefix(prefix))
+    .filter(|name| !name.trim().is_empty())
+    .unwrap_or(model)
 }
 
 /// The model and who serves it: `claude-sonnet-4-6 (claude plan)`.
@@ -360,12 +455,33 @@ const PRICES: &[(&str, Price)] = &[
 
 /// The upstream model `model` names on any route: without its route or
 /// router prefix, lowercased, `.` as `-` (`aura-gpt-5-4`,
-/// `chatgpt/gpt-5.4` -> `gpt-5-4`).
+/// `chatgpt/gpt-5.4` -> `gpt-5-4`). OpenRouter ids also lose their vendor
+/// segment and `:variant` (`openrouter/openai/gpt-5.4:nitro` ->
+/// `gpt-5-4`), so one upstream model shares its key, price and limits
+/// across every route.
 #[must_use]
 pub fn model_key(model: &str) -> String {
     let name = upstream_model_name(model);
+    let name = if backend_for(model) == ModelBackend::OpenRouter {
+        openrouter_model_name(name)
+    } else {
+        name
+    };
     let name = name.strip_prefix("aura-").unwrap_or(name);
     name.to_ascii_lowercase().replace('.', "-")
+}
+
+/// The model in an OpenRouter slug, without vendor or variant
+/// (`anthropic/claude-sonnet-4.6:nitro` -> `claude-sonnet-4.6`). A slug
+/// that would leave nothing is returned whole.
+fn openrouter_model_name(slug: &str) -> &str {
+    let model = slug.split_once('/').map_or(slug, |(_, model)| model);
+    let model = model.split_once(':').map_or(model, |(model, _)| model);
+    if model.trim().is_empty() {
+        slug
+    } else {
+        model
+    }
 }
 
 /// Whether changing the thinking effort between two requests of one
@@ -436,6 +552,8 @@ fn is_snapshot_of(name: &str, key: &str) -> bool {
     }
 }
 
+/// List price of `model`: the curated [`PRICES`] entry, else the price
+/// its provider listed (see [the module docs](self#live-model-info)).
 fn list_price(model: &str) -> Option<Price> {
     if backend_for(model) == ModelBackend::Local {
         return None;
@@ -445,6 +563,11 @@ fn list_price(model: &str) -> Option<Price> {
         .iter()
         .find(|(name, _)| is_snapshot_of(&key, name))
         .map(|(_, price)| *price)
+        .or_else(|| {
+            live_model_info(model)
+                .and_then(|info| info.price)
+                .map(|live| price(live.input, live.output, live.cache_write, live.cache_read))
+        })
 }
 
 /// The family `key` (a [`model_key`]) belongs to and its version there:
@@ -509,9 +632,15 @@ pub fn billed_tokens(model: &str, usage: &Usage) -> BilledTokens {
     let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
     let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
     // OpenAI counts cached tokens inside `input_tokens`; Anthropic-format
-    // responses report them on top of it.
-    let openai =
-        backend_for(model) == ModelBackend::Chatgpt || model_key(model).starts_with("gpt-");
+    // responses report them on top of it. Only the ChatGPT route and
+    // aura-router's GPT aliases answer in OpenAI shape: OpenRouter's
+    // `/v1/messages` (and the local server's) reports Anthropic-format
+    // usage whatever model is upstream.
+    let openai = match backend_for(model) {
+        ModelBackend::Chatgpt => true,
+        ModelBackend::Router => model_key(model).starts_with("gpt-"),
+        ModelBackend::Local | ModelBackend::Claude | ModelBackend::OpenRouter => false,
+    };
     let uncached_input = if openai {
         usage.input_tokens.saturating_sub(cache_read)
     } else {
@@ -544,6 +673,94 @@ pub fn estimate_cost_usd(model: &str, usage: &Usage) -> Option<f64> {
         + tokens.cache_read as f64 * price.cache_read
         + tokens.output as f64 * price.output;
     Some(micro_usd / 1_000_000.0)
+}
+
+/// What a provider's model listing says about one model. Every field is
+/// optional: a listing may leave any of them out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LiveModelInfo {
+    /// Context window, in tokens.
+    pub context_window: Option<u64>,
+    /// Most output tokens one reply may hold.
+    pub max_output: Option<u32>,
+    /// Price per token kind.
+    pub price: Option<LivePrice>,
+}
+
+/// A listed model price, in USD per million tokens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LivePrice {
+    /// Uncached prompt tokens.
+    pub input: f64,
+    /// Output tokens.
+    pub output: f64,
+    /// Prompt tokens written to the cache.
+    pub cache_write: f64,
+    /// Prompt tokens read from the cache.
+    pub cache_read: f64,
+}
+
+impl LivePrice {
+    /// Whether every rate is a real, non-negative number.
+    fn is_valid(&self) -> bool {
+        [self.input, self.output, self.cache_write, self.cache_read]
+            .iter()
+            .all(|rate| rate.is_finite() && *rate >= 0.0)
+    }
+}
+
+impl LiveModelInfo {
+    /// `self` without the values no model can have (zero limits, prices
+    /// that are negative or not numbers), or `None` when nothing is left.
+    fn sanitized(self) -> Option<Self> {
+        let info = Self {
+            context_window: self.context_window.filter(|tokens| *tokens > 0),
+            max_output: self.max_output.filter(|tokens| *tokens > 0),
+            price: self.price.filter(LivePrice::is_valid),
+        };
+        let is_empty =
+            info.context_window.is_none() && info.max_output.is_none() && info.price.is_none();
+        (!is_empty).then_some(info)
+    }
+}
+
+/// Listed model info by full model id; see [the module
+/// docs](self#live-model-info) for who writes it and how it is read.
+static LIVE_MODELS: RwLock<BTreeMap<String, LiveModelInfo>> = RwLock::new(BTreeMap::new());
+
+/// Replace everything known live about `backend`'s models with `entries`
+/// (full model id, info), as fetched from its provider's model listing.
+/// Entries whose id names another backend are ignored, so each backend's
+/// entries always come from its own latest listing; values no model can
+/// have are dropped.
+pub fn replace_live_models(
+    backend: ModelBackend,
+    entries: impl IntoIterator<Item = (String, LiveModelInfo)>,
+) {
+    let fresh: Vec<(String, LiveModelInfo)> = entries
+        .into_iter()
+        .filter(|(id, _)| backend_for(id) == backend)
+        .filter_map(|(id, info)| info.sanitized().map(|info| (id, info)))
+        .collect();
+    let mut table = LIVE_MODELS.write().unwrap_or_else(PoisonError::into_inner);
+    table.retain(|id, _| backend_for(id) != backend);
+    table.extend(fresh);
+}
+
+/// What the latest model listing of its provider said about `model`.
+#[must_use]
+pub fn live_model_info(model: &str) -> Option<LiveModelInfo> {
+    LIVE_MODELS
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(model)
+        .copied()
+}
+
+/// Context window the latest model listing gave `model`, in tokens.
+#[must_use]
+pub fn live_context_window(model: &str) -> Option<u64> {
+    live_model_info(model).and_then(|info| info.context_window)
 }
 
 /// Model name as the local server knows it (`local/qwen3:4b` -> `qwen3:4b`).
@@ -601,8 +818,9 @@ pub fn catalog(default_local: &str, installed_local: &[String]) -> Vec<ModelOpti
     catalog_with_plans(default_local, installed_local, &[])
 }
 
-/// [`catalog`], with each plan's curated list replaced by `plan_models`
-/// (fetched live from the provider) for every plan backend it covers.
+/// [`catalog`], with each curated list of a cloud backend (plans and
+/// OpenRouter) replaced by `plan_models` (fetched live from the provider)
+/// for every backend it covers.
 #[must_use]
 pub fn catalog_with_plans(
     default_local: &str,
@@ -633,6 +851,7 @@ pub fn catalog_with_plans(
         (ROUTER_MODELS, ModelBackend::Router),
         (CLAUDE_MODELS, ModelBackend::Claude),
         (CHATGPT_MODELS, ModelBackend::Chatgpt),
+        (OPENROUTER_MODELS, ModelBackend::OpenRouter),
     ] {
         let live: Vec<&ModelOption> = plan_models
             .iter()
@@ -1057,5 +1276,168 @@ mod tests {
     async fn probe_unreachable_server() {
         let status = probe_local_server("http://127.0.0.1:9").await;
         assert_eq!(status, LocalServerStatus::Unreachable);
+    }
+
+    #[test]
+    fn openrouter_ids_route_to_openrouter_with_their_vendor_slug() {
+        for (model, upstream, key, label) in [
+            (
+                "openrouter/anthropic/claude-sonnet-4.6",
+                "anthropic/claude-sonnet-4.6",
+                "claude-sonnet-4-6",
+                "anthropic/claude-sonnet-4.6 (openrouter)",
+            ),
+            (
+                "openrouter/openai/gpt-5.4",
+                "openai/gpt-5.4",
+                "gpt-5-4",
+                "openai/gpt-5.4 (openrouter)",
+            ),
+            (
+                "openrouter/anthropic/claude-haiku-4.5:nitro",
+                "anthropic/claude-haiku-4.5:nitro",
+                "claude-haiku-4-5",
+                "anthropic/claude-haiku-4.5:nitro (openrouter)",
+            ),
+            (
+                "openrouter/meta-llama/llama-4:free",
+                "meta-llama/llama-4:free",
+                "llama-4",
+                "meta-llama/llama-4:free (openrouter)",
+            ),
+        ] {
+            assert_eq!(backend_for(model), ModelBackend::OpenRouter, "{model}");
+            assert_eq!(upstream_model_name(model), upstream, "{model}");
+            assert_eq!(model_key(model), key, "{model}");
+            assert_eq!(route_label(model), label, "{model}");
+        }
+        assert_eq!(upstream_model_name("openrouter/"), "openrouter/");
+        assert_eq!(
+            ModelBackend::OpenRouter.required_provider(),
+            Some(ProviderKind::OpenRouter)
+        );
+        assert_eq!(
+            model_key("openrouter/openai/gpt-5.4"),
+            model_key("chatgpt/gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn source_label_names_who_pays() {
+        for (backend, source) in [
+            (ModelBackend::Local, "local"),
+            (ModelBackend::Router, "aura-router"),
+            (ModelBackend::Claude, "Claude plan"),
+            (ModelBackend::Chatgpt, "ChatGPT plan"),
+            (ModelBackend::OpenRouter, "OpenRouter"),
+        ] {
+            assert_eq!(backend.source_label(), source);
+        }
+    }
+
+    #[test]
+    fn openrouter_models_share_curated_tiers_limits_and_prices() {
+        assert_eq!(
+            infer_tier("openrouter/anthropic/claude-haiku-4.5"),
+            ModelTier::Fast
+        );
+        assert_eq!(
+            infer_tier("openrouter/openai/gpt-5.4:nitro"),
+            ModelTier::Frontier
+        );
+        assert_eq!(
+            max_output_tokens("openrouter/anthropic/claude-haiku-4.5"),
+            64_000
+        );
+        let usage = usage(1_000, 2_000, 1_000_000, 1_000);
+        let direct = estimate_cost_usd("claude/claude-sonnet-4-6", &usage);
+        assert!(direct.is_some());
+        assert_eq!(
+            estimate_cost_usd("openrouter/anthropic/claude-sonnet-4.6", &usage),
+            direct
+        );
+        assert!(options_of(ModelBackend::OpenRouter)
+            .contains(&"openrouter/anthropic/claude-sonnet-4.6".to_string()));
+    }
+
+    #[test]
+    fn openrouter_usage_is_anthropic_shaped_even_for_openai_models() {
+        let usage = usage(10_000, 0, 8_000, 1_000);
+        assert_eq!(call_tokens("openrouter/openai/gpt-5.4", &usage), 19_000);
+        assert_eq!(call_tokens("chatgpt/gpt-5.4", &usage), 11_000);
+    }
+
+    fn options_of(backend: ModelBackend) -> Vec<String> {
+        catalog("local/qwen3:4b", &[])
+            .into_iter()
+            .filter(|o| o.backend == backend)
+            .map(|o| o.id)
+            .collect()
+    }
+
+    // The live table is process-wide and tests run in parallel, so this is
+    // the only test that writes it, and only for OpenRouter ids no other
+    // test reads.
+    #[test]
+    fn live_info_fills_in_what_the_curated_tables_do_not_know() {
+        let unknown = "openrouter/some/model-xyz";
+        let curated = "openrouter/anthropic/claude-opus-4.7:live-test";
+        let listed_price = LivePrice {
+            input: 2.0,
+            output: 8.0,
+            cache_write: 2.5,
+            cache_read: 0.2,
+        };
+        let usage = usage(1_000_000, 0, 0, 1_000_000);
+        assert_eq!(estimate_cost_usd(unknown, &usage), None);
+        assert_eq!(max_output_tokens(unknown), UNKNOWN_OUTPUT_TOKENS);
+
+        replace_live_models(
+            ModelBackend::OpenRouter,
+            [
+                (
+                    unknown.to_string(),
+                    LiveModelInfo {
+                        context_window: Some(262_144),
+                        max_output: Some(16_000),
+                        price: Some(listed_price),
+                    },
+                ),
+                (
+                    curated.to_string(),
+                    LiveModelInfo {
+                        context_window: Some(0),
+                        max_output: Some(20_000),
+                        price: Some(LivePrice {
+                            input: 99.0,
+                            ..listed_price
+                        }),
+                    },
+                ),
+                // Another backend's id: ignored.
+                (
+                    "aura-live-test-model".to_string(),
+                    LiveModelInfo {
+                        context_window: Some(1),
+                        max_output: None,
+                        price: None,
+                    },
+                ),
+            ],
+        );
+        assert_cost(unknown, &usage, 10.0);
+        assert_eq!(max_output_tokens(unknown), 16_000);
+        assert_eq!(live_context_window(unknown), Some(262_144));
+        // Curated prices win; OpenRouter's listed output limit wins; a zero
+        // window is dropped.
+        assert_cost(curated, &usage, 30.0);
+        assert_eq!(max_output_tokens(curated), 20_000);
+        assert_eq!(live_context_window(curated), None);
+        assert_eq!(live_model_info("aura-live-test-model"), None);
+
+        // A later listing replaces the earlier one entirely.
+        replace_live_models(ModelBackend::OpenRouter, []);
+        assert_eq!(live_model_info(unknown), None);
+        assert_eq!(estimate_cost_usd(unknown, &usage), None);
     }
 }

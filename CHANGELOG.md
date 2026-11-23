@@ -7,6 +7,167 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Scrolling stays smooth while many agents work
+
+##### Fixed
+
+- Agents working in chats that are not on screen no longer redraw the
+  desktop window or the terminal UI. With 30 agents streaming behind a
+  long chat left alone, the desktop window's thread was busy about
+  730 ms of every second drawing frames like the one on screen; it is
+  now busy about 30 ms. Scrolling that chat with a touchpad meanwhile
+  costs about 80 ms of every second, down from 130–160 ms, and each
+  frame takes about half as long.
+- The desktop window shows its frames on the GPU from a thread of its
+  own, so waiting for the display's refresh no longer holds up input or
+  the agents' updates, and it starts no more frames than the display
+  shows. The agents' updates are taken in on a thread of their own,
+  and an editor opened from the window is waited for on another.
+- On Linux, agents run 10 nice levels below the UI: the threads that
+  run them and the builds, tests and tools they start, so a busy
+  machine no longer starves the window or the terminal UI.
+  `AURA_AGENT_NICE` sets how many levels (0 to 19; 0 leaves them as
+  they are).
+- A long chat costs a frame only what is on screen: a turn's footer is
+  formatted only when its block is laid out again, blocks above the
+  screen are stepped over by their height, and drawing stops once the
+  screen is full. A streamed chunk and its frame after 2,000 messages
+  take 1.4 ms in the desktop window, down from 1.8 ms. Lists of agents,
+  projects and processes that arrive unchanged are dropped without a
+  redraw.
+- A long chat is laid out across up to eight cores when the window is
+  resized or the chat is opened. In the desktop window, a chat of
+  2,000 messages takes 60–70 ms to lay out at a new width, down from
+  160–200 ms, and its first frame about 70 ms, down from about 200 ms;
+  in the terminal UI its first frame takes about 70 ms, down from
+  180 ms.
+- Without a GPU, the desktop window paints each frame in bands across
+  up to eight cores.
+- Agents in chats that are not on screen send their streamed text to
+  the UI five times a second rather than thirty, and the UI's queue of
+  updates from agents holds 4,096 rather than 200, so a burst from many
+  agents doesn't hold them up.
+- The desktop window finds the rows and text it draws in its caches
+  with a faster hash.
+- Agents write their record entries without waiting on each other's
+  writes, and an append no longer reads back and decodes the 50
+  entries before it to get their context hashes.
+
+### Benchmark arms with a model per difficulty
+
+##### Added
+
+- A benchmark arm can run work on a model chosen by its difficulty: in
+  the BENCH tab's new-benchmark form, set an arm to `by difficulty` and
+  pick a model for its Easy, Medium and Hard rows (←/→ cycles every
+  model you can run, or type part of a name such as `deepseek` and
+  press Enter). Each model may come from any route: a linked Claude or
+  ChatGPT plan, the cloud router, OpenRouter or a local model.
+- `/compare --a` and `--against` take the same arm as
+  `difficulty:easy=<model>,medium=<model>,hard=<model>`.
+- Gate's classifier rates each prompt and subtask of such an arm's runs,
+  and the work runs on its difficulty's model (the medium one when it is
+  unrated) at the effort Gate would give that difficulty. It is not
+  followed up, reviewed or moved to a stronger model, so the results
+  show what the chosen models do on their own.
+
+##### Fixed
+
+- A benchmark arm pinned to a model Gate does not route to, such as an
+  OpenRouter model without a curated price or a second route of a model
+  linked on a plan, is no longer rejected when the benchmark is set up.
+
+### INBOX tab in the Kernel panel
+
+##### Added
+
+- The Kernel panel (top right) has an INBOX tab after POLICIES. It lists
+  the messages the agents of the run on screen send each other, threaded
+  by subject, the most recently active thread first. A thread row shows
+  an unread dot, a fold arrow, the subject, its message count, who took
+  part and the time of its newest message; ←/→ fold and unfold it to
+  list its messages. The header reads `2 NEW` while threads are unread,
+  otherwise the thread count.
+- `send_to_agent` takes an optional `subject`; messages that share a
+  subject are threaded together.
+- Clicking a thread or a message, or pressing Enter on it, opens the
+  conversation over the chat (`THREAD <subject>`) as a stack of
+  foldable messages: `n`/`p` move between them, Enter or Space folds
+  one, `e`/`c` unfold or fold them all, and Esc closes the view.
+  Opening a thread marks it read.
+- `/inbox` (also `/mail`) opens the tab.
+
+### Model aliases
+
+##### Added
+
+- `/model <name>` and `--model <name>` (`aura -p`, `aura runs`,
+  `aura eval run`) accept short names and pick the best match you can
+  run: `opus` the newest Opus, `deepseek` the best DeepSeek, `sonnet
+  4.5` that version, `openrouter opus` that route. Models your
+  sign-ins allow come first, then releases over previews, the stronger
+  tier, the newer version and the current model's route. Exact ids
+  (`claude/claude-opus-4-7`) and full model names (`claude-opus-4-6`,
+  `aura-claude-opus-4-7`, `gpt-5.4`) are used as given. The success
+  message names the alias, as in `Model: claude/claude-opus-4-7
+  (claude plan) — matched "opus"`; a match that needs a sign-in says
+  which `/login` to use.
+
+### OpenRouter sign-in
+
+##### Added
+
+- `aura login openrouter` (`/login openrouter` in the TUI) links your
+  OpenRouter account through the browser (OAuth PKCE, localhost
+  callback), which returns an API key you own. `--paste` (`/login
+  openrouter paste`) works on headless machines and also accepts an
+  existing `sk-or-…` key. `aura logout openrouter` unlinks it. The key
+  is kept in the same vault as plan links, so it survives restarts, and
+  belongs to the active identity (local or zOS).
+- `openrouter/<vendor>/<model>` models (for example
+  `openrouter/anthropic/claude-sonnet-4.6`) go to OpenRouter's
+  Anthropic-compatible Messages API and are billed to your OpenRouter
+  credits. The account's tool-capable models are loaded from
+  `GET /v1/models` and cached in `AURA_HOME/openrouter_models.json`;
+  their context windows, output limits and prices come from that list.
+- `AURA_OPENROUTER_URL` (default `https://openrouter.ai/api`) sets the
+  API base. Values that are not HTTPS and not loopback are ignored.
+- New crate `aura-auth-openrouter` with `OpenRouterProvider`.
+- The reply footer says who paid for the turn's tokens on the same
+  line as the model: `[claude-opus-4-7 · 1.6M tok · $0.998 · via Claude
+  plan]`, or each sign-in's share in place of the totals when several
+  paid, such as `[m · via Claude plan 25.1k tok · OpenRouter 2.8k tok
+  $0.004]`. `/cost` adds a "By sign-in" breakdown.
+- Each model call's record entry has `route`, the requested model id
+  with its route prefix.
+
+##### Changed
+
+- `/model` has two tabs, "Ready" and "Sign in". Tab or ←/→ switches
+  tabs, typing filters by id or label, Backspace edits the filter and
+  Esc clears it, then closes. The list scrolls. j/k/q no longer
+  navigate.
+- Gate routes to OpenRouter models only when their list price is known.
+  A model reachable more than one way goes to a linked plan first, then
+  aura-router, then OpenRouter.
+- One chat can switch providers turn by turn: each provider gets only
+  the reasoning blocks it produced, and tool-call ids are normalized.
+
+### To-do boxes are bigger and match in every list
+
+##### Changed
+
+- The desktop window draws the to-do boxes (`☐ ☒ ▣`) larger, with a
+  larger cross and fill inside, so they read at a glance.
+- The PLANS and TASKS tabs draw their todos like the checklist that
+  follows the conversation: `☒` done and faded, `▣` in progress in bold
+  white, `☐` pending in gray, and cancelled ones struck through. They
+  used to show `✓ ▸ ○ ✗` in the status colors.
+- The to-do boxes line up under the icon above them: under the `⬢` of
+  the checklist that follows the conversation, under the plan's fold
+  arrow in PLANS, and under the task's icon in TASKS. They used to be
+  indented two columns.
+
 ### POLICIES tab in the Kernel panel
 
 ##### Added
@@ -23,8 +184,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   remembered this session, and INTEGRATIONS what is installed. The tool
   states are worked out before a call's arguments, so checks that
   depend on paths can still decide a real call differently.
-- The header shows the agent's `MODE/APPROVAL`, in the warning color
-  under `yolo`. The view refreshes when the agent comes on screen, when
+- The header shows the agent's `MODE/APPROVAL`, in the accent color
+  under `yolo`. Every highlight on the tab (section titles, warnings,
+  and the on/ask/off marks) uses the theme's accent color. The view
+  refreshes when the agent comes on screen, when
   its mode or approval level changes, after an "always allow" answer,
   and whenever the tab opens.
 - Open the tab with `/policies` (also `/perms`), or press

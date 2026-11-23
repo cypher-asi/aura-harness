@@ -1,7 +1,12 @@
 //! The models a turn ran on, for the footer under its reply:
-//! `claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5`, with the tokens and
-//! cost of every call. The chat title's model is left out of the list,
-//! but its tokens and cost are counted.
+//! `claude-sonnet-5-5 ×2 · high thinking · gate: claude-haiku-5-5`, with
+//! the tokens and cost of every call. The chat title's model is left out
+//! of the list, but its tokens and cost are counted.
+//!
+//! The thinking level is the one the turn's own calls recorded asking
+//! for, shown as a range (`low–high thinking`) when they differed and
+//! left out when none recorded one, as in older records. Gate's and the
+//! title's calls think at a level of their own, so theirs is not shown.
 //!
 //! Every model call is a `Reasoning` entry in the agent's record, so the
 //! footer is read off the record the same way while the turn runs and
@@ -23,9 +28,22 @@
 use crate::event_loop::agent_events::call_usage;
 use crate::record_loader::{json_payload, model_call};
 use aura_core_types::{Route, RouteReason, Transaction, TransactionType};
-use aura_model::model_catalog::upstream_model_name;
-use aura_model::ModelCallPurpose;
-use aura_ui_terminal::events::CallUsage;
+use aura_model::model_catalog::{backend_for, upstream_model_name};
+use aura_model::{ModelCallPurpose, ThinkingEffort};
+use aura_ui_terminal::events::{CallUsage, SourceUsage};
+use serde_json::Value;
+
+/// A turn's footer: its models, what all its calls used, and that split
+/// by the sign-in that paid for it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Footer {
+    /// `claude-sonnet-5-5 ×2 · high thinking · gate: claude-haiku-5-5`
+    pub(crate) models: String,
+    /// Tokens and cost of all the turn's calls, when any reported usage
+    pub(crate) usage: Option<CallUsage>,
+    /// Those tokens per sign-in, in the order each was first used
+    pub(crate) sources: Vec<SourceUsage>,
+}
 
 /// What one entry did to the turn being tallied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,27 +94,46 @@ impl TurnCalls {
                 let Some((model, usage)) = model_call(tx) else {
                     return Seen::Other;
                 };
-                let purpose = json_payload(tx)
-                    .and_then(|payload| payload.get("purpose").cloned())
+                let payload = json_payload(tx);
+                let field = |key: &str| payload.as_ref().and_then(|payload| payload.get(key));
+                let purpose = field("purpose")
+                    .cloned()
                     .and_then(|purpose| serde_json::from_value(purpose).ok());
-                let call = call_usage(&model, &usage);
+                let effort = field("thinking_effort")
+                    .and_then(Value::as_str)
+                    .and_then(ThinkingEffort::from_wire);
+                // The requested id names the route, and so who paid;
+                // records written before it was kept have only the
+                // model the upstream echoed back.
+                let route = field("route")
+                    .and_then(Value::as_str)
+                    .filter(|route| !route.is_empty())
+                    .unwrap_or(&model);
+                let call = Call {
+                    model: &model,
+                    route,
+                    purpose,
+                    effort,
+                    usage: call_usage(route, &usage),
+                };
                 if matches!(
                     purpose,
                     Some(ModelCallPurpose::Classify | ModelCallPurpose::Criteria)
                 ) {
-                    self.next.add(&model, purpose, call);
+                    self.next.add(call);
                     return Seen::Other;
                 }
-                self.current.add(&model, purpose, call);
+                self.current.add(call);
                 Seen::Call
             }
             _ => Seen::Other,
         }
     }
 
-    /// The footer of the current turn: its models, then the tokens and
-    /// cost of all its calls. `None` before its first call.
-    pub(crate) fn footer(&self) -> Option<(String, Option<CallUsage>)> {
+    /// The footer of the current turn: its models and the level they
+    /// thought at, then the tokens and cost of all its calls. `None`
+    /// before its first call.
+    pub(crate) fn footer(&self) -> Option<Footer> {
         self.current.footer(self.routed)
     }
 
@@ -112,40 +149,97 @@ impl TurnCalls {
     }
 }
 
+/// One model call a `Reasoning` entry records.
+struct Call<'a> {
+    model: &'a str,
+    /// The model id the call asked for, route prefix included; `model`
+    /// for records that don't say
+    route: &'a str,
+    /// What the call was made for; `None` for the turn's own work
+    purpose: Option<ModelCallPurpose>,
+    /// The thinking level the call asked for, when its entry records one
+    effort: Option<ThinkingEffort>,
+    usage: Option<CallUsage>,
+}
+
 #[derive(Debug, Default)]
 struct Tally {
     /// Each model and what it ran for, with its number of calls, in the
     /// order they first ran
     models: Vec<(String, Option<ModelCallPurpose>, u32)>,
+    /// The lowest and highest thinking level of the turn's own calls.
+    /// Gate's and the title's calls are left out: they run at a level of
+    /// their own, not the one the turn was asked to think at.
+    thinking: Option<(ThinkingEffort, ThinkingEffort)>,
     tokens: u64,
     cost_usd: f64,
     priced: bool,
+    /// Tokens, cost and whether any call was priced, per sign-in, in the
+    /// order each was first used
+    sources: Vec<(&'static str, u64, f64, bool)>,
 }
 
 impl Tally {
-    fn add(&mut self, model: &str, purpose: Option<ModelCallPurpose>, call: Option<CallUsage>) {
-        let name = upstream_model_name(model);
+    fn add(&mut self, call: Call<'_>) {
+        let name = upstream_model_name(call.model);
         match self
             .models
             .iter_mut()
-            .find(|(m, p, _)| m == name && *p == purpose)
+            .find(|(m, p, _)| m == name && *p == call.purpose)
         {
             Some((_, _, calls)) => *calls += 1,
-            None => self.models.push((name.to_string(), purpose, 1)),
+            None => self.models.push((name.to_string(), call.purpose, 1)),
         }
-        if let Some(call) = call {
-            self.tokens += call.tokens;
-            if let Some(cost) = call.cost_usd {
+        if let (None, Some(effort)) = (call.purpose, call.effort) {
+            self.thinking = Some(match self.thinking {
+                Some((lowest, highest)) => (lowest.min(effort), highest.max(effort)),
+                None => (effort, effort),
+            });
+        }
+        if let Some(usage) = call.usage {
+            self.tokens += usage.tokens;
+            if let Some(cost) = usage.cost_usd {
                 self.cost_usd += cost;
                 self.priced = true;
             }
+            let label = backend_for(call.route).source_label();
+            let at = match self.sources.iter().position(|(l, ..)| *l == label) {
+                Some(at) => at,
+                None => {
+                    self.sources.push((label, 0, 0.0, false));
+                    self.sources.len() - 1
+                }
+            };
+            let source = &mut self.sources[at];
+            source.1 += usage.tokens;
+            if let Some(cost) = usage.cost_usd {
+                source.2 += cost;
+                source.3 = true;
+            }
         }
+    }
+
+    /// `high thinking` when the turn's own calls all thought at one
+    /// level, `low–high thinking` when they differed, `no thinking` when
+    /// every call had it off. `None` when none of them recorded a level,
+    /// as in records written before levels were.
+    fn thinking_label(&self) -> Option<String> {
+        let (lowest, highest) = self.thinking?;
+        if highest == ThinkingEffort::Off {
+            return Some("no thinking".to_string());
+        }
+        let (lowest, highest) = (lowest.as_str(), highest.as_str());
+        Some(if lowest == highest {
+            format!("{lowest} thinking")
+        } else {
+            format!("{lowest}–{highest} thinking")
+        })
     }
 
     /// The tally's footer. `routed` says whether Gate picked the turn's
     /// model: only then is the classifier's call Gate's, otherwise it
     /// just labelled the prompt for Gate to learn from.
-    fn footer(&self, routed: bool) -> Option<(String, Option<CallUsage>)> {
+    fn footer(&self, routed: bool) -> Option<Footer> {
         if self.models.is_empty() {
             return None;
         }
@@ -164,6 +258,11 @@ impl Tally {
                     n => format!("{label}{model} ×{n}"),
                 });
             }
+            // The level the turn thought at goes right after its own
+            // models, before Gate's.
+            if purpose.is_none() {
+                parts.extend(self.thinking_label());
+            }
         }
         // Only the chat's title has run so far: there is no model of the
         // turn's own to show yet.
@@ -174,7 +273,21 @@ impl Tally {
             tokens: self.tokens,
             cost_usd: self.priced.then_some(self.cost_usd),
         });
-        Some((parts.join(" · "), usage))
+        let sources = self
+            .sources
+            .iter()
+            .filter(|(_, tokens, ..)| *tokens > 0)
+            .map(|&(label, tokens, cost_usd, priced)| SourceUsage {
+                label: label.to_string(),
+                tokens,
+                cost_usd: priced.then_some(cost_usd),
+            })
+            .collect();
+        Some(Footer {
+            models: parts.join(" · "),
+            usage,
+            sources,
+        })
     }
 }
 
@@ -243,7 +356,7 @@ mod tests {
                 Seen::Call
             ]
         );
-        let (models, usage) = calls.footer().unwrap();
+        let Footer { models, usage, .. } = calls.footer().unwrap();
         assert_eq!(
             models, "claude-sonnet-5-5 ×2 · gate: claude-haiku-5-5",
             "the earlier turn's Opus call is not this turn's, and the title's model is not shown"
@@ -281,7 +394,7 @@ mod tests {
             calls.see(&tx);
         }
         assert_eq!(
-            calls.footer().unwrap().0,
+            calls.footer().unwrap().models,
             "claude-sonnet-5-5 · claude-opus-5-5 · gate: claude-opus-5-5"
         );
 
@@ -291,7 +404,7 @@ mod tests {
         ));
         assert_eq!(calls.footer(), None, "the next turn starts empty");
         calls.see(&call(agent, "local/qwen3", None, 10));
-        let (models, usage) = calls.footer().unwrap();
+        let Footer { models, usage, .. } = calls.footer().unwrap();
         assert_eq!(models, "qwen3");
         assert_eq!(usage.unwrap().cost_usd, None, "local calls are not priced");
     }
@@ -312,7 +425,7 @@ mod tests {
             calls.see(&tx);
         }
         assert_eq!(
-            calls.footer().unwrap().0,
+            calls.footer().unwrap().models,
             "claude-opus-5-5 ×2 · classify: claude-haiku-5-5",
             "Gate didn't pick the model, so its classifier didn't route the turn"
         );
@@ -326,9 +439,183 @@ mod tests {
             calls.see(&tx);
         }
         assert_eq!(
-            calls.footer().unwrap().0,
+            calls.footer().unwrap().models,
             "claude-opus-5-5 · gate: claude-haiku-5-5",
             "the next turn is routed by Gate"
         );
+    }
+
+    /// A call recording the thinking level `effort` it asked for.
+    fn thinking_call(
+        agent: AgentId,
+        model: &str,
+        purpose: Option<&str>,
+        effort: &str,
+    ) -> Transaction {
+        let mut payload = json!({
+            "model": model,
+            "input_tokens": 1_000,
+            "output_tokens": 10,
+            "thinking_effort": effort,
+        });
+        if let Some(purpose) = purpose {
+            payload["purpose"] = json!(purpose);
+        }
+        Transaction::new_chained(
+            agent,
+            TransactionType::Reasoning,
+            serde_json::to_vec(&payload).unwrap(),
+            None,
+        )
+    }
+
+    fn footer_of(txs: &[Transaction]) -> String {
+        let mut calls = TurnCalls::default();
+        for tx in txs {
+            calls.see(tx);
+        }
+        calls.footer().unwrap().models
+    }
+
+    #[test]
+    fn the_footer_names_the_level_the_turn_thought_at() {
+        let agent = AgentId::generate();
+        let sonnet = "claude/claude-sonnet-5-5";
+        let haiku = "claude/claude-haiku-5-5";
+        let routed = || prompt(agent, Route::turn(sonnet, RouteReason::Default));
+        let cases = [
+            (
+                "one level",
+                vec![
+                    thinking_call(agent, haiku, Some("classify"), "low"),
+                    routed(),
+                    thinking_call(agent, sonnet, None, "high"),
+                    thinking_call(agent, sonnet, None, "high"),
+                ],
+                "claude-sonnet-5-5 ×2 · high thinking · gate: claude-haiku-5-5",
+            ),
+            (
+                "levels that differ show as a range, lowest first",
+                vec![
+                    routed(),
+                    thinking_call(agent, sonnet, None, "max"),
+                    thinking_call(agent, sonnet, None, "minimal"),
+                    thinking_call(agent, sonnet, None, "medium"),
+                ],
+                "claude-sonnet-5-5 ×3 · minimal–max thinking",
+            ),
+            (
+                "Gate's and the title's levels are not the turn's",
+                vec![
+                    thinking_call(agent, haiku, Some("classify"), "off"),
+                    routed(),
+                    thinking_call(agent, sonnet, None, "medium"),
+                    thinking_call(agent, "claude/claude-opus-5-5", Some("judge"), "max"),
+                    thinking_call(agent, haiku, Some("title"), "off"),
+                ],
+                "claude-sonnet-5-5 · medium thinking · gate: claude-haiku-5-5 \
+                 · gate: claude-opus-5-5",
+            ),
+            (
+                "a call that recorded no level leaves the range alone",
+                vec![
+                    routed(),
+                    call(agent, sonnet, None, 10),
+                    thinking_call(agent, sonnet, None, "xhigh"),
+                ],
+                "claude-sonnet-5-5 ×2 · xhigh thinking",
+            ),
+            (
+                "only Gate recorded a level",
+                vec![
+                    thinking_call(agent, haiku, Some("classify"), "low"),
+                    routed(),
+                    call(agent, sonnet, None, 10),
+                ],
+                "claude-sonnet-5-5 · gate: claude-haiku-5-5",
+            ),
+            (
+                "thinking off throughout",
+                vec![
+                    routed(),
+                    thinking_call(agent, sonnet, None, "off"),
+                    thinking_call(agent, sonnet, None, "off"),
+                ],
+                "claude-sonnet-5-5 ×2 · no thinking",
+            ),
+        ];
+        for (case, txs, expected) in cases {
+            assert_eq!(footer_of(&txs), expected, "{case}");
+        }
+    }
+
+    fn routed_call(agent: AgentId, model: &str, route: &str, output: u64) -> Transaction {
+        let payload = json!({
+            "model": model,
+            "route": route,
+            "input_tokens": 1_000,
+            "output_tokens": output,
+        });
+        Transaction::new_chained(
+            agent,
+            TransactionType::Reasoning,
+            serde_json::to_vec(&payload).unwrap(),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_turn_splits_its_tokens_by_the_sign_in_that_paid() {
+        let agent = AgentId::generate();
+        let mut calls = TurnCalls::default();
+        for tx in [
+            prompt(
+                agent,
+                Route::turn("claude/claude-sonnet-4-6", RouteReason::Pinned),
+            ),
+            routed_call(agent, "claude-sonnet-4-6", "claude/claude-sonnet-4-6", 100),
+            routed_call(
+                agent,
+                "anthropic/claude-4.5-haiku-20251001",
+                "openrouter/anthropic/claude-haiku-4.5",
+                10,
+            ),
+            routed_call(agent, "claude-sonnet-4-6", "claude/claude-sonnet-4-6", 50),
+        ] {
+            calls.see(&tx);
+        }
+        let footer = calls.footer().unwrap();
+        let labels: Vec<&str> = footer.sources.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, ["Claude plan", "OpenRouter"]);
+        assert_eq!(footer.sources[0].tokens, 2_000 + 150);
+        assert_eq!(footer.sources[1].tokens, 1_010);
+        assert!(
+            footer.sources[1].cost_usd.is_some_and(|cost| cost > 0.0),
+            "the OpenRouter route is priced by the model it names"
+        );
+        assert_eq!(
+            footer.usage.unwrap().tokens,
+            footer.sources.iter().map(|s| s.tokens).sum::<u64>()
+        );
+    }
+
+    #[test]
+    fn records_without_a_route_are_put_down_to_the_model_they_name() {
+        let agent = AgentId::generate();
+        let mut calls = TurnCalls::default();
+        for tx in [
+            prompt(
+                agent,
+                Route::turn("aura-claude-sonnet-4-6", RouteReason::Pinned),
+            ),
+            call(agent, "aura-claude-sonnet-4-6", None, 10),
+            call(agent, "local/qwen3:4b", None, 10),
+        ] {
+            calls.see(&tx);
+        }
+        let sources = calls.footer().unwrap().sources;
+        let labels: Vec<&str> = sources.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, ["aura-router", "local"]);
+        assert_eq!(sources[1].cost_usd, None, "local calls are not priced");
     }
 }

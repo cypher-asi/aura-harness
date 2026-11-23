@@ -19,11 +19,13 @@ pub mod graph;
 pub mod hud;
 pub mod image_preview;
 pub mod images;
+mod inbox;
 mod input_editor;
 mod keys;
 mod line_edit;
 mod members;
 pub mod mentions;
+mod model_picker;
 mod panes;
 pub mod plans;
 mod policies;
@@ -73,7 +75,9 @@ pub use definitions::AgentsTab;
 use file_view::FileView;
 use folder_picker::FolderPicker;
 use hud::Hud;
+pub use inbox::{InboxRow, ThreadView};
 pub use members::{MemberRow, RecordsTab};
+pub use model_picker::{ModelPicker, ModelTab};
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 pub use processes::SidePanelTab;
 pub use prose::{ProseMeasure, ProseRow};
@@ -248,6 +252,9 @@ pub struct App {
     pub(super) sandbox_stale: bool,
     /// Animation frame counter for spinners
     pub(super) animation_frame: usize,
+    /// Whether the screen may look different since the host last drew
+    /// it; see [`Self::take_redraw`]
+    pub(super) redraw: bool,
     /// Kernel records list
     pub(super) records: VecDeque<RecordSummary>,
     /// Selected record index in the list
@@ -258,6 +265,8 @@ pub struct App {
     pub(super) records_tab: RecordsTab,
     /// The agents of the run of the agent on screen, for the MEMBERS tab
     pub(super) members: members::Members,
+    /// The threads of mail between agents, for the INBOX tab
+    pub(super) inbox: inbox::Inbox,
     /// First line of the POLICIES tab on screen
     pub(super) policies_scroll: usize,
     /// Record or file shown over the chat panel
@@ -283,6 +292,24 @@ pub struct App {
     pub(super) active_agent_id: String,
     /// Chats of the agents not on screen, by agent ID
     pub(super) views: HashMap<String, agent_views::AgentView>,
+    /// Whether the chat on screen holds its agent's history, so showing
+    /// it again needs no reload (see `agent_views`)
+    pub(super) chat_loaded: bool,
+    /// When the chat on screen started waiting for its history
+    pub(super) chat_loading_since: Option<Instant>,
+    /// When the chat on screen got its history after waiting for it, to
+    /// fade it in
+    pub(super) chat_revealed_at: Option<Instant>,
+    /// The agent the UI switched to on screen and asked the session for,
+    /// until the session confirms it; echoes of earlier switches are
+    /// ignored meanwhile
+    pub(super) switch_sent: Option<String>,
+    /// The agent the session last confirmed as active, to go back to when
+    /// a switch fails
+    pub(super) confirmed_agent: String,
+    /// What was typed for the agents not on screen, by agent ID; each
+    /// agent gets its draft back when it comes on screen again
+    pub(super) drafts: HashMap<String, queue_panel::Draft>,
     /// API URL for the swarm
     pub(super) api_url: Option<String>,
     /// Whether the API is currently active
@@ -303,8 +330,8 @@ pub struct App {
     pub(super) plans: Vec<String>,
     /// The active agent's current plan
     pub(super) active_plan: Option<PlanView>,
-    /// Highlighted row in the model selector
-    pub(super) model_cursor: usize,
+    /// Model selector state: tab, filter and highlighted row
+    pub(super) model_picker: ModelPicker,
     /// Cloud model to select once the in-chat login completes
     pub(super) pending_model: Option<String>,
     /// First visible row of the agents list
@@ -504,6 +531,9 @@ pub struct PanelAreas {
     pub chat_rows_top: usize,
     /// Input box under the chat panel (including border)
     pub input: Option<Rect>,
+    /// Stop button at the right end of the input box's first row, drawn
+    /// while the agent on screen is busy
+    pub input_stop: Option<Rect>,
     /// Record panel (including border)
     pub records: Option<Rect>,
     /// Header bar of the record panel
@@ -514,6 +544,10 @@ pub struct PanelAreas {
     pub member_rows: Option<Rect>,
     /// Member row shown at the top of `member_rows`
     pub members_scroll: usize,
+    /// Rows of the INBOX tab inside the record panel
+    pub inbox_rows: Option<Rect>,
+    /// Inbox row shown at the top of `inbox_rows`
+    pub inbox_scroll: usize,
     /// Sandbox panel (including border)
     pub sandbox: Option<Rect>,
     /// Rows of the sandbox tree inside the panel
@@ -563,6 +597,9 @@ pub enum DetailView {
     Graph,
     /// A pasted image, as large as the panel allows.
     Image(Box<image_preview::ImageView>),
+    /// A thread of mail between agents, from the INBOX tab, kept up to
+    /// date as its messages arrive.
+    Thread(Box<ThreadView>),
 }
 
 /// Clickable item under the pointer.
@@ -576,6 +613,8 @@ pub(crate) enum HoverTarget {
     CloseDetail,
     /// The button that expands the chat panel or restores it.
     ExpandChat,
+    /// The stop button in the input box, shown while a turn runs.
+    StopTurn,
     /// A row in the projects list, including "+ New project".
     ProjectRow(usize),
     /// The "+" at the right end of a project's row in the projects list.
@@ -583,9 +622,6 @@ pub(crate) enum HoverTarget {
     /// The archive button left of the time on an agent's row in the
     /// projects list, shown while the row is hovered.
     ArchiveAgent(usize),
-    /// The open button left of the archive button on an agent's row in
-    /// the projects list, shown while the row is hovered.
-    OpenAgent(usize),
     /// A row in the roster, including "+ New agent".
     DefinitionRow(usize),
     /// A row in the Archive.
@@ -598,6 +634,8 @@ pub(crate) enum HoverTarget {
     RecordTab(RecordsTab),
     /// A row in the Record panel's MEMBERS tab.
     MemberRow(usize),
+    /// A row in the Record panel's INBOX tab.
+    InboxRow(usize),
     /// A label in the side panel's tab bar.
     SideTab(SidePanelTab),
     /// The `*` button at the right end of the side panel's tab bar.
@@ -706,27 +744,21 @@ pub(crate) const PROJECT_ADD_WIDTH: u16 = 3;
 /// cell grid there as well.
 pub(crate) const AGENT_ARCHIVE_GLYPH: &str = "✕";
 
-/// Glyph of the open button drawn left of the archive button. Not a
-/// triangle: `▸` and `▾` already fold and unfold rows in this list. The
-/// desktop takes it from its monospace font, centered in its cell.
-pub(crate) const AGENT_OPEN_GLYPH: &str = "↗";
-
-/// A button drawn on a hovered agent's row in the projects list.
+/// A button drawn on a hovered agent's row in the projects list. Clicking
+/// elsewhere on the row already shows the agent, so there is no button
+/// for that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentButton {
-    /// Shows the agent in the chat, as the context menu's Open does.
-    Open,
     /// Archives the agent.
     Archive,
 }
 
 impl AgentButton {
     /// The buttons, left to right as drawn.
-    pub(crate) const ALL: [Self; 2] = [Self::Open, Self::Archive];
+    pub(crate) const ALL: [Self; 1] = [Self::Archive];
 
     pub(crate) const fn glyph(self) -> &'static str {
         match self {
-            Self::Open => AGENT_OPEN_GLYPH,
             Self::Archive => AGENT_ARCHIVE_GLYPH,
         }
     }
@@ -739,30 +771,188 @@ impl AgentButton {
     /// The hover target of this button on projects-list row `index`.
     pub(crate) const fn target(self, index: usize) -> HoverTarget {
         match self {
-            Self::Open => HoverTarget::OpenAgent(index),
             Self::Archive => HoverTarget::ArchiveAgent(index),
         }
     }
 }
 
-/// What follows the buttons on a hovered agent's row: the time with a
-/// space on each side (` 5m `), or a single space that keeps the last
-/// button off the panel's edge when the agent has no time.
-pub(crate) fn agent_time_cell(ago: Option<&str>) -> String {
-    ago.map_or_else(|| " ".to_string(), |ago| format!(" {ago} "))
+/// The fewest columns an agent's name keeps beside its code; narrower rows
+/// drop the code instead.
+const MIN_NAME_BESIDE_CODE: usize = 4;
+
+/// Columns of the widest code shown among `agents`: the width of the code
+/// column in the projects list, 0 when no row shows a code and there is
+/// none.
+pub(crate) fn agent_code_width(agents: &[AgentSummary]) -> usize {
+    agents
+        .iter()
+        .filter_map(shown_agent_code)
+        .map(text_width)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The code `agent`'s projects-list row shows in its code column. Spawned
+/// subtasks (any agent below the top of its tree) show none: their name
+/// already starts with the code (`RE36: Fix parser`), so the column would
+/// only repeat it. Their cell stays blank, so times still line up.
+pub(crate) fn shown_agent_code(agent: &AgentSummary) -> Option<&str> {
+    if agent.depth > 0 {
+        return None;
+    }
+    agent.code.as_deref()
+}
+
+/// Columns before the name on the row of an agent at `depth`: one leading
+/// space, the spawn guides at `AURA_WIDTH + 2` columns per level, then the
+/// icon column and the space after it, as `tree_row` lays them out.
+fn agent_row_lead(depth: usize) -> usize {
+    use crate::animation::AURA_WIDTH;
+    1 + depth * (AURA_WIDTH + 2) + AURA_WIDTH + 1
+}
+
+/// What a projects-list or roster row shows right of its buttons, flush
+/// with the right edge: the time cell, then the code cell (on roster rows,
+/// the definition's abbreviation).
+///
+/// The time cell is the time with a space on each side (` 5m `). With no
+/// time it is a single space, which keeps the last button or the code off
+/// the time's place, or nothing on a row with neither buttons nor a code
+/// column. The code cell is the agent's code, left-aligned and padded to
+/// the code column's width so codes line up, then one space before the
+/// panel's edge; with no code column it is empty.
+///
+/// The renderer draws these cells and the hit-testing finds the buttons
+/// from them, so the two cannot drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AgentRowEnd<'a> {
+    ago: Option<&'a str>,
+    code: Option<&'a str>,
+    code_width: usize,
+}
+
+impl<'a> AgentRowEnd<'a> {
+    /// The end of a row with a time and no code column, as project and
+    /// archive rows have.
+    pub(crate) const fn time(ago: Option<&'a str>) -> Self {
+        Self {
+            ago,
+            code: None,
+            code_width: 0,
+        }
+    }
+
+    /// The end of the row of an agent at `depth`, in a list `width` columns
+    /// wide whose code column is `code_width` columns (0 for none). The
+    /// code column is dropped when it would leave the name fewer than
+    /// [`MIN_NAME_BESIDE_CODE`] columns with the buttons showing, so
+    /// hovering the row never changes whether it has one.
+    pub(crate) fn agent(
+        width: usize,
+        depth: usize,
+        ago: Option<&'a str>,
+        (code, code_width): (Option<&'a str>, usize),
+    ) -> Self {
+        let buttons: usize = AgentButton::ALL
+            .iter()
+            .map(|button| text_width(&button.label()))
+            .sum();
+        Self::coded_if_room(
+            width,
+            agent_row_lead(depth) + buttons,
+            ago,
+            (code, code_width),
+            true,
+        )
+    }
+
+    /// The end of a roster row, in a list `width` columns wide whose
+    /// abbreviation column is `column_width` columns (0 for none): no
+    /// time, then the definition's `abbreviation` laid out as a code. As
+    /// with [`Self::agent`], the column is dropped when it would leave the
+    /// name fewer than [`MIN_NAME_BESIDE_CODE`] columns. Roster rows have
+    /// no buttons.
+    pub(crate) fn definition(
+        width: usize,
+        (abbreviation, column_width): (Option<&'a str>, usize),
+    ) -> Self {
+        Self::coded_if_room(
+            width,
+            agent_row_lead(0),
+            None,
+            (abbreviation, column_width),
+            false,
+        )
+    }
+
+    /// The end with `code` in a column `code_width` wide when the row,
+    /// `width` columns with `taken` of them before the name and after it
+    /// besides this end, leaves the name at least [`MIN_NAME_BESIDE_CODE`]
+    /// columns; else the time alone.
+    fn coded_if_room(
+        width: usize,
+        taken: usize,
+        ago: Option<&'a str>,
+        (code, code_width): (Option<&'a str>, usize),
+        has_buttons: bool,
+    ) -> Self {
+        if code_width == 0 {
+            return Self::time(ago);
+        }
+        let with_code = Self {
+            ago,
+            code,
+            code_width,
+        };
+        let around = taken + text_width(&with_code.text(has_buttons));
+        if width.saturating_sub(around) >= MIN_NAME_BESIDE_CODE {
+            with_code
+        } else {
+            Self::time(ago)
+        }
+    }
+
+    /// The time cell, for a row whose buttons show when `has_buttons`.
+    pub(crate) fn time_cell(&self, has_buttons: bool) -> String {
+        match self.ago {
+            Some(ago) => format!(" {ago} "),
+            None if has_buttons || self.code_width > 0 => " ".to_string(),
+            None => String::new(),
+        }
+    }
+
+    /// The code cell: empty with no code column.
+    pub(crate) fn code_cell(&self) -> String {
+        if self.code_width == 0 {
+            return String::new();
+        }
+        let code = self.code.unwrap_or_default();
+        let pad = self.code_width.saturating_sub(text_width(code));
+        format!("{code}{} ", " ".repeat(pad))
+    }
+
+    /// The whole text right of the buttons: the time cell, then the code
+    /// cell.
+    pub(crate) fn text(&self, has_buttons: bool) -> String {
+        self.time_cell(has_buttons) + &self.code_cell()
+    }
+}
+
+fn text_width(text: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    text.width()
 }
 
 fn columns(text: &str) -> u16 {
-    use unicode_width::UnicodeWidthStr;
-    u16::try_from(text.width()).unwrap_or(u16::MAX)
+    u16::try_from(text_width(text)).unwrap_or(u16::MAX)
 }
 
 /// Column of `button`'s glyph on an agent's row in the projects list,
-/// counted from the row's left edge, for a row `width` columns wide whose
-/// time reads `ago`. The renderer lays the row out from the same pieces:
+/// counted from the row's left edge, for a row `width` columns wide that
+/// ends in `end`. The renderer lays the row out from the same pieces:
 /// each button's [`AgentButton::label`] in [`AgentButton::ALL`] order,
-/// then [`agent_time_cell`], flush with the right edge.
-pub(crate) fn agent_button_offset(width: u16, ago: Option<&str>, button: AgentButton) -> u16 {
+/// then [`AgentRowEnd::text`], flush with the right edge.
+pub(crate) fn agent_button_offset(width: u16, end: &AgentRowEnd<'_>, button: AgentButton) -> u16 {
     let after: u16 = AgentButton::ALL
         .iter()
         .skip_while(|&&b| b != button)
@@ -771,7 +961,7 @@ pub(crate) fn agent_button_offset(width: u16, ago: Option<&str>, button: AgentBu
         .fold(0, u16::saturating_add);
     let glyph = columns(button.glyph());
     width.saturating_sub(
-        columns(&agent_time_cell(ago))
+        columns(&end.text(true))
             .saturating_add(after)
             .saturating_add(glyph),
     )
@@ -781,13 +971,17 @@ pub(crate) fn agent_button_offset(width: u16, ago: Option<&str>, button: AgentBu
 /// [`agent_button_offset`] says. Each button takes its glyph and the space
 /// left of it, so the zones don't overlap; the last also takes the space
 /// between it and the time.
-pub(crate) fn agent_button_at(width: u16, ago: Option<&str>, offset: u16) -> Option<AgentButton> {
+pub(crate) fn agent_button_at(
+    width: u16,
+    end: &AgentRowEnd<'_>,
+    offset: u16,
+) -> Option<AgentButton> {
     let last = AgentButton::ALL.len() - 1;
     AgentButton::ALL
         .iter()
         .enumerate()
         .find(|&(i, &button)| {
-            let glyph = agent_button_offset(width, ago, button);
+            let glyph = agent_button_offset(width, end, button);
             let end = glyph.saturating_add(columns(button.glyph()));
             let end = if i == last {
                 end.saturating_add(1)
@@ -867,11 +1061,13 @@ impl App {
             sandbox: SandboxTree::default(),
             sandbox_stale: false,
             animation_frame: 0,
+            redraw: true,
             records: VecDeque::new(),
             selected_record: 0,
             records_scroll: 0,
             records_tab: RecordsTab::default(),
             members: members::Members::default(),
+            inbox: inbox::Inbox::default(),
             policies_scroll: 0,
             detail: None,
             detail_scroll: 0,
@@ -884,6 +1080,14 @@ impl App {
             project_moves: 0,
             active_agent_id: String::new(),
             views: HashMap::new(),
+            // The chat at startup gets its history without a switch; it
+            // shows at once instead of fading in.
+            chat_loaded: true,
+            chat_loading_since: None,
+            chat_revealed_at: None,
+            switch_sent: None,
+            confirmed_agent: String::new(),
+            drafts: HashMap::new(),
             api_url: None,
             api_active: false,
             login_email: String::new(),
@@ -894,7 +1098,7 @@ impl App {
             user: None,
             plans: Vec::new(),
             active_plan: None,
-            model_cursor: 0,
+            model_picker: ModelPicker::default(),
             pending_model: None,
             agents_scroll: 0,
             agents_scroll_detached: false,
@@ -1319,6 +1523,9 @@ impl App {
             PanelFocus::Records if self.records_tab == RecordsTab::Policies => {
                 self.scroll_policies(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
+            PanelFocus::Records if self.records_tab == RecordsTab::Inbox => {
+                self.scroll_inbox(-isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Records => {
                 self.selected_record = self.selected_record.saturating_sub(lines);
             }
@@ -1368,6 +1575,9 @@ impl App {
             }
             PanelFocus::Records if self.records_tab == RecordsTab::Policies => {
                 self.scroll_policies(isize::try_from(lines).unwrap_or(isize::MAX));
+            }
+            PanelFocus::Records if self.records_tab == RecordsTab::Inbox => {
+                self.scroll_inbox(isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Records => {
                 if !self.records.is_empty() {
@@ -1735,6 +1945,18 @@ impl App {
         self.areas.input = Some(area);
     }
 
+    /// Record where the input box's stop button was drawn this frame, or
+    /// that it was not.
+    pub fn set_input_stop_area(&mut self, area: Option<Rect>) {
+        self.areas.input_stop = area;
+    }
+
+    /// Where the input box's stop button was drawn last frame.
+    #[cfg(test)]
+    pub(crate) const fn input_stop_area(&self) -> Option<Rect> {
+        self.areas.input_stop
+    }
+
     /// Record where the agents list rows were drawn this frame.
     pub fn set_agent_rows_area(&mut self, area: Rect) {
         self.areas.agent_rows = Some(area);
@@ -1819,6 +2041,11 @@ impl App {
     }
 
     fn mouse(&mut self, mouse: MouseEvent) {
+        // First, so the button works while an approval waits too; an
+        // open context menu takes the click instead, as it may cover it.
+        if self.context_menu.is_none() && self.click_stop_button(mouse) {
+            return;
+        }
         if self.state != AppState::Idle && self.state != AppState::Processing {
             self.hover = None;
             self.context_menu = None;
@@ -1970,10 +2197,12 @@ impl App {
                             self.clear_selection();
                         } else if self.detail == Some(DetailView::Graph) {
                             self.click_graph(mouse.column, mouse.row);
-                        } else if self.detail.is_none()
-                            && ((self.log.is_open() && self.click_log(mouse.column, mouse.row))
-                                || (self.flow.is_open()
-                                    && self.click_flow(mouse.column, mouse.row)))
+                        } else if self.click_thread(mouse.column, mouse.row)
+                            || (self.detail.is_none()
+                                && ((self.log.is_open()
+                                    && self.click_log(mouse.column, mouse.row))
+                                    || (self.flow.is_open()
+                                        && self.click_flow(mouse.column, mouse.row))))
                         {
                             self.clear_selection();
                         }
@@ -1983,6 +2212,21 @@ impl App {
             _ => {}
         }
         self.hover = self.hover_target(mouse.column, mouse.row);
+    }
+
+    /// A left press on the input box's stop button cancels the running
+    /// turn, as Ctrl+C does. Returns whether the press was on it.
+    fn click_stop_button(&mut self, mouse: MouseEvent) -> bool {
+        let pressed = mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self.is_busy()
+            && contains(self.areas.input_stop, mouse.column, mouse.row);
+        if !pressed {
+            return false;
+        }
+        self.cancel();
+        self.clear_selection();
+        self.hover = None;
+        true
     }
 
     /// Clickable item at a screen cell, using the areas from the last frame.
@@ -1999,6 +2243,9 @@ impl App {
         }
         if contains(self.areas.chat_expand, column, row) {
             return Some(HoverTarget::ExpandChat);
+        }
+        if contains(self.areas.input_stop, column, row) {
+            return Some(HoverTarget::StopTurn);
         }
         if self.agents_tab == AgentsTab::Projects {
             if let Some(index) = self.project_row_at(column, row) {
@@ -2030,6 +2277,9 @@ impl App {
         }
         if let Some(index) = self.member_row_at(column, row) {
             return Some(HoverTarget::MemberRow(index));
+        }
+        if let Some(index) = self.inbox_row_at(column, row) {
+            return Some(HoverTarget::InboxRow(index));
         }
         if let Some(target) = self.hovered_side_panel(column, row) {
             return Some(target);
@@ -2084,7 +2334,7 @@ impl App {
     /// The button at `column` on projects-list row `index`, if the row is
     /// an agent's, and the agent's id. Where the buttons sit follows the
     /// row's time, which is formatted against the clock just as the
-    /// renderer does it.
+    /// renderer does it, and the code column.
     fn agent_button_hit(&self, index: usize, column: u16) -> Option<(AgentButton, String)> {
         let list = self.areas.agent_rows?;
         let ProjectListRow::Agent { index: agent } = *self.project_rows().get(index)? else {
@@ -2095,8 +2345,14 @@ impl App {
         let ago = agent
             .last_active_ms
             .map(|ms| crate::renderer::format_ago(ms, now));
+        let end = AgentRowEnd::agent(
+            usize::from(list.width),
+            agent.depth,
+            ago.as_deref(),
+            (shown_agent_code(agent), agent_code_width(&self.agents)),
+        );
         let offset = column.checked_sub(list.x)?;
-        let button = agent_button_at(list.width, ago.as_deref(), offset)?;
+        let button = agent_button_at(list.width, &end, offset)?;
         Some((button, agent.id.clone()))
     }
 
@@ -2271,6 +2527,7 @@ impl App {
     /// Report the outcome of copying `chars` characters to the clipboard.
     ///
     pub fn notify_copied(&mut self, chars: usize, result: &std::io::Result<()>) {
+        self.redraw = true;
         let what = self.copy_label.take();
         self.log.copy_finished(result.is_ok());
         self.notification = Some(match result {
@@ -2300,7 +2557,6 @@ impl App {
             self.add_agent_to_project(&key);
         } else if let Some((button, id)) = self.agent_button_hit(index, column) {
             match button {
-                AgentButton::Open => self.request_agent_switch(id),
                 AgentButton::Archive => self.archive_agent(id),
             }
         } else if let Some(agent) = self.fold_marker_at(index, column) {
@@ -2866,10 +3122,10 @@ impl App {
         self.chat_width.max(MIN_COMMAND_COLUMNS)
     }
 
-    /// Highlighted row in the model selector.
+    /// Model selector state (tab, filter, highlighted row).
     #[must_use]
-    pub const fn model_cursor(&self) -> usize {
-        self.model_cursor
+    pub const fn model_picker(&self) -> &ModelPicker {
+        &self.model_picker
     }
 
     /// Get the current spinner character for animations.
@@ -3125,19 +3381,55 @@ impl App {
 
     /// Request a switch to another agent. Agents keep working while
     /// another one is shown.
+    ///
+    /// A listed agent comes on screen at once, without waiting for the
+    /// session: a chat already held in memory is shown as it is and the
+    /// session is only told the agent is in front (`FocusAgent`); any
+    /// other chat is asked for (`SelectAgent`) and waits, blank, for its
+    /// history. The event goes out before the local switch so the
+    /// requests the switch makes (LOG, GRAPH, BENCH) reach the session
+    /// after it. An agent that is not listed, such as one shown in
+    /// another tab of the desktop window, only gets the request; the
+    /// screen changes once the session answers.
     pub(super) fn request_agent_switch(&mut self, agent_id: String) {
         if agent_id == self.active_agent_id {
             return;
         }
-        if let Some(tx) = &self.event_tx {
-            let _ = tx.try_send(UiEvent::SelectAgent(agent_id));
+        if !self.agents.iter().any(|agent| agent.id == agent_id) {
+            self.try_send_event(UiEvent::SelectAgent(agent_id));
+            return;
         }
+        let loaded = self.views.get(&agent_id).is_some_and(|view| view.loaded);
+        let event = if loaded {
+            UiEvent::FocusAgent(agent_id.clone())
+        } else {
+            UiEvent::SelectAgent(agent_id.clone())
+        };
+        // A request that never left gets no answer, and a switch waiting
+        // for one would drop every later `SetActiveAgent`.
+        if !self.try_send_event(event) {
+            return;
+        }
+        if self.switch_sent.is_none() && self.confirmed_agent.is_empty() {
+            self.confirmed_agent.clone_from(&self.active_agent_id);
+        }
+        self.switch_sent = Some(agent_id.clone());
+        self.apply_active_agent(&agent_id);
+        self.start_chat_loading();
+    }
+
+    /// Send `event` to the session. Returns whether it went out.
+    fn try_send_event(&self, event: UiEvent) -> bool {
+        self.event_tx
+            .as_ref()
+            .is_some_and(|tx| tx.try_send(event).is_ok())
     }
 
     /// Process pending updates from the command channel, and scroll the
     /// chat under a selection held past its top or bottom.
     pub fn tick(&mut self) {
         self.animation_frame = self.animation_frame.wrapping_add(1);
+        let shown = self.notification.is_some();
         self.expire_notification();
         if !self.selection_scrolling() {
             self.selection_scrolled = None;
@@ -3152,6 +3444,7 @@ impl App {
         self.receive_commands();
         if std::mem::take(&mut self.sandbox_stale) && self.sandbox_panel_visible {
             self.sandbox.refresh();
+            self.redraw = true;
         }
         self.refresh_live_log();
 
@@ -3163,6 +3456,48 @@ impl App {
         } else {
             self.processing_since = None;
         }
+        if shown || self.animating() {
+            self.redraw = true;
+        }
+    }
+
+    /// Whether the screen may look different since this was last called:
+    /// a command changed what it shows, a tick turned a spinner, or
+    /// something it shows changed with time. Commands for agents off
+    /// screen count only when they change something on it (a
+    /// notification, the projects list's marks). The host draws when this
+    /// says so, and after input, which this doesn't track.
+    pub fn take_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.redraw)
+    }
+
+    /// Have the next [`Self::take_redraw`] say the screen changed.
+    pub fn request_redraw(&mut self) {
+        self.redraw = true;
+    }
+
+    /// Whether the screen changes from tick to tick: a spinner turns for
+    /// an agent, task or process at work, a notification scrolls, a
+    /// selection held past the chat's edge scrolls it, or the chat, LOG
+    /// or BENCH tab animates.
+    #[must_use]
+    pub fn animating(&self) -> bool {
+        self.is_busy()
+            || self.notification.is_some()
+            || self.agents.iter().any(|agent| agent.running)
+            || self
+                .task_list
+                .tasks()
+                .iter()
+                .any(|task| task.state == crate::events::TaskState::Running)
+            || self
+                .processes
+                .iter()
+                .any(|process| process.status == crate::events::ProcessStatus::Running)
+            || self.selection_scrolling()
+            || self.bench_animating()
+            || self.log_animating()
+            || self.chat_animating()
     }
 
     /// Apply every command waiting in the command channel. Between frames

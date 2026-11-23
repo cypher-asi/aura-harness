@@ -145,6 +145,30 @@ impl AgentControlHook for AgentHooks {
         attachments: Option<serde_json::Value>,
         model: Option<&str>,
     ) -> Result<(), String> {
+        self.deliver_message_in_thread(
+            target_agent_id,
+            parent_agent_id,
+            originating_user_id,
+            project_id,
+            content,
+            attachments,
+            model,
+            None,
+        )
+        .await
+    }
+
+    async fn deliver_message_in_thread(
+        &self,
+        target_agent_id: &str,
+        parent_agent_id: Option<&str>,
+        originating_user_id: Option<&str>,
+        project_id: Option<&str>,
+        content: &str,
+        attachments: Option<serde_json::Value>,
+        model: Option<&str>,
+        subject: Option<&str>,
+    ) -> Result<(), String> {
         let host = self.host()?;
         if let Some(target) = self.local_target(&host, target_agent_id)? {
             return host.deliver_message(
@@ -152,12 +176,13 @@ impl AgentControlHook for AgentHooks {
                 target,
                 MessageKind::Request,
                 content.to_string(),
+                subject,
             );
         }
         match self.env().and_then(|env| env.remote_control) {
             Some(remote) => {
                 remote
-                    .deliver_message(
+                    .deliver_message_in_thread(
                         target_agent_id,
                         parent_agent_id,
                         originating_user_id,
@@ -165,6 +190,7 @@ impl AgentControlHook for AgentHooks {
                         content,
                         attachments,
                         model,
+                        subject,
                     )
                     .await
             }
@@ -224,7 +250,7 @@ impl AgentControlHook for AgentHooks {
                 ),
                 None => task.to_string(),
             };
-            return host.deliver_message(Some(self.caller), target, MessageKind::Request, text);
+            return host.deliver_in_new_thread(self.caller, target, text);
         }
         match self.env().and_then(|env| env.remote_control) {
             Some(remote) => {

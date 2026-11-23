@@ -69,7 +69,7 @@ pub fn shimmer_spans(
 }
 
 /// `color` as red, green and blue, when it has a fixed value.
-const fn rgb(color: Color) -> Option<(u8, u8, u8)> {
+pub(crate) const fn rgb(color: Color) -> Option<(u8, u8, u8)> {
     match color {
         Color::Rgb(r, g, b) => Some((r, g, b)),
         Color::White => Some((255, 255, 255)),
@@ -82,7 +82,7 @@ const fn rgb(color: Color) -> Option<(u8, u8, u8)> {
 
 /// The color `part / whole` of the way from `from` to `to`, `part` at most
 /// `whole`.
-fn mix(from: (u8, u8, u8), to: (u8, u8, u8), (part, whole): (usize, usize)) -> Color {
+pub(crate) fn mix(from: (u8, u8, u8), to: (u8, u8, u8), (part, whole): (usize, usize)) -> Color {
     let channel = |a: u8, b: u8| {
         let (a, b) = (usize::from(a), usize::from(b));
         let value = if b >= a {

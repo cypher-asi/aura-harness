@@ -1,0 +1,41 @@
+{
+  "id": "01a2054907920039",
+  "title": "finish",
+  "state": "completed",
+  "agent_id": "6e6ac86c5323b32834581a572d3b4f071b98cee6591e81f7b10af349b8e36429",
+  "agent_name": "Agent 963",
+  "items": [
+    {
+      "content": "Engine + tool: mail.rs, thread/subject on envelopes, MailObserver, send_to_agent subject, tests",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "aura-ui: MailView and UiCommand::AddMail",
+      "state": "completed"
+    },
+    {
+      "content": "aura-app: Mailbox observer, channel + loop arm, task mail, tests",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "TUI: RecordsTab::Inbox, Inbox state, DetailView::Thread, keys/clicks, /inbox",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "TUI: renderer for inbox list and thread view, tab-bar test fixes, docs",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "fmt, clippy, tests, commit",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    }
+  ],
+  "summary": "Refine the drop list and restage.",
+  "updated_ms": 1795385996677,
+  "created_ms": 1795385001874
+}

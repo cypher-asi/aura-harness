@@ -108,10 +108,14 @@ impl UiRecordObserver {
                 None
             }
         };
-        if let Some((model, usage)) = footer {
+        if let Some(footer) = footer {
             self.send(UiCommand::ForAgent {
                 agent_id: entry.tx.agent_id.to_hex(),
-                command: Box::new(UiCommand::SetReplyModel { model, usage }),
+                command: Box::new(UiCommand::SetReplyModel {
+                    model: footer.models,
+                    usage: footer.usage,
+                    sources: footer.sources,
+                }),
             });
         }
     }

@@ -12,7 +12,7 @@ use ratatui::{
 
 use crate::app::image_preview::ImagePreview;
 use crate::components::Activity;
-use crate::events::{CallUsage, FileDiffData, MessageRole};
+use crate::events::{CallUsage, FileDiffData, MessageRole, SourceUsage};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -43,6 +43,8 @@ pub struct Message {
     model: Option<String>,
     /// Tokens and cost of the model call that wrote an assistant reply
     usage: Option<CallUsage>,
+    /// Those tokens split by the sign-in that paid for them
+    sources: Vec<SourceUsage>,
     /// Set when the message shows file changes
     diff: Option<DiffBlock>,
     /// Images the user pasted into the message, drawn under its text
@@ -65,6 +67,7 @@ impl Clone for Message {
             expanded: self.expanded,
             model: self.model.clone(),
             usage: self.usage,
+            sources: self.sources.clone(),
             diff: self.diff.clone(),
             images: self.images.clone(),
             id: next_message_id(),
@@ -107,6 +110,7 @@ impl Message {
             expanded: false,
             model: None,
             usage: None,
+            sources: Vec::new(),
             diff: None,
             images: Vec::new(),
             id: next_message_id(),
@@ -265,6 +269,20 @@ impl Message {
     pub fn set_usage(&mut self, usage: Option<CallUsage>) {
         if self.usage != usage {
             self.usage = usage;
+            self.touch();
+        }
+    }
+
+    /// The reply's tokens split by the sign-in that paid for them.
+    #[must_use]
+    pub fn sources(&self) -> &[SourceUsage] {
+        &self.sources
+    }
+
+    /// Record which sign-ins paid for the reply's tokens.
+    pub fn set_sources(&mut self, sources: &[SourceUsage]) {
+        if self.sources != sources {
+            self.sources = sources.to_vec();
             self.touch();
         }
     }

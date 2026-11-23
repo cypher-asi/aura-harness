@@ -1,0 +1,54 @@
+{
+  "id": "01a204eaee1c0023",
+  "title": "impl",
+  "state": "open",
+  "agent_id": "3368940924675b173207a46516aefe1b8ea82a4877f9b8ec4c11ae6f513f9b71",
+  "agent_name": "Agent 956",
+  "items": [
+    {
+      "content": "Add ArmSpec::ByDifficulty with label/from_label/model_for and serde tests",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Add router::runnable and ModelSelection::runnable_models",
+      "state": "pending"
+    },
+    {
+      "content": "Resolve arm models across all providers; parse difficulty: arms; DifficultyRoutes::decide",
+      "state": "completed"
+    },
+    {
+      "content": "Wire routes into ComparePlan, estimate and arm labels in compare.rs/compare_view.rs",
+      "state": "pending"
+    },
+    {
+      "content": "Route turns by difficulty in compare_run.rs via ArmRouting::ByDifficulty",
+      "state": "pending"
+    },
+    {
+      "content": "Classify and route subtasks by the table in subagents.rs/gate_subtask.rs",
+      "state": "pending"
+    },
+    {
+      "content": "BENCH form: by-difficulty choice, per-difficulty rows, typed match, submit",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Render the new arm and its rows in renderer/benchmarks.rs",
+      "state": "pending"
+    },
+    {
+      "content": "Add tests across core-types, gate, aura-app and TUI; run fmt, clippy, test",
+      "state": "pending"
+    },
+    {
+      "content": "Update /compare USAGE and CHANGELOG",
+      "state": "pending"
+    }
+  ],
+  "summary": "Starting with the core/gate layer and the TUI form side by side, since the UI crate doesn't depend on the core types.",
+  "updated_ms": 1795379774359,
+  "created_ms": 1795378834972
+}

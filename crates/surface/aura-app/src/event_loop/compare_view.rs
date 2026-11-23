@@ -81,6 +81,12 @@ pub(super) fn arm_label(spec: &ArmSpec) -> String {
             format!("gate without enforced delegation ({NO_DELEGATE})")
         }
         ArmSpec::Model { model } => route_label(model),
+        ArmSpec::ByDifficulty { easy, medium, hard } => format!(
+            "by difficulty: easy → {} · medium → {} · hard → {}",
+            route_label(easy),
+            route_label(medium),
+            route_label(hard)
+        ),
     }
 }
 

@@ -1314,6 +1314,12 @@ async fn switching_to_a_busy_agent_keeps_its_live_chat() {
         .iter()
         .any(|(_, c)| matches!(c, UiCommand::LoadConversation(_)));
     assert!(!reloaded, "a busy agent's chat is live, not reloaded");
+    assert!(
+        commands.iter().any(|(agent, c)| {
+            agent.as_deref() == Some(first.to_hex().as_str()) && matches!(c, UiCommand::ChatReady)
+        }),
+        "the UI is told its live chat is current, so it stops waiting: {commands:?}"
+    );
 
     fixture.gate.add_permits(1);
     let finished = next_done(&mut done).await;
@@ -1722,6 +1728,52 @@ async fn a_mode_switch_is_recorded_before_it_takes_effect() {
         ),
         "{shown:?}"
     );
+}
+
+/// Whether the Agents panel rows say each agent is in plan mode, by hex
+/// id: from the lists sent to the UI, then from the hub's summaries.
+fn plan_marks(hub: &subagents::AgentHub) -> [HashMap<String, bool>; 2] {
+    let marks = |rows: Vec<aura_ui_terminal::events::AgentSummary>| {
+        rows.into_iter()
+            .map(|row| (row.id, row.plan_mode))
+            .collect::<HashMap<_, _>>()
+    };
+    let listed = hub
+        .agent_lists()
+        .into_iter()
+        .find_map(|command| match command {
+            UiCommand::SetAgents(rows) => Some(rows),
+            _ => None,
+        })
+        .expect("the lists hold the Agents panel rows");
+    [marks(listed), marks(hub.agent_summaries())]
+}
+
+#[tokio::test]
+async fn a_switch_to_plan_mode_marks_the_agent_in_the_agent_lists() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let (first, second) = (fixture.first.to_hex(), fixture.second.to_hex());
+    let mut state = loop_state(&fixture, &mut b);
+    let expect = |first_on: bool, second_on: bool| {
+        let marks = HashMap::from([(first.clone(), first_on), (second.clone(), second_on)]);
+        [marks.clone(), marks]
+    };
+    assert_eq!(plan_marks(&state.hub), expect(false, false));
+
+    let set_plan = UiEvent::SetMode {
+        agent_id: first.clone(),
+        mode: PermissionMode::Plan,
+    };
+    handle_ui_event(&mut state, set_plan, &links).await;
+    assert_eq!(plan_marks(&state.hub), expect(true, false));
+
+    // `/plan` again leaves plan mode, and once more enters it.
+    handle_ui_event(&mut state, UiEvent::TogglePlan(first.clone()), &links).await;
+    assert_eq!(plan_marks(&state.hub), expect(false, false));
+    handle_ui_event(&mut state, UiEvent::TogglePlan(first.clone()), &links).await;
+    assert_eq!(plan_marks(&state.hub), expect(true, false));
 }
 
 #[tokio::test]
@@ -3306,4 +3358,50 @@ async fn focusing_an_agent_makes_it_active_without_reloading_its_chat() {
             .any(|(_, c)| matches!(c, UiCommand::LoadConversation(_))),
         "the view that asked already has the chat"
     );
+}
+
+#[tokio::test]
+async fn a_selected_agent_gets_its_chat_before_its_records() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(
+        &mut state,
+        UiEvent::SelectAgent(fixture.second.to_hex()),
+        &links,
+    )
+    .await;
+    let sent = drain(&mut commands);
+    let at = |wanted: fn(&UiCommand) -> bool| sent.iter().position(|(_, c)| wanted(c));
+    let chat = at(|c| matches!(c, UiCommand::LoadConversation(_))).expect("chat sent");
+    let records = at(|c| matches!(c, UiCommand::SetRecords(_))).expect("records sent");
+    assert!(chat < records, "the chat the UI waits on comes first");
+}
+
+#[tokio::test]
+async fn selecting_the_active_agent_again_sends_its_chat() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let second = fixture.second;
+    let mut state = loop_state(&fixture, &mut b);
+
+    handle_ui_event(&mut state, UiEvent::SelectAgent(second.to_hex()), &links).await;
+    let _ = drain(&mut commands);
+
+    // A UI that showed another agent meanwhile, without the session
+    // following, asks for this one's chat again.
+    handle_ui_event(&mut state, UiEvent::SelectAgent(second.to_hex()), &links).await;
+    let again = drain(&mut commands);
+    assert!(again
+        .iter()
+        .any(|(_, c)| matches!(c, UiCommand::LoadConversation(_))));
+
+    handle_ui_event(&mut state, UiEvent::FocusAgent(second.to_hex()), &links).await;
+    let focused = drain(&mut commands);
+    assert!(!focused
+        .iter()
+        .any(|(_, c)| matches!(c, UiCommand::LoadConversation(_))));
 }

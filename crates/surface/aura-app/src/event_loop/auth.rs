@@ -238,10 +238,15 @@ pub(super) async fn handle_link(
         "Open this URL"
     };
     if pending.needs_paste() {
+        let api_key = if kind == ProviderKind::OpenRouter {
+            " (or paste an sk-or- API key)"
+        } else {
+            ""
+        };
         show_system_message(
             state,
             format!(
-                "{how} to sign in to {}, then paste the code it shows:\n{url}",
+                "{how} to sign in to {}, then paste the code it shows{api_key}:\n{url}",
                 kind.label()
             ),
         )
@@ -310,7 +315,12 @@ pub(super) async fn handle_link_outcome(state: &mut LoopState<'_>, outcome: Link
             )
             .await;
             let mut note = describe_link(&link);
-            if link.plan_enabled {
+            if kind == ProviderKind::OpenRouter {
+                note.push_str(
+                    "\nOpenRouter models are now in /model; they bill your OpenRouter credits, \
+                     not Aura.",
+                );
+            } else if link.plan_enabled {
                 note.push_str(&format!(
                     "\n{} plan models are now in /model; they bill your plan, not Aura.",
                     kind.label()

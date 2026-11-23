@@ -10,7 +10,10 @@
 //!
 //! - a Gate arm's turns go where Gate sends them with exploration off,
 //!   and their subtasks are routed the same way;
-//! - a pinned arm's turns and subtasks run on the model it is pinned to.
+//! - a pinned arm's turns and subtasks run on the model it is pinned to;
+//! - a by-difficulty arm's turns and subtasks run on the model it gives
+//!   their difficulty, as the classifier rates it, and are not followed
+//!   up, judged or moved to stronger models.
 //!
 //! A run sends its prompts one after the other on the same conversation,
 //! as a replayed session did. Each prompt is recorded with route reason
@@ -59,8 +62,8 @@ use aura_core_types::{
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_gate::attempts::Terms;
 use aura_gate::compare::{
-    judge_pairs, judge_task, list_price, plan_shares, run_name, seed, EndedRun, PlanReading,
-    Schedule,
+    judge_pairs, judge_task, list_price, plan_shares, run_name, seed, DifficultyRoutes, EndedRun,
+    PlanReading, Schedule,
 };
 use aura_gate::evidence::outcome::calls_for_stronger;
 
@@ -73,6 +76,7 @@ use aura_ui_terminal::events::{
     run_order, BenchDoing, BenchLiveRun, BenchTaskSetup, ProcessStatus,
 };
 use aura_ui_terminal::{ApprovalLevel, PermissionMode, UiCommand};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -121,6 +125,9 @@ pub(super) struct ComparePlan {
     pub budget_usd: Option<f64>,
     /// What Gate routes a Gate arm among
     pub candidates: Vec<Candidate>,
+    /// Every model the user can run on any route, which a by-difficulty
+    /// arm's models are looked up among
+    pub runnable: Vec<Candidate>,
     /// Model that classifies the runs' prompts
     pub classifier: String,
     /// The user's folder the copies are made from
@@ -158,12 +165,36 @@ fn fixture(dir: &Path, task: &ExampleTask) -> PathBuf {
     dir.join(FIXTURES).join(task.id.replace('/', "__"))
 }
 
+/// How an arm is named where room is short: its label, or `by difficulty`
+/// for an arm whose label lists a model per difficulty.
+fn short_label(spec: &ArmSpec) -> Cow<'_, str> {
+    if spec.is_by_difficulty() {
+        Cow::Borrowed("by difficulty")
+    } else {
+        spec.label()
+    }
+}
+
 /// What the agent grouping `arm`'s runs, on `spec`, is called:
-/// `A · gate`, `B · claude-opus-5-5`.
+/// `A · gate`, `B · claude-opus-5-5`, `B · by difficulty`.
 fn arm_name(arm: CompareArm, spec: &ArmSpec) -> String {
-    let label = spec.label();
-    let short = label.rsplit('/').next().unwrap_or(label);
+    let label = short_label(spec);
+    let short = label.rsplit('/').next().unwrap_or(&label);
     format!("{} · {short}", arm.as_str().to_uppercase())
+}
+
+/// How the turns and subtasks of a run of the arm `spec` are routed.
+fn arm_routing(spec: &ArmSpec, plan: &ComparePlan) -> ArmRouting {
+    match (spec, DifficultyRoutes::of(spec, &plan.runnable)) {
+        (_, Some(routes)) => ArmRouting::ByDifficulty(routes),
+        (ArmSpec::Gate { delegate }, None) => ArmRouting::Gate {
+            candidates: plan.candidates.clone(),
+            delegate: *delegate,
+        },
+        (ArmSpec::Model { model }, None) => ArmRouting::Pinned(model.clone()),
+        // `DifficultyRoutes::of` gives routes for every by-difficulty arm.
+        (ArmSpec::ByDifficulty { medium, .. }, None) => ArmRouting::Pinned(medium.clone()),
+    }
 }
 
 /// The task records a run's subtasks left in its copy, moved out of it
@@ -1043,7 +1074,7 @@ fn run_recorder(
     task: &str,
 ) -> Option<Arc<RunRecorder>> {
     let spec = &ctx.plan.arms[arm.index()];
-    let mut meta = RunMeta::new(spec.label(), RunSource::Bench);
+    let mut meta = RunMeta::new(short_label(spec), RunSource::Bench);
     meta.workspace = session.kernel.agent_workspace().display().to_string();
     meta.mode = PermissionMode::Agent.name().to_string();
     meta.title = format!("{} {name}: {task}", ctx.host.name);
@@ -1087,13 +1118,7 @@ async fn run_turn(
     hub.set_permissions(agent_id, permissions);
     super::modes::apply(&session.kernel, permissions, &hub.tool_names());
     let spec = &plan.arms[arm.index()];
-    let routing = match spec {
-        ArmSpec::Gate { delegate } => ArmRouting::Gate {
-            candidates: plan.candidates.clone(),
-            delegate: *delegate,
-        },
-        ArmSpec::Model { model } => ArmRouting::Pinned(model.clone()),
-    };
+    let routing = arm_routing(spec, plan);
     hub.begin_compare_run(agent_id, routing.clone());
     let task = example.map_or(plan.task.as_str(), |task| task.title.as_str());
     let recorder = run_recorder(ctx, &session, (arm, name, example), task);
@@ -1108,7 +1133,7 @@ async fn run_turn(
 
     let cancel = ctx.cancel.child_token();
     let ui = AgentUi::new(ctx.commands.clone(), agent_id);
-    let mut row = turn_summary(agent_id, task, spec.label());
+    let mut row = turn_summary(agent_id, task, &short_label(spec));
     row.label = format!("{} {name}: {}", ctx.host.name, row.label);
     hub.processes.start(row, Some(cancel.clone()));
     hub.start_running(agent_id, Arc::clone(&session.kernel), cancel.clone(), None);
@@ -1127,7 +1152,7 @@ async fn run_turn(
         // What the copy holds before the prompt, so a review of a Gate
         // run sees everything the prompt's turn changes.
         let copy_before = match (&routing, i) {
-            (ArmRouting::Pinned(_), _) => None,
+            (ArmRouting::Pinned(_) | ArmRouting::ByDifficulty(_), _) => None,
             (ArmRouting::Gate { .. }, 0) => Some(Before::of_copy(&copy)),
             (ArmRouting::Gate { .. }, _) => Before::of_copy_now(&copy).await,
         };
@@ -1325,16 +1350,17 @@ async fn run_prompt(
                 None
             }
         },
-        ArmRouting::Pinned(_) => None,
+        ArmRouting::Pinned(_) | ArmRouting::ByDifficulty(_) => None,
     };
     let work = Work::turn(category).of(difficulty);
     let decision = match routing {
         ArmRouting::Gate { .. } if plan.learn => hub.gate.decide(&work, &plan.candidates),
         ArmRouting::Gate { .. } => hub.gate.redecide(&work, &plan.candidates),
+        ArmRouting::ByDifficulty(routes) => Some(routes.decide(&work)),
         ArmRouting::Pinned(_) => None,
     };
     match (routing, &decision) {
-        (ArmRouting::Gate { .. }, Some(decision)) => {
+        (ArmRouting::Gate { .. } | ArmRouting::ByDifficulty(_), Some(decision)) => {
             hub.model_limits().route(&mut config, decision);
         }
         (ArmRouting::Pinned(model), _) if *model != config.model => {
@@ -1381,7 +1407,7 @@ async fn run_prompt(
     ui.send(system_message(format!(
         "{} {name} · {} → {} · {category}{step}",
         ctx.host.name,
-        plan.arms[arm.index()].label(),
+        short_label(&plan.arms[arm.index()]),
         aura_model::model_catalog::route_label(&model)
     )))
     .await;

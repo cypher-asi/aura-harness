@@ -17,13 +17,15 @@ use super::compare_run::{self, patches, remove_copies, save, ComparePlan};
 use super::compare_view::{self, arm_label, split_patch, EstimateView};
 use super::handlers::system_message;
 use super::subagents::{lock, AgentHub};
+use super::titles;
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
 use aura_agent_kernel::Kernel;
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::{
-    AgentId, ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, RouteLevel,
+    AgentId, ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, Difficulty,
+    RouteLevel,
 };
 use aura_gate::compare::{
     default_against, estimate, parse, resolve_arms, CompareCommand, CompareRequest,
@@ -344,14 +346,19 @@ pub(super) async fn prepare(
         }
         None => "gate".to_string(),
     };
+    let runnable = state.models.runnable_models();
     let (arm_a, arm_b) = resolve_arms(
         (&a_query, &b_query),
+        &runnable,
         &candidates,
         state.hub.gate.settings().delegate,
     )?;
-    let judge = strongest.unwrap_or_else(|| match (&arm_a, &arm_b) {
-        (ArmSpec::Model { model }, _) | (_, ArmSpec::Model { model }) => model.clone(),
-        _ => String::new(),
+    let judge = strongest.unwrap_or_else(|| {
+        [&arm_a, &arm_b]
+            .into_iter()
+            .find_map(|spec| spec.model_for(Some(Difficulty::Hard)))
+            .unwrap_or_default()
+            .to_string()
     });
     let check = if examples.is_empty() {
         request.check.clone().or_else(|| {
@@ -374,9 +381,11 @@ pub(super) async fn prepare(
         .map(|decision| decision.model.id),
         None => aura_gate::route::fixed_pick(&candidates).map(|c| c.id.clone()),
     };
-    let model_of = |spec: &ArmSpec| match spec {
-        ArmSpec::Gate { .. } => expected.clone().unwrap_or_else(|| judge.clone()),
-        ArmSpec::Model { model } => model.clone(),
+    // A by-difficulty arm is priced on its medium model, which work of
+    // unknown difficulty runs on.
+    let model_of = |spec: &ArmSpec| match spec.model_for(None) {
+        Some(model) => model.to_string(),
+        None => expected.clone().unwrap_or_else(|| judge.clone()),
     };
     let reads = |spec: &ArmSpec| match (spec, expected.as_deref()) {
         (ArmSpec::Gate { .. }, Some(model)) => {
@@ -427,6 +436,7 @@ pub(super) async fn prepare(
         check,
         budget_usd: request.budget_usd,
         candidates,
+        runnable,
         classifier: state.models.classifier_model(),
         workspace,
         user: agent_id,
@@ -484,7 +494,7 @@ pub(super) async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
         let mut registry = lock(&state.hub.registry);
         // Asked from a comparison, or from a run of one, it goes beside
         // that comparison rather than inside it.
-        let parent = registry
+        let (parent_id, untitled, parent) = registry
             .ancestry(plan.user)
             .into_iter()
             .filter_map(|id| registry.find(id))
@@ -493,11 +503,22 @@ pub(super) async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
                     && !agent.is_compare_arm()
                     && !registry.under_compare(agent.agent_id())
             })
-            .map(|agent| agent.zns_id.clone())
+            .map(|agent| (agent.agent_id(), agent.needs_title(), agent.zns_id.clone()))
             .ok_or("The agent that asked for the comparison is gone")?;
-        registry
+        let host = registry
             .create_compare(&parent)
-            .map_err(|e| format!("Could not register the comparison: {e:#}"))?
+            .map_err(|e| format!("Could not register the comparison: {e:#}"))?;
+        // An agent opened only to run a benchmark never runs a typed turn,
+        // so it would keep its placeholder name in the Agents panel: name
+        // it after the benchmark instead. Names the user gave are kept.
+        if untitled {
+            if let Err(e) =
+                registry.set_title(parent_id, &titles::bench_title(&plan.source, &plan.task))
+            {
+                warn!(agent = %parent_id, error = %e, "Could not save the benchmark title");
+            }
+        }
+        host
     };
     state.hub.send_agent_list().await;
     info!(

@@ -5,34 +5,72 @@
 //! the atlas's, for color glyphs) over what is there, by the color's
 //! alpha times the atlas's coverage. The sum is rounded once, at the
 //! end, as the GPU rounds what it worked out in floating point.
+//!
+//! A tall frame is cut into bands of rows, each painted by a thread of
+//! its own with every quad cut to the band.
 
 use crate::scene::{Fill, Quad, Scene};
 use crate::text::Atlas;
+use std::num::NonZeroUsize;
+use std::ops::Range;
+
+/// Rows a thread is given at least: fewer cost more to hand out than to
+/// paint.
+const BAND_ROWS: usize = 64;
+/// Most threads a frame is painted by.
+const MOST_BANDS: usize = 8;
 
 /// Paint `scene` into `out` as RGBA rows, top to bottom, resizing it to
 /// the scene.
 pub fn paint(scene: &Scene, atlas: &Atlas, out: &mut Vec<u8>) {
     let (width, height) = (scene.width as usize, scene.height as usize);
-    let [red, green, blue, _] = scene.background;
+    let stride = width * 4;
     out.clear();
-    out.reserve(width * height * 4);
-    for _ in 0..width * height {
-        out.extend_from_slice(&[red, green, blue, 255]);
+    out.resize(stride * height, 0);
+    if stride == 0 {
+        return;
     }
+    let rows = height.div_ceil(bands(height));
+    if rows >= height {
+        paint_band(scene, atlas, out, 0);
+        return;
+    }
+    std::thread::scope(|scope| {
+        for (index, band) in out.chunks_mut(rows * stride).enumerate() {
+            scope.spawn(move || paint_band(scene, atlas, band, index * rows));
+        }
+    });
+}
+
+/// How many bands, a thread each, a frame `height` rows tall is cut into.
+pub fn bands(height: usize) -> usize {
+    let threads = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    threads.min(MOST_BANDS).min(height / BAND_ROWS).max(1)
+}
+
+/// Paint the rows of `scene` from row `top` into `band`, as many as it
+/// holds.
+fn paint_band(scene: &Scene, atlas: &Atlas, band: &mut [u8], top: usize) {
+    let [red, green, blue, _] = scene.background;
+    for pixel in band.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&[red, green, blue, 255]);
+    }
+    let rows = band.len() / (scene.width as usize * 4);
     for quad in &scene.quads {
-        paint_quad(quad, scene, atlas, out);
+        paint_quad(quad, scene, atlas, band, top..top + rows);
     }
 }
 
+/// Paint `quad` into `out`, which holds the frame's `rows`.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss
 )]
-fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8]) {
-    // The part of the quad inside the frame.
+fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8], rows: Range<usize>) {
+    // The part of the quad inside the frame, and in these rows.
     let left = quad.x.max(0);
-    let top = quad.y.max(0);
+    let top = quad.y.max(rows.start as i32);
     let right = quad
         .x
         .saturating_add_unsigned(quad.w)
@@ -40,7 +78,8 @@ fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8]) {
     let bottom = quad
         .y
         .saturating_add_unsigned(quad.h)
-        .min(scene.height as i32);
+        .min(scene.height as i32)
+        .min(rows.end as i32);
     if right <= left || bottom <= top {
         return;
     }
@@ -49,7 +88,7 @@ fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8]) {
     let (atlas_width, atlas_height) = atlas.size();
     let [red, green, blue, alpha] = quad.color;
     for y in top..bottom {
-        let start = y as usize * stride + left as usize * 4;
+        let start = (y as usize - rows.start) * stride + left as usize * 4;
         let row = &mut out[start..start + span];
         if quad.fill == Fill::Solid {
             if alpha == 255 {
@@ -249,6 +288,34 @@ mod tests {
         assert!(green
             .iter()
             .all(|(x, y)| pixel(&pixels, 40, *x, *y)[0] == 0));
+    }
+
+    #[test]
+    fn a_frame_painted_in_bands_is_the_frame_painted_whole() {
+        let mut text = TextSystem::new();
+        let mut scene = Scene::default();
+        scene.begin(50, 300, [10, 20, 30, 255]);
+        for (step, top) in (0u8..).zip([0.0, 60.0, 70.0, 140.0, 148.0, 220.0, 290.0]) {
+            let color = [200, step * 30, 90, 100 + step * 20];
+            scene
+                .quads
+                .extend(Quad::solid(-5.0, top, 40.0, top + 20.0, color));
+        }
+        for y in [60.0, 145.0, 223.0] {
+            let cell = Rectangle {
+                x: 10.0,
+                y,
+                width: 8.4,
+                height: 18.0,
+            };
+            shapes::draw(&mut scene.quads, text.atlas_mut(), '◆', cell, WHITE);
+        }
+        let mut banded = Vec::new();
+        paint(&scene, text.atlas(), &mut banded);
+        let mut whole = vec![0; banded.len()];
+        paint_band(&scene, text.atlas(), &mut whole, 0);
+        assert_eq!(banded.len(), 50 * 300 * 4);
+        assert!(banded == whole, "the bands meet without a seam");
     }
 
     #[test]

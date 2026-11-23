@@ -199,6 +199,27 @@ fn history(messages: usize) -> Vec<MessageData> {
     out
 }
 
+/// Two hundred turns of a question and a long answer, no two rows alike
+/// as in a real conversation.
+fn long_chat() -> Vec<MessageData> {
+    (0..200)
+        .flat_map(|turn| {
+            let reply: String = (0..12)
+                .map(|k| {
+                    format!(
+                        "Turn {turn}, point {k}: the kernel records step {k} of turn {turn} \
+                         and checks it against the policy before it runs.\n\n"
+                    )
+                })
+                .collect();
+            [
+                MessageData::new(MessageRole::User, format!("Question number {turn}")),
+                MessageData::new(MessageRole::Assistant, reply),
+            ]
+        })
+        .collect()
+}
+
 /// The middle of `pane`'s body on the window, in pixels.
 #[allow(clippy::cast_precision_loss)]
 fn inside(stage: &super::tests::Stage, pane: aura_ui_terminal::Pane) -> crate::geom::Point {
@@ -251,27 +272,10 @@ fn scroll_timings() {
         }
     }
     agents[0].id = "a1".into();
-    // No two rows alike, as in a real conversation.
-    let conversation: Vec<MessageData> = (0..200)
-        .flat_map(|turn| {
-            let reply: String = (0..12)
-                .map(|k| {
-                    format!(
-                        "Turn {turn}, point {k}: the kernel records step {k} of turn {turn} \
-                         and checks it against the policy before it runs.\n\n"
-                    )
-                })
-                .collect();
-            [
-                MessageData::new(MessageRole::User, format!("Question number {turn}")),
-                MessageData::new(MessageRole::Assistant, reply),
-            ]
-        })
-        .collect();
     stage.apply([
         UiCommand::SetAgents(agents),
         UiCommand::SetActiveAgent("a1".into()),
-        UiCommand::LoadConversation(conversation),
+        UiCommand::LoadConversation(long_chat()),
     ]);
 
     let run = |stage: &mut super::tests::Stage, label: &str, delta: MouseScrollDelta| {
@@ -311,6 +315,162 @@ fn scroll_timings() {
         "projects list, a notch down and its frame",
         MouseScrollDelta::LineDelta(0.0, -1.0),
     );
+}
+
+/// A second of the window's loop with thirty agents streaming behind a
+/// long chat. What arrives is applied when it arrives, a frame is drawn
+/// whenever the shell asks for one, and a frame unlike the one on screen
+/// waits for the display's next refresh before the loop goes on, as the
+/// window's does. Once while a touchpad scrolls the chat the whole
+/// second, and once with the chat left alone.
+#[test]
+#[ignore = "benchmark"]
+fn swarm_scroll_timings() {
+    use aura_ui_terminal::Pane;
+    use winit::dpi::PhysicalPosition;
+    use winit::event::MouseScrollDelta;
+
+    const AGENTS: u32 = 30;
+    /// How often an agent's forwarder sends what it has.
+    const FLUSH: Duration = Duration::from_millis(33);
+    /// How often a touchpad reports scrolling.
+    const TOUCHPAD: Duration = Duration::from_millis(8);
+    const SECOND: Duration = Duration::from_secs(1);
+
+    enum Arrival {
+        Command(Box<UiCommand>),
+        Scroll,
+    }
+
+    let refresh = SECOND / u32::try_from(REFRESH).unwrap_or(60);
+    let reply: Vec<char> = REPLY.replace("{prompt}", "the crates").chars().collect();
+    let mut chunks = reply.chunks(12).cycle();
+    let mut agents = vec![agent("a1", "Agent01", 0, Some("aura-harness"))];
+    agents
+        .extend((1..=AGENTS).map(|i| agent(&format!("b{i:02}"), &format!("Agent{i:02}"), 1, None)));
+    let conversation = long_chat();
+
+    for scrolling in [true, false] {
+        let mut arrivals = Vec::new();
+        for i in 1..=AGENTS {
+            let (mut at, mut step) = (FLUSH * i / AGENTS, 0);
+            while at < SECOND {
+                let command = match step % 10 {
+                    0 => UiCommand::ShowTool(ToolData {
+                        id: format!("t{step}"),
+                        name: "read_file".into(),
+                        args: r#"{"path":"src/lib.rs"}"#.into(),
+                    }),
+                    1 => UiCommand::CompleteTool {
+                        id: format!("t{}", step - 1),
+                        result: LISTING.into(),
+                        success: true,
+                    },
+                    2..=4 => UiCommand::AppendThinking("weighing the options ".into()),
+                    _ => UiCommand::AppendText(chunks.next().unwrap().iter().collect()),
+                };
+                let command = UiCommand::ForAgent {
+                    agent_id: format!("b{i:02}"),
+                    command: Box::new(command),
+                };
+                arrivals.push((at, Arrival::Command(Box::new(command))));
+                at += FLUSH;
+                step += 1;
+            }
+        }
+        if scrolling {
+            let mut at = Duration::ZERO;
+            while at < SECOND {
+                arrivals.push((at, Arrival::Scroll));
+                at += TOUCHPAD;
+            }
+        }
+        arrivals.sort_by_key(|(at, _)| *at);
+
+        let mut stage = stage();
+        seed(&mut stage);
+        stage.apply([
+            UiCommand::SetAgents(agents.clone()),
+            UiCommand::SetActiveAgent("a1".into()),
+            UiCommand::LoadConversation(conversation.clone()),
+        ]);
+        stage.shell.pointer_moved(inside(&stage, Pane::Chat));
+        let mut shown = stage.shell.frame(stage.now).clone();
+        let quarter =
+            f64::from(stage.shell.metrics.cell.height / super::glide::TOUCHPAD_GAIN) / 4.0;
+        let touchpad = MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, quarter));
+
+        let start = stage.now;
+        let (mut clock, mut next) = (Duration::ZERO, 0);
+        let (mut busy, mut same, mut frames, mut shown_at) =
+            (Duration::ZERO, 0, Vec::new(), Vec::new());
+        while clock < SECOND {
+            let now = start + clock;
+            let t = Instant::now();
+            let mut batch = Vec::new();
+            while next < arrivals.len() && arrivals[next].0 <= clock {
+                match &arrivals[next].1 {
+                    Arrival::Command(command) => batch.push((**command).clone()),
+                    Arrival::Scroll => stage.shell.wheel(touchpad, now),
+                }
+                next += 1;
+            }
+            if !batch.is_empty() {
+                stage.shell.commands(batch);
+            }
+            stage.shell.advance(now);
+            let mut spent = t.elapsed();
+            let mut fresh = false;
+            if stage.shell.dirty() {
+                let t = Instant::now();
+                let scene = stage.shell.frame(now);
+                fresh = *scene != shown;
+                if fresh {
+                    shown.clone_from(scene);
+                } else {
+                    same += 1;
+                }
+                frames.push(t.elapsed());
+                spent += t.elapsed();
+            }
+            busy += spent;
+            clock += spent;
+            if fresh {
+                // Shown at the display's next refresh, which the loop
+                // waits for.
+                shown_at.push(clock);
+                let refreshes = clock.as_nanos() / refresh.as_nanos() + 1;
+                clock = refresh * u32::try_from(refreshes).unwrap_or(u32::MAX);
+            } else if !stage.shell.dirty() {
+                let arrival = arrivals.get(next).map_or(SECOND, |(at, _)| *at);
+                let deadline = stage
+                    .shell
+                    .deadline(start + clock)
+                    .saturating_duration_since(start);
+                clock = clock.max(arrival.min(deadline));
+            }
+        }
+
+        let longest = shown_at
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .max()
+            .unwrap_or_default();
+        let label = if scrolling {
+            "chat scrolled by a touchpad"
+        } else {
+            "chat left alone"
+        };
+        println!(
+            "{AGENTS} agents streaming, {label}: {} frames drawn ({same} unchanged, {} shown), \
+             busy {:.1} ms of the second, longest wait between shown frames {:.1} ms",
+            frames.len(),
+            shown_at.len(),
+            busy.as_secs_f64() * 1e3,
+            longest.as_secs_f64() * 1e3,
+        );
+        report("  frame", &mut frames);
+    }
 }
 
 /// The window with the most messages the UI keeps, and with a twentieth

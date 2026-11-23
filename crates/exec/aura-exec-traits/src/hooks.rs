@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 /// Hook invoked by the `send_to_agent` / `agent_lifecycle` / `delegate_task`
 /// tools to actually affect the target agent. Kept as a trait so the
 /// permission gate can be tested without wiring a real kernel writer.
+// `async_trait` moves a default method's body out of the method, so the
+// allow on `deliver_message_in_thread` alone does not reach it; its
+// arguments mirror the remote wire call one for one.
+#[allow(clippy::too_many_arguments)]
 #[async_trait]
 pub trait AgentControlHook: Send + Sync {
     /// Deliver a user-message-shaped payload to `target`.
@@ -34,6 +38,37 @@ pub trait AgentControlHook: Send + Sync {
         attachments: Option<serde_json::Value>,
         model: Option<&str>,
     ) -> Result<(), String>;
+
+    /// [`Self::deliver_message`] in the conversation named `subject`.
+    ///
+    /// Reusing a subject keeps the exchange in one thread; a new subject
+    /// starts a new one. `None` lets the implementor pick, e.g. the last
+    /// thread between the two agents. Hooks without threads (remote
+    /// servers) keep this default, which ignores `subject`.
+    #[allow(clippy::too_many_arguments)]
+    async fn deliver_message_in_thread(
+        &self,
+        target_agent_id: &str,
+        parent_agent_id: Option<&str>,
+        originating_user_id: Option<&str>,
+        project_id: Option<&str>,
+        content: &str,
+        attachments: Option<serde_json::Value>,
+        model: Option<&str>,
+        subject: Option<&str>,
+    ) -> Result<(), String> {
+        let _ = subject;
+        self.deliver_message(
+            target_agent_id,
+            parent_agent_id,
+            originating_user_id,
+            project_id,
+            content,
+            attachments,
+            model,
+        )
+        .await
+    }
 
     /// Apply a lifecycle transition to `target`.
     async fn lifecycle(

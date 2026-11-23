@@ -9,10 +9,11 @@
 mod api_types;
 mod config;
 mod convert;
+mod origin_tag;
 mod provider;
 mod sse;
 
-pub use config::{anthropic_api_base, AnthropicConfig, ENV_FALLBACK_MODEL};
+pub use config::{anthropic_api_base, openrouter_api_base, AnthropicConfig, ENV_FALLBACK_MODEL};
 pub use provider::exp_backoff_with_jitter;
 
 use crate::error::ReasonerError;
@@ -113,6 +114,38 @@ fn is_cloudflare_html(body: &str) -> bool {
 }
 
 // ============================================================================
+// Reasoning Origin
+// ============================================================================
+
+/// Signature prefix marking thinking blocks produced through OpenRouter.
+///
+/// The text after the prefix is OpenRouter's own signature, which is what
+/// gets echoed back to OpenRouter; other providers never see these blocks.
+pub const OPENROUTER_REASONING_PREFIX: &str = "openrouter:";
+
+/// Which backend an [`AnthropicProvider`] talks to, and therefore which
+/// thinking blocks in a mixed-provider conversation it may replay.
+///
+/// Reasoning is only valid for the provider that produced it: a foreign
+/// signature fails verification (or leaks another vendor's opaque state),
+/// so each origin keeps only the thinking blocks it can accept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReasoningOrigin {
+    /// aura-router or the public Anthropic API. Only Anthropic-signed
+    /// thinking is sent; unsigned thinking is rejected by the API and is
+    /// dropped along with OpenAI and OpenRouter reasoning.
+    #[default]
+    Anthropic,
+    /// A local Messages-compatible server (e.g. Ollama). Signatures are
+    /// not verified, so everything except OpenAI and OpenRouter reasoning
+    /// is sent as-is.
+    Local,
+    /// OpenRouter. Only blocks tagged with [`OPENROUTER_REASONING_PREFIX`]
+    /// are sent, with the prefix stripped from the signature.
+    OpenRouter,
+}
+
+// ============================================================================
 // Provider Implementation
 // ============================================================================
 
@@ -131,6 +164,8 @@ pub struct AnthropicProvider {
     sse_for_all_models: bool,
     // aura-router accepts body fields the public Anthropic API rejects.
     router_body_extensions: bool,
+    // Decides which thinking blocks may be replayed to this backend.
+    reasoning_origin: ReasoningOrigin,
 }
 
 impl AnthropicProvider {
@@ -157,7 +192,17 @@ impl AnthropicProvider {
             config,
             sse_for_all_models: false,
             router_body_extensions: true,
+            reasoning_origin: ReasoningOrigin::default(),
         })
+    }
+
+    /// Set which backend this provider talks to, so only thinking blocks
+    /// that backend produced are replayed. Defaults to
+    /// [`ReasoningOrigin::Anthropic`].
+    #[must_use]
+    pub const fn with_reasoning_origin(mut self, origin: ReasoningOrigin) -> Self {
+        self.reasoning_origin = origin;
+        self
     }
 
     /// Send only fields the public Anthropic Messages API accepts, for

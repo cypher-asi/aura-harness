@@ -357,13 +357,16 @@ impl App {
         self.open_detail(DetailView::Graph);
     }
 
-    pub(super) fn upsert_graph(&mut self, run_id: &str, nodes: Vec<TraceNode>) {
+    /// Add `nodes` to the run graph when it holds run `run_id`. Returns
+    /// whether it does.
+    pub(super) fn upsert_graph(&mut self, run_id: &str, nodes: Vec<TraceNode>) -> bool {
         if self.graph.run_id != run_id {
-            return;
+            return false;
         }
         for node in nodes {
             self.graph.upsert(node);
         }
+        true
     }
 
     pub(super) fn request_graph(&self, arg: &str) {

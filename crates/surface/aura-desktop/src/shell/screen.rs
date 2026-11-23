@@ -4,6 +4,8 @@
 //! `AURA_DESKTOP_RENDERER=cpu` draws on the CPU whatever the machine
 //! has, and `=gpu` on whatever adapter there is, a software one too.
 
+use super::present::Presenter;
+use super::window::Wake;
 use crate::gpu::Gpu;
 use crate::raster;
 use crate::scene::Scene;
@@ -11,20 +13,39 @@ use crate::text::{Atlas, TextSystem};
 use anyhow::{anyhow, Context as _};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::window::Window;
 
 pub enum Screen {
-    Gpu(Box<Gpu>),
+    /// The GPU, showing frames from a thread of its own
+    Gpu(Presenter),
     Soft(Soft),
 }
 
+/// How showing a frame went.
+#[derive(Debug)]
+pub enum Showing {
+    /// Shown, after this long drawing and showing it
+    Done(Duration),
+    /// The window gave nothing to draw into this time. The next thing
+    /// that changes how it looks tries again.
+    Missed,
+    /// Handed to the thread that shows frames, which says how it went
+    /// with [`Wake::Presented`]
+    Handed,
+}
+
 impl Screen {
-    /// The best there is to draw `window` on.
+    /// The best there is to draw `window` on. A GPU tells the loop with
+    /// `wake` how showing each frame went.
     ///
     /// # Errors
     ///
     /// Fails when the window can be drawn on neither way.
-    pub fn new(window: &Arc<Window>) -> anyhow::Result<Self> {
+    pub fn new(
+        window: &Arc<Window>,
+        wake: impl Fn(Wake) -> bool + Send + 'static,
+    ) -> anyhow::Result<Self> {
         let asked = std::env::var("AURA_DESKTOP_RENDERER").ok();
         let asked = asked.as_deref().map(str::trim);
         if asked != Some("cpu") {
@@ -32,7 +53,7 @@ impl Screen {
             match Gpu::new(Arc::clone(window), size.width, size.height) {
                 Ok(gpu) if asked == Some("gpu") || !gpu.is_software() => {
                     tracing::info!(adapter = gpu.name(), "drawing on the GPU");
-                    return Ok(Self::Gpu(Box::new(gpu)));
+                    return Presenter::start(gpu, Arc::clone(window), wake).map(Self::Gpu);
                 }
                 // A software adapter rasterizes on the CPU as well, with
                 // more to do for the same pixels.
@@ -46,25 +67,23 @@ impl Screen {
     }
 
     /// The tallest the glyph atlas may grow here, if it matters.
-    pub fn atlas_limit(&self) -> Option<u32> {
+    pub const fn atlas_limit(&self) -> Option<u32> {
         match self {
-            Self::Gpu(gpu) => Some(gpu.atlas_limit()),
+            Self::Gpu(presenter) => Some(presenter.atlas_limit()),
             Self::Soft(_) => None,
         }
     }
 
-    /// The window is `width` × `height` pixels now.
-    pub fn resize(&mut self, width: u32, height: u32) {
+    /// Whether a frame can be drawn now without waiting behind the last.
+    pub const fn ready(&self) -> bool {
         match self {
-            Self::Gpu(gpu) => gpu.resize(width, height),
-            // Takes the size of each frame it is given.
-            Self::Soft(_) => {}
+            Self::Gpu(presenter) => presenter.ready(),
+            Self::Soft(_) => true,
         }
     }
 
-    /// Draw `scene` and show it, calling `before_showing` once it is
-    /// drawn. `false` when the window gave nothing to draw into this
-    /// time.
+    /// Show `scene`, at its size, calling `before_showing` once it is
+    /// drawn on this thread.
     ///
     /// # Errors
     ///
@@ -74,10 +93,28 @@ impl Screen {
         scene: &Scene,
         text: &mut TextSystem,
         before_showing: impl FnOnce(),
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Showing> {
         match self {
-            Self::Gpu(gpu) => gpu.render(scene, text.atlas_mut(), before_showing),
-            Self::Soft(soft) => soft.render(scene, text.atlas(), before_showing),
+            Self::Gpu(presenter) => {
+                presenter.hand_over(scene, text.atlas_mut());
+                Ok(Showing::Handed)
+            }
+            Self::Soft(soft) => {
+                let started = Instant::now();
+                let shown = soft.render(scene, text.atlas(), before_showing)?;
+                Ok(if shown {
+                    Showing::Done(started.elapsed())
+                } else {
+                    Showing::Missed
+                })
+            }
+        }
+    }
+
+    /// The thread that shows frames said how one went.
+    pub fn presented(&mut self) {
+        if let Self::Gpu(presenter) = self {
+            presenter.presented();
         }
     }
 }
@@ -136,7 +173,7 @@ impl Soft {
         if buffer.len() * 4 != self.pixels.len() {
             return Ok(false);
         }
-        pack(&self.pixels, &mut buffer);
+        pack_rows(&self.pixels, &mut buffer, size.0 as usize);
         before_showing();
         buffer
             .present()
@@ -144,6 +181,22 @@ impl Soft {
             .context("showing the window's pixels")?;
         Ok(true)
     }
+}
+
+/// [`pack`] rows `width` pixels wide, in as many bands, a thread each, as
+/// [`raster::paint`] paints them in.
+fn pack_rows(rgba: &[u8], out: &mut [u32], width: usize) {
+    let height = out.len().checked_div(width).unwrap_or(0);
+    let words = height.div_ceil(raster::bands(height)) * width;
+    if words >= out.len() {
+        pack(rgba, out);
+        return;
+    }
+    std::thread::scope(|scope| {
+        for (out, rgba) in out.chunks_mut(words).zip(rgba.chunks(words * 4)) {
+            scope.spawn(move || pack(rgba, out));
+        }
+    });
 }
 
 /// RGBA bytes as the words a window's pixels are: red, green and blue
@@ -163,5 +216,17 @@ mod tests {
         let mut out = [0; 2];
         pack(&[0x12, 0x34, 0x56, 0xff, 0xff, 0x00, 0x01, 0x80], &mut out);
         assert_eq!(out, [0x0012_3456, 0x00ff_0001]);
+    }
+
+    #[test]
+    fn rows_packed_in_bands_are_packed_as_a_whole() {
+        let (width, height) = (7, 300);
+        let rgba: Vec<u8> = (0..width * height * 4)
+            .map(|i| u8::try_from(i % 251).unwrap_or(0))
+            .collect();
+        let (mut banded, mut whole) = (vec![0; width * height], vec![0; width * height]);
+        pack_rows(&rgba, &mut banded, width);
+        pack(&rgba, &mut whole);
+        assert!(banded == whole);
     }
 }

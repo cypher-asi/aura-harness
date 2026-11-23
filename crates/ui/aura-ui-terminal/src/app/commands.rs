@@ -14,9 +14,12 @@ use tracing::debug;
 impl App {
     /// Handle a slash command.
     pub(super) fn handle_command(&mut self, text: &str) -> KeyResult {
-        let parts: Vec<&str> = text[1..].splitn(2, ' ').collect();
-        let cmd = parts[0].to_lowercase();
-        let arg = parts.get(1).map_or("", |a| a.trim());
+        // A line break or tab ends the name as a space does, so a recalled
+        // or pasted "/model\n" is still `/model`.
+        let body = text.strip_prefix('/').unwrap_or(text).trim();
+        let (cmd, arg) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
+        let cmd = cmd.to_lowercase();
+        let arg = arg.trim();
 
         match cmd.as_str() {
             "quit" | "exit" | "q" => {
@@ -59,6 +62,7 @@ impl App {
             }
             "members" | "team" => self.show_members(),
             "policies" | "policy" | "perms" | "permissions" => self.show_policies(),
+            "inbox" | "mail" => self.show_inbox(),
             "agents" | "swarm" | "sw" => {
                 self.swarm_panel_visible = !self.swarm_panel_visible;
                 if !self.swarm_panel_visible && self.focus == PanelFocus::Swarm {
@@ -102,12 +106,10 @@ impl App {
                 if arg.is_empty() {
                     self.open_model_selector();
                 } else {
-                    let id = self
-                        .models
-                        .iter()
-                        .find(|m| {
-                            m.id.eq_ignore_ascii_case(arg) || m.label.eq_ignore_ascii_case(arg)
-                        })
+                    // An exact id or label maps to its id here; any other
+                    // name (`opus`, `deepseek`) goes as typed and the event
+                    // loop resolves it as an alias.
+                    let id = super::model_picker::exact_match(&self.models, arg)
                         .map_or_else(|| arg.to_string(), |m| m.id.clone());
                     self.choose_model(&id);
                 }
@@ -119,7 +121,9 @@ impl App {
                     None if arg.is_empty() || arg.eq_ignore_ascii_case("zos") => UiEvent::Logout,
                     None => {
                         self.notification = Some((
-                            format!("Unknown provider: {arg}. Use zos, claude or chatgpt."),
+                            format!(
+                                "Unknown provider: {arg}. Use zos, claude, chatgpt or openrouter."
+                            ),
                             NotificationType::Warning,
                         ));
                         return KeyResult::continue_running();
@@ -145,7 +149,8 @@ impl App {
                 self.add_message(Message::new(MessageRole::System, &report));
             }
             "cost" | "usage" => {
-                let report = self.hud.cost_report();
+                let mut report = self.hud.cost_report();
+                report.push_str(&super::hud::sources_report(self.turn_sources()));
                 self.add_message(Message::new(MessageRole::System, &report));
             }
             "todos" | "todo" => {
@@ -238,7 +243,7 @@ impl App {
             self.start_link(provider, paste);
         } else {
             self.notification = Some((
-                format!("Unknown provider: {target}. Use zos, claude or chatgpt."),
+                format!("Unknown provider: {target}. Use zos, claude, chatgpt or openrouter."),
                 NotificationType::Warning,
             ));
         }
@@ -274,11 +279,7 @@ impl App {
             ));
             return;
         }
-        self.model_cursor = self
-            .models
-            .iter()
-            .position(|m| m.id == self.current_model)
-            .unwrap_or(0);
+        self.model_picker.open(&self.models, &self.current_model);
         self.state = AppState::SelectingModel;
     }
 
@@ -380,9 +381,7 @@ impl App {
         self.thinking = thinking;
         self.user = user;
         self.plans = plans;
-        if self.model_cursor >= self.models.len() {
-            self.model_cursor = self.models.len().saturating_sub(1);
-        }
+        self.model_picker.clamp(&self.models);
         let pending_ready = self
             .pending_model
             .as_deref()
@@ -757,15 +756,37 @@ impl App {
         }
     }
 
+    /// Whether `cmd` lists the agents, projects or processes just as the
+    /// app has them. The session sends its lists again whenever any
+    /// agent's state moves, mostly unchanged.
+    fn lists_nothing_new(&self, cmd: &UiCommand) -> bool {
+        match cmd {
+            UiCommand::SetAgents(agents) => *agents == self.agents,
+            UiCommand::SetProjects(projects) => *projects == self.projects,
+            UiCommand::SetProcesses(processes) => *processes == self.all_processes,
+            _ => false,
+        }
+    }
+
     /// Process a UI command from the kernel.
     pub fn process_command(&mut self, cmd: UiCommand) {
         debug!(?cmd, "Processing UI command");
+        if self.lists_nothing_new(&cmd) {
+            return;
+        }
+        if !matches!(cmd, UiCommand::ForAgent { .. }) {
+            self.redraw = true;
+        }
         match cmd {
             UiCommand::SetStatus(status) => self.status = status,
             UiCommand::StartStreaming => self.cmd_start_streaming(),
             UiCommand::AppendText(text) => self.cmd_append_text(&text),
             UiCommand::FinishStreaming => self.cmd_finish_streaming(),
-            UiCommand::SetReplyModel { model, usage } => self.cmd_set_reply_model(&model, usage),
+            UiCommand::SetReplyModel {
+                model,
+                usage,
+                sources,
+            } => self.cmd_set_reply_model(&model, usage, &sources),
             UiCommand::StartThinking => self.add_activity(Activity::thinking()),
             UiCommand::AppendThinking(thinking) => self.cmd_append_thinking(&thinking),
             UiCommand::FinishThinking => self.cmd_finish_thinking(),
@@ -883,6 +904,8 @@ impl App {
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
             UiCommand::SetArchivedAgents(agents) => self.set_archived(agents),
             UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(&agent_id),
+            UiCommand::SwitchFailed(agent_id) => self.cmd_switch_failed(&agent_id),
+            UiCommand::ChatReady => self.reveal_chat(),
             UiCommand::SetAgentDefinitions(definitions) => self.set_definitions(definitions),
             UiCommand::OpenEditor(path) => self.editor_request = Some(path),
             UiCommand::ClearRecords => {
@@ -896,6 +919,7 @@ impl App {
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
             UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
             UiCommand::SetProcesses(processes) => self.set_processes(processes),
+            UiCommand::AddMail(mail) => self.add_mail(mail),
             UiCommand::GraphLoad { run_id, nodes } => self.load_graph(run_id, nodes),
             UiCommand::GraphUpsert { run_id, nodes } => {
                 self.trace_feed.push(&self.active_agent_id, &run_id, &nodes);
@@ -1015,7 +1039,29 @@ impl App {
         self.streaming_content.clear();
     }
 
-    fn cmd_set_reply_model(&mut self, model: &str, usage: Option<CallUsage>) {
+    /// Each turn's split of tokens by sign-in, as its last reply's
+    /// footer shows it. Every reply of a turn carries the turn's split
+    /// so far, so only the last one before the next prompt counts.
+    fn turn_sources(&self) -> Vec<&[crate::events::SourceUsage]> {
+        let mut turns = Vec::new();
+        let mut last: Option<&[crate::events::SourceUsage]> = None;
+        for message in &self.messages {
+            if message.role() == MessageRole::User {
+                turns.extend(last.take());
+            } else if message.role() == MessageRole::Assistant && !message.sources().is_empty() {
+                last = Some(message.sources());
+            }
+        }
+        turns.extend(last);
+        turns
+    }
+
+    fn cmd_set_reply_model(
+        &mut self,
+        model: &str,
+        usage: Option<CallUsage>,
+        sources: &[crate::events::SourceUsage],
+    ) {
         let replies = self
             .messages
             .iter_mut()
@@ -1025,6 +1071,7 @@ impl App {
         for message in replies {
             message.set_model(model);
             message.set_usage(usage);
+            message.set_sources(sources);
         }
     }
 
@@ -1037,6 +1084,7 @@ impl App {
             msg.set_model(model);
         }
         msg.set_usage(data.usage);
+        msg.set_sources(&data.sources);
         self.add_message(msg);
     }
 
@@ -1234,6 +1282,7 @@ impl App {
             self.messages.pop_front();
         }
         self.scroll_offset = 0;
+        self.reveal_chat();
     }
 
     /// Append a record, oldest first. A selection on the newest record
@@ -1296,8 +1345,68 @@ impl App {
         self.refresh_side_scope();
     }
 
+    /// The session made `agent_id` the active agent. While a switch the
+    /// UI already made on screen waits for its answer, only that answer
+    /// counts: an echo of an earlier request (A, then B, then back to A
+    /// before B was confirmed) is dropped, so the screen never jumps back
+    /// to an agent the user left.
     fn cmd_set_active_agent(&mut self, agent_id: &str) {
+        let Some(sent) = self.switch_sent.as_deref() else {
+            self.confirmed_agent = agent_id.to_string();
+            self.apply_active_agent(agent_id);
+            return;
+        };
+        // The session's active agent is `agent_id` either way, which is
+        // where a failed switch should go back to.
+        let confirms = sent == agent_id;
+        self.confirmed_agent = agent_id.to_string();
+        if !confirms {
+            return;
+        }
+        self.switch_sent = None;
+        if agent_id == self.active_agent_id {
+            // The screen switched when the user asked; only the marks
+            // the agents list draws may have been redrawn since.
+            self.mark_active_agent();
+        } else {
+            self.apply_active_agent(agent_id);
+        }
+    }
+
+    /// The session could not switch to `agent_id`. A screen that already
+    /// shows it goes back to the agent the session still has active, so
+    /// it doesn't wait for a chat that will not come.
+    fn cmd_switch_failed(&mut self, agent_id: &str) {
+        if self.switch_sent.as_deref() != Some(agent_id) && self.active_agent_id != agent_id {
+            return;
+        }
+        self.switch_sent = None;
+        // The failed agent's chat keeps `loaded` unset, so the next
+        // switch to it asks for its history again.
+        self.chat_loading_since = None;
+        let back = self.confirmed_agent.clone();
+        if !back.is_empty() && back != self.active_agent_id {
+            self.apply_active_agent(&back);
+            // The session sends nothing more for the agent it kept, so a
+            // chat of it still waiting shows what it holds.
+            self.chat_loading_since = None;
+        }
+    }
+
+    /// Mark the agent on screen as the active one in the agents list.
+    fn mark_active_agent(&mut self) {
+        for agent in &mut self.agents {
+            agent.is_active = agent.id == self.active_agent_id;
+        }
+    }
+
+    /// Put `agent_id` on screen: its chat, the tab it was left on, and
+    /// fresh LOG, GRAPH and BENCH content for it when those are open.
+    pub(super) fn apply_active_agent(&mut self, agent_id: &str) {
         let switched = agent_id != self.active_agent_id;
+        // The LOG tab shows the agent coming on screen, never the one
+        // leaving: its last log comes back at once, or none.
+        self.log.show_agent(agent_id);
         let left_on = self.show_agent_chat(agent_id);
         self.refresh_side_scope();
         if self.log_wanted_for(agent_id) {
@@ -1323,9 +1432,7 @@ impl App {
             // offers the sessions of the agent on screen.
             self.request_benchmarks();
         }
-        for agent in &mut self.agents {
-            agent.is_active = agent.id == self.active_agent_id;
-        }
+        self.mark_active_agent();
         if switched {
             // Switching to an agent folded out of sight opens the agents
             // above it; a folded project stays folded.
@@ -1356,6 +1463,7 @@ fn plan_provider(arg: &str) -> Option<&'static str> {
     match arg.trim().to_ascii_lowercase().as_str() {
         "claude" | "anthropic" => Some("claude"),
         "chatgpt" | "openai" => Some("chatgpt"),
+        "openrouter" | "open-router" | "or" => Some("openrouter"),
         _ => None,
     }
 }

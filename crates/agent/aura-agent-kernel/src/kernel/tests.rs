@@ -350,6 +350,117 @@ async fn reason_streaming_handshake_error_records_failed() {
     );
 }
 
+fn request_with_effort(effort: Option<aura_model::ThinkingEffort>) -> ModelRequest {
+    ModelRequest::builder("test-model", "system")
+        .message(aura_model::Message::user("hello"))
+        .thinking_effort(effort)
+        .try_build()
+        .unwrap()
+}
+
+fn reasoning_payload(entry: &aura_core_types::RecordEntry) -> serde_json::Value {
+    assert_eq!(entry.tx.tx_type, TransactionType::Reasoning);
+    serde_json::from_slice(&entry.tx.payload).unwrap()
+}
+
+/// Who paid for a call is read off the requested model id's route
+/// prefix, so every `Reasoning` entry records it as `route`, whatever
+/// model name the upstream echoed back.
+#[tokio::test]
+async fn reasoning_entries_record_the_requested_route() {
+    let route = "openrouter/anthropic/claude-sonnet-4.6";
+    let request = || {
+        ModelRequest::builder(route, "system")
+            .message(aura_model::Message::user("hello"))
+            .try_build()
+            .unwrap()
+    };
+    let (kernel, _db, _ws) = create_new_kernel();
+    let done = kernel.reason(request()).await.unwrap();
+    assert_eq!(reasoning_payload(&done.entry)["route"], route);
+
+    let (handle, _stream) = kernel.reason_streaming(request()).await.unwrap();
+    let entry = handle
+        .record_completed(
+            "anthropic/claude-4.6-sonnet-20260101",
+            aura_model::StopReason::EndTurn,
+            &aura_model::Usage::default(),
+            &[],
+            "",
+            None,
+        )
+        .unwrap();
+    let payload = reasoning_payload(&entry);
+    assert_eq!(payload["route"], route);
+    assert_eq!(payload["model"], "anthropic/claude-4.6-sonnet-20260101");
+
+    let (handle, _stream) = kernel.reason_streaming(request()).await.unwrap();
+    let failed = handle.record_failed("stream cut").unwrap();
+    assert_eq!(reasoning_payload(&failed)["route"], route);
+}
+
+/// The reply's footer shows the thinking level a turn ran at, so every
+/// completed model call records the level its request asked for.
+#[tokio::test]
+async fn reason_records_the_requested_thinking_effort() {
+    let (kernel, _db, _ws) = create_new_kernel();
+    let high = kernel
+        .reason(request_with_effort(Some(aura_model::ThinkingEffort::High)))
+        .await
+        .unwrap();
+    assert_eq!(reasoning_payload(&high.entry)["thinking_effort"], "high");
+
+    let off = kernel
+        .reason(request_with_effort(Some(aura_model::ThinkingEffort::Off)))
+        .await
+        .unwrap();
+    assert_eq!(reasoning_payload(&off.entry)["thinking_effort"], "off");
+
+    let unset = kernel.reason(request_with_effort(None)).await.unwrap();
+    assert!(
+        reasoning_payload(&unset.entry)
+            .get("thinking_effort")
+            .is_none(),
+        "a request that left the level to the provider records none"
+    );
+}
+
+#[tokio::test]
+async fn reason_streaming_records_the_requested_thinking_effort() {
+    let (kernel, _db, _ws) = create_new_kernel();
+    let (handle, _stream) = kernel
+        .reason_streaming(request_with_effort(Some(aura_model::ThinkingEffort::XHigh)))
+        .await
+        .unwrap();
+    let entry = handle
+        .record_completed(
+            "test-model",
+            aura_model::StopReason::EndTurn,
+            &aura_model::Usage::default(),
+            &[],
+            "",
+            None,
+        )
+        .unwrap();
+    assert_eq!(reasoning_payload(&entry)["thinking_effort"], "xhigh");
+
+    let (handle, _stream) = kernel
+        .reason_streaming(request_with_effort(None))
+        .await
+        .unwrap();
+    let entry = handle
+        .record_completed(
+            "test-model",
+            aura_model::StopReason::EndTurn,
+            &aura_model::Usage::default(),
+            &[],
+            "",
+            None,
+        )
+        .unwrap();
+    assert!(reasoning_payload(&entry).get("thinking_effort").is_none());
+}
+
 #[tokio::test]
 async fn test_sequence_across_process_and_reason() {
     let (kernel, _db, _ws) = create_new_kernel();

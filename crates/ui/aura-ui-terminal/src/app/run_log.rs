@@ -1,10 +1,22 @@
 //! The chat panel's LOG tab: the run log of the agent on screen and of
-//! every agent it spawned, as panels that fold open and shut. A run opens
-//! on its details, its files on disk and its last turn; a turn on its
-//! steps; a step on its fields, thinking, reply, calls and output. The
-//! runs of spawned agents sit under the step whose call started them.
-//! `Copy log` puts the whole `log.json` on the clipboard. While steps are
-//! being recorded the log reloads about once a second.
+//! every agent it spawned, as panels that fold open and shut. The run
+//! asked for is always open: its details (metadata, problems and files on
+//! disk), its turns and the runs below it. A new run opens on its last
+//! turn; a turn on its steps; a step on its fields, thinking, reply, calls
+//! and output. The runs of spawned agents sit under the step whose call
+//! started them. `Copy log` puts the whole `log.json` on the clipboard.
+//! While steps are being recorded the log reloads about once a second.
+//!
+//! Invariants:
+//! - The state belongs to one agent ([`LogState::show_agent`]); switching
+//!   parks it and brings back the other agent's, so the tab never shows
+//!   the log of an agent that is not on screen.
+//! - Coming onto the tab, or onto another agent, holds the log on hand
+//!   back: its folds are kept, but nothing of it is drawn until the fresh
+//!   log (or a notice) arrives, which then fades in. So the tab never
+//!   flashes an out-of-date log or message before the real one.
+//! - A live reload while a log is shown changes nothing on screen until
+//!   the new log arrives; a notice then doesn't replace the shown log.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -12,19 +24,19 @@ use std::time::{Duration, Instant};
 
 use super::file_view::FileView;
 use super::{App, ChatTab, DetailView, NotificationType};
-use crate::events::{LogRequest, LogRunView, LogStepView, LogTurnView, LogView, UiEvent};
+use crate::events::{
+    LogRequest, LogRunView, LogStatus, LogStepView, LogTurnView, LogView, UiEvent,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 /// A panel of the LOG tab, by the run it is in.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LogPanel {
-    /// A run: the one asked for, or a subagent's
+    /// A subagent's run; the run asked for has no row of its own
     Run(String),
-    /// A run's metadata, totals and problems
+    /// A run's metadata, totals, problems and files on disk
     Details(String),
-    /// Where a run is stored
-    Files(String),
     /// A turn of a run
     Turn(String, u32),
     /// A step of a run
@@ -36,11 +48,7 @@ impl LogPanel {
     #[must_use]
     pub fn run_id(&self) -> &str {
         match self {
-            Self::Run(run)
-            | Self::Details(run)
-            | Self::Files(run)
-            | Self::Turn(run, _)
-            | Self::Step(run, _) => run,
+            Self::Run(run) | Self::Details(run) | Self::Turn(run, _) | Self::Step(run, _) => run,
         }
     }
 }
@@ -53,16 +61,36 @@ pub struct LogRow {
     pub depth: usize,
 }
 
+/// What the LOG tab showed for an agent, kept while another is on screen.
+#[derive(Debug, Clone, Default)]
+struct ParkedLog {
+    view: Option<LogView>,
+    notice: Option<String>,
+    expanded: HashSet<LogPanel>,
+    raw: HashSet<LogPanel>,
+    selected: Option<LogPanel>,
+    scroll: usize,
+}
+
 /// The LOG tab's state.
 #[derive(Debug, Clone, Default)]
 pub struct LogState {
     open: bool,
+    /// The agent the state below belongs to
+    agent: String,
     /// The log, once it arrived
     pub view: Option<LogView>,
     /// Why there is no log to show
     pub notice: Option<String>,
-    /// Whether a log was asked for and hasn't arrived
-    pub loading: bool,
+    /// When a log was asked for that hasn't arrived
+    pub loading_since: Option<Instant>,
+    /// When a log or a notice came on screen where nothing was shown, to
+    /// fade it in
+    pub revealed_at: Option<Instant>,
+    /// The log on hand is from an earlier visit to the tab, or of the
+    /// agent before a switch: kept for its folds, but not drawn until a
+    /// fresh one arrives, so the tab never shows what may be out of date
+    held: bool,
     /// Panels opened
     pub expanded: HashSet<LogPanel>,
     /// Steps shown as their JSON
@@ -72,6 +100,8 @@ pub struct LogState {
     pub scroll: usize,
     /// Scroll the selected panel into sight on the next frame
     pub follow: bool,
+    /// What other agents' tabs showed, the most recently parked last
+    parked: Vec<(String, ParkedLog)>,
     /// The panel each line drawn last frame belongs to, from its top
     hits: Vec<(u16, LogPanel)>,
     /// Where `Copy log` was drawn
@@ -97,14 +127,125 @@ const LIVE_EVERY: Duration = Duration::from_secs(1);
 /// How long a reload may stay unanswered before another is asked for.
 const RELOAD_GIVE_UP: Duration = Duration::from_secs(10);
 
+/// How long the tab stays blank waiting for a log before it says it is
+/// loading, so a quick load shows no message at all.
+pub const LOADING_DELAY: Duration = Duration::from_millis(150);
+
+/// How long a log takes to fade in once it arrives.
+pub const FADE_IN: Duration = Duration::from_millis(180);
+
+/// Agents whose tab state is kept while another is on screen.
+const PARKED_AGENTS: usize = 8;
+
+/// How far something that came on screen at `revealed_at` has faded in,
+/// as milliseconds of [`FADE_IN`], while it still is. Shared by the LOG
+/// tab and the chat so both fade alike.
+pub(crate) fn fade_progress(revealed_at: Option<Instant>) -> Option<(usize, usize)> {
+    let elapsed = revealed_at?.elapsed();
+    (elapsed < FADE_IN).then(|| {
+        let whole = usize::try_from(FADE_IN.as_millis()).unwrap_or(usize::MAX);
+        let part = usize::try_from(elapsed.as_millis()).unwrap_or(whole);
+        (part.min(whole), whole.max(1))
+    })
+}
+
 impl LogState {
     #[must_use]
     pub const fn is_open(&self) -> bool {
         self.open
     }
 
+    /// Open or shut the tab. Coming onto it holds the log on hand back
+    /// until a fresh one arrives.
     pub(super) fn set_open(&mut self, open: bool) {
+        if open && !self.open {
+            self.hold();
+        }
         self.open = open;
+    }
+
+    /// Stop drawing the log on hand until the next one arrives.
+    fn hold(&mut self) {
+        self.held = self.view.is_some() || self.notice.is_some();
+        self.revealed_at = None;
+    }
+
+    /// Make the state the one of `agent_id`: park the state of the agent
+    /// it belonged to and bring back what `agent_id`'s tab showed, or
+    /// start empty. Nothing changes when it already is `agent_id`'s.
+    pub fn show_agent(&mut self, agent_id: &str) {
+        if self.agent == agent_id {
+            return;
+        }
+        let previous = std::mem::replace(&mut self.agent, agent_id.to_string());
+        let coming = self.take_parked(agent_id).unwrap_or_default();
+        let leaving = ParkedLog {
+            view: self.view.take(),
+            notice: self.notice.take(),
+            expanded: std::mem::take(&mut self.expanded),
+            raw: std::mem::take(&mut self.raw),
+            selected: self.selected.take(),
+            scroll: std::mem::take(&mut self.scroll),
+        };
+        self.parked.retain(|(id, _)| id != &previous);
+        if leaving.view.is_some() || leaving.notice.is_some() {
+            self.parked.push((previous, leaving));
+        }
+        if self.parked.len() > PARKED_AGENTS {
+            let extra = self.parked.len() - PARKED_AGENTS;
+            self.parked.drain(..extra);
+        }
+        self.view = coming.view;
+        self.notice = coming.notice;
+        self.expanded = coming.expanded;
+        self.raw = coming.raw;
+        self.selected = coming.selected;
+        self.scroll = coming.scroll;
+        self.follow = false;
+        self.loading_since = None;
+        self.hold();
+    }
+
+    /// The state parked for `agent_id`, taken out of the cache.
+    fn take_parked(&mut self, agent_id: &str) -> Option<ParkedLog> {
+        let at = self.parked.iter().position(|(id, _)| id == agent_id)?;
+        Some(self.parked.remove(at).1)
+    }
+
+    /// The log to draw for `agent_id`: the loaded one, when it is that
+    /// agent's and not held back for a fresh one.
+    #[must_use]
+    pub fn shown(&self, agent_id: &str) -> Option<&LogView> {
+        self.view
+            .as_ref()
+            .filter(|v| !self.held && v.agent_id == agent_id)
+    }
+
+    /// Whether the log or notice on hand waits for a fresh one before it
+    /// is drawn.
+    #[must_use]
+    pub const fn is_held(&self) -> bool {
+        self.held
+    }
+
+    /// Whether a log was asked for and hasn't arrived.
+    #[must_use]
+    pub const fn is_loading(&self) -> bool {
+        self.loading_since.is_some()
+    }
+
+    /// Whether a log has been awaited long enough to say it is loading.
+    #[must_use]
+    pub fn loading_shown(&self) -> bool {
+        self.loading_since
+            .is_some_and(|at| at.elapsed() >= LOADING_DELAY)
+    }
+
+    /// How far a log arriving has faded in, as milliseconds of
+    /// [`FADE_IN`], while it still is.
+    #[must_use]
+    pub fn fading(&self) -> Option<(usize, usize)> {
+        fade_progress(self.revealed_at)
     }
 
     /// A step was recorded: reload the log if it is open.
@@ -119,7 +260,7 @@ impl LogState {
         self.open
             && self.stale
             && since.is_none_or(|since| {
-                since >= LIVE_EVERY && (!self.loading || since >= RELOAD_GIVE_UP)
+                since >= LIVE_EVERY && (!self.is_loading() || since >= RELOAD_GIVE_UP)
             })
     }
 
@@ -145,16 +286,23 @@ impl LogState {
             .find(|s| s.seq == seq)
     }
 
+    /// Whether `panel` is open. The run asked for always is.
     #[must_use]
     pub fn is_expanded(&self, panel: &LogPanel) -> bool {
-        self.expanded.contains(panel)
+        self.is_root(panel) || self.expanded.contains(panel)
+    }
+
+    /// Whether `panel` is the run asked for, which has no row.
+    fn is_root(&self, panel: &LogPanel) -> bool {
+        matches!(panel, LogPanel::Run(id)
+            if self.view.as_ref().and_then(LogView::root).is_some_and(|r| &r.run_id == id))
     }
 
     /// Whether `panel` has anything to open.
     #[must_use]
     pub fn opens(&self, panel: &LogPanel) -> bool {
         match panel {
-            LogPanel::Run(_) | LogPanel::Details(_) | LogPanel::Files(_) => true,
+            LogPanel::Run(_) | LogPanel::Details(_) => true,
             LogPanel::Turn(run, turn) => self.turn(run, *turn).is_some_and(|t| !t.steps.is_empty()),
             LogPanel::Step(run, seq) => self
                 .step(run, *seq)
@@ -162,18 +310,22 @@ impl LogState {
         }
     }
 
-    /// The panel headers on screen, top to bottom.
+    /// The panel headers on screen, top to bottom. The run asked for has
+    /// no row: its panels are the top level.
     #[must_use]
     pub fn rows(&self) -> Vec<LogRow> {
         let mut rows = Vec::new();
         if let Some(view) = &self.view {
-            if !view.runs.is_empty() {
-                self.push_run(view, 0, 0, &mut rows, &mut HashSet::new());
+            if let Some(root) = view.root() {
+                let mut seen = HashSet::from([0]);
+                self.push_contents(view, root, 0, &mut rows, &mut seen);
             }
         }
         rows
     }
 
+    /// The row of run `index` of `view` at `depth`, and its panels below
+    /// it when it is open.
     fn push_run(
         &self,
         view: &LogView,
@@ -188,54 +340,65 @@ impl LogState {
         if !seen.insert(index) {
             return;
         }
-        let id = &run.run_id;
-        let panel = LogPanel::Run(id.clone());
+        let panel = LogPanel::Run(run.run_id.clone());
         let open = self.is_expanded(&panel);
         rows.push(LogRow { panel, depth });
-        if !open {
-            return;
+        if open {
+            self.push_contents(view, run, depth + 1, rows, seen);
         }
+    }
+
+    /// The panels of `run` at `depth`: its details, its turns with their
+    /// steps, and the runs below it.
+    fn push_contents(
+        &self,
+        view: &LogView,
+        run: &LogRunView,
+        depth: usize,
+        rows: &mut Vec<LogRow>,
+        seen: &mut HashSet<usize>,
+    ) {
+        let id = &run.run_id;
         rows.push(LogRow {
             panel: LogPanel::Details(id.clone()),
-            depth: depth + 1,
-        });
-        rows.push(LogRow {
-            panel: LogPanel::Files(id.clone()),
-            depth: depth + 1,
+            depth,
         });
         for turn in &run.turns {
             let panel = LogPanel::Turn(id.clone(), turn.turn);
             let open = self.is_expanded(&panel);
-            rows.push(LogRow {
-                panel,
-                depth: depth + 1,
-            });
+            rows.push(LogRow { panel, depth });
             if !open {
                 continue;
             }
             for step in &turn.steps {
                 rows.push(LogRow {
                     panel: LogPanel::Step(id.clone(), step.seq),
-                    depth: depth + 2,
+                    depth: depth + 1,
                 });
                 for &child in &step.spawned {
-                    self.push_run(view, child, depth + 3, rows, seen);
+                    self.push_run(view, child, depth + 2, rows, seen);
                 }
             }
             for &child in &turn.spawned {
-                self.push_run(view, child, depth + 2, rows, seen);
+                self.push_run(view, child, depth + 1, rows, seen);
             }
         }
         for &child in &run.runs {
-            self.push_run(view, child, depth + 1, rows, seen);
+            self.push_run(view, child, depth, rows, seen);
         }
     }
 
-    /// Take `view` in: a new run opens on its details, files and last
-    /// turn; the same run again keeps what was open and opens a new turn.
+    /// Take `view` in: a new run opens on its last turn, its details
+    /// shut; the same run again keeps what was open and opens a new turn.
+    /// A log coming where none was drawn, or one held back, fades in.
     fn load(&mut self, view: LogView) {
-        self.loading = false;
+        self.loading_since = None;
         self.notice = None;
+        if self.shown(&view.agent_id).is_none() {
+            self.revealed_at = Some(Instant::now());
+        }
+        self.held = false;
+        self.agent.clone_from(&view.agent_id);
         let same = self
             .view
             .as_ref()
@@ -260,15 +423,9 @@ impl LogState {
             self.raw.clear();
             self.scroll = 0;
             self.selected = None;
-            if let Some(root) = view.root() {
-                let id = root.run_id.clone();
-                self.expanded.insert(LogPanel::Run(id.clone()));
-                self.expanded.insert(LogPanel::Details(id.clone()));
-                self.expanded.insert(LogPanel::Files(id.clone()));
-                if let Some(turn) = last_turn(&view) {
-                    self.expanded.insert(LogPanel::Turn(id.clone(), turn));
-                }
-                self.selected = Some(LogPanel::Run(id));
+            if let (Some(root), Some(turn)) = (view.root(), last_turn(&view)) {
+                self.expanded
+                    .insert(LogPanel::Turn(root.run_id.clone(), turn));
             }
         }
         self.view = Some(view);
@@ -313,8 +470,11 @@ impl LogState {
         self.select_at(&rows, to);
     }
 
-    /// Open or shut `panel`.
+    /// Open or shut `panel`; the run asked for stays open.
     pub(crate) fn toggle(&mut self, panel: &LogPanel) {
+        if self.is_root(panel) {
+            return;
+        }
         if !self.expanded.remove(panel) && self.opens(panel) {
             self.expanded.insert(panel.clone());
         }
@@ -338,13 +498,16 @@ impl LogState {
         let Some(panel) = self.selected.clone() else {
             return;
         };
-        if self.expanded.remove(&panel) {
+        if !self.is_root(&panel) && self.expanded.remove(&panel) {
             return;
         }
         let rows = self.rows();
         let at = self.selected_index(&rows);
         let depth = rows.get(at).map_or(0, |r| r.depth);
-        if let Some(parent) = rows[..at].iter().rposition(|r| r.depth < depth) {
+        let parent = rows
+            .get(..at)
+            .and_then(|above| above.iter().rposition(|r| r.depth < depth));
+        if let Some(parent) = parent {
             self.select_at(&rows, parent);
         }
     }
@@ -359,7 +522,6 @@ impl LogState {
             let id = &run.run_id;
             all.push(LogPanel::Run(id.clone()));
             all.push(LogPanel::Details(id.clone()));
-            all.push(LogPanel::Files(id.clone()));
             for turn in &run.turns {
                 all.push(LogPanel::Turn(id.clone(), turn.turn));
                 for step in &turn.steps {
@@ -370,12 +532,9 @@ impl LogState {
         self.expanded.extend(all);
     }
 
-    /// Shut every panel but the run asked for.
+    /// Shut every panel; the run asked for stays open.
     fn collapse_all(&mut self) {
         self.expanded.clear();
-        if let Some(root) = self.view.as_ref().and_then(LogView::root) {
-            self.expanded.insert(LogPanel::Run(root.run_id.clone()));
-        }
         self.keep_selection();
         self.follow = true;
     }
@@ -452,9 +611,10 @@ impl App {
         &mut self.log
     }
 
-    /// Ask for the log of the agent on screen.
+    /// Ask for the log of the agent on screen. Nothing on screen changes
+    /// until it arrives.
     pub(super) fn request_log(&mut self) {
-        self.log.loading = true;
+        self.log.loading_since = Some(Instant::now());
         self.log.stale = false;
         self.log.requested = Some(Instant::now());
         if let Some(tx) = &self.event_tx {
@@ -462,6 +622,25 @@ impl App {
                 agent_id: self.active_agent_id.clone(),
                 request: LogRequest::Load,
             });
+        }
+    }
+
+    /// Whether the open LOG tab changes from frame to frame: it waits
+    /// for a log with none shown, a log is fading in, or the run on
+    /// screen is still running so its spinner turns.
+    #[must_use]
+    pub fn log_animating(&self) -> bool {
+        if !self.log.is_open() {
+            return false;
+        }
+        if self.log.fading().is_some() {
+            return true;
+        }
+        match self.log.shown(&self.active_agent_id) {
+            None => self.log.is_loading(),
+            Some(view) => view
+                .root()
+                .is_some_and(|root| root.status == LogStatus::Running),
         }
     }
 
@@ -492,16 +671,25 @@ impl App {
 
     pub(super) fn cmd_log_view(&mut self, view: LogView) {
         if view.agent_id == self.active_agent_id {
+            self.log.show_agent(&view.agent_id);
             self.log.load(view);
         }
     }
 
+    /// Why the log of `agent_id` can't be shown. It replaces what the tab
+    /// shows only when no log is shown: a reload that failed leaves the
+    /// log on screen, and one held back comes back rather than vanish.
     pub(super) fn cmd_log_notice(&mut self, agent_id: &str, notice: String) {
-        if agent_id == self.active_agent_id {
-            self.log.loading = false;
-            self.log.view = None;
-            self.log.notice = Some(notice);
+        if agent_id != self.active_agent_id {
+            return;
         }
+        self.log.show_agent(agent_id);
+        if self.log.shown(agent_id).is_none() {
+            self.log.revealed_at = Some(Instant::now());
+        }
+        self.log.held = false;
+        self.log.loading_since = None;
+        self.log.notice = Some(notice);
     }
 
     /// Copy `text` to the clipboard after the next frame, saying `what`
@@ -682,22 +870,20 @@ mod tests {
     }
 
     #[test]
-    fn a_new_log_opens_on_its_details_files_and_last_turn() {
+    fn a_new_log_opens_on_its_last_turn_with_its_details_shut() {
         let mut state = LogState::default();
         state.load(view());
-        let root = |p: fn(String) -> LogPanel| p("root".into());
         assert_eq!(
             panels(&state),
             vec![
-                root(LogPanel::Run),
-                root(LogPanel::Details),
-                root(LogPanel::Files),
+                LogPanel::Details("root".into()),
                 LogPanel::Turn("root".into(), 1),
                 LogPanel::Turn("root".into(), 2),
                 LogPanel::Step("root".into(), 5),
-            ]
+            ],
+            "the run asked for has no row of its own"
         );
-        assert_eq!(state.selected, Some(LogPanel::Run("root".into())));
+        assert_eq!(state.selected, Some(LogPanel::Details("root".into())));
     }
 
     #[test]
@@ -728,7 +914,7 @@ mod tests {
         let rows = state.rows();
         let listed: Vec<(&LogPanel, usize)> = rows.iter().map(|r| (&r.panel, r.depth)).collect();
         let (a, b) = (LogPanel::Run("a-1".into()), LogPanel::Run("b-1".into()));
-        assert_eq!(&listed[listed.len() - 2..], [(&a, 1), (&b, 1)]);
+        assert_eq!(&listed[listed.len() - 2..], [(&a, 0), (&b, 0)]);
     }
 
     #[test]
@@ -736,9 +922,21 @@ mod tests {
         let mut state = LogState::default();
         state.load(view());
         state.selected = Some(LogPanel::Step("root".into(), 5));
+        state.toggle(&LogPanel::Turn("root".into(), 2));
+        let shown = panels(&state);
+        assert!(!shown.contains(&LogPanel::Step("root".into(), 5)));
+        assert!(shown.contains(state.selected.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn the_run_asked_for_stays_open() {
+        let mut state = LogState::default();
+        state.load(view());
+        let before = panels(&state);
         state.toggle(&LogPanel::Run("root".into()));
-        assert_eq!(panels(&state), vec![LogPanel::Run("root".into())]);
-        assert_eq!(state.selected, Some(LogPanel::Run("root".into())));
+        state.collapse_all();
+        assert!(state.is_expanded(&LogPanel::Run("root".into())));
+        assert_eq!(panels(&state)[0], before[0]);
     }
 
     #[test]
@@ -749,7 +947,7 @@ mod tests {
         let mut next = view();
         next.runs[0].turns.push(turn(3, vec![step(9, vec![])]));
         state.load(next);
-        assert!(!state.is_expanded(&LogPanel::Details("root".into())));
+        assert!(state.is_expanded(&LogPanel::Details("root".into())));
         assert!(
             state.is_expanded(&LogPanel::Turn("root".into(), 3)),
             "a new turn opens"
@@ -862,6 +1060,113 @@ mod tests {
             ChatTab::Chat,
             "the wait ended with the switch"
         );
+    }
+
+    #[test]
+    fn switching_agents_parks_the_log_and_brings_it_back() {
+        use crate::events::UiCommand;
+        let (tx, _rx) = tokio::sync::mpsc::channel(32);
+        let mut app = App::new().with_event_sender(tx);
+        app.process_command(UiCommand::SetActiveAgent("a".into()));
+        app.show_chat_tab(ChatTab::Log);
+        app.cmd_log_view(view());
+        app.log.selected = Some(LogPanel::Step("root".into(), 5));
+
+        app.process_command(UiCommand::SetActiveAgent("b".into()));
+        assert!(app.log.view.is_none(), "a's log is not b's");
+        assert!(app.log.shown("b").is_none());
+
+        app.process_command(UiCommand::SetActiveAgent("a".into()));
+        assert!(app.log.is_held(), "a's old log waits for the fresh one");
+        assert!(app.log.shown("a").is_none(), "nothing old is drawn");
+        app.cmd_log_view(view());
+        assert!(app.log.shown("a").is_some());
+        assert_eq!(
+            app.log.selected,
+            Some(LogPanel::Step("root".into(), 5)),
+            "the fresh log keeps a's folds and selection"
+        );
+        assert!(app.log.fading().is_some(), "and fades in");
+    }
+
+    #[test]
+    fn coming_back_to_the_tab_hides_the_old_log_until_the_fresh_one() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(32);
+        let mut app = App::new().with_event_sender(tx);
+        app.active_agent_id = "a".into();
+        app.show_chat_tab(ChatTab::Log);
+        app.cmd_log_view(view());
+        app.log.revealed_at = None;
+
+        app.show_chat_tab(ChatTab::Chat);
+        app.show_chat_tab(ChatTab::Log);
+        assert!(app.log.shown("a").is_none(), "the old log is not flashed");
+        assert!(app.log.is_loading());
+
+        app.cmd_log_view(view());
+        assert!(app.log.shown("a").is_some());
+        assert!(app.log.fading().is_some());
+
+        // A live reload on the open tab keeps the log on screen.
+        app.request_log();
+        assert!(app.log.shown("a").is_some());
+    }
+
+    #[test]
+    fn an_old_notice_is_not_shown_while_the_log_is_asked_for_again() {
+        let (tx, _rx) = tokio::sync::mpsc::channel(32);
+        let mut app = App::new().with_event_sender(tx);
+        app.active_agent_id = "a".into();
+        app.show_chat_tab(ChatTab::Log);
+        app.cmd_log_notice("a", "no run log yet".into());
+        app.show_chat_tab(ChatTab::Chat);
+        app.show_chat_tab(ChatTab::Log);
+        assert!(app.log.is_held() && app.log.is_loading());
+    }
+
+    #[test]
+    fn a_notice_during_a_reload_keeps_the_log_on_screen() {
+        let mut app = App::new();
+        app.active_agent_id = "a".into();
+        app.cmd_log_view(view());
+        app.request_log();
+        app.cmd_log_notice("a", "could not read the run".into());
+        assert!(app.log.shown("a").is_some());
+        assert!(!app.log.is_loading());
+    }
+
+    #[test]
+    fn a_slow_log_says_it_is_loading_only_after_a_moment() {
+        let mut state = LogState {
+            loading_since: Some(Instant::now()),
+            ..LogState::default()
+        };
+        assert!(state.is_loading() && !state.loading_shown());
+        state.loading_since = Instant::now().checked_sub(LOADING_DELAY);
+        assert!(state.loading_shown());
+    }
+
+    #[test]
+    fn a_log_fades_in_only_where_none_was_shown() {
+        let mut state = LogState::default();
+        state.load(view());
+        assert!(state.fading().is_some(), "the first log fades in");
+        state.revealed_at = None;
+        state.load(view());
+        assert!(state.revealed_at.is_none(), "a reload doesn't fade");
+    }
+
+    #[test]
+    fn the_tab_animates_while_it_waits_or_fades() {
+        let mut app = App::new();
+        app.active_agent_id = "a".into();
+        assert!(!app.log_animating(), "the tab is shut");
+        app.show_chat_tab(ChatTab::Log);
+        assert!(app.log_animating(), "waiting for the log");
+        app.cmd_log_view(view());
+        assert!(app.log_animating(), "fading in");
+        app.log.revealed_at = Instant::now().checked_sub(FADE_IN);
+        assert!(!app.log_animating(), "a finished run on screen is still");
     }
 
     #[test]

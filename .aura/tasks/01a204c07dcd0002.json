@@ -1,0 +1,11 @@
+{
+  "id": "01a204c07dcd0002",
+  "title": "should be able to shift enter when empty and increase space",
+  "state": "completed",
+  "agent_id": "b64a4bc77b54c1a9387134116fcac4a9dc7680b6f3f3a467b1485238d1c02f13",
+  "agent_name": "Agent 888",
+  "items": [],
+  "summary": "Let me add a probe test for the empty case, including after the user has clicked into another panel and while a turn is running.",
+  "updated_ms": 1795376219338,
+  "created_ms": 1795376053709
+}

@@ -17,7 +17,9 @@ const DEFAULT_REPEATS: u32 = 3;
 
 /// How `/compare` is used, for error messages.
 const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms> | --examples N | --suite <name>] \
-[--a <model|gate>] [--against <model|gate|gate:nodelegate>] [--repeats N] [--check <cmd>] [--budget $] [--learn] · \
+[--a <model|gate|difficulty:easy=<model>,medium=<model>,hard=<model>>] \
+[--against <model|gate|gate:nodelegate|difficulty:easy=<model>,medium=<model>,hard=<model>>] \
+[--repeats N] [--check <cmd>] [--budget $] [--learn] · \
 /compare go | cancel | show [n] | diff [run] | apply <run> | dismiss";
 
 /// Which earlier session a comparison replays.

@@ -1,0 +1,14 @@
+{
+  "id": "01a20490b851005b",
+  "title": "Feature in a Rust workspace (follow `.cursor/rules.md`: no unwrap/expect in production, rustfmt, docs on public items, …",
+  "state": "completed",
+  "agent_id": "7d62888fca14eb65e197c8dcbcb5c0b9d6abea0c02da7e4bb0f91d4900339202",
+  "agent_name": "rust-engineer #57",
+  "assignee": "rust-engineer",
+  "parent": "01a2048fef29005a",
+  "items": [],
+  "summary": "Passes in isolation (OS-process scan test, flaky under parallel load, file untouched). Re-running the full suite once more:",
+  "updated_ms": 1795374414960,
+  "created_ms": 1795372922961,
+  "tool_use_id": "toolu_01S1udmdYYAWWU8BEJDSJ5z2"
+}

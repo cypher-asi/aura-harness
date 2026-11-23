@@ -114,7 +114,8 @@ async fn spawned_agent_replies_with_a_notice_and_is_listed() {
         .expect("timed out waiting for the reply")
         .expect("notices closed");
     assert_eq!(notice.to, root);
-    assert_eq!(notice.shown, "Message from helper");
+    // The reply stays in the thread the first prompt started, named after it.
+    assert_eq!(notice.shown, "Message from helper: go");
     assert!(notice.prompt.contains("all done"), "{}", notice.prompt);
     assert!(
         agents.host().tree(root).len() > 1,

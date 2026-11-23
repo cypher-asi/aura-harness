@@ -4,9 +4,9 @@
 //!
 //! ```text
 //!  ⢎⡱ Fix the login bug  Agent       1/3
-//!      ✓  Find the handler
-//!      ▸  Write the fix  → coder
-//!      ○  Add a test  → tester
+//!  ☒  Find the handler
+//!  ▣  Write the fix  → coder
+//!  ☐  Add a test  → tester
 //!    ⢎⡱ Write the fix  → coder       0/2
 //!  ✓  Rename the crate  Agent       2/2
 //! ```
@@ -102,9 +102,12 @@ pub(super) fn render_tasks(
                     let item = &task.items[item];
                     let icon = StatusIcon::new(marker(item.state), marker_color(item.state, theme));
                     let agent = item.assignee.as_deref().map(|agent| format!("→ {agent}"));
+                    // An item is a level below its task, but its box sits
+                    // under the task's icon, as the checklist's boxes sit
+                    // under its `⬢`.
                     list_row_with_detail(
                         width,
-                        depth,
+                        depth.saturating_sub(1),
                         icon,
                         (item.content.lines().next().unwrap_or(""), agent.as_deref()),
                         cell_style(theme, state, todo_style(item.state, theme)),

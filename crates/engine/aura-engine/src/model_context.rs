@@ -6,9 +6,27 @@
 //! Phase B / Commit 3 lifts this out of the gateway-side `session/state.rs`
 //! so engine-internal callers don't reach back into `aura-node`.
 
+/// Context window assumed for a model nothing here or in a model
+/// listing knows.
+const DEFAULT_CONTEXT_WINDOW: u64 = 200_000;
+
 /// Map a model identifier to its maximum context window in tokens.
+///
+/// A window from the provider's model listing
+/// ([`aura_model::model_catalog::live_context_window`]) wins on
+/// OpenRouter ids, whose listing is the authority for that route, and
+/// stands in for [`DEFAULT_CONTEXT_WINDOW`] when the table below does not
+/// know a model.
 #[must_use]
 pub fn context_window_for_model(model: &str) -> u64 {
+    use aura_model::model_catalog::{backend_for, live_context_window, ModelBackend};
+
+    let live = || live_context_window(model);
+    if backend_for(model) == ModelBackend::OpenRouter {
+        if let Some(window) = live() {
+            return window;
+        }
+    }
     match model {
         m if m.starts_with(aura_model::model_catalog::LOCAL_PREFIX) => {
             aura_model::model_catalog::local_context_tokens()
@@ -87,7 +105,7 @@ pub fn context_window_for_model(model: &str) -> u64 {
 
         // Google
         m if m.contains("gemini") => 1_048_576,
-        _ => 200_000,
+        _ => live().unwrap_or(DEFAULT_CONTEXT_WINDOW),
     }
 }
 
@@ -273,5 +291,44 @@ mod tests {
     #[test]
     fn unknown_model_gets_safe_default() {
         assert_eq!(context_window_for_model("unknown-model-xyz"), 200_000);
+    }
+
+    // The live table is process-wide: this is the only test in the crate
+    // that writes it, and it uses ids no other test reads.
+    #[test]
+    fn listed_windows_win_on_openrouter_and_fill_in_unknown_models() {
+        use aura_model::model_catalog::{replace_live_models, LiveModelInfo, ModelBackend};
+
+        let window = |tokens| LiveModelInfo {
+            context_window: Some(tokens),
+            max_output: None,
+            price: None,
+        };
+        let openrouter_curated = "openrouter/anthropic/claude-sonnet-4.6:ctx-test";
+        let openrouter_unknown = "openrouter/some/ctx-test-model";
+        let openrouter_unlisted = "openrouter/anthropic/claude-haiku-4.5:ctx-test";
+        replace_live_models(
+            ModelBackend::OpenRouter,
+            [
+                (openrouter_curated.to_string(), window(200_000)),
+                (openrouter_unknown.to_string(), window(65_536)),
+            ],
+        );
+        replace_live_models(
+            ModelBackend::Router,
+            [
+                ("aura-ctx-test-unknown".to_string(), window(64_000)),
+                ("aura-claude-opus-4-7-ctx-test".to_string(), window(8_000)),
+            ],
+        );
+        assert_eq!(context_window_for_model(openrouter_curated), 200_000);
+        assert_eq!(context_window_for_model(openrouter_unknown), 65_536);
+        assert_eq!(context_window_for_model(openrouter_unlisted), 200_000);
+        assert_eq!(context_window_for_model("aura-ctx-test-unknown"), 64_000);
+        // Outside OpenRouter, the curated table wins over a listing.
+        assert_eq!(
+            context_window_for_model("aura-claude-opus-4-7-ctx-test"),
+            1_000_000
+        );
     }
 }

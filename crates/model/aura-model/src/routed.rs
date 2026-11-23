@@ -1,7 +1,8 @@
 //! Provider that dispatches each request by its model id (see
 //! [`crate::model_catalog`]): `local/*` to the local model server,
-//! `claude/*` and `chatgpt/*` to the user's linked plan, everything else
-//! to aura-router. Routes never fall back to one another, so the billing
+//! `claude/*` and `chatgpt/*` to the user's linked plan, `openrouter/*`
+//! to OpenRouter with the user's OpenRouter key, everything else to
+//! aura-router. Routes never fall back to one another, so the billing
 //! target is always the one the user picked.
 
 use std::sync::Arc;
@@ -22,6 +23,7 @@ pub struct RoutedProvider {
     router: SharedProvider,
     claude: Option<SharedProvider>,
     chatgpt: Option<SharedProvider>,
+    openrouter: Option<SharedProvider>,
 }
 
 impl RoutedProvider {
@@ -33,6 +35,7 @@ impl RoutedProvider {
             router,
             claude: None,
             chatgpt: None,
+            openrouter: None,
         }
     }
 
@@ -47,6 +50,13 @@ impl RoutedProvider {
     #[must_use]
     pub fn with_chatgpt(mut self, provider: SharedProvider) -> Self {
         self.chatgpt = Some(provider);
+        self
+    }
+
+    /// Serve `openrouter/*` models with `provider`.
+    #[must_use]
+    pub fn with_openrouter(mut self, provider: SharedProvider) -> Self {
+        self.openrouter = Some(provider);
         self
     }
 
@@ -74,6 +84,7 @@ impl RoutedProvider {
             ModelBackend::Router => return Ok((self.router.as_ref(), request)),
             ModelBackend::Claude => self.claude.as_deref(),
             ModelBackend::Chatgpt => self.chatgpt.as_deref(),
+            ModelBackend::OpenRouter => self.openrouter.as_deref(),
         };
         subscription
             .map(|provider| (provider as &dyn ModelProvider, request))
@@ -348,5 +359,124 @@ mod tests {
             Arc::as_ptr(provider.chatgpt.as_ref().unwrap()).cast::<u8>()
         ));
         assert_eq!(rewritten.model.as_str(), "chatgpt/gpt-5.4");
+    }
+
+    #[test]
+    fn openrouter_models_route_to_openrouter_only() {
+        let model = "openrouter/anthropic/claude-sonnet-4.6";
+        let err = routed()
+            .route(request(model))
+            .err()
+            .expect("no openrouter backend configured");
+        assert!(matches!(err, ReasonerError::Api { status: 401, .. }));
+
+        let provider =
+            routed().with_openrouter(Arc::new(MockProvider::simple_response("openrouter")));
+        let (target, rewritten) = provider.route(request(model)).unwrap();
+        assert!(std::ptr::eq(
+            std::ptr::from_ref(target).cast::<u8>(),
+            Arc::as_ptr(provider.openrouter.as_ref().unwrap()).cast::<u8>()
+        ));
+        assert_eq!(rewritten.model.as_str(), model);
+    }
+
+    struct OpenRouterKey;
+
+    #[async_trait]
+    impl aura_core_auth::CredentialResolver for OpenRouterKey {
+        async fn inference_credential(
+            &self,
+            provider: aura_core_auth::ProviderKind,
+        ) -> Result<aura_core_auth::InferenceCredential, aura_core_auth::AuthError> {
+            Ok(aura_core_auth::InferenceCredential {
+                provider,
+                bearer: "sk-or-test-key".into(),
+                headers: vec![("X-Title".into(), "Aura".into())],
+                system_preamble: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn openrouter_requests_use_openrouter_key_and_upstream_model() {
+        use crate::credentialed::CredentialedProvider;
+        use crate::{AnthropicConfig, AnthropicProvider};
+        use futures_util::StreamExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic/claude-sonnet-4.6\",\"stop_reason\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut raw = Vec::new();
+            let mut buf = vec![0u8; 65536];
+            loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                raw.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&raw).to_ascii_lowercase();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+                    if raw.len() >= end + 4 + length || n == 0 {
+                        break;
+                    }
+                }
+            }
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&raw).to_string()
+        });
+
+        let config = AnthropicConfig {
+            base_url: format!("http://{addr}"),
+            max_retries: 0,
+            ..AnthropicConfig::openrouter()
+        };
+        let openrouter = AnthropicProvider::new(config)
+            .unwrap()
+            .with_sse_for_all_models()
+            .without_router_body_extensions();
+        let openrouter = CredentialedProvider::new(
+            aura_core_auth::ProviderKind::OpenRouter,
+            Arc::new(openrouter),
+            Arc::new(OpenRouterKey),
+        );
+        let provider = routed().with_openrouter(Arc::new(openrouter));
+
+        let mut req = request("openrouter/anthropic/claude-sonnet-4.6");
+        req.aura_project_id = Some("project-1".to_string());
+        let mut stream = provider.complete_streaming(req).await.unwrap();
+        while let Some(event) = stream.next().await {
+            event.unwrap();
+        }
+
+        let raw = server.await.unwrap();
+        let lower = raw.to_ascii_lowercase();
+        assert!(lower.starts_with("post /v1/messages"), "{raw}");
+        let body: serde_json::Value =
+            serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["model"], "anthropic/claude-sonnet-4.6", "{raw}");
+        assert!(
+            lower.contains("authorization: bearer sk-or-test-key"),
+            "{raw}"
+        );
+        assert!(lower.contains("x-title: aura"), "{raw}");
+        assert!(!lower.contains("x-aura-"), "{raw}");
+        assert!(!lower.contains("jwt"), "{raw}");
     }
 }

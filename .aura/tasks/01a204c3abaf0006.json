@@ -1,0 +1,14 @@
+{
+  "id": "01a204c3abaf0006",
+  "title": "Rust workspace change (follow `.cursor/rules.md`: no unwrap/expect in production code, rustfmt, docs, deterministic tes…",
+  "state": "completed",
+  "agent_id": "3e09a46da05a3bdf6723dc23e9a46abbae0213ea6c71366c39c3006dfdc2fb6a",
+  "agent_name": "rust-engineer #62",
+  "assignee": "rust-engineer",
+  "parent": "01a204c26cd60004",
+  "items": [],
+  "summary": "Every roster row in the AGENTS tab now ends with its definition's abbreviation. It's the same prefix its instances' codes use, unique across definitions, and saved so it doesn't change. All the requested checks pass.",
+  "updated_ms": 1795376852990,
+  "created_ms": 1795376262063,
+  "tool_use_id": "toolu_01NHbGf9MBgGPfphpcekdxsv"
+}

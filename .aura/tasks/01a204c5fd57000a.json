@@ -1,0 +1,14 @@
+{
+  "id": "01a204c5fd57000a",
+  "title": "Rust workspace change (follow `.cursor/rules.md`: no unwrap/expect in production code, rustfmt, docs, deterministic tes…",
+  "state": "completed",
+  "agent_id": "517cbadabdce133ebe15d3b1e1c6c1ca1c03718af4ba9b05881a3f5aea714523",
+  "agent_name": "rust-engineer #63",
+  "assignee": "rust-engineer",
+  "parent": "01a204c590a20009",
+  "items": [],
+  "summary": "Codes now look like `RE36`, with no separator. Prefixes are always 2 or 3 uppercase letters, and older registries are converted when they load. All the checks you listed pass. I built on the other agent's prefix table and `reserve_prefixes` and left them in place, and didn't touch any of the unrelated changes in the tree.",
+  "updated_ms": 1795377360387,
+  "created_ms": 1795376414039,
+  "tool_use_id": "toolu_01UFR5FY5wZ9ymSNnk6qMS3V"
+}

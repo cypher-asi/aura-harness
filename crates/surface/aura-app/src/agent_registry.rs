@@ -15,6 +15,7 @@ use anyhow::Context;
 use aura_core_types::{AgentId, Identity};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -135,10 +136,24 @@ pub struct RegisteredAgent {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
     /// Short title of what the agent's chat is about, written by the model
-    /// after its first turn. Shown instead of `name`, which stays the
-    /// agent's identity.
+    /// after its first turn or set explicitly. Shown instead of `name`
+    /// (after the code for a spawned instance, in place of its subtitle;
+    /// see [`Self::display_name`]), which stays the agent's identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Short code name shown beside the agent in the UI, `<PREFIX><N>`
+    /// such as `RE36` for `rust-engineer #36`. Unique in the registry and
+    /// never changed once assigned: the registry gives one to every agent
+    /// it registers, and to agents of older registries when it loads them
+    /// (older `RE-36` codes become `RE36`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Short name of the subtask a spawned permanent-agent instance was
+    /// given ("Fix parser escapes"), written by the title model from the
+    /// task prompt. Shown after the code (`RE36: Fix parser escapes`)
+    /// unless the agent has a title; `name` stays the agent's identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
     /// Version 0: ZNS id of the agent heading the project this one was
     /// added to.
     #[serde(default, rename = "member_of", skip_serializing)]
@@ -174,10 +189,37 @@ impl RegisteredAgent {
         self.zns_id.starts_with(COMPARE_ARM_ZNS_PREFIX)
     }
 
-    /// What the UI calls the agent: its title once it has one.
+    /// What the UI calls the agent. A spawned instance, or any agent with
+    /// a subtitle, is labelled by its code and what it is doing:
+    /// `<code>: <title>` once it has a title (an explicit title says more
+    /// than the subtitle written from its task, so it wins), else
+    /// `<code>: <subtitle>`, without the code when it has none. Other
+    /// agents show their title once they have one. Without either, the
+    /// name. The name stays the agent's identity (see [`Self::identity`]).
     #[must_use]
-    pub fn display_name(&self) -> &str {
-        self.title.as_deref().unwrap_or(&self.name)
+    pub fn display_name(&self) -> Cow<'_, str> {
+        let label = self.title.as_deref().or(self.subtitle.as_deref());
+        let coded = self.is_spawned_instance() || self.subtitle.is_some();
+        match (label, self.code.as_deref()) {
+            (Some(label), Some(code)) if coded => Cow::Owned(format!("{code}: {label}")),
+            (Some(label), _) => Cow::Borrowed(label),
+            (None, _) => Cow::Borrowed(&self.name),
+        }
+    }
+
+    /// Whether another agent spawned this instance of a permanent agent.
+    fn is_spawned_instance(&self) -> bool {
+        self.definition.is_some() && self.parent.is_some()
+    }
+
+    /// Whether the agent should be named after its subtask: it is an
+    /// instance of a permanent agent that another agent spawned, and has
+    /// neither a subtitle nor a title yet. A title set first (by hand, or
+    /// when an unstarted spawn is archived) is not overridden by a
+    /// subtitle the title model writes later.
+    #[must_use]
+    pub fn needs_subtitle(&self) -> bool {
+        self.is_spawned_instance() && self.subtitle.is_none() && self.title.is_none()
     }
 
     /// Whether the agent should get a title: it has none yet and still has
@@ -221,6 +263,14 @@ struct RegistryFile {
     projects: Vec<Project>,
     #[serde(default)]
     agents: Vec<RegisteredAgent>,
+    /// The code prefix each source key (definition name, or `agent`) has
+    /// reserved, so definitions without instances have one too.
+    #[serde(default, skip_serializing_if = "code::PrefixTable::is_empty")]
+    prefixes: code::PrefixTable,
+    /// The highest code number each prefix has ever been given, so the
+    /// codes and instance names of dropped agents are not reused.
+    #[serde(default, skip_serializing_if = "code::LastNumbers::is_empty")]
+    last_numbers: code::LastNumbers,
 }
 
 /// File-backed agent registry.
@@ -328,10 +378,77 @@ impl AgentRegistry {
             });
             changed = true;
         }
+        let migrated = code::migrate(&mut registry.file.agents, &mut registry.file.prefixes);
+        let reserved = registry
+            .file
+            .prefixes
+            .fill_from_codes(&registry.file.agents);
+        let seeded = registry
+            .file
+            .last_numbers
+            .raise_to_codes(&registry.file.agents);
+        let coded = registry.assign_missing_codes();
         if changed {
             registry.save()?;
+        } else if migrated || coded || reserved || seeded {
+            // Codes alone are no reason to refuse to start, say on a
+            // read-only data directory: the next load assigns the same
+            // ones again, as backfilling is deterministic.
+            if let Err(error) = registry.save() {
+                tracing::warn!(
+                    path = %registry.path.display(),
+                    error = %format!("{error:#}"),
+                    "could not save the agents' new codes"
+                );
+            }
         }
         Ok(registry)
+    }
+
+    /// Give every agent without a code one, in registry order, so the same
+    /// registry always gets the same codes (see [`code::backfill`]).
+    /// Returns whether any agent got one.
+    fn assign_missing_codes(&mut self) -> bool {
+        let mut changed = false;
+        for index in 0..self.file.agents.len() {
+            if self.file.agents[index].code.is_some() {
+                continue;
+            }
+            let assigned = code::backfill(
+                &self.file.agents[index],
+                &self.file.agents,
+                &mut self.file.prefixes,
+                &mut self.file.last_numbers,
+            );
+            self.file.agents[index].code = Some(assigned);
+            changed = true;
+        }
+        changed
+    }
+
+    /// The code prefix (the abbreviation, such as `RE` for
+    /// `rust-engineer`) of each of `keys`, in the same order. A key is a
+    /// definition name, or `agent` for agents without one.
+    ///
+    /// Keys without a prefix yet reserve one now, in the order given, so
+    /// the same registry and keys always give the same prefixes. A
+    /// reserved prefix is the one the key's instances' codes get, is never
+    /// changed, and no other key has it. The registry is saved only when
+    /// something was reserved.
+    ///
+    /// # Errors
+    /// Returns an error if a new reservation cannot be saved. The
+    /// reservations stay in memory regardless.
+    pub fn reserve_prefixes(&mut self, keys: &[&str]) -> anyhow::Result<Vec<String>> {
+        let before = self.file.prefixes.len();
+        let prefixes = keys
+            .iter()
+            .map(|key| self.file.prefixes.prefix_for(key, &self.file.agents))
+            .collect();
+        if self.file.prefixes.len() != before {
+            self.save()?;
+        }
+        Ok(prefixes)
     }
 
     /// Turn a version 0 registry, where the agent heading a project held
@@ -820,6 +937,24 @@ impl AgentRegistry {
         self.save()
     }
 
+    /// Give `agent_id` the subtask name `subtitle`. Blank subtitles are
+    /// ignored.
+    ///
+    /// # Errors
+    /// Returns an error if the agent is unknown or the registry cannot be
+    /// written.
+    pub fn set_subtitle(&mut self, agent_id: AgentId, subtitle: &str) -> anyhow::Result<()> {
+        let subtitle = subtitle.trim();
+        if subtitle.is_empty() {
+            return Ok(());
+        }
+        let Some(index) = self.position(agent_id) else {
+            anyhow::bail!("no such agent");
+        };
+        self.file.agents[index].subtitle = Some(subtitle.to_string());
+        self.save()
+    }
+
     /// Whether nothing registered spawned `agent`: it is listed at the top
     /// of its project.
     fn is_top_level(&self, agent: &RegisteredAgent) -> bool {
@@ -873,17 +1008,29 @@ impl AgentRegistry {
     }
 
     /// A fresh instance of `definition`, named `<definition> #<n>`, not yet
-    /// registered.
+    /// registered. `n` is one past both the highest number any instance of
+    /// `definition` has in its name and the highest number its code prefix
+    /// was ever given, so neither a name nor a code is reused after an
+    /// instance is dropped, even the highest-numbered one, and [`code::assign`]
+    /// gives the instance the code with the same number.
     fn new_instance(&self, definition: &str) -> RegisteredAgent {
-        let count = self
+        let highest_named = self
             .file
             .agents
             .iter()
             .filter(|a| a.definition.as_deref() == Some(definition))
-            .count();
+            .filter_map(|a| code::number_in_name(&a.name, definition))
+            .max()
+            .unwrap_or(0);
+        let highest_coded = self
+            .file
+            .prefixes
+            .get(definition)
+            .map_or(0, |prefix| self.file.last_numbers.last(prefix));
+        let number = highest_named.max(highest_coded).saturating_add(1);
         RegisteredAgent {
             definition: Some(definition.to_string()),
-            ..Self::new_agent(format!("{definition} #{}", count + 1))
+            ..Self::new_agent(format!("{definition} #{number}"))
         }
     }
 
@@ -923,12 +1070,23 @@ impl AgentRegistry {
             archived: false,
             removed: false,
             title: None,
+            code: None,
+            subtitle: None,
             legacy_member_of: None,
             id: IdCache::default(),
         }
     }
 
-    fn push(&mut self, agent: RegisteredAgent) -> anyhow::Result<RegisteredAgent> {
+    /// Register `agent`, giving it its code, and save.
+    fn push(&mut self, mut agent: RegisteredAgent) -> anyhow::Result<RegisteredAgent> {
+        if agent.code.is_none() {
+            agent.code = Some(code::assign(
+                &agent,
+                &self.file.agents,
+                &mut self.file.prefixes,
+                &mut self.file.last_numbers,
+            ));
+        }
         self.file.agents.push(agent.clone());
         self.save()?;
         Ok(agent)
@@ -1373,6 +1531,8 @@ fn legacy_or_new_zns_id(data_dir: &Path) -> anyhow::Result<String> {
         .with_context(|| format!("writing {}", identity_file.display()))?;
     Ok(zns_id)
 }
+
+mod code;
 
 #[cfg(test)]
 mod tests;

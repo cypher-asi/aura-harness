@@ -22,11 +22,11 @@ use unicode_width::UnicodeWidthStr;
 /// Width of the label column of a STATUS row.
 const LABEL_WIDTH: usize = 10;
 
-/// The header's info cell: `AGENT/ASK`, warning-colored under `yolo`.
+/// The header's info cell: `AGENT/ASK`, in the accent under `yolo`.
 pub(super) fn header_info(app: &App, theme: &Theme) -> Option<HeaderInfo> {
     let view = app.policies()?;
     let color = if view.approval == ApprovalLevel::Yolo {
-        theme.colors.warning
+        theme.colors.success
     } else {
         theme.colors.muted
     };
@@ -82,7 +82,7 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
 
     lines.push(heading("STATUS", None, theme));
     let approval_style = if view.approval == ApprovalLevel::Yolo {
-        Style::default().fg(theme.colors.warning)
+        Style::default().fg(theme.colors.success)
     } else {
         text
     };
@@ -105,7 +105,7 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
     } else {
         (
             "can't be confined here".to_string(),
-            Style::default().fg(theme.colors.warning),
+            Style::default().fg(theme.colors.success),
         )
     };
     lines.push(row("commands", &commands, commands_style, width, theme));
@@ -120,7 +120,7 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
     } else {
         (
             "none: ask calls are denied".to_string(),
-            Style::default().fg(theme.colors.warning),
+            Style::default().fg(theme.colors.success),
         )
     };
     lines.push(row("prompts", &prompts, prompts_style, width, theme));
@@ -171,11 +171,13 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
         .max()
         .unwrap_or(0)
         .min(width / 2);
+    // Every state is drawn in the accent; the glyph tells them apart.
+    let accent = Style::default().fg(theme.colors.success);
     for tool in &view.tools {
-        let (glyph, color) = match tool.state {
-            ToolPolicyState::On => ("✓", theme.colors.success),
-            ToolPolicyState::Ask => ("?", theme.colors.warning),
-            ToolPolicyState::Off => ("✗", theme.colors.error),
+        let glyph = match tool.state {
+            ToolPolicyState::On => "✓",
+            ToolPolicyState::Ask => "?",
+            ToolPolicyState::Off => "✗",
         };
         let name = pad(&fit(&tool.name, name_width), name_width);
         let state = pad(tool.state.label(), 4);
@@ -184,11 +186,11 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
         let rule = fit(&tool.decided_by, width.saturating_sub(used));
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled(glyph, Style::default().fg(color)),
+            Span::styled(glyph, accent),
             Span::raw(" "),
             Span::styled(name, text),
             Span::raw(" "),
-            Span::styled(state, Style::default().fg(color)),
+            Span::styled(state, accent),
             Span::raw(" "),
             Span::styled(rule, muted),
         ]));
@@ -216,7 +218,7 @@ fn heading(title: &'static str, note: Option<String>, theme: &Theme) -> Line<'st
         Span::styled(
             title,
             Style::default()
-                .fg(theme.colors.primary)
+                .fg(theme.colors.success)
                 .add_modifier(Modifier::BOLD),
         ),
     ];
@@ -419,7 +421,7 @@ mod tests {
     fn the_tab_lists_status_capabilities_and_how_each_tool_resolves() {
         let mut app = app_on_policies();
         app.process_command(UiCommand::SetPolicies(view(ApprovalLevel::Ask)));
-        let rows = render_rows(&mut app, 200, 50);
+        let rows = render_rows(&mut app, 240, 50);
         let screen = rows.join("\n");
         assert!(screen.contains("POLICIES"), "{screen}");
         assert!(screen.contains("AGENT/ASK"), "{screen}");
@@ -446,7 +448,7 @@ mod tests {
         app.handle_key(crossterm::event::KeyEvent::from(
             crossterm::event::KeyCode::End,
         ));
-        let screen = render_rows(&mut app, 200, 50).join("\n");
+        let screen = render_rows(&mut app, 240, 50).join("\n");
         assert!(screen.contains("`cargo test` commands"), "{screen}");
         assert!(screen.contains("INTEGRATIONS"), "{screen}");
     }
@@ -455,12 +457,12 @@ mod tests {
     fn strict_flags_the_always_allow_rules_as_ignored() {
         let mut app = app_on_policies();
         app.process_command(UiCommand::SetPolicies(view(ApprovalLevel::Strict)));
-        let screen = render_rows(&mut app, 200, 50).join("\n");
+        let screen = render_rows(&mut app, 240, 50).join("\n");
         assert!(screen.contains("STRICT │"), "the header names the level");
         app.handle_key(crossterm::event::KeyEvent::from(
             crossterm::event::KeyCode::End,
         ));
-        let screen = render_rows(&mut app, 200, 50).join("\n");
+        let screen = render_rows(&mut app, 240, 50).join("\n");
         assert!(screen.contains("ignored at strict"), "{screen}");
     }
 

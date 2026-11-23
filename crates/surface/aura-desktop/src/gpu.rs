@@ -7,7 +7,9 @@
 //! they are, as the CPU rasterizer blends them.
 
 use crate::scene::{Fill, Quad, Scene};
+#[cfg(test)]
 use crate::text::Atlas;
+use crate::text::AtlasRows;
 use anyhow::{anyhow, Context};
 
 /// Bytes of one quad in the instance buffer.
@@ -140,20 +142,16 @@ impl Renderer {
         self.device.limits().max_texture_dimension_2d
     }
 
-    /// Draw `scene` over all of `target`, which is `size` pixels, from
-    /// `atlas`.
-    #[allow(clippy::cast_precision_loss)] // window sizes
-    fn draw(
-        &mut self,
-        scene: &Scene,
-        atlas: &mut Atlas,
-        target: &wgpu::TextureView,
-        size: (u32, u32),
-    ) {
-        if !self.upload(atlas) {
-            return;
-        }
+    /// The size of the atlas the texture holds, if there is one.
+    #[cfg(test)]
+    fn atlas_size(&self) -> Option<(u32, u32)> {
+        self.atlas.as_ref().map(|kept| kept.size)
+    }
 
+    /// Draw `scene` over all of `target`, which is `size` pixels, from
+    /// the atlas as uploaded.
+    #[allow(clippy::cast_precision_loss)] // window sizes
+    fn draw(&mut self, scene: &Scene, target: &wgpu::TextureView, size: (u32, u32)) {
         // As many quads as an instance count can say; a frame has
         // thousands.
         let count = u32::try_from(scene.quads.len()).unwrap_or(u32::MAX);
@@ -209,11 +207,12 @@ impl Renderer {
         self.queue.submit([encoder.finish()]);
     }
 
-    /// Bring the texture up to date with `atlas`: all of it when the
-    /// atlas grew, else the rows written since the last frame. `false`
-    /// when the atlas is larger than a texture can be.
-    fn upload(&mut self, atlas: &mut Atlas) -> bool {
-        let (width, height) = atlas.size();
+    /// Bring the texture up to date with the atlas: a new texture when it
+    /// changed size, which comes with every row, else the rows written
+    /// since the last frame. `false` when the atlas is larger than a
+    /// texture can be.
+    fn upload(&mut self, atlas: &AtlasRows) -> bool {
+        let (width, height) = atlas.size;
         let limit = self.atlas_limit();
         if width > limit || height > limit {
             tracing::error!(width, height, limit, "the atlas is larger than a texture");
@@ -262,11 +261,8 @@ impl Renderer {
         let Some(kept) = &self.atlas else {
             return false;
         };
-        let dirty = atlas.take_dirty();
-        let rows = if fresh { Some(0..height) } else { dirty };
-        if let Some(rows) = rows.filter(|rows| rows.start < rows.end && rows.end <= height) {
-            let stride = width as usize * 4;
-            let bytes = &atlas.pixels()[rows.start as usize * stride..rows.end as usize * stride];
+        let rows = atlas.rows();
+        if rows.start < rows.end && rows.end <= height {
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &kept.texture,
@@ -278,7 +274,7 @@ impl Renderer {
                     },
                     aspect: wgpu::TextureAspect::All,
                 },
-                bytes,
+                &atlas.pixels,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(width * 4),
@@ -470,9 +466,10 @@ impl Gpu {
         self.surface.configure(&self.renderer.device, &self.config);
     }
 
-    /// Draw `scene` and show it, calling `before_showing` once it is
-    /// drawn. `false` when the window gave no frame to draw into this
-    /// time; the next one will.
+    /// Draw `scene` at its size from the atlas brought up to date with
+    /// `atlas`, and show it, calling `before_showing` once it is drawn.
+    /// `false` when the window gave no frame to draw into this time; the
+    /// next one will.
     ///
     /// # Errors
     ///
@@ -481,9 +478,13 @@ impl Gpu {
     pub fn render(
         &mut self,
         scene: &Scene,
-        atlas: &mut Atlas,
+        atlas: &AtlasRows,
         before_showing: impl FnOnce(),
     ) -> anyhow::Result<bool> {
+        // Before the window is asked for a frame, which it may not give:
+        // these rows are handed over only once.
+        let uploaded = self.renderer.upload(atlas);
+        self.resize(scene.width, scene.height);
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -503,7 +504,9 @@ impl Gpu {
             format: Some(self.view),
             ..wgpu::TextureViewDescriptor::default()
         });
-        self.renderer.draw(scene, atlas, &view, self.size());
+        if uploaded {
+            self.renderer.draw(scene, &view, self.size());
+        }
         let stale = frame.suboptimal;
         before_showing();
         frame.present();
@@ -581,7 +584,10 @@ impl Offscreen {
             mapped_at_creation: false,
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer.draw(scene, atlas, &view, (width, height));
+        let rows = atlas.take_rows(self.renderer.atlas_size());
+        if self.renderer.upload(&rows) {
+            self.renderer.draw(scene, &view, (width, height));
+        }
 
         let device = &self.renderer.device;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

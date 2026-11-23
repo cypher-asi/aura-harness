@@ -15,6 +15,7 @@ mod graph;
 mod header;
 mod hud;
 mod images;
+mod inbox;
 mod input;
 mod markdown;
 mod members;
@@ -139,7 +140,8 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     bench_panel::render(frame, chat_column[1], app, theme);
     queue_panel::render(frame, chat_column[2], app, theme);
     app.set_input_area(chat_column[3]);
-    input::render_input(frame, chat_column[3], app, theme);
+    let stop = input::render_input(frame, chat_column[3], app, theme);
+    app.set_input_stop_area(stop);
     let footer_gap = hud::render_footer(frame, inset_edges(chat_column[4]), app, theme);
     let (records, sandbox) = split_right_column(right, app);
     let notice_area = under_right.unwrap_or(footer_gap);

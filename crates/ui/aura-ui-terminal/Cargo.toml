@@ -16,6 +16,9 @@ crossterm = { workspace = true }
 # Async runtime
 tokio = { workspace = true }
 
+# Laying a long chat out across cores
+rayon = { workspace = true }
+
 # Serialization (for themes)
 serde = { workspace = true }
 serde_json = { workspace = true }

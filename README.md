@@ -26,7 +26,7 @@ cargo run -- login          # optional: unlock cloud models (or /login in the UI
 cargo run -- run --ui none  # headless server on 127.0.0.1:8080
 ```
 
-In the terminal UI, `/model` switches between local and cloud models; see [running](docs/running.md#local-model-by-default-login-optional). The badge next to the model is the approval level: `yolo` (the default) asks nothing while confining commands to writing inside the current folder, `ask` asks before edits and commands outside the allow list, and `strict` asks for everything but reads. Change it with `/approval` or Shift+Tab; see [the CLI docs](docs/cli.md#long-tasks-in-the-terminal).
+In the terminal UI, `/model` switches between local and cloud models, and `/login claude`, `/login chatgpt` or `/login openrouter` adds models billed to your own plan or OpenRouter credits; see [running](docs/running.md#local-model-by-default-login-optional). The badge next to the model is the approval level: `yolo` (the default) asks nothing while confining commands to writing inside the current folder, `ask` asks before edits and commands outside the allow list, and `strict` asks for everything but reads. Change it with `/approval` or Shift+Tab; see [the CLI docs](docs/cli.md#long-tasks-in-the-terminal).
 
 Or with Docker:
 
@@ -53,7 +53,7 @@ docker build -t aura . && docker run -p 8080:8080 aura
 ```text
 aura-harness/
   src/             aura binary entry point
-  crates/          39 library crates in 10 layers (see docs/architecture.md)
+  crates/          40 library crates in 10 layers (see docs/architecture.md)
   tests/           workspace-level integration and boundary tests
   evals/           agent evaluation scenarios
   docs/            the pages listed under Resources

@@ -235,6 +235,7 @@ async fn emit_response_to_ui(
                 activity: None,
                 model: None,
                 usage: None,
+                sources: Vec::new(),
             }))
             .await;
         }
@@ -451,6 +452,7 @@ pub(super) fn system_message(content: String) -> UiCommand {
         activity: None,
         model: None,
         usage: None,
+        sources: Vec::new(),
     })
 }
 
@@ -479,20 +481,20 @@ pub(super) async fn announce_models(state: &mut LoopState<'_>) {
 }
 
 pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
-    use aura_model::model_catalog::{backend_for, ModelBackend, GATE_MODEL_ID};
-    if id == GATE_MODEL_ID || backend_for(id) == ModelBackend::Local {
+    let typed = id.trim();
+    if needs_local_probe(&state.models, typed) {
         state.models.refresh_local().await;
     }
-    match state.models.select(state.agent_loop.config_mut(), id) {
+    match state.models.select(state.agent_loop.config_mut(), typed) {
         Ok(()) => {
-            info!(model = %state.models.current(), "Model selected");
-            let _ = state
-                .commands
-                .send(UiCommand::ShowSuccess(format!(
-                    "Model: {}",
-                    state.models.display()
-                )))
-                .await;
+            info!(model = %state.models.current(), typed, "Model selected");
+            let display = state.models.display();
+            let message = if state.models.current().eq_ignore_ascii_case(typed) {
+                format!("Model: {display}")
+            } else {
+                format!("Model: {display} — matched \"{typed}\"")
+            };
+            let _ = state.commands.send(UiCommand::ShowSuccess(message)).await;
             if let Some(hint) = state.models.local_hint() {
                 show_system_message(state, hint).await;
             }
@@ -502,6 +504,21 @@ pub(super) async fn handle_select_model(state: &mut LoopState<'_>, id: &str) {
         }
     }
     let _ = state.commands.send(state.models.ui_command()).await;
+}
+
+/// Whether selecting `typed` should first re-probe the local server,
+/// which can take a few seconds: for `gate` (whose pick may be local), a
+/// local id, and an alias that names no model or a local one among the
+/// models listed now (a local model is listed only once the server was
+/// probed with it installed). A cloud alias such as `opus` or a cloud id
+/// switches without waiting.
+fn needs_local_probe(models: &crate::model_selection::ModelSelection, typed: &str) -> bool {
+    use aura_model::model_catalog::{backend_for, ModelBackend, GATE_MODEL_ID};
+    let is_local = |id: &str| backend_for(id) == ModelBackend::Local;
+    typed.eq_ignore_ascii_case(GATE_MODEL_ID)
+        || is_local(typed)
+        || (crate::model_selection::may_be_alias(typed)
+            && models.resolve(typed).is_none_or(|id| is_local(&id)))
 }
 
 /// Pin the thinking level of the next turns to `level`, or hand it back

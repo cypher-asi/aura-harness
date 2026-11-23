@@ -20,7 +20,7 @@ use crate::cli::{
     RunsSubcommand,
 };
 use crate::evals::{self, EvalGate, EvalOptions, EvalRunner};
-use aura_app::model_selection::ModelSelection;
+use aura_app::model_selection::{may_be_alias, ModelSelection};
 use aura_app::recorded_runs::{self, HeadlessRun};
 use aura_app::{event_loop, session_helpers};
 
@@ -382,15 +382,26 @@ async fn loop_setup(
     let auth = Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
     let summary = event_loop::auth::auth_summary(&auth, config.auth_token.as_deref());
     let mut models = ModelSelection::init(&mut config, summary);
+    // A short name (`opus`, `deepseek`) resolves among the listed models,
+    // so load the live lists before resolving it.
+    let alias = model.is_some_and(may_be_alias);
+    if alias {
+        models.refresh_local().await;
+        if let Some(note) = models.refresh_plans(auth.as_ref()).await {
+            eprintln!("{note}");
+        }
+    }
     if let Some(model) = model {
         models
             .use_for_run(&mut config, model)
             .map_err(|problem| anyhow::anyhow!("--model {model}: {problem}"))?;
     }
     if models.is_gate() {
-        models.refresh_local().await;
-        if let Some(note) = models.refresh_plans(auth.as_ref()).await {
-            eprintln!("{note}");
+        if !alias {
+            models.refresh_local().await;
+            if let Some(note) = models.refresh_plans(auth.as_ref()).await {
+                eprintln!("{note}");
+            }
         }
         models.refresh_route(&mut config);
         eprintln!("{}", models.display());

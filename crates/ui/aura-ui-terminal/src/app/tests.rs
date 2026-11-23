@@ -632,6 +632,58 @@ fn test_switching_back_shows_a_turn_that_finished_meanwhile() {
 }
 
 #[test]
+fn only_what_changes_the_screen_asks_for_a_frame() {
+    let (mut app, _rx) = app_with_agents();
+    assert!(app.take_redraw(), "nothing is drawn yet");
+    assert!(!app.take_redraw());
+
+    stream_to(&mut app, "bb", "working on it");
+    assert!(!app.take_redraw(), "a chat off screen is not on screen");
+    stream_to(&mut app, "aa", "on screen");
+    assert!(app.take_redraw());
+
+    let step = |agent_id: &str| UiCommand::ForAgent {
+        agent_id: agent_id.to_string(),
+        command: Box::new(UiCommand::GraphUpsert {
+            run_id: format!("run-{agent_id}"),
+            nodes: Vec::new(),
+        }),
+    };
+    app.process_command(step("bb"));
+    assert!(!app.take_redraw(), "the steps feed is not on screen");
+    app.side_tab = SidePanelTab::Trace;
+    app.process_command(step("bb"));
+    assert!(app.take_redraw(), "the steps feed is on screen");
+
+    for command in [UiCommand::FinishStreaming, UiCommand::Complete] {
+        app.process_command(UiCommand::ForAgent {
+            agent_id: "bb".to_string(),
+            command: Box::new(command),
+        });
+    }
+    assert!(app.take_redraw(), "an agent off screen finishing says so");
+    assert!(app.notification().is_some());
+}
+
+#[test]
+fn a_tick_asks_for_a_frame_only_while_something_moves() {
+    let (mut app, _rx) = app_with_agents();
+    app.take_redraw();
+    app.tick();
+    assert!(!app.take_redraw(), "nothing moves");
+
+    let mut working = agent("bb", "Researcher");
+    working.running = true;
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("aa", "Terminal Agent"),
+        working,
+    ]));
+    app.take_redraw();
+    app.tick();
+    assert!(app.take_redraw(), "a working agent's spinner turns");
+}
+
+#[test]
 fn test_each_agent_has_its_own_trace_feed() {
     let (mut app, _rx) = app_with_agents();
     let step = |agent_id: &str, id: &str| UiCommand::ForAgent {
@@ -780,9 +832,16 @@ fn test_agent_command_selects_by_number_and_name() {
 
     app.handle_command("/agent 2");
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+    assert_eq!(app.active_agent_id(), "bb", "switched on screen at once");
 
+    // Already on screen: nothing to ask for.
     app.handle_command("/agent researcher");
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+    assert!(rx.try_recv().is_err());
+
+    // The first agent's chat is held in memory, so the session is only
+    // told it is in front.
+    app.handle_command("/agent 1");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::FocusAgent(id)) if id == "aa"));
 
     app.handle_command("/agent nobody");
     assert!(rx.try_recv().is_err());
@@ -906,10 +965,12 @@ fn app_with_definitions() -> (App, mpsc::Receiver<UiEvent>) {
         crate::events::AgentDefinitionSummary {
             name: "explorer".to_string(),
             description: "Reads code".to_string(),
+            ..Default::default()
         },
         crate::events::AgentDefinitionSummary {
             name: "reviewer".to_string(),
             description: "Reviews diffs".to_string(),
+            ..Default::default()
         },
     ]));
     app.focus = PanelFocus::Swarm;
@@ -1355,7 +1416,8 @@ fn test_alt_arrows_switch_agent_from_chat() {
 
     app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
     app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "aa"));
+    // aa's chat was on screen before, so it is still in memory.
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::FocusAgent(id)) if id == "aa"));
 }
 
 fn mouse(kind: crossterm::event::MouseEventKind, column: u16, row: u16) -> MouseEvent {
@@ -1402,39 +1464,138 @@ fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
 
 #[test]
 fn test_agent_buttons_sit_left_of_the_time() {
-    // ` ↗ ✕ 5m `: each glyph after a space, then the time with a space
-    // each side.
-    let at = |ago, button| agent_button_offset(18, ago, button);
+    // ` ✕ 5m `: the glyph after a space, then the time with a space each
+    // side.
+    let at = |ago, button| agent_button_offset(18, &AgentRowEnd::time(ago), button);
     assert_eq!(at(Some("5m"), AgentButton::Archive), 13);
-    assert_eq!(at(Some("5m"), AgentButton::Open), 11);
     assert_eq!(at(Some("now"), AgentButton::Archive), 12);
-    assert_eq!(at(Some("now"), AgentButton::Open), 10);
     // No time: the archive glyph one column in from the right edge.
     assert_eq!(at(None, AgentButton::Archive), 16);
-    assert_eq!(at(None, AgentButton::Open), 14);
-    assert_eq!(agent_button_offset(1, Some("5m"), AgentButton::Open), 0);
+    assert_eq!(
+        agent_button_offset(1, &AgentRowEnd::time(Some("5m")), AgentButton::Archive),
+        0
+    );
 }
 
 #[test]
-fn test_agent_button_zones_split_the_strip_without_overlap() {
-    // Open takes its space and glyph (13, 14); archive its space, glyph
-    // and the space before the edge (15..=17).
+fn test_agent_archive_button_zone_spans_its_space_glyph_and_gap() {
+    // Archive takes its space, glyph and the space before the edge
+    // (15..=17); the name left of it is not a button.
     let expected = [
-        (12, None),
-        (13, Some(AgentButton::Open)),
-        (14, Some(AgentButton::Open)),
+        (13, None),
+        (14, None),
         (15, Some(AgentButton::Archive)),
         (16, Some(AgentButton::Archive)),
         (17, Some(AgentButton::Archive)),
     ];
+    let no_time = AgentRowEnd::time(None);
     for (offset, button) in expected {
-        assert_eq!(agent_button_at(18, None, offset), button, "{offset}");
+        assert_eq!(agent_button_at(18, &no_time, offset), button, "{offset}");
     }
-    assert_eq!(
-        agent_button_at(18, Some("5m"), 14),
-        Some(AgentButton::Archive)
-    );
-    assert_eq!(agent_button_at(18, Some("5m"), 15), None, "the time");
+    let five_minutes = AgentRowEnd::time(Some("5m"));
+    assert_eq!(agent_button_at(18, &five_minutes, 11), None, "the name");
+    for offset in 12..=14 {
+        assert_eq!(
+            agent_button_at(18, &five_minutes, offset),
+            Some(AgentButton::Archive),
+            "{offset}"
+        );
+    }
+    assert_eq!(agent_button_at(18, &five_minutes, 15), None, "the time");
+}
+
+#[test]
+fn test_agent_row_end_puts_the_padded_code_after_the_time() {
+    let end = |ago, code| AgentRowEnd::agent(30, 0, ago, (code, 4));
+    assert_eq!(end(Some("5m"), Some("RE36")).text(true), " 5m RE36 ");
+    assert_eq!(end(Some("2d"), Some("AG1")).text(true), " 2d AG1  ");
+    // The same text with or without the buttons, so nothing moves on hover.
+    assert_eq!(end(Some("2d"), Some("AG1")).text(false), " 2d AG1  ");
+    assert_eq!(end(None, Some("AG1")).text(false), " AG1  ");
+    // An agent with no code keeps the column blank, so times line up.
+    assert_eq!(end(Some("5m"), None).text(false), " 5m      ");
+}
+
+#[test]
+fn test_agent_row_end_without_a_code_column_is_the_time_alone() {
+    for ago in [Some("5m"), None] {
+        for has_buttons in [true, false] {
+            let end = AgentRowEnd::agent(30, 0, ago, (Some("RE36"), 0));
+            assert_eq!(end, AgentRowEnd::time(ago));
+            assert_eq!(
+                end.text(has_buttons),
+                AgentRowEnd::time(ago).text(has_buttons)
+            );
+        }
+    }
+    assert_eq!(AgentRowEnd::time(Some("5m")).text(false), " 5m ");
+    assert_eq!(AgentRowEnd::time(None).text(false), "");
+    assert_eq!(AgentRowEnd::time(None).text(true), " ");
+    assert_eq!(agent_code_width(&[agent("aa", "A"), agent("bb", "B")]), 0);
+}
+
+#[test]
+fn test_agent_code_width_is_the_widest_code() {
+    let coded = |id: &str, code: &str| crate::events::AgentSummary {
+        code: Some(code.to_string()),
+        ..agent(id, id)
+    };
+    let agents = [coded("aa", "AG1"), agent("bb", "B"), coded("cc", "REV36")];
+    assert_eq!(agent_code_width(&agents), 5);
+}
+
+#[test]
+fn test_subtask_rows_show_no_code_and_leave_the_column_to_top_level_rows() {
+    let row = |id: &str, code: &str, depth| crate::events::AgentSummary {
+        code: Some(code.to_string()),
+        depth,
+        ..agent(id, id)
+    };
+    let top = row("aa", "AG1", 0);
+    let subtask = row("bb", "RUS70", 1);
+    assert_eq!(shown_agent_code(&top), Some("AG1"));
+    assert_eq!(shown_agent_code(&subtask), None);
+    // Only the top-level code sizes the column.
+    assert_eq!(agent_code_width(&[top, subtask.clone()]), 3);
+    assert_eq!(agent_code_width(&[subtask]), 0);
+}
+
+#[test]
+fn test_agent_row_end_drops_the_code_when_the_name_gets_too_narrow() {
+    use crate::animation::AURA_WIDTH;
+    // Lead, the button (` ✕`) and ` 5m RE36 `, beside a name of 4.
+    let around = 1 + AURA_WIDTH + 1 + 2 + 9;
+    let end = |width, depth| AgentRowEnd::agent(width, depth, Some("5m"), (Some("RE36"), 4));
+    assert_eq!(end(around + 4, 0).text(false), " 5m RE36 ");
+    assert_eq!(end(around + 3, 0), AgentRowEnd::time(Some("5m")));
+    // Each level of depth takes `AURA_WIDTH + 2` more columns.
+    let deeper = around + 4 + AURA_WIDTH + 2;
+    assert_eq!(end(deeper, 1).text(false), " 5m RE36 ");
+    assert_eq!(end(deeper - 1, 1), AgentRowEnd::time(Some("5m")));
+}
+
+#[test]
+fn test_an_agents_buttons_make_room_for_its_code() {
+    use crossterm::event::MouseEventKind;
+    let (tx, _rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetAgents(vec![crate::events::AgentSummary {
+        code: Some("RE36".to_string()),
+        ..agent("aa", "A")
+    }]));
+    let mut app = with_agent_areas(app);
+
+    // Rows span columns 1..19 and end in ` ✕ RE36 ` (no time): the archive
+    // glyph at column 1 + 11, the code in columns 14..18.
+    let end = AgentRowEnd::agent(18, 0, None, (Some("RE36"), 4));
+    assert_eq!(agent_button_offset(18, &end, AgentButton::Archive), 11);
+    app.handle_mouse(mouse(MouseEventKind::Moved, 10, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 12, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(1)));
+    // The code is not a button.
+    app.handle_mouse(mouse(MouseEventKind::Moved, 15, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
 }
 
 #[test]
@@ -1444,12 +1605,10 @@ fn test_hovering_an_agents_buttons_targets_them() {
 
     // Rows span columns 1..19. Agent `aa` (row 1, line 5) has no time, so
     // its archive glyph is at column 17 and that button takes columns
-    // 16..=18; the open glyph is at column 15, its button 14..=15.
-    app.handle_mouse(mouse(MouseEventKind::Moved, 13, 5));
-    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
-    for column in 14..=15 {
+    // 16..=18; left of it is the row.
+    for column in 13..=15 {
         app.handle_mouse(mouse(MouseEventKind::Moved, column, 5));
-        assert_eq!(app.hover(), Some(HoverTarget::OpenAgent(1)), "{column}");
+        assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)), "{column}");
     }
     for column in 16..=18 {
         app.handle_mouse(mouse(MouseEventKind::Moved, column, 5));
@@ -1458,7 +1617,7 @@ fn test_hovering_an_agents_buttons_targets_them() {
     app.handle_mouse(mouse(MouseEventKind::Moved, 5, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
 
-    // A project's header keeps its "+" and gets neither button.
+    // A project's header keeps its "+" and gets no archive button.
     app.handle_mouse(mouse(MouseEventKind::Moved, 17, 4));
     assert_eq!(app.hover(), Some(HoverTarget::AddToProject(0)));
     app.handle_mouse(mouse(MouseEventKind::Moved, 14, 4));
@@ -1477,10 +1636,10 @@ fn test_an_agents_buttons_follow_its_time() {
     }]));
     let mut app = with_agent_areas(app);
 
-    // ` ↗ ✕ 3m `: the open glyph at column 1 + 11, the archive glyph at
-    // 1 + 13, the time in columns 15..19.
+    // ` ✕ 3m `: the archive glyph at column 1 + 13, the time in columns
+    // 15..19.
     app.handle_mouse(mouse(MouseEventKind::Moved, 12, 5));
-    assert_eq!(app.hover(), Some(HoverTarget::OpenAgent(1)));
+    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
     app.handle_mouse(mouse(MouseEventKind::Moved, 14, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(1)));
     app.handle_mouse(mouse(MouseEventKind::Moved, 17, 5));
@@ -1501,27 +1660,6 @@ fn test_clicking_an_agents_archive_button_archives_it() {
     app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 17, 8));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::ArchiveAgent(id)) if id == "bb"));
     assert!(rx.try_recv().is_err(), "the click neither opens nor drags");
-    assert_eq!(app.selected_agent(), selected);
-    assert!(app.project_drag_hit().is_none());
-}
-
-#[test]
-fn test_clicking_an_agents_open_button_switches_to_it() {
-    use crossterm::event::{MouseButton, MouseEventKind};
-    let (mut app, mut rx) = app_with_agent_areas();
-    let selected = app.selected_agent();
-    assert_ne!(selected, 4);
-
-    // Agent `bb` is row 4, line 8; its open glyph is at column 15.
-    app.handle_mouse(mouse(MouseEventKind::Moved, 15, 8));
-    assert_eq!(app.hover(), Some(HoverTarget::OpenAgent(4)));
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 15, 8));
-    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 15, 8));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
-    assert!(
-        rx.try_recv().is_err(),
-        "the click neither archives nor drags"
-    );
     assert_eq!(app.selected_agent(), selected);
     assert!(app.project_drag_hit().is_none());
 }
@@ -2257,6 +2395,7 @@ fn test_reply_model_sets_the_turn_so_far_on_replies_since_last_user_message() {
             tokens: 900,
             cost_usd: None,
         }),
+        sources: Vec::new(),
     });
     app.process_command(UiCommand::StartStreaming);
     app.process_command(UiCommand::AppendText("second part".to_string()));
@@ -2267,6 +2406,7 @@ fn test_reply_model_sets_the_turn_so_far_on_replies_since_last_user_message() {
     app.process_command(UiCommand::SetReplyModel {
         model: "qwen3:4b · claude-opus-4-7".to_string(),
         usage: Some(opus),
+        sources: Vec::new(),
     });
 
     let models: Vec<(&str, Option<&str>, Option<u64>)> = app
@@ -2651,7 +2791,7 @@ fn test_model_command_opens_selector_on_current() {
     let (mut app, _rx) = app_with_models(None);
     app.handle_command("/model");
     assert_eq!(app.state(), AppState::SelectingModel);
-    assert_eq!(app.model_cursor(), 0);
+    assert_eq!(app.model_picker().cursor(), 0);
 
     app.handle_key(key(KeyCode::Esc));
     assert_eq!(app.state(), AppState::Idle);
@@ -2672,10 +2812,46 @@ fn test_selector_enter_emits_select_model() {
 }
 
 #[test]
+fn test_selector_typing_filters_and_esc_clears_before_closing() {
+    let (mut app, mut rx) = app_with_models(Some("alice"));
+    app.handle_command("/model");
+    for c in "sonnet".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    assert_eq!(app.model_picker().filter(), "sonnet");
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.state(), AppState::SelectingModel);
+    assert_eq!(app.model_picker().filter(), "");
+
+    for c in "zzz".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(
+        app.state(),
+        AppState::SelectingModel,
+        "no match keeps it open"
+    );
+    for _ in 0..3 {
+        app.handle_key(key(KeyCode::Backspace));
+    }
+    for c in "sonnet".chars() {
+        app.handle_key(key(KeyCode::Char(c)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.state(), AppState::Idle);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SelectModel(id)) if id == "aura-claude-sonnet-4-6"
+    ));
+}
+
+#[test]
 fn test_guest_cloud_pick_starts_login_then_selects() {
     let (mut app, mut rx) = app_with_models(None);
     app.handle_command("/model");
-    app.handle_key(key(KeyCode::Down));
+    // Signed-out cloud models live on the Sign-in tab.
+    app.handle_key(key(KeyCode::Tab));
     app.handle_key(key(KeyCode::Enter));
 
     assert_eq!(app.state(), AppState::LoginEmail);
@@ -3989,6 +4165,103 @@ fn a_plan_for_an_agent_off_screen_leaves_the_active_plan_alone() {
     assert!(app.active_plan().is_none());
 }
 
+/// Whether the Agents panel marks agent `id` as in plan mode.
+fn listed_in_plan_mode(app: &App, id: &str) -> bool {
+    app.agents()
+        .iter()
+        .find(|a| a.id == id)
+        .unwrap_or_else(|| panic!("{id} is not listed"))
+        .plan_mode
+}
+
+#[test]
+fn set_mode_plan_marks_an_off_screen_agent_in_plan_mode() {
+    let (mut app, _rx) = app_with_agents();
+    assert!(!listed_in_plan_mode(&app, "aa") && !listed_in_plan_mode(&app, "bb"));
+
+    app.process_command(for_agent(
+        "bb",
+        UiCommand::SetMode(crate::PermissionMode::Plan),
+    ));
+    assert!(listed_in_plan_mode(&app, "bb"));
+    assert!(!listed_in_plan_mode(&app, "aa"), "the active agent is not");
+    assert_eq!(app.hud().mode, None, "the chat on screen keeps its mode");
+
+    app.process_command(for_agent(
+        "bb",
+        UiCommand::SetMode(crate::PermissionMode::Agent),
+    ));
+    assert!(!listed_in_plan_mode(&app, "bb"));
+}
+
+#[test]
+fn set_mode_plan_marks_the_on_screen_agent_in_plan_mode() {
+    let (mut app, _rx) = app_with_agents();
+
+    app.process_command(for_agent(
+        "aa",
+        UiCommand::SetMode(crate::PermissionMode::Plan),
+    ));
+    assert!(listed_in_plan_mode(&app, "aa"));
+    assert!(!listed_in_plan_mode(&app, "bb"));
+    assert_eq!(app.hud().mode, Some(crate::PermissionMode::Plan));
+
+    app.process_command(for_agent(
+        "aa",
+        UiCommand::SetMode(crate::PermissionMode::Agent),
+    ));
+    assert!(!listed_in_plan_mode(&app, "aa"));
+    assert_eq!(app.hud().mode, Some(crate::PermissionMode::Agent));
+}
+
+#[test]
+fn any_mode_but_plan_clears_the_plan_mode_mark() {
+    use crate::PermissionMode;
+    let (mut app, _rx) = app_with_agents();
+    for mode in [PermissionMode::ReadOnly, PermissionMode::Debug] {
+        app.process_command(for_agent("bb", UiCommand::SetMode(PermissionMode::Plan)));
+        assert!(listed_in_plan_mode(&app, "bb"));
+        app.process_command(for_agent("bb", UiCommand::SetMode(mode)));
+        assert!(!listed_in_plan_mode(&app, "bb"), "{mode:?}");
+    }
+}
+
+#[test]
+fn set_mode_plan_for_an_unlisted_agent_marks_no_one_in_plan_mode() {
+    let (mut app, _rx) = app_with_agents();
+    app.process_command(for_agent(
+        "zz",
+        UiCommand::SetMode(crate::PermissionMode::Plan),
+    ));
+    assert!(app.agents().iter().all(|a| !a.plan_mode));
+}
+
+#[test]
+fn a_new_agent_list_replaces_the_plan_mode_mark() {
+    let (mut app, _rx) = app_with_agents();
+    app.process_command(for_agent(
+        "bb",
+        UiCommand::SetMode(crate::PermissionMode::Plan),
+    ));
+    assert!(listed_in_plan_mode(&app, "bb"));
+
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("aa", "Terminal Agent"),
+        agent("bb", "Researcher"),
+    ]));
+    assert!(!listed_in_plan_mode(&app, "bb"), "the list says it is not");
+
+    app.process_command(UiCommand::SetAgents(vec![
+        crate::events::AgentSummary {
+            plan_mode: true,
+            ..agent("aa", "Terminal Agent")
+        },
+        agent("bb", "Researcher"),
+    ]));
+    assert!(listed_in_plan_mode(&app, "aa"), "the list says it is");
+    assert!(!listed_in_plan_mode(&app, "bb"));
+}
+
 // ========================================================================
 // Folding agents over their spawns
 // ========================================================================
@@ -4637,4 +4910,483 @@ fn test_the_scrollbar_of_a_file_reaches_no_further_than_its_text() {
     assert!(!app.scrollbar_held());
     assert_eq!(app.detail_scroll(), bar.last, "where it was");
     app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), text, top));
+}
+
+// ========================================================================
+// Multi-line input and the stop button
+// ========================================================================
+
+/// The keys that break the line instead of sending it.
+const NEWLINE_KEYS: [(KeyCode, KeyModifiers); 3] = [
+    (KeyCode::Enter, KeyModifiers::SHIFT),
+    (KeyCode::Enter, KeyModifiers::ALT),
+    (KeyCode::Char('j'), KeyModifiers::CONTROL),
+];
+
+fn shift_enter() -> KeyEvent {
+    KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)
+}
+
+#[test]
+fn newline_keys_break_the_line_at_the_cursor_without_sending() {
+    for (code, modifiers) in NEWLINE_KEYS {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut app = App::new().with_event_sender(tx);
+        type_chars(&mut app, "ab");
+        app.handle_key(key(KeyCode::Left));
+
+        app.handle_key(KeyEvent::new(code, modifiers));
+        assert_eq!(app.input(), "a\nb", "{code:?} {modifiers:?}");
+        assert_eq!(app.cursor_pos(), 2, "just past the break");
+
+        app.handle_key(key(KeyCode::End));
+        app.handle_key(KeyEvent::new(code, modifiers));
+        assert_eq!(app.input(), "a\nb\n", "{code:?} {modifiers:?}");
+        assert_eq!(app.cursor_pos(), 4);
+
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing sent: {code:?} {modifiers:?}"
+        );
+        assert!(app.messages().is_empty());
+        assert_eq!(app.state(), AppState::Idle);
+    }
+}
+
+#[test]
+fn plain_enter_still_sends_a_multi_line_message() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    type_chars(&mut app, "one");
+    app.handle_key(shift_enter());
+    type_chars(&mut app, "two");
+
+    app.handle_key(key(KeyCode::Enter));
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "one\ntwo"
+    ));
+    assert_eq!(app.input(), "");
+    assert_eq!(app.cursor_pos(), 0);
+}
+
+#[test]
+fn newline_keys_on_an_empty_line_break_it_from_any_panel() {
+    for (code, modifiers) in NEWLINE_KEYS {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut app = App::new().with_event_sender(tx);
+        assert_eq!(app.focus, PanelFocus::Chat);
+        app.handle_key(KeyEvent::new(code, modifiers));
+        assert_eq!(app.input(), "\n", "{code:?} {modifiers:?}");
+        assert_eq!(app.cursor_pos(), 1);
+        assert!(rx.try_recv().is_err());
+    }
+
+    // Typing goes to the prompt from any panel, and so does a line break,
+    // even before anything is typed.
+    for focus in [PanelFocus::Records, PanelFocus::Swarm, PanelFocus::Sandbox] {
+        let mut app = App::new();
+        app.focus = focus;
+        app.handle_key(shift_enter());
+        assert_eq!(app.input(), "\n", "{focus:?}");
+        type_chars(&mut app, "x");
+        app.handle_key(shift_enter());
+        assert_eq!(app.input(), "\nx\n", "{focus:?}");
+    }
+}
+
+#[test]
+fn newline_keys_do_not_break_login_prompts() {
+    let mut app = App::new();
+    app.state = AppState::LoginEmail;
+    type_chars(&mut app, "me@x.io");
+
+    app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
+    assert_eq!(app.input(), "me@x.io", "Ctrl+J is not typed");
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
+    assert_eq!(app.state(), AppState::LoginPassword, "Enter submits");
+    assert_eq!(app.input(), "");
+}
+
+#[test]
+fn up_and_down_move_between_lines_at_the_same_column() {
+    let mut app = App::new();
+    // "abc\nx\nhello": lines start at bytes 0, 4 and 6.
+    type_chars(&mut app, "abc");
+    app.handle_key(shift_enter());
+    type_chars(&mut app, "x");
+    app.handle_key(shift_enter());
+    type_chars(&mut app, "hello");
+    assert_eq!(app.input(), "abc\nx\nhello");
+    assert_eq!(app.cursor_pos(), 11, "at the end of \"hello\", column 5");
+
+    let mut stops = Vec::new();
+    for code in [KeyCode::Up, KeyCode::Up, KeyCode::Down, KeyCode::Down] {
+        app.handle_key(key(code));
+        stops.push(app.cursor_pos());
+    }
+    assert_eq!(app.input(), "abc\nx\nhello", "the text stays");
+    // Up clamps to the end of "x"; the column is then 1 for the rest.
+    assert_eq!(stops, [5, 1, 5, 7]);
+
+    // Up on the first line with no history leaves it all as it was.
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!((app.input(), app.cursor_pos()), ("abc\nx\nhello", 1));
+}
+
+#[test]
+fn up_and_down_recall_history_from_the_first_and_last_lines() {
+    let mut app = App::new();
+    submit(&mut app, "older");
+    app.state = AppState::Idle;
+    type_chars(&mut app, "one");
+    app.handle_key(shift_enter());
+    type_chars(&mut app, "two");
+    app.handle_key(key(KeyCode::Enter));
+    app.state = AppState::Idle;
+    assert_eq!(app.input(), "");
+
+    // Recalled, the two-line message has the cursor at its end; Up walks
+    // to its first line before going further back.
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!((app.input(), app.cursor_pos()), ("one\ntwo", 7));
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!((app.input(), app.cursor_pos()), ("one\ntwo", 3));
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.input(), "older");
+
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!((app.input(), app.cursor_pos()), ("one\ntwo", 7));
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.input(), "", "past the newest entry");
+}
+
+#[test]
+fn down_on_the_last_line_of_a_typed_draft_keeps_it() {
+    let mut app = App::new();
+    submit(&mut app, "older");
+    app.state = AppState::Idle;
+    type_chars(&mut app, "one");
+    app.handle_key(shift_enter());
+    type_chars(&mut app, "two");
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.cursor_pos(), 6);
+
+    // Not browsing history: Down goes to the end and stays there.
+    for _ in 0..2 {
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!((app.input(), app.cursor_pos()), ("one\ntwo", 7));
+    }
+    // History is still a key away.
+    app.handle_key(key(KeyCode::Up));
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(app.input(), "older");
+}
+
+#[test]
+fn enter_on_a_blank_prompt_sends_nothing() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut app = App::new().with_event_sender(tx);
+    app.handle_key(shift_enter());
+    type_chars(&mut app, " \t");
+    app.handle_key(key(KeyCode::Enter));
+    assert!(rx.try_recv().is_err(), "nothing sent");
+    assert_eq!(app.state(), AppState::Idle);
+    assert_eq!(app.input(), "\n \t", "the blank line stays to edit");
+}
+
+#[test]
+fn enter_on_a_blank_prompt_sends_the_queued_message_now() {
+    let (mut app, mut rx) = app_with_agents();
+    submit(&mut app, "first");
+    submit(&mut app, "second");
+    while rx.try_recv().is_ok() {}
+    app.process_command(UiCommand::SetQueue(vec![crate::events::QueuedItemView {
+        id: 1,
+        text: "second".to_string(),
+        editable: true,
+    }]));
+    app.handle_key(shift_enter());
+
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SendQueuedNow(id)) if id == "aa"
+    ));
+    assert!(rx.try_recv().is_err(), "the blank line is not sent");
+}
+
+#[test]
+fn a_slash_command_name_ends_at_any_whitespace() {
+    let (mut app, _rx) = app_with_models(None);
+    type_chars(&mut app, "/model");
+    app.handle_key(shift_enter());
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.state(), AppState::SelectingModel, "\"/model\\n\"");
+
+    let (mut app, mut rx) = app_with_models(None);
+    app.handle_command("/model\tlocal/qwen3:8b\n");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SelectModel(id)) if id == "local/qwen3:8b"
+    ));
+}
+
+#[test]
+fn newline_keys_on_an_empty_line_are_left_to_the_other_chat_tabs() {
+    for tab in [ChatTab::Graph, ChatTab::Time, ChatTab::Bench, ChatTab::Log] {
+        let mut app = App::new();
+        app.show_chat_tab(tab);
+        for (code, modifiers) in NEWLINE_KEYS {
+            app.handle_key(KeyEvent::new(code, modifiers));
+            assert_eq!(app.input(), "", "{tab:?} {code:?} {modifiers:?}");
+        }
+    }
+
+    // The TERMINAL prompt is a prompt like CHAT.
+    let mut app = App::new();
+    app.show_chat_tab(ChatTab::Terminal);
+    app.handle_key(shift_enter());
+    assert_eq!(app.input(), "\n");
+}
+
+/// An app whose agent `aa` is mid-turn, drawn once so the stop button's
+/// cells are recorded, and the event channel's receiving end.
+fn busy_app_with_stop_button() -> (
+    App,
+    mpsc::Receiver<UiEvent>,
+    ratatui::Terminal<ratatui::backend::TestBackend>,
+    Rect,
+) {
+    let (tx, rx) = mpsc::channel(10);
+    let mut app = App::new().with_event_sender(tx);
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(UiCommand::TurnStarted { prompt: None });
+    assert!(app.is_busy());
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    draw(&mut app, &mut terminal);
+    let stop = app
+        .input_stop_area()
+        .expect("a busy agent shows the button");
+    (app, rx, terminal, stop)
+}
+
+#[test]
+fn clicking_the_stop_button_cancels_the_turn() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let (mut app, mut rx, mut terminal, stop) = busy_app_with_stop_button();
+
+    app.handle_mouse(mouse(MouseEventKind::Moved, stop.x + 2, stop.y));
+    assert_eq!(app.hover(), Some(HoverTarget::StopTurn));
+
+    let last = stop.right() - 1;
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), last, stop.y));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::Cancel(id)) if id == "aa"));
+    assert_eq!(app.state(), AppState::Idle);
+    assert_eq!(app.hover(), None);
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), last, stop.y));
+
+    // Idle, the button is gone and its cells cancel nothing.
+    draw(&mut app, &mut terminal);
+    assert_eq!(app.input_stop_area(), None);
+    app.handle_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        stop.x,
+        stop.y,
+    ));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn clicks_beside_the_stop_button_do_not_cancel() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let (mut app, mut rx, _terminal, stop) = busy_app_with_stop_button();
+    for (column, row) in [(stop.x - 1, stop.y), (stop.x, stop.y - 1)] {
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), column, row));
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), column, row));
+    }
+    // Only a left press is a click on it.
+    app.handle_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Right),
+        stop.x,
+        stop.y,
+    ));
+    app.context_menu = None;
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), stop.x, stop.y));
+
+    assert!(
+        !std::iter::from_fn(|| rx.try_recv().ok()).any(|e| matches!(e, UiEvent::Cancel(_))),
+        "no cancel"
+    );
+    assert!(app.is_busy());
+}
+
+#[test]
+fn the_stop_button_cancels_a_turn_waiting_for_approval() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let (mut app, mut rx, mut terminal, _) = busy_app_with_stop_button();
+    app.process_command(approval_request("req-1", ""));
+    assert_eq!(app.state(), AppState::AwaitingApproval);
+    draw(&mut app, &mut terminal);
+    let stop = app.input_stop_area().expect("still busy");
+
+    app.handle_mouse(mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        stop.x,
+        stop.y,
+    ));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::Cancel(id)) if id == "aa"));
+    assert!(app.pending_approval().is_none());
+    assert_eq!(app.state(), AppState::Idle);
+}
+
+/// The text of the screen `app` draws, a line per row.
+fn drawn_text(app: &mut App) -> String {
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).expect("backend");
+    terminal
+        .draw(|frame| crate::render(frame, app, &crate::Theme::default()))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn load_chat_of(app: &mut App, id: &str, text: &str) {
+    app.process_command(UiCommand::ForAgent {
+        agent_id: id.to_string(),
+        command: Box::new(UiCommand::LoadConversation(vec![MessageData::new(
+            MessageRole::Assistant,
+            text,
+        )])),
+    });
+}
+
+#[test]
+fn switching_to_an_agent_not_in_memory_is_immediate_and_fades_in_once_loaded() {
+    let (mut app, mut rx) = app_with_agents();
+    app.handle_command("/agent 2");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+    assert_eq!(app.active_agent_id(), "bb", "before the session answers");
+    assert!(app.chat_loading());
+    assert!(app.chat_animating());
+    assert!(app.chat_fading().is_none());
+
+    load_chat_of(&mut app, "bb", "bb's history");
+    assert!(!app.chat_loading());
+    assert!(app.chat_fading().is_some(), "the history fades in");
+    assert!(app.messages().iter().any(|m| m.content() == "bb's history"));
+}
+
+#[test]
+fn switching_back_to_a_chat_in_memory_shows_it_at_once_without_a_fade() {
+    let (mut app, mut rx) = app_with_agents();
+    app.handle_command("/agent 2");
+    let _ = rx.try_recv();
+    load_chat_of(&mut app, "bb", "bb's history");
+    app.process_command(UiCommand::SetActiveAgent("bb".into()));
+
+    app.handle_command("/agent 1");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::FocusAgent(id)) if id == "aa"));
+    assert_eq!(app.active_agent_id(), "aa");
+    assert!(!app.chat_loading());
+    assert!(app.chat_fading().is_none());
+
+    app.process_command(UiCommand::SetActiveAgent("aa".into()));
+    app.handle_command("/agent 2");
+    assert!(
+        matches!(rx.try_recv(), Ok(UiEvent::FocusAgent(id)) if id == "bb"),
+        "bb's history is held now"
+    );
+    assert!(!app.chat_loading());
+    assert!(app.messages().iter().any(|m| m.content() == "bb's history"));
+}
+
+#[test]
+fn a_late_answer_to_an_earlier_switch_is_ignored() {
+    let (mut app, mut rx) = app_with_agents();
+    app.handle_command("/agent 2");
+    app.handle_command("/agent 1");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::FocusAgent(id)) if id == "aa"));
+
+    app.process_command(UiCommand::SetActiveAgent("bb".into()));
+    assert_eq!(app.active_agent_id(), "aa", "the answer for bb came late");
+    app.process_command(UiCommand::SetActiveAgent("aa".into()));
+    assert_eq!(app.active_agent_id(), "aa");
+
+    // With nothing awaited, the session's switches apply again.
+    app.process_command(UiCommand::SetActiveAgent("bb".into()));
+    assert_eq!(app.active_agent_id(), "bb");
+}
+
+#[test]
+fn a_failed_switch_goes_back_to_the_agent_the_session_kept() {
+    let (mut app, mut rx) = app_with_agents();
+    app.handle_command("/agent 2");
+    let _ = rx.try_recv();
+    assert_eq!(app.active_agent_id(), "bb");
+
+    app.process_command(UiCommand::SwitchFailed("bb".into()));
+    assert_eq!(app.active_agent_id(), "aa");
+    assert!(!app.chat_loading());
+
+    // bb's history was never loaded, so it is asked for again.
+    app.handle_command("/agent 2");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+}
+
+#[test]
+fn chat_ready_ends_the_wait_for_a_live_chat() {
+    let (mut app, mut rx) = app_with_agents();
+    app.handle_command("/agent 2");
+    let _ = rx.try_recv();
+    app.process_command(UiCommand::SetActiveAgent("bb".into()));
+    assert!(app.chat_loading());
+
+    app.process_command(UiCommand::ForAgent {
+        agent_id: "bb".into(),
+        command: Box::new(UiCommand::ChatReady),
+    });
+    assert!(!app.chat_loading());
+    assert!(app.chat_fading().is_some());
+}
+
+#[test]
+fn an_unlisted_agent_waits_for_the_session() {
+    let (mut app, mut rx) = app_with_agents();
+    app.request_agent_switch("elsewhere".into());
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "elsewhere"));
+    assert_eq!(app.active_agent_id(), "aa");
+    assert!(!app.chat_loading());
+}
+
+#[test]
+fn a_loading_chat_draws_no_welcome_and_says_it_loads_after_a_moment() {
+    let (mut app, mut rx) = app_with_agents();
+    app.handle_command("/agent 2");
+    let _ = rx.try_recv();
+
+    let text = drawn_text(&mut app);
+    assert!(!text.contains("Type a message"), "{text}");
+    assert!(!text.contains("Loading chat"), "a quick load says nothing");
+
+    app.chat_loading_since = Instant::now().checked_sub(super::run_log::LOADING_DELAY);
+    let text = drawn_text(&mut app);
+    assert!(text.contains("Loading chat"), "{text}");
+
+    load_chat_of(&mut app, "bb", "bb's history");
+    let text = drawn_text(&mut app);
+    assert!(text.contains("bb's history"), "{text}");
 }

@@ -63,7 +63,9 @@ themes keep working:
 - **Error (`✗`)**: `error`
 - **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
   `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
-  ten, the rest are counted on a `muted` `N more` row.
+  ten, the rest are counted on a `muted` `N more` row. The boxes line up
+  under the `⬢` above them. The PLANS and TASKS tabs draw their todos the
+  same way, with the boxes under the plan's fold arrow or the task's icon.
 
 ### Borders and Panels
 
@@ -84,9 +86,10 @@ themes keep working:
 Every panel has its own header bar above its body: a bordered frame of
 equal-width tab cells, then an info cell filling the rest of the width.
 Most tab bars spread their tabs over the whole width. The Kernel panel's
-KERNEL | MEMBERS | POLICIES bar keeps its tabs at their own width and
-leaves the rest to the info cell, which shows the open tab's count (or,
-on POLICIES, the agent's `MODE/APPROVAL`) on its right. Bars
+KERNEL | MEMBERS | POLICIES | INBOX bar keeps its tabs at their own width
+and leaves the rest to the info cell, which shows the open tab's count
+(or, on POLICIES, the agent's `MODE/APPROVAL`; on INBOX, `N NEW` while
+threads are unread) on its right. Bars
 without tabs (a record or file shown over the chat) show a title on the
 left of the info cell.
 
@@ -99,9 +102,9 @@ left of the info cell.
 ```
 
 ```text
-┌──────────┬──────────┬──────────┬────────────┐
-│  KERNEL  │▓MEMBERS ▓│ POLICIES │   3 AGENTS │
-└──────────┴──────────┴──────────┴────────────┘
+┌──────────┬──────────┬──────────┬──────────┬────────────┐
+│  KERNEL  │▓MEMBERS ▓│ POLICIES │  INBOX   │   3 AGENTS │
+└──────────┴──────────┴──────────┴──────────┴────────────┘
 ```
 
 The MEMBERS tab lists the agent on screen, which leads its run, then the
@@ -111,12 +114,39 @@ Its rows use the Processes tab's status glyphs, and `lead`, `task` or
 
 The POLICIES tab is a read-only document in sections (STATUS,
 CAPABILITIES, TOOLS, ALWAYS ALLOW, SESSION GRANTS, INTEGRATIONS), each
-headed in bold `primary` with a `muted` note after it. STATUS rows put a
-`muted` label column before the value. TOOLS rows mark each tool `✓ on`
-in `success`, `? ask` in `warning` or `✗ off` in `error`, followed by the
-deciding rule in `muted`. What weakens the guardrails (`yolo`, commands
-that can't be confined, no live prompts) is shown in `warning`, and the
-header's `MODE/APPROVAL` info turns `warning` under `yolo`.
+headed in bold accent (`success`) with a `muted` note after it. STATUS
+rows put a `muted` label column before the value. TOOLS rows mark each
+tool `✓ on`, `? ask` or `✗ off`, all in the accent, followed by the
+deciding rule in `muted`. Every highlight on the tab uses the accent:
+what weakens the guardrails (`yolo`, commands that can't be confined, no
+live prompts) is shown in it, and the header's `MODE/APPROVAL` info turns
+the accent under `yolo`.
+
+The INBOX tab lists the threads of mail between the agents of the run,
+the most recently active first. A thread row starts with the unread dot
+`●` in the accent (`success`, a space once read) and the fold arrow
+`▸`/`▾`, then the subject, bold while unread, and its `(count)`; the
+participants (`Lead ↔ scout`) and the `HH:MM` of its newest message sit
+on the right. An unfolded thread lists its messages under it, indented:
+an optional `↩` for replies, `from → to`, a preview cut to fit and the
+time. Counts, participants, names and times are `muted`; the subject
+and preview are `foreground`. Rows highlight like MEMBERS rows, and the
+hint reads `↑↓ move  ←→ fold  ⏎ open  ⇧←→ tabs`.
+
+```text
+ ● ▾ Review parser changes (3)   Lead ↔ scout  12:04
+       Lead → scout   Please check the tokenizer…  12:01
+     ↩ scout → Lead   Found two issues: …          12:03
+   ▸ Benchmark run (1)           Lead → bench  11:50
+```
+
+Opening a thread or a message shows the conversation over the chat,
+headed `THREAD <subject>` with its message count. Each message has a
+`▸`/`▾ from → to · HH:MM` header (` · reply` for replies), bold on the
+selection when highlighted; a folded message shows a `muted` preview
+after its header, an unfolded one its text indented two columns. `n`/`p`
+move between messages, ⏎ or Space folds one, `e`/`c` unfold or fold
+them all, and Esc closes the view.
 
 - **Frame and dividers**: the panel's border color
 - **Active tab**: bold. While the panel is focused it is filled with `selection` and labelled in `on_selection`; otherwise the label is `foreground` with no fill
@@ -139,8 +169,8 @@ under three columns.
 │      2 steps (click to expand)               │
 │                                              │
 │  ⬢ Working on 2 to-dos                       │
-│    ☒ Read the handler                        │
-│    ▣ Fix the redirect                        │
+│  ☒ Read the handler                          │
+│  ▣ Fix the redirect                          │
 │                                              │
 │  ⬢ Thinking… 12s                             │
 └──────────────────────────────────────────────┘

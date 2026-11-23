@@ -151,7 +151,7 @@ mod tests {
     fn the_members_tab_lists_the_run_under_its_lead() {
         let mut app = app_with_members();
         app.select_pane_tab(crate::PaneTab::Records(RecordsTab::Members));
-        let rows = render_rows(&mut app, 200, 30);
+        let rows = render_rows(&mut app, 240, 30);
         let screen = rows.join("\n");
         assert!(
             screen.contains("│  KERNEL  │ MEMBERS  │ POLICIES │"),
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn the_kernel_tab_keeps_its_record_count_beside_the_tabs() {
         let mut app = app_with_members();
-        let rows = render_rows(&mut app, 200, 30);
+        let rows = render_rows(&mut app, 240, 30);
         let screen = rows.join("\n");
         assert_eq!(app.records_tab(), RecordsTab::Kernel);
         assert!(
@@ -191,7 +191,7 @@ mod tests {
         let mut app = App::new();
         app.process_command(UiCommand::SetActiveAgent("aa".into()));
         app.select_pane_tab(crate::PaneTab::Records(RecordsTab::Members));
-        let screen = render_rows(&mut app, 200, 30).join("\n");
+        let screen = render_rows(&mut app, 240, 30).join("\n");
         assert!(screen.contains("No agents joined yet."), "{screen}");
         assert!(screen.contains("1 AGENT │"), "{screen}");
     }
@@ -201,7 +201,7 @@ mod tests {
         let mut app = app_with_members();
         app.set_host_chrome(true);
         app.select_pane_tab(crate::PaneTab::Records(RecordsTab::Members));
-        render_rows(&mut app, 200, 30);
+        render_rows(&mut app, 240, 30);
         let chrome = app
             .pane_chrome()
             .iter()
@@ -213,6 +213,7 @@ mod tests {
                 crate::PaneTab::Records(RecordsTab::Kernel),
                 crate::PaneTab::Records(RecordsTab::Members),
                 crate::PaneTab::Records(RecordsTab::Policies),
+                crate::PaneTab::Records(RecordsTab::Inbox),
             ]
         );
         assert_eq!(

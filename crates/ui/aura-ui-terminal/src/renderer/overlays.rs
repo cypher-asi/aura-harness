@@ -9,7 +9,7 @@ use crate::{
     App, Theme,
 };
 use ratatui::{
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
@@ -100,72 +100,167 @@ fn render_approval_modal(
     frame.render_widget(paragraph, modal_area);
 }
 
-/// Render the model selector, grouped by route (local, cloud, plans).
-fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
-    let models = app.models();
-    let mut lines: Vec<Line<'_>> = Vec::new();
-    let mut last_group: Option<&str> = None;
+/// Rows of the model selector that are not the list: the tab row, the
+/// filter row, the blank lines around the list, the key hints and the
+/// two borders.
+const MODEL_SELECTOR_CHROME_ROWS: usize = 7;
 
+/// Render the model selector: a Ready / Sign-in tab row, the filter, and
+/// the models on the tab grouped by route, scrolled to keep the cursor in
+/// view.
+fn render_model_selector(frame: &mut Frame, app: &App, theme: &Theme) {
+    let picker = app.model_picker();
+    let models = picker.visible(app.models());
+    let muted = Style::default().fg(theme.colors.muted);
+
+    let (ready, sign_in) = crate::app::ModelPicker::counts(app.models());
+    let tab = |label: &str, count: usize, active: bool| {
+        let style = if active {
+            Style::default()
+                .fg(theme.colors.primary)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else {
+            muted
+        };
+        Span::styled(format!("{label} ({count})"), style)
+    };
+    let showing_ready = picker.tab() == crate::app::ModelTab::Ready;
+    let tabs = Line::from(vec![
+        tab("Ready", ready, showing_ready),
+        Span::raw("  "),
+        tab("Sign in", sign_in, !showing_ready),
+    ]);
+    let filter = if picker.filter().is_empty() {
+        Line::from(Span::styled("Type to filter", muted))
+    } else {
+        Line::from(Span::styled(
+            format!("/ {}█", picker.filter()),
+            Style::default().fg(theme.colors.foreground),
+        ))
+    };
+
+    // The list, each row with the index of its model (headings and
+    // separators have none), so the window can follow the cursor.
+    let mut rows: Vec<(Line<'_>, Option<usize>)> = Vec::new();
+    let mut last_group: Option<&str> = None;
     for (idx, model) in models.iter().enumerate() {
         if last_group != Some(model.group.as_str()) {
             if last_group.is_some() {
-                lines.push(Line::from(""));
+                rows.push((Line::from(""), None));
             }
-            lines.push(Line::from(Span::styled(
-                model.group.as_str(),
-                Style::default().fg(theme.colors.muted),
-            )));
+            rows.push((Line::from(Span::styled(model.group.as_str(), muted)), None));
             last_group = Some(model.group.as_str());
         }
-
-        let selected = idx == app.model_cursor();
-        let current = model.id == app.current_model();
-        let marker = if selected { "› " } else { "  " };
-        let check = if current { "● " } else { "  " };
-        let note = if model.local && !model.installed {
-            "  not pulled".to_string()
-        } else if model.available {
-            String::new()
+        rows.push((
+            model_row(app, model, idx == picker.cursor(), theme),
+            Some(idx),
+        ));
+    }
+    if rows.is_empty() {
+        let empty = if picker.filter().is_empty() && !showing_ready {
+            "Everything is signed in"
         } else {
-            match model.provider.as_deref() {
-                Some(provider) if provider != "zos" => format!("  /login {provider}"),
-                _ => "  login required".to_string(),
-            }
+            "No models match"
         };
-        let label_color = if selected {
-            theme.colors.primary
-        } else {
-            theme.colors.foreground
-        };
-        lines.push(Line::from(vec![
-            Span::styled(marker, Style::default().fg(theme.colors.primary)),
-            Span::styled(check, Style::default().fg(theme.colors.success)),
-            Span::styled(model.label.clone(), Style::default().fg(label_color)),
-            Span::styled(note, Style::default().fg(theme.colors.warning)),
-        ]));
+        rows.push((Line::from(Span::styled(empty, muted)), None));
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "↑/↓ move  Enter select  Esc close",
-        Style::default().fg(theme.colors.muted),
-    )));
-
     let area = frame.area();
-    let modal_width = 52.min(area.width.saturating_sub(4));
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "selector line count is small"
-    )]
-    let modal_height = ((lines.len() + 2) as u16).min(area.height.saturating_sub(2));
+    let modal_width = 64.min(area.width.saturating_sub(4));
+    let max_height = usize::from(area.height.saturating_sub(2));
+    let room = max_height
+        .saturating_sub(MODEL_SELECTOR_CHROME_ROWS)
+        .max(1)
+        .min(rows.len());
+    let cursor_row = rows
+        .iter()
+        .position(|(_, idx)| *idx == Some(picker.cursor()))
+        .unwrap_or(0);
+    let start = list_window_start(rows.len(), room, cursor_row);
+    let total = rows.len();
+    // Markers need a row each beside the cursor's; in a window too small
+    // for that, every row is a list row.
+    let markers = room >= 3;
+
+    let mut lines = vec![tabs, filter, Line::from("")];
+    for (offset, (line, _)) in rows.into_iter().skip(start).take(room).enumerate() {
+        if markers && offset == 0 && start > 0 {
+            lines.push(Line::from(Span::styled("  ↑ more", muted)));
+        } else if markers && offset + 1 == room && start + room < total {
+            lines.push(Line::from(Span::styled("  ↓ more", muted)));
+        } else {
+            lines.push(line);
+        }
+    }
+    lines.push(Line::from(""));
+    let hints = if modal_width >= 62 {
+        "↑/↓ move  Tab switch  type to filter  Enter select  Esc close"
+    } else {
+        "↑/↓ Tab type Enter Esc"
+    };
+    lines.push(Line::from(Span::styled(hints, muted)));
+
+    let modal_height = u16::try_from(lines.len() + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height.saturating_sub(2));
     let modal_area = centered_rect(modal_width, modal_height, area);
     frame.render_widget(Clear, modal_area);
 
     let block = Block::default()
         .title(" Select model ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.muted));
+        .border_style(muted);
     frame.render_widget(Paragraph::new(lines).block(block), modal_area);
+}
+
+/// First row of a `room`-row window over `total` rows that shows
+/// `cursor`: the earliest window that has it, with one row below it to
+/// spare, since the window's last row turns into a `↓ more` marker when
+/// rows are hidden past it. The selector keeps no scroll state, so the
+/// window is worked out again on every frame from the cursor alone.
+fn list_window_start(total: usize, room: usize, cursor: usize) -> usize {
+    if total <= room {
+        return 0;
+    }
+    if room < 3 {
+        // No room for markers around the cursor: put it first.
+        return cursor.min(total - room);
+    }
+    (cursor + 2).saturating_sub(room).min(total - room)
+}
+
+/// One model's row: cursor marker, current check, label and what it
+/// still needs (`not pulled`, `/login <provider>`).
+fn model_row<'a>(
+    app: &App,
+    model: &'a crate::events::ModelOptionView,
+    selected: bool,
+    theme: &Theme,
+) -> Line<'a> {
+    let current = model.id == app.current_model();
+    let marker = if selected { "› " } else { "  " };
+    let check = if current { "● " } else { "  " };
+    let note = if model.local && !model.installed {
+        "  not pulled".to_string()
+    } else if model.available {
+        String::new()
+    } else {
+        match model.provider.as_deref() {
+            Some(provider) if provider != "zos" => format!("  /login {provider}"),
+            _ => "  login required".to_string(),
+        }
+    };
+    let label_color = if selected {
+        theme.colors.primary
+    } else {
+        theme.colors.foreground
+    };
+    Line::from(vec![
+        Span::styled(marker, Style::default().fg(theme.colors.primary)),
+        Span::styled(check, Style::default().fg(theme.colors.success)),
+        Span::styled(model.label.as_str(), Style::default().fg(label_color)),
+        Span::styled(note, Style::default().fg(theme.colors.warning)),
+    ])
 }
 
 /// Render the new-project folder browser: the directory being browsed,
@@ -395,7 +490,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/archive /remove-project  Hide agent, project",
         "/agents /kernel /files  Toggle those panels",
         "/graph [id] /runs /status  Run graphs, scores",
-        "/model /thinking [level]  Model, thinking level",
+        "/model [opus] /thinking [level]  Model, thinking",
         "/mode [name] /approval [level]  Work, what asks",
         "/plan /build [path]  Plan mode, implement plan",
         "/login /whoami  Login for cloud models, status",
@@ -403,7 +498,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "/logout [claude|chatgpt]  Sign out / unlink",
         "/quit      Exit",
         "",
-        "Enter      Send message",
+        "Enter / Shift+Enter  Send / new line",
         "@path      Attach a file or folder",
         "Ctrl+V     Paste an image (or text)",
         "Ctrl+G     Edit the input in $EDITOR",
@@ -721,6 +816,37 @@ fn build_message_section(
             }
             ContentSegment::CodeBlock { language, code } => {
                 content.extend(CodeBlock::new(language, code).render(theme, width));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::list_window_start;
+
+    /// Whatever the room, the cursor's row is in the window and is not a
+    /// row a `↑ more` / `↓ more` marker takes.
+    #[test]
+    fn the_cursor_row_is_always_shown() {
+        for total in 1..40 {
+            for room in 1..=total {
+                for cursor in 0..total {
+                    let start = list_window_start(total, room, cursor);
+                    assert!(start + room <= total, "{total} {room} {cursor}");
+                    assert!(
+                        (start..start + room).contains(&cursor),
+                        "{total} {room} {cursor}: window {start}"
+                    );
+                    if room >= 3 {
+                        let offset = cursor - start;
+                        assert!(offset != 0 || start == 0, "{total} {room} {cursor}");
+                        assert!(
+                            offset + 1 != room || start + room == total,
+                            "{total} {room} {cursor}"
+                        );
+                    }
+                }
             }
         }
     }

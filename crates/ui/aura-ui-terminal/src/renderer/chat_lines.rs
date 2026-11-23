@@ -2,7 +2,9 @@
 
 mod stream;
 
-use super::activity::{activity_lines, collapsed_hint, group_header, records_link, GroupView};
+use super::activity::{
+    activity_lines, collapsed_hint, group_header, records_link, GroupView, StepNumber,
+};
 use super::command::shell_lines;
 use super::diff::diff_message_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
@@ -15,9 +17,12 @@ use crate::app::{ImageHit, ToggleRow, ToggleTarget};
 use crate::components::{Activity, Message, MessageRole};
 use crate::Theme;
 use ratatui::text::Line;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroUsize;
 use std::ops::Range;
+use std::sync::OnceLock;
 use stream::Settled;
 
 /// How the groups of agent steps in the chat are shown.
@@ -32,25 +37,36 @@ pub(crate) struct GroupState<'a> {
 }
 
 /// Where a block falls in its turn: everything from one prompt to the next.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct TurnPlace {
-    /// Model, tokens and cost of the turn's latest reply, drawn after the
-    /// block when it is the turn's last from the agent
-    footer: Vec<String>,
+#[derive(Debug, Clone, Copy)]
+struct TurnPlace<'a> {
+    /// The turn's latest reply, when the block is the turn's last from
+    /// the agent. Its model, tokens, cost and who paid for them are drawn
+    /// as one line after the block.
+    meta: Option<&'a Message>,
     /// Number of the block's first step, counted from 1 across the turn
     first_step: usize,
     /// When the turn's prompt was sent, in Unix milliseconds
     started_ms: u64,
 }
 
-impl TurnPlace {
+impl TurnPlace<'_> {
     /// A block outside any turn.
     const fn alone() -> Self {
         Self {
-            footer: Vec::new(),
+            meta: None,
             first_step: 1,
             started_ms: 0,
         }
+    }
+}
+
+impl Hash for TurnPlace<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // A reply's version changes with what its footer is drawn from,
+        // so the footer is only formatted when the block is drawn.
+        self.meta.map(Message::version).hash(state);
+        self.first_step.hash(state);
+        self.started_ms.hash(state);
     }
 }
 
@@ -153,6 +169,15 @@ impl ChatLineCache {
         } else {
             turn_places(&shown, &runs)
         };
+        let layout = Layout {
+            terminal: self.terminal,
+            prompt: &self.prompt,
+            width,
+            measure,
+            theme,
+            spinner,
+        };
+        let mut stale = Vec::new();
         self.order.clear();
         for (i, (run, place)) in runs.iter().zip(&places).enumerate() {
             let members = &shown[run.clone()];
@@ -170,95 +195,32 @@ impl ChatLineCache {
             (view, live, place).hash(&mut hasher);
             let revision = hasher.finish();
 
-            if live
-                || self
+            self.order.push(key);
+            if !live
+                && self
                     .entries
                     .get(&key)
-                    .is_none_or(|block| block.revision != revision)
+                    .is_some_and(|block| block.revision == revision)
             {
-                let shell = members[0].shell_run().filter(|_| self.terminal);
-                let mut settled = None;
-                let (mut lines, mut toggles, mut prose) = match (shell, view) {
-                    (Some(run), _) => (
-                        shell_lines(run, &self.prompt, width, theme),
-                        Vec::new(),
-                        Vec::new(),
-                    ),
-                    (None, Some(view)) => {
-                        let (lines, toggles) =
-                            group_lines(members, view, live, place, width, theme, spinner);
-                        (lines, toggles, Vec::new())
-                    }
-                    (None, None) if members.len() > 1 => {
-                        let mut lines = Vec::new();
-                        let mut prose = Vec::new();
-                        for member in members {
-                            let (more, flags) =
-                                message_lines(member, (width, measure), theme, spinner);
-                            prose.resize(lines.len(), None);
-                            prose.extend(flags);
-                            lines.extend(more);
-                        }
-                        (lines, Vec::new(), prose)
-                    }
-                    (None, None) if !self.terminal && stream::applies(members[0]) => {
-                        let (mut lines, mut prose, mut state) = self
-                            .entries
-                            .remove(&key)
-                            .map_or_else(Default::default, |block| {
-                                (block.lines, block.prose, block.settled.unwrap_or_default())
-                            });
-                        state.extend(members[0].content(), (&mut lines, &mut prose), |text| {
-                            content_lines(text, MessageRole::Assistant, (width, measure), theme)
-                        });
-                        settled = Some(state);
-                        (lines, Vec::new(), prose)
-                    }
-                    (None, None) => {
-                        single_lines(members[0], place, (width, measure), theme, spinner)
-                    }
-                };
-                let mut images = Vec::new();
-                if !self.terminal && members.len() == 1 && !members[0].images().is_empty() {
-                    let (more, hits) = super::images::message_image_lines(members[0], width, theme);
-                    let start = lines.len();
-                    images.extend(hits.into_iter().map(|hit| ImageHit {
-                        line: start + hit.line,
-                        ..hit
-                    }));
-                    lines.extend(more);
-                }
-                if let Some(footer) = reply_footer(&place.footer, width, theme) {
-                    // Separate the closing meta line from the reply body (or the
-                    // activity lines above it) with a blank row so it reads as a
-                    // distinct footer rather than another content line.
-                    let separated = lines
-                        .last()
-                        .is_none_or(|line| line.spans.iter().all(|s| s.content.trim().is_empty()));
-                    if !separated {
-                        lines.push(Line::from(""));
-                    }
-                    lines.push(footer);
-                }
-                let user =
-                    !self.terminal && members.len() == 1 && members[0].role() == MessageRole::User;
-                if user {
-                    frame_user_block(&mut lines, &mut toggles, &mut images, &mut prose);
-                }
-                self.entries.insert(
-                    key,
-                    BlockLines {
-                        revision,
-                        user,
-                        lines,
-                        toggles,
-                        images,
-                        prose,
-                        settled,
-                    },
-                );
+                continue;
             }
-            self.order.push(key);
+            let block = Stale {
+                key,
+                revision,
+                members,
+                view,
+                live,
+                place: *place,
+            };
+            if layout.streams(&block) {
+                let before = self.entries.remove(&key);
+                self.entries.insert(key, layout.block(&block, before));
+            } else {
+                stale.push(block);
+            }
+        }
+        for (block, lines) in stale.iter().zip(layout.blocks(&stale)) {
+            self.entries.insert(block.key, lines);
         }
         if self.entries.len() > self.order.len() {
             let live: HashSet<u64> = self.order.iter().copied().collect();
@@ -272,6 +234,192 @@ impl ChatLineCache {
     pub(crate) fn blocks(&self) -> impl Iterator<Item = &BlockLines> {
         self.order.iter().filter_map(|key| self.entries.get(key))
     }
+}
+
+/// Blocks to lay out at once from which they are laid out across
+/// threads: fewer take less time than handing them out does.
+const PARALLEL_BLOCKS: usize = 16;
+
+/// Most threads blocks are laid out on.
+const MOST_LAYOUT_THREADS: usize = 8;
+
+/// What every block of a frame is laid out with.
+#[derive(Clone, Copy)]
+struct Layout<'a> {
+    terminal: bool,
+    prompt: &'a str,
+    width: usize,
+    measure: Measure,
+    theme: &'a Theme,
+    spinner: &'a str,
+}
+
+/// A block whose lines are out of date.
+struct Stale<'a> {
+    /// The id of its first message
+    key: u64,
+    revision: u64,
+    members: &'a [&'a Message],
+    view: Option<GroupView>,
+    live: bool,
+    place: TurnPlace<'a>,
+}
+
+impl Layout<'_> {
+    /// Whether `block` is a reply still being written, which is laid out
+    /// from how it was the last time.
+    fn streams(self, block: &Stale<'_>) -> bool {
+        !self.terminal
+            && block.view.is_none()
+            && block.members.len() == 1
+            && stream::applies(block.members[0])
+    }
+
+    /// The lines of `blocks`, in order. A width or theme change, an agent
+    /// switch or a chat's first frame lays out every block, which is
+    /// shared out across threads.
+    fn blocks(self, blocks: &[Stale<'_>]) -> Vec<BlockLines> {
+        if blocks.len() >= PARALLEL_BLOCKS {
+            if let Some(pool) = layout_threads() {
+                return pool.install(|| {
+                    blocks
+                        .par_iter()
+                        .map(|block| self.block(block, None))
+                        .collect()
+                });
+            }
+        }
+        blocks.iter().map(|block| self.block(block, None)).collect()
+    }
+
+    /// The lines of `block`. A reply still being written goes on from
+    /// `before`, how it was laid out the last time.
+    fn block(self, block: &Stale<'_>, before: Option<BlockLines>) -> BlockLines {
+        let Self {
+            terminal,
+            width,
+            measure,
+            theme,
+            spinner,
+            ..
+        } = self;
+        let members = block.members;
+        let shell = members[0].shell_run().filter(|_| terminal);
+        let mut settled = None;
+        let (mut lines, mut toggles, mut prose) = match (shell, block.view) {
+            (Some(run), _) => (
+                shell_lines(run, self.prompt, width, theme),
+                Vec::new(),
+                Vec::new(),
+            ),
+            (None, Some(view)) => {
+                let (lines, toggles) = group_lines(
+                    members,
+                    view,
+                    block.live,
+                    &block.place,
+                    width,
+                    theme,
+                    spinner,
+                );
+                (lines, toggles, Vec::new())
+            }
+            (None, None) if members.len() > 1 => {
+                let mut lines = Vec::new();
+                let mut prose = Vec::new();
+                for member in members {
+                    let (more, flags) = message_lines(member, (width, measure), theme, spinner);
+                    prose.resize(lines.len(), None);
+                    prose.extend(flags);
+                    lines.extend(more);
+                }
+                (lines, Vec::new(), prose)
+            }
+            (None, None) if self.streams(block) => {
+                let (mut lines, mut prose, mut state) = before
+                    .map_or_else(Default::default, |block| {
+                        (block.lines, block.prose, block.settled.unwrap_or_default())
+                    });
+                state.extend(members[0].content(), (&mut lines, &mut prose), |text| {
+                    content_lines(text, MessageRole::Assistant, (width, measure), theme)
+                });
+                settled = Some(state);
+                (lines, Vec::new(), prose)
+            }
+            (None, None) => {
+                single_lines(members[0], &block.place, (width, measure), theme, spinner)
+            }
+        };
+        let mut images = Vec::new();
+        if !terminal && members.len() == 1 && !members[0].images().is_empty() {
+            let (more, hits) = super::images::message_image_lines(members[0], width, theme);
+            let start = lines.len();
+            images.extend(hits.into_iter().map(|hit| ImageHit {
+                line: start + hit.line,
+                ..hit
+            }));
+            lines.extend(more);
+        }
+        if let Some(reply) = block.place.meta {
+            push_footer(&mut lines, reply, width, theme);
+        }
+        let user = !terminal && members.len() == 1 && members[0].role() == MessageRole::User;
+        if user {
+            frame_user_block(&mut lines, &mut toggles, &mut images, &mut prose);
+        }
+        BlockLines {
+            revision: block.revision,
+            user,
+            lines,
+            toggles,
+            images,
+            prose,
+            settled,
+        }
+    }
+}
+
+/// The threads chat blocks are laid out on, or `None` with one core.
+/// They start with the first chat long enough to need them, from the
+/// thread that draws the UI, so they run at its priority and not the
+/// agents'.
+fn layout_threads() -> Option<&'static rayon::ThreadPool> {
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let threads = std::thread::available_parallelism()
+            .map_or(1, NonZeroUsize::get)
+            .min(MOST_LAYOUT_THREADS);
+        if threads < 2 {
+            return None;
+        }
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|index| format!("aura-layout-{index}"))
+            .build()
+            .map_err(|error| tracing::warn!(%error, "laying chats out on one thread"))
+            .ok()
+    })
+    .as_ref()
+}
+
+/// The footer of `reply`, a turn's latest, under the `lines` of the
+/// turn's last block from the agent: the model, tokens, cost and who paid
+/// for them, on one line.
+fn push_footer(lines: &mut Vec<Line<'static>>, reply: &Message, width: usize, theme: &Theme) {
+    let meta = reply_meta(reply.model(), reply.usage(), reply.sources());
+    let Some(footer) = reply_footer(&meta, width, theme) else {
+        return;
+    };
+    // Separate the closing meta line from the reply body (or the
+    // activity lines above it) with a blank row so it reads as a
+    // distinct footer rather than another content line.
+    let separated = lines
+        .last()
+        .is_none_or(|line| line.spans.iter().all(|s| s.content.trim().is_empty()));
+    if !separated {
+        lines.push(Line::from(""));
+    }
+    lines.push(footer);
 }
 
 /// Blank rows above and below a user's message: the frame's border, then
@@ -334,16 +482,16 @@ fn is_notice(message: &Message) -> bool {
 /// Each block's place in its turn. A prompt starts a turn; the agent's
 /// last block in it carries the footer of the turn's latest reply, and
 /// steps are numbered in order across the turn.
-fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
-    let mut places: Vec<TurnPlace> = Vec::with_capacity(runs.len());
+fn turn_places<'a>(shown: &[&'a Message], runs: &[Range<usize>]) -> Vec<TurnPlace<'a>> {
+    let mut places: Vec<TurnPlace<'a>> = Vec::with_capacity(runs.len());
     let mut last_agent: Option<usize> = None;
-    let mut meta: Vec<String> = Vec::new();
+    let mut meta: Option<&'a Message> = None;
     let mut steps = 0;
     let mut started_ms = shown.first().map_or(0, |m| m.timestamp_ms());
     for run in runs {
         let first = shown[run.start];
         if first.role() == MessageRole::User {
-            close_turn(&mut places, last_agent.take(), std::mem::take(&mut meta));
+            close_turn(&mut places, last_agent.take(), meta.take());
             steps = 0;
             started_ms = first.timestamp_ms();
         }
@@ -352,7 +500,7 @@ fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
             last_agent = Some(places.len());
         }
         places.push(TurnPlace {
-            footer: Vec::new(),
+            meta: None,
             first_step: steps + 1,
             started_ms,
         });
@@ -361,17 +509,18 @@ fn turn_places(shown: &[&Message], runs: &[Range<usize>]) -> Vec<TurnPlace> {
             .filter(|m| m.activity_step().is_some())
             .count();
         if agent && first.activity_step().is_none() && first.model().is_some() {
-            meta = reply_meta(first.model(), first.usage());
+            meta = Some(first);
         }
     }
     close_turn(&mut places, last_agent, meta);
     places
 }
 
-/// Put a turn's `meta` under its last block from the agent, at `last`.
-fn close_turn(places: &mut [TurnPlace], last: Option<usize>, meta: Vec<String>) {
+/// Put the footer of a turn's latest reply, `meta`, under its last block
+/// from the agent, at `last`.
+fn close_turn<'a>(places: &mut [TurnPlace<'a>], last: Option<usize>, meta: Option<&'a Message>) {
     if let Some(place) = last.and_then(|at| places.get_mut(at)) {
-        place.footer = meta;
+        place.meta = meta;
     }
 }
 
@@ -388,7 +537,7 @@ fn group_view(open: Option<bool>, expand_all: bool, live: bool) -> GroupView {
 
 /// ` · step 7 · 42s` after a running group's summary: the number of its
 /// latest step in the turn, and how long the group has been going.
-fn group_progress(steps: &[&Activity], place: &TurnPlace) -> String {
+fn group_progress(steps: &[&Activity], place: &TurnPlace<'_>) -> String {
     let mut progress = format!(" · step {}", place.first_step + steps.len() - 1);
     if let Some(elapsed) = steps
         .first()
@@ -408,7 +557,7 @@ fn group_lines(
     members: &[&Message],
     view: GroupView,
     live: bool,
-    place: &TurnPlace,
+    place: &TurnPlace<'_>,
     width: usize,
     theme: &Theme,
     spinner: &str,
@@ -439,10 +588,12 @@ fn group_lines(
         return (lines, toggles);
     }
     let mut number = place.first_step;
+    let last = place.first_step + steps.len().saturating_sub(1);
     for member in members {
         let Some(step) = member.activity_step() else {
             continue;
         };
+        let step_number = StepNumber::new(number, last);
         toggles.push(ToggleRow {
             line: lines.len(),
             target: ToggleTarget::Step(member.version().0),
@@ -451,7 +602,7 @@ fn group_lines(
         lines.extend(activity_lines(
             step,
             member.is_expanded(),
-            Some(number),
+            Some(step_number),
             spinner,
             width,
             theme,
@@ -460,7 +611,7 @@ fn group_lines(
             &mut lines,
             &mut toggles,
             (step, member.is_expanded()),
-            Some(number),
+            Some(step_number),
             place,
             (width, theme),
         );
@@ -475,8 +626,8 @@ fn push_records_link(
     lines: &mut Vec<Line<'static>>,
     toggles: &mut Vec<ToggleRow>,
     (step, expanded): (&Activity, bool),
-    number: Option<usize>,
-    place: &TurnPlace,
+    number: Option<StepNumber>,
+    place: &TurnPlace<'_>,
     (width, theme): (usize, &Theme),
 ) {
     if !expanded || !matches!(step, Activity::Thinking(_)) {
@@ -493,7 +644,7 @@ fn push_records_link(
 /// A block of one message; a lone agent step toggles on its header.
 fn single_lines(
     message: &Message,
-    place: &TurnPlace,
+    place: &TurnPlace<'_>,
     (width, measure): (usize, Measure),
     theme: &Theme,
     spinner: &str,
@@ -601,4 +752,69 @@ fn content_lines(
         }
     }
     (lines, prose)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `turns` prompts, each answered with a tool call, a notice and a
+    /// reply that has a list, code and a footer.
+    fn long_chat(turns: usize) -> VecDeque<Message> {
+        let mut chat = VecDeque::new();
+        for turn in 0..turns {
+            let prompt = format!("question {turn}: what is in `src/{turn}.rs`?");
+            chat.push_back(Message::new(MessageRole::User, &prompt));
+            let call = Activity::tool(&format!("call-{turn}"), "read_file", "{\"path\":\"a.rs\"}");
+            let mut step = Message::activity(call, false);
+            step.update_activity(|activity| activity.finish("read"));
+            chat.push_back(step);
+            let notice = format!("policy: read_file allowed by rule {turn}");
+            chat.push_back(Message::new(MessageRole::System, &notice));
+            let text = format!(
+                "It holds **{turn}** things:\n\n- one\n- two, which goes on past the \
+                 edge of a narrow pane\n\n```rust\nfn f() -> u32 {{ {turn} }}\n```\n"
+            );
+            let mut reply = Message::new(MessageRole::Assistant, &text);
+            reply.set_model("claude-sonnet");
+            chat.push_back(reply);
+        }
+        chat
+    }
+
+    #[test]
+    fn a_chat_laid_out_across_threads_is_laid_out_as_it_is_a_message_at_a_time() {
+        let theme = Theme::cyber();
+        let open = HashMap::new();
+        let groups = GroupState {
+            open: &open,
+            expand_all: false,
+            turn_live: false,
+        };
+        let size = (40, Measure::GRID);
+        let chat = long_chat(40);
+        let mut whole = ChatLineCache::default();
+        whole.update(&chat, size, &theme, "*", &groups);
+
+        let mut grown = ChatLineCache::default();
+        let mut so_far = VecDeque::new();
+        for message in &chat {
+            so_far.push_back(message.clone());
+            grown.update(&so_far, size, &theme, "*", &groups);
+        }
+        let drawn = |cache: &ChatLineCache| {
+            cache
+                .blocks()
+                .map(|block| {
+                    (
+                        block.lines.clone(),
+                        block.prose.clone(),
+                        block.toggles.len(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(whole.blocks().count() > PARALLEL_BLOCKS * 4);
+        assert!(drawn(&whole) == drawn(&grown), "the same lines either way");
+    }
 }

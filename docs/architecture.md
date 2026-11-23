@@ -36,7 +36,7 @@ Within a layer, crates are listed leaves first.
 | exec     | Tool seam traits, the HTTP `DomainApi`, the tool catalog and executor. | `aura-exec-traits`, `aura-exec-domain-http`, `aura-exec-tools` |
 | agent    | One agent: kernel, turn loop, steering, subagent derivation, run traces. | `aura-agent-subagent`, `aura-agent-steering`, `aura-agent-kernel`, `aura-agent`, `aura-agent-trace` |
 | gate     | Gate, the router behind the `gate` model id: routing, evidence, follow-ups, judges, the attempt log, `/compare` arithmetic, the lead's limits, and Gate while the app runs. | `aura-gate-evidence`, `aura-gate-route`, `aura-gate-followup`, `aura-gate-judge`, `aura-gate-attempts`, `aura-gate-compare`, `aura-gate-lead`, `aura-gate-live`, `aura-gate` |
-| auth     | Sign-in: zOS identity, linked ChatGPT and Claude plans, credential storage. | `aura-auth-kit`, `aura-auth-zos`, `aura-auth-chatgpt`, `aura-auth-claude`, `aura-auth` |
+| auth     | Sign-in: zOS identity, linked ChatGPT and Claude plans, linked OpenRouter account, credential storage. | `aura-auth-kit`, `aura-auth-zos`, `aura-auth-chatgpt`, `aura-auth-claude`, `aura-auth-openrouter`, `aura-auth` |
 | engine   | Many agents: scheduler, workers, agent host, automatons. | `aura-engine-automaton`, `aura-engine` |
 | ui       | Renderer-agnostic UI protocol and the ratatui terminal UI. | `aura-ui`, `aura-ui-terminal` |
 | surface  | What you run: the session host, the HTTP/WS node, the CLI, the desktop app. | `aura-app`, `aura-node`, `aura-cli`, `aura-desktop` |
@@ -246,7 +246,7 @@ Strongly-typed identifier newtypes (`TurnId`, `RunId`, `ToolCallId`, `SessionId`
 
 #### [`aura-core-auth`](../crates/core/aura-core-auth)
 
-Auth primitives and the contracts each auth method implements. Types: `AccessToken`, `RefreshToken`, `Token`, `StoredSession`, `AuthError`, `ProviderKind` (`local`, `zos`, `chatgpt`, `claude`), `Owner`, `OAuthTokens`, `LinkedAccount`, `InferenceCredential`. Traits: `IdentityProvider` (zOS), `SubscriptionProvider` (ChatGPT, Claude) and `CredentialResolver`, which the model layer calls for a fresh plan credential per request. Keeping the traits here means provider crates never depend on each other and `aura-model` never depends on the auth layer. No I/O.
+Auth primitives and the contracts each auth method implements. Types: `AccessToken`, `RefreshToken`, `Token`, `StoredSession`, `AuthError`, `ProviderKind` (`local`, `zos`, `chatgpt`, `claude`, `openrouter`), `Owner`, `OAuthTokens`, `LinkedAccount`, `InferenceCredential`. Traits: `IdentityProvider` (zOS), `SubscriptionProvider` (ChatGPT, Claude, OpenRouter) and `CredentialResolver`, which the model layer calls for a fresh plan credential per request. Keeping the traits here means provider crates never depend on each other and `aura-model` never depends on the auth layer. No I/O.
 
 #### [`aura-core-protocol`](../crates/core/aura-core-protocol)
 
@@ -498,7 +498,7 @@ Sign-in and credential storage. It sits above the agent layer because nothing be
 
 #### [`aura-auth`](../crates/auth/aura-auth)
 
-Auth composition root. `AuthManager` registers the identity provider (zOS) and the subscription providers (ChatGPT, Claude), links plans to the active identity (`Owner::Local` while signed out, otherwise the zOS user), and implements `CredentialResolver`. Refreshes are single-flight per link, rotated tokens are saved before use, and a revoked grant marks the link `ReauthRequired`. `Vault` stores the zOS session in the legacy slot (OS keyring, falling back to `~/.aura/credentials.json`, so existing logins still work), link metadata in `~/.aura/auth/index.json`, and each link's tokens in its own keyring entry or 0600 file. `CredentialStore` remains as a static shim over the zOS slot.
+Auth composition root. `AuthManager` registers the identity provider (zOS) and the subscription providers (ChatGPT, Claude, OpenRouter), links plans to the active identity (`Owner::Local` while signed out, otherwise the zOS user), and implements `CredentialResolver`. Refreshes are single-flight per link, rotated tokens are saved before use, and a revoked grant marks the link `ReauthRequired`. `Vault` stores the zOS session in the legacy slot (OS keyring, falling back to `~/.aura/credentials.json`, so existing logins still work), link metadata in `~/.aura/auth/index.json`, and each link's tokens in its own keyring entry or 0600 file. `CredentialStore` remains as a static shim over the zOS slot.
 
 Each auth method is its own crate:
 
@@ -508,6 +508,7 @@ Each auth method is its own crate:
 | [`aura-auth-zos`](../crates/auth/aura-auth-zos) | `ZosClient` and `ZosIdentity` (email/password login, JWT for aura-router). |
 | [`aura-auth-chatgpt`](../crates/auth/aura-auth-chatgpt) | Sign in with ChatGPT: dynamic client id per host, `id_token` checked against the issuer's JWKS, refresh and revocation. |
 | [`aura-auth-claude`](../crates/auth/aura-auth-claude) | Claude Pro/Max through Claude Code's public OAuth client. Inference needs the `oauth-2025-04-20` beta header and the Claude Code system prompt opening. Anthropic does not publish this flow for other apps. |
+| [`aura-auth-openrouter`](../crates/auth/aura-auth-openrouter) | `OpenRouterProvider` (`SubscriptionProvider`): OpenRouter OAuth PKCE with a localhost callback that returns a user-owned API key, or a pasted code or `sk-or-…` key. The key does not expire, so there is no refresh; a revoked key needs a new sign-in. |
 
 ---
 

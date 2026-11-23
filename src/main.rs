@@ -2,7 +2,8 @@
 //!
 //! The desktop window has to own the main thread, so it opens here,
 //! before any async runtime starts; everything else runs
-//! `aura_cli::run_cli` on a Tokio runtime.
+//! `aura_cli::run_cli` on a Tokio runtime, whose threads run below the
+//! terminal UI's when there is one.
 
 use clap::Parser;
 use std::process::ExitCode;
@@ -21,10 +22,12 @@ fn main() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(aura_cli::run_cli(cli))
+    let mut runtime = tokio::runtime::Builder::new_multi_thread();
+    runtime.enable_all();
+    if let Some(start) = aura_cli::runtime_thread_start(&cli) {
+        runtime.on_thread_start(start);
+    }
+    runtime.build()?.block_on(aura_cli::run_cli(cli))
 }
 
 #[cfg(feature = "desktop")]

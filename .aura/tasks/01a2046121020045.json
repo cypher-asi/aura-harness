@@ -1,0 +1,16 @@
+{
+  "id": "01a2046121020045",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust workspace). IMPORTANT: the working tree has many unrelated uncommitted changes …",
+  "state": "completed",
+  "agent_id": "54a57bedad0dc5750dbfcbfbd8176fb9b94dcfd03460bf7bfeacc53ab0cbdde9",
+  "agent_name": "rust-engineer #45",
+  "assignee": "rust-engineer",
+  "parent": "01a2045abd210040",
+  "plan": ".aura/plans/openrouter-integration_0f77685d.plan.md",
+  "plan_todo": "auth-manager",
+  "items": [],
+  "summary": "OpenRouter is now registered in `AuthManager::new()`, and you can link it by pasting a key into the normal sign-in or by calling the new `AuthManager::link_api_key(provider, key)`. All 30 `aura-auth` tests pass, including 4 new OpenRouter ones.",
+  "updated_ms": 1795370261211,
+  "created_ms": 1795369804034,
+  "tool_use_id": "toolu_018XMjVQmPyqphZG1hBZCZC8"
+}

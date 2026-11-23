@@ -21,6 +21,10 @@
 //! judge reviews the failed attempt first (see
 //! [`aura_gate::judge::turn`]): a failure it does not put down to
 //! the model is not retried and counts for nothing.
+//!
+//! Under the by-difficulty arm of `/compare` a subtask nothing pins is
+//! classified as Gate's are, then runs on the model the arm gives its
+//! difficulty, with no exploring and no retry.
 
 use super::agents::AgentSession;
 use super::turns::record_prompt;
@@ -30,6 +34,7 @@ use aura_core_types::{
     Difficulty, Hash, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason,
     SubagentDispatchRequest,
 };
+use aura_gate::compare::DifficultyRoutes;
 use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision, Work};
 use aura_model::model_catalog::GATE_MODEL_ID;
@@ -85,6 +90,9 @@ pub(super) struct SubtaskGate {
     /// Set for the retry of a failed attempt: where it goes, and the
     /// first attempt's category
     pub escalation: Option<(Decision, PromptCategory)>,
+    /// Set under the by-difficulty arm of `/compare`: the model each
+    /// difficulty goes to, instead of Gate's pick
+    pub table: Option<DifficultyRoutes>,
 }
 
 impl SubtaskGate {
@@ -118,6 +126,31 @@ impl SubtaskGate {
             self.live.note_model(session.agent_id(), &decision.model.id);
             label.category = Some(*category);
             label.shown = Some(route_line(decision, *category));
+            label.route = decision.route(RouteLevel::Subtask);
+            return Ok(label);
+        }
+        if let Some(table) = &self.table {
+            let category = label.classify(session, cancel).await?;
+            label.category = Some(category);
+            let work = Work::new(RouteLevel::Subtask, category, Some(self.kind.as_str()))
+                .of(label.difficulty);
+            let decision = table.decide(&work);
+            info!(
+                kind = %self.kind,
+                model = %decision.model.id,
+                %category,
+                difficulty = ?label.difficulty,
+                "The by-difficulty arm routed the subtask"
+            );
+            self.limits.route(config, &decision);
+            self.live.note_model(session.agent_id(), &decision.model.id);
+            label.shown = Some(format!(
+                "by difficulty → {} · subtask, {category}, {}",
+                decision.label(),
+                label
+                    .difficulty
+                    .map_or_else(|| "unrated".to_string(), |d| d.to_string())
+            ));
             label.route = decision.route(RouteLevel::Subtask);
             return Ok(label);
         }

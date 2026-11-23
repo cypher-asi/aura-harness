@@ -5,7 +5,8 @@
 //! measured widths are kept in bounded
 //! least-recently-used stores: a run is shaped once however many frames
 //! show it. Each glyph is rasterized once per size and sub-pixel position
-//! into the [`Atlas`], which drawn shapes share.
+//! into the [`Atlas`], which drawn shapes share. Threads that only lay
+//! text out measure it with a [`Measurer`], which has no atlas.
 
 use crate::geom::Point;
 use crate::scene::{Fill, Quad};
@@ -15,11 +16,11 @@ use cosmic_text::{
     SwashCache, SwashContent, Weight, Wrap,
 };
 use ratatui::style::Modifier;
+use rustc_hash::{FxHashMap, FxHasher};
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub use cosmic_text::Shaping;
 
@@ -115,7 +116,7 @@ pub struct Run {
 /// A least-recently-used store. Entries are found by a hash of their key
 /// and checked against it, so a lookup allocates nothing.
 struct Lru<K, V> {
-    entries: HashMap<u64, (K, V, u64)>,
+    entries: FxHashMap<u64, (K, V, u64)>,
     clock: u64,
     limit: usize,
 }
@@ -123,7 +124,7 @@ struct Lru<K, V> {
 impl<K, V> Lru<K, V> {
     fn new(limit: usize) -> Self {
         Self {
-            entries: HashMap::new(),
+            entries: FxHashMap::default(),
             clock: 0,
             limit: limit.max(2),
         }
@@ -207,6 +208,31 @@ pub struct ShapeKey {
     pub phase: [u8; 2],
 }
 
+/// Rows of an [`Atlas`] copied out for a texture of it on another
+/// thread.
+pub struct AtlasRows {
+    /// The atlas's size when they were copied
+    pub size: (u32, u32),
+    /// The first row copied
+    pub start: u32,
+    /// RGBA rows from `start` down
+    pub pixels: Vec<u8>,
+}
+
+impl AtlasRows {
+    /// The rows copied.
+    pub fn rows(&self) -> Range<u32> {
+        let stride = self.size.0 as usize * 4;
+        let count = self.pixels.len().checked_div(stride).unwrap_or(0);
+        self.start..self.start + u32::try_from(count).unwrap_or(u32::MAX)
+    }
+
+    /// Whether every row of the atlas was copied.
+    pub fn whole(&self) -> bool {
+        self.rows() == (0..self.size.1)
+    }
+}
+
 struct Shelf {
     y: u32,
     height: u32,
@@ -224,8 +250,8 @@ pub struct Atlas {
     shelves: Vec<Shelf>,
     /// First row below the shelves
     used: u32,
-    glyphs: HashMap<CacheKey, Option<Slot>>,
-    shapes: HashMap<ShapeKey, Option<Slot>>,
+    glyphs: FxHashMap<CacheKey, Option<Slot>>,
+    shapes: FxHashMap<ShapeKey, Option<Slot>>,
     generation: u64,
     dirty: Option<Range<u32>>,
 }
@@ -243,8 +269,8 @@ impl Atlas {
             pixels: vec![0; (Self::WIDTH * Self::START_HEIGHT * 4) as usize],
             shelves: Vec::new(),
             used: 0,
-            glyphs: HashMap::new(),
-            shapes: HashMap::new(),
+            glyphs: FxHashMap::default(),
+            shapes: FxHashMap::default(),
             generation: 0,
             dirty: None,
         }
@@ -268,6 +294,47 @@ impl Atlas {
     /// The rows written since this was last called.
     pub fn take_dirty(&mut self) -> Option<Range<u32>> {
         self.dirty.take()
+    }
+
+    /// The rows written since the last take, copied out for a texture of
+    /// the atlas that is `known` in size: every row when the atlas is no
+    /// longer that size, since such a texture is made anew.
+    pub fn take_rows(&mut self, known: Option<(u32, u32)>) -> AtlasRows {
+        let dirty = self.take_dirty();
+        let rows = if known == Some(self.size()) {
+            dirty.unwrap_or(0..0)
+        } else {
+            0..self.height
+        };
+        self.copy_rows(rows)
+    }
+
+    /// `newer`, the rows taken for a frame, together with `older`, those
+    /// of a frame it replaces before they reached the texture, both read
+    /// again as the atlas has them now.
+    pub fn merge_rows(&self, newer: AtlasRows, older: &AtlasRows) -> AtlasRows {
+        // The atlas changed size since `older` only if `newer` has every
+        // row.
+        let (a, b) = (newer.rows(), older.rows());
+        if newer.whole() || b.is_empty() {
+            return newer;
+        }
+        let rows = if a.is_empty() {
+            b
+        } else {
+            a.start.min(b.start)..a.end.max(b.end)
+        };
+        self.copy_rows(rows)
+    }
+
+    fn copy_rows(&self, rows: Range<u32>) -> AtlasRows {
+        let (start, end) = (rows.start.min(self.height), rows.end.min(self.height));
+        let stride = self.width as usize * 4;
+        AtlasRows {
+            size: self.size(),
+            start,
+            pixels: self.pixels[start as usize * stride..end.max(start) as usize * stride].to_vec(),
+        }
     }
 
     /// The tallest the atlas may grow: what the GPU takes as a texture.
@@ -382,26 +449,100 @@ impl Atlas {
     }
 }
 
+/// The fonts and how wide text measured in them is: all laying text out
+/// needs, without drawing any.
+pub struct Measurer {
+    fonts: FontSystem,
+    widths: Lru<(Box<str>, Face, u32), f32>,
+}
+
+impl Measurer {
+    fn new() -> Self {
+        Self {
+            fonts: font_system(),
+            widths: Lru::new(MAX_WIDTHS),
+        }
+    }
+
+    /// How wide a run of `text` is in `face` at `size`, trailing spaces
+    /// included.
+    pub fn run_width(&mut self, text: &str, face: Face, size: f32) -> f32 {
+        // A closing bar keeps trailing spaces in the measured line.
+        self.line_width(&format!("{text}|"), face, size) - self.line_width("|", face, size)
+    }
+
+    /// How wide `text` is laid out on one line.
+    fn line_width(&mut self, text: &str, face: Face, size: f32) -> f32 {
+        let hash = hash_of(&(text, face, size.to_bits()));
+        let is = |key: &(Box<str>, Face, u32)| {
+            *key.0 == *text && (key.1, key.2) == (face, size.to_bits())
+        };
+        if let Some(width) = self.widths.get(hash, is) {
+            return *width;
+        }
+        let buffer = layout(
+            &mut self.fonts,
+            text,
+            (face, size, size * LINE_EM),
+            Shaping::Advanced,
+            Some(Wrap::None),
+        );
+        let width = buffer
+            .layout_runs()
+            .fold(0.0_f32, |width, line| width.max(line.line_w));
+        self.widths
+            .put(hash, (text.into(), face, size.to_bits()), width);
+        width
+    }
+}
+
+/// The system's fonts and the bundled ones. They are found once, and
+/// every thread's text system or measurer starts from a copy.
+fn font_system() -> FontSystem {
+    static FONTS: OnceLock<(String, fontdb::Database)> = OnceLock::new();
+    let (locale, fonts) = FONTS.get_or_init(|| {
+        let bundled = theme::font_files()
+            .into_iter()
+            .map(|font| fontdb::Source::Binary(Arc::new(font.into_owned())));
+        FontSystem::new_with_fonts(bundled).into_locale_and_db()
+    });
+    FontSystem::new_with_locale_and_db(locale.clone(), fonts.clone())
+}
+
+/// `text` in `face` at `size`, in lines `line_height` tall.
+fn layout(
+    fonts: &mut FontSystem,
+    text: &str,
+    (face, size, line_height): (Face, f32, f32),
+    shaping: Shaping,
+    wrap: Option<Wrap>,
+) -> Buffer {
+    let metrics = Metrics::new(size, line_height.max(f32::MIN_POSITIVE));
+    let mut buffer = Buffer::new(fonts, metrics);
+    buffer.set_size(fonts, Some(f32::INFINITY), Some(f32::INFINITY));
+    if let Some(wrap) = wrap {
+        buffer.set_wrap(fonts, wrap);
+    }
+    buffer.set_text(fonts, text, &face.attrs(), shaping, None);
+    buffer.shape_until_scroll(fonts, false);
+    buffer
+}
+
 /// The fonts, what was shaped and measured with them, and the atlas.
 pub struct TextSystem {
-    fonts: FontSystem,
+    measurer: Measurer,
     swash: SwashCache,
     runs: Lru<RunKey, Arc<Run>>,
-    widths: Lru<(Box<str>, Face, u32), f32>,
     atlas: Atlas,
 }
 
 impl TextSystem {
     /// The system's fonts and the bundled ones.
     pub fn new() -> Self {
-        let bundled = theme::font_files()
-            .into_iter()
-            .map(|font| fontdb::Source::Binary(Arc::new(font.into_owned())));
         Self {
-            fonts: FontSystem::new_with_fonts(bundled),
+            measurer: Measurer::new(),
             swash: SwashCache::new(),
             runs: Lru::new(MAX_RUNS),
-            widths: Lru::new(MAX_WIDTHS),
             atlas: Atlas::new(),
         }
     }
@@ -435,7 +576,13 @@ impl TextSystem {
         if let Some(run) = self.runs.get(hash, is) {
             return Arc::clone(run);
         }
-        let buffer = self.layout(text, face, size, line_height, shaping, None);
+        let buffer = layout(
+            &mut self.measurer.fonts,
+            text,
+            (face, size, line_height),
+            shaping,
+            None,
+        );
         let mut run = Run {
             glyphs: Vec::new(),
             baseline: 0.0,
@@ -465,53 +612,7 @@ impl TextSystem {
     /// How wide a run of `text` is in `face` at `size`, trailing spaces
     /// included.
     pub fn run_width(&mut self, text: &str, face: Face, size: f32) -> f32 {
-        // A closing bar keeps trailing spaces in the measured line.
-        self.line_width(&format!("{text}|"), face, size) - self.line_width("|", face, size)
-    }
-
-    /// How wide `text` is laid out on one line.
-    fn line_width(&mut self, text: &str, face: Face, size: f32) -> f32 {
-        let hash = hash_of(&(text, face, size.to_bits()));
-        let is = |key: &(Box<str>, Face, u32)| {
-            *key.0 == *text && (key.1, key.2) == (face, size.to_bits())
-        };
-        if let Some(width) = self.widths.get(hash, is) {
-            return *width;
-        }
-        let buffer = self.layout(
-            text,
-            face,
-            size,
-            size * LINE_EM,
-            Shaping::Advanced,
-            Some(Wrap::None),
-        );
-        let width = buffer
-            .layout_runs()
-            .fold(0.0_f32, |width, line| width.max(line.line_w));
-        self.widths
-            .put(hash, (text.into(), face, size.to_bits()), width);
-        width
-    }
-
-    fn layout(
-        &mut self,
-        text: &str,
-        face: Face,
-        size: f32,
-        line_height: f32,
-        shaping: Shaping,
-        wrap: Option<Wrap>,
-    ) -> Buffer {
-        let metrics = Metrics::new(size, line_height.max(f32::MIN_POSITIVE));
-        let mut buffer = Buffer::new(&mut self.fonts, metrics);
-        buffer.set_size(&mut self.fonts, Some(f32::INFINITY), Some(f32::INFINITY));
-        if let Some(wrap) = wrap {
-            buffer.set_wrap(&mut self.fonts, wrap);
-        }
-        buffer.set_text(&mut self.fonts, text, &face.attrs(), shaping, None);
-        buffer.shape_until_scroll(&mut self.fonts, false);
-        buffer
+        self.measurer.run_width(text, face, size)
     }
 
     /// The glyphs of `label` as quads, written at `at`.
@@ -572,7 +673,7 @@ impl TextSystem {
         }
         let slot = self
             .swash
-            .get_image_uncached(&mut self.fonts, key)
+            .get_image_uncached(&mut self.measurer.fonts, key)
             .and_then(|image| {
                 let pixels = match image.content {
                     SwashContent::Mask => Pixels::Mask(image.data),
@@ -598,7 +699,7 @@ impl TextSystem {
 }
 
 fn hash_of(key: &impl Hash) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     key.hash(&mut hasher);
     hasher.finish()
 }
@@ -614,16 +715,21 @@ pub fn with<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
 }
 
 /// How many cells `text` takes in the proportional face: what the
-/// terminal UI wraps chat prose to.
+/// terminal UI wraps chat prose to. The chat is laid out on several
+/// threads, so each measures with a measurer of its own, which has no
+/// atlas to keep.
 pub fn prose_cells(text: &str, modifier: Modifier) -> f32 {
     /// Size widths are measured at, large enough that rounding is lost
     const SIZE: f32 = 100.0;
+    thread_local! {
+        static MEASURER: RefCell<Measurer> = RefCell::new(Measurer::new());
+    }
     let face = Face {
         family: Family::Sans,
         bold: modifier.contains(Modifier::BOLD),
         italic: modifier.contains(Modifier::ITALIC),
     };
-    with(|text_system| text_system.run_width(text, face, theme::prose_size(SIZE)))
+    MEASURER.with_borrow_mut(|measurer| measurer.run_width(text, face, theme::prose_size(SIZE)))
         / theme::cell_size(SIZE).width
 }
 
@@ -721,6 +827,42 @@ mod tests {
     }
 
     #[test]
+    fn rows_are_copied_out_as_a_texture_of_the_atlas_lacks_them() {
+        let mut atlas = Atlas::new();
+        let stride = Atlas::WIDTH as usize * 4;
+        let all = atlas.take_rows(None);
+        assert_eq!((all.size, all.rows()), ((Atlas::WIDTH, 512), 0..512));
+        assert!(all.whole(), "a new texture gets every row");
+        let size = Some(atlas.size());
+        assert!(atlas.take_rows(size).rows().is_empty(), "nothing new");
+
+        atlas.shape(key(1), || Some(mask(10, 14, 200)));
+        let first = atlas.take_rows(size);
+        assert_eq!(first.rows(), 0..14);
+        assert_eq!(&first.pixels[..4], &[255, 255, 255, 200]);
+        assert_eq!(first.pixels.len(), 14 * stride);
+
+        // The frame with `first` was replaced before the texture took
+        // its rows, so the next one carries both.
+        atlas.shape(key(2), || Some(mask(10, 30, 9)));
+        let second = atlas.take_rows(size);
+        assert_eq!(second.rows(), 16..46);
+        let both = atlas.merge_rows(second, &first);
+        assert_eq!(both.rows(), 0..46);
+        assert_eq!(
+            &both.pixels[16 * stride..16 * stride + 4],
+            &[255, 255, 255, 9]
+        );
+
+        // Grown: every row again, whatever was missed before.
+        atlas.shape(key(3), || Some(mask(10, 600, 1)));
+        let grown = atlas.take_rows(size);
+        assert_eq!(grown.size, (Atlas::WIDTH, 1024));
+        assert!(grown.whole());
+        assert!(atlas.merge_rows(grown, &both).whole());
+    }
+
+    #[test]
     fn runs_are_shaped_once_and_glyphs_rasterized_once() {
         let mut text = TextSystem::new();
         let face = Face::mono(false);
@@ -803,5 +945,33 @@ mod tests {
         let spaced = prose_cells("illicit ", Modifier::empty());
         assert!(spaced > narrow + 0.2, "the space counts: {spaced}");
         assert!(prose_cells("mammoth", Modifier::BOLD) > wide);
+    }
+
+    #[test]
+    fn prose_is_as_wide_on_any_thread_and_as_drawn() {
+        const WORDS: [&str; 5] = ["illicit", "mammoth ", "naïve", "日本語", "Wi-Fi"];
+        let measure = || {
+            WORDS
+                .iter()
+                .map(|word| prose_cells(word, Modifier::ITALIC))
+                .collect::<Vec<f32>>()
+        };
+        let here = measure();
+        let there = std::thread::spawn(measure).join().expect("measured");
+        assert_eq!(here, there);
+
+        let face = Face {
+            family: Family::Sans,
+            bold: false,
+            italic: true,
+        };
+        let mut text = TextSystem::new();
+        let size = theme::prose_size(100.0);
+        let drawn = text.run_width(WORDS[1], face, size) / theme::cell_size(100.0).width;
+        assert!(
+            (drawn - here[1]).abs() < f32::EPSILON,
+            "{drawn} vs {}",
+            here[1]
+        );
     }
 }

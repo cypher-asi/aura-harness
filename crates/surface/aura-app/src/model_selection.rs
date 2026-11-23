@@ -5,8 +5,10 @@
 //! the user can run right now, a local model served by Ollama when
 //! nothing is signed in. `/login` unlocks the aura-router cloud models and
 //! `/login claude` / `/login chatgpt` unlock models billed to a linked
-//! plan. Every other model id names its route. Gate's pick, and so who is
-//! billed, is shown at the start of each turn and in the status line.
+//! plan. `/login openrouter` unlocks the `openrouter/<vendor>/<model>`
+//! models, billed to the user's OpenRouter credits. Every other model id
+//! names its route. Gate's pick, and so who is billed, is shown at the
+//! start of each turn and in the status line.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -14,9 +16,10 @@ use std::time::Duration;
 use aura_agent::AgentLoopConfig;
 use aura_auth::{AuthSummary, CredentialResolver, ProviderKind};
 use aura_gate::route::Candidate;
+use aura_model::model_alias::{resolve_alias, resolve_exact, AliasCandidate};
 use aura_model::model_catalog::{
-    self, backend_for, infer_tier, local_model_name, LocalServerStatus, ModelBackend, ModelOption,
-    GATE_MODEL_ID,
+    self, backend_for, infer_tier, local_model_name, LiveModelInfo, LivePrice, LocalServerStatus,
+    ModelBackend, ModelOption, ModelTier, GATE_MODEL_ID, OPENROUTER_PREFIX,
 };
 use aura_model::ThinkingEffort;
 use aura_ui_terminal::events::ModelOptionView;
@@ -155,6 +158,23 @@ impl ModelSelection {
         )
     }
 
+    /// Every model the user can run now on any route, cheapest first:
+    /// unlike [`Self::gate_candidates`], each route of a model is kept and
+    /// OpenRouter models without a curated price are too, so a benchmark
+    /// arm can name any of them.
+    pub fn runnable_models(&self) -> Vec<Candidate> {
+        let catalog = model_catalog::catalog_with_plans(
+            &self.default_local,
+            self.installed_local(),
+            &self.plan_models,
+        );
+        aura_gate::route::runnable(
+            &catalog,
+            |provider| self.auth.can_use(provider),
+            |id| self.dropped.contains(id),
+        )
+    }
+
     /// Where Gate expects the next turn to go before its prompt is
     /// classified (its default for most categories), `None` when a model
     /// is pinned or nothing can run (then the turn goes to the default
@@ -216,50 +236,134 @@ impl ModelSelection {
         usable(&self.auth, id)
     }
 
-    /// Reload the model lists of linked plans. Returns a user-facing
-    /// note when a linked plan's list could not be loaded; the list saved
-    /// when it last loaded is used then, else the built-in one.
+    /// Reload the model lists of the linked Claude plan and OpenRouter
+    /// account, concurrently. Returns a user-facing note (one line per
+    /// provider) when a linked provider's list could not be loaded; the
+    /// list saved when it last loaded is used then, else the built-in one.
     pub async fn refresh_plans(&mut self, resolver: &dyn CredentialResolver) -> Option<String> {
-        if !self.auth.can_use(ProviderKind::Claude) {
-            self.plan_models.clear();
-            return None;
-        }
-        let listed = aura_model::plan_models::fetch_claude_models(resolver).await;
-        self.plans_listed(listed.map_err(|e| e.to_string()))
+        let claude = self.auth.can_use(ProviderKind::Claude);
+        let openrouter = self.auth.can_use(ProviderKind::OpenRouter);
+        let (claude_listed, openrouter_listed) = tokio::join!(
+            async {
+                if claude {
+                    let listed = aura_model::plan_models::fetch_claude_models(resolver).await;
+                    Some(listed.map_err(|e| e.to_string()))
+                } else {
+                    None
+                }
+            },
+            async {
+                if openrouter {
+                    let listed = aura_model::plan_models::fetch_openrouter_models(resolver).await;
+                    Some(listed.map_err(|e| e.to_string()))
+                } else {
+                    None
+                }
+            },
+        );
+        let claude_note = match claude_listed {
+            Some(listed) => self.plans_listed(listed),
+            None => {
+                self.set_backend_models(ModelBackend::Claude, Vec::new());
+                None
+            }
+        };
+        let openrouter_note = match openrouter_listed {
+            Some(listed) => self.openrouter_listed(listed),
+            None => {
+                self.set_backend_models(ModelBackend::OpenRouter, Vec::new());
+                None
+            }
+        };
+        let notes: Vec<String> = [claude_note, openrouter_note]
+            .into_iter()
+            .flatten()
+            .collect();
+        (!notes.is_empty()).then(|| notes.join("\n"))
+    }
+
+    /// Replace the live models of `backend` with `models`; an empty list
+    /// means the built-in one.
+    fn set_backend_models(&mut self, backend: ModelBackend, models: Vec<ModelOption>) {
+        self.plan_models.retain(|m| m.backend != backend);
+        self.plan_models.extend(models);
+    }
+
+    /// Path beside `tui.json` named `file`, `None` without a prefs path.
+    fn saved_path(&self, file: &str) -> Option<PathBuf> {
+        self.prefs_path
+            .as_ref()
+            .map(|prefs| prefs.with_file_name(file))
     }
 
     /// Take in the Claude plan's model list as `listed` just now, or why
-    /// it could not be. Returns the note of [`Self::refresh_plans`].
+    /// it could not be. Returns the Claude note of [`Self::refresh_plans`].
     fn plans_listed(&mut self, listed: Result<Vec<ModelOption>, String>) -> Option<String> {
-        let saved_at = self
-            .prefs_path
-            .as_ref()
-            .map(|prefs| prefs.with_file_name(PLAN_MODELS_FILE));
+        let saved_at = self.saved_path(PLAN_MODELS_FILE);
         match listed {
             Ok(models) => {
                 if let Some(path) = &saved_at {
                     save_plan_models(path, &models);
                 }
-                self.plan_models = models;
+                self.set_backend_models(ModelBackend::Claude, models);
                 None
             }
             Err(problem) => {
                 warn!(error = %problem, "Failed to list Claude plan models");
-                self.plan_models = saved_at
+                let saved = saved_at
                     .as_deref()
                     .map(load_plan_models)
                     .unwrap_or_default();
-                let shown = if self.plan_models.is_empty() {
-                    "showing the built-in list"
-                } else {
-                    "showing the list saved when it last loaded"
-                };
+                let shown = shown_list(saved.is_empty());
+                self.set_backend_models(ModelBackend::Claude, saved);
                 Some(format!(
                     "Couldn't load your Claude plan's model list ({problem}); {shown}. Any \
                      model works with /model claude/<model-id>."
                 ))
             }
         }
+    }
+
+    /// Take in the OpenRouter account's model list as `listed` just now,
+    /// or why it could not be, and publish the limits and prices it gives.
+    /// Returns the OpenRouter note of [`Self::refresh_plans`].
+    fn openrouter_listed(
+        &mut self,
+        listed: Result<Vec<(ModelOption, LiveModelInfo)>, String>,
+    ) -> Option<String> {
+        let saved_at = self.saved_path(OPENROUTER_MODELS_FILE);
+        let (entries, note) = match listed {
+            Ok(entries) => {
+                if let Some(path) = &saved_at {
+                    save_openrouter_models(path, &entries);
+                }
+                (entries, None)
+            }
+            Err(problem) => {
+                warn!(error = %problem, "Failed to list OpenRouter models");
+                let saved = saved_at
+                    .as_deref()
+                    .map(load_openrouter_models)
+                    .unwrap_or_default();
+                let shown = shown_list(saved.is_empty());
+                let note = format!(
+                    "Couldn't load your OpenRouter account's model list ({problem}); {shown}. \
+                     Any model works with /model openrouter/<vendor>/<model>."
+                );
+                (saved, Some(note))
+            }
+        };
+        if note.is_none() || !entries.is_empty() {
+            model_catalog::replace_live_models(
+                ModelBackend::OpenRouter,
+                entries
+                    .iter()
+                    .map(|(option, info)| (option.id.clone(), *info)),
+            );
+        }
+        let models = entries.into_iter().map(|(option, _)| option).collect();
+        self.set_backend_models(ModelBackend::OpenRouter, models);
+        note
     }
 
     /// Re-probe the local model server.
@@ -306,7 +410,7 @@ impl ModelSelection {
         std::iter::once(gate)
             .chain(options.into_iter().map(|o| ModelOptionView {
                 local: o.backend == ModelBackend::Local,
-                group: group_heading(o.backend).to_string(),
+                group: group_heading(o.backend, &o.id),
                 provider: o.required_provider().map(|p| p.id().to_string()),
                 available: self.usable(&o.id),
                 context_window: Some(aura_engine::model_context::context_window_for_model(&o.id)),
@@ -372,17 +476,64 @@ impl ModelSelection {
     }
 
     /// Switch to `id` for this process only, leaving the saved choice
-    /// alone. Returns a user-facing problem when the switch is refused.
+    /// alone. `id` may be a short alias (`opus`, `deepseek`), which picks
+    /// the model [`Self::resolve`] names; a full model name (see
+    /// [`may_be_alias`]) is used as given unless it is a listed label.
+    /// Returns a user-facing problem when the switch is refused.
     pub fn use_for_run(&mut self, config: &mut AgentLoopConfig, id: &str) -> Result<(), String> {
-        let id = id.trim();
-        if id.is_empty() {
+        let typed = id.trim();
+        if typed.is_empty() {
             return Err("Model id is empty".to_string());
         }
-        if !self.usable(id) {
-            return Err(unusable_reason(id));
+        let id = self.resolve(typed).unwrap_or_else(|| typed.to_string());
+        if !self.usable(&id) {
+            let reason = unusable_reason(&id);
+            return Err(if id.eq_ignore_ascii_case(typed) {
+                reason
+            } else {
+                format!("\"{typed}\" matches {id}: {reason}")
+            });
         }
-        self.apply(config, id);
+        self.apply(config, &id);
         Ok(())
+    }
+
+    /// The model id `query` names among Gate and the listed models: an
+    /// exact id, else the best-ranked model with that exact label, else,
+    /// when [`may_be_alias`] holds, the best match for a short alias
+    /// (`opus`, `sonnet 4.5`, `openrouter opus`), preferring models the
+    /// current sign-ins can run. `None` when nothing matches that way
+    /// (an unlisted explicit id, a full model name such as
+    /// `claude-opus-4-6`, a name that matches nothing); callers then use
+    /// `query` as the id.
+    pub fn resolve(&self, query: &str) -> Option<String> {
+        let catalog = model_catalog::catalog_with_plans(
+            &self.default_local,
+            self.installed_local(),
+            &self.plan_models,
+        );
+        // Gate first, so its id and label match exactly; the resolver
+        // never picks it for a fuzzy query, so its tier does not matter.
+        let gate = AliasCandidate {
+            id: GATE_MODEL_ID,
+            label: GATE_LABEL,
+            tier: ModelTier::Frontier,
+            available: true,
+        };
+        let candidates: Vec<AliasCandidate<'_>> = std::iter::once(gate)
+            .chain(catalog.iter().map(|option| AliasCandidate {
+                id: &option.id,
+                label: &option.label,
+                tier: option.tier,
+                available: self.usable(&option.id),
+            }))
+            .collect();
+        let resolved = if may_be_alias(query) {
+            resolve_alias(query, &candidates, &self.current)
+        } else {
+            resolve_exact(query, &candidates, &self.current)
+        };
+        resolved.map(str::to_string)
     }
 
     /// Switch to Gate when the current model needs a sign-in the user no
@@ -509,7 +660,10 @@ impl ModelLimits {
                 config.stream_timeout = LOCAL_STREAM_TIMEOUT;
                 config.stream_event_timeout = LOCAL_STREAM_TIMEOUT;
             }
-            ModelBackend::Router | ModelBackend::Claude | ModelBackend::Chatgpt => {
+            ModelBackend::Router
+            | ModelBackend::Claude
+            | ModelBackend::Chatgpt
+            | ModelBackend::OpenRouter => {
                 config.stream_timeout = limits.stream_timeout;
                 config.stream_event_timeout = limits.stream_event_timeout;
             }
@@ -553,6 +707,33 @@ fn resolve_startup_model(
     GATE_MODEL_ID.to_string()
 }
 
+/// Whether `model`, as typed for `--model` or `/model`, may be a short
+/// alias that [`ModelSelection::resolve`] matches against the listed
+/// models. Not for `gate`, an explicit routed id (one with `/`), or a
+/// full model name, which is used as given: one word starting with
+/// `aura-`, `claude-` or `gpt-` (any case) and holding a digit
+/// (`claude-opus-4-6`, `aura-claude-opus-4-7`, `gpt-5.4`). Callers load
+/// the live model lists before resolving an alias.
+pub fn may_be_alias(model: &str) -> bool {
+    let model = model.trim();
+    !model.is_empty()
+        && !model.contains('/')
+        && !model.eq_ignore_ascii_case(GATE_MODEL_ID)
+        && !is_full_model_name(model)
+}
+
+/// Whether `model` is a full model name rather than an alias: see
+/// [`may_be_alias`].
+fn is_full_model_name(model: &str) -> bool {
+    const FULL_NAME_PREFIXES: [&str; 3] = ["aura-", "claude-", "gpt-"];
+    let has_prefix = FULL_NAME_PREFIXES.iter().any(|prefix| {
+        model
+            .get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    });
+    has_prefix && !model.contains(char::is_whitespace) && model.bytes().any(|b| b.is_ascii_digit())
+}
+
 fn usable(auth: &AuthSummary, id: &str) -> bool {
     id == GATE_MODEL_ID
         || backend_for(id)
@@ -576,6 +757,10 @@ fn unusable_reason(id: &str) -> String {
         Some(ProviderKind::Zos) | None => {
             format!("{id} is a cloud model — use /login first, or pick a local model")
         }
+        Some(ProviderKind::OpenRouter) => format!(
+            "{id} runs on your OpenRouter account — use /login openrouter first, or pick \
+             another model"
+        ),
         Some(provider) => format!(
             "{id} runs on your {} plan — use /login {} first, or pick another model",
             provider.label(),
@@ -584,12 +769,33 @@ fn unusable_reason(id: &str) -> String {
     }
 }
 
-const fn group_heading(backend: ModelBackend) -> &'static str {
+/// Selector heading for the model `id` served by `backend`; OpenRouter
+/// models are grouped by vendor (`OpenRouter · anthropic`).
+fn group_heading(backend: ModelBackend, id: &str) -> String {
     match backend {
-        ModelBackend::Local => "Local (no login)",
-        ModelBackend::Router => "Cloud (aura-router)",
-        ModelBackend::Claude => "Claude plan (direct)",
-        ModelBackend::Chatgpt => "ChatGPT plan (direct)",
+        ModelBackend::Local => "Local (no login)".to_string(),
+        ModelBackend::Router => "Cloud (aura-router)".to_string(),
+        ModelBackend::Claude => "Claude plan (direct)".to_string(),
+        ModelBackend::Chatgpt => "ChatGPT plan (direct)".to_string(),
+        ModelBackend::OpenRouter => {
+            let vendor = id
+                .strip_prefix(OPENROUTER_PREFIX)
+                .and_then(|rest| rest.split('/').next())
+                .filter(|vendor| !vendor.is_empty());
+            match vendor {
+                Some(vendor) => format!("OpenRouter · {vendor}"),
+                None => "OpenRouter".to_string(),
+            }
+        }
+    }
+}
+
+/// How a note describes the list shown after a listing failed.
+const fn shown_list(nothing_saved: bool) -> &'static str {
+    if nothing_saved {
+        "showing the built-in list"
+    } else {
+        "showing the list saved when it last loaded"
     }
 }
 
@@ -648,6 +854,90 @@ fn load_plan_models(path: &std::path::Path) -> Vec<ModelOption> {
             installed: true,
             id: m.id,
             label: m.label,
+        })
+        .collect()
+}
+
+/// Beside `tui.json`: the OpenRouter account's model list as it last
+/// loaded, with the limits and prices it gave, used when it can't be
+/// loaded.
+const OPENROUTER_MODELS_FILE: &str = "openrouter_models.json";
+
+/// An OpenRouter model as saved in [`OPENROUTER_MODELS_FILE`].
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedOpenRouterModel {
+    id: String,
+    label: String,
+    #[serde(default)]
+    context_window: Option<u64>,
+    #[serde(default)]
+    max_output: Option<u32>,
+    #[serde(default)]
+    price: Option<SavedPrice>,
+}
+
+/// A [`LivePrice`] as saved, in USD per million tokens.
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedPrice {
+    input: f64,
+    output: f64,
+    cache_write: f64,
+    cache_read: f64,
+}
+
+fn save_openrouter_models(path: &std::path::Path, entries: &[(ModelOption, LiveModelInfo)]) {
+    let saved: Vec<SavedOpenRouterModel> = entries
+        .iter()
+        .map(|(option, info)| SavedOpenRouterModel {
+            id: option.id.clone(),
+            label: option.label.clone(),
+            context_window: info.context_window,
+            max_output: info.max_output,
+            price: info.price.map(|p| SavedPrice {
+                input: p.input,
+                output: p.output,
+                cache_write: p.cache_write,
+                cache_read: p.cache_read,
+            }),
+        })
+        .collect();
+    let written = serde_json::to_vec_pretty(&saved)
+        .map_err(std::io::Error::other)
+        .and_then(|bytes| std::fs::write(path, bytes));
+    if let Err(e) = written {
+        warn!(path = %path.display(), error = %e, "Could not save the OpenRouter model list");
+    }
+}
+
+/// The OpenRouter models saved at `path`; none when there is no readable
+/// list.
+fn load_openrouter_models(path: &std::path::Path) -> Vec<(ModelOption, LiveModelInfo)> {
+    let saved: Vec<SavedOpenRouterModel> = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    saved
+        .into_iter()
+        .filter(|m| backend_for(&m.id) == ModelBackend::OpenRouter)
+        .map(|m| {
+            let info = LiveModelInfo {
+                context_window: m.context_window,
+                max_output: m.max_output,
+                price: m.price.map(|p| LivePrice {
+                    input: p.input,
+                    output: p.output,
+                    cache_write: p.cache_write,
+                    cache_read: p.cache_read,
+                }),
+            };
+            let option = ModelOption {
+                tier: infer_tier(&m.id),
+                backend: ModelBackend::OpenRouter,
+                installed: true,
+                id: m.id,
+                label: m.label,
+            };
+            (option, info)
         })
         .collect()
 }
@@ -770,6 +1060,111 @@ mod tests {
         assert!(note.contains("saved when it last loaded"), "{note}");
         assert_eq!(ids(&later), live.map(|m| m.id), "not the built-in list");
         assert_eq!(later.classifier_model(), "claude/claude-haiku-5-5");
+    }
+
+    #[test]
+    fn an_openrouter_list_that_fails_to_load_falls_back_to_the_one_saved_last() {
+        let home = tempfile::tempdir().unwrap();
+        let openrouter = || signed_in(None, &[ProviderKind::OpenRouter]);
+        // The selector's entries, not Gate's candidates: Gate leaves out
+        // OpenRouter models without a curated price, as these are.
+        let ids = |selection: &ModelSelection| -> Vec<String> {
+            selection
+                .options()
+                .into_iter()
+                .filter(|o| backend_for(&o.id) == ModelBackend::OpenRouter)
+                .map(|o| o.id)
+                .collect()
+        };
+        let live: Vec<(ModelOption, LiveModelInfo)> = [
+            "openrouter/acme/saved-test-fast",
+            "openrouter/acme/saved-test-pro",
+        ]
+        .into_iter()
+        .map(|id| {
+            let option = ModelOption {
+                id: id.to_string(),
+                label: id.to_string(),
+                backend: ModelBackend::OpenRouter,
+                installed: true,
+                tier: infer_tier(id),
+            };
+            let info = LiveModelInfo {
+                context_window: Some(123_456),
+                max_output: Some(8_192),
+                price: Some(LivePrice {
+                    input: 1.0,
+                    output: 2.0,
+                    cache_write: 1.0,
+                    cache_read: 0.5,
+                }),
+            };
+            (option, info)
+        })
+        .collect();
+        let live_ids: Vec<String> = live.iter().map(|(o, _)| o.id.clone()).collect();
+
+        let (mut selection, _) = selection_on(openrouter(), GATE_MODEL_ID);
+        selection.prefs_path = Some(home.path().join("tui.json"));
+        assert_eq!(selection.openrouter_listed(Ok(live)), None);
+        assert_eq!(ids(&selection), live_ids);
+        assert!(home.path().join(OPENROUTER_MODELS_FILE).exists());
+
+        let (mut later, _) = selection_on(openrouter(), GATE_MODEL_ID);
+        later.prefs_path = Some(home.path().join("tui.json"));
+        let note = later
+            .openrouter_listed(Err("timed out".to_string()))
+            .unwrap();
+        assert!(note.contains("timed out"), "{note}");
+        assert!(note.contains("OpenRouter"), "{note}");
+        assert!(note.contains("saved when it last loaded"), "{note}");
+        assert!(
+            note.contains("/model openrouter/<vendor>/<model>"),
+            "{note}"
+        );
+        assert_eq!(ids(&later), live_ids, "not the built-in list");
+        let info = model_catalog::live_model_info("openrouter/acme/saved-test-pro")
+            .expect("saved limits published");
+        assert_eq!(info.context_window, Some(123_456));
+        assert_eq!(info.max_output, Some(8_192));
+        assert_eq!(info.price.map(|p| p.output), Some(2.0));
+
+        let (mut fresh, _) = selection_on(openrouter(), GATE_MODEL_ID);
+        let note = fresh.openrouter_listed(Err("offline".to_string())).unwrap();
+        assert!(note.contains("built-in list"), "{note}");
+    }
+
+    #[test]
+    fn openrouter_options_are_grouped_by_vendor() {
+        assert_eq!(
+            group_heading(
+                ModelBackend::OpenRouter,
+                "openrouter/anthropic/claude-sonnet-4.6"
+            ),
+            "OpenRouter · anthropic"
+        );
+        let (selection, _) = selection_on(signed_in(None, &[ProviderKind::OpenRouter]), LOCAL);
+        let options = selection.options();
+        let entry = options
+            .iter()
+            .find(|o| o.id.starts_with("openrouter/anthropic/"))
+            .expect("curated OpenRouter anthropic model listed");
+        assert_eq!(entry.group, "OpenRouter · anthropic");
+    }
+
+    #[test]
+    fn openrouter_models_need_the_openrouter_sign_in() {
+        let id = "openrouter/anthropic/claude-sonnet-4.6";
+        assert!(!usable(
+            &signed_in(Some("alice"), &[ProviderKind::Claude]),
+            id
+        ));
+        assert!(usable(&signed_in(None, &[ProviderKind::OpenRouter]), id));
+
+        let (mut selection, mut config) = selection(Some("alice"));
+        let err = selection.select(&mut config, id).unwrap_err();
+        assert!(err.contains("/login openrouter"), "{err}");
+        assert!(err.contains("OpenRouter account"), "{err}");
     }
 
     #[test]
@@ -1009,5 +1404,153 @@ mod tests {
             .expect("current model listed");
         assert!(entry.local);
         assert!(!entry.installed);
+    }
+
+    #[test]
+    fn opus_alias_selects_the_claude_plan_opus_and_saves_that_id() {
+        let home = tempfile::tempdir().unwrap();
+        let (mut selection, mut config) =
+            selection_on(signed_in(None, &[ProviderKind::Claude]), GATE_MODEL_ID);
+        selection.prefs_path = Some(home.path().join("tui.json"));
+
+        selection
+            .select(&mut config, "opus")
+            .expect("Claude plan Opus");
+
+        assert_eq!(selection.current(), "claude/claude-opus-4-7");
+        assert_eq!(config.model, "claude/claude-opus-4-7");
+        let prefs = load_prefs(&home.path().join("tui.json")).expect("saved");
+        assert_eq!(prefs.model.as_deref(), Some("claude/claude-opus-4-7"));
+    }
+
+    #[test]
+    fn sonnet_alias_selects_the_router_sonnet_when_signed_in_to_zos_only() {
+        let (mut selection, mut config) = selection(Some("alice"));
+        selection
+            .select(&mut config, "sonnet")
+            .expect("router Sonnet");
+        assert_eq!(selection.current(), "aura-claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn guest_alias_for_a_cloud_model_is_refused_with_its_sign_in() {
+        let (mut selection, mut config) = selection(None);
+        let err = selection.select(&mut config, "opus").unwrap_err();
+        assert!(err.contains("/login"), "{err}");
+        assert!(err.contains("\"opus\""), "{err}");
+        // One `/login` unlocks the router's Opus, so the hint names it
+        // rather than a plan's.
+        assert!(
+            err.starts_with("\"opus\" matches aura-claude-opus-4-7: "),
+            "{err}"
+        );
+        assert_eq!(selection.current(), LOCAL);
+        assert_eq!(config.model, LOCAL);
+    }
+
+    #[test]
+    fn a_full_model_name_is_selected_as_given() {
+        for typed in [
+            "claude-opus-4-6",
+            "aura-claude-opus-4-6",
+            "Claude-Sonnet-4-5-20250929",
+        ] {
+            let (mut selection, mut config) = selection(Some("alice"));
+            assert_eq!(selection.resolve(typed), None, "{typed}");
+            selection
+                .select(&mut config, typed)
+                .expect("router ids need only the zOS login");
+            assert_eq!(selection.current(), typed);
+            assert_eq!(config.model, typed);
+        }
+    }
+
+    #[test]
+    fn a_listed_full_model_name_resolves_to_itself() {
+        let (selection, _config) = selection(Some("alice"));
+        assert_eq!(
+            selection.resolve("AURA-CLAUDE-OPUS-4-7").as_deref(),
+            Some("aura-claude-opus-4-7")
+        );
+    }
+
+    #[test]
+    fn an_explicit_unlisted_id_is_selected_as_given() {
+        let (mut selection, mut config) =
+            selection_on(signed_in(None, &[ProviderKind::Claude]), GATE_MODEL_ID);
+        selection
+            .select(&mut config, "claude/claude-opus-4-1")
+            .expect("any Claude plan model");
+        assert_eq!(selection.current(), "claude/claude-opus-4-1");
+    }
+
+    #[test]
+    fn gate_is_selected_by_its_id_and_label() {
+        for typed in ["gate", "Gate"] {
+            let (mut selection, mut config) = selection(Some("alice"));
+            selection.select(&mut config, typed).expect("gate");
+            assert!(selection.is_gate(), "{typed}");
+        }
+    }
+
+    #[test]
+    fn unknown_short_name_is_kept_as_a_router_id() {
+        let (mut selection, mut config) = selection(Some("alice"));
+        assert_eq!(selection.resolve("zzz-unknown"), None);
+        selection
+            .select(&mut config, "zzz-unknown")
+            .expect("router ids need only the zOS login");
+        assert_eq!(selection.current(), "zzz-unknown");
+    }
+
+    #[test]
+    fn only_short_names_other_than_gate_may_be_aliases() {
+        for (typed, alias) in [
+            ("opus", true),
+            ("sonnet 4.5", true),
+            ("claude opus", true),
+            ("opus-4.6", true),
+            ("gpt", true),
+            ("claude-opus", true),
+            ("aura-claude-opus-4-7", false),
+            ("claude-opus-4-6", false),
+            ("gpt-5.4", false),
+            ("GPT-5.4", false),
+            ("gate", false),
+            (" Gate ", false),
+            ("claude/claude-opus-4-7", false),
+            ("local/qwen3:4b", false),
+            ("  ", false),
+        ] {
+            assert_eq!(may_be_alias(typed), alias, "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn deepseek_alias_picks_the_best_live_openrouter_deepseek() {
+        let (mut selection, mut config) =
+            selection_on(signed_in(None, &[ProviderKind::OpenRouter]), GATE_MODEL_ID);
+        let live = [
+            "openrouter/deepseek/deepseek-chat-v3.1",
+            "openrouter/deepseek/deepseek-v3.2",
+            "openrouter/deepseek/deepseek-v3.2-exp",
+            "openrouter/deepseek/deepseek-r1",
+            "openrouter/anthropic/claude-opus-4.7",
+        ]
+        .map(|id| ModelOption {
+            id: id.to_string(),
+            label: id.to_string(),
+            backend: ModelBackend::OpenRouter,
+            installed: true,
+            tier: infer_tier(id),
+        });
+        // Set directly rather than through `openrouter_listed`, which
+        // publishes process-wide limits other tests read.
+        selection.set_backend_models(ModelBackend::OpenRouter, live.to_vec());
+
+        selection
+            .select(&mut config, "deepseek")
+            .expect("OpenRouter DeepSeek");
+        assert_eq!(selection.current(), "openrouter/deepseek/deepseek-v3.2");
     }
 }

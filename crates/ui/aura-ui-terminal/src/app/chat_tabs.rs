@@ -169,20 +169,9 @@ impl App {
     /// screen was left on. Unlike [`Self::show_chat_tab`], it neither
     /// scrolls the chat to its bottom nor moves the timeline's selection,
     /// and it asks for nothing: the switch asks for what the tab shows of
-    /// the new agent. Text typed on the input line, which every agent
-    /// shares, keeps its meaning across the switch: a message is not run
-    /// as a shell command, nor a command sent to the model.
+    /// the new agent. The input holds the draft the agent was left with,
+    /// typed under this tab, so Enter does with it what it did then.
     pub(super) fn restore_chat_tab(&mut self, tab: ChatTab) {
-        // Text typed keeps what Enter does with it: under a typed message an
-        // agent left on TERMINAL comes back on CHAT, and under a typed command
-        // the terminal stays.
-        let tab = if self.input.is_empty() || (tab == ChatTab::Terminal) == self.terminal_mode {
-            tab
-        } else if self.terminal_mode {
-            ChatTab::Terminal
-        } else {
-            ChatTab::Chat
-        };
         if tab == self.chat_tab() {
             return;
         }
@@ -226,6 +215,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::AppState;
     use crate::events::{AgentSummary, UiCommand, UiEvent};
     use crossterm::event::{KeyCode, KeyEvent};
     use tokio::sync::mpsc;
@@ -406,18 +396,23 @@ mod tests {
         app.open_log_of("bb".to_string());
         let sent: Vec<UiEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         assert!(
-            matches!(sent.as_slice(), [UiEvent::SelectAgent(id)] if id == "bb"),
-            "asks for the switch to bb, sent {sent:?}"
+            matches!(
+                sent.as_slice(),
+                [UiEvent::SelectAgent(id), UiEvent::Log { agent_id, .. }]
+                    if id == "bb" && agent_id == "bb"
+            ),
+            "asks for the switch to bb, then its log, sent {sent:?}"
         );
-        assert_eq!(app.chat_tab(), ChatTab::Chat, "until the switch lands");
-
-        switch_to(&mut app, "bb");
         assert_eq!(
             app.chat_tab(),
             ChatTab::Log,
-            "not the TERMINAL bb was left on"
+            "at once, not the TERMINAL bb was left on"
         );
-        assert_eq!(requests(&mut rx), ["log bb"]);
+
+        // The session's answer changes nothing more.
+        switch_to(&mut app, "bb");
+        assert_eq!(app.chat_tab(), ChatTab::Log);
+        assert!(requests(&mut rx).is_empty());
 
         switch_to(&mut app, "aa");
         assert_eq!(app.chat_tab(), ChatTab::Chat);
@@ -440,73 +435,92 @@ mod tests {
     }
 
     #[test]
-    fn typed_text_keeps_what_enter_does_across_a_switch() {
-        // A message typed is not run as a shell command: bb, left on
-        // TERMINAL, comes back on CHAT.
+    fn each_agent_gets_back_the_draft_it_was_left_with() {
         let (mut app, _rx) = two_agents();
-        switch_to(&mut app, "bb");
-        app.show_chat_tab(ChatTab::Terminal);
-        switch_to(&mut app, "aa");
-        assert_eq!(app.chat_tab(), ChatTab::Chat);
-        type_text(&mut app, "hi");
-        switch_to(&mut app, "bb");
-        assert_eq!(
-            app.chat_tab(),
-            ChatTab::Chat,
-            "not the TERMINAL bb was left on"
-        );
-        assert!(!app.input_is_command(), "Enter sends the line as a message");
-        assert_eq!(app.input(), "hi");
+        type_text(&mut app, "hello there");
+        app.cursor_pos = 5;
 
-        // A command typed is not sent to the model: the terminal stays.
-        let (mut app, _rx) = two_agents();
         switch_to(&mut app, "bb");
-        app.show_chat_tab(ChatTab::Graph);
+        assert_eq!(app.input(), "", "aa's draft does not carry over to bb");
+        assert_eq!(app.cursor_pos, 0);
+        type_text(&mut app, "for bb");
+
         switch_to(&mut app, "aa");
+        assert_eq!(app.input(), "hello there");
+        assert_eq!(app.cursor_pos, 5, "the cursor is where it was left");
+
+        switch_to(&mut app, "bb");
+        assert_eq!(app.input(), "for bb");
+
+        // The agent on screen sent again keeps what is typed.
+        switch_to(&mut app, "bb");
+        assert_eq!(app.input(), "for bb");
+
+        // A draft cleared before leaving stays cleared.
+        app.input.clear();
+        app.cursor_pos = 0;
+        switch_to(&mut app, "aa");
+        switch_to(&mut app, "bb");
+        assert_eq!(app.input(), "");
+    }
+
+    #[test]
+    fn a_draft_comes_back_with_the_tab_it_was_typed_on() {
+        // A command typed on TERMINAL comes back as a command, whatever
+        // the other agent's tab.
+        let (mut app, _rx) = two_agents();
         app.show_chat_tab(ChatTab::Terminal);
         type_text(&mut app, "ls");
         switch_to(&mut app, "bb");
-        assert_eq!(
-            app.chat_tab(),
-            ChatTab::Terminal,
-            "not the GRAPH bb was left on"
-        );
+        assert_eq!(app.chat_tab(), ChatTab::Chat, "bb was never shown");
+        assert!(!app.input_is_command());
+        draft(&mut app, "hi");
+        switch_to(&mut app, "aa");
+        assert_eq!(app.chat_tab(), ChatTab::Terminal);
         assert!(app.input_is_command(), "Enter runs the line as a command");
         assert_eq!(app.input(), "ls");
 
-        // With nothing typed, the agent comes back on the tab it was left on.
-        let (mut app, _rx) = two_agents();
+        // And bb's message comes back as a message.
         switch_to(&mut app, "bb");
-        app.show_chat_tab(ChatTab::Terminal);
-        switch_to(&mut app, "aa");
         assert_eq!(app.chat_tab(), ChatTab::Chat);
-        assert!(app.input().is_empty());
-        switch_to(&mut app, "bb");
-        assert_eq!(app.chat_tab(), ChatTab::Terminal);
+        assert!(!app.input_is_command(), "Enter sends the line as a message");
+        assert_eq!(app.input(), "hi");
 
-        // A typed message keeps any tab where Enter still sends it.
+        // A message typed on a tab where Enter sends it keeps that tab.
         for saved in [ChatTab::Graph, ChatTab::Bench, ChatTab::Log] {
             let (mut app, _rx) = two_agents();
             switch_to(&mut app, "bb");
             app.show_chat_tab(saved);
-            switch_to(&mut app, "aa");
             draft(&mut app, "hi");
-            switch_to(&mut app, "bb");
-            assert_eq!(app.chat_tab(), saved, "a message, bb left on {saved:?}");
-            assert!(!app.input_is_command());
-        }
-
-        // A message typed on GRAPH or LOG is not run as a command either.
-        for typed_on in [ChatTab::Graph, ChatTab::Log] {
-            let (mut app, _rx) = two_agents();
-            switch_to(&mut app, "bb");
+            switch_to(&mut app, "aa");
             app.show_chat_tab(ChatTab::Terminal);
-            switch_to(&mut app, "aa");
-            app.show_chat_tab(typed_on);
-            draft(&mut app, "hi");
             switch_to(&mut app, "bb");
-            assert_eq!(app.chat_tab(), ChatTab::Chat, "typed on {typed_on:?}");
+            assert_eq!(app.chat_tab(), saved, "bb left on {saved:?}");
             assert!(!app.input_is_command());
+            assert_eq!(app.input(), "hi");
         }
+    }
+
+    #[test]
+    fn a_login_prompt_keeps_its_answer_across_a_switch() {
+        let (mut app, _rx) = two_agents();
+        type_text(&mut app, "for aa");
+        switch_to(&mut app, "bb");
+        type_text(&mut app, "for bb");
+        app.start_login();
+        type_text(&mut app, "me@x.io");
+
+        switch_to(&mut app, "aa");
+        assert_eq!(app.input(), "me@x.io", "the prompt's answer stays");
+        assert_eq!(app.state, AppState::LoginEmail);
+
+        // aa's draft waits for a switch made outside the prompt; the
+        // prompt, once answered, leaves the input empty.
+        app.state = AppState::Idle;
+        app.input.clear();
+        app.cursor_pos = 0;
+        switch_to(&mut app, "bb");
+        switch_to(&mut app, "aa");
+        assert_eq!(app.input(), "for aa");
     }
 }

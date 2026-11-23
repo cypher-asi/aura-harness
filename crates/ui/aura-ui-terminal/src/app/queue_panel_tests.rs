@@ -655,5 +655,11 @@ fn switching_agents_cancels_an_edit() {
     app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
 
     assert!(!app.editing_queued());
-    assert_eq!(app.input(), "draft");
+    assert_eq!(app.input(), "", "the draft stays with aa");
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    assert_eq!(
+        app.input(),
+        "draft",
+        "aa gets back the draft the edit set aside, not the queued text"
+    );
 }

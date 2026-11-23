@@ -48,9 +48,14 @@ use rocksdb::{
     BlockBasedOptions, BoundColumnFamily, Cache, ColumnFamilyDescriptor, DBCompressionType,
     DBWithThreadMode, Direction, IteratorMode, MultiThreaded, Options, WriteBatch, WriteOptions,
 };
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tracing::{debug, instrument, warn};
+
+/// How many locks record appends are spread over. An agent always takes
+/// the same one, so different agents mostly commit at once.
+const APPEND_SHARDS: u64 = 64;
 
 /// `RocksDB`-based store implementation.
 pub struct RocksStore {
@@ -71,7 +76,12 @@ pub struct RocksStore {
     /// not covered by that claim. Holding this lock across the
     /// check+commit turns the only observable concurrency failure into
     /// a clean [`StoreError::SequenceMismatch`] the caller can retry.
-    append_lock: Mutex<()>,
+    ///
+    /// The race is between appends for one agent, so each agent's
+    /// appends meet at one of [`APPEND_SHARDS`] locks
+    /// ([`Self::append_lock`]): with many agents running, one agent's
+    /// commit (an fsync with `sync_writes`) no longer holds up the rest.
+    append_locks: Box<[Mutex<()>]>,
     /// Optional value-sealing cipher (Swarm TEE phase 5).
     ///
     /// `Some` when the harness booted in `AURA_STATE_ENCRYPTION=sealed`
@@ -185,7 +195,7 @@ impl RocksStore {
             db: Arc::new(db),
             sync_writes,
             processing_claim_lock: Mutex::new(()),
-            append_lock: Mutex::new(()),
+            append_locks: (0..APPEND_SHARDS).map(|_| Mutex::new(())).collect(),
             cipher,
         })
     }
@@ -375,6 +385,17 @@ impl RocksStore {
         Ok(())
     }
 
+    /// The lock `agent_id`'s appends hold across the head check and the
+    /// commit. The batch is serialized and sealed before it is taken.
+    fn append_lock(&self, agent_id: AgentId) -> MutexGuard<'_, ()> {
+        let mut hasher = DefaultHasher::new();
+        agent_id.as_bytes().hash(&mut hasher);
+        let shard = usize::try_from(hasher.finish() % APPEND_SHARDS).unwrap_or(0);
+        self.append_locks[shard]
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn append_entry_direct_internal(
         &self,
         agent_id: AgentId,
@@ -383,12 +404,6 @@ impl RocksStore {
         runtime_capabilities: Option<&RuntimeCapabilityInstall>,
         clear_runtime_capabilities: bool,
     ) -> Result<(), StoreError> {
-        let _append_guard = self
-            .append_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.assert_next_seq(agent_id, next_seq)?;
-
         let mut batch = WriteBatch::default();
         self.append_record_and_head_to_batch(&mut batch, agent_id, next_seq, entry)?;
         self.apply_runtime_capability_ops_to_batch(
@@ -398,6 +413,8 @@ impl RocksStore {
             clear_runtime_capabilities,
         )?;
 
+        let _append_guard = self.append_lock(agent_id);
+        self.assert_next_seq(agent_id, next_seq)?;
         self.db
             .write_opt(batch, &self.write_opts())
             .map_err(backend)?;
@@ -416,12 +433,6 @@ impl RocksStore {
     ) -> Result<(), StoreError> {
         let cf_meta = self.cf(cf::AGENT_META)?;
         let cf_inbox = self.cf(cf::INBOX)?;
-
-        let _append_guard = self
-            .append_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.assert_next_seq(agent_id, next_seq)?;
 
         let inbox_key = InboxKey::new(agent_id, dequeued_inbox_seq);
         let inbox_head_key = AgentMetaKey::inbox_head(agent_id);
@@ -443,6 +454,8 @@ impl RocksStore {
             clear_runtime_capabilities,
         )?;
 
+        let _append_guard = self.append_lock(agent_id);
+        self.assert_next_seq(agent_id, next_seq)?;
         self.db
             .write_opt(batch, &self.write_opts())
             .map_err(backend)?;
@@ -869,18 +882,6 @@ impl crate::store::WriteStore for RocksStore {
         let cf_record = self.cf(cf::RECORD)?;
         let cf_meta = self.cf(cf::AGENT_META)?;
 
-        let _append_guard = self
-            .append_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let current_head = self.get_head_seq(agent_id)?;
-        if base_seq != current_head + 1 {
-            return Err(StoreError::SequenceMismatch {
-                expected: current_head + 1,
-                actual: base_seq,
-            });
-        }
-
         let mut batch = WriteBatch::default();
         let head_seq_key = AgentMetaKey::head_seq(agent_id);
 
@@ -894,6 +895,14 @@ impl crate::store::WriteStore for RocksStore {
         let last_seq = base_seq + entries.len() as u64 - 1;
         batch.put_cf(&cf_meta, head_seq_key.encode(), last_seq.to_be_bytes());
 
+        let _append_guard = self.append_lock(agent_id);
+        let current_head = self.get_head_seq(agent_id)?;
+        if base_seq != current_head + 1 {
+            return Err(StoreError::SequenceMismatch {
+                expected: current_head + 1,
+                actual: base_seq,
+            });
+        }
         self.db
             .write_opt(batch, &self.write_opts())
             .map_err(backend)?;

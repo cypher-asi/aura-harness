@@ -17,7 +17,7 @@ fn manager() -> anyhow::Result<AuthManager> {
 fn parse_provider(raw: &str) -> anyhow::Result<ProviderKind> {
     let kind: ProviderKind = raw.parse()?;
     if kind == ProviderKind::Local {
-        anyhow::bail!("`local` needs no sign-in; use zos, claude or chatgpt");
+        anyhow::bail!("`local` needs no sign-in; use zos, claude, chatgpt or openrouter");
     }
     Ok(kind)
 }
@@ -90,7 +90,11 @@ async fn link_plan(auth: &AuthManager, kind: ProviderKind, paste: bool) -> anyho
     );
 
     let link = if pending.needs_paste() {
-        print!("Paste the code shown after sign-in: ");
+        if kind == ProviderKind::OpenRouter {
+            print!("Paste the code shown after sign-in (or an sk-or- API key): ");
+        } else {
+            print!("Paste the code shown after sign-in: ");
+        }
         std::io::stdout().flush()?;
         let mut code = String::new();
         std::io::stdin().read_line(&mut code)?;
@@ -110,7 +114,12 @@ async fn link_plan(auth: &AuthManager, kind: ProviderKind, paste: bool) -> anyho
         owner_label(&auth.owner()),
     );
     println!("  {}", describe_link(&link));
-    if link.plan_enabled {
+    if kind == ProviderKind::OpenRouter {
+        println!(
+            "  Pick an `openrouter/<vendor>/<model>` model with /model; those turns bill your \
+             OpenRouter credits, not Aura."
+        );
+    } else if link.plan_enabled {
         println!(
             "  Pick a `{}/…` model with /model; those turns bill your plan, not Aura.",
             kind.id()

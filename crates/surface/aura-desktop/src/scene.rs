@@ -14,8 +14,8 @@
 use crate::geom::{rgba, Color};
 use aura_ui_terminal::ProseRow;
 use ratatui::buffer::Cell;
-use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use rustc_hash::{FxHashMap, FxHasher};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 /// What fills a quad.
@@ -215,7 +215,7 @@ impl CachedRow {
 /// colors, where the grid starts, the atlas) is the same for every
 /// piece, so the owner calls [`Self::clear`] when one of those changes.
 pub struct RowCache {
-    rows: HashMap<u64, CachedRow>,
+    rows: FxHashMap<u64, CachedRow>,
     frame: u64,
     /// Pieces kept; the ones not drawn for longest go first
     limit: usize,
@@ -231,7 +231,7 @@ impl Default for RowCache {
 impl RowCache {
     pub fn new(limit: usize) -> Self {
         Self {
-            rows: HashMap::new(),
+            rows: FxHashMap::default(),
             frame: 0,
             limit: limit.max(1),
             built: 0,
@@ -248,7 +248,7 @@ impl RowCache {
         prose: Option<&ProseRow>,
         build: impl FnOnce(&mut Layers),
     ) -> &Layers {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         start.hash(&mut hasher);
         cells.hash(&mut hasher);
         if let Some(prose) = prose {

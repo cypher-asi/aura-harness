@@ -342,7 +342,7 @@ fn agent_name(hub: &AgentHub, agent: AgentId) -> String {
 /// The name of `agent` in the registry, else at the agent host.
 fn known_name(hub: &AgentHub, agent: AgentId) -> Option<String> {
     if let Some(known) = lock(&hub.registry).find(agent) {
-        return Some(known.display_name().to_string());
+        return Some(known.display_name().into_owned());
     }
     hub.agents
         .as_ref()

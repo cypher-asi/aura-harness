@@ -110,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_right_cycles_through_all_three_tabs() {
+    fn shift_right_cycles_through_every_tab() {
         let (mut app, _rx) = app_with_agents();
         let right = KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT);
         let left = KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT);
@@ -120,7 +120,11 @@ mod tests {
         assert!(app.handle_records_shortcut(right));
         assert_eq!(app.records_tab(), RecordsTab::Policies);
         assert!(app.handle_records_shortcut(right));
+        assert_eq!(app.records_tab(), RecordsTab::Inbox);
+        assert!(app.handle_records_shortcut(right));
         assert_eq!(app.records_tab(), RecordsTab::Kernel);
+        assert!(app.handle_records_shortcut(left));
+        assert_eq!(app.records_tab(), RecordsTab::Inbox);
         assert!(app.handle_records_shortcut(left));
         assert_eq!(app.records_tab(), RecordsTab::Policies);
     }

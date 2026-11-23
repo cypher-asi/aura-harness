@@ -33,6 +33,7 @@ use super::approvals::TerminalApprovals;
 use super::gate_subtask::{explicit_model, GateBase, SubtaskGate, SubtaskLabel};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::host::{agent_tool_definitions, TerminalAgents};
+use super::mail::{MailSender, Mailbox, TaskMail};
 use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
@@ -72,7 +73,7 @@ use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision};
 use aura_model::{Message, ThinkingEffort, ToolDefinition};
 use aura_ui_terminal::events::{
-    AgentDefinitionSummary, AgentSummary, ProcessKind, ProcessStatus, ProcessSummary,
+    AgentDefinitionSummary, AgentSummary, MailView, ProcessKind, ProcessStatus, ProcessSummary,
 };
 use aura_ui_terminal::{PermissionMode, UiCommand};
 use std::collections::hash_map::Entry;
@@ -220,6 +221,10 @@ pub(crate) enum ArmRouting {
     },
     /// Every subtask nothing else pins runs on this model.
     Pinned(String),
+    /// Every turn and subtask nothing else pins is classified and runs on
+    /// the model its difficulty is given, with no exploring and no
+    /// escalation.
+    ByDifficulty(aura_gate::compare::DifficultyRoutes),
 }
 
 /// How a turn of one of the user's agents leads under Gate once its
@@ -329,6 +334,9 @@ pub struct AgentHub {
     /// Messages for agents from work that finishes off the event loop.
     pub(crate) notices: NoticeSender,
     notice_rx: Mutex<Option<mpsc::UnboundedReceiver<Notice>>>,
+    /// Mail for the INBOX tab, once the event loop opened it
+    /// ([`Self::open_mail`]); without it no mail is collected.
+    mail: Mutex<Option<MailSender>>,
     pub(crate) agents: Option<TerminalAgents>,
     /// The agent the RECORD panel follows.
     pub(crate) record_panel: RecordPanelAgent,
@@ -420,6 +428,7 @@ impl AgentHub {
                 processes: parts.processes,
                 notices,
                 notice_rx: Mutex::new(Some(notice_rx)),
+                mail: Mutex::new(None),
                 agents: parts.agents,
                 record_panel: parts.record_panel,
                 traces: parts.traces,
@@ -559,7 +568,7 @@ impl AgentHub {
         }
         match self.compare_routing(agent_id) {
             Some(ArmRouting::Gate { delegate, .. }) => Some(delegate),
-            Some(ArmRouting::Pinned(_)) => None,
+            Some(ArmRouting::Pinned(_) | ArmRouting::ByDifficulty(_)) => None,
             None => lock(&self.base)
                 .gate
                 .candidates
@@ -685,28 +694,57 @@ impl AgentHub {
         lock(&self.definitions).reload()
     }
 
-    /// Rows for the roster (the agents panel's Agents tab).
+    /// Rows for the roster (the agents panel's Agents tab), each with its
+    /// abbreviation. Definitions without one yet reserve it now, in roster
+    /// order (see [`AgentRegistry::reserve_prefixes`]); when that cannot
+    /// be saved the roster still shows them, and the next save keeps them.
     pub fn definition_summaries(&self) -> Vec<AgentDefinitionSummary> {
-        lock(&self.definitions)
+        let mut summaries: Vec<AgentDefinitionSummary> = lock(&self.definitions)
             .all()
             .iter()
             .map(|d| AgentDefinitionSummary {
                 name: d.name.clone(),
                 description: d.description.clone(),
+                abbreviation: None,
             })
-            .collect()
+            .collect();
+        let names: Vec<&str> = summaries.iter().map(|s| s.name.as_str()).collect();
+        let abbreviations = {
+            let mut registry = lock(&self.registry);
+            registry.reserve_prefixes(&names).or_else(|error| {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    "could not save the permanent agents' abbreviations"
+                );
+                // Reserved in memory all the same, so asking again
+                // reserves nothing new and saves nothing.
+                registry.reserve_prefixes(&names)
+            })
+        }
+        .unwrap_or_default();
+        for (summary, abbreviation) in summaries.iter_mut().zip(abbreviations) {
+            summary.abbreviation = Some(abbreviation);
+        }
+        summaries
     }
 
     /// Rows for the Agents panel.
     pub fn agent_summaries(&self) -> Vec<AgentSummary> {
         let registry = lock(&self.registry);
         let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
-        agent_summaries(
+        let mut rows = agent_summaries(
             &registry,
             self.factory.store.as_ref(),
             registry.active().agent_id(),
             &running,
-        )
+        );
+        drop(registry);
+        for row in &mut rows {
+            if let Ok(agent_id) = AgentId::from_hex(&row.id) {
+                self.mark_plan_mode(agent_id, row);
+            }
+        }
+        rows
     }
 
     /// Archive spawns from an earlier run of the app that never got to
@@ -751,6 +789,60 @@ impl AgentHub {
         }
     }
 
+    /// Name `agent` after its subtask, `subtitle`, and show it in the
+    /// Agents panel right away, unless it was named meanwhile or is no
+    /// spawned instance.
+    pub(super) async fn apply_subtitle(&self, agent: AgentId, subtitle: &str) {
+        if self.set_subtitle_if_needed(agent, subtitle) {
+            self.send_agent_list().await;
+        }
+    }
+
+    /// Save `subtitle` for `agent` when it still needs one. Returns whether
+    /// it was saved.
+    fn set_subtitle_if_needed(&self, agent: AgentId, subtitle: &str) -> bool {
+        let mut registry = lock(&self.registry);
+        let wanted = registry
+            .find(agent)
+            .is_some_and(crate::agent_registry::RegisteredAgent::needs_subtitle);
+        wanted
+            && match registry.set_subtitle(agent, subtitle) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!(%agent, error = %e, "Could not save the subtask's subtitle");
+                    false
+                }
+            }
+    }
+
+    /// Name the subtask `child` was spawned for with `prompt`: by the
+    /// title model in the background, through the child's `kernel` with
+    /// `config`'s credentials, or at once from the prompt under a
+    /// benchmark's run, whose agents are named without model calls.
+    async fn name_subtask(
+        self: &Arc<Self>,
+        request: &SubagentDispatchRequest,
+        child: AgentId,
+        kernel: &Arc<Kernel>,
+        config: &AgentLoopConfig,
+        prompt: &str,
+    ) {
+        if self.in_bench(request.parent_agent_id) {
+            self.apply_subtitle(child, &super::titles::bench_subtitle(prompt))
+                .await;
+            return;
+        }
+        let classifier = lock(&self.base).gate.classifier.clone();
+        super::titles::spawn_subtitle(
+            Arc::clone(self),
+            child,
+            aura_agent::KernelModelGateway::new(Arc::clone(kernel)),
+            config.clone(),
+            super::titles::title_model(classifier),
+            prompt.to_string(),
+        );
+    }
+
     /// The projects, the Agents panel rows and the Archive, in the order
     /// the UI takes them: the projects first, so one with every agent
     /// archived is known when the rows arrive. Also returns the agent the
@@ -772,8 +864,18 @@ impl AgentHub {
             crate::record_loader::ListRows::build(&registry, &running)
         };
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
+        for (agent_id, row) in &mut rows.listed {
+            self.mark_plan_mode(*agent_id, row);
+        }
         let active = rows.active;
         (rows.into_commands(), active)
+    }
+
+    /// Mark `row`, the Agents panel row of `agent_id`, when the agent is
+    /// in plan mode. Archived agents run no turns, so their rows are left
+    /// unmarked.
+    fn mark_plan_mode(&self, agent_id: AgentId, row: &mut AgentSummary) {
+        row.plan_mode = self.mode_of(agent_id) == PermissionMode::Plan;
     }
 
     /// The projects, the Agents panel rows and the Archive, in the order
@@ -819,6 +921,31 @@ impl AgentHub {
         lock(&self.notice_rx)
             .take()
             .unwrap_or_else(|| mpsc::unbounded_channel().1)
+    }
+
+    /// Start collecting mail between agents for the INBOX tab: the host's
+    /// messages and the `task` calls this hub dispatches. Returns where it
+    /// arrives, for the event loop. A later call replaces the earlier
+    /// channel. Surfaces that never call it (`aura -p`) collect none, so
+    /// nothing piles up unread.
+    pub(crate) fn open_mail(&self) -> mpsc::UnboundedReceiver<MailView> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        if let Some(agents) = &self.agents {
+            agents
+                .host()
+                .set_mail_observer(Arc::new(Mailbox::new(tx.clone())));
+        }
+        *lock(&self.mail) = Some(tx);
+        rx
+    }
+
+    /// Show `view` in the INBOX tab, if mail is collected.
+    fn post_mail(&self, view: MailView) {
+        if let Some(mail) = lock(&self.mail).as_ref() {
+            // A closed channel means the event loop ended; nobody is left
+            // to show it.
+            let _ = mail.send(view);
+        }
     }
 
     /// Tell the Processes tab what every agent is called.
@@ -1063,6 +1190,8 @@ impl AgentHub {
                 todo_id: request.todo_id.clone(),
             })
             .await;
+        let mail = self.task_mail(parent, child_id, &name, &request.prompt);
+        self.post_mail(mail.request(&request.prompt));
         let todo = request.todo_id.clone();
         let subtask = Subtask {
             request,
@@ -1080,6 +1209,8 @@ impl AgentHub {
                     .tasks
                     .finish_spawn(child_id, report.outcome())
                     .await;
+                let last = report.last();
+                hub.post_mail(mail.reply(last.child, &last.name, report.outcome()));
                 let _ = hub.notices.send(task_notice(
                     parent,
                     &shown,
@@ -1101,10 +1232,27 @@ impl AgentHub {
             .tasks
             .finish_spawn(child_id, report.outcome())
             .await;
-        if let Err(reason) = &report.last().reply {
-            warn!(child = %report.last().name, %reason, "Permanent agent failed");
+        let last = report.last();
+        self.post_mail(mail.reply(last.child, &last.name, report.outcome()));
+        if let Err(reason) = &last.reply {
+            warn!(child = %last.name, %reason, "Permanent agent failed");
         }
         Ok(report.result())
+    }
+
+    /// The INBOX thread of the `task` `parent` gave `child`, shown as
+    /// `child_name`, named after `prompt`.
+    fn task_mail(
+        &self,
+        parent: AgentId,
+        child: AgentId,
+        child_name: &str,
+        prompt: &str,
+    ) -> TaskMail {
+        let parent_name = lock(&self.registry)
+            .find(parent)
+            .map_or_else(|| "agent".to_string(), |a| a.display_name().into_owned());
+        TaskMail::new(parent, parent_name, child, child_name.to_string(), prompt)
     }
 
     /// Write on the parent's record that `request` went to `child`, an
@@ -1191,6 +1339,10 @@ impl AgentHub {
         config.initial_todos.clone_from(&session.todos);
         // Observers report on the agent they were installed for, not this one.
         config.observers.clear();
+        // Named beside the turn, not after it, so the name shows within a
+        // second or two.
+        self.name_subtask(request, child_id, &session.kernel, &config, &prompt)
+            .await;
         if let Some(addendum) = request
             .system_prompt_addendum
             .as_deref()
@@ -1241,11 +1393,28 @@ impl AgentHub {
         })
     }
 
-    /// Whether `agent` runs a benchmark's run.
+    /// Whether `agent` works under a benchmark: it, or an agent above it
+    /// in the registry, runs a benchmark's run (its trace is a bench
+    /// run), or it is a `/compare` run or a subtask of one. So a subtask
+    /// nested under a run (bench arm, `RE1`, `REV1`) is treated like the
+    /// run's direct subtasks, though its own trace is a TUI run.
+    /// [`AgentRegistry::ancestry`] stops after as many steps as there are
+    /// agents, so a hand-edited parent cycle cannot loop.
     fn in_bench(&self, agent: AgentId) -> bool {
-        self.traces
-            .recorder(agent)
-            .is_some_and(|rec| rec.meta().source == RunSource::Bench)
+        let (mut ancestry, under_compare) = {
+            let registry = lock(&self.registry);
+            (registry.ancestry(agent), registry.under_compare(agent))
+        };
+        if ancestry.is_empty() {
+            // Unregistered: only its own trace can say.
+            ancestry.push(agent);
+        }
+        under_compare
+            || ancestry.into_iter().any(|id| {
+                self.traces
+                    .recorder(id)
+                    .is_some_and(|rec| rec.meta().source == RunSource::Bench)
+            })
     }
 
     /// Run `subtask` to its end: wait for its workspace when it writes
@@ -1440,6 +1609,7 @@ impl AgentHub {
             explicit.is_some() || request.council_index.is_some() || definition.model.is_some();
         let mut candidates = base.gate.candidates.clone();
         let mut explore = true;
+        let mut table = None;
         match arm {
             Some(ArmRouting::Pinned(model)) => {
                 if !pinned {
@@ -1454,6 +1624,13 @@ impl AgentHub {
                 candidates = Some(arm_candidates);
                 explore = false;
             }
+            Some(ArmRouting::ByDifficulty(routes)) => {
+                // The arm's table routes the subtask, so Gate neither
+                // picks among candidates nor retries a failed attempt.
+                candidates = None;
+                explore = false;
+                table = (!pinned).then_some(routes);
+            }
             None => {}
         }
         SubtaskGate {
@@ -1465,6 +1642,7 @@ impl AgentHub {
             live: Arc::clone(&self.gate),
             explore,
             escalation: None,
+            table,
         }
     }
 

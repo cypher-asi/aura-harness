@@ -92,12 +92,14 @@ pub fn run(args: DesktopOptions, mode: Option<AgentMode>) -> anyhow::Result<()> 
             .with_context(|| format!("opening workspace {}", workspace.display()))?;
     }
 
+    // The agents run here, below the window in priority; the window
+    // takes commands and starts editors from threads of its own.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("aura-agent")
+        .on_thread_start(aura_app::priority::agent_thread_start())
         .build()
         .context("starting the async runtime")?;
-    // The window pumps the session's commands and runs editors on it.
     let _guard = runtime.enter();
 
     let tabs_file = (!args.demo).then(|| router::arrangement_file(args.dir.as_deref()));

@@ -5,8 +5,9 @@ use super::convert::{
     resolve_output_config, resolve_thinking, tool_choice_for, COMPUTER_USE_BETA,
     EXTENDED_CACHE_TTL_BETA,
 };
+use super::origin_tag::{tag_response, tag_stream};
 use super::sse::SseStream;
-use super::{AnthropicProvider, ApiError};
+use super::{AnthropicProvider, ApiError, ReasoningOrigin};
 
 use crate::error::ReasonerError;
 use crate::{
@@ -268,7 +269,7 @@ impl RequestRoutingContext {
 
 impl AnthropicProvider {
     fn model_looks_like_anthropic(model: &str) -> bool {
-        let model = model.trim().to_ascii_lowercase();
+        let model = super::convert::capability_model(model).to_ascii_lowercase();
         model.starts_with("claude") || model.starts_with("aura-claude")
     }
 
@@ -1951,8 +1952,8 @@ fn build_api_request(
     system: Option<&serde_json::Value>,
     prompt_caching_enabled: bool,
     anthropic_features_enabled: bool,
-    openai_cache_key: Option<String>,
-    openai_cache_retention: Option<&'static str>,
+    (openai_cache_key, openai_cache_retention): (Option<String>, Option<&'static str>),
+    reasoning_origin: ReasoningOrigin,
 ) -> ApiRequest {
     let thinking = anthropic_features_enabled
         .then(|| resolve_thinking(request, model))
@@ -1963,7 +1964,11 @@ fn build_api_request(
     ApiRequest {
         model: model.to_string(),
         system: system.cloned(),
-        messages: convert_messages_to_api(&request.messages, prompt_caching_enabled),
+        messages: convert_messages_to_api(
+            &request.messages,
+            prompt_caching_enabled,
+            reasoning_origin,
+        ),
         tools: if request.tools.is_empty() {
             None
         } else {
@@ -2529,8 +2534,8 @@ impl ModelProvider for AnthropicProvider {
                     system.as_ref(),
                     prompt_caching_enabled,
                     anthropic_features_enabled,
-                    openai_cache_key,
-                    openai_cache_retention,
+                    (openai_cache_key, openai_cache_retention),
+                    self.reasoning_origin,
                 );
                 if !self.router_body_extensions {
                     api_request.reasoning_effort = None;
@@ -2606,6 +2611,7 @@ impl ModelProvider for AnthropicProvider {
                     provider_request_id,
                 );
                 parsed.trace.plan_usage = plan_usage;
+                tag_response(&mut parsed, self.reasoning_origin);
                 crate::console::emit_response_block(&parsed, latency_ms, 200, "OK");
                 Ok(parsed)
             })
@@ -2686,6 +2692,7 @@ impl ModelProvider for AnthropicProvider {
                     messages: convert_messages_to_api(
                         &request_ref.messages,
                         prompt_caching_enabled,
+                        self.reasoning_origin,
                     ),
                     tools: if request_ref.tools.is_empty() {
                         None
@@ -2764,7 +2771,11 @@ impl ModelProvider for AnthropicProvider {
                 let sse_stream = SseStream::with_request_id(byte_stream, provider_request_id)
                     .with_plan_usage(plan_usage)
                     .with_idle_timeout(Duration::from_millis(self.config.timeout_ms));
-                Ok(Box::pin(sse_stream) as StreamEventStream)
+                // The buffered path above is already tagged by `complete`.
+                Ok(tag_stream(
+                    Box::pin(sse_stream) as StreamEventStream,
+                    self.reasoning_origin,
+                ))
             })
         })
         .await
@@ -4028,8 +4039,8 @@ mod request_diagnostics_tests {
             None,
             false,
             false,
-            None,
-            None,
+            (None, None),
+            ReasoningOrigin::Anthropic,
         );
         let body = serde_json::to_value(api_request).unwrap();
 
@@ -4051,7 +4062,15 @@ mod request_diagnostics_tests {
                 .thinking_effort(Some(crate::ThinkingEffort::Off))
                 .try_build()
                 .unwrap();
-            let api_request = build_api_request(&request, model, None, false, true, None, None);
+            let api_request = build_api_request(
+                &request,
+                model,
+                None,
+                false,
+                true,
+                (None, None),
+                ReasoningOrigin::Anthropic,
+            );
             serde_json::to_value(api_request).unwrap()["tool_choice"].clone()
         };
         let criteria = || crate::ToolChoice::tool("criteria");
@@ -4422,5 +4441,23 @@ mod request_diagnostics_tests {
     fn replace_all_subslice_haystack_shorter_than_needle() {
         let out = replace_all_subslice(b"hi", b"hello", b"X");
         assert_eq!(out, b"hi");
+    }
+}
+
+#[cfg(test)]
+mod openrouter_slug_tests {
+    use super::AnthropicProvider;
+
+    #[test]
+    fn claude_on_openrouter_counts_as_anthropic() {
+        assert!(AnthropicProvider::model_looks_like_anthropic(
+            "anthropic/claude-sonnet-4.6"
+        ));
+        assert!(AnthropicProvider::model_looks_like_anthropic(
+            "claude-opus-4-7"
+        ));
+        assert!(!AnthropicProvider::model_looks_like_anthropic(
+            "openai/gpt-5.4"
+        ));
     }
 }

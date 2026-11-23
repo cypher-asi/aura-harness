@@ -53,6 +53,10 @@ flate2 = { workspace = true }
 tar = { workspace = true }
 walkdir = { workspace = true }
 
+# Lowers the agents' threads below the UI's (`priority`).
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "process", "thread"] }
+
 [build-dependencies]
 walkdir = { workspace = true }
 

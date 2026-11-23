@@ -25,6 +25,7 @@ mod factory;
 mod hooks;
 mod host;
 mod inbox;
+mod mail;
 mod observer;
 mod setup;
 
@@ -37,4 +38,5 @@ pub use host::{
     AgentEnv, AgentHost, AgentHostConfig, AgentInfo, AgentState, LifecycleAction, RootAgent,
 };
 pub use inbox::{InboxMessage, MessageKind, ParentInbox};
+pub use mail::{MailMessage, MailObserver, ThreadId};
 pub use observer::{HostedTurn, TurnObserver};

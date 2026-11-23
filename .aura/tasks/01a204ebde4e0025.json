@@ -1,0 +1,14 @@
+{
+  "id": "01a204ebde4e0025",
+  "title": "Implement the TUI side of a new benchmark arm kind \"by difficulty\" in crate `aura-ui-terminal` (repo root workspace). O…",
+  "state": "failed",
+  "agent_id": "6f305b8fafa0507df71e2d0d25f6044c8705b73fc96b2d882523d8c57681ec53",
+  "agent_name": "rust-engineer #68",
+  "assignee": "rust-engineer",
+  "parent": "01a204eaee1c0023",
+  "items": [],
+  "summary": "ran out of time: it stopped after 0 minutes without a reply",
+  "updated_ms": 1795379467696,
+  "created_ms": 1795378896462,
+  "tool_use_id": "toolu_016qJnPLYQtYyLHLRoygk29d"
+}

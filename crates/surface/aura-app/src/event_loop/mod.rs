@@ -28,6 +28,7 @@ pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
 mod log_view;
+pub(crate) mod mail;
 pub(crate) mod modes;
 pub(crate) use modes::Permissions;
 pub(crate) mod notices;
@@ -253,6 +254,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         flow,
     };
     let mut notice_rx = state.hub.take_notices();
+    let mut mail_rx = state.hub.open_mail();
     state.hub.name_agents();
     state.hub.record_panel.set(active);
 
@@ -281,6 +283,9 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             }
             Some(notice) = notice_rx.recv() => {
                 notices::handle_notice(&mut state, notice).await;
+            }
+            Some(view) = mail_rx.recv() => {
+                mail::forward(state.commands, view).await;
             }
             Some(outcome) = link_rx.recv() => {
                 auth::handle_link_outcome(&mut state, outcome).await;

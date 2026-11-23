@@ -1,0 +1,36 @@
+{
+  "id": "01a2048fef29005a",
+  "title": "when a subtask is created/spawned underneath an agent, it should have a subtitle with RE36: Name of subtask, using haik…",
+  "state": "open",
+  "agent_id": "357cd979c801d7a1a11f0406a472b339ac403ffee1ebd52c91f842bc23e32635",
+  "agent_name": "Agent 931",
+  "items": [
+    {
+      "content": "Registry: persisted unique agent codes + AgentSummary plumbing (done, untested)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review code-name + subtitle changes for bugs and regressions",
+      "state": "pending"
+    },
+    {
+      "content": "Render code column + shared layout helper for hit-testing, update/add terminal tests, docs",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Registry tests for agent code names",
+      "state": "pending",
+      "assignee": "tests"
+    },
+    {
+      "content": "Spawned subtask agents get a Haiku-written subtitle shown as '<CODE>: <subtask name>'",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    }
+  ],
+  "summary": "The subtask-subtitle feature is with rust-engineer #57 in the background; nothing is built or tested yet. The code-column UI work (rust-engineer #56) and the registry tests (tests #8) haven't reported back either.",
+  "updated_ms": 1795373582420,
+  "created_ms": 1795372871465
+}

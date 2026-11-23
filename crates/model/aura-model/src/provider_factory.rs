@@ -3,9 +3,10 @@
 //! The main wire client is Anthropic-shaped. It talks to `aura-router`
 //! (the Aura proxy) with a per-request JWT and, for the terminal UI only
 //! via [`routed_provider`], to a local Anthropic-compatible server
-//! (Ollama), to the Anthropic API with a Claude plan, and — through the
-//! Responses client — to OpenAI with a ChatGPT plan. For tests, [`mock_provider`]
-//! returns a fixture-friendly `MockProvider`.
+//! (Ollama), to the Anthropic API with a Claude plan, to OpenRouter's
+//! Anthropic-compatible Messages API with an OpenRouter key, and — through
+//! the Responses client — to OpenAI with a ChatGPT plan. For tests,
+//! [`mock_provider`] returns a fixture-friendly `MockProvider`.
 //!
 //! Per-session overrides — model, fallback model, prompt-caching toggle —
 //! arrive on the wire as `aura_core_protocol::SessionModelOverrides` and are
@@ -17,7 +18,7 @@ use std::sync::Arc;
 use aura_core_auth::{CredentialResolver, ProviderKind};
 use tracing::info;
 
-use crate::anthropic::{AnthropicConfig, AnthropicProvider};
+use crate::anthropic::{AnthropicConfig, AnthropicProvider, ReasoningOrigin};
 use crate::credentialed::CredentialedProvider;
 use crate::error::ReasonerError;
 use crate::mock::MockProvider;
@@ -111,8 +112,10 @@ pub fn with_session_overrides(
 
 /// Build the terminal provider. `local/*` models go to the local
 /// Anthropic-compatible server (Ollama), `claude/*` and `chatgpt/*` to
-/// the user's linked plan via `subscriptions`, everything else to
-/// aura-router. Without a resolver, plan models fail with an auth error.
+/// the user's linked plan and `openrouter/*` to OpenRouter's
+/// Anthropic-compatible Messages API with the user's OpenRouter key, all
+/// via `subscriptions`; everything else goes to aura-router. Without a
+/// resolver, plan and OpenRouter models fail with an auth error.
 ///
 /// # Errors
 ///
@@ -128,13 +131,19 @@ pub fn routed_provider(
         plans = subscriptions.is_some(),
         "LLM provider ready (local + router-backed proxy)"
     );
-    let local = AnthropicProvider::new(local_cfg)?.with_sse_for_all_models();
+    let local = AnthropicProvider::new(local_cfg)?
+        .with_sse_for_all_models()
+        .with_reasoning_origin(ReasoningOrigin::Local);
     let router = AnthropicProvider::new(router_cfg)?;
     let mut routed = RoutedProvider::new(Arc::new(local), Arc::new(router));
     if let Some(resolver) = subscriptions {
         let claude = AnthropicProvider::new(AnthropicConfig::anthropic_direct())?
             .without_router_body_extensions();
         let chatgpt = OpenAiResponsesProvider::from_env()?;
+        let openrouter = AnthropicProvider::new(AnthropicConfig::openrouter())?
+            .with_sse_for_all_models()
+            .without_router_body_extensions()
+            .with_reasoning_origin(ReasoningOrigin::OpenRouter);
         routed = routed
             .with_claude(Arc::new(CredentialedProvider::new(
                 ProviderKind::Claude,
@@ -144,6 +153,11 @@ pub fn routed_provider(
             .with_chatgpt(Arc::new(CredentialedProvider::new(
                 ProviderKind::Chatgpt,
                 Arc::new(chatgpt),
+                resolver.clone(),
+            )))
+            .with_openrouter(Arc::new(CredentialedProvider::new(
+                ProviderKind::OpenRouter,
+                Arc::new(openrouter),
                 resolver,
             )));
     }

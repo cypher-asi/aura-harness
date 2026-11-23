@@ -7,11 +7,13 @@ use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        agent_time_cell,
+        agent_code_width,
         scrollbar::{ScrollTarget, ScrollbarArea},
+        shown_agent_code,
         tab_bar::TabLayout,
-        AgentButton, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit, MenuTarget,
-        Pane, PanelFocus, ProjectListRow, ProseRow, RecordsTab, ToggleRow, ToggleTarget,
+        AgentButton, AgentRowEnd, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit,
+        MenuTarget, Pane, PanelFocus, ProjectListRow, ProseRow, RecordsTab, ToggleRow,
+        ToggleTarget,
     },
     App, Theme,
 };
@@ -115,6 +117,16 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     } else {
         live_tail(app, padded.width as usize, theme)
     };
+    if !terminal && app.chat_loading() {
+        // The agent's history is on its way: neither the welcome text nor
+        // a partial chat, which would flash before the real one.
+        app.set_chat_images(Vec::new());
+        app.set_chat_rows(Some((padded, 0)));
+        if app.chat_loading_shown() {
+            render_chat_loading(frame, padded, theme);
+        }
+        return;
+    }
     if app.pane_is_empty() && tail.lines.is_empty() {
         app.set_chat_images(Vec::new());
         app.set_chat_rows(Some((padded, 0)));
@@ -337,10 +349,18 @@ fn render_chat_lines(
     let mut user_rows = Vec::new();
     let mut line_index = 0usize;
     for (i, block) in cache.blocks().enumerate() {
+        if visible.len() >= rows {
+            break;
+        }
         if i > 0 {
             for _ in 0..gap {
                 push_visible(&mut visible, &mut line_index, start, rows, blank.clone());
             }
+        }
+        // A block above the screen only moves the ones below it down.
+        if line_index + block.lines.len() <= start {
+            line_index += block.lines.len();
+            continue;
         }
         let hovered = |offset: usize| {
             block
@@ -413,6 +433,13 @@ fn render_chat_lines(
         .collect();
     app.set_prose_rows(prose);
     paint_user_band(frame.buffer_mut(), (body, padded), &user_rows, theme);
+    // A chat that waited for its history fades in from the background.
+    // Only colours change, so the prose rows read above stay valid, and
+    // it comes before the smooth scroll takes its print of the body.
+    let fade = app.chat_fading().filter(|_| !app.terminal_pane());
+    if let Some(progress) = fade {
+        crate::animation::fade_area(frame.buffer_mut(), body, progress, theme);
+    }
 
     let hovered_image = match app.hover() {
         Some(HoverTarget::ChatImage(message, index)) => Some((message, index)),
@@ -437,7 +464,7 @@ fn render_chat_lines(
     app.set_chat_images(image_hits);
     if smooth {
         let width = frame.buffer_mut().area.width;
-        let below = row_below(
+        let mut below = row_below(
             width,
             (body, padded),
             next,
@@ -445,6 +472,10 @@ fn render_chat_lines(
             measure,
             theme,
         );
+        if let Some(progress) = fade {
+            let area = below.0.area;
+            crate::animation::fade_area(&mut below.0, area, progress, theme);
+        }
         let view = ChatScroll {
             body,
             above: start,
@@ -812,7 +843,8 @@ struct LiveTail {
 
 fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
     let mut lines = if app.state() == AppState::Processing {
-        super::hud::todo_checklist(app.hud(), width, theme)
+        let frame = theme.animate_spinners.then(|| app.animation_frame());
+        super::hud::todo_checklist(app.hud(), width, theme, frame)
     } else {
         Vec::new()
     };
@@ -872,6 +904,17 @@ pub(crate) fn format_elapsed(elapsed: std::time::Duration) -> String {
     } else {
         format!("{}m {:02}s", secs / 60, secs % 60)
     }
+}
+
+/// What the chat says once it has waited a moment for its history.
+const CHAT_LOADING: &str = "Loading chat…";
+
+fn render_chat_loading(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let line = Line::from(Span::styled(
+        CHAT_LOADING,
+        Style::default().fg(theme.colors.faint),
+    ));
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn render_welcome(frame: &mut Frame, area: Rect, terminal: bool, theme: &Theme) {
@@ -1061,8 +1104,10 @@ fn build_archived_lines<'a>(
 
 /// A project is its own row under a folder icon, with a "+" on the right
 /// that adds an agent to it, and its agents below it, each followed by
-/// the agents it spawned indented further. Each agent
-/// shows how long ago it was last active on the right. A ring spins in the
+/// the agents it spawned indented further. Each agent shows how long ago
+/// it was last active on the right, then its code, padded so the codes
+/// line up; a row too narrow to leave its name four columns beside the
+/// code drops it. A ring spins in the
 /// folder's column beside agents that are thinking; idle agents leave it
 /// blank. An agent with spawns shows ▾ there, ▸ when folded over them;
 /// a busy one shows the ring alone, which still folds it.
@@ -1075,12 +1120,12 @@ fn build_archived_lines<'a>(
 /// last line is "+ New project", which the panel pins to its bottom row:
 ///
 /// ```text
-///  🗁  WEBSITE            +
-///  ⢎⡱ Agent              1m
-///      reviewer          2d
-///     Agent 2            5m
+///  🗁  WEBSITE                 +
+///  ⢎⡱ Agent            1m AG1
+///      reviewer #1     2d REV1
+///     Agent 2          5m AG2
 ///
-///  🗀  RESEARCH           +
+///  🗀  RESEARCH                +
 ///  …
 ///  +  New project
 /// ```
@@ -1100,6 +1145,9 @@ fn build_swarm_lines<'a>(
     let shown_active = app.shown_active_agent();
     let width = inner.width as usize;
     let now_ms = now_ms();
+    // Every agent row's code column is as wide as the widest code, so the
+    // codes line up; 0 when no agent has one.
+    let code_width = agent_code_width(app.agents());
     let is_thinking = |agent: &crate::events::AgentSummary| app.agent_thinking(agent);
     let project_name = Style::default().fg(theme.colors.muted);
     let agent_name = Style::default().fg(theme.colors.foreground);
@@ -1242,13 +1290,23 @@ fn build_swarm_lines<'a>(
                     (button, color)
                 });
                 let buttons: &[_] = if pointer_on_row { &buttons } else { &[] };
+                let badge = agent.plan_mode.then_some(RowBadge {
+                    text: PLAN_BADGE,
+                    color: theme.colors.success,
+                });
+                let end = AgentRowEnd::agent(
+                    width,
+                    agent.depth,
+                    ago.as_deref(),
+                    (shown_agent_code(agent), code_width),
+                );
                 lines.push(tree_row(
                     width,
                     (&spawn_guides(app.agents(), index), theme.colors.muted),
                     icon,
-                    &agent.name,
+                    (&agent.name, badge),
                     cell,
-                    ago.as_deref(),
+                    &end,
                     buttons,
                 ));
             }
@@ -1381,25 +1439,51 @@ pub(super) fn list_row_with_detail<'a>(
     cell: CellStyle,
     time: Option<&str>,
 ) -> Line<'a> {
+    list_row_ending(
+        width,
+        depth,
+        icon,
+        (name, detail),
+        cell,
+        &AgentRowEnd::time(time),
+    )
+}
+
+/// [`list_row_with_detail`] ending in `end` instead of a time, as roster
+/// rows end in their abbreviation.
+fn list_row_ending<'a>(
+    width: usize,
+    depth: usize,
+    icon: StatusIcon,
+    (name, detail): (&str, Option<&str>),
+    cell: CellStyle,
+    end: &AgentRowEnd<'_>,
+) -> Line<'a> {
     let fill = cell
         .bg
         .map_or_else(Style::default, |bg| Style::default().bg(bg));
     let indent = Span::styled(format!(" {}", "  ".repeat(depth)), fill);
-    indented_row(width, indent, icon, (name, detail), cell, time, &[])
+    let label = RowLabel {
+        name,
+        badge: None,
+        detail,
+    };
+    indented_row(width, indent, icon, label, cell, end, &[])
 }
 
 /// [`list_row`] for an agent in a project's tree: indented by `guides`,
 /// the lines from the agent that spawned it, drawn in their color. A
 /// spawn with no icon has its elbow run on through the icon column. The
-/// `buttons`, each with its color, are drawn left of the time, where
-/// `app::agent_button_offset` says they are.
+/// `badge`, if any, is drawn right after the name (see [`RowBadge`]). The
+/// `buttons`, each with its color, are drawn left of `end`, the time and
+/// code, where `app::agent_button_offset` says they are.
 pub(super) fn tree_row<'a>(
     width: usize,
     (guides, color): (&str, Color),
     icon: StatusIcon,
-    name: &str,
+    (name, badge): (&str, Option<RowBadge<'_>>),
     mut cell: CellStyle,
-    time: Option<&str>,
+    end: &AgentRowEnd<'_>,
     buttons: &[(AgentButton, Color)],
 ) -> Line<'a> {
     let fill = cell
@@ -1412,7 +1496,37 @@ pub(super) fn tree_row<'a>(
         icon
     };
     let indent = Span::styled(format!(" {guides}"), fill.fg(color));
-    indented_row(width, indent, icon, (name, None), cell, time, buttons)
+    let label = RowLabel {
+        name,
+        badge,
+        detail: None,
+    };
+    indented_row(width, indent, icon, label, cell, end, buttons)
+}
+
+/// What an agent row says after its name when the agent is in plan mode.
+pub(super) const PLAN_BADGE: &str = " (P)";
+
+/// The fewest name columns a row keeps beside its badge; narrower rows
+/// drop the badge instead.
+const MIN_NAME_BESIDE_BADGE: usize = 2;
+
+/// A short marker drawn right after a row's name in its own color, which
+/// it keeps on selected and hovered rows. The name is cut to make room for
+/// it, so it stays visible after a long name.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RowBadge<'a> {
+    pub(super) text: &'a str,
+    pub(super) color: Color,
+}
+
+/// The text of a projects-list row: its name, then an optional badge and
+/// an optional muted detail.
+#[derive(Debug, Clone, Copy)]
+struct RowLabel<'a> {
+    name: &'a str,
+    badge: Option<RowBadge<'a>>,
+    detail: Option<&'a str>,
 }
 
 /// `   │   ├`: the tree lines before the agent at `index` in `agents`.
@@ -1449,9 +1563,9 @@ fn indented_row<'a>(
     width: usize,
     indent: Span<'a>,
     icon: StatusIcon,
-    (name, detail): (&str, Option<&str>),
+    label: RowLabel<'_>,
     cell: CellStyle,
-    time: Option<&str>,
+    end: &AgentRowEnd<'_>,
     buttons: &[(AgentButton, Color)],
 ) -> Line<'a> {
     let fill = cell
@@ -1459,27 +1573,37 @@ fn indented_row<'a>(
         .map_or_else(Style::default, |bg| Style::default().bg(bg));
     let icon_width = display_width(&icon.glyph);
     let icon_pad = AURA_WIDTH.saturating_sub(icon_width) + 1;
-    // Buttons sit just left of the time, laid out from the same pieces
-    // as `app::agent_button_offset`. Rows without buttons keep their
-    // spans as they were.
-    let time = if buttons.is_empty() {
-        time.map(|time| format!(" {time} ")).unwrap_or_default()
-    } else {
-        agent_time_cell(time)
-    };
+    // Buttons sit just left of the time and code, laid out from the same
+    // pieces as `app::agent_button_offset`. Rows without buttons keep the
+    // same time and code, so neither moves when the pointer comes.
+    let time = end.time_cell(!buttons.is_empty());
+    let code = end.code_cell();
     let buttons: Vec<Span<'a>> = buttons
         .iter()
         .map(|&(button, color)| Span::styled(button.label(), fill.fg(color)))
         .collect();
     let button_width: usize = buttons.iter().map(Span::width).sum();
-    let name_width = width
+    let text_width = width
         .saturating_sub(
-            indent.width() + icon_width + icon_pad + button_width + display_width(&time),
+            indent.width()
+                + icon_width
+                + icon_pad
+                + button_width
+                + display_width(&time)
+                + display_width(&code),
         )
         .max(1);
-    let name = truncate_agent_name(name, name_width);
+    // The badge's columns come out of the name's, so a long name is cut
+    // and the badge still shows; a row too narrow for both drops it.
+    let badge = label
+        .badge
+        .filter(|badge| text_width >= display_width(badge.text) + MIN_NAME_BESIDE_BADGE);
+    let badge_width = badge.map_or(0, |badge| display_width(badge.text));
+    let name_width = text_width - badge_width;
+    let name = truncate_agent_name(label.name, name_width);
     let rest = name_width.saturating_sub(display_width(&name));
-    let detail = detail
+    let detail = label
+        .detail
         .filter(|detail| !detail.is_empty() && rest >= 4)
         .map(|detail| format!("  {}", truncate_record_info(detail, rest - 2)))
         .unwrap_or_default();
@@ -1490,11 +1614,21 @@ fn indented_row<'a>(
         Span::styled(icon.glyph, fill.fg(icon_color)),
         Span::styled(" ".repeat(icon_pad), fill),
         Span::styled(name, fill.patch(cell.text)),
+    ];
+    if let Some(badge) = badge {
+        spans.push(Span::styled(badge.text.to_string(), fill.fg(badge.color)));
+    }
+    spans.extend([
         Span::styled(detail, fill.fg(cell.time)),
         Span::styled(" ".repeat(padding), fill),
-    ];
+    ]);
     spans.extend(buttons);
     spans.push(Span::styled(time, fill.fg(cell.time)));
+    // The code keeps the time's color on the row's fill, so it stays on
+    // selected and hovered rows. No span at all without a code column.
+    if !code.is_empty() {
+        spans.push(Span::styled(code, fill.fg(cell.time)));
+    }
     Line::from(spans)
 }
 
@@ -1589,16 +1723,27 @@ fn project_label(agent: &crate::events::AgentSummary) -> String {
         .to_uppercase()
 }
 
-/// Roster rows: a gray `@` and the name for each permanent agent, then
-/// "+  New agent", which the panel pins to its bottom row. Markers and
-/// names share columns with the projects list. A selected row still paints
-/// the `@` in the selection text color.
-fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
+/// Roster rows: a gray `@`, the name and, at the far right, the muted
+/// abbreviation for each permanent agent, then "+  New agent", which the
+/// panel pins to its bottom row and which has no abbreviation. Markers and
+/// names share columns with the projects list, and abbreviations are laid
+/// out as its codes are ([`AgentRowEnd::definition`]): left-aligned in a
+/// column as wide as the widest one, one space from the edge, in the time
+/// color on the row's fill. A long name is cut first; a row that would
+/// leave the name fewer than four columns drops its abbreviation. A
+/// selected row still paints the `@` in the selection text color.
+pub(super) fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let selected = app.selected_definition();
     let width = inner.width as usize;
-    let names = app
-        .definitions()
+    let definitions = app.definitions();
+    let abbreviation_width = definitions
+        .iter()
+        .filter_map(|definition| definition.abbreviation.as_deref())
+        .map(display_width)
+        .max()
+        .unwrap_or(0);
+    let names = definitions
         .iter()
         .map(|definition| {
             (
@@ -1606,6 +1751,7 @@ fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line
                 definition.name.as_str(),
                 theme.colors.secondary,
                 theme.colors.muted,
+                Some(definition.abbreviation.as_deref()),
             )
         })
         .chain(std::iter::once((
@@ -1613,18 +1759,29 @@ fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) -> Vec<Line
             "New agent",
             theme.colors.muted,
             theme.colors.muted,
+            None,
         )));
 
     names
         .enumerate()
-        .map(|(i, (marker, name, text, icon_color))| {
+        .map(|(i, (marker, name, text, icon_color, abbreviation))| {
             let is_selected = i == selected && is_focused;
             let is_hovered =
                 matches!(app.hover(), Some(HoverTarget::DefinitionRow(row)) if row == i);
             let state = CellState::of(is_selected, is_hovered);
             let cell = cell_style(theme, state, Style::default().fg(text));
             let icon = StatusIcon::new(marker, icon_color);
-            list_row(width, 0, icon, name, cell, None)
+            match abbreviation {
+                Some(abbreviation) => list_row_ending(
+                    width,
+                    0,
+                    icon,
+                    (name, None),
+                    cell,
+                    &AgentRowEnd::definition(width, (abbreviation, abbreviation_width)),
+                ),
+                None => list_row(width, 0, icon, name, cell, None),
+            }
         })
         .collect()
 }
@@ -1675,6 +1832,15 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             Some(HeaderInfo::count(count, unit, theme.colors.muted))
         }
         RecordsTab::Policies => super::policies::header_info(app, theme),
+        RecordsTab::Inbox => {
+            let (unread, threads) = app.inbox_header_counts();
+            Some(if unread > 0 {
+                HeaderInfo::count(unread, "NEW", theme.colors.warning)
+            } else {
+                let unit = if threads == 1 { "THREAD" } else { "THREADS" };
+                HeaderInfo::count(threads, unit, theme.colors.muted)
+            })
+        }
     };
     let header = PanelHeader {
         layout: RecordsTab::layout(bar.width),
@@ -1699,6 +1865,10 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     }
     if tab == RecordsTab::Policies {
         super::policies::render_policies(frame, area, inner, app, theme);
+        return;
+    }
+    if tab == RecordsTab::Inbox {
+        super::inbox::render_inbox(frame, area, inner, app, theme);
         return;
     }
 

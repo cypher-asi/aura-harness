@@ -1,0 +1,16 @@
+{
+  "id": "01a2047334b6004c",
+  "title": "Repo: /home/n3o/code/aura-harness. Work fast and stay focused; do not touch files other than `crates/model/aura-model/s…",
+  "state": "completed",
+  "agent_id": "dded00cb47c2458582b601733f2d0007078dde3b42a6135a3ee34ef88e85be8b",
+  "agent_name": "rust-engineer #47",
+  "assignee": "rust-engineer",
+  "parent": "01a2045abd210040",
+  "plan": ".aura/plans/openrouter-integration_0f77685d.plan.md",
+  "plan_todo": "listing",
+  "items": [],
+  "summary": "I added `fetch_openrouter_models` to `crates/model/aura-model/src/plan_models.rs`, following the same pattern as `fetch_claude_models`. Tests, Clippy and rustfmt all pass for this crate, and no other files were changed.",
+  "updated_ms": 1795371055788,
+  "created_ms": 1795370988726,
+  "tool_use_id": "toolu_015qtF4pXnMuTBZrP7EoTDqk"
+}

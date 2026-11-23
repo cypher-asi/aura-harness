@@ -5,7 +5,7 @@ use aura_model::model_catalog::{
     catalog, catalog_with_plans, ModelBackend, ModelOption, ModelTier,
 };
 
-use super::{candidates, current, Candidate};
+use super::{candidates, current, runnable, Candidate};
 use crate::fixed_pick;
 use crate::fixtures::{ids, signed_in, versions, with_local, LOCAL, NEW_OPUS, NEW_SONNET};
 
@@ -150,4 +150,107 @@ fn an_older_version_of_a_model_is_not_current() {
         "fable 5.2 has no known price, so nothing is known against 5.1"
     );
     assert_eq!(fixed_pick(&all).map(|c| c.id.as_str()), Some(NEW_SONNET));
+}
+
+fn option(id: &str, backend: ModelBackend, tier: ModelTier) -> ModelOption {
+    ModelOption {
+        id: id.to_string(),
+        label: id.to_string(),
+        backend,
+        installed: true,
+        tier,
+    }
+}
+
+const OPENROUTER_SONNET: &str = "openrouter/anthropic/claude-sonnet-4.6";
+
+fn sonnet_on_every_route() -> Vec<ModelOption> {
+    vec![
+        option(
+            OPENROUTER_SONNET,
+            ModelBackend::OpenRouter,
+            ModelTier::Standard,
+        ),
+        option(
+            "aura-claude-sonnet-4-6",
+            ModelBackend::Router,
+            ModelTier::Standard,
+        ),
+        option(
+            "claude/claude-sonnet-4-6",
+            ModelBackend::Claude,
+            ModelTier::Standard,
+        ),
+    ]
+}
+
+#[test]
+fn openrouter_models_are_candidates_only_with_a_curated_price() {
+    let options = [
+        option(
+            OPENROUTER_SONNET,
+            ModelBackend::OpenRouter,
+            ModelTier::Standard,
+        ),
+        option(
+            "openrouter/acme/unknown-model",
+            ModelBackend::OpenRouter,
+            ModelTier::Standard,
+        ),
+    ];
+    let openrouter = candidates(&options, signed_in(&[ProviderKind::OpenRouter]), |_| false);
+    assert_eq!(ids(&openrouter), [OPENROUTER_SONNET]);
+    assert!(openrouter[0].cost_usd.is_some());
+}
+
+#[test]
+fn runnable_keeps_every_route_and_unpriced_openrouter_models() {
+    const DEEPSEEK: &str = "openrouter/deepseek/deepseek-v3.2";
+    let mut options = sonnet_on_every_route();
+    options.push(option(
+        DEEPSEEK,
+        ModelBackend::OpenRouter,
+        ModelTier::Standard,
+    ));
+    let can_use = signed_in(&[ProviderKind::Claude, ProviderKind::OpenRouter]);
+    let all = runnable(&options, &can_use, |_| false);
+    let all_ids = ids(&all);
+    for id in ["claude/claude-sonnet-4-6", OPENROUTER_SONNET, DEEPSEEK] {
+        assert!(all_ids.contains(&id), "{id} in {all_ids:?}");
+    }
+    assert!(
+        !all_ids.contains(&"aura-claude-sonnet-4-6"),
+        "not signed in to the router"
+    );
+    assert_eq!(all_ids.last(), Some(&DEEPSEEK), "unpriced last");
+    assert_eq!(all.last().map(|c| c.tier), Some(ModelTier::Standard));
+
+    let routed = candidates(&options, &can_use, |_| false);
+    assert_eq!(ids(&routed), ["claude/claude-sonnet-4-6"]);
+    let kept = runnable(&options, &can_use, |id| id == DEEPSEEK);
+    assert!(!ids(&kept).contains(&DEEPSEEK), "dropped stays dropped");
+}
+
+#[test]
+fn the_router_route_is_kept_over_openrouter() {
+    let both = candidates(
+        &sonnet_on_every_route(),
+        signed_in(&[ProviderKind::Zos, ProviderKind::OpenRouter]),
+        |_| false,
+    );
+    assert_eq!(ids(&both), ["aura-claude-sonnet-4-6"]);
+}
+
+#[test]
+fn the_plan_route_is_kept_over_router_and_openrouter() {
+    let all = candidates(
+        &sonnet_on_every_route(),
+        signed_in(&[
+            ProviderKind::Zos,
+            ProviderKind::OpenRouter,
+            ProviderKind::Claude,
+        ]),
+        |_| false,
+    );
+    assert_eq!(ids(&all), ["claude/claude-sonnet-4-6"]);
 }

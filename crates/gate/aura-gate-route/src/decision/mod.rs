@@ -14,8 +14,9 @@ pub struct Decision {
     /// How hard the model reasons on it.
     pub effort: ThinkingEffort,
     /// Why: [`RouteReason::Proven`], [`RouteReason::Default`] or
-    /// [`RouteReason::Explore`], and [`RouteReason::Escalate`] after a
-    /// failed attempt.
+    /// [`RouteReason::Explore`], [`RouteReason::Escalate`] after a
+    /// failed attempt, and [`RouteReason::Compare`] on an arm of
+    /// `/compare` with a model per difficulty.
     pub reason: RouteReason,
     /// Whether Gate explored instead of taking its pick.
     pub explored: bool,

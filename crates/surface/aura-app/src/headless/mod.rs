@@ -34,7 +34,7 @@ use crate::harness::{
     policy_tool_names, post_edit_check_from_env, project_instructions, Harness, HubSetup,
 };
 use crate::long_run::LongRunSettings;
-use crate::model_selection::ModelSelection;
+use crate::model_selection::{may_be_alias, ModelSelection};
 use crate::session_helpers;
 use anyhow::Context;
 use aura_core_modes::AgentMode;
@@ -323,6 +323,22 @@ async fn build(
         });
     let mut models = ModelSelection::init(&mut config, summary);
     let mut notes = Vec::new();
+    // A short name (`opus`, `deepseek`) resolves among the listed models,
+    // so load the live lists first. Mock runs skip this: they have no
+    // sign-ins and must not touch the network.
+    let mut local_probed = false;
+    let mut plans_refreshed = false;
+    if let (Some(model), Some(auth)) = (&args.model, &auth) {
+        if may_be_alias(model) {
+            models.refresh_local().await;
+            local_probed = true;
+            if let Some(note) = models.refresh_plans(auth.as_ref()).await {
+                warn!("{note}");
+                notes.push(note);
+            }
+            plans_refreshed = true;
+        }
+    }
     if let Some(model) = &args.model {
         if let Err(problem) = models.use_for_run(&mut config, model) {
             if !mock {
@@ -334,13 +350,15 @@ async fn build(
         let local = |config: &aura_agent::AgentLoopConfig| {
             aura_model::model_catalog::local_model_name(&config.model).is_some()
         };
-        if models.is_gate() || local(&config) {
+        if !local_probed && (models.is_gate() || local(&config)) {
             models.refresh_local().await;
         }
         if models.is_gate() {
-            if let Some(note) = models.refresh_plans(auth.as_ref()).await {
-                warn!("{note}");
-                notes.push(note);
+            if !plans_refreshed {
+                if let Some(note) = models.refresh_plans(auth.as_ref()).await {
+                    warn!("{note}");
+                    notes.push(note);
+                }
             }
             models.refresh_route(&mut config);
             info!(model = %config.model, "{}", models.display());

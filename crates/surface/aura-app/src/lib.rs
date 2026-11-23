@@ -36,6 +36,7 @@ pub mod headless;
 pub mod isolation;
 mod long_run;
 pub mod model_selection;
+pub mod priority;
 pub mod project_instructions;
 pub mod record_loader;
 pub mod recorded_runs;

@@ -1,0 +1,14 @@
+{
+  "id": "01a20432229b0022",
+  "title": "Goal: the footer under an agent's reply in the chat must show the thinking level the turn ran at, next to the model, e.…",
+  "state": "completed",
+  "agent_id": "d2fd6732463d5127b623c2a8bf8c07e5bee6466307f37c0f4a6a66cd21ed429a",
+  "agent_name": "rust-engineer #37",
+  "assignee": "rust-engineer",
+  "parent": "01a2043060400021",
+  "items": [],
+  "summary": "The reply footer now shows the thinking level after the turn's own models, both live and when a chat is loaded again. Tests and fmt pass. Plain clippy `-D warnings` does not pass, but the errors are in three files I didn't touch (details below).",
+  "updated_ms": 1795367194157,
+  "created_ms": 1795366724251,
+  "tool_use_id": "toolu_01UFc4VGPyMr6zBZztoUcTBY"
+}

@@ -246,7 +246,17 @@ impl Tabs {
     }
 
     fn deliver(&mut self, command: UiCommand) {
-        if let UiCommand::ForAgent { agent_id, .. } = &command {
+        if let UiCommand::ForAgent {
+            agent_id,
+            command: inner,
+        } = &command
+        {
+            if let UiCommand::SetMode(mode) = inner.as_ref() {
+                // Lists sent on from this copy keep the agent's plan mark.
+                if let Some(agent) = self.agents.iter_mut().find(|a| a.id == *agent_id) {
+                    agent.plan_mode = *mode == aura_ui_terminal::PermissionMode::Plan;
+                }
+            }
             match self.owner(agent_id) {
                 Some(index) => self.tabs[index].tui.process_command(command),
                 // Not listed yet: a tab's UI keeps it until it is.
@@ -262,6 +272,17 @@ impl Tabs {
                     // A new agent: the list that names it follows.
                     self.unlisted = Some((agent, Vec::new()));
                 }
+            }
+            UiCommand::SwitchFailed(agent) => {
+                // The tab that switched to `agent` goes back; the session
+                // still has the agent it had.
+                if self.focus_sent.as_deref() == Some(agent.as_str()) {
+                    self.focus_sent = None;
+                }
+                let index = self.owner(&agent).unwrap_or_else(|| self.active_index());
+                self.tabs[index]
+                    .tui
+                    .process_command(UiCommand::SwitchFailed(agent));
             }
             UiCommand::SetProcesses(processes) => {
                 self.processes = processes;
@@ -846,6 +867,14 @@ impl Tabs {
             }
         }
         match &event {
+            UiEvent::SelectAgent(agent) | UiEvent::FocusAgent(agent)
+                if self.owner(agent) == Some(from) =>
+            {
+                let load = matches!(event, UiEvent::SelectAgent(_));
+                let agent = agent.clone();
+                self.switch_in_tab(from, agent, load);
+                return;
+            }
             UiEvent::SelectAgent(agent) => {
                 // An agent of another tab: go to that tab instead.
                 if let Some(owner) = self.owner(agent).filter(|owner| *owner != from) {
@@ -900,6 +929,30 @@ impl Tabs {
         match &self.focus_sent {
             Some(sent) => sent == agent,
             None => self.session_active == agent,
+        }
+    }
+
+    /// The tab at `from` switched to `agent`, one of its own, on screen
+    /// already (see `App::request_agent_switch`), and asks the session to
+    /// follow: with the agent's chat (`load`) or without. Asking for the
+    /// agent the tab shows first, as other events do, would turn the
+    /// session to `agent` without its chat.
+    ///
+    /// The tab waits for the session's `SetActiveAgent`. When the session
+    /// has `agent` active already and nothing is on its way, it would send
+    /// none, so the answer is given here instead.
+    fn switch_in_tab(&mut self, from: usize, agent: String, load: bool) {
+        if load {
+            // Sent even to an agent the session has active: it sends the
+            // chat of an agent selected again.
+            self.focus_sent = Some(agent.clone());
+            self.send(UiEvent::SelectAgent(agent));
+        } else if !self.asked_for(&agent) {
+            self.request(&agent, false);
+        } else if self.focus_sent.is_none() {
+            if let Some(tab) = self.tabs.get_mut(from) {
+                tab.tui.process_command(UiCommand::SetActiveAgent(agent));
+            }
         }
     }
 
@@ -1386,6 +1439,54 @@ mod tests {
         };
         assert_eq!(listed(&tabs.tabs[0]), ["1", "3"]);
         assert_eq!(listed(&tabs.tabs[1]), ["2", "3"]);
+    }
+
+    /// Whether tab `tab` lists agent `id` as in plan mode, if it lists it.
+    fn plan_mode_in(tabs: &Tabs, tab: usize, id: &str) -> Option<bool> {
+        let agents = tabs.tabs[tab].tui.agents().iter();
+        agents.filter(|a| a.id == id).map(|a| a.plan_mode).next()
+    }
+
+    fn set_mode_for(agent_id: &str, mode: aura_ui_terminal::PermissionMode) -> UiCommand {
+        UiCommand::ForAgent {
+            agent_id: agent_id.into(),
+            command: Box::new(UiCommand::SetMode(mode)),
+        }
+    }
+
+    #[test]
+    fn a_plan_mode_switch_survives_the_lists_sent_on_to_tabs() {
+        use aura_ui_terminal::PermissionMode;
+        let (mut tabs, _events) = two_tabs();
+
+        // a1.1, off screen in the back tab, goes into plan mode.
+        tabs.apply(set_mode_for("a1.1", PermissionMode::Plan));
+        assert_eq!(plan_mode_in(&tabs, 0, "a1.1"), Some(true));
+        assert_eq!(plan_mode_in(&tabs, 0, "a1"), Some(false));
+        assert_eq!(plan_mode_in(&tabs, 1, "a1.1"), None, "not its tab's");
+
+        // New projects re-send each tab its agents from the router's copy.
+        tabs.apply(projects(&["a1", "p2", "a3"]));
+        assert_eq!(plan_mode_in(&tabs, 0, "a1.1"), Some(true), "still marked");
+        assert_eq!(plan_mode_in(&tabs, 0, "a1"), Some(false));
+        assert_eq!(plan_mode_in(&tabs, 1, "a3"), Some(false));
+
+        // a3, on screen in the front tab, too.
+        tabs.apply(set_mode_for("a3", PermissionMode::Plan));
+        tabs.apply(projects(&["a1", "p2", "a3"]));
+        assert_eq!(plan_mode_in(&tabs, 1, "a3"), Some(true));
+        assert_eq!(plan_mode_in(&tabs, 0, "a1.1"), Some(true));
+
+        // Out of plan mode, the next re-send keeps it unmarked.
+        tabs.apply(set_mode_for("a1.1", PermissionMode::Agent));
+        assert_eq!(plan_mode_in(&tabs, 0, "a1.1"), Some(false));
+        tabs.apply(projects(&["a1", "p2", "a3"]));
+        assert_eq!(plan_mode_in(&tabs, 0, "a1.1"), Some(false));
+        assert_eq!(plan_mode_in(&tabs, 1, "a3"), Some(true));
+
+        // The session's own list says who is in plan mode from then on.
+        tabs.apply(list(TWO, "a3"));
+        assert_eq!(plan_mode_in(&tabs, 1, "a3"), Some(false));
     }
 
     #[test]
@@ -1912,5 +2013,47 @@ mod tests {
         assert!(!tabs.close(1), "the last tab stays");
         assert_eq!(tabs.arrangement(), [["a3", "a1"]]);
         assert_eq!(tabs.front_index(), 0);
+    }
+
+    #[test]
+    fn a_tabs_own_switch_goes_to_the_session_alone() {
+        let (mut tabs, mut events) = tabs();
+        start(&mut tabs, ONE, "a1");
+        let _ = sent(&mut events);
+
+        // The tab switched on screen already; nothing is asked for the
+        // agent it showed before, which would turn the session there.
+        tabs.forward(0, UiEvent::FocusAgent("a1.1".into()));
+        assert_eq!(sent(&mut events), [r#"FocusAgent("a1.1")"#]);
+        switch(&mut tabs, ONE, "a1.1");
+
+        tabs.forward(0, UiEvent::SelectAgent("a1".into()));
+        assert_eq!(sent(&mut events), [r#"SelectAgent("a1")"#]);
+        switch(&mut tabs, ONE, "a1");
+
+        // A select of the agent the session has is still sent: its chat
+        // comes with the answer.
+        tabs.forward(0, UiEvent::SelectAgent("a1".into()));
+        assert_eq!(sent(&mut events), [r#"SelectAgent("a1")"#]);
+        switch(&mut tabs, ONE, "a1");
+
+        // A focus on it gets its answer here, as the session sends none.
+        tabs.forward(0, UiEvent::FocusAgent("a1".into()));
+        assert!(sent(&mut events).is_empty());
+        assert_eq!(shown(&tabs), ["a1"]);
+    }
+
+    #[test]
+    fn a_failed_switch_is_no_longer_waited_for() {
+        let (mut tabs, mut events) = tabs();
+        start(&mut tabs, ONE, "a1");
+        tabs.forward(0, UiEvent::SelectAgent("a1.1".into()));
+        assert_eq!(sent(&mut events), [r#"SelectAgent("a1.1")"#]);
+        tabs.apply(UiCommand::ShowError("Could not open agent".into()));
+        tabs.apply(UiCommand::SwitchFailed("a1.1".into()));
+
+        // The session still has a1, so asking for a1.1 again is sent.
+        tabs.forward(0, UiEvent::FocusAgent("a1.1".into()));
+        assert_eq!(sent(&mut events), [r#"FocusAgent("a1.1")"#]);
     }
 }

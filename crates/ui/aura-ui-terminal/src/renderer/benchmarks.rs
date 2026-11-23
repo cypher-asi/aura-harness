@@ -3,7 +3,7 @@
 
 use super::panels::body_block;
 use super::text::display_width;
-use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice};
+use crate::app::benchmarks::{BenchMode, BenchState, FormField, WorkChoice, BY_DIFFICULTY};
 use crate::events::{
     arm_letter, cost_per_fix, run_order, BenchArm, BenchDoing, BenchLiveRun, BenchRun, BenchStatus,
     BenchTaskCell, BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict, BenchView,
@@ -74,7 +74,11 @@ fn tokens(n: u64) -> String {
 }
 
 /// `opus-5-5` for `claude/claude-opus-5-5`: no provider, no `claude-`.
+/// An arm that runs work on a model per difficulty is `by difficulty`.
 pub(super) fn short_model(model: &str) -> &str {
+    if model.starts_with("difficulty:") {
+        return BY_DIFFICULTY;
+    }
     let name = model.rsplit('/').next().unwrap_or(model);
     name.strip_prefix("claude-").unwrap_or(name)
 }
@@ -1314,7 +1318,26 @@ fn arm_reads(value: &str, arm_b: bool) -> String {
         "" if arm_b => "the strongest Opus (default)".to_string(),
         "gate" => "gate · Gate routes each turn".to_string(),
         "gate:nodelegate" => "gate:nodelegate · Gate without enforced delegation".to_string(),
+        BY_DIFFICULTY => "by difficulty · a model for easy, medium and hard work".to_string(),
         model => model.to_string(),
+    }
+}
+
+/// How a difficulty's row reads: its model and who serves it, or how to
+/// pick one. Returns whether it reads faint.
+fn difficulty_reads(app: &App, model: &str) -> (String, bool) {
+    if model.is_empty() {
+        return ("←/→ or type part of a name, then Enter".to_string(), true);
+    }
+    let group = app
+        .models()
+        .iter()
+        .find(|m| m.id == model)
+        .map(|m| m.group.as_str())
+        .filter(|group| !group.is_empty());
+    match group {
+        Some(group) => (format!("{model} · {group}"), false),
+        None => (model.to_string(), false),
     }
 }
 
@@ -1338,8 +1361,19 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
     let typed_prompt = matches!(state.work(), WorkChoice::Prompt);
     let examples = matches!(state.work(), WorkChoice::Examples(_));
     for field in FormField::ALL {
+        if !form.shown(field) {
+            continue;
+        }
         let focused = field == form.field;
         let (value, faint) = match field {
+            FormField::AEasy
+            | FormField::AMedium
+            | FormField::AHard
+            | FormField::BEasy
+            | FormField::BMedium
+            | FormField::BHard => {
+                difficulty_reads(app, form.difficulty_model(field).unwrap_or_default())
+            }
             FormField::Work => (
                 match state.work() {
                     WorkChoice::LastPrompt => "your last prompt".to_string(),
@@ -1424,7 +1458,8 @@ fn form_lines<'a>(app: &App, theme: &Theme, width: usize) -> Vec<Line<'a>> {
         let cycles = matches!(
             field,
             FormField::Work | FormField::A | FormField::B | FormField::Repeats
-        ) || (field == FormField::Tasks && examples);
+        ) || field.difficulty().is_some()
+            || (field == FormField::Tasks && examples);
         let value = if focused && cycles {
             format!("‹ {value} ›")
         } else {
@@ -2226,6 +2261,38 @@ mod tests {
         assert!(
             shown.contains("(only when the work is example tasks)"),
             "{shown}"
+        );
+    }
+
+    #[test]
+    fn a_by_difficulty_arm_shows_a_row_per_difficulty() {
+        use crate::app::benchmarks::BY_DIFFICULTY;
+        let theme = Theme::default();
+        let mut app = App::new();
+        let shown = text(&form_lines(&app, &theme, 120));
+        assert!(!shown.contains("Medium"), "{shown}");
+
+        let form = &mut app.bench_mut().form;
+        form.b = BY_DIFFICULTY.to_string();
+        form.b_models[0] = "openrouter/deepseek/deepseek-v3.2".to_string();
+        form.field = FormField::BEasy;
+        let shown = text(&form_lines(&app, &theme, 120));
+        assert!(
+            shown.contains("by difficulty · a model for easy, medium and hard work"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("‹ openrouter/deepseek/deepseek-v3.2 ›"),
+            "{shown}"
+        );
+        assert!(shown.contains("  Medium"), "{shown}");
+        assert!(
+            shown.contains("←/→ or type part of a name, then Enter"),
+            "{shown}"
+        );
+        assert_eq!(
+            short_model("difficulty:easy=a,medium=b,hard=c"),
+            BY_DIFFICULTY
         );
     }
 }

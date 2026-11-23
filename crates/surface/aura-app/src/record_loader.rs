@@ -15,8 +15,8 @@ use aura_model::{Message, ModelCallPurpose, Usage};
 use aura_store_record::{ReadStore, StoreError};
 use aura_ui_terminal::{
     events::{
-        ActivityData, AgentSummary, CallUsage, MessageData, MessageRole, PolicyDetail,
-        ProjectSummary, RecordStatus, RecordSummary, MAX_RECORDS,
+        ActivityData, AgentSummary, MessageData, MessageRole, PolicyDetail, ProjectSummary,
+        RecordStatus, RecordSummary, MAX_RECORDS,
     },
     UiCommand,
 };
@@ -306,10 +306,19 @@ pub fn conversation_history(
 }
 
 /// Put the footer of a reply's turn, its models and their usage, on `reply`.
-fn set_footer(reply: &mut MessageData, footer: Option<(String, Option<CallUsage>)>) {
-    let (model, usage) = footer.unzip();
-    reply.model = model;
-    reply.usage = usage.flatten();
+fn set_footer(reply: &mut MessageData, footer: Option<crate::turn_calls::Footer>) {
+    match footer {
+        Some(footer) => {
+            reply.model = Some(footer.models);
+            reply.usage = footer.usage;
+            reply.sources = footer.sources;
+        }
+        None => {
+            reply.model = None;
+            reply.usage = None;
+            reply.sources = Vec::new();
+        }
+    }
 }
 
 /// The model that answered the call a `Reasoning` entry records.
@@ -743,7 +752,7 @@ fn rows(
             below_compare.push(above || agent.is_compare());
             let row = AgentSummary {
                 id: agent_id.to_hex(),
-                name: agent.display_name().to_string(),
+                name: agent.display_name().into_owned(),
                 zns_id: agent.zns_id.clone(),
                 is_active: agent_id == active,
                 record_count: 0,
@@ -755,6 +764,10 @@ fn rows(
                 bench_run: above && !agent.is_compare_arm(),
                 project_id: agent.project_id.clone(),
                 project: names.of(registry, agent.project_id.as_deref()),
+                // The registry does not know modes; the hub fills this in.
+                plan_mode: false,
+                code: agent.code.clone(),
+                subtitle: agent.subtitle.clone(),
             };
             (agent_id, row)
         })
@@ -787,6 +800,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
             activity: None,
             model: None,
             usage: None,
+            sources: Vec::new(),
         });
     }
     let (role, content) = match tx.tx_type {
@@ -823,6 +837,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
         activity: None,
         model: None,
         usage: None,
+        sources: Vec::new(),
     })
 }
 

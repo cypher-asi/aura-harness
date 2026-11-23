@@ -8,7 +8,7 @@ Usage: aura logout [OPTIONS] [PROVIDER]
 
 Arguments:
   [PROVIDER]
-          `zos` (default) to sign out, or `claude` / `chatgpt` to unlink
+          `zos` (default) to sign out, or `claude` / `chatgpt` / `openrouter` to unlink
           
           [default: zos]
 
