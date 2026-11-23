@@ -2,14 +2,18 @@
 //! they were when it started, what it cost, and what the user kept from
 //! it (the reference the judge rates each run against).
 
+#![deny(clippy::too_many_lines)]
+
 use super::LoopState;
 use crate::file_checkpoints::{FileCheckpoints, TurnManifest};
-use crate::session_checkpoint::SessionUsage;
+use crate::session_checkpoint::{SessionCheckpoint, SessionUsage};
 use aura_core_types::{AgentId, BenchSource, Reference, SessionBaseline};
 use aura_gate::compare::{relative, title, SessionPick};
 use aura_gate::judge::blind::MAX_DIFF;
 use aura_model::{Message, Role};
 use aura_ui_terminal::events::BenchSession;
+use std::borrow::Cow;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Sessions the BENCH tab offers at most.
@@ -28,25 +32,36 @@ pub(super) struct Replay {
     pub notes: Vec<String>,
 }
 
-/// One of the agent's sessions.
-struct Session {
+/// One of the agent's sessions: borrowed when it is open, else loaded
+/// from its checkpoint.
+struct Session<'a> {
     started_ms: u64,
-    messages: Vec<Message>,
-    usage: SessionUsage,
+    messages: Cow<'a, [Message]>,
+    usage: Cow<'a, SessionUsage>,
     current: bool,
 }
 
-/// The agent's current session: its open one, else its latest checkpoint.
-fn current(state: &LoopState<'_>, agent_id: AgentId) -> Option<Session> {
-    if let Some(session) = state.idle.get(&agent_id) {
-        if !session.messages.is_empty() {
-            return Some(Session {
-                started_ms: session.started_ms,
-                messages: session.messages.clone(),
-                usage: session.usage.clone(),
-                current: true,
-            });
+impl Session<'_> {
+    /// The session `checkpoint` holds.
+    fn checkpointed(checkpoint: SessionCheckpoint, current: bool) -> Self {
+        Self {
+            started_ms: checkpoint.started_ms,
+            messages: Cow::Owned(checkpoint.messages),
+            usage: Cow::Owned(checkpoint.usage),
+            current,
         }
+    }
+}
+
+/// The agent's current session: its open one, else its latest checkpoint.
+fn current<'a>(state: &'a LoopState<'_>, agent_id: AgentId) -> Option<Session<'a>> {
+    if let Some(open) = state.idle.get(&agent_id).filter(|s| !s.messages.is_empty()) {
+        return Some(Session {
+            started_ms: open.started_ms,
+            messages: Cow::Borrowed(open.messages.as_slice()),
+            usage: Cow::Borrowed(&open.usage),
+            current: true,
+        });
     }
     let checkpoint = state
         .hub
@@ -54,27 +69,21 @@ fn current(state: &LoopState<'_>, agent_id: AgentId) -> Option<Session> {
         .checkpoints
         .as_ref()?
         .load_current(agent_id)?;
-    Some(Session {
-        started_ms: checkpoint.started_ms,
-        messages: checkpoint.messages,
-        usage: checkpoint.usage,
-        current: true,
-    })
+    Some(Session::checkpointed(checkpoint, true))
 }
 
-fn session(state: &LoopState<'_>, agent_id: AgentId, pick: SessionPick) -> Option<Session> {
+fn session<'a>(
+    state: &'a LoopState<'_>,
+    agent_id: AgentId,
+    pick: SessionPick,
+) -> Option<Session<'a>> {
     let now = current(state, agent_id);
     match pick {
         SessionPick::Current => now,
         SessionPick::Started(ms) if now.as_ref().is_some_and(|s| s.started_ms == ms) => now,
         SessionPick::Started(ms) => {
             let checkpoint = state.hub.factory.checkpoints.as_ref()?.load(agent_id, ms)?;
-            Some(Session {
-                started_ms: checkpoint.started_ms,
-                messages: checkpoint.messages,
-                usage: checkpoint.usage,
-                current: false,
-            })
+            Some(Session::checkpointed(checkpoint, false))
         }
     }
 }
@@ -83,7 +92,7 @@ fn session(state: &LoopState<'_>, agent_id: AgentId, pick: SessionPick) -> Optio
 /// newest first.
 pub(super) fn sessions(state: &LoopState<'_>, agent_id: AgentId) -> Vec<BenchSession> {
     let files = state.hub.factory.file_checkpoints.as_ref();
-    let listed = |s: &Session| {
+    let listed = |s: &Session<'_>| {
         let manifests = manifests(files, agent_id, s.started_ms);
         let prompts = prompts(&s.messages, &manifests);
         (!prompts.is_empty()).then(|| BenchSession {
@@ -108,13 +117,7 @@ pub(super) fn sessions(state: &LoopState<'_>, agent_id: AgentId) -> Vec<BenchSes
         let Some(checkpoint) = checkpoints.load(agent_id, listing.started_ms) else {
             continue;
         };
-        let past = Session {
-            started_ms: checkpoint.started_ms,
-            messages: checkpoint.messages,
-            usage: checkpoint.usage,
-            current: false,
-        };
-        out.extend(listed(&past));
+        out.extend(listed(&Session::checkpointed(checkpoint, false)));
     }
     out
 }
@@ -160,24 +163,7 @@ pub(super) fn load(
         .first()
         .ok_or("That session has no prompts to replay")?;
     let mut notes = Vec::new();
-    let start = match files {
-        Some(files) if !manifests.is_empty() => {
-            notes.push(
-                "Each copy starts from the files as they were when the session started; \
-                 changes its shell commands made are not undone"
-                    .to_string(),
-            );
-            start_files(files, agent_id, &manifests, workspace, &mut notes)
-        }
-        _ => {
-            notes.push(
-                "The session changed no checkpointed files, so each copy starts from the \
-                 files as they are now"
-                    .to_string(),
-            );
-            Vec::new()
-        }
-    };
+    let start = start(files, agent_id, &manifests, workspace, &mut notes);
     let diff = files.map_or_else(String::new, |files| {
         reference_diff(files, agent_id, &manifests, workspace)
     });
@@ -188,13 +174,7 @@ pub(super) fn load(
                 .to_string(),
         );
     }
-    let reply = session
-        .messages
-        .iter()
-        .rev()
-        .find(|m| m.role == Role::Assistant && !m.text_content().trim().is_empty())
-        .map(Message::text_content)
-        .unwrap_or_default();
+    let reply = last_reply(&session.messages);
     let reference = (!diff.is_empty() || !reply.is_empty()).then_some(Reference { diff, reply });
     let usage = &session.usage;
     let source = BenchSource::Session {
@@ -215,6 +195,48 @@ pub(super) fn load(
         start,
         notes,
     })
+}
+
+/// What each copy starts from, with a note saying which: the files the
+/// session changed as they were when it started, or the files as they are
+/// now (nothing to put back) when its file checkpoints name none.
+fn start(
+    files: Option<&FileCheckpoints>,
+    agent_id: AgentId,
+    manifests: &[TurnManifest],
+    workspace: &Path,
+    notes: &mut Vec<String>,
+) -> Vec<StartFile> {
+    match files {
+        Some(files) if !manifests.is_empty() => {
+            notes.push(
+                "Each copy starts from the files as they were when the session started; \
+                 changes its shell commands made are not undone"
+                    .to_string(),
+            );
+            start_files(files, agent_id, manifests, workspace, notes)
+        }
+        _ => {
+            notes.push(
+                "The session changed no checkpointed files, so each copy starts from the \
+                 files as they are now"
+                    .to_string(),
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// The text of the last reply in `messages` that has any; empty when none
+/// has.
+fn last_reply(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .rev()
+        .filter(|m| m.role == Role::Assistant)
+        .map(Message::text_content)
+        .find(|text| !text.trim().is_empty())
+        .unwrap_or_default()
 }
 
 /// What each file the session changed held when it started, relative to
@@ -257,7 +279,7 @@ fn reference_diff(
 ) -> String {
     let mut diff = String::new();
     for file in files.diff(agent_id, manifests, Some(workspace)) {
-        diff.push_str(&format!("--- a/{0}\n+++ b/{0}\n{1}", file.path, file.diff));
+        let _ = write!(diff, "--- a/{0}\n+++ b/{0}\n{1}", file.path, file.diff);
         if !diff.ends_with('\n') {
             diff.push('\n');
         }
@@ -265,7 +287,10 @@ fn reference_diff(
             break;
         }
     }
-    diff.chars().take(MAX_DIFF).collect()
+    if let Some((cut, _)) = diff.char_indices().nth(MAX_DIFF) {
+        diff.truncate(cut);
+    }
+    diff
 }
 
 /// Put the session's starting files in the copy at `workdir`.
