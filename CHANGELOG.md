@@ -67,6 +67,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attempt line once, after Gate's follow-up, as the terminal's turns
   do. A passed check the judge then found wanting used to leave both a
   `checks_passed` and a `judged_fail` on the record.
+- A `/compare` Gate run whose route turned your sign-in down goes on,
+  on Gate's next choice, in the same conversation, as a turn in the
+  terminal does; it stopped with the API's error. Its later prompts
+  leave that model out and, in a comparison that learns, no longer
+  explore. A pinned arm's run still stops.
 
 ##### Fixed
 
