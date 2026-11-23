@@ -46,6 +46,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+#[cfg(test)]
+mod tests;
+
 /// How long a turn may keep running after `--max-time` cancelled it
 /// before it is dropped, losing the turn's unsaved steps.
 const CANCEL_GRACE: Duration = Duration::from_secs(60);
