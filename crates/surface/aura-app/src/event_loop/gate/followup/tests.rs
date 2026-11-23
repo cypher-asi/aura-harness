@@ -1,5 +1,5 @@
-//! Which steps an attempt may take, what it is told of them, and what the
-//! harness's own check and the review say.
+//! Which steps an attempt may take, what it is told of them, what the
+//! harness's own check and the review say, and how failed work moves on.
 
 use super::check::check_signal;
 use super::messages::{nudge_message, nudge_notice};
@@ -8,10 +8,11 @@ use super::untested::untested;
 use super::*;
 use crate::event_loop::task_check::CheckRun;
 use aura_config::GateConfig;
-use aura_core_types::{Hash, OutcomePayload};
+use aura_core_types::{Hash, OutcomePayload, PromptPayload, Route, RouteReason};
 use aura_gate::followup::{Allowed, NUDGE_PROMPT};
 use aura_gate::judge::criteria::{Checked, Criterion, Kind, Status};
 use aura_gate::judge::turn::Answer;
+use aura_gate::route::{Decision, Work};
 use aura_model::model_catalog::{ModelBackend, ModelTier};
 use aura_model::ThinkingEffort;
 
@@ -273,4 +274,58 @@ fn reviews_join_on_lines() {
     assert_eq!(joined(some("a"), some("b")), some("a\nb"));
     assert_eq!(joined(None, some("b")), some("b"));
     assert_eq!(joined(None, None), None);
+}
+
+#[test]
+fn a_takeover_is_the_harnesss_and_recorded_with_route_reason_escalate() {
+    let next = Decision {
+        model: candidate(OPUS, ModelTier::Frontier, 4.0),
+        effort: ThinkingEffort::High,
+        reason: RouteReason::Escalate,
+        explored: false,
+        propensity: 1.0,
+    };
+    let found = Some("The parser drops a token.");
+    let takeover = Takeover::new(SONNET, next, OutcomeSignal::ChecksFailed, found);
+    assert!(
+        takeover.text.starts_with(
+            "The work above was done on claude-sonnet-5-5 (claude plan) and ended with its last \
+             test or build command failing. A reviewer of that work found: The parser drops a \
+             token. You are a stronger model taking over this turn."
+        ),
+        "{}",
+        takeover.text
+    );
+    let expected = PromptPayload {
+        category: Some(PromptCategory::Debugging),
+        classifier: HAIKU.to_string(),
+        route: Route::turn(OPUS, RouteReason::Escalate).at_effort("high"),
+        ..PromptPayload::new(format!("Harness notice:\n{}", takeover.text))
+    };
+    let prompt = takeover.prompt(PromptCategory::Debugging, HAIKU.to_string());
+    assert_eq!(prompt, expected);
+}
+
+#[test]
+fn a_reroute_skips_the_models_whose_routes_refused_the_sign_in() {
+    let candidates = [
+        candidate(HAIKU, ModelTier::Fast, 0.1),
+        candidate(SONNET, ModelTier::Standard, 2.0),
+        candidate(OPUS, ModelTier::Frontier, 4.0),
+    ];
+    let live = never_exploring();
+    let work = Work::turn(PromptCategory::Question).of(Some(Difficulty::Medium));
+    assert_eq!(live.decide(&work, &candidates).unwrap().model.id, SONNET);
+    let next = reroute(&live, &work, &candidates, &[SONNET.to_string()]).unwrap();
+    assert_ne!(next.model.id, SONNET);
+    let every: Vec<String> = candidates.iter().map(|c| c.id.clone()).collect();
+    assert!(reroute(&live, &work, &candidates, &every).is_none());
+    assert_eq!(
+        refused_notice(
+            SONNET,
+            "gate → claude-opus-5-5 (claude plan) · question, default"
+        ),
+        "claude/claude-sonnet-5-5 refused your sign-in; Gate skips it until your sign-ins \
+         change.\ngate → claude-opus-5-5 (claude plan) · question, default"
+    );
 }

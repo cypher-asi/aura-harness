@@ -21,6 +21,11 @@
 //! Work the review finds unfinished goes back to its model once and on
 //! to a stronger model after that.
 //!
+//! An attempt that failed, by its own check, the harness's or the
+//! judge's verdict, goes on the same way from each surface: Gate's judge
+//! says whether its model was at fault ([`Judging`]), and the next
+//! stronger model takes the work over ([`Takeover`]).
+//!
 //! - `driver`: one pass of the follow-up over an attempt
 //! - `report`: what a step found, shown as it is found
 //! - `steps`: the steps an attempt may still take, and the next of them
@@ -30,10 +35,14 @@
 //! - `before`: the workspace before an attempt, and what it changed since
 //! - `untested`: what an attempt added that no test names
 //! - `messages`: what the model and the user are told of each step
+//! - `ended`: the signal an attempt ended with, and how it failed
+//! - `escalate`: the judge of a failure, and the move to a stronger model
 
 mod before;
 mod check;
 mod driver;
+mod ended;
+mod escalate;
 mod judge;
 mod messages;
 mod report;
@@ -46,9 +55,12 @@ mod untested;
 pub(crate) use before::Before;
 use before::Changed;
 pub(crate) use driver::{Attempt, CarryOn, Followed, Following};
-pub(crate) use messages::{takeover, takeover_message};
+pub(crate) use ended::{ended_signal, failure_text};
+pub(crate) use escalate::{record_message, stronger, takeover_prompt, Judging, Takeover};
+pub(super) use escalate::{refused_notice, reroute};
 pub(crate) use report::{Found, Report};
 
+use crate::event_loop::agents::AgentSession;
 use aura_agent::AgentLoopResult;
 use aura_config::ReviewMode;
 use aura_core_types::{Difficulty, OutcomeSignal, PromptCategory};
@@ -57,7 +69,7 @@ use aura_gate::followup::{Allowed, Taken};
 use aura_gate::judge::criteria::Criteria;
 use aura_gate::live::{self, GateLive};
 use aura_gate::route::Candidate;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Whether a turn on `model`, routed among `candidates`, may have its
@@ -115,6 +127,14 @@ pub(crate) struct FollowUp {
 /// Whether `result` stopped on a limit rather than by finishing.
 fn hit_limit(result: &AgentLoopResult) -> bool {
     result.budget_exhausted || result.stalled || result.output_truncated
+}
+
+/// What the attempt `session`'s agent is running changed with its file
+/// tools, as a unified diff whose paths are relative to `workspace`.
+fn tool_edits(session: &AgentSession, workspace: &Path) -> String {
+    (session.file_checkpoints.as_ref())
+        .map(|files| files.attempt(session.agent_id()).diff(Some(workspace)))
+        .unwrap_or_default()
 }
 
 /// `first`, then `second`, on lines of their own; whichever is present.

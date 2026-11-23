@@ -34,7 +34,10 @@ use super::agent_events::AgentUi;
 use super::agents::AgentSession;
 use super::bench_source::{self, StartFile};
 use super::compare_view::{duration, money, render};
-use super::gate::followup::{joined, takeover_message, At, Attempt, Before, CarryOn, Following};
+use super::gate::followup::{
+    ended_signal, failure_text, joined, record_message, stronger, At, Attempt, Before, CarryOn,
+    Following, Judging, Takeover,
+};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message, turn_summary};
 use super::modes::Permissions;
 use super::processes::{now_ms, turn_id};
@@ -42,7 +45,7 @@ use super::steering::Steering;
 use super::subagents::{lock, AgentHub, ArmRouting};
 use super::task_check;
 use super::tasks::TASKS_DIR;
-use super::turns::{ended_signal, failure_text, record_prompt};
+use super::turns::record_prompt;
 use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
 use crate::isolation::changes::{self, BUILD_OUTPUT};
@@ -57,7 +60,7 @@ use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_core_types::{
     AgentId, ArmSpec, BenchSource, CompareArm, CompareCopy, CompareJudgment, ComparePayload,
     CompareRun, CompareStatus, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory,
-    PromptPayload, Route, RouteLevel, RouteReason, RunTurn, SystemKind, Transaction,
+    PromptPayload, Route, RouteReason, RunTurn, SystemKind, Transaction,
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_gate::attempts::Terms;
@@ -1465,12 +1468,6 @@ async fn run_prompt(
     };
     let mut left;
     let mut cut_short;
-    let edits = || {
-        files
-            .as_ref()
-            .map(|files| files.attempt(agent_id).diff(Some(&workdir)))
-            .unwrap_or_default()
-    };
     let (signal, reply, mut error, ended, recorded) = loop {
         let agent_loop = AgentLoop::new(config.clone());
         let steering = Steering::new(cancel);
@@ -1553,7 +1550,7 @@ async fn run_prompt(
         // What a judge of the attempt's failure is shown of its change.
         let diff = match &result {
             Ok(partial) if gate_arm && calls_for_stronger(signal) => {
-                follow.steps.diff(partial, edits()).await
+                follow.steps.diff(session, Some(partial)).await
             }
             _ => String::new(),
         };
@@ -1608,22 +1605,19 @@ async fn run_prompt(
             .as_ref()
             .and_then(|failed| live::judge_for(&hub.gate, &plan.candidates, failed));
         if let (Some(judge), Some(failed)) = (judge, &ended) {
-            let shown = Failed {
-                task: text,
-                diff: &diff,
-                reply: &reply,
-                failure: &failure,
+            let judging = Judging {
+                session,
+                judge: &judge,
+                ended: failed,
+                shown: Failed {
+                    task: text,
+                    diff: &diff,
+                    reply: &reply,
+                    failure: &failure,
+                },
+                auth_token: config.auth_token.clone(),
             };
-            let judged = live::judge_failed(
-                &session.kernel,
-                &judge,
-                failed,
-                &shown,
-                config.auth_token.clone(),
-            )
-            .await;
-            if let Some((judged_as, judged)) = judged {
-                ui.send(system_message(judged.describe())).await;
+            if let Some((judged_as, judged)) = judging.ask(ui).await {
                 if !judged.verdict.at_fault {
                     break (judged_as.signal, reply, error, Some(judged_as), true);
                 }
@@ -1631,33 +1625,21 @@ async fn run_prompt(
             }
         }
         let ran_at = config.held_thinking_effort();
-        let Some(next) = hub.gate.escalate(
-            RouteLevel::Turn,
-            category,
-            (&model, routed_effort(&config)),
-            signal,
-            &plan.candidates,
-        ) else {
+        let ran = (model.as_str(), routed_effort(&config));
+        let Some(next) = stronger(&hub.gate, &plan.candidates, category, ran, signal) else {
             break (signal, reply, error, ended, true);
         };
         let review = joined(harness, review);
-        let takeover = takeover_message(&model, &next.model.id, signal, review.as_deref());
-        let escalated = PromptPayload {
-            category: Some(category),
-            classifier: plan.classifier.clone(),
-            route: next.route(RouteLevel::Turn),
-            ..PromptPayload::new(takeover.clone())
-        };
-        if let Some(rec) = recorder {
-            rec.follow_up(&takeover);
-        }
-        prompt_tx = match record_prompt(session, &escalated).await {
-            Ok((tx, _)) => Some(tx.hash),
+        let takeover = Takeover::new(&model, next, signal, review.as_deref());
+        let escalated = takeover.prompt(category, plan.classifier.clone());
+        prompt_tx = match record_message(session, &escalated, recorder.map(Arc::as_ref)).await {
+            Ok(hash) => Some(hash),
             Err(problem) => {
                 warn!(%agent_id, %problem, "Failed to record a compare run's escalated prompt");
                 None
             }
         };
+        let next = takeover.next;
         info!(%agent_id, from = %model, to = %next.model.id, %signal, "Gate moves the run's turn to a stronger model");
         ui.send(system_message(format!(
             "{} {name} · gate → {} · {category}, {}",
@@ -1676,7 +1658,7 @@ async fn run_prompt(
         turn_start = session.messages.len();
         config.initial_todos.clone_from(&session.todos);
         config.initial_thinking_effort = ran_at;
-        session.messages.push(Message::user(takeover));
+        session.messages.push(Message::user(escalated.text));
     };
     if let Some(files) = &files {
         let _ = files.take_attempt(agent_id);
@@ -1733,7 +1715,7 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
     if pairs.is_empty() || ctx.plan.judge.is_empty() {
         return Vec::new();
     }
-    let judging = Judging {
+    let judging = PairJudging {
         ctx,
         session,
         auth_token: ctx.hub.turn(None, &ctx.plan.workspace).0.auth_token,
@@ -1753,7 +1735,7 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
 }
 
 /// What the judge is given for every pair of a comparison.
-struct Judging<'a> {
+struct PairJudging<'a> {
     ctx: &'a Context,
     session: &'a AgentSession,
     auth_token: Option<String>,
@@ -1764,7 +1746,7 @@ struct Judging<'a> {
     reference: Option<blind::Attempt>,
 }
 
-impl Judging<'_> {
+impl PairJudging<'_> {
     /// The judge's verdict on the `i`th pair, `(a, b)`; `None` when the
     /// comparison was cancelled before the judge was asked.
     async fn judge(&self, i: usize, (a, b): (&Ran, &Ran)) -> Option<CompareJudgment> {

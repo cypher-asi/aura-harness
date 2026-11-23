@@ -9,29 +9,17 @@ use super::agent_events::AgentUi;
 use super::agent_events::ForwarderState;
 use super::agents::AgentSession;
 use super::attachments::{expand_mentions_in, mentioned_paths};
-use super::gate::followup::{
-    joined, may_review, takeover_message, At, Attempt, Before, CarryOn, Following,
-};
-use super::handlers::{handle_agent_success, record_response, run_agent_turn, system_message};
+use super::gate;
+use super::gate::turn::{Ending, GateTurn, Routing};
+use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
-use super::subagents::{AgentHub, LeadProfile};
 use super::tasks::{request_state, summary_of};
 use crate::long_run::LongRunSettings;
-use crate::model_selection::{routed_effort, ModelLimits};
-use aura_agent::{AgentLoop, CompactHistoryError};
+use aura_agent::{AgentError, AgentLoop, AgentLoopResult, CompactHistoryError};
 use aura_agent_trace::RunRecorder;
-use aura_core_types::{
-    AgentId, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload,
-    RecordEntry, Route, RouteLevel, RouteReason, Transaction,
-};
-use aura_gate::attempts::Terms;
-use aura_gate::evidence::checks::{last_check, last_check_seen};
-use aura_gate::evidence::outcome::{calls_for_stronger, turn_signal};
-use aura_gate::judge::criteria::Criteria;
-use aura_gate::judge::turn::Failed;
-use aura_gate::live::{self, GateLive};
-use aura_gate::route::{Candidate, Decision, Work as GateWork};
+use aura_core_types::{AgentId, Hash, PromptPayload, RecordEntry, Route, RouteReason, Transaction};
+use aura_gate::live;
 use aura_model::{ContentBlock, ImageSource, Message, Role, ToolDefinition};
 use aura_ui_terminal::events::ImageAttachment;
 use aura_ui_terminal::UiCommand;
@@ -108,121 +96,6 @@ pub(super) enum Task {
         agent_loop: Box<AgentLoop>,
         focus: Option<String>,
     },
-}
-
-/// What Gate routes a turn among once its prompt is classified, and how
-/// to point an agent loop at its choice.
-pub(super) struct GateTurn {
-    /// Models the turn may go to
-    pub candidates: Vec<Candidate>,
-    pub limits: ModelLimits,
-    /// What Gate has learned
-    pub live: Arc<GateLive>,
-    /// The model selector and status line as they stand, for showing the
-    /// turn's route
-    pub models: UiCommand,
-    /// How the turn leads when Gate has it led; `None` when the agent
-    /// never leads
-    pub lead: Option<LeadProfile>,
-    /// For what the turn's subtasks cost
-    pub hub: Arc<AgentHub>,
-}
-
-impl GateTurn {
-    /// Gate's choice for a turn asking for `category`, of `difficulty`,
-    /// after the models in `refused` turned the user's sign-in down; it
-    /// explores only on the first choice.
-    fn decide(
-        &self,
-        category: PromptCategory,
-        difficulty: Option<Difficulty>,
-        refused: &[String],
-    ) -> Option<Decision> {
-        let work = GateWork::turn(category).of(difficulty);
-        if refused.is_empty() {
-            return self.live.decide(&work, &self.candidates);
-        }
-        let left: Vec<Candidate> = self
-            .candidates
-            .iter()
-            .filter(|c| !refused.contains(&c.id))
-            .cloned()
-            .collect();
-        self.live.redecide(&work, &left)
-    }
-
-    /// Point `agent_loop`, running `agent`'s turn, at `decision`'s model
-    /// and effort.
-    fn point(&self, agent: AgentId, agent_loop: &mut AgentLoop, decision: &Decision) {
-        self.live.note_model(agent, &decision.model.id);
-        let current = agent_loop.config();
-        if current.model == decision.model.id
-            && current.routed_thinking_effort == Some(decision.effort)
-        {
-            return;
-        }
-        let mut config = current.clone();
-        self.limits.route(&mut config, decision);
-        *agent_loop = AgentLoop::new(config);
-    }
-
-    /// Have Gate decide whether the turn on `agent_loop` with `tools`,
-    /// asking for `category` of a difficulty, is led
-    /// ([`GateLive::way`]), and make it a lead's if so (see
-    /// [`LeadProfile::apply`]). Returns whether it is led (`None` when
-    /// the agent never leads) and whether its calls must stay within the
-    /// lead's limits.
-    fn lead(
-        &self,
-        (category, difficulty): (PromptCategory, Option<Difficulty>),
-        agent_loop: &mut AgentLoop,
-        tools: &mut Vec<ToolDefinition>,
-    ) -> (Option<bool>, bool) {
-        let Some(lead) = self.lead else {
-            return (None, false);
-        };
-        let mut config = agent_loop.config().clone();
-        let way = self.live.way((category, difficulty), &config.model, true);
-        if way.explored {
-            info!(led = way.led, %category, "Gate explores the other way of working");
-        }
-        let before = config.system_prompt.len();
-        let enforced = lead.apply(way.led, &mut config, tools);
-        if config.system_prompt.len() != before {
-            *agent_loop = AgentLoop::new(config);
-        }
-        (Some(way.led), enforced)
-    }
-
-    /// Show the model and route of `decision` in the status line.
-    async fn show(&self, ui: &AgentUi, decision: &Decision) {
-        let mut models = self.models.clone();
-        if let UiCommand::SetModels { route, .. } = &mut models {
-            *route = Some(decision.model.route_label());
-        }
-        ui.send_app(models).await;
-    }
-}
-
-/// The chat line saying where Gate sent a turn asking for `category`, e.g.
-/// `gate → claude-sonnet-4-6 (claude plan) at medium effort · question,
-/// default`.
-fn route_line(decision: &Decision, category: PromptCategory) -> String {
-    format!(
-        "gate → {} · {category}, {}",
-        decision.label(),
-        decision.reason
-    )
-}
-
-/// How Gate records a turn's prompt: who classifies it, and why the turn
-/// runs on its model. A turn on a pinned model runs beside the
-/// classifier; a turn Gate routes waits for its category.
-pub(super) struct Routing {
-    /// Model that classifies the prompt
-    pub classifier: String,
-    /// Why the turn runs on its model, until Gate decides
-    pub reason: RouteReason,
 }
 
 /// An agent's work that ended, handing its session back.
@@ -309,8 +182,10 @@ async fn run(
                 recorder,
                 gate,
                 routing,
+                ui: &ui,
+                cancel: &cancel,
             };
-            run_prompt(&mut session, prompt, turn, &ui, &cancel).await
+            run_prompt(&mut session, prompt, turn).await
         }
         Task::Command { command, cols } => {
             run_user_command(&mut session, &command, cols, &ui).await;
@@ -325,14 +200,54 @@ async fn run(
 }
 
 /// What a turn runs on, besides the session.
-struct TurnParts<'a> {
-    agent_loop: Box<AgentLoop>,
-    tools: Vec<ToolDefinition>,
-    steering: &'a Steering,
-    limits: LongRunSettings,
-    recorder: Option<Arc<RunRecorder>>,
-    gate: Option<Box<GateTurn>>,
-    routing: Box<Routing>,
+pub(super) struct TurnParts<'a> {
+    pub agent_loop: Box<AgentLoop>,
+    pub tools: Vec<ToolDefinition>,
+    pub steering: &'a Steering,
+    pub limits: LongRunSettings,
+    pub recorder: Option<Arc<RunRecorder>>,
+    /// What Gate routes the turn among, when it routes it
+    pub gate: Option<Box<GateTurn>>,
+    /// How Gate records the turn's prompt
+    pub routing: Box<Routing>,
+    /// Where the turn reports
+    pub ui: &'a AgentUi,
+    /// Stops the turn
+    pub cancel: &'a CancellationToken,
+}
+
+impl TurnParts<'_> {
+    /// Run one attempt at the turn on `session`, with the turn's agent
+    /// loop and tools as they stand.
+    pub(super) async fn attempt(
+        &self,
+        session: &AgentSession,
+    ) -> (Result<AgentLoopResult, AgentError>, ForwarderState) {
+        run_agent_turn(
+            session,
+            &self.agent_loop,
+            self.tools.clone(),
+            self.ui,
+            self.cancel,
+            self.steering,
+            self.limits,
+            self.recorder.clone(),
+        )
+        .await
+    }
+}
+
+/// How a turn's last attempt ended, and what Gate records of the turn
+/// once that is handled.
+pub(super) struct Ran {
+    pub result: Result<AgentLoopResult, AgentError>,
+    pub forwarded: ForwarderState,
+    /// The outcome Gate records once the turn's result is handled; `None`
+    /// on a pinned model, and when the last attempt's outcome is already
+    /// recorded
+    pub ending: Option<Ending>,
+    /// Models Gate picked whose route refused the user's sign-in or plan
+    pub refused: Vec<String>,
 }
 
 /// Record `text` on `session` as a prompt from the user, not classified:
@@ -363,23 +278,31 @@ pub(crate) async fn record_prompt(
     Ok((tx, result.entry))
 }
 
+/// Record `prompt` on `session` as the prompt of the turn it is running,
+/// which the turn's file checkpoints then name; returns its transaction
+/// hash.
+pub(super) async fn record_turn_prompt(
+    session: &AgentSession,
+    prompt: &PromptPayload,
+) -> Result<Hash, String> {
+    let (tx, _) = record_prompt(session, prompt).await?;
+    if let Some(files) = &session.file_checkpoints {
+        files.note_prompt_tx(session.agent_id(), tx.hash);
+    }
+    Ok(tx.hash)
+}
+
 /// Record `prompt` as typed and run a turn answering it. The model gets
 /// the files it mentions as well. A turn on a model the user pinned is
 /// recorded with its route only: Gate neither classifies it nor records
-/// how it went. Otherwise the prompt is recorded with its category and
-/// route, and the turn ends with an `Outcome` saying how it went; a
-/// prompt the classifier could not label fails the turn. When Gate
-/// routes the turn, it picks the model once the prompt is classified;
-/// when that model's route refuses the user's sign-in, the
-/// turn carries on from where it stopped on Gate's next choice, and when
-/// the turn fails through the model's own doing it carries on on the
-/// next stronger model (see [`run_attempts`]).
+/// how it went. Otherwise Gate labels the turn (see
+/// [`gate::turn`](super::gate::turn)): the prompt is recorded with its
+/// category and route, and the turn ends with an `Outcome` saying how it
+/// went; a prompt the classifier could not label fails the turn.
 async fn run_prompt(
     session: &mut AgentSession,
-    mut prompt: Prompt,
+    prompt: Prompt,
     mut turn: TurnParts<'_>,
-    ui: &AgentUi,
-    cancel: &CancellationToken,
 ) -> Outcome {
     drain_stale_inbox(session).await;
     session.tasks.begin_request(
@@ -395,117 +318,99 @@ async fn run_prompt(
     let started = Instant::now();
     let model = turn.agent_loop.config().model.clone();
     live::note_retry(&session.kernel, session.agent_id(), &prompt.text, &model).await;
-    let mut label = Label {
-        text: prompt.text.clone(),
-        classifier: turn.routing.classifier.clone(),
-        auth_token: turn.agent_loop.config().auth_token.clone(),
-        route: Route::turn(model, turn.routing.reason),
-        led: None,
-        difficulty: None,
+    let ran = if turn.routing.reason == RouteReason::Pinned {
+        run_pinned(session, prompt, &turn, model).await
+    } else {
+        match gate::turn::run(session, prompt, &mut turn, started).await {
+            Some(ran) => ran,
+            None => return Outcome::default(),
+        }
     };
-    let started_ms = super::processes::now_ms();
-    let hub = turn.gate.as_ref().map(|gate| Arc::clone(&gate.hub));
-    let mut turn_start = session.messages.len();
-    let mut started = started;
+    finish(session, ran, &turn).await
+}
 
-    let (process_result, forwarded, attempts, recorded) =
-        if turn.routing.reason == RouteReason::Pinned {
-            begin_files(session, &prompt.text);
-            if let Err(problem) = label.record(session, None).await {
-                ui.send(UiCommand::ShowError(problem)).await;
-            }
-            session.messages.push(model_message(session, prompt).await);
-            let (result, forwarded) = run_agent_turn(
-                session,
-                &turn.agent_loop,
-                turn.tools.clone(),
-                ui,
-                cancel,
-                turn.steering,
-                turn.limits,
-                turn.recorder.clone(),
-            )
+/// Run the turn of `prompt` on `model`, which the user pinned: the prompt
+/// is recorded with its route only.
+async fn run_pinned(
+    session: &mut AgentSession,
+    prompt: Prompt,
+    turn: &TurnParts<'_>,
+    model: String,
+) -> Ran {
+    begin_files(session, &prompt.text);
+    let recorded = PromptPayload {
+        route: Route::turn(model, RouteReason::Pinned),
+        ..PromptPayload::new(prompt.text.clone())
+    };
+    if let Err(problem) = record_turn_prompt(session, &recorded).await {
+        turn.ui.send(UiCommand::ShowError(problem)).await;
+    }
+    session.messages.push(model_message(session, prompt).await);
+    let (result, forwarded) = turn.attempt(session).await;
+    Ran {
+        result,
+        forwarded,
+        ending: None,
+        refused: Vec::new(),
+    }
+}
+
+/// Close the turn that ended as `ran`: keep what it left in `session`,
+/// report how it ended, and record Gate's outcome of it once the result
+/// is handled.
+async fn finish(session: &mut AgentSession, ran: Ran, turn: &TurnParts<'_>) -> Outcome {
+    let Ran {
+        result,
+        forwarded,
+        ending,
+        refused,
+    } = ran;
+    keep(session, &forwarded);
+    let messages = result
+        .as_ref()
+        .map_or(&[][..], |result| result.messages.as_slice());
+    let (seen, unseen) = turn.steering.finish(messages);
+    let cancelled = turn.cancel.is_cancelled();
+    if let Some(rec) = &turn.recorder {
+        super::trace::end_turn(rec, &result, cancelled);
+    }
+    if cancelled {
+        turn.ui
+            .send(UiCommand::ShowWarning("Turn cancelled".to_string()))
             .await;
-            (result, forwarded, Attempts::default(), None)
-        } else {
-            let category = match label.classify(session).await {
-                Ok(category) => category,
-                Err(problem) => {
-                    ui.send(UiCommand::ShowError(problem)).await;
-                    ui.send(UiCommand::Complete).await;
-                    return Outcome::default();
-                }
-            };
-            let mut criteria = None;
-            if let Some(gate) = turn.gate.as_deref() {
-                criteria = match live::hold_to_criteria(
-                    &session.kernel,
-                    (&gate.live, &gate.candidates),
-                    category,
-                    &mut label.difficulty,
-                    &label.text,
-                    label.auth_token.clone(),
-                )
-                .await
-                {
-                    Ok(criteria) => criteria,
-                    Err(problem) => {
-                        ui.send(system_message(problem)).await;
-                        None
-                    }
-                };
-                if let Some(note) = live::worker_note_for(criteria.as_deref()) {
-                    prompt.text.push_str(&note);
-                }
-                let agent = session.agent_id();
-                if route_turn(gate, agent, &mut turn.agent_loop, &mut label, category, ui).await {
-                    let (led, enforced) = gate.lead(
-                        (category, label.difficulty),
-                        &mut turn.agent_loop,
-                        &mut turn.tools,
-                    );
-                    label.led = led;
-                    session.lead = enforced;
-                }
-            }
-            let recorded = match label.record(session, Some(category)).await {
-                Ok(recorded) => (recorded, category),
-                Err(problem) => {
-                    ui.send(UiCommand::ShowError(problem)).await;
-                    ui.send(UiCommand::Complete).await;
-                    return Outcome::default();
-                }
-            };
-            begin_files(session, &label.text);
-            if let Some(files) = &session.file_checkpoints {
-                files.note_prompt_tx(session.agent_id(), recorded.0);
-            }
-            session.messages.push(model_message(session, prompt).await);
-            let asked = Asked {
-                task: &label.text,
-                prompt_tx: recorded.0,
-                category,
-                difficulty: label.difficulty,
-                led: label.led,
-                criteria,
-                turn_start,
-                started,
-                started_ms,
-            };
-            let (result, forwarded, attempts) =
-                run_attempts(session, &mut turn, asked, ui, cancel).await;
-            // The outcome below is the last attempt's.
-            let mut recorded = Some(recorded);
-            if let Some((prompt_tx, start, at)) = attempts.moved {
-                recorded = Some((prompt_tx, category));
-                turn_start = start;
-                started = at;
-            }
-            if attempts.settled {
-                recorded = None;
-            }
-            (result, forwarded, attempts, recorded)
-        };
+    }
+    let stopped = cancelled || forwarded.credentials_rejected;
+    let settled = ending.map(|ending| ending.settle(&result, stopped));
+    end_request(session, &result, cancelled).await;
+    let failure = match result {
+        Ok(result) => {
+            handle_agent_success(session, result, &forwarded, turn.ui, &seen).await;
+            None
+        }
+        Err(e) if cancelled => {
+            info!(error = %e, "Cancelled turn ended with an error");
+            turn.ui.send(UiCommand::Complete).await;
+            None
+        }
+        Err(e) => {
+            error!(error = %e, "Agent loop failed");
+            Some(e.to_string())
+        }
+    };
+    if let Some(settled) = settled {
+        settled.record(session, turn, &forwarded).await;
+    }
+    Outcome {
+        failure,
+        unseen,
+        refused,
+    }
+}
+
+/// Keep what the turn's last run, which `forwarded` followed, left in
+/// `session` besides its conversation: what it used and the plan it
+/// wrote. The files changed from here on are no longer the turn's.
+fn keep(session: &mut AgentSession, forwarded: &ForwarderState) {
     if let Some(files) = &session.file_checkpoints {
         files.end_turn(session.agent_id());
     }
@@ -514,39 +419,20 @@ async fn run_prompt(
         session.active_plan = Some(path.clone());
         session.building_plan = false;
     }
-    let (seen, unseen) = turn.steering.finish(
-        process_result
-            .as_ref()
-            .map_or(&[][..], |result| result.messages.as_slice()),
-    );
-    let cancelled = cancel.is_cancelled();
-    if let Some(rec) = &turn.recorder {
-        super::trace::end_turn(rec, &process_result, cancelled);
-    }
-    if cancelled {
-        ui.send(UiCommand::ShowWarning("Turn cancelled".to_string()))
-            .await;
-    }
-    let signal = if cancelled || forwarded.credentials_rejected {
-        OutcomeSignal::Cancelled
-    } else {
-        attempts
-            .signal
-            .or_else(|| ended_signal(&process_result, turn_start))
-            .unwrap_or(OutcomeSignal::Unavailable)
-    };
+}
 
-    let summary = process_result
+/// Close the task board's request of the turn that ended with `result`,
+/// which the user stopped when `cancelled`.
+async fn end_request(
+    session: &AgentSession,
+    result: &Result<AgentLoopResult, AgentError>,
+    cancelled: bool,
+) {
+    let summary = result
         .as_ref()
         .ok()
         .and_then(|result| summary_of(&result.total_text));
-    let failed = process_result.is_err() && !cancelled;
-    // What the last attempt left, for Gate's attempt log.
-    let left = process_result
-        .as_ref()
-        .ok()
-        .filter(|_| hub.is_some())
-        .map(|result| live::evidence_of(result, turn_start, attempts.changed.as_deref()));
+    let failed = result.is_err() && !cancelled;
     session
         .tasks
         .end_request(
@@ -555,138 +441,10 @@ async fn run_prompt(
             summary,
         )
         .await;
-    let failure = match process_result {
-        Ok(result) => {
-            handle_agent_success(session, result, &forwarded, ui, &seen).await;
-            None
-        }
-        Err(e) if cancelled => {
-            info!(error = %e, "Cancelled turn ended with an error");
-            ui.send(UiCommand::Complete).await;
-            None
-        }
-        Err(e) => {
-            error!(error = %e, "Agent loop failed");
-            Some(e.to_string())
-        }
-    };
-    if let Some((prompt_tx, category)) = recorded {
-        let outcome = OutcomePayload {
-            prompt_tx,
-            category,
-            model: turn.agent_loop.config().model.clone(),
-            success: signal.success(),
-            signal,
-            cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
-            subtask_cost_usd: hub.as_ref().map_or(0.0, |hub| {
-                hub.subtask_cost_usd(session.agent_id(), started_ms)
-            }),
-            latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        };
-        if let Some(hub) = &hub {
-            let terms = Terms {
-                difficulty: label.difficulty,
-                led: label.led,
-                routed: true,
-            };
-            hub.gate
-                .log_attempt(session.agent_id(), &outcome, terms, left);
-        }
-        live::record(&session.kernel, session.agent_id(), &outcome).await;
-    }
-    Outcome {
-        failure,
-        unseen,
-        refused: attempts.refused,
-    }
-}
-
-/// Have Gate pick the model of `agent`'s turn asking for `category`,
-/// point `agent_loop` at it, show the choice, and make it the route
-/// `label` records. Returns whether Gate had a model to pick.
-async fn route_turn(
-    gate: &GateTurn,
-    agent: AgentId,
-    agent_loop: &mut AgentLoop,
-    label: &mut Label,
-    category: PromptCategory,
-    ui: &AgentUi,
-) -> bool {
-    let Some(decision) = gate.decide(category, label.difficulty, &[]) else {
-        return false;
-    };
-    info!(
-        model = %decision.model.id,
-        %category,
-        reason = %decision.reason,
-        "Gate routed the turn"
-    );
-    gate.point(agent, agent_loop, &decision);
-    ui.send(system_message(route_line(&decision, category)))
-        .await;
-    gate.show(ui, &decision).await;
-    label.route = decision.route(RouteLevel::Turn);
-    true
-}
-
-/// What a turn's prompt is recorded with besides its category.
-struct Label {
-    text: String,
-    classifier: String,
-    auth_token: Option<String>,
-    route: Route,
-    /// Whether Gate had the turn led; `None` when it did not decide
-    led: Option<bool>,
-    /// How hard the classifier judged the work, once it said
-    difficulty: Option<Difficulty>,
-}
-
-impl Label {
-    /// The prompt's category, as the classifier says; its difficulty is
-    /// kept on `self`.
-    ///
-    /// # Errors
-    /// Says why when the classifier gave no category and difficulty.
-    async fn classify(&mut self, session: &AgentSession) -> Result<PromptCategory, String> {
-        let label = live::classify_prompt(
-            &session.kernel,
-            &self.classifier,
-            &self.text,
-            self.auth_token.clone(),
-        )
-        .await?;
-        self.difficulty = Some(label.difficulty);
-        Ok(label.category)
-    }
-
-    /// Record the prompt on `session` as asking for `category`, `None`
-    /// when nothing classified it, returning its transaction hash.
-    async fn record(
-        &self,
-        session: &AgentSession,
-        category: Option<PromptCategory>,
-    ) -> Result<Hash, String> {
-        let payload = PromptPayload {
-            text: self.text.clone(),
-            category,
-            classifier: category
-                .map(|_| self.classifier.clone())
-                .unwrap_or_default(),
-            route: self.route.clone(),
-            kind: None,
-            led: self.led,
-            difficulty: self.difficulty,
-        };
-        let (tx, _) = record_prompt(session, &payload).await?;
-        if let Some(files) = &session.file_checkpoints {
-            files.note_prompt_tx(session.agent_id(), tx.hash);
-        }
-        Ok(tx.hash)
-    }
 }
 
 /// Start checkpointing the files the turn answering `text` changes.
-fn begin_files(session: &AgentSession, text: &str) {
+pub(super) fn begin_files(session: &AgentSession, text: &str) {
     if let Some(files) = &session.file_checkpoints {
         files.begin_turn(
             session.agent_id(),
@@ -697,392 +455,9 @@ fn begin_files(session: &AgentSession, text: &str) {
     }
 }
 
-/// The signal of a turn that ran to its end with `result`, whose messages
-/// from `turn_start` on are the turn's own; `None` when nothing says how
-/// it went, and the judge has to. A turn the model's provider cut short
-/// is [`OutcomeSignal::Unavailable`] whatever it did before, since its
-/// work stopped where the model did not choose to stop it.
-pub(crate) fn ended_signal(
-    result: &Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
-    turn_start: usize,
-) -> Option<OutcomeSignal> {
-    match result {
-        Err(e) if e.is_unavailable() => Some(OutcomeSignal::Unavailable),
-        Err(_) => Some(OutcomeSignal::Error),
-        Ok(result) if result.llm_error.is_some() && result.llm_unavailable => {
-            Some(OutcomeSignal::Unavailable)
-        }
-        Ok(result) => {
-            let errored = result.llm_error.is_some() && result.total_text.trim().is_empty();
-            let messages = result.messages.get(turn_start..).unwrap_or_default();
-            turn_signal(errored, last_check(messages))
-        }
-    }
-}
-
-/// How a turn that ran to its end with `result` failed, for the judge:
-/// its error, or its last check and what the check printed. `None` when
-/// it did neither.
-pub(crate) fn failure_text(
-    result: &Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
-    turn_start: usize,
-) -> Option<String> {
-    let result = match result {
-        Err(e) => return Some(format!("The run ended in an error: {e}")),
-        Ok(result) => result,
-    };
-    if let Some(error) = result
-        .llm_error
-        .as_ref()
-        .filter(|_| result.total_text.trim().is_empty())
-    {
-        return Some(format!("The model call failed: {error}"));
-    }
-    let messages = result.messages.get(turn_start..).unwrap_or_default();
-    last_check_seen(messages)
-        .filter(|check| !check.passed)
-        .map(|check| {
-            format!(
-                "The last test or build command it ran, `{}`, failed. What the command printed:\n{}",
-                check.command, check.output
-            )
-        })
-}
-
-/// The attempts of a turn before its last: on models that refused the
-/// user's sign-in, and on weaker models that failed.
-#[derive(Default)]
-struct Attempts {
-    /// Models that refused
-    refused: Vec<String>,
-    /// What the refused attempts since the last recorded outcome cost
-    cost_usd: f64,
-    /// Set once the turn went on to a stronger model: the prompt its last
-    /// attempt answers, where that attempt's messages start in the
-    /// session, and when it started
-    moved: Option<(Hash, usize, Instant)>,
-    /// Whether the last attempt's outcome is already recorded
-    settled: bool,
-    /// What the last attempt ended with once Gate's follow-up had its
-    /// say: a harness check's result, or the judge's verdict on unchecked
-    /// work. `None` when Gate did not follow it up
-    signal: Option<OutcomeSignal>,
-    /// The files the last attempt changed by any means, when the harness
-    /// compared the workspace before and after
-    changed: Option<Vec<String>>,
-}
-
-/// The prompt a turn answers, for the attempts at it.
-struct Asked<'a> {
-    /// What the user asked
-    task: &'a str,
-    /// Its recorded prompt
-    prompt_tx: Hash,
-    category: PromptCategory,
-    /// How hard the classifier judged it
-    difficulty: Option<Difficulty>,
-    /// Whether Gate had the turn led
-    led: Option<bool>,
-    /// What its work is checked against, written down before it started
-    criteria: Option<Arc<Criteria>>,
-    /// Where the turn's messages start in the session
-    turn_start: usize,
-    started: Instant,
-    /// When it started, in Unix milliseconds
-    started_ms: u64,
-}
-
-/// Run the turn of the prompt `asked`. When Gate routes it, Gate is asked
-/// again while a route refuses the user's sign-in. An attempt that ran
-/// no check of its own gets Gate's follow-up first (see
-/// [`gate::followup`](super::gate::followup)): when it changed files it is asked once to check
-/// them, then the harness runs the project's tests, and work still
-/// unchecked gets the judge's verdict. Work that is hard or shows a sign of
-/// failure is reviewed against the request before it stands; what the
-/// review finds unfinished goes back to the same model once. An attempt
-/// that fails (a model error, its last check or the harness's failing,
-/// or the judge finding its work unfinished) is handled here:
-///
-/// 1. its `Outcome` is recorded and, for a failed check or an error,
-///    Gate's judge says whether the model was at fault
-///    ([`live::judge_failed`]);
-/// 2. a failure the judge excuses ends the turn where it is;
-/// 3. otherwise the turn carries on in the same conversation on the
-///    next stronger model, told what the judge found, under a prompt of
-///    its own recorded with route reason `escalate`.
-///
-/// A failure with no judge and no stronger model is left for the caller
-/// to record.
-async fn run_attempts(
-    session: &mut AgentSession,
-    turn: &mut TurnParts<'_>,
-    asked: Asked<'_>,
-    ui: &AgentUi,
-    cancel: &CancellationToken,
-) -> (
-    Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
-    ForwarderState,
-    Attempts,
-) {
-    let mut attempts = Attempts::default();
-    let gate = turn.gate.take();
-    let agent = session.agent_id();
-    let category = asked.category;
-    // Watched so the judge can see what a failed attempt changed.
-    let files = session.file_checkpoints.clone().filter(|_| gate.is_some());
-    if let Some(files) = &files {
-        files.begin_attempt(agent);
-    }
-    let (mut prompt_tx, mut turn_start, mut started) =
-        (asked.prompt_tx, asked.turn_start, asked.started);
-    // The workspace as it is now, so a review sees everything the turn
-    // changes, by its commands as well as its file tools.
-    let before = match gate.as_ref() {
-        Some(gate)
-            if aura_gate::evidence::verifiable(category)
-                && may_review(
-                    &gate.live,
-                    &gate.candidates,
-                    &turn.agent_loop.config().model,
-                ) =>
-        {
-            Before::of_workspace(session.kernel.agent_workspace()).await
-        }
-        _ => None,
-    };
-    let mut follow = Following::default();
-    let (result, forwarded) = 'attempts: loop {
-        let (result, forwarded) = run_agent_turn(
-            session,
-            &turn.agent_loop,
-            turn.tools.clone(),
-            ui,
-            cancel,
-            turn.steering,
-            turn.limits,
-            turn.recorder.clone(),
-        )
-        .await;
-        let Some(gate) = gate.as_ref() else {
-            break (result, forwarded);
-        };
-        if cancel.is_cancelled() {
-            break (result, forwarded);
-        }
-        let model = turn.agent_loop.config().model.clone();
-        if forwarded.credentials_rejected {
-            attempts.refused.push(model.clone());
-            let Some(next) = gate.decide(category, asked.difficulty, &attempts.refused) else {
-                break (result, forwarded);
-            };
-            attempts.cost_usd += forwarded.usage.cost_usd;
-            session.usage.add(&forwarded.usage);
-            if let Ok(partial) = &result {
-                session.messages.clone_from(&partial.messages);
-            }
-            info!(from = %model, to = %next.model.id, "Gate re-routed the turn");
-            ui.send(system_message(format!(
-                "{model} refused your sign-in; Gate skips it until your sign-ins change.\n{}",
-                route_line(&next, category)
-            )))
-            .await;
-            gate.point(agent, &mut turn.agent_loop, &next);
-            gate.show(ui, &next).await;
-            continue;
-        }
-
-        let mut signal = ended_signal(&result, turn_start);
-        // What the harness's check printed when it failed, and what the
-        // judge found wrong with unchecked work.
-        let (mut harness, mut unchecked) = (None, None);
-        if let Ok(partial) = &result {
-            let workspace = session.kernel.agent_workspace();
-            let attempt = Attempt {
-                session,
-                live: &gate.live,
-                candidates: &gate.candidates,
-                task: asked.task,
-                ran: (model.as_str(), routed_effort(turn.agent_loop.config())),
-                result: partial,
-                at: At {
-                    category,
-                    difficulty: asked.difficulty,
-                    signal,
-                    turn_start,
-                },
-                prompt_tx: Some(prompt_tx),
-                workspace: &workspace,
-                before: before.as_ref(),
-                criteria: asked.criteria.as_ref(),
-                auth_token: turn.agent_loop.config().auth_token.clone(),
-            };
-            let followed = follow.run(&attempt, ui).await;
-            (signal, harness, unchecked) = (followed.signal, followed.harness, followed.wrong);
-            if let Some(CarryOn {
-                message, notice, ..
-            }) = followed.carry_on
-            {
-                // The same model carries on in the same conversation.
-                session.messages.clone_from(&partial.messages);
-                session.todos.clone_from(&partial.todos);
-                record_response(session, &partial.total_text).await;
-                if let Some(rec) = &turn.recorder {
-                    rec.follow_up(&message);
-                }
-                if let Err(problem) = record_user_prompt(session, message.clone()).await {
-                    warn!(%problem, "Could not record Gate's message to the model");
-                }
-                session.usage.add(&forwarded.usage);
-                attempts.cost_usd += forwarded.usage.cost_usd;
-                session.messages.push(Message::user(message));
-                info!(%model, %notice, "Gate has the turn carry on");
-                ui.send(system_message(notice)).await;
-                let mut config = turn.agent_loop.config().clone();
-                config.initial_todos.clone_from(&session.todos);
-                config.initial_thinking_effort = config.held_thinking_effort();
-                *turn.agent_loop = AgentLoop::new(config);
-                continue 'attempts;
-            }
-        }
-        let signal = signal.unwrap_or(OutcomeSignal::Unavailable);
-        attempts.signal = Some(signal);
-        if !calls_for_stronger(signal) {
-            break (result, forwarded);
-        }
-        let failed = OutcomePayload {
-            prompt_tx,
-            category,
-            model: model.clone(),
-            success: signal.success(),
-            signal,
-            cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
-            subtask_cost_usd: gate.hub.subtask_cost_usd(agent, asked.started_ms),
-            latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        };
-        let effort = routed_effort(turn.agent_loop.config());
-        let stronger = |live: &GateLive| {
-            // Only a turn whose conversation survived can be carried on.
-            result
-                .is_ok()
-                .then(|| {
-                    live.escalate(
-                        RouteLevel::Turn,
-                        category,
-                        (&model, effort),
-                        signal,
-                        &gate.candidates,
-                    )
-                })
-                .flatten()
-        };
-        let judge = live::judge_for(&gate.live, &gate.candidates, &failed);
-        let mut next = None;
-        if judge.is_none() {
-            next = stronger(&gate.live);
-            if next.is_none() {
-                break (result, forwarded);
-            }
-        }
-        let terms = Terms {
-            difficulty: asked.difficulty,
-            led: asked.led,
-            routed: true,
-        };
-        let left = result
-            .as_ref()
-            .ok()
-            .map(|result| follow.steps.evidence(result, turn_start));
-        gate.live.log_attempt(agent, &failed, terms, left);
-        live::record(&session.kernel, agent, &failed).await;
-        attempts.settled = true;
-        let mut review = unchecked;
-        if let Some(judge) = judge {
-            let workspace = session.kernel.agent_workspace();
-            let edits = files
-                .as_ref()
-                .map(|files| files.attempt(agent).diff(Some(&workspace)))
-                .unwrap_or_default();
-            let diff = match &result {
-                Ok(partial) => follow.steps.diff(partial, edits).await,
-                Err(_) => edits,
-            };
-            let failure = harness
-                .clone()
-                .or_else(|| failure_text(&result, turn_start))
-                .unwrap_or_default();
-            let shown = Failed {
-                task: asked.task,
-                diff: &diff,
-                reply: result.as_ref().map_or("", |r| r.total_text.as_str()),
-                failure: &failure,
-            };
-            let auth_token = turn.agent_loop.config().auth_token.clone();
-            let judged =
-                live::judge_failed(&session.kernel, &judge, &failed, &shown, auth_token).await;
-            if let Some((_, judged)) = judged {
-                ui.send(system_message(judged.describe())).await;
-                if !judged.verdict.at_fault {
-                    break (result, forwarded);
-                }
-                review = Some(judged.verdict.reasons);
-            }
-            next = stronger(&gate.live);
-        }
-        let review = joined(harness, review);
-        let (Some(next), Ok(partial)) = (next, &result) else {
-            break (result, forwarded);
-        };
-
-        // The stronger model carries on from what the attempt left.
-        let takeover = takeover_message(&model, &next.model.id, signal, review.as_deref());
-        let payload = PromptPayload {
-            category: Some(category),
-            route: next.route(RouteLevel::Turn),
-            ..PromptPayload::new(takeover.clone())
-        };
-        session.messages.clone_from(&partial.messages);
-        session.todos.clone_from(&partial.todos);
-        record_response(session, &partial.total_text).await;
-        if let Some(rec) = &turn.recorder {
-            rec.follow_up(&takeover);
-        }
-        let recorded = match record_prompt(session, &payload).await {
-            Ok((tx, _)) => tx.hash,
-            Err(problem) => {
-                warn!(%problem, "Could not record the stronger model's prompt");
-                break (result, forwarded);
-            }
-        };
-        session.usage.add(&forwarded.usage);
-        attempts.cost_usd = 0.0;
-        attempts.settled = false;
-        attempts.signal = None;
-        (prompt_tx, turn_start, started) = (recorded, session.messages.len(), Instant::now());
-        attempts.moved = Some((prompt_tx, turn_start, started));
-        session.messages.push(Message::user(takeover));
-        info!(from = %model, to = %next.model.id, %signal, "Gate moves the turn to a stronger model");
-        ui.send(system_message(route_line(&next, category))).await;
-        let mut config = turn.agent_loop.config().clone();
-        config.initial_todos.clone_from(&session.todos);
-        config.initial_thinking_effort = config.held_thinking_effort();
-        *turn.agent_loop = AgentLoop::new(config);
-        gate.point(agent, &mut turn.agent_loop, &next);
-        gate.show(ui, &next).await;
-    };
-    if let Some(files) = &files {
-        let _ = files.take_attempt(agent);
-    }
-    attempts.changed = result
-        .as_ref()
-        .ok()
-        .and_then(|result| follow.steps.changed_paths(result))
-        .map(<[String]>::to_vec);
-    (result, forwarded, attempts)
-}
-
 /// The user message the model gets for `prompt`: its images, then its
 /// text with the mentioned files from the agent's workspace appended.
-async fn model_message(session: &AgentSession, prompt: Prompt) -> Message {
+pub(super) async fn model_message(session: &AgentSession, prompt: Prompt) -> Message {
     let Prompt {
         text,
         mentions,

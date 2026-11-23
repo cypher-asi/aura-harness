@@ -8,7 +8,8 @@ use super::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use super::sink::{CallLimits, HeadlessSink, TurnTally};
 use super::tools::ToolFilter;
 use crate::event_loop::gate::followup::{
-    joined, takeover, At, Attempt, Before, CarryOn, FollowUp, Followed, Following, Found, Report,
+    self, ended_signal, failure_text, joined, takeover_prompt, At, Attempt, Before, CarryOn,
+    FollowUp, Followed, Following, Judging, Takeover,
 };
 use crate::event_loop::handlers::{
     drive_turn, mark_session_start, record_response, resume_checkpoint,
@@ -17,7 +18,7 @@ use crate::event_loop::notices::{completion_notice, record_completion, Notice};
 use crate::event_loop::processes::stop_background_commands;
 use crate::event_loop::steering::{SteerSource, Steering};
 use crate::event_loop::subagents::lock;
-use crate::event_loop::turns::{drain_stale_inbox, ended_signal, failure_text, record_prompt};
+use crate::event_loop::turns::{drain_stale_inbox, record_prompt};
 use crate::event_loop::{AgentHub, AgentSession};
 use crate::model_selection::routed_effort;
 use crate::session_checkpoint::SessionUsage;
@@ -379,10 +380,9 @@ impl Headless {
             let mut review = found.wrong.take();
             if answering && found.carry_on.is_none() && review.is_none() {
                 let judged = self
-                    .judge(session, &task, &outcome, &mut follow.steps)
+                    .judge(session, &task, &outcome, &mut follow.steps, output)
                     .await;
                 if let Some((judged_as, judged)) = judged {
-                    output.report(Found::Judged(&judged)).await;
                     outcome.ended = Some(judged_as);
                     review = Some(judged.verdict.reasons.clone());
                     self.judged.push(judged);
@@ -427,19 +427,20 @@ impl Headless {
             if answering && (outcome.stop.is_none() || outcome.can_go_on) {
                 if let Some((decision, ended)) = self.stronger(session, outcome.ended.as_ref()) {
                     let review = joined(found.harness.take(), review);
-                    let mut next = takeover(
-                        &ended.model,
-                        &decision.model.id,
-                        raw.unwrap_or(ended.signal),
-                        review.as_deref(),
-                    );
+                    let signal = raw.unwrap_or(ended.signal);
+                    let takeover = Takeover::new(&ended.model, decision, signal, review.as_deref());
+                    let mut next = takeover.text;
                     for unseen in &outcome.unseen {
                         next.push_str("\n\n");
                         next.push_str(unseen);
                     }
                     output.event(&StreamEvent::Notice { text: &next });
                     prompt = format!("{}{next}", SteerSource::Harness.prefix());
-                    carry = Some(Carry::Escalate(decision, ended.category, outcome.terms));
+                    carry = Some(Carry::Escalate(
+                        takeover.next,
+                        ended.category,
+                        outcome.terms,
+                    ));
                     continue;
                 }
             }
@@ -500,12 +501,13 @@ impl Headless {
 
     /// Ask Gate's judge about `turn`, a turn of `session` answering
     /// `task`, when Gate routed it and it failed on a model weaker than
-    /// the judge: was the model at fault? The finding is recorded as a
-    /// later `Outcome` of the turn's prompt, which is returned with it:
-    /// `judged_fail` counts against the model and sends the turn on to a
-    /// stronger one, `judged_excused` counts for nothing and leaves the
-    /// turn where it is. `None` when the turn is not judged or the judge
-    /// gave no verdict; the turn's own signal then stands.
+    /// the judge: was the model at fault? The finding is streamed to
+    /// `output` and recorded as a later `Outcome` of the turn's prompt,
+    /// which is returned with it: `judged_fail` counts against the model
+    /// and sends the turn on to a stronger one, `judged_excused` counts
+    /// for nothing and leaves the turn where it is. `None` when the turn
+    /// is not judged or the judge gave no verdict; the turn's own signal
+    /// then stands.
     ///
     /// The judge is only asked about failures, so what it costs is paid
     /// when there is something to learn; the cost is reported on its own
@@ -516,27 +518,26 @@ impl Headless {
         task: &str,
         turn: &TurnOutcome,
         follow: &mut FollowUp,
+        output: &Output,
     ) -> Option<(OutcomePayload, Judged)> {
         let ended = turn.ended.as_ref()?;
         let judge = self.hub.judge_of(session.definition.as_deref(), ended)?;
+        let diff = follow.diff(session, turn.result.as_ref()).await;
         let workspace = session.kernel.agent_workspace();
-        let edits = session
-            .file_checkpoints
-            .as_ref()
-            .map(|files| files.attempt(session.agent_id()).diff(Some(&workspace)))
-            .unwrap_or_default();
-        let diff = match &turn.result {
-            Some(result) => follow.diff(result, edits).await,
-            None => edits,
-        };
         let (config, _) = self.hub.turn(session.definition.as_deref(), &workspace);
-        let failed = Failed {
-            task,
-            diff: &diff,
-            reply: turn.result.as_ref().map_or("", |r| r.total_text.as_str()),
-            failure: turn.failure.as_deref().unwrap_or_default(),
+        let judging = Judging {
+            session,
+            judge: &judge,
+            ended,
+            shown: Failed {
+                task,
+                diff: &diff,
+                reply: turn.result.as_ref().map_or("", |r| r.total_text.as_str()),
+                failure: turn.failure.as_deref().unwrap_or_default(),
+            },
+            auth_token: config.auth_token,
         };
-        live::judge_failed(&session.kernel, &judge, ended, &failed, config.auth_token).await
+        judging.ask(output).await
     }
 
     /// Follow up `turn`, a turn of `session` answering `task` that Gate
@@ -606,12 +607,13 @@ impl Headless {
     ) -> Option<(Decision, &'a OutcomePayload)> {
         let ended = ended.filter(|ended| calls_for_stronger(ended.signal))?;
         let candidates = self.hub.gate_candidates(session.definition.as_deref())?;
-        let decision = self.hub.gate.escalate(
-            RouteLevel::Turn,
-            ended.category,
-            (&ended.model, self.effort),
-            ended.signal,
+        let ran = (ended.model.as_str(), self.effort);
+        let decision = followup::stronger(
+            &self.hub.gate,
             &candidates,
+            ended.category,
+            ran,
+            ended.signal,
         )?;
         info!(
             from = %ended.model,
@@ -985,11 +987,7 @@ impl Headless {
     ) -> Result<(PromptPayload, Option<PromptCategory>, Option<String>), String> {
         if let Some((decision, category)) = escalation {
             self.point(session, config, &decision);
-            let payload = PromptPayload {
-                category: Some(category),
-                route: decision.route(RouteLevel::Turn),
-                ..PromptPayload::new(text)
-            };
+            let payload = takeover_prompt(text.to_string(), category, &decision, String::new());
             return Ok((payload, Some(category), None));
         }
         let Some(candidates) = self

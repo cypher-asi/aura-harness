@@ -9,7 +9,7 @@ use aura_model::model_catalog::route_label;
 
 /// `text` marked as the harness's, so it reads apart from the user's
 /// prompts.
-fn from_harness(text: &str) -> String {
+pub(super) fn from_harness(text: &str) -> String {
     format!("{}{text}", SteerSource::Harness.prefix())
 }
 
@@ -75,21 +75,11 @@ pub(super) fn repair_notice(model: &str) -> String {
 
 /// What `next` is told when it goes on with the work of `model`, which
 /// ended with `signal`, with what was found wrong with it.
-pub(crate) fn takeover(
+pub(super) fn takeover(
     model: &str,
     next: &str,
     signal: OutcomeSignal,
     review: Option<&str>,
 ) -> String {
     followup::takeover_prompt(&route_label(model), next != model, signal, review)
-}
-
-/// [`takeover`], marked as the harness's.
-pub(crate) fn takeover_message(
-    model: &str,
-    next: &str,
-    signal: OutcomeSignal,
-    review: Option<&str>,
-) -> String {
-    from_harness(&takeover(model, next, signal, review))
 }

@@ -3,7 +3,8 @@
 
 use super::check::check_command;
 use super::untested::untested;
-use super::{hit_limit, At, Before, Changed, FollowUp};
+use super::{hit_limit, tool_edits, At, Before, Changed, FollowUp};
+use crate::event_loop::agents::AgentSession;
 use aura_agent::AgentLoopResult;
 use aura_config::ReviewMode;
 use aura_core_types::{OutcomeSignal, RouteLevel};
@@ -155,14 +156,22 @@ impl FollowUp {
             .map(|changed| changed.paths.as_slice())
     }
 
-    /// The attempt's change as of `result` as a judge is shown it:
-    /// everything it changed when the workspace was recorded before it,
-    /// else `edits`, what its file tools changed.
-    pub(crate) async fn diff(&mut self, result: &AgentLoopResult, edits: String) -> String {
-        match self.changed_as_of(result).await {
-            Some(changed) => changed.diff.clone(),
-            None => edits,
+    /// The attempt's change as a judge is shown it: everything it changed
+    /// as of `result` when the workspace was recorded before it, else
+    /// what its file tools changed in `session`'s workspace, which is
+    /// only read then. An attempt that left no result is shown the
+    /// latter.
+    pub(crate) async fn diff(
+        &mut self,
+        session: &AgentSession,
+        result: Option<&AgentLoopResult>,
+    ) -> String {
+        if let Some(result) = result {
+            if let Some(changed) = self.changed_as_of(result).await {
+                return changed.diff.clone();
+            }
         }
+        tool_edits(session, &session.kernel.agent_workspace())
     }
 
     /// The evidence the attempt that ended in `result` left, its

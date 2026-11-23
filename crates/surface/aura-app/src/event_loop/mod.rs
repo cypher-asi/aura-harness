@@ -72,6 +72,7 @@ use aura_model::model_catalog::local_model_name;
 use aura_model::ToolDefinition;
 use aura_ui_terminal::events::{ImageAttachment, ProcessStatus};
 use aura_ui_terminal::{PermissionMode, UiCommand, UiEvent};
+use gate::turn::{GateTurn, Routing};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,7 +80,7 @@ use steering::{SteerSource, Steering};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
-use turns::{GateTurn, Prompt, Routing, Task, Work, WorkDone};
+use turns::{Prompt, Task, Work, WorkDone};
 
 /// How long quitting waits for cancelled turns to record how they ended.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);

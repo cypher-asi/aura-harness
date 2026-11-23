@@ -11,7 +11,7 @@ use super::messages::{
 };
 use super::report::{Found, Report};
 use super::review::Reviewing;
-use super::{At, Before, FollowUp};
+use super::{tool_edits, At, Before, FollowUp};
 use crate::event_loop::agents::AgentSession;
 use aura_agent::AgentLoopResult;
 use aura_core_types::{Hash, OutcomeSignal};
@@ -53,10 +53,7 @@ pub(crate) struct Attempt<'a> {
 impl Attempt<'_> {
     /// What the attempt's file tools changed, as a unified diff.
     fn edits(&self) -> String {
-        let (session, workspace) = (self.session, self.workspace);
-        (session.file_checkpoints.as_ref())
-            .map(|files| files.attempt(session.agent_id()).diff(Some(workspace)))
-            .unwrap_or_default()
+        tool_edits(self.session, self.workspace)
     }
 }
 
@@ -196,7 +193,10 @@ impl Following {
         let Some(prompt_tx) = attempt.prompt_tx else {
             return;
         };
-        let edits = attempt.edits();
+        let edits = match self.steps.changed_read(attempt.result) {
+            Some(_) => String::new(),
+            None => attempt.edits(),
+        };
         let shown = Reviewing {
             task: attempt.task,
             result: attempt.result,
@@ -264,7 +264,7 @@ impl Following {
         let Some(judge) = judge.map(str::to_string) else {
             return;
         };
-        let diff = self.steps.diff(attempt.result, attempt.edits()).await;
+        let diff = self.steps.diff(attempt.session, Some(attempt.result)).await;
         let shown = Unchecked {
             task: attempt.task,
             diff: &diff,

@@ -100,8 +100,9 @@ pub(super) struct Reviewing<'a> {
     /// Where its own messages start in `result`
     pub turn_start: usize,
     pub category: PromptCategory,
-    /// What its file tools changed, as a unified diff: shown when the
-    /// harness could not compare the workspace before and after
+    /// What its file tools changed, as a unified diff: shown, and so only
+    /// read, when the harness could not compare the workspace before and
+    /// after
     pub edits: &'a str,
     pub why: &'a [Why],
     /// Whether Gate acts on the answer
