@@ -25,7 +25,7 @@ fn the_lead_keeps_every_tool_but_the_file_changing_ones() {
 #[test]
 fn checks_and_inspection_commands_are_allowed() {
     for command in [
-        "cargo test -p aura-agent-gate",
+        "cargo test -p aura-gate",
         "cargo clippy --workspace -- -D warnings",
         "npm test",
         "pytest -x tests/",

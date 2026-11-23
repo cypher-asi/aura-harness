@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_and_build_commands_are_checks() {
         for command in [
-            "cargo test -p aura-agent-gate",
+            "cargo test -p aura-gate",
             "cargo build --release",
             "cargo clippy --workspace -- -D warnings",
             "cargo nextest run",
