@@ -35,6 +35,10 @@ struct Recording {
     requests: Arc<Mutex<Vec<ModelRequest>>>,
 }
 
+/// A reply [`Recording`] turns into a failed call, as from a model that
+/// fell over.
+const FAILS: &str = "<the call fails>";
+
 #[async_trait]
 impl ModelProvider for Recording {
     fn name(&self) -> &'static str {
@@ -45,6 +49,12 @@ impl ModelProvider for Recording {
         self.requests.lock().unwrap().push(request.clone());
         let model = request.model.as_str().to_string();
         let mut response = self.inner.complete(request).await?;
+        if response.message.text_content() == FAILS {
+            return Err(ReasonerError::Api {
+                status: 400,
+                message: "the model fell over".to_string(),
+            });
+        }
         response.trace.model.clone_from(&model);
         response.model_used = model;
         Ok(response)
@@ -1843,4 +1853,453 @@ async fn a_move_up_streams_records_and_sends_its_takeover_byte_for_byte() {
         sent.extend(told.as_deref());
         assert_eq!(last, sent);
     }
+}
+
+/// What a run of "fix the parser" under [`sonnet_and_opus`] left: its
+/// report, the lines it printed, the requests it made, its record and
+/// the attempt lines of Gate's attempt log, each line as written.
+struct Routed {
+    report: super::RunReport,
+    printed: Vec<String>,
+    requests: Arc<Mutex<Vec<ModelRequest>>>,
+    entries: Vec<aura_core_types::RecordEntry>,
+    attempts: Vec<String>,
+}
+
+/// An outcome as (index of its prompt, category, model, success, signal,
+/// cost in USD).
+type Outcome = (
+    usize,
+    aura_core_types::PromptCategory,
+    String,
+    Option<bool>,
+    aura_core_types::OutcomeSignal,
+    f64,
+);
+
+/// Run "fix the parser" under [`sonnet_and_opus`] on `provider`, in a
+/// workspace `prepare` fills first.
+async fn routed(provider: MockProvider, prepare: impl FnOnce(&Path)) -> Routed {
+    let dirs = dirs();
+    prepare(dirs.workspace.path());
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let gate = sonnet_and_opus();
+    let (mut h, requests) = harness(&dirs, provider, ToolFilter::default(), permissions, gate);
+    let asked = request("fix the parser", SessionChoice::New);
+    let (report, captured) = execute(&mut h, asked, OutputFormat::StreamJson).await;
+    let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
+    let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
+    let log = aura_gate::attempts::AttemptLog::in_data_dir(dirs.data.path());
+    let logged = std::fs::read_to_string(log.path()).unwrap_or_default();
+    let attempts = (logged.lines())
+        .filter(|line| line.starts_with(r#"{"kind":"attempt","#))
+        .map(str::to_string)
+        .collect();
+    Routed {
+        report,
+        printed: captured.text().lines().map(str::to_string).collect(),
+        requests,
+        entries,
+        attempts,
+    }
+}
+
+impl Routed {
+    /// The lines it streamed of what Gate did: its notices, its checks
+    /// and its judges' findings.
+    fn gate_lines(&self) -> Vec<&str> {
+        let gate = ["notice", "checked", "judged"].map(|kind| format!(r#"{{"type":"{kind}","#));
+        (self.printed.iter().map(String::as_str))
+            .filter(|line| gate.iter().any(|start| line.starts_with(start.as_str())))
+            .collect()
+    }
+
+    /// The prompts it recorded.
+    fn prompts(&self) -> Vec<aura_core_types::PromptPayload> {
+        (self.entries.iter())
+            .filter_map(|e| e.tx.prompt_payload())
+            .collect()
+    }
+
+    /// The outcomes it recorded, each naming its prompt by index.
+    fn outcomes(&self) -> Vec<Outcome> {
+        let prompts: Vec<_> = (self.entries.iter())
+            .filter(|e| e.tx.prompt_payload().is_some())
+            .map(|e| e.tx.hash)
+            .collect();
+        (self.entries.iter())
+            .filter_map(|e| e.tx.outcome_payload())
+            .map(|o| {
+                let at = prompts.iter().position(|hash| *hash == o.prompt_tx);
+                (
+                    at.unwrap(),
+                    o.category,
+                    o.model,
+                    o.success,
+                    o.signal,
+                    o.cost_usd,
+                )
+            })
+            .collect()
+    }
+}
+
+/// The prompt of "fix the parser" as Gate records it when the turn starts
+/// on Sonnet.
+fn asked_on_sonnet() -> aura_core_types::PromptPayload {
+    use aura_core_types::{Difficulty, PromptCategory, PromptPayload, Route, RouteReason};
+    PromptPayload {
+        category: Some(PromptCategory::Debugging),
+        classifier: GATE_HAIKU.to_string(),
+        route: Route::turn(GATE_SONNET, RouteReason::Default).at_effort("medium"),
+        led: Some(false),
+        difficulty: Some(Difficulty::Medium),
+        ..PromptPayload::new("fix the parser")
+    }
+}
+
+/// A model whose prompt is classified as debugging, with no criteria to
+/// check it against, and whose turn writes `parser.txt` and says it is
+/// done without checking; it then answers `then`, in order.
+fn unchecked_change_provider(then: &[&str]) -> MockProvider {
+    let mut provider = MockProvider::new()
+        .with_response(MockResponse::text("debugging medium"))
+        .with_response(no_criteria())
+        .with_response(MockResponse::tool_use(
+            "c0",
+            "write_file",
+            json!({"path": "parser.txt", "content": "skip the last token\n"}),
+        ))
+        .with_response(MockResponse::text("Fixed the parser."));
+    for reply in then {
+        provider = provider.with_response(MockResponse::text(*reply));
+    }
+    provider
+}
+
+/// What the agent loop tells the model once it has changed its first
+/// file.
+const FIRST_CHANGE_NOTE: &str = "NOTE: You've made your first file change. Before making more \
+                                 changes, consider verifying your work (e.g., run the build or \
+                                 tests) to catch issues early.";
+
+/// A run whose change Sonnet is asked to check, which it does not, and
+/// whose unchecked work the judge then lets stand.
+async fn nudged() -> Routed {
+    let then = ["I read it again.", "It is done.\nVERDICT: OK"];
+    routed(unchecked_change_provider(&then), |_| {}).await
+}
+
+#[tokio::test]
+async fn a_nudge_streams_records_and_sends_its_message_byte_for_byte() {
+    use aura_core_types::{OutcomeSignal, PromptCategory, PromptPayload};
+    let run = nudged().await;
+
+    assert_eq!(
+        run.gate_lines(),
+        [
+            "{\"type\":\"notice\",\"text\":\"gate: aura-claude-sonnet-4-6 (cloud) changed files \
+             without running a test or build; asking it to check its change\"}",
+            "{\"type\":\"judged\",\"model\":\"aura-claude-sonnet-4-6\",\"judge\":\
+             \"aura-claude-sonnet-4-6\",\"at_fault\":false,\"reasons\":\"It is done.\",\
+             \"cost_usd\":0.00105}",
+        ]
+    );
+    let nudge = format!("Harness notice:\n{}", aura_gate::followup::NUDGE_PROMPT);
+    let sent = ["fix the parser", FIRST_CHANGE_NOTE, &nudge];
+    assert_eq!(last_prompts(&run.requests), sent);
+    let nudged = PromptPayload {
+        led: Some(false),
+        ..PromptPayload::new(nudge)
+    };
+    assert_eq!(run.prompts(), [asked_on_sonnet(), nudged]);
+    let (debugging, passed) = (PromptCategory::Debugging, OutcomeSignal::JudgedPass);
+    let outcome = (
+        0,
+        debugging,
+        GATE_SONNET.to_string(),
+        Some(true),
+        passed,
+        0.00315,
+    );
+    assert_eq!(run.outcomes(), [outcome]);
+}
+
+#[tokio::test]
+async fn a_nudged_attempt_is_logged_once_byte_for_byte() {
+    let run = nudged().await;
+
+    let [line] = run.attempts.as_slice() else {
+        panic!("one attempt line: {:?}", run.attempts);
+    };
+    let attempt: Value = serde_json::from_str(line).unwrap();
+    let (agent, _) = parse_session_id(&run.report.session_id, AgentId::generate()).unwrap();
+    let asked = run.entries.iter().find(|e| e.tx.prompt_payload().is_some());
+    let logged = format!(
+        "{{\"kind\":\"attempt\",\"at_ms\":{},\"agent\":\"{}\",\"prompt_tx\":\"{}\",\
+         \"category\":\"debugging\",\"difficulty\":\"medium\",\"led\":false,\"routed\":true,\
+         \"model\":\"aura-claude-sonnet-4-6\",\"signal\":\"judged_pass\",\"success\":true,\
+         \"cost_usd\":0.00315,\"subtask_cost_usd\":0.0,\"latency_ms\":{},\"evidence\":\
+         {{\"calls\":3,\"commands\":0,\"checks_run\":0,\"nudges\":1,\"files_edited\":\
+         [\"parser.txt\"],\"files_written\":[\"parser.txt\"],\"files_changed\":1,\
+         \"hit_limit\":false,\"reply\":\"I read it again.\"}}}}",
+        attempt["at_ms"],
+        agent.to_hex(),
+        asked.unwrap().tx.hash.to_hex(),
+        attempt["latency_ms"],
+    );
+    assert_eq!(*line, logged);
+}
+
+#[tokio::test]
+async fn criteria_are_sent_after_the_prompt_but_not_recorded_with_it() {
+    let criteria = json!({"items": [{"text": "the parser keeps the last token",
+                                     "kind": "behaviour"}], "strict": false});
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text("debugging medium"))
+        .with_response(MockResponse::tool_use("k0", "criteria", criteria))
+        .with_response(MockResponse::text("I could not find the parser."))
+        .with_response(MockResponse::text("It never looked.\nVERDICT: OK"));
+    let run = routed(provider, |_| {}).await;
+
+    let sent = "fix the parser\n\nBefore you started, the harness wrote down what this work \
+                will be checked against. Before you finish, make sure each holds and that a \
+                test or command you ran shows it. Where one names a reference, compare against \
+                that reference itself on every path the change adds, rather than against \
+                output written out by hand.\n\n1. [behaviour] the parser keeps the last token";
+    assert_eq!(last_prompts(&run.requests), [sent]);
+    assert_eq!(run.prompts(), [asked_on_sonnet()]);
+    assert_eq!(
+        run.gate_lines(),
+        [
+            "{\"type\":\"judged\",\"model\":\"aura-claude-sonnet-4-6\",\"judge\":\
+          \"aura-claude-sonnet-4-6\",\"at_fault\":false,\"reasons\":\"It never looked.\",\
+          \"cost_usd\":0.00105}"
+        ]
+    );
+}
+
+/// A model whose prompt is classified as debugging, with no criteria to
+/// check it against, and whose turn writes `parser.txt`, then runs its
+/// tests through the workspace's `.swe/run`, which fails, and gives up;
+/// the judge then excuses the failure.
+fn failing_script_provider() -> MockProvider {
+    MockProvider::new()
+        .with_response(MockResponse::text("debugging medium"))
+        .with_response(no_criteria())
+        .with_response(MockResponse::tool_use(
+            "c0",
+            "write_file",
+            json!({"path": "parser.txt", "content": "skip the last token\n"}),
+        ))
+        .with_response(MockResponse::tool_use(
+            "c1",
+            "run_command",
+            json!({"program": "sh", "args": [".swe/run", "pytest"]}),
+        ))
+        .with_response(MockResponse::text("The tests still fail."))
+        .with_response(MockResponse::text("No crate here.\nVERDICT: OTHER"))
+}
+
+/// A `.swe/run` in `workspace` that prints a failing test and fails.
+fn failing_script(workspace: &Path) {
+    std::fs::create_dir_all(workspace.join(".swe")).unwrap();
+    let script = "echo 'FAILED test_parser.py::test_last_token'\necho '1 failed'\nexit 1\n";
+    std::fs::write(workspace.join(".swe/run"), script).unwrap();
+}
+
+#[tokio::test]
+async fn the_judge_of_a_failed_turn_is_shown_it_byte_for_byte() {
+    let run = routed(failing_script_provider(), failing_script).await;
+
+    let requests = run.requests.lock().unwrap();
+    let judge = &requests[5];
+    assert_eq!(judge.model.as_str(), GATE_OPUS);
+    assert_eq!(judge.system.as_str(), aura_gate::judge::turn::SYSTEM_PROMPT);
+    assert_eq!(judge.messages.len(), 1);
+    assert_eq!(
+        judge.messages[0].text_content(),
+        "## The user's request\n\nfix the parser\n\n## Changes\n```diff\n=== parser.txt\n\
+         @@ -0,0 +1 @@\n+skip the last token\n\n```\n\n## Final reply\nThe tests still fail.\
+         \n\n## How it failed\nThe last test or build command it ran, `sh .swe/run pytest`, \
+         failed. What the command printed:\n{\"exit_code\":1,\"ok\":false,\"stderr\":\
+         \"exit_code: 1\\nstdout:\\nFAILED test_parser.py::test_last_token\\n1 failed\\n\\n\
+         stderr:\\n\",\"stdout\":\"\"}"
+    );
+}
+
+#[tokio::test]
+async fn a_move_up_prints_its_report_byte_for_byte() {
+    let then = [
+        "The parser still drops the last token.\nVERDICT: MODEL",
+        "Fixed it.",
+    ];
+    let run = routed(failing_check_provider(&then), |_| {}).await;
+
+    let report = &run.report;
+    let printed = format!(
+        "{{\"type\":\"result\",\"exit_reason\":\"success\",\"is_error\":false,\"result\":\
+         \"Fixed it.\",\"session_id\":\"{}\",\"model\":\"aura-claude-opus-4-7\",\
+         \"num_turns\":4,\"agent_turns\":2,\"duration_ms\":{},\"usage\":{{\"calls\":4,\
+         \"input_tokens\":400,\"cache_read_tokens\":0,\"cache_write_tokens\":0,\
+         \"output_tokens\":200,\"cache_hit_rate\":0.0,\"cost_usd\":0.0049}},\
+         \"total_cost_usd\":0.0098,\"gate_cost_usd\":0.0049,\"compactions\":0,\"todos\":[],\
+         \"files_changed\":[\"parser.txt\"],\"error\":null}}",
+        report.session_id, report.duration_ms,
+    );
+    assert_eq!(run.printed.last(), Some(&printed));
+}
+
+#[tokio::test]
+async fn a_model_error_moves_the_turn_up_byte_for_byte() {
+    use aura_core_types::{OutcomeSignal, PromptCategory, PromptPayload, Route, RouteReason};
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text("debugging medium"))
+        .with_response(no_criteria())
+        .with_response(MockResponse::text(FAILS))
+        .with_response(MockResponse::text("It broke.\nVERDICT: MODEL"))
+        .with_response(MockResponse::text("Fixed it."));
+    let run = routed(provider, |_| {}).await;
+
+    let report = &run.report;
+    assert_eq!(
+        (report.exit_reason, report.error.as_deref()),
+        (ExitReason::Success, None)
+    );
+    assert_eq!(
+        (report.model.as_str(), report.result.as_str()),
+        (GATE_OPUS, "Fixed it.")
+    );
+    let told = "The work above was done on aura-claude-sonnet-4-6 (cloud) and ended in an error. \
+                A reviewer of that work found: It broke. You are a stronger model taking over \
+                this turn. The files are as that work left them: check what it changed, find \
+                what is wrong and finish the request.";
+    let judged = "{\"type\":\"judged\",\"model\":\"aura-claude-sonnet-4-6\",\"judge\":\
+                  \"aura-claude-opus-4-7\",\"at_fault\":true,\"reasons\":\"It broke.\",\
+                  \"cost_usd\":0.00175}";
+    let notice = format!("{{\"type\":\"notice\",\"text\":\"{told}\"}}");
+    assert_eq!(run.gate_lines(), [judged, &notice]);
+    let takeover = PromptPayload {
+        category: Some(PromptCategory::Debugging),
+        route: Route::turn(GATE_OPUS, RouteReason::Escalate).at_effort("medium"),
+        led: Some(false),
+        ..PromptPayload::new(format!("Harness notice:\n{told}"))
+    };
+    assert_eq!(run.prompts(), [asked_on_sonnet(), takeover]);
+    let (debugging, sonnet) = (PromptCategory::Debugging, GATE_SONNET.to_string());
+    assert_eq!(
+        run.outcomes(),
+        [
+            (
+                0,
+                debugging,
+                sonnet.clone(),
+                Some(false),
+                OutcomeSignal::Error,
+                0.0
+            ),
+            (
+                0,
+                debugging,
+                sonnet,
+                Some(false),
+                OutcomeSignal::JudgedFail,
+                0.0
+            ),
+            (
+                1,
+                debugging,
+                GATE_OPUS.to_string(),
+                None,
+                OutcomeSignal::Unavailable,
+                0.00175
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_led_turn_records_its_prompt_as_led() {
+    use aura_core_types::{Difficulty, OutcomeSignal, PromptCategory, PromptPayload};
+    use aura_core_types::{Route, RouteLevel, RouteReason};
+    let gate = GateBase {
+        candidates: Some(vec![sonnet_and_opus().candidates.unwrap()[0].clone()]),
+        ..sonnet_and_opus()
+    };
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let provider = MockProvider::simple_response("multi_file_change medium");
+    let (mut h, _) = harness(&dirs, provider, ToolFilter::default(), permissions, gate);
+    let work = (PromptCategory::MultiFileChange, Some(Difficulty::Medium));
+    for (led, outcomes) in [(true, (10, true)), (false, (3, false))] {
+        (h.hub.gate).learn(RouteLevel::Turn, work, GATE_SONNET, Some(led), outcomes);
+    }
+    let asked = request("rename the crate everywhere", SessionChoice::New);
+    let (report, _) = execute(&mut h, asked, OutputFormat::Json).await;
+
+    let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
+    let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
+    let prompts: Vec<_> = entries
+        .iter()
+        .filter_map(|e| e.tx.prompt_payload())
+        .collect();
+    let led = PromptPayload {
+        category: Some(PromptCategory::MultiFileChange),
+        classifier: GATE_HAIKU.to_string(),
+        route: Route::turn(GATE_SONNET, RouteReason::Default).at_effort("medium"),
+        led: Some(true),
+        difficulty: Some(Difficulty::Medium),
+        ..PromptPayload::new("rename the crate everywhere")
+    };
+    assert_eq!(prompts, [led]);
+    let outcomes: Vec<_> = (entries.iter().filter_map(|e| e.tx.outcome_payload()))
+        .map(|o| (o.prompt_tx, o.model, o.signal))
+        .collect();
+    let asked = entries.iter().find(|e| e.tx.prompt_payload().is_some());
+    let unavailable = OutcomeSignal::Unavailable;
+    let outcome = (asked.unwrap().tx.hash, GATE_SONNET.to_string(), unavailable);
+    assert_eq!(outcomes, [outcome]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_background_notice_starts_a_routed_turn_byte_for_byte() {
+    use aura_core_types::{Difficulty, PromptCategory, PromptPayload, Route, RouteReason};
+    let provider = MockProvider::new()
+        .with_response(MockResponse::text("question medium"))
+        .with_response(MockResponse::tool_use(
+            "b0",
+            "run_command",
+            json!({"program": "sh", "args": ["-c", "sleep 1; echo done"], "background": true}),
+        ))
+        .with_response(MockResponse::text("Started it."))
+        .with_response(MockResponse::text("It is done.\nVERDICT: OK"))
+        .with_response(MockResponse::text("question medium"))
+        .with_response(MockResponse::text("Noted."));
+    let run = routed(provider, |_| {}).await;
+
+    let lines = run.gate_lines();
+    let notice: Value = serde_json::from_str(lines[1]).unwrap();
+    let notice = notice["text"].as_str().unwrap();
+    assert!(
+        notice.starts_with("The background command `sh -c"),
+        "{notice}"
+    );
+    let text = serde_json::to_string(notice).unwrap();
+    assert_eq!(lines[1], format!("{{\"type\":\"notice\",\"text\":{text}}}"));
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    let told = format!("Harness notice:\n{notice}");
+    assert_eq!(last_prompts(&run.requests).last(), Some(&told));
+    let question = |text: &str| PromptPayload {
+        category: Some(PromptCategory::Question),
+        classifier: GATE_HAIKU.to_string(),
+        route: Route::turn(GATE_SONNET, RouteReason::Default).at_effort("medium"),
+        led: Some(false),
+        difficulty: Some(Difficulty::Medium),
+        ..PromptPayload::new(text)
+    };
+    assert_eq!(run.prompts(), [question("fix the parser"), question(&told)]);
+    assert_eq!(
+        (run.report.agent_turns, run.report.result.as_str()),
+        (2, "Noted.")
+    );
 }
