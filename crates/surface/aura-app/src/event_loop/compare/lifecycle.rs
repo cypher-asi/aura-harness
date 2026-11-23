@@ -3,11 +3,11 @@
 //! `/compare cancel`.
 
 use super::record::{interrupted, latest_payload};
+use super::run::{self, ComparePlan};
 use super::view::plural;
 use super::Running;
 use crate::agent_registry::RegisteredAgent;
 use crate::event_loop::agent_events::AgentUi;
-use crate::event_loop::compare_run::{self, ComparePlan};
 use crate::event_loop::subagents::{lock, AgentHub};
 use crate::event_loop::{bench, titles, LoopState};
 use aura_ui_terminal::UiCommand;
@@ -106,7 +106,7 @@ async fn supervise(
     cancel: CancellationToken,
 ) {
     let user = plan.user;
-    let ran = tokio::spawn(compare_run::run(
+    let ran = tokio::spawn(run::run(
         Arc::clone(&hub),
         commands.clone(),
         plan,

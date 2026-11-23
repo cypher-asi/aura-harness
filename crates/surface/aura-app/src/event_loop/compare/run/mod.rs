@@ -30,22 +30,24 @@
 //! the plan readings those calls recorded; once every run has ended they
 //! are shared out between the runs with `plan_shares`.
 
-use super::agent_events::AgentUi;
-use super::agents::AgentSession;
-use super::bench_source::{self, StartFile};
-use super::compare::view::{duration, money, render};
-use super::gate::followup::{
+use super::view::{duration, money, render};
+use crate::event_loop::agent_events::AgentUi;
+use crate::event_loop::agents::AgentSession;
+use crate::event_loop::bench_source::{self, StartFile};
+use crate::event_loop::gate::followup::{
     ended_signal, failure_text, joined, record_message, stronger, At, Attempt, Before, CarryOn,
     Following, Judging, Takeover,
 };
-use super::handlers::{handle_agent_success, run_agent_turn, system_message, turn_summary};
-use super::modes::Permissions;
-use super::processes::{now_ms, turn_id};
-use super::steering::Steering;
-use super::subagents::{lock, AgentHub, ArmRouting};
-use super::task_check;
-use super::tasks::TASKS_DIR;
-use super::turns::record_prompt;
+use crate::event_loop::handlers::{
+    handle_agent_success, run_agent_turn, system_message, turn_summary,
+};
+use crate::event_loop::modes::Permissions;
+use crate::event_loop::processes::{now_ms, turn_id};
+use crate::event_loop::steering::Steering;
+use crate::event_loop::subagents::{lock, AgentHub, ArmRouting};
+use crate::event_loop::task_check;
+use crate::event_loop::tasks::TASKS_DIR;
+use crate::event_loop::turns::record_prompt;
 use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
 use crate::isolation::changes::{self, BUILD_OUTPUT};
@@ -438,7 +440,7 @@ async fn files_of(ctx: &Context, task: &ExampleTask) -> Result<(), Option<String
 async fn show_live(ctx: &Context, payload: &ComparePayload) {
     let host = ctx.host.agent_id();
     let root = lock(&ctx.hub.registry).root(host);
-    let mut view = super::bench::view(host, root, &ctx.host.name, payload);
+    let mut view = crate::event_loop::bench::view(host, root, &ctx.host.name, payload);
     let setup = ctx.setup.borrow().clone();
     for row in &mut view.tasks {
         if let Some(i) = ctx.plan.examples.iter().position(|t| t.id == row.id) {
@@ -475,7 +477,7 @@ async fn show_live(ctx: &Context, payload: &ComparePayload) {
                     u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
                 }),
                 cost_usd: used.iter().map(|row| row.cost_usd).sum(),
-                tokens: super::bench::tokens(&used),
+                tokens: crate::event_loop::bench::tokens(&used),
                 agent_id: working.map(|(agent, _)| agent.to_hex()),
                 doing: working.and_then(|(agent, _)| doing(&ctx.hub, agent, now_ms())),
             }
@@ -541,7 +543,7 @@ struct Ran {
 /// Write `payload` to the record of the comparison's agent `agent_id`
 /// (named `name`) and show it in the BENCH tab. A failure to record is
 /// logged.
-pub(super) async fn save(
+pub(crate) async fn save(
     hub: &AgentHub,
     kernel: &Kernel,
     commands: &mpsc::Sender<UiCommand>,
@@ -550,7 +552,7 @@ pub(super) async fn save(
 ) -> bool {
     let recorded = record(kernel, agent_id, payload).await;
     let root = lock(&hub.registry).root(agent_id);
-    let view = super::bench::view(agent_id, root, name, payload);
+    let view = crate::event_loop::bench::view(agent_id, root, name, payload);
     let _ = commands.send(UiCommand::BenchUpsert(Box::new(view))).await;
     recorded
 }
@@ -1120,7 +1122,7 @@ async fn run_turn(
     // nothing asks, and its commands may only write inside the copy.
     let permissions = Permissions::new(PermissionMode::Agent, ApprovalLevel::Yolo);
     hub.set_permissions(agent_id, permissions);
-    super::modes::apply(&session.kernel, permissions, &hub.tool_names());
+    crate::event_loop::modes::apply(&session.kernel, permissions, &hub.tool_names());
     let spec = &plan.arms[arm.index()];
     let routing = arm_routing(spec, plan);
     hub.begin_compare_run(agent_id, routing.clone());
@@ -1424,7 +1426,7 @@ async fn run_prompt(
     .await;
 
     let started = Instant::now();
-    let started_ms = super::processes::now_ms();
+    let started_ms = crate::event_loop::processes::now_ms();
     let prompt_tx = match record_prompt(session, &prompt).await {
         Ok((tx, _)) => Some(tx.hash),
         Err(problem) => {
@@ -1493,7 +1495,7 @@ async fn run_prompt(
         // Each attempt ends in the log, so a nudge, a send-back or a
         // stronger model's takeover shows where the one before it stopped.
         if let Some(rec) = recorder {
-            super::trace::end_turn(rec, &result, cancel.is_cancelled());
+            crate::event_loop::trace::end_turn(rec, &result, cancel.is_cancelled());
         }
         let stopped = cancel.is_cancelled() || forwarded.credentials_rejected;
         let mut signal = if stopped {
@@ -1661,7 +1663,7 @@ async fn run_prompt(
         ctx.routed(name, route(&model));
         escalations += 1;
         nudged_cost_usd = 0.0;
-        (attempt_started, attempt_ms) = (Instant::now(), super::processes::now_ms());
+        (attempt_started, attempt_ms) = (Instant::now(), crate::event_loop::processes::now_ms());
         turn_start = session.messages.len();
         config.initial_todos.clone_from(&session.todos);
         config.initial_thinking_effort = ran_at;

@@ -4,7 +4,7 @@
 //! the same actions (see [`super::bench`]).
 //!
 //! `/compare [prompt]` prepares a comparison and shows what it should
-//! cost; `/compare go` starts it (see [`super::compare_run`]). Each
+//! cost; `/compare go` starts it (see [`run`]). Each
 //! comparison is an agent (`Compare #n`) under the agent that asked,
 //! with its runs under it; its state is the latest `compare` system
 //! record on its own record, which is also where `/compare` lists past
@@ -29,6 +29,7 @@ mod handle;
 mod lifecycle;
 mod prepare;
 mod record;
+pub(super) mod run;
 pub(super) mod view;
 
 pub(super) use ended::{apply, diff, dismiss};
@@ -37,8 +38,8 @@ pub(super) use lifecycle::{cancel, start};
 pub(super) use prepare::prepare;
 pub(super) use record::comparisons;
 
-use super::compare_run::ComparePlan;
 use super::LoopState;
+use run::ComparePlan;
 use aura_agent_kernel::Kernel;
 use aura_core_types::AgentId;
 use aura_gate::compare::DEFAULT_CONCURRENCY;

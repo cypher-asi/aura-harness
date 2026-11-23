@@ -2,10 +2,10 @@
 //! it runs and the arms it runs on, and what it should cost.
 
 use super::kernel_of;
+use super::run::ComparePlan;
 use super::view::{arm_label, plural, EstimateView};
 use crate::bench_pack::{self, ExampleTask};
 use crate::event_loop::bench_source::{self, Replay, StartFile};
-use crate::event_loop::compare_run::ComparePlan;
 use crate::event_loop::LoopState;
 use aura_agent_kernel::Kernel;
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;

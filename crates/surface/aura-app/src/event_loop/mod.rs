@@ -17,7 +17,6 @@ pub mod auth;
 mod bench;
 mod bench_source;
 mod compare;
-mod compare_run;
 pub(crate) mod flow;
 mod flow_builder;
 pub(crate) mod gate;

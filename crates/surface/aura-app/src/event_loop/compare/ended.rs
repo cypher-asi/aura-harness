@@ -4,9 +4,9 @@
 
 use super::kernel_of;
 use super::record::{hosts, latest_state};
+use super::run::{patches, remove_copies, save};
 use super::view::{plural, split_patch};
 use crate::event_loop::agent_events::AgentUi;
-use crate::event_loop::compare_run::{patches, remove_copies, save};
 use crate::event_loop::handlers::system_message;
 use crate::event_loop::LoopState;
 use crate::isolation::changes;

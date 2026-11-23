@@ -548,7 +548,7 @@ async fn a_comparison_recorded_running_that_nothing_runs_is_stopped() {
     payload.status = CompareStatus::Running;
     let kernel = compare::kernel_of(&mut state, host.agent_id()).unwrap();
     let ids = (host.agent_id(), host.name.as_str());
-    compare_run::save(&state.hub, &kernel, state.commands, ids, &payload).await;
+    compare::run::save(&state.hub, &kernel, state.commands, ids, &payload).await;
     drain(&mut commands);
 
     bench(&mut state, &links, BenchRequest::List).await;
