@@ -7,9 +7,7 @@ use super::text::{display_width, wrap_words, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
-        agent_code_width,
         scrollbar::{ScrollTarget, ScrollbarArea},
-        shown_agent_code,
         tab_bar::TabLayout,
         AgentButton, AgentRowEnd, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit,
         MenuTarget, Pane, PanelFocus, ProjectListRow, ProseRow, RecordsTab, ToggleRow,
@@ -1145,9 +1143,6 @@ fn build_swarm_lines<'a>(
     let shown_active = app.shown_active_agent();
     let width = inner.width as usize;
     let now_ms = now_ms();
-    // Every agent row's code column is as wide as the widest code, so the
-    // codes line up; 0 when no agent has one.
-    let code_width = agent_code_width(app.agents());
     let is_thinking = |agent: &crate::events::AgentSummary| app.agent_thinking(agent);
     let project_name = Style::default().fg(theme.colors.muted);
     let agent_name = Style::default().fg(theme.colors.foreground);
@@ -1294,12 +1289,7 @@ fn build_swarm_lines<'a>(
                     text: PLAN_BADGE,
                     color: theme.colors.success,
                 });
-                let end = AgentRowEnd::agent(
-                    width,
-                    agent.depth,
-                    ago.as_deref(),
-                    (shown_agent_code(agent), code_width),
-                );
+                let end = AgentRowEnd::agent(ago.as_deref());
                 lines.push(tree_row(
                     width,
                     (&spawn_guides(app.agents(), index), theme.colors.muted),
@@ -1475,8 +1465,8 @@ fn list_row_ending<'a>(
 /// the lines from the agent that spawned it, drawn in their color. A
 /// spawn with no icon has its elbow run on through the icon column. The
 /// `badge`, if any, is drawn right after the name (see [`RowBadge`]). The
-/// `buttons`, each with its color, are drawn left of `end`, the time and
-/// code, where `app::agent_button_offset` says they are.
+/// `buttons`, each with its color, are drawn left of `end`, the time,
+/// where `app::agent_button_offset` says they are.
 pub(super) fn tree_row<'a>(
     width: usize,
     (guides, color): (&str, Color),
@@ -1583,23 +1573,22 @@ fn indented_row<'a>(
         .map(|&(button, color)| Span::styled(button.label(), fill.fg(color)))
         .collect();
     let button_width: usize = buttons.iter().map(Span::width).sum();
-    let text_width = width
-        .saturating_sub(
-            indent.width()
-                + icon_width
-                + icon_pad
-                + button_width
-                + display_width(&time)
-                + display_width(&code),
-        )
-        .max(1);
+    let text_width = width.saturating_sub(
+        indent.width()
+            + icon_width
+            + icon_pad
+            + button_width
+            + display_width(&time)
+            + display_width(&code),
+    );
     // The badge's columns come out of the name's, so a long name is cut
-    // and the badge still shows; a row too narrow for both drops it.
+    // and the badge still shows; a row too narrow for both drops it. A row
+    // narrower than its fixed parts has no name columns at all.
     let badge = label
         .badge
         .filter(|badge| text_width >= display_width(badge.text) + MIN_NAME_BESIDE_BADGE);
     let badge_width = badge.map_or(0, |badge| display_width(badge.text));
-    let name_width = text_width - badge_width;
+    let name_width = text_width.saturating_sub(badge_width);
     let name = truncate_agent_name(label.name, name_width);
     let rest = name_width.saturating_sub(display_width(&name));
     let detail = label
@@ -1786,7 +1775,13 @@ pub(super) fn build_definition_lines<'a>(app: &App, inner: Rect, theme: &Theme) 
         .collect()
 }
 
+/// The agent's name cut to `max_width` columns, ending in `…` when cut.
+/// No room at all means no name, not even the ellipsis, so a row narrower
+/// than its fixed parts is never wider than the row.
 fn truncate_agent_name(name: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
     if display_width(name) <= max_width {
         return name.to_string();
     }

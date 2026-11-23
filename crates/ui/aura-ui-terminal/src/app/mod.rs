@@ -780,29 +780,6 @@ impl AgentButton {
 /// drop the code instead.
 const MIN_NAME_BESIDE_CODE: usize = 4;
 
-/// Columns of the widest code shown among `agents`: the width of the code
-/// column in the projects list, 0 when no row shows a code and there is
-/// none.
-pub(crate) fn agent_code_width(agents: &[AgentSummary]) -> usize {
-    agents
-        .iter()
-        .filter_map(shown_agent_code)
-        .map(text_width)
-        .max()
-        .unwrap_or(0)
-}
-
-/// The code `agent`'s projects-list row shows in its code column. Spawned
-/// subtasks (any agent below the top of its tree) show none: their name
-/// already starts with the code (`RE36: Fix parser`), so the column would
-/// only repeat it. Their cell stays blank, so times still line up.
-pub(crate) fn shown_agent_code(agent: &AgentSummary) -> Option<&str> {
-    if agent.depth > 0 {
-        return None;
-    }
-    agent.code.as_deref()
-}
-
 /// Columns before the name on the row of an agent at `depth`: one leading
 /// space, the spawn guides at `AURA_WIDTH + 2` columns per level, then the
 /// icon column and the space after it, as `tree_row` lays them out.
@@ -842,36 +819,18 @@ impl<'a> AgentRowEnd<'a> {
         }
     }
 
-    /// The end of the row of an agent at `depth`, in a list `width` columns
-    /// wide whose code column is `code_width` columns (0 for none). The
-    /// code column is dropped when it would leave the name fewer than
-    /// [`MIN_NAME_BESIDE_CODE`] columns with the buttons showing, so
-    /// hovering the row never changes whether it has one.
-    pub(crate) fn agent(
-        width: usize,
-        depth: usize,
-        ago: Option<&'a str>,
-        (code, code_width): (Option<&'a str>, usize),
-    ) -> Self {
-        let buttons: usize = AgentButton::ALL
-            .iter()
-            .map(|button| text_width(&button.label()))
-            .sum();
-        Self::coded_if_room(
-            width,
-            agent_row_lead(depth) + buttons,
-            ago,
-            (code, code_width),
-            true,
-        )
+    /// The end of an agent row: the time alone. Agent rows have no code
+    /// column; only roster rows show a code (the definition's
+    /// abbreviation), so names get the whole width.
+    pub(crate) fn agent(ago: Option<&'a str>) -> Self {
+        Self::time(ago)
     }
 
     /// The end of a roster row, in a list `width` columns wide whose
     /// abbreviation column is `column_width` columns (0 for none): no
-    /// time, then the definition's `abbreviation` laid out as a code. As
-    /// with [`Self::agent`], the column is dropped when it would leave the
-    /// name fewer than [`MIN_NAME_BESIDE_CODE`] columns. Roster rows have
-    /// no buttons.
+    /// time, then the definition's `abbreviation` laid out as a code. The
+    /// column is dropped when it would leave the name fewer than
+    /// [`MIN_NAME_BESIDE_CODE`] columns. Roster rows have no buttons.
     pub(crate) fn definition(
         width: usize,
         (abbreviation, column_width): (Option<&'a str>, usize),
@@ -2345,12 +2304,7 @@ impl App {
         let ago = agent
             .last_active_ms
             .map(|ms| crate::renderer::format_ago(ms, now));
-        let end = AgentRowEnd::agent(
-            usize::from(list.width),
-            agent.depth,
-            ago.as_deref(),
-            (shown_agent_code(agent), agent_code_width(&self.agents)),
-        );
+        let end = AgentRowEnd::agent(ago.as_deref());
         let offset = column.checked_sub(list.x)?;
         let button = agent_button_at(list.width, &end, offset)?;
         Some((button, agent.id.clone()))

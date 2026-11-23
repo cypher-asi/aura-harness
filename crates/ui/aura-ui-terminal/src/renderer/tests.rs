@@ -5491,7 +5491,7 @@ fn char_column(row: &str, needle: &str) -> usize {
 }
 
 #[test]
-fn agent_rows_end_in_their_codes_lined_up_at_the_right_edge() {
+fn no_agent_row_shows_a_code_at_the_right_edge() {
     use crate::events::UiCommand;
     let mut app = app_with_coded_agents(Some("RE36"), Some("AG1"));
     app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
@@ -5499,30 +5499,24 @@ fn agent_rows_end_in_their_codes_lined_up_at_the_right_edge() {
     let rows = render_rows(&mut app, 120);
     let aa = line_with(&rows, "Terminal Ag");
     let bb = line_with(&rows, "Researcher");
-    assert!(rows[aa].contains(" 3m RE36 │"), "{:?}", rows[aa]);
-    // The shorter code is padded, so both start in the same column.
-    assert!(rows[bb].contains(" AG1  │"), "{:?}", rows[bb]);
-    assert_eq!(
-        char_column(&rows[aa], "RE36"),
-        char_column(&rows[bb], "AG1")
+    // Neither the root agent nor its spawn shows its code; the time alone
+    // ends the row and both names line up.
+    assert!(rows[aa].contains(" 3m │"), "{:?}", rows[aa]);
+    assert!(!rows[aa].contains("RE36"), "{:?}", rows[aa]);
+    assert!(!rows[bb].contains("AG1"), "{:?}", rows[bb]);
+    // The time is the last text before the panel's right border; the
+    // agent's code used to sit between them.
+    let row = &rows[aa];
+    let time_end = row.find(" 3m ").unwrap() + 4;
+    let after_time = &row[time_end..];
+    assert!(
+        after_time.trim_start_matches(' ').starts_with('│'),
+        "nothing between the time and the border: {row:?}"
     );
-
-    // Muted like the time, on the selected row's fill.
-    let colors = test_theme().colors;
-    let buffer = render_buffer(&mut app, 120);
-    let (aa, bb) = (u16::try_from(aa).unwrap(), u16::try_from(bb).unwrap());
-    let (_, code) = find_cell(&buffer, aa, "RE36").expect("code");
-    let (_, time) = find_cell(&buffer, aa, "3m").expect("time");
-    let (_, name) = find_cell(&buffer, aa, "Terminal").expect("name");
-    assert_eq!(code.fg, time.fg);
-    assert_eq!(code.bg, name.bg);
-    assert!(name.bg.is_some_and(|bg| bg != Color::Reset), "{name:?}");
-    let (_, code) = find_cell(&buffer, bb, "AG1").expect("code");
-    assert_eq!(code.fg, Some(colors.muted));
 }
 
 #[test]
-fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_a_code() {
+fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_the_time() {
     use crate::app::{agent_button_offset, AgentButton, AgentRowEnd, HoverTarget};
     use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
     let moved = |column: usize, row: usize| MouseEvent {
@@ -5541,7 +5535,7 @@ fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_a_code()
     let edge = name + row[name..].iter().position(|&c| c == '│').expect("border");
     let list_x = left + 1;
     let width = edge - list_x;
-    let end = AgentRowEnd::agent(width, 0, Some("3m"), (Some("RE36"), 4));
+    let end = AgentRowEnd::agent(Some("3m"));
     let offset = |button| {
         let width = u16::try_from(width).unwrap();
         list_x + usize::from(agent_button_offset(width, &end, button))
@@ -5549,32 +5543,28 @@ fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_a_code()
 
     app.handle_mouse(moved(name, line));
     let hovered = render_rows(&mut app, 120);
-    assert!(
-        hovered[line].contains(" ✕ 3m RE36 │"),
-        "{:?}",
-        hovered[line]
-    );
+    assert!(hovered[line].contains(" ✕ 3m │"), "{:?}", hovered[line]);
     let glyph_at = |row: &str, column: usize| row.chars().nth(column);
     assert_eq!(
         glyph_at(&hovered[line], offset(AgentButton::Archive)),
         Some('✕')
     );
     assert_eq!(
-        char_column(&hovered[line], " 3m RE36 "),
-        char_column(&before[line], " 3m RE36 "),
-        "the time and code stay put on hover"
+        char_column(&hovered[line], " 3m "),
+        char_column(&before[line], " 3m "),
+        "the time stays put on hover"
     );
 
     app.handle_mouse(moved(offset(AgentButton::Archive), line));
     assert!(matches!(app.hover(), Some(HoverTarget::ArchiveAgent(_))));
     app.handle_mouse(moved(offset(AgentButton::Archive) - 2, line));
     assert!(matches!(app.hover(), Some(HoverTarget::ProjectRow(_))));
-    app.handle_mouse(moved(char_column(&before[line], "RE36"), line));
+    app.handle_mouse(moved(char_column(&before[line], "3m"), line));
     assert!(matches!(app.hover(), Some(HoverTarget::ProjectRow(_))));
 }
 
 #[test]
-fn a_tree_row_drops_its_code_when_the_name_gets_too_narrow_and_still_fits() {
+fn a_tree_row_keeps_its_whole_width_at_narrow_widths() {
     use super::panels::{cell_style, tree_row, CellState, StatusIcon};
     use crate::app::{AgentButton, AgentRowEnd};
     let theme = test_theme();
@@ -5585,10 +5575,12 @@ fn a_tree_row_drops_its_code_when_the_name_gets_too_narrow_and_still_fits() {
             .collect()
     };
     let buttons = AgentButton::ALL.map(|button| (button, theme.colors.muted));
-    // ` `, the icon column and its pad, ` ✕`, then ` 3m RE36 `.
-    let around = 1 + crate::animation::AURA_WIDTH + 1 + 2 + 9;
+    // ` `, the icon column and its pad, ` ✕`, then ` 3m ` is 10 columns.
+    // Below that the fixed parts alone are wider than the row, which no
+    // row layout cuts.
+    let around = 1 + crate::animation::AURA_WIDTH + 1 + 2 + 4;
     for width in around..=around + 10 {
-        let end = AgentRowEnd::agent(width, 0, Some("3m"), (Some("RE36"), 4));
+        let end = AgentRowEnd::agent(Some("3m"));
         for buttons in [&buttons[..], &[]] {
             let cell = cell_style(&theme, CellState::Normal, Style::default());
             let icon = StatusIcon::new("", theme.colors.muted);
@@ -5602,13 +5594,13 @@ fn a_tree_row_drops_its_code_when_the_name_gets_too_narrow_and_still_fits() {
                 buttons,
             );
             let line_text = text(&line);
-            assert_eq!(line.width(), width, "width {width}: {line_text:?}");
-            if width >= around + 4 {
-                assert!(line_text.ends_with(" 3m RE36 "), "{line_text:?}");
-            } else {
-                assert!(!line_text.contains("RE36"), "{line_text:?}");
-                assert!(line_text.ends_with(" 3m "), "{line_text:?}");
-            }
+            assert!(line_text.ends_with(" 3m "), "{line_text:?}");
+            assert_eq!(
+                line.width(),
+                width,
+                "width {width}, buttons {}: {line_text:?}",
+                buttons.len()
+            );
         }
     }
 }
@@ -5617,7 +5609,7 @@ fn a_tree_row_drops_its_code_when_the_name_gets_too_narrow_and_still_fits() {
 fn agent_rows_without_codes_are_laid_out_as_before() {
     use super::panels::{cell_style, tree_row, CellState, StatusIcon};
     use crate::animation::AURA_WIDTH;
-    use crate::app::{agent_code_width, AgentButton, AgentRowEnd};
+    use crate::app::{AgentButton, AgentRowEnd};
     let theme = test_theme();
     let text = |line: &ratatui::text::Line<'_>| -> String {
         line.spans
@@ -5629,7 +5621,7 @@ fn agent_rows_without_codes_are_laid_out_as_before() {
     let row = |ago: Option<&str>, buttons: &[(AgentButton, Color)]| {
         let cell = cell_style(&theme, CellState::Normal, Style::default());
         let icon = StatusIcon::new("", theme.colors.muted);
-        let end = AgentRowEnd::agent(24, 0, ago, (None, 0));
+        let end = AgentRowEnd::agent(ago);
         text(&tree_row(
             24,
             ("", theme.colors.muted),
@@ -5655,9 +5647,8 @@ fn agent_rows_without_codes_are_laid_out_as_before() {
         format!("{lead}{:<17} ✕ ", "Researcher")
     );
 
-    // In the panel, a list with no codes has no code column.
-    let mut app = app_with_coded_agents(None, None);
-    assert_eq!(agent_code_width(app.agents()), 0);
+    // In the panel, a coded agent gets the same rows as one without.
+    let mut app = app_with_coded_agents(Some("RE36"), Some("AG1"));
     let rows = render_rows(&mut app, 120);
     let aa = &rows[line_with(&rows, "Terminal Ag")];
     assert!(aa.contains(" 3m │"), "{aa:?}");

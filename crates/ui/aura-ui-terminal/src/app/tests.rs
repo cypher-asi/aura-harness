@@ -1505,22 +1505,10 @@ fn test_agent_archive_button_zone_spans_its_space_glyph_and_gap() {
 }
 
 #[test]
-fn test_agent_row_end_puts_the_padded_code_after_the_time() {
-    let end = |ago, code| AgentRowEnd::agent(30, 0, ago, (code, 4));
-    assert_eq!(end(Some("5m"), Some("RE36")).text(true), " 5m RE36 ");
-    assert_eq!(end(Some("2d"), Some("AG1")).text(true), " 2d AG1  ");
-    // The same text with or without the buttons, so nothing moves on hover.
-    assert_eq!(end(Some("2d"), Some("AG1")).text(false), " 2d AG1  ");
-    assert_eq!(end(None, Some("AG1")).text(false), " AG1  ");
-    // An agent with no code keeps the column blank, so times line up.
-    assert_eq!(end(Some("5m"), None).text(false), " 5m      ");
-}
-
-#[test]
-fn test_agent_row_end_without_a_code_column_is_the_time_alone() {
+fn test_agent_row_end_is_the_time_alone_even_for_coded_agents() {
     for ago in [Some("5m"), None] {
         for has_buttons in [true, false] {
-            let end = AgentRowEnd::agent(30, 0, ago, (Some("RE36"), 0));
+            let end = AgentRowEnd::agent(ago);
             assert_eq!(end, AgentRowEnd::time(ago));
             assert_eq!(
                 end.text(has_buttons),
@@ -1531,51 +1519,10 @@ fn test_agent_row_end_without_a_code_column_is_the_time_alone() {
     assert_eq!(AgentRowEnd::time(Some("5m")).text(false), " 5m ");
     assert_eq!(AgentRowEnd::time(None).text(false), "");
     assert_eq!(AgentRowEnd::time(None).text(true), " ");
-    assert_eq!(agent_code_width(&[agent("aa", "A"), agent("bb", "B")]), 0);
 }
 
 #[test]
-fn test_agent_code_width_is_the_widest_code() {
-    let coded = |id: &str, code: &str| crate::events::AgentSummary {
-        code: Some(code.to_string()),
-        ..agent(id, id)
-    };
-    let agents = [coded("aa", "AG1"), agent("bb", "B"), coded("cc", "REV36")];
-    assert_eq!(agent_code_width(&agents), 5);
-}
-
-#[test]
-fn test_subtask_rows_show_no_code_and_leave_the_column_to_top_level_rows() {
-    let row = |id: &str, code: &str, depth| crate::events::AgentSummary {
-        code: Some(code.to_string()),
-        depth,
-        ..agent(id, id)
-    };
-    let top = row("aa", "AG1", 0);
-    let subtask = row("bb", "RUS70", 1);
-    assert_eq!(shown_agent_code(&top), Some("AG1"));
-    assert_eq!(shown_agent_code(&subtask), None);
-    // Only the top-level code sizes the column.
-    assert_eq!(agent_code_width(&[top, subtask.clone()]), 3);
-    assert_eq!(agent_code_width(&[subtask]), 0);
-}
-
-#[test]
-fn test_agent_row_end_drops_the_code_when_the_name_gets_too_narrow() {
-    use crate::animation::AURA_WIDTH;
-    // Lead, the button (` ✕`) and ` 5m RE36 `, beside a name of 4.
-    let around = 1 + AURA_WIDTH + 1 + 2 + 9;
-    let end = |width, depth| AgentRowEnd::agent(width, depth, Some("5m"), (Some("RE36"), 4));
-    assert_eq!(end(around + 4, 0).text(false), " 5m RE36 ");
-    assert_eq!(end(around + 3, 0), AgentRowEnd::time(Some("5m")));
-    // Each level of depth takes `AURA_WIDTH + 2` more columns.
-    let deeper = around + 4 + AURA_WIDTH + 2;
-    assert_eq!(end(deeper, 1).text(false), " 5m RE36 ");
-    assert_eq!(end(deeper - 1, 1), AgentRowEnd::time(Some("5m")));
-}
-
-#[test]
-fn test_an_agents_buttons_make_room_for_its_code() {
+fn test_an_agents_buttons_leave_room_for_its_time() {
     use crossterm::event::MouseEventKind;
     let (tx, _rx) = mpsc::channel(8);
     let mut app = App::new().with_event_sender(tx);
@@ -1585,17 +1532,14 @@ fn test_an_agents_buttons_make_room_for_its_code() {
     }]));
     let mut app = with_agent_areas(app);
 
-    // Rows span columns 1..19 and end in ` ✕ RE36 ` (no time): the archive
-    // glyph at column 1 + 11, the code in columns 14..18.
-    let end = AgentRowEnd::agent(18, 0, None, (Some("RE36"), 4));
-    assert_eq!(agent_button_offset(18, &end, AgentButton::Archive), 11);
-    app.handle_mouse(mouse(MouseEventKind::Moved, 10, 5));
-    assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
-    app.handle_mouse(mouse(MouseEventKind::Moved, 12, 5));
-    assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(1)));
-    // The code is not a button.
+    // Rows span columns 1..19 and end in ` ✕ ` (no time, and no code even
+    // though the agent has one): the archive glyph at column 1 + 16.
+    let end = AgentRowEnd::agent(None);
+    assert_eq!(agent_button_offset(18, &end, AgentButton::Archive), 16);
     app.handle_mouse(mouse(MouseEventKind::Moved, 15, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 17, 5));
+    assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(1)));
 }
 
 #[test]
