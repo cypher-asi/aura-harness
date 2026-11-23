@@ -7,6 +7,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### OpenRouter reasoning replies parse
+
+##### Fixed
+
+- Every benchmark run failed at once with "Gate could not classify the
+  prompt" when the classifier was `openrouter/openai/gpt-5-nano`.
+  OpenRouter's Anthropic-compatible endpoint answers a reasoning model
+  with a `redacted_thinking` block (its encrypted reasoning) before the
+  `label` call, and the reply failed to parse. Such a block is now read
+  and dropped, in whole replies and in streams, so the label is found.
+
 ### Gate in crates of its own
 
 ##### Changed

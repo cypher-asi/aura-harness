@@ -70,6 +70,25 @@ fn test_parse_message_stop_event() {
 }
 
 #[test]
+fn redacted_thinking_block_start_parses_as_thinking() {
+    // OpenRouter's Anthropic endpoint opens a `redacted_thinking`
+    // block for reasoning models whose reasoning is encrypted.
+    let event = parse_sse_event(
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"gAAAAB\"}}",
+    );
+    assert!(
+        matches!(
+            event,
+            Some(StreamEvent::ContentBlockStart {
+                index: 0,
+                content_type: crate::StreamContentType::Thinking,
+            })
+        ),
+        "got {event:?}"
+    );
+}
+
+#[test]
 fn test_parse_error_event() {
     let event = parse_sse_event(
         "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}",

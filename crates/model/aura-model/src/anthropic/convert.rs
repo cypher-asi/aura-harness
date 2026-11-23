@@ -948,37 +948,39 @@ pub(super) fn dedupe_tool_results(api_messages: &mut Vec<ApiMessage>) {
 pub(super) fn convert_response_to_aura(content: &[ApiContent]) -> Message {
     let blocks: Vec<ContentBlock> = content
         .iter()
-        .map(|c| match c {
-            ApiContent::Text { text, .. } => ContentBlock::Text { text: text.clone() },
+        .filter_map(|c| match c {
+            ApiContent::Text { text, .. } => Some(ContentBlock::Text { text: text.clone() }),
             ApiContent::Thinking {
                 thinking,
                 signature,
-            } => ContentBlock::Thinking {
+            } => Some(ContentBlock::Thinking {
                 thinking: thinking.clone(),
                 signature: signature.clone(),
-            },
-            ApiContent::ToolUse { id, name, input } => ContentBlock::ToolUse {
+            }),
+            // Nothing readable, and not replayed: dropped.
+            ApiContent::RedactedThinking { .. } | ApiContent::Unknown => None,
+            ApiContent::ToolUse { id, name, input } => Some(ContentBlock::ToolUse {
                 id: id.clone(),
                 name: name.clone(),
                 input: input.clone(),
-            },
+            }),
             ApiContent::ToolResult {
                 tool_use_id,
                 content,
                 is_error,
                 ..
-            } => ContentBlock::ToolResult {
+            } => Some(ContentBlock::ToolResult {
                 tool_use_id: tool_use_id.clone(),
                 content: ToolResultContent::Text(content.clone()),
                 is_error: is_error.unwrap_or(false),
-            },
-            ApiContent::Image { source } => ContentBlock::Image {
+            }),
+            ApiContent::Image { source } => Some(ContentBlock::Image {
                 source: ImageSource {
                     source_type: source.source_type.clone(),
                     media_type: source.media_type.clone(),
                     data: source.data.clone(),
                 },
-            },
+            }),
         })
         .collect();
 

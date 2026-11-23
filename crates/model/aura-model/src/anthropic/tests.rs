@@ -2981,3 +2981,51 @@ fn openrouter_slugs_get_the_capabilities_of_the_model_they_name() {
         Some(ApiToolChoice::Any { .. })
     ));
 }
+
+#[test]
+fn complete_response_with_redacted_thinking_parses_and_drops_it() {
+    // The reply Gate's classifier got from `openrouter/openai/gpt-5-nano`
+    // through OpenRouter's Anthropic endpoint: encrypted reasoning, then
+    // the forced `label` call. It failed to parse before.
+    let body = r#"{
+        "id": "gen-1",
+        "type": "message",
+        "role": "assistant",
+        "model": "openai/gpt-5-nano",
+        "content": [
+            {"type": "redacted_thinking", "data": "gAAAAABencrypted"},
+            {"type": "tool_use", "id": "call_1", "name": "label",
+             "input": {"category": "code", "difficulty": "medium"}}
+        ],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 812, "output_tokens": 64}
+    }"#;
+    let response: super::api_types::ApiResponse = serde_json::from_str(body).unwrap();
+    assert_eq!(response.usage.input_tokens, 812);
+    let message = super::convert::convert_response_to_aura(&response.content);
+    assert_eq!(message.content.len(), 1);
+    assert!(matches!(
+        &message.content[0],
+        ContentBlock::ToolUse { name, .. } if name == "label"
+    ));
+}
+
+#[test]
+fn complete_response_with_an_unknown_block_type_keeps_the_rest() {
+    let body = r#"{
+        "id": "msg_1",
+        "model": "claude-x",
+        "content": [
+            {"type": "web_search_tool_result", "tool_use_id": "srv_1", "content": []},
+            {"type": "text", "text": "done"}
+        ],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 1, "output_tokens": 1}
+    }"#;
+    let response: super::api_types::ApiResponse = serde_json::from_str(body).unwrap();
+    let message = super::convert::convert_response_to_aura(&response.content);
+    assert!(matches!(
+        message.content.as_slice(),
+        [ContentBlock::Text { text }] if text == "done"
+    ));
+}

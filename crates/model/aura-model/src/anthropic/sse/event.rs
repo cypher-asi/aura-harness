@@ -39,7 +39,12 @@ pub(super) fn sse_event_to_stream_event(sse_event: SseEvent) -> StreamEvent {
         } => {
             let content_type = match content_block {
                 SseContentBlock::Text { .. } => StreamContentType::Text,
-                SseContentBlock::Thinking { .. } => StreamContentType::Thinking,
+                // An encrypted block streams no deltas, so it lands as an
+                // empty thinking block without a signature, which is
+                // never echoed back.
+                SseContentBlock::Thinking { .. } | SseContentBlock::RedactedThinking { .. } => {
+                    StreamContentType::Thinking
+                }
                 SseContentBlock::ToolUse { id, name } => StreamContentType::ToolUse { id, name },
             };
             StreamEvent::ContentBlockStart {

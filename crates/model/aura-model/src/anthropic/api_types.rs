@@ -58,6 +58,15 @@ pub(super) enum ApiContent {
         #[serde(skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
+    /// Encrypted reasoning. Anthropic sends it when a thinking block was
+    /// flagged by its safety systems; OpenRouter's Anthropic-compatible
+    /// endpoint sends it for reasoning models (OpenAI's among them) whose
+    /// reasoning is not shown. Only ever received, never sent: the
+    /// response conversion drops it, since nothing can be read from it.
+    RedactedThinking {
+        #[serde(default)]
+        data: String,
+    },
     Image {
         source: ApiImageSource,
     },
@@ -74,6 +83,11 @@ pub(super) enum ApiContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<serde_json::Value>,
     },
+    /// Any block type this client does not know yet (a server tool's
+    /// result, say). Only ever received, and dropped by the response
+    /// conversion, so one new block type cannot fail a whole reply.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,6 +311,11 @@ pub(super) enum SseContentBlock {
     Thinking {
         #[serde(default)]
         thinking: String,
+    },
+    /// Encrypted reasoning; see [`ApiContent::RedactedThinking`].
+    RedactedThinking {
+        #[serde(default)]
+        data: String,
     },
     ToolUse {
         id: String,
