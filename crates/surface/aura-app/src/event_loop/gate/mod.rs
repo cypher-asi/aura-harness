@@ -3,4 +3,6 @@
 //!
 //! - [`followup`]: what an attempt does when it ends with no check of its own
 
+#![deny(clippy::too_many_lines)]
+
 pub(crate) mod followup;
