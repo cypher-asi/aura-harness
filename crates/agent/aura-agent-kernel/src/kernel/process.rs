@@ -128,7 +128,7 @@ impl Kernel {
         } else {
             let tx = Transaction::mode_change_with(
                 self.agent_id,
-                ModeChangePayload {
+                &ModeChangePayload {
                     system_kind: SystemKind::ModeChange,
                     from,
                     to: mode,

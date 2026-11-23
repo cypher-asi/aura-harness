@@ -298,7 +298,7 @@ impl Transaction {
     pub fn mode_change(agent_id: AgentId, from: AgentMode, to: AgentMode) -> Self {
         Self::mode_change_with(
             agent_id,
-            ModeChangePayload {
+            &ModeChangePayload {
                 system_kind: SystemKind::ModeChange,
                 from,
                 to,
@@ -310,8 +310,8 @@ impl Transaction {
 
     /// Create a [`SystemKind::ModeChange`] transaction carrying `payload`.
     #[must_use]
-    pub fn mode_change_with(agent_id: AgentId, payload: ModeChangePayload) -> Self {
-        let bytes = serde_json::to_vec(&payload).unwrap_or_default();
+    pub fn mode_change_with(agent_id: AgentId, payload: &ModeChangePayload) -> Self {
+        let bytes = serde_json::to_vec(payload).unwrap_or_default();
         Self::new_chained(agent_id, TransactionType::System, bytes, None)
     }
 
