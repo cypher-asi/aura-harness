@@ -749,16 +749,19 @@ already ran before the verdict reached this seam.
 
 ### 4.c Gate: the lead's tools and routed subtasks
 
-Under `gate`, with `AURA_GATE_DELEGATE` on, the user's own agent leads the
-turns classified `multi_file_change` or `planning`
-(`aura_gate::lead::leads`), and on those turns its tools only narrow:
+Under `gate`, with `AURA_GATE_DELEGATE` on, the user's own agent may lead
+a turn classified `multi_file_change`, `planning`, `debugging` or
+`research` when what Gate has learned says so
+(`aura_gate::lead::choose_way`), and on a led turn its tools only narrow:
 
 - `write_file`, `edit_file`, `delete_file`, `apply_patch`, `git_commit` and
-  `git_commit_push` are dropped from the turn's tool list
-  ([`event_loop/lead.rs`](../crates/surface/aura-app/src/event_loop/lead.rs)).
+  `git_commit_push` are dropped from the turn's tool list (`lead_tools`, in
+  [`aura-gate-lead`'s executor](../crates/gate/aura-gate-lead/src/executor/mod.rs)).
 - `LeadExecutor` wraps the turn's executor. A call to a dropped tool, or a
   `run_command` line outside the allowlist of checks and inspection
-  commands (`aura_gate::lead::allows_command`), is not executed. It is
+  commands (`allows_command`, in
+  [`aura-gate-lead`'s limits](../crates/gate/aura-gate-lead/src/limits/commands.rs)),
+  is not executed. It is
   still recorded through the kernel as a preset result with source
   `gate_lead`, after passing the policy gate like any other call.
 - `read_file` results are cut to 200 lines and `search_code` / `find_files`

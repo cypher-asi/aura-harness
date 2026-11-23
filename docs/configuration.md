@@ -91,7 +91,7 @@ Ctrl+G in the input, and editing a permanent agent, open the user's editor.
 
 ## Gate
 
-Read once at startup by `GateConfig::from_env` ([`crates/config/aura-config/src/gate.rs`](../crates/config/aura-config/src/gate.rs)), in the terminal, the desktop app and `aura -p`. A variable set to a value it does not accept (a target or exploration rate that is not a number from 0 to 1, a minimum that is not a whole number of at least 1, or a delegation switch that is not on or off) keeps its own default and logs a warning naming the variable, the value and what it accepts. The other Gate variables and every other `aura-config` setting still apply. See [Gate](cli.md#gate).
+Read once at startup by `GateConfig::from_env` ([`crates/config/aura-config/src/gate/`](../crates/config/aura-config/src/gate/mod.rs)), in the terminal, the desktop app and `aura -p`. A variable set to a value it does not accept (a target or exploration rate that is not a number from 0 to 1, a minimum that is not a whole number of at least 1, or a delegation switch that is not on or off) keeps its own default and logs a warning naming the variable, the value and what it accepts. The other Gate variables and every other `aura-config` setting still apply. See [Gate](cli.md#gate).
 
 | Variable | Default | Description |
 |----------|---------|-------------|

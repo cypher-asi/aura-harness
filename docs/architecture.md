@@ -452,7 +452,7 @@ Normalized run trajectories. Every coding run is recorded as ordered steps plus 
 
 ### Gate layer
 
-Gate, the router behind the `gate` model id, in one crate per section. The crates other than `aura-gate-live` depend only on the core, config and model layers and never call a model; apart from the attempt log's file they do no I/O. `aura-gate-live` runs Gate in the app, and sends its requests through an agent's kernel. See [Gate](#gate).
+Gate, the router behind the `gate` model id, in one crate per section, each split into a module per part. The crates other than `aura-gate-lead` and `aura-gate-live` depend only on the core, config and model layers and never call a model; apart from the attempt log's file and the paths of a replayed session they do no I/O. `aura-gate-lead` wraps the agent layer's tool executor, and `aura-gate-live` runs Gate in the app, sending its requests through an agent's kernel. The Gate crates and the app's `event_loop/gate/` deny functions over 50 lines (`clippy::too_many_lines`, with the threshold in `crates/gate/clippy.toml` and the app's `clippy.toml`), and [`tests/gate_file_sizes.rs`](../tests/gate_file_sizes.rs) keeps Gate's files to 500 lines. See [Gate](#gate).
 
 #### [`aura-gate-evidence`](../crates/gate/aura-gate-evidence)
 
@@ -460,7 +460,7 @@ What an attempt left behind. `transcript` reads what a turn's reply says of the 
 
 #### [`aura-gate-route`](../crates/gate/aura-gate-route)
 
-Where work goes. `candidates` are the models the user's sign-ins allow, one route per upstream model. `pick` chooses the cheapest proven model, else the category default, with exploration and none below the standard tier for work that is not easy. It runs at `effort_on`: the `start_effort` of the work's difficulty, except that code work on the fast tier runs at `medium` or above and other work there with thinking off. `escalate` picks a stronger model at the same effort, else the same model at `raise_effort`. The surfaces apply a decision through `ModelLimits::route`, which sets `AgentLoopConfig::routed_thinking_effort` (a user's `user_thinking_effort` wins over it). `stats` holds `GateStats`, the per level, category and model table built from record entries, and `replay` scores another way of routing on the recorded work.
+Where work goes. `candidates` are the models the user's sign-ins allow, one route per upstream model, and `runnable` every model they can run on any route. `pick` chooses the cheapest proven model, else the category default, with exploration and none below the standard tier for work that is not easy. It runs at `effort_on`: the `start_effort` of the work's difficulty, except that code work on the fast tier runs at `medium` or above and other work there with thinking off. `escalate` picks a stronger model at the same effort, else the same model at `raise_effort`. The surfaces apply a decision through `ModelLimits::route`, which sets `AgentLoopConfig::routed_thinking_effort` (a user's `user_thinking_effort` wins over it). `stats` holds `GateStats`, the per level, category and model table built from record entries, and `replay` scores another way of routing on the recorded work.
 
 #### [`aura-gate-followup`](../crates/gate/aura-gate-followup)
 
@@ -468,19 +468,19 @@ What a routed turn does before its work stands (`next`): a nudge, the harness's 
 
 #### [`aura-gate-judge`](../crates/gate/aura-gate-judge)
 
-Gate's requests to other models and the reading of their replies: `classify` labels a prompt with its category and difficulty, `criteria` writes a code turn's acceptance criteria, `turn` holds the judge of failed work and its reviews of unverified work and of work about to stand, and `blind` is the `/compare` judge.
+Gate's requests to other models and the reading of their replies: `classify` labels a prompt with its category and difficulty, `criteria` writes a code turn's acceptance criteria, `turn` holds the judge of failed work and its reviews of unverified work and of work about to stand, and `blind` is the `/compare` judge. They build their requests through `request`, which also cuts long parts of a prompt, fences the user's text and reads the replies.
 
 #### [`aura-gate-attempts`](../crates/gate/aura-gate-attempts)
 
-The attempt log, `gate/attempts.jsonl` in the data directory: each attempt's `Evidence` and what later proved it right or wrong, the tiers each sign of failure has earned, and `evaluate`, which scores Gate's verdicts and each flag against the truths for `aura gate eval`.
+The attempt log, `gate/attempts.jsonl` in the data directory: each attempt's `Evidence` and what later proved it right or wrong (`line`, read and appended by `file`), each attempt joined to its truth (`join`), the tiers each sign of failure has earned (`tiers`), and `evaluate` (`score`), which scores Gate's verdicts and each flag against the truths for `aura gate eval`, rendered by `report`.
 
 #### [`aura-gate-compare`](../crates/gate/aura-gate-compare)
 
-The `/compare` arithmetic: the arguments, what each arm runs on, the estimate, the schedule, tokens and cost per model, plan shares, and the per-arm summary.
+The `/compare` arithmetic: the arguments, what each arm runs on, the estimate, the schedule, tokens and cost per model, plan shares, and the per-arm summary. `pairs` says which runs the judge compares, the order it sees each pair in and what it is told the runs were asked, and `source` reads a replayed session's prompts, title and paths.
 
 #### [`aura-gate-lead`](../crates/gate/aura-gate-lead)
 
-What the lead may run and read while delegation is enforced, and `delegation`, the `/gate` delegation figures.
+`way` decides whether a turn is led, its work handed to subtasks, or done by the model it is routed to, from what Gate has learned of both. `limits` says what the lead may use, run and read while delegation is enforced, and `LeadExecutor` (`executor`) holds a led turn's calls to that, recording refused calls with the refusal as their result. `delegation` holds the `/gate` delegation figures.
 
 #### [`aura-gate-live`](../crates/gate/aura-gate-live)
 
