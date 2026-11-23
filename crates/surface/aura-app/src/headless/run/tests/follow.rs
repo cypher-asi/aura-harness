@@ -2,7 +2,7 @@
 //! checked when its model is asked to, work that ran no check goes to
 //! the judge, and the judge's verdict is the work's outcome.
 
-use super::super::parse_session_id;
+use super::super::session::parse_session_id;
 use super::{
     asked_on_sonnet, fix_the_parser, last_prompts, unfinished_provider, Routed, FIRST_CHANGE_NOTE,
 };

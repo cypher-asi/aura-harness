@@ -12,8 +12,6 @@
 //! - `escalate`: a failed turn, Gate's judge of it, and the move to a
 //!   stronger model
 
-#![deny(clippy::too_many_lines)]
-
 mod escalate;
 mod follow;
 mod limits;
@@ -21,7 +19,8 @@ mod report;
 mod route;
 mod session;
 
-use super::{parse_session_id, Headless, SessionChoice};
+use super::session::parse_session_id;
+use super::{Headless, SessionChoice};
 use crate::event_loop::GateBase;
 use crate::headless::output::RunReport;
 use crate::headless::tests::{

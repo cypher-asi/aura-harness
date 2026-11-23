@@ -1,6 +1,7 @@
 //! Session ids, and the sessions `--resume` and `--continue` pick up.
 
-use super::super::{parse_session_id, session_id, SessionChoice};
+use super::super::session::{parse_session_id, session_id};
+use super::super::SessionChoice;
 use super::{last_prompts, todo_call};
 use crate::headless::output::{ExitReason, RunReport};
 use crate::headless::tests::{dirs, execute, headless, request, Dirs, Requests};
