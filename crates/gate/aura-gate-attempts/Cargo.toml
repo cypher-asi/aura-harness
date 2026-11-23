@@ -1,0 +1,18 @@
+[package]
+name = "aura-gate-attempts"
+description = "Gate: the local log of attempts, what later proved them right or wrong, and the report that scores Gate against it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-gate-evidence = { path = "../aura-gate-evidence" }
+aura-gate-judge = { path = "../aura-gate-judge" }
+aura-model = { path = "../../model/aura-model" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

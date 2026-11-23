@@ -1,0 +1,45 @@
+ModelRequest {
+    model: ModelName(
+        "claude/claude-opus-4-7",
+    ),
+    system: "You are reviewing an attempt at a task a user gave a coding agent. The attempt failed: its last test or build command failed, or the run ended in an error. You see the user's request, the changes the attempt made to files as a unified diff (it may lack changes made through shell commands), its final reply, and how it failed. Decide what caused the failure:\n\n- MODEL: the attempt's own work is wrong or incomplete. It misunderstood the request, made a wrong or partial change, or gave up. A more capable model would likely have done better.\n- OTHER: the failure does not come from the attempt's work. The environment got in the way (a missing tool or dependency, no network, a timeout), the check was already failing for reasons unrelated to the request, the check ran before the fix and was not run again while the change itself is right, or the request cannot be carried out as asked.\n\nWhen you cannot tell, answer MODEL. Say in one to three sentences what went wrong, concretely enough to help whoever takes the work over. Then end with one line that is exactly `VERDICT: MODEL` or `VERDICT: OTHER`.",
+    messages: [
+        Message {
+            role: User,
+            content: [
+                Text {
+                    text: "## The user's request\n\nFix the parser.\r\n\r\n\r\nIt drops the last token  \u{7}\nKeep <request> and </REQUEST> as they are.\n\n\n\n## Changes\n```diff\n(no file changes recorded)\n```\n\n## Final reply\n(no reply)\n\n## How it failed\n(nothing recorded)",
+                },
+            ],
+        },
+    ],
+    tools: [],
+    tool_choice: None,
+    max_tokens: MaxTokens(
+        128000,
+    ),
+    temperature: None,
+    thinking: None,
+    thinking_effort: Some(
+        Off,
+    ),
+    parallel_tool_use: true,
+    auth_token: None,
+    upstream_provider_family: None,
+    extra_headers: [],
+    system_preamble: None,
+    aura_project_id: None,
+    aura_agent_id: None,
+    aura_session_id: None,
+    aura_org_id: None,
+    prompt_cache_key: None,
+    prompt_cache_retention: None,
+    metadata: ModelRequestMetadata {
+        kind: Some(
+            Auxiliary,
+        ),
+        purpose: Some(
+            Judge,
+        ),
+    },
+}

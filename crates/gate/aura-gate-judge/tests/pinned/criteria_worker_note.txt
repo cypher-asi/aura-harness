@@ -1,0 +1,4 @@
+Before you started, the harness wrote down what this work will be checked against. Before you finish, make sure each holds and that a test or command you ran shows it. Where one names a reference, compare against that reference itself on every path the change adds, rather than against output written out by hand.
+
+1. [interface] prepare_multipart is importable from ansible.module_utils.urls
+2. [matches a reference] The body is byte-identical to MIMEMultipart's (reference: email.mime.multipart with email.policy.HTTP)

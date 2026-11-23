@@ -34,19 +34,13 @@ use super::agent_events::AgentUi;
 use super::agents::AgentSession;
 use super::bench_source::{self, StartFile};
 use super::compare_view::{duration, money, render};
-use super::gate_followup::{
-    check_review, check_signal, harness_check, joined, judge_unchecked, nudge_message,
-    nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
-    Before, FollowUp, Reviewing, Unchecked,
-};
-use super::gate_log::RunOf;
-use super::gate_record;
+use super::gate::followup::{joined, takeover_message, At, Attempt, Before, CarryOn, Following};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message, turn_summary};
 use super::modes::Permissions;
 use super::processes::{now_ms, turn_id};
-use super::steering::{SteerSource, Steering};
+use super::steering::Steering;
 use super::subagents::{lock, AgentHub, ArmRouting};
-use super::task_check::{self, takeover_prompt};
+use super::task_check;
 use super::tasks::TASKS_DIR;
 use super::turns::{ended_signal, failure_text, record_prompt};
 use crate::agent_registry::RegisteredAgent;
@@ -57,13 +51,6 @@ use crate::isolation::{
 };
 use crate::model_selection::routed_effort;
 use aura_agent::{AgentLoop, AgentLoopConfig};
-use aura_agent_gate::attempt_log::Terms;
-use aura_agent_gate::compare::{list_price, plan_shares, run_name, PlanReading, Schedule};
-use aura_agent_gate::followup::Step;
-use aura_agent_gate::outcome::calls_for_stronger;
-use aura_agent_gate::turn_judge::Failed;
-use aura_agent_gate::DifficultyRoutes;
-use aura_agent_gate::{judge, Candidate, Work};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::{Activity, Doing, RunMeta, RunRecorder, RunSource};
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
@@ -73,6 +60,17 @@ use aura_core_types::{
     PromptPayload, Route, RouteLevel, RouteReason, RunTurn, SystemKind, Transaction,
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
+use aura_gate::attempts::Terms;
+use aura_gate::compare::{
+    judge_pairs, judge_task, list_price, plan_shares, run_name, seed, DifficultyRoutes, EndedRun,
+    PlanReading, Schedule,
+};
+use aura_gate::evidence::outcome::calls_for_stronger;
+
+use aura_gate::judge::blind;
+use aura_gate::judge::turn::Failed;
+use aura_gate::live::{self, RunOf};
+use aura_gate::route::{Candidate, Work};
 use aura_model::Message;
 use aura_ui_terminal::events::{
     run_order, BenchDoing, BenchLiveRun, BenchTaskSetup, ProcessStatus,
@@ -696,7 +694,7 @@ pub(super) async fn run(
                 hub.gate
                     .log_truth(r.run.agent_id, ended.prompt_tx, passed, of);
             }
-            gate_record::record(&kernel, r.run.agent_id, &ended).await;
+            live::record(&kernel, r.run.agent_id, &ended).await;
         }
     }
     // What the checks proved may change which signs have work reviewed.
@@ -1306,7 +1304,7 @@ async fn run_prompt(
     let classified = if plan.classifier.is_empty() {
         Err("Gate has no model to classify the prompt".to_string())
     } else {
-        gate_record::classify_prompt(
+        live::classify_prompt(
             &session.kernel,
             &plan.classifier,
             text,
@@ -1336,7 +1334,7 @@ async fn run_prompt(
     let category = label.category;
     let mut difficulty = Some(label.difficulty);
     let criteria = match routing {
-        ArmRouting::Gate { .. } => match gate_record::hold_to_criteria(
+        ArmRouting::Gate { .. } => match live::hold_to_criteria(
             &session.kernel,
             (&hub.gate, &plan.candidates),
             category,
@@ -1439,7 +1437,7 @@ async fn run_prompt(
     let (mut attempt_started, mut attempt_ms) = (started, started_ms);
     let (mut escalations, mut nudges, mut sent_back) = (0, 0, 0);
     let mut turn_start = session.messages.len();
-    let note = gate_record::worker_note_for(criteria.as_deref());
+    let note = live::worker_note_for(criteria.as_deref());
     session
         .messages
         .push(Message::user(format!("{text}{}", note.unwrap_or_default())));
@@ -1454,9 +1452,9 @@ async fn run_prompt(
     if let Some(files) = &files {
         files.begin_attempt(agent_id);
     }
-    // The follow-up steps of the attempt on `follow.0`, and what its runs
-    // before a nudge cost.
-    let mut follow = (String::new(), FollowUp::default());
+    // The follow-up of the run's attempts, and what its runs before a
+    // nudge cost.
+    let mut follow = Following::default();
     let mut nudged_cost_usd = 0.0;
     // What the attempt left, for Gate's attempt log.
     let terms = Terms {
@@ -1516,137 +1514,30 @@ async fn run_prompt(
         // found wrong with the work, and what the same model is told when
         // it carries on: asked to check its change (a nudge), or sent back
         // with what is wrong, along with what the user is told of that.
-        let (mut harness, mut unchecked) = (None, None);
-        let mut carry_on: Option<(String, String, bool)> = None;
+        let (mut harness, mut unchecked, mut carry_on) = (None, None, None);
         if let (true, false, Ok(partial)) = (gate_arm, stopped, &result) {
-            if follow.0 != model {
-                let ran = (model.as_str(), routed_effort(&config));
-                let fresh = FollowUp::new(&hub.gate, &plan.candidates, ran, &workdir)
-                    .since(copy_before.clone())
-                    .held_to(criteria.clone())
-                    .after(&follow.1);
-                follow = (model.clone(), fresh);
-            }
-            loop {
-                let at = At {
+            let attempt = Attempt {
+                session,
+                live: &hub.gate,
+                candidates: &plan.candidates,
+                task: text,
+                ran: (model.as_str(), routed_effort(&config)),
+                result: partial,
+                at: At {
                     category,
                     difficulty,
                     signal,
                     turn_start,
-                };
-                match follow.1.next(partial, at).await {
-                    Step::Stop => break,
-                    Step::Nudge(uncovered) => {
-                        carry_on = Some((
-                            nudge_message(&uncovered),
-                            nudge_notice(&model, &uncovered),
-                            true,
-                        ));
-                        break;
-                    }
-                    Step::Repair(signs) => {
-                        carry_on = Some((
-                            sign_repair_message(&signs),
-                            sign_repair_notice(&model, &signs),
-                            false,
-                        ));
-                        break;
-                    }
-                    Step::Review { why, act } => {
-                        let pending = signal.unwrap_or(OutcomeSignal::Unavailable);
-                        let Some(ended) = outcome(pending, &model) else {
-                            continue;
-                        };
-                        let edits = edits();
-                        let shown = Reviewing {
-                            task: text,
-                            result: partial,
-                            turn_start,
-                            category,
-                            edits: &edits,
-                            why: &why,
-                            act,
-                        };
-                        let reviewed = follow
-                            .1
-                            .review(
-                                session,
-                                &hub.gate,
-                                &ended,
-                                &shown,
-                                config.auth_token.clone(),
-                            )
-                            .await;
-                        let Some(reviewed) = reviewed else {
-                            continue;
-                        };
-                        ui.send(system_message(reviewed.describe())).await;
-                        if reviewed.unfinished() {
-                            if follow.1.send_back(partial) {
-                                carry_on = Some((
-                                    repair_message(&reviewed.findings),
-                                    repair_notice(&model),
-                                    false,
-                                ));
-                                break;
-                            }
-                            signal = Some(OutcomeSignal::JudgedFail);
-                            unchecked = Some(reviewed.findings);
-                        } else if signal.is_none() {
-                            signal = reviewed.verdict();
-                        }
-                    }
-                    Step::HarnessCheck => {
-                        let Some(command) = follow.1.check().map(str::to_string) else {
-                            continue;
-                        };
-                        ui.send(system_message(format!(
-                            "gate: running `{command}` to check the change"
-                        )))
-                        .await;
-                        let check = harness_check(session, &command).await;
-                        ui.send(system_message(check.describe())).await;
-                        if let Some(checked) = check_signal(&check) {
-                            signal = Some(checked);
-                            harness = (checked == OutcomeSignal::ChecksFailed)
-                                .then(|| check_review(&check));
-                        }
-                    }
-                    Step::JudgeUnverified(suspicions) => {
-                        let (Some(judge), Some(ended)) = (
-                            follow.1.judge().map(str::to_string),
-                            outcome(signal.unwrap_or(OutcomeSignal::Unavailable), &model),
-                        ) else {
-                            continue;
-                        };
-                        let diff = follow.1.diff(partial, edits()).await;
-                        let shown = Unchecked {
-                            task: text,
-                            diff: &diff,
-                            result: partial,
-                            turn_start,
-                            suspicions: &suspicions,
-                        };
-                        let judged = judge_unchecked(
-                            session,
-                            &judge,
-                            &ended,
-                            &shown,
-                            config.auth_token.clone(),
-                        )
-                        .await;
-                        if let Some((verdict, judged)) = judged {
-                            ui.send(system_message(judged.describe())).await;
-                            if verdict == OutcomeSignal::JudgedFail || signal.is_none() {
-                                signal = Some(verdict);
-                            }
-                            if verdict == OutcomeSignal::JudgedFail {
-                                unchecked = Some(judged.verdict.reasons);
-                            }
-                        }
-                    }
-                }
-            }
+                },
+                prompt_tx,
+                workspace: &workdir,
+                before: copy_before.as_ref(),
+                criteria: criteria.as_ref(),
+                auth_token: config.auth_token.clone(),
+            };
+            let followed = follow.run(&attempt, ui).await;
+            (signal, harness, unchecked) = (followed.signal, followed.harness, followed.wrong);
+            carry_on = followed.carry_on;
         }
         let signal = signal.unwrap_or(OutcomeSignal::Unavailable);
         let failure = harness
@@ -1657,11 +1548,11 @@ async fn run_prompt(
         left = result
             .as_ref()
             .ok()
-            .map(|result| follow.1.evidence(result, turn_start));
+            .map(|result| follow.steps.evidence(result, turn_start));
         // What a judge of the attempt's failure is shown of its change.
         let diff = match &result {
             Ok(partial) if gate_arm && calls_for_stronger(signal) => {
-                follow.1.diff(partial, edits()).await
+                follow.steps.diff(partial, edits()).await
             }
             _ => String::new(),
         };
@@ -1678,7 +1569,12 @@ async fn run_prompt(
                 (String::new(), Some(e.to_string()))
             }
         };
-        if let Some((message, notice, nudge)) = carry_on {
+        if let Some(CarryOn {
+            message,
+            notice,
+            nudge,
+        }) = carry_on
+        {
             if let Some(rec) = recorder {
                 rec.follow_up(&message);
             }
@@ -1704,12 +1600,12 @@ async fn run_prompt(
         }
         if let Some(failed) = &ended {
             hub.gate.log_attempt(agent_id, failed, terms, left.take());
-            gate_record::record(&session.kernel, agent_id, failed).await;
+            live::record(&session.kernel, agent_id, failed).await;
         }
         let mut review = unchecked;
         let judge = ended
             .as_ref()
-            .and_then(|failed| gate_record::judge_for(&hub.gate, &plan.candidates, failed));
+            .and_then(|failed| live::judge_for(&hub.gate, &plan.candidates, failed));
         if let (Some(judge), Some(failed)) = (judge, &ended) {
             let shown = Failed {
                 task: text,
@@ -1717,7 +1613,7 @@ async fn run_prompt(
                 reply: &reply,
                 failure: &failure,
             };
-            let judged = gate_record::judge_failed(
+            let judged = live::judge_failed(
                 &session.kernel,
                 &judge,
                 failed,
@@ -1743,16 +1639,8 @@ async fn run_prompt(
         ) else {
             break (signal, reply, error, ended, true);
         };
-        let takeover = format!(
-            "{}{}",
-            SteerSource::Harness.prefix(),
-            takeover_prompt(
-                &aura_model::model_catalog::route_label(&model),
-                next.model.id != model,
-                signal,
-                joined(harness, review).as_deref()
-            )
-        );
+        let review = joined(harness, review);
+        let takeover = takeover_message(&model, &next.model.id, signal, review.as_deref());
         let escalated = PromptPayload {
             category: Some(category),
             classifier: plan.classifier.clone(),
@@ -1797,7 +1685,7 @@ async fn run_prompt(
     }
     if let (false, Some(ended)) = (recorded, &ended) {
         hub.gate.log_attempt(agent_id, ended, terms, left);
-        gate_record::record(&session.kernel, agent_id, ended).await;
+        live::record(&session.kernel, agent_id, ended).await;
     }
     let effort = effort_of(&config);
     let routed = RunTurn {
@@ -1826,64 +1714,33 @@ async fn run_prompt(
     }
 }
 
-/// A number from `agent` to seed the judge's order with.
-fn seed(agent: AgentId) -> u64 {
-    let mut bytes = [0u8; 8];
-    bytes.copy_from_slice(&agent.0[..8]);
-    u64::from_le_bytes(bytes)
-}
-
-/// What the judge is told the runs were asked: the prompt, or every
-/// prompt in order.
-fn judge_task(prompts: &[String]) -> String {
-    match prompts {
-        [only] => only.clone(),
-        _ => {
-            let mut task = String::from("The user sent these messages in order:\n");
-            for (i, prompt) in prompts.iter().enumerate() {
-                task.push_str(&format!("\n### Message {}\n{prompt}\n", i + 1));
-            }
-            task
-        }
-    }
-}
-
 /// Have the judge compare each run of arm A with arm B's run of the same
 /// number, through the comparison's own kernel, and rate each against
 /// what the user kept when the work is a replayed session.
 async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<CompareJudgment> {
-    let finished = |arm: CompareArm| -> Vec<&Ran> {
-        ran.iter()
-            .filter(|r| r.run.arm == arm && r.run.error.is_none())
-            .collect()
-    };
-    let pairs: Vec<(&Ran, &Ran)> = if ctx.plan.examples.is_empty() {
-        finished(CompareArm::A)
-            .into_iter()
-            .zip(finished(CompareArm::B))
-            .collect()
-    } else {
-        // Only runs of the same number worked on the same task.
-        let b = finished(CompareArm::B);
-        finished(CompareArm::A)
-            .into_iter()
-            .filter_map(|a| {
-                let n = a.order.0;
-                b.iter().find(|b| b.order.0 == n).map(|b| (a, *b))
-            })
-            .collect()
-    };
+    let ended: Vec<EndedRun> = ran
+        .iter()
+        .map(|r| EndedRun {
+            arm: r.run.arm,
+            n: r.order.0,
+            errored: r.run.error.is_some(),
+        })
+        .collect();
+    let pairs: Vec<(&Ran, &Ran)> = judge_pairs(&ended, !ctx.plan.examples.is_empty())
+        .into_iter()
+        .map(|(a, b)| (&ran[a], &ran[b]))
+        .collect();
     if pairs.is_empty() || ctx.plan.judge.is_empty() {
         return Vec::new();
     }
     let auth_token = ctx.hub.turn(None, &ctx.plan.workspace).0.auth_token;
     let seed = seed(ctx.host.agent_id());
     let shared_task = judge_task(&ctx.plan.prompts);
-    let reference = ctx.plan.source.reference().map(|r| judge::Attempt {
+    let reference = ctx.plan.source.reference().map(|r| blind::Attempt {
         diff: r.diff.clone(),
         reply: r.reply.clone(),
     });
-    let attempt = |r: &Ran| judge::Attempt {
+    let attempt = |r: &Ran| blind::Attempt {
         diff: r.patch.clone(),
         reply: r.reply.clone(),
     };
@@ -1892,7 +1749,7 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
         if ctx.cancel.is_cancelled() {
             break;
         }
-        let a_first = judge::a_first(seed, i);
+        let a_first = blind::a_first(seed, i);
         let mut judgment = CompareJudgment {
             a_run: a.run.name.clone(),
             b_run: b.run.name.clone(),
@@ -1909,7 +1766,7 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
             .plan
             .example(a.order.0)
             .map_or_else(|| shared_task.clone(), |task| judge_task(&task.prompts));
-        let request = judge::request(
+        let request = blind::request(
             &ctx.plan.judge,
             &task,
             (&attempt(a), &attempt(b)),
@@ -1923,7 +1780,7 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
                     Ok(Ok(result)) => {
                         judgment.cost_usd =
                             list_price(&ctx.plan.judge, &result.response.usage).unwrap_or(0.0);
-                        Ok(judge::reply_text(&result.response))
+                        Ok(blind::reply_text(&result.response))
                     }
                     Ok(Err(e)) => Err(format!("judge call failed: {e}")),
                     Err(_) => Err("judge call timed out".to_string()),
@@ -1933,15 +1790,15 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
         };
         match reply {
             Ok(text) => {
-                if let Some(verdict) = judge::parse(&text) {
+                if let Some(verdict) = blind::parse(&text) {
                     judgment.parsed = true;
-                    judgment.winner = judge::winner(verdict, a_first);
+                    judgment.winner = blind::winner(verdict, a_first);
                 }
                 if reference.is_some() {
                     (judgment.a_vs_reference, judgment.b_vs_reference) =
-                        judge::reference_verdicts(&text, a_first);
+                        blind::reference_verdicts(&text, a_first);
                 }
-                let named = judge::unblind(&text, a_first, (&a.run.name, &b.run.name));
+                let named = blind::unblind(&text, a_first, (&a.run.name, &b.run.name));
                 judgment.reasoning = named.chars().take(MAX_REASONING).collect();
             }
             Err(problem) => {

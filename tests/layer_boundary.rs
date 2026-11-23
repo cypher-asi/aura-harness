@@ -12,7 +12,7 @@
 //! ## Layer order (lowest → highest)
 //!
 //! `core` < `config` < `store` < `model` < `context` < `plugin` <
-//! `exec` < `agent` < `auth` < `engine` < `ui` < `surface`.
+//! `exec` < `agent` < `gate` < `auth` < `engine` < `ui` < `surface`.
 //!
 //! Equal or downward edges are accepted.
 //!
@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 /// Layer rank, lowest first. A crate may depend on its own layer or any
 /// layer before it.
 const LAYER_ORDER: &[&str] = &[
-    "core", "config", "store", "model", "context", "plugin", "exec", "agent", "auth", "engine",
-    "ui", "surface",
+    "core", "config", "store", "model", "context", "plugin", "exec", "agent", "gate", "auth",
+    "engine", "ui", "surface",
 ];
 
 /// Surface crates are named after the binary or host they provide, so

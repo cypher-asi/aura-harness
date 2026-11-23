@@ -712,7 +712,7 @@ async fn a_by_difficulty_arm_runs_each_turn_and_subtask_on_its_difficultys_model
 
     // Its subtasks are classified and go to their difficulty's model too.
     let runnable = state.models.runnable_models();
-    let routes = aura_agent_gate::DifficultyRoutes::of(&payload.arm_b, &runnable).unwrap();
+    let routes = aura_gate::compare::DifficultyRoutes::of(&payload.arm_b, &runnable).unwrap();
     let first = fixture.first;
     fixture
         .hub
@@ -921,7 +921,7 @@ async fn gate_arms_explore_only_in_learn_mode() {
                 explore_rate: 1.0,
                 ..aura_config::GateConfig::defaults()
             },
-            aura_agent_gate::SplitMix64::seeded(3),
+            aura_gate::route::SplitMix64::seeded(3),
         );
         let (fixture, mut commands) = fixture_with_gate(gate);
         let mut b = borrowed(&fixture);

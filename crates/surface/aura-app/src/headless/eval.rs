@@ -11,12 +11,11 @@
 use super::output::Output;
 use super::run::{Headless, RunLimits};
 use super::OutputFormat;
-use crate::event_loop::gate_log::RunOf;
-use crate::event_loop::gate_record::{self, Judged};
 use crate::event_loop::subagents::lock;
 use crate::event_loop::task_check::{run_script, CheckRun};
 use aura_agent_trace::RunRecorder;
 use aura_core_types::ModelTokens;
+use aura_gate::live::{self, Judged, RunOf};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -149,7 +148,7 @@ impl EvalTurns {
                     };
                     hub.gate.log_truth(agent_id, ended.prompt_tx, passed, of);
                 }
-                gate_record::record(&session.kernel, agent_id, &ended.with_signal(signal)).await;
+                live::record(&session.kernel, agent_id, &ended.with_signal(signal)).await;
             }
             (None, _) => warn!(%agent_id, "{}", check.describe()),
             (Some(_), None) => {}

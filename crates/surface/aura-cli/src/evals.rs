@@ -538,7 +538,7 @@ pub fn results_table(results: &[EvalResult]) -> String {
     let passed = results.iter().filter(|r| r.passed).count();
     let cost: f64 = results.iter().map(EvalResult::cost_usd).sum();
     let _ = writeln!(out, "{passed}/{} passed, ${cost:.4}", results.len());
-    let judged: Vec<&aura_app::headless::Judged> = results
+    let judged: Vec<&aura_gate::live::Judged> = results
         .iter()
         .filter_map(|r| r.gate.as_ref())
         .flat_map(|gate| &gate.judged)

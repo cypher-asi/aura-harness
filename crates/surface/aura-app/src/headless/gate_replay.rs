@@ -12,7 +12,7 @@
 //! saved session, and the final reply.
 //!
 //! With `--criteria` the work is also held to acceptance criteria, as a
-//! live turn's is ([`aura_agent_gate::criteria`]): a writer lists them
+//! live turn's is ([`aura_gate::judge::criteria`]): a writer lists them
 //! from each request, once per request and writer (they are kept beside
 //! the log, so every reviewer is asked about the same list), and the
 //! reviewer goes through them.
@@ -30,31 +30,26 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use aura_agent_gate::attempt_log::{
+use aura_core_types::{AgentId, Difficulty, Hash};
+use aura_gate::attempts::{
     self, below_strongest, Attempt, AttemptLog, CopyAt, Line, Review, Stood, Tier, Tiers,
     TruthSource,
 };
-use aura_agent_gate::criteria::{self, Criteria};
-use aura_agent_gate::evidence::{flags, Evidence, Flag};
-use aura_agent_gate::followup::Why;
-use aura_agent_gate::turn_judge::{self, Answer, ReviewVariant, Standing};
-use aura_core_types::{AgentId, Difficulty, Hash};
+use aura_gate::evidence::transcript::reply::final_reply;
+use aura_gate::evidence::{flags, Evidence, Flag};
+use aura_gate::followup::Why;
+use aura_gate::judge::criteria::{self, Criteria};
+use aura_gate::judge::turn::{self, shown_to_reviewer, Answer, ReviewVariant, Standing};
 use aura_model::model_catalog::{estimate_cost_usd, infer_tier, route_label, ModelTier};
 use aura_model::{Message, ModelProvider, StopReason, Usage};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::event_loop::gate_followup::{
-    checks_shown, commands_run, final_reply_in, tally as criteria_tally,
-};
-use crate::event_loop::gate_log::sent_text;
 use crate::event_loop::processes::now_ms;
 use crate::event_loop::tasks::TASKS_DIR;
 use crate::isolation::changes;
 use crate::session_checkpoint::Checkpoints;
-
-/// Commands shown to the reviewer, latest last.
-const SHOWN_COMMANDS: usize = 40;
+use aura_gate::live::sent_text;
 
 /// How long one review may take.
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(420);
@@ -128,7 +123,7 @@ fn pick<'a>(
 ) -> (Vec<Pick<'a>>, BTreeMap<&'static str, usize>) {
     let mut left_out: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut picks = Vec::new();
-    for stood in attempt_log::stood(lines) {
+    for stood in attempts::stood(lines) {
         let (attempt, truth) = (stood.attempt, stood.truth);
         let wanted = options.task.as_deref().is_none_or(|wanted| {
             truth
@@ -289,6 +284,7 @@ fn prepare(pick: &Pick<'_>, sessions: &Checkpoints, tiers: &Tiers) -> Result<Pre
         .flatten()
         .collect::<Vec<_>>()
         .join(" ");
+    let (commands, checks) = shown_to_reviewer(messages);
     Ok(Prepared {
         attempt: Attempt {
             evidence,
@@ -299,9 +295,9 @@ fn prepare(pick: &Pick<'_>, sessions: &Checkpoints, tiers: &Tiers) -> Result<Pre
         right: truth.passed,
         task,
         diff,
-        commands: commands_run(messages, SHOWN_COMMANDS),
-        checks: checks_shown(messages),
-        reply: final_reply_in(messages),
+        commands,
+        checks,
+        reply: final_reply(messages),
         why,
         signs,
         criteria: None,
@@ -476,8 +472,8 @@ fn estimate(judge: &str, prepared: &[Prepared], variant: ReviewVariant) -> Optio
         .iter()
         .map(|prepared| {
             let why = prepared.why_told();
-            let chars = turn_judge::REVIEW_SYSTEM_PROMPT.len()
-                + turn_judge::review_prompt(&prepared.standing(&why)).len();
+            let chars = turn::REVIEW_SYSTEM_PROMPT.len()
+                + turn::review_prompt(&prepared.standing(&why)).len();
             #[allow(
                 clippy::cast_precision_loss,
                 clippy::cast_possible_truncation,
@@ -517,7 +513,7 @@ async fn ask(
     prepared: Prepared,
 ) -> Asked {
     let why = prepared.why_told();
-    let request = turn_judge::review_request(&judge, &prepared.standing(&why), variant, auth_token);
+    let request = turn::review_request(&judge, &prepared.standing(&why), variant, auth_token);
     let mut wasted_usd = 0.0;
     let answer = match request {
         Err(e) => Err(format!("could not build the request: {e}")),
@@ -527,7 +523,7 @@ async fn ask(
             Ok(Err(e)) => Err(format!("the reviewer's call failed: {e}")),
             Ok(Ok(response)) => {
                 let cost_usd = estimate_cost_usd(&judge, &response.usage).unwrap_or(0.0);
-                let parsed = turn_judge::parse_answer(&response.message.text_content());
+                let parsed = turn::parse_answer(&response.message.text_content());
                 if parsed.is_none() {
                     wasted_usd = cost_usd;
                 }
@@ -575,7 +571,7 @@ async fn ask(
         }
     }
     let criteria = match (&answer, prepared.criteria.as_deref()) {
-        (Ok((_, findings, _)), Some(held)) => criteria_tally(&criteria::checked(held, findings)),
+        (Ok((_, findings, _)), Some(held)) => criteria::tally(&criteria::checked(held, findings)),
         _ => String::new(),
     };
     Asked {
@@ -723,7 +719,7 @@ pub async fn gate_replay(options: ReplayOptions) -> anyhow::Result<()> {
         None
     };
 
-    let tiers = attempt_log::tiers(&read.lines);
+    let tiers = attempts::tiers(&read.lines);
     let sessions = Checkpoints::new(&options.data_dir);
     let mut prepared = Vec::with_capacity(picks.len());
     for pick in &picks {
@@ -852,8 +848,8 @@ pub async fn gate_replay(options: ReplayOptions) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_agent_gate::attempt_log::{Terms, Truth};
     use aura_core_types::{Hash, OutcomePayload, OutcomeSignal, PromptCategory};
+    use aura_gate::attempts::{Terms, Truth};
     use aura_model::{ContentBlock, Role, ToolResultContent};
     use serde_json::json;
     use std::path::Path;
@@ -1213,7 +1209,7 @@ mod tests {
 
         // The reviewer is shown them, and its line for each is logged.
         let why = held[0].why_told();
-        let shown = turn_judge::review_prompt(&held[0].standing(&why));
+        let shown = turn::review_prompt(&held[0].standing(&why));
         assert!(
             shown.contains("2. [error] f(-1) raises ValueError"),
             "{shown}"

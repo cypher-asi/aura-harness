@@ -19,7 +19,7 @@
 //! so their edits never collide. Under Gate the user's own agent leads
 //! the turns that ask for a change across several files or for planning:
 //! [`LeadProfile::apply`] gives such a turn the lead's prompt and, while
-//! delegation is enforced, the lead's tools (see [`super::lead`]). It
+//! delegation is enforced, the lead's tools (see [`aura_gate::lead`]). It
 //! does every other turn itself, on the model Gate routes it to.
 //!
 //! Spawns run inside the parent's tool call, on the parent's turn task, so
@@ -30,13 +30,9 @@
 use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
 use super::approvals::TerminalApprovals;
-use super::gate_followup;
-use super::gate_live::GateLive;
-use super::gate_record;
 use super::gate_subtask::{explicit_model, GateBase, SubtaskGate, SubtaskLabel};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::host::{agent_tool_definitions, TerminalAgents};
-use super::lead::lead_tools;
 use super::mail::{MailSender, Mailbox, TaskMail};
 use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
@@ -57,9 +53,6 @@ use crate::project_instructions::ProjectInstructions;
 use crate::record_loader::agent_summaries;
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig};
-use aura_agent_gate::compare::{tally, PlanReading};
-use aura_agent_gate::turn_judge::{Failed, Unverified, Verdict};
-use aura_agent_gate::{followup, Candidate, Decision};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
@@ -72,6 +65,12 @@ use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
 use aura_exec_tools::todo::{task_report_line, TODO_WRITE_TOOL_NAME};
 use aura_exec_tools::SubagentDispatchHook;
+use aura_gate::compare::{tally, PlanReading};
+use aura_gate::followup;
+use aura_gate::judge::turn::{shown_to_judge, Failed, Unverified, Verdict};
+use aura_gate::lead::lead_tools;
+use aura_gate::live::{self, GateLive};
+use aura_gate::route::{Candidate, Decision};
 use aura_model::{Message, ThinkingEffort, ToolDefinition};
 use aura_ui_terminal::events::{
     AgentDefinitionSummary, AgentSummary, MailView, ProcessKind, ProcessStatus, ProcessSummary,
@@ -200,7 +199,7 @@ struct Redo {
 impl Redo {
     async fn record(self) {
         info!(child = %self.child, "Subtask dispatched again; its first attempt failed");
-        gate_record::record(
+        live::record(
             &self.kernel,
             self.child,
             &self.ended.with_signal(OutcomeSignal::Redone),
@@ -225,7 +224,7 @@ pub(crate) enum ArmRouting {
     /// Every turn and subtask nothing else pins is classified and runs on
     /// the model its difficulty is given, with no exploring and no
     /// escalation.
-    ByDifficulty(aura_agent_gate::DifficultyRoutes),
+    ByDifficulty(aura_gate::compare::DifficultyRoutes),
 }
 
 /// How a turn of one of the user's agents leads under Gate once its
@@ -238,7 +237,7 @@ pub(crate) struct LeadProfile {
 
 impl LeadProfile {
     /// Make the turn set up with `config` and `tools` a lead's when it is
-    /// `led` (as Gate decides, [`aura_agent_gate::choose_way`]): the
+    /// `led` (as Gate decides, [`aura_gate::lead::choose_way`]): the
     /// prompt says how to lead and, with delegation enforced, the lead's
     /// tools replace the file tools. Any other turn is left as it is, for
     /// the model Gate routes it to to do the work itself. Returns whether
@@ -556,7 +555,7 @@ impl AgentHub {
 
     /// Whether the agent `agent_id`, an instance of the permanent agent
     /// `definition` if any, leads under Gate the turns that call for a
-    /// lead ([`aura_agent_gate::choose_way`]): `Some(true)` with
+    /// lead ([`aura_gate::lead::choose_way`]): `Some(true)` with
     /// delegation enforced, `Some(false)` with it only recommended
     /// (`AURA_GATE_DELEGATE=off`, or the `gate:nodelegate` arm of
     /// `/compare`), `None` when it never leads. Only the user's own
@@ -1037,7 +1036,7 @@ impl AgentHub {
         for earlier in &mut work.subtasks {
             if earlier.redone
                 || earlier.kind != attempt.kind
-                || !aura_agent_gate::outcome::is_repeat(&earlier.prompt, &attempt.prompt)
+                || !aura_gate::evidence::outcome::is_repeat(&earlier.prompt, &attempt.prompt)
             {
                 continue;
             }
@@ -1522,7 +1521,7 @@ impl AgentHub {
         if let Some(snapshot) = snapshot {
             restore_workspace(snapshot).await;
         }
-        let prompt = task_check::retry_prompt(&request.prompt, &first.model, &why);
+        let prompt = followup::retry_prompt(&request.prompt, &first.model, &why);
         let retry = match self
             .open_task(&request, &definition, prompt, Some((decision, category)))
             .await
@@ -1662,14 +1661,14 @@ impl AgentHub {
 
     /// The model that judges `ended`, the outcome of work Gate routed for
     /// an agent running the permanent agent `definition` (see
-    /// [`gate_record::judge_for`]).
+    /// [`live::judge_for`]).
     pub(crate) fn judge_of(
         &self,
         definition: Option<&str>,
         ended: &OutcomePayload,
     ) -> Option<String> {
         let candidates = self.gate_candidates(definition)?;
-        gate_record::judge_for(&self.gate, &candidates, ended)
+        live::judge_for(&self.gate, &candidates, ended)
     }
 
     /// The model that classifies prompts; empty when nothing does.
@@ -1733,7 +1732,7 @@ impl AgentHub {
                 return;
             }
             if let Some((model, usage)) = crate::record_loader::model_call(&entry.tx) {
-                cost_usd += aura_agent_gate::compare::list_price(&model, &usage).unwrap_or(0.0);
+                cost_usd += aura_gate::compare::list_price(&model, &usage).unwrap_or(0.0);
             }
         });
         cost_usd
@@ -1907,7 +1906,7 @@ impl AgentHub {
         if let (Some(outcome), None, Some(candidates)) =
             (ended.as_mut(), end.signal, gate.candidates.as_deref())
         {
-            if let Some(judge) = gate_record::verdict_judge_for(candidates, &model) {
+            if let Some(judge) = live::verdict_judge_for(candidates, &model) {
                 let workspace = session.kernel.agent_workspace();
                 let diff = files_before
                     .as_ref()
@@ -1936,10 +1935,10 @@ impl AgentHub {
                     suspicions: &suspicions,
                 };
                 let auth_token = agent_loop.config().auth_token.clone();
-                if let Some((verdict, found)) = gate_record::judge_unverified(
+                if let Some((verdict, found)) = live::judge_unverified(
                     &session.kernel,
                     &judge,
-                    outcome,
+                    &outcome.model,
                     &unverified,
                     auth_token,
                 )
@@ -1957,7 +1956,7 @@ impl AgentHub {
         }
         if let Some(outcome) = ended.as_mut() {
             outcome.success = outcome.signal.success();
-            gate_record::record(&session.kernel, child_id, outcome).await;
+            live::record(&session.kernel, child_id, outcome).await;
         }
         // A first attempt that failed is reviewed before it is retried on
         // a stronger model: was the model at fault?
@@ -1967,7 +1966,7 @@ impl AgentHub {
             gate.candidates.as_deref(),
             &gate.escalation,
         ) {
-            if let Some(judge) = gate_record::judge_for(&self.gate, candidates, outcome) {
+            if let Some(judge) = live::judge_for(&self.gate, candidates, outcome) {
                 let workspace = session.kernel.agent_workspace();
                 let diff = files_before
                     .as_ref()
@@ -1981,8 +1980,7 @@ impl AgentHub {
                 };
                 let auth_token = agent_loop.config().auth_token.clone();
                 if let Some((judged_as, found)) =
-                    gate_record::judge_failed(&session.kernel, &judge, outcome, &failed, auth_token)
-                        .await
+                    live::judge_failed(&session.kernel, &judge, outcome, &failed, auth_token).await
                 {
                     ui.send(system_message(found.describe())).await;
                     *outcome = judged_as;
@@ -2214,11 +2212,10 @@ impl Drop for WriteSlot<'_> {
 /// none of them changes files. They run side by side; the others run one
 /// at a time per workspace.
 fn reads_only(definition: &AgentDefinition) -> bool {
-    definition.tools.as_ref().is_some_and(|tools| {
-        tools
-            .iter()
-            .all(|tool| aura_agent_gate::lead::keeps_tool(tool))
-    })
+    definition
+        .tools
+        .as_ref()
+        .is_some_and(|tools| tools.iter().all(|tool| aura_gate::lead::keeps_tool(tool)))
 }
 
 /// What a subtask is told `left` before its time is up.
@@ -2499,8 +2496,7 @@ async fn run_task_turn(
     };
     let text = result.final_text.clone();
     let llm_error = result.llm_error.as_ref().map(ToString::to_string);
-    end.shown =
-        gate_followup::shown_to_judge(result.messages.get(turn_start..).unwrap_or_default());
+    end.shown = shown_to_judge(result.messages.get(turn_start..).unwrap_or_default());
     end.files = result
         .file_changes
         .iter()

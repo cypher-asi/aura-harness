@@ -1,0 +1,36 @@
+[package]
+name = "aura-gate-live"
+description = "Gate while the app runs: the routing table every agent shares, the attempt log as attempts end, and Gate's calls through an agent's kernel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# `GateLive::learn`, which fills the table for other crates' tests.
+test-support = ["aura-gate-route/test-support"]
+
+[dependencies]
+aura-agent = { path = "../../agent/aura-agent" }
+aura-agent-kernel = { path = "../../agent/aura-agent-kernel" }
+aura-config = { path = "../../config/aura-config" }
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-gate-attempts = { path = "../aura-gate-attempts" }
+aura-gate-compare = { path = "../aura-gate-compare" }
+aura-gate-evidence = { path = "../aura-gate-evidence" }
+aura-gate-followup = { path = "../aura-gate-followup" }
+aura-gate-judge = { path = "../aura-gate-judge" }
+aura-gate-lead = { path = "../aura-gate-lead" }
+aura-gate-route = { path = "../aura-gate-route" }
+aura-model = { path = "../../model/aura-model" }
+aura-store-db = { path = "../../store/aura-store-db" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+aura-core-auth = { path = "../../core/aura-core-auth" }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -20,7 +20,7 @@ aura-exec-tools = { path = "../../exec/aura-exec-tools" }
 aura-agent = { path = "../../agent/aura-agent" }
 aura-context-compaction = { path = "../../context/aura-context-compaction" }
 aura-agent-trace = { path = "../../agent/aura-agent-trace" }
-aura-agent-gate = { path = "../../agent/aura-agent-gate" }
+aura-gate = { path = "../../gate/aura-gate" }
 aura-context-memory = { path = "../../context/aura-context-memory" }
 aura-context-prompts = { path = "../../context/aura-context-prompts" }
 aura-context-skills = { path = "../../context/aura-context-skills" }
@@ -61,6 +61,8 @@ rustix = { version = "1.1", default-features = false, features = ["std", "proces
 walkdir = { workspace = true }
 
 [dev-dependencies]
+# `test-support` lets the app's tests fill Gate's table by hand.
+aura-gate = { path = "../../gate/aura-gate", features = ["test-support"] }
 tower = { workspace = true }
 which = { workspace = true }
 # `test-util` enables tokio's paused-clock test helpers

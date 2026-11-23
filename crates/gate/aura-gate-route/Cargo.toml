@@ -1,0 +1,26 @@
+[package]
+name = "aura-gate-route"
+description = "Gate: the candidates the user's sign-ins allow, the model each turn and subtask goes to, and what Gate has learned"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# `GateStats::learn` and `GateStats::learn_costing`, which fill a table
+# with outcomes for tests, here and in the crates that build on Gate.
+test-support = []
+
+[dependencies]
+aura-config = { path = "../../config/aura-config" }
+aura-core-auth = { path = "../../core/aura-core-auth" }
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-gate-evidence = { path = "../aura-gate-evidence" }
+aura-model = { path = "../../model/aura-model" }
+
+# The integration tests fill their tables with `test-support`'s builder.
+[dev-dependencies]
+aura-gate-route = { path = ".", features = ["test-support"] }
+
+[lints]
+workspace = true

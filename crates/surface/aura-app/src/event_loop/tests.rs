@@ -12,6 +12,7 @@ use aura_core_types::{
     Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
 };
 use aura_exec_tools::ToolConfig;
+use aura_gate::live::GateLive;
 use aura_model::{
     MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse, ReasonerError,
 };
@@ -69,10 +70,10 @@ impl ModelProvider for GatedProvider {
             });
         }
         let last = request.messages.last().map(|m| m.text_content());
-        if request.system == aura_agent_gate::classify::SYSTEM_PROMPT {
+        if request.system == aura_gate::judge::classify::SYSTEM_PROMPT {
             return classify(&request, last.as_deref().unwrap_or_default()).await;
         }
-        if request.system == aura_agent_gate::criteria::SYSTEM_PROMPT
+        if request.system == aura_gate::judge::criteria::SYSTEM_PROMPT
             && last
                 .as_deref()
                 .is_some_and(|text| text.contains("criteria writer down"))
@@ -83,7 +84,7 @@ impl ModelProvider for GatedProvider {
                     .to_string(),
             });
         }
-        if request.system == aura_agent_gate::criteria::SYSTEM_PROMPT {
+        if request.system == aura_gate::judge::criteria::SYSTEM_PROMPT {
             let asked = last.as_deref().unwrap_or_default();
             let kind = if asked.contains("(exacting criteria)") {
                 Some("exact_output")
@@ -100,14 +101,14 @@ impl ModelProvider for GatedProvider {
                 return MockProvider::new()
                     .with_response(MockResponse::tool_use(
                         "toolu_criteria",
-                        aura_agent_gate::criteria::CRITERIA_TOOL,
+                        aura_gate::judge::criteria::CRITERIA_TOOL,
                         input,
                     ))
                     .complete(request)
                     .await;
             }
         }
-        if request.system == aura_agent_gate::turn_judge::SYSTEM_PROMPT {
+        if request.system == aura_gate::judge::turn::SYSTEM_PROMPT {
             let asked = last.as_deref().unwrap_or_default();
             let reply = if asked.contains("judge: blame") {
                 "The change is wrong.\nVERDICT: MODEL"
@@ -118,7 +119,7 @@ impl ModelProvider for GatedProvider {
             };
             return MockProvider::simple_response(reply).complete(request).await;
         }
-        if request.system == aura_agent_gate::turn_judge::UNVERIFIED_SYSTEM_PROMPT {
+        if request.system == aura_gate::judge::turn::UNVERIFIED_SYSTEM_PROMPT {
             let asked = last.as_deref().unwrap_or_default();
             let disowned = asked.contains("it isn't verified");
             let reply = if disowned && asked.contains("review: blame") {
@@ -130,7 +131,7 @@ impl ModelProvider for GatedProvider {
             };
             return MockProvider::simple_response(reply).complete(request).await;
         }
-        if request.system == aura_agent_gate::turn_judge::REVIEW_SYSTEM_PROMPT {
+        if request.system == aura_gate::judge::turn::REVIEW_SYSTEM_PROMPT {
             let asked = last.as_deref().unwrap_or_default();
             let repaired = asked.contains(REPAIRED_REPLY);
             let once = asked.contains("inspect: once");
@@ -143,7 +144,7 @@ impl ModelProvider for GatedProvider {
             };
             return MockProvider::simple_response(reply).complete(request).await;
         }
-        if request.system == aura_agent_gate::judge::SYSTEM_PROMPT {
+        if request.system == aura_gate::judge::blind::SYSTEM_PROMPT {
             let reply = if last.as_deref().is_some_and(|t| t.contains("## Reference")) {
                 "A is tidier.\nA_VS_REFERENCE: AS_GOOD\nB_VS_REFERENCE: WORSE\nWINNER: A"
             } else {
@@ -232,7 +233,7 @@ impl ModelProvider for GatedProvider {
         let sent_back = !auxiliary
             && last
                 .as_deref()
-                .is_some_and(|text| text.contains(aura_agent_gate::followup::REPAIR_OPENING));
+                .is_some_and(|text| text.contains(aura_gate::followup::REPAIR_OPENING));
         if sent_back {
             return MockProvider::simple_response(REPAIRED_REPLY)
                 .complete(request)
@@ -347,7 +348,7 @@ async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse,
         .into_iter()
         .find(|d| prompt.contains(&format!("({d})")))
         .unwrap_or("medium");
-    let tool = aura_agent_gate::classify::LABEL_TOOL;
+    let tool = aura_gate::judge::classify::LABEL_TOOL;
     let answer = if request.tools.iter().any(|t| t.name == tool) {
         MockResponse::tool_use(
             "toolu_label",
@@ -380,19 +381,15 @@ struct Fixture {
 
 /// Gate settings for tests: the defaults, without exploring.
 fn steady_gate() -> GateLive {
-    GateLive::new(aura_config::GateConfig {
-        explore_rate: 0.0,
-        ..aura_config::GateConfig::defaults()
-    })
+    GateLive::new(aura_config::GateConfig::defaults().without_exploring())
 }
 
 /// [`steady_gate`] whose lead keeps its own file tools and commands, as
 /// with `AURA_GATE_DELEGATE=off`.
 fn steady_gate_without_delegation() -> GateLive {
     GateLive::new(aura_config::GateConfig {
-        explore_rate: 0.0,
         delegate: false,
-        ..aura_config::GateConfig::defaults()
+        ..aura_config::GateConfig::defaults().without_exploring()
     })
 }
 
@@ -570,7 +567,7 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         approvals: Arc::clone(&fixture.approvals),
         compare: compare::CompareState::new(
             fixture._dirs[0].path().join("compare"),
-            aura_agent_gate::compare::DEFAULT_CONCURRENCY,
+            aura_gate::compare::DEFAULT_CONCURRENCY,
         ),
         flow: None,
     }
@@ -2683,8 +2680,8 @@ async fn debugging_turn_under_gate(
 /// returned) in which checked work that changed no file has been wrong
 /// often enough to be reviewed.
 fn reviewing_gate(review: aura_config::ReviewMode) -> (GateLive, TempDir) {
-    use aura_agent_gate::attempt_log::{Attempt, AttemptLog, Line, Terms, Truth, TruthSource};
-    use aura_agent_gate::evidence::Evidence;
+    use aura_gate::attempts::{Attempt, AttemptLog, Line, Terms, Truth, TruthSource};
+    use aura_gate::evidence::Evidence;
     let dir = TempDir::new().unwrap();
     let log = AttemptLog::in_data_dir(dir.path());
     let agent = AgentId::generate().to_hex();
@@ -2727,15 +2724,14 @@ fn reviewing_gate(review: aura_config::ReviewMode) -> (GateLive, TempDir) {
         log.append(&Line::Truth(truth)).unwrap();
     }
     let gate = GateLive::new(aura_config::GateConfig {
-        explore_rate: 0.0,
         review,
         review_sample: 1.0,
-        ..aura_config::GateConfig::defaults()
+        ..aura_config::GateConfig::defaults().without_exploring()
     });
     gate.log_attempts_to(log);
     assert_eq!(
-        gate.tiers().of(aura_agent_gate::evidence::Flag::NoChanges),
-        aura_agent_gate::attempt_log::Tier::Review
+        gate.tiers().of(aura_gate::evidence::Flag::NoChanges),
+        aura_gate::attempts::Tier::Review
     );
     (gate, dir)
 }
@@ -2872,8 +2868,8 @@ async fn a_passed_check_the_reply_disowns_stands_when_the_judge_finds_the_work_d
 
 #[tokio::test]
 async fn hard_work_a_review_finds_unfinished_goes_back_to_its_model_once() {
-    use aura_agent_gate::attempt_log::Line;
-    use aura_agent_gate::turn_judge::Answer;
+    use aura_gate::attempts::Line;
+    use aura_gate::judge::turn::Answer;
     let (gate, _log_dir) = reviewing_gate(aura_config::ReviewMode::On);
     let (fixture, mut commands) = fixture_with_gate(gate);
     let mut b = borrowed(&fixture);
@@ -2901,7 +2897,7 @@ async fn hard_work_a_review_finds_unfinished_goes_back_to_its_model_once() {
     let sent_back: Vec<&str> = prompts
         .iter()
         .map(|(_, _, p)| p.text.as_str())
-        .filter(|text| text.contains(aura_agent_gate::followup::REPAIR_OPENING))
+        .filter(|text| text.contains(aura_gate::followup::REPAIR_OPENING))
         .collect();
     assert_eq!(sent_back.len(), 1, "{shown}");
     assert!(
@@ -3080,7 +3076,7 @@ async fn gate_explores_the_next_cheaper_model_and_records_its_propensity() {
             explore_rate: 1.0,
             ..aura_config::GateConfig::defaults()
         },
-        aura_agent_gate::SplitMix64::seeded(3),
+        aura_gate::route::SplitMix64::seeded(3),
     );
     let (fixture, mut commands) = fixture_with_gate(gate);
     let mut b = borrowed(&fixture);
@@ -3114,8 +3110,7 @@ async fn gate_explores_the_next_cheaper_model_and_records_its_propensity() {
 async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
     let gate = GateLive::new(aura_config::GateConfig {
         min_tries: 1,
-        explore_rate: 0.0,
-        ..aura_config::GateConfig::defaults()
+        ..aura_config::GateConfig::defaults().without_exploring()
     });
     let (fixture, _commands) = fixture_with_gate(gate);
     let mut b = borrowed(&fixture);
@@ -3127,8 +3122,8 @@ async fn the_next_turn_uses_what_the_last_outcome_taught_gate() {
     // A later signal about the last turn, as the judge records one.
     async fn rate(state: &LoopState<'_>, agent: AgentId, signal: OutcomeSignal) {
         let kernel = state.kernel_for(agent).unwrap();
-        let last = gate_record::last_turn(kernel.store().as_ref(), agent).unwrap();
-        assert!(gate_record::record(&kernel, agent, &last.outcome.with_signal(signal)).await);
+        let last = aura_gate::live::last_turn(kernel.store().as_ref(), agent).unwrap();
+        assert!(aura_gate::live::record(&kernel, agent, &last.outcome.with_signal(signal)).await);
     }
     let reasons = |state: &LoopState<'_>| -> Vec<RouteReason> {
         prompts_of(state, first)

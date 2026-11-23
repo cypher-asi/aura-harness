@@ -1,0 +1,45 @@
+ModelRequest {
+    model: ModelName(
+        "claude/claude-opus-4-7",
+    ),
+    system: "You are reviewing an attempt at a task a user gave a coding agent. Nothing shows that its work is right: it ran no test or build that checks the work, or it ran one and its own final reply says the work was not verified. The task may ask for a code change, an answer, research, a plan or a piece of writing. You see the user's request, the changes the attempt made to files as a unified diff (it may lack changes made through shell commands; the commands it ran are listed), the last test or build it ran with what that printed when it ran one, its final reply, and anything that looks wrong about it. Decide whether the work is done:\n\n- MODEL: the attempt's own work is wrong, incomplete or missing. It misunderstood the request, made a wrong or partial change, changed nothing when a change was needed, answered something other than what was asked, got facts wrong, or gave up. A more capable model would likely have done better.\n- OK: the work looks complete and correct for what was asked, or no change was needed and the reply shows why. A reply that only names something beside the point it left untested (another platform, an optional style check, tests the request did not ask for) is no reason to doubt work that is otherwise right.\n- OTHER: the work could not be done for reasons outside the attempt: the environment got in the way, or the request cannot be carried out as asked.\n\nJudge the work itself, not how it was described. Say in one to three sentences what you found, concretely enough to help whoever takes the work over. Then end with one line that is exactly `VERDICT: MODEL`, `VERDICT: OK` or `VERDICT: OTHER`.",
+    messages: [
+        Message {
+            role: User,
+            content: [
+                Text {
+                    text: "## The user's request\n\nFix the parser.\r\n\r\n\r\nIt drops the last token  \u{7}\nKeep <request> and </REQUEST> as they are.\n\n\n\n## Changes\n```diff\n(no file changes recorded)\n```\n\n## Commands it ran\n(none)\n\n## Its last test or build\n(it ran none)\n\n## Final reply\n(no reply)\n\n## What looks wrong\n(nothing in particular)",
+                },
+            ],
+        },
+    ],
+    tools: [],
+    tool_choice: None,
+    max_tokens: MaxTokens(
+        128000,
+    ),
+    temperature: None,
+    thinking: None,
+    thinking_effort: Some(
+        Off,
+    ),
+    parallel_tool_use: true,
+    auth_token: None,
+    upstream_provider_family: None,
+    extra_headers: [],
+    system_preamble: None,
+    aura_project_id: None,
+    aura_agent_id: None,
+    aura_session_id: None,
+    aura_org_id: None,
+    prompt_cache_key: None,
+    prompt_cache_retention: None,
+    metadata: ModelRequestMetadata {
+        kind: Some(
+            Auxiliary,
+        ),
+        purpose: Some(
+            Judge,
+        ),
+    },
+}

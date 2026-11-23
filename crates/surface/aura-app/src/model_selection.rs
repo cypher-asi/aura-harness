@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use aura_agent::AgentLoopConfig;
-use aura_agent_gate::Candidate;
 use aura_auth::{AuthSummary, CredentialResolver, ProviderKind};
+use aura_gate::route::Candidate;
 use aura_model::model_alias::{resolve_alias, resolve_exact, AliasCandidate};
 use aura_model::model_catalog::{
     self, backend_for, infer_tier, local_model_name, LiveModelInfo, LivePrice, LocalServerStatus,
@@ -151,7 +151,7 @@ impl ModelSelection {
             self.installed_local(),
             &self.plan_models,
         );
-        aura_agent_gate::candidates(
+        aura_gate::route::candidates(
             &catalog,
             |provider| self.auth.can_use(provider),
             |id| self.dropped.contains(id),
@@ -168,7 +168,7 @@ impl ModelSelection {
             self.installed_local(),
             &self.plan_models,
         );
-        aura_agent_gate::runnable(
+        aura_gate::route::runnable(
             &catalog,
             |provider| self.auth.can_use(provider),
             |id| self.dropped.contains(id),
@@ -184,13 +184,13 @@ impl ModelSelection {
         if !self.is_gate() {
             return None;
         }
-        aura_agent_gate::fixed_pick(&self.gate_candidates()).cloned()
+        aura_gate::route::fixed_pick(&self.gate_candidates()).cloned()
     }
 
     /// The model that classifies prompts: the cheapest fast-tier model the
     /// user can run, else the local default.
     pub fn classifier_model(&self) -> String {
-        aura_agent_gate::classify::classifier(&self.gate_candidates())
+        aura_gate::judge::classify::classifier(&self.gate_candidates())
             .map_or_else(|| self.default_local.clone(), |c| c.id.clone())
     }
 
@@ -672,7 +672,7 @@ impl ModelLimits {
 
     /// Point `config` at the model and reasoning effort Gate's `decision`
     /// chose.
-    pub fn route(self, config: &mut AgentLoopConfig, decision: &aura_agent_gate::Decision) {
+    pub fn route(self, config: &mut AgentLoopConfig, decision: &aura_gate::route::Decision) {
         if config.model != decision.model.id {
             self.configure(config, &decision.model.id);
         }

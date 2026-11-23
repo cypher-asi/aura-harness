@@ -21,16 +21,15 @@ use super::titles;
 use super::LoopState;
 use crate::agent_registry::RegisteredAgent;
 use crate::bench_pack::{self, ExampleTask};
-use aura_agent_gate::compare::{
-    default_against, estimate, parse, resolve_arms, CompareCommand, CompareRequest,
-    DEFAULT_CONCURRENCY,
-};
 use aura_agent_kernel::Kernel;
-use aura_config::GateConfig;
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::{
     AgentId, ArmSpec, BenchSource, CompareArm, ComparePayload, CompareStatus, Difficulty,
     RouteLevel,
+};
+use aura_gate::compare::{
+    default_against, estimate, parse, resolve_arms, CompareCommand, CompareRequest,
+    DEFAULT_CONCURRENCY,
 };
 use aura_model::model_catalog::route_label;
 use aura_store_db::ReadStore;
@@ -297,7 +296,7 @@ pub(super) async fn prepare(
     let kernel = kernel_of(state, agent_id)?;
     let workspace = kernel.agent_workspace();
     let workspace = workspace.canonicalize().unwrap_or(workspace);
-    let last = super::gate_record::last_turn(kernel.store().as_ref(), agent_id);
+    let last = aura_gate::live::last_turn(kernel.store().as_ref(), agent_id);
     let mut category = None;
     let mut replay = None;
     let examples = match (request.examples, request.suite.as_deref()) {
@@ -370,20 +369,17 @@ pub(super) async fn prepare(
     } else {
         None
     };
-    let no_exploring = GateConfig {
-        explore_rate: 0.0,
-        ..*state.hub.gate.settings()
-    };
+    let no_exploring = state.hub.gate.settings().without_exploring();
     let expected = match category {
-        Some(category) => aura_agent_gate::pick(
+        Some(category) => aura_gate::route::pick(
             &state.hub.gate.stats(),
-            &aura_agent_gate::Work::new(RouteLevel::Turn, category, None),
+            &aura_gate::route::Work::new(RouteLevel::Turn, category, None),
             &candidates,
             &no_exploring,
             &mut || 1.0,
         )
         .map(|decision| decision.model.id),
-        None => aura_agent_gate::fixed_pick(&candidates).map(|c| c.id.clone()),
+        None => aura_gate::route::fixed_pick(&candidates).map(|c| c.id.clone()),
     };
     // A by-difficulty arm is priced on its medium model, which work of
     // unknown difficulty runs on.

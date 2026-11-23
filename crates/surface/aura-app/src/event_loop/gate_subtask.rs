@@ -12,14 +12,14 @@
 //! how it went.
 //!
 //! A subtask dispatched by an agent working on a frontier model is first
-//! routed below that tier ([`aura_agent_gate::below_lead`]), so the most
+//! routed below that tier ([`aura_gate::route::below_lead`]), so the most
 //! expensive model plans and a cheaper one does the work.
 //!
 //! A subtask Gate routed whose attempt failed is retried once on the next
 //! stronger model, the lead's tier included; the retry is recorded with
 //! route reason `escalate`, which Gate's table does not count. Gate's
 //! judge reviews the failed attempt first (see
-//! [`aura_agent_gate::turn_judge`]): a failure it does not put down to
+//! [`aura_gate::judge::turn`]): a failure it does not put down to
 //! the model is not retried and counts for nothing.
 //!
 //! Under the by-difficulty arm of `/compare` a subtask nothing pins is
@@ -27,16 +27,16 @@
 //! difficulty, with no exploring and no retry.
 
 use super::agents::AgentSession;
-use super::gate_live::GateLive;
-use super::gate_record;
 use super::turns::record_prompt;
 use crate::model_selection::{ModelLimits, ModelSelection};
 use aura_agent::AgentLoopConfig;
-use aura_agent_gate::{Candidate, Decision, DifficultyRoutes, Work};
 use aura_core_types::{
     Difficulty, Hash, PromptCategory, PromptPayload, Route, RouteLevel, RouteReason,
     SubagentDispatchRequest,
 };
+use aura_gate::compare::DifficultyRoutes;
+use aura_gate::live::{self, GateLive};
+use aura_gate::route::{Candidate, Decision, Work};
 use aura_model::model_catalog::GATE_MODEL_ID;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -159,7 +159,7 @@ impl SubtaskGate {
         };
         let category = label.classify(session, cancel).await?;
         label.category = Some(category);
-        let among = aura_agent_gate::below_lead(candidates, self.lead_model.as_deref());
+        let among = aura_gate::route::below_lead(candidates, self.lead_model.as_deref());
         let work =
             Work::new(RouteLevel::Subtask, category, Some(self.kind.as_str())).of(label.difficulty);
         let decision = if self.explore {
@@ -226,7 +226,7 @@ impl SubtaskLabel {
             return Err("Gate has no model to classify the subtask's prompt".to_string());
         }
         let label = tokio::select! {
-            label = gate_record::classify_prompt(
+            label = live::classify_prompt(
                 &session.kernel,
                 &self.classifier,
                 &self.text,

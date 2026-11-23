@@ -15,7 +15,7 @@ aura-ui-terminal = { path = "../../ui/aura-ui-terminal" }
 aura-model = { path = "../../model/aura-model" }
 aura-exec-tools = { path = "../../exec/aura-exec-tools" }
 aura-agent = { path = "../../agent/aura-agent" }
-aura-agent-gate = { path = "../../agent/aura-agent-gate" }
+aura-gate = { path = "../../gate/aura-gate" }
 aura-agent-trace = { path = "../../agent/aura-agent-trace" }
 aura-auth = { path = "../../auth/aura-auth" }
 aura-node = { path = "../aura-node" }

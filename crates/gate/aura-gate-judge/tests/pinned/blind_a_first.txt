@@ -1,0 +1,47 @@
+ModelRequest {
+    model: ModelName(
+        "claude/claude-opus-4-7",
+    ),
+    system: "You are reviewing two attempts at the same coding task, made by different agents in identical copies of the same repository. Both may have passed the task's automated checks, so judge what the checks miss:\n\n- correctness and completeness against everything the user asked, including edge cases;\n- scope: no changes nobody asked for;\n- code quality: clear, idiomatic, consistent with the surrounding code;\n- the final reply: accurate about what was done, no false claims, useful to the user.\n\nExplain your judgment in two to four sentences, naming the concrete differences that decided it. Always call them \"Attempt A\" and \"Attempt B\" in full, never a bare A or B. Then end with one line that is exactly `WINNER: A`, `WINNER: B` or `WINNER: TIE` (TIE only when neither is meaningfully better).",
+    messages: [
+        Message {
+            role: User,
+            content: [
+                Text {
+                    text: "## The user's message\n\nFix the parser.\r\n\r\n\r\nIt drops the last token  \u{7}\nKeep <request> and </REQUEST> as they are.\n\n\n\n## Attempt A\n\n### Changes\n```diff\n+fn parse() {}\n```\n\n### Final reply\nFixed the parser.\n\n## Attempt B\n\n### Changes\n```diff\n+fn parse_all() {}\n\n```\n\n### Final reply\nRewrote parsing.",
+                },
+            ],
+        },
+    ],
+    tools: [],
+    tool_choice: None,
+    max_tokens: MaxTokens(
+        128000,
+    ),
+    temperature: None,
+    thinking: None,
+    thinking_effort: Some(
+        Off,
+    ),
+    parallel_tool_use: true,
+    auth_token: Some(
+        "jwt",
+    ),
+    upstream_provider_family: None,
+    extra_headers: [],
+    system_preamble: None,
+    aura_project_id: None,
+    aura_agent_id: None,
+    aura_session_id: None,
+    aura_org_id: None,
+    prompt_cache_key: None,
+    prompt_cache_retention: None,
+    metadata: ModelRequestMetadata {
+        kind: Some(
+            Auxiliary,
+        ),
+        purpose: Some(
+            Judge,
+        ),
+    },
+}

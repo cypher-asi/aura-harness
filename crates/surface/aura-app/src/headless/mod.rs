@@ -17,7 +17,6 @@ mod tools;
 #[cfg(test)]
 mod tests;
 
-pub use crate::event_loop::gate_record::Judged;
 pub use crate::event_loop::task_check::CheckRun;
 pub use eval::{copy_dir, EvalRan, EvalTurn, EvalTurns, GateUse};
 pub use gate_replay::{gate_replay, ReplayOptions};

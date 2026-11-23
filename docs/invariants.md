@@ -536,10 +536,12 @@ early-drop termination paths.
 covers the sync (`reason_sync_error_records_failed`) and handshake-error
 (`reason_streaming_handshake_error_records_failed`) paths.
 
-Gate ([`aura-agent-gate`](../crates/agent/aura-agent-gate)) never calls a model
-and never holds a `ModelProvider`; it depends only on the core, config and
-model layers. It builds the classifier's and the `/compare` judge's
-requests, and the surface sends them through an agent's `Kernel::reason`.
+Gate ([`aura-gate`](../crates/gate/aura-gate)) never calls a provider
+and never holds a `ModelProvider`. Its crates build the classifier's,
+the judge's and the `/compare` judge's requests, and every one goes
+through an agent's `Kernel::reason`: Gate's own calls from
+[`aura-gate-live`](../crates/gate/aura-gate-live), the `/compare`
+judge's from the surface.
 A classifier call is an `Auxiliary` `Reasoning` record in the classified
 agent's log, and a judge call is one in the comparison agent's log. Gate's
 pick only sets the model of the turn's or subtask's own kernel-mediated
@@ -749,14 +751,14 @@ already ran before the verdict reached this seam.
 
 Under `gate`, with `AURA_GATE_DELEGATE` on, the user's own agent leads the
 turns classified `multi_file_change` or `planning`
-(`aura_agent_gate::lead::leads`), and on those turns its tools only narrow:
+(`aura_gate::lead::leads`), and on those turns its tools only narrow:
 
 - `write_file`, `edit_file`, `delete_file`, `apply_patch`, `git_commit` and
   `git_commit_push` are dropped from the turn's tool list
   ([`event_loop/lead.rs`](../crates/surface/aura-app/src/event_loop/lead.rs)).
 - `LeadExecutor` wraps the turn's executor. A call to a dropped tool, or a
   `run_command` line outside the allowlist of checks and inspection
-  commands (`aura_agent_gate::lead::allows_command`), is not executed. It is
+  commands (`aura_gate::lead::allows_command`), is not executed. It is
   still recorded through the kernel as a preset result with source
   `gate_lead`, after passing the policy gate like any other call.
 - `read_file` results are cut to 200 lines and `search_code` / `find_files`

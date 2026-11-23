@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context as _;
-use aura_agent_gate::attempt_log::{self, evaluate_where, Filter};
+use aura_gate::attempts::{self, evaluate_where, Filter};
 
 use aura_app::headless::ReplayOptions;
 
@@ -18,7 +18,7 @@ fn default_data_dir() -> PathBuf {
 
 /// The attempt log of [`default_data_dir`].
 fn default_log() -> PathBuf {
-    default_data_dir().join(attempt_log::FILE)
+    default_data_dir().join(attempts::FILE)
 }
 
 /// Run `aura gate`.
@@ -65,7 +65,7 @@ pub async fn cmd_gate(args: GateCommand) -> anyhow::Result<()> {
         } => {
             let path = log.unwrap_or_else(default_log);
             let read =
-                attempt_log::read(&path).with_context(|| format!("reading {}", path.display()))?;
+                attempts::read(&path).with_context(|| format!("reading {}", path.display()))?;
             let report = evaluate_where(
                 &read.lines,
                 &Filter {

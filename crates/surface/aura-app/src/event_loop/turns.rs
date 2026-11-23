@@ -9,35 +9,29 @@ use super::agent_events::AgentUi;
 use super::agent_events::ForwarderState;
 use super::agents::AgentSession;
 use super::attachments::{expand_mentions_in, mentioned_paths};
-use super::gate_followup::{
-    check_review, check_signal, harness_check, joined, judge_unchecked, may_review, nudge_message,
-    nudge_notice, repair_message, repair_notice, sign_repair_message, sign_repair_notice, At,
-    Before, FollowUp, Reviewing, Unchecked,
+use super::gate::followup::{
+    joined, may_review, takeover_message, At, Attempt, Before, CarryOn, Following,
 };
-use super::gate_live::GateLive;
-use super::gate_log;
-use super::gate_record;
 use super::handlers::{handle_agent_success, record_response, run_agent_turn, system_message};
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use super::subagents::{AgentHub, LeadProfile};
-use super::task_check::takeover_prompt;
 use super::tasks::{request_state, summary_of};
 use crate::long_run::LongRunSettings;
 use crate::model_selection::{routed_effort, ModelLimits};
 use aura_agent::{AgentLoop, CompactHistoryError};
-use aura_agent_gate::attempt_log::Terms;
-use aura_agent_gate::checks::{last_check, last_check_seen};
-use aura_agent_gate::criteria::Criteria;
-use aura_agent_gate::followup::Step;
-use aura_agent_gate::outcome::{calls_for_stronger, turn_signal};
-use aura_agent_gate::turn_judge::Failed;
-use aura_agent_gate::{Candidate, Decision, Work as GateWork};
 use aura_agent_trace::RunRecorder;
 use aura_core_types::{
     AgentId, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload,
     RecordEntry, Route, RouteLevel, RouteReason, Transaction,
 };
+use aura_gate::attempts::Terms;
+use aura_gate::evidence::checks::{last_check, last_check_seen};
+use aura_gate::evidence::outcome::{calls_for_stronger, turn_signal};
+use aura_gate::judge::criteria::Criteria;
+use aura_gate::judge::turn::Failed;
+use aura_gate::live::{self, GateLive};
+use aura_gate::route::{Candidate, Decision, Work as GateWork};
 use aura_model::{ContentBlock, ImageSource, Message, Role, ToolDefinition};
 use aura_ui_terminal::events::ImageAttachment;
 use aura_ui_terminal::UiCommand;
@@ -400,7 +394,7 @@ async fn run_prompt(
     );
     let started = Instant::now();
     let model = turn.agent_loop.config().model.clone();
-    gate_record::note_retry(session, &prompt.text, &model).await;
+    live::note_retry(&session.kernel, session.agent_id(), &prompt.text, &model).await;
     let mut label = Label {
         text: prompt.text.clone(),
         classifier: turn.routing.classifier.clone(),
@@ -444,7 +438,7 @@ async fn run_prompt(
             };
             let mut criteria = None;
             if let Some(gate) = turn.gate.as_deref() {
-                criteria = match gate_record::hold_to_criteria(
+                criteria = match live::hold_to_criteria(
                     &session.kernel,
                     (&gate.live, &gate.candidates),
                     category,
@@ -460,7 +454,7 @@ async fn run_prompt(
                         None
                     }
                 };
-                if let Some(note) = gate_record::worker_note_for(criteria.as_deref()) {
+                if let Some(note) = live::worker_note_for(criteria.as_deref()) {
                     prompt.text.push_str(&note);
                 }
                 let agent = session.agent_id();
@@ -552,7 +546,7 @@ async fn run_prompt(
         .as_ref()
         .ok()
         .filter(|_| hub.is_some())
-        .map(|result| gate_log::evidence_of(result, turn_start, attempts.changed.as_deref()));
+        .map(|result| live::evidence_of(result, turn_start, attempts.changed.as_deref()));
     session
         .tasks
         .end_request(
@@ -598,7 +592,7 @@ async fn run_prompt(
             hub.gate
                 .log_attempt(session.agent_id(), &outcome, terms, left);
         }
-        gate_record::record(&session.kernel, session.agent_id(), &outcome).await;
+        live::record(&session.kernel, session.agent_id(), &outcome).await;
     }
     Outcome {
         failure,
@@ -654,7 +648,7 @@ impl Label {
     /// # Errors
     /// Says why when the classifier gave no category and difficulty.
     async fn classify(&mut self, session: &AgentSession) -> Result<PromptCategory, String> {
-        let label = gate_record::classify_prompt(
+        let label = live::classify_prompt(
             &session.kernel,
             &self.classifier,
             &self.text,
@@ -801,7 +795,7 @@ struct Asked<'a> {
 /// Run the turn of the prompt `asked`. When Gate routes it, Gate is asked
 /// again while a route refuses the user's sign-in. An attempt that ran
 /// no check of its own gets Gate's follow-up first (see
-/// [`gate_followup`]): when it changed files it is asked once to check
+/// [`gate::followup`](super::gate::followup)): when it changed files it is asked once to check
 /// them, then the harness runs the project's tests, and work still
 /// unchecked gets the judge's verdict. Work that is hard or shows a sign of
 /// failure is reviewed against the request before it stands; what the
@@ -811,7 +805,7 @@ struct Asked<'a> {
 ///
 /// 1. its `Outcome` is recorded and, for a failed check or an error,
 ///    Gate's judge says whether the model was at fault
-///    ([`gate_record::judge_failed`]);
+///    ([`live::judge_failed`]);
 /// 2. a failure the judge excuses ends the turn where it is;
 /// 3. otherwise the turn carries on in the same conversation on the
 ///    next stronger model, told what the judge found, under a prompt of
@@ -845,7 +839,7 @@ async fn run_attempts(
     // changes, by its commands as well as its file tools.
     let before = match gate.as_ref() {
         Some(gate)
-            if aura_agent_gate::router::verifiable(category)
+            if aura_gate::evidence::verifiable(category)
                 && may_review(
                     &gate.live,
                     &gate.candidates,
@@ -856,9 +850,7 @@ async fn run_attempts(
         }
         _ => None,
     };
-    // The follow-up steps of the attempt on `follow.0`; a new model starts
-    // them afresh.
-    let mut follow = (String::new(), FollowUp::default());
+    let mut follow = Following::default();
     let (result, forwarded) = 'attempts: loop {
         let (result, forwarded) = run_agent_turn(
             session,
@@ -904,146 +896,32 @@ async fn run_attempts(
         // judge found wrong with unchecked work.
         let (mut harness, mut unchecked) = (None, None);
         if let Ok(partial) = &result {
-            if follow.0 != model {
-                let workspace = session.kernel.agent_workspace();
-                let ran = (model.as_str(), routed_effort(turn.agent_loop.config()));
-                let fresh = FollowUp::new(&gate.live, &gate.candidates, ran, &workspace)
-                    .since(before.clone())
-                    .held_to(asked.criteria.clone())
-                    .after(&follow.1);
-                follow = (model.clone(), fresh);
-            }
-            let edits = || {
-                let workspace = session.kernel.agent_workspace();
-                files
-                    .as_ref()
-                    .map(|files| files.attempt(agent).diff(Some(&workspace)))
-                    .unwrap_or_default()
-            };
-            // What the same model is told when it carries on, and what
-            // the user is told of that.
-            let mut carry_on = None;
-            loop {
-                let at = At {
+            let workspace = session.kernel.agent_workspace();
+            let attempt = Attempt {
+                session,
+                live: &gate.live,
+                candidates: &gate.candidates,
+                task: asked.task,
+                ran: (model.as_str(), routed_effort(turn.agent_loop.config())),
+                result: partial,
+                at: At {
                     category,
                     difficulty: asked.difficulty,
                     signal,
                     turn_start,
-                };
-                match follow.1.next(partial, at).await {
-                    Step::Stop => break,
-                    Step::Nudge(uncovered) => {
-                        carry_on =
-                            Some((nudge_message(&uncovered), nudge_notice(&model, &uncovered)));
-                        break;
-                    }
-                    Step::Repair(signs) => {
-                        carry_on = Some((
-                            sign_repair_message(&signs),
-                            sign_repair_notice(&model, &signs),
-                        ));
-                        break;
-                    }
-                    Step::Review { why, act } => {
-                        let ended = OutcomePayload {
-                            prompt_tx,
-                            category,
-                            model: model.clone(),
-                            success: None,
-                            signal: signal.unwrap_or(OutcomeSignal::Unavailable),
-                            cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
-                            subtask_cost_usd: gate.hub.subtask_cost_usd(agent, asked.started_ms),
-                            latency_ms: u64::try_from(started.elapsed().as_millis())
-                                .unwrap_or(u64::MAX),
-                        };
-                        let edits = edits();
-                        let shown = Reviewing {
-                            task: asked.task,
-                            result: partial,
-                            turn_start,
-                            category,
-                            edits: &edits,
-                            why: &why,
-                            act,
-                        };
-                        let auth_token = turn.agent_loop.config().auth_token.clone();
-                        let reviewed = follow
-                            .1
-                            .review(session, &gate.live, &ended, &shown, auth_token)
-                            .await;
-                        let Some(reviewed) = reviewed else {
-                            continue;
-                        };
-                        ui.send(system_message(reviewed.describe())).await;
-                        if reviewed.unfinished() {
-                            if follow.1.send_back(partial) {
-                                carry_on = Some((
-                                    repair_message(&reviewed.findings),
-                                    repair_notice(&model),
-                                ));
-                                break;
-                            }
-                            signal = Some(OutcomeSignal::JudgedFail);
-                            unchecked = Some(reviewed.findings);
-                        } else if signal.is_none() {
-                            signal = reviewed.verdict();
-                        }
-                    }
-                    Step::HarnessCheck => {
-                        let Some(command) = follow.1.check().map(str::to_string) else {
-                            continue;
-                        };
-                        ui.send(system_message(format!(
-                            "gate: running `{command}` to check the change"
-                        )))
-                        .await;
-                        let check = harness_check(session, &command).await;
-                        ui.send(system_message(check.describe())).await;
-                        if let Some(checked) = check_signal(&check) {
-                            signal = Some(checked);
-                            harness = (checked == OutcomeSignal::ChecksFailed)
-                                .then(|| check_review(&check));
-                        }
-                    }
-                    Step::JudgeUnverified(suspicions) => {
-                        let Some(judge) = follow.1.judge().map(str::to_string) else {
-                            continue;
-                        };
-                        let ended = OutcomePayload {
-                            prompt_tx,
-                            category,
-                            model: model.clone(),
-                            success: None,
-                            signal: signal.unwrap_or(OutcomeSignal::Unavailable),
-                            cost_usd: attempts.cost_usd + forwarded.usage.cost_usd,
-                            subtask_cost_usd: gate.hub.subtask_cost_usd(agent, asked.started_ms),
-                            latency_ms: u64::try_from(started.elapsed().as_millis())
-                                .unwrap_or(u64::MAX),
-                        };
-                        let diff = follow.1.diff(partial, edits()).await;
-                        let shown = Unchecked {
-                            task: asked.task,
-                            diff: &diff,
-                            result: partial,
-                            turn_start,
-                            suspicions: &suspicions,
-                        };
-                        let auth_token = turn.agent_loop.config().auth_token.clone();
-                        let judged =
-                            judge_unchecked(session, &judge, &ended, &shown, auth_token).await;
-                        if let Some((verdict, judged)) = judged {
-                            ui.send(system_message(judged.describe())).await;
-                            if verdict == OutcomeSignal::JudgedFail || signal.is_none() {
-                                signal = Some(verdict);
-                            }
-                            if verdict == OutcomeSignal::JudgedFail {
-                                unchecked = Some(judged.verdict.reasons);
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some((message, notice)) = carry_on {
+                },
+                prompt_tx: Some(prompt_tx),
+                workspace: &workspace,
+                before: before.as_ref(),
+                criteria: asked.criteria.as_ref(),
+                auth_token: turn.agent_loop.config().auth_token.clone(),
+            };
+            let followed = follow.run(&attempt, ui).await;
+            (signal, harness, unchecked) = (followed.signal, followed.harness, followed.wrong);
+            if let Some(CarryOn {
+                message, notice, ..
+            }) = followed.carry_on
+            {
                 // The same model carries on in the same conversation.
                 session.messages.clone_from(&partial.messages);
                 session.todos.clone_from(&partial.todos);
@@ -1097,7 +975,7 @@ async fn run_attempts(
                 })
                 .flatten()
         };
-        let judge = gate_record::judge_for(&gate.live, &gate.candidates, &failed);
+        let judge = live::judge_for(&gate.live, &gate.candidates, &failed);
         let mut next = None;
         if judge.is_none() {
             next = stronger(&gate.live);
@@ -1113,9 +991,9 @@ async fn run_attempts(
         let left = result
             .as_ref()
             .ok()
-            .map(|result| follow.1.evidence(result, turn_start));
+            .map(|result| follow.steps.evidence(result, turn_start));
         gate.live.log_attempt(agent, &failed, terms, left);
-        gate_record::record(&session.kernel, agent, &failed).await;
+        live::record(&session.kernel, agent, &failed).await;
         attempts.settled = true;
         let mut review = unchecked;
         if let Some(judge) = judge {
@@ -1125,7 +1003,7 @@ async fn run_attempts(
                 .map(|files| files.attempt(agent).diff(Some(&workspace)))
                 .unwrap_or_default();
             let diff = match &result {
-                Ok(partial) => follow.1.diff(partial, edits).await,
+                Ok(partial) => follow.steps.diff(partial, edits).await,
                 Err(_) => edits,
             };
             let failure = harness
@@ -1140,8 +1018,7 @@ async fn run_attempts(
             };
             let auth_token = turn.agent_loop.config().auth_token.clone();
             let judged =
-                gate_record::judge_failed(&session.kernel, &judge, &failed, &shown, auth_token)
-                    .await;
+                live::judge_failed(&session.kernel, &judge, &failed, &shown, auth_token).await;
             if let Some((_, judged)) = judged {
                 ui.send(system_message(judged.describe())).await;
                 if !judged.verdict.at_fault {
@@ -1157,16 +1034,7 @@ async fn run_attempts(
         };
 
         // The stronger model carries on from what the attempt left.
-        let takeover = format!(
-            "{}{}",
-            SteerSource::Harness.prefix(),
-            takeover_prompt(
-                &aura_model::model_catalog::route_label(&model),
-                next.model.id != model,
-                signal,
-                review.as_deref()
-            )
-        );
+        let takeover = takeover_message(&model, &next.model.id, signal, review.as_deref());
         let payload = PromptPayload {
             category: Some(category),
             route: next.route(RouteLevel::Turn),
@@ -1207,7 +1075,7 @@ async fn run_attempts(
     attempts.changed = result
         .as_ref()
         .ok()
-        .and_then(|result| follow.1.changed_paths(result))
+        .and_then(|result| follow.steps.changed_paths(result))
         .map(<[String]>::to_vec);
     (result, forwarded, attempts)
 }

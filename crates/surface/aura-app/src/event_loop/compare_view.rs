@@ -2,13 +2,13 @@
 //! per-arm (and, for a replayed session, per-prompt) view once it ends, the list of past comparisons, and run
 //! diffs split per file for the diff view.
 
-use aura_agent_gate::compare::{
-    judge_cost_usd, summarize, task_cells, too_close, turn_cells, ArmSummary, Estimate, TaskCell,
-    TurnCell, NO_DELEGATE,
-};
 use aura_core_types::{
     ArmSpec, BenchSource, CompareArm, ComparePayload, CompareRun, CompareStatus, ExampleTaskInfo,
     ModelTokens, Plan, PlanShare, RunTurn,
+};
+use aura_gate::compare::{
+    judge_cost_usd, summarize, task_cells, too_close, turn_cells, ArmSummary, Estimate, TaskCell,
+    TurnCell, NO_DELEGATE,
 };
 use aura_model::model_catalog::route_label;
 use aura_ui_terminal::events::{cost_per_fix, cost_shares, per_fix_cells, FileDiffData};
