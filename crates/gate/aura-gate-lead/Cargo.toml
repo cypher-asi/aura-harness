@@ -17,6 +17,8 @@ async-trait = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# The way tests fill their tables with `test-support`'s builder.
+aura-gate-route = { path = "../aura-gate-route", features = ["test-support"] }
 tokio = { workspace = true }
 
 [lints]
