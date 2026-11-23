@@ -20,7 +20,7 @@ use aura_store_db::RocksStore;
 use aura_ui_terminal::events::{PolicyView, RewindScope, ToolPolicyState};
 use aura_ui_terminal::{ApprovalLevel, PermissionMode};
 use tempfile::TempDir;
-use tokio::sync::Semaphore;
+use tokio::sync::{Barrier, Semaphore};
 
 mod compare_runs;
 mod delegation;
@@ -47,11 +47,18 @@ const REFUSING_MODEL: &str = "claude/claude-sonnet-4-6";
 /// "inspect: fine", and gives no verdict otherwise; a model sent back to
 /// its work replies that it fixed what the review found. The
 /// comparison judge prefers the first attempt, and, given what the user
-/// kept, rates it as good as that and the second worse.
+/// kept, rates it as good as that and the second worse; of work "judged
+/// together", it answers once a second judge is asked at the same time,
+/// and fails after [`JUDGED_TOGETHER`] without one.
 struct GatedProvider {
     inner: MockProvider,
     gate: Arc<Semaphore>,
+    judges: Arc<Barrier>,
 }
+
+/// How long the comparison judge of work "judged together" waits for a
+/// second judge.
+const JUDGED_TOGETHER: Duration = Duration::from_secs(5);
 
 /// What a model sent back to its work by Gate's review replies.
 const REPAIRED_REPLY: &str = "Fixed what the review found.";
@@ -145,7 +152,18 @@ impl ModelProvider for GatedProvider {
             return MockProvider::simple_response(reply).complete(request).await;
         }
         if request.system == aura_gate::judge::blind::SYSTEM_PROMPT {
-            let reply = if last.as_deref().is_some_and(|t| t.contains("## Reference")) {
+            let asked = last.as_deref().unwrap_or_default();
+            if asked.contains("judged together")
+                && tokio::time::timeout(JUDGED_TOGETHER, self.judges.wait())
+                    .await
+                    .is_err()
+            {
+                return Err(ReasonerError::Api {
+                    status: 408,
+                    message: "no other pair was being judged".to_string(),
+                });
+            }
+            let reply = if asked.contains("## Reference") {
                 "A is tidier.\nA_VS_REFERENCE: AS_GOOD\nB_VS_REFERENCE: WORSE\nWINNER: A"
             } else {
                 "A is tidier.\nWINNER: A"
@@ -455,6 +473,7 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
         ]));
     let gate = Arc::new(Semaphore::new(0));
     let provider_gate = Arc::clone(&gate);
+    let judges = Arc::new(Barrier::new(2));
     let workspace_root = workspace.path().to_path_buf();
     let checkpoints = crate::session_checkpoint::Checkpoints::new(data.path());
     let prompter = Arc::clone(&approvals);
@@ -471,6 +490,7 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
                 let provider: Arc<dyn ModelProvider + Send + Sync> = Arc::new(GatedProvider {
                     inner: MockProvider::simple_response("Done."),
                     gate: Arc::clone(&provider_gate),
+                    judges: Arc::clone(&judges),
                 });
                 let workspace_base = folder.unwrap_or_else(|| workspace_root.clone());
                 prompter.set_folder(agent_id, workspace_base.clone());

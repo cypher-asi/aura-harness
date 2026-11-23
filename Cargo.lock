@@ -439,6 +439,7 @@ dependencies = [
  "chrono",
  "dirs",
  "flate2",
+ "futures-util",
  "hex",
  "reqwest",
  "rustix 1.1.3",

@@ -76,6 +76,7 @@ use aura_ui_terminal::events::{
     run_order, BenchDoing, BenchLiveRun, BenchTaskSetup, ProcessStatus,
 };
 use aura_ui_terminal::{ApprovalLevel, PermissionMode, UiCommand};
+use futures_util::stream::{self, StreamExt};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1716,7 +1717,9 @@ async fn run_prompt(
 
 /// Have the judge compare each run of arm A with arm B's run of the same
 /// number, through the comparison's own kernel, and rate each against
-/// what the user kept when the work is a replayed session.
+/// what the user kept when the work is a replayed session. As many pairs
+/// are judged at once as runs may work at once, and the judgments keep
+/// the pairs' order.
 async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<CompareJudgment> {
     let ended: Vec<EndedRun> = ran
         .iter()
@@ -1726,30 +1729,49 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
             errored: r.run.error.is_some(),
         })
         .collect();
-    let pairs: Vec<(&Ran, &Ran)> = judge_pairs(&ended, !ctx.plan.examples.is_empty())
-        .into_iter()
-        .map(|(a, b)| (&ran[a], &ran[b]))
-        .collect();
+    let pairs = judge_pairs(&ended, !ctx.plan.examples.is_empty());
     if pairs.is_empty() || ctx.plan.judge.is_empty() {
         return Vec::new();
     }
-    let auth_token = ctx.hub.turn(None, &ctx.plan.workspace).0.auth_token;
-    let seed = seed(ctx.host.agent_id());
-    let shared_task = judge_task(&ctx.plan.prompts);
-    let reference = ctx.plan.source.reference().map(|r| blind::Attempt {
-        diff: r.diff.clone(),
-        reply: r.reply.clone(),
-    });
-    let attempt = |r: &Ran| blind::Attempt {
-        diff: r.patch.clone(),
-        reply: r.reply.clone(),
+    let judging = Judging {
+        ctx,
+        session,
+        auth_token: ctx.hub.turn(None, &ctx.plan.workspace).0.auth_token,
+        seed: seed(ctx.host.agent_id()),
+        shared_task: judge_task(&ctx.plan.prompts),
+        reference: ctx.plan.source.reference().map(|r| blind::Attempt {
+            diff: r.diff.clone(),
+            reply: r.reply.clone(),
+        }),
     };
-    let mut judgments = Vec::with_capacity(pairs.len());
-    for (i, (a, b)) in pairs.into_iter().enumerate() {
-        if ctx.cancel.is_cancelled() {
-            break;
+    stream::iter(pairs.into_iter().enumerate())
+        .map(|(i, (a, b))| judging.judge(i, (&ran[a], &ran[b])))
+        .buffered(ctx.plan.concurrency.max(1))
+        .filter_map(std::future::ready)
+        .collect()
+        .await
+}
+
+/// What the judge is given for every pair of a comparison.
+struct Judging<'a> {
+    ctx: &'a Context,
+    session: &'a AgentSession,
+    auth_token: Option<String>,
+    seed: u64,
+    /// The task of the runs that are not of an example task
+    shared_task: String,
+    /// What the user kept, when the work is a replayed session
+    reference: Option<blind::Attempt>,
+}
+
+impl Judging<'_> {
+    /// The judge's verdict on the `i`th pair, `(a, b)`; `None` when the
+    /// comparison was cancelled before the judge was asked.
+    async fn judge(&self, i: usize, (a, b): (&Ran, &Ran)) -> Option<CompareJudgment> {
+        if self.ctx.cancel.is_cancelled() {
+            return None;
         }
-        let a_first = blind::a_first(seed, i);
+        let a_first = blind::a_first(self.seed, i);
         let mut judgment = CompareJudgment {
             a_run: a.run.name.clone(),
             b_run: b.run.name.clone(),
@@ -1758,43 +1780,18 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
             parsed: false,
             a_vs_reference: None,
             b_vs_reference: None,
-            model: ctx.plan.judge.clone(),
+            model: self.ctx.plan.judge.clone(),
             cost_usd: 0.0,
             reasoning: String::new(),
         };
-        let task = ctx
-            .plan
-            .example(a.order.0)
-            .map_or_else(|| shared_task.clone(), |task| judge_task(&task.prompts));
-        let request = blind::request(
-            &ctx.plan.judge,
-            &task,
-            (&attempt(a), &attempt(b)),
-            a_first,
-            reference.as_ref(),
-            auth_token.clone(),
-        );
-        let reply = match request {
-            Ok(request) => {
-                match tokio::time::timeout(JUDGE_TIMEOUT, session.kernel.reason(request)).await {
-                    Ok(Ok(result)) => {
-                        judgment.cost_usd =
-                            list_price(&ctx.plan.judge, &result.response.usage).unwrap_or(0.0);
-                        Ok(blind::reply_text(&result.response))
-                    }
-                    Ok(Err(e)) => Err(format!("judge call failed: {e}")),
-                    Err(_) => Err("judge call timed out".to_string()),
-                }
-            }
-            Err(e) => Err(format!("judge request: {e}")),
-        };
-        match reply {
-            Ok(text) => {
+        match self.ask((a, b), a_first).await {
+            Ok((text, cost_usd)) => {
+                judgment.cost_usd = cost_usd;
                 if let Some(verdict) = blind::parse(&text) {
                     judgment.parsed = true;
                     judgment.winner = blind::winner(verdict, a_first);
                 }
-                if reference.is_some() {
+                if self.reference.is_some() {
                     (judgment.a_vs_reference, judgment.b_vs_reference) =
                         blind::reference_verdicts(&text, a_first);
                 }
@@ -1806,9 +1803,44 @@ async fn judge_all(ctx: &Context, session: &AgentSession, ran: &[Ran]) -> Vec<Co
                 judgment.reasoning = problem;
             }
         }
-        judgments.push(judgment);
+        Some(judgment)
     }
-    judgments
+
+    /// The judge's reply on `(a, b)`, shown `a` first when `a_first`, and
+    /// what it cost; else why there is none.
+    async fn ask(&self, (a, b): (&Ran, &Ran), a_first: bool) -> Result<(String, f64), String> {
+        let plan = &self.ctx.plan;
+        let task = plan
+            .example(a.order.0)
+            .map_or(Cow::Borrowed(self.shared_task.as_str()), |task| {
+                Cow::Owned(judge_task(&task.prompts))
+            });
+        let request = blind::request(
+            &plan.judge,
+            &task,
+            (&attempt(a), &attempt(b)),
+            a_first,
+            self.reference.as_ref(),
+            self.auth_token.clone(),
+        )
+        .map_err(|e| format!("judge request: {e}"))?;
+        match tokio::time::timeout(JUDGE_TIMEOUT, self.session.kernel.reason(request)).await {
+            Ok(Ok(result)) => Ok((
+                blind::reply_text(&result.response),
+                list_price(&plan.judge, &result.response.usage).unwrap_or(0.0),
+            )),
+            Ok(Err(e)) => Err(format!("judge call failed: {e}")),
+            Err(_) => Err("judge call timed out".to_string()),
+        }
+    }
+}
+
+/// Run `r` as the judge is shown it.
+fn attempt(r: &Ran) -> blind::Attempt {
+    blind::Attempt {
+        diff: r.patch.clone(),
+        reply: r.reply.clone(),
+    }
 }
 
 /// Remove the copies of `payload`'s runs and the folder they were in.
