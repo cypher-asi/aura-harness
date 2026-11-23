@@ -239,6 +239,34 @@ impl EvalResult {
             gate.tokens.iter().map(|m| m.cost_usd).sum()
         })
     }
+
+    /// Model calls under Gate with no known list price, which
+    /// [`Self::cost_usd`] leaves out.
+    #[must_use]
+    pub fn unpriced_calls(&self) -> u32 {
+        self.gate
+            .as_ref()
+            .map_or(0, |gate| gate.tokens.iter().map(|m| m.unpriced_calls).sum())
+    }
+}
+
+/// `cost_usd` to four places, `+?` after it when `unpriced` calls had no
+/// known price, or `unknown` when nothing priced cost anything.
+fn amount(cost_usd: f64, unpriced: u32) -> String {
+    match unpriced {
+        0 => format!("{cost_usd:.4}"),
+        _ if cost_usd > 0.0 => format!("{cost_usd:.4}+?"),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// [`amount`] in dollars.
+fn dollars(cost_usd: f64, unpriced: u32) -> String {
+    match unpriced {
+        0 => format!("${cost_usd:.4}"),
+        _ if cost_usd > 0.0 => format!("${cost_usd:.4}+?"),
+        _ => "unknown cost".to_string(),
+    }
 }
 
 /// Run every task `opts.repeat` times, reporting each run on stderr as it
@@ -291,10 +319,10 @@ fn progress_line(n: usize, total: usize, result: &EvalResult, spent: f64) -> Str
         .map(|gate| format!("  {}", judged_note(gate)))
         .unwrap_or_default();
     format!(
-        "[{n}/{total}] {} {} ${:.4} {:.1}s (${spent:.4} so far){routed}{judged}{}",
+        "[{n}/{total}] {} {} {} {:.1}s (${spent:.4} so far){routed}{judged}{}",
         result.task,
         if result.passed { "pass" } else { "FAIL" },
-        result.cost_usd(),
+        dollars(result.cost_usd(), result.unpriced_calls()),
         result.scorecard.wall_ms as f64 / 1000.0,
         result
             .error
@@ -323,11 +351,18 @@ fn judged_note(gate: &GateUse) -> String {
             )
         })
         .collect();
-    format!(
-        "judge: {} (${:.4} of the cost)",
-        found.join(", "),
-        gate.judge_cost_usd()
-    )
+    let cost = judge_cost(gate.judge_cost_usd(), gate.judge_unpriced_calls());
+    format!("judge: {} ({cost} of the cost)", found.join(", "))
+}
+
+/// What the judge's calls cost: `$0.0123`; `$0.0123+?` when `unpriced`
+/// of them had no known price, and `an unknown amount` when none had one.
+fn judge_cost(cost_usd: f64, unpriced: usize) -> String {
+    match unpriced {
+        0 => format!("${cost_usd:.4}"),
+        _ if cost_usd > 0.0 => format!("${cost_usd:.4}+?"),
+        _ => "an unknown amount".to_string(),
+    }
 }
 
 /// Category of each task id (`<suite>/<task>`) in `tasks`.
@@ -506,12 +541,12 @@ pub fn results_table(results: &[EvalResult]) -> String {
     for r in results {
         let _ = writeln!(
             out,
-            "{:<24} {:<6} {:>9} {:>6} {:>9.4} {:>8.1}  {}{}",
+            "{:<24} {:<6} {:>9} {:>6} {:>9} {:>8.1}  {}{}",
             r.task,
             if r.passed { "pass" } else { "FAIL" },
             r.scorecard.total_tokens(),
             r.scorecard.model_calls,
-            r.cost_usd(),
+            amount(r.cost_usd(), r.unpriced_calls()),
             r.scorecard.wall_ms as f64 / 1000.0,
             r.run_id,
             r.error
@@ -537,7 +572,19 @@ pub fn results_table(results: &[EvalResult]) -> String {
     }
     let passed = results.iter().filter(|r| r.passed).count();
     let cost: f64 = results.iter().map(EvalResult::cost_usd).sum();
-    let _ = writeln!(out, "{passed}/{} passed, ${cost:.4}", results.len());
+    let unpriced: u32 = results.iter().map(EvalResult::unpriced_calls).sum();
+    let _ = writeln!(
+        out,
+        "{passed}/{} passed, {}",
+        results.len(),
+        dollars(cost, unpriced)
+    );
+    if unpriced > 0 {
+        let _ = writeln!(
+            out,
+            "+? {unpriced} model call(s) have no known list price and are not in the cost"
+        );
+    }
     let judged: Vec<&aura_gate::live::Judged> = results
         .iter()
         .filter_map(|r| r.gate.as_ref())
@@ -545,10 +592,12 @@ pub fn results_table(results: &[EvalResult]) -> String {
         .collect();
     if !judged.is_empty() {
         let at_fault = judged.iter().filter(|j| j.verdict.at_fault).count();
-        let cost: f64 = judged.iter().map(|j| j.cost_usd).sum();
+        let cost: f64 = judged.iter().filter_map(|j| j.cost_usd).sum();
+        let unpriced = judged.iter().filter(|j| j.cost_usd.is_none()).count();
+        let cost = judge_cost(cost, unpriced);
         let _ = writeln!(
             out,
-            "judge: reviewed {} failed turn(s), {at_fault} the model's fault, ${cost:.4} of the cost spent on learning from them",
+            "judge: reviewed {} failed turn(s), {at_fault} the model's fault, {cost} of the cost spent on learning from them",
             judged.len()
         );
     }
@@ -800,5 +849,23 @@ fn rate(passed: usize, total: usize) -> f64 {
         0.0
     } else {
         passed as f64 / total as f64
+    }
+}
+
+#[cfg(test)]
+mod cost_tests {
+    use super::{amount, dollars, judge_cost};
+
+    #[test]
+    fn eval_costs_say_when_some_prices_are_unknown() {
+        assert_eq!(amount(0.12, 0), "0.1200");
+        assert_eq!(amount(0.12, 3), "0.1200+?");
+        assert_eq!(amount(0.0, 3), "unknown");
+        assert_eq!(dollars(0.12, 0), "$0.1200");
+        assert_eq!(dollars(0.12, 1), "$0.1200+?");
+        assert_eq!(dollars(0.0, 1), "unknown cost");
+        assert_eq!(judge_cost(0.02, 0), "$0.0200");
+        assert_eq!(judge_cost(0.02, 1), "$0.0200+?");
+        assert_eq!(judge_cost(0.0, 1), "an unknown amount");
     }
 }

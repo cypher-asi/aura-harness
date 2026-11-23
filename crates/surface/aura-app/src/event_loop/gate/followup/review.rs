@@ -30,8 +30,9 @@ pub(crate) struct Reviewed {
     pub answer: Answer,
     /// What it found
     pub findings: String,
-    /// List-price cost of the review in USD
-    pub cost_usd: f64,
+    /// List-price cost of the review in USD; `None` when the reviewer's
+    /// price is unknown
+    pub cost_usd: Option<f64>,
     /// Whether Gate acts on the answer
     pub act: bool,
     /// The acceptance criteria it was held to, each with what it found
@@ -68,9 +69,9 @@ impl Reviewed {
             Answer::Other => format!("{model}'s work was held up by something outside it.\n{findings}"),
         };
         format!(
-            "Gate's review ({}, ${:.4}{}): {}",
+            "Gate's review ({}, {}{}): {}",
             route_label(&self.judge),
-            self.cost_usd,
+            live::cost_text(self.cost_usd),
             tally(&self.checked),
             found.trim_end()
         )
@@ -131,7 +132,7 @@ impl FollowUp {
         let request = self.review_request(judge, shown, criteria, auth_token);
         let (answer, findings, cost_usd) =
             live::ask_review(&session.kernel, judge, request).await?;
-        info!(%judge, %model, ?answer, cost_usd, act = shown.act, "The judge reviewed work about to stand");
+        info!(%judge, %model, ?answer, cost_usd = ?cost_usd, act = shown.act, "The judge reviewed work about to stand");
         let reviewed = Reviewed {
             model: model.to_string(),
             judge: judge.to_string(),

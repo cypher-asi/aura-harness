@@ -35,6 +35,20 @@ pub enum ModelCallPurpose {
     Title,
 }
 
+impl ModelCallPurpose {
+    /// The purpose as the call's record entry names it: `classify`,
+    /// `criteria`, `judge` or `title`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Classify => "classify",
+            Self::Criteria => "criteria",
+            Self::Judge => "judge",
+            Self::Title => "title",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ModelRequestMetadata {
     pub kind: Option<ModelRequestKind>,

@@ -1,13 +1,14 @@
 {
   "id": "01a20707d7e60003",
   "title": "Workspace: /home/n3o/code/aura-harness (Rust). Follow .cursor/rules.md (no unwrap/expect in prod, clippy -D warnings, r…",
-  "state": "running",
+  "state": "completed",
   "agent_id": "4fba18dfb60fc0444a81038fc413f2156d3535102f22e689d452c233d504716b",
   "agent_name": "rust-engineer #86",
   "assignee": "rust-engineer",
   "parent": "01a2070741a90000",
   "items": [],
-  "updated_ms": 1795414284262,
+  "summary": "A total that was only partly priced now shows as `$x+?` in the HUD, the reply footer and the replayed-session baseline, instead of looking complete. The \"vs session\" ratio is hidden whenever the baseline is incomplete. fmt, clippy and the tests all pass.",
+  "updated_ms": 1795415555132,
   "created_ms": 1795414284262,
   "tool_use_id": "toolu_011ApbqLjVA5GwYvkczGxGWJ"
 }

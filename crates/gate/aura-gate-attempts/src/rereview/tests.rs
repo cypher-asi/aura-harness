@@ -248,7 +248,11 @@ fn the_reviewer_is_shown_what_the_run_left_and_its_review_is_a_line_of_the_log()
          shell_edit no_test_changed"
     );
 
-    let answered = (Answer::Model, "1. Negative input is not rejected.", 0.05);
+    let answered = (
+        Answer::Model,
+        "1. Negative input is not rejected.",
+        Some(0.05),
+    );
     let Line::Review(review) = ready.review(OPUS, ReviewVariant::Plain, answered, 9) else {
         panic!("a review is a review line");
     };
@@ -278,7 +282,7 @@ fn a_reply_is_an_answer_and_one_without_a_verdict_says_why() {
     let answered = Asked::of(&ready, OPUS, &reply);
     assert!(
         matches!(&answered.answer, Ok((Answer::Model, findings, cost))
-            if findings.contains("Negative input") && *cost > 0.0),
+            if findings.contains("Negative input") && cost.is_some_and(|c| c > 0.0)),
         "{answered:?}"
     );
     assert_eq!((answered.unreached(), answered.wasted_usd), (None, 0.0));
@@ -316,21 +320,25 @@ fn four_reviews() -> [Asked; 4] {
         asked(
             "Compare #22 a-6",
             false,
-            Ok((Answer::Model, findings.to_string(), 0.0123)),
+            Ok((Answer::Model, findings.to_string(), Some(0.0123))),
             0.0,
             ", criteria 1/2 met, 1 unmet",
         ),
         asked(
             "Compare #22 b-6",
             true,
-            Ok((Answer::Ok, "Every requirement is met.".to_string(), 0.02)),
+            Ok((
+                Answer::Ok,
+                "Every requirement is met.".to_string(),
+                Some(0.02),
+            )),
             0.0,
             "",
         ),
         asked(
             "Compare #23 a-1",
             true,
-            Ok((Answer::Other, String::new(), 0.004)),
+            Ok((Answer::Other, String::new(), Some(0.004))),
             0.0,
             "",
         ),
@@ -362,5 +370,27 @@ fn each_review_is_a_row_and_the_reviews_are_tallied() {
         "3 reviews answered, 1 not, $0.04 at list price\n\
          wrong work: 1 of 1 found unfinished\n\
          right work: 0 of 2 found unfinished"
+    );
+}
+
+#[test]
+fn a_reviewer_with_no_known_price_is_not_counted_as_free() {
+    let ready = prepared();
+    let reply = response("1. Negative input.\nVERDICT: MODEL", StopReason::EndTurn);
+    let unpriced = Asked::of(&ready, "mystery-reviewer", &reply);
+    assert!(
+        matches!(&unpriced.answer, Ok((Answer::Model, _, None))),
+        "{unpriced:?}"
+    );
+    assert!(
+        unpriced.row().contains("price unknown"),
+        "{}",
+        unpriced.row()
+    );
+    let priced = Asked::of(&ready, OPUS, &reply);
+    let summary = tally(&[priced, unpriced]);
+    assert!(
+        summary.contains("+? at list price (some prices unknown)"),
+        "{summary}"
     );
 }

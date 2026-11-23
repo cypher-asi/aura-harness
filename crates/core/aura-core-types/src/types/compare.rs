@@ -217,11 +217,18 @@ fn parse_difficulty_models(body: &str) -> Result<[String; 3], String> {
     ])
 }
 
-/// Tokens and list-price cost one model used in a run.
+/// Tokens and list-price cost one model used in a run, for the run's
+/// own work or for one purpose beside it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelTokens {
     /// Model as the provider named it.
     pub model: String,
+    /// What the calls were made for beside the run's own work
+    /// (`classify`, `criteria`, `judge`, `title`); `None` for the work
+    /// itself, and for every call in records written before calls were
+    /// told apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
     /// Model calls.
     pub calls: u32,
     /// Prompt tokens, cached ones included.
@@ -381,7 +388,7 @@ pub struct CompareRun {
     /// classifier, and the subtasks they dispatched. Calls with no known
     /// price are left out and counted in `tokens`.
     pub cost_usd: f64,
-    /// Tokens and cost per model, most expensive first.
+    /// Tokens and cost per model and purpose, most expensive first.
     pub tokens: Vec<ModelTokens>,
     /// Each prompt's turn, in order; empty in older records.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -492,8 +499,25 @@ pub struct SessionBaseline {
     pub cost_usd: f64,
     /// Whether any call had a price.
     pub priced: bool,
+    /// Calls with no known price, which `cost_usd` leaves out. 0 in
+    /// baselines saved before it was kept.
+    #[serde(default)]
+    pub unpriced_calls: u32,
     /// Models the calls went to, first use first.
     pub models: Vec<String>,
+}
+
+impl SessionBaseline {
+    /// What the session cost when every call had a price; `None` when
+    /// some or all had none, so it cannot be set against another cost.
+    #[must_use]
+    pub const fn known_cost_usd(&self) -> Option<f64> {
+        if self.priced && self.unpriced_calls == 0 {
+            Some(self.cost_usd)
+        } else {
+            None
+        }
+    }
 }
 
 /// What the user kept from a replayed session, for the judge to measure
@@ -979,6 +1003,38 @@ mod tests {
     }
 
     #[test]
+    fn a_purpose_round_trips_and_older_tokens_load_as_the_work() {
+        let criteria = ModelTokens {
+            model: "openai/gpt-6.1-terra".to_string(),
+            purpose: Some("criteria".to_string()),
+            calls: 3,
+            ..ModelTokens::default()
+        };
+        let json = serde_json::to_value(&criteria).unwrap();
+        assert_eq!(json["purpose"], "criteria");
+        let back: ModelTokens = serde_json::from_value(json).unwrap();
+        assert_eq!(back, criteria);
+
+        let work = ModelTokens {
+            purpose: None,
+            ..criteria
+        };
+        let json = serde_json::to_value(&work).unwrap();
+        assert!(json.get("purpose").is_none(), "the work's row has none");
+        let older = serde_json::json!({
+            "model": "claude-sonnet-5-5",
+            "calls": 2,
+            "input_tokens": 10,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "output_tokens": 5,
+            "cost_usd": 0.01
+        });
+        let older: ModelTokens = serde_json::from_value(older).unwrap();
+        assert_eq!(older.purpose, None);
+    }
+
+    #[test]
     fn a_run_counts_the_unpriced_calls_of_its_models() {
         let mut payload = payload();
         let run = &mut payload.runs[0];
@@ -1062,6 +1118,7 @@ mod tests {
                 calls: 4,
                 cost_usd: 0.8,
                 priced: true,
+                unpriced_calls: 1,
                 models: vec!["opus".to_string()],
             },
             reference: Some(Reference {
@@ -1074,11 +1131,27 @@ mod tests {
         let back = ComparePayload::from_bytes(&payload.to_bytes()).unwrap();
         assert_eq!(back, payload);
         assert_eq!(back.source.reference().unwrap().reply, "done");
-        assert!((back.source.baseline().unwrap().cost_usd - 0.8).abs() < 1e-9);
+        let baseline = back.source.baseline().unwrap();
+        assert!((baseline.cost_usd - 0.8).abs() < 1e-9);
+        assert_eq!(baseline.unpriced_calls, 1);
+        assert_eq!(baseline.known_cost_usd(), None, "partly priced");
         assert_eq!(
             back.judgments[0].vs_reference(CompareArm::B),
             Some(RefVerdict::Worse)
         );
+    }
+
+    #[test]
+    fn a_baseline_saved_before_unpriced_calls_were_kept_loads() {
+        let old = r#"{"calls":3,"cost_usd":0.5,"priced":true,"models":["opus"]}"#;
+        let baseline: SessionBaseline = serde_json::from_str(old).unwrap();
+        assert_eq!(baseline.unpriced_calls, 0);
+        assert_eq!(baseline.known_cost_usd(), Some(0.5));
+        let unpriced = SessionBaseline {
+            priced: false,
+            ..baseline
+        };
+        assert_eq!(unpriced.known_cost_usd(), None);
     }
 
     #[test]

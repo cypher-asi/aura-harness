@@ -309,5 +309,17 @@ pub fn format_cost(usd: f64) -> String {
     }
 }
 
+/// A total of calls of which `unpriced_calls` had no known price:
+/// [`format_cost`] of `usd` when every call had one, `$0.042+?` when
+/// some had none, and `None` when none had one (`usd` is `None`).
+pub fn format_partial_cost(usd: Option<f64>, unpriced_calls: u32) -> Option<String> {
+    let cost = format_cost(usd?);
+    Some(if unpriced_calls == 0 {
+        cost
+    } else {
+        cost + crate::benchmarks::UNPRICED_MARK
+    })
+}
+
 #[cfg(test)]
 mod tests;

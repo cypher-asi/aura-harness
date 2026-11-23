@@ -26,8 +26,8 @@ mod runtime;
 mod table;
 
 pub use ask::{
-    ask_review, classify_prompt, hold_to_criteria, judge_failed, judge_for, judge_unverified,
-    reviewer_for, verdict_judge_for, worker_note_for, Judged,
+    ask_review, classify_prompt, cost_text, hold_to_criteria, judge_failed, judge_for,
+    judge_unverified, reviewer_for, verdict_judge_for, worker_note_for, Judged,
 };
 pub use attempts::{copy_at, evidence, evidence_of, sent_text, RunOf, SavedSessions};
 pub use record::{last_turn, note_retry, note_rewind, record, LastTurn};

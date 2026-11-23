@@ -1,7 +1,7 @@
 {
   "id": "01a206cbb2e60018",
   "title": "Workspace: /home/n3o/code/aura-harness (Rust). Follow .cursor/rules.md (no unwrap in prod, clippy -D warnings, rustfmt,…",
-  "state": "running",
+  "state": "open",
   "agent_id": "f935c59ca60d5b47ebd212c0f37d1863a527d74e7ff6596b47a166bf37b8b960",
   "agent_name": "rust-engineer #82",
   "assignee": "rust-engineer",

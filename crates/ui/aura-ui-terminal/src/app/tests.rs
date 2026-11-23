@@ -2338,6 +2338,7 @@ fn test_reply_model_sets_the_turn_so_far_on_replies_since_last_user_message() {
         usage: Some(CallUsage {
             tokens: 900,
             cost_usd: None,
+            unpriced_calls: 0,
         }),
         sources: Vec::new(),
     });
@@ -2346,6 +2347,7 @@ fn test_reply_model_sets_the_turn_so_far_on_replies_since_last_user_message() {
     let opus = CallUsage {
         tokens: 12_400,
         cost_usd: Some(0.042),
+        unpriced_calls: 0,
     };
     app.process_command(UiCommand::SetReplyModel {
         model: "qwen3:4b · claude-opus-4-7".to_string(),

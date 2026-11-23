@@ -59,6 +59,17 @@ pub(crate) struct UsageReport {
     pub cache_hit_rate: Option<f64>,
     /// Estimated at API list prices; `None` when no call had a price
     pub cost_usd: Option<f64>,
+    /// Calls with no known price, which `cost_usd` leaves out; left out
+    /// of the output when every call had one (local models are free)
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unpriced_calls: u32,
+}
+
+/// Whether a count is 0, so the output leaves it out as it did before
+/// unpriced calls were counted.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
+const fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl From<&SessionUsage> for UsageReport {
@@ -73,6 +84,7 @@ impl From<&SessionUsage> for UsageReport {
             output_tokens: usage.output_tokens,
             cache_hit_rate: (prompt > 0).then(|| usage.cache_read_tokens as f64 / prompt as f64),
             cost_usd: usage.priced.then_some(usage.cost_usd),
+            unpriced_calls: usage.unpriced_calls,
         }
     }
 }
@@ -190,6 +202,11 @@ pub(crate) enum StreamEvent<'a> {
         cache_write_tokens: u64,
         output_tokens: u64,
         cost_usd: Option<f64>,
+        /// Whether the model has no known price, so `cost_usd` is `null`
+        /// for that reason rather than because the model is local; left
+        /// out when it has one
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        unpriced: bool,
     },
     /// Older history was summarized.
     Compacted {
@@ -212,8 +229,8 @@ pub(crate) enum StreamEvent<'a> {
         /// Whether the model's own work caused the failure
         at_fault: bool,
         reasons: &'a str,
-        /// What the judge's call cost
-        cost_usd: f64,
+        /// What the judge's call cost; `null` when its price is unknown
+        cost_usd: Option<f64>,
     },
     /// Gate ran the project's tests on a turn that checked nothing.
     Checked {
@@ -344,6 +361,7 @@ mod tests {
             output_tokens: 50,
             cost_usd: 0.01,
             priced: true,
+            unpriced_calls: 0,
             context_tokens: 0,
             models: Vec::new(),
         };
@@ -354,6 +372,41 @@ mod tests {
             UsageReport::from(&SessionUsage::default()).cache_hit_rate,
             None
         );
+    }
+
+    #[test]
+    fn a_partly_priced_run_counts_its_unpriced_calls_and_a_priced_one_reads_as_before() {
+        let usage = SessionUsage {
+            calls: 3,
+            cost_usd: 0.01,
+            priced: true,
+            unpriced_calls: 2,
+            ..SessionUsage::default()
+        };
+        let partly = serde_json::to_value(UsageReport::from(&usage)).unwrap();
+        assert_eq!(partly["cost_usd"], 0.01);
+        assert_eq!(partly["unpriced_calls"], 2);
+        let priced = SessionUsage {
+            unpriced_calls: 0,
+            ..usage
+        };
+        let priced = serde_json::to_value(UsageReport::from(&priced)).unwrap();
+        assert!(priced.get("unpriced_calls").is_none(), "{priced}");
+
+        let event = |unpriced| {
+            serde_json::to_value(StreamEvent::Usage {
+                model: "glm-9",
+                input_tokens: 1,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                output_tokens: 1,
+                cost_usd: None,
+                unpriced,
+            })
+            .unwrap()
+        };
+        assert_eq!(event(true)["unpriced"], true);
+        assert!(event(false).get("unpriced").is_none());
     }
 
     #[test]

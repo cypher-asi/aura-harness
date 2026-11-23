@@ -9,7 +9,7 @@ use aura_agent_kernel::Kernel;
 use aura_core_types::{OutcomePayload, OutcomeSignal};
 use aura_gate_judge::turn::{self, Answer, Failed, Unverified, Verdict};
 use aura_gate_route::Candidate;
-use aura_model::model_catalog::{estimate_cost_usd, infer_tier, route_label, ModelTier};
+use aura_model::model_catalog::{infer_tier, route_label, ModelTier};
 use aura_model::{ModelRequest, ReasonerError};
 use std::time::Duration;
 use tracing::{info, warn};
@@ -30,13 +30,20 @@ pub struct Judged {
     /// Model that judged it
     pub judge: String,
     pub verdict: Verdict,
-    /// List-price cost of the judge's call in USD; 0 when the price is
-    /// unknown. Not part of the work's own cost: it is what Gate pays to
-    /// learn from the failure.
-    pub cost_usd: f64,
+    /// List-price cost of the judge's call in USD; `None` when the
+    /// judge's price is unknown. Not part of the work's own cost: it is
+    /// what Gate pays to learn from the failure.
+    pub cost_usd: Option<f64>,
     /// Whether the work ran no check and was judged for looking wrong
     /// rather than for failing.
     pub unverified: bool,
+}
+
+/// A judge's call cost for a one-line note: `$0.0123`, or `price
+/// unknown` when the judge has no known list price.
+#[must_use]
+pub fn cost_text(cost_usd: Option<f64>) -> String {
+    cost_usd.map_or_else(|| "price unknown".to_string(), |usd| format!("${usd:.4}"))
 }
 
 impl Judged {
@@ -51,9 +58,9 @@ impl Judged {
         };
         let reasons = self.verdict.reasons.trim();
         format!(
-            "Gate's judge ({}, ${:.4}): {found}{}",
+            "Gate's judge ({}, {}): {found}{}",
             route_label(&self.judge),
-            self.cost_usd,
+            cost_text(self.cost_usd),
             if reasons.is_empty() {
                 String::new()
             } else {
@@ -105,7 +112,7 @@ pub async fn judge_failed(
     } else {
         OutcomeSignal::JudgedExcused
     };
-    info!(%judge, model = %ended.model, %signal, cost_usd = judged.cost_usd, "The judge reviewed failed work");
+    info!(%judge, model = %ended.model, %signal, cost_usd = ?judged.cost_usd, "The judge reviewed failed work");
     let outcome = ended.with_signal(signal);
     record(kernel, kernel.agent_id, &outcome).await;
     Some((outcome, judged))
@@ -165,7 +172,7 @@ pub async fn judge_unverified(
     let request = turn::unverified_request(judge, unverified, auth_token);
     let (answer, judged) = ask_judge(kernel, judge, model, request, true).await?;
     let signal = answer.verdict();
-    info!(%judge, %model, %signal, cost_usd = judged.cost_usd, "The judge gave its verdict on unchecked work");
+    info!(%judge, %model, %signal, cost_usd = ?judged.cost_usd, "The judge gave its verdict on unchecked work");
     Some((signal, judged))
 }
 
@@ -195,14 +202,15 @@ async fn ask_judge(
 
 /// Send `request`, a review of work about to stand
 /// ([`turn::review_request`]), to `judge` through `kernel`. Returns its
-/// answer, what it found and the list-price cost of the call; `None` when
+/// answer, what it found and the list-price cost of the call (`None` in
+/// the cost when the judge's price is unknown); `None` when
 /// the request could not be built, the call failed or timed out, or the
 /// reply held no verdict. Nothing is recorded.
 pub async fn ask_review(
     kernel: &Kernel,
     judge: &str,
     request: Result<ModelRequest, ReasonerError>,
-) -> Option<(Answer, String, f64)> {
+) -> Option<(Answer, String, Option<f64>)> {
     ask(kernel, judge, request, REVIEW_TIMEOUT).await
 }
 
@@ -211,7 +219,7 @@ async fn ask(
     judge: &str,
     request: Result<ModelRequest, ReasonerError>,
     within: Duration,
-) -> Option<(Answer, String, f64)> {
+) -> Option<(Answer, String, Option<f64>)> {
     let request = match request {
         Ok(request) => request,
         Err(e) => {
@@ -234,6 +242,36 @@ async fn ask(
         warn!(%judge, "The judge gave no verdict");
         return None;
     };
-    let cost_usd = estimate_cost_usd(judge, &response.usage).unwrap_or(0.0);
+    // Local judges cost nothing; an unknown price stays unknown rather
+    // than reading as free.
+    let cost_usd = aura_gate_compare::list_price(judge, &response.usage);
     Some((answer, reasons, cost_usd))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn judged(cost_usd: Option<f64>) -> Judged {
+        Judged {
+            model: "claude/claude-haiku-4-5".to_string(),
+            judge: "claude/claude-opus-4-7".to_string(),
+            verdict: Verdict {
+                at_fault: true,
+                reasons: String::new(),
+            },
+            cost_usd,
+            unverified: false,
+        }
+    }
+
+    #[test]
+    fn a_judge_with_no_known_price_is_not_shown_as_free() {
+        assert_eq!(cost_text(Some(0.0123)), "$0.0123");
+        assert_eq!(cost_text(None), "price unknown");
+        assert!(judged(Some(0.0123)).describe().contains(", $0.0123): "));
+        let unknown = judged(None).describe();
+        assert!(unknown.contains(", price unknown): "), "{unknown}");
+        assert!(!unknown.contains("$0"), "{unknown}");
+    }
 }

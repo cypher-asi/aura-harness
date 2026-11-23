@@ -349,7 +349,7 @@ fn call_tokens(payload: &Value) -> Usage {
 
 /// The call `tx` records, when it is a model call that got an answer:
 /// the model that answered, the id it was asked for (when the record
-/// kept it) and its tokens.
+/// kept it), what it was made for and its tokens.
 pub(crate) fn model_call(tx: &Transaction) -> Option<ModelCall> {
     if tx.tx_type != TransactionType::Reasoning {
         return None;
@@ -358,6 +358,7 @@ pub(crate) fn model_call(tx: &Transaction) -> Option<ModelCall> {
     Some(ModelCall {
         model: reasoning_model(&payload)?,
         route: recorded_model(&payload, "route"),
+        purpose: recorded_purpose(&payload),
         usage: call_tokens(&payload),
     })
 }
@@ -368,7 +369,13 @@ pub(crate) fn call_purpose(tx: &Transaction) -> Option<ModelCallPurpose> {
     if tx.tx_type != TransactionType::Reasoning {
         return None;
     }
-    json_payload(tx)?
+    recorded_purpose(&json_payload(tx)?)
+}
+
+/// The purpose a `Reasoning` payload names, unless it names none this
+/// build knows.
+fn recorded_purpose(payload: &Value) -> Option<ModelCallPurpose> {
+    payload
         .get("purpose")
         .cloned()
         .and_then(|purpose| serde_json::from_value(purpose).ok())

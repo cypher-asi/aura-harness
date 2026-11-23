@@ -973,6 +973,9 @@ pub struct SourceUsage {
     /// Estimated cost of those calls at list prices; `None` when none was priced
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Calls with no known price, which `cost_usd` leaves out
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unpriced_calls: u32,
 }
 
 /// Tokens model calls used and what they cost.
@@ -983,6 +986,16 @@ pub struct CallUsage {
     /// Estimated cost at API list prices; `None` for local or unpriced models
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Calls with no known price, which `cost_usd` leaves out. Local
+    /// models are free, not unpriced.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unpriced_calls: u32,
+}
+
+/// Whether a count is 0, so it is left out when serialized.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
+const fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// Tokens and cost of one model call, for the session totals.
@@ -1000,6 +1013,9 @@ pub struct CallStats {
     pub output_tokens: u64,
     /// Estimated cost at API list prices; `None` for local or unpriced models
     pub cost_usd: Option<f64>,
+    /// Whether the model has no known price, so `cost_usd` leaves the
+    /// call out. Local models are free, not unpriced.
+    pub unpriced: bool,
     /// Context window of the model, when known
     pub context_limit: Option<u64>,
 }
@@ -1027,6 +1043,8 @@ pub struct SessionTotals {
     pub output_tokens: u64,
     /// Estimated cost; `None` when no call had a price
     pub cost_usd: Option<f64>,
+    /// Calls with no known price, which `cost_usd` leaves out
+    pub unpriced_calls: u32,
     /// Prompt of the latest call
     pub context_tokens: u64,
     /// Models the calls went to, first use first

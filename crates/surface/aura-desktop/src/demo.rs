@@ -390,11 +390,13 @@ impl Demo {
             usage: Some(CallUsage {
                 tokens: 4_812,
                 cost_usd: None,
+                unpriced_calls: 0,
             }),
             sources: vec![SourceUsage {
                 label: "local".into(),
                 tokens: 4_812,
                 cost_usd: None,
+                unpriced_calls: 0,
             }],
         })
         .await;

@@ -7,9 +7,9 @@ use crate::app::benchmarks::{
     BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY,
 };
 use crate::events::{
-    arm_letter, cost_per_fix, run_order, unpriced_note, BenchArm, BenchCost, BenchDoing,
-    BenchLiveRun, BenchRun, BenchStatus, BenchTaskCell, BenchTaskSetup, BenchTokens, BenchTurn,
-    BenchVerdict, BenchView, UNPRICED_MARK,
+    arm_letter, cost_per_fix, run_order, unpriced_note, BenchArm, BenchBaseline, BenchCost,
+    BenchDoing, BenchLiveRun, BenchRun, BenchStatus, BenchTaskCell, BenchTaskSetup, BenchTokens,
+    BenchTurn, BenchVerdict, BenchView, UNPRICED_MARK,
 };
 use crate::{App, Theme};
 use ratatui::{
@@ -724,15 +724,16 @@ fn reference_mark(rating: Option<&str>) -> &'static str {
     }
 }
 
-/// An arm's tokens per model: its ended runs' `done` and what its runs
-/// under way, `live`, have used so far, most expensive first.
+/// An arm's tokens per model and purpose: its ended runs' `done` and
+/// what its runs under way, `live`, have used so far, most expensive
+/// first.
 fn tokens_so_far<'a>(
     done: &[BenchTokens],
     live: impl Iterator<Item = &'a BenchLiveRun>,
 ) -> Vec<BenchTokens> {
     let mut rows = done.to_vec();
     for t in live.flat_map(|r| &r.tokens) {
-        match rows.iter_mut().find(|row| row.model == t.model) {
+        match (rows.iter_mut()).find(|row| row.model == t.model && row.purpose == t.purpose) {
             Some(row) => {
                 row.calls += t.calls;
                 row.input_tokens += t.input_tokens;
@@ -745,6 +746,16 @@ fn tokens_so_far<'a>(
     }
     rows.sort_by(|x, y| y.cost_usd.total_cmp(&x.cost_usd));
     rows
+}
+
+/// `gpt-6.1-terra · criteria` for calls made beside the runs' own work,
+/// `sonnet-5-5` for the work's.
+fn tokens_label(t: &BenchTokens) -> String {
+    let model = short_model(&t.model);
+    match &t.purpose {
+        Some(purpose) => format!("{model} · {purpose}"),
+        None => model.to_string(),
+    }
 }
 
 /// One benchmark's numbers; `frame` lights what is under way while it
@@ -892,12 +903,13 @@ fn detail_lines(
         pair(&|arm| cost_text(arm.median_cost())),
         saving(a.median_cost(), b.median_cost()),
     );
-    if let Some(baseline) = view.baseline.as_ref().filter(|b| b.priced) {
-        add(
-            "vs session",
-            pair(&|arm| ratio(arm, baseline.cost_usd)),
-            none(),
-        );
+    // A ratio against a session some of whose calls had no known price
+    // would read as if the session were cheaper than it was.
+    let baseline_usd = (view.baseline.as_ref())
+        .and_then(BenchBaseline::cost)
+        .and_then(BenchCost::known);
+    if let Some(baseline_usd) = baseline_usd {
+        add("vs session", pair(&|arm| ratio(arm, baseline_usd)), none());
     }
     add(
         "checks",
@@ -969,11 +981,9 @@ fn detail_lines(
             "session: {} call{}, {}{}",
             baseline.calls,
             if baseline.calls == 1 { "" } else { "s" },
-            if baseline.priced {
-                money(baseline.cost_usd)
-            } else {
-                "no price".to_string()
-            },
+            baseline
+                .cost()
+                .map_or_else(|| "no price".to_string(), |cost| cost.read(money)),
             if models.is_empty() {
                 String::new()
             } else {
@@ -1106,7 +1116,7 @@ fn detail_lines(
         for (n, t) in used.iter().enumerate() {
             rows.push(Row::Cells(vec![
                 cell(if n == 0 { arm_letter(i) } else { "" }.to_string()),
-                cell(short_model(&t.model).to_string()),
+                cell(tokens_label(t)),
                 cell(t.calls.to_string()),
                 cell(tokens(t.input_tokens)),
                 cell(tokens(t.output_tokens)),
@@ -1464,9 +1474,10 @@ fn form_layout<'a>(
                         headline(&session.title, 40),
                         session.prompts,
                         if session.prompts == 1 { "" } else { "s" },
-                        session
-                            .cost_usd
-                            .map_or_else(String::new, |usd| format!(" · cost {}", money(usd))),
+                        session.cost_usd.map_or_else(String::new, |usd| {
+                            let cost = BenchCost::new(usd, session.unpriced_calls);
+                            format!(" · cost {}", cost.read(money))
+                        }),
                     ),
                 },
                 false,
@@ -1655,11 +1666,38 @@ mod tests {
                 calls: 12,
                 cost_usd: 0.20,
                 priced: true,
+                unpriced_calls: 0,
                 models: vec!["claude-opus-4-7".to_string()],
             }),
             has_reference: true,
             ..BenchView::default()
         }
+    }
+
+    #[test]
+    fn a_partly_priced_session_shows_no_ratio_and_marks_its_cost() {
+        let theme = Theme::default();
+        let mut view = view();
+        if let Some(baseline) = view.baseline.as_mut() {
+            baseline.unpriced_calls = 3;
+        }
+        let shown = text(&detail_lines(&view, Some(0), &theme, 120, None));
+        assert!(!shown.contains("vs session"), "{shown}");
+        assert!(
+            shown.contains("session: 12 calls, $0.20+? on opus-4-7"),
+            "{shown}"
+        );
+        if let Some(baseline) = view.baseline.as_mut() {
+            baseline.priced = false;
+            baseline.cost_usd = 0.0;
+            baseline.unpriced_calls = 12;
+        }
+        let shown = text(&detail_lines(&view, Some(0), &theme, 120, None));
+        assert!(!shown.contains("vs session"), "{shown}");
+        assert!(
+            shown.contains("session: 12 calls, no price on opus-4-7"),
+            "{shown}"
+        );
     }
 
     fn text(lines: &[Line<'_>]) -> String {
@@ -2053,6 +2091,7 @@ mod tests {
                 cost_usd: 0.04,
                 tokens: vec![BenchTokens {
                     model: "claude-sonnet-4-6".to_string(),
+                    purpose: None,
                     calls: 3,
                     input_tokens: 42_000,
                     output_tokens: 1_500,
@@ -2182,6 +2221,7 @@ mod tests {
     fn runs_under_way_add_to_tokens_used_so_far() {
         let token = |model: &str, cost: f64| BenchTokens {
             model: model.to_string(),
+            purpose: None,
             calls: 1,
             input_tokens: 1_000,
             output_tokens: 100,
@@ -2211,6 +2251,47 @@ mod tests {
         assert!((used[1].cost_usd - 0.3).abs() < 1e-9);
     }
 
+    #[test]
+    fn calls_beside_the_work_are_named_for_what_they_were_for() {
+        let theme = Theme::default();
+        let token = |model: &str, purpose: Option<&str>, calls, cost_usd| BenchTokens {
+            model: model.to_string(),
+            purpose: purpose.map(str::to_string),
+            calls,
+            cost_usd,
+            ..BenchTokens::default()
+        };
+        let sonnet = "claude/claude-sonnet-5-5";
+        let terra = "openrouter/openai/gpt-6.1-terra";
+        let mut view = view();
+        view.arms[0].tokens = vec![
+            token(sonnet, None, 20, 0.28),
+            token(sonnet, Some("judge"), 1, 0.02),
+            token(terra, Some("criteria"), 1, 0.01),
+        ];
+        view.live = vec![BenchLiveRun {
+            name: "a-2".to_string(),
+            tokens: vec![token(terra, Some("criteria"), 2, 0.02)],
+            ..BenchLiveRun::default()
+        }];
+        let shown = text(&detail_lines(&view, None, &theme, 120, None));
+        let calls = |label: &str| {
+            let row = (shown.lines())
+                .skip_while(|l| !l.starts_with("── tokens"))
+                .find(|l| l.contains(label))
+                .unwrap_or_else(|| panic!("no {label:?} row in\n{shown}"));
+            let (_, after) = row.split_once('│').unwrap();
+            after.split_whitespace().next().unwrap().to_string()
+        };
+        assert_eq!(calls("A  sonnet-5-5 "), "20", "the work's own row");
+        assert_eq!(calls("sonnet-5-5 · judge"), "1");
+        assert_eq!(
+            calls("gpt-6.1-terra · criteria"),
+            "3",
+            "a run under way adds to its row"
+        );
+    }
+
     /// The detail of a benchmark whose arm B ran on `glm-9`, a model with
     /// no known price: `unpriced` of the arm's `calls` calls had none and
     /// the rest cost `priced_usd`.
@@ -2230,6 +2311,7 @@ mod tests {
         }
         b.tokens = vec![BenchTokens {
             model: "openrouter/z-ai/glm-9".to_string(),
+            purpose: None,
             calls,
             input_tokens: 90_000,
             output_tokens: 4_000,
@@ -2238,6 +2320,7 @@ mod tests {
         }];
         view.arms[0].tokens = vec![BenchTokens {
             model: "claude-sonnet-4-6".to_string(),
+            purpose: None,
             calls: 4,
             input_tokens: 40_000,
             output_tokens: 2_000,

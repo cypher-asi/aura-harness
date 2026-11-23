@@ -138,7 +138,7 @@ pub(crate) fn review(prompt: &str, verdict: Answer, variant: &str) -> Review {
         verdict,
         findings: "The `int` case accepts `'1.1'`.".to_string(),
         judge: OPUS.to_string(),
-        cost_usd: 0.05,
+        cost_usd: Some(0.05),
         variant: variant.to_string(),
         criteria: Vec::new(),
         acted: false,
@@ -329,7 +329,7 @@ pub(crate) fn sample() -> Vec<Line> {
         // Sent back, by another reviewer asked another way.
         Line::Review(Review {
             judge: SONNET.to_string(),
-            cost_usd: 0.125,
+            cost_usd: Some(0.125),
             signs: vec![Flag::StaleCheck],
             acted: true,
             replayed: false,

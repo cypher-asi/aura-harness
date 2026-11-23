@@ -66,3 +66,23 @@ fn older_lines_still_read() {
     picked["source"] = "picked".into();
     assert!(serde_json::from_value::<Line>(picked).is_ok());
 }
+
+#[test]
+fn a_review_keeps_an_unknown_price_and_older_ones_read_as_priced() {
+    use crate::samples::review;
+    use aura_gate_judge::turn::Answer;
+    let mut unpriced = review("p1", Answer::Ok, "plain");
+    unpriced.cost_usd = None;
+    let json = serde_json::to_value(Line::Review(unpriced.clone())).unwrap();
+    assert!(json["cost_usd"].is_null(), "{json}");
+    assert_eq!(
+        serde_json::from_value::<Line>(json).unwrap(),
+        Line::Review(unpriced)
+    );
+    let older = serde_json::to_value(Line::Review(review("p1", Answer::Ok, "plain"))).unwrap();
+    assert_eq!(older["cost_usd"], 0.05);
+    let Line::Review(read) = serde_json::from_value(older).unwrap() else {
+        panic!("a review");
+    };
+    assert_eq!(read.cost_usd, Some(0.05));
+}

@@ -1682,8 +1682,8 @@ impl AgentHub {
         lock(&self.base).limits
     }
 
-    /// Tokens and cost per model of every model call `agent` and the
-    /// agents under it made, classifier calls included.
+    /// Tokens and cost per model and purpose of every model call `agent`
+    /// and the agents under it made, classifier calls included.
     pub(crate) fn tokens_by_model(&self, agent: AgentId) -> Vec<ModelTokens> {
         let mut calls = Vec::new();
         self.each_entry(agent, |entry| {

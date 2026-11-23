@@ -49,7 +49,7 @@ fn a_review_held_to_criteria_says_how_many_it_found_met() {
         judge: OPUS.to_string(),
         answer: Answer::Model,
         findings: "CRITERION 2: UNTESTED".to_string(),
-        cost_usd: 0.1,
+        cost_usd: Some(0.1),
         act: false,
         checked: vec![
             checked(Some(Status::Met)),

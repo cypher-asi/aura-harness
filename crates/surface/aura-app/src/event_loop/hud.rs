@@ -28,7 +28,8 @@ pub(super) fn todo_views(todos: &[TodoItem]) -> Vec<TodoView> {
 }
 
 /// Tokens and cost of one model call: its usage read in the shape of the
-/// endpoint it went to, priced as [`ModelCall`] prices it.
+/// endpoint it went to, priced as [`ModelCall`] prices it. A call is
+/// unpriced when its model has no known price; a local model's are free.
 pub(crate) fn call_stats(call: &ModelCall, context_limit: Option<u64>) -> CallStats {
     let tokens = call.billed_tokens();
     CallStats {
@@ -38,7 +39,24 @@ pub(crate) fn call_stats(call: &ModelCall, context_limit: Option<u64>) -> CallSt
         cache_write_tokens: tokens.cache_write,
         output_tokens: tokens.output,
         cost_usd: call.estimate_cost_usd(),
+        unpriced: call.list_price().is_none(),
         context_limit,
+    }
+}
+
+/// The session totals of the one call `stats` reports.
+pub(crate) fn call_session_usage(stats: &CallStats) -> SessionUsage {
+    SessionUsage {
+        calls: 1,
+        input_tokens: stats.input_tokens,
+        cache_read_tokens: stats.cache_read_tokens,
+        cache_write_tokens: stats.cache_write_tokens,
+        output_tokens: stats.output_tokens,
+        cost_usd: stats.cost_usd.unwrap_or(0.0),
+        priced: stats.cost_usd.is_some(),
+        unpriced_calls: u32::from(stats.unpriced),
+        context_tokens: stats.prompt_tokens(),
+        models: vec![stats.model.clone()],
     }
 }
 
@@ -64,6 +82,7 @@ pub(super) fn session_totals(usage: &SessionUsage) -> SessionTotals {
         cache_write_tokens: usage.cache_write_tokens,
         output_tokens: usage.output_tokens,
         cost_usd: usage.priced.then_some(usage.cost_usd),
+        unpriced_calls: usage.unpriced_calls,
         context_tokens: usage.context_tokens,
         models: usage.models.clone(),
     }
@@ -111,6 +130,7 @@ mod tests {
         ModelCall {
             model: model.to_string(),
             route: route.map(str::to_string),
+            purpose: None,
             usage,
         }
     }
@@ -146,9 +166,29 @@ mod tests {
         assert_eq!(stats.model, "openai/gpt-5.4");
         assert_eq!(stats.input_tokens, 1_000, "cache reads come on top");
         assert!(stats.cost_usd.is_some_and(|cost| cost > 0.0));
-        // A local server naming its model like a slug is not priced.
-        let local = routed("openai/gpt-5.4", Some("local/openai/gpt-5.4"), usage);
-        assert_eq!(call_stats(&local, None).cost_usd, None);
+        assert!(!stats.unpriced);
+        // A local server naming its model like a slug is not priced, but
+        // free rather than unpriced.
+        let local = routed(
+            "openai/gpt-5.4",
+            Some("local/openai/gpt-5.4"),
+            usage.clone(),
+        );
+        let local = call_stats(&local, None);
+        assert_eq!(local.cost_usd, None);
+        assert!(!local.unpriced);
+        // A model with no known price is unpriced.
+        let unknown = routed("mystery/model-x", Some("openrouter/mystery/model-x"), usage);
+        let unknown = call_stats(&unknown, None);
+        assert_eq!(unknown.cost_usd, None);
+        assert!(unknown.unpriced);
+        let mut session = call_session_usage(&stats);
+        session.add(&call_session_usage(&unknown));
+        assert!(session.priced);
+        assert_eq!(session.unpriced_calls, 1);
+        let totals = session_totals(&session);
+        assert_eq!(totals.unpriced_calls, 1);
+        assert!(totals.cost_usd.is_some());
     }
 
     #[test]

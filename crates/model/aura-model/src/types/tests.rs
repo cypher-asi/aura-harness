@@ -60,6 +60,17 @@ fn test_model_request_builder() {
 }
 
 #[test]
+fn a_call_purpose_is_named_as_its_record_entry_names_it() {
+    use ModelCallPurpose::{Classify, Criteria, Judge, Title};
+    for purpose in [Classify, Criteria, Judge, Title] {
+        assert_eq!(
+            serde_json::to_value(purpose).unwrap(),
+            serde_json::json!(purpose.as_str())
+        );
+    }
+}
+
+#[test]
 fn test_safe_auxiliary_request_contract_is_accepted() {
     let request = ModelRequest::builder("claude-opus-4-6", "You are helpful")
         .message(Message::user("Hi"))

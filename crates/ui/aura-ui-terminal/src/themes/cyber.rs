@@ -5,7 +5,7 @@
 //! | Color       | Hex Code | RGB            | Usage                                   |
 //! |-------------|----------|----------------|-----------------------------------------|
 //! | Cyan/Green  | #01f4cb  | (1, 244, 203)  | Status glyphs, success, diff additions  |
-//! | Blue        | #01a4f4  | (1, 164, 244)  | Info, links, mode badges                |
+//! | Blue        | #01a4f4  | (1, 164, 244)  | Info, links                             |
 //! | Purple      | #cb01f4  | (203, 1, 244)  | Code block keywords                     |
 //! | Red         | #e06c75  | (224, 108, 117)| Errors, danger                          |
 //! | White       | #ffffff  | (255, 255, 255)| Titles, the user's text, the current item |

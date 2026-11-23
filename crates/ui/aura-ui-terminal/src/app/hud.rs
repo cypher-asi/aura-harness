@@ -2,7 +2,7 @@
 //! the status line, the todo strip, and the `/context`, `/cost` and
 //! `/todos` commands. Each agent has its own, swapped in with its chat.
 
-use super::format::{format_cost, format_tokens};
+use super::format::{format_partial_cost, format_tokens};
 use crate::events::{
     CallStats, ContextView, InstructionFileView, InstructionStatus, JobView, PolicyView,
     QueuedItemView, SessionTotals, SourceUsage, TodoState, TodoView,
@@ -26,6 +26,8 @@ pub struct SessionStats {
     pub cost_usd: f64,
     /// Whether any call had a price
     pub priced: bool,
+    /// Calls with no known price, which `cost_usd` leaves out
+    pub unpriced_calls: u32,
     /// Prompt of the latest call: what is in the context window now
     pub context_tokens: u64,
     /// Context window of the model, when known
@@ -48,6 +50,9 @@ impl SessionStats {
             self.cost_usd += cost;
             self.priced = true;
         }
+        if call.unpriced {
+            self.unpriced_calls = self.unpriced_calls.saturating_add(1);
+        }
         self.context_tokens = call.prompt_tokens();
         if call.context_limit.is_some() {
             self.context_limit = call.context_limit;
@@ -68,11 +73,19 @@ impl SessionStats {
             output_tokens: totals.output_tokens,
             cost_usd: totals.cost_usd.unwrap_or(0.0),
             priced: totals.cost_usd.is_some(),
+            unpriced_calls: totals.unpriced_calls,
             context_tokens: totals.context_tokens,
             context_limit: self.context_limit,
             compactions: 0,
             models: totals.models.clone(),
         };
+    }
+
+    /// What the session cost so far: `$0.042`, `$0.042+?` when some calls
+    /// had no known price, `None` when none had one.
+    #[must_use]
+    pub fn cost_label(&self) -> Option<String> {
+        format_partial_cost(self.priced.then_some(self.cost_usd), self.unpriced_calls)
     }
 
     /// Share of prompt tokens served from the cache, in percent. `None`
@@ -212,10 +225,14 @@ impl Hud {
         if stats.calls == 0 {
             return "Cost: no model call yet".to_string();
         }
-        let cost = if stats.priced {
-            format!("about {} at API list prices", format_cost(stats.cost_usd))
-        } else {
-            "no priced calls (local or unpriced models)".to_string()
+        let cost = match stats.cost_label() {
+            Some(cost) if stats.unpriced_calls > 0 => format!(
+                "about {cost} at API list prices, leaving out {} call{} with no known price",
+                stats.unpriced_calls,
+                plural(stats.unpriced_calls)
+            ),
+            Some(cost) => format!("about {cost} at API list prices"),
+            None => "no priced calls (local or unpriced models)".to_string(),
         };
         format!(
             "Cost: {cost}\n{} model call{}\n  new input   {:>8}\n  cache read  {:>8}\n  cache write {:>8}\n  output      {:>8}",
@@ -233,12 +250,12 @@ impl Hud {
 /// over `turns` (each turn's split by sign-in, as its reply footer shows
 /// it). Empty when no turn says.
 pub fn sources_report<'a>(turns: impl IntoIterator<Item = &'a [SourceUsage]>) -> String {
-    let mut totals: Vec<(String, u64, Option<f64>)> = Vec::new();
+    let mut totals: Vec<(String, u64, Option<f64>, u32)> = Vec::new();
     for source in turns.into_iter().flatten() {
         let at = match totals.iter().position(|(label, ..)| *label == source.label) {
             Some(at) => at,
             None => {
-                totals.push((source.label.clone(), 0, None));
+                totals.push((source.label.clone(), 0, None, 0));
                 totals.len() - 1
             }
         };
@@ -247,15 +264,16 @@ pub fn sources_report<'a>(turns: impl IntoIterator<Item = &'a [SourceUsage]>) ->
         if let Some(cost) = source.cost_usd {
             total.2 = Some(total.2.unwrap_or(0.0) + cost);
         }
+        total.3 = total.3.saturating_add(source.unpriced_calls);
     }
     if totals.is_empty() {
         return String::new();
     }
     let mut out = String::from("\nBy sign-in:");
-    for (label, tokens, cost) in totals {
+    for (label, tokens, cost, unpriced_calls) in totals {
         out.push_str(&format!("\n  {label:<14}{:>8} tok", format_tokens(tokens)));
-        if let Some(cost) = cost {
-            out.push_str(&format!("  {}", format_cost(cost)));
+        if let Some(cost) = format_partial_cost(cost, unpriced_calls) {
+            out.push_str(&format!("  {cost}"));
         }
     }
     out
@@ -307,8 +325,63 @@ mod tests {
             cache_write_tokens: write,
             output_tokens: 100,
             cost_usd: cost,
+            unpriced: false,
             context_limit: Some(200_000),
         }
+    }
+
+    /// A call to a model with no known price.
+    fn unpriced_call() -> CallStats {
+        CallStats {
+            model: "openrouter/z-ai/glm-9".to_string(),
+            unpriced: true,
+            ..call(10, 0, 0, None)
+        }
+    }
+
+    #[test]
+    fn a_partly_priced_session_reads_as_a_part() {
+        let mut hud = Hud::default();
+        hud.stats.add(&call(10, 0, 0, Some(0.05)));
+        assert_eq!(hud.stats.cost_label().as_deref(), Some("$0.050"));
+        hud.stats.add(&unpriced_call());
+        hud.stats.add(&unpriced_call());
+        assert_eq!(hud.stats.unpriced_calls, 2);
+        assert_eq!(hud.stats.cost_label().as_deref(), Some("$0.050+?"));
+        let report = hud.cost_report();
+        assert!(
+            report.contains("about $0.050+? at API list prices, leaving out 2 calls"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn local_calls_are_free_not_unpriced() {
+        let mut stats = SessionStats::default();
+        stats.add(&call(10, 0, 0, Some(0.05)));
+        stats.add(&CallStats {
+            model: "local/qwen3".to_string(),
+            ..call(10, 0, 0, None)
+        });
+        assert_eq!(stats.cost_label().as_deref(), Some("$0.050"));
+    }
+
+    #[test]
+    fn restored_totals_keep_their_unpriced_calls() {
+        let mut stats = SessionStats::default();
+        stats.restore(&SessionTotals {
+            calls: 3,
+            cost_usd: Some(0.5),
+            unpriced_calls: 1,
+            ..SessionTotals::default()
+        });
+        assert_eq!(stats.cost_label().as_deref(), Some("$0.500+?"));
+        stats.restore(&SessionTotals {
+            calls: 3,
+            unpriced_calls: 3,
+            ..SessionTotals::default()
+        });
+        assert_eq!(stats.cost_label(), None, "nothing priced");
     }
 
     #[test]
@@ -353,6 +426,7 @@ mod tests {
             label: label.to_string(),
             tokens,
             cost_usd,
+            unpriced_calls: 0,
         };
         let first = [
             source("Claude plan", 20_000, None),
@@ -373,6 +447,18 @@ mod tests {
         );
         assert!(openrouter.contains("$0.75"), "{report}");
         assert_eq!(sources_report(std::iter::empty::<&[SourceUsage]>()), "");
+    }
+
+    #[test]
+    fn sources_report_marks_a_sign_in_with_unpriced_calls() {
+        let turn = [SourceUsage {
+            label: "OpenRouter".to_string(),
+            tokens: 1_000,
+            cost_usd: Some(0.5),
+            unpriced_calls: 1,
+        }];
+        let report = sources_report([&turn[..]]);
+        assert!(report.contains("$0.500+?"), "{report}");
     }
 
     #[test]

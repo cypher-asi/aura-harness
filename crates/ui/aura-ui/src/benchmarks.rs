@@ -184,10 +184,14 @@ pub fn per_fix_cells(
     [cell(a, a_share), cell(b, b_share)]
 }
 
-/// Tokens and cost one model used across an arm's runs.
+/// Tokens and cost one model used across an arm's runs, for the runs'
+/// own work or for one purpose beside it.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BenchTokens {
     pub model: String,
+    /// What the calls were made for beside the runs' own work
+    /// (`classify`, `criteria`, `judge`, `title`); `None` for the work
+    pub purpose: Option<String>,
     pub calls: u32,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -262,7 +266,7 @@ pub struct BenchArm {
     pub ref_better: usize,
     pub ref_as_good: usize,
     pub ref_worse: usize,
-    /// Tokens per model, most expensive first
+    /// Tokens per model and purpose, most expensive first
     pub tokens: Vec<BenchTokens>,
     /// One per prompt
     pub turns: Vec<BenchTurn>,
@@ -419,7 +423,7 @@ pub struct BenchLiveRun {
     pub cost_usd: f64,
     /// Its calls so far with no known price, which `cost_usd` leaves out
     pub unpriced_calls: u32,
-    /// Tokens per model its calls have used so far
+    /// Tokens its calls have used so far, per model and purpose
     pub tokens: Vec<BenchTokens>,
     /// Hex id of the agent it runs as; `None` while it waits for its
     /// task's files
@@ -493,7 +497,19 @@ pub struct BenchBaseline {
     pub cost_usd: f64,
     /// Whether any of its calls had a price
     pub priced: bool,
+    /// Calls with no known price, which `cost_usd` leaves out
+    pub unpriced_calls: u32,
     pub models: Vec<String>,
+}
+
+impl BenchBaseline {
+    /// What the session cost as far as its calls had a price; `None`
+    /// when none had one.
+    #[must_use]
+    pub fn cost(&self) -> Option<BenchCost> {
+        self.priced
+            .then(|| BenchCost::new(self.cost_usd, self.unpriced_calls))
+    }
 }
 
 /// A benchmark as the BENCH tab shows it.
@@ -637,6 +653,8 @@ pub struct BenchSession {
     pub prompts: usize,
     /// What it cost when it ran; `None` when none of its calls had a price
     pub cost_usd: Option<f64>,
+    /// Calls with no known price, which `cost_usd` leaves out
+    pub unpriced_calls: u32,
     pub models: Vec<String>,
     /// Whether it is the agent's current session
     pub current: bool,
@@ -737,6 +755,25 @@ mod tests {
         assert_eq!(BenchCost::new(0.0, 3).read(money), "unknown");
         assert_eq!(BenchCost::new(0.11, 2).known(), None);
         assert_eq!(BenchCost::new(0.11, 0).known(), Some(0.11));
+    }
+
+    #[test]
+    fn a_partly_priced_baseline_has_no_known_cost() {
+        let baseline = |priced, unpriced_calls| BenchBaseline {
+            calls: 4,
+            cost_usd: 0.2,
+            priced,
+            unpriced_calls,
+            models: Vec::new(),
+        };
+        assert_eq!(
+            baseline(true, 0).cost().and_then(BenchCost::known),
+            Some(0.2)
+        );
+        let partly = baseline(true, 1).cost();
+        assert_eq!(partly.map(|c| c.read(money)).as_deref(), Some("$0.20+?"));
+        assert_eq!(partly.and_then(BenchCost::known), None);
+        assert_eq!(baseline(false, 4).cost(), None);
     }
 
     #[test]

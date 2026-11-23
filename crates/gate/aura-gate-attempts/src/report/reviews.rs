@@ -27,9 +27,10 @@ impl Report {
             let replayed = if score.replayed { " (replayed)" } else { "" };
             let asked = format!("{}{replayed}", score.variant);
             let reviewer = score.judge.rsplit('/').next().unwrap_or_default();
+            let cost = cost_cell(score.cost_usd, score.unpriced);
             writeln!(
                 out,
-                "  {asked:ASKED_WIDTH$}  {reviewer:REVIEWER_WIDTH$}  {:>8}  {:>5}  {:>5}  {:>15}  {:>6}  {:>17}  {:>16}  ${:>6.2}",
+                "  {asked:ASKED_WIDTH$}  {reviewer:REVIEWER_WIDTH$}  {:>8}  {:>5}  {:>5}  {:>15}  {:>6}  {:>17}  {:>16}  {cost}",
                 score.reviewed,
                 score.known,
                 score.wrong,
@@ -37,9 +38,31 @@ impl Report {
                 score.caught,
                 score.false_alarms,
                 score.wrong - score.caught,
-                score.cost_usd
             )?;
         }
         Ok(())
+    }
+}
+
+/// `$1.25`; `$1.25+?` when `unpriced` reviews had no known price, and
+/// `unknown` when none had one.
+fn cost_cell(cost_usd: f64, unpriced: u32) -> String {
+    match unpriced {
+        0 => format!("${cost_usd:>6.2}"),
+        _ if cost_usd > 0.0 => format!("${cost_usd:>6.2}+?"),
+        _ => "unknown".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cost_cell;
+
+    #[test]
+    fn a_review_cost_says_when_some_prices_are_unknown() {
+        assert_eq!(cost_cell(0.15, 0), "$  0.15");
+        assert_eq!(cost_cell(0.15, 2), "$  0.15+?");
+        assert_eq!(cost_cell(0.0, 2), "unknown");
+        assert_eq!(cost_cell(0.0, 0), "$  0.00");
     }
 }

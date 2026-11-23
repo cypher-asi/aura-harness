@@ -11,7 +11,8 @@ use crate::event_loop::agents::AgentSession;
 use crate::event_loop::compare::view::{cost, duration, money, plural};
 use crate::event_loop::handlers::system_message;
 use aura_core_types::{ComparePayload, CompareRun};
-use aura_gate::compare::Schedule;
+use aura_gate::compare::{Schedule, Spent};
+use std::fmt::Write;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
@@ -37,6 +38,8 @@ pub(super) async fn run_all(
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut setup = ctx.setup.clone();
     let mut setting_up = !plan.examples.is_empty();
+    // Arms whose run the chat was told the budget cannot count.
+    let mut warned = [false; 2];
     loop {
         if !ctx.cancel.is_cancelled() {
             while let Some((arm, n)) = schedule.start_next() {
@@ -63,30 +66,52 @@ pub(super) async fn run_all(
             None
         });
         let Some(done) = done else {
-            schedule.finished(0.0);
+            schedule.finished(0.0, 0);
             continue;
         };
-        schedule.finished(done.run.cost_usd);
-        ended(ctx, session, user_ui, payload, &done).await;
+        schedule.finished(done.run.cost_usd, done.run.unpriced_calls());
+        ended(ctx, session, user_ui, payload, &done, &mut warned).await;
         ran.push(done);
     }
-    payload.notes.extend(budget_note(ctx, &mut schedule));
+    payload.notes.extend(closing_note(ctx, &mut schedule));
     ran
 }
 
-/// Tell the user's chat that `done` ended, put it among the finished
-/// runs of `payload`, and record and show that on the comparison's
-/// `session`.
+/// The budget's note once every run has ended, dropping the runs
+/// `schedule` still holds.
+fn closing_note(ctx: &Context, schedule: &mut Schedule) -> Option<String> {
+    let skipped = schedule.drop_pending().len();
+    budget_note(
+        ctx.plan.budget_usd,
+        schedule.spent(),
+        skipped,
+        ctx.cancel.is_cancelled(),
+    )
+}
+
+/// Tell the user's chat that `done` ended (and, the first time a run of
+/// its arm had no priced call, that the budget cannot count that arm,
+/// marking it in `warned`), put it among the finished runs of `payload`,
+/// and record and show that on the comparison's `session`.
 async fn ended(
     ctx: &Context,
     session: &AgentSession,
     user_ui: &AgentUi,
     payload: &mut ComparePayload,
     done: &Ran,
+    warned: &mut [bool; 2],
 ) {
     user_ui
         .send(system_message(progress(&ctx.host.name, &done.run)))
         .await;
+    let arm = done.run.arm.index();
+    let unpriced = (!warned[arm])
+        .then(|| unpriced_arm_note(&ctx.host.name, ctx.plan.budget_usd, &done.run))
+        .flatten();
+    if let Some(note) = unpriced {
+        warned[arm] = true;
+        user_ui.send(system_message(note)).await;
+    }
     payload.runs.push(done.run.clone());
     // Among the finished runs now, it leaves the live ones; the view
     // sent shows both, so no run drops out of the table between them.
@@ -95,17 +120,74 @@ async fn ended(
     show_live(ctx, payload).await;
 }
 
-/// What the comparison's record notes when the budget was spent before
-/// the runs `schedule` still holds could start; nothing when every run
-/// started or the user stopped the comparison.
-fn budget_note(ctx: &Context, schedule: &mut Schedule) -> Option<String> {
-    let skipped = schedule.drop_pending().len();
-    (skipped > 0 && !ctx.cancel.is_cancelled()).then(|| {
+/// What the comparison's record notes about its budget: when it was spent
+/// before `skipped` runs could start, what was spent of it; and when some
+/// calls had no known price, that the budget could not count them.
+/// Nothing without a budget, when the user stopped the comparison, or
+/// when every run started and every call had a price.
+pub(super) fn budget_note(
+    budget_usd: Option<f64>,
+    spent: Spent,
+    skipped: usize,
+    cancelled: bool,
+) -> Option<String> {
+    let budget = budget_usd.filter(|_| !cancelled)?;
+    let spent_of_budget = spent_of_budget(budget, spent);
+    if skipped > 0 {
+        return Some(format!(
+            "{skipped} run{} did not start: {spent_of_budget}",
+            plural(skipped)
+        ));
+    }
+    (!spent.is_complete())
+        .then(|| format!("The budget counts only priced calls: {spent_of_budget}"))
+}
+
+/// `spent $1.20 of the $2.00 budget`, and when some calls had no known
+/// price, `spent $1.20+? of the $2.00 budget; 14 calls have no known
+/// price and are not counted`.
+pub(super) fn spent_of_budget(budget_usd: f64, spent: Spent) -> String {
+    let mut text = format!(
+        "spent {} of the {} budget",
+        cost(spent.usd, spent.unpriced_calls),
+        money(budget_usd)
+    );
+    let calls = spent.unpriced_calls;
+    if calls > 0 {
+        let (have, are) = if calls == 1 {
+            ("has", "is")
+        } else {
+            ("have", "are")
+        };
+        let _ = write!(
+            text,
+            "; {calls} call{} {have} no known price and {are} not counted",
+            plural(calls)
+        );
+    }
+    text
+}
+
+/// The line the user's chat gets, once per arm, when a run of it made
+/// calls and none of them had a known price, so the budget cannot count
+/// that arm at all. `None` without a budget, or when some call was
+/// priced.
+pub(super) fn unpriced_arm_note(
+    compare: &str,
+    budget_usd: Option<f64>,
+    run: &CompareRun,
+) -> Option<String> {
+    let budget = budget_usd?;
+    let calls: u32 = run.tokens.iter().map(|row| row.calls).sum();
+    let unpriced = run.unpriced_calls();
+    (unpriced > 0 && unpriced >= calls).then(|| {
         format!(
-            "The budget of {} was spent after {}; {skipped} run{} did not start",
-            money(ctx.plan.budget_usd.unwrap_or_default()),
-            money(schedule.spent_usd()),
-            plural(skipped),
+            "{compare}: none of {}'s {unpriced} call{} had a known price, so the {} budget \
+             does not count arm {}",
+            run.name,
+            plural(unpriced),
+            money(budget),
+            run.arm.as_str().to_ascii_uppercase(),
         )
     })
 }

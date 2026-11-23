@@ -100,6 +100,7 @@ pub(super) fn sessions(state: &LoopState<'_>, agent_id: AgentId) -> Vec<BenchSes
             title: title(&prompts[0]),
             prompts: prompts.len(),
             cost_usd: s.usage.priced.then_some(s.usage.cost_usd),
+            unpriced_calls: s.usage.unpriced_calls,
             models: s.usage.models.clone(),
             current: s.current,
         })
@@ -181,12 +182,7 @@ pub(super) fn load(
         agent_id,
         started_ms: session.started_ms,
         title: title(first),
-        baseline: SessionBaseline {
-            calls: usage.calls,
-            cost_usd: usage.cost_usd,
-            priced: usage.priced,
-            models: usage.models.clone(),
-        },
+        baseline: baseline(usage),
         reference,
     };
     Ok(Replay {
@@ -195,6 +191,19 @@ pub(super) fn load(
         start,
         notes,
     })
+}
+
+/// What `usage` says the session cost, to set the replays against. Its
+/// unpriced calls are kept so that a partly priced cost is not taken for
+/// the whole.
+fn baseline(usage: &SessionUsage) -> SessionBaseline {
+    SessionBaseline {
+        calls: usage.calls,
+        cost_usd: usage.cost_usd,
+        priced: usage.priced,
+        unpriced_calls: usage.unpriced_calls,
+        models: usage.models.clone(),
+    }
 }
 
 /// What each copy starts from, with a note saying which: the files the
@@ -318,6 +327,27 @@ pub(super) fn restore(workdir: &Path, start: &[StartFile]) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_partly_priced_session_keeps_its_unpriced_calls_in_the_baseline() {
+        let usage = SessionUsage {
+            calls: 5,
+            cost_usd: 0.3,
+            priced: true,
+            unpriced_calls: 2,
+            models: vec!["opus".to_string(), "glm-9".to_string()],
+            ..SessionUsage::default()
+        };
+        let partly = baseline(&usage);
+        assert_eq!(partly.unpriced_calls, 2);
+        assert!(partly.priced, "the priced part is still shown");
+        assert_eq!(partly.known_cost_usd(), None, "but not set against");
+        let whole = baseline(&SessionUsage {
+            unpriced_calls: 0,
+            ..usage
+        });
+        assert_eq!(whole.known_cost_usd(), Some(0.3));
+    }
 
     #[test]
     fn restore_writes_and_removes_files() {

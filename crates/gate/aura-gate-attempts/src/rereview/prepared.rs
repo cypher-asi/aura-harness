@@ -134,7 +134,7 @@ impl Prepared {
         &self,
         judge: &str,
         variant: ReviewVariant,
-        (verdict, findings, cost_usd): (Answer, &str, f64),
+        (verdict, findings, cost_usd): (Answer, &str, Option<f64>),
         at_ms: u64,
     ) -> Line {
         Line::Review(Review {

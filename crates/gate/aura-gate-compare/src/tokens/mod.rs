@@ -1,4 +1,5 @@
-//! The tokens and list-price cost per model of a run's model calls.
+//! The tokens and list-price cost per model of a run's model calls, its
+//! own work apart from each purpose of the calls made beside it.
 
 #[cfg(test)]
 mod tests;
@@ -9,7 +10,7 @@ use aura_model::model_catalog::{
     backend_for, billed_tokens, estimate_cost_usd, model_key, BilledTokens, ModelBackend,
     OPENROUTER_PREFIX,
 };
-use aura_model::Usage;
+use aura_model::{ModelCallPurpose, Usage};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
@@ -35,6 +36,10 @@ pub struct ModelCall {
     /// (`openrouter/openai/gpt-6.1-sol`); `None` in records written
     /// before it was kept.
     pub route: Option<String>,
+    /// What the call was made for beside the agent's own work, such as
+    /// Gate writing a turn's acceptance criteria; `None` for the work
+    /// itself.
+    pub purpose: Option<ModelCallPurpose>,
     /// What the call used.
     pub usage: Usage,
 }
@@ -132,20 +137,24 @@ fn used_nothing(usage: &Usage) -> bool {
         && usage.cache_read_input_tokens.unwrap_or(0) == 0
 }
 
-/// Tokens and list-price cost per model of `calls`, most expensive first.
-/// A call with no known price adds nothing to its model's cost and is
-/// counted in its `unpriced_calls`; a local model's calls, and calls that
-/// used no tokens, are priced, at 0.
+/// Tokens and list-price cost per model of `calls`, most expensive first:
+/// a row for a model's calls for the agent's own work, and one for each
+/// [`purpose`](ModelCall::purpose) its other calls were made for. A call
+/// with no known price adds nothing to its row's cost and is counted in
+/// its `unpriced_calls`; a local model's calls, and calls that used no
+/// tokens, are priced, at 0.
 #[must_use]
 pub fn tally(calls: impl IntoIterator<Item = ModelCall>) -> Vec<ModelTokens> {
-    let mut by_model: BTreeMap<String, ModelTokens> = BTreeMap::new();
+    let mut by_row: BTreeMap<(String, Option<&str>), ModelTokens> = BTreeMap::new();
     for call in calls {
         let billed = call.billed_tokens();
         let price = call.list_price();
-        let row = by_model
-            .entry(row_name(&call).to_string())
-            .or_insert_with_key(|model| ModelTokens {
+        let purpose = call.purpose.map(ModelCallPurpose::as_str);
+        let row = by_row
+            .entry((row_name(&call).to_string(), purpose))
+            .or_insert_with_key(|(model, purpose)| ModelTokens {
                 model: model.clone(),
+                purpose: purpose.map(str::to_string),
                 ..ModelTokens::default()
             });
         row.calls += 1;
@@ -158,7 +167,7 @@ pub fn tally(calls: impl IntoIterator<Item = ModelCall>) -> Vec<ModelTokens> {
             None => row.unpriced_calls += 1,
         }
     }
-    most_expensive_first(by_model.into_values().collect())
+    most_expensive_first(by_row.into_values().collect())
 }
 
 /// The row `call` is counted in: the model asked for when the answer
@@ -173,14 +182,16 @@ fn row_name(call: &ModelCall) -> &str {
     }
 }
 
-/// `rows` added up per model, most expensive first.
+/// `rows` added up per model and purpose, most expensive first.
 pub(crate) fn merge_tokens<'a>(
     rows: impl IntoIterator<Item = &'a ModelTokens>,
 ) -> Vec<ModelTokens> {
-    let mut by_model: BTreeMap<&str, ModelTokens> = BTreeMap::new();
+    let mut by_row: BTreeMap<(&str, Option<&str>), ModelTokens> = BTreeMap::new();
     for row in rows {
-        let sum = by_model.entry(&row.model).or_insert_with(|| ModelTokens {
+        let key = (row.model.as_str(), row.purpose.as_deref());
+        let sum = by_row.entry(key).or_insert_with(|| ModelTokens {
             model: row.model.clone(),
+            purpose: row.purpose.clone(),
             ..ModelTokens::default()
         });
         sum.calls += row.calls;
@@ -191,15 +202,17 @@ pub(crate) fn merge_tokens<'a>(
         sum.cost_usd += row.cost_usd;
         sum.unpriced_calls += row.unpriced_calls;
     }
-    most_expensive_first(by_model.into_values().collect())
+    most_expensive_first(by_row.into_values().collect())
 }
 
-/// `rows`, one per model, most expensive first, then by model.
+/// `rows`, one per model and purpose, most expensive first, then by
+/// model, a model's own work before its other calls.
 fn most_expensive_first(mut rows: Vec<ModelTokens>) -> Vec<ModelTokens> {
     rows.sort_unstable_by(|a, b| {
         b.cost_usd
             .total_cmp(&a.cost_usd)
             .then_with(|| a.model.cmp(&b.model))
+            .then_with(|| a.purpose.cmp(&b.purpose))
     });
     rows
 }

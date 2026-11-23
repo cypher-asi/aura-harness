@@ -2,7 +2,7 @@
 
 use super::markdown::{render_markdown_flow, wrap_spans};
 use super::text::{display_width, wrap_words, Measure};
-use crate::app::format::{format_cost, format_tokens};
+use crate::app::format::{format_partial_cost, format_tokens};
 use crate::components::{CodeBlock, MessageRole};
 use crate::events::{CallUsage, SourceUsage};
 use crate::Theme;
@@ -92,11 +92,12 @@ pub(super) fn reply_meta(
                 sources.first().map(|source| CallUsage {
                     tokens: source.tokens,
                     cost_usd: source.cost_usd,
+                    unpriced_calls: source.unpriced_calls,
                 })
             });
             if let Some(usage) = usage {
                 parts.push(format!("{} tok", format_tokens(usage.tokens)));
-                parts.extend(usage.cost_usd.map(format_cost));
+                parts.extend(format_partial_cost(usage.cost_usd, usage.unpriced_calls));
             }
             parts.extend(
                 sources
@@ -111,9 +112,9 @@ pub(super) fn reply_meta(
                 source.label,
                 format_tokens(source.tokens)
             );
-            if let Some(cost) = source.cost_usd {
+            if let Some(cost) = format_partial_cost(source.cost_usd, source.unpriced_calls) {
                 part.push(' ');
-                part.push_str(&format_cost(cost));
+                part.push_str(&cost);
             }
             part
         })),

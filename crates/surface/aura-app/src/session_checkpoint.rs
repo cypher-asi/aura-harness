@@ -36,6 +36,10 @@ pub struct SessionUsage {
     pub cost_usd: f64,
     /// Whether any call had a price
     pub priced: bool,
+    /// Calls with no known price, which `cost_usd` leaves out. 0 in
+    /// checkpoints written before it was kept.
+    #[serde(default)]
+    pub unpriced_calls: u32,
     /// Prompt of the latest call: what was in the context window
     #[serde(default)]
     pub context_tokens: u64,
@@ -54,6 +58,7 @@ impl SessionUsage {
         self.output_tokens += other.output_tokens;
         self.cost_usd += other.cost_usd;
         self.priced |= other.priced;
+        self.unpriced_calls = self.unpriced_calls.saturating_add(other.unpriced_calls);
         if other.calls > 0 {
             self.context_tokens = other.context_tokens;
         }
@@ -326,6 +331,30 @@ mod tests {
 
         assert!(checkpoints.load_current(agent).is_none());
         assert!(checkpoints.list(agent, None).is_empty());
+    }
+
+    #[test]
+    fn usage_counts_unpriced_calls_and_loads_without_them() {
+        let mut usage = SessionUsage::default();
+        usage.add(&SessionUsage {
+            calls: 1,
+            cost_usd: 0.1,
+            priced: true,
+            ..SessionUsage::default()
+        });
+        usage.add(&SessionUsage {
+            calls: 1,
+            unpriced_calls: 1,
+            ..SessionUsage::default()
+        });
+        assert!(usage.priced);
+        assert_eq!(usage.unpriced_calls, 1, "a part priced total says so");
+
+        let old = r#"{"calls":2,"input_tokens":1,"cache_read_tokens":0,
+            "cache_write_tokens":0,"output_tokens":1,"cost_usd":0.1,"priced":true}"#;
+        let loaded: SessionUsage = serde_json::from_str(old).unwrap();
+        assert_eq!(loaded.unpriced_calls, 0);
+        assert!(loaded.priced);
     }
 
     #[test]

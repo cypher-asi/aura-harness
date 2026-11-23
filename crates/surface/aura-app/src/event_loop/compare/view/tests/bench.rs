@@ -73,15 +73,17 @@ fn the_bench_tab_sums_up_each_arm() {
          median_cost_usd: Some(0.06), unpriced_calls: 0, finished_unpriced_calls: 0, median_wall_ms: Some(42000), checks_passed: 2, \
          checks_run: 3, judge_wins: 0, judge_losses: 1, judge_ties: 0, ref_better: 0, \
          ref_as_good: 0, ref_worse: 0, tokens: [BenchTokens { model: \"claude-sonnet-4-6\", \
-         calls: 9, input_tokens: 126000, output_tokens: 4500, cost_usd: 0.18, unpriced_calls: 0 }], \
+         purpose: None, calls: 9, input_tokens: 126000, output_tokens: 4500, cost_usd: 0.18, \
+         unpriced_calls: 0 }], \
          turns: [BenchTurn { runs: 2, mean_cost_usd: Some(0.41000000000000003), unpriced_calls: 0, passed: 2, \
          failed: 0, errors: 0 }], escalated: 1, nudged: 1 }",
         "BenchArm { label: \"aura-claude-opus-4-7\", runs: 3, finished: 2, \
          total_cost_usd: 1.35, median_cost_usd: Some(0.42500000000000004), unpriced_calls: 0, finished_unpriced_calls: 0, \
          median_wall_ms: Some(42000), checks_passed: 2, checks_run: 2, judge_wins: 1, \
          judge_losses: 0, judge_ties: 0, ref_better: 0, ref_as_good: 0, ref_worse: 0, \
-         tokens: [BenchTokens { model: \"claude-opus-4-7\", calls: 9, input_tokens: 126000, \
-         output_tokens: 4500, cost_usd: 1.35, unpriced_calls: 0 }], turns: [BenchTurn { runs: 0, \
+         tokens: [BenchTokens { model: \"claude-opus-4-7\", purpose: None, calls: 9, \
+         input_tokens: 126000, output_tokens: 4500, cost_usd: 1.35, unpriced_calls: 0 }], \
+         turns: [BenchTurn { runs: 0, \
          mean_cost_usd: None, unpriced_calls: 0, passed: 0, failed: 0, errors: 0 }], escalated: 0, nudged: 0 }",
     ];
     assert_eq!(debug(&bench_view(&routed()).arms), routed_arms);
@@ -90,7 +92,8 @@ fn the_bench_tab_sums_up_each_arm() {
          median_cost_usd: Some(0.06), unpriced_calls: 0, finished_unpriced_calls: 0, median_wall_ms: Some(42000), checks_passed: 2, \
          checks_run: 3, judge_wins: 0, judge_losses: 1, judge_ties: 0, ref_better: 0, \
          ref_as_good: 0, ref_worse: 1, tokens: [BenchTokens { model: \"claude-sonnet-4-6\", \
-         calls: 9, input_tokens: 126000, output_tokens: 4500, cost_usd: 0.18, unpriced_calls: 0 }], \
+         purpose: None, calls: 9, input_tokens: 126000, output_tokens: 4500, cost_usd: 0.18, \
+         unpriced_calls: 0 }], \
          turns: [BenchTurn { runs: 3, mean_cost_usd: Some(0.02), unpriced_calls: 0, passed: 3, failed: 0, \
          errors: 0 }, BenchTurn { runs: 3, mean_cost_usd: Some(0.04), unpriced_calls: 0, passed: 0, failed: 0, \
          errors: 3 }], escalated: 0, nudged: 0 }",
@@ -98,8 +101,9 @@ fn the_bench_tab_sums_up_each_arm() {
          total_cost_usd: 1.35, median_cost_usd: Some(0.45), unpriced_calls: 0, finished_unpriced_calls: 0, median_wall_ms: Some(42000), \
          checks_passed: 3, checks_run: 3, judge_wins: 1, judge_losses: 0, judge_ties: 0, \
          ref_better: 1, ref_as_good: 0, ref_worse: 0, \
-         tokens: [BenchTokens { model: \"claude-opus-4-7\", calls: 9, input_tokens: 126000, \
-         output_tokens: 4500, cost_usd: 1.35, unpriced_calls: 0 }], turns: [BenchTurn { runs: 3, \
+         tokens: [BenchTokens { model: \"claude-opus-4-7\", purpose: None, calls: 9, \
+         input_tokens: 126000, output_tokens: 4500, cost_usd: 1.35, unpriced_calls: 0 }], \
+         turns: [BenchTurn { runs: 3, \
          mean_cost_usd: Some(0.02), unpriced_calls: 0, passed: 3, failed: 0, errors: 0 }, BenchTurn { runs: 3, \
          mean_cost_usd: Some(0.04), unpriced_calls: 0, passed: 0, failed: 0, errors: 3 }], escalated: 0, \
          nudged: 0 }",
@@ -180,6 +184,7 @@ fn the_bench_tab_shows_a_replayed_session_with_what_it_cost() {
             calls: 12,
             cost_usd: 0.9,
             priced: true,
+            unpriced_calls: 0,
             models: vec!["claude-opus-4-7".to_string()],
         }),
         has_reference: true,

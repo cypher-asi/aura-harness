@@ -140,3 +140,17 @@ fn other_tools_are_unchanged() {
     let result = envelope(true, 0, "x", "");
     assert_eq!(format_tool_result("read_file", &result), result);
 }
+
+#[test]
+fn a_partly_priced_total_is_marked_and_an_unpriced_one_is_left_out() {
+    assert_eq!(
+        format_partial_cost(Some(0.042), 0).as_deref(),
+        Some("$0.042")
+    );
+    assert_eq!(
+        format_partial_cost(Some(0.042), 2).as_deref(),
+        Some("$0.042+?")
+    );
+    assert_eq!(format_partial_cost(None, 3), None);
+    assert_eq!(format_partial_cost(None, 0), None);
+}

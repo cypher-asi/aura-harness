@@ -165,16 +165,22 @@ fn mock_tokens(model: &str, calls: u32, cost_usd: f64) -> aura_core_types::Model
 
 /// [`Pinned`]'s run `name` on `model`, in its own copy under `dir`, as
 /// it should be recorded but for its agent, prompt and times, taken from
-/// `ran`. The mock provider's own calls (classifying the prompt, and for
-/// Gate's arm one more) are priced by the model they asked for.
+/// `ran`. The mock provider also answers Gate's calls beside the work
+/// (classifying the prompt, and on Gate's arm judging its turn), priced
+/// by the model they asked for.
 fn pinned_run(ran: &CompareRun, dir: &std::path::Path, model: &str) -> CompareRun {
     let gate = ran.arm == CompareArm::A;
-    let (model_usd, mock_usd, mock_calls) = if gate {
-        (0.0021, 0.0014, 2)
-    } else {
-        (0.0035, 0.00035, 1)
+    let made_for = |purpose: &str, cost_usd| aura_core_types::ModelTokens {
+        purpose: Some(purpose.to_string()),
+        ..mock_tokens("mock-model", 1, cost_usd)
     };
-    let cost_usd = model_usd + mock_usd;
+    let mut tokens = if gate {
+        vec![mock_tokens(model, 2, 0.0021), made_for("judge", 0.00105)]
+    } else {
+        vec![mock_tokens(model, 2, 0.0035)]
+    };
+    tokens.push(made_for("classify", 0.00035));
+    let cost_usd = tokens.iter().map(|row| row.cost_usd).sum();
     let root = dir.join(&ran.name);
     let turn = RunTurn {
         category: Some(PromptCategory::Question),
@@ -198,10 +204,7 @@ fn pinned_run(ran: &CompareRun, dir: &std::path::Path, model: &str) -> CompareRu
             baseline: EMPTY_TREE.to_string(),
         },
         cost_usd,
-        tokens: vec![
-            mock_tokens(model, 2, model_usd),
-            mock_tokens("mock-model", mock_calls, mock_usd),
-        ],
+        tokens,
         turns: vec![turn],
         plan_usage: Vec::new(),
         check_passed: Some(!gate),

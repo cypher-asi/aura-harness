@@ -35,8 +35,8 @@ themes keep working:
 | `text`          | Light gray | The agent's replies, what is being typed             |
 | `primary`       | White      | Headings and emphasis                                |
 | `secondary`     | Silver     | Hovered labels, the to-do count                      |
-| `success`       | Cyan       | Live and working status (`●`, `⬢`), focused borders  |
-| `warning`       | Blue       | Warnings, waiting on approval, non-agent modes       |
+| `success`       | Cyan       | Live and working status (`●`, `⬢`), focused borders, non-agent modes |
+| `warning`       | Blue       | Warnings, waiting on approval                        |
 | `error`         | Red        | Errors, failed steps, danger actions                 |
 | `pending`       | White      | Pending states                                       |
 | `muted`         | Gray       | Secondary text, prompts                              |

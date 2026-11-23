@@ -32,8 +32,16 @@ pub struct ReviewScore {
     /// Of those, the ones whose work was right: good work it would send
     /// back
     pub false_alarms: u32,
-    /// List-price cost of the reviews in USD
+    /// List-price cost of the reviews with a known price, in USD
     pub cost_usd: f64,
+    /// Reviews whose price was unknown, which `cost_usd` leaves out
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unpriced: u32,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
+const fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl ReviewScore {
@@ -51,6 +59,7 @@ impl ReviewScore {
             caught: 0,
             false_alarms: 0,
             cost_usd: 0.0,
+            unpriced: 0,
         };
         score.count(review, right);
         score
@@ -67,7 +76,10 @@ impl ReviewScore {
     /// known.
     fn count(&mut self, review: &Review, right: Option<bool>) {
         self.reviewed += 1;
-        self.cost_usd += review.cost_usd;
+        match review.cost_usd {
+            Some(cost_usd) => self.cost_usd += cost_usd,
+            None => self.unpriced += 1,
+        }
         let Some(right) = right else {
             return;
         };

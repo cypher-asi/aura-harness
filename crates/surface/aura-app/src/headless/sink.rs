@@ -4,7 +4,7 @@
 //! events to an eval run's trace.
 
 use super::output::{ExitReason, Output, StreamEvent};
-use crate::event_loop::hud::call_stats;
+use crate::event_loop::hud::{call_session_usage, call_stats};
 use crate::session_checkpoint::SessionUsage;
 use async_trait::async_trait;
 use aura_agent::{
@@ -218,6 +218,7 @@ impl TurnEventSink for HeadlessSink {
         let call = ModelCall {
             model,
             route,
+            purpose: None,
             usage: Usage {
                 input_tokens,
                 output_tokens,
@@ -226,25 +227,15 @@ impl TurnEventSink for HeadlessSink {
             },
         };
         let stats = call_stats(&call, self.context_limit);
-        let model = call.model;
-        self.tally.usage.add(&SessionUsage {
-            calls: 1,
-            input_tokens: stats.input_tokens,
-            cache_read_tokens: stats.cache_read_tokens,
-            cache_write_tokens: stats.cache_write_tokens,
-            output_tokens: stats.output_tokens,
-            cost_usd: stats.cost_usd.unwrap_or(0.0),
-            priced: stats.cost_usd.is_some(),
-            context_tokens: stats.prompt_tokens(),
-            models: vec![model.clone()],
-        });
+        self.tally.usage.add(&call_session_usage(&stats));
         self.output.event(&StreamEvent::Usage {
-            model: &model,
+            model: &stats.model,
             input_tokens: stats.input_tokens,
             cache_read_tokens: stats.cache_read_tokens,
             cache_write_tokens: stats.cache_write_tokens,
             output_tokens: stats.output_tokens,
             cost_usd: stats.cost_usd,
+            unpriced: stats.unpriced,
         });
         self.enforce_limits();
     }

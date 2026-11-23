@@ -36,7 +36,7 @@ pub use arms::{default_against, resolve_arms, resolve_classifier, DifficultyRout
 pub use estimate::{estimate, list_price, Estimate};
 pub use pairs::{judge_pairs, judge_task, seed, EndedRun};
 pub use plan_shares::{plan_shares, PlanReading};
-pub use schedule::{run_name, Schedule, DEFAULT_CONCURRENCY};
+pub use schedule::{run_name, Schedule, Spent, DEFAULT_CONCURRENCY};
 pub use source::{prompts, relative, title};
 pub use summary::{
     judge_cost_usd, judge_unpriced_calls, summarize, task_cells, too_close, turn_cells, ArmSummary,

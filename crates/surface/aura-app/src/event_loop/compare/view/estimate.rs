@@ -56,11 +56,7 @@ impl EstimateView<'_> {
         row(&mut out, "Check", &self.check());
         row(&mut out, "Estimate", &self.cost());
         if let Some(budget) = self.budget_usd {
-            let budget = format!(
-                "{}: no new run starts once the finished ones cost that much",
-                money(budget)
-            );
-            row(&mut out, "Budget", &budget);
+            row(&mut out, "Budget", &self.budget(budget));
         }
         for note in self.notes {
             row(&mut out, "Note", note);
@@ -125,6 +121,31 @@ impl EstimateView<'_> {
             Some(check) => format!("`{check}` after each run").into(),
             None => "none · --check <cmd> or AURA_CHECK_COMMAND counts passes".into(),
         }
+    }
+
+    /// What the budget of `budget_usd` stops, and, when an arm's price is
+    /// unknown, that its calls are not counted toward it. The judge runs
+    /// after every run has ended, so its price does not matter here.
+    fn budget(&self, budget_usd: f64) -> String {
+        let mut budget = format!(
+            "{}: no new run starts once the finished ones cost that much",
+            money(budget_usd)
+        );
+        let unpriced: Vec<&str> = [("A", self.estimate.a_usd), ("B", self.estimate.b_usd)]
+            .into_iter()
+            .filter_map(|(arm, usd)| usd.is_none().then_some(arm))
+            .collect();
+        let (arms, has, its) = match unpriced.as_slice() {
+            [] => return budget,
+            [arm] => ((*arm).to_string(), "has", "its"),
+            arms => (arms.join(" and "), "have", "their"),
+        };
+        let _ = write!(
+            budget,
+            "\nit counts only priced calls: {arms} {has} no known price, \
+             so {its} calls are not counted"
+        );
+        budget
     }
 
     /// What each arm and the judge should cost at list prices.

@@ -9,17 +9,38 @@ use std::collections::VecDeque;
 /// Runs that may work at the same time, across both arms.
 pub const DEFAULT_CONCURRENCY: usize = 4;
 
+/// What the finished runs have spent against the budget: the list-price
+/// cost of their priced calls, and how many calls had no known price and
+/// so are not counted in it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Spent {
+    /// What the priced calls cost
+    pub usd: f64,
+    /// Calls with no known price, which `usd` (and so the budget) leaves
+    /// out
+    pub unpriced_calls: u32,
+}
+
+impl Spent {
+    /// Whether every call had a price, so `usd` is all that was spent.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        self.unpriced_calls == 0
+    }
+}
+
 /// Which runs start when: the arms alternate (`a-1`, `b-1`, `a-2`, ...)
 /// so a budget that runs out leaves them balanced; at most `cap` work at
-/// once; and once what the finished runs cost reaches the budget, no new
-/// run starts.
+/// once; and once what the finished runs' priced calls cost reaches the
+/// budget, no new run starts. Calls with no known price are counted but
+/// never priced, so they cannot bring the budget closer.
 #[derive(Debug, Clone)]
 pub struct Schedule {
     pending: VecDeque<(CompareArm, u32)>,
     running: usize,
     cap: usize,
     budget_usd: Option<f64>,
-    spent_usd: f64,
+    spent: Spent,
 }
 
 impl Schedule {
@@ -34,7 +55,7 @@ impl Schedule {
             running: 0,
             cap: cap.max(1),
             budget_usd,
-            spent_usd: 0.0,
+            spent: Spent::default(),
         }
     }
 
@@ -49,22 +70,25 @@ impl Schedule {
         Some(next)
     }
 
-    /// A run ended, having cost `cost_usd`.
-    pub fn finished(&mut self, cost_usd: f64) {
+    /// A run ended, its priced calls having cost `cost_usd`, and
+    /// `unpriced_calls` more having no known price.
+    pub fn finished(&mut self, cost_usd: f64, unpriced_calls: u32) {
         self.running = self.running.saturating_sub(1);
-        self.spent_usd += cost_usd.max(0.0);
+        self.spent.usd += cost_usd.max(0.0);
+        self.spent.unpriced_calls = self.spent.unpriced_calls.saturating_add(unpriced_calls);
     }
 
-    /// Whether the budget is spent.
+    /// Whether the budget is spent, by the priced calls alone: an unknown
+    /// price is not guessed at.
     fn over_budget(&self) -> bool {
         self.budget_usd
-            .is_some_and(|budget| self.spent_usd >= budget)
+            .is_some_and(|budget| self.spent.usd >= budget)
     }
 
-    /// What the finished runs cost so far.
+    /// What the finished runs spent so far, and the calls that leaves out.
     #[must_use]
-    pub const fn spent_usd(&self) -> f64 {
-        self.spent_usd
+    pub const fn spent(&self) -> Spent {
+        self.spent
     }
 
     /// Drop the runs that have not started (the comparison is stopped,

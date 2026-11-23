@@ -209,6 +209,7 @@ fn replay() -> ComparePayload {
             calls: 12,
             cost_usd: 0.9,
             priced: true,
+            unpriced_calls: 0,
             models: vec!["claude-opus-4-7".to_string()],
         },
         reference: Some(aura_core_types::Reference {

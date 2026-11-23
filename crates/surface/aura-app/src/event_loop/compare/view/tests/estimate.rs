@@ -204,11 +204,76 @@ fn the_estimate_of_a_prompt_is_pinned_byte_for_byte() {
         "                for turns of about 150k input and 6k output tokens",
         "                some prices are unknown",
         "  Budget        $2.00: no new run starts once the finished ones cost that much",
+        "                it counts only priced calls: B has no known price, so its calls",
+        "                are not counted",
     ];
     assert_eq!(
         estimate_of(None, &[], None, Some(2.0), &[]),
         expected.join("\n")
     );
+}
+
+#[test]
+fn the_budget_row_names_every_arm_whose_price_is_unknown() {
+    let budget_row = |a_usd, b_usd, judge_usd| {
+        let text = EstimateView {
+            estimate: Estimate {
+                a_usd,
+                b_usd,
+                judge_usd,
+            },
+            ..view_with_budget(Some(2.0))
+        }
+        .render();
+        let at = text.find("\n  Budget").map_or(text.len(), |at| at + 1);
+        text[at..].to_string()
+    };
+    assert_eq!(
+        budget_row(None, None, Some(0.1)),
+        "  Budget        $2.00: no new run starts once the finished ones cost that much\n\
+         \x20               it counts only priced calls: A and B have no known price, so\n\
+         \x20               their calls are not counted"
+    );
+    assert_eq!(
+        budget_row(Some(1.0), Some(2.0), None),
+        "  Budget        $2.00: no new run starts once the finished ones cost that much",
+        "the judge runs after the budget's runs, so its price does not matter here"
+    );
+    let unbudgeted = EstimateView {
+        estimate: Estimate {
+            a_usd: None,
+            b_usd: None,
+            judge_usd: None,
+        },
+        ..view_with_budget(None)
+    }
+    .render();
+    assert!(!unbudgeted.contains("Budget"), "{unbudgeted}");
+}
+
+/// A prompt's estimate with `budget_usd`, every price known.
+fn view_with_budget(budget_usd: Option<f64>) -> EstimateView<'static> {
+    EstimateView {
+        task: "fix it",
+        prompts: 1,
+        session: None,
+        examples: &[],
+        a: "aura-claude-sonnet-4-6 (cloud)".to_string(),
+        b: "mystery".to_string(),
+        classifier: "haiku",
+        classifier_named: true,
+        judge: "aura-claude-opus-4-7",
+        repeats: 1,
+        check: None,
+        budget_usd,
+        concurrency: 4,
+        estimate: Estimate {
+            a_usd: Some(1.0),
+            b_usd: Some(1.0),
+            judge_usd: Some(0.1),
+        },
+        notes: &[],
+    }
 }
 
 #[test]

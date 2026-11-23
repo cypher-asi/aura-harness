@@ -19,10 +19,11 @@ pub struct Asked {
     pub task_id: String,
     pub model: String,
     pub right: bool,
-    /// The answer, what was found and what it cost; the problem when the
-    /// reviewer gave none
-    pub answer: Result<(Answer, String, f64), String>,
-    /// What a reply without a verdict cost
+    /// The answer, what was found and what it cost (`None` when the
+    /// reviewer's price is unknown); the problem when the reviewer gave
+    /// none
+    pub answer: Result<(Answer, String, Option<f64>), String>,
+    /// What a reply without a verdict cost; 0 when its price is unknown
     pub wasted_usd: f64,
     /// How many of its criteria the reviewer found met, when it was held
     /// to any
@@ -31,7 +32,7 @@ pub struct Asked {
 
 impl Asked {
     /// The review of `prepared` that came to `answer`.
-    fn new(prepared: &Prepared, answer: Result<(Answer, String, f64), String>) -> Self {
+    fn new(prepared: &Prepared, answer: Result<(Answer, String, Option<f64>), String>) -> Self {
         Self {
             run: prepared.run.clone(),
             task_id: prepared.task_id.clone(),
@@ -52,7 +53,7 @@ impl Asked {
     /// `judge`'s review of `prepared`, read from its `response`.
     #[must_use]
     pub fn of(prepared: &Prepared, judge: &str, response: &ModelResponse) -> Self {
-        let cost_usd = estimate_cost_usd(judge, &response.usage).unwrap_or(0.0);
+        let cost_usd = estimate_cost_usd(judge, &response.usage);
         let Some((answer, findings)) = turn::parse_answer(&response.message.text_content()) else {
             let cut = if response.stop_reason == StopReason::MaxTokens {
                 "its reply was cut off at the token limit"
@@ -60,11 +61,12 @@ impl Asked {
                 "its reply ended without one"
             };
             let problem = format!(
-                "{NO_VERDICT}: {cut} after {} tokens, ${cost_usd:.3}",
-                response.usage.output_tokens
+                "{NO_VERDICT}: {cut} after {} tokens, {}",
+                response.usage.output_tokens,
+                cost_text(cost_usd)
             );
             return Self {
-                wasted_usd: cost_usd,
+                wasted_usd: cost_usd.unwrap_or(0.0),
                 ..Self::failed(prepared, problem)
             };
         };
@@ -104,7 +106,11 @@ impl Asked {
             Answer::Ok => "done",
             Answer::Other => "held up",
         };
-        let mut line = format!("{head}  {said:10}  ${cost_usd:.3}{}", self.criteria);
+        let mut line = format!(
+            "{head}  {said:10}  {}{}",
+            cost_text(*cost_usd),
+            self.criteria
+        );
         if *answer == Answer::Model {
             let shown = findings.lines().filter(|l| !l.trim().is_empty());
             for finding in shown.take(FINDINGS_SHOWN) {
@@ -116,10 +122,15 @@ impl Asked {
     }
 }
 
+/// `$0.012`, or `price unknown`.
+fn cost_text(cost_usd: Option<f64>) -> String {
+    cost_usd.map_or_else(|| "price unknown".to_string(), |usd| format!("${usd:.3}"))
+}
+
 /// How the reviews in `asked` held up, in a few lines.
 #[must_use]
 pub fn tally(asked: &[Asked]) -> String {
-    let answered: Vec<(&Asked, Answer, f64)> = asked
+    let answered: Vec<(&Asked, Answer, Option<f64>)> = asked
         .iter()
         .filter_map(|asked| {
             let (answer, _, cost_usd) = asked.answer.as_ref().ok()?;
@@ -137,11 +148,17 @@ pub fn tally(asked: &[Asked]) -> String {
     };
     let cost: f64 = answered
         .iter()
-        .map(|(_, _, cost_usd)| cost_usd)
+        .filter_map(|(_, _, cost_usd)| *cost_usd)
         .sum::<f64>()
         + asked.iter().map(|asked| asked.wasted_usd).sum::<f64>();
+    let unpriced = answered.iter().any(|(_, _, cost_usd)| cost_usd.is_none());
+    let cost = if unpriced {
+        format!("${cost:.2}+? at list price (some prices unknown)")
+    } else {
+        format!("${cost:.2} at list price")
+    };
     format!(
-        "{} reviews answered, {} not, ${cost:.2} at list price\n\
+        "{} reviews answered, {} not, {cost}\n\
          wrong work: {} of {} found unfinished\n\
          right work: {} of {} found unfinished",
         answered.len(),

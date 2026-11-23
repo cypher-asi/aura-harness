@@ -10,7 +10,8 @@ mod judge;
 pub use classify::classify_prompt;
 pub use criteria::{hold_to_criteria, worker_note_for};
 pub use judge::{
-    ask_review, judge_failed, judge_for, judge_unverified, reviewer_for, verdict_judge_for, Judged,
+    ask_review, cost_text, judge_failed, judge_for, judge_unverified, reviewer_for,
+    verdict_judge_for, Judged,
 };
 
 use aura_agent_kernel::{Kernel, KernelError};

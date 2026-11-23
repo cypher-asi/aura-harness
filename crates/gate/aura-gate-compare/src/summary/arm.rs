@@ -27,7 +27,7 @@ pub struct ArmSummary {
     /// Calls of the finished runs with no known price, which
     /// `median_cost_usd` leaves out.
     pub finished_unpriced_calls: u32,
-    /// Tokens per model over every run, most expensive first.
+    /// Tokens per model and purpose over every run, most expensive first.
     pub tokens: Vec<ModelTokens>,
     /// Share of each plan window the arm's runs used.
     pub plan_usage: Vec<PlanShare>,

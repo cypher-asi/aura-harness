@@ -168,12 +168,42 @@ struct Tally {
     /// Gate's and the title's calls are left out: they run at a level of
     /// their own, not the one the turn was asked to think at.
     thinking: Option<(ThinkingEffort, ThinkingEffort)>,
+    /// What all the calls used
+    spent: Spent,
+    /// What the calls used per sign-in, in the order each was first used
+    sources: Vec<(&'static str, Spent)>,
+}
+
+/// Tokens and cost of some calls, and how many of them had no known
+/// price, so that a partly priced total is not taken for a whole one.
+#[derive(Debug, Default, Clone, Copy)]
+struct Spent {
     tokens: u64,
     cost_usd: f64,
+    /// Whether any call was priced
     priced: bool,
-    /// Tokens, cost and whether any call was priced, per sign-in, in the
-    /// order each was first used
-    sources: Vec<(&'static str, u64, f64, bool)>,
+    /// Calls with no known price, which `cost_usd` leaves out
+    unpriced_calls: u32,
+}
+
+impl Spent {
+    fn add(&mut self, usage: CallUsage) {
+        self.tokens += usage.tokens;
+        if let Some(cost) = usage.cost_usd {
+            self.cost_usd += cost;
+            self.priced = true;
+        }
+        self.unpriced_calls = self.unpriced_calls.saturating_add(usage.unpriced_calls);
+    }
+
+    /// `None` when the calls used no tokens.
+    fn usage(self) -> Option<CallUsage> {
+        (self.tokens > 0).then_some(CallUsage {
+            tokens: self.tokens,
+            cost_usd: self.priced.then_some(self.cost_usd),
+            unpriced_calls: self.unpriced_calls,
+        })
+    }
 }
 
 impl Tally {
@@ -194,24 +224,15 @@ impl Tally {
             });
         }
         if let Some(usage) = call.usage {
-            self.tokens += usage.tokens;
-            if let Some(cost) = usage.cost_usd {
-                self.cost_usd += cost;
-                self.priced = true;
-            }
+            self.spent.add(usage);
             let label = backend_for(call.route).source_label();
-            let at = match self.sources.iter().position(|(l, ..)| *l == label) {
-                Some(at) => at,
+            match self.sources.iter_mut().find(|(l, _)| *l == label) {
+                Some((_, source)) => source.add(usage),
                 None => {
-                    self.sources.push((label, 0, 0.0, false));
-                    self.sources.len() - 1
+                    let mut source = Spent::default();
+                    source.add(usage);
+                    self.sources.push((label, source));
                 }
-            };
-            let source = &mut self.sources[at];
-            source.1 += usage.tokens;
-            if let Some(cost) = usage.cost_usd {
-                source.2 += cost;
-                source.3 = true;
             }
         }
     }
@@ -266,18 +287,18 @@ impl Tally {
         if parts.is_empty() {
             return None;
         }
-        let usage = (self.tokens > 0).then(|| CallUsage {
-            tokens: self.tokens,
-            cost_usd: self.priced.then_some(self.cost_usd),
-        });
+        let usage = self.spent.usage();
         let sources = self
             .sources
             .iter()
-            .filter(|(_, tokens, ..)| *tokens > 0)
-            .map(|&(label, tokens, cost_usd, priced)| SourceUsage {
-                label: label.to_string(),
-                tokens,
-                cost_usd: priced.then_some(cost_usd),
+            .filter_map(|&(label, spent)| {
+                let usage = spent.usage()?;
+                Some(SourceUsage {
+                    label: label.to_string(),
+                    tokens: usage.tokens,
+                    cost_usd: usage.cost_usd,
+                    unpriced_calls: usage.unpriced_calls,
+                })
             })
             .collect();
         Some(Footer {
@@ -594,6 +615,38 @@ mod tests {
             footer.usage.unwrap().tokens,
             footer.sources.iter().map(|s| s.tokens).sum::<u64>()
         );
+    }
+
+    #[test]
+    fn a_turn_with_an_unpriced_call_is_partly_priced() {
+        let agent = AgentId::generate();
+        let mut calls = TurnCalls::default();
+        for tx in [
+            prompt(
+                agent,
+                Route::turn("claude/claude-sonnet-4-6", RouteReason::Pinned),
+            ),
+            routed_call(agent, "claude-sonnet-4-6", "claude/claude-sonnet-4-6", 100),
+            routed_call(agent, "mystery/model-x", "openrouter/mystery/model-x", 10),
+            call(agent, "local/qwen3:4b", None, 10),
+        ] {
+            calls.see(&tx);
+        }
+        let footer = calls.footer().unwrap();
+        let usage = footer.usage.unwrap();
+        assert!(usage.cost_usd.is_some_and(|cost| cost > 0.0));
+        assert_eq!(
+            usage.unpriced_calls, 1,
+            "the unknown model is left out of the cost; the local one is free"
+        );
+        let unpriced: Vec<(&str, u32)> = (footer.sources.iter())
+            .map(|s| (s.label.as_str(), s.unpriced_calls))
+            .collect();
+        assert_eq!(
+            unpriced,
+            [("Claude plan", 0), ("OpenRouter", 1), ("local", 0)]
+        );
+        assert_eq!(footer.sources[1].cost_usd, None, "nothing it ran is priced");
     }
 
     #[test]

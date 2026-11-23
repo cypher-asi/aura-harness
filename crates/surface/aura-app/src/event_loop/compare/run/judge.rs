@@ -8,6 +8,7 @@ use crate::event_loop::agents::AgentSession;
 use aura_core_types::CompareJudgment;
 use aura_gate::compare::{judge_pairs, judge_task, seed, EndedRun, ModelCall};
 use aura_gate::judge::blind;
+use aura_model::ModelCallPurpose;
 use futures_util::stream::{self, StreamExt};
 use std::borrow::Cow;
 use std::time::Duration;
@@ -145,6 +146,7 @@ impl PairJudging<'_> {
                 let call = ModelCall {
                     model: result.response.trace.model.clone(),
                     route: Some(plan.judge.clone()),
+                    purpose: Some(ModelCallPurpose::Judge),
                     usage: result.response.usage.clone(),
                 };
                 Ok((blind::reply_text(&result.response), call.list_price()))

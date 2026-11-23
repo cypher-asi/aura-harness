@@ -66,7 +66,8 @@ impl Summary<'_> {
 }
 
 /// `claude-sonnet-4-6 9 calls, 126k in / 5k out, $0.18` for each of
-/// `rows`, one after another.
+/// `rows`, one after another, a row of calls made beside the runs' own
+/// work named for what they were for (`claude-haiku-4-5 · classify`).
 fn write_model_tokens(out: &mut String, rows: &[ModelTokens]) {
     if rows.is_empty() {
         out.push_str("no model calls");
@@ -76,9 +77,10 @@ fn write_model_tokens(out: &mut String, rows: &[ModelTokens]) {
         if i > 0 {
             out.push_str("; ");
         }
+        let purpose = (row.purpose.as_deref()).map_or_else(String::new, |p| format!(" · {p}"));
         let _ = write!(
             out,
-            "{} {} call{}, {} in / {} out, {}",
+            "{}{purpose} {} call{}, {} in / {} out, {}",
             row.model,
             row.calls,
             plural(row.calls),

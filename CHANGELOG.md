@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Benchmarks' tokens say what each call was for
+
+##### Changed
+
+- A benchmark's tokens table gives the calls made beside a run's own
+  work rows of their own, named for what they were for, such as
+  `gpt-6.1-terra · criteria` and `sonnet-5-5 · judge`; `/compare show`
+  names them the same way. They were added into their model's row, so
+  a Gate arm listed a model neither arm named, the cheapest
+  standard-tier model writing its turns' acceptance criteria, with no
+  reason given, and Gate's judge calls on the work's own model counted
+  as that work. Runs that finished before keep one row per model.
+
 ### Benchmarks pick their classifier
 
 ##### Added

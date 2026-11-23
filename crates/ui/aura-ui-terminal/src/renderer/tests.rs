@@ -3218,9 +3218,31 @@ fn test_reply_footer_shows_model_tokens_and_cost_after_the_turn() {
     let usage = CallUsage {
         tokens: 12_400,
         cost_usd: Some(0.0418),
+        unpriced_calls: 0,
     };
     let footer = reply_footer_row("claude-opus-4-7", Some(usage), 200);
     assert_eq!(footer, "[claude-opus-4-7 · 12.4k tok · $0.042]");
+}
+
+#[test]
+fn test_reply_footer_marks_a_partly_priced_turn() {
+    let usage = CallUsage {
+        tokens: 12_400,
+        cost_usd: Some(0.0418),
+        unpriced_calls: 2,
+    };
+    let footer = reply_footer_row("claude-opus-4-7 · glm-9", Some(usage), 200);
+    assert_eq!(footer, "[claude-opus-4-7 · glm-9 · 12.4k tok · $0.042+?]");
+    let unpriced = CallUsage {
+        tokens: 900,
+        cost_usd: None,
+        unpriced_calls: 2,
+    };
+    assert_eq!(
+        reply_footer_row("glm-9", Some(unpriced), 200),
+        "[glm-9 · 900 tok]",
+        "nothing priced shows no cost, as before"
+    );
 }
 
 #[test]
@@ -3230,6 +3252,7 @@ fn test_reply_footer_without_usage_or_cost() {
     let local = CallUsage {
         tokens: 900,
         cost_usd: None,
+        unpriced_calls: 0,
     };
     assert_eq!(
         reply_footer_row("qwen3:4b", Some(local), 200),
@@ -3244,6 +3267,7 @@ fn test_reply_footer_drops_cost_then_tokens_when_narrow() {
     let usage = CallUsage {
         tokens: 1_250_000,
         cost_usd: Some(3.5),
+        unpriced_calls: 0,
     };
     let meta = reply_meta(Some("claude-opus-4-7"), Some(usage), &[]);
     let footer = |width| {
@@ -3267,7 +3291,12 @@ fn test_reply_meta_formats_tokens_and_cost() {
     use super::segments::reply_meta;
 
     let meta = |tokens, cost_usd| {
-        reply_meta(Some("m"), Some(CallUsage { tokens, cost_usd }), &[]).join(" · ")
+        let usage = CallUsage {
+            tokens,
+            cost_usd,
+            unpriced_calls: 0,
+        };
+        reply_meta(Some("m"), Some(usage), &[]).join(" · ")
     };
     assert_eq!(meta(842, Some(0.004)), "m · 842 tok · <$0.01");
     assert_eq!(meta(12_449, Some(0.0418)), "m · 12.4k tok · $0.042");
@@ -4611,6 +4640,7 @@ fn test_status_line_shows_context_cache_and_cost() {
         cache_write_tokens: 0,
         output_tokens: 900,
         cost_usd: Some(3.42),
+        unpriced: false,
         context_limit: Some(200_000),
     }));
     app.process_command(UiCommand::SetQueue(vec![crate::events::QueuedItemView {
@@ -5905,17 +5935,20 @@ fn test_reply_footer_says_who_paid_for_the_tokens() {
         usage: Some(CallUsage {
             tokens: 27_900,
             cost_usd: Some(0.004),
+            unpriced_calls: 0,
         }),
         sources: vec![
             SourceUsage {
                 label: "Claude plan".to_string(),
                 tokens: 25_100,
                 cost_usd: None,
+                unpriced_calls: 0,
             },
             SourceUsage {
                 label: "OpenRouter".to_string(),
                 tokens: 2_800,
                 cost_usd: Some(0.004),
+                unpriced_calls: 0,
             },
         ],
     });
@@ -5941,20 +5974,34 @@ fn test_reply_footer_says_who_paid_for_the_tokens() {
             label: "Claude plan".to_string(),
             tokens: 25_100,
             cost_usd: None,
+            unpriced_calls: 0,
         },
         SourceUsage {
             label: "OpenRouter".to_string(),
             tokens: 2_800,
             cost_usd: Some(0.004),
+            unpriced_calls: 0,
         },
     ];
     let usage = CallUsage {
         tokens: 27_900,
         cost_usd: Some(0.004),
+        unpriced_calls: 0,
     };
     assert_eq!(
         super::segments::reply_meta(Some("m"), Some(usage), &sources).join(" · "),
         "m · via Claude plan 25.1k tok · OpenRouter 2.8k tok <$0.01"
+    );
+    let partly = [
+        sources[0].clone(),
+        SourceUsage {
+            unpriced_calls: 1,
+            ..sources[1].clone()
+        },
+    ];
+    assert_eq!(
+        super::segments::reply_meta(Some("m"), Some(usage), &partly).join(" · "),
+        "m · via Claude plan 25.1k tok · OpenRouter 2.8k tok <$0.01+?"
     );
 }
 
@@ -5968,11 +6015,13 @@ fn test_reply_footer_names_a_lone_sign_in_without_repeating_its_totals() {
         Some(CallUsage {
             tokens: 1_600_000,
             cost_usd: Some(0.998),
+            unpriced_calls: 0,
         }),
         &[SourceUsage {
             label: "Claude plan".to_string(),
             tokens: 1_600_000,
             cost_usd: Some(0.998),
+            unpriced_calls: 0,
         }],
     );
     assert_eq!(

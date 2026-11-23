@@ -97,11 +97,10 @@ impl Summary<'_> {
             "\n  The session itself: {calls} call{}, ",
             plural(calls)
         );
-        if baseline.priced {
-            out.push_str(&money(baseline.cost_usd));
-        } else {
-            out.push_str("no price");
-        }
+        let cost = baseline
+            .priced
+            .then(|| BenchCost::new(baseline.cost_usd, baseline.unpriced_calls));
+        out.push_str(&cost.map_or_else(|| "no price".to_string(), |cost| cost.read(money)));
         if !baseline.models.is_empty() {
             let _ = write!(out, " on {}", baseline.models.join(", "));
         }

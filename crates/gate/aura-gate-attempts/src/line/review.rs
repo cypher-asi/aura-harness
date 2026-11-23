@@ -27,8 +27,11 @@ pub struct Review {
     pub findings: String,
     /// The model that reviewed
     pub judge: String,
-    /// List-price cost of the review in USD
-    pub cost_usd: f64,
+    /// List-price cost of the review in USD; `None` when the reviewer's
+    /// price was unknown (lines written before that was kept always
+    /// have one)
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
     /// How the judge was asked, e.g. `plain`, `thinking`, or
     /// `plain+criteria` when it was given the attempt's acceptance
     /// criteria

@@ -154,6 +154,7 @@ pub(super) fn tokens(rows: &[ModelTokens]) -> Vec<BenchTokens> {
     rows.iter()
         .map(|row| BenchTokens {
             model: row.model.clone(),
+            purpose: row.purpose.clone(),
             calls: row.calls,
             input_tokens: row.input_tokens,
             output_tokens: row.output_tokens,
@@ -266,6 +267,7 @@ pub(super) fn view(
             calls: b.calls,
             cost_usd: b.cost_usd,
             priced: b.priced,
+            unpriced_calls: b.unpriced_calls,
             models: b.models.clone(),
         }),
         has_reference: payload.source.reference().is_some(),

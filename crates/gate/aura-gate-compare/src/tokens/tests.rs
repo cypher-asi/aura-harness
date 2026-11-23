@@ -15,6 +15,7 @@ fn call(model: &str, usage: Usage) -> ModelCall {
     ModelCall {
         model: model.to_string(),
         route: None,
+        purpose: None,
         usage,
     }
 }
@@ -25,6 +26,55 @@ fn routed(model: &str, route: &str, usage: Usage) -> ModelCall {
         route: Some(route.to_string()),
         ..call(model, usage)
     }
+}
+
+/// `call`, made for `purpose` beside the agent's own work.
+fn made_for(purpose: ModelCallPurpose, call: ModelCall) -> ModelCall {
+    ModelCall {
+        purpose: Some(purpose),
+        ..call
+    }
+}
+
+#[test]
+fn a_model_s_calls_beside_the_work_get_a_row_per_purpose() {
+    use ModelCallPurpose::{Classify, Criteria, Judge};
+    let tokens = || usage(1_000, 100, None, Some(0));
+    let sonnet = "claude-sonnet-5-5";
+    let rows = tally([
+        call(sonnet, tokens()),
+        made_for(Judge, call(sonnet, tokens())),
+        call(sonnet, tokens()),
+        made_for(Criteria, call("gpt-6.1-terra", tokens())),
+        made_for(Classify, call("claude-haiku-5-5", tokens())),
+    ]);
+    let shown: Vec<(&str, Option<&str>, u32)> = (rows.iter())
+        .map(|r| (r.model.as_str(), r.purpose.as_deref(), r.calls))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (sonnet, None, 2),
+            (sonnet, Some("judge"), 1),
+            ("gpt-6.1-terra", Some("criteria"), 1),
+            ("claude-haiku-5-5", Some("classify"), 1),
+        ],
+        "most expensive first"
+    );
+
+    let merged = merge_tokens(rows.iter().chain(rows.iter()));
+    let merged: Vec<(Option<&str>, u32)> = (merged.iter())
+        .map(|r| (r.purpose.as_deref(), r.calls))
+        .collect();
+    assert_eq!(
+        merged,
+        [
+            (None, 4),
+            (Some("judge"), 2),
+            (Some("criteria"), 2),
+            (Some("classify"), 2)
+        ]
+    );
 }
 
 #[test]

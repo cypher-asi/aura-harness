@@ -6,7 +6,7 @@
 //! machine (streaming / thinking toggles, had-text tracking) and the
 //! [`AgentUi`] that feeds the chat of the agent whose turn it is.
 
-use super::hud::{call_stats, todo_views};
+use super::hud::{call_session_usage, call_stats, todo_views};
 use super::plan_mode::{plan_view, plan_views};
 use super::record_ui::RecordPanelAgent;
 use crate::session_checkpoint::SessionUsage;
@@ -141,6 +141,8 @@ pub(crate) fn call_usage(call: &ModelCall) -> Option<CallUsage> {
     (tokens > 0).then(|| CallUsage {
         tokens,
         cost_usd: call.estimate_cost_usd(),
+        // A local model's call is free, not unpriced.
+        unpriced_calls: u32::from(call.list_price().is_none()),
     })
 }
 
@@ -451,6 +453,7 @@ impl TurnEventSink for UiCommandSink {
             let call = ModelCall {
                 model,
                 route,
+                purpose: None,
                 usage: Usage {
                     input_tokens,
                     output_tokens,
@@ -459,17 +462,7 @@ impl TurnEventSink for UiCommandSink {
                 },
             };
             let stats = call_stats(&call, self.state.context_limit);
-            self.state.usage.add(&SessionUsage {
-                calls: 1,
-                input_tokens: stats.input_tokens,
-                cache_read_tokens: stats.cache_read_tokens,
-                cache_write_tokens: stats.cache_write_tokens,
-                output_tokens: stats.output_tokens,
-                cost_usd: stats.cost_usd.unwrap_or(0.0),
-                priced: stats.cost_usd.is_some(),
-                context_tokens: stats.prompt_tokens(),
-                models: vec![call.model],
-            });
+            self.state.usage.add(&call_session_usage(&stats));
             self.state.turn_cost_usd += stats.cost_usd.unwrap_or(0.0);
             self.ui.send(UiCommand::CallStats(stats)).await;
             self.enforce_cost_cap().await;

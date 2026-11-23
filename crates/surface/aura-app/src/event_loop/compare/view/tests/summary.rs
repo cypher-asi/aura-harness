@@ -5,8 +5,8 @@
 use super::super::render;
 use super::{examples, line, payload, replay, routed, share, unpriced};
 use aura_core_types::{
-    AgentId, BenchSource, ComparePayload, Difficulty, OutcomeSignal, Plan, PromptCategory,
-    RefVerdict, RunTurn, SessionBaseline,
+    AgentId, BenchSource, CompareArm, ComparePayload, Difficulty, ModelTokens, OutcomeSignal, Plan,
+    PromptCategory, RefVerdict, RunTurn, SessionBaseline,
 };
 
 #[test]
@@ -91,6 +91,30 @@ fn costs_with_unpriced_calls_read_as_parts_or_unknown_and_are_not_compared() {
 
     let priced = render("Compare #1", &payload());
     assert!(!priced.contains("no known price"), "{priced}");
+}
+
+#[test]
+fn calls_beside_the_work_are_named_for_what_they_were_for() {
+    let mut classified = payload();
+    for run in (classified.runs.iter_mut()).filter(|run| run.arm == CompareArm::A) {
+        run.tokens.push(ModelTokens {
+            model: "claude-haiku-4-5".to_string(),
+            purpose: Some("classify".to_string()),
+            calls: 1,
+            input_tokens: 4_000,
+            output_tokens: 50,
+            cost_usd: 0.001,
+            ..ModelTokens::default()
+        });
+    }
+    let text = render("Compare #1", &classified);
+    assert!(
+        text.contains(
+            "A: claude-sonnet-4-6 9 calls, 126k in / 5k out, $0.18; \
+             claude-haiku-4-5 · classify 3 calls, 12k in / 150 out, $0.0030"
+        ),
+        "{text}"
+    );
 }
 
 #[test]
@@ -189,6 +213,7 @@ fn a_replayed_session_shows_each_prompt_its_cost_and_the_reference() {
             calls: 12,
             cost_usd: 0.9,
             priced: true,
+            unpriced_calls: 0,
             models: vec!["claude-opus-4-7".to_string()],
         },
         reference: None,
@@ -221,6 +246,19 @@ fn a_replayed_session_shows_each_prompt_its_cost_and_the_reference() {
     assert!(first.contains(&"$0.02, 3 pass"), "{first:?}");
     let second = line(&text, "2.");
     assert!(second.contains(&"$0.04, 3 fail"), "{second:?}");
+}
+
+#[test]
+fn a_partly_priced_session_marks_its_cost() {
+    let mut partly = replay();
+    if let BenchSource::Session { baseline, .. } = &mut partly.source {
+        baseline.unpriced_calls = 2;
+    }
+    let text = render("Compare #1", &partly);
+    assert!(
+        text.contains("The session itself: 12 calls, $0.90+? on claude-opus-4-7"),
+        "{text}"
+    );
 }
 
 #[test]

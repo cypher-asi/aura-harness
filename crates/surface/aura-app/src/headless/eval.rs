@@ -172,8 +172,8 @@ pub struct GateUse {
     /// Models Gate routed the run's turns and subtasks to, first used
     /// first.
     pub routed: Vec<String>,
-    /// Model calls of the run and its subtasks per model, classifier
-    /// and judge calls included.
+    /// Model calls of the run and its subtasks per model and purpose,
+    /// classifier and judge calls included.
     pub tokens: Vec<ModelTokens>,
     /// What Gate's judge found on the turns that failed, oldest first.
     pub judged: Vec<Judged>,
@@ -184,7 +184,17 @@ impl GateUse {
     /// turns, and part of `tokens` too.
     #[must_use]
     pub fn judge_cost_usd(&self) -> f64 {
-        self.judged.iter().map(|judged| judged.cost_usd).sum()
+        self.judged
+            .iter()
+            .filter_map(|judged| judged.cost_usd)
+            .sum()
+    }
+
+    /// The judge's calls whose price is unknown, which
+    /// [`Self::judge_cost_usd`] leaves out.
+    #[must_use]
+    pub fn judge_unpriced_calls(&self) -> usize {
+        self.judged.iter().filter(|j| j.cost_usd.is_none()).count()
     }
 }
 

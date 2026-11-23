@@ -167,6 +167,12 @@ pub const BY_DIFFICULTY: &str = "by difficulty";
 /// fast model the user can run.
 pub const AUTO_CLASSIFIER: &str = "auto";
 
+/// The classifier row's starting value: Claude Haiku, sent as
+/// `--classifier haiku` is when the form can't name the Haiku the user
+/// runs. Cycling or the selector still pick another, [`AUTO_CLASSIFIER`]
+/// included.
+pub const DEFAULT_CLASSIFIER: &str = "haiku";
+
 /// The names of the difficulties, easiest first, as the arm string has
 /// them.
 pub const DIFFICULTIES: [&str; 3] = ["easy", "medium", "hard"];
@@ -219,7 +225,8 @@ pub struct BenchForm {
     /// As `a_models`, for arm B
     pub b_models: [String; 3],
     /// The model that classifies each run's prompt, or
-    /// [`AUTO_CLASSIFIER`] for Gate's choice
+    /// [`AUTO_CLASSIFIER`] for Gate's choice; [`DEFAULT_CLASSIFIER`]
+    /// until changed
     pub classifier: String,
     pub repeats: u32,
     /// Empty for the project's check
@@ -242,7 +249,7 @@ impl Default for BenchForm {
             b: String::new(),
             a_models: Default::default(),
             b_models: Default::default(),
-            classifier: AUTO_CLASSIFIER.to_string(),
+            classifier: DEFAULT_CLASSIFIER.to_string(),
             repeats: 3,
             check: String::new(),
             budget: String::new(),
@@ -632,6 +639,16 @@ impl App {
             .collect()
     }
 
+    /// The classifier a new benchmark starts on: the first Haiku that can
+    /// run, else [`DEFAULT_CLASSIFIER`] for the server to find.
+    #[must_use]
+    pub fn default_bench_classifier(&self) -> String {
+        self.bench_model_choices()
+            .into_iter()
+            .find(|id| id.to_ascii_lowercase().contains(DEFAULT_CLASSIFIER))
+            .unwrap_or_else(|| DEFAULT_CLASSIFIER.to_string())
+    }
+
     /// Open the model selector, as `/model` does, to pick the model of the
     /// form's row `field` (a difficulty's, or the classifier's), filtered
     /// by `filter` and on the row's model when it has one.
@@ -834,6 +851,11 @@ impl App {
     /// Open the form, asking for the sessions it offers.
     pub(super) fn open_bench_form(&mut self) {
         self.bench.mode = BenchMode::Form;
+        if self.bench.form.classifier == DEFAULT_CLASSIFIER {
+            // Name the Haiku the user runs, now the model list is likely
+            // in; a classifier the user chose is left alone.
+            self.bench.form.classifier = self.default_bench_classifier();
+        }
         self.bench.form.estimate = None;
         self.bench.form.waiting = false;
         self.send_bench(BenchRequest::Sessions);
@@ -943,12 +965,13 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') => self.change_form_value(false),
             KeyCode::Right | KeyCode::Char('l') => self.change_form_value(true),
             KeyCode::Delete | KeyCode::Backspace if field.is_text() => {
+                let default_classifier = self.default_bench_classifier();
                 let form = &mut self.bench.form;
                 match field {
                     FormField::Prompt => form.prompt.clear(),
                     FormField::Check => form.check.clear(),
                     FormField::Budget => form.budget.clear(),
-                    FormField::Classifier => form.classifier = AUTO_CLASSIFIER.to_string(),
+                    FormField::Classifier => form.classifier = default_classifier,
                     _ => {
                         if let Some(model) = form.row_model_mut(field) {
                             model.clear();
@@ -1200,6 +1223,7 @@ mod tests {
                 title: "fix it".to_string(),
                 prompts: 3,
                 cost_usd: Some(0.4),
+                unpriced_calls: 0,
                 models: Vec::new(),
                 current: true,
             }],
@@ -1524,7 +1548,7 @@ mod tests {
     }
 
     #[test]
-    fn the_classifier_row_starts_auto_cycles_models_and_is_sent() {
+    fn the_classifier_row_starts_on_haiku_cycles_models_and_is_sent() {
         let mut app = three_models();
         app.bench.mode = BenchMode::Form;
         app.bench.form.field = FormField::B;
@@ -1534,16 +1558,23 @@ mod tests {
             FormField::Classifier,
             "after the arms"
         );
-        assert_eq!(app.bench.form.classifier, AUTO_CLASSIFIER);
-        assert_eq!(app.bench.form.classifier_model(), None);
+        assert_eq!(app.bench.form.classifier, DEFAULT_CLASSIFIER);
+        assert_eq!(
+            app.bench.form.classifier_model(),
+            Some(DEFAULT_CLASSIFIER.to_string()),
+            "haiku is sent for the server to find"
+        );
 
         app.change_form_value(true);
-        assert_eq!(app.bench.form.classifier, "claude/claude-sonnet-4-6");
-        app.change_form_value(false);
         assert_eq!(
             app.bench.form.classifier, AUTO_CLASSIFIER,
             "auto comes first"
         );
+        assert_eq!(app.bench.form.classifier_model(), None);
+        app.change_form_value(true);
+        assert_eq!(app.bench.form.classifier, "claude/claude-sonnet-4-6");
+        app.change_form_value(false);
+        assert_eq!(app.bench.form.classifier, AUTO_CLASSIFIER);
         app.change_form_value(false);
         assert_eq!(app.bench.form.classifier, "chatgpt/gpt-5.4", "and wraps");
 
@@ -1582,6 +1613,33 @@ mod tests {
 
         app.bench.form.field = FormField::Classifier;
         assert!(app.bench_form_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)));
-        assert_eq!(app.bench.form.classifier, AUTO_CLASSIFIER);
+        assert_eq!(app.bench.form.classifier, DEFAULT_CLASSIFIER);
+    }
+
+    #[test]
+    fn opening_the_form_names_the_runnable_haiku_and_keeps_a_chosen_classifier() {
+        const HAIKU: &str = "claude/claude-haiku-4-5";
+        let mut app = app_with_models(&[
+            ("gate", "Gate"),
+            ("claude/claude-sonnet-4-6", "Claude Sonnet 4.6"),
+            (HAIKU, "Claude Haiku 4.5"),
+        ]);
+        app.open_bench_form();
+        assert_eq!(app.bench.form.classifier, HAIKU);
+        assert_eq!(app.bench.form.classifier_model(), Some(HAIKU.to_string()));
+
+        app.bench.form.classifier = AUTO_CLASSIFIER.to_string();
+        app.open_bench_form();
+        assert_eq!(
+            app.bench.form.classifier, AUTO_CLASSIFIER,
+            "a classifier the user chose stays"
+        );
+
+        app.bench.form.field = FormField::Classifier;
+        assert!(app.bench_form_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)));
+        assert_eq!(
+            app.bench.form.classifier, HAIKU,
+            "backspace goes back to Haiku"
+        );
     }
 }

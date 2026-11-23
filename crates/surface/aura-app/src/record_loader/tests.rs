@@ -955,6 +955,16 @@ fn a_model_call_keeps_the_route_it_asked_for() {
     assert_eq!(call.route.as_deref(), Some("openrouter/openai/gpt-6.1-sol"));
     assert_eq!(call.usage.input_tokens, 1_000_000);
     assert_eq!(call.list_price(), Some(2.0));
+    assert_eq!(call.purpose, None, "the agent's own work");
+    let criteria = text_tx(
+        agent,
+        TransactionType::Reasoning,
+        r#"{"model":"openai/gpt-6.1-terra","purpose":"criteria","input_tokens":1}"#,
+    );
+    assert_eq!(
+        model_call(&criteria).unwrap().purpose,
+        Some(aura_model::ModelCallPurpose::Criteria)
+    );
 
     // Older records keep no route; an empty or unknown one is none.
     for payload in [

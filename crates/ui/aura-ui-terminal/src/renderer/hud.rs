@@ -8,7 +8,7 @@
 //! ```
 
 use super::text::display_width;
-use crate::app::format::{format_cost, format_tokens};
+use crate::app::format::format_tokens;
 use crate::app::hud::Hud;
 use crate::app::NotificationType;
 use crate::events::{TodoState, TodoView};
@@ -62,15 +62,16 @@ impl FooterModel {
 pub(super) fn status_parts(hud: &Hud, model: FooterModel, theme: &Theme) -> Vec<(String, Color)> {
     let stats = &hud.stats;
     let mut parts = Vec::new();
+    // Modes are a setting, not a warning: they take the theme's accent.
     match hud.mode {
         None | Some(PermissionMode::Agent) => {}
         Some(PermissionMode::Plan) => {
             parts.push((
                 "plan mode (/plan to leave)".to_string(),
-                theme.colors.warning,
+                theme.colors.success,
             ));
         }
-        Some(mode) => parts.push((format!("{mode} mode"), theme.colors.warning)),
+        Some(mode) => parts.push((format!("{mode} mode"), theme.colors.success)),
     }
     let window = match model {
         FooterModel::Gate => None,
@@ -92,8 +93,8 @@ pub(super) fn status_parts(hud: &Hud, model: FooterModel, theme: &Theme) -> Vec<
     if let Some(hit) = stats.cache_hit_percent() {
         parts.push((format!("{hit}% cached"), theme.colors.muted));
     }
-    if stats.priced {
-        parts.push((format_cost(stats.cost_usd), theme.colors.muted));
+    if let Some(cost) = stats.cost_label() {
+        parts.push((cost, theme.colors.muted));
     }
     if model == FooterModel::Gate && !stats.models.is_empty() {
         let models = stats.models.len();
@@ -543,6 +544,23 @@ mod tests {
     }
 
     #[test]
+    fn non_agent_modes_are_drawn_in_the_accent_color() {
+        let theme = Theme::default();
+        for mode in [
+            PermissionMode::Plan,
+            PermissionMode::ReadOnly,
+            PermissionMode::Debug,
+        ] {
+            let hud = crate::app::hud::Hud {
+                mode: Some(mode),
+                ..crate::app::hud::Hud::default()
+            };
+            let parts = status_parts(&hud, FooterModel::Model { window: None }, &theme);
+            assert_eq!(parts[0].1, theme.colors.success, "{mode:?}");
+        }
+    }
+
+    #[test]
     fn agent_mode_is_left_out_of_the_status() {
         let theme = Theme::default();
         let hud = crate::app::hud::Hud {
@@ -550,6 +568,32 @@ mod tests {
             ..crate::app::hud::Hud::default()
         };
         assert!(status_parts(&hud, FooterModel::Model { window: None }, &theme).is_empty());
+    }
+
+    #[test]
+    fn the_status_marks_a_partly_priced_total_and_drops_an_unpriced_one() {
+        use crate::app::hud::SessionStats;
+        let theme = Theme::default();
+        let cost_part = |stats: SessionStats| {
+            let hud = Hud {
+                stats,
+                ..Hud::default()
+            };
+            status_parts(&hud, FooterModel::Gate, &theme)
+                .into_iter()
+                .map(|(text, _)| text)
+                .find(|text| text.contains('$'))
+        };
+        let stats = |priced, unpriced_calls| SessionStats {
+            calls: 3,
+            cost_usd: 0.25,
+            priced,
+            unpriced_calls,
+            ..SessionStats::default()
+        };
+        assert_eq!(cost_part(stats(true, 0)).as_deref(), Some("$0.250"));
+        assert_eq!(cost_part(stats(true, 2)).as_deref(), Some("$0.250+?"));
+        assert_eq!(cost_part(stats(false, 3)), None);
     }
 
     #[test]
