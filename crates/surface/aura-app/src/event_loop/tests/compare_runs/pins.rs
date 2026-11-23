@@ -165,10 +165,16 @@ fn mock_tokens(model: &str, calls: u32, cost_usd: f64) -> aura_core_types::Model
 
 /// [`Pinned`]'s run `name` on `model`, in its own copy under `dir`, as
 /// it should be recorded but for its agent, prompt and times, taken from
-/// `ran`.
+/// `ran`. The mock provider's own calls (classifying the prompt, and for
+/// Gate's arm one more) are priced by the model they asked for.
 fn pinned_run(ran: &CompareRun, dir: &std::path::Path, model: &str) -> CompareRun {
     let gate = ran.arm == CompareArm::A;
-    let (cost_usd, mock_calls) = if gate { (0.0021, 2) } else { (0.0035, 1) };
+    let (model_usd, mock_usd, mock_calls) = if gate {
+        (0.0021, 0.0014, 2)
+    } else {
+        (0.0035, 0.00035, 1)
+    };
+    let cost_usd = model_usd + mock_usd;
     let root = dir.join(&ran.name);
     let turn = RunTurn {
         category: Some(PromptCategory::Question),
@@ -193,8 +199,8 @@ fn pinned_run(ran: &CompareRun, dir: &std::path::Path, model: &str) -> CompareRu
         },
         cost_usd,
         tokens: vec![
-            mock_tokens(model, 2, cost_usd),
-            mock_tokens("mock-model", mock_calls, 0.0),
+            mock_tokens(model, 2, model_usd),
+            mock_tokens("mock-model", mock_calls, mock_usd),
         ],
         turns: vec![turn],
         plan_usage: Vec::new(),
@@ -252,6 +258,7 @@ fn pinned_payload(
             b_vs_reference: None,
             model: OPUS.to_string(),
             cost_usd: 0.00175,
+            unpriced_calls: 0,
             reasoning: "A is tidier.\nWINNER: A".to_string(),
         }],
         notes: Vec::new(),
@@ -431,7 +438,7 @@ async fn what_compare_answers_after_a_comparison_is_pinned_byte_for_byte() {
         format!(
             "Comparisons (/compare show <n> for one):\n  1. Compare #1 · {at} · \"write the answer\" · \
              gate without enforced delegation (gate:nodelegate) vs aura-claude-opus-4-7 (cloud) · \
-             {status} · A $0.0021 median, 0/1 pass / B $0.0035 median, 1/1 pass"
+             {status} · A $0.0035 median, 0/1 pass / B $0.0039 median, 1/1 pass"
         )
     };
     for (args, answer) in answers_once_ended(&payload, listed("done")) {

@@ -23,7 +23,14 @@ pub enum DebugEvent {
     LlmCall {
         timestamp: DateTime<Utc>,
         provider: String,
+        /// The model that answered, as the provider named it; the model
+        /// asked for when the provider named none.
         model: String,
+        /// The model id the call asked for, route prefix included
+        /// (`openrouter/openai/gpt-6.1-sol`), which decides how the call
+        /// is priced and its usage read; `None` in older bundles.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        route: Option<String>,
         input_tokens: u64,
         output_tokens: u64,
         /// Prompt tokens written to the provider's prompt cache.

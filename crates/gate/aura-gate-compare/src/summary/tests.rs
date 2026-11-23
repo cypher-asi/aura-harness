@@ -48,6 +48,7 @@ fn judged(a_run: &str, winner: Option<CompareArm>, parsed: bool) -> CompareJudgm
         b_vs_reference: None,
         model: "judge".to_string(),
         cost_usd: 0.01,
+        unpriced_calls: 0,
         reasoning: String::new(),
     }
 }
@@ -245,4 +246,48 @@ fn example_tasks_count_passes_per_task_and_arm() {
         ..payload
     };
     assert!(task_cells(&prompt, CompareArm::A).is_empty());
+}
+
+/// `run` with `unpriced` more calls, to a model with no known price.
+fn with_unpriced(mut run: CompareRun, unpriced: u32) -> CompareRun {
+    run.tokens.push(ModelTokens {
+        model: "mystery-model".to_string(),
+        calls: unpriced,
+        unpriced_calls: unpriced,
+        ..ModelTokens::default()
+    });
+    run
+}
+
+#[test]
+fn unpriced_calls_are_counted_per_arm_finished_runs_and_cells() {
+    let mut payload = judged_payload();
+    // b-3, the failed run, called a model with no known price.
+    payload.runs[5] = with_unpriced(payload.runs[5].clone(), 2);
+    payload.runs[0] = with_unpriced(payload.runs[0].clone(), 1);
+    let a = summarize(&payload, CompareArm::A);
+    assert_eq!((a.unpriced_calls, a.finished_unpriced_calls), (1, 1));
+    let b = summarize(&payload, CompareArm::B);
+    assert_eq!(
+        (b.unpriced_calls, b.finished_unpriced_calls),
+        (2, 0),
+        "a failed run's calls leave the median complete"
+    );
+    let mystery = b
+        .tokens
+        .iter()
+        .find(|t| t.model == "mystery-model")
+        .unwrap();
+    assert_eq!((mystery.calls, mystery.unpriced_calls), (2, 2));
+    assert!((b.total_cost_usd - 2.50).abs() < 1e-9, "priced part only");
+
+    let mut examples = examples_payload();
+    examples.runs[2] = with_unpriced(examples.runs[2].clone(), 3);
+    let cells = task_cells(&examples, CompareArm::A);
+    assert_eq!((cells[0].unpriced_calls, cells[1].unpriced_calls), (0, 3));
+
+    let mut replay = replay_payload();
+    replay.runs[0].turns[1].unpriced_calls = 2;
+    let turns = turn_cells(&replay, CompareArm::A);
+    assert_eq!((turns[0].unpriced_calls, turns[1].unpriced_calls), (0, 2));
 }

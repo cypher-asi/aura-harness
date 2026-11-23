@@ -17,10 +17,16 @@ pub struct ArmSummary {
     pub finished: usize,
     /// Median wall time of the finished runs.
     pub median_wall_ms: Option<u64>,
-    /// What every run cost.
+    /// What every run cost: the priced calls of every run.
     pub total_cost_usd: f64,
     /// Median cost of the finished runs.
     pub median_cost_usd: Option<f64>,
+    /// Calls of every run with no known price, which `total_cost_usd`
+    /// leaves out.
+    pub unpriced_calls: u32,
+    /// Calls of the finished runs with no known price, which
+    /// `median_cost_usd` leaves out.
+    pub finished_unpriced_calls: u32,
     /// Tokens per model over every run, most expensive first.
     pub tokens: Vec<ModelTokens>,
     /// Share of each plan window the arm's runs used.
@@ -68,6 +74,8 @@ pub fn summarize(payload: &ComparePayload, arm: CompareArm) -> ArmSummary {
         median_wall_ms,
         total_cost_usd: runs.iter().map(|run| run.cost_usd).sum(),
         median_cost_usd: median(&costs),
+        unpriced_calls: runs.iter().map(|run| run.unpriced_calls()).sum(),
+        finished_unpriced_calls: finished.iter().map(|run| run.unpriced_calls()).sum(),
         tokens: merge_tokens(runs.iter().flat_map(|run| run.tokens.iter())),
         plan_usage: merge_plan_shares(runs.iter().flat_map(|run| run.plan_usage.iter())),
         checks_passed: runs.iter().filter(|r| r.check_passed == Some(true)).count(),

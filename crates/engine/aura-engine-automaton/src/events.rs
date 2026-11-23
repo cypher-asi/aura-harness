@@ -368,6 +368,7 @@ impl From<aura_agent::DebugEvent> for AutomatonEvent {
                 timestamp,
                 provider,
                 model,
+                route: _,
                 input_tokens,
                 output_tokens,
                 cache_creation_input_tokens,

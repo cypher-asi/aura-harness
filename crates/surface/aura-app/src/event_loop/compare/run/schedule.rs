@@ -8,7 +8,7 @@ use super::live::show_live;
 use super::start::run_one;
 use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::agents::AgentSession;
-use crate::event_loop::compare::view::{duration, money, plural};
+use crate::event_loop::compare::view::{cost, duration, money, plural};
 use crate::event_loop::handlers::system_message;
 use aura_core_types::{ComparePayload, CompareRun};
 use aura_gate::compare::Schedule;
@@ -123,7 +123,7 @@ pub(super) fn progress(compare: &str, run: &CompareRun) -> String {
             "{compare}: {} done in {}, {}{check}",
             run.name,
             duration(run.wall_ms),
-            money(run.cost_usd)
+            cost(run.cost_usd, run.unpriced_calls())
         ),
     }
 }

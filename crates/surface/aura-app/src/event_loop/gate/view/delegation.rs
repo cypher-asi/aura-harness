@@ -6,7 +6,6 @@ use super::{money, percent, GateView};
 use crate::event_loop::subagents::{lock, AgentHub};
 use crate::record_loader::{format_local_time, model_call};
 use aura_core_types::{AgentId, RecordEntry, RouteLevel, RouteReason};
-use aura_gate::compare::list_price;
 use aura_gate::lead::delegation::{self, Call, Delegation, Share, Subtask};
 use aura_store_db::ReadStore;
 use std::collections::HashMap;
@@ -44,10 +43,10 @@ impl Record {
                 }
                 _ => {}
             }
-        } else if let Some((model, usage)) = model_call(&entry.tx) {
+        } else if let Some(call) = model_call(&entry.tx) {
             self.calls.push(Call {
                 ts_ms,
-                cost_usd: list_price(&model, &usage).unwrap_or(0.0),
+                cost_usd: call.list_price().unwrap_or(0.0),
             });
         }
     }

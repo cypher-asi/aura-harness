@@ -12,6 +12,7 @@ fn llm_call_serializes_with_debug_llm_call_type_and_counter_fields() {
         timestamp: fixed_ts(),
         provider: "anthropic".into(),
         model: "claude-opus-4-6".into(),
+        route: Some("claude/claude-opus-4-6".into()),
         input_tokens: 1024,
         output_tokens: 512,
         cache_creation_input_tokens: Some(256),
@@ -27,6 +28,7 @@ fn llm_call_serializes_with_debug_llm_call_type_and_counter_fields() {
     assert_eq!(v["type"], "debug.llm_call");
     assert_eq!(v["provider"], "anthropic");
     assert_eq!(v["model"], "claude-opus-4-6");
+    assert_eq!(v["route"], "claude/claude-opus-4-6");
     // aura-os `update_counters` reads these exact field names off
     // `token_usage`/`assistant_message_end`, not `debug.llm_call`,
     // but we carry them here so the channel file is analytic-ready.
@@ -51,6 +53,7 @@ fn llm_call_omits_none_option_fields() {
         timestamp: fixed_ts(),
         provider: "anthropic".into(),
         model: "claude-opus-4-6".into(),
+        route: None,
         input_tokens: 0,
         output_tokens: 0,
         cache_creation_input_tokens: None,
@@ -63,6 +66,7 @@ fn llm_call_omits_none_option_fields() {
     };
     let v = serde_json::to_value(&ev).expect("serialize");
     assert!(v.get("cache_creation_input_tokens").is_none());
+    assert!(v.get("route").is_none());
     assert!(v.get("cache_read_input_tokens").is_none());
     assert!(v.get("task_id").is_none());
     assert!(v.get("agent_instance_id").is_none());
@@ -93,10 +97,12 @@ fn llm_call_accepts_legacy_request_id_alias_on_deserialize() {
     let ev: DebugEvent = serde_json::from_value(raw).expect("parse legacy shape");
     match ev {
         DebugEvent::LlmCall {
+            route,
             provider_request_id,
             message_id,
             ..
         } => {
+            assert_eq!(route, None, "bundles from before routes were kept");
             assert_eq!(provider_request_id.as_deref(), Some("legacy_req_01"));
             assert!(message_id.is_none());
         }
@@ -183,6 +189,7 @@ fn serialized_type_strings_match_aura_os_counter_constants() {
                 timestamp: ts,
                 provider: "p".into(),
                 model: "m".into(),
+                route: None,
                 input_tokens: 0,
                 output_tokens: 0,
                 cache_creation_input_tokens: None,

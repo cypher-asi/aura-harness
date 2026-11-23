@@ -11,6 +11,7 @@ use aura_core_types::{
 };
 use aura_exec_tools::plan_tools::{plan_path_from_output, CREATE_PLAN_TOOL_NAME};
 use aura_exec_tools::todo::TODO_WRITE_TOOL_NAME;
+use aura_gate::compare::ModelCall;
 use aura_model::{Message, ModelCallPurpose, Usage};
 use aura_store_record::{ReadStore, StoreError};
 use aura_ui_terminal::{
@@ -322,32 +323,43 @@ fn set_footer(reply: &mut MessageData, footer: Option<crate::turn_calls::Footer>
 }
 
 /// The model that answered the call a `Reasoning` entry records.
-fn reasoning_model(tx: &Transaction) -> Option<String> {
-    json_payload(tx)?
-        .get("model")
+fn reasoning_model(payload: &Value) -> Option<String> {
+    recorded_model(payload, "model")
+}
+
+/// The model id named under `key` in a `Reasoning` payload, unless it is
+/// empty or `unknown`.
+fn recorded_model(payload: &Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
         .and_then(Value::as_str)
         .filter(|model| !model.is_empty() && *model != "unknown")
         .map(str::to_string)
 }
 
-fn call_tokens(tx: &Transaction) -> Option<Usage> {
-    let payload = json_payload(tx)?;
+fn call_tokens(payload: &Value) -> Usage {
     let tokens = |key: &str| payload.get(key).and_then(Value::as_u64);
-    Some(Usage {
+    Usage {
         input_tokens: tokens("input_tokens").unwrap_or(0),
         output_tokens: tokens("output_tokens").unwrap_or(0),
         cache_creation_input_tokens: tokens("cache_creation_input_tokens"),
         cache_read_input_tokens: tokens("cache_read_input_tokens"),
-    })
+    }
 }
 
-/// The model and tokens of the call `tx` records, when it is a model
-/// call that got an answer.
-pub(crate) fn model_call(tx: &Transaction) -> Option<(String, Usage)> {
+/// The call `tx` records, when it is a model call that got an answer:
+/// the model that answered, the id it was asked for (when the record
+/// kept it) and its tokens.
+pub(crate) fn model_call(tx: &Transaction) -> Option<ModelCall> {
     if tx.tx_type != TransactionType::Reasoning {
         return None;
     }
-    Some((reasoning_model(tx)?, call_tokens(tx)?))
+    let payload = json_payload(tx)?;
+    Some(ModelCall {
+        model: reasoning_model(&payload)?,
+        route: recorded_model(&payload, "route"),
+        usage: call_tokens(&payload),
+    })
 }
 
 /// What the model call `tx` records was made for, when it was made

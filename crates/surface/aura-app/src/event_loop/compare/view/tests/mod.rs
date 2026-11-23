@@ -99,11 +99,27 @@ fn payload() -> ComparePayload {
             b_vs_reference: None,
             model: opus.to_string(),
             cost_usd: 0.03,
+            unpriced_calls: 0,
             reasoning: String::new(),
         }],
         notes: vec!["the budget stopped 2 runs".to_string()],
         status: CompareStatus::Done,
     }
+}
+
+/// [`payload`] with no known price for Opus's calls but one run's worth:
+/// `b-1` and `b-2` have none priced, `b-3` one call unpriced of three.
+fn unpriced() -> ComparePayload {
+    let mut payload = payload();
+    for run in payload.runs.iter_mut().filter(|r| r.arm == CompareArm::B) {
+        let unpriced = if run.name == "b-3" { 1 } else { 3 };
+        if unpriced == 3 {
+            run.cost_usd = 0.0;
+            run.tokens[0].cost_usd = 0.0;
+        }
+        run.tokens[0].unpriced_calls = unpriced;
+    }
+    payload
 }
 
 /// The cells of the first line of `text` that starts with `start`, split

@@ -10,7 +10,7 @@ use crate::session_checkpoint::SessionUsage;
 use aura_agent::AgentLoopResult;
 use aura_core_types::AgentId;
 use aura_exec_tools::todo::TodoItem;
-use aura_model::{model_catalog, Usage};
+use aura_gate::compare::ModelCall;
 use aura_ui_terminal::events::{CallStats, ContextView, SessionTotals, TodoView};
 use aura_ui_terminal::UiCommand;
 
@@ -27,16 +27,17 @@ pub(super) fn todo_views(todos: &[TodoItem]) -> Vec<TodoView> {
         .collect()
 }
 
-/// Tokens and cost of one call to `model`.
-pub(crate) fn call_stats(model: &str, usage: &Usage, context_limit: Option<u64>) -> CallStats {
-    let tokens = model_catalog::billed_tokens(model, usage);
+/// Tokens and cost of one model call: its usage read in the shape of the
+/// endpoint it went to, priced as [`ModelCall`] prices it.
+pub(crate) fn call_stats(call: &ModelCall, context_limit: Option<u64>) -> CallStats {
+    let tokens = call.billed_tokens();
     CallStats {
-        model: model.to_string(),
+        model: call.model.clone(),
         input_tokens: tokens.uncached_input,
         cache_read_tokens: tokens.cache_read,
         cache_write_tokens: tokens.cache_write,
         output_tokens: tokens.output,
-        cost_usd: model_catalog::estimate_cost_usd(model, usage),
+        cost_usd: call.estimate_cost_usd(),
         context_limit,
     }
 }
@@ -104,6 +105,15 @@ pub(super) async fn send_queued(state: &LoopState<'_>, agent_id: AgentId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aura_model::Usage;
+
+    fn routed(model: &str, route: Option<&str>, usage: Usage) -> ModelCall {
+        ModelCall {
+            model: model.to_string(),
+            route: route.map(str::to_string),
+            usage,
+        }
+    }
 
     #[test]
     fn anthropic_cache_reads_are_on_top_of_input() {
@@ -113,11 +123,32 @@ mod tests {
             cache_creation_input_tokens: Some(1_000),
             cache_read_input_tokens: Some(9_000),
         };
-        let stats = call_stats("claude-sonnet-4-5", &usage, Some(200_000));
+        let stats = call_stats(&routed("claude-sonnet-4-5", None, usage), Some(200_000));
         assert_eq!(stats.input_tokens, 100);
         assert_eq!(stats.cache_read_tokens, 9_000);
         assert_eq!(stats.prompt_tokens(), 10_100);
         assert_eq!(stats.context_limit, Some(200_000));
+    }
+
+    #[test]
+    fn a_call_is_read_and_priced_by_the_route_it_took() {
+        // OpenRouter answers a GPT model in Anthropic shape, naming it by
+        // its bare slug.
+        let usage = Usage::new(1_000, 50).with_cache(None, Some(800));
+        let stats = call_stats(
+            &routed(
+                "openai/gpt-5.4",
+                Some("openrouter/openai/gpt-5.4"),
+                usage.clone(),
+            ),
+            None,
+        );
+        assert_eq!(stats.model, "openai/gpt-5.4");
+        assert_eq!(stats.input_tokens, 1_000, "cache reads come on top");
+        assert!(stats.cost_usd.is_some_and(|cost| cost > 0.0));
+        // A local server naming its model like a slug is not priced.
+        let local = routed("openai/gpt-5.4", Some("local/openai/gpt-5.4"), usage);
+        assert_eq!(call_stats(&local, None).cost_usd, None);
     }
 
     #[test]

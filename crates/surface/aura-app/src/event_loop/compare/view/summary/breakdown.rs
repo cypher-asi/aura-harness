@@ -2,7 +2,7 @@
 //! prompt of a replayed session (mean turn cost and how its commands
 //! went).
 
-use super::super::format::{headline, money, plural};
+use super::super::format::{cost, headline, plural};
 use super::Summary;
 use aura_core_types::CompareArm;
 use aura_gate::compare::{task_cells, turn_cells, TaskCell, TurnCell};
@@ -36,8 +36,11 @@ impl Summary<'_> {
         let width = self.width;
         for (i, task) in examples.iter().enumerate() {
             let (a, b) = (a_cells.get(i), b_cells.get(i));
-            let cost = |cell: Option<&TaskCell>| cell.and_then(|c| c.mean_cost_usd);
-            let [a_share, b_share] = cost_shares(cost(a), cost(b));
+            let known = |cell: Option<&TaskCell>| {
+                cell.filter(|c| c.unpriced_calls == 0)
+                    .and_then(|c| c.mean_cost_usd)
+            };
+            let [a_share, b_share] = cost_shares(known(a), known(b));
             let _ = write!(
                 out,
                 "\n    {:<TASK_WIDTH$}{:<width$}  {}",
@@ -79,7 +82,7 @@ fn task_cell(cell: Option<&TaskCell>) -> String {
     let Some(cell) = cell.filter(|cell| cell.runs > 0) else {
         return "-".to_string();
     };
-    let cost = cell.mean_cost_usd.map_or_else(|| "-".to_string(), money);
+    let cost = mean_cost(cell.mean_cost_usd, cell.unpriced_calls);
     if cell.checked == 0 {
         return format!("{} run{}, {cost}", cell.runs, plural(cell.runs));
     }
@@ -92,7 +95,7 @@ fn turn_cell(cell: Option<&TurnCell>) -> String {
     let Some(cell) = cell.filter(|cell| cell.runs > 0) else {
         return "-".to_string();
     };
-    let mut text = cell.mean_cost_usd.map_or_else(|| "-".to_string(), money);
+    let mut text = mean_cost(cell.mean_cost_usd, cell.unpriced_calls);
     for (n, what) in [
         (cell.passed, "pass"),
         (cell.failed, "fail"),
@@ -103,4 +106,9 @@ fn turn_cell(cell: Option<&TurnCell>) -> String {
         }
     }
     text
+}
+
+/// A mean cost as [`cost`] reads it, `-` when there is none.
+fn mean_cost(usd: Option<f64>, unpriced_calls: u32) -> String {
+    usd.map_or_else(|| "-".to_string(), |usd| cost(usd, unpriced_calls))
 }

@@ -151,6 +151,7 @@ fn live_run(hub: &AgentHub, live: Live) -> BenchLiveRun {
         difficulty,
         wall_ms: working.map(|(_, since)| elapsed_ms(since)),
         cost_usd: used.iter().map(|row| row.cost_usd).sum(),
+        unpriced_calls: used.iter().map(|row| row.unpriced_calls).sum(),
         tokens: bench::tokens(&used),
         agent_id: working.map(|(agent, _)| agent.to_hex()),
         doing: working.and_then(|(agent, _)| doing(hub, agent, now_ms())),

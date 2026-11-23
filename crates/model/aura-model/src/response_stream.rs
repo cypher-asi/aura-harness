@@ -631,6 +631,9 @@ mod tests {
             Ok(StreamEvent::MessageDelta {
                 stop_reason: Some(StopReason::ToolUse),
                 output_tokens: 5,
+                input_tokens: None,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
             }),
             Ok(StreamEvent::MessageStop),
         ];
@@ -683,6 +686,43 @@ mod tests {
             )),
             "text deltas must surface as OutputTextDelta"
         );
+    }
+
+    #[tokio::test]
+    async fn response_stream_completed_usage_takes_message_delta_totals() {
+        // OpenRouter's Anthropic-compatible endpoint, non-Anthropic
+        // upstream: `message_start` reports 0 input tokens and the real
+        // totals arrive on `message_delta`.
+        let events: Vec<Result<StreamEvent, ReasonerError>> = vec![
+            Ok(StreamEvent::MessageStart {
+                message_id: "gen-1".into(),
+                model: "openai/gpt-5".into(),
+                input_tokens: Some(0),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+            }),
+            Ok(StreamEvent::MessageDelta {
+                stop_reason: Some(StopReason::ToolUse),
+                output_tokens: 56,
+                input_tokens: Some(1234),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: Some(900),
+            }),
+            Ok(StreamEvent::MessageStop),
+        ];
+        let underlying: StreamEventStream = Box::pin(futures_util::stream::iter(events));
+        let mut stream = response_stream_from_event_stream(underlying);
+        let mut completed_usage = None;
+        while let Some(event) = stream.next().await {
+            if let Ok(ResponseEvent::Completed { usage, .. }) = event {
+                completed_usage = Some(usage);
+            }
+        }
+        let usage = completed_usage.expect("stream emits Completed");
+        assert_eq!(usage.input_tokens, 1234);
+        assert_eq!(usage.output_tokens, 56);
+        assert_eq!(usage.cache_creation_input_tokens, None);
+        assert_eq!(usage.cache_read_input_tokens, Some(900));
     }
 
     #[tokio::test]

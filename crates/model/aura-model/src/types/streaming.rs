@@ -67,6 +67,16 @@ pub enum StreamEvent {
         stop_reason: Option<StopReason>,
         /// Output tokens used so far
         output_tokens: u64,
+        /// Input-token total from the delta's usage, when reported.
+        ///
+        /// Anthropic repeats the cumulative `message_start` total here;
+        /// OpenRouter's Anthropic-compatible endpoint sends the only
+        /// real total here for non-Anthropic upstreams.
+        input_tokens: Option<u64>,
+        /// Cache creation input tokens from the delta's usage, when reported.
+        cache_creation_input_tokens: Option<u64>,
+        /// Cache read input tokens from the delta's usage, when reported.
+        cache_read_input_tokens: Option<u64>,
     },
 
     /// Message complete
@@ -103,6 +113,21 @@ pub enum StreamEvent {
         /// headers ([`crate::plan_usage`]); empty when there was none.
         plan_usage: Vec<aura_core_types::PlanUsage>,
     },
+}
+
+/// Merge a usage total reported on `message_delta` into the value seeded
+/// by `message_start`.
+///
+/// A reported value wins when it is non-zero (Anthropic's delta usage is
+/// cumulative and OpenRouter reports the only real total there for
+/// non-Anthropic upstreams) or when nothing was known yet. A zero or
+/// missing delta value never erases a good `message_start` value.
+fn merge_delta_total(current: Option<u64>, delta: Option<u64>) -> Option<u64> {
+    match (current, delta) {
+        (_, Some(reported)) if reported > 0 => Some(reported),
+        (None, Some(reported)) => Some(reported),
+        (current, _) => current,
+    }
 }
 
 /// Type of content in a streaming block.
@@ -219,8 +244,14 @@ impl StreamAccumulator {
                 if let Some(tokens) = input_tokens {
                     self.input_tokens = *tokens;
                 }
-                self.cache_creation_input_tokens = *cache_creation_input_tokens;
-                self.cache_read_input_tokens = *cache_read_input_tokens;
+                // A start frame without cache numbers must not erase
+                // numbers an earlier frame already supplied.
+                if cache_creation_input_tokens.is_some() {
+                    self.cache_creation_input_tokens = *cache_creation_input_tokens;
+                }
+                if cache_read_input_tokens.is_some() {
+                    self.cache_read_input_tokens = *cache_read_input_tokens;
+                }
             }
             StreamEvent::ContentBlockStart { content_type, .. } => match content_type {
                 StreamContentType::ToolUse { id, name } => {
@@ -265,9 +296,23 @@ impl StreamAccumulator {
             StreamEvent::MessageDelta {
                 stop_reason,
                 output_tokens,
+                input_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
             } => {
                 self.stop_reason = *stop_reason;
                 self.output_tokens = *output_tokens;
+                // `input_tokens` uses 0 for "unknown", so only a
+                // non-zero delta total can improve on it.
+                if let Some(tokens) = input_tokens.filter(|tokens| *tokens > 0) {
+                    self.input_tokens = tokens;
+                }
+                self.cache_creation_input_tokens = merge_delta_total(
+                    self.cache_creation_input_tokens,
+                    *cache_creation_input_tokens,
+                );
+                self.cache_read_input_tokens =
+                    merge_delta_total(self.cache_read_input_tokens, *cache_read_input_tokens);
             }
             StreamEvent::MessageStop | StreamEvent::Ping => {}
             StreamEvent::Error {

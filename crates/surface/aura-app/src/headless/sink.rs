@@ -13,6 +13,7 @@ use aura_agent::{
 };
 use aura_agent_trace::RunRecorder;
 use aura_exec_tools::todo::TodoItem;
+use aura_gate::compare::ModelCall;
 use aura_model::Usage;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -204,6 +205,7 @@ impl TurnEventSink for HeadlessSink {
     async fn on_debug(&mut self, event: DebugEvent) {
         let DebugEvent::LlmCall {
             model,
+            route,
             input_tokens,
             output_tokens,
             cache_creation_input_tokens,
@@ -213,13 +215,18 @@ impl TurnEventSink for HeadlessSink {
         else {
             return;
         };
-        let usage = Usage {
-            input_tokens,
-            output_tokens,
-            cache_creation_input_tokens,
-            cache_read_input_tokens,
+        let call = ModelCall {
+            model,
+            route,
+            usage: Usage {
+                input_tokens,
+                output_tokens,
+                cache_creation_input_tokens,
+                cache_read_input_tokens,
+            },
         };
-        let stats = call_stats(&model, &usage, self.context_limit);
+        let stats = call_stats(&call, self.context_limit);
+        let model = call.model;
         self.tally.usage.add(&SessionUsage {
             calls: 1,
             input_tokens: stats.input_tokens,

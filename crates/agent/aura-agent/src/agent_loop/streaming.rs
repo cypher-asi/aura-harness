@@ -116,6 +116,7 @@ pub(super) fn emit_debug_llm_call(
             timestamp: Utc::now(),
             provider: provider_name.to_string(),
             model,
+            route: Some(model_name.to_string()),
             input_tokens: response.usage.input_tokens,
             output_tokens: response.usage.output_tokens,
             cache_creation_input_tokens: response.usage.cache_creation_input_tokens,

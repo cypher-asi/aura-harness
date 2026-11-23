@@ -91,7 +91,7 @@ impl TurnCalls {
                 Seen::Other
             }
             TransactionType::Reasoning => {
-                let Some((model, usage)) = model_call(tx) else {
+                let Some(model_call) = model_call(tx) else {
                     return Seen::Other;
                 };
                 let payload = json_payload(tx);
@@ -105,16 +105,13 @@ impl TurnCalls {
                 // The requested id names the route, and so who paid;
                 // records written before it was kept have only the
                 // model the upstream echoed back.
-                let route = field("route")
-                    .and_then(Value::as_str)
-                    .filter(|route| !route.is_empty())
-                    .unwrap_or(&model);
+                let route = model_call.endpoint();
                 let call = Call {
-                    model: &model,
+                    model: &model_call.model,
                     route,
                     purpose,
                     effort,
-                    usage: call_usage(route, &usage),
+                    usage: call_usage(&model_call),
                 };
                 if matches!(
                     purpose,

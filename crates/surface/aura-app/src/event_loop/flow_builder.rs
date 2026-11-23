@@ -22,7 +22,7 @@ use aura_core_types::{
 };
 use aura_exec_tools::agents::send_to_agent::SEND_TO_AGENT_TOOL_NAME;
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
-use aura_model::{model_catalog, ModelCallPurpose};
+use aura_model::ModelCallPurpose;
 use aura_ui_terminal::events::{
     FlowBench, FlowKind, FlowLane, FlowNode, FlowUsage, TraceNodeStatus,
 };
@@ -503,12 +503,12 @@ impl FlowBuilder {
         node.status = TraceNodeStatus::Ok;
         let duration_ms = payload.get("duration_ms").and_then(Value::as_u64);
         let mut tokens = reasoning_tokens(&payload);
-        if let Some((model, usage)) = model_call(&entry.tx) {
-            let billed = model_catalog::billed_tokens(&model, &usage);
+        if let Some(call) = model_call(&entry.tx) {
+            let billed = call.billed_tokens();
             let flow_usage = FlowUsage {
                 input_tokens: billed.uncached_input + billed.cache_write + billed.cache_read,
                 output_tokens: billed.output,
-                cost_usd: model_catalog::estimate_cost_usd(&model, &usage),
+                cost_usd: call.estimate_cost_usd(),
                 duration_ms,
             };
             // The whole prompt, as the stats line counts it: Anthropic

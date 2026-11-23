@@ -39,6 +39,7 @@ pub use plan_shares::{plan_shares, PlanReading};
 pub use schedule::{run_name, Schedule, DEFAULT_CONCURRENCY};
 pub use source::{prompts, relative, title};
 pub use summary::{
-    judge_cost_usd, summarize, task_cells, too_close, turn_cells, ArmSummary, TaskCell, TurnCell,
+    judge_cost_usd, judge_unpriced_calls, summarize, task_cells, too_close, turn_cells, ArmSummary,
+    TaskCell, TurnCell,
 };
-pub use tokens::tally;
+pub use tokens::{tally, ModelCall};

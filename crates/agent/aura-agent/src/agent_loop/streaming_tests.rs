@@ -119,6 +119,9 @@ impl ModelProvider for FlakyPartialProvider {
                 Ok(StreamEvent::MessageDelta {
                     stop_reason: Some(StopReason::EndTurn),
                     output_tokens: 1,
+                    input_tokens: None,
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
                 }),
                 Ok(StreamEvent::MessageStop),
             ];
@@ -309,6 +312,9 @@ impl ModelProvider for DisconnectProvider {
                 Ok(StreamEvent::MessageDelta {
                     stop_reason: Some(StopReason::EndTurn),
                     output_tokens: 1,
+                    input_tokens: None,
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
                 }),
                 Ok(StreamEvent::MessageStop),
             ])));

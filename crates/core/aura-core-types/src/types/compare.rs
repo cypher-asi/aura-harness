@@ -232,8 +232,27 @@ pub struct ModelTokens {
     pub cache_write_tokens: u64,
     /// Completion tokens.
     pub output_tokens: u64,
-    /// List-price cost in USD; 0 when the price is unknown.
+    /// List-price cost in USD of the priced calls: those of `calls` not
+    /// in `unpriced_calls`. Local models are priced, at 0.
     pub cost_usd: f64,
+    /// Calls with no known list price, which `cost_usd` leaves out; 0 in
+    /// records written before they were counted.
+    #[serde(default, skip_serializing_if = "is_zero_calls")]
+    pub unpriced_calls: u32,
+}
+
+impl ModelTokens {
+    /// Whether some of its calls have no known price, so `cost_usd` is
+    /// only what the others cost.
+    #[must_use]
+    pub const fn is_incomplete(&self) -> bool {
+        self.unpriced_calls > 0
+    }
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+const fn is_zero_calls(calls: &u32) -> bool {
+    *calls == 0
 }
 
 /// Where a run's workspace copy is and what it started from.
@@ -299,6 +318,10 @@ pub struct RunTurn {
     /// The part of `cost_usd` its subtasks spent.
     #[serde(default)]
     pub subtask_cost_usd: f64,
+    /// Its model calls, subtasks included, with no known list price,
+    /// which `cost_usd` leaves out; 0 in older records.
+    #[serde(default, skip_serializing_if = "is_zero_calls")]
+    pub unpriced_calls: u32,
 }
 
 impl RunTurn {
@@ -326,6 +349,7 @@ impl RunTurn {
             nudges: 0,
             sent_back: 0,
             subtask_cost_usd: 0.0,
+            unpriced_calls: 0,
         }
     }
 }
@@ -353,8 +377,9 @@ pub struct CompareRun {
     /// Wall time from the first prompt to the end of the last turn,
     /// subtasks included.
     pub wall_ms: u64,
-    /// List-price cost of every model call: the turns, their classifier,
-    /// and the subtasks they dispatched.
+    /// List-price cost of every priced model call: the turns, their
+    /// classifier, and the subtasks they dispatched. Calls with no known
+    /// price are left out and counted in `tokens`.
     pub cost_usd: f64,
     /// Tokens and cost per model, most expensive first.
     pub tokens: Vec<ModelTokens>,
@@ -377,6 +402,15 @@ pub struct CompareRun {
     /// tasks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
+}
+
+impl CompareRun {
+    /// Its model calls with no known list price, which `cost_usd` leaves
+    /// out.
+    #[must_use]
+    pub fn unpriced_calls(&self) -> u32 {
+        self.tokens.iter().map(|row| row.unpriced_calls).sum()
+    }
 }
 
 /// How the judge rated an attempt against the reference: what the user
@@ -427,8 +461,13 @@ pub struct CompareJudgment {
     pub b_vs_reference: Option<RefVerdict>,
     /// Model that judged.
     pub model: String,
-    /// List-price cost of the judge call.
+    /// List-price cost of the judge call; 0 when its price is unknown,
+    /// which `unpriced_calls` says.
     pub cost_usd: f64,
+    /// Judge calls with no known list price, which `cost_usd` leaves
+    /// out: 1 or 0; 0 in records written before they were counted.
+    #[serde(default, skip_serializing_if = "is_zero_calls")]
+    pub unpriced_calls: u32,
     /// The judge's reasoning, cut short.
     pub reasoning: String,
 }
@@ -796,11 +835,30 @@ mod tests {
                 b_vs_reference: None,
                 model: "claude/claude-opus-4-7".to_string(),
                 cost_usd: 0.03,
+                unpriced_calls: 0,
                 reasoning: "Both are fine.".to_string(),
             }],
             notes: Vec::new(),
             status: CompareStatus::Applied("a-1".to_string()),
         }
+    }
+
+    #[test]
+    fn an_unpriced_judgment_round_trips_and_older_ones_load_as_priced() {
+        let mut unpriced = payload();
+        unpriced.judgments[0].unpriced_calls = 1;
+        let json: serde_json::Value = serde_json::from_slice(&unpriced.to_bytes()).unwrap();
+        assert_eq!(json["judgments"][0]["unpriced_calls"], 1);
+        assert_eq!(
+            ComparePayload::from_bytes(&unpriced.to_bytes()),
+            Some(unpriced)
+        );
+
+        let mut older = serde_json::to_value(&payload().judgments[0]).unwrap();
+        assert!(older.get("unpriced_calls").is_none(), "0 is not written");
+        older.as_object_mut().unwrap().remove("unpriced_calls");
+        let older: CompareJudgment = serde_json::from_value(older).unwrap();
+        assert_eq!(older.unpriced_calls, 0);
     }
 
     #[test]
@@ -880,6 +938,62 @@ mod tests {
         without["runs"][0].as_object_mut().unwrap().remove("turns");
         let oldest = ComparePayload::from_bytes(&serde_json::to_vec(&without).unwrap()).unwrap();
         assert!(oldest.runs[0].turns.is_empty());
+    }
+
+    #[test]
+    fn unpriced_calls_round_trip_and_older_tokens_load_as_all_priced() {
+        let row = ModelTokens {
+            model: "glm-9".to_string(),
+            calls: 4,
+            input_tokens: 1_000,
+            output_tokens: 100,
+            cost_usd: 0.02,
+            unpriced_calls: 3,
+            ..ModelTokens::default()
+        };
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["unpriced_calls"], 3);
+        let back: ModelTokens = serde_json::from_value(json).unwrap();
+        assert_eq!(back, row);
+        assert!(back.is_incomplete());
+
+        let priced = ModelTokens {
+            unpriced_calls: 0,
+            ..row.clone()
+        };
+        let json = serde_json::to_value(&priced).unwrap();
+        assert!(json.get("unpriced_calls").is_none(), "0 is not written");
+
+        let older = serde_json::json!({
+            "model": "claude-sonnet-4-6",
+            "calls": 2,
+            "input_tokens": 10,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "output_tokens": 5,
+            "cost_usd": 0.01
+        });
+        let older: ModelTokens = serde_json::from_value(older).unwrap();
+        assert_eq!(older.unpriced_calls, 0);
+        assert!(!older.is_incomplete());
+    }
+
+    #[test]
+    fn a_run_counts_the_unpriced_calls_of_its_models() {
+        let mut payload = payload();
+        let run = &mut payload.runs[0];
+        assert_eq!(run.unpriced_calls(), 0);
+        run.tokens[0].unpriced_calls = 1;
+        run.tokens.push(ModelTokens {
+            model: "glm-9".to_string(),
+            calls: 2,
+            unpriced_calls: 2,
+            ..ModelTokens::default()
+        });
+        run.turns[0].unpriced_calls = 3;
+        assert_eq!(run.unpriced_calls(), 3);
+        let back = ComparePayload::from_bytes(&payload.to_bytes()).unwrap();
+        assert_eq!(back, payload);
     }
 
     #[test]

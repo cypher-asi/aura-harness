@@ -118,6 +118,9 @@ impl ModelProvider for StreamingMockProvider {
         events.push(Ok(StreamEvent::MessageDelta {
             stop_reason: Some(response.stop_reason),
             output_tokens: response.usage.output_tokens,
+            input_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
         }));
         events.push(Ok(StreamEvent::MessageStop));
 

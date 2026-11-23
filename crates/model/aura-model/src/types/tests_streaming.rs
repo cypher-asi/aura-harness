@@ -29,6 +29,9 @@ fn test_stream_accumulator_text_only() {
     acc.process(&StreamEvent::MessageDelta {
         stop_reason: Some(StopReason::EndTurn),
         output_tokens: 10,
+        input_tokens: None,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
     });
     acc.process(&StreamEvent::MessageStop);
 
@@ -67,6 +70,9 @@ fn test_stream_accumulator_tool_use() {
     acc.process(&StreamEvent::MessageDelta {
         stop_reason: Some(StopReason::ToolUse),
         output_tokens: 20,
+        input_tokens: None,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
     });
 
     assert_eq!(acc.tool_uses.len(), 1);
@@ -159,6 +165,9 @@ fn test_stream_accumulator_into_response() {
     acc.process(&StreamEvent::MessageDelta {
         stop_reason: Some(StopReason::EndTurn),
         output_tokens: 5,
+        input_tokens: None,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
     });
 
     let response = acc.into_response(100, 500).unwrap();
@@ -620,6 +629,9 @@ fn test_stream_accumulator_input_tokens_from_message_start() {
     acc.process(&StreamEvent::MessageDelta {
         stop_reason: Some(StopReason::EndTurn),
         output_tokens: 3,
+        input_tokens: None,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
     });
 
     let response = acc.into_response(0, 100).unwrap();
@@ -628,6 +640,143 @@ fn test_stream_accumulator_input_tokens_from_message_start() {
     assert_eq!(response.usage.cache_creation_input_tokens, Some(150));
     assert_eq!(response.usage.cache_read_input_tokens, Some(50));
     assert_eq!(response.model_used, "claude");
+}
+
+fn message_start(input: Option<u64>, creation: Option<u64>, read: Option<u64>) -> StreamEvent {
+    StreamEvent::MessageStart {
+        message_id: "msg".to_string(),
+        model: "m".to_string(),
+        input_tokens: input,
+        cache_creation_input_tokens: creation,
+        cache_read_input_tokens: read,
+    }
+}
+
+fn message_delta(input: Option<u64>, creation: Option<u64>, read: Option<u64>) -> StreamEvent {
+    StreamEvent::MessageDelta {
+        stop_reason: Some(StopReason::EndTurn),
+        output_tokens: 7,
+        input_tokens: input,
+        cache_creation_input_tokens: creation,
+        cache_read_input_tokens: read,
+    }
+}
+
+/// Input and cache totals as carried on a start or delta frame.
+#[derive(Clone, Copy)]
+struct Totals {
+    input: Option<u64>,
+    creation: Option<u64>,
+    read: Option<u64>,
+}
+
+const fn totals(input: Option<u64>, creation: Option<u64>, read: Option<u64>) -> Totals {
+    Totals {
+        input,
+        creation,
+        read,
+    }
+}
+
+struct MergeCase {
+    name: &'static str,
+    start: Totals,
+    delta: Totals,
+    expected_input: u64,
+    expected_creation: Option<u64>,
+    expected_read: Option<u64>,
+}
+
+#[test]
+fn test_stream_accumulator_message_delta_usage_merge() {
+    let cases = [
+        MergeCase {
+            name: "openrouter: zero start, delta carries totals",
+            start: totals(Some(0), None, None),
+            delta: totals(Some(1234), Some(10), Some(900)),
+            expected_input: 1234,
+            expected_creation: Some(10),
+            expected_read: Some(900),
+        },
+        MergeCase {
+            name: "openrouter: delta with null cache",
+            start: totals(Some(0), None, None),
+            delta: totals(Some(1234), None, None),
+            expected_input: 1234,
+            expected_creation: None,
+            expected_read: None,
+        },
+        MergeCase {
+            name: "anthropic: delta without totals keeps start",
+            start: totals(Some(200), Some(150), Some(50)),
+            delta: totals(None, None, None),
+            expected_input: 200,
+            expected_creation: Some(150),
+            expected_read: Some(50),
+        },
+        MergeCase {
+            name: "anthropic: cumulative delta with same totals",
+            start: totals(Some(200), Some(150), Some(50)),
+            delta: totals(Some(200), Some(150), Some(50)),
+            expected_input: 200,
+            expected_creation: Some(150),
+            expected_read: Some(50),
+        },
+        MergeCase {
+            name: "zero delta does not erase good start",
+            start: totals(Some(200), Some(150), Some(50)),
+            delta: totals(Some(0), Some(0), Some(0)),
+            expected_input: 200,
+            expected_creation: Some(150),
+            expected_read: Some(50),
+        },
+        MergeCase {
+            name: "zero delta fills unknown cache fields",
+            start: totals(None, None, None),
+            delta: totals(Some(0), Some(0), Some(0)),
+            expected_input: 0,
+            expected_creation: Some(0),
+            expected_read: Some(0),
+        },
+    ];
+    for case in cases {
+        let name = case.name;
+        let mut acc = StreamAccumulator::new();
+        acc.process(&message_start(
+            case.start.input,
+            case.start.creation,
+            case.start.read,
+        ));
+        acc.process(&message_delta(
+            case.delta.input,
+            case.delta.creation,
+            case.delta.read,
+        ));
+        acc.process(&StreamEvent::MessageStop);
+        let usage = acc.into_response(0, 0).expect("clean stream").usage;
+        assert_eq!(usage.input_tokens, case.expected_input, "{name}: input");
+        assert_eq!(usage.output_tokens, 7, "{name}: output");
+        assert_eq!(
+            usage.cache_creation_input_tokens, case.expected_creation,
+            "{name}: cache_creation"
+        );
+        assert_eq!(
+            usage.cache_read_input_tokens, case.expected_read,
+            "{name}: cache_read"
+        );
+    }
+}
+
+#[test]
+fn test_stream_accumulator_message_start_without_cache_keeps_known_cache() {
+    // A later start frame (e.g. the OpenAI Responses decoder's closing
+    // start) without cache numbers must not erase earlier ones.
+    let mut acc = StreamAccumulator::new();
+    acc.process(&message_start(Some(10), Some(4), Some(6)));
+    acc.process(&message_start(Some(12), None, None));
+    assert_eq!(acc.input_tokens, 12);
+    assert_eq!(acc.cache_creation_input_tokens, Some(4));
+    assert_eq!(acc.cache_read_input_tokens, Some(6));
 }
 
 #[test]

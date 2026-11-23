@@ -1,10 +1,10 @@
 //! What each arm used: tokens per model, the share of each plan window it
 //! drew, and what the judge's blind calls cost.
 
-use super::super::format::{money, plural, tokens};
+use super::super::format::{cost, plural, tokens};
 use super::Summary;
 use aura_core_types::{ModelTokens, Plan, PlanShare};
-use aura_gate::compare::judge_cost_usd;
+use aura_gate::compare::{judge_cost_usd, judge_unpriced_calls};
 use aura_model::model_catalog::route_label;
 use std::fmt::Write;
 
@@ -53,7 +53,10 @@ impl Summary<'_> {
             judgments.len(),
             plural(judgments.len()),
             route_label(&judgment.model),
-            money(judge_cost_usd(self.payload)),
+            cost(
+                judge_cost_usd(self.payload),
+                judge_unpriced_calls(self.payload)
+            ),
         );
         let unparsed = judgments.iter().filter(|j| !j.parsed).count();
         if unparsed > 0 {
@@ -81,7 +84,7 @@ fn write_model_tokens(out: &mut String, rows: &[ModelTokens]) {
             plural(row.calls),
             tokens(row.input_tokens),
             tokens(row.output_tokens),
-            money(row.cost_usd),
+            cost(row.cost_usd, row.unpriced_calls),
         );
     }
 }

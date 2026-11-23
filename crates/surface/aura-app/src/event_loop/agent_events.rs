@@ -18,6 +18,7 @@ use aura_agent::{
 use aura_core_types::AgentId;
 use aura_exec_tools::plan_tools::{plan_path_from_output, sync_todo_list, CREATE_PLAN_TOOL_NAME};
 use aura_exec_tools::todo::TodoItem;
+use aura_gate::compare::ModelCall;
 use aura_model::{model_catalog, Usage};
 use aura_ui_terminal::{
     events::{CallUsage, MessageData, MessageRole, ToolData},
@@ -131,13 +132,15 @@ pub(crate) struct TurnPlan {
     pub building: Option<String>,
 }
 
-/// Tokens and estimated cost of one model call, for the reply footer.
-/// `None` when the provider reported no usage at all.
-pub(crate) fn call_usage(model: &str, usage: &Usage) -> Option<CallUsage> {
-    let tokens = model_catalog::call_tokens(model, usage);
+/// Tokens and estimated cost of one model call, for the reply footer:
+/// its usage read in the shape of the endpoint it went to, priced as
+/// [`ModelCall`] prices it. `None` when the provider reported no usage
+/// at all.
+pub(crate) fn call_usage(call: &ModelCall) -> Option<CallUsage> {
+    let tokens = model_catalog::call_tokens(call.endpoint(), &call.usage);
     (tokens > 0).then(|| CallUsage {
         tokens,
-        cost_usd: model_catalog::estimate_cost_usd(model, usage),
+        cost_usd: call.estimate_cost_usd(),
     })
 }
 
@@ -434,6 +437,7 @@ impl TurnEventSink for UiCommandSink {
     async fn on_debug(&mut self, event: DebugEvent) {
         if let DebugEvent::LlmCall {
             model,
+            route,
             input_tokens,
             output_tokens,
             cache_creation_input_tokens,
@@ -444,13 +448,17 @@ impl TurnEventSink for UiCommandSink {
             if model.is_empty() {
                 return;
             }
-            let usage = Usage {
-                input_tokens,
-                output_tokens,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
+            let call = ModelCall {
+                model,
+                route,
+                usage: Usage {
+                    input_tokens,
+                    output_tokens,
+                    cache_creation_input_tokens,
+                    cache_read_input_tokens,
+                },
             };
-            let stats = call_stats(&model, &usage, self.state.context_limit);
+            let stats = call_stats(&call, self.state.context_limit);
             self.state.usage.add(&SessionUsage {
                 calls: 1,
                 input_tokens: stats.input_tokens,
@@ -460,7 +468,7 @@ impl TurnEventSink for UiCommandSink {
                 cost_usd: stats.cost_usd.unwrap_or(0.0),
                 priced: stats.cost_usd.is_some(),
                 context_tokens: stats.prompt_tokens(),
-                models: vec![model],
+                models: vec![call.model],
             });
             self.state.turn_cost_usd += stats.cost_usd.unwrap_or(0.0);
             self.ui.send(UiCommand::CallStats(stats)).await;

@@ -1732,8 +1732,8 @@ impl AgentHub {
             if entry.tx.ts_ms < since_ms {
                 return;
             }
-            if let Some((model, usage)) = crate::record_loader::model_call(&entry.tx) {
-                cost_usd += aura_gate::compare::list_price(&model, &usage).unwrap_or(0.0);
+            if let Some(call) = crate::record_loader::model_call(&entry.tx) {
+                cost_usd += call.list_price().unwrap_or(0.0);
             }
         });
         cost_usd
@@ -1755,9 +1755,8 @@ impl AgentHub {
             if entry.tx.ts_ms < since_ms || !gates {
                 return;
             }
-            let priced = crate::record_loader::model_call(&entry.tx).and_then(|(model, usage)| {
-                aura_model::model_catalog::estimate_cost_usd(&model, &usage)
-            });
+            let priced = crate::record_loader::model_call(&entry.tx)
+                .and_then(|call| call.estimate_cost_usd());
             if let Some(price) = priced {
                 *cost_usd.get_or_insert(0.0) += price;
             }

@@ -12,7 +12,8 @@ use aura_core_types::{
     RefVerdict, RunTurn,
 };
 use aura_gate::compare::{
-    judge_cost_usd, summarize, task_cells, turn_cells, CompareRequest, SessionPick,
+    judge_cost_usd, judge_unpriced_calls, summarize, task_cells, turn_cells, CompareRequest,
+    SessionPick,
 };
 use aura_ui_terminal::events::{
     run_order, BenchArm, BenchBaseline, BenchExample, BenchJudge, BenchRequest, BenchRun,
@@ -157,6 +158,7 @@ pub(super) fn tokens(rows: &[ModelTokens]) -> Vec<BenchTokens> {
             input_tokens: row.input_tokens,
             output_tokens: row.output_tokens,
             cost_usd: row.cost_usd,
+            unpriced_calls: row.unpriced_calls,
         })
         .collect()
 }
@@ -176,6 +178,8 @@ fn arm(payload: &ComparePayload, arm: CompareArm) -> BenchArm {
         finished: summary.finished,
         total_cost_usd: summary.total_cost_usd,
         median_cost_usd: summary.median_cost_usd,
+        unpriced_calls: summary.unpriced_calls,
+        finished_unpriced_calls: summary.finished_unpriced_calls,
         median_wall_ms: summary.median_wall_ms,
         checks_passed: summary.checks_passed,
         checks_run: summary.checks_run,
@@ -191,6 +195,7 @@ fn arm(payload: &ComparePayload, arm: CompareArm) -> BenchArm {
             .map(|cell| BenchTurn {
                 runs: cell.runs,
                 mean_cost_usd: cell.mean_cost_usd,
+                unpriced_calls: cell.unpriced_calls,
                 passed: cell.passed,
                 failed: cell.failed,
                 errors: cell.errors,
@@ -311,6 +316,7 @@ fn tasks(payload: &ComparePayload) -> Vec<BenchTaskRow> {
                         passed: cell.passed,
                         checked: cell.checked,
                         mean_cost_usd: cell.mean_cost_usd,
+                        unpriced_calls: cell.unpriced_calls,
                     })
                     .unwrap_or_default()
             }),
@@ -326,6 +332,7 @@ fn judge(payload: &ComparePayload) -> Option<BenchJudge> {
     Some(BenchJudge {
         model: first.model.clone(),
         cost_usd: judge_cost_usd(payload),
+        unpriced_calls: judge_unpriced_calls(payload),
         verdicts: payload
             .judgments
             .iter()
@@ -362,6 +369,7 @@ fn run(run: &CompareRun) -> BenchRun {
         subtask_cost_usd: run.turns.iter().map(|turn| turn.subtask_cost_usd).sum(),
         wall_ms: run.wall_ms,
         cost_usd: run.cost_usd,
+        unpriced_calls: run.unpriced_calls(),
         check_passed: run.check_passed,
         files_changed: run.files_changed,
         error: run.error.clone(),

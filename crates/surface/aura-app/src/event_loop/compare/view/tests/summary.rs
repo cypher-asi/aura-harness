@@ -3,7 +3,7 @@
 //! tasks, each also pinned byte for byte.
 
 use super::super::render;
-use super::{examples, line, payload, replay, routed, share};
+use super::{examples, line, payload, replay, routed, share, unpriced};
 use aura_core_types::{
     AgentId, BenchSource, ComparePayload, Difficulty, OutcomeSignal, Plan, PromptCategory,
     RefVerdict, RunTurn, SessionBaseline,
@@ -59,6 +59,38 @@ fn the_view_shows_both_arms_side_by_side() {
         !text.contains(" · direct"),
         "older runs say nothing of routing"
     );
+}
+
+#[test]
+fn costs_with_unpriced_calls_read_as_parts_or_unknown_and_are_not_compared() {
+    let text = render("Compare #1", &unpriced());
+    assert_eq!(
+        line(&text, "total cost"),
+        ["total cost", "$0.18", "$0.45+?"]
+    );
+    assert_eq!(
+        line(&text, "median cost"),
+        ["median cost", "$0.06", "unknown"]
+    );
+    assert_eq!(
+        line(&text, "cost per fix"),
+        ["cost per fix", "$0.09", "$0.15+?"]
+    );
+    assert!(
+        text.contains("\n  +? some calls have no known price: claude-opus-4-7\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("B: claude-opus-4-7 9 calls, 126k in / 5k out, $0.45+?"),
+        "{text}"
+    );
+    assert!(line(&text, "b-1").contains(&"unknown"), "{text}");
+    assert!(line(&text, "b-3").contains(&"$0.45+?"), "{text}");
+    assert!(!text.contains("free"), "{text}");
+    assert!(!text.contains("% less"), "{text}");
+
+    let priced = render("Compare #1", &payload());
+    assert!(!priced.contains("no known price"), "{priced}");
 }
 
 #[test]

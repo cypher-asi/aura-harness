@@ -285,6 +285,10 @@ impl Decoder {
         out.push(StreamEvent::MessageDelta {
             stop_reason: Some(stop_reason),
             output_tokens: tokens("/output_tokens").unwrap_or(0),
+            // Input / cache totals ride on the start frame above.
+            input_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
         });
         out.push(StreamEvent::MessageStop);
     }

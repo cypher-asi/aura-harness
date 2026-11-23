@@ -1,6 +1,6 @@
 //! One line per past comparison, numbered for `/compare show <n>`.
 
-use super::format::{arm_label, headline, money, status};
+use super::format::{arm_label, cost, headline, status};
 use crate::record_loader::format_local_time;
 use aura_core_types::{CompareArm, ComparePayload};
 use aura_gate::compare::{summarize, ArmSummary};
@@ -40,7 +40,7 @@ pub(crate) fn list(comparisons: &[(String, Option<ComparePayload>)]) -> String {
 /// many of its checks passed when any ran.
 fn write_arm(out: &mut String, arm: &ArmSummary) {
     match arm.median_cost_usd {
-        Some(usd) => out.push_str(&money(usd)),
+        Some(usd) => out.push_str(&cost(usd, arm.finished_unpriced_calls)),
         None => out.push('-'),
     }
     out.push_str(" median");

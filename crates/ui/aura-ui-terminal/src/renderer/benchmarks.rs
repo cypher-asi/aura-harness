@@ -7,8 +7,9 @@ use crate::app::benchmarks::{
     BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY,
 };
 use crate::events::{
-    arm_letter, cost_per_fix, run_order, BenchArm, BenchDoing, BenchLiveRun, BenchRun, BenchStatus,
-    BenchTaskCell, BenchTaskSetup, BenchTokens, BenchTurn, BenchVerdict, BenchView,
+    arm_letter, cost_per_fix, run_order, unpriced_note, BenchArm, BenchCost, BenchDoing,
+    BenchLiveRun, BenchRun, BenchStatus, BenchTaskCell, BenchTaskSetup, BenchTokens, BenchTurn,
+    BenchVerdict, BenchView, UNPRICED_MARK,
 };
 use crate::{App, Theme};
 use ratatui::{
@@ -29,6 +30,12 @@ pub(super) fn money(usd: f64) -> String {
     } else {
         format!("${usd:.2}")
     }
+}
+
+/// `cost` as [`money`], marked `+?` when some of its calls had no known
+/// price and `unknown` when none had one; `-` for no cost at all.
+fn cost_text(cost: Option<BenchCost>) -> String {
+    cost.map_or_else(|| "-".to_string(), |cost| cost.read(money))
 }
 
 /// `850ms`, `42s`, `3m05s`, `1h05m`.
@@ -115,19 +122,22 @@ fn moved_up(run: &BenchRun) -> String {
 }
 
 /// `yes, $0.26 in subtasks` for a run whose model led a turn, handing
-/// the work to subtasks, else `no`.
+/// the work to subtasks, else `no`. The subtasks' cost is marked as the
+/// run's is when some of its calls had no known price.
 fn led(run: &BenchRun) -> String {
     if run.led {
-        format!("yes, {} in subtasks", money(run.subtask_cost_usd))
+        let subtasks = BenchCost::new(run.subtask_cost_usd, run.unpriced_calls);
+        format!("yes, {} in subtasks", subtasks.read(money))
     } else {
         "no".to_string()
     }
 }
 
 /// `-74%` for the cheaper of two costs, nothing for the other or when
-/// they are about the same or either is unknown.
-fn saving(a: Option<f64>, b: Option<f64>) -> [String; 2] {
-    let (Some(a), Some(b)) = (a, b) else {
+/// they are about the same, either is unknown, or either leaves out
+/// calls with no known price.
+fn saving(a: Option<BenchCost>, b: Option<BenchCost>) -> [String; 2] {
+    let (Some(a), Some(b)) = (a.and_then(BenchCost::known), b.and_then(BenchCost::known)) else {
         return [String::new(), String::new()];
     };
     let larger = a.max(b);
@@ -515,7 +525,7 @@ fn arm_brief(arm: &BenchArm) -> String {
     let mut text = format!(
         "{} {}",
         headline(short_model(&arm.label), 28),
-        arm.median_cost_usd.map_or_else(|| "-".to_string(), money)
+        cost_text(arm.median_cost())
     );
     if arm.checks_run > 0 {
         text.push_str(&format!(" {}/{} pass", arm.checks_passed, arm.checks_run));
@@ -613,7 +623,7 @@ fn task_cells(cell: &BenchTaskCell, theme: &Theme) -> [Cell; 2] {
     if cell.runs == 0 {
         return [(String::new(), text), ("-".to_string(), text)];
     }
-    let cost = cell.mean_cost_usd.map_or_else(|| "-".to_string(), money);
+    let cost = cost_text(cell.mean_cost());
     let check = match (cell.checked, cell.passed) {
         (0, _) if cell.runs == 1 => (String::new(), text),
         (0, _) => (format!("{}×", cell.runs), text),
@@ -663,7 +673,7 @@ fn turn_cell(turn: Option<&BenchTurn>) -> String {
     let Some(turn) = turn.filter(|t| t.runs > 0) else {
         return "-".to_string();
     };
-    let mut text = turn.mean_cost_usd.map_or_else(|| "-".to_string(), money);
+    let mut text = cost_text(turn.mean_cost());
     for (n, what) in [
         (turn.passed, "✓"),
         (turn.failed, "✗"),
@@ -676,12 +686,20 @@ fn turn_cell(turn: Option<&BenchTurn>) -> String {
     text
 }
 
-/// What a run of arm A or B cost next to the session it replays.
+/// What a run of arm A or B cost next to the session it replays, marked
+/// `+?` when the run's cost leaves out calls with no known price.
 #[allow(clippy::cast_precision_loss)]
 fn ratio(arm: &BenchArm, baseline: f64) -> String {
-    arm.median_cost_usd.filter(|_| baseline > 0.0).map_or_else(
+    arm.median_cost().filter(|_| baseline > 0.0).map_or_else(
         || "-".to_string(),
-        |cost| format!("{:.2}×", cost / baseline),
+        |cost| {
+            let mark = if cost.is_complete() {
+                ""
+            } else {
+                UNPRICED_MARK
+            };
+            format!("{:.2}×{mark}", cost.usd / baseline)
+        },
     )
 }
 
@@ -720,6 +738,7 @@ fn tokens_so_far<'a>(
                 row.input_tokens += t.input_tokens;
                 row.output_tokens += t.output_tokens;
                 row.cost_usd += t.cost_usd;
+                row.unpriced_calls += t.unpriced_calls;
             }
             None => rows.push(t.clone()),
         }
@@ -828,8 +847,12 @@ fn detail_lines(
         }
         text
     };
-    let spent =
-        |arm: usize| view.arms[arm].total_cost_usd + live_of(arm).map(|r| r.cost_usd).sum::<f64>();
+    let spent = |arm: usize| {
+        let live = live_of(arm).map(BenchLiveRun::cost);
+        live.fold(view.arms[arm].total_cost(), |sum, cost| {
+            BenchCost::new(sum.usd + cost.usd, sum.unpriced_calls + cost.unpriced_calls)
+        })
+    };
     let worked = |arm: usize| {
         let ended: u64 = view
             .runs
@@ -861,13 +884,13 @@ fn detail_lines(
     add("total time", [worked(0), worked(1)], none());
     add(
         "cost",
-        [money(spent(0)), money(spent(1))],
+        [spent(0).read(money), spent(1).read(money)],
         saving(Some(spent(0)), Some(spent(1))),
     );
     add(
         "cost/run",
-        pair(&|arm| arm.median_cost_usd.map_or_else(|| "-".to_string(), money)),
-        saving(a.median_cost_usd, b.median_cost_usd),
+        pair(&|arm| cost_text(arm.median_cost())),
+        saving(a.median_cost(), b.median_cost()),
     );
     if let Some(baseline) = view.baseline.as_ref().filter(|b| b.priced) {
         add(
@@ -888,10 +911,10 @@ fn detail_lines(
         none(),
     );
     if a.checks_run + b.checks_run > 0 {
-        let per_fix = |arm: &BenchArm| cost_per_fix(arm.total_cost_usd, arm.checks_passed);
+        let per_fix = |arm: &BenchArm| cost_per_fix(arm.total_cost(), arm.checks_passed);
         add(
             "$/fix",
-            pair(&|arm| per_fix(arm).map_or_else(|| "no fix".to_string(), money)),
+            pair(&|arm| per_fix(arm).map_or_else(|| "no fix".to_string(), |cost| cost.read(money))),
             saving(per_fix(a), per_fix(b)),
         );
     }
@@ -933,6 +956,13 @@ fn detail_lines(
         width,
         theme,
     ));
+    let unpriced: Vec<BenchTokens> = (0..2)
+        .flat_map(|arm| tokens_so_far(&view.arms[arm].tokens, live_of(arm)))
+        .filter(|t| t.unpriced_calls > 0)
+        .collect();
+    if let Some(note) = unpriced_note(unpriced.iter().map(|t| short_model(&t.model))) {
+        lines.push(Line::from(Span::styled(fit(&note, width), muted)));
+    }
     if let Some(baseline) = &view.baseline {
         let models: Vec<&str> = baseline.models.iter().map(|m| short_model(m)).collect();
         let about = format!(
@@ -981,7 +1011,7 @@ fn detail_lines(
             .tasks
             .iter()
             .map(|task| {
-                let [da, db] = saving(task.arms[0].mean_cost_usd, task.arms[1].mean_cost_usd);
+                let [da, db] = saving(task.arms[0].mean_cost(), task.arms[1].mean_cost());
                 let [check_a, cost_a] = task_cells(&task.arms[0], theme);
                 let [check_b, cost_b] = task_cells(&task.arms[1], theme);
                 let last = match &task.setup {
@@ -1080,7 +1110,7 @@ fn detail_lines(
                 cell(t.calls.to_string()),
                 cell(tokens(t.input_tokens)),
                 cell(tokens(t.output_tokens)),
-                cell(money(t.cost_usd)),
+                cell(t.cost().read(money)),
             ]));
         }
     }
@@ -1122,7 +1152,7 @@ fn detail_lines(
                 short_model(&judge.model),
                 judge.verdicts.len(),
                 if judge.verdicts.len() == 1 { "" } else { "s" },
-                money(judge.cost_usd)
+                judge.cost().read(money)
             ),
             width,
             theme,
@@ -1223,7 +1253,7 @@ fn detail_lines(
                 base,
             ),
             (duration(r.wall_ms), base),
-            (money(r.cost_usd), base),
+            (r.cost().read(money), base),
             (check.0.to_string(), check.1),
             (r.files_changed.to_string(), base),
             (
@@ -1312,7 +1342,7 @@ fn live_row(
             text,
         ),
         (live.wall_ms.map_or_else(String::new, duration), text),
-        (money(live.cost_usd), text),
+        (live.cost().read(money), text),
     ];
     let status = match (&live.doing, live.wall_ms) {
         (_, None) => "waiting for its task's files".to_string(),
@@ -1619,6 +1649,7 @@ mod tests {
                     b_vs_reference: Some("better".to_string()),
                     reasoning: "B also fixed the docs".to_string(),
                 }],
+                ..BenchJudge::default()
             }),
             baseline: Some(BenchBaseline {
                 calls: 12,
@@ -1952,12 +1983,14 @@ mod tests {
                         passed: 2,
                         checked: 2,
                         mean_cost_usd: Some(0.02),
+                        unpriced_calls: 0,
                     },
                     BenchTaskCell {
                         runs: 2,
                         passed: 1,
                         checked: 2,
                         mean_cost_usd: Some(0.30),
+                        unpriced_calls: 0,
                     },
                 ],
                 ..BenchTaskRow::default()
@@ -2024,6 +2057,7 @@ mod tests {
                     input_tokens: 42_000,
                     output_tokens: 1_500,
                     cost_usd: 0.04,
+                    unpriced_calls: 0,
                 }],
                 ..BenchLiveRun::default()
             },
@@ -2152,6 +2186,7 @@ mod tests {
             input_tokens: 1_000,
             output_tokens: 100,
             cost_usd: cost,
+            unpriced_calls: 0,
         };
         let live = [
             BenchLiveRun {
@@ -2159,15 +2194,225 @@ mod tests {
                 ..BenchLiveRun::default()
             },
             BenchLiveRun {
-                tokens: vec![token("sonnet", 0.2)],
+                tokens: vec![
+                    token("sonnet", 0.2),
+                    BenchTokens {
+                        unpriced_calls: 1,
+                        ..token("sonnet", 0.0)
+                    },
+                ],
                 ..BenchLiveRun::default()
             },
         ];
         let used = tokens_so_far(&[token("sonnet", 0.1)], live.iter());
         let models: Vec<&str> = used.iter().map(|t| t.model.as_str()).collect();
         assert_eq!(models, ["opus", "sonnet", "haiku"]);
-        assert_eq!(used[1].calls, 2);
+        assert_eq!((used[1].calls, used[1].unpriced_calls), (3, 1));
         assert!((used[1].cost_usd - 0.3).abs() < 1e-9);
+    }
+
+    /// The detail of a benchmark whose arm B ran on `glm-9`, a model with
+    /// no known price: `unpriced` of the arm's `calls` calls had none and
+    /// the rest cost `priced_usd`.
+    fn unpriced_view(calls: u32, unpriced: u32, priced_usd: f64) -> BenchView {
+        let mut view = view();
+        view.baseline = None;
+        let b = &mut view.arms[1];
+        b.label = "glm-9".to_string();
+        b.total_cost_usd = priced_usd;
+        b.median_cost_usd = Some(priced_usd / 2.0);
+        b.unpriced_calls = unpriced;
+        b.finished_unpriced_calls = unpriced;
+        b.checks_passed = 1;
+        for turn in &mut b.turns {
+            turn.mean_cost_usd = Some(priced_usd / 4.0);
+            turn.unpriced_calls = unpriced;
+        }
+        b.tokens = vec![BenchTokens {
+            model: "openrouter/z-ai/glm-9".to_string(),
+            calls,
+            input_tokens: 90_000,
+            output_tokens: 4_000,
+            cost_usd: priced_usd,
+            unpriced_calls: unpriced,
+        }];
+        view.arms[0].tokens = vec![BenchTokens {
+            model: "claude-sonnet-4-6".to_string(),
+            calls: 4,
+            input_tokens: 40_000,
+            output_tokens: 2_000,
+            cost_usd: 0.12,
+            unpriced_calls: 0,
+        }];
+        view.runs.push(BenchRun {
+            name: "b-1".to_string(),
+            arm: 1,
+            model: "openrouter/z-ai/glm-9".to_string(),
+            wall_ms: 30_000,
+            cost_usd: priced_usd / 2.0,
+            unpriced_calls: unpriced,
+            ..BenchRun::default()
+        });
+        view
+    }
+
+    fn line_of<'s>(shown: &'s str, start: &str) -> &'s str {
+        shown
+            .lines()
+            .find(|l| l.starts_with(start))
+            .unwrap_or_else(|| panic!("no {start:?} line in\n{shown}"))
+    }
+
+    fn run_line<'s>(shown: &'s str, name: &str) -> &'s str {
+        shown
+            .lines()
+            .skip_while(|l| !l.contains("── runs"))
+            .find(|l| l.split_whitespace().next() == Some(name))
+            .unwrap_or_else(|| panic!("no {name} run in\n{shown}"))
+    }
+
+    #[test]
+    fn a_model_with_no_known_price_reads_unknown_not_free() {
+        let theme = Theme::default();
+        let shown = text(&detail_lines(
+            &unpriced_view(6, 6, 0.0),
+            None,
+            &theme,
+            140,
+            None,
+        ));
+        let tokens = line_of(&shown, "B  glm-9 ");
+        assert!(tokens.trim_end().ends_with("unknown"), "{shown}");
+        assert!(!tokens.contains("free"), "{shown}");
+        for label in ["cost ", "cost/run ", "$/fix "] {
+            let row = line_of(&shown, label);
+            assert!(row.trim_end().ends_with("unknown"), "{row}");
+            assert!(
+                !row.contains('%'),
+                "no saving against a missing price: {row}"
+            );
+        }
+        assert!(run_line(&shown, "b-1").contains("unknown"), "{shown}");
+        assert!(
+            shown.contains("+? some calls have no known price: glm-9"),
+            "{shown}"
+        );
+        assert!(!shown.contains("free"), "{shown}");
+    }
+
+    #[test]
+    fn a_partly_priced_cost_shows_the_priced_part_marked() {
+        let theme = Theme::default();
+        let shown = text(&detail_lines(
+            &unpriced_view(6, 2, 0.22),
+            None,
+            &theme,
+            140,
+            None,
+        ));
+        assert!(
+            line_of(&shown, "B  glm-9 ").trim_end().ends_with("$0.22+?"),
+            "{shown}"
+        );
+        let cost = line_of(&shown, "cost ");
+        assert!(
+            cost.contains("$0.12") && cost.trim_end().ends_with("$0.22+?"),
+            "{cost}"
+        );
+        assert!(!cost.contains('%'), "{cost}");
+        let per_run = line_of(&shown, "cost/run ");
+        assert!(per_run.trim_end().ends_with("$0.11+?"), "{per_run}");
+        assert!(!per_run.contains('%'), "{per_run}");
+        assert!(
+            line_of(&shown, "$/fix ").trim_end().ends_with("$0.22+?"),
+            "{shown}"
+        );
+        assert!(run_line(&shown, "b-1").contains("$0.11+?"), "{shown}");
+        assert!(shown.contains("$0.06+? 2✓"), "turn cells: {shown}");
+        assert!(
+            shown.contains("+? some calls have no known price"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn a_fully_priced_benchmark_has_no_note_and_keeps_free_for_local_models() {
+        let theme = Theme::default();
+        let mut view = view();
+        view.arms[1].tokens = vec![BenchTokens {
+            model: "local/qwen3:4b".to_string(),
+            calls: 3,
+            ..BenchTokens::default()
+        }];
+        let shown = text(&detail_lines(&view, None, &theme, 120, None));
+        assert!(!shown.contains("no known price"), "{shown}");
+        assert!(!shown.contains("+?"), "{shown}");
+        assert!(
+            line_of(&shown, "B  qwen3:4b ").trim_end().ends_with("free"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn savings_need_both_costs_complete() {
+        let cost = |usd, unpriced| Some(BenchCost::new(usd, unpriced));
+        assert_eq!(saving(cost(0.1, 0), cost(0.4, 0)), ["-75%", ""]);
+        assert_eq!(saving(cost(0.1, 0), cost(0.0, 3)), ["", ""]);
+        assert_eq!(saving(cost(0.1, 1), cost(0.4, 0)), ["", ""]);
+        assert_eq!(saving(None, cost(0.4, 0)), ["", ""]);
+    }
+
+    #[test]
+    fn task_cells_mark_a_cost_that_leaves_out_unpriced_calls() {
+        use crate::events::BenchTaskRow;
+        let theme = Theme::default();
+        let mut view = unpriced_view(6, 6, 0.0);
+        view.prompts = Vec::new();
+        let cell = |usd, unpriced| BenchTaskCell {
+            runs: 1,
+            passed: 1,
+            checked: 1,
+            mean_cost_usd: Some(usd),
+            unpriced_calls: unpriced,
+        };
+        view.tasks = vec![
+            BenchTaskRow {
+                id: "coding/one".to_string(),
+                arms: [cell(0.10, 0), cell(0.0, 4)],
+                ..BenchTaskRow::default()
+            },
+            BenchTaskRow {
+                id: "coding/two".to_string(),
+                arms: [cell(0.10, 0), cell(0.05, 1)],
+                ..BenchTaskRow::default()
+            },
+        ];
+        let shown = text(&detail_lines(&view, None, &theme, 140, None));
+        let one = line_of(&shown, "one ");
+        assert!(one.contains("unknown") && !one.contains('%'), "{one}");
+        let two = line_of(&shown, "two ");
+        assert!(two.contains("$0.05+?") && !two.contains('%'), "{two}");
+    }
+
+    #[test]
+    fn a_judge_with_no_known_price_reads_unknown_not_free() {
+        let theme = Theme::default();
+        let judge_line = |cost_usd, unpriced_calls| {
+            let mut view = view();
+            if let Some(judge) = view.judge.as_mut() {
+                judge.cost_usd = cost_usd;
+                judge.unpriced_calls = unpriced_calls;
+            }
+            let shown = text(&detail_lines(&view, None, &theme, 160, None));
+            shown
+                .lines()
+                .find(|l| l.contains("blind call"))
+                .unwrap_or_else(|| panic!("no judge line in\n{shown}"))
+                .to_string()
+        };
+        assert!(judge_line(0.0, 1).contains("· unknown, not in arm costs"));
+        assert!(judge_line(0.03, 1).contains("· $0.03+?, not in arm costs"));
+        assert!(judge_line(0.03, 0).contains("· $0.03, not in arm costs"));
     }
 
     #[test]

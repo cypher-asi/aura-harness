@@ -12,10 +12,17 @@ pub use cells::{task_cells, turn_cells, TaskCell, TurnCell};
 
 use aura_core_types::ComparePayload;
 
-/// What every judge call of `payload` cost.
+/// What every judge call of `payload` cost, as far as each had a price.
 #[must_use]
 pub fn judge_cost_usd(payload: &ComparePayload) -> f64 {
     payload.judgments.iter().map(|j| j.cost_usd).sum()
+}
+
+/// The judge calls of `payload` with no known price, which
+/// [`judge_cost_usd`] leaves out.
+#[must_use]
+pub fn judge_unpriced_calls(payload: &ComparePayload) -> u32 {
+    payload.judgments.iter().map(|j| j.unpriced_calls).sum()
 }
 
 /// Whether two counts out of a handful of runs are too close to tell

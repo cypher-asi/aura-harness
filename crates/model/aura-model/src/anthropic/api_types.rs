@@ -292,8 +292,11 @@ pub(super) struct SseMessageStart {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code, clippy::struct_field_names)]
 pub(super) struct SseUsageStart {
-    #[serde(alias = "prompt_tokens")]
-    pub input_tokens: u64,
+    /// Optional because OpenRouter's Anthropic-compatible endpoint sends
+    /// `null` (or omits it) for non-Anthropic upstreams; the real total
+    /// then arrives on `message_delta`.
+    #[serde(default, alias = "prompt_tokens")]
+    pub input_tokens: Option<u64>,
     #[serde(default, alias = "prompt_cache_miss_tokens")]
     pub cache_creation_input_tokens: Option<u64>,
     #[serde(default, alias = "prompt_cache_hit_tokens", alias = "cached_tokens")]
@@ -341,10 +344,24 @@ pub(super) struct SseMessageDeltaContent {
     pub stop_reason: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+/// Usage carried on `message_delta`.
+///
+/// Anthropic reports cumulative totals here; OpenRouter's
+/// Anthropic-compatible endpoint reports the *only* input / cache totals
+/// here for non-Anthropic upstreams (its `message_start` says 0). Every
+/// field may be `null` or absent. Unknown extras (`output_tokens_details`,
+/// `server_tool_use`, `cost`, ...) are ignored.
+#[derive(Debug, Default, Deserialize)]
+#[allow(clippy::struct_field_names)]
 pub(super) struct SseUsageDelta {
-    #[serde(alias = "completion_tokens")]
-    pub output_tokens: u64,
+    #[serde(default, alias = "completion_tokens")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, alias = "prompt_tokens")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, alias = "prompt_cache_miss_tokens")]
+    pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default, alias = "prompt_cache_hit_tokens", alias = "cached_tokens")]
+    pub cache_read_input_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

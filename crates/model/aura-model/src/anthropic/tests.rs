@@ -1421,6 +1421,7 @@ async fn test_proxy_openai_models_fall_back_to_buffered_streaming() {
         StreamEvent::MessageDelta {
             stop_reason: Some(StopReason::EndTurn),
             output_tokens: 5,
+            ..
         }
     )));
     assert!(matches!(

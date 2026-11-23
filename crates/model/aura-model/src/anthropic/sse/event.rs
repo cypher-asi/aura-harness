@@ -23,7 +23,7 @@ pub(super) fn sse_event_to_stream_event(sse_event: SseEvent) -> StreamEvent {
         SseEvent::MessageStart { message } => StreamEvent::MessageStart {
             message_id: message.id,
             model: message.model,
-            input_tokens: message.usage.as_ref().map(|u| u.input_tokens),
+            input_tokens: message.usage.as_ref().and_then(|u| u.input_tokens),
             cache_creation_input_tokens: message
                 .usage
                 .as_ref()
@@ -66,9 +66,13 @@ pub(super) fn sse_event_to_stream_event(sse_event: SseEvent) -> StreamEvent {
                 "stop_sequence" => StopReason::StopSequence,
                 _ => StopReason::EndTurn,
             });
+            let usage = usage.unwrap_or_default();
             StreamEvent::MessageDelta {
                 stop_reason,
-                output_tokens: usage.map_or(0, |u| u.output_tokens),
+                output_tokens: usage.output_tokens.unwrap_or(0),
+                input_tokens: usage.input_tokens,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                cache_read_input_tokens: usage.cache_read_input_tokens,
             }
         }
         SseEvent::MessageStop => StreamEvent::MessageStop,

@@ -73,6 +73,9 @@ impl ModelSelection {
     /// `auth` describes what the active identity can use.
     pub fn init(config: &mut AgentLoopConfig, auth: AuthSummary) -> Self {
         let prefs_path = prefs_path();
+        if let Some(path) = &prefs_path {
+            publish_saved_openrouter_info(path);
+        }
         let prefs = prefs_path
             .as_deref()
             .and_then(load_prefs)
@@ -355,12 +358,7 @@ impl ModelSelection {
             }
         };
         if note.is_none() || !entries.is_empty() {
-            model_catalog::replace_live_models(
-                ModelBackend::OpenRouter,
-                entries
-                    .iter()
-                    .map(|(option, info)| (option.id.clone(), *info)),
-            );
+            publish_openrouter_info(&entries);
         }
         let models = entries.into_iter().map(|(option, _)| option).collect();
         self.set_backend_models(ModelBackend::OpenRouter, models);
@@ -811,6 +809,29 @@ fn load_prefs(path: &std::path::Path) -> Option<TuiPrefs> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Make the limits and prices of OpenRouter's `entries` what the catalog
+/// knows live about OpenRouter models.
+fn publish_openrouter_info(entries: &[(ModelOption, LiveModelInfo)]) {
+    model_catalog::replace_live_models(
+        ModelBackend::OpenRouter,
+        entries
+            .iter()
+            .map(|(option, info)| (option.id.clone(), *info)),
+    );
+}
+
+/// Publish the limits and prices of the OpenRouter listing saved beside
+/// `prefs` (`tui.json`), so OpenRouter calls are priced from the start:
+/// a fresh listing is fetched only when the model lists are refreshed,
+/// and a run on a model named in full never refreshes them. Nothing is
+/// published when no list is saved there.
+fn publish_saved_openrouter_info(prefs: &std::path::Path) {
+    let saved = load_openrouter_models(&prefs.with_file_name(OPENROUTER_MODELS_FILE));
+    if !saved.is_empty() {
+        publish_openrouter_info(&saved);
+    }
+}
+
 /// Beside `tui.json`: the Claude plan's model list as it last loaded,
 /// used when it can't be loaded. The built-in list is older and would
 /// leave Gate routing among models the plan has since replaced.
@@ -1129,6 +1150,25 @@ mod tests {
         assert_eq!(info.context_window, Some(123_456));
         assert_eq!(info.max_output, Some(8_192));
         assert_eq!(info.price.map(|p| p.output), Some(2.0));
+
+        // At startup, the saved list's prices are published before any
+        // listing is fetched.
+        model_catalog::replace_live_models(ModelBackend::OpenRouter, []);
+        assert_eq!(
+            model_catalog::live_model_info("openrouter/acme/saved-test-pro"),
+            None
+        );
+        publish_saved_openrouter_info(&home.path().join("tui.json"));
+        let usage = aura_model::Usage::new(1_000_000, 1_000_000);
+        assert_eq!(
+            model_catalog::estimate_cost_usd("openrouter/acme/saved-test-pro", &usage),
+            Some(3.0),
+            "the saved price is used before any listing is fetched"
+        );
+        // Nothing saved: what is known stays.
+        let empty = tempfile::tempdir().unwrap();
+        publish_saved_openrouter_info(&empty.path().join("tui.json"));
+        assert!(model_catalog::live_model_info("openrouter/acme/saved-test-pro").is_some());
 
         let (mut fresh, _) = selection_on(openrouter(), GATE_MODEL_ID);
         let note = fresh.openrouter_listed(Err("offline".to_string())).unwrap();

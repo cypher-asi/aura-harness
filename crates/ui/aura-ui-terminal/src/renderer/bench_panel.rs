@@ -23,7 +23,7 @@ use super::panels::border_color;
 use super::text::display_width;
 use crate::app::bench_progress::{BenchPanelAreas, BenchTabArea};
 use crate::app::PanelFocus;
-use crate::events::{BenchPhase, BenchView};
+use crate::events::{BenchCost, BenchLiveRun, BenchPhase, BenchView};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -218,13 +218,15 @@ fn facts(view: &BenchView) -> Vec<(&'static str, String)> {
         rows.push(("Setup", setup));
     }
     let spent = |arm: usize| {
-        let live: f64 = view
+        let live = view
             .live
             .iter()
             .filter(|r| r.arm.min(1) == arm)
-            .map(|r| r.cost_usd)
-            .sum();
-        money(view.arms[arm].total_cost_usd + live)
+            .map(BenchLiveRun::cost);
+        live.fold(view.arms[arm].total_cost(), |sum, cost| {
+            BenchCost::new(sum.usd + cost.usd, sum.unpriced_calls + cost.unpriced_calls)
+        })
+        .read(money)
     };
     rows.push(("Spent", format!("A {} · B {}", spent(0), spent(1))));
     rows

@@ -62,6 +62,79 @@ pub fn run_order(name: &str, arm: usize) -> (u32, usize) {
     (number, arm)
 }
 
+/// What follows a cost that leaves out calls with no known price.
+pub const UNPRICED_MARK: &str = "+?";
+
+/// A list-price cost and how many of the calls in it had no known price,
+/// so that it is only what the others cost.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BenchCost {
+    /// What the priced calls cost
+    pub usd: f64,
+    /// Calls with no known price, which `usd` leaves out
+    pub unpriced_calls: u32,
+}
+
+impl BenchCost {
+    /// `usd`, leaving out `unpriced_calls` calls.
+    #[must_use]
+    pub const fn new(usd: f64, unpriced_calls: u32) -> Self {
+        Self {
+            usd,
+            unpriced_calls,
+        }
+    }
+
+    /// Whether every call in it had a known price.
+    #[must_use]
+    pub const fn is_complete(self) -> bool {
+        self.unpriced_calls == 0
+    }
+
+    /// What it cost when every call had a price; `None` when some had
+    /// none, so it cannot be set against another cost.
+    #[must_use]
+    pub const fn known(self) -> Option<f64> {
+        if self.is_complete() {
+            Some(self.usd)
+        } else {
+            None
+        }
+    }
+
+    /// `money(usd)` when every call had a price, `$0.11+?` when some
+    /// had none, and `unknown` when the priced ones cost nothing (or
+    /// there were none).
+    #[must_use]
+    pub fn read(self, money: fn(f64) -> String) -> String {
+        if self.is_complete() {
+            money(self.usd)
+        } else if self.usd <= 0.0 {
+            "unknown".to_string()
+        } else {
+            money(self.usd) + UNPRICED_MARK
+        }
+    }
+}
+
+/// `+? some calls have no known price: glm-9, mystery` when `models`
+/// made calls with no known price; `None` when there are none.
+#[must_use]
+pub fn unpriced_note<'a>(models: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let mut named: Vec<&str> = Vec::new();
+    for model in models {
+        if !named.contains(&model) {
+            named.push(model);
+        }
+    }
+    (!named.is_empty()).then(|| {
+        format!(
+            "{UNPRICED_MARK} some calls have no known price: {}",
+            named.join(", ")
+        )
+    })
+}
+
 /// How two costs compare, for after each: ` · 100%` for the larger and
 /// ` · 33% less` for the other, both ` · 100%` when they are about the
 /// same. Empty when either is unknown or the larger is nothing.
@@ -90,17 +163,23 @@ pub fn cost_shares(a: Option<f64>, b: Option<f64>) -> [String; 2] {
 /// passes.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
-pub fn cost_per_fix(total_usd: f64, fixes: usize) -> Option<f64> {
-    (fixes > 0).then(|| total_usd / fixes as f64)
+pub fn cost_per_fix(total: BenchCost, fixes: usize) -> Option<BenchCost> {
+    (fixes > 0).then(|| BenchCost::new(total.usd / fixes as f64, total.unpriced_calls))
 }
 
 /// The "cost per fix" cells of two arms: what each verified fix cost, with
-/// how the two compare, or `no fix` for an arm none of whose checks passed.
+/// how the two compare when both are complete, or `no fix` for an arm
+/// none of whose checks passed.
 #[must_use]
-pub fn per_fix_cells(a: Option<f64>, b: Option<f64>, money: fn(f64) -> String) -> [String; 2] {
-    let [a_share, b_share] = cost_shares(a, b);
-    let cell = |cost: Option<f64>, share: String| {
-        cost.map_or_else(|| "no fix".to_string(), |usd| money(usd) + &share)
+pub fn per_fix_cells(
+    a: Option<BenchCost>,
+    b: Option<BenchCost>,
+    money: fn(f64) -> String,
+) -> [String; 2] {
+    let known = |cost: Option<BenchCost>| cost.and_then(BenchCost::known);
+    let [a_share, b_share] = cost_shares(known(a), known(b));
+    let cell = |cost: Option<BenchCost>, share: String| {
+        cost.map_or_else(|| "no fix".to_string(), |cost| cost.read(money) + &share)
     };
     [cell(a, a_share), cell(b, b_share)]
 }
@@ -112,7 +191,18 @@ pub struct BenchTokens {
     pub calls: u32,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// What its priced calls cost
     pub cost_usd: f64,
+    /// Its calls with no known price, which `cost_usd` leaves out
+    pub unpriced_calls: u32,
+}
+
+impl BenchTokens {
+    /// What its calls cost, as far as they had a price.
+    #[must_use]
+    pub const fn cost(&self) -> BenchCost {
+        BenchCost::new(self.cost_usd, self.unpriced_calls)
+    }
 }
 
 /// How an arm's runs did on one prompt.
@@ -122,12 +212,24 @@ pub struct BenchTurn {
     pub runs: usize,
     /// Mean cost of their turns
     pub mean_cost_usd: Option<f64>,
+    /// Calls of their turns with no known price, which `mean_cost_usd`
+    /// leaves out
+    pub unpriced_calls: u32,
     /// Turns whose last test or build command passed
     pub passed: usize,
     /// Turns whose last test or build command failed
     pub failed: usize,
     /// Turns that ended in an error
     pub errors: usize,
+}
+
+impl BenchTurn {
+    /// Mean cost of its turns, as far as their calls had a price.
+    #[must_use]
+    pub fn mean_cost(&self) -> Option<BenchCost> {
+        self.mean_cost_usd
+            .map(|usd| BenchCost::new(usd, self.unpriced_calls))
+    }
 }
 
 /// One arm of a benchmark.
@@ -139,8 +241,16 @@ pub struct BenchArm {
     pub runs: usize,
     /// Runs that ended without an error
     pub finished: usize,
+    /// What the priced calls of every run cost
     pub total_cost_usd: f64,
+    /// Median cost of the finished runs
     pub median_cost_usd: Option<f64>,
+    /// Calls of every run with no known price, which `total_cost_usd`
+    /// leaves out
+    pub unpriced_calls: u32,
+    /// Calls of the finished runs with no known price, which
+    /// `median_cost_usd` leaves out
+    pub finished_unpriced_calls: u32,
     pub median_wall_ms: Option<u64>,
     pub checks_passed: usize,
     pub checks_run: usize,
@@ -160,6 +270,22 @@ pub struct BenchArm {
     pub escalated: usize,
     /// Runs Gate asked to check a change they had not checked
     pub nudged: usize,
+}
+
+impl BenchArm {
+    /// What every run cost, as far as its calls had a price.
+    #[must_use]
+    pub const fn total_cost(&self) -> BenchCost {
+        BenchCost::new(self.total_cost_usd, self.unpriced_calls)
+    }
+
+    /// Median cost of the finished runs, as far as their calls had a
+    /// price.
+    #[must_use]
+    pub fn median_cost(&self) -> Option<BenchCost> {
+        self.median_cost_usd
+            .map(|usd| BenchCost::new(usd, self.finished_unpriced_calls))
+    }
 }
 
 /// One run of a benchmark.
@@ -187,7 +313,10 @@ pub struct BenchRun {
     /// The part of `cost_usd` its subtasks spent
     pub subtask_cost_usd: f64,
     pub wall_ms: u64,
+    /// What its priced calls cost
     pub cost_usd: f64,
+    /// Its calls with no known price, which `cost_usd` leaves out
+    pub unpriced_calls: u32,
     pub check_passed: Option<bool>,
     pub files_changed: u32,
     pub error: Option<String>,
@@ -195,6 +324,14 @@ pub struct BenchRun {
     pub task: Option<String>,
     /// Hex id of the agent it ran as, whose LOG tab shows its trace
     pub agent_id: String,
+}
+
+impl BenchRun {
+    /// What it cost, as far as its calls had a price.
+    #[must_use]
+    pub const fn cost(&self) -> BenchCost {
+        BenchCost::new(self.cost_usd, self.unpriced_calls)
+    }
 }
 
 /// How an arm's runs did on one example task.
@@ -207,6 +344,18 @@ pub struct BenchTaskCell {
     /// Runs whose check ran
     pub checked: usize,
     pub mean_cost_usd: Option<f64>,
+    /// Calls of its runs with no known price, which `mean_cost_usd`
+    /// leaves out
+    pub unpriced_calls: u32,
+}
+
+impl BenchTaskCell {
+    /// Mean cost of its runs, as far as their calls had a price.
+    #[must_use]
+    pub fn mean_cost(&self) -> Option<BenchCost> {
+        self.mean_cost_usd
+            .map(|usd| BenchCost::new(usd, self.unpriced_calls))
+    }
 }
 
 /// Where an example task's files stand while its benchmark sets up.
@@ -266,8 +415,10 @@ pub struct BenchLiveRun {
     pub difficulty: Option<String>,
     /// How long it has worked; `None` while it waits for its task's files
     pub wall_ms: Option<u64>,
-    /// What its model calls have cost so far
+    /// What its priced model calls have cost so far
     pub cost_usd: f64,
+    /// Its calls so far with no known price, which `cost_usd` leaves out
+    pub unpriced_calls: u32,
     /// Tokens per model its calls have used so far
     pub tokens: Vec<BenchTokens>,
     /// Hex id of the agent it runs as; `None` while it waits for its
@@ -275,6 +426,14 @@ pub struct BenchLiveRun {
     pub agent_id: Option<String>,
     /// What it is doing right now; `None` when that is not known
     pub doing: Option<BenchDoing>,
+}
+
+impl BenchLiveRun {
+    /// What it has cost so far, as far as its calls had a price.
+    #[must_use]
+    pub const fn cost(&self) -> BenchCost {
+        BenchCost::new(self.cost_usd, self.unpriced_calls)
+    }
 }
 
 /// What a run under way is doing right now.
@@ -312,8 +471,19 @@ pub struct BenchVerdict {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BenchJudge {
     pub model: String,
+    /// What its priced calls cost
     pub cost_usd: f64,
+    /// Its calls with no known price, which `cost_usd` leaves out
+    pub unpriced_calls: u32,
     pub verdicts: Vec<BenchVerdict>,
+}
+
+impl BenchJudge {
+    /// What its calls cost, as far as they had a price.
+    #[must_use]
+    pub const fn cost(&self) -> BenchCost {
+        BenchCost::new(self.cost_usd, self.unpriced_calls)
+    }
 }
 
 /// What a replayed session cost when it ran.
@@ -549,6 +719,51 @@ mod tests {
         assert_eq!(cost_shares(Some(1.0), Some(0.996)), [" · 100%", " · 100%"]);
         assert_eq!(cost_shares(Some(0.0), Some(0.0)), ["", ""]);
         assert_eq!(cost_shares(None, Some(0.2)), ["", ""]);
+    }
+
+    fn money(usd: f64) -> String {
+        if usd <= 0.0 {
+            "free".to_string()
+        } else {
+            format!("${usd:.2}")
+        }
+    }
+
+    #[test]
+    fn a_cost_with_unpriced_calls_reads_as_a_part_or_unknown_never_free() {
+        assert_eq!(BenchCost::new(0.0, 0).read(money), "free", "a local model");
+        assert_eq!(BenchCost::new(0.11, 0).read(money), "$0.11");
+        assert_eq!(BenchCost::new(0.11, 2).read(money), "$0.11+?");
+        assert_eq!(BenchCost::new(0.0, 3).read(money), "unknown");
+        assert_eq!(BenchCost::new(0.11, 2).known(), None);
+        assert_eq!(BenchCost::new(0.11, 0).known(), Some(0.11));
+    }
+
+    #[test]
+    fn per_fix_cells_compare_only_complete_costs() {
+        let fix = |usd, unpriced| cost_per_fix(BenchCost::new(usd, unpriced), 2);
+        assert_eq!(
+            per_fix_cells(fix(0.4, 0), fix(0.2, 0), money),
+            ["$0.20 · 100%", "$0.10 · 50% less"]
+        );
+        assert_eq!(
+            per_fix_cells(fix(0.4, 0), fix(0.0, 4), money),
+            ["$0.20", "unknown"],
+            "no -100% from a missing price"
+        );
+        assert_eq!(
+            per_fix_cells(None, fix(0.2, 1), money),
+            ["no fix", "$0.10+?"]
+        );
+    }
+
+    #[test]
+    fn the_unpriced_note_names_each_model_once() {
+        assert_eq!(unpriced_note([]), None);
+        assert_eq!(
+            unpriced_note(["glm-9", "mystery", "glm-9"]).as_deref(),
+            Some("+? some calls have no known price: glm-9, mystery")
+        );
     }
 
     #[test]

@@ -459,6 +459,11 @@ const PRICES: &[(&str, Price)] = &[
 /// segment and `:variant` (`openrouter/openai/gpt-5.4:nitro` ->
 /// `gpt-5-4`), so one upstream model shares its key, price and limits
 /// across every route.
+///
+/// A name without a route prefix is taken as it is, even when it looks
+/// like an OpenRouter slug (`openai/gpt-oss-20b`): local servers name
+/// their models that way too, so only the route a call took can say
+/// that such a name is OpenRouter's.
 #[must_use]
 pub fn model_key(model: &str) -> String {
     let name = upstream_model_name(model);
@@ -469,6 +474,14 @@ pub fn model_key(model: &str) -> String {
     };
     let name = name.strip_prefix("aura-").unwrap_or(name);
     name.to_ascii_lowercase().replace('.', "-")
+}
+
+/// `id` without its OpenRouter `:variant` (`openrouter/x/y:nitro` ->
+/// `openrouter/x/y`), `None` when it has none.
+fn without_variant(id: &str) -> Option<&str> {
+    id.rsplit_once(':')
+        .filter(|(base, variant)| !base.is_empty() && !variant.contains('/'))
+        .map(|(base, _)| base)
 }
 
 /// The model in an OpenRouter slug, without vendor or variant
@@ -635,7 +648,9 @@ pub fn billed_tokens(model: &str, usage: &Usage) -> BilledTokens {
     // responses report them on top of it. Only the ChatGPT route and
     // aura-router's GPT aliases answer in OpenAI shape: OpenRouter's
     // `/v1/messages` (and the local server's) reports Anthropic-format
-    // usage whatever model is upstream.
+    // usage whatever model is upstream. Pass the id the call asked for:
+    // the name an answer comes back with does not say which endpoint
+    // reported it.
     let openai = match backend_for(model) {
         ModelBackend::Chatgpt => true,
         ModelBackend::Router => model_key(model).starts_with("gpt-"),
@@ -747,14 +762,20 @@ pub fn replace_live_models(
     table.extend(fresh);
 }
 
-/// What the latest model listing of its provider said about `model`.
+/// What the latest model listing of its provider said about `model`:
+/// the entry listed under `model` itself, else, for an OpenRouter id,
+/// under that id without its `:variant` (`:nitro` is listed as its base
+/// model).
 #[must_use]
 pub fn live_model_info(model: &str) -> Option<LiveModelInfo> {
-    LIVE_MODELS
-        .read()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(model)
-        .copied()
+    let table = LIVE_MODELS.read().unwrap_or_else(PoisonError::into_inner);
+    let listed = |id: &str| table.get(id).copied();
+    listed(model).or_else(|| {
+        if backend_for(model) != ModelBackend::OpenRouter {
+            return None;
+        }
+        listed(without_variant(model)?)
+    })
 }
 
 /// Context window the latest model listing gave `model`, in tokens.
@@ -1367,6 +1388,25 @@ mod tests {
         assert_eq!(call_tokens("chatgpt/gpt-5.4", &usage), 11_000);
     }
 
+    #[test]
+    fn a_bare_vendor_slug_is_not_taken_for_an_openrouter_id() {
+        // Local servers name models the way OpenRouter does
+        // (`openai/gpt-oss-20b` on LM Studio), so a name with no route
+        // prefix is not priced, keyed or shaped as OpenRouter's.
+        let slug = "openai/gpt-6.1-sol";
+        assert_eq!(backend_for(slug), ModelBackend::Router);
+        assert_eq!(model_key(slug), "openai/gpt-6-1-sol");
+        assert_ne!(model_key(slug), model_key("openrouter/openai/gpt-6.1-sol"));
+        let usage = usage(10_000, 0, 8_000, 1_000);
+        assert_eq!(estimate_cost_usd(slug, &usage), None);
+        assert!(estimate_cost_usd("openrouter/openai/gpt-6.1-sol", &usage).is_some());
+
+        // Router aliases and bare GPT names keep their OpenAI shape.
+        assert_eq!(model_key("aura-gpt-5-4"), "gpt-5-4");
+        assert_eq!(call_tokens("aura-gpt-5-4", &usage), 11_000);
+        assert_eq!(call_tokens("gpt-6.1-sol", &usage), 11_000);
+    }
+
     fn options_of(backend: ModelBackend) -> Vec<String> {
         catalog("local/qwen3:4b", &[])
             .into_iter()
@@ -1423,6 +1463,26 @@ mod tests {
                         price: None,
                     },
                 ),
+                (
+                    "openrouter/deepseek/deepseek-v4.1-flash-1017".to_string(),
+                    LiveModelInfo {
+                        context_window: None,
+                        max_output: None,
+                        price: Some(listed_price),
+                    },
+                ),
+                (
+                    "openrouter/acme/variant-test".to_string(),
+                    LiveModelInfo {
+                        context_window: None,
+                        max_output: None,
+                        price: Some(LivePrice {
+                            input: 1.0,
+                            output: 1.0,
+                            ..listed_price
+                        }),
+                    },
+                ),
             ],
         );
         assert_cost(unknown, &usage, 10.0);
@@ -1434,10 +1494,23 @@ mod tests {
         assert_eq!(max_output_tokens(curated), 20_000);
         assert_eq!(live_context_window(curated), None);
         assert_eq!(live_model_info("aura-live-test-model"), None);
+        // A variant finds its base model's listing; the bare slug an
+        // answer names is not looked up as an OpenRouter id.
+        assert_cost("openrouter/acme/variant-test:nitro", &usage, 2.0);
+        assert_cost("openrouter/deepseek/deepseek-v4.1-flash-1017", &usage, 10.0);
+        assert_eq!(
+            estimate_cost_usd("deepseek/deepseek-v4.1-flash-1017", &usage),
+            None
+        );
+        assert_eq!(live_model_info("acme/variant-test:nitro"), None);
 
         // A later listing replaces the earlier one entirely.
         replace_live_models(ModelBackend::OpenRouter, []);
         assert_eq!(live_model_info(unknown), None);
         assert_eq!(estimate_cost_usd(unknown, &usage), None);
+        assert_eq!(
+            live_model_info("openrouter/deepseek/deepseek-v4.1-flash-1017"),
+            None
+        );
     }
 }

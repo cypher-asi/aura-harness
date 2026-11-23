@@ -115,6 +115,9 @@ async fn malformed_tool_json_is_rejected_without_execution() {
         Ok(StreamEvent::MessageDelta {
             stop_reason: Some(StopReason::MaxTokens),
             output_tokens: 100,
+            input_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
         }),
         Ok(StreamEvent::MessageStop),
     ];
@@ -748,6 +751,9 @@ async fn pump_streams_thinking_incrementally_not_just_at_block_close() {
         Ok(StreamEvent::MessageDelta {
             stop_reason: Some(StopReason::EndTurn),
             output_tokens: 5,
+            input_tokens: None,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
         }),
         Ok(StreamEvent::MessageStop),
     ];

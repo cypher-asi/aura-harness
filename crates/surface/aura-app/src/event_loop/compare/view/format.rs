@@ -4,6 +4,7 @@
 use aura_core_types::{ArmSpec, CompareStatus};
 use aura_gate::compare::NO_DELEGATE;
 use aura_model::model_catalog::route_label;
+use aura_ui_terminal::events::BenchCost;
 use std::borrow::Cow;
 
 /// `$0.004`, `$1.25`, or `free` for nothing.
@@ -15,6 +16,13 @@ pub(crate) fn money(usd: f64) -> String {
     } else {
         format!("${usd:.2}")
     }
+}
+
+/// `usd` as [`money`] when every call in it had a price, `$0.11+?` when
+/// `unpriced_calls` of them had none, `unknown` when none of the priced
+/// ones cost anything.
+pub(crate) fn cost(usd: f64, unpriced_calls: u32) -> String {
+    BenchCost::new(usd, unpriced_calls).read(money)
 }
 
 /// `850ms`, `42s`, `3m 05s`.

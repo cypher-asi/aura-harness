@@ -217,10 +217,8 @@ async fn prompt_all(
             prompted.prompt_tx = turned.prompt_tx;
             prompted.model.clone_from(&turned.turn.model);
         }
-        prompted.turns.push(RunTurn {
-            cost_usd: (spent(hub, agent_id) - spent_before).max(0.0),
-            ..turned.turn
-        });
+        let turn = spent(hub, agent_id).since(spent_before, turned.turn);
+        prompted.turns.push(turn);
         prompted.reply = turned.reply;
         prompted.last = turned.ended.filter(|_| !turned.cut_short);
         if turned.error.is_some() {
@@ -252,12 +250,33 @@ async fn end(parts: &RunParts<'_>, session: AgentSession, failed: bool) {
     hub.send_agent_list().await;
 }
 
-/// What `agent`'s calls and its subtasks' have cost so far.
-fn spent(hub: &AgentHub, agent: AgentId) -> f64 {
-    hub.tokens_by_model(agent)
-        .iter()
-        .map(|row| row.cost_usd)
-        .sum()
+/// What `agent`'s calls and its subtasks' have cost so far, and how many
+/// of them had no known price.
+fn spent(hub: &AgentHub, agent: AgentId) -> Spent {
+    let rows = hub.tokens_by_model(agent);
+    Spent {
+        usd: rows.iter().map(|row| row.cost_usd).sum(),
+        unpriced_calls: rows.iter().map(|row| row.unpriced_calls).sum(),
+    }
+}
+
+/// What an agent's priced calls have cost so far, and the calls with no
+/// known price that leaves out.
+#[derive(Clone, Copy)]
+struct Spent {
+    usd: f64,
+    unpriced_calls: u32,
+}
+
+impl Spent {
+    /// `turn`, costing what was spent from `before` to this.
+    fn since(self, before: Self, turn: RunTurn) -> RunTurn {
+        RunTurn {
+            cost_usd: (self.usd - before.usd).max(0.0),
+            unpriced_calls: self.unpriced_calls.saturating_sub(before.unpriced_calls),
+            ..turn
+        }
+    }
 }
 
 /// The trace of `run` on `session`, working on `task`, recorded as a

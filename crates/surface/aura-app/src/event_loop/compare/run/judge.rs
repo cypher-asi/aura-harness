@@ -6,7 +6,7 @@
 use super::context::{Context, Ran};
 use crate::event_loop::agents::AgentSession;
 use aura_core_types::CompareJudgment;
-use aura_gate::compare::{judge_pairs, judge_task, list_price, seed, EndedRun};
+use aura_gate::compare::{judge_pairs, judge_task, seed, EndedRun, ModelCall};
 use aura_gate::judge::blind;
 use futures_util::stream::{self, StreamExt};
 use std::borrow::Cow;
@@ -90,11 +90,15 @@ impl PairJudging<'_> {
             b_vs_reference: None,
             model: self.ctx.plan.judge.clone(),
             cost_usd: 0.0,
+            unpriced_calls: 0,
             reasoning: String::new(),
         };
         match self.ask((a, b), a_first).await {
-            Ok((text, cost_usd)) => {
-                judgment.cost_usd = cost_usd;
+            Ok((text, price)) => {
+                match price {
+                    Some(cost_usd) => judgment.cost_usd = cost_usd,
+                    None => judgment.unpriced_calls = 1,
+                }
                 if let Some(verdict) = blind::parse(&text) {
                     judgment.parsed = true;
                     judgment.winner = blind::winner(verdict, a_first);
@@ -115,8 +119,12 @@ impl PairJudging<'_> {
     }
 
     /// The judge's reply on `(a, b)`, shown `a` first when `a_first`, and
-    /// what it cost; else why there is none.
-    async fn ask(&self, (a, b): (&Ran, &Ran), a_first: bool) -> Result<(String, f64), String> {
+    /// its list price (`None` when unknown); else why there is none.
+    async fn ask(
+        &self,
+        (a, b): (&Ran, &Ran),
+        a_first: bool,
+    ) -> Result<(String, Option<f64>), String> {
         let plan = &self.ctx.plan;
         let task = plan
             .example(a.order.0)
@@ -133,10 +141,14 @@ impl PairJudging<'_> {
         )
         .map_err(|e| format!("judge request: {e}"))?;
         match tokio::time::timeout(JUDGE_TIMEOUT, self.session.kernel.reason(request)).await {
-            Ok(Ok(result)) => Ok((
-                blind::reply_text(&result.response),
-                list_price(&plan.judge, &result.response.usage).unwrap_or(0.0),
-            )),
+            Ok(Ok(result)) => {
+                let call = ModelCall {
+                    model: result.response.trace.model.clone(),
+                    route: Some(plan.judge.clone()),
+                    usage: result.response.usage.clone(),
+                };
+                Ok((blind::reply_text(&result.response), call.list_price()))
+            }
             Ok(Err(e)) => Err(format!("judge call failed: {e}")),
             Err(_) => Err("judge call timed out".to_string()),
         }

@@ -1,7 +1,7 @@
 //! One line per run, how its turns were routed, the comparison's notes,
 //! and what can be done with its copies.
 
-use super::super::format::{duration, headline, money, plural};
+use super::super::format::{cost, duration, headline, plural};
 use super::Summary;
 use aura_core_types::{CompareRun, CompareStatus, RunTurn};
 use aura_model::model_catalog::route_label;
@@ -45,7 +45,7 @@ fn write_run(out: &mut String, run: &CompareRun) {
         run.name,
         route_label(&run.model),
         duration(run.wall_ms),
-        money(run.cost_usd),
+        cost(run.cost_usd, run.unpriced_calls()),
         plural(files),
     );
     if let Some(task) = &run.task {
@@ -79,8 +79,11 @@ fn write_routing(out: &mut String, run: &CompareRun) {
     let subtasks: f64 = routed.iter().map(|t| t.subtask_cost_usd).sum();
     if subtasks > 0.0 {
         let total: f64 = routed.iter().map(|t| t.cost_usd).sum();
-        let lead = money((total - subtasks).max(0.0));
-        let _ = write!(out, ": lead {lead} + subtasks {}", money(subtasks));
+        // Which part the unpriced calls were in is not kept, so both
+        // parts are marked.
+        let unpriced: u32 = routed.iter().map(|t| t.unpriced_calls).sum();
+        let lead = cost((total - subtasks).max(0.0), unpriced);
+        let _ = write!(out, ": lead {lead} + subtasks {}", cost(subtasks, unpriced));
     }
     for (times, what) in [
         (

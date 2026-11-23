@@ -5,11 +5,20 @@
 use super::super::format::{duration, money, plural};
 use super::Summary;
 use aura_gate::compare::{too_close, ArmSummary};
-use aura_ui_terminal::events::{cost_per_fix, cost_shares, per_fix_cells};
+use aura_ui_terminal::events::{
+    cost_per_fix, cost_shares, per_fix_cells, unpriced_note, BenchCost,
+};
 use std::fmt::Write;
 
 /// Characters a row's label takes, arm A's column after it.
 const LABEL_WIDTH: usize = 14;
+
+/// Median cost of `arm`'s finished runs, as far as their calls had a
+/// price.
+fn median_cost(arm: &ArmSummary) -> Option<BenchCost> {
+    arm.median_cost_usd
+        .map(|usd| BenchCost::new(usd, arm.finished_unpriced_calls))
+}
 
 impl Summary<'_> {
     /// The arms' headings after a blank line, then a row per figure for
@@ -23,14 +32,19 @@ impl Summary<'_> {
         self.row(out, "median time", |arm| {
             arm.median_wall_ms.map_or_else(|| "-".to_string(), duration)
         });
-        self.cost_row(out, "total cost", |arm| Some(arm.total_cost_usd));
-        self.cost_row(out, "median cost", |arm| arm.median_cost_usd);
+        self.cost_row(out, "total cost", |arm| {
+            Some(BenchCost::new(arm.total_cost_usd, arm.unpriced_calls))
+        });
+        self.cost_row(out, "median cost", median_cost);
         self.row(out, "check", |arm| match arm.checks_run {
             0 => "-".to_string(),
             run => format!("{}/{run} passed", arm.checks_passed),
         });
         if self.a.checks_run + self.b.checks_run > 0 {
-            let per_fix = |arm: &ArmSummary| cost_per_fix(arm.total_cost_usd, arm.checks_passed);
+            let per_fix = |arm: &ArmSummary| {
+                let total = BenchCost::new(arm.total_cost_usd, arm.unpriced_calls);
+                cost_per_fix(total, arm.checks_passed)
+            };
             let [a, b] = per_fix_cells(per_fix(&self.a), per_fix(&self.b), money);
             self.cells(out, "cost per fix", &a, &b);
         }
@@ -46,6 +60,13 @@ impl Summary<'_> {
                 let (better, as_good, worse) = (arm.ref_better, arm.ref_as_good, arm.ref_worse);
                 format!("{better} better, {as_good} as good, {worse} worse")
             });
+        }
+        let unpriced = (self.a.tokens.iter())
+            .chain(&self.b.tokens)
+            .filter(|row| row.is_incomplete())
+            .map(|row| row.model.as_str());
+        if let Some(note) = unpriced_note(unpriced) {
+            let _ = write!(out, "\n  {note}");
         }
         self.render_verdicts(out);
     }
@@ -92,12 +113,19 @@ impl Summary<'_> {
     }
 
     /// The row `label` of what each arm's runs `cost`, with each arm's
-    /// share of the other's.
-    fn cost_row(&self, out: &mut String, label: &str, cost: impl Fn(&ArmSummary) -> Option<f64>) {
+    /// share of the other's when both are complete.
+    fn cost_row(
+        &self,
+        out: &mut String,
+        label: &str,
+        cost: impl Fn(&ArmSummary) -> Option<BenchCost>,
+    ) {
         let (a, b) = (cost(&self.a), cost(&self.b));
-        let [a_share, b_share] = cost_shares(a, b);
-        let cell =
-            |usd: Option<f64>, share: &str| usd.map_or_else(|| "-".to_string(), money) + share;
+        let known = |cost: Option<BenchCost>| cost.and_then(BenchCost::known);
+        let [a_share, b_share] = cost_shares(known(a), known(b));
+        let cell = |cost: Option<BenchCost>, share: &str| {
+            cost.map_or_else(|| "-".to_string(), |cost| cost.read(money)) + share
+        };
         self.cells(out, label, &cell(a, &a_share), &cell(b, &b_share));
     }
 

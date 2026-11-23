@@ -939,6 +939,40 @@ fn group_labels_fit_group_column() {
 }
 
 #[test]
+fn a_model_call_keeps_the_route_it_asked_for() {
+    let agent = AgentId::generate();
+    let routed = text_tx(
+        agent,
+        TransactionType::Reasoning,
+        r#"{"model":"openai/gpt-6.1-sol","route":"openrouter/openai/gpt-6.1-sol",
+            "input_tokens":1000000,"output_tokens":0}"#,
+    );
+    let call = model_call(&routed).unwrap();
+    assert_eq!(
+        call.model, "openai/gpt-6.1-sol",
+        "shown as the answer named it"
+    );
+    assert_eq!(call.route.as_deref(), Some("openrouter/openai/gpt-6.1-sol"));
+    assert_eq!(call.usage.input_tokens, 1_000_000);
+    assert_eq!(call.list_price(), Some(2.0));
+
+    // Older records keep no route; an empty or unknown one is none.
+    for payload in [
+        r#"{"model":"claude-haiku-4-5","input_tokens":1}"#,
+        r#"{"model":"claude-haiku-4-5","route":"","input_tokens":1}"#,
+        r#"{"model":"claude-haiku-4-5","route":"unknown","input_tokens":1}"#,
+    ] {
+        let call = model_call(&text_tx(agent, TransactionType::Reasoning, payload)).unwrap();
+        assert_eq!(call.route, None, "{payload}");
+    }
+    // No answering model, or not a model call: nothing.
+    let unanswered = r#"{"model":"unknown","route":"claude/claude-opus-4-7"}"#;
+    assert!(model_call(&text_tx(agent, TransactionType::Reasoning, unanswered)).is_none());
+    let prompt = text_tx(agent, TransactionType::UserPrompt, r#"{"model":"m"}"#);
+    assert!(model_call(&prompt).is_none());
+}
+
+#[test]
 fn plan_usage_is_read_from_model_calls_only() {
     let agent = AgentId::generate();
     let call = text_tx(

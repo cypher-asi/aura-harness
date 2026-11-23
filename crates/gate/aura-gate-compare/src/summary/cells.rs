@@ -11,6 +11,9 @@ pub struct TurnCell {
     pub runs: usize,
     /// Mean cost of their turns.
     pub mean_cost_usd: Option<f64>,
+    /// Calls of their turns with no known price, which `mean_cost_usd`
+    /// leaves out.
+    pub unpriced_calls: u32,
     /// Turns whose last test or build command passed.
     pub passed: usize,
     /// Turns whose last test or build command failed.
@@ -30,6 +33,7 @@ pub fn turn_cells(payload: &ComparePayload, arm: CompareArm) -> Vec<TurnCell> {
             TurnCell {
                 runs: turns.len(),
                 mean_cost_usd: mean(turns.iter().map(|t| t.cost_usd)),
+                unpriced_calls: turns.iter().map(|t| t.unpriced_calls).sum(),
                 passed: count(OutcomeSignal::ChecksPassed),
                 failed: count(OutcomeSignal::ChecksFailed),
                 errors: count(OutcomeSignal::Error),
@@ -49,6 +53,9 @@ pub struct TaskCell {
     pub checked: usize,
     /// Mean cost of its runs.
     pub mean_cost_usd: Option<f64>,
+    /// Calls of its runs with no known price, which `mean_cost_usd`
+    /// leaves out.
+    pub unpriced_calls: u32,
 }
 
 /// One cell per example task of `payload`, for the runs of `arm`; empty
@@ -70,6 +77,7 @@ pub fn task_cells(payload: &ComparePayload, arm: CompareArm) -> Vec<TaskCell> {
                 passed: runs.iter().filter(|r| r.check_passed == Some(true)).count(),
                 checked: runs.iter().filter(|r| r.check_passed.is_some()).count(),
                 mean_cost_usd: mean(runs.iter().map(|r| r.cost_usd)),
+                unpriced_calls: runs.iter().map(|r| r.unpriced_calls()).sum(),
             }
         })
         .collect()
