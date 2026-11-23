@@ -1,7 +1,9 @@
 //! `aura gate`: reading Gate's attempt log, and asking Gate's reviewer
 //! about the attempts in it.
 
-use std::path::PathBuf;
+#![deny(clippy::too_many_lines)]
+
+use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 use aura_gate::attempts::{self, evaluate_where, Filter};
@@ -21,7 +23,8 @@ fn default_log() -> PathBuf {
     default_data_dir().join(attempts::FILE)
 }
 
-/// Run `aura gate`.
+/// Run `aura gate`: hand each subcommand's flags, with their defaults
+/// filled in, to the subcommand.
 ///
 /// # Errors
 ///
@@ -63,30 +66,34 @@ pub async fn cmd_gate(args: GateCommand) -> anyhow::Result<()> {
             task,
             json,
         } => {
-            let path = log.unwrap_or_else(default_log);
-            let read =
-                attempts::read(&path).with_context(|| format!("reading {}", path.display()))?;
-            let report = evaluate_where(
-                &read.lines,
-                &Filter {
-                    routed,
-                    passed,
-                    task,
-                },
-            );
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-                return Ok(());
-            }
-            println!("{}", path.display());
-            if read.unreadable > 0 {
-                println!(
-                    "{} lines could not be read and are left out",
-                    read.unreadable
-                );
-            }
-            print!("{}", report.render());
-            Ok(())
+            let filter = Filter {
+                routed,
+                passed,
+                task,
+            };
+            eval(&log.unwrap_or_else(default_log), &filter, json)
         }
     }
+}
+
+/// `aura gate eval`: score Gate on the attempts in the log at `path`
+/// that `filter` lets through, and print the report, as JSON when `json`
+/// says so, else as tables under the log's path and how many of its lines
+/// could not be read.
+fn eval(path: &Path, filter: &Filter, json: bool) -> anyhow::Result<()> {
+    let read = attempts::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let report = evaluate_where(&read.lines, filter);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!("{}", path.display());
+    if read.unreadable > 0 {
+        println!(
+            "{} lines could not be read and are left out",
+            read.unreadable
+        );
+    }
+    print!("{}", report.render());
+    Ok(())
 }
