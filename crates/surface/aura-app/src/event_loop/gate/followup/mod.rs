@@ -56,8 +56,9 @@ pub(crate) use before::Before;
 use before::Changed;
 pub(crate) use driver::{Attempt, CarryOn, Followed, Following};
 pub(crate) use ended::{ended_signal, failure_text};
-pub(crate) use escalate::{record_message, stronger, takeover_prompt, Judging, Takeover};
-pub(super) use escalate::{refused_notice, reroute};
+pub(crate) use escalate::{
+    record_message, refused_notice, reroute, stronger, takeover_prompt, Judging, Takeover,
+};
 pub(crate) use messages::from_harness;
 pub(crate) use report::{Found, Report};
 

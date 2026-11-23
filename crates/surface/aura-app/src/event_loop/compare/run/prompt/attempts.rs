@@ -1,7 +1,8 @@
 //! The attempts at a prompt's turn: the first runs where the run's arm
-//! routed the prompt, and on a Gate run each attempt that ended goes to
-//! Gate's follow-up and, when it failed, to Gate's judge and on to a
-//! stronger model, until an attempt stands.
+//! routed the prompt, and on a Gate run an attempt whose route refused
+//! the user's sign-in goes on on Gate's next choice, and each other
+//! attempt that ended goes to Gate's follow-up and, when it failed, to
+//! Gate's judge and on to a stronger model, until an attempt stands.
 
 use super::route::{effort_of, Routed};
 use super::stronger::Failure;
@@ -31,7 +32,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// How an attempt's run ended: its result, and what its events told.
-type AttemptRun = (Result<AgentLoopResult, AgentError>, ForwarderState);
+pub(super) type AttemptRun = (Result<AgentLoopResult, AgentError>, ForwarderState);
 
 /// A prompt of a run as it was routed, for the attempts at its turn.
 pub(super) struct Asked<'a> {
@@ -47,6 +48,9 @@ pub(super) struct Asked<'a> {
     /// What the copy held before the prompt, for a review of a Gate run's
     /// work
     pub before: Option<Before>,
+    /// Models whose routes refused the user's sign-in in the run so far,
+    /// which its turns leave out
+    pub refused: &'a mut Vec<String>,
     /// The model the prompt went to, and the effort its requests were
     /// routed at
     pub model: String,
@@ -163,6 +167,9 @@ impl<'a, 'p> Attempting<'a, 'p> {
     pub(super) async fn run(&mut self) -> Ended {
         loop {
             let ran = self.attempt().await;
+            if self.reroute(&ran).await {
+                continue;
+            }
             if let ControlFlow::Break(ended) = self.goes_on(ran).await {
                 return ended;
             }

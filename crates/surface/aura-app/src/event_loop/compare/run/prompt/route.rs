@@ -8,6 +8,7 @@ use super::{Prompt, Turned};
 use crate::event_loop::agents::AgentSession;
 use crate::event_loop::compare::run::arm::short_label;
 use crate::event_loop::compare::run::turn::RunParts;
+use crate::event_loop::gate::followup;
 use crate::event_loop::handlers::system_message;
 use crate::event_loop::processes::now_ms;
 use crate::event_loop::subagents::{ArmRouting, LeadProfile};
@@ -46,14 +47,14 @@ pub(super) async fn route<'a>(
 ) -> Result<Routed<'a>, Turned> {
     let text = prompt.text;
     let (mut config, mut tools, lead) = turn_config(parts, session, text);
-    let label = match classify(parts, session, text, config.auth_token.clone()).await {
+    let label = match classify(parts, session, text, &config).await {
         Ok(label) => label,
         Err(problem) => return Err(unclassified(parts, problem).await),
     };
     let (category, mut difficulty) = (label.category, Some(label.difficulty));
-    let token = config.auth_token.clone();
-    let criteria = criteria(parts, session, category, &mut difficulty, text, token).await;
-    let decision = decide(parts, &mut config, &Work::turn(category).of(difficulty));
+    let criteria = criteria(parts, session, category, &mut difficulty, text, &config).await;
+    let work = Work::turn(category).of(difficulty);
+    let decision = decide(parts, &mut config, &work, prompt.refused);
     let model = config.model.clone();
     let led = lead.is_some_and(|lead| {
         let gate = &parts.ctx.hub.gate;
@@ -80,6 +81,7 @@ pub(super) async fn route<'a>(
         led,
         criteria,
         before: prompt.before,
+        refused: prompt.refused,
         effort: effort_of(&config),
         model,
         prompt_tx,
@@ -113,17 +115,19 @@ fn turn_config(
 }
 
 /// What `text` asks for and how hard it is, as the comparison's
-/// classifier labels it through `session`'s kernel.
+/// classifier labels it through `session`'s kernel, signed in as `config`
+/// is.
 async fn classify(
     parts: &RunParts<'_>,
     session: &AgentSession,
     text: &str,
-    auth_token: Option<String>,
+    config: &AgentLoopConfig,
 ) -> Result<Label, String> {
     let classifier = &parts.ctx.plan.classifier;
     if classifier.is_empty() {
         return Err("Gate has no model to classify the prompt".to_string());
     }
+    let auth_token = config.auth_token.clone();
     live::classify_prompt(&session.kernel, classifier, text, auth_token).await
 }
 
@@ -152,16 +156,16 @@ async fn unclassified(parts: &RunParts<'_>, problem: String) -> Turned {
 
 /// What a Gate run holds the work `text` asks for, of `category`, to:
 /// criteria written down before it starts (see
-/// [`live::hold_to_criteria`]), which may change its `difficulty`.
-/// `None` on other arms, or when they could not be written, which the
-/// run's chat is told.
+/// [`live::hold_to_criteria`]), signed in as `config` is, which may
+/// change its `difficulty`. `None` on other arms, or when they could not
+/// be written, which the run's chat is told.
 async fn criteria(
     parts: &RunParts<'_>,
     session: &AgentSession,
     category: PromptCategory,
     difficulty: &mut Option<Difficulty>,
     text: &str,
-    auth_token: Option<String>,
+    config: &AgentLoopConfig,
 ) -> Option<Arc<Criteria>> {
     if !parts.gate_arm() {
         return None;
@@ -173,7 +177,7 @@ async fn criteria(
         category,
         difficulty,
         text,
-        auth_token,
+        config.auth_token.clone(),
     );
     match held.await {
         Ok(criteria) => criteria,
@@ -185,12 +189,22 @@ async fn criteria(
 }
 
 /// Where the run's arm sends `work`: Gate's choice, exploring only when
-/// the comparison learns, or the arm's model for its difficulty, with
-/// `config` pointed at it; a pinned arm's `config` is pointed at its
-/// model instead.
-fn decide(parts: &RunParts<'_>, config: &mut AgentLoopConfig, work: &Work<'_>) -> Option<Decision> {
+/// the comparison learns, or else, once the routes of the models in
+/// `refused` turned the user's sign-in down, its re-route among the
+/// others (see [`followup::reroute`]); or the arm's model for its
+/// difficulty. `config` is pointed at it; a pinned arm's `config` is
+/// pointed at its model instead.
+fn decide(
+    parts: &RunParts<'_>,
+    config: &mut AgentLoopConfig,
+    work: &Work<'_>,
+    refused: &[String],
+) -> Option<Decision> {
     let (hub, plan) = (&parts.ctx.hub, &parts.ctx.plan);
     let decision = match parts.routing {
+        ArmRouting::Gate { .. } if !refused.is_empty() => {
+            followup::reroute(&hub.gate, work, &plan.candidates, refused)
+        }
         ArmRouting::Gate { .. } if plan.learn => hub.gate.decide(work, &plan.candidates),
         ArmRouting::Gate { .. } => hub.gate.redecide(work, &plan.candidates),
         ArmRouting::ByDifficulty(routes) => Some(routes.decide(work)),

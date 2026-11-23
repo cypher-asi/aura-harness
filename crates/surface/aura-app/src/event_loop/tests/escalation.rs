@@ -1,7 +1,8 @@
 //! What a turn Gate routes records, shows and sends, byte for byte, when
 //! its failed work moves to a stronger model, when the judge excuses the
 //! failure, and when a route refuses the user's sign-in; and what a
-//! `/compare` Gate run does when its work moves up.
+//! `/compare` Gate run does when its work moves up and when a route
+//! refuses the user's sign-in.
 
 use super::*;
 use aura_core_types::{CompareStatus, Difficulty};
@@ -311,6 +312,79 @@ async fn a_compare_gate_run_records_shows_and_sends_its_move_up_byte_for_byte() 
         parked_conversation(&state, run.agent_id),
         [text, "", TAKEOVER_BLAMED]
     );
+}
+
+#[tokio::test]
+async fn a_compare_gate_run_re_routes_a_refused_sign_in_where_a_pinned_run_stops() {
+    let (fixture, mut commands) = fixture_with_gate(steady_gate_without_delegation());
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    state.models = ModelSelection::signed_in(
+        &fixture.config,
+        aura_model::model_catalog::GATE_MODEL_ID,
+        aura_auth::AuthSummary {
+            subscriptions: vec![aura_auth::ProviderKind::Claude],
+            ..aura_auth::AuthSummary::default()
+        },
+    );
+    state.sync_turn_base();
+    let args = format!("hello --repeats 1 --against {REFUSING_MODEL}");
+    let payload = compare_runs::run_comparison(&mut state, &links, &mut commands, &args).await;
+    assert_eq!(payload.status, CompareStatus::Done, "{payload:#?}");
+    let (gate, pinned) = (payload.run("a-1").unwrap(), payload.run("b-1").unwrap());
+
+    assert_eq!(gate.error, None, "the Gate run goes on: {gate:#?}");
+    let (prompts, outcomes) = recorded(&compare_runs::entries(&state, gate.agent_id));
+    let asked = PromptPayload {
+        category: Some(PromptCategory::Question),
+        classifier: "claude/claude-haiku-4-5".to_string(),
+        route: Route::turn(REFUSING_MODEL, RouteReason::Compare).at_effort("medium"),
+        led: Some(false),
+        difficulty: Some(Difficulty::Medium),
+        ..PromptPayload::new("hello")
+    };
+    assert_eq!(prompts, [asked]);
+    let opus = "claude/claude-opus-4-7";
+    let question = PromptCategory::Question;
+    let answered = (
+        0,
+        question,
+        opus.to_string(),
+        None,
+        OutcomeSignal::Unavailable,
+    );
+    assert_eq!(outcomes, [answered]);
+    let turn = &gate.turns[0];
+    assert_eq!(
+        (
+            turn.model.as_str(),
+            turn.first_model.as_deref(),
+            turn.escalations
+        ),
+        (opus, Some(REFUSING_MODEL), 0)
+    );
+    assert_eq!(
+        system_lines(&mut commands, gate.agent_id),
+        [
+            "Compare #1 a-1 · gate:nodelegate → claude-sonnet-4-6 (claude plan) · question",
+            "claude/claude-sonnet-4-6 refused your sign-in; Gate skips it until your sign-ins \
+             change.\nCompare #1 a-1 · gate → claude-opus-4-7 (claude plan) at medium effort · \
+             question, default",
+        ]
+    );
+    assert_eq!(parked_conversation(&state, gate.agent_id), ["hello"]);
+
+    assert!(pinned.error.is_some(), "the pinned run stops: {pinned:#?}");
+    let (_, outcomes) = recorded(&compare_runs::entries(&state, pinned.agent_id));
+    let stopped = (
+        0,
+        question,
+        REFUSING_MODEL.to_string(),
+        None,
+        OutcomeSignal::Cancelled,
+    );
+    assert_eq!(outcomes, [stopped]);
 }
 
 /// The user messages of the session `agent_id`'s run parked when it

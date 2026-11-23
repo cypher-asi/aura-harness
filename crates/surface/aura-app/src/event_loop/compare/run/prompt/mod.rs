@@ -7,10 +7,14 @@
 //! stand is reviewed when it is hard or shows a sign of failure, and an
 //! attempt that failed goes to the judge, then on in the same
 //! conversation to the next stronger model. The run's own check is not
-//! consulted, as no turn outside a benchmark has one.
+//! consulted, as no turn outside a benchmark has one. An attempt whose
+//! model's route refused the user's sign-in goes on on Gate's next
+//! choice, as a routed turn's does, and the run's later turns leave that
+//! model out; a pinned or by-difficulty run stops there.
 //!
 //! - `route`: the prompt classified, routed, announced and recorded
 //! - `attempts`: the attempts at its turn, and how the turn ended
+//! - `refused`: the move off a route that refused the user's sign-in
 //! - `carry`: Gate's follow-up of an attempt, and the same model carrying
 //!   on with the work
 //! - `stronger`: the judge of a failed attempt, and the move to a
@@ -18,6 +22,7 @@
 
 mod attempts;
 mod carry;
+mod refused;
 mod route;
 mod stronger;
 
@@ -35,6 +40,9 @@ pub(super) struct Prompt<'a> {
     /// What the copy held before it, when a review of a Gate run's work
     /// may look at what its turn changed
     pub before: Option<Before>,
+    /// Models whose routes refused the user's sign-in earlier in the run,
+    /// which its turn leaves out; it adds those that refuse it
+    pub refused: &'a mut Vec<String>,
 }
 
 /// One turn of a run: what its prompt got.

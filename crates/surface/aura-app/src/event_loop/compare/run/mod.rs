@@ -20,7 +20,10 @@
 //! `compare` and its turn ends with its `Outcome`; what each turn cost is
 //! kept per prompt. A Gate arm's turns are followed up, judged and moved
 //! to stronger models as the terminal's routed turns are, so a run costs
-//! what the same work would outside a benchmark. After the last turn the
+//! what the same work would outside a benchmark; and when a model's route
+//! refuses the user's sign-in, the turn goes on on Gate's next choice and
+//! the run's later turns leave that model out, where a pinned or
+//! by-difficulty arm's run stops. After the last turn the
 //! check command runs in the copy as a `run_command` call through the
 //! run's kernel, so it is in the run's log, and its verdict is recorded as
 //! a later `Outcome` once every run has ended, so it counts in the table

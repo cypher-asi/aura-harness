@@ -191,6 +191,7 @@ async fn prompt_all(
         turns: Vec::with_capacity(prompts.len()),
         ..Prompted::default()
     };
+    let mut refused = Vec::new();
     for (i, text) in prompts.iter().enumerate() {
         if parts.cancel.is_cancelled() {
             prompted.error = Some(STOPPED.to_string());
@@ -209,6 +210,7 @@ async fn prompt_all(
             i,
             of: prompts.len(),
             before,
+            refused: &mut refused,
         };
         let turned = run_prompt(parts, session, prompt).await;
         if i == 0 {
