@@ -18,7 +18,7 @@ use aura_ui_terminal::events::{
 use aura_ui_terminal::UiCommand;
 use serde::Serialize;
 
-use super::compare_view::{duration, headline, money, tokens};
+use super::compare::view::{duration, headline, money, tokens};
 use super::subagents::lock;
 use super::LoopState;
 use crate::agent_registry::{AgentRegistry, RegisteredAgent};

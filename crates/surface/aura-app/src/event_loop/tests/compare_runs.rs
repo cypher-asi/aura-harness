@@ -2,7 +2,7 @@
 //! picking and applying a run, and the budget.
 
 use super::*;
-use crate::event_loop::compare_view::{duration, money, render};
+use crate::event_loop::compare::view::{duration, money, render};
 use aura_core_types::{
     ArmSpec, BenchSource, CompareArm, CompareCopy, ComparePayload, CompareRun, CompareStatus,
     Difficulty, RefVerdict, RunTurn,

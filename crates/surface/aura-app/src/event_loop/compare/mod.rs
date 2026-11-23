@@ -11,10 +11,11 @@
 //! comparisons from. Copies are removed by `/compare apply` and
 //! `/compare dismiss`.
 
+pub(super) mod view;
+
 use super::agent_events::AgentUi;
 use super::bench_source;
 use super::compare_run::{self, patches, remove_copies, save, ComparePlan};
-use super::compare_view::{self, arm_label, split_patch, EstimateView};
 use super::handlers::system_message;
 use super::subagents::{lock, AgentHub};
 use super::titles;
@@ -40,6 +41,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
+use view::{arm_label, split_patch, EstimateView};
 
 /// Entries scanned back from the head of a comparison's record for its
 /// latest state.
@@ -182,7 +184,7 @@ fn list(state: &LoopState<'_>) -> String {
         .into_iter()
         .map(|(_, name, payload)| (name, payload))
         .collect();
-    let mut text = compare_view::list(&all);
+    let mut text = view::list(&all);
     if let Some(running) = state.compare.running() {
         text.push_str(&format!(
             "\n{} is running; /compare cancel stops it.",
@@ -202,7 +204,7 @@ fn show(state: &LoopState<'_>, n: Option<usize>) -> Result<String, String> {
         None => all.iter().rev().find(|(_, _, payload)| payload.is_some()),
     };
     match chosen {
-        Some((_, name, Some(payload))) => Ok(compare_view::render(name, payload)),
+        Some((_, name, Some(payload))) => Ok(view::render(name, payload)),
         Some((_, name, None)) => Err(format!("{name} has no record")),
         None => Err("No such comparison; /compare lists them".to_string()),
     }

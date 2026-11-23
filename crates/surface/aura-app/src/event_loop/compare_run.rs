@@ -33,7 +33,7 @@
 use super::agent_events::AgentUi;
 use super::agents::AgentSession;
 use super::bench_source::{self, StartFile};
-use super::compare_view::{duration, money, render};
+use super::compare::view::{duration, money, render};
 use super::gate::followup::{
     ended_signal, failure_text, joined, record_message, stronger, At, Attempt, Before, CarryOn,
     Following, Judging, Takeover,

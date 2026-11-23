@@ -24,7 +24,7 @@ readings goes to the run whose call saw it, so runs at the same time don't count
 and use outside the comparison while it ran lands on the next run to read.";
 
 /// `$0.004`, `$1.25`, or `free` for nothing.
-pub(super) fn money(usd: f64) -> String {
+pub(crate) fn money(usd: f64) -> String {
     if usd <= 0.0 {
         "free".to_string()
     } else if usd < 0.01 {
@@ -35,7 +35,7 @@ pub(super) fn money(usd: f64) -> String {
 }
 
 /// `850ms`, `42s`, `3m 05s`.
-pub(super) fn duration(ms: u64) -> String {
+pub(crate) fn duration(ms: u64) -> String {
     if ms < 1_000 {
         return format!("{ms}ms");
     }
@@ -48,7 +48,7 @@ pub(super) fn duration(ms: u64) -> String {
 
 /// `950`, `12k`, `1.4M` tokens.
 #[allow(clippy::cast_precision_loss)]
-pub(super) fn tokens(n: u64) -> String {
+pub(crate) fn tokens(n: u64) -> String {
     if n < 1_000 {
         n.to_string()
     } else if n < 1_000_000 {
@@ -59,7 +59,7 @@ pub(super) fn tokens(n: u64) -> String {
 }
 
 /// The first line of `text`, cut to `max` characters.
-pub(super) fn headline(text: &str, max: usize) -> String {
+pub(crate) fn headline(text: &str, max: usize) -> String {
     let line = text
         .lines()
         .find(|l| !l.trim().is_empty())
@@ -292,7 +292,7 @@ fn turn_cell(cell: &TurnCell) -> String {
 }
 
 /// The view of one comparison.
-pub(super) fn render(name: &str, payload: &ComparePayload) -> String {
+pub(crate) fn render(name: &str, payload: &ComparePayload) -> String {
     let a = summarize(payload, CompareArm::A);
     let b = summarize(payload, CompareArm::B);
     let (a_label, b_label) = (
@@ -1542,7 +1542,7 @@ mod tests {
     /// another agent's tree.
     fn bench_view(payload: &ComparePayload) -> BenchView {
         let (host, root) = (AgentId::new([0xc0; 32]), AgentId::new([0x0f; 32]));
-        super::super::bench::view(host, root, "Compare #1", payload)
+        crate::event_loop::bench::view(host, root, "Compare #1", payload)
     }
 
     /// Each of `items` as `Debug` writes it on one line.

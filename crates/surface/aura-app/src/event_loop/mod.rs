@@ -18,7 +18,6 @@ mod bench;
 mod bench_source;
 mod compare;
 mod compare_run;
-mod compare_view;
 pub(crate) mod flow;
 mod flow_builder;
 pub(crate) mod gate;

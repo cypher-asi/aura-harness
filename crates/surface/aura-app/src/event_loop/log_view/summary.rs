@@ -5,7 +5,7 @@
 use aura_core_types::trace::FileTouch;
 use serde_json::Value;
 
-use super::super::compare_view::{headline, tokens};
+use super::super::compare::view::{headline, tokens};
 
 /// Longest argument shown for a call.
 const ARGUMENT_CHARS: usize = 72;
