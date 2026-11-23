@@ -3,17 +3,15 @@
 //! a rule), the heads of the tokens, cost and time columns, the run's
 //! panels that fold open and shut, and the keys at the bottom.
 //!
-//! The header and the column heads keep their height in every state, so
-//! nothing moves when the log arrives. A log waited for leaves the tab
-//! blank for a moment ([`LOADING_DELAY`]) before it says it is loading, so
-//! a quick load shows no message at all; a log coming where none was shown
-//! fades in ([`crate::app::run_log::FADE_IN`]). Only the log of the agent
-//! on screen is ever drawn.
+//! Until the log arrives the tab is blank: no title, no loading line, no
+//! keys. The log, or a notice saying why there is none, then fades in
+//! ([`crate::app::run_log::FADE_IN`]). Only the log of the agent on screen
+//! is ever drawn.
 
 use super::benchmarks::fit;
 use super::panels::body_block;
 use super::text::{display_width, wrap_words};
-use crate::animation::{fade_in, shimmer_spans};
+use crate::animation::fade_in;
 use crate::app::run_log::{LogPanel, LogRow, LogState};
 use crate::events::{LogField, LogSection, LogStatus, LogView};
 use crate::{App, Theme};
@@ -69,9 +67,6 @@ const KEYS: [(&str, &str); 9] = [
     ("esc", "back"),
 ];
 
-/// What the tab says while it waits for a log.
-const LOADING: &str = "Loading log…";
-
 /// Draw the LOG tab in `area`, the chat panel below its header bar.
 pub(super) fn render_run_log(
     frame: &mut Frame,
@@ -98,22 +93,24 @@ pub(super) fn render_run_log(
     }
     let width = usize::from(padded.width);
     let spinner = app.spinner_char();
-    let animation = app.animation_frame();
     let state = app.run_log();
-    let view = state.shown(app.active_agent_id());
     let fade = state.fading();
+    let Some(view) = state.shown(app.active_agent_id()) else {
+        // Nothing before the log: no title, no loading line, no keys.
+        // Only a notice, once one came, says why there is none.
+        let mut lines = notice_lines(state, width, theme);
+        if let Some(progress) = fade {
+            fade_in(&mut lines, progress, theme);
+        }
+        frame.render_widget(Paragraph::new(lines), padded);
+        app.set_chat_rows(None);
+        app.run_log_mut().set_hits(Vec::new(), None);
+        return;
+    };
 
     let (mut top, button) = header_lines(state, view, padded, spinner, theme);
-    top.push(if view.is_some() {
-        column_heads(width, theme)
-    } else {
-        Line::default()
-    });
-    let (mut lines, owners, selected_line) = if view.is_some() {
-        document(state, width, spinner, theme)
-    } else {
-        placeholder(state, width, animation, theme)
-    };
+    top.push(column_heads(width, theme));
+    let (mut lines, owners, selected_line) = document(state, width, spinner, theme);
     if let Some(progress) = fade {
         fade_in(&mut top, progress, theme);
         fade_in(&mut lines, progress, theme);
@@ -171,11 +168,10 @@ pub(super) fn render_run_log(
 
 /// The header's three lines, and where `Copy log` was drawn: the run's
 /// status and title with the button, its totals with where the log is
-/// stored, and a rule. With no log shown, the same three lines hold only
-/// the tab's name, so the tab doesn't move when the log arrives.
+/// stored, and a rule.
 fn header_lines(
     state: &LogState,
-    view: Option<&LogView>,
+    view: &LogView,
     area: Rect,
     spinner: &'static str,
     theme: &Theme,
@@ -186,16 +182,6 @@ fn header_lines(
     let bold = Style::default()
         .fg(theme.colors.text)
         .add_modifier(Modifier::BOLD);
-    let Some(view) = view else {
-        return (
-            vec![
-                Line::from(Span::styled("Run log", muted)),
-                Line::default(),
-                rule(width, theme),
-            ],
-            None,
-        );
-    };
     let root = view.root();
     let status = root.map_or(LogStatus::Ok, |r| r.status);
     let title = root.map_or("Run log", |r| r.title.as_str());
@@ -442,47 +428,28 @@ fn fit_pair(label: &str, summary: &str, room: usize) -> (String, String) {
 type Document = (Vec<Line<'static>>, Vec<Option<LogPanel>>, Option<usize>);
 
 /// What the tab shows with no log of the agent on screen: why there is
-/// none; that it is loading, once it has waited a moment; or, before
-/// that, nothing.
-fn placeholder(state: &LogState, width: usize, animation: usize, theme: &Theme) -> Document {
+/// none, once a notice came, else nothing at all. A notice from an
+/// earlier load is not shown while the log is asked for again: it may no
+/// longer hold.
+fn notice_lines(state: &LogState, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let Some(notice) = state.notice.as_ref().filter(|_| !state.is_loading()) else {
+        return Vec::new();
+    };
     let muted = Style::default().fg(theme.colors.muted);
     let faint = Style::default().fg(theme.colors.faint);
     let room = width.saturating_sub(GUTTER);
     let indent = || Span::raw(" ".repeat(GUTTER));
     let mut lines = vec![Line::default()];
-    // A notice from an earlier load is not shown while the log is asked
-    // for again: it may no longer hold.
-    if let Some(notice) = state.notice.as_ref().filter(|_| !state.is_loading()) {
-        for line in prose_wrap(notice, room) {
-            lines.push(Line::from(vec![indent(), Span::styled(line, muted)]));
-        }
-        lines.push(Line::default());
-        lines.push(Line::from(vec![
-            indent(),
-            Span::styled("r", muted),
-            Span::styled(" to retry", faint),
-        ]));
-    } else if state.is_loading() {
-        if state.loading_shown() {
-            let mut spans = vec![indent()];
-            spans.extend(shimmer_spans(
-                LOADING,
-                animation,
-                Style::default(),
-                (theme.colors.muted, theme.colors.text),
-            ));
-            lines.push(Line::from(spans));
-        }
-    } else {
-        let text = "The log of the agent on screen shows here once it has run a turn: every \
-                    turn, model call, thought, tool call and harness decision, with the runs of \
-                    the agents it spawned.";
-        for line in prose_wrap(text, room) {
-            lines.push(Line::from(vec![indent(), Span::styled(line, muted)]));
-        }
+    for line in prose_wrap(notice, room) {
+        lines.push(Line::from(vec![indent(), Span::styled(line, muted)]));
     }
-    let owners = vec![None; lines.len()];
-    (lines, owners, None)
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        indent(),
+        Span::styled("r", muted),
+        Span::styled(" to retry", faint),
+    ]));
+    lines
 }
 
 /// Every line of the panels on screen; the panel whose header each line
@@ -799,7 +766,6 @@ fn body_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::run_log::LOADING_DELAY;
     use crate::events::{LogRunView, LogStepView, LogTurnView, UiCommand};
     use ratatui::{backend::TestBackend, Terminal};
     use std::time::Instant;
@@ -1020,16 +986,16 @@ mod tests {
     }
 
     #[test]
-    fn the_header_keeps_its_height_with_or_without_a_log() {
+    fn a_notice_comes_alone_and_fades_in() {
         let mut app = App::new();
         app.process_command(UiCommand::LogNotice {
             agent_id: String::new(),
             notice: "This agent has no run log yet; send it a prompt".into(),
         });
-        let empty = screen(&mut app);
-        app.process_command(UiCommand::LogView(Box::new(view())));
-        let loaded = screen(&mut app);
-        assert_eq!(rule_row(&empty), rule_row(&loaded), "{empty}\n{loaded}");
+        let text = screen(&mut app);
+        assert!(!text.contains("Run log"), "{text}");
+        assert!(!text.contains("esc back"), "no keys without a log: {text}");
+        assert!(app.run_log().fading().is_some());
     }
 
     #[test]
@@ -1067,18 +1033,26 @@ mod tests {
     }
 
     #[test]
-    fn a_log_waited_for_says_it_is_loading_only_after_a_moment() {
+    fn nothing_is_drawn_before_the_log_arrives() {
         let mut app = App::new();
-        app.run_log_mut().loading_since = Some(Instant::now());
+        app.run_log_mut().loading_since =
+            Instant::now().checked_sub(std::time::Duration::from_secs(5));
         let text = screen(&mut app);
+        let inside: String = text
+            .lines()
+            .skip(1)
+            .take(28)
+            .map(|line| line.trim_matches(|c: char| c == '│' || c.is_whitespace()))
+            .collect();
         assert!(
-            !text.contains("Loading"),
-            "a quick load shows nothing:\n{text}"
+            inside.is_empty(),
+            "a slow load still draws nothing:\n{text}"
         );
-        assert!(!text.contains("once it has run a turn"), "{text}");
-        app.run_log_mut().loading_since = Instant::now().checked_sub(LOADING_DELAY);
+
+        app.process_command(UiCommand::LogView(Box::new(view())));
         let text = screen(&mut app);
-        assert!(text.contains(LOADING), "{text}");
+        assert!(text.contains("fix the parser"), "{text}");
+        assert!(app.run_log().fading().is_some(), "the log fades in");
     }
 
     #[test]

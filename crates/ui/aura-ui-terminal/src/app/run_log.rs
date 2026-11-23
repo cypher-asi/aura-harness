@@ -127,8 +127,8 @@ const LIVE_EVERY: Duration = Duration::from_secs(1);
 /// How long a reload may stay unanswered before another is asked for.
 const RELOAD_GIVE_UP: Duration = Duration::from_secs(10);
 
-/// How long the tab stays blank waiting for a log before it says it is
-/// loading, so a quick load shows no message at all.
+/// How long the chat stays blank waiting for its records before it says
+/// it is loading, so a quick load shows no message at all.
 pub const LOADING_DELAY: Duration = Duration::from_millis(150);
 
 /// How long a log takes to fade in once it arrives.
@@ -232,13 +232,6 @@ impl LogState {
     #[must_use]
     pub const fn is_loading(&self) -> bool {
         self.loading_since.is_some()
-    }
-
-    /// Whether a log has been awaited long enough to say it is loading.
-    #[must_use]
-    pub fn loading_shown(&self) -> bool {
-        self.loading_since
-            .is_some_and(|at| at.elapsed() >= LOADING_DELAY)
     }
 
     /// How far a log arriving has faded in, as milliseconds of
@@ -625,9 +618,10 @@ impl App {
         }
     }
 
-    /// Whether the open LOG tab changes from frame to frame: it waits
-    /// for a log with none shown, a log is fading in, or the run on
-    /// screen is still running so its spinner turns.
+    /// Whether the open LOG tab changes from frame to frame: what arrived
+    /// is fading in, or the run on screen is still running so its spinner
+    /// turns. A blank tab waiting for its log is still; the log's arrival
+    /// asks for a frame of its own.
     #[must_use]
     pub fn log_animating(&self) -> bool {
         if !self.log.is_open() {
@@ -637,7 +631,7 @@ impl App {
             return true;
         }
         match self.log.shown(&self.active_agent_id) {
-            None => self.log.is_loading(),
+            None => false,
             Some(view) => view
                 .root()
                 .is_some_and(|root| root.status == LogStatus::Running),
@@ -1136,17 +1130,6 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_log_says_it_is_loading_only_after_a_moment() {
-        let mut state = LogState {
-            loading_since: Some(Instant::now()),
-            ..LogState::default()
-        };
-        assert!(state.is_loading() && !state.loading_shown());
-        state.loading_since = Instant::now().checked_sub(LOADING_DELAY);
-        assert!(state.loading_shown());
-    }
-
-    #[test]
     fn a_log_fades_in_only_where_none_was_shown() {
         let mut state = LogState::default();
         state.load(view());
@@ -1157,12 +1140,12 @@ mod tests {
     }
 
     #[test]
-    fn the_tab_animates_while_it_waits_or_fades() {
+    fn the_tab_animates_only_while_it_fades() {
         let mut app = App::new();
         app.active_agent_id = "a".into();
         assert!(!app.log_animating(), "the tab is shut");
         app.show_chat_tab(ChatTab::Log);
-        assert!(app.log_animating(), "waiting for the log");
+        assert!(!app.log_animating(), "a blank tab waiting is still");
         app.cmd_log_view(view());
         assert!(app.log_animating(), "fading in");
         app.log.revealed_at = Instant::now().checked_sub(FADE_IN);
