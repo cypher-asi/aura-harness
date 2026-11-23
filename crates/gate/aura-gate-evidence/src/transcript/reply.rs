@@ -145,8 +145,9 @@ pub fn says_unverified(reply: &str) -> bool {
 }
 
 /// The text of the last message in `messages` that can be a turn's final
-/// reply ([`is_reply`]): what the turn ended by saying, without what the
-/// model narrated along the way. Empty when there is none.
+/// reply (the model's, with text that is not blank): what the turn ended
+/// by saying, without what the model narrated along the way. Empty when
+/// there is none.
 #[must_use]
 pub fn final_reply(messages: &[Message]) -> String {
     messages

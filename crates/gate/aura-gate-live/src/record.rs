@@ -78,7 +78,7 @@ pub struct LastTurn {
 }
 
 /// The latest turn recorded for `agent_id`, if one ended within the last
-/// [`SCAN_LIMIT`] entries.
+/// `SCAN_LIMIT` entries.
 pub fn last_turn<S: ReadStore + ?Sized>(store: &S, agent_id: AgentId) -> Option<LastTurn> {
     let entries = newest_first(store, agent_id);
     let outcome = entries

@@ -46,7 +46,7 @@ pub(super) struct CaughtUp {
 }
 
 impl GateLive {
-    /// [`catch_up`] on this table's attempt log, reading the runs'
+    /// `catch_up` on this table's attempt log, reading the runs'
     /// messages from `sessions`, on a blocking thread so startup doesn't
     /// wait for it. Without a Tokio runtime it runs here.
     pub fn catch_up_in_background<S: SavedSessions + Send + 'static>(

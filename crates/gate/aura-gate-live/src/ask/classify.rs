@@ -14,7 +14,7 @@ const CLASSIFY_ATTEMPTS: u32 = 2;
 
 /// Label `text` with its category and difficulty by asking `model`
 /// through `kernel`, so the call is recorded. A reply without a label is
-/// asked for again, up to [`CLASSIFY_ATTEMPTS`] calls in all.
+/// asked for again, up to `CLASSIFY_ATTEMPTS` calls in all.
 ///
 /// # Errors
 /// Says why when the request could not be built, a call failed or timed

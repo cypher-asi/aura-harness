@@ -73,14 +73,14 @@ async fn write_criteria(
 
 /// The acceptance criteria of `text`, a prompt asking for `category` that
 /// Gate routes among `candidates`, written through `kernel` when Gate's
-/// settings call for them ([`criteria_writer_for`]). Work they find
+/// settings call for them (`criteria_writer_for`). Work they find
 /// exacting is rated hard in `difficulty`, with criteria `log` as with
 /// `on`, so it starts on a model that can meet them. `Ok(None)` when none
 /// are due.
 ///
 /// # Errors
 /// Says why, as a line for the chat, when the writer could not be asked
-/// ([`write_criteria`]).
+/// (`write_criteria`).
 pub async fn hold_to_criteria(
     kernel: &Kernel,
     (live, candidates): (&GateLive, &[Candidate]),

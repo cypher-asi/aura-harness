@@ -17,7 +17,7 @@ pub fn command_lines(messages: &[Message]) -> impl Iterator<Item = String> + '_ 
 
 /// The command line a `run_command` call runs: its script, or its program
 /// and arguments, without the stray zero-width characters that
-/// `run_command` drops before running them ([`without_stray_zero_width`]).
+/// `run_command` drops before running them.
 #[must_use]
 pub fn command_line(input: &Value) -> String {
     if let Some(script) = ["shell_script", "command"]
