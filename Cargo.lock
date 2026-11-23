@@ -899,6 +899,7 @@ version = "0.1.0"
 dependencies = [
  "aura-core-types",
  "aura-gate-evidence",
+ "aura-gate-followup",
  "aura-gate-judge",
  "aura-model",
  "serde",

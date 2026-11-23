@@ -38,6 +38,8 @@
 //! - `score`: [`evaluate`] and [`evaluate_where`], and their tallies
 //! - `tiers`: what each sign of failure has earned ([`tiers`])
 //! - `report`: the [`Report`] as text, for a terminal
+//! - [`rereview`]: asking the reviewer again about attempts in the log,
+//!   for `aura gate replay`
 //! - `samples` (tests only): the lines and logs the unit tests share
 #![deny(clippy::too_many_lines)]
 
@@ -45,6 +47,7 @@ mod file;
 mod join;
 mod line;
 mod report;
+pub mod rereview;
 #[cfg(test)]
 mod samples;
 mod score;

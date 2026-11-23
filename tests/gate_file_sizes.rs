@@ -17,6 +17,7 @@ const GATE_DIRS: &[&str] = &[
     "crates/config/aura-config/src/gate",
     "crates/core/aura-core-types/src/types/gate",
     "crates/surface/aura-app/src/event_loop/gate",
+    "crates/surface/aura-app/src/headless/gate_replay",
 ];
 
 /// Every `.rs` file under `dir`, at any depth.
