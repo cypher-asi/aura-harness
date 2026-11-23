@@ -20,6 +20,8 @@
 //! - `ended`: applying, showing and dismissing the runs of a comparison
 //!   that ended
 //! - `record`: each comparison's latest state, read from its record
+//! - [`run`]: running a comparison: its runs in their copies, their
+//!   checks, the judge, and the record of how it ended
 //! - [`view`]: what `/compare` shows
 
 #![deny(clippy::too_many_lines)]
@@ -39,10 +41,10 @@ pub(super) use prepare::prepare;
 pub(super) use record::comparisons;
 
 use super::LoopState;
-use run::ComparePlan;
 use aura_agent_kernel::Kernel;
 use aura_core_types::AgentId;
 use aura_gate::compare::DEFAULT_CONCURRENCY;
+use run::ComparePlan;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
