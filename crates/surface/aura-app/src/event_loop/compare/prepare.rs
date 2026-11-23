@@ -223,8 +223,14 @@ impl Arms {
             );
         }
         let strongest = default_against(&candidates).map(|c| c.id.as_str());
-        let a = request.a.as_deref().unwrap_or("gate");
+        let a = (request.a.as_deref())
+            .filter(|query| !query.trim().is_empty())
+            .unwrap_or("gate");
         let b = match request.against.as_deref() {
+            // Blank is how the BENCH form's default reads: the strongest Opus.
+            Some(query) if query.trim().is_empty() => {
+                strongest.ok_or("No model to compare with")?
+            }
             Some(query) => query,
             None if a.trim().to_ascii_lowercase().starts_with("gate") => {
                 strongest.ok_or("No model to compare Gate with")?

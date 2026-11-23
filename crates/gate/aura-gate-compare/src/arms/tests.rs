@@ -99,6 +99,14 @@ fn arms_name_gate_with_or_without_delegation_or_a_model() {
 }
 
 #[test]
+fn a_blank_query_names_no_model() {
+    let all = with_claude_plan();
+    assert!(resolve_arm("", &all, &all, true).is_err());
+    assert!(resolve_arm("  ", &all, &all, true).is_err());
+    assert!(resolve_classifier("", &all, &all).is_err());
+}
+
+#[test]
 fn gate_against_gate_without_delegation_always_delegates() {
     let all = with_claude_plan();
     let nodelegate = ArmSpec::Gate { delegate: false };

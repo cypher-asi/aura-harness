@@ -114,6 +114,11 @@ fn resolve_model<'a>(
     candidates: &'a [Candidate],
 ) -> Result<&'a Candidate, String> {
     let lower = query.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        // Every id contains "", so a blank query would match the
+        // strongest model of all rather than the one the user meant.
+        return Err("Name a model, e.g. opus".to_string());
+    }
     let exact = (runnable.iter())
         .find(|c| c.id.eq_ignore_ascii_case(&lower))
         .or_else(|| {
