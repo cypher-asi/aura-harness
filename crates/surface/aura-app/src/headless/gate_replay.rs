@@ -1136,6 +1136,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn each_review_is_a_row_and_the_reviews_are_tallied() {
+        let asked = |run: &str, right: bool, answer, wasted_usd, criteria: &str| Asked {
+            run: run.to_string(),
+            task_id: "ansible-d72025be".to_string(),
+            model: "Sonnet 5.5".to_string(),
+            right,
+            answer,
+            wasted_usd,
+            criteria: criteria.to_string(),
+        };
+        let findings = "1. The fix misses the empty case.\n\n2. No test covers it.  \n3. c\n\
+                        4. d\n5. e\n6. f\n7. g\n";
+        let all = [
+            asked(
+                "Compare #22 a-6",
+                false,
+                Ok((Answer::Model, findings.to_string(), 0.0123)),
+                0.0,
+                ", criteria 1/2 met, 1 unmet",
+            ),
+            asked(
+                "Compare #22 b-6",
+                true,
+                Ok((Answer::Ok, "Every requirement is met.".to_string(), 0.02)),
+                0.0,
+                "",
+            ),
+            asked(
+                "Compare #23 a-1",
+                true,
+                Ok((Answer::Other, String::new(), 0.004)),
+                0.0,
+                "",
+            ),
+            asked(
+                "Compare #23 b-1",
+                false,
+                Err(format!("{NO_VERDICT}: its reply ended without one")),
+                0.001,
+                "",
+            ),
+        ];
+        let rows: Vec<String> = all.iter().map(row).collect();
+        assert_eq!(
+            rows,
+            [
+                "  Compare #22 a-6  ansible-d72025be                         Sonnet 5.5                       wrong  unfinished  $0.012, criteria 1/2 met, 1 unmet\n      1. The fix misses the empty case.\n      2. No test covers it.\n      3. c\n      4. d\n      5. e\n      6. f",
+                "  Compare #22 b-6  ansible-d72025be                         Sonnet 5.5                       right  done        $0.020",
+                "  Compare #23 a-1  ansible-d72025be                         Sonnet 5.5                       right  held up     $0.004",
+                "  Compare #23 b-1  ansible-d72025be                         Sonnet 5.5                       wrong  no answer: the reviewer gave no verdict: its reply ended without one",
+            ]
+        );
+        assert_eq!(
+            tally(&all),
+            "3 reviews answered, 1 not, $0.04 at list price\n\
+             wrong work: 1 of 1 found unfinished\n\
+             right work: 0 of 2 found unfinished"
+        );
+    }
+
     /// A reply that calls the criteria tool with `items`.
     fn criteria_reply(items: serde_json::Value) -> aura_model::MockResponse {
         aura_model::MockResponse::tool_use(
