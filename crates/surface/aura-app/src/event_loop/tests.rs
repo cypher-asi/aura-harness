@@ -24,6 +24,7 @@ use tokio::sync::{Barrier, Semaphore};
 
 mod compare_runs;
 mod delegation;
+mod escalation;
 mod flow;
 mod queue_edits;
 mod subtasks;

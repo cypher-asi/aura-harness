@@ -1722,3 +1722,125 @@ async fn a_turn_whose_follow_up_changes_its_signal_is_recorded_once() {
         .collect();
     assert_eq!(logged, signals, "each attempt is logged once, as recorded");
 }
+
+/// The `judged` and `notice` lines a run of "fix the parser" under
+/// [`sonnet_and_opus`] on `provider` streamed, the prompts it recorded,
+/// and the user messages of its last agent turn.
+async fn moved_up(
+    provider: MockProvider,
+) -> (Vec<Value>, Vec<aura_core_types::PromptPayload>, Vec<String>) {
+    let dirs = dirs();
+    let permissions = super::permissions(aura_core_modes::AgentMode::Agent, None);
+    let gate = sonnet_and_opus();
+    let (mut h, requests) = harness(&dirs, provider, ToolFilter::default(), permissions, gate);
+    let (report, captured) = execute(
+        &mut h,
+        request("fix the parser", SessionChoice::New),
+        OutputFormat::StreamJson,
+    )
+    .await;
+    let lines = (captured.json_lines().into_iter())
+        .filter(|line| line["type"] == "judged" || line["type"] == "notice")
+        .collect();
+    let (agent, _) = parse_session_id(&report.session_id, AgentId::generate()).unwrap();
+    let entries = h.hub.factory.store.scan_record(agent, 1, 1_000).unwrap();
+    let prompts = entries
+        .iter()
+        .filter_map(|e| e.tx.prompt_payload())
+        .collect();
+    (lines, prompts, last_prompts(&requests))
+}
+
+/// A run [`moved_up`] goes through: its provider, the `judged` line it
+/// streams, what Opus is told when it takes the work over (`None` when
+/// it does not), and the user messages of the turn before.
+type MoveUp = (MockProvider, Value, Option<&'static str>, Vec<&'static str>);
+
+/// A failed check the judge blames, one it excuses, and unchecked work
+/// it finds unfinished.
+fn move_ups() -> [MoveUp; 3] {
+    let failed = |verdict| failing_check_provider(&[verdict, "Fixed it."]);
+    let unchecked = MockProvider::new()
+        .with_response(MockResponse::text("debugging medium"))
+        .with_response(no_criteria())
+        .with_response(MockResponse::text(
+            "I could not find where the parser drops the token.",
+        ))
+        .with_response(MockResponse::text(
+            "It never opened the parser.\nVERDICT: MODEL",
+        ))
+        .with_response(MockResponse::text("Fixed it."));
+    let judged = |judge: &str, at_fault: bool, cost_usd: f64, reasons: &str| {
+        json!({"type": "judged", "model": GATE_SONNET, "judge": judge, "at_fault": at_fault,
+               "reasons": reasons, "cost_usd": cost_usd})
+    };
+    let note = "NOTE: You've made your first file change. Before making more changes, consider \
+                verifying your work (e.g., run the build or tests) to catch issues early.";
+    [
+        (
+            failed("The parser still drops the last token.\nVERDICT: MODEL"),
+            judged(
+                GATE_OPUS,
+                true,
+                0.00175,
+                "The parser still drops the last token.",
+            ),
+            Some(concat!(
+             "The work above was done on aura-claude-sonnet-4-6 (cloud) and ended with its last ",
+             "test or build command failing. A reviewer of that work found: The parser still ",
+             "drops the last token. You are a stronger model taking over this turn. The files ",
+             "are as that work left them: check what it changed, find what is wrong and finish ",
+             "the request."
+         )),
+            vec!["fix the parser", note],
+        ),
+        (
+            failed("There is no crate here to test.\nVERDICT: OTHER"),
+            judged(GATE_OPUS, false, 0.00175, "There is no crate here to test."),
+            None,
+            vec!["fix the parser", note],
+        ),
+        (
+            unchecked,
+            judged(GATE_SONNET, true, 0.00105, "It never opened the parser."),
+            Some(concat!(
+                "The work above was done on aura-claude-sonnet-4-6 (cloud) and ended without ",
+                "checking its work, which looked unfinished. A reviewer of that work found: It ",
+                "never opened the parser. You are a stronger model taking over this turn. The ",
+                "files are as that work left them: check what it changed, find what is wrong and ",
+                "finish the request."
+            )),
+            vec!["fix the parser"],
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn a_move_up_streams_records_and_sends_its_takeover_byte_for_byte() {
+    use aura_core_types::{Difficulty, PromptCategory, PromptPayload, Route, RouteReason};
+    let asked = PromptPayload {
+        category: Some(PromptCategory::Debugging),
+        classifier: GATE_HAIKU.to_string(),
+        route: Route::turn(GATE_SONNET, RouteReason::Default).at_effort("medium"),
+        led: Some(false),
+        difficulty: Some(Difficulty::Medium),
+        ..PromptPayload::new("fix the parser")
+    };
+    for (provider, judged, takeover, mut sent) in move_ups() {
+        let (lines, prompts, last) = moved_up(provider).await;
+        let mut streamed = vec![judged];
+        streamed.extend(takeover.map(|text| json!({"type": "notice", "text": text})));
+        assert_eq!(lines, streamed);
+        let told = takeover.map(|text| format!("Harness notice:\n{text}"));
+        let mut recorded = vec![asked.clone()];
+        recorded.extend(told.clone().map(|text| PromptPayload {
+            category: Some(PromptCategory::Debugging),
+            route: Route::turn(GATE_OPUS, RouteReason::Escalate).at_effort("medium"),
+            led: Some(false),
+            ..PromptPayload::new(text)
+        }));
+        assert_eq!(prompts, recorded);
+        sent.extend(told.as_deref());
+        assert_eq!(last, sent);
+    }
+}

@@ -22,7 +22,7 @@ async fn compare(state: &mut LoopState<'_>, links: &mpsc::Sender<auth::LinkOutco
 
 /// Prepare and start the comparison `args` asks for, and wait for it to
 /// end.
-async fn run_comparison(
+pub(super) async fn run_comparison(
     state: &mut LoopState<'_>,
     links: &mpsc::Sender<auth::LinkOutcome>,
     commands: &mut mpsc::Receiver<UiCommand>,
@@ -53,7 +53,10 @@ fn latest(state: &LoopState<'_>) -> ComparePayload {
 }
 
 /// A record entry scan that works for agents with no open kernel too.
-fn entries(state: &LoopState<'_>, agent_id: AgentId) -> Vec<aura_core_types::RecordEntry> {
+pub(super) fn entries(
+    state: &LoopState<'_>,
+    agent_id: AgentId,
+) -> Vec<aura_core_types::RecordEntry> {
     state
         .hub
         .factory
