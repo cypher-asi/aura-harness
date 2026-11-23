@@ -1,6 +1,8 @@
 //! The BENCH tab's requests, served by `/compare`'s actions: every
 //! benchmark is a comparison, shown as a [`BenchView`].
 
+#![deny(clippy::too_many_lines)]
+
 use super::agent_events::AgentUi;
 use super::compare;
 use super::subagents::lock;
@@ -22,49 +24,27 @@ use aura_ui_terminal::UiCommand;
 /// A request from the BENCH tab shown for `agent_id`'s chat.
 pub(super) async fn handle(state: &mut LoopState<'_>, agent_id: AgentId, request: BenchRequest) {
     state.park_finished_spawns().await;
+    if let Some(reply) = reply(state, agent_id, request).await {
+        let _ = state.commands.send(reply).await;
+    }
+}
+
+/// What the BENCH tab is sent after `request`: what it asked for, or the
+/// notice an action leaves; `None` when the action has nothing to say.
+async fn reply(
+    state: &mut LoopState<'_>,
+    agent_id: AgentId,
+    request: BenchRequest,
+) -> Option<UiCommand> {
     let notice = match request {
-        BenchRequest::List => {
-            let root = lock(&state.hub.registry).root(agent_id);
-            let benches = list(state, root);
-            let _ = state
-                .commands
-                .send(UiCommand::BenchList {
-                    agent_id: agent_id.to_hex(),
-                    root: root.to_hex(),
-                    benches,
-                })
-                .await;
-            return;
-        }
-        BenchRequest::Sessions => {
-            let sessions = super::bench_source::sessions(state, agent_id);
-            let examples = crate::bench_pack::tasks()
-                .iter()
-                .map(|task| BenchExample {
-                    suite: task.suite().to_string(),
-                    title: task.title.clone(),
-                })
-                .collect();
-            let _ = state
-                .commands
-                .send(UiCommand::BenchSessions {
-                    agent_id: agent_id.to_hex(),
-                    sessions,
-                    examples,
-                })
-                .await;
-            return;
-        }
+        BenchRequest::List => return Some(bench_list(state, agent_id)),
+        BenchRequest::Sessions => return Some(bench_sessions(state, agent_id)),
         BenchRequest::Prepare(spec) => {
             let estimate = compare::prepare(state, agent_id, request_of(spec)).await;
-            let _ = state
-                .commands
-                .send(UiCommand::BenchEstimate {
-                    agent_id: agent_id.to_hex(),
-                    estimate,
-                })
-                .await;
-            return;
+            return Some(UiCommand::BenchEstimate {
+                agent_id: agent_id.to_hex(),
+                estimate,
+            });
         }
         BenchRequest::Start => compare::start(state).await,
         BenchRequest::Cancel => Ok(compare::cancel(state)),
@@ -85,9 +65,37 @@ pub(super) async fn handle(state: &mut LoopState<'_>, agent_id: AgentId, request
         },
     };
     if notice.as_ref().is_ok_and(String::is_empty) {
-        return;
+        return None;
     }
-    let _ = state.commands.send(UiCommand::BenchNotice(notice)).await;
+    Some(UiCommand::BenchNotice(notice))
+}
+
+/// The benchmarks of the tree `agent_id` is in.
+fn bench_list(state: &LoopState<'_>, agent_id: AgentId) -> UiCommand {
+    let root = lock(&state.hub.registry).root(agent_id);
+    UiCommand::BenchList {
+        agent_id: agent_id.to_hex(),
+        root: root.to_hex(),
+        benches: list(state, root),
+    }
+}
+
+/// The sessions of `agent_id` the BENCH tab can replay, and the example
+/// tasks it can run.
+fn bench_sessions(state: &LoopState<'_>, agent_id: AgentId) -> UiCommand {
+    let sessions = super::bench_source::sessions(state, agent_id);
+    let examples = crate::bench_pack::tasks()
+        .iter()
+        .map(|task| BenchExample {
+            suite: task.suite().to_string(),
+            title: task.title.clone(),
+        })
+        .collect();
+    UiCommand::BenchSessions {
+        agent_id: agent_id.to_hex(),
+        sessions,
+        examples,
+    }
 }
 
 fn host(id: &str) -> Result<AgentId, String> {
@@ -229,7 +237,41 @@ pub(super) fn view(
     name: &str,
     payload: &ComparePayload,
 ) -> BenchView {
-    let (title, source) = match &payload.source {
+    let (title, source) = title_and_source(payload);
+    let mut runs: Vec<BenchRun> = payload.runs.iter().map(run).collect();
+    runs.sort_by_key(|run| run_order(&run.name, run.arm));
+    BenchView {
+        id: host.to_hex(),
+        root: root.to_hex(),
+        name: name.to_string(),
+        title,
+        started_ms: payload.started_ms,
+        source,
+        status: status(&payload.status),
+        repeats: payload.repeats,
+        tasks: tasks(payload),
+        check: payload.check.clone(),
+        budget_usd: payload.budget_usd,
+        classifier: payload.classifier.clone(),
+        prompts: payload.prompts.clone(),
+        arms: [arm(payload, CompareArm::A), arm(payload, CompareArm::B)],
+        runs,
+        judge: judge(payload),
+        baseline: payload.source.baseline().map(|b| BenchBaseline {
+            calls: b.calls,
+            cost_usd: b.cost_usd,
+            priced: b.priced,
+            models: b.models.clone(),
+        }),
+        has_reference: payload.source.reference().is_some(),
+        notes: payload.notes.clone(),
+        live: Vec::new(),
+    }
+}
+
+/// The comparison's title, and where its work came from.
+fn title_and_source(payload: &ComparePayload) -> (String, String) {
+    match &payload.source {
         BenchSource::Session { title, .. } => (title.clone(), format!("session \"{title}\"")),
         BenchSource::Prompt => {
             let title = payload.task.lines().next().unwrap_or_default().to_string();
@@ -247,9 +289,13 @@ pub(super) fn view(
                 if tasks.len() == 1 { "" } else { "s" }
             ),
         ),
-    };
+    }
+}
+
+/// The comparison's example tasks, each with how either arm did on it.
+fn tasks(payload: &ComparePayload) -> Vec<BenchTaskRow> {
     let cells = CompareArm::BOTH.map(|arm| task_cells(payload, arm));
-    let tasks = payload
+    payload
         .source
         .examples()
         .iter()
@@ -270,8 +316,14 @@ pub(super) fn view(
             }),
             setup: BenchTaskSetup::Ready,
         })
-        .collect();
-    let judge = payload.judgments.first().map(|first| BenchJudge {
+        .collect()
+}
+
+/// The judge's verdicts on the comparison's pairs; `None` before it gave
+/// any.
+fn judge(payload: &ComparePayload) -> Option<BenchJudge> {
+    let first = payload.judgments.first()?;
+    Some(BenchJudge {
         model: first.model.clone(),
         cost_usd: judge_cost_usd(payload),
         verdicts: payload
@@ -287,63 +339,33 @@ pub(super) fn view(
                 reasoning: j.reasoning.clone(),
             })
             .collect(),
-    });
-    let mut view = BenchView {
-        id: host.to_hex(),
-        root: root.to_hex(),
-        name: name.to_string(),
-        title,
-        started_ms: payload.started_ms,
-        source,
-        status: status(&payload.status),
-        repeats: payload.repeats,
-        tasks,
-        check: payload.check.clone(),
-        budget_usd: payload.budget_usd,
-        classifier: payload.classifier.clone(),
-        prompts: payload.prompts.clone(),
-        arms: [arm(payload, CompareArm::A), arm(payload, CompareArm::B)],
-        runs: payload
-            .runs
-            .iter()
-            .map(|run| {
-                let (model, escalated_to, escalated_effort) = models(run);
-                let first = run.turns.first();
-                BenchRun {
-                    name: run.name.clone(),
-                    arm: run.arm.index(),
-                    model,
-                    escalated_to,
-                    escalated_effort,
-                    category: first
-                        .and_then(|turn| turn.category)
-                        .map(|category| category.as_str().to_string()),
-                    difficulty: first
-                        .and_then(|turn| turn.difficulty)
-                        .map(|difficulty| difficulty.as_str().to_string()),
-                    led: run.turns.iter().any(|turn| turn.led == Some(true)),
-                    subtask_cost_usd: run.turns.iter().map(|turn| turn.subtask_cost_usd).sum(),
-                    wall_ms: run.wall_ms,
-                    cost_usd: run.cost_usd,
-                    check_passed: run.check_passed,
-                    files_changed: run.files_changed,
-                    error: run.error.clone(),
-                    task: run.task.clone(),
-                    agent_id: run.agent_id.to_hex(),
-                }
-            })
-            .collect(),
-        judge,
-        baseline: payload.source.baseline().map(|b| BenchBaseline {
-            calls: b.calls,
-            cost_usd: b.cost_usd,
-            priced: b.priced,
-            models: b.models.clone(),
-        }),
-        has_reference: payload.source.reference().is_some(),
-        notes: payload.notes.clone(),
-        live: Vec::new(),
-    };
-    view.runs.sort_by_key(|run| run_order(&run.name, run.arm));
-    view
+    })
+}
+
+/// `run` as the BENCH tab lists it.
+fn run(run: &CompareRun) -> BenchRun {
+    let (model, escalated_to, escalated_effort) = models(run);
+    let first = run.turns.first();
+    BenchRun {
+        name: run.name.clone(),
+        arm: run.arm.index(),
+        model,
+        escalated_to,
+        escalated_effort,
+        category: first
+            .and_then(|turn| turn.category)
+            .map(|category| category.as_str().to_string()),
+        difficulty: first
+            .and_then(|turn| turn.difficulty)
+            .map(|difficulty| difficulty.as_str().to_string()),
+        led: run.turns.iter().any(|turn| turn.led == Some(true)),
+        subtask_cost_usd: run.turns.iter().map(|turn| turn.subtask_cost_usd).sum(),
+        wall_ms: run.wall_ms,
+        cost_usd: run.cost_usd,
+        check_passed: run.check_passed,
+        files_changed: run.files_changed,
+        error: run.error.clone(),
+        task: run.task.clone(),
+        agent_id: run.agent_id.to_hex(),
+    }
 }

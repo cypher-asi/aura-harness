@@ -18,6 +18,7 @@ const GATE_DIRS: &[&str] = &[
     "crates/core/aura-core-types/src/types/gate",
     "crates/surface/aura-app/src/event_loop/compare",
     "crates/surface/aura-app/src/event_loop/gate",
+    "crates/surface/aura-app/src/event_loop/tests/compare_runs",
     "crates/surface/aura-app/src/event_loop/tests/delegation",
     "crates/surface/aura-app/src/headless/gate_replay",
     "crates/surface/aura-app/src/headless/run",
