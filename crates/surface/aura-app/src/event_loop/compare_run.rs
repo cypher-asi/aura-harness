@@ -1974,6 +1974,103 @@ mod tests {
         assert!(fixture(dir.path(), last).is_dir());
     }
 
+    /// Run `a-1` as it ended: in 3m 05s, at $0.004, its check as
+    /// `check_passed` says, and stopped by `error` when there is one.
+    fn ended(check_passed: Option<bool>, error: Option<&str>) -> CompareRun {
+        CompareRun {
+            name: "a-1".to_string(),
+            arm: CompareArm::A,
+            agent_id: AgentId::new([1; 32]),
+            prompt_tx: None,
+            model: "aura-claude-sonnet-4-6".to_string(),
+            copy: CompareCopy {
+                root: PathBuf::new(),
+                workdir: PathBuf::new(),
+                git_dir: None,
+                baseline: String::new(),
+            },
+            wall_ms: 185_000,
+            cost_usd: 0.004,
+            tokens: Vec::new(),
+            plan_usage: Vec::new(),
+            turns: Vec::new(),
+            check_passed,
+            files_changed: 0,
+            error: error.map(str::to_string),
+            task: None,
+        }
+    }
+
+    #[test]
+    fn the_chat_hears_how_each_run_ended() {
+        let stopped = Some("opening the run: no session");
+        for (check, error, line) in [
+            (
+                Some(true),
+                None,
+                "Compare #1: a-1 done in 3m 05s, $0.0040, check passed",
+            ),
+            (
+                Some(false),
+                None,
+                "Compare #1: a-1 done in 3m 05s, $0.0040, check failed",
+            ),
+            (None, None, "Compare #1: a-1 done in 3m 05s, $0.0040"),
+            (
+                None,
+                stopped,
+                "Compare #1: a-1 stopped: opening the run: no session",
+            ),
+        ] {
+            assert_eq!(progress("Compare #1", &ended(check, error)), line);
+        }
+    }
+
+    #[test]
+    fn a_run_under_way_says_what_its_model_is_doing() {
+        let doing = |doing: Doing| {
+            let mut activity = Activity::default();
+            (activity.doing, activity.since_ms) = (doing, 1_000);
+            (activity.calls, activity.restarts) = (2, 1);
+            let BenchDoing {
+                what, for_ms, call, ..
+            } = bench_doing(&activity, 4_500);
+            (what, for_ms, call)
+        };
+        let tools = Doing::Tools(vec!["run_command".to_string(), "task".to_string()]);
+        assert_eq!(
+            [Doing::Waiting, Doing::Thinking, Doing::Writing, tools].map(doing),
+            [
+                ("waiting for the model".to_string(), 3_500, 3),
+                ("thinking".to_string(), 3_500, 3),
+                ("writing".to_string(), 3_500, 3),
+                ("running run_command, task".to_string(), 3_500, 0),
+            ]
+        );
+        let mut activity = Activity::default();
+        activity.restarts = 2;
+        let shown = bench_doing(&activity, 0);
+        assert_eq!((shown.restarts, shown.subtask), (2, None));
+    }
+
+    #[test]
+    fn an_arms_agent_and_trace_name_it_shortly() {
+        let gate = ArmSpec::Gate { delegate: false };
+        let model = ArmSpec::Model {
+            model: "openrouter/anthropic/claude-opus-4-7".to_string(),
+        };
+        let by_difficulty = ArmSpec::ByDifficulty {
+            easy: "a".to_string(),
+            medium: "b".to_string(),
+            hard: "c".to_string(),
+        };
+        assert_eq!(arm_name(CompareArm::A, &gate), "A · gate:nodelegate");
+        assert_eq!(arm_name(CompareArm::B, &model), "B · claude-opus-4-7");
+        assert_eq!(arm_name(CompareArm::B, &by_difficulty), "B · by difficulty");
+        assert_eq!(short_label(&model), "openrouter/anthropic/claude-opus-4-7");
+        assert_eq!(short_label(&by_difficulty), "by difficulty");
+    }
+
     #[tokio::test]
     async fn setting_up_stops_with_the_comparison() {
         let dir = tempfile::tempdir().unwrap();

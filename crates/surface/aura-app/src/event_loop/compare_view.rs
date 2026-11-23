@@ -708,13 +708,15 @@ mod tests {
         AgentId, CompareCopy, CompareJudgment, OutcomeSignal, RefVerdict, RunTurn, SessionBaseline,
         SystemKind,
     };
+    use aura_ui_terminal::events::{BenchBaseline, BenchStatus, BenchView};
     use std::path::PathBuf;
 
     fn run(arm: CompareArm, n: u32, model: &str, cost: f64, check: bool) -> CompareRun {
+        let id = u8::try_from(n).unwrap() + 0x10 * u8::from(arm == CompareArm::B);
         CompareRun {
             name: format!("{arm}-{n}"),
             arm,
-            agent_id: AgentId::generate(),
+            agent_id: AgentId::new([id; 32]),
             prompt_tx: None,
             model: model.to_string(),
             copy: CompareCopy {
@@ -1209,5 +1211,662 @@ mod tests {
         assert_eq!(money(0.004), "$0.0040");
         assert_eq!(headline("  \nfirst line\nsecond", 80), "first line");
         assert_eq!(headline("abcdef", 4), "abc…");
+    }
+
+    #[test]
+    fn the_view_is_pinned_byte_for_byte() {
+        let expected = [
+            "Compare #1 · \"fix the flaky parser test\" · done",
+            "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each, check `cargo test`",
+            "",
+            "                A gate                            B aura-claude-opus-4-7",
+            "  finished      3/3                               3/3",
+            "  median time   42s                               42s",
+            "  total cost    $0.18 · 87% less                  $1.35 · 100%",
+            "  median cost   $0.06 · 87% less                  $0.45 · 100%",
+            "  check         2/3 passed                        3/3 passed",
+            "  cost per fix  $0.09 · 80% less                  $0.45 · 100%",
+            "  judge         0 won, 1 lost, 0 tied             1 won, 0 lost, 0 tied",
+            "  Too close to call with 3 runs: check passes are within one of each other.",
+            "  Too close to call with 3 runs: judge wins are within one of each other.",
+            "",
+            "  Tokens per model",
+            "    A: claude-sonnet-4-6 9 calls, 126k in / 5k out, $0.18",
+            "    B: claude-opus-4-7 9 calls, 126k in / 5k out, $1.35",
+            "  Plan usage: no call reported a plan's usage (only Claude and ChatGPT plans do), so tokens per model (what draws a plan down) are shown instead.",
+            "  Judge: 1 blind call on aura-claude-opus-4-7 (cloud), $0.03 (not in the arm totals)",
+            "",
+            "  Runs",
+            "    a-1      aura-claude-sonnet-4-6 (cloud)          41s     $0.05  check passed  2 files",
+            "    b-1      aura-claude-opus-4-7 (cloud)            41s     $0.40  check passed  2 files",
+            "    a-2      aura-claude-sonnet-4-6 (cloud)          42s     $0.07  check passed  2 files",
+            "    b-2      aura-claude-opus-4-7 (cloud)            42s     $0.50  check passed  2 files",
+            "    a-3      aura-claude-sonnet-4-6 (cloud)          43s     $0.06  check failed  2 files",
+            "    b-3      aura-claude-opus-4-7 (cloud)            43s     $0.45  check passed  2 files",
+            "  Note: the budget stopped 2 runs",
+            "",
+            "  /compare diff [run] · /compare apply <run> · /compare dismiss",
+        ];
+        assert_eq!(render("Compare #1", &payload()), expected.join("\n"));
+    }
+
+    #[test]
+    fn a_stopped_comparison_with_routed_runs_is_pinned_byte_for_byte() {
+        let expected = [
+            "Compare #2 · \"fix the flaky parser test\" · stopped",
+            "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each, check `cargo test`",
+            "",
+            "                A gate                            B aura-claude-opus-4-7",
+            "  finished      3/3                               2/3",
+            "  median time   42s                               42s",
+            "  total cost    $0.18 · 87% less                  $1.35 · 100%",
+            "  median cost   $0.06 · 86% less                  $0.43 · 100%",
+            "  check         2/3 passed                        2/2 passed",
+            "  cost per fix  $0.09 · 87% less                  $0.68 · 100%",
+            "  judge         0 won, 1 lost, 0 tied             1 won, 0 lost, 0 tied",
+            "  Too close to call with 3 runs: check passes are within one of each other.",
+            "  Too close to call with 3 runs: judge wins are within one of each other.",
+            "",
+            "  Tokens per model",
+            "    A: claude-sonnet-4-6 9 calls, 126k in / 5k out, $0.18",
+            "    B: claude-opus-4-7 9 calls, 126k in / 5k out, $1.35",
+            "  Plan usage: no call reported a plan's usage (only Claude and ChatGPT plans do), so tokens per model (what draws a plan down) are shown instead.",
+            "  Judge: 1 blind call on aura-claude-opus-4-7 (cloud), $0.03 (not in the arm totals)",
+            "",
+            "  Runs",
+            "    a-1      aura-claude-sonnet-4-6 (cloud)          41s     $0.05  check passed  2 files  · debugging/hard, direct, asked to check 1×, moved up 1×",
+            "    b-1      aura-claude-opus-4-7 (cloud)            41s     $0.40  check passed  2 files",
+            "    a-2      aura-claude-sonnet-4-6 (cloud)          42s     $0.07  check passed  2 files  · multi_file_change, question, 1 of 2 turns led: lead $0.63 + subtasks $0.17, sent back 2×",
+            "    b-2      aura-claude-opus-4-7 (cloud)            42s     $0.50                2 files  (the model fell over)",
+            "    a-3      aura-claude-sonnet-4-6 (cloud)          43s     $0.06  check failed  2 files",
+            "    b-3      aura-claude-opus-4-7 (cloud)            43s     $0.45  check passed  2 files",
+            "  Note: the budget stopped 2 runs",
+            "",
+            "  /compare diff [run] · /compare apply <run> · /compare dismiss",
+        ];
+        assert_eq!(render("Compare #2", &routed()), expected.join("\n"));
+    }
+
+    #[test]
+    fn a_replayed_session_is_pinned_byte_for_byte() {
+        let expected = [
+            "Compare #3 · \"fix the flaky parser test\" · done",
+            "  Replays the session \"fix the parser\": 2 prompts in order",
+            "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each, check `cargo test`",
+            "",
+            "                A gate                            B aura-claude-opus-4-7",
+            "  finished      3/3                               3/3",
+            "  median time   42s                               42s",
+            "  total cost    $0.18 · 87% less                  $1.35 · 100%",
+            "  median cost   $0.06 · 87% less                  $0.45 · 100%",
+            "  check         2/3 passed                        3/3 passed",
+            "  cost per fix  $0.09 · 80% less                  $0.45 · 100%",
+            "  judge         0 won, 1 lost, 0 tied             1 won, 0 lost, 0 tied",
+            "  vs yours      0 better, 0 as good, 1 worse      1 better, 0 as good, 0 worse",
+            "  Too close to call with 3 runs: check passes are within one of each other.",
+            "  Too close to call with 3 runs: judge wins are within one of each other.",
+            "  The session itself: 12 calls, $0.90 on claude-opus-4-7",
+            "",
+            "  Per prompt (mean turn cost; test or build commands that passed or failed)",
+            "    1.        $0.02, 3 pass                     $0.02, 3 pass  \"fix the parser\"",
+            "    2.        $0.04, 3 error                    $0.04, 3 error  \"now the docs\"",
+            "",
+            "  Tokens per model",
+            "    A: claude-sonnet-4-6 9 calls, 126k in / 5k out, $0.18",
+            "    B: claude-opus-4-7 9 calls, 126k in / 5k out, $1.35",
+            "",
+            "  Plan usage, share of each window's limit",
+            "    A: Claude plan 5h window +2.1%, 7d opus window +0.2%",
+            "    B: ChatGPT plan 5h window +1.2%",
+            "  Plan readings cover the whole account: each rise between readings goes to the run whose call saw it, so runs at the same time don't count it twice, and use outside the comparison while it ran lands on the next run to read.",
+            "  Judge: 1 blind call on aura-claude-opus-4-7 (cloud), $0.03 (not in the arm totals)",
+            "",
+            "  Runs",
+            "    a-1      aura-claude-sonnet-4-6 (cloud)          41s     $0.05  check passed  2 files",
+            "    b-1      aura-claude-opus-4-7 (cloud)            41s     $0.40  check passed  2 files",
+            "    a-2      aura-claude-sonnet-4-6 (cloud)          42s     $0.07  check passed  2 files",
+            "    b-2      aura-claude-opus-4-7 (cloud)            42s     $0.50  check passed  2 files",
+            "    a-3      aura-claude-sonnet-4-6 (cloud)          43s     $0.06  check failed  2 files",
+            "    b-3      aura-claude-opus-4-7 (cloud)            43s     $0.45  check passed  2 files",
+            "  Note: the budget stopped 2 runs",
+            "",
+            "  /compare diff [run] · /compare apply <run> · /compare dismiss",
+        ];
+        assert_eq!(render("Compare #3", &replay()), expected.join("\n"));
+    }
+
+    #[test]
+    fn example_tasks_are_pinned_byte_for_byte() {
+        let expected = [
+            "Compare #4 · \"2 example coding tasks\" · done",
+            "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs of each of 2 example tasks per arm, each task's own check",
+            "",
+            "                A gate                            B aura-claude-opus-4-7",
+            "  finished      3/3                               3/3",
+            "  median time   42s                               42s",
+            "  total cost    $0.18 · 87% less                  $1.35 · 100%",
+            "  median cost   $0.06 · 87% less                  $0.45 · 100%",
+            "  check         2/3 passed                        3/3 passed",
+            "  cost per fix  $0.09 · 80% less                  $0.45 · 100%",
+            "  judge         0 won, 1 lost, 0 tied             1 won, 0 lost, 0 tied",
+            "  Too close to call with 3 runs: check passes are within one of each other.",
+            "  Too close to call with 3 runs: judge wins are within one of each other.",
+            "",
+            "  Per task (checks passed; mean run cost)",
+            "    coding/write-file                 1/2 passed, $0.06 · 87% less      2/2 passed, $0.43 · 100%",
+            "    coding/fix-shell-bug              1/1 passed, $0.07 · 86% less      1/1 passed, $0.50 · 100%",
+            "",
+            "  Tokens per model",
+            "    A: claude-sonnet-4-6 9 calls, 126k in / 5k out, $0.18",
+            "    B: claude-opus-4-7 9 calls, 126k in / 5k out, $1.35",
+            "  Plan usage: no call reported a plan's usage (only Claude and ChatGPT plans do), so tokens per model (what draws a plan down) are shown instead.",
+            "  Judge: 1 blind call on aura-claude-opus-4-7 (cloud), $0.03 (not in the arm totals)",
+            "",
+            "  Runs",
+            "    a-1      aura-claude-sonnet-4-6 (cloud)          41s     $0.05  check passed  2 files  coding/write-file",
+            "    b-1      aura-claude-opus-4-7 (cloud)            41s     $0.40  check passed  2 files  coding/write-file",
+            "    a-2      aura-claude-sonnet-4-6 (cloud)          42s     $0.07  check passed  2 files  coding/fix-shell-bug",
+            "    b-2      aura-claude-opus-4-7 (cloud)            42s     $0.50  check passed  2 files  coding/fix-shell-bug",
+            "    a-3      aura-claude-sonnet-4-6 (cloud)          43s     $0.06  check failed  2 files  coding/write-file",
+            "    b-3      aura-claude-opus-4-7 (cloud)            43s     $0.45  check passed  2 files  coding/write-file",
+            "  Note: the budget stopped 2 runs",
+            "",
+            "  /compare diff [run] · /compare dismiss",
+        ];
+        assert_eq!(render("Compare #4", &examples()), expected.join("\n"));
+    }
+
+    #[test]
+    fn the_list_is_pinned_byte_for_byte() {
+        let mut running = payload();
+        running.status = CompareStatus::Running;
+        let mut applied = payload();
+        applied.status = CompareStatus::Applied("a-2".to_string());
+        let listed = list(&[
+            ("Compare #1".to_string(), Some(payload())),
+            ("Compare #2".to_string(), Some(routed())),
+            ("Compare #3".to_string(), Some(replay())),
+            ("Compare #4".to_string(), Some(examples())),
+            ("Compare #5".to_string(), None),
+            ("Compare #6".to_string(), Some(running)),
+            ("Compare #7".to_string(), Some(applied)),
+        ]);
+        let at = crate::record_loader::format_local_time(0);
+        let expected = [
+            "Comparisons (/compare show <n> for one):".to_string(),
+            format!("  1. Compare #1 · {at} · \"fix the flaky parser test\" · gate vs aura-claude-opus-4-7 (cloud) · done · A $0.06 median, 2/3 pass / B $0.45 median, 3/3 pass"),
+            format!("  2. Compare #2 · {at} · \"fix the flaky parser test\" · gate vs aura-claude-opus-4-7 (cloud) · stopped · A $0.06 median, 2/3 pass / B $0.43 median, 2/2 pass"),
+            format!("  3. Compare #3 · {at} · \"fix the flaky parser test\" · gate vs aura-claude-opus-4-7 (cloud) · done · A $0.06 median, 2/3 pass / B $0.45 median, 3/3 pass"),
+            format!("  4. Compare #4 · {at} · \"2 example coding tasks\" · gate vs aura-claude-opus-4-7 (cloud) · done · A $0.06 median, 2/3 pass / B $0.45 median, 3/3 pass"),
+            "  5. Compare #5 · no record".to_string(),
+            format!("  6. Compare #6 · {at} · \"fix the flaky parser test\" · gate vs aura-claude-opus-4-7 (cloud) · running · A $0.06 median, 2/3 pass / B $0.45 median, 3/3 pass"),
+            format!("  7. Compare #7 · {at} · \"fix the flaky parser test\" · gate vs aura-claude-opus-4-7 (cloud) · applied a-2 · A $0.06 median, 2/3 pass / B $0.45 median, 3/3 pass"),
+        ];
+        assert_eq!(listed, expected.join("\n"));
+    }
+
+    /// Notes of a replayed session's estimate.
+    fn notes() -> Vec<String> {
+        vec![
+            "shell changes are not undone".to_string(),
+            "Learn mode: Gate arms explore as routed turns do (5% of turns), so the runs teach \
+             Gate about models it would not pick yet"
+                .to_string(),
+        ]
+    }
+
+    /// Two example tasks of different suites.
+    fn tasks() -> [ExampleTaskInfo; 2] {
+        [
+            example("coding/write-file"),
+            example("gate_hard/retry-spec"),
+        ]
+    }
+
+    /// The estimate of 2 runs per arm, up to 4 at a time, of Gate against
+    /// a model per difficulty, whose price is unknown, judged by Opus.
+    fn estimate_of(
+        session: Option<&str>,
+        examples: &[ExampleTaskInfo],
+        check: Option<&str>,
+        budget_usd: Option<f64>,
+        notes: &[String],
+    ) -> String {
+        EstimateView {
+            task: "fix the flaky parser test\nmore detail",
+            prompts: 3,
+            session,
+            examples,
+            a: "gate (likely aura-claude-sonnet-4-6 (cloud))".to_string(),
+            b: "by difficulty: easy → aura-claude-haiku-4-5 (cloud) · medium → \
+                aura-claude-sonnet-4-6 (cloud) · hard → aura-claude-opus-4-7 (cloud)"
+                .to_string(),
+            judge: "aura-claude-opus-4-7",
+            repeats: 2,
+            check,
+            budget_usd,
+            concurrency: 4,
+            estimate: Estimate {
+                a_usd: Some(1.5),
+                b_usd: None,
+                judge_usd: Some(0.004),
+            },
+            notes,
+        }
+        .render()
+    }
+
+    #[test]
+    fn the_estimate_of_a_prompt_is_pinned_byte_for_byte() {
+        let expected = [
+            "Compare: \"fix the flaky parser test\"",
+            "  A             gate (likely aura-claude-sonnet-4-6 (cloud))",
+            "  B             by difficulty: easy → aura-claude-haiku-4-5 (cloud) · medium →",
+            "                aura-claude-sonnet-4-6 (cloud) · hard → aura-claude-opus-4-7",
+            "                (cloud)",
+            "  Runs          2 per arm, up to 4 at a time,",
+            "                each in its own copy of the workspace",
+            "  Check         none · --check <cmd> or AURA_CHECK_COMMAND counts passes",
+            "  Estimate      ~$1.50 at list prices",
+            "                A ~$1.50 · B ~unknown",
+            "                judge ~$0.0040 on aura-claude-opus-4-7 (cloud)",
+            "                for turns of about 150k input and 6k output tokens",
+            "                some prices are unknown",
+            "  Budget        $2.00: no new run starts once the finished ones cost that much",
+        ];
+        assert_eq!(
+            estimate_of(None, &[], None, Some(2.0), &[]),
+            expected.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_estimate_of_a_replayed_session_is_pinned_byte_for_byte() {
+        let expected = [
+            "Benchmark: replay the session \"fix the parser\", 3 prompts in order",
+            "  A             gate (likely aura-claude-sonnet-4-6 (cloud))",
+            "  B             by difficulty: easy → aura-claude-haiku-4-5 (cloud) · medium →",
+            "                aura-claude-sonnet-4-6 (cloud) · hard → aura-claude-opus-4-7",
+            "                (cloud)",
+            "  Runs          2 per arm, up to 4 at a time,",
+            "                each in its own copy of the workspace",
+            "  Check         `cargo test` after each run",
+            "  Estimate      ~$1.50 at list prices",
+            "                A ~$1.50 · B ~unknown",
+            "                judge ~$0.0040 on aura-claude-opus-4-7 (cloud)",
+            "                for turns of about 150k input and 6k output tokens",
+            "                some prices are unknown",
+            "  Note          shell changes are not undone",
+            "  Note          Learn mode: Gate arms explore as routed turns do (5% of turns),",
+            "                so the runs teach Gate about models it would not pick yet",
+        ];
+        assert_eq!(
+            estimate_of(
+                Some("fix the parser"),
+                &[],
+                Some("cargo test"),
+                None,
+                &notes()
+            ),
+            expected.join("\n")
+        );
+    }
+
+    #[test]
+    fn the_estimate_of_example_tasks_is_pinned_byte_for_byte() {
+        let expected = [
+            "Benchmark: 2 example coding tasks",
+            "  Tasks         coding/write-file, gate_hard/retry-spec",
+            "  A             gate (likely aura-claude-sonnet-4-6 (cloud))",
+            "  B             by difficulty: easy → aura-claude-haiku-4-5 (cloud) · medium →",
+            "                aura-claude-sonnet-4-6 (cloud) · hard → aura-claude-opus-4-7",
+            "                (cloud)",
+            "  Runs          2 of each task per arm (4 per arm), up to 4 at a time,",
+            "                each in a fresh copy of its task's files",
+            "  Check         each task's own command; hidden checks go in only after the run",
+            "  Estimate      ~$1.50 at list prices",
+            "                A ~$1.50 · B ~unknown",
+            "                judge ~$0.0040 on aura-claude-opus-4-7 (cloud)",
+            "                for turns of about 150k input and 6k output tokens",
+            "                some prices are unknown",
+            "  Note          Learn mode: Gate arms explore as routed turns do (5% of turns),",
+            "                so the runs teach Gate about models it would not pick yet",
+        ];
+        assert_eq!(
+            estimate_of(None, &tasks(), Some("cargo test"), None, &notes()[1..]),
+            expected.join("\n")
+        );
+    }
+
+    /// The BENCH tab's view of `payload`, held by an agent of its own in
+    /// another agent's tree.
+    fn bench_view(payload: &ComparePayload) -> BenchView {
+        let (host, root) = (AgentId::new([0xc0; 32]), AgentId::new([0x0f; 32]));
+        super::super::bench::view(host, root, "Compare #1", payload)
+    }
+
+    /// Each of `items` as `Debug` writes it on one line.
+    fn debug<T: std::fmt::Debug>(items: &[T]) -> Vec<String> {
+        items.iter().map(|item| format!("{item:?}")).collect()
+    }
+
+    /// `view` without its arms, runs, tasks and judge.
+    fn rest(view: BenchView) -> BenchView {
+        BenchView {
+            arms: Default::default(),
+            runs: Vec::new(),
+            tasks: Vec::new(),
+            judge: None,
+            ..view
+        }
+    }
+
+    #[test]
+    fn the_bench_tab_lists_each_run_as_it_ran() {
+        let expected = [
+            "BenchRun { name: \"a-1\", arm: 0, model: \"aura-claude-haiku-4-5\", \
+             escalated_to: Some(\"aura-claude-sonnet-4-6\"), escalated_effort: Some(\"high\"), \
+             category: Some(\"debugging\"), difficulty: Some(\"hard\"), led: false, \
+             subtask_cost_usd: 0.0, wall_ms: 41000, cost_usd: 0.05, check_passed: Some(true), \
+             files_changed: 2, error: None, task: None, \
+             agent_id: \"0101010101010101010101010101010101010101010101010101010101010101\" }",
+            "BenchRun { name: \"b-1\", arm: 1, model: \"aura-claude-opus-4-7\", escalated_to: None, \
+             escalated_effort: None, category: None, difficulty: None, led: false, \
+             subtask_cost_usd: -0.0, wall_ms: 41000, cost_usd: 0.4, check_passed: Some(true), \
+             files_changed: 2, error: None, task: None, \
+             agent_id: \"1111111111111111111111111111111111111111111111111111111111111111\" }",
+            "BenchRun { name: \"a-2\", arm: 0, model: \"m\", escalated_to: None, \
+             escalated_effort: None, category: Some(\"multi_file_change\"), difficulty: None, \
+             led: true, subtask_cost_usd: 0.17, wall_ms: 42000, cost_usd: 0.07, \
+             check_passed: Some(true), files_changed: 2, error: None, task: None, \
+             agent_id: \"0202020202020202020202020202020202020202020202020202020202020202\" }",
+            "BenchRun { name: \"b-2\", arm: 1, model: \"aura-claude-opus-4-7\", escalated_to: None, \
+             escalated_effort: None, category: None, difficulty: None, led: false, \
+             subtask_cost_usd: -0.0, wall_ms: 42000, cost_usd: 0.5, check_passed: None, \
+             files_changed: 2, error: Some(\"the model fell over\\nand stayed down\"), task: None, \
+             agent_id: \"1212121212121212121212121212121212121212121212121212121212121212\" }",
+            "BenchRun { name: \"a-3\", arm: 0, model: \"aura-claude-sonnet-4-6\", \
+             escalated_to: None, escalated_effort: None, category: None, difficulty: None, \
+             led: false, subtask_cost_usd: -0.0, wall_ms: 43000, cost_usd: 0.06, \
+             check_passed: Some(false), files_changed: 2, error: None, task: None, \
+             agent_id: \"0303030303030303030303030303030303030303030303030303030303030303\" }",
+            "BenchRun { name: \"b-3\", arm: 1, model: \"aura-claude-opus-4-7\", escalated_to: None, \
+             escalated_effort: None, category: None, difficulty: None, led: false, \
+             subtask_cost_usd: -0.0, wall_ms: 43000, cost_usd: 0.45, check_passed: Some(true), \
+             files_changed: 2, error: None, task: None, \
+             agent_id: \"1313131313131313131313131313131313131313131313131313131313131313\" }",
+        ];
+        assert_eq!(debug(&bench_view(&routed()).runs), expected);
+    }
+
+    #[test]
+    fn the_bench_tab_sums_up_each_arm() {
+        let routed_arms = [
+            "BenchArm { label: \"gate\", runs: 3, finished: 3, total_cost_usd: 0.18, \
+             median_cost_usd: Some(0.06), median_wall_ms: Some(42000), checks_passed: 2, \
+             checks_run: 3, judge_wins: 0, judge_losses: 1, judge_ties: 0, ref_better: 0, \
+             ref_as_good: 0, ref_worse: 0, tokens: [BenchTokens { model: \"claude-sonnet-4-6\", \
+             calls: 9, input_tokens: 126000, output_tokens: 4500, cost_usd: 0.18 }], \
+             turns: [BenchTurn { runs: 2, mean_cost_usd: Some(0.41000000000000003), passed: 2, \
+             failed: 0, errors: 0 }], escalated: 1, nudged: 1 }",
+            "BenchArm { label: \"aura-claude-opus-4-7\", runs: 3, finished: 2, \
+             total_cost_usd: 1.35, median_cost_usd: Some(0.42500000000000004), \
+             median_wall_ms: Some(42000), checks_passed: 2, checks_run: 2, judge_wins: 1, \
+             judge_losses: 0, judge_ties: 0, ref_better: 0, ref_as_good: 0, ref_worse: 0, \
+             tokens: [BenchTokens { model: \"claude-opus-4-7\", calls: 9, input_tokens: 126000, \
+             output_tokens: 4500, cost_usd: 1.35 }], turns: [BenchTurn { runs: 0, \
+             mean_cost_usd: None, passed: 0, failed: 0, errors: 0 }], escalated: 0, nudged: 0 }",
+        ];
+        assert_eq!(debug(&bench_view(&routed()).arms), routed_arms);
+        let replayed_arms = [
+            "BenchArm { label: \"gate\", runs: 3, finished: 3, total_cost_usd: 0.18, \
+             median_cost_usd: Some(0.06), median_wall_ms: Some(42000), checks_passed: 2, \
+             checks_run: 3, judge_wins: 0, judge_losses: 1, judge_ties: 0, ref_better: 0, \
+             ref_as_good: 0, ref_worse: 1, tokens: [BenchTokens { model: \"claude-sonnet-4-6\", \
+             calls: 9, input_tokens: 126000, output_tokens: 4500, cost_usd: 0.18 }], \
+             turns: [BenchTurn { runs: 3, mean_cost_usd: Some(0.02), passed: 3, failed: 0, \
+             errors: 0 }, BenchTurn { runs: 3, mean_cost_usd: Some(0.04), passed: 0, failed: 0, \
+             errors: 3 }], escalated: 0, nudged: 0 }",
+            "BenchArm { label: \"aura-claude-opus-4-7\", runs: 3, finished: 3, \
+             total_cost_usd: 1.35, median_cost_usd: Some(0.45), median_wall_ms: Some(42000), \
+             checks_passed: 3, checks_run: 3, judge_wins: 1, judge_losses: 0, judge_ties: 0, \
+             ref_better: 1, ref_as_good: 0, ref_worse: 0, \
+             tokens: [BenchTokens { model: \"claude-opus-4-7\", calls: 9, input_tokens: 126000, \
+             output_tokens: 4500, cost_usd: 1.35 }], turns: [BenchTurn { runs: 3, \
+             mean_cost_usd: Some(0.02), passed: 3, failed: 0, errors: 0 }, BenchTurn { runs: 3, \
+             mean_cost_usd: Some(0.04), passed: 0, failed: 0, errors: 3 }], escalated: 0, \
+             nudged: 0 }",
+        ];
+        assert_eq!(debug(&bench_view(&replay()).arms), replayed_arms);
+    }
+
+    #[test]
+    fn the_bench_tab_names_a_comparison_and_its_judge() {
+        let view = bench_view(&routed());
+        let judge = [
+            "Some(BenchJudge { model: \"aura-claude-opus-4-7\", cost_usd: 0.03, \
+             verdicts: [BenchVerdict { a_run: \"a-1\", b_run: \"b-1\", parsed: true, \
+             winner: Some(1), a_vs_reference: None, b_vs_reference: None, reasoning: \"\" }] })",
+        ];
+        assert_eq!(debug(&[&view.judge]), judge);
+        let expected = BenchView {
+            id: "c0".repeat(32),
+            root: "0f".repeat(32),
+            name: "Compare #1".to_string(),
+            title: "fix the flaky parser test".to_string(),
+            source: "prompt".to_string(),
+            status: BenchStatus::Cancelled,
+            repeats: 3,
+            check: Some("cargo test".to_string()),
+            prompts: vec!["fix the flaky parser test\nmore detail".to_string()],
+            notes: vec!["the budget stopped 2 runs".to_string()],
+            ..BenchView::default()
+        };
+        assert_eq!(rest(view), expected);
+    }
+
+    #[test]
+    fn the_bench_tab_shows_a_replayed_session_with_what_it_cost() {
+        let view = bench_view(&replay());
+        let judge = [
+            "Some(BenchJudge { model: \"aura-claude-opus-4-7\", cost_usd: 0.03, \
+             verdicts: [BenchVerdict { a_run: \"a-1\", b_run: \"b-1\", parsed: true, \
+             winner: Some(1), a_vs_reference: Some(\"worse\"), b_vs_reference: Some(\"better\"), \
+             reasoning: \"\" }] })",
+        ];
+        assert_eq!(debug(&[&view.judge]), judge);
+        let expected = BenchView {
+            id: "c0".repeat(32),
+            root: "0f".repeat(32),
+            name: "Compare #1".to_string(),
+            title: "fix the parser".to_string(),
+            source: "session \"fix the parser\"".to_string(),
+            status: BenchStatus::Done,
+            repeats: 3,
+            check: Some("cargo test".to_string()),
+            prompts: vec!["fix the parser".to_string(), "now the docs".to_string()],
+            baseline: Some(BenchBaseline {
+                calls: 12,
+                cost_usd: 0.9,
+                priced: true,
+                models: vec!["claude-opus-4-7".to_string()],
+            }),
+            has_reference: true,
+            notes: vec!["the budget stopped 2 runs".to_string()],
+            ..BenchView::default()
+        };
+        assert_eq!(rest(view), expected);
+    }
+
+    #[test]
+    fn the_bench_tab_has_a_row_per_example_task() {
+        let view = bench_view(&examples());
+        let tasks = [
+            "BenchTaskRow { id: \"coding/write-file\", title: \"coding/write-file\", \
+             arms: [BenchTaskCell { runs: 2, passed: 1, checked: 2, \
+             mean_cost_usd: Some(0.055) }, BenchTaskCell { runs: 2, passed: 2, checked: 2, \
+             mean_cost_usd: Some(0.42500000000000004) }], setup: Ready }",
+            "BenchTaskRow { id: \"coding/fix-shell-bug\", title: \"coding/fix-shell-bug\", \
+             arms: [BenchTaskCell { runs: 1, passed: 1, checked: 1, mean_cost_usd: Some(0.07) }, \
+             BenchTaskCell { runs: 1, passed: 1, checked: 1, mean_cost_usd: Some(0.5) }], \
+             setup: Ready }",
+        ];
+        assert_eq!(debug(&view.tasks), tasks);
+        let worked_on: Vec<(&str, Option<&str>)> = (view.runs.iter())
+            .map(|run| (run.name.as_str(), run.task.as_deref()))
+            .collect();
+        let (write, fix) = (Some("coding/write-file"), Some("coding/fix-shell-bug"));
+        let order = [("a-1", write), ("b-1", write), ("a-2", fix), ("b-2", fix)];
+        assert_eq!(
+            worked_on,
+            [
+                order[0],
+                order[1],
+                order[2],
+                order[3],
+                ("a-3", write),
+                ("b-3", write)
+            ]
+        );
+        let expected = BenchView {
+            id: "c0".repeat(32),
+            root: "0f".repeat(32),
+            name: "Compare #1".to_string(),
+            title: "2 example coding tasks".to_string(),
+            source: "2 example tasks".to_string(),
+            status: BenchStatus::Done,
+            repeats: 3,
+            notes: vec!["the budget stopped 2 runs".to_string()],
+            ..BenchView::default()
+        };
+        assert_eq!(rest(view), expected);
+    }
+
+    #[test]
+    fn the_bench_tab_names_a_plans_work_and_each_status() {
+        let mut planned = payload();
+        planned.plan = Some("plans/parser.md".to_string());
+        planned.task = "Build the plan\nin plans/parser.md".to_string();
+        planned.budget_usd = Some(2.5);
+        let view = rest(bench_view(&planned));
+        assert_eq!(
+            (view.title.as_str(), view.source.as_str(), view.budget_usd),
+            ("Build the plan", "plan plans/parser.md", Some(2.5))
+        );
+        let applied = || CompareStatus::Applied("a-2".to_string());
+        for (status, shown) in [
+            (CompareStatus::Running, BenchStatus::Running),
+            (CompareStatus::Done, BenchStatus::Done),
+            (CompareStatus::Cancelled, BenchStatus::Cancelled),
+            (applied(), BenchStatus::Applied("a-2".to_string())),
+            (CompareStatus::Dismissed, BenchStatus::Dismissed),
+        ] {
+            let payload = ComparePayload {
+                status,
+                ..payload()
+            };
+            assert_eq!(bench_view(&payload).status, shown);
+        }
+    }
+
+    /// [`payload`] whose runs say how their turns were routed, as a
+    /// comparison the user stopped with a run that stopped too.
+    fn routed() -> ComparePayload {
+        use aura_core_types::{Difficulty, PromptCategory};
+        let mut payload = payload();
+        payload.runs[0].turns = vec![RunTurn {
+            category: Some(PromptCategory::Debugging),
+            difficulty: Some(Difficulty::Hard),
+            led: Some(false),
+            escalations: 1,
+            nudges: 1,
+            first_model: Some("aura-claude-haiku-4-5".to_string()),
+            effort: Some("high".to_string()),
+            first_effort: Some("medium".to_string()),
+            ..RunTurn::new(
+                "aura-claude-sonnet-4-6",
+                0.05,
+                1,
+                OutcomeSignal::ChecksPassed,
+            )
+        }];
+        payload.runs[2].turns = vec![
+            RunTurn {
+                category: Some(PromptCategory::MultiFileChange),
+                led: Some(true),
+                subtask_cost_usd: 0.17,
+                sent_back: 2,
+                ..RunTurn::new("m", 0.77, 1, OutcomeSignal::ChecksPassed)
+            },
+            RunTurn {
+                category: Some(PromptCategory::Question),
+                led: Some(false),
+                ..RunTurn::new("m", 0.03, 1, OutcomeSignal::JudgedPass)
+            },
+        ];
+        payload.runs[3].error = Some("the model fell over\nand stayed down".to_string());
+        payload.runs[3].check_passed = None;
+        payload.status = CompareStatus::Cancelled;
+        payload
+    }
+
+    /// [`payload`] as a replayed session of two prompts, judged against
+    /// what the user kept, whose runs reported plan usage.
+    fn replay() -> ComparePayload {
+        let mut replay = payload();
+        replay.prompts = vec!["fix the parser".to_string(), "now the docs".to_string()];
+        replay.source = BenchSource::Session {
+            agent_id: AgentId::generate(),
+            started_ms: 1,
+            title: "fix the parser".to_string(),
+            baseline: SessionBaseline {
+                calls: 12,
+                cost_usd: 0.9,
+                priced: true,
+                models: vec!["claude-opus-4-7".to_string()],
+            },
+            reference: Some(aura_core_types::Reference {
+                diff: "--- a/x\n+++ b/x\n".to_string(),
+                reply: "done".to_string(),
+            }),
+        };
+        let turn = |cost: f64, signal: OutcomeSignal| RunTurn::new("", cost, 1, signal);
+        for run in &mut replay.runs {
+            run.turns = vec![
+                turn(0.02, OutcomeSignal::ChecksPassed),
+                turn(0.04, OutcomeSignal::Error),
+            ];
+        }
+        replay.judgments[0].a_vs_reference = Some(RefVerdict::Worse);
+        replay.judgments[0].b_vs_reference = Some(RefVerdict::Better);
+        replay.runs[0].plan_usage = vec![
+            share(Plan::Claude, "5h", 0.021),
+            share(Plan::Claude, "7d_opus", 0.002),
+        ];
+        replay.runs[1].plan_usage = vec![share(Plan::Chatgpt, "5h", 0.012)];
+        replay
+    }
+
+    /// [`payload`] as two example tasks, the runs taking turns at them.
+    fn examples() -> ComparePayload {
+        let mut bench = payload();
+        bench.task = "2 example coding tasks".to_string();
+        bench.prompts = Vec::new();
+        bench.check = None;
+        bench.source = BenchSource::Examples {
+            tasks: vec![
+                example("coding/write-file"),
+                example("coding/fix-shell-bug"),
+            ],
+        };
+        for (i, run) in bench.runs.iter_mut().enumerate() {
+            let id = if (i / 2) % 2 == 0 {
+                "coding/write-file"
+            } else {
+                "coding/fix-shell-bug"
+            };
+            run.task = Some(id.to_string());
+        }
+        bench
     }
 }
