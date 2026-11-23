@@ -1,0 +1,14 @@
+{
+  "id": "01a206c3320f0013",
+  "title": "Workspace: /home/n3o/code/aura-harness (Rust). Follow .cursor/rules.md (no unwrap in prod, clippy -D warnings, rustfmt,…",
+  "state": "completed",
+  "agent_id": "15e5d4fcb8f1fd2448619ebeea1284610faff2cc7d18209a42df989ddd4a3a72",
+  "agent_name": "rust-engineer #78",
+  "assignee": "rust-engineer",
+  "parent": "01a206c2672c0011",
+  "items": [],
+  "summary": "Every OpenRouter call now gets a price, but I only partly verified it. `cargo fmt --all` and clippy on all four crates are clean. I ran the tests for `aura-model` (model_catalog tests, 28 passed) and `aura-gate-compare` (51 passed). I ran out of time before running `cargo test -p aura-gate-route -p aura-app`, so the new aura-app tests (record_loader, startup cache load) are written but have never…",
+  "updated_ms": 1795410224500,
+  "created_ms": 1795409785359,
+  "tool_use_id": "toolu_01QoNFLUbZEfFkMLKir75Fmu"
+}

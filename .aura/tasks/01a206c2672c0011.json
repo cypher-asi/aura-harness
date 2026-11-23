@@ -1,0 +1,31 @@
+{
+  "id": "01a206c2672c0011",
+  "title": "ensure all the open router stuff has a price and make the suggestions you suggested",
+  "state": "open",
+  "agent_id": "41d38b30baa751d4a89b0c17f617af342c3357bc8bd9739dd5ebde27ea17f7f9",
+  "agent_name": "Agent 1041",
+  "items": [
+    {
+      "content": "Price OpenRouter calls: response model names (vendor/model, no prefix) and route fallback get a list price",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Show unknown prices as unknown, not free; flag arm totals as incomplete",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Fix: read input/cache usage from message_delta on OpenRouter streams",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review all changes; fmt, clippy, tests",
+      "state": "pending"
+    }
+  ],
+  "summary": "Both fixes are running in the background: OpenRouter input-token parsing, and showing unknown prices as unknown instead of \"free\". I'll review once they report back.",
+  "updated_ms": 1795410264154,
+  "created_ms": 1795409733420
+}

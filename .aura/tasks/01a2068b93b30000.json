@@ -1,0 +1,11 @@
+{
+  "id": "01a2068b93b30000",
+  "title": "fix those",
+  "state": "completed",
+  "agent_id": "510cfa591375f25a8f089669ec9a37df3da2b0ae893a97ef18d9fa15fcd787dc",
+  "agent_name": "Agent 972",
+  "items": [],
+  "summary": "Both alerts are the same advisory: `jsonwebtoken` 9.3.1 has a type-confusion flaw (GHSA-h395-gr6q-cpjc), fixed in 10.3.0. Let me see who uses it:",
+  "updated_ms": 1795406355695,
+  "created_ms": 1795406140339
+}
