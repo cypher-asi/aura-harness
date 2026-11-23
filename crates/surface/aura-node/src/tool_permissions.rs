@@ -150,7 +150,7 @@ pub(crate) async fn append_agent_tool_permissions_entry(
         .await
         .map_err(|e| format!("claim agent processing: {e}"))?;
 
-    aura_agent_kernel::write_system_record(store, agent_id, tx.clone())
+    aura_agent_kernel::write_system_record(store, agent_id, &tx)
         .map_err(|e| format!("write_system_record: {e}"))?;
     Ok(tx)
 }

@@ -17,6 +17,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with a `redacted_thinking` block (its encrypted reasoning) before the
   `label` call, and the reply failed to parse. Such a block is now read
   and dropped, in whole replies and in streams, so the label is found.
+  A whole reply with a block type the client does not know keeps its
+  other blocks rather than failing.
+- A benchmark run whose prompt could not be classified was listed under
+  the session's model, a model of neither arm. It is listed under its
+  arm's: the pinned model, or `gate` or `by difficulty`.
 
 ### Gate in crates of its own
 

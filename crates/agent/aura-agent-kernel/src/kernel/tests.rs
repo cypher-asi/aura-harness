@@ -792,7 +792,7 @@ fn write_system_record_resolves_concurrent_appends_without_loss() {
                     Bytes::from(format!("payload-{i}").into_bytes()),
                     None,
                 );
-                crate::write_system_record(&store, agent_id, tx)
+                crate::write_system_record(&store, agent_id, &tx)
             })
         })
         .collect();

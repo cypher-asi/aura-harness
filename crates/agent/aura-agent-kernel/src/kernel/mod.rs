@@ -598,7 +598,7 @@ impl Kernel {
 pub fn write_system_record(
     store: &Arc<dyn Store>,
     agent_id: AgentId,
-    tx: aura_core_types::Transaction,
+    tx: &aura_core_types::Transaction,
 ) -> Result<u64, crate::KernelError> {
     write_system_entry(store, agent_id, tx).map(|entry| entry.seq)
 }
@@ -612,7 +612,7 @@ pub fn write_system_record(
 pub fn write_system_entry(
     store: &Arc<dyn Store>,
     agent_id: AgentId,
-    tx: aura_core_types::Transaction,
+    tx: &aura_core_types::Transaction,
 ) -> Result<RecordEntry, crate::KernelError> {
     // The `seq` for a System record is derived from a `get_head_seq`
     // read that is NOT serialized with the actual `append_entry_direct`
@@ -625,7 +625,7 @@ pub fn write_system_entry(
     // re-read the head and rebuild the entry on a bounded retry loop.
     const MAX_RETRIES: u32 = 16;
     for attempt in 0..=MAX_RETRIES {
-        match append_system_record_once(store, agent_id, &tx) {
+        match append_system_record_once(store, agent_id, tx) {
             Ok(entry) => return Ok(entry),
             Err(SystemRecordError::SequenceMismatch) if attempt < MAX_RETRIES => {
                 // Brief backoff so the racing writer can land before we

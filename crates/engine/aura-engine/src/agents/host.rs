@@ -852,7 +852,7 @@ impl HostInner {
                     &self.store,
                     self.scheduler.record_observer(),
                     plan.parent,
-                    tx,
+                    &tx,
                 )
                 .map_err(|e| format!("spawn record: {e}"))?;
             }
@@ -1656,7 +1656,7 @@ fn record_message(
         Bytes::from(payload.to_string().into_bytes()),
         None,
     );
-    if let Err(err) = write_observed(store, observer, message.to, tx) {
+    if let Err(err) = write_observed(store, observer, message.to, &tx) {
         warn!(root = %message.to, %err, "could not record agent message");
     }
 }
@@ -1667,7 +1667,7 @@ fn write_observed(
     store: &Arc<dyn Store>,
     observer: Option<&Arc<dyn RecordObserver>>,
     agent_id: AgentId,
-    tx: Transaction,
+    tx: &Transaction,
 ) -> Result<u64, aura_agent_kernel::KernelError> {
     let entry = write_system_entry(store, agent_id, tx)?;
     if let Some(observer) = observer {

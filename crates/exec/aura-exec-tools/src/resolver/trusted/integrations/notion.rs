@@ -42,7 +42,7 @@ impl ToolResolver {
                 Some(Value::Object(payload)),
             )
             .await?;
-        Ok(notion_page_list_response(response))
+        Ok(notion_page_list_response(&response))
     }
 
     pub(in super::super) async fn notion_fetch_page(
@@ -130,7 +130,7 @@ impl ToolResolver {
                 Some(append_blocks_payload(args)?),
             )
             .await?;
-        Ok(notion_block_list_response(response))
+        Ok(notion_block_list_response(&response))
     }
 
     pub(in super::super) async fn notion_create_page(
@@ -207,7 +207,7 @@ impl ToolResolver {
                 Some(query_data_source_payload(args)?),
             )
             .await?;
-        Ok(notion_page_list_response(response))
+        Ok(notion_page_list_response(&response))
     }
 
     pub(in super::super) async fn notion_create_database(
@@ -293,7 +293,7 @@ impl ToolResolver {
                 None,
             )
             .await?;
-        Ok(notion_block_list_response(response))
+        Ok(notion_block_list_response(&response))
     }
 
     async fn notion_json_request(
@@ -578,7 +578,7 @@ fn data_source_properties(args: &Value) -> Value {
         .unwrap_or_else(|| json!({ "Name": { "title": {} } }))
 }
 
-fn notion_page_list_response(response: Value) -> Value {
+fn notion_page_list_response(response: &Value) -> Value {
     let results = response
         .get("results")
         .and_then(Value::as_array)
@@ -596,7 +596,7 @@ fn notion_page_list_response(response: Value) -> Value {
     })
 }
 
-fn notion_block_list_response(response: Value) -> Value {
+fn notion_block_list_response(response: &Value) -> Value {
     json!({
         "blocks": response.get("results").cloned().unwrap_or_else(|| json!([])),
         "next_cursor": response.get("next_cursor").cloned().unwrap_or(Value::Null),

@@ -1321,7 +1321,14 @@ async fn run_prompt(
         Err(problem) => {
             ui.send(UiCommand::ShowWarning(problem.clone())).await;
             ui.send(UiCommand::Complete).await;
-            let model = config.model.clone();
+            // No model was routed to, so the run is named for its arm:
+            // the session's own model is no model of the arm.
+            let model = match routing {
+                ArmRouting::Pinned(model) => model.clone(),
+                ArmRouting::Gate { .. } | ArmRouting::ByDifficulty(_) => {
+                    short_label(&plan.arms[arm.index()]).into_owned()
+                }
+            };
             return Turned {
                 prompt_tx: None,
                 model: model.clone(),

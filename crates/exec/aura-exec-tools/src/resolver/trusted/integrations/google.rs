@@ -174,14 +174,18 @@ fn gmail_message_from_args(args: &Value, tool_name: &str) -> Result<Value, ToolE
         )));
     }
 
+    let cc = optional_string_list(args, &["cc"]);
+    let bcc = optional_string_list(args, &["bcc"]);
     let raw = build_gmail_raw_message(
-        &from,
-        &to,
-        optional_string_list(args, &["cc"]).as_deref(),
-        optional_string_list(args, &["bcc"]).as_deref(),
-        &subject,
-        text.as_deref(),
-        html.as_deref(),
+        &GmailMessage {
+            from: &from,
+            to: &to,
+            cc: cc.as_deref(),
+            bcc: bcc.as_deref(),
+            subject: &subject,
+            text: text.as_deref(),
+            html: html.as_deref(),
+        },
         tool_name,
     )?;
     let mut message = json!({ "raw": raw });
@@ -191,16 +195,28 @@ fn gmail_message_from_args(args: &Value, tool_name: &str) -> Result<Value, ToolE
     Ok(message)
 }
 
-fn build_gmail_raw_message(
-    from: &str,
-    to: &[String],
-    cc: Option<&[String]>,
-    bcc: Option<&[String]>,
-    subject: &str,
-    text: Option<&str>,
-    html: Option<&str>,
-    tool_name: &str,
-) -> Result<String, ToolError> {
+/// The parts of a Gmail message, as the tool's arguments gave them.
+#[derive(Clone, Copy)]
+struct GmailMessage<'a> {
+    from: &'a str,
+    to: &'a [String],
+    cc: Option<&'a [String]>,
+    bcc: Option<&'a [String]>,
+    subject: &'a str,
+    text: Option<&'a str>,
+    html: Option<&'a str>,
+}
+
+fn build_gmail_raw_message(parts: &GmailMessage<'_>, tool_name: &str) -> Result<String, ToolError> {
+    let GmailMessage {
+        from,
+        to,
+        cc,
+        bcc,
+        subject,
+        text,
+        html,
+    } = *parts;
     let from = safe_header_value("from", from, tool_name)?;
     let subject = safe_header_value("subject", subject, tool_name)?;
     let to_header = safe_header_list("to", to, tool_name)?;

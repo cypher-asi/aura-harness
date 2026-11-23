@@ -515,7 +515,7 @@ pub async fn fetch_dek_with_retry(
                     provider = %provider.describe(),
                     attempt,
                     error = %format!("{err:#}"),
-                    retry_in_ms = backoff.as_millis() as u64,
+                    retry_in_ms = u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX),
                     "DEK fetch failed; retrying"
                 );
                 let remaining = total_timeout.saturating_sub(elapsed);
