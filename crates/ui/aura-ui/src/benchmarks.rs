@@ -348,6 +348,9 @@ pub struct BenchView {
     pub tasks: Vec<BenchTaskRow>,
     pub check: Option<String>,
     pub budget_usd: Option<f64>,
+    /// Model that classified the runs' prompts; empty for benchmarks
+    /// recorded before they named it
+    pub classifier: String,
     /// The prompts each run got, in order
     pub prompts: Vec<String>,
     /// Arm A, then arm B
@@ -500,6 +503,9 @@ pub struct BenchSpec {
     /// Example tasks use their own.
     pub check: Option<String>,
     pub budget_usd: Option<f64>,
+    /// Model that classifies each run's prompt; `None` for Gate's
+    /// automatic choice
+    pub classifier: Option<String>,
 }
 
 /// What the BENCH tab asks of the event loop.

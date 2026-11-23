@@ -9,7 +9,7 @@ use crate::event_loop::gate::followup::{joined, record_message, stronger, Judgin
 use crate::event_loop::handlers::system_message;
 use crate::event_loop::processes::now_ms;
 use crate::model_selection::routed_effort;
-use aura_core_types::{OutcomePayload, OutcomeSignal};
+use aura_core_types::{OutcomePayload, OutcomeSignal, PromptCategory};
 use aura_gate::judge::turn::Failed;
 use aura_gate::live;
 use aura_model::{Message, ThinkingEffort};
@@ -19,6 +19,8 @@ use tracing::{info, warn};
 
 /// An attempt that ended badly enough to call for a stronger model.
 pub(super) struct Failure {
+    /// What its prompt asks for, which the stronger model is chosen for
+    pub category: PromptCategory,
     pub signal: OutcomeSignal,
     /// Its outcome; `None` when the prompt it answers could not be recorded
     pub outcome: Option<OutcomePayload>,
@@ -41,6 +43,7 @@ impl Attempting<'_, '_> {
     pub(super) async fn escalate(&mut self, failure: Failure) -> ControlFlow<Ended> {
         let judged = self.judged(&failure).await;
         let Failure {
+            category,
             signal,
             outcome,
             reply,
@@ -64,7 +67,7 @@ impl Attempting<'_, '_> {
         let ran_at = self.config.held_thinking_effort();
         let ran = (self.current.model.as_str(), routed_effort(&self.config));
         let (gate, candidates) = (&self.parts.ctx.hub.gate, &self.parts.ctx.plan.candidates);
-        let Some(next) = stronger(gate, candidates, self.asked.category, ran, signal) else {
+        let Some(next) = stronger(gate, candidates, category, ran, signal) else {
             return ControlFlow::Break(Ended {
                 signal,
                 reply,
@@ -75,7 +78,7 @@ impl Attempting<'_, '_> {
         };
         let found = joined(harness, review);
         let takeover = Takeover::new(&self.current.model, next, signal, found.as_deref());
-        self.take_over(takeover, signal, ran_at).await;
+        self.take_over(takeover, category, signal, ran_at).await;
         ControlFlow::Continue(())
     }
 
@@ -122,17 +125,18 @@ impl Attempting<'_, '_> {
         live::record(&self.session.kernel, agent_id, failed).await;
     }
 
-    /// Hand the turn to the stronger model `takeover` names, in the same
-    /// conversation, after an attempt that ended with `signal` and whose
-    /// requests were held at the effort `ran_at`.
+    /// Hand the turn on a prompt of `category` to the stronger model
+    /// `takeover` names, in the same conversation, after an attempt that
+    /// ended with `signal` and whose requests were held at the effort
+    /// `ran_at`.
     async fn take_over(
         &mut self,
         takeover: Takeover,
+        category: PromptCategory,
         signal: OutcomeSignal,
         ran_at: Option<ThinkingEffort>,
     ) {
         let (parts, agent_id) = (self.parts, self.session.agent_id());
-        let category = self.asked.category;
         let prompt = takeover.prompt(category, parts.ctx.plan.classifier.clone());
         let recorder = parts.recorder.as_deref();
         self.current.prompt_tx = match record_message(self.session, &prompt, recorder).await {

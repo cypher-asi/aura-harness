@@ -38,7 +38,9 @@ pub(super) type AttemptRun = (Result<AgentLoopResult, AgentError>, ForwarderStat
 pub(super) struct Asked<'a> {
     /// What the prompt says
     pub text: &'a str,
-    pub category: PromptCategory,
+    /// What the classifier said it asks for; `None` for a pinned arm's
+    /// prompt it gave no label
+    pub category: Option<PromptCategory>,
     /// How hard the classifier judged it
     pub difficulty: Option<Difficulty>,
     /// Whether Gate had the turn led
@@ -204,7 +206,6 @@ impl<'a, 'p> Attempting<'a, 'p> {
     /// Whether another attempt follows the one that ended as `ran`, set
     /// up when one does; else how the turn ended.
     async fn goes_on(&mut self, (result, forwarded): AttemptRun) -> ControlFlow<Ended> {
-        let gate_arm = self.parts.gate_arm();
         let stopped = self.parts.cancel.is_cancelled() || forwarded.credentials_rejected;
         let turn_start = self.current.turn_start;
         let mut signal = if stopped {
@@ -214,8 +215,8 @@ impl<'a, 'p> Attempting<'a, 'p> {
         };
         self.cut_short = signal == Some(OutcomeSignal::Unavailable);
         let mut followed = Followed::default();
-        if let (true, false, Ok(partial)) = (gate_arm, stopped, &result) {
-            followed = self.follow_up(partial, signal).await;
+        if let (Some(category), false, Ok(partial)) = (self.gate_category(), stopped, &result) {
+            followed = self.follow_up(partial, signal, category).await;
             signal = followed.signal;
         }
         let signal = signal.unwrap_or(OutcomeSignal::Unavailable);
@@ -232,7 +233,7 @@ impl<'a, 'p> Attempting<'a, 'p> {
             return ControlFlow::Continue(());
         }
         let outcome = self.outcome(signal, forwarded.usage.cost_usd);
-        if !(gate_arm && survived && calls_for_stronger(signal)) {
+        let Some(category) = self.escalates(survived, signal) else {
             return ControlFlow::Break(Ended {
                 signal,
                 reply,
@@ -240,8 +241,9 @@ impl<'a, 'p> Attempting<'a, 'p> {
                 outcome,
                 recorded: false,
             });
-        }
+        };
         let failure = Failure {
+            category,
             signal,
             outcome,
             reply,
@@ -293,16 +295,32 @@ impl<'a, 'p> Attempting<'a, 'p> {
         }
     }
 
+    /// The prompt's category when Gate routes the run. A Gate run's prompt
+    /// always has one: it stops when it could not be classified.
+    pub(super) fn gate_category(&self) -> Option<PromptCategory> {
+        self.asked.category.filter(|_| self.parts.gate_arm())
+    }
+
+    /// The category a Gate run's attempt that ended with `signal` hands
+    /// its turn to a stronger model under: when the attempt `survived`
+    /// and `signal` calls for one.
+    fn escalates(&self, survived: bool, signal: OutcomeSignal) -> Option<PromptCategory> {
+        self.gate_category()
+            .filter(|_| survived && calls_for_stronger(signal))
+    }
+
     /// The outcome of the attempt that ended with `signal`, its last run
     /// having cost `cost_usd`; `None` when the prompt it answers could not
-    /// be recorded.
+    /// be recorded, or was not classified and has no category to count
+    /// it under.
     fn outcome(&self, signal: OutcomeSignal, cost_usd: f64) -> Option<OutcomePayload> {
         let current = &self.current;
         let hub = &self.parts.ctx.hub;
         let agent_id = self.session.agent_id();
-        current.prompt_tx.map(|prompt_tx| OutcomePayload {
+        let asked = current.prompt_tx.zip(self.asked.category);
+        asked.map(|(prompt_tx, category)| OutcomePayload {
             prompt_tx,
-            category: self.asked.category,
+            category,
             model: current.model.clone(),
             success: signal.success(),
             signal,
@@ -359,7 +377,7 @@ impl<'a, 'p> Attempting<'a, 'p> {
         let asked = self.asked;
         let effort = effort_of(&self.config);
         let turn = RunTurn {
-            category: Some(asked.category),
+            category: asked.category,
             difficulty: asked.difficulty,
             led: Some(asked.led),
             escalations: self.escalations,

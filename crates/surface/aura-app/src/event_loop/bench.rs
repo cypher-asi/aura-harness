@@ -117,6 +117,7 @@ fn request_of(spec: BenchSpec) -> CompareRequest {
         budget_usd: spec.budget_usd,
         learn: false,
         suite,
+        classifier: spec.classifier,
     }
 }
 
@@ -299,6 +300,7 @@ pub(super) fn view(
         tasks,
         check: payload.check.clone(),
         budget_usd: payload.budget_usd,
+        classifier: payload.classifier.clone(),
         prompts: payload.prompts.clone(),
         arms: [arm(payload, CompareArm::A), arm(payload, CompareArm::B)],
         runs: payload

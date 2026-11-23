@@ -38,8 +38,8 @@ pub(super) struct Routed<'a> {
 }
 
 /// Classify and route `prompt` on `session`, then announce and record it.
-/// Errs with the turn as it ended when the prompt could not be
-/// classified.
+/// A pinned arm's prompt that could not be classified goes on
+/// unclassified; on other arms it errs with the turn as it ended.
 pub(super) async fn route<'a>(
     parts: &RunParts<'_>,
     session: &mut AgentSession,
@@ -47,24 +47,23 @@ pub(super) async fn route<'a>(
 ) -> Result<Routed<'a>, Turned> {
     let text = prompt.text;
     let (mut config, mut tools, lead) = turn_config(parts, session, text);
-    let label = match classify(parts, session, text, &config).await {
-        Ok(label) => label,
-        Err(problem) => return Err(unclassified(parts, problem).await),
-    };
-    let (category, mut difficulty) = (label.category, Some(label.difficulty));
+    let label = classify(parts, session, text, &config).await?;
+    let category = label.map(|label| label.category);
+    let mut difficulty = label.map(|label| label.difficulty);
     let criteria = criteria(parts, session, category, &mut difficulty, text, &config).await;
-    let work = Work::turn(category).of(difficulty);
-    let decision = decide(parts, &mut config, &work, prompt.refused);
+    let work = category.map(|category| Work::turn(category).of(difficulty));
+    let decision = decide(parts, &mut config, work.as_ref(), prompt.refused);
     let model = config.model.clone();
     let led = lead.is_some_and(|lead| {
         let gate = &parts.ctx.hub.gate;
         gate.note_model(session.agent_id(), &model);
-        let led = gate.way((category, difficulty), &model, false).led;
+        let led =
+            category.is_some_and(|category| gate.way((category, difficulty), &model, false).led);
         session.lead = lead.apply(led, &mut config, &mut tools);
         led
     });
     let payload = PromptPayload {
-        category: Some(category),
+        category,
         classifier: parts.ctx.plan.classifier.clone(),
         route: route_of(&model, decision.as_ref()),
         led: Some(led),
@@ -116,34 +115,51 @@ fn turn_config(
 
 /// What `text` asks for and how hard it is, as the comparison's
 /// classifier labels it through `session`'s kernel, signed in as `config`
-/// is.
+/// is. `None` when a pinned arm's prompt could not be labelled, which goes
+/// on unclassified; on other arms that errs with the turn as it ended.
 async fn classify(
     parts: &RunParts<'_>,
     session: &AgentSession,
     text: &str,
     config: &AgentLoopConfig,
-) -> Result<Label, String> {
+) -> Result<Option<Label>, Turned> {
     let classifier = &parts.ctx.plan.classifier;
-    if classifier.is_empty() {
-        return Err("Gate has no model to classify the prompt".to_string());
+    let labelled = if classifier.is_empty() {
+        Err("Gate has no model to classify the prompt".to_string())
+    } else {
+        let auth_token = config.auth_token.clone();
+        live::classify_prompt(&session.kernel, classifier, text, auth_token).await
+    };
+    match labelled {
+        Ok(label) => Ok(Some(label)),
+        Err(problem) if matches!(parts.routing, ArmRouting::Pinned(_)) => {
+            goes_on_unclassified(parts, session, problem).await;
+            Ok(None)
+        }
+        Err(problem) => Err(unclassified(parts, problem).await),
     }
-    let auth_token = config.auth_token.clone();
-    live::classify_prompt(&session.kernel, classifier, text, auth_token).await
 }
 
-/// The turn of a prompt that could not be classified, for `problem`,
-/// which the run's chat shows.
+/// Tell the run's chat that its prompt, which could not be classified
+/// for `problem`, goes on unclassified. A pinned arm needs no label to
+/// pick its model, as a turn on a pinned model outside a benchmark does
+/// not; the run then leaves no outcome for Gate, with no category to
+/// count it under.
+async fn goes_on_unclassified(parts: &RunParts<'_>, session: &AgentSession, problem: String) {
+    let agent_id = session.agent_id();
+    warn!(%agent_id, %problem, "A pinned compare run goes on unclassified");
+    let line = format!("{problem} · the run goes on unclassified");
+    parts.ui.send(system_message(line)).await;
+}
+
+/// The turn of a Gate or by-difficulty prompt that could not be
+/// classified, for `problem`, which the run's chat shows.
 async fn unclassified(parts: &RunParts<'_>, problem: String) -> Turned {
     parts.ui.send(UiCommand::ShowWarning(problem.clone())).await;
     parts.ui.send(UiCommand::Complete).await;
     // No model was routed to, so the run is named for its arm: the
     // session's own model is no model of the arm.
-    let model = match parts.routing {
-        ArmRouting::Pinned(model) => model.clone(),
-        ArmRouting::Gate { .. } | ArmRouting::ByDifficulty(_) => {
-            short_label(parts.spec()).into_owned()
-        }
-    };
+    let model = short_label(parts.spec()).into_owned();
     Turned {
         prompt_tx: None,
         reply: String::new(),
@@ -162,14 +178,12 @@ async fn unclassified(parts: &RunParts<'_>, problem: String) -> Turned {
 async fn criteria(
     parts: &RunParts<'_>,
     session: &AgentSession,
-    category: PromptCategory,
+    category: Option<PromptCategory>,
     difficulty: &mut Option<Difficulty>,
     text: &str,
     config: &AgentLoopConfig,
 ) -> Option<Arc<Criteria>> {
-    if !parts.gate_arm() {
-        return None;
-    }
+    let category = category.filter(|_| parts.gate_arm())?;
     let (hub, plan) = (&parts.ctx.hub, &parts.ctx.plan);
     let held = live::hold_to_criteria(
         &session.kernel,
@@ -197,18 +211,20 @@ async fn criteria(
 fn decide(
     parts: &RunParts<'_>,
     config: &mut AgentLoopConfig,
-    work: &Work<'_>,
+    work: Option<&Work<'_>>,
     refused: &[String],
 ) -> Option<Decision> {
     let (hub, plan) = (&parts.ctx.hub, &parts.ctx.plan);
-    let decision = match parts.routing {
-        ArmRouting::Gate { .. } if !refused.is_empty() => {
+    let decision = match (parts.routing, work) {
+        (ArmRouting::Gate { .. }, Some(work)) if !refused.is_empty() => {
             followup::reroute(&hub.gate, work, &plan.candidates, refused)
         }
-        ArmRouting::Gate { .. } if plan.learn => hub.gate.decide(work, &plan.candidates),
-        ArmRouting::Gate { .. } => hub.gate.redecide(work, &plan.candidates),
-        ArmRouting::ByDifficulty(routes) => Some(routes.decide(work)),
-        ArmRouting::Pinned(_) => None,
+        (ArmRouting::Gate { .. }, Some(work)) if plan.learn => {
+            hub.gate.decide(work, &plan.candidates)
+        }
+        (ArmRouting::Gate { .. }, Some(work)) => hub.gate.redecide(work, &plan.candidates),
+        (ArmRouting::ByDifficulty(routes), Some(work)) => Some(routes.decide(work)),
+        _ => None,
     };
     match (parts.routing, &decision) {
         (ArmRouting::Gate { .. } | ArmRouting::ByDifficulty(_), Some(decision)) => {
@@ -235,15 +251,15 @@ fn route_of(model: &str, decision: Option<&Decision>) -> Route {
 }
 
 /// Show in the run's chat that `prompt`'s turn starts on `model` for
-/// `category`; the first prompt also lists the run among the agents, as
-/// it runs on `config`.
+/// `category`, if it was classified; the first prompt also lists the run
+/// among the agents, as it runs on `config`.
 async fn announce(
     parts: &RunParts<'_>,
     session: &AgentSession,
     prompt: &Prompt<'_>,
     config: &AgentLoopConfig,
     model: &str,
-    category: PromptCategory,
+    category: Option<PromptCategory>,
 ) {
     let (ctx, run, ui) = (parts.ctx, parts.run, &parts.ui);
     if prompt.i == 0 {
@@ -263,10 +279,11 @@ async fn announce(
     };
     let label = short_label(parts.spec());
     let line = format!(
-        "{} {} · {label} → {} · {category}{step}",
+        "{} {} · {label} → {} · {}{step}",
         ctx.host.name,
         run.name,
-        route_label(model)
+        route_label(model),
+        category.map_or("unclassified", PromptCategory::as_str),
     );
     ui.send(system_message(line)).await;
 }

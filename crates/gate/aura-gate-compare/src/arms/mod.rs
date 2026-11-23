@@ -196,3 +196,26 @@ pub fn resolve_arms(
     }
     Ok((a_spec, b_spec))
 }
+
+/// The model `query` (a `--classifier` value) names to classify each
+/// run's prompt, found as an arm's model is ([`resolve_model`]) among
+/// `runnable` and `candidates`.
+///
+/// # Errors
+/// Says which models are available when `query` names none of them, and
+/// that Gate itself cannot classify.
+pub fn resolve_classifier(
+    query: &str,
+    runnable: &[Candidate],
+    candidates: &[Candidate],
+) -> Result<String, String> {
+    if query.trim().eq_ignore_ascii_case("gate") {
+        return Err(
+            "Classifier: name a model, e.g. --classifier haiku, or leave it out for Gate's choice"
+                .to_string(),
+        );
+    }
+    resolve_model(query, runnable, candidates)
+        .map(|c| c.id.clone())
+        .map_err(|error| format!("Classifier: {error}"))
+}

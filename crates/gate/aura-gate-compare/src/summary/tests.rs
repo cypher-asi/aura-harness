@@ -70,6 +70,7 @@ fn payload(runs: Vec<CompareRun>, judgments: Vec<CompareJudgment>) -> ComparePay
         repeats: 3,
         check: Some("true".to_string()),
         budget_usd: None,
+        classifier: String::new(),
         requested_by: AgentId::generate(),
         apply_root: PathBuf::new(),
         started_ms: 0,

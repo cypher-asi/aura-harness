@@ -218,6 +218,7 @@ fn comparison(run: CompareRun) -> ComparePayload {
         repeats: 1,
         check: None,
         budget_usd: None,
+        classifier: String::new(),
         requested_by: AgentId::generate(),
         apply_root: PathBuf::from("/work/repo"),
         started_ms: 1_000,

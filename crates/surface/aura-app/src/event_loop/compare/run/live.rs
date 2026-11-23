@@ -30,7 +30,8 @@ pub(super) struct Live {
 #[derive(Clone)]
 pub(super) struct LiveRoute {
     pub model: String,
-    pub category: PromptCategory,
+    /// `None` for a pinned arm's run its classifier gave no label
+    pub category: Option<PromptCategory>,
     pub difficulty: Option<Difficulty>,
 }
 
@@ -135,7 +136,9 @@ fn live_run(hub: &AgentHub, live: Live) -> BenchLiveRun {
         routed,
     } = live;
     let used = working.map_or_else(Vec::new, |(agent, _)| hub.tokens_by_model(agent));
-    let category = routed.as_ref().map(|r| r.category.as_str().to_string());
+    let category = (routed.as_ref())
+        .and_then(|r| r.category)
+        .map(|c| c.as_str().to_string());
     let difficulty = (routed.as_ref())
         .and_then(|r| r.difficulty)
         .map(|d| d.as_str().to_string());

@@ -7,6 +7,32 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Benchmarks pick their classifier
+
+##### Added
+
+- A benchmark names the model that classifies its runs' prompts. The
+  BENCH tab's form has a Classifier row under the arms: `auto` keeps
+  Gate's choice, and ←/→,
+  Enter or typing picks another in the `/model` selector, as on a
+  difficulty's row. `/compare --classifier <model>` does the same. A
+  model you cannot run now is refused with the models you can, the
+  estimate shows the classifier, and the benchmark's header and
+  `/compare show` name it.
+
+##### Changed
+
+- Gate's classifier is a fast model on a linked Claude or ChatGPT plan
+  before a cheaper one paid for by the token: a plan's calls cost
+  nothing more. A local fast model still comes first. With a Claude
+  plan and OpenRouter both linked, prompts were classified on
+  OpenRouter's `gpt-5-nano` rather than the plan's Haiku.
+- A pinned arm's run whose prompt cannot be classified goes on, on its
+  model, unclassified, as a turn on a pinned model outside a benchmark
+  does; it failed at once. It leaves no outcome for Gate, having no
+  category to count it under. Gate and by-difficulty arms still need
+  the label to route, and their runs still fail without one.
+
 ### OpenRouter reasoning replies parse
 
 ##### Fixed
@@ -104,10 +130,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - A benchmark arm can run work on a model chosen by its difficulty: in
   the BENCH tab's new-benchmark form, set an arm to `by difficulty` and
-  pick a model for its Easy, Medium and Hard rows (←/→ cycles every
-  model you can run, or type part of a name such as `deepseek` and
-  press Enter). Each model may come from any route: a linked Claude or
+  pick a model for its Easy, Medium and Hard rows. Enter on a row, or a
+  click on it, opens the `/model` selector, with its Ready / Sign in tabs and
+  type-to-filter, and puts the model picked there on the row without
+  changing the session's model; typing on the row first opens it
+  filtered by what was typed, and ←/→ cycles the models in place. Each
+  model may come from any route: a linked Claude or
   ChatGPT plan, the cloud router, OpenRouter or a local model.
+- The model selector takes the mouse: a click on a model picks it, as
+  Enter does, a click outside it closes it, and the wheel moves the
+  highlight. Rows of the new-benchmark form can be clicked too; a click
+  on the last row asks for the estimate, or starts the benchmark.
 - `/compare --a` and `--against` take the same arm as
   `difficulty:easy=<model>,medium=<model>,hard=<model>`.
 - Gate's classifier rates each prompt and subtask of such an arm's runs,

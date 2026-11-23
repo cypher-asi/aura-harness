@@ -5,8 +5,8 @@
 use super::super::render;
 use super::{examples, line, payload, replay, routed, share};
 use aura_core_types::{
-    AgentId, BenchSource, Difficulty, OutcomeSignal, Plan, PromptCategory, RefVerdict, RunTurn,
-    SessionBaseline,
+    AgentId, BenchSource, ComparePayload, Difficulty, OutcomeSignal, Plan, PromptCategory,
+    RefVerdict, RunTurn, SessionBaseline,
 };
 
 #[test]
@@ -58,6 +58,23 @@ fn the_view_shows_both_arms_side_by_side() {
     assert!(
         !text.contains(" · direct"),
         "older runs say nothing of routing"
+    );
+}
+
+#[test]
+fn the_heading_names_the_classifier_its_record_names() {
+    let text = render("Compare #1", &payload());
+    assert!(
+        text.contains(", check `cargo test`, classifier aura-claude-haiku-4-5 (cloud)\n"),
+        "{text}"
+    );
+    let older = ComparePayload {
+        classifier: String::new(),
+        ..payload()
+    };
+    assert!(
+        !render("Compare #1", &older).contains("classifier"),
+        "older records name no classifier"
     );
 }
 
@@ -200,7 +217,7 @@ fn example_tasks_show_per_task_passes_and_offer_no_apply() {
 fn the_view_is_pinned_byte_for_byte() {
     let expected = [
         "Compare #1 · \"fix the flaky parser test\" · done",
-        "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each, check `cargo test`",
+        "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each, check `cargo test`, classifier aura-claude-haiku-4-5 (cloud)",
         "",
         "                A gate                            B aura-claude-opus-4-7",
         "  finished      3/3                               3/3",
@@ -237,7 +254,7 @@ fn the_view_is_pinned_byte_for_byte() {
 fn a_stopped_comparison_with_routed_runs_is_pinned_byte_for_byte() {
     let expected = [
         "Compare #2 · \"fix the flaky parser test\" · stopped",
-        "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each, check `cargo test`",
+        "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each, check `cargo test`, classifier aura-claude-haiku-4-5 (cloud)",
         "",
         "                A gate                            B aura-claude-opus-4-7",
         "  finished      3/3                               2/3",
@@ -275,7 +292,7 @@ fn a_replayed_session_is_pinned_byte_for_byte() {
     let expected = [
         "Compare #3 · \"fix the flaky parser test\" · done",
         "  Replays the session \"fix the parser\": 2 prompts in order",
-        "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each, check `cargo test`",
+        "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs each, check `cargo test`, classifier aura-claude-haiku-4-5 (cloud)",
         "",
         "                A gate                            B aura-claude-opus-4-7",
         "  finished      3/3                               3/3",
@@ -322,7 +339,7 @@ fn a_replayed_session_is_pinned_byte_for_byte() {
 fn example_tasks_are_pinned_byte_for_byte() {
     let expected = [
         "Compare #4 · \"2 example coding tasks\" · done",
-        "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs of each of 2 example tasks per arm, each task's own check",
+        "  A gate vs B aura-claude-opus-4-7 (cloud), 3 runs of each of 2 example tasks per arm, each task's own check, classifier aura-claude-haiku-4-5 (cloud)",
         "",
         "                A gate                            B aura-claude-opus-4-7",
         "  finished      3/3                               3/3",

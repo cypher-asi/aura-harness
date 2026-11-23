@@ -11,6 +11,9 @@ use crate::events::ModelOptionView;
 /// Rows the cursor jumps for PageUp / PageDown.
 pub const PAGE_STEP: isize = 10;
 
+/// The selector's entry for Gate itself, which picks a model per turn.
+const GATE_ID: &str = "gate";
+
 /// Which half of the model list the selector shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ModelTab {
@@ -47,12 +50,46 @@ impl ModelTab {
     }
 }
 
-/// Selector state: tab, filter query and cursor.
+/// What the model picked in the selector is for.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PickerTarget {
+    /// The session's model, as `/model` selects it
+    #[default]
+    Session,
+    /// The model of one difficulty of a benchmark arm on the BENCH tab's
+    /// form: `arm` 0 for A, 1 for B; `difficulty` 0 easy, 1 medium, 2 hard
+    BenchDifficulty { arm: usize, difficulty: usize },
+    /// The model that classifies a benchmark's prompts, on the BENCH
+    /// tab's form
+    BenchClassifier,
+}
+
+/// Where the selector and its model rows were drawn in the last frame,
+/// for clicks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PickerLayout {
+    /// The whole selector, borders included
+    pub modal: ratatui::layout::Rect,
+    /// The screen row of each model row shown, with its index in
+    /// [`ModelPicker::visible`]
+    pub rows: Vec<(u16, usize)>,
+}
+
+impl PickerLayout {
+    /// The visible index of the model drawn on screen row `row`.
+    #[must_use]
+    pub fn model_at(&self, row: u16) -> Option<usize> {
+        self.rows.iter().find(|(y, _)| *y == row).map(|(_, i)| *i)
+    }
+}
+
+/// Selector state: tab, filter query, cursor and what the pick is for.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelPicker {
     tab: ModelTab,
     filter: String,
     cursor: usize,
+    target: PickerTarget,
 }
 
 impl ModelPicker {
@@ -60,6 +97,12 @@ impl ModelPicker {
     #[must_use]
     pub const fn tab(&self) -> ModelTab {
         self.tab
+    }
+
+    /// What the pick is for.
+    #[must_use]
+    pub const fn target(&self) -> PickerTarget {
+        self.target
     }
 
     /// Filter typed so far.
@@ -74,26 +117,55 @@ impl ModelPicker {
         self.cursor
     }
 
-    /// Models on the current tab matching the filter, in list order.
+    /// Models on the current tab matching the filter, in list order. A
+    /// benchmark row takes a model, so Gate is left out for one.
     #[must_use]
     pub fn visible<'a>(&self, models: &'a [ModelOptionView]) -> Vec<&'a ModelOptionView> {
         let query = self.filter.to_lowercase();
         models
             .iter()
-            .filter(|m| self.tab.holds(m) && matches_query(m, &query))
+            .filter(|m| self.offers(m) && self.tab.holds(m) && matches_query(m, &query))
             .collect()
     }
 
     /// Number of models on the Ready and Sign-in tabs, ignoring the filter.
     #[must_use]
-    pub fn counts(models: &[ModelOptionView]) -> (usize, usize) {
-        let ready = models.iter().filter(|m| m.available).count();
-        (ready, models.len() - ready)
+    pub fn counts(&self, models: &[ModelOptionView]) -> (usize, usize) {
+        let offered = models.iter().filter(|m| self.offers(m));
+        let ready = offered.clone().filter(|m| m.available).count();
+        (ready, offered.count() - ready)
+    }
+
+    /// Whether the selector lists `model` for what the pick is for.
+    fn offers(&self, model: &ModelOptionView) -> bool {
+        self.target == PickerTarget::Session || model.id != GATE_ID
+    }
+
+    /// Reset for a fresh open for `target`: show the tab holding
+    /// `current`, set the filter to `filter` and highlight `current` (or
+    /// the first row).
+    pub fn open_for(
+        &mut self,
+        models: &[ModelOptionView],
+        current: &str,
+        target: PickerTarget,
+        filter: &str,
+    ) {
+        self.open(models, current);
+        self.target = target;
+        self.filter = filter.trim().to_string();
+        self.cursor = self
+            .visible(models)
+            .iter()
+            .position(|m| m.id == current)
+            .unwrap_or(0);
     }
 
     /// Reset for a fresh open: show the tab holding `current`, clear the
-    /// filter and highlight `current` (or the first row).
+    /// filter and highlight `current` (or the first row). The pick is the
+    /// session's model.
     pub fn open(&mut self, models: &[ModelOptionView], current: &str) {
+        self.target = PickerTarget::Session;
         self.tab = models
             .iter()
             .find(|m| m.id == current)
@@ -147,6 +219,11 @@ impl ModelPicker {
     /// Cursor to the first row.
     pub fn home(&mut self) {
         self.cursor = 0;
+    }
+
+    /// Cursor to row `index` of the visible list, clamped to it.
+    pub fn select(&mut self, models: &[ModelOptionView], index: usize) {
+        self.cursor = index.min(self.last(models));
     }
 
     /// Cursor to the last visible row.
@@ -276,8 +353,39 @@ mod tests {
     #[test]
     fn counts_ignore_the_filter() {
         let models = models();
-        assert_eq!(ModelPicker::counts(&models), (3, 2));
-        assert_eq!(ModelPicker::counts(&[]), (0, 0));
+        let picker = ModelPicker::default();
+        assert_eq!(picker.counts(&models), (3, 2));
+        assert_eq!(picker.counts(&[]), (0, 0));
+    }
+
+    #[test]
+    fn a_benchmark_row_is_offered_models_only_filtered_by_what_was_typed() {
+        let models = models();
+        let mut picker = ModelPicker::default();
+        let target = PickerTarget::BenchDifficulty {
+            arm: 1,
+            difficulty: 2,
+        };
+        picker.open_for(&models, "", target, "");
+        assert_eq!(picker.target(), target);
+        assert_eq!(
+            ids(&picker.visible(&models)),
+            ["local/qwen3:4b", "aura-claude-sonnet-4-6"],
+            "no Gate"
+        );
+        assert_eq!(picker.counts(&models), (2, 2));
+
+        picker.open_for(&models, "chatgpt/gpt-5", target, " gpt ");
+        assert_eq!(picker.filter(), "gpt");
+        assert_eq!(picker.tab(), ModelTab::SignIn);
+        assert_eq!(
+            picker.selected(&models).map(|m| m.id.as_str()),
+            Some("chatgpt/gpt-5")
+        );
+
+        picker.open(&models, "gate");
+        assert_eq!(picker.target(), PickerTarget::Session, "/model again");
+        assert_eq!(picker.visible(&models)[0].id, "gate");
     }
 
     #[test]

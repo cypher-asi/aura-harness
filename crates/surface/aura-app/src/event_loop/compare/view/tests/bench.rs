@@ -127,6 +127,7 @@ fn the_bench_tab_names_a_comparison_and_its_judge() {
         check: Some("cargo test".to_string()),
         prompts: vec!["fix the flaky parser test\nmore detail".to_string()],
         notes: vec!["the budget stopped 2 runs".to_string()],
+        classifier: "aura-claude-haiku-4-5".to_string(),
         ..BenchView::default()
     };
     assert_eq!(rest(view), expected);
@@ -160,6 +161,7 @@ fn the_bench_tab_shows_a_replayed_session_with_what_it_cost() {
         }),
         has_reference: true,
         notes: vec!["the budget stopped 2 runs".to_string()],
+        classifier: "aura-claude-haiku-4-5".to_string(),
         ..BenchView::default()
     };
     assert_eq!(rest(view), expected);
@@ -201,6 +203,7 @@ fn the_bench_tab_has_a_row_per_example_task() {
         status: BenchStatus::Done,
         repeats: 3,
         notes: vec!["the budget stopped 2 runs".to_string()],
+        classifier: "aura-claude-haiku-4-5".to_string(),
         ..BenchView::default()
     };
     assert_eq!(rest(view), expected);

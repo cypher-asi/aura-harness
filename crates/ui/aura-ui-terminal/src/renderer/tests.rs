@@ -3968,6 +3968,105 @@ fn test_a_selection_dragged_past_a_record_scrolls_it() {
     assert_copied_lines_to_40(&copied);
 }
 
+#[test]
+fn test_clicking_a_difficulty_row_then_a_model_picks_it_from_the_selector() {
+    use crate::app::benchmarks::BY_DIFFICULTY;
+    use crate::app::{AppState, PickerTarget};
+    use crate::events::{ModelOptionView, UiCommand};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
+
+    let model = |id: &str, label: &str, group: &str| ModelOptionView {
+        id: id.to_string(),
+        label: label.to_string(),
+        local: false,
+        installed: true,
+        group: group.to_string(),
+        provider: None,
+        available: true,
+        context_window: None,
+    };
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetModels {
+        options: vec![
+            model("gate", "Gate", "Gate"),
+            model(
+                "claude/claude-sonnet-4-6",
+                "Claude Sonnet 4.6",
+                "Claude plan",
+            ),
+            model(
+                "openrouter/deepseek/deepseek-v3.2",
+                "DeepSeek V3.2",
+                "OpenRouter",
+            ),
+        ],
+        current: "gate".to_string(),
+        route: None,
+        user: None,
+        plans: Vec::new(),
+        thinking: None,
+    });
+    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    assert_eq!(app.chat_tab(), crate::app::ChatTab::Bench);
+    app.handle_key(KeyEvent::from(KeyCode::Char('n')));
+    app.bench_mut().form.b = BY_DIFFICULTY.to_string();
+    let click = |app: &mut crate::App, column: u16, row: u16| {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.handle_mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+    };
+
+    let buffer = render_buffer(&mut app, 160);
+    let row = row_of(&buffer, "  Medium");
+    let (column, _) = find_cell(&buffer, row, "Medium").unwrap();
+    click(&mut app, column, row);
+    assert_eq!(app.state(), AppState::SelectingModel);
+    assert_eq!(
+        app.model_picker().target(),
+        PickerTarget::BenchDifficulty {
+            arm: 1,
+            difficulty: 1
+        }
+    );
+
+    let buffer = render_buffer(&mut app, 160);
+    assert!(
+        row_of(&buffer, "Model for medium work · arm B") < row_of(&buffer, "DeepSeek V3.2"),
+        "the selector is up"
+    );
+    let row = row_of(&buffer, "DeepSeek V3.2");
+    let (column, _) = find_cell(&buffer, row, "DeepSeek V3.2").unwrap();
+    click(&mut app, column, row);
+    assert_eq!(app.state(), AppState::Idle);
+    assert_eq!(
+        app.bench().form.b_models[1],
+        "openrouter/deepseek/deepseek-v3.2"
+    );
+    assert_eq!(app.current_model(), "gate", "the session keeps its model");
+
+    // A click outside the selector closes it and changes nothing.
+    let buffer = render_buffer(&mut app, 160);
+    let row = row_of(&buffer, "  Hard");
+    let (column, _) = find_cell(&buffer, row, "Hard").unwrap();
+    click(&mut app, column, row);
+    assert_eq!(app.state(), AppState::SelectingModel);
+    render_buffer(&mut app, 160);
+    click(&mut app, 0, 0);
+    assert_eq!(app.state(), AppState::Idle);
+    assert!(app.bench().form.b_models[2].is_empty());
+}
+
 fn render_buffer(app: &mut crate::App, width: u16) -> ratatui::buffer::Buffer {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();

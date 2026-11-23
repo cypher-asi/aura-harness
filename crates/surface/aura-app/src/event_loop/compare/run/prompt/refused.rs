@@ -16,13 +16,15 @@ impl Attempting<'_, '_> {
     /// is left.
     pub(super) async fn reroute(&mut self, (result, forwarded): &AttemptRun) -> bool {
         let parts = self.parts;
-        if !forwarded.credentials_rejected || !parts.gate_arm() || parts.cancel.is_cancelled() {
+        let Some(category) = self.gate_category() else {
+            return false;
+        };
+        if !forwarded.credentials_rejected || parts.cancel.is_cancelled() {
             return false;
         }
         let model = self.current.model.clone();
         self.asked.refused.push(model.clone());
-        let (category, difficulty) = (self.asked.category, self.asked.difficulty);
-        let work = Work::turn(category).of(difficulty);
+        let work = Work::turn(category).of(self.asked.difficulty);
         let candidates = &parts.ctx.plan.candidates;
         let next = followup::reroute(&parts.ctx.hub.gate, &work, candidates, self.asked.refused);
         let Some(next) = next else {

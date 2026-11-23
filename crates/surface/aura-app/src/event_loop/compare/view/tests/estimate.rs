@@ -16,6 +16,8 @@ fn the_estimate_names_the_arms_runs_and_budget() {
         examples: &[],
         a: "gate (likely aura-claude-sonnet-4-6 (cloud))".to_string(),
         b: "aura-claude-opus-4-7 (cloud)".to_string(),
+        classifier: "aura-claude-haiku-4-5",
+        classifier_named: false,
         judge: "aura-claude-opus-4-7",
         repeats: 3,
         check: None,
@@ -33,6 +35,7 @@ fn the_estimate_names_the_arms_runs_and_budget() {
     for row in [
         "\n  A             gate (likely aura-claude-sonnet-4-6 (cloud))\n",
         "\n  B             aura-claude-opus-4-7 (cloud)\n",
+        "\n  Classifier    aura-claude-haiku-4-5 (cloud) · Gate's choice of fast model;\n                --classifier <model> picks another\n",
         "\n  Runs          3 per arm, up to 4 at a time,\n                each in its own copy of the workspace\n",
         "\n  Check         none · --check <cmd> or AURA_CHECK_COMMAND counts passes\n",
         "\n  Estimate      ~$5.50 at list prices\n                A ~$1.50 · B ~$4.00\n                judge ~unknown on ",
@@ -71,6 +74,8 @@ fn a_session_estimate_says_what_it_replays_with_its_notes() {
         examples: &[],
         a: "claude-sonnet-4-6".to_string(),
         b: "claude-opus-4-7".to_string(),
+        classifier: "claude/claude-haiku-4-5",
+        classifier_named: true,
         judge: "claude-opus-4-7",
         repeats: 2,
         check: Some("cargo test"),
@@ -91,6 +96,10 @@ fn a_session_estimate_says_what_it_replays_with_its_notes() {
     assert!(
         text.contains("\n  A             claude-sonnet-4-6\n"),
         "{text}"
+    );
+    assert!(
+        text.contains("\n  Classifier    claude-haiku-4-5 (claude plan)\n"),
+        "a named classifier reads as itself: {text}"
     );
     assert!(text.contains("\n  Runs          2 per arm"), "{text}");
     assert!(
@@ -139,6 +148,8 @@ fn estimate_of(
         b: "by difficulty: easy → aura-claude-haiku-4-5 (cloud) · medium → \
             aura-claude-sonnet-4-6 (cloud) · hard → aura-claude-opus-4-7 (cloud)"
             .to_string(),
+        classifier: "haiku",
+        classifier_named: true,
         judge: "aura-claude-opus-4-7",
         repeats: 2,
         check,
@@ -183,6 +194,7 @@ fn the_estimate_of_a_prompt_is_pinned_byte_for_byte() {
         "  B             by difficulty: easy → aura-claude-haiku-4-5 (cloud) · medium →",
         "                aura-claude-sonnet-4-6 (cloud) · hard → aura-claude-opus-4-7",
         "                (cloud)",
+        "  Classifier    haiku (cloud)",
         "  Runs          2 per arm, up to 4 at a time,",
         "                each in its own copy of the workspace",
         "  Check         none · --check <cmd> or AURA_CHECK_COMMAND counts passes",
@@ -207,6 +219,7 @@ fn the_estimate_of_a_replayed_session_is_pinned_byte_for_byte() {
         "  B             by difficulty: easy → aura-claude-haiku-4-5 (cloud) · medium →",
         "                aura-claude-sonnet-4-6 (cloud) · hard → aura-claude-opus-4-7",
         "                (cloud)",
+        "  Classifier    haiku (cloud)",
         "  Runs          2 per arm, up to 4 at a time,",
         "                each in its own copy of the workspace",
         "  Check         `cargo test` after each run",
@@ -240,6 +253,7 @@ fn the_estimate_of_example_tasks_is_pinned_byte_for_byte() {
         "  B             by difficulty: easy → aura-claude-haiku-4-5 (cloud) · medium →",
         "                aura-claude-sonnet-4-6 (cloud) · hard → aura-claude-opus-4-7",
         "                (cloud)",
+        "  Classifier    haiku (cloud)",
         "  Runs          2 of each task per arm (4 per arm), up to 4 at a time,",
         "                each in a fresh copy of its task's files",
         "  Check         each task's own command; hidden checks go in only after the run",

@@ -183,6 +183,31 @@ fn an_unknown_model_lists_at_most_twenty_ids() {
         .contains("sign in"));
 }
 
+#[test]
+fn a_classifier_is_a_model_the_user_can_run() {
+    let (all, routed) = plans_and_openrouter();
+    assert_eq!(
+        resolve_classifier("claude/claude-haiku-4-5", &all, &routed),
+        Ok("claude/claude-haiku-4-5".to_string())
+    );
+    assert_eq!(
+        resolve_classifier(DEEPSEEK, &all, &routed),
+        Ok(DEEPSEEK.to_string()),
+        "a model Gate does not route to still classifies"
+    );
+    let unknown = resolve_classifier("llama", &all, &routed).unwrap_err();
+    assert!(
+        unknown.starts_with("Classifier: No available model matches `llama`; available: "),
+        "{unknown}"
+    );
+    assert!(resolve_classifier("haiku", &[], &[])
+        .unwrap_err()
+        .contains("sign in"));
+    assert!(resolve_classifier(" Gate ", &all, &routed)
+        .unwrap_err()
+        .contains("Gate's choice"));
+}
+
 fn difficulty_arm() -> ArmSpec {
     ArmSpec::ByDifficulty {
         easy: "claude/claude-sonnet-4-6".to_string(),

@@ -12,7 +12,11 @@ aura-auth-kit = { path = "../aura-auth-kit" }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
-jsonwebtoken = "9.3"
+# `~10.3`: 10.3.0 fixes GHSA-h395-gr6q-cpjc and is the newest release that
+# still builds on the workspace MSRV (10.4+ needs Rust 1.88). The crypto
+# backend is aws-lc-rs: `rust_crypto` would pull in `rsa`, which carries an
+# unfixed advisory of its own (RUSTSEC-2023-0071).
+jsonwebtoken = { version = "~10.3", features = ["aws_lc_rs"] }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -14,6 +14,7 @@ mod usage;
 use super::format::{arm_label, headline, plural, status};
 use aura_core_types::{BenchSource, CompareArm, ComparePayload};
 use aura_gate::compare::{summarize, ArmSummary};
+use aura_model::model_catalog::route_label;
 use std::fmt::Write;
 
 /// Characters arm A's column takes at least.
@@ -54,7 +55,8 @@ struct Summary<'a> {
 
 impl Summary<'_> {
     /// The comparison's name, task and status, the session it replays,
-    /// and what its arms ran.
+    /// what its arms ran, and the model that classified its prompts when
+    /// its record names one.
     fn render_heading(&self, out: &mut String, name: &str) {
         let payload = self.payload;
         let _ = write!(
@@ -96,6 +98,9 @@ impl Summary<'_> {
                 let _ = write!(out, ", check `{check}`");
             }
             None => out.push_str(", no check command"),
+        }
+        if !payload.classifier.is_empty() {
+            let _ = write!(out, ", classifier {}", route_label(&payload.classifier));
         }
     }
 }

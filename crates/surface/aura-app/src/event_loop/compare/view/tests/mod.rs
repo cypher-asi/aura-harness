@@ -77,6 +77,7 @@ fn payload() -> ComparePayload {
         repeats: 3,
         check: Some("cargo test".to_string()),
         budget_usd: None,
+        classifier: "aura-claude-haiku-4-5".to_string(),
         requested_by: AgentId::generate(),
         apply_root: PathBuf::from("/repo"),
         started_ms: 0,

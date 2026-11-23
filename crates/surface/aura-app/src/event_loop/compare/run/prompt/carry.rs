@@ -8,18 +8,19 @@ use crate::event_loop::gate::followup::{record_message, At, Attempt, CarryOn, Fo
 use crate::event_loop::handlers::system_message;
 use crate::model_selection::routed_effort;
 use aura_agent::AgentLoopResult;
-use aura_core_types::{OutcomeSignal, PromptPayload};
+use aura_core_types::{OutcomeSignal, PromptCategory, PromptPayload};
 use aura_model::Message;
 use tracing::warn;
 
 impl Attempting<'_, '_> {
-    /// Gate's follow-up of the attempt that ended with `partial` and, so
-    /// far, `signal` (see
+    /// Gate's follow-up of the attempt at a prompt of `category` that
+    /// ended with `partial` and, so far, `signal` (see
     /// [`Following::run`](crate::event_loop::gate::followup::Following::run)).
     pub(super) async fn follow_up(
         &mut self,
         partial: &AgentLoopResult,
         signal: Option<OutcomeSignal>,
+        category: PromptCategory,
     ) -> Followed {
         let (parts, asked) = (self.parts, &self.asked);
         let attempt = Attempt {
@@ -30,7 +31,7 @@ impl Attempting<'_, '_> {
             ran: (self.current.model.as_str(), routed_effort(&self.config)),
             result: partial,
             at: At {
-                category: asked.category,
+                category,
                 difficulty: asked.difficulty,
                 signal,
                 turn_start: self.current.turn_start,

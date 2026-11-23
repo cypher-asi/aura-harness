@@ -19,7 +19,7 @@ const DEFAULT_REPEATS: u32 = 3;
 const USAGE: &str = "Usage: /compare [prompt | --plan <file> | --session current|<started_ms> | --examples N | --suite <name>] \
 [--a <model|gate|difficulty:easy=<model>,medium=<model>,hard=<model>>] \
 [--against <model|gate|gate:nodelegate|difficulty:easy=<model>,medium=<model>,hard=<model>>] \
-[--repeats N] [--check <cmd>] [--budget $] [--learn] · \
+[--repeats N] [--check <cmd>] [--budget $] [--classifier <model>] [--learn] · \
 /compare go | cancel | show [n] | diff [run] | apply <run> | dismiss";
 
 /// Which earlier session a comparison replays.
@@ -60,6 +60,9 @@ pub struct CompareRequest {
     /// The suite the example tasks are taken from; `None` for every
     /// suite. With no `examples`, every task of the suite.
     pub suite: Option<String>,
+    /// The model that classifies each run's prompt; `None` (or
+    /// `--classifier auto`) for Gate's automatic choice.
+    pub classifier: Option<String>,
 }
 
 impl Default for CompareRequest {
@@ -76,6 +79,7 @@ impl Default for CompareRequest {
             examples: None,
             learn: false,
             suite: None,
+            classifier: None,
         }
     }
 }

@@ -630,6 +630,10 @@ pub struct ComparePayload {
     /// Spend after which no new run starts, in USD.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_usd: Option<f64>,
+    /// The model that classified each run's prompt; empty in records from
+    /// before benchmarks picked their classifier.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub classifier: String,
     /// The user's agent that asked for it.
     pub requested_by: AgentId,
     /// Where the user's changes go when a run is applied: the root of
@@ -727,6 +731,7 @@ mod tests {
             repeats: 3,
             check: Some("cargo test".to_string()),
             budget_usd: Some(2.5),
+            classifier: "claude/claude-haiku-4-5".to_string(),
             requested_by: AgentId::generate(),
             apply_root: PathBuf::from("/work/repo"),
             started_ms: 1_000,
@@ -823,7 +828,22 @@ mod tests {
         assert!(json["runs"][0].get("error").is_none());
         assert!(json["judgments"][0].get("a_vs_reference").is_none());
         assert_eq!(json["runs"][0]["plan_usage"][0]["plan"], "claude");
+        assert_eq!(json["classifier"], "claude/claude-haiku-4-5");
         assert_eq!(ComparePayload::from_bytes(&bytes), Some(payload.clone()));
+
+        let mut unnamed = serde_json::to_value(&payload).unwrap();
+        unnamed.as_object_mut().unwrap().remove("classifier");
+        let unnamed = ComparePayload::from_bytes(&serde_json::to_vec(&unnamed).unwrap()).unwrap();
+        assert_eq!(unnamed.classifier, "", "older records name no classifier");
+        let no_classifier = ComparePayload {
+            classifier: String::new(),
+            ..payload.clone()
+        };
+        let json: serde_json::Value = serde_json::from_slice(&no_classifier.to_bytes()).unwrap();
+        assert!(
+            json.get("classifier").is_none(),
+            "an empty one is not written"
+        );
 
         let mut without = serde_json::to_value(&payload).unwrap();
         let run = without["runs"][0].as_object_mut().unwrap();

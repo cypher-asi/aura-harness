@@ -138,6 +138,7 @@ fn started(plan: &ComparePlan, repo: Option<&Path>) -> ComparePayload {
         repeats: plan.repeats,
         check: plan.check.clone(),
         budget_usd: plan.budget_usd,
+        classifier: plan.classifier.clone(),
         requested_by: plan.user,
         apply_root: repo.map_or_else(|| plan.workspace.clone(), Path::to_path_buf),
         started_ms: now_ms(),

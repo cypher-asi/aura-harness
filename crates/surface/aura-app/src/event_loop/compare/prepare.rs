@@ -10,7 +10,9 @@ use crate::event_loop::LoopState;
 use aura_agent_kernel::Kernel;
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::{AgentId, ArmSpec, BenchSource, Difficulty, PromptCategory, RouteLevel};
-use aura_gate::compare::{default_against, estimate, resolve_arms, CompareRequest};
+use aura_gate::compare::{
+    default_against, estimate, resolve_arms, resolve_classifier, CompareRequest,
+};
 use aura_gate::route::Candidate;
 use aura_model::model_catalog::route_label;
 use std::path::{Path, PathBuf};
@@ -35,8 +37,9 @@ pub(crate) async fn prepare(
     let work = Work::of(state, agent_id, &request, &kernel, &workspace)?;
     let arms = Arms::of(state, &request)?;
     let category = work.category;
+    let classifier_named = request.classifier.is_some();
     let plan = plan_of(state, agent_id, request, work, arms, workspace);
-    let text = estimate_of(state, &plan, category);
+    let text = estimate_of(state, &plan, category, classifier_named);
     state.compare.pending = Some(plan);
     Ok(text)
 }
@@ -194,10 +197,13 @@ fn example_tasks(
     Ok(pool)
 }
 
-/// What a comparison runs on and which model judges it.
+/// What a comparison runs on, which model classifies its prompts and
+/// which model judges it.
 struct Arms {
     /// What arm A and arm B run on
     specs: [ArmSpec; 2],
+    /// The model the request named, else Gate's automatic choice
+    classifier: String,
     judge: String,
     /// What Gate routes a Gate arm among
     candidates: Vec<Candidate>,
@@ -228,6 +234,10 @@ impl Arms {
         let runnable = state.models.runnable_models();
         let delegate = state.hub.gate.settings().delegate;
         let (arm_a, arm_b) = resolve_arms((a, b), &runnable, &candidates, delegate)?;
+        let classifier = match request.classifier.as_deref() {
+            Some(query) => resolve_classifier(query, &runnable, &candidates)?,
+            None => state.models.classifier_model(),
+        };
         let judge = match strongest {
             Some(model) => model.to_string(),
             None => [&arm_a, &arm_b]
@@ -238,6 +248,7 @@ impl Arms {
         };
         Ok(Self {
             specs: [arm_a, arm_b],
+            classifier,
             judge,
             candidates,
             runnable,
@@ -281,7 +292,7 @@ fn plan_of(
         budget_usd: request.budget_usd,
         candidates: arms.candidates,
         runnable: arms.runnable,
-        classifier: state.models.classifier_model(),
+        classifier: arms.classifier,
         workspace,
         user,
         root: state.compare.root.clone(),
@@ -291,11 +302,13 @@ fn plan_of(
 }
 
 /// What the user is asked to confirm before `plan` starts, with Gate's
-/// likely pick for work asking for `category`.
+/// likely pick for work asking for `category`; `classifier_named` when
+/// the request named the classifier rather than leaving it to Gate.
 fn estimate_of(
     state: &LoopState<'_>,
     plan: &ComparePlan,
     category: Option<PromptCategory>,
+    classifier_named: bool,
 ) -> String {
     let expected = expected_pick(state, &plan.candidates, category);
     let expected = expected.as_deref();
@@ -322,6 +335,8 @@ fn estimate_of(
         examples: plan.source.examples(),
         a: reads(a),
         b: reads(b),
+        classifier: &plan.classifier,
+        classifier_named,
         judge: &plan.judge,
         repeats: plan.repeats,
         check: plan.check.as_deref(),

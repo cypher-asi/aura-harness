@@ -41,8 +41,23 @@ fn flags_and_the_prompt_are_read_in_any_order() {
             examples: None,
             learn: false,
             suite: None,
+            classifier: None,
         }
     );
+}
+
+#[test]
+fn a_classifier_names_the_model_that_classifies_the_prompts() {
+    let request = start("fix it --classifier claude-haiku-4-5");
+    assert_eq!(request.classifier.as_deref(), Some("claude-haiku-4-5"));
+    assert_eq!(request.prompt.as_deref(), Some("fix it"));
+    assert_eq!(
+        start("--classifier=' openrouter/openai/gpt-5-nano ' --examples 2").classifier,
+        Some("openrouter/openai/gpt-5-nano".to_string())
+    );
+    assert_eq!(start("fix it").classifier, None, "Gate's choice by default");
+    assert_eq!(start("fix it --classifier AUTO").classifier, None);
+    assert_eq!(CompareRequest::default().classifier, None);
 }
 
 #[test]
@@ -288,6 +303,11 @@ fn errors_say_what_is_wrong_in_full() {
     let cases = [
         (r#"--a "" fix"#, usage("--a needs a value.")),
         ("--against", usage("--against needs a value.")),
+        ("--classifier", usage("--classifier needs a value.")),
+        (
+            r#"--classifier="" fix"#,
+            usage("--classifier needs a value."),
+        ),
         ("APPLY", usage("/compare APPLY needs a name.")),
         ("--colour red x", usage("Unknown option --colour.")),
         (

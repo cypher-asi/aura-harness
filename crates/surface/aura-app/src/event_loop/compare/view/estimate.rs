@@ -26,6 +26,11 @@ pub(crate) struct EstimateView<'a> {
     /// Arm A as it reads, with Gate's likely pick when Gate routes it
     pub a: String,
     pub b: String,
+    /// Model that classifies the runs' prompts
+    pub classifier: &'a str,
+    /// Whether the user named the classifier rather than leaving it to
+    /// Gate
+    pub classifier_named: bool,
     pub judge: &'a str,
     pub repeats: u32,
     pub check: Option<&'a str>,
@@ -46,6 +51,7 @@ impl EstimateView<'_> {
         }
         row(&mut out, "A", &self.a);
         row(&mut out, "B", &self.b);
+        row(&mut out, "Classifier", &self.classifier());
         row(&mut out, "Runs", &self.runs());
         row(&mut out, "Check", &self.check());
         row(&mut out, "Estimate", &self.cost());
@@ -81,6 +87,16 @@ impl EstimateView<'_> {
             ),
             None => format!("Compare: \"{}\"", headline(self.task, 80)),
         }
+    }
+
+    /// The model that classifies the runs' prompts, and how to pick
+    /// another when it is Gate's choice.
+    fn classifier(&self) -> String {
+        let model = route_label(self.classifier);
+        if self.classifier_named {
+            return model;
+        }
+        format!("{model} · Gate's choice of fast model; --classifier <model> picks another")
     }
 
     /// How many runs each arm gets, how many at once, and where they work.

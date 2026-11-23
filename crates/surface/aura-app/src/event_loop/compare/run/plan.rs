@@ -41,7 +41,8 @@ pub(crate) struct ComparePlan {
     /// Every model the user can run on any route, which a by-difficulty
     /// arm's models are looked up among
     pub runnable: Vec<Candidate>,
-    /// Model that classifies the runs' prompts
+    /// Model that classifies the runs' prompts: the one the benchmark
+    /// named, else Gate's automatic choice
     pub classifier: String,
     /// The user's folder the copies are made from
     pub workspace: PathBuf,
