@@ -58,6 +58,7 @@ pub(crate) use driver::{Attempt, CarryOn, Followed, Following};
 pub(crate) use ended::{ended_signal, failure_text};
 pub(crate) use escalate::{record_message, stronger, takeover_prompt, Judging, Takeover};
 pub(super) use escalate::{refused_notice, reroute};
+pub(crate) use messages::from_harness;
 pub(crate) use report::{Found, Report};
 
 use crate::event_loop::agents::AgentSession;

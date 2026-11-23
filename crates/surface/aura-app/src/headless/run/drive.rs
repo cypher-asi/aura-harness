@@ -5,9 +5,8 @@
 use super::session::session_id;
 use super::turn::{Carry, TurnOutcome};
 use super::{Headless, RunLimits};
-use crate::event_loop::gate::followup::{Before, Following};
+use crate::event_loop::gate::followup::{from_harness, Before, Following};
 use crate::event_loop::processes::stop_background_commands;
-use crate::event_loop::steering::SteerSource;
 use crate::event_loop::AgentSession;
 use crate::headless::output::{ExitReason, Output, RunReport, StreamEvent, UsageReport};
 use crate::session_checkpoint::SessionUsage;
@@ -193,8 +192,7 @@ impl Driving<'_> {
             outcome.unseen.join("\n\n")
         };
         self.run.output.event(&StreamEvent::Notice { text: &next });
-        let prompt = format!("{}{next}", SteerSource::Harness.prefix());
-        Ok(Some((prompt, None)))
+        Ok(Some((from_harness(&next), None)))
     }
 
     /// End the run, stopped as `stop` says when something stopped it: the

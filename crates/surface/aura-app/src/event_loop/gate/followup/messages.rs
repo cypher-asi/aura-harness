@@ -9,7 +9,7 @@ use aura_model::model_catalog::route_label;
 
 /// `text` marked as the harness's, so it reads apart from the user's
 /// prompts.
-pub(super) fn from_harness(text: &str) -> String {
+pub(crate) fn from_harness(text: &str) -> String {
     format!("{}{text}", SteerSource::Harness.prefix())
 }
 

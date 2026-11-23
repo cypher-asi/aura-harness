@@ -9,9 +9,8 @@
 use super::drive::{Driving, Next};
 use super::turn::{Carry, TurnOutcome};
 use crate::event_loop::gate::followup::{
-    self, joined, At, Attempt, CarryOn, Followed, Judging, Takeover,
+    self, from_harness, joined, At, Attempt, CarryOn, Followed, Judging, Takeover,
 };
-use crate::event_loop::steering::SteerSource;
 use crate::headless::output::StreamEvent;
 use aura_core_types::{OutcomePayload, OutcomeSignal};
 use aura_gate::evidence::outcome::calls_for_stronger;
@@ -186,9 +185,8 @@ impl Driving<'_> {
         let takeover = Takeover::new(&ended.model, decision, signal, found.as_deref());
         let text = with_unseen(takeover.text, &outcome.unseen);
         self.run.output.event(&StreamEvent::Notice { text: &text });
-        let prompt = format!("{}{text}", SteerSource::Harness.prefix());
         let carry = Carry::Escalate(takeover.next, ended.category, outcome.terms);
-        Some((prompt, Some(carry)))
+        Some((from_harness(&text), Some(carry)))
     }
 
     /// Where a turn that Gate routed and that `ended` badly goes on: the
