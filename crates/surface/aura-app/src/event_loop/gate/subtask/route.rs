@@ -34,6 +34,7 @@ impl SubtaskGate {
             route: Route::subtask(config.model.clone(), RouteReason::Pinned),
             category: None,
             difficulty: None,
+            assessment: None,
             shown: None,
         };
         if let Some((decision, category)) = &self.escalation {

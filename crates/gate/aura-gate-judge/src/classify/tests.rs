@@ -1,15 +1,20 @@
 //! The classifier's request, and the label read out of its reply.
 
 use aura_core_auth::ProviderKind;
-use aura_core_types::{Difficulty, PromptCategory};
+use aura_core_types::{Assessment, Difficulty, Exploration, Pitfall, PromptCategory, Scope, Spec};
 use aura_gate_route::candidates;
 use aura_model::model_catalog::catalog;
 use aura_model::{ContentBlock, Message, Role, ToolChoice};
 use serde_json::json;
 
 use super::label::{label_in, parse, parse_difficulty, parse_label};
-use super::prompt::{prepare, CATEGORY_MEANINGS, DIFFICULTY_MEANINGS, HEAD_CHARS, TAIL_CHARS};
-use super::{classifier, reply_shown, request, Label, LABEL_TOOL, SYSTEM_PROMPT};
+use super::prompt::{
+    prepare, CATEGORY_MEANINGS, DIFFICULTY_MEANINGS, EXPLORATION_MEANINGS, HEAD_CHARS,
+    PITFALL_MEANINGS, SCOPE_MEANINGS, SPEC_MEANINGS, TAIL_CHARS,
+};
+use super::{
+    classifier, difficulty_of, points, reply_shown, request, Label, LABEL_TOOL, SYSTEM_PROMPT,
+};
 
 const LOCAL: &str = "local/qwen3:4b";
 const HAIKU: &str = "claude/claude-haiku-5-5";
@@ -19,6 +24,39 @@ fn called(input: serde_json::Value) -> Message {
         Role::Assistant,
         vec![ContentBlock::tool_use("toolu_1", LABEL_TOOL, input)],
     )
+}
+
+/// The arguments of a label call for work across many files, loosely
+/// specified, deep in the codebase, with a trap: the given `category`.
+fn wide(category: &str) -> serde_json::Value {
+    json!({
+        "analysis": " Reworks session sign-out across the settings UI. ",
+        "category": category,
+        "scope": "many_files",
+        "spec": "loose",
+        "exploration": "deep",
+        "checkable": false,
+        "pitfalls": ["concurrency"],
+    })
+}
+
+/// Work as `scope`, `spec` and `exploration` say, with `pitfalls`, and
+/// whether the request says how to check it.
+fn assessed(
+    scope: Scope,
+    spec: Spec,
+    exploration: Exploration,
+    checkable: bool,
+    pitfalls: &[Pitfall],
+) -> Assessment {
+    Assessment {
+        analysis: String::new(),
+        scope,
+        spec,
+        exploration,
+        checkable,
+        pitfalls: pitfalls.to_vec(),
+    }
 }
 
 #[test]
@@ -72,6 +110,7 @@ fn a_label_needs_both_a_category_and_a_difficulty() {
         Some(Label {
             category: PromptCategory::SmallChange,
             difficulty: Difficulty::Easy,
+            assessment: None,
         })
     );
     assert_eq!(parse_label("planning"), None);
@@ -82,33 +121,80 @@ fn a_label_needs_both_a_category_and_a_difficulty() {
 #[test]
 fn the_label_tool_call_is_the_answer() {
     assert_eq!(
-        label_in(&called(
-            json!({"category": "multi_file_change", "difficulty": "hard"})
-        )),
+        label_in(&called(wide("multi_file_change"))),
         Some(Label {
             category: PromptCategory::MultiFileChange,
             difficulty: Difficulty::Hard,
+            assessment: Some(Assessment {
+                analysis: "Reworks session sign-out across the settings UI.".to_string(),
+                ..assessed(
+                    Scope::ManyFiles,
+                    Spec::Loose,
+                    Exploration::Deep,
+                    false,
+                    &[Pitfall::Concurrency],
+                )
+            }),
         })
     );
+    let small = json!({
+        "analysis": "Rename one variable.",
+        "category": " Small_Change ",
+        "scope": "ONE_SPOT",
+        "spec": "exact",
+        "exploration": "none",
+        "checkable": true,
+        "pitfalls": [],
+    });
+    let label = label_in(&called(small)).unwrap();
+    assert_eq!(label.category, PromptCategory::SmallChange);
+    assert_eq!(label.difficulty, Difficulty::Easy);
+}
+
+#[test]
+fn unknown_or_repeated_pitfalls_are_left_out() {
+    let mut input = wide("debugging");
+    input["pitfalls"] = json!(["Parsing", "weather", "parsing", 7, "security"]);
+    let assessment = label_in(&called(input)).unwrap().assessment.unwrap();
+    assert_eq!(assessment.pitfalls, [Pitfall::Parsing, Pitfall::Security]);
+}
+
+#[test]
+fn a_label_call_missing_any_field_is_no_label() {
+    for key in [
+        "analysis",
+        "category",
+        "scope",
+        "spec",
+        "exploration",
+        "checkable",
+        "pitfalls",
+    ] {
+        let mut input = wide("debugging");
+        input.as_object_mut().unwrap().remove(key);
+        assert_eq!(label_in(&called(input)), None, "without {key}");
+    }
+    for (key, value) in [
+        ("category", json!("feature")),
+        ("category", json!(3)),
+        ("scope", json!("huge")),
+        ("spec", json!("vague")),
+        ("exploration", json!("lots")),
+        ("checkable", json!("yes")),
+        ("pitfalls", json!("parsing")),
+        ("analysis", json!(["a"])),
+    ] {
+        let mut input = wide("debugging");
+        input[key] = value.clone();
+        assert_eq!(label_in(&called(input)), None, "{key}: {value}");
+    }
     assert_eq!(
         label_in(&called(
-            json!({"category": " Debugging ", "difficulty": "EASY"})
+            json!({"category": "debugging", "difficulty": "hard"})
         )),
-        Some(Label {
-            category: PromptCategory::Debugging,
-            difficulty: Difficulty::Easy,
-        })
+        None,
+        "the old label, a category and a difficulty, is not an assessment"
     );
-    for input in [
-        json!({"category": "feature", "difficulty": "hard"}),
-        json!({"category": "debugging", "difficulty": "brutal"}),
-        json!({"category": "debugging"}),
-        json!({"difficulty": "hard"}),
-        json!({"category": 3, "difficulty": "hard"}),
-        json!({}),
-    ] {
-        assert_eq!(label_in(&called(input.clone())), None, "{input}");
-    }
 }
 
 #[test]
@@ -117,7 +203,7 @@ fn text_is_read_only_when_no_tool_was_called() {
         label_in(&Message::assistant("question medium")).map(|l| l.category),
         Some(PromptCategory::Question)
     );
-    let mut both = called(json!({"category": "feature", "difficulty": "hard"}));
+    let mut both = called(wide("feature"));
     both.content
         .insert(0, ContentBlock::text("question medium"));
     assert_eq!(label_in(&both), None, "a bad call is not saved by its text");
@@ -155,24 +241,145 @@ fn the_classifier_must_call_the_label_tool() {
     assert_eq!(built.tools.len(), 1);
     let tool = &built.tools[0];
     assert_eq!(tool.name, LABEL_TOOL);
-    let schema = &tool.input_schema;
-    assert_eq!(schema["required"], json!(["category", "difficulty"]));
-    assert_eq!(
-        schema["properties"]["category"]["enum"],
-        json!(PromptCategory::CLASSES.map(PromptCategory::as_str))
-    );
-    assert_eq!(
-        schema["properties"]["difficulty"]["enum"],
-        json!(Difficulty::ALL.map(Difficulty::as_str))
-    );
     let sent = built.messages[0].text_content();
     assert!(
         sent.ends_with(
-            "\n</request>\n\nLabel the request above with the label tool. Do not carry it out."
+            "\n</request>\n\nAssess the request above with the label tool. Do not carry it out."
         ),
         "{sent}"
     );
     assert!(request("", "hi", None).is_err());
+}
+
+#[test]
+fn the_label_tool_takes_only_the_listed_values_and_reasons_first() {
+    let built = request(HAIKU, "fix the parser", None).unwrap();
+    let schema = &built.tools[0].input_schema;
+    assert_eq!(
+        schema["required"],
+        json!([
+            "analysis",
+            "category",
+            "scope",
+            "spec",
+            "exploration",
+            "checkable",
+            "pitfalls"
+        ])
+    );
+    let properties = &schema["properties"];
+    assert_eq!(
+        properties["category"]["enum"],
+        json!(PromptCategory::CLASSES.map(PromptCategory::as_str))
+    );
+    assert_eq!(
+        properties["scope"]["enum"],
+        json!(Scope::ALL.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+    );
+    assert_eq!(
+        properties["spec"]["enum"],
+        json!(Spec::ALL.iter().map(|s| s.as_str()).collect::<Vec<_>>())
+    );
+    assert_eq!(
+        properties["exploration"]["enum"],
+        json!(Exploration::ALL
+            .iter()
+            .map(|e| e.as_str())
+            .collect::<Vec<_>>())
+    );
+    assert_eq!(
+        properties["pitfalls"]["items"]["enum"],
+        json!(Pitfall::ALL.iter().map(|p| p.as_str()).collect::<Vec<_>>())
+    );
+    assert_eq!(properties["checkable"]["type"], "boolean");
+    assert!(
+        properties.get("difficulty").is_none(),
+        "worked out, not asked"
+    );
+    let keys: Vec<&String> = properties.as_object().unwrap().keys().collect();
+    assert_eq!(keys[0], "analysis", "the model reasons before it labels");
+}
+
+#[test]
+fn every_field_value_has_a_meaning_in_order() {
+    assert_eq!(SCOPE_MEANINGS.map(|(s, _)| s).as_slice(), Scope::ALL);
+    assert_eq!(SPEC_MEANINGS.map(|(s, _)| s).as_slice(), Spec::ALL);
+    assert_eq!(
+        EXPLORATION_MEANINGS.map(|(e, _)| e).as_slice(),
+        Exploration::ALL
+    );
+    assert_eq!(PITFALL_MEANINGS.map(|(p, _)| p).as_slice(), Pitfall::ALL);
+}
+
+#[test]
+fn small_precise_work_is_easy_and_wide_loose_work_is_hard() {
+    use Exploration as E;
+    use Scope as S;
+    let rename = assessed(S::OneSpot, Spec::Exact, E::None, false, &[]);
+    assert_eq!(
+        (points(&rename), difficulty_of(&rename)),
+        (0, Difficulty::Easy)
+    );
+    let question = assessed(S::OneSpot, Spec::Clear, E::Some, false, &[]);
+    assert_eq!(difficulty_of(&question), Difficulty::Easy);
+    let rounding = assessed(
+        S::OneFile,
+        Spec::Exact,
+        E::None,
+        false,
+        &[Pitfall::MoneyNumbers],
+    );
+    assert_eq!(
+        (points(&rounding), difficulty_of(&rounding)),
+        (3, Difficulty::Medium),
+        "a trap lifts small work off the fast model"
+    );
+    let feature = assessed(S::ManyFiles, Spec::Clear, E::Deep, false, &[]);
+    assert_eq!(
+        (points(&feature), difficulty_of(&feature)),
+        (6, Difficulty::Hard)
+    );
+    let worst = assessed(
+        S::ManyFiles,
+        Spec::Loose,
+        E::Deep,
+        false,
+        &[Pitfall::Security, Pitfall::Concurrency, Pitfall::Parsing],
+    );
+    assert_eq!(points(&worst), 10, "traps past the second add nothing");
+}
+
+#[test]
+fn a_way_to_check_the_result_takes_a_point_off() {
+    use Exploration as E;
+    let unchecked = assessed(Scope::FewFiles, Spec::Exact, E::Some, false, &[]);
+    let checked = Assessment {
+        checkable: true,
+        ..unchecked.clone()
+    };
+    assert_eq!(points(&unchecked), 3);
+    assert_eq!(points(&checked), 2);
+    assert_eq!(difficulty_of(&checked), Difficulty::Easy);
+    let nothing = assessed(Scope::OneSpot, Spec::Exact, E::None, true, &[]);
+    assert_eq!(points(&nothing), 0, "never below none");
+}
+
+#[test]
+fn an_assessment_sums_up_what_drives_it() {
+    let shown = assessed(
+        Scope::FewFiles,
+        Spec::Clear,
+        Exploration::Deep,
+        true,
+        &[Pitfall::Concurrency, Pitfall::Security],
+    )
+    .summary();
+    assert_eq!(
+        shown,
+        "a few files, clear spec, deep exploring, checkable, traps: concurrency, security"
+    );
+    let plain = assessed(Scope::OneSpot, Spec::Exact, Exploration::None, false, &[]);
+    assert_eq!(plain.summary(), "one spot, exact spec, no exploring");
 }
 
 #[test]
@@ -182,9 +389,7 @@ fn local_models_answer_in_text() {
     assert!(matches!(built.tool_choice, ToolChoice::None));
     let sent = built.messages[0].text_content();
     assert!(
-        sent.starts_with(
-            "Length: 14 characters, 1 lines.\n<request>\nfix the parser\n</request>\n\n"
-        ),
+        sent.starts_with("<request>\nfix the parser\n</request>\n\n"),
         "{sent}"
     );
     assert!(
@@ -222,8 +427,8 @@ fn every_meaning_is_in_the_system_prompt() {
 fn the_same_prompt_is_prepared_the_same() {
     let plain = prepare("fix the parser\n\nit drops the last token");
     assert_eq!(
-        plain,
-        "Length: 39 characters, 3 lines.\n<request>\nfix the parser\n\nit drops the last token\n</request>"
+        plain, "<request>\nfix the parser\n\nit drops the last token\n</request>",
+        "no size, which reads as a sign of hard work"
     );
     for variant in [
         "fix the parser\r\n\r\nit drops the last token",
@@ -243,9 +448,7 @@ fn a_long_prompt_keeps_its_start_and_end() {
     );
     let prepared = prepare(&long);
     let total = long.chars().count();
-    assert!(prepared.starts_with(&format!(
-        "Length: {total} characters, 1 lines.\n<request>\nSTART"
-    )));
+    assert!(prepared.starts_with("<request>\nSTART"));
     assert!(prepared.contains(&format!(
         "\n[... {} characters omitted ...]\n",
         total - HEAD_CHARS - TAIL_CHARS
@@ -274,12 +477,12 @@ fn a_task_prompt_stays_inside_the_fence() {
     let sent = built.messages[0].text_content();
     let (before, inside) = sent.split_once("<request>\n").unwrap();
     let (inside, after) = inside.split_once("\n</request>").unwrap();
-    assert!(before.starts_with("Length: "));
+    assert!(before.is_empty());
     assert!(inside.starts_with("Your task is to implement"));
     assert!(!after.contains("Your task"));
     assert_eq!(
         sent.lines().last(),
-        Some("Label the request above with the label tool. Do not carry it out.")
+        Some("Assess the request above with the label tool. Do not carry it out.")
     );
 }
 

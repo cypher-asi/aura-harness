@@ -1,10 +1,11 @@
 //! The label in the classifier's reply: the arguments of its call to the
 //! label tool, or the words of a text answer.
 
-use aura_core_types::{Difficulty, PromptCategory};
+use aura_core_types::{Assessment, Difficulty, Exploration, Pitfall, PromptCategory, Scope, Spec};
 use aura_model::{Message, ModelResponse};
 use serde_json::Value;
 
+use super::difficulty::difficulty_of;
 use super::{Label, LABEL_TOOL};
 use crate::request::{after_thinking, answered, calls, Answered};
 
@@ -17,8 +18,8 @@ pub fn label_of(response: &ModelResponse) -> Option<Label> {
 
 /// The label in the classifier's `reply`: the arguments of its call to
 /// the [`LABEL_TOOL`], or, when it called no tool, its text. `None` when
-/// the call's arguments are not one category and one difficulty, or it
-/// called another tool.
+/// the call's arguments are not a whole assessment, or it called another
+/// tool.
 pub(super) fn label_in(reply: &Message) -> Option<Label> {
     match answered(reply, LABEL_TOOL) {
         Answered::Tool(input) => called_with(input),
@@ -28,7 +29,9 @@ pub(super) fn label_in(reply: &Message) -> Option<Label> {
 }
 
 /// The label `input` gives, the arguments of a call to the
-/// [`LABEL_TOOL`].
+/// [`LABEL_TOOL`]: its category, and its assessment with the difficulty
+/// worked out from it. `None` when a field is missing or names no value
+/// it takes; a pitfall it does not know is left out.
 fn called_with(input: &Value) -> Option<Label> {
     let field = |key: &str| {
         input
@@ -36,9 +39,27 @@ fn called_with(input: &Value) -> Option<Label> {
             .and_then(Value::as_str)
             .map(|value| value.trim().to_ascii_lowercase())
     };
+    let mut pitfalls = Vec::new();
+    for name in input.get("pitfalls")?.as_array()? {
+        let pitfall = name
+            .as_str()
+            .and_then(|name| Pitfall::from_name(&name.trim().to_ascii_lowercase()));
+        if let Some(pitfall) = pitfall.filter(|p| !pitfalls.contains(p)) {
+            pitfalls.push(pitfall);
+        }
+    }
+    let assessment = Assessment {
+        analysis: input.get("analysis")?.as_str()?.trim().to_string(),
+        scope: Scope::from_name(&field("scope")?)?,
+        spec: Spec::from_name(&field("spec")?)?,
+        exploration: Exploration::from_name(&field("exploration")?)?,
+        checkable: input.get("checkable")?.as_bool()?,
+        pitfalls,
+    };
     Some(Label {
         category: PromptCategory::from_name(&field("category")?)?,
-        difficulty: Difficulty::from_name(&field("difficulty")?)?,
+        difficulty: difficulty_of(&assessment),
+        assessment: Some(assessment),
     })
 }
 
@@ -61,6 +82,7 @@ pub(super) fn parse_label(reply: &str) -> Option<Label> {
     Some(Label {
         category: parse(reply)?,
         difficulty: parse_difficulty(reply)?,
+        assessment: None,
     })
 }
 

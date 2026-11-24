@@ -163,28 +163,32 @@ fn mock_tokens(model: &str, calls: u32, cost_usd: f64) -> aura_core_types::Model
     }
 }
 
-/// [`Pinned`]'s run `name` on `model`, in its own copy under `dir`, as
-/// it should be recorded but for its agent, prompt and times, taken from
-/// `ran`. The mock provider also answers Gate's calls beside the work
-/// (classifying the prompt, and on Gate's arm judging its turn), priced
-/// by the model they asked for.
-fn pinned_run(ran: &CompareRun, dir: &std::path::Path, model: &str) -> CompareRun {
-    let gate = ran.arm == CompareArm::A;
-    let made_for = |purpose: &str, cost_usd| aura_core_types::ModelTokens {
+/// The mock provider's one call made for `purpose` beside the work,
+/// costing `cost_usd`.
+fn made_for(purpose: &str, cost_usd: f64) -> aura_core_types::ModelTokens {
+    aura_core_types::ModelTokens {
         purpose: Some(purpose.to_string()),
         ..mock_tokens("mock-model", 1, cost_usd)
-    };
-    let mut tokens = if gate {
+    }
+}
+
+/// [`Pinned`]'s run `name` on `model`, in its own copy under `dir`, as
+/// it should be recorded but for its agent, prompt and times, taken from
+/// `ran`. The mock provider also answers Gate's judge of the turn on
+/// Gate's arm, priced by the model it asked for.
+fn pinned_run(ran: &CompareRun, dir: &std::path::Path, model: &str) -> CompareRun {
+    let gate = ran.arm == CompareArm::A;
+    let tokens = if gate {
         vec![mock_tokens(model, 2, 0.0021), made_for("judge", 0.00105)]
     } else {
         vec![mock_tokens(model, 2, 0.0035)]
     };
-    tokens.push(made_for("classify", 0.00035));
     let cost_usd = tokens.iter().map(|row| row.cost_usd).sum();
     let root = dir.join(&ran.name);
     let turn = RunTurn {
         category: Some(PromptCategory::Question),
         difficulty: Some(Difficulty::Medium),
+        assessment: Some(mock_assessment("question", Difficulty::Medium)),
         led: Some(false),
         effort: gate.then(|| "medium".to_string()),
         ..RunTurn::new(
@@ -245,6 +249,7 @@ fn pinned_payload(
         check: Some(OPUS_CHECK.to_string()),
         budget_usd: None,
         classifier: HAIKU.to_string(),
+        classify_tokens: vec![made_for("classify", 0.00035)],
         requested_by,
         apply_root: workspace,
         runs: vec![
@@ -285,6 +290,7 @@ async fn what_a_comparison_records_is_pinned() {
         .filter_map(|entry| entry.tx.compare_payload())
         .collect();
     let running = |runs: usize| ComparePayload {
+        classify_tokens: Vec::new(),
         runs: payload.runs[..runs].to_vec(),
         judgments: Vec::new(),
         status: CompareStatus::Running,
@@ -441,7 +447,7 @@ async fn what_compare_answers_after_a_comparison_is_pinned_byte_for_byte() {
         format!(
             "Comparisons (/compare show <n> for one):\n  1. Compare #1 · {at} · \"write the answer\" · \
              gate without enforced delegation (gate:nodelegate) vs aura-claude-opus-4-7 (cloud) · \
-             {status} · A $0.0035 median, 0/1 pass / B $0.0039 median, 1/1 pass"
+             {status} · A $0.0032 median, 0/1 pass / B $0.0035 median, 1/1 pass"
         )
     };
     for (args, answer) in answers_once_ended(&payload, listed("done")) {

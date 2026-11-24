@@ -8,20 +8,26 @@
 //! its start and end, and fenced as text to label, so a prompt that reads
 //! as instructions ("Your task is to implement...") is not taken for the
 //! classifier's own task. The model answers by calling the
-//! [`LABEL_TOOL`], whose arguments can only be one category and one
-//! difficulty; local models, which may not support a forced tool, answer
-//! in text. A reply that does not name both a category and a difficulty
-//! is no label: Gate does not route work it could not classify.
+//! [`LABEL_TOOL`] with an [`Assessment`]: its reasoning first, then a
+//! category and what decides how capable a model the work needs, each
+//! from a fixed list. The difficulty is worked out from those
+//! ([`difficulty_of`]). Local models, which may not support a forced
+//! tool, name a category and a difficulty in text. A reply that does not
+//! give both is no label: Gate does not route work it could not classify.
 //!
 //! - `prompt`: the system prompt, the label tool and the message the classifier is sent
 //! - `label`: the label read out of its reply, its tool call or its text
+//! - `difficulty`: the difficulty an assessment adds up to
 
+mod difficulty;
 mod label;
 mod prompt;
 #[cfg(test)]
 mod tests;
 
-use aura_core_types::{Difficulty, PromptCategory};
+pub use difficulty::{difficulty_of, points, EASY_AT_MOST, HARD_AT_LEAST};
+
+use aura_core_types::{Assessment, Difficulty, PromptCategory};
 use aura_gate_route::Candidate;
 use aura_model::model_catalog::{ModelBackend, ModelTier};
 use aura_model::{ModelCallPurpose, ModelRequest, ReasonerError, ToolChoice};
@@ -32,12 +38,15 @@ pub use label::{label_of, reply_shown};
 pub use prompt::{LABEL_TOOL, SYSTEM_PROMPT};
 
 /// What the classifier says of a prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label {
     /// What the prompt asks for.
     pub category: PromptCategory,
     /// How hard its work looks.
     pub difficulty: Difficulty,
+    /// What the classifier found about the work, which `difficulty` was
+    /// worked out from; `None` for a text answer, which names it.
+    pub assessment: Option<Assessment>,
 }
 
 /// The model that classifies prompts: a fast-tier candidate, a local one

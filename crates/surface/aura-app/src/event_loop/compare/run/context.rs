@@ -1,6 +1,7 @@
 //! What the runs of one comparison share, which run each is, and what
 //! each gives back once it ends.
 
+use super::labels::Labels;
 use super::live::Live;
 use super::plan::ComparePlan;
 use crate::agent_registry::RegisteredAgent;
@@ -28,6 +29,10 @@ pub(super) struct Context {
     pub commands: mpsc::Sender<UiCommand>,
     pub plan: ComparePlan,
     pub host: RegisteredAgent,
+    /// The comparison's own kernel, which the calls made for both arms go
+    /// through (classifying the prompts, judging the runs), so they are
+    /// in neither arm's totals
+    pub kernel: Arc<Kernel>,
     /// ZNS ids of the agents each arm's runs are registered under, A first
     pub arms: [String; 2],
     /// How the turns and subtasks of each arm's runs are routed, A first
@@ -48,6 +53,8 @@ pub(super) struct Context {
     pub agents: HashMap<String, RegisteredAgent>,
     /// Runs under way, in the order they started
     pub live: Mutex<Vec<Live>>,
+    /// The classifier's label of each prompt, shared by both arms' runs
+    pub labels: Labels,
 }
 
 /// Run `n` of `arm`: its name, and the example task it works on when the

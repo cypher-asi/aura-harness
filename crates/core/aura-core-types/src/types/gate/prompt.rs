@@ -1,5 +1,6 @@
 //! The payload of a `UserPrompt` transaction.
 
+use super::assessment::Assessment;
 use super::category::{stored_category, Difficulty, PromptCategory};
 use super::route::Route;
 use super::to_json;
@@ -35,6 +36,11 @@ pub struct PromptPayload {
     /// say, and for prompts recorded before it was asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<Difficulty>,
+    /// What the classifier found about the work, which `difficulty` was
+    /// worked out from; `None` when it named the difficulty itself (a
+    /// local model answering in text), and for prompts recorded before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assessment: Option<Assessment>,
 }
 
 impl PromptPayload {
@@ -49,6 +55,7 @@ impl PromptPayload {
             kind: None,
             led: None,
             difficulty: None,
+            assessment: None,
         }
     }
 

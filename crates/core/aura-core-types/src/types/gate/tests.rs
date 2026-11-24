@@ -11,6 +11,14 @@ fn prompt_payload_round_trips_with_string_forms() {
         kind: None,
         led: Some(true),
         difficulty: Some(Difficulty::Hard),
+        assessment: Some(Assessment {
+            analysis: "A flaky test across the sync code.".to_string(),
+            scope: Scope::FewFiles,
+            spec: Spec::Loose,
+            exploration: Exploration::Deep,
+            checkable: true,
+            pitfalls: vec![Pitfall::Concurrency],
+        }),
     };
     let bytes = payload.to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
@@ -21,13 +29,29 @@ fn prompt_payload_round_trips_with_string_forms() {
     assert!(json.get("kind").is_none(), "a turn names no kind");
     assert_eq!(json["led"], true);
     assert_eq!(json["difficulty"], "hard");
+    assert_eq!(
+        json["assessment"],
+        serde_json::json!({
+            "analysis": "A flaky test across the sync code.",
+            "scope": "few_files",
+            "spec": "loose",
+            "exploration": "deep",
+            "checkable": true,
+            "pitfalls": ["concurrency"],
+        })
+    );
     assert_eq!(PromptPayload::from_bytes(&bytes).unwrap(), payload);
     let older = br#"{"text":"fix it","category":"debugging","classifier":"","route":{"level":"turn","model":"m","reason":"default","explored":false,"propensity":1.0}}"#;
     let older = PromptPayload::from_bytes(older).unwrap();
-    assert_eq!((older.led, older.difficulty), (None, None));
+    assert_eq!(
+        (older.led, older.difficulty, older.assessment),
+        (None, None, None)
+    );
     let unrouted = String::from_utf8(PromptPayload::new("hi").to_bytes()).unwrap();
     assert!(
-        !unrouted.contains("difficulty") && !unrouted.contains("category"),
+        !unrouted.contains("difficulty")
+            && !unrouted.contains("category")
+            && !unrouted.contains("assessment"),
         "a prompt Gate does not route is stored without a label: {unrouted}"
     );
     let unclassified = br#"{"text":"hi","category":"unclassified","classifier":"","route":{"level":"turn","model":"m","reason":"pinned","explored":false,"propensity":1.0}}"#;

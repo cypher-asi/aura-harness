@@ -16,7 +16,7 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use super::gate::{Difficulty, OutcomeSignal, PromptCategory};
+use super::gate::{Assessment, Difficulty, OutcomeSignal, PromptCategory};
 use super::plan_usage::PlanShare;
 use super::transaction::SystemKind;
 use crate::ids::{AgentId, Hash};
@@ -296,6 +296,11 @@ pub struct RunTurn {
     /// How hard the classifier judged it, when it said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<Difficulty>,
+    /// What the classifier found about its work, which `difficulty` was
+    /// worked out from; `None` when it named the difficulty itself, and
+    /// in older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assessment: Option<Assessment>,
     /// Whether the agent led it, handing its work to subtasks; `None` in
     /// older records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -348,6 +353,7 @@ impl RunTurn {
             signal,
             category: None,
             difficulty: None,
+            assessment: None,
             led: None,
             escalations: 0,
             first_model: None,
@@ -697,6 +703,12 @@ pub struct ComparePayload {
     /// before benchmarks picked their classifier.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub classifier: String,
+    /// The classifier's calls, per model: each prompt is classified once
+    /// for both arms, on the comparison's own agent, so they are in
+    /// neither arm's totals. Empty while it runs, and in records from
+    /// before then, whose runs each paid for their own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub classify_tokens: Vec<ModelTokens>,
     /// The user's agent that asked for it.
     pub requested_by: AgentId,
     /// Where the user's changes go when a run is applied: the root of
@@ -795,6 +807,7 @@ mod tests {
             check: Some("cargo test".to_string()),
             budget_usd: Some(2.5),
             classifier: "claude/claude-haiku-4-5".to_string(),
+            classify_tokens: Vec::new(),
             requested_by: AgentId::generate(),
             apply_root: PathBuf::from("/work/repo"),
             started_ms: 1_000,

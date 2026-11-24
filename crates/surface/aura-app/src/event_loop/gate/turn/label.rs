@@ -42,8 +42,8 @@ impl Label {
         }
     }
 
-    /// The prompt's category, as the classifier says; its difficulty is
-    /// kept on the prompt.
+    /// The prompt's category, as the classifier says; its difficulty and
+    /// what the classifier found about it are kept on the prompt.
     ///
     /// # Errors
     /// Says why when the classifier gave no category and difficulty.
@@ -56,6 +56,7 @@ impl Label {
         let label =
             live::classify_prompt(&session.kernel, &prompt.classifier, &prompt.text, token).await?;
         prompt.difficulty = Some(label.difficulty);
+        prompt.assessment = label.assessment;
         Ok(label.category)
     }
 

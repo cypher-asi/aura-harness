@@ -3,7 +3,7 @@
 
 use crate::event_loop::agents::AgentSession;
 use crate::event_loop::turns::record_prompt;
-use aura_core_types::{Difficulty, Hash, PromptCategory, PromptPayload, Route};
+use aura_core_types::{Assessment, Difficulty, Hash, PromptCategory, PromptPayload, Route};
 use aura_gate::live;
 use tokio_util::sync::CancellationToken;
 
@@ -18,13 +18,15 @@ pub(crate) struct SubtaskLabel {
     pub category: Option<PromptCategory>,
     /// How hard the classifier judged the work, once it said
     pub(super) difficulty: Option<Difficulty>,
+    /// What the classifier found about the work, once it said
+    pub(super) assessment: Option<Assessment>,
     /// Where Gate sent the subtask, for the child's chat
     pub shown: Option<String>,
 }
 
 impl SubtaskLabel {
-    /// The prompt's category, as the classifier says, its difficulty kept
-    /// on `self`.
+    /// The prompt's category, as the classifier says, its difficulty and
+    /// what the classifier found about it kept on `self`.
     ///
     /// # Errors
     /// Says why when nothing classifies prompts, the subtask is cancelled
@@ -47,6 +49,7 @@ impl SubtaskLabel {
             () = cancel.cancelled() => return Err("cancelled by the user".to_string()),
         };
         self.difficulty = Some(label.difficulty);
+        self.assessment = label.assessment;
         Ok(label.category)
     }
 
@@ -68,6 +71,7 @@ impl SubtaskLabel {
             kind: Some(self.kind.clone()),
             led: None,
             difficulty: self.difficulty,
+            assessment: self.assessment.clone(),
         };
         let (tx, _) = record_prompt(session, &payload).await?;
         Ok(self.category.map(|category| (tx.hash, category)))

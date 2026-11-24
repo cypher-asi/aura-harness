@@ -33,32 +33,34 @@ fn the_bench_tab_lists_each_run_as_it_ran() {
     let expected = [
         "BenchRun { name: \"a-1\", arm: 0, model: \"aura-claude-haiku-4-5\", \
          escalated_to: Some(\"aura-claude-sonnet-4-6\"), escalated_effort: Some(\"high\"), \
-         category: Some(\"debugging\"), difficulty: Some(\"hard\"), led: false, \
+         category: Some(\"debugging\"), difficulty: Some(\"hard\"), \
+         drivers: Some(\"a few files, loose spec, deep exploring, checkable, traps: concurrency\"), \
+         led: false, \
          subtask_cost_usd: 0.0, wall_ms: 41000, cost_usd: 0.05, unpriced_calls: 0, check_passed: Some(true), \
          files_changed: 2, error: None, task: None, \
          agent_id: \"0101010101010101010101010101010101010101010101010101010101010101\" }",
         "BenchRun { name: \"b-1\", arm: 1, model: \"aura-claude-opus-4-7\", escalated_to: None, \
-         escalated_effort: None, category: None, difficulty: None, led: false, \
+         escalated_effort: None, category: None, difficulty: None, drivers: None, led: false, \
          subtask_cost_usd: -0.0, wall_ms: 41000, cost_usd: 0.4, unpriced_calls: 0, check_passed: Some(true), \
          files_changed: 2, error: None, task: None, \
          agent_id: \"1111111111111111111111111111111111111111111111111111111111111111\" }",
         "BenchRun { name: \"a-2\", arm: 0, model: \"m\", escalated_to: None, \
-         escalated_effort: None, category: Some(\"multi_file_change\"), difficulty: None, \
+         escalated_effort: None, category: Some(\"multi_file_change\"), difficulty: None, drivers: None, \
          led: true, subtask_cost_usd: 0.17, wall_ms: 42000, cost_usd: 0.07, unpriced_calls: 0, \
          check_passed: Some(true), files_changed: 2, error: None, task: None, \
          agent_id: \"0202020202020202020202020202020202020202020202020202020202020202\" }",
         "BenchRun { name: \"b-2\", arm: 1, model: \"aura-claude-opus-4-7\", escalated_to: None, \
-         escalated_effort: None, category: None, difficulty: None, led: false, \
+         escalated_effort: None, category: None, difficulty: None, drivers: None, led: false, \
          subtask_cost_usd: -0.0, wall_ms: 42000, cost_usd: 0.5, unpriced_calls: 0, check_passed: None, \
          files_changed: 2, error: Some(\"the model fell over\\nand stayed down\"), task: None, \
          agent_id: \"1212121212121212121212121212121212121212121212121212121212121212\" }",
         "BenchRun { name: \"a-3\", arm: 0, model: \"aura-claude-sonnet-4-6\", \
-         escalated_to: None, escalated_effort: None, category: None, difficulty: None, \
+         escalated_to: None, escalated_effort: None, category: None, difficulty: None, drivers: None, \
          led: false, subtask_cost_usd: -0.0, wall_ms: 43000, cost_usd: 0.06, unpriced_calls: 0, \
          check_passed: Some(false), files_changed: 2, error: None, task: None, \
          agent_id: \"0303030303030303030303030303030303030303030303030303030303030303\" }",
         "BenchRun { name: \"b-3\", arm: 1, model: \"aura-claude-opus-4-7\", escalated_to: None, \
-         escalated_effort: None, category: None, difficulty: None, led: false, \
+         escalated_effort: None, category: None, difficulty: None, drivers: None, led: false, \
          subtask_cost_usd: -0.0, wall_ms: 43000, cost_usd: 0.45, unpriced_calls: 0, check_passed: Some(true), \
          files_changed: 2, error: None, task: None, \
          agent_id: \"1313131313131313131313131313131313131313131313131313131313131313\" }",

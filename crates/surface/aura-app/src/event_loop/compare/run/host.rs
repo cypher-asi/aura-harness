@@ -5,6 +5,7 @@
 use super::arm::{arm_name, arm_routing};
 use super::context::{Context, Ran};
 use super::judge::judge_all;
+use super::labels::Labels;
 use super::plan::ComparePlan;
 use super::schedule::run_all;
 use super::setup::set_up;
@@ -24,6 +25,7 @@ use aura_core_types::{
 };
 use aura_gate::compare::{plan_shares, run_name, PlanReading};
 use aura_gate::live::{self, GateLive, RunOf};
+use aura_model::ModelCallPurpose;
 use aura_ui_terminal::events::BenchTaskSetup;
 use aura_ui_terminal::UiCommand;
 use std::collections::HashMap;
@@ -76,6 +78,7 @@ pub(crate) async fn run(
         commands,
         plan,
         host,
+        kernel: Arc::clone(&session.kernel),
         arms,
         routing,
         gates,
@@ -85,6 +88,7 @@ pub(crate) async fn run(
         setup,
         agents,
         live: Mutex::default(),
+        labels: Labels::default(),
     });
     let ran = run_all(&ctx, &session, &user_ui, &mut payload).await;
     conclude(&ctx, session, &user_ui, ran, payload).await;
@@ -165,6 +169,7 @@ fn started(plan: &ComparePlan, repo: Option<&Path>) -> ComparePayload {
         check: plan.check.clone(),
         budget_usd: plan.budget_usd,
         classifier: plan.classifier.clone(),
+        classify_tokens: Vec::new(),
         requested_by: plan.user,
         apply_root: repo.map_or_else(|| plan.workspace.clone(), Path::to_path_buf),
         started_ms: now_ms(),
@@ -215,8 +220,8 @@ fn register_runs(
 
 /// Settle the comparison once its runs in `ran` have ended: record what
 /// their checks proved, note what kept runs from running, share out the
-/// plan usage, judge the runs unless the user stopped the comparison,
-/// and finish it.
+/// plan usage, count the classifier's calls, judge the runs unless the
+/// user stopped the comparison, and finish it.
 async fn conclude(
     ctx: &Context,
     session: AgentSession,
@@ -244,6 +249,8 @@ async fn conclude(
     payload
         .notes
         .extend(ran.iter_mut().filter_map(|r| r.note.take()));
+    payload.classify_tokens =
+        (ctx.hub).own_tokens_for(ctx.host.agent_id(), ModelCallPurpose::Classify);
     if ctx.cancel.is_cancelled() {
         payload.status = CompareStatus::Cancelled;
     } else {

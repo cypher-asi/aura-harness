@@ -36,6 +36,8 @@
 //! - `plan`: the comparison as the user confirmed it
 //! - `context`: what the runs of a comparison share, which run each is,
 //!   and what each gives back
+//! - `labels`: the classifier's label of each prompt, asked for once and
+//!   shared by every run that sends it
 //! - `arm`: what an arm is called, and how its runs are routed
 //! - `host`: the comparison on its own agent, from its first record to
 //!   its last
@@ -57,6 +59,7 @@ mod context;
 mod copy;
 mod host;
 mod judge;
+mod labels;
 mod live;
 mod plan;
 mod prompt;

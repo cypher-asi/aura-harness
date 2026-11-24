@@ -1134,6 +1134,30 @@ fn detail_lines(
         theme,
     ));
 
+    if !view.classify.is_empty() {
+        let calls: u32 = view.classify.iter().map(|t| t.calls).sum();
+        let cost = BenchCost::new(
+            view.classify.iter().map(|t| t.cost_usd).sum(),
+            view.classify.iter().map(|t| t.unpriced_calls).sum(),
+        );
+        let models: Vec<&str> = view
+            .classify
+            .iter()
+            .map(|t| short_model(&t.model))
+            .collect();
+        lines.push(Line::default());
+        lines.push(section_rule(
+            &format!(
+                "classifier {} · {calls} call{} · {}, not in arm costs",
+                models.join(", "),
+                if calls == 1 { "" } else { "s" },
+                cost.read(money)
+            ),
+            width,
+            theme,
+        ));
+    }
+
     if let Some(judge) = &view.judge {
         let rows: Vec<Row> = judge
             .verdicts
@@ -1180,12 +1204,14 @@ fn detail_lines(
         view.runs.iter().any(|r| r.task.is_some()) || view.live.iter().any(|r| r.task.is_some());
     let any_moved = view.runs.iter().any(|r| r.escalated_to.is_some());
     let any_led = view.runs.iter().any(|r| r.led);
+    let any_drivers = view.runs.iter().any(|r| r.drivers.is_some());
     let header = [
         "",
         "run",
         "model",
         "classified",
         "difficulty",
+        if any_drivers { "why" } else { "" },
         if any_moved { "moved up" } else { "" },
         if any_led { "led" } else { "" },
         if has_task { "task" } else { "" },
@@ -1246,6 +1272,7 @@ fn detail_lines(
             (short_model(&r.model).to_string(), base),
             (category(r), base),
             (r.difficulty.clone().unwrap_or_default(), base),
+            (r.drivers.clone().unwrap_or_default(), muted),
             (
                 if any_moved {
                     moved_up(r)
@@ -1285,6 +1312,7 @@ fn detail_lines(
         &[
             Col::L,
             Col::L,
+            Col::L.flex(),
             Col::L.flex(),
             Col::L.flex(),
             Col::L.flex(),
@@ -1344,6 +1372,7 @@ fn live_row(
         (live.difficulty.clone().unwrap_or_default(), text),
         empty(),
         empty(),
+        empty(),
         (
             live.task
                 .as_deref()
@@ -1369,7 +1398,7 @@ fn live_row(
 
 /// The column of the runs table a run under way shows what it is doing
 /// from: the last, after `files`, where an ended run shows its error.
-const LIVE_STATUS_AT: usize = 12;
+const LIVE_STATUS_AT: usize = 13;
 
 /// How an arm's value reads in the form.
 fn arm_reads(value: &str, arm_b: bool) -> String {
@@ -1756,6 +1785,44 @@ mod tests {
         assert!(
             !shown.lines().any(|l| l.starts_with("moved up")),
             "no summary row when nothing moved up: {shown}"
+        );
+    }
+
+    #[test]
+    fn a_run_shows_what_drove_its_difficulty() {
+        let theme = Theme::default();
+        let mut view = view();
+        let header = |view: &BenchView| {
+            let shown = text(&detail_lines(view, None, &theme, 160, None));
+            let header = shown
+                .lines()
+                .skip_while(|l| !l.contains("── runs"))
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            (shown, header)
+        };
+        let (_, plain) = header(&view);
+        assert!(
+            !plain.split_whitespace().any(|w| w == "why"),
+            "no column for runs whose classifier named the difficulty: {plain}"
+        );
+        view.runs[0].difficulty = Some("hard".to_string());
+        view.runs[0].drivers = Some("many files, loose spec, deep exploring".to_string());
+        let (shown, header) = header(&view);
+        let heads: Vec<&str> = header.split_whitespace().collect();
+        assert!(
+            heads.windows(2).any(|w| w == ["difficulty", "why"]),
+            "{shown}"
+        );
+        let run = shown
+            .lines()
+            .skip_while(|l| !l.contains("── runs"))
+            .find(|l| l.split_whitespace().next() == Some("a-1"))
+            .unwrap_or_default();
+        assert!(
+            run.contains("hard") && run.contains("many files, loose spec, deep exploring"),
+            "{shown}"
         );
     }
 
@@ -2475,6 +2542,26 @@ mod tests {
         assert!(one.contains("unknown") && !one.contains('%'), "{one}");
         let two = line_of(&shown, "two ");
         assert!(two.contains("$0.05+?") && !two.contains('%'), "{two}");
+    }
+
+    #[test]
+    fn the_classifiers_calls_are_shown_apart_from_the_arms() {
+        let theme = Theme::default();
+        let mut view = view();
+        let shown = text(&detail_lines(&view, None, &theme, 160, None));
+        assert!(!shown.contains("calls · "), "none until it ends:\n{shown}");
+        view.classify = vec![BenchTokens {
+            model: "claude-haiku-4-5".to_string(),
+            purpose: Some("classify".to_string()),
+            calls: 3,
+            cost_usd: 0.0012,
+            ..BenchTokens::default()
+        }];
+        let shown = text(&detail_lines(&view, None, &theme, 160, None));
+        assert!(
+            shown.contains("classifier haiku-4-5 · 3 calls · $0.0012, not in arm costs"),
+            "{shown}"
+        );
     }
 
     #[test]

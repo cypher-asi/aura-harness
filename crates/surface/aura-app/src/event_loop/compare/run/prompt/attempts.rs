@@ -17,7 +17,9 @@ use crate::event_loop::handlers::{handle_agent_success, run_agent_turn};
 use crate::event_loop::steering::Steering;
 use crate::event_loop::trace;
 use aura_agent::{AgentError, AgentLoop, AgentLoopConfig, AgentLoopResult};
-use aura_core_types::{Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory, RunTurn};
+use aura_core_types::{
+    Assessment, Difficulty, Hash, OutcomePayload, OutcomeSignal, PromptCategory, RunTurn,
+};
 use aura_gate::attempts::Terms;
 use aura_gate::evidence::outcome::calls_for_stronger;
 use aura_gate::evidence::Evidence;
@@ -43,6 +45,9 @@ pub(super) struct Asked<'a> {
     pub category: Option<PromptCategory>,
     /// How hard the classifier judged it
     pub difficulty: Option<Difficulty>,
+    /// What the classifier found about its work, which `difficulty` was
+    /// worked out from
+    pub assessment: Option<Assessment>,
     /// Whether Gate had the turn led
     pub led: bool,
     /// What a Gate run's work is held to, written down before it started
@@ -377,6 +382,7 @@ impl<'a, 'p> Attempting<'a, 'p> {
         let turn = RunTurn {
             category: asked.category,
             difficulty: asked.difficulty,
+            assessment: asked.assessment,
             led: Some(asked.led),
             escalations: self.escalations,
             first_model: (self.current.model != asked.model).then_some(asked.model),

@@ -112,6 +112,7 @@ fn on_haiku(text: &str) -> PromptPayload {
         route: Route::turn(HAIKU, RouteReason::Default).at_effort("medium"),
         led: Some(false),
         difficulty: Some(Difficulty::Easy),
+        assessment: Some(mock_assessment("debugging", Difficulty::Easy)),
         ..PromptPayload::new(text)
     }
 }
@@ -239,6 +240,7 @@ async fn a_refused_sign_in_records_shows_and_sends_its_reroute_byte_for_byte() {
         route: Route::turn(REFUSING_MODEL, RouteReason::Default).at_effort("medium"),
         led: Some(false),
         difficulty: Some(Difficulty::Medium),
+        assessment: Some(mock_assessment("question", Difficulty::Medium)),
         ..PromptPayload::new("hello")
     };
     assert_eq!(seen.prompts, [asked]);
@@ -342,6 +344,7 @@ async fn a_compare_gate_run_re_routes_a_refused_sign_in_where_a_pinned_run_stops
         route: Route::turn(REFUSING_MODEL, RouteReason::Compare).at_effort("medium"),
         led: Some(false),
         difficulty: Some(Difficulty::Medium),
+        assessment: Some(mock_assessment("question", Difficulty::Medium)),
         ..PromptPayload::new("hello")
     };
     assert_eq!(prompts, [asked]);

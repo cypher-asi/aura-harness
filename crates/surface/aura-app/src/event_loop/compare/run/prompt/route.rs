@@ -48,17 +48,15 @@ pub(super) async fn route<'a>(
     let text = prompt.text;
     let (mut config, mut tools, lead) = turn_config(parts, session, text);
     let label = classify(parts, session, text, &config).await?;
-    let category = label.map(|label| label.category);
-    let mut difficulty = label.map(|label| label.difficulty);
+    let category = label.as_ref().map(|label| label.category);
+    let mut difficulty = label.as_ref().map(|label| label.difficulty);
+    let assessment = label.and_then(|label| label.assessment);
     let criteria = criteria(parts, session, category, &mut difficulty, text, &config).await;
     let work = category.map(|category| Work::turn(category).of(difficulty));
     let decision = decide(parts, &mut config, work.as_ref(), prompt.refused);
     let model = config.model.clone();
     let led = lead.is_some_and(|lead| {
-        let gate = parts.gate;
-        gate.note_model(session.agent_id(), &model);
-        let led =
-            category.is_some_and(|category| gate.way((category, difficulty), &model, false).led);
+        let led = leads(parts, session, (category, difficulty), &model);
         session.lead = lead.apply(led, &mut config, &mut tools);
         led
     });
@@ -68,6 +66,7 @@ pub(super) async fn route<'a>(
         route: route_of(&model, decision.as_ref()),
         led: Some(led),
         difficulty,
+        assessment: assessment.clone(),
         ..PromptPayload::new(text.to_string())
     };
     announce(parts, session, &prompt, &config, &model, category).await;
@@ -77,6 +76,7 @@ pub(super) async fn route<'a>(
         text,
         category,
         difficulty,
+        assessment,
         led,
         criteria,
         before: prompt.before,
@@ -92,6 +92,18 @@ pub(super) async fn route<'a>(
         config,
         tools,
     })
+}
+
+/// Whether Gate has `model` lead the work of `category` at `difficulty`
+/// on `session` rather than do it itself; never for unclassified work.
+fn leads(
+    parts: &RunParts<'_>,
+    session: &AgentSession,
+    (category, difficulty): (Option<PromptCategory>, Option<Difficulty>),
+    model: &str,
+) -> bool {
+    parts.gate.note_model(session.agent_id(), model);
+    category.is_some_and(|category| parts.gate.way((category, difficulty), model, false).led)
 }
 
 /// What the run's turn on `text` starts from: the user's turn on
@@ -114,9 +126,12 @@ fn turn_config(
 }
 
 /// What `text` asks for and how hard it is, as the comparison's
-/// classifier labels it through `session`'s kernel, signed in as `config`
-/// is. `None` when a pinned arm's prompt could not be labelled, which goes
-/// on unclassified; on other arms that errs with the turn as it ended.
+/// classifier labels it through the comparison's own kernel, signed in as
+/// `config` is: once for the whole comparison, whichever run sends it
+/// first (see [`Labels`](super::super::labels::Labels)), and paid for by
+/// neither arm. `None` when a pinned arm's prompt could not be labelled,
+/// which goes on unclassified; on other arms that errs with the turn as
+/// it ended.
 async fn classify(
     parts: &RunParts<'_>,
     session: &AgentSession,
@@ -128,7 +143,8 @@ async fn classify(
         Err("Gate has no model to classify the prompt".to_string())
     } else {
         let auth_token = config.auth_token.clone();
-        live::classify_prompt(&session.kernel, classifier, text, auth_token).await
+        let ask = || live::classify_prompt(&parts.ctx.kernel, classifier, text, auth_token);
+        parts.ctx.labels.of(text, ask).await
     };
     match labelled {
         Ok(label) => Ok(Some(label)),

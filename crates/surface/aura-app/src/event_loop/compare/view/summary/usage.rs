@@ -1,5 +1,6 @@
 //! What each arm used: tokens per model, the share of each plan window it
-//! drew, and what the judge's blind calls cost.
+//! drew, and what the calls made for both arms cost: the classifier's and
+//! the judge's blind calls.
 
 use super::super::format::{cost, plural, tokens};
 use super::Summary;
@@ -37,7 +38,29 @@ impl Summary<'_> {
             }
             let _ = write!(out, "\n  {PLAN_SHARE_NOTE}");
         }
+        self.render_classifier(out);
         self.render_judge(out);
+    }
+
+    /// How many calls the classifier made on which model and what they
+    /// cost, paid for once for both arms.
+    fn render_classifier(&self, out: &mut String) {
+        let rows = &self.payload.classify_tokens;
+        if rows.is_empty() {
+            return;
+        }
+        let calls: u32 = rows.iter().map(|row| row.calls).sum();
+        let models: Vec<&str> = rows.iter().map(|row| row.model.as_str()).collect();
+        let _ = write!(
+            out,
+            "\n  Classifier: {calls} call{} on {}, {} (not in the arm totals)",
+            plural(calls),
+            models.join(", "),
+            cost(
+                rows.iter().map(|row| row.cost_usd).sum(),
+                rows.iter().map(|row| row.unpriced_calls).sum()
+            ),
+        );
     }
 
     /// How many blind calls the judge made on which model, what they cost

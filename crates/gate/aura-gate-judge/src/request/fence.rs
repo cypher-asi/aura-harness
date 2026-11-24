@@ -18,8 +18,25 @@ pub(crate) fn fenced(prompt: &str, head: usize, tail: usize) -> String {
     let chars = text.chars().count();
     let lines = text.lines().count();
     format!(
-        "Length: {chars} characters, {lines} lines.\n<request>\n{}\n</request>",
-        unfenced(&excerpt(&text, chars, head, tail))
+        "Length: {chars} characters, {lines} lines.\n{}",
+        fence(&text, chars, head, tail)
+    )
+}
+
+/// `prompt` as [`fenced`] shows it, without its size: a model judging how
+/// hard the work is reads a long prompt's size as a sign it is hard.
+pub(crate) fn fenced_text(prompt: &str, head: usize, tail: usize) -> String {
+    let text = normalize(prompt);
+    let chars = text.chars().count();
+    fence(&text, chars, head, tail)
+}
+
+/// Normalized `text`, of `chars` characters, cut and between `<request>`
+/// tags as [`fenced`] puts it.
+fn fence(text: &str, chars: usize, head: usize, tail: usize) -> String {
+    format!(
+        "<request>\n{}\n</request>",
+        unfenced(&excerpt(text, chars, head, tail))
     )
 }
 

@@ -1,6 +1,7 @@
 //! The prompt-cache scope of a comparison's arms: every request one arm's
 //! runs send, Gate's calls on them and their subtasks' included, carries
-//! the arm's salt, which no other arm and no ordinary session shares.
+//! the arm's salt, which no other arm and no ordinary session shares. The
+//! classifier's call, made once for both arms, is no arm's.
 
 use super::*;
 use crate::agent_registry::RegisteredAgent;
@@ -69,13 +70,6 @@ async fn every_request_of_an_arm_carries_its_own_cache_salt() {
         let systems: Vec<String> = (fixture.sent_by(run.agent_id).into_iter())
             .map(|sent| sent.system)
             .collect();
-        assert!(
-            systems
-                .iter()
-                .any(|s| s == aura_gate::judge::classify::SYSTEM_PROMPT),
-            "{}: the classifier's call is among the salted ones",
-            run.name
-        );
         if run.arm == CompareArm::A {
             assert!(
                 systems
@@ -86,6 +80,19 @@ async fn every_request_of_an_arm_carries_its_own_cache_salt() {
             );
         }
     }
+    let classified: Vec<AgentId> = (fixture.sent.lock().unwrap().iter())
+        .filter(|sent| sent.system == aura_gate::judge::classify::SYSTEM_PROMPT)
+        .map(|sent| sent.agent)
+        .collect();
+    assert_eq!(
+        classified.len(),
+        1,
+        "the prompt is classified once for both arms"
+    );
+    assert!(
+        payload.runs.iter().all(|run| run.agent_id != classified[0]),
+        "on the comparison's own agent, in neither arm's cache scope or costs"
+    );
 }
 
 /// Dispatch a reviewer asked `prompt` from `chain[0]`, whose ancestors

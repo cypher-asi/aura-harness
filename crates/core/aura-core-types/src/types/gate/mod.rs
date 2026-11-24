@@ -7,6 +7,7 @@
 //! user's rating). Which one counts is decided by whoever reads them; the
 //! record keeps all of them.
 
+mod assessment;
 mod category;
 mod outcome;
 mod prompt;
@@ -14,6 +15,7 @@ mod route;
 #[cfg(test)]
 mod tests;
 
+pub use assessment::{Assessment, Exploration, Pitfall, Scope, Spec};
 pub use category::{Difficulty, PromptCategory};
 pub use outcome::{OutcomePayload, OutcomeSignal};
 pub use prompt::PromptPayload;

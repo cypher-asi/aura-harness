@@ -43,7 +43,17 @@ pub async fn classify_prompt(
             Err(e) => return failed(e.to_string()),
         };
         if let Some(found) = classify::label_of(&response) {
-            info!(%model, attempt, category = %found.category, difficulty = %found.difficulty, "Classified the prompt");
+            let assessment = found.assessment.as_ref();
+            info!(
+                %model,
+                attempt,
+                category = %found.category,
+                difficulty = %found.difficulty,
+                points = assessment.map(classify::points),
+                drivers = assessment.map(aura_core_types::Assessment::summary),
+                analysis = assessment.map(|a| a.analysis.as_str()),
+                "Classified the prompt"
+            );
             return Ok(found);
         }
         reply = classify::reply_shown(&response.message);

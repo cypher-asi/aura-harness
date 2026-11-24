@@ -54,6 +54,7 @@ impl Driving<'_> {
         let label = live::classify_prompt(kernel, &classifier, &text, token).await?;
         let category = label.category;
         let mut difficulty = Some(label.difficulty);
+        let assessment = label.assessment;
         let mut told = None;
         if std::mem::take(&mut self.headless.criteria_due) {
             let token = config.auth_token.clone();
@@ -76,6 +77,7 @@ impl Driving<'_> {
             classifier,
             route,
             difficulty,
+            assessment,
             ..PromptPayload::new(text)
         };
         Ok((payload, Some(category), told))

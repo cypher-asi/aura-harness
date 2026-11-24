@@ -9,7 +9,8 @@ use aura_agent_kernel::KernelConfig;
 use aura_auth::{Vault, ZosIdentity};
 use aura_context_skills::{SkillLoader, SkillManager};
 use aura_core_types::{
-    Hash, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
+    Assessment, Difficulty, Exploration, Hash, OutcomePayload, OutcomeSignal, PromptCategory,
+    PromptPayload, Route, RouteLevel, Scope, Spec,
 };
 use aura_exec_tools::ToolConfig;
 use aura_gate::live::GateLive;
@@ -362,13 +363,32 @@ async fn answer(request: ModelRequest, last: Option<&str>) -> Result<ModelRespon
     Ok(response)
 }
 
+/// What the mock classifier ([`classify`]) finds about a prompt it
+/// labels `category`, which adds up to `difficulty`.
+pub(super) fn mock_assessment(category: &str, difficulty: Difficulty) -> Assessment {
+    let (scope, spec, exploration) = match difficulty {
+        Difficulty::Easy => (Scope::OneSpot, Spec::Exact, Exploration::None),
+        Difficulty::Medium => (Scope::OneFile, Spec::Clear, Exploration::Some),
+        Difficulty::Hard => (Scope::ManyFiles, Spec::Loose, Exploration::Deep),
+    };
+    Assessment {
+        analysis: format!("{category} work"),
+        scope,
+        spec,
+        exploration,
+        checkable: false,
+        pitfalls: Vec::new(),
+    }
+}
+
 /// The classifier's answer to `request`, asking about `prompt`: prompts
 /// that say "across files" are changes across several files, those that
 /// say "plan:" are planning, those that say "fix" are debugging,
 /// "classifier down" fails the call, "classifier rambles" gets a reply
 /// with no label, and the rest are questions. Prompts that say "(easy)"
 /// or "(hard)" get that difficulty; the rest are medium. The answer is a
-/// call to the label tool when the request offers it, else text.
+/// call to the label tool when the request offers it, with an assessment
+/// that adds up to that difficulty, else text.
 async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse, ReasonerError> {
     if prompt.contains("classifier down") {
         return Err(ReasonerError::Internal("classifier offline".to_string()));
@@ -393,11 +413,11 @@ async fn classify(request: &ModelRequest, prompt: &str) -> Result<ModelResponse,
         .unwrap_or("medium");
     let tool = aura_gate::judge::classify::LABEL_TOOL;
     let answer = if request.tools.iter().any(|t| t.name == tool) {
-        MockResponse::tool_use(
-            "toolu_label",
-            tool,
-            serde_json::json!({"category": label, "difficulty": difficulty}),
-        )
+        let difficulty = Difficulty::from_name(difficulty).unwrap();
+        let mut input = serde_json::to_value(mock_assessment(label, difficulty)).unwrap();
+        input["category"] = label.into();
+        input["pitfalls"] = serde_json::json!([]);
+        MockResponse::tool_use("toolu_label", tool, input)
     } else {
         MockResponse::text(format!("{label} {difficulty}"))
     };
@@ -2701,7 +2721,6 @@ async fn the_classifiers_difficulty_moves_where_a_turn_starts_and_is_recorded() 
     )
     .await;
 
-    use aura_core_types::Difficulty;
     let prompts: Vec<(Option<PromptCategory>, Option<Difficulty>, String)> =
         prompts_of(&state, first)
             .into_iter()
@@ -3302,7 +3321,6 @@ async fn recorded_difficulty(
 #[tokio::test]
 async fn exacting_criteria_rate_the_work_hard_unless_criteria_are_off() {
     use aura_config::ReviewMode;
-    use aura_core_types::Difficulty;
     let exacting = "fix the parser (exacting criteria)";
     assert_eq!(
         recorded_difficulty(ReviewMode::Log, exacting).await,

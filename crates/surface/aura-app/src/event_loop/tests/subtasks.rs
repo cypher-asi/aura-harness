@@ -105,6 +105,7 @@ async fn a_task_under_gate_runs_on_the_model_gate_picks_for_it() {
             route: Route::subtask(SONNET, RouteReason::Default).at_effort("medium"),
             kind: Some("reviewer".to_string()),
             difficulty: Some(Difficulty::Medium),
+            assessment: Some(mock_assessment("debugging", Difficulty::Medium)),
             ..PromptPayload::new("fix the flaky parser test")
         }],
         "medium debugging starts on the standard tier, as for turns"

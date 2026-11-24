@@ -311,6 +311,10 @@ pub struct BenchRun {
     pub category: Option<String>,
     /// How hard the classifier said its first prompt's work is (`hard`)
     pub difficulty: Option<String>,
+    /// What the classifier found drove that difficulty (`many files,
+    /// loose spec, deep exploring`); `None` when it named the difficulty
+    /// itself, and in older records
+    pub drivers: Option<String>,
     /// Whether Gate had its model lead a turn, handing the work to
     /// subtasks
     pub led: bool,
@@ -546,6 +550,9 @@ pub struct BenchView {
     /// Runs under way, in [`run_order`]; only while it runs
     pub live: Vec<BenchLiveRun>,
     pub judge: Option<BenchJudge>,
+    /// The classifier's calls, made once per prompt for both arms and in
+    /// neither arm's costs; empty until it ends
+    pub classify: Vec<BenchTokens>,
     /// What a replayed session cost when it ran
     pub baseline: Option<BenchBaseline>,
     /// Whether the judge had what the user kept to measure against

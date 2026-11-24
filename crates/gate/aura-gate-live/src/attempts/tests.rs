@@ -219,6 +219,7 @@ fn comparison(run: CompareRun) -> ComparePayload {
         check: None,
         budget_usd: None,
         classifier: String::new(),
+        classify_tokens: Vec::new(),
         requested_by: AgentId::generate(),
         apply_root: PathBuf::from("/work/repo"),
         started_ms: 1_000,

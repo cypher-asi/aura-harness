@@ -1811,6 +1811,7 @@ mod tests {
             check: None,
             budget_usd: None,
             classifier: String::new(),
+            classify_tokens: Vec::new(),
             requested_by: lead,
             apply_root: "/repo".into(),
             started_ms: 0,

@@ -8,8 +8,8 @@ use super::compare;
 use super::subagents::lock;
 use super::LoopState;
 use aura_core_types::{
-    AgentId, BenchSource, CompareArm, ComparePayload, CompareRun, CompareStatus, ModelTokens,
-    RefVerdict, RunTurn,
+    AgentId, Assessment, BenchSource, CompareArm, ComparePayload, CompareRun, CompareStatus,
+    ModelTokens, RefVerdict, RunTurn,
 };
 use aura_gate::compare::{
     judge_cost_usd, judge_unpriced_calls, summarize, task_cells, turn_cells, CompareRequest,
@@ -263,6 +263,7 @@ pub(super) fn view(
         arms: [arm(payload, CompareArm::A), arm(payload, CompareArm::B)],
         runs,
         judge: judge(payload),
+        classify: tokens(&payload.classify_tokens),
         baseline: payload.source.baseline().map(|b| BenchBaseline {
             calls: b.calls,
             cost_usd: b.cost_usd,
@@ -367,6 +368,9 @@ fn run(run: &CompareRun) -> BenchRun {
         difficulty: first
             .and_then(|turn| turn.difficulty)
             .map(|difficulty| difficulty.as_str().to_string()),
+        drivers: first
+            .and_then(|turn| turn.assessment.as_ref())
+            .map(Assessment::summary),
         led: run.turns.iter().any(|turn| turn.led == Some(true)),
         subtask_cost_usd: run.turns.iter().map(|turn| turn.subtask_cost_usd).sum(),
         wall_ms: run.wall_ms,

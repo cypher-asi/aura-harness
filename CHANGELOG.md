@@ -7,6 +7,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### The classifier assesses the work, and Gate scores its difficulty
+
+##### Changed
+
+- The classifier no longer picks a difficulty. Its `label` tool asks for
+  a short analysis first, then how much code the work changes (one spot,
+  one file, a few files, many files), how precisely the request is
+  specified, how much exploring it needs, whether it gives a way to
+  check the result, and which traps it holds (dates and times, money and
+  numbers, text encoding, concurrency, security, parsing, compatibility,
+  performance). Gate adds these into points: 2 or fewer is easy, 6 or
+  more is hard, anything between is medium. Its prompt now judges the
+  work rather than the writing, so a long or carefully written request
+  is no longer hard for that alone, and the request's length is no
+  longer sent to it.
+- A comparison classifies each prompt once, on its own agent, and both
+  arms share the label, so they are routed on the same assessment. Like
+  the judge's calls, the classifier's are in neither arm's costs:
+  `/compare show` gives them a `Classifier:` line of their own beside
+  `Judge:`, and the BENCH tab a `classifier` line beside its `judge`
+  one, once the comparison ends.
+
+##### Added
+
+- `/compare show` follows a run's category and difficulty with what
+  drove it, such as `debugging/hard (a few files, loose spec, deep
+  exploring, checkable, traps: concurrency)`, and the BENCH tab's runs
+  table has a `why` column with the same. A prompt's record keeps the
+  full assessment, analysis included.
+
 ### Benchmarks' tokens say what each call was for
 
 ##### Changed

@@ -100,7 +100,9 @@ fn write_routing(out: &mut String, run: &CompareRun) {
 }
 
 /// What the `routed` turns asked for and how hard, each once in the order
-/// they first asked, e.g. `debugging/hard, question`.
+/// they first asked, with what the classifier found drove it when it
+/// said, e.g. `debugging/hard (many files, loose spec, deep exploring),
+/// question`.
 fn write_asked(out: &mut String, routed: &[&RunTurn]) {
     let mut asked = Vec::new();
     for turn in routed {
@@ -117,6 +119,9 @@ fn write_asked(out: &mut String, routed: &[&RunTurn]) {
         let _ = write!(out, "{category}");
         if let Some(difficulty) = turn.difficulty {
             let _ = write!(out, "/{difficulty}");
+        }
+        if let Some(assessment) = &turn.assessment {
+            let _ = write!(out, " ({})", assessment.summary());
         }
     }
 }

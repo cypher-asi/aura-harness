@@ -10,6 +10,30 @@ use aura_core_types::{
 };
 
 #[test]
+fn the_classifiers_calls_are_shown_apart_from_the_arms() {
+    let mut payload = payload();
+    payload.classify_tokens = vec![ModelTokens {
+        model: "claude-haiku-4-5".to_string(),
+        purpose: Some("classify".to_string()),
+        calls: 1,
+        cost_usd: 0.0004,
+        ..ModelTokens::default()
+    }];
+    let text = render("Compare #1", &payload);
+    assert!(
+        text.contains(
+            "\n  Classifier: 1 call on claude-haiku-4-5, $0.0004 (not in the arm totals)\
+             \n  Judge: 1 blind call"
+        ),
+        "{text}"
+    );
+    assert_eq!(
+        line(&text, "total cost"),
+        ["total cost", "$0.18 · 87% less", "$1.35 · 100%"]
+    );
+}
+
+#[test]
 fn the_view_shows_both_arms_side_by_side() {
     let text = render("Compare #1", &payload());
     assert!(text.starts_with("Compare #1 · \"fix the flaky parser test\" · done"));
@@ -344,7 +368,7 @@ fn a_stopped_comparison_with_routed_runs_is_pinned_byte_for_byte() {
         "  Judge: 1 blind call on aura-claude-opus-4-7 (cloud), $0.03 (not in the arm totals)",
         "",
         "  Runs",
-        "    a-1      aura-claude-sonnet-4-6 (cloud)          41s     $0.05  check passed  2 files  · debugging/hard, direct, asked to check 1×, moved up 1×",
+        "    a-1      aura-claude-sonnet-4-6 (cloud)          41s     $0.05  check passed  2 files  · debugging/hard (a few files, loose spec, deep exploring, checkable, traps: concurrency), direct, asked to check 1×, moved up 1×",
         "    b-1      aura-claude-opus-4-7 (cloud)            41s     $0.40  check passed  2 files",
         "    a-2      aura-claude-sonnet-4-6 (cloud)          42s     $0.07  check passed  2 files  · multi_file_change, question, 1 of 2 turns led: lead $0.63 + subtasks $0.17, sent back 2×",
         "    b-2      aura-claude-opus-4-7 (cloud)            42s     $0.50                2 files  (the model fell over)",

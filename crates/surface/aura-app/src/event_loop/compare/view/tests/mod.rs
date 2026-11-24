@@ -17,9 +17,10 @@ mod patch;
 mod summary;
 
 use aura_core_types::{
-    AgentId, ArmSpec, BenchSource, CompareArm, CompareCopy, CompareJudgment, ComparePayload,
-    CompareRun, CompareStatus, Difficulty, ExampleTaskInfo, ModelTokens, OutcomeSignal, Plan,
-    PlanShare, PromptCategory, RefVerdict, RunTurn, SessionBaseline, SystemKind,
+    AgentId, ArmSpec, Assessment, BenchSource, CompareArm, CompareCopy, CompareJudgment,
+    ComparePayload, CompareRun, CompareStatus, Difficulty, ExampleTaskInfo, Exploration,
+    ModelTokens, OutcomeSignal, Pitfall, Plan, PlanShare, PromptCategory, RefVerdict, RunTurn,
+    Scope, SessionBaseline, Spec, SystemKind,
 };
 use std::path::PathBuf;
 
@@ -78,6 +79,7 @@ fn payload() -> ComparePayload {
         check: Some("cargo test".to_string()),
         budget_usd: None,
         classifier: "aura-claude-haiku-4-5".to_string(),
+        classify_tokens: Vec::new(),
         requested_by: AgentId::generate(),
         apply_root: PathBuf::from("/repo"),
         started_ms: 0,
@@ -163,6 +165,14 @@ fn routed() -> ComparePayload {
     payload.runs[0].turns = vec![RunTurn {
         category: Some(PromptCategory::Debugging),
         difficulty: Some(Difficulty::Hard),
+        assessment: Some(Assessment {
+            analysis: "A flaky parser test.".to_string(),
+            scope: Scope::FewFiles,
+            spec: Spec::Loose,
+            exploration: Exploration::Deep,
+            checkable: true,
+            pitfalls: vec![Pitfall::Concurrency],
+        }),
         led: Some(false),
         escalations: 1,
         nudges: 1,

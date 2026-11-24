@@ -72,7 +72,7 @@ use aura_gate::judge::turn::{shown_to_judge, Verdict};
 use aura_gate::lead::lead_tools;
 use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision};
-use aura_model::{Message, ThinkingEffort, ToolDefinition};
+use aura_model::{Message, ModelCallPurpose, ThinkingEffort, ToolDefinition};
 use aura_ui_terminal::events::{
     AgentDefinitionSummary, AgentSummary, MailView, ProcessKind, ProcessStatus, ProcessSummary,
 };
@@ -1725,6 +1725,21 @@ impl AgentHub {
         let mut calls = Vec::new();
         self.each_entry(agent, |entry| {
             calls.extend(crate::record_loader::model_call(&entry.tx));
+        });
+        tally(calls)
+    }
+
+    /// [`Self::tokens_by_model`] of `agent`'s own calls alone, made for
+    /// `purpose`, leaving out the agents under it.
+    pub(crate) fn own_tokens_for(
+        &self,
+        agent: AgentId,
+        purpose: ModelCallPurpose,
+    ) -> Vec<ModelTokens> {
+        let mut calls = Vec::new();
+        self.each_entry_of(vec![agent], |entry| {
+            let call = crate::record_loader::model_call(&entry.tx);
+            calls.extend(call.filter(|call| call.purpose == Some(purpose)));
         });
         tally(calls)
     }

@@ -27,8 +27,8 @@ pub use compare::{
 pub use context_hash::ContextHash;
 pub use effect::{Effect, EffectKind, EffectStatus};
 pub use gate::{
-    Difficulty, OutcomePayload, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteLevel,
-    RouteReason,
+    Assessment, Difficulty, Exploration, OutcomePayload, OutcomeSignal, Pitfall, PromptCategory,
+    PromptPayload, Route, RouteLevel, RouteReason, Scope, Spec,
 };
 pub use identity::Identity;
 pub use plan_usage::{Plan, PlanShare, PlanUsage};

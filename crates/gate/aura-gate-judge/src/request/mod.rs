@@ -15,5 +15,5 @@ mod tests;
 
 pub(crate) use ask::{answers_in_text, meanings, Ask};
 pub(crate) use cut::{cut, or_blank, tail};
-pub(crate) use fence::fenced;
+pub(crate) use fence::{fenced, fenced_text};
 pub(crate) use reply::{after_thinking, answered, calls, Answered};
