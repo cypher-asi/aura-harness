@@ -1,0 +1,31 @@
+{
+  "id": "01a20e7a8d5e0001",
+  "title": "Implement the user's requested benchmark defaults in the Rust repo at the current workspace. This is a direct user impl…",
+  "state": "completed",
+  "agent_id": "66cdac7eca6963ae442b0e4bbe4ae88dc0548593add0a767deb3d1c7f208404e",
+  "agent_name": "implement #84",
+  "assignee": "implement",
+  "parent": "01a20e7989880000",
+  "items": [
+    {
+      "content": "Inspect benchmark form, sessions handling, submission, and existing tests",
+      "state": "completed"
+    },
+    {
+      "content": "Implement shared SWE-bench Pro Hard benchmark defaults and refresh-preservation behavior",
+      "state": "completed"
+    },
+    {
+      "content": "Add or update focused deterministic regression tests",
+      "state": "completed"
+    },
+    {
+      "content": "Run formatting, focused tests, and Clippy; review the final diff",
+      "state": "in_progress"
+    }
+  ],
+  "summary": "Implemented the benchmark defaults in `app/benchmarks.rs`:",
+  "updated_ms": 1795539689013,
+  "created_ms": 1795539242334,
+  "tool_use_id": "call_0_799bb5d8aa103a25"
+}

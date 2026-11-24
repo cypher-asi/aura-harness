@@ -1,0 +1,26 @@
+{
+  "id": "01a20e7989880000",
+  "title": "default bench mark to: swe bench hard as default, 1 task try per, gate by difficulty with haiku (easy), kimi k3 (medium…",
+  "state": "completed",
+  "agent_id": "491d83f5554e86f37dd4b6aa03ec9b8bbf09ab34ab7f79546e50249da3533a8b",
+  "agent_name": "Agent 1392",
+  "items": [
+    {
+      "content": "Locate the benchmark form defaults and exact catalog IDs for the requested suite and models.",
+      "state": "completed"
+    },
+    {
+      "content": "Prefill SWE-bench Hard, one attempt per task, and difficulty-routed model defaults.",
+      "state": "completed",
+      "assignee": "implement"
+    },
+    {
+      "content": "Add or update regression tests and run focused quality checks.",
+      "state": "completed",
+      "assignee": "reviewer"
+    }
+  ],
+  "summary": "I’ll find the benchmark configuration, update the prefilled defaults, and verify the affected checks.",
+  "updated_ms": 1795539937896,
+  "created_ms": 1795539175816
+}
