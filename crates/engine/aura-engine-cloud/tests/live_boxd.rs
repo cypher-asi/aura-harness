@@ -12,7 +12,11 @@ use aura_engine_cloud::{BoxdProvider, VmProvider};
 fn provider() -> BoxdProvider {
     let _ = aura_config::env_file::load();
     let config = aura_config::CloudConfig::from_env().expect("cloud settings");
-    assert!(config.is_configured(), "{}", aura_config::MISSING_CREDENTIAL_NOTICE);
+    assert!(
+        config.is_configured(),
+        "{}",
+        aura_config::MISSING_CREDENTIAL_NOTICE
+    );
     BoxdProvider::from_config(&config).expect("provider")
 }
 
@@ -25,7 +29,12 @@ async fn read_only_calls_succeed() {
     let machines = boxd.list(&[]).await.expect("list machines");
     println!("listed {} machines", machines.len());
     for machine in &machines {
-        println!("  {} {} {}", machine.name, machine.status.as_str(), machine.region);
+        println!(
+            "  {} {} {}",
+            machine.name,
+            machine.status.as_str(),
+            machine.region
+        );
     }
     match boxd.balance().await {
         Ok(balance) => println!("balance: {balance:?}"),
