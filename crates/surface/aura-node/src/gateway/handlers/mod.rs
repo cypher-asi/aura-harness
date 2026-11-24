@@ -27,6 +27,8 @@
 //! - [`processes`] — in-TEE process / automation CRUD + trigger
 //!   (`/v1/processes`; Swarm TEE phase 7).
 //! - [`tool_permissions`] — user defaults + per-agent overrides.
+//! - [`cloud`] — the routes a cloud node serves its hub and peers
+//!   (`/v1/host`, `/v1/sync/*`, `/v1/workspace/patch`, `/v1/mesh`).
 //! - [`util`] — shared parsing helpers (`parse_agent_id` for the
 //!   bare/partitioned UUID + hex grammars).
 //!
@@ -37,6 +39,7 @@
 //! [`pub(in crate::gateway) use`] re-export below keeps the same shape working
 //! from the new `handlers/` subtree.
 
+pub(crate) mod cloud;
 pub(crate) mod files;
 pub(crate) mod memory;
 pub(crate) mod preview_tcp;

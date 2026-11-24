@@ -305,6 +305,9 @@ impl Node {
             trigger_registrar: Some(trigger_registrar),
             router_url,
         });
+        if self.config.cloud_node {
+            start_claim_socket(&state, &self.config.data_dir, addr.port());
+        }
         let app = create_router(state);
 
         info!(%addr, "HTTP server listening");
@@ -335,6 +338,23 @@ impl Node {
 
         Ok(())
     }
+}
+
+/// Serve the cloud node's claim socket (`aura node claim --stdin`).
+#[cfg(unix)]
+fn start_claim_socket(state: &RouterState, data_dir: &std::path::Path, port: u16) {
+    let node = state.cloud_node();
+    let path = crate::cloud_node::claim_socket_path(data_dir);
+    tokio::spawn(async move {
+        if let Err(err) = crate::cloud_node::serve_claims(node, path, port).await {
+            tracing::error!(error = %err, "cloud node claim socket failed; the hub cannot claim this node");
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn start_claim_socket(_state: &RouterState, _data_dir: &std::path::Path, _port: u16) {
+    tracing::warn!("cloud nodes need a Unix socket for their claim; AURA_CLOUD_NODE ignored");
 }
 
 /// Env var that disables the auto-kill self-heal on `AddrInUse`. Set

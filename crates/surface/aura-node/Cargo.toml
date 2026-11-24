@@ -37,6 +37,7 @@ aura-context-compaction = { path = "../../context/aura-context-compaction" }
 # `node.rs` instantiates the engine (scheduler + automaton bridge) and
 # the gateway router builds the node's agent host from it.
 aura-engine = { path = "../../engine/aura-engine" }
+aura-engine-cloud = { path = "../../engine/aura-engine-cloud" }
 # Phase C / Commit 4: HTTP `DomainApi` impl moved out of the gateway.
 # `node.rs` constructs `HttpDomainApi` from here.
 aura-exec-domain-http = { path = "../../exec/aura-exec-domain-http" }
@@ -45,6 +46,7 @@ aura-context-skills = { path = "../../context/aura-context-skills" }
 aura-plugin = { path = "../../plugin/aura-plugin" }
 aura-plugin-hooks = { path = "../../plugin/aura-plugin-hooks" }
 chrono = { workspace = true }
+parking_lot = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

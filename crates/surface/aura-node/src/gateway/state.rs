@@ -99,6 +99,11 @@ pub struct RouterState {
     /// Every agent spawned on this node, from any session. Shared so
     /// agents outlive the request that started them.
     pub(crate) agent_host: aura_engine::AgentHost,
+    /// This node as a cloud machine's node (inert unless
+    /// `AURA_CLOUD_NODE=1`): its claim, sealed agents, host sampler.
+    pub(crate) cloud: Arc<crate::cloud_node::CloudNode>,
+    /// The cloud node's half of the mesh.
+    pub(crate) mesh: Arc<super::handlers::cloud::MeshNode>,
 }
 
 /// Input bundle for [`RouterState::new`].
@@ -144,6 +149,13 @@ impl RouterState {
                 max_running: limits.max_running,
             },
         );
+        let cloud = crate::cloud_node::CloudNode::new(&cfg.config);
+        let mesh = super::handlers::cloud::MeshNode::new(Arc::clone(&cloud));
+        if cloud.enabled() {
+            agent_host.set_remote_router(Arc::new(super::handlers::cloud::MeshRouter(Arc::clone(
+                &mesh,
+            ))));
+        }
         Self {
             store: cfg.store,
             scheduler: cfg.scheduler,
@@ -164,7 +176,17 @@ impl RouterState {
             ws_slots: Arc::new(Semaphore::new(ws::MAX_WS_CONNS_PER_NODE)),
             chat_runs: Arc::new(DashMap::new()),
             agent_host,
+            cloud,
+            mesh,
         }
+    }
+}
+
+impl RouterState {
+    /// The cloud-node state, for the claim socket.
+    #[must_use]
+    pub(crate) fn cloud_node(&self) -> Arc<crate::cloud_node::CloudNode> {
+        Arc::clone(&self.cloud)
     }
 }
 
@@ -190,6 +212,8 @@ impl Clone for RouterState {
             ws_slots: self.ws_slots.clone(),
             chat_runs: self.chat_runs.clone(),
             agent_host: self.agent_host.clone(),
+            cloud: self.cloud.clone(),
+            mesh: self.mesh.clone(),
         }
     }
 }

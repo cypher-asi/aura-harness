@@ -59,6 +59,7 @@
 )]
 
 pub mod auth;
+pub mod cloud_node;
 mod config;
 pub mod console_format;
 pub mod files_api;

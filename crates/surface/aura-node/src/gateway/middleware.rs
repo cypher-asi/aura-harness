@@ -48,6 +48,7 @@ use tower_http::{
 use tracing::{warn, Level};
 
 use super::auth_mw;
+use super::handlers::cloud;
 use super::handlers::files::{
     delete_workspace_handler, import_workspace_handler, list_files_handler, read_file_handler,
     resolve_workspace_handler, write_file_handler,
@@ -97,6 +98,24 @@ use super::RouterState;
 /// the protected sub-router is still structurally separate — matching
 /// the public / protected split for ordering and body-limit purposes —
 /// but every request is allowed through without a token check.
+/// Routes a cloud node serves its hub and peers; they answer `404` on
+/// other nodes. See [`cloud`].
+fn cloud_routes() -> Router<RouterState> {
+    // Record pages for an agent's hand-off can be large.
+    let import_limit = DefaultBodyLimit::max(64 * 1024 * 1024);
+    Router::new()
+        .route("/v1/host", get(cloud::host_handler))
+        .route(
+            "/v1/sync/import",
+            post(cloud::sync_import_handler).route_layer(import_limit),
+        )
+        .route("/v1/sync/seal/:agent_id", post(cloud::sync_seal_handler))
+        .route("/v1/sync/traces", get(cloud::sync_traces_handler))
+        .route("/v1/workspace/patch", get(cloud::workspace_patch_handler))
+        .route("/v1/mesh/mail", post(cloud::mesh_mail_handler))
+        .route("/v1/mesh", get(cloud::mesh_ws_handler))
+}
+
 pub fn create_router(state: RouterState) -> Router {
     // Per-route body limits — tighter ceilings for endpoints that have
     // no legitimate reason to accept a large body. Each one is a
@@ -375,9 +394,11 @@ pub fn create_router(state: RouterState) -> Router {
             "/v1/processes/:id/runs",
             get(list_process_runs_handler).route_layer(body_limit_16k),
         )
-        .merge(strict);
+        .merge(strict)
+        .merge(cloud_routes());
 
-    let protected = if state.config.require_auth {
+    // A cloud node always checks tokens: the hub's claim decides them.
+    let protected = if state.config.require_auth || state.config.cloud_node {
         protected.route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_mw::require_bearer_mw,

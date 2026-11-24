@@ -30,6 +30,20 @@ pub(in crate::gateway) async fn run_start_handler(
     State(state): State<RouterState>,
     Json(req): Json<RuntimeRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(agent) = req
+        .agent_identity
+        .partition_id
+        .as_deref()
+        .and_then(|id| aura_core_types::AgentId::from_hex(id).ok())
+        .filter(|agent| state.cloud.is_sealed(agent))
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("agent {agent} was handed back to its hub; this node no longer runs it"),
+            })),
+        ));
+    }
     let auth_token =
         resolve_run_auth_token(req.auth_jwt.clone(), &headers, state.config.require_auth);
 

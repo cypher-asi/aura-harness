@@ -53,6 +53,16 @@ pub(crate) async fn require_bearer_mw(
     mut request: Request,
     next: Next,
 ) -> Response {
+    if state.cloud.enabled() {
+        // A cloud node takes only the tokens its hub's claim gave it.
+        if let Err(status) = state
+            .cloud
+            .authorize(request.headers(), request.uri().path())
+        {
+            return status.into_response();
+        }
+        return next.run(request).await;
+    }
     let token = match check_bearer_any(
         request.headers(),
         &state.config.auth_token,

@@ -23,6 +23,14 @@ pub(in crate::gateway) async fn submit_tx_handler(
     Json(request): Json<SubmitTxRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let agent_id = parse_agent_id(&request.agent_id).map_err(ApiError::into_string_tuple)?;
+    if state.cloud.is_sealed(&agent_id) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "agent {agent_id} was handed back to its hub; this node no longer writes for it"
+            ),
+        ));
+    }
 
     let tx_type = match request.kind.as_str() {
         "user_prompt" => TransactionType::UserPrompt,
