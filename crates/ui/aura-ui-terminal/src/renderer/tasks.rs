@@ -56,12 +56,15 @@ pub(super) fn render_tasks(
 ) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
     let list = app.task_list();
-    if list.rows().is_empty() && list.hidden() > 0 {
-        render_hidden(frame, inner, ("tasks", list.hidden()), theme);
-        return;
-    }
     if list.rows().is_empty() {
-        render_empty(frame, inner, "No tasks yet.", theme);
+        // Hidden tasks are named first: the plans are left out with them.
+        if list.hidden() > 0 {
+            render_hidden(frame, inner, ("tasks", list.hidden()), theme);
+        } else if list.hidden_plans() > 0 {
+            render_hidden(frame, inner, ("plans", list.hidden_plans()), theme);
+        } else {
+            render_empty(frame, inner, "No tasks yet.", theme);
+        }
         return;
     }
 
@@ -215,4 +218,61 @@ fn todo_line(
         cell_style(theme, state, todo_style(todo.state, theme)),
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{AgentSummary, TodoState, UiCommand};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    /// The screen after drawing the TASKS tab into a 60x4 frame.
+    fn drawn(app: &mut App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(60, 4)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_tasks(frame, area, area, app, &Theme::default());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn plans_of_other_agents_only_say_so_when_no_task_is_hidden() {
+        let mut app = App::new();
+        let agent = |id: &str| AgentSummary {
+            id: id.into(),
+            name: id.to_uppercase(),
+            project_id: Some("site".into()),
+            ..AgentSummary::default()
+        };
+        app.process_command(UiCommand::SetAgents(vec![agent("a"), agent("b")]));
+        app.process_command(UiCommand::SetActiveAgent("a".into()));
+        app.process_command(UiCommand::SetPlans(vec![PlanView {
+            path: ".aura/plans/b.plan.md".into(),
+            name: "b".into(),
+            todos: vec![TodoView {
+                content: "step".into(),
+                state: TodoState::Pending,
+                assignee: None,
+                task: Some("tb".into()),
+            }],
+        }]));
+        assert!(app.task_list().rows().is_empty());
+        assert_eq!(app.task_list().hidden(), 0);
+        assert_eq!(app.task_list().hidden_plans(), 1);
+
+        let screen = drawn(&mut app);
+        assert!(screen.contains("No plans for this agent"), "{screen}");
+        assert!(!screen.contains("No tasks yet."), "{screen}");
+    }
 }

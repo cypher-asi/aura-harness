@@ -2,8 +2,9 @@
 //! active agent's workspace, grouped under the plan it works on. Each plan
 //! is a foldable header with its todos, then the tasks working on it; the
 //! plan being worked on comes first, then the other plans newest first.
-//! Tasks that work on no plan, or on one that is not listed, go last
-//! under a `No Plan` header, shown only when there are such tasks.
+//! A task that names no plan goes with the listed plan whose todo it
+//! does. Tasks that work on no plan, or on one that is not listed, go
+//! last under a `No Plan` header, shown only when there are such tasks.
 //!
 //! A user's request is a task, and each piece of it an agent handed to
 //! another with `task` is a task under it, in the same group; each shows
@@ -88,6 +89,28 @@ enum RowKey {
     Todo(String, usize),
     Task(String),
     Item(String, usize),
+}
+
+/// The listed plans by what places a tree of tasks in their group: their
+/// path, and the tasks their todos name. Where two plans match, the
+/// first listed wins.
+#[derive(Debug, Default)]
+struct PlanIndex<'a> {
+    by_path: HashMap<&'a str, usize>,
+    by_todo_task: HashMap<&'a str, usize>,
+}
+
+impl PlanIndex<'_> {
+    /// The listed plan whose group the tree rooted at `root` goes in:
+    /// the plan it names, else the plan whose todo it does; `None` for
+    /// the No Plan group. A named plan that is not listed puts the tree
+    /// under No Plan even when a listed plan's todo names it.
+    fn group_of(&self, root: &TaskView) -> Option<usize> {
+        match root.plan.as_deref() {
+            Some(path) => self.by_path.get(path).copied(),
+            None => self.by_todo_task.get(root.id.as_str()).copied(),
+        }
+    }
 }
 
 /// The plans and tasks, and how the tab shows them.
@@ -238,9 +261,13 @@ impl TaskList {
             parent = self.find(&id).and_then(|task| task.parent.clone());
         }
         if let Some(root) = self.listed_root(id) {
-            match self.group_of(root) {
+            let group = self
+                .tasks
+                .get(root)
+                .and_then(|root| self.plan_index().group_of(root));
+            match group.and_then(|plan| self.plans.get(plan)) {
                 Some(plan) => {
-                    let path = self.plans[plan].path.clone();
+                    let path = plan.path.clone();
                     self.plan_folds.insert(path, true);
                 }
                 None => self.no_plan_open = Some(true),
@@ -333,16 +360,18 @@ impl TaskList {
     /// is drawn in. `None` when `id` is not listed.
     fn listed_root(&self, id: &str) -> Option<usize> {
         let is_listed = |index: usize| self.scoped.get(index).copied().unwrap_or(false);
-        let mut root = self
-            .tasks
-            .iter()
-            .position(|task| task.id == id)
-            .filter(|&index| is_listed(index))?;
+        // The first task of an id, as a scan from the top would find it.
+        let mut index: HashMap<&str, usize> = HashMap::with_capacity(self.tasks.len());
+        for (i, task) in self.tasks.iter().enumerate() {
+            index.entry(task.id.as_str()).or_insert(i);
+        }
+        let mut root = index.get(id).copied().filter(|&root| is_listed(root))?;
         let mut seen = HashSet::from([root]);
-        while let Some(parent) = self.tasks[root]
-            .parent
-            .as_deref()
-            .and_then(|parent| self.tasks.iter().position(|task| task.id == parent))
+        while let Some(parent) = self
+            .tasks
+            .get(root)
+            .and_then(|task| task.parent.as_deref())
+            .and_then(|parent| index.get(parent).copied())
             .filter(|&parent| is_listed(parent) && seen.insert(parent))
         {
             root = parent;
@@ -350,14 +379,22 @@ impl TaskList {
         Some(root)
     }
 
-    /// The listed plan whose group the tree rooted at task `root` goes
-    /// in; `None` for the No Plan group.
-    fn group_of(&self, root: usize) -> Option<usize> {
-        let path = self.tasks.get(root)?.plan.as_deref()?;
-        self.plans
+    /// The listed plans, for [`PlanIndex::group_of`].
+    fn plan_index(&self) -> PlanIndex<'_> {
+        let mut index = PlanIndex::default();
+        let listed = self
+            .plans
             .iter()
             .zip(&self.plans_shown)
-            .position(|(plan, &shown)| shown && plan.path == path)
+            .enumerate()
+            .filter_map(|(i, (plan, &shown))| shown.then_some((i, plan)));
+        for (i, plan) in listed {
+            index.by_path.entry(plan.path.as_str()).or_insert(i);
+            for id in plan.todos.iter().filter_map(|todo| todo.task.as_deref()) {
+                index.by_todo_task.entry(id).or_insert(i);
+            }
+        }
+        index
     }
 
     /// What the highlighted row shows.
@@ -519,6 +556,7 @@ impl TaskList {
 
     fn build_rows(&self) -> Vec<TaskRow> {
         let listed: HashSet<&str> = self.scoped_tasks().map(|task| task.id.as_str()).collect();
+        let plan_index = self.plan_index();
         let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
         let mut groups: Vec<Vec<usize>> = vec![Vec::new(); self.plans.len()];
         let mut no_plan = Vec::new();
@@ -532,7 +570,7 @@ impl TaskList {
                 .filter(|parent| listed.contains(parent))
             {
                 Some(parent) => children.entry(parent).or_default().push(index),
-                None => match self.group_of(index) {
+                None => match plan_index.group_of(task) {
                     Some(plan) => groups[plan].push(index),
                     None => no_plan.push(index),
                 },
@@ -652,9 +690,13 @@ impl App {
     }
 
     /// Open the plan of the highlighted row: the plan itself on a header
-    /// or todo, the plan a task works on, at its todo, on a task row.
+    /// or todo, the plan a task works on, at its todo, on a task row. The
+    /// No Plan header has none.
     pub(super) fn open_selected_row_plan(&mut self) {
-        if self.task_list.selected_plan().is_some() {
+        let row = self.task_list.rows.get(self.task_list.selected).copied();
+        if matches!(row, Some(TaskRow::Plan { plan: None, .. })) {
+            self.warn("No plan to open");
+        } else if self.task_list.selected_plan().is_some() {
             self.open_selected_plan();
         } else {
             self.open_selected_task_plan();
@@ -667,49 +709,50 @@ impl App {
             return;
         };
         let Some(plan) = task.plan.clone() else {
-            self.notification = Some((
-                "This task has no plan".to_string(),
-                NotificationType::Warning,
-            ));
+            self.warn("This task has no plan");
             return;
         };
         let todo = task.plan_todo.clone();
         self.open_plan_at(&plan, todo.as_deref());
     }
 
-    /// Highlight the task doing the highlighted todo.
+    /// Highlight the task doing the highlighted todo, or say why it
+    /// can't: the row is not a todo, no task does it, the scope hides
+    /// the task, or the task is not loaded.
     pub(super) fn jump_to_todo_task(&mut self) {
-        let task = match (
-            self.task_list.selected_plan(),
-            self.task_list.rows.get(self.task_list.selected),
-        ) {
-            (Some(plan), Some(TaskRow::Todo { todo, .. })) => {
-                plan.todos.get(*todo).and_then(|todo| todo.task.clone())
-            }
-            _ => None,
-        };
-        let Some(task) = task else {
-            self.notification = Some((
-                "No task is doing this todo".to_string(),
-                NotificationType::Warning,
-            ));
+        let list = &self.task_list;
+        let Some(&TaskRow::Todo { plan, todo }) = list.rows.get(list.selected) else {
+            self.warn("Select a todo to jump to its task");
             return;
         };
-        let hidden = !self.task_list.select_task(&task)
-            && self
-                .task_list
-                .tasks()
-                .iter()
-                .any(|listed| listed.id == task);
-        if hidden {
-            self.notification = Some((
-                format!(
-                    "Another agent is doing this todo; the {} button lists it",
-                    SideScope::BUTTON
-                ),
-                NotificationType::Warning,
-            ));
+        let task = list
+            .plans
+            .get(plan)
+            .and_then(|plan| plan.todos.get(todo))
+            .and_then(|todo| todo.task.clone());
+        let Some(task) = task else {
+            self.warn("No task is doing this todo");
+            return;
+        };
+        if self.task_list.select_task(&task) {
+            return;
         }
+        let list = &self.task_list;
+        let is_loaded = list.tasks().iter().any(|listed| listed.id == task);
+        let is_scoped = list.scoped_tasks().any(|listed| listed.id == task);
+        if is_loaded && !is_scoped {
+            self.warn(format!(
+                "Another agent is doing this todo; the {} button lists it",
+                SideScope::BUTTON
+            ));
+        } else {
+            self.warn("That todo's task isn't loaded");
+        }
+    }
+
+    /// Show `message` as a warning.
+    fn warn(&mut self, message: impl Into<String>) {
+        self.notification = Some((message.into(), NotificationType::Warning));
     }
 
     /// Clicking a plan's or task's fold glyph folds or opens it; clicking
@@ -922,6 +965,64 @@ mod tests {
     }
 
     #[test]
+    fn a_task_naming_no_plan_goes_with_the_plan_whose_todo_it_does() {
+        let mut list = TaskList::default();
+        let mut a = plan("a", &[Todo, Todo]);
+        a.todos[0].task = Some("linked".to_string());
+        a.todos[1].task = Some("own".to_string());
+        list.set_plans(vec![a, plan("b", &[Todo])]);
+        list.set_tasks(vec![task("linked", None, R, 0), planned("own", "b", R)]);
+        assert_eq!(
+            shape(&list),
+            ["-a", "#a 0", "#a 1", "-linked", "-b", "#b 0", "-own"],
+            "a's todo names both, but own works on b"
+        );
+    }
+
+    /// The text of the notification on screen.
+    fn notice(app: &App) -> Option<&str> {
+        app.notification().map(|(text, _)| text.as_str())
+    }
+
+    #[test]
+    fn t_and_p_say_why_they_have_nothing_to_show() {
+        let mut app = App::new();
+        let mut a = plan("a", &[Todo, Todo]);
+        a.todos[0].task = Some("gone".to_string());
+        app.process_command(UiCommand::SetPlans(vec![a]));
+        app.process_command(UiCommand::SetTasks(vec![task("loose", None, R, 0)]));
+        app.focus = PanelFocus::Sandbox;
+        app.show_side_tab(SidePanelTab::Tasks);
+        assert_eq!(
+            shape(app.task_list()),
+            ["-a", "#a 0", "#a 1", "-No Plan", "-loose"]
+        );
+        let press = |app: &mut App, code: KeyCode| app.handle_key(KeyEvent::from(code));
+
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(notice(&app), Some("Select a todo to jump to its task"));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(notice(&app), Some("That todo's task isn't loaded"));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(notice(&app), Some("No task is doing this todo"));
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(notice(&app), Some("No plan to open"));
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(notice(&app), Some("Select a todo to jump to its task"));
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('p'));
+        assert_eq!(notice(&app), Some("This task has no plan"));
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(notice(&app), Some("Select a todo to jump to its task"));
+        assert_eq!(shape(app.task_list()).len(), 5, "nothing folded");
+    }
+
+    #[test]
     fn no_plan_lists_tasks_of_no_listed_plan_and_only_when_there_are_some() {
         let mut list = TaskList::default();
         list.set_plans(vec![plan("a", &[Todo])]);
@@ -1116,11 +1217,16 @@ mod tests {
         app.show_side_tab(SidePanelTab::Tasks);
         assert_eq!(
             shape(app.task_list()),
-            ["-a", "#a 0", "-No Plan", "-t2", "-t1"]
+            ["-a", "#a 0", "-t1", "-No Plan", "-t2"],
+            "t1 does a's todo, so it sits under a"
         );
 
         app.handle_key(KeyEvent::from(KeyCode::Char('t')));
-        assert!(app.notification().is_some(), "a plan header has no task");
+        assert_eq!(
+            notice(&app),
+            Some("Select a todo to jump to its task"),
+            "a plan header has no task"
+        );
         assert_eq!(app.task_list().selected(), 0);
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Char('t')));

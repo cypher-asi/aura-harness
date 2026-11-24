@@ -214,7 +214,8 @@ impl App {
 
     /// Keys of the side panel's lists that would otherwise go to the input,
     /// used while it is empty: Home/End jump, Space folds in the trees, and
-    /// each tab's letters (`o`/`k`/`l` on Processes, `g` on Trace).
+    /// each tab's letters (`o`/`k`/`l` on Processes, `g` on Trace, `p`/`t`
+    /// on Tasks).
     pub(super) fn handle_side_list_shortcut(&mut self, key: KeyEvent) -> bool {
         if key
             .modifiers

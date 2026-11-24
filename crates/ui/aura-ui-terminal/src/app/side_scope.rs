@@ -128,9 +128,11 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::tasks::TaskRow;
     use crate::events::{
         AgentSummary, PlanView, ProcessKind, TaskView, TodoState, TodoView, TraceNode, UiCommand,
     };
+    use crossterm::event::{KeyCode, KeyEvent};
 
     fn agent(id: &str, project: &str, depth: usize) -> AgentSummary {
         AgentSummary {
@@ -329,6 +331,127 @@ mod tests {
             app.selected_process_data().map(|p| p.id.as_str()),
             Some("pac")
         );
+    }
+
+    /// The TASKS tab's rows as text: a plan header by path, a todo as `#`
+    /// and its plan's path, a task by id indented by depth.
+    fn rows(app: &App) -> Vec<String> {
+        let list = app.task_list();
+        list.rows()
+            .iter()
+            .map(|row| match *row {
+                TaskRow::Plan { plan, .. } => {
+                    plan.map_or_else(|| "No Plan".into(), |plan| list.plans()[plan].path.clone())
+                }
+                TaskRow::Todo { plan, .. } => format!("#{}", list.plans()[plan].path),
+                TaskRow::Task { task, depth, .. } | TaskRow::Item { task, depth, .. } => {
+                    format!("{}{}", "  ".repeat(depth), list.tasks()[task].id)
+                }
+            })
+            .collect()
+    }
+
+    fn highlighted(app: &App) -> Option<String> {
+        rows(app).get(app.task_list().selected()).cloned()
+    }
+
+    /// `tx` of `a` is a part of `tb` of `b` and does `plan-c`'s todo;
+    /// `tn` of `b` works on no plan.
+    fn app_with_cross_agent_tasks() -> App {
+        let mut app = app();
+        app.process_command(UiCommand::SetTasks(vec![
+            task("tn", "b", None, None),
+            task("tx", "a", Some("tb"), None),
+            task("tb", "b", None, Some("plan-b")),
+        ]));
+        app.process_command(UiCommand::SetPlans(vec![
+            plan("plan-b", None),
+            plan("plan-c", Some("tx")),
+        ]));
+        app
+    }
+
+    #[test]
+    fn the_scope_moves_tasks_between_plans_and_shows_no_plan_when_needed() {
+        let mut app = app_with_cross_agent_tasks();
+        assert_eq!(
+            rows(&app),
+            ["plan-c", "#plan-c", "tx"],
+            "without tb, tx goes with the plan whose todo it does"
+        );
+
+        app.toggle_side_scope();
+        assert_eq!(
+            rows(&app),
+            ["plan-b", "#plan-b", "tb", "  tx", "plan-c", "#plan-c", "No Plan", "tn"],
+            "tx joins tb under plan-b, and tn needs No Plan"
+        );
+
+        app.toggle_side_scope();
+        assert_eq!(
+            rows(&app),
+            ["plan-c", "#plan-c", "tx"],
+            "No Plan goes again"
+        );
+    }
+
+    #[test]
+    fn the_highlight_stays_on_a_plan_or_todo_across_the_scope_switch() {
+        let mut app = app_with_cross_agent_tasks();
+        app.task_list.select(0);
+        app.toggle_side_scope();
+        assert_eq!(app.task_list().selected(), 4);
+        assert_eq!(highlighted(&app).as_deref(), Some("plan-c"));
+        app.toggle_side_scope();
+        assert_eq!(highlighted(&app).as_deref(), Some("plan-c"));
+
+        app.task_list.select(1);
+        app.toggle_side_scope();
+        assert_eq!(app.task_list().selected(), 5);
+        assert_eq!(highlighted(&app).as_deref(), Some("#plan-c"));
+        app.toggle_side_scope();
+        assert_eq!(app.task_list().selected(), 1);
+    }
+
+    #[test]
+    fn dropping_the_current_plan_hides_it_and_clamps_the_highlight() {
+        let mut app = app();
+        app.process_command(UiCommand::SetTasks(vec![task(
+            "ta",
+            "a",
+            None,
+            Some("plan-a"),
+        )]));
+        app.process_command(UiCommand::SetPlans(vec![plan("plan-a", None)]));
+        let mut current = plan("plan-z", None);
+        current.todos = vec![current.todos[0].clone(); 4];
+        app.process_command(UiCommand::SetPlan(Some(current)));
+        assert_eq!(rows(&app).len(), 8, "plan-z and its 4 todos, then plan-a");
+        app.task_list.select(4);
+        assert_eq!(highlighted(&app).as_deref(), Some("#plan-z"));
+
+        app.process_command(UiCommand::SetPlan(None));
+        assert_eq!(rows(&app), ["plan-a", "#plan-a", "ta"]);
+        assert_eq!(app.task_list().selected(), 2);
+        assert_eq!(highlighted(&app).as_deref(), Some("ta"));
+        assert_eq!(app.task_list().hidden_plans(), 1);
+    }
+
+    #[test]
+    fn t_on_a_todo_whose_task_the_scope_hides_points_at_the_button() {
+        let mut app = app();
+        app.process_command(UiCommand::SetPlans(vec![plan("plan-a", Some("tb"))]));
+        app.focus = crate::app::PanelFocus::Sandbox;
+        app.show_side_tab(crate::app::SidePanelTab::Tasks);
+        app.task_list.select(1);
+        assert_eq!(highlighted(&app).as_deref(), Some("#plan-a"));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('t')));
+        assert_eq!(
+            app.notification().map(|(text, _)| text.as_str()),
+            Some("Another agent is doing this todo; the * button lists it")
+        );
+        assert_eq!(app.task_list().selected(), 1, "the highlight stays put");
     }
 
     #[test]
