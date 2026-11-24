@@ -16,6 +16,7 @@ mod attachments;
 pub mod auth;
 mod bench;
 mod bench_source;
+mod cloud;
 mod compare;
 pub(crate) mod flow;
 mod flow_builder;
@@ -114,6 +115,9 @@ pub struct EventLoopContext<'a> {
     /// `events` may still be open then, so its closing can't be the
     /// signal.
     pub quit: CancellationToken,
+    /// The main store, for cloud agents' record mirror; `None` leaves
+    /// cloud agents off.
+    pub cloud_store: Option<Arc<dyn aura_store_db::Store>>,
 }
 
 /// Mutable state threaded through all event handlers.
@@ -144,11 +148,18 @@ pub(super) struct LoopState<'a> {
     pub(super) compare: compare::CompareState,
     /// Feed of the GRAPH tab.
     pub(super) flow: Option<Arc<FlowFeed>>,
+    /// Cloud agents: the hub, who is moving, cloud turns in flight.
+    pub(super) cloud: cloud::CloudState,
 }
 
 impl LoopState<'_> {
     /// Kernel of `agent_id`, whether it is idle or at work.
     pub(super) fn kernel_for(&self, agent_id: AgentId) -> Option<Arc<Kernel>> {
+        // A cloud agent's writer is its machine's kernel; nothing here
+        // may write for it (rewinds, sign-in notices) until it is back.
+        if self.cloud.is_cloud(agent_id) || self.cloud.is_moving(agent_id) {
+            return None;
+        }
         self.idle
             .get(&agent_id)
             .map(|s| Arc::clone(&s.kernel))
@@ -220,6 +231,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         approvals,
         flow,
         quit,
+        cloud_store,
     } = ctx;
     let processes = Arc::clone(&hub.processes);
     let publisher = processes::spawn_publisher(Arc::clone(&processes), commands.clone());
@@ -249,6 +261,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
                 .join("aura_data"),
         ),
         flow,
+        cloud: cloud::CloudState::new(cloud_store),
     };
     let mut notice_rx = state.hub.take_notices();
     let mut mail_rx = state.hub.open_mail();
@@ -257,6 +270,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
 
     agents::send_sandbox_root(&state).await;
     hud::send_session_of(&state, active).await;
+    cloud::start(&mut state).await;
     modes::send_mode(&state, active).await;
     policies::send_policies_of(&state, active).await;
     modes::warn_if_unconfined(&state, active).await;
@@ -514,6 +528,9 @@ async fn handle_ui_event(
             // A call waiting for an answer holds the turn; deny it so the
             // turn sees the cancellation.
             state.approvals.cancel_agent(agent_id).await;
+            if state.cloud.cancel(agent_id) {
+                return false;
+            }
             if !state.hub.cancel(agent_id) {
                 AgentUi::new(state.commands.clone(), agent_id)
                     .send(UiCommand::SetStatus("Cancelled".to_string()))
@@ -613,6 +630,14 @@ async fn handle_ui_event(
             agents::handle_reorder_agents(state, &project_id, &order).await;
         }
         UiEvent::ArchiveAgent(agent) => agents::handle_archive_agent(state, &agent).await,
+        UiEvent::SetPlacement {
+            agent_id,
+            placement,
+        } => cloud::handle_set_placement(state, &agent_id, placement).await,
+        UiEvent::HostAction { agent_id, action } => {
+            cloud::handle_host_action(state, &agent_id, action).await;
+        }
+        UiEvent::CloudSetup => cloud::handle_setup(state).await,
         UiEvent::RestoreAgent(agent) => agents::handle_restore_agent(state, &agent).await,
         UiEvent::RemoveProject(project) => agents::handle_remove_project(state, &project).await,
         UiEvent::RefreshAgents => agents::handle_refresh_agents(state).await,
@@ -706,6 +731,9 @@ async fn answer_approval(state: &LoopState<'_>, request_id: &str, answer: Answer
 /// Give `work` to `agent_id`: now if it is idle, else once its current
 /// work ends.
 async fn submit(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
+    let Some(work) = cloud::submit(state, agent_id, work).await else {
+        return;
+    };
     if state.hub.is_running(agent_id) {
         info!(%agent_id, "Agent is busy; queueing work");
         state.queued.push_back(agent_id, work);

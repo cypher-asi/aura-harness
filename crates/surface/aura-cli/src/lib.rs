@@ -47,6 +47,7 @@ use thiserror::Error;
 
 mod auth_commands;
 pub mod cli;
+mod cloud_commands;
 pub mod evals;
 mod gate_commands;
 mod runner;

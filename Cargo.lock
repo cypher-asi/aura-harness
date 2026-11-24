@@ -444,8 +444,10 @@ dependencies = [
  "aura-context-prompts",
  "aura-context-skills",
  "aura-core-modes",
+ "aura-core-protocol",
  "aura-core-types",
  "aura-engine",
+ "aura-engine-cloud",
  "aura-exec-tools",
  "aura-gate",
  "aura-model",
@@ -462,16 +464,19 @@ dependencies = [
  "flate2",
  "futures-util",
  "hex",
+ "parking_lot",
  "reqwest",
  "rustix 1.1.3",
  "serde",
  "serde_json",
  "serde_yaml",
  "similar",
+ "sysinfo",
  "tar",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-tungstenite 0.26.2",
  "tokio-util",
  "toml",
  "tower 0.5.2",
@@ -481,6 +486,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "which",
+ "zeroize",
 ]
 
 [[package]]
@@ -615,6 +621,7 @@ dependencies = [
  "aura-ui-terminal",
  "clap",
  "colored",
+ "dirs",
  "rpassword",
  "serde",
  "serde_json",
@@ -6595,8 +6602,12 @@ checksum = "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite 0.26.2",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -6969,6 +6980,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.4",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror 2.0.18",
  "utf-8",

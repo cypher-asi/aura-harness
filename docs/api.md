@@ -123,6 +123,20 @@ Scheduled automations (cron + prompt + config) and their run history, sealed at 
 | POST | `/v1/processes/:id/trigger` | Trigger a process now. |
 | GET | `/v1/processes/:id/runs` | Run history for a process. |
 
+## Cloud nodes
+
+Served only by a node started with `AURA_CLOUD_NODE=1` on a boxd machine (other nodes answer `404`). Such a node accepts no token until its hub claims it over boxd's authenticated `Exec` (`aura node claim --stdin`); after that it accepts only the hub's node token, and its project's mesh token on the mesh routes. Wire types live in [`aura_core_protocol::cloud`](../crates/core/aura-core-protocol/src/cloud).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/v1/host` | The machine's `HostStats`: OS, addresses, CPU, memory, disk, the snapshot it came from. |
+| POST | `/v1/sync/import` | Seed an agent's record (`SyncImport`): entries are checked and appended verbatim. |
+| POST | `/v1/sync/seal/:agent_id` | Stop writing for an agent; returns its final head. `/tx` and `/v1/run` then refuse it. |
+| GET | `/v1/sync/traces` | Trace runs since a cursor. |
+| GET | `/v1/workspace/patch` | The machine's work as a patch against the snapshot's commit. |
+| POST | `/v1/mesh/mail` | One message for an agent on this node (from the hub or a peer). |
+| WS | `/v1/mesh` | The hub's socket: mail both ways, the project's directory, host stats, keep-alive. |
+
 ## Limits
 
 Every route except `/health` sits behind the optional bearer-token gate. Mutating endpoints (`/tx`, `/v1/run`, `/api/write-file`, run pause/stop, and the safe-workspace writes) get a stricter per-IP rate limit. Request bodies default to a 1 MiB cap, with tighter per-route caps on endpoints that take small or no bodies.

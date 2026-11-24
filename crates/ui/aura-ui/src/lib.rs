@@ -16,6 +16,7 @@ pub mod events;
 pub mod flow;
 pub mod format;
 pub mod history;
+pub mod host;
 pub mod mode_command;
 pub mod run_log;
 pub mod sandbox;

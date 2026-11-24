@@ -203,7 +203,7 @@ async fn test_ws_runtime_request_bootstrap() {
 #[tokio::test]
 
 async fn test_ws_simple_prompt() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("simple-prompt");
@@ -245,7 +245,7 @@ async fn test_ws_simple_prompt() {
 #[tokio::test]
 
 async fn test_tool_write_and_read_file() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-write-read");
@@ -281,7 +281,7 @@ async fn test_tool_write_and_read_file() {
 #[tokio::test]
 
 async fn test_tool_edit_file() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-edit");
@@ -325,7 +325,7 @@ async fn test_tool_edit_file() {
 #[tokio::test]
 
 async fn test_tool_delete_file() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-delete");
@@ -358,7 +358,7 @@ async fn test_tool_delete_file() {
 #[tokio::test]
 
 async fn test_tool_list_files() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-list");
@@ -387,7 +387,7 @@ async fn test_tool_list_files() {
 #[tokio::test]
 
 async fn test_tool_stat_file() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-stat");
@@ -411,7 +411,7 @@ async fn test_tool_stat_file() {
 #[tokio::test]
 
 async fn test_tool_find_files() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-find");
@@ -452,7 +452,7 @@ async fn test_tool_find_files() {
 #[tokio::test]
 
 async fn test_tool_search_code() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-search");
@@ -499,7 +499,7 @@ async fn test_tool_search_code() {
 #[tokio::test]
 
 async fn test_tool_run_command() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-cmd");
@@ -545,7 +545,7 @@ async fn test_tool_run_command() {
 #[tokio::test]
 
 async fn test_ws_multi_turn() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("multi-turn");
@@ -599,7 +599,7 @@ async fn test_ws_multi_turn() {
 #[tokio::test]
 
 async fn test_ws_cancel_turn() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("cancel-test");
@@ -660,7 +660,7 @@ async fn test_ws_invalid_json() {
 #[tokio::test]
 
 async fn test_ws_message_during_turn() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("msg-during-turn");
@@ -700,7 +700,7 @@ async fn test_ws_message_during_turn() {
 
 #[tokio::test]
 async fn test_ws_streaming_message_fields() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stream-fields");
@@ -774,7 +774,7 @@ async fn test_ws_streaming_message_fields() {
 
 #[tokio::test]
 async fn test_ws_files_changed_after_write() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("files-changed");
@@ -812,7 +812,7 @@ async fn test_ws_files_changed_after_write() {
 
 #[tokio::test]
 async fn test_ws_runtime_request_with_system_prompt() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("sys-prompt");
@@ -849,7 +849,7 @@ async fn test_ws_runtime_request_with_system_prompt() {
 
 #[tokio::test]
 async fn test_ws_runtime_request_with_model() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("model-override");
@@ -879,7 +879,7 @@ async fn test_ws_runtime_request_with_model() {
 
 #[tokio::test]
 async fn test_ws_runtime_request_with_max_turns() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("max-turns");
@@ -914,7 +914,7 @@ async fn test_ws_runtime_request_with_max_turns() {
 
 #[tokio::test]
 async fn test_ws_auth_bearer_header() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     assert!(
         !token.is_empty(),
@@ -949,7 +949,7 @@ async fn test_ws_auth_bearer_header() {
 
 #[tokio::test]
 async fn test_tool_read_nonexistent_file() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-err-read");
@@ -975,7 +975,7 @@ async fn test_tool_read_nonexistent_file() {
 
 #[tokio::test]
 async fn test_tool_delete_nonexistent_file() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-err-delete");
@@ -997,7 +997,7 @@ async fn test_tool_delete_nonexistent_file() {
 
 #[tokio::test]
 async fn test_tool_run_command_failure() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-err-cmd");
@@ -1039,7 +1039,7 @@ async fn test_tool_run_command_failure() {
 
 #[tokio::test]
 async fn test_tool_edit_no_match() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-err-edit");
@@ -1083,7 +1083,7 @@ async fn test_tool_edit_no_match() {
 
 #[tokio::test]
 async fn test_tool_read_file_line_range() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-line-range");
@@ -1122,7 +1122,7 @@ async fn test_tool_read_file_line_range() {
 
 #[tokio::test]
 async fn test_tool_run_command_with_cwd() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-cwd");
@@ -1162,7 +1162,7 @@ async fn test_tool_run_command_with_cwd() {
 
 #[tokio::test]
 async fn test_tool_write_file_overwrite() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-overwrite");
@@ -1199,7 +1199,7 @@ async fn test_tool_write_file_overwrite() {
 
 #[tokio::test]
 async fn test_tool_search_code_regex() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-regex");

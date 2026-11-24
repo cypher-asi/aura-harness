@@ -661,6 +661,7 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
             aura_gate::compare::DEFAULT_CONCURRENCY,
         ),
         flow: None,
+        cloud: super::cloud::CloudState::default(),
     }
 }
 

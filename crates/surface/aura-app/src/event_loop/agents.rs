@@ -619,6 +619,7 @@ pub(super) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &
     // Archiving is reversible, so it does not wait for work in flight to
     // finish on its own: it stops it and carries on.
     let stopped = stop_busy(state, &subtree).await;
+    super::cloud::on_archive(state, &subtree);
     let archived = lock(&state.hub.registry).archive(agent_id);
     match archived {
         Ok(()) => {

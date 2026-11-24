@@ -100,13 +100,17 @@ run_band "§1/§3" "direct ModelProvider::complete call outside the recording se
 #   * `crates/surface/aura-node/src/tool_permissions.rs` — HTTP-driven tool-
 #     permissions append guarded by the per-agent scheduler claim (see
 #     §12.a). Routed via `aura_agent_kernel::write_system_record`.
+#   * `crates/surface/aura-app/src/cloud/store.rs` — the cloud ledger writer:
+#     machine and `Placement` rows on ledger agents no kernel runs. Its
+#     record mirror
+#     goes through `WriteStore::append_replica_batch`.
 # Agent-host fallback records (a root agent whose inbox is gone) also go
 # through `aura_agent_kernel::write_system_record`, which calls
 # `WriteStore::append_entry_direct` internally — `aura-engine/src/agents/`
 # never names an `append_entry_*` symbol, so no allowlist entry is needed.
 run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
     'append_entry_(atomic|dequeued|direct|entries_batch)' \
-    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/tool_permissions\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/cloud/store\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — raw `git` processes must live in a kernel-mediated executor or in a
 # declared infrastructure exception.
@@ -136,10 +140,18 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     apply lifecycle for explicitly selected hosted Safe Workspaces. A closed
 #     subcommand allowlist in that module rejects network Git operations.
 #     Declared exception in docs/invariants.md.
+#   * Cloud agents (declared exception in docs/invariants.md):
+#     `crates/engine/aura-engine-cloud/src/delta.rs` and `snapshots.rs`
+#     read the project (`rev-parse`, `diff`, `ls-files`, `archive`) to
+#     pack what a machine needs; `crates/surface/aura-app/src/cloud/hub.rs`
+#     runs `git apply --3way` of a cloud agent's patch into its own
+#     project; `crates/surface/aura-node/src/gateway/handlers/cloud.rs`
+#     diffs the machine's workspace for that patch. No commit, fetch or
+#     push.
 #   * Test files.
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \
-    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace\.rs|crates/engine/aura-engine-cloud/src/(delta|snapshots)\.rs|crates/surface/aura-app/src/cloud/hub\.rs|crates/surface/aura-node/src/gateway/handlers/cloud\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — the git subcommands `changes.rs` runs outside its tests (the first
 # literal of each `.arg(` / `.args([`) stay in the local-only set its row in
@@ -192,6 +204,11 @@ done <<<"$changes_subcommands"
 #   - crates/surface/aura-node/src/tool_permissions.rs — HTTP-driven tool-permissions
 #                                                  append serialized via the §12.a claim
 #   - crates/surface/aura-app/src/harness.rs             — interactive session host constructs a Kernel
+#   - crates/surface/aura-app/src/session.rs, event_loop/mod.rs, event_loop/cloud.rs
+#                                                — hand the main store to the cloud hub
+#   - crates/surface/aura-app/src/cloud/               — the cloud hub's ledger writer and record mirror
+#                                                (declared exception: cloud record mirror)
+#   - crates/surface/aura-node/src/gateway/handlers/cloud.rs — cloud node routes (tests build a store)
 #
 # Test-only holders (filenames that don't match `*test*.rs` but whose hits
 # are inside `#[cfg(test)] mod tests`):
@@ -201,7 +218,7 @@ done <<<"$changes_subcommands"
 #   - crates/engine/aura-engine/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store(_db)?::)?Store>' \
-    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/gateway/state\.rs|crates/surface/aura-node/src/gateway/session/mod\.rs|crates/surface/aura-node/src/gateway/session/cross_agent_hook\.rs|crates/surface/aura-node/src/gateway/session/child_kernel\.rs|crates/engine/aura-engine/src/scheduler\.rs|crates/engine/aura-engine/src/automaton/|crates/engine/aura-engine/src/agents/host\.rs|crates/engine/aura-engine/src/worker\.rs|crates/surface/aura-node/src/node\.rs|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/harness\.rs|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/kernel_domain_gateway/|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/gateway/state\.rs|crates/surface/aura-node/src/gateway/session/mod\.rs|crates/surface/aura-node/src/gateway/session/cross_agent_hook\.rs|crates/surface/aura-node/src/gateway/session/child_kernel\.rs|crates/engine/aura-engine/src/scheduler\.rs|crates/engine/aura-engine/src/automaton/|crates/engine/aura-engine/src/agents/host\.rs|crates/engine/aura-engine/src/worker\.rs|crates/surface/aura-node/src/node\.rs|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/harness\.rs|crates/surface/aura-app/src/session\.rs|crates/surface/aura-app/src/event_loop/(mod|cloud)\.rs|crates/surface/aura-app/src/cloud/|crates/surface/aura-node/src/gateway/handlers/cloud\.rs|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/kernel_domain_gateway/|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into the store crates directly. Any
 # code that needs persistence goes through the per-agent kernel. Test files

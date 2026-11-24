@@ -1204,7 +1204,11 @@ fn test_sandbox_panel_sits_below_record() {
         "{}",
         rows[sandbox]
     );
-    assert!(rows[sandbox].contains("TASKS"), "{}", rows[sandbox]);
+    assert!(
+        rows[sandbox].contains("TSK") || rows[sandbox].contains("TASKS"),
+        "{}",
+        rows[sandbox]
+    );
     assert!(
         rows[sandbox + 3].contains("▸  src"),
         "{}",
@@ -1230,12 +1234,12 @@ fn test_side_panel_header_matches_the_agents_header() {
     );
     assert_eq!(
         widths.len(),
-        6,
+        7,
         "the tabs and the two buttons fill the bar: {widths:?}"
     );
-    assert_eq!(widths[4..], [3, 3]);
+    assert_eq!(widths[5..], [3, 3]);
     assert!(
-        widths[..4].iter().all(|w| w.abs_diff(widths[0]) <= 1),
+        widths[..5].iter().all(|w| w.abs_diff(widths[0]) <= 1),
         "{widths:?}"
     );
     assert_eq!(
@@ -1247,7 +1251,8 @@ fn test_side_panel_header_matches_the_agents_header() {
     let rows = render_rows(&mut app, 260);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
     assert!(rows[tabs].contains("PROCESSES"), "{}", rows[tabs]);
-    assert_eq!(widths.len(), 6, "{widths:?}");
+    assert!(rows[tabs].contains("HOST"), "{}", rows[tabs]);
+    assert_eq!(widths.len(), 7, "{widths:?}");
 }
 
 #[test]
@@ -1497,7 +1502,10 @@ fn test_files_command_toggles_sandbox_panel() {
 
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 150).join("\n");
-    assert!(screen.contains("TASKS"), "{screen}");
+    assert!(
+        screen.contains("TSK") || screen.contains("TASKS"),
+        "{screen}"
+    );
     assert!(!screen.contains("KRN"));
 }
 
@@ -1794,7 +1802,7 @@ fn test_thinking_level_gives_way_before_the_model() {
     let mut app = app_with_model(None);
     app.process_command(UiCommand::SetApproval(crate::ApprovalLevel::Strict));
     app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
-    let footer = render_rows(&mut app, 120)
+    let footer = render_rows(&mut app, 136)
         .into_iter()
         .find(|row| row.contains("qwen3:4b"))
         .expect("the model stays when the footer is too narrow for both");
@@ -1807,7 +1815,7 @@ fn test_approval_level_sits_before_the_model() {
 
     let mut app = app_with_model(None);
     let input_row = |app: &mut crate::App| {
-        render_rows(app, 120)
+        render_rows(app, 136)
             .into_iter()
             .find(|row| row.contains("qwen3:4b"))
             .unwrap()
@@ -1928,7 +1936,7 @@ fn chat_panel(rows: &[String]) -> (usize, usize, usize) {
 #[test]
 fn test_slash_menu_spans_chat_width_above_input() {
     let mut app = app_with_model(None);
-    type_text(&mut app, "/lo");
+    type_text(&mut app, "/log");
     let rows = render_rows(&mut app, 120);
     let n = rows.len();
 
@@ -2101,7 +2109,11 @@ fn test_header_shows_local_url_and_model_moves_to_the_footer() {
         .take(chat_right - chat_left)
         .collect();
     assert!(footer.trim_start().starts_with("qwen3:4b"), "{footer:?}");
-    assert!(footer.trim_end().ends_with("● Ready"), "{footer:?}");
+    assert!(footer.contains("● Ready"), "{footer:?}");
+    assert!(
+        footer.trim_end().ends_with("⌂ local"),
+        "the placement switch ends the footer: {footer:?}"
+    );
     assert!(!footer.contains("/model"));
 }
 
@@ -2853,7 +2865,8 @@ fn test_outer_text_is_inset_to_panel_borders() {
     assert_eq!(last_col(&rows[0]), inner_right, "{:?}", rows[0]);
     let (_, _, chat_right) = chat_panel(&rows);
     let status: Vec<char> = rows[rows.len() - 1].chars().collect();
-    assert_eq!(status[chat_right - 1], 'y', "{status:?}");
+    // The placement switch (`⌂ local`) ends the footer.
+    assert_eq!(status[chat_right - 1], 'l', "{status:?}");
     assert_eq!(status[chat_right], ' ', "{status:?}");
 }
 
@@ -2990,7 +3003,8 @@ fn test_notification_uses_the_footer_gap_without_a_right_column() {
     let footer = rows.last().unwrap();
     assert!(footer.contains("✓ Copied 4 characters"), "{footer:?}");
     assert!(footer.contains("qwen3:4b"), "the stats stay: {footer:?}");
-    assert!(footer.trim_end().ends_with("Ready"), "{footer:?}");
+    assert!(footer.contains("Ready"), "{footer:?}");
+    assert!(footer.trim_end().ends_with("⌂ local"), "{footer:?}");
 }
 
 #[test]
@@ -3170,7 +3184,7 @@ fn test_status_line_under_gate_counts_models_instead_of_context() {
             ..CallStats::default()
         }));
     }
-    let rows = render_rows(&mut app, 160);
+    let rows = render_rows(&mut app, 180);
     let status = &rows[rows.len() - 1];
     assert!(!status.contains("context"), "{status:?}");
     assert!(status.contains("$0.200 · 2 models · 2 calls"), "{status:?}");

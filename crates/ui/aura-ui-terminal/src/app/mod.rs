@@ -14,6 +14,7 @@ mod definitions;
 pub mod file_view;
 pub mod flow;
 pub mod folder_picker;
+mod host_tab;
 pub(crate) use aura_ui::format;
 pub mod graph;
 pub mod hud;
@@ -74,6 +75,7 @@ use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
 use file_view::FileView;
 use folder_picker::FolderPicker;
+pub use host_tab::{switch_label, switch_rect, SWITCH_GAP};
 use hud::Hud;
 pub use inbox::{InboxRow, ThreadView};
 pub use members::{MemberRow, RecordsTab};
@@ -450,6 +452,8 @@ pub struct App {
     pub(super) workspace_move: Option<WorkspaceMove>,
     /// Usage, todos and jobs of the agent on screen
     pub(super) hud: Hud,
+    /// Where each agent runs, and the HOST tab
+    pub(super) cloud: host_tab::CloudUi,
     /// The queued-messages panel above the input
     pub(super) queue_panel: queue_panel::QueuePanel,
     /// The benchmark progress panel above the input
@@ -1104,6 +1108,7 @@ impl App {
             workspaces: context_menu::Workspaces::default(),
             workspace_move: None,
             hud: Hud::default(),
+            cloud: host_tab::CloudUi::default(),
             queue_panel: queue_panel::QueuePanel::default(),
             bench_panel: bench_progress::BenchPanel::default(),
             todos_open: false,
@@ -1499,6 +1504,7 @@ impl App {
                 match self.side_tab {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
+                    SidePanelTab::Host => self.scroll_host(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
                 }
@@ -1559,6 +1565,7 @@ impl App {
                 match self.side_tab {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
+                    SidePanelTab::Host => self.scroll_host(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
                 }
@@ -1995,6 +2002,9 @@ impl App {
         // First, so the button works while an approval waits too; an
         // open context menu takes the click instead, as it may cover it.
         if self.context_menu.is_none() && self.click_stop_button(mouse) {
+            return;
+        }
+        if self.context_menu.is_none() && self.click_placement_switch(mouse) {
             return;
         }
         // The selector takes the click whole: one that picks a model and

@@ -39,6 +39,7 @@ pub mod animation;
 pub mod ansi;
 pub mod components;
 pub use aura_ui::events;
+pub use aura_ui::host;
 pub mod input;
 pub mod layout;
 pub use aura_ui::mode_command;

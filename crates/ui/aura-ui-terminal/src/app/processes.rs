@@ -21,6 +21,9 @@ pub enum SidePanelTab {
     Sandbox,
     /// Live agent turns, spawned agents and background commands.
     Processes,
+    /// The host the agent on screen runs on, this machine or its cloud
+    /// machine: resources, addresses, status and cost.
+    Host,
     /// Live feed of recorded steps and harness decisions.
     Trace,
     /// Work agents did or are doing, grouped under the plans they work
@@ -30,13 +33,20 @@ pub enum SidePanelTab {
 }
 
 impl SidePanelTab {
-    pub const ALL: [Self; 4] = [Self::Sandbox, Self::Processes, Self::Trace, Self::Tasks];
+    pub const ALL: [Self; 5] = [
+        Self::Sandbox,
+        Self::Processes,
+        Self::Host,
+        Self::Trace,
+        Self::Tasks,
+    ];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Sandbox => "SANDBOX",
             Self::Processes => "PROCESSES",
+            Self::Host => "HOST",
             Self::Trace => "TRACE",
             Self::Tasks => "TASKS",
         }
@@ -48,6 +58,7 @@ impl SidePanelTab {
         match self {
             Self::Sandbox => "SBX",
             Self::Processes => "PRC",
+            Self::Host => "HST",
             Self::Trace => "TRC",
             Self::Tasks => "TSK",
         }
@@ -63,7 +74,8 @@ impl SidePanelTab {
     pub(super) const fn next(self) -> Self {
         match self {
             Self::Sandbox => Self::Processes,
-            Self::Processes => Self::Trace,
+            Self::Processes => Self::Host,
+            Self::Host => Self::Trace,
             Self::Trace => Self::Tasks,
             Self::Tasks => Self::Sandbox,
         }
@@ -73,7 +85,8 @@ impl SidePanelTab {
         match self {
             Self::Sandbox => Self::Tasks,
             Self::Processes => Self::Sandbox,
-            Self::Trace => Self::Processes,
+            Self::Host => Self::Processes,
+            Self::Trace => Self::Host,
             Self::Tasks => Self::Trace,
         }
     }
@@ -233,6 +246,9 @@ impl App {
                 match self.side_tab {
                     SidePanelTab::Sandbox => self.sandbox.select(index),
                     SidePanelTab::Processes => self.select_process(index),
+                    SidePanelTab::Host => {
+                        self.cloud.host_scroll = if index == 0 { 0 } else { usize::MAX / 2 };
+                    }
                     SidePanelTab::Trace => self.trace_feed.select(index),
                     SidePanelTab::Tasks => self.task_list.select(index),
                 }
@@ -373,6 +389,7 @@ impl App {
                     self.open_selected_process();
                 }
             }
+            SidePanelTab::Host => {}
             SidePanelTab::Trace => {
                 if let Some(index) = self.trace_row_at(column, row) {
                     self.trace_feed.select(index);
@@ -433,6 +450,7 @@ impl App {
             SidePanelTab::Processes => self
                 .process_row_at(column, row)
                 .map(HoverTarget::ProcessRow),
+            SidePanelTab::Host => None,
             SidePanelTab::Trace => self.trace_row_at(column, row).map(HoverTarget::TraceRow),
             SidePanelTab::Tasks => self.task_row_at(column, row).map(HoverTarget::TaskRow),
         }
@@ -501,9 +519,13 @@ mod tests {
         assert_eq!(app.side_tab(), SidePanelTab::Tasks);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Trace);
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        assert_eq!(app.side_tab(), SidePanelTab::Host);
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        assert_eq!(app.side_tab(), SidePanelTab::Processes);
         app.handle_key(key(KeyCode::Right));
-        assert_eq!(app.side_tab(), SidePanelTab::Trace);
-        for _ in 0..2 {
+        assert_eq!(app.side_tab(), SidePanelTab::Processes);
+        for _ in 0..4 {
             app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         }
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);

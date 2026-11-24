@@ -37,7 +37,7 @@ Within a layer, crates are listed leaves first.
 | agent    | One agent: kernel, turn loop, steering, subagent derivation, run traces. | `aura-agent-subagent`, `aura-agent-steering`, `aura-agent-kernel`, `aura-agent`, `aura-agent-trace` |
 | gate     | Gate, the router behind the `gate` model id: routing, evidence, follow-ups, judges, the attempt log, `/compare` arithmetic, the lead's limits, and Gate while the app runs. | `aura-gate-evidence`, `aura-gate-route`, `aura-gate-followup`, `aura-gate-judge`, `aura-gate-attempts`, `aura-gate-compare`, `aura-gate-lead`, `aura-gate-live`, `aura-gate` |
 | auth     | Sign-in: zOS identity, linked ChatGPT and Claude plans, linked OpenRouter account, credential storage. | `aura-auth-kit`, `aura-auth-zos`, `aura-auth-chatgpt`, `aura-auth-claude`, `aura-auth-openrouter`, `aura-auth` |
-| engine   | Many agents: scheduler, workers, agent host, automatons. | `aura-engine-automaton`, `aura-engine` |
+| engine   | Many agents: scheduler, workers, agent host, automatons, cloud machines. | `aura-engine-automaton`, `aura-engine-cloud`, `aura-engine` |
 | ui       | Renderer-agnostic UI protocol and the ratatui terminal UI. | `aura-ui`, `aura-ui-terminal` |
 | surface  | What you run: the session host, the HTTP/WS node, the CLI, the desktop app. | `aura-app`, `aura-node`, `aura-cli`, `aura-desktop` |
 
@@ -221,6 +221,10 @@ The terminal's PROCESSES tab lists the work running for its agents. `ProcessTabl
 - a `/proc` scan for processes tagged with `AURA_AGENT_ID`, `AURA_TOOL_USE_ID` and `AURA_HARNESS_PID`. Every command the tools spawn carries these tags, so a daemon that detaches and is reparented to init is still listed under the agent that started it.
 
 Each row links to the agent that started it and to the record entry of its tool call. Killing a row cancels the turn or task, stops the agent, cancels the background command, or sends `SIGTERM` to the process group. Finished rows stay listed (the last 50). A publisher sends the table to the UI every 500 ms, and only when it changed, along with each agent's background jobs for its status line. A background command's completion is recorded on its agent's kernel (`ProcessComplete`), marked in the table, and becomes a notice with the exit code and the end of its log.
+
+### Cloud agents
+
+An agent can run on its own boxd machine instead of this one (the footer switch, `/cloud`, `/local`). The app is the **hub** (`aura-app/src/cloud/`, `event_loop/cloud.rs`): `CloudHub::place` restores the project snapshot (or forks a cloud parent's machine), uploads the files changed since, hands the agent's record to the machine's node (`POST /v1/sync/import`) and writes a `SystemKind::Placement` row on the agent's machine ledger; from then on that node's kernel is the agent's single writer. The hub drives its turns over `POST /v1/run` + `WS /stream/:run_id` and mirrors every committed entry into the main RocksDB through `WriteStore::append_replica_batch` after `replica::verify_page`. `CloudHub::recall` seals the node, copies the rest of the record, applies its `git` patch to the project and destroys the machine; archiving does the same. Mail crosses nodes through `AgentHost`'s `RemoteRouter`: the hub keeps a mesh socket (`WS /v1/mesh`) to each awake node and sends each node a directory of its project's agents, so machines reach each other's domains directly and fall back to the hub. The HOST side tab shows the host of the agent on screen (this machine or its machine) with its resources, addresses, state and cost. See [configuration.md](configuration.md#cloud-agents-boxd) and the declared exception in [invariants.md](invariants.md#declared-exceptions).
 
 ### External contract
 
@@ -525,6 +529,10 @@ Many agents at once. The engine drives agent-layer kernels and loops: it schedul
 #### [`aura-engine-automaton`](../crates/engine/aura-engine-automaton)
 
 Long-running automaton workflows that drive `AgentLoop` on a schedule. Built-ins: `ChatAutomaton`, `DevLoopAutomaton` (with commit-and-push support; `dev_loop/{mod,aggregate,forward_event,validation}.rs`), `SpecGenAutomaton`, `TaskRunAutomaton`. `AutomatonRuntime` installs / runs / cancels instances; `TickContext` carries per-tick state.
+
+#### [`aura-engine-cloud`](../crates/engine/aura-engine-cloud)
+
+Cloud agents on [boxd](https://boxd.sh) microVMs. `boxd.rs` is the `VmProvider` over boxd's gRPC API, compiled at build time from the vendored `proto/boxd/api/v1/api.proto` with `tonic` and the pure-Rust `protox` (no `protoc`; `scripts/update_boxd_proto.sh` refreshes it); `token.rs` exchanges `BOXD_API_KEY` for a one-hour JWT; `fake.rs` is an in-memory provider for tests. `fleet.rs` (`VmFleet`) owns every cloud agent's machine: create from a snapshot or fork, claim (node tokens over `Exec`), idle hibernation, wake, destroy, orphan sweep, and `SystemKind::Vm` rows through a `VmLedger`. `snapshots.rs` builds the base and per-project snapshots (finished build plus a running node) keyed by a fingerprint of lockfiles, toolchain and build command. `delta.rs` packs the project files a machine needs on top of its snapshot and never includes `.env` files; `machine_env.rs` is the env allowlist (no `BOXD_*`). `cost.rs` adds boxd's metered usage to a live estimate from host samples; `replica.rs` checks a node's record pages before they are mirrored; `mesh.rs` is the hub's directory of which node holds which agent; `host.rs` samples a host's vital facts.
 
 #### [`aura-engine`](../crates/engine/aura-engine)
 

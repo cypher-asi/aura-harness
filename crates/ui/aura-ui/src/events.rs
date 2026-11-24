@@ -352,6 +352,24 @@ pub enum UiEvent {
         agent_id: String,
         request: LogRequest,
     },
+
+    /// Move an agent between this machine and its own cloud machine (the
+    /// footer switch, `/cloud`, `/local`)
+    SetPlacement {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        placement: crate::host::PlacementView,
+    },
+
+    /// A HOST tab button or `/cloud pull|sleep|wake`
+    HostAction {
+        /// Agent the chat showed (hex id)
+        agent_id: String,
+        action: crate::host::HostAction,
+    },
+
+    /// `/cloud setup`: put a boxd API key in `AURA_HOME/.env`
+    CloudSetup,
 }
 
 /// What `/rewind` puts back.
@@ -792,6 +810,16 @@ pub enum UiCommand {
 
     /// A task in the active agent's workspace was started or moved on
     UpsertTask(TaskView),
+
+    /// Where an agent runs, for its footer switch
+    SetPlacement {
+        /// Agent (hex id)
+        agent_id: String,
+        state: crate::host::PlacementState,
+    },
+
+    /// The HOST tab of the agent on screen
+    SetHost(Box<crate::host::HostView>),
 }
 
 /// A plan the agent wrote, as the todo list above the input shows it.

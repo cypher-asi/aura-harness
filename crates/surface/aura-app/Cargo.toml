@@ -27,6 +27,8 @@ aura-context-skills = { path = "../../context/aura-context-skills" }
 aura-auth = { path = "../../auth/aura-auth" }
 aura-node = { path = "../aura-node" }
 aura-engine = { path = "../../engine/aura-engine" }
+aura-engine-cloud = { path = "../../engine/aura-engine-cloud" }
+aura-core-protocol = { path = "../../core/aura-core-protocol" }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
@@ -53,6 +55,12 @@ reqwest = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
 walkdir = { workspace = true }
+parking_lot = { workspace = true }
+sysinfo = { workspace = true }
+which = { workspace = true }
+zeroize = { workspace = true }
+# Cloud agents: the hub drives each node's run stream and mesh socket.
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 
 # Lowers the agents' threads below the UI's (`priority`).
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -65,7 +73,6 @@ walkdir = { workspace = true }
 # `test-support` lets the app's tests fill Gate's table by hand.
 aura-gate = { path = "../../gate/aura-gate", features = ["test-support"] }
 tower = { workspace = true }
-which = { workspace = true }
 # `test-util` enables tokio's paused-clock test helpers
 # (`#[tokio::test(start_paused = true)]`), so the shutdown-grace tests of
 # `session::SessionTask::finish` run without real waits. Tests only; the

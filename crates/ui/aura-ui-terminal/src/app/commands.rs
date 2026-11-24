@@ -60,6 +60,7 @@ impl App {
                     self.focus = PanelFocus::Chat;
                 }
             }
+            "cloud" | "local" | "host" => self.handle_cloud_command(&cmd, arg),
             "members" | "team" => self.show_members(),
             "policies" | "policy" | "perms" | "permissions" => self.show_policies(),
             "inbox" | "mail" => self.show_inbox(),
@@ -898,6 +899,8 @@ impl App {
             UiCommand::ForAgent { agent_id, command } => {
                 self.process_agent_command(&agent_id, *command);
             }
+            UiCommand::SetPlacement { agent_id, state } => self.cmd_set_placement(agent_id, state),
+            UiCommand::SetHost(view) => self.cmd_set_host(*view),
             UiCommand::ClearConversation => self.cmd_clear_conversation(),
             UiCommand::NewRecord(record) => self.cmd_new_record(record),
             UiCommand::SetProjects(projects) => self.projects = projects,

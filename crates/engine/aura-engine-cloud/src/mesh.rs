@@ -112,10 +112,22 @@ pub struct MailBook {
 }
 
 impl MailBook {
-    /// An empty book.
+    /// An empty book. Ids start at the wall clock in microseconds, so a
+    /// restarted sender never reuses an id its receivers still remember.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            next_id: Mutex::new(first_mail_id()),
+            seen: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Forget `mail`, so a resend is handled again (its delivery failed).
+    pub fn forget(&self, mail: &MeshMail) {
+        if let Some((set, order)) = self.seen.lock().get_mut(&mail.from_node) {
+            set.remove(&mail.id);
+            order.retain(|id| *id != mail.id);
+        }
     }
 
     /// A fresh id for mail the hub sends.
@@ -141,6 +153,17 @@ impl MailBook {
         }
         true
     }
+}
+
+/// The first id a sender hands out: microseconds since 1970, so ids keep
+/// growing across restarts.
+#[must_use]
+pub fn first_mail_id() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |since| {
+            u64::try_from(since.as_micros()).unwrap_or(u64::MAX / 2)
+        })
 }
 
 /// A thread id as it travels between nodes: `<node>:<local id>`. Ids
@@ -221,8 +244,14 @@ mod tests {
             ..mail
         };
         assert!(book.first_sight(&other_node));
-        assert_eq!(book.next_id(), 1);
-        assert_eq!(book.next_id(), 2);
+        book.forget(&other_node);
+        assert!(
+            book.first_sight(&other_node),
+            "a forgotten id is handled again"
+        );
+        let first = book.next_id();
+        assert!(first > 1_000_000, "ids start at the clock: {first}");
+        assert_eq!(book.next_id(), first + 1);
     }
 
     #[test]

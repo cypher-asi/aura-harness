@@ -143,7 +143,7 @@ impl TestServer {
         provider_override: Option<Arc<dyn ModelProvider + Send + Sync>>,
         require_auth: bool,
     ) -> Self {
-        let _ = dotenvy::dotenv();
+        let _ = aura_config::env_file::load();
 
         let data_dir = tempfile::tempdir().expect("create temp dir");
 

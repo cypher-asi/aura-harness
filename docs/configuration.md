@@ -108,6 +108,28 @@ Read once at startup by `GateConfig::from_env` ([`crates/config/aura-config/src/
 | `AURA_GATE_REVIEW_SAMPLE` | `0.25` | Share of routed turns (0–1) whose work gets a review that is only logged, with `AURA_GATE_REVIEW` or `AURA_GATE_CRITERIA` at `log`; the others skip it. A review Gate acts on (`on`) is always asked. |
 | `AURA_GATE_CASCADE` | `on` | Whether work a check verifies (`small_change`, `multi_file_change`, `debugging`) starts on the model it is expected to cost least from, counting the stronger models a failed attempt moves up to. `off` (or `0`, `false`, `no`) routes it like other work, by success rate. See [Gate](cli.md#gate). |
 
+## Cloud agents (boxd)
+
+Any agent can run on its own [boxd](https://boxd.sh) microVM instead of this machine: flip the switch at the right of the footer (`⌂ local` / `☁ cloud`), or type `/cloud` and `/local`. The HOST side tab (after PROCESSES) shows the host the agent on screen runs on: this machine's name, OS, addresses, CPU, memory and disk, or the cloud machine's region, size, state, addresses, usage and cost. In project scope it lists every host of the project with its cost per hour.
+
+Settings are read from the environment, which `.env` files can set: the `.env` found from the working directory upward first, then `AURA_HOME/.env` (`~/.aura/.env`), never overriding a variable already set. `aura cloud setup` (or `/cloud setup`) signs in with the `boxd` CLI, mints a key and writes it to `AURA_HOME/.env` with mode `600`. A key added later is picked up the next time cloud mode is used; no restart. `aura cloud status` shows what is loaded, with the key redacted.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BOXD_API_KEY` | unset | boxd API key (`bxd_…`); required for cloud mode. Exchanged for a one-hour token; never sent to a machine. |
+| `BOXD_TOKEN` | unset | A boxd token you already hold; wins over the key. |
+| `BOXD_BASE_URL` | `https://boxd.sh:9443` | gRPC endpoint (older name: `BOXD_API_URL`). |
+| `BOXD_REGION` | Frankfurt | Region for new machines (`nyc` = New York). |
+| `BOXD_ORG` | key's org | Organization to act in. |
+| `AURA_CLOUD_SIZE` | `4x16` | Machine size: `1x4`, `2x8`, `4x16` or `8x32` (vCPU × GiB). Falls back one size when the org quota refuses it. |
+| `AURA_CLOUD_IDLE_HIBERNATE_SECS` | `300` | Idle seconds before a machine hibernates (disk-only billing, ~100 ms wake). |
+| `AURA_CLOUD_IDLE_STANDBY_SECS` | `0` | Idle seconds before standby (memory kept, sub-ms wake); `0` = off. |
+| `AURA_CLOUD_ISOLATED` | `1` | Create machines isolated (no in-machine boxd CLI signed in as you). |
+| `AURA_CLOUD_FORK_ON_SPAWN` | `1` | Give an agent spawned by a cloud agent a fork of its parent's machine. |
+| `AURA_CLOUD_PRICE_VCPU_HOUR`, `AURA_CLOUD_PRICE_MEM_GIB_HOUR`, `AURA_CLOUD_PRICE_DISK_GIB_HOUR` | boxd list prices (€0.039, €0.012, €0.00008) | Rates for the live estimate between boxd's meter readings. |
+
+How it works: the first move of a project builds a snapshot holding the finished build and a running aura node (rebuilt only when lockfiles, the toolchain or the build command change). A new agent's machine is restored from it and gets only the files changed since, never `.env` files. The agent's record is handed to the machine's node, which becomes its single writer; the app mirrors every entry back into the main RocksDB. Messages between agents on different machines travel over each node's mesh socket. `/local` (or archiving the agent) seals the node, copies the rest of the record, applies the agent's changes with `git apply --3way` (saving the patch under `AURA_HOME/cloud/<agent>/` if it doesn't apply) and destroys the machine. Cloud agents' turns run on models served by aura-router; Gate routing, `/compare` and local models stay on this machine.
+
 ## Node runtime
 
 | Variable | Default | Description |

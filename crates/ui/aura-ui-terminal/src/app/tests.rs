@@ -3022,9 +3022,9 @@ fn test_slash_opens_menu_with_all_commands() {
 #[test]
 fn test_slash_menu_filters_as_you_type() {
     let mut app = App::new();
-    type_chars(&mut app, "/lo");
+    type_chars(&mut app, "/log");
     assert_eq!(slash_names(&app), ["log", "login", "logout"]);
-    type_chars(&mut app, "go");
+    type_chars(&mut app, "o");
     assert_eq!(slash_names(&app), ["logout"]);
     type_chars(&mut app, "x");
     assert!(app.slash_matches().is_empty());
@@ -3051,7 +3051,7 @@ fn test_slash_menu_closes_after_space() {
 #[test]
 fn test_slash_menu_arrows_move_and_wrap() {
     let mut app = App::new();
-    type_chars(&mut app, "/lo");
+    type_chars(&mut app, "/log");
     app.handle_key(key(KeyCode::Down));
     assert_eq!(app.slash_cursor(), 1);
     app.handle_key(key(KeyCode::Down));
@@ -3060,7 +3060,7 @@ fn test_slash_menu_arrows_move_and_wrap() {
     assert_eq!(app.slash_cursor(), 0);
     app.handle_key(key(KeyCode::Up));
     assert_eq!(app.slash_cursor(), 2);
-    assert_eq!(app.input(), "/lo");
+    assert_eq!(app.input(), "/log");
 }
 
 #[test]

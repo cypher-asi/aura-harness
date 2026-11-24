@@ -1164,7 +1164,7 @@ async fn ws_proto_rapid_init_then_message() {
 
 #[tokio::test]
 async fn zos_login_obtains_jwt() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let (email, password) = require_zos!();
 
     let token = common::zos_login(&email, &password)
@@ -1181,7 +1181,7 @@ async fn zos_login_obtains_jwt() {
 
 #[tokio::test]
 async fn zos_login_invalid_credentials() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     // Only run if we have valid creds (so we know the endpoint is reachable)
     let _valid_creds = require_zos!();
 
@@ -1191,7 +1191,7 @@ async fn zos_login_invalid_credentials() {
 
 #[tokio::test]
 async fn zos_whoami_after_login() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let (email, password) = require_zos!();
 
     let client = aura_auth::ZosClient::new().unwrap();
@@ -1206,7 +1206,7 @@ async fn zos_whoami_after_login() {
 
 #[tokio::test]
 async fn jwt_via_bearer_header() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let (email, password) = require_zos!();
     let token = common::zos_login(&email, &password).await.unwrap();
 
@@ -1234,7 +1234,7 @@ async fn jwt_via_bearer_header() {
 
 #[tokio::test]
 async fn jwt_llm_turn() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let (email, password) = require_zos!();
     let token = common::zos_login(&email, &password).await.unwrap();
 
@@ -1255,7 +1255,7 @@ async fn jwt_llm_turn() {
 
 #[tokio::test]
 async fn jwt_tool_turn() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let (email, password) = require_zos!();
     let token = common::zos_login(&email, &password).await.unwrap();
 
@@ -1283,7 +1283,7 @@ async fn jwt_tool_turn() {
 
 #[tokio::test]
 async fn jwt_missing_errors() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let _creds = require_zos!();
 
     let server = TestServer::start().await;
@@ -1316,7 +1316,7 @@ async fn jwt_missing_errors() {
 
 #[tokio::test]
 async fn tool_write_file_nested_dirs() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-nested");
@@ -1353,7 +1353,7 @@ async fn tool_write_file_nested_dirs() {
 
 #[tokio::test]
 async fn tool_edit_file_replace_all() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-replaceall");
@@ -1385,7 +1385,7 @@ async fn tool_edit_file_replace_all() {
 
 #[tokio::test]
 async fn tool_search_code_with_context() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-search-ctx");
@@ -1414,7 +1414,7 @@ async fn tool_search_code_with_context() {
 
 #[tokio::test]
 async fn tool_find_files_scoped() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-find-scoped");
@@ -1446,7 +1446,7 @@ async fn tool_find_files_scoped() {
 
 #[tokio::test]
 async fn tool_run_command_with_timeout() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-cmd-timeout");
@@ -1482,7 +1482,7 @@ async fn tool_run_command_with_timeout() {
 
 #[tokio::test]
 async fn tool_multi_step_single_turn() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-multi-step");
@@ -1518,7 +1518,7 @@ async fn tool_multi_step_single_turn() {
 
 #[tokio::test]
 async fn tool_write_read_roundtrip() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-roundtrip");
@@ -1563,7 +1563,7 @@ async fn tool_write_read_roundtrip() {
 
 #[tokio::test]
 async fn tool_read_nonexistent_errors() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-read-noexist");
@@ -1583,7 +1583,7 @@ async fn tool_read_nonexistent_errors() {
 
 #[tokio::test]
 async fn tool_edit_no_match_errors() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-edit-nomatch");
@@ -1614,7 +1614,7 @@ async fn tool_edit_no_match_errors() {
 
 #[tokio::test]
 async fn tool_delete_nonexistent() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-del-noexist");
@@ -1634,7 +1634,7 @@ async fn tool_delete_nonexistent() {
 
 #[tokio::test]
 async fn tool_run_command_failure() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-cmd-fail");
@@ -1662,7 +1662,7 @@ async fn tool_run_command_failure() {
 
 #[tokio::test]
 async fn tool_read_file_line_range() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-linerange");
@@ -1703,7 +1703,7 @@ async fn tool_read_file_line_range() {
 
 #[tokio::test]
 async fn tool_search_code_regex() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-regex-search");
@@ -1732,7 +1732,7 @@ async fn tool_search_code_regex() {
 
 #[tokio::test]
 async fn tool_stat_file() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-stat");
@@ -1755,7 +1755,7 @@ async fn tool_stat_file() {
 
 #[tokio::test]
 async fn tool_list_files_with_content() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-list");
@@ -1779,7 +1779,7 @@ async fn tool_list_files_with_content() {
 
 #[tokio::test]
 async fn tool_write_file_overwrite() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-overwrite");
@@ -1813,7 +1813,7 @@ async fn tool_write_file_overwrite() {
 
 #[tokio::test]
 async fn tool_run_command_with_cwd() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("tool-cwd");
@@ -1845,7 +1845,7 @@ async fn tool_run_command_with_cwd() {
 
 #[tokio::test]
 async fn stream_message_sequence_order() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stream-order");
@@ -1877,7 +1877,7 @@ async fn stream_message_sequence_order() {
 
 #[tokio::test]
 async fn stream_message_id_matches() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stream-msgid");
@@ -1908,7 +1908,7 @@ async fn stream_message_id_matches() {
 
 #[tokio::test]
 async fn stream_usage_fields() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stream-usage");
@@ -1948,7 +1948,7 @@ async fn stream_usage_fields() {
 
 #[tokio::test]
 async fn stream_cumulative_tokens_increase() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stream-cumulative");
@@ -1996,7 +1996,7 @@ async fn stream_cumulative_tokens_increase() {
 
 #[tokio::test]
 async fn stream_files_changed_structure() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stream-fc");
@@ -2028,7 +2028,7 @@ async fn stream_files_changed_structure() {
 
 #[tokio::test]
 async fn stream_tool_use_start_fields() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stream-tool-fields");
@@ -2061,7 +2061,7 @@ async fn stream_tool_use_start_fields() {
 
 #[tokio::test]
 async fn stream_tool_result_name_matches_start() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stream-tool-match");
@@ -2096,7 +2096,7 @@ async fn stream_tool_result_name_matches_start() {
 
 #[tokio::test]
 async fn stream_stop_reason_on_simple_turn() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stream-stop");
@@ -2115,7 +2115,7 @@ async fn stream_stop_reason_on_simple_turn() {
 
 #[tokio::test]
 async fn stress_parallel_sessions_independent() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let base_url = server.base_url().to_string();
@@ -2214,7 +2214,7 @@ async fn stress_rapid_connect_disconnect() {
 
 #[tokio::test]
 async fn stress_large_file_content() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("stress-large");
@@ -2314,7 +2314,7 @@ async fn stress_concurrent_rest_and_ws() {
 
 #[tokio::test]
 async fn tool_multi_turn_context_preserved() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("multi-turn");
@@ -2350,7 +2350,7 @@ async fn tool_multi_turn_context_preserved() {
 
 #[tokio::test]
 async fn tool_cancel_during_turn() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("cancel-turn");
@@ -2383,7 +2383,7 @@ async fn tool_cancel_during_turn() {
 
 #[tokio::test]
 async fn tool_message_during_turn_rejected() {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let token = require_llm!();
     let server = TestServer::start().await;
     let ws_path = server.workspaces_path().join("msg-during-turn");

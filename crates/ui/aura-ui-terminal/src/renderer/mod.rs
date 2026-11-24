@@ -13,6 +13,7 @@ mod flow_minimap;
 mod flow_timeline;
 mod graph;
 mod header;
+mod host_tab;
 mod hud;
 mod images;
 mod inbox;
@@ -143,6 +144,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let stop = input::render_input(frame, chat_column[3], app, theme);
     app.set_input_stop_area(stop);
     let footer_gap = hud::render_footer(frame, inset_edges(chat_column[4]), app, theme);
+    app.set_footer_area(inset_edges(chat_column[4]));
     let (records, sandbox) = split_right_column(right, app);
     let notice_area = under_right.unwrap_or(footer_gap);
     if let Some(read) = hud::render_notice(frame, (notice_area, sandbox.or(records)), app, theme) {

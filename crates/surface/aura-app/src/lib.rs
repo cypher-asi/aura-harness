@@ -29,6 +29,7 @@ pub mod agent_definitions;
 pub mod agent_registry;
 pub mod api_server;
 pub mod bench_pack;
+pub mod cloud;
 pub mod event_loop;
 pub mod file_checkpoints;
 mod harness;

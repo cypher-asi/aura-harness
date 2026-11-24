@@ -44,6 +44,9 @@ use crate::gateway::RouterState;
 const MAX_PATCH_BYTES: usize = 64 * 1024 * 1024;
 /// Limit on the git commands behind the patch.
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Longest a seal waits for the agent's writes in flight to end.
+const SEAL_DRAIN: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// How often host stats go up the hub socket.
 const HOST_STATS_EVERY: Duration = Duration::from_secs(5);
 /// Limit on a direct send to a peer node.
@@ -92,7 +95,7 @@ impl MeshNode {
             directory: RwLock::new(HashMap::new()),
             uplink: Mutex::new(None),
             pending: Mutex::new(Vec::new()),
-            next_id: AtomicU64::new(1),
+            next_id: AtomicU64::new(aura_engine_cloud::mesh::first_mail_id()),
             seen: MailBook::new(),
             http: reqwest::Client::builder()
                 .timeout(PEER_TIMEOUT)
@@ -297,17 +300,38 @@ pub(in crate::gateway) async fn sync_seal_handler(
     }
     let agent = parse_agent(&agent_hex)?;
     state.cloud.seal(agent);
-    // Stop the agent's spawned children; its own turns are refused from
-    // now on by the sealed check on `/v1/run` and `/tx`.
+    // New turns are refused from now on by the sealed check on `/v1/run`
+    // and `/tx`. Stop what is already running: the agent's spawned
+    // children, and every chat run (a cloud node only runs its hub's
+    // agent), then wait for them to end so the head is final.
     let _ = state
         .agent_host
         .lifecycle(agent, aura_engine::agents::LifecycleAction::Stop);
+    for run in state.chat_runs.iter() {
+        run.shutdown.cancel();
+    }
+    let deadline = tokio::time::Instant::now() + SEAL_DRAIN;
+    while !state.chat_runs.is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    // A turn the scheduler runs (mail) holds the agent's claim; waiting
+    // for it means no write is in flight when the head is read.
+    let claim = tokio::time::timeout(SEAL_DRAIN, state.scheduler.processing_claim(agent))
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::CONFLICT,
+                format!("agent {agent} is still writing; try the seal again"),
+            )
+        })?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("claim: {e}")))?;
     let head_seq = state.store.get_head_seq(agent).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("storage error: {e}"),
         )
     })?;
+    drop(claim);
     Ok(Json(SealResponse { head_seq }))
 }
 
@@ -441,7 +465,10 @@ fn accept_mail(state: &RouterState, mesh: &MeshNode, mail: &MeshMail) -> MeshFra
     });
     match delivered {
         Ok(()) => ack(true, None),
-        Err(err) => ack(false, Some(err)),
+        Err(err) => {
+            mesh.seen.forget(mail);
+            ack(false, Some(err))
+        }
     }
 }
 

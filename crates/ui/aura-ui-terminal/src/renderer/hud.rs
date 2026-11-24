@@ -183,7 +183,7 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Th
     if area.height == 0 || area.width == 0 {
         return Rect { height: 0, ..area };
     }
-    let row = Rect { height: 1, ..area };
+    let row = super::host_tab::split_footer(frame, Rect { height: 1, ..area }, app, theme);
     let status = status_spans(app, theme);
     let status_width: usize = status.iter().map(|s| display_width(&s.content)).sum();
     let room = usize::from(row.width).saturating_sub(status_width + STATUS_GAP);

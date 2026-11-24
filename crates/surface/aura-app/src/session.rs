@@ -222,6 +222,7 @@ pub async fn start(
         Arc::clone(&record_router) as Arc<dyn RecordObserver>,
         Arc::clone(&flow) as Arc<dyn RecordObserver>,
     ]));
+    let cloud_store = Arc::clone(&store) as Arc<dyn aura_store_db::Store>;
     let Harness { hub, background } = build_hub(HubSetup {
         data_dir: data_dir.clone(),
         workspace_root: workspace_root.clone(),
@@ -283,6 +284,7 @@ pub async fn start(
             approvals,
             flow: Some(flow),
             quit: loop_quit,
+            cloud_store: Some(cloud_store),
         };
         event_loop::run_event_loop(ctx).await
     });

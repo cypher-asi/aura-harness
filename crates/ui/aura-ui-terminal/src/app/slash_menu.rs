@@ -96,6 +96,14 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("policies", "Show the policies and permissions of this agent"),
     command("inbox", "Show the messages this run's agents sent each other"),
     command("files", "Toggle Sandbox panel"),
+    SlashCommand {
+        name: "cloud",
+        args: "[setup|pull|sleep|wake]",
+        description: "Run this agent on its own cloud machine, or manage it",
+        needs_args: false,
+    },
+    command("local", "Bring this agent back to run on this machine"),
+    command("host", "Show the host this agent runs on, with its resources and cost"),
     command(
         "expand",
         "Expand the chat panel to fill the screen, or restore it",
