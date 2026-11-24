@@ -46,6 +46,7 @@
 pub mod agent_identity;
 pub mod chat_project_info;
 pub mod client;
+pub mod cloud;
 pub mod common;
 pub mod context;
 pub mod conversions;

@@ -11,10 +11,15 @@ aura-core-types = { path = "../../core/aura-core-types" }
 # AgentConfig::default_mode carries an AgentMode primitive.
 aura-core-modes = { path = "../../core/aura-core-modes" }
 dirs = { workspace = true }
+dotenvy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

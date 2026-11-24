@@ -35,7 +35,7 @@ rustc-hash = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { version = "4.5", features = ["derive"] }
-dotenvy = { workspace = true }
+aura-config = { path = "../../config/aura-config" }
 futures = "0.3"
 tokio = { workspace = true }
 tracing = { workspace = true }

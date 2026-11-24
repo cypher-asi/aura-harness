@@ -72,7 +72,7 @@ fn parse_approval(raw: &str) -> Result<ApprovalLevel, String> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let args = Args::parse();
     let options = DesktopOptions {
         workspace: args.workspace,

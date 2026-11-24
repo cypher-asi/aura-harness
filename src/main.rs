@@ -9,7 +9,7 @@ use clap::Parser;
 use std::process::ExitCode;
 
 fn main() -> anyhow::Result<ExitCode> {
-    let _ = dotenvy::dotenv();
+    let _ = aura_config::env_file::load();
     let cli = aura_cli::cli::Cli::parse();
 
     #[cfg(feature = "desktop")]

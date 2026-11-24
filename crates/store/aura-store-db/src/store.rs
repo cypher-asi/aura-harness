@@ -138,6 +138,41 @@ pub trait WriteStore: ReadStore + sealed::Sealed {
         base_seq: u64,
         entries: &[RecordEntry],
     ) -> Result<(), StoreError>;
+
+    /// Append entries another node's kernel committed, verbatim, in one
+    /// atomic batch: the cloud record mirror's only write path.
+    ///
+    /// This is a declared exception to "only the kernel appends"
+    /// (`docs/invariants.md`, *Declared Exceptions*): while an agent runs
+    /// on a cloud machine, that machine's kernel is its single writer and
+    /// the local store only receives copies. Callers must have checked
+    /// the page (`aura_engine_cloud::replica::verify_page`); this method
+    /// re-checks that every entry's `seq` continues from `base_seq` and
+    /// that `base_seq` is the local head + 1, so a gap or a duplicate
+    /// can't be written.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::SequenceMismatch`] for non-contiguous entries;
+    /// otherwise as [`Self::append_entries_batch`]. Nothing is written
+    /// on error.
+    fn append_replica_batch(
+        &self,
+        agent_id: AgentId,
+        base_seq: u64,
+        entries: &[RecordEntry],
+    ) -> Result<(), StoreError> {
+        for (offset, entry) in (0u64..).zip(entries) {
+            let expected = base_seq + offset;
+            if entry.seq != expected {
+                return Err(StoreError::SequenceMismatch {
+                    expected,
+                    actual: entry.seq,
+                });
+            }
+        }
+        self.append_entries_batch(agent_id, base_seq, entries)
+    }
 }
 
 /// Convenience combined trait for storage implementations. Blanket-impl'd for

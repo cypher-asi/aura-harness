@@ -129,9 +129,11 @@
 pub mod agent;
 pub mod aura_home;
 pub mod automaton;
+pub mod cloud;
 pub mod compaction;
 pub mod conflict;
 pub mod env;
+pub mod env_file;
 pub mod gate;
 pub mod plugins;
 pub mod prompts;
@@ -148,6 +150,10 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 pub use agent::AgentConfig;
 pub use aura_home::{AuraHome, AuraHomeError, AuraHomeSource};
 pub use automaton::AutomatonConfig;
+pub use cloud::{
+    BoxdApiKey, BoxdCredential, BoxdToken, CloudConfig, MachineSize, MachineSizeError,
+    MISSING_CREDENTIAL_NOTICE,
+};
 pub use compaction::{CompactionConfig, COMPACTION_TRIGGER_DEFAULT};
 pub use conflict::ConflictConfig;
 pub use env::{ConfigError, ENV_VAR_NAMES};
@@ -232,6 +238,8 @@ pub struct AuraConfig {
     pub trace: TraceConfig,
     /// How Gate routes work across models.
     pub gate: GateConfig,
+    /// Cloud agents on boxd machines.
+    pub cloud: CloudConfig,
 }
 
 impl AuraConfig {
@@ -246,6 +254,7 @@ impl AuraConfig {
             plugins: PluginsConfig::defaults(),
             trace: TraceConfig::defaults(),
             gate: GateConfig::defaults(),
+            cloud: CloudConfig::defaults(),
         }
     }
 
@@ -268,6 +277,13 @@ impl AuraConfig {
             plugins: PluginsConfig::defaults(),
             trace: TraceConfig::from_env(),
             gate: GateConfig::from_env(),
+            // A bad cloud setting turns cloud mode off with a warning
+            // rather than discarding every other setting; the cloud hub
+            // reads `CloudConfig::from_env` itself to report the error.
+            cloud: CloudConfig::from_env().unwrap_or_else(|err| {
+                tracing::warn!(error = %err, "aura-config: cloud settings ignored");
+                CloudConfig::defaults()
+            }),
         })
     }
 }
@@ -343,6 +359,12 @@ pub fn reasoner() -> ReasonerConfig {
 #[must_use]
 pub fn trace() -> TraceConfig {
     current().trace
+}
+
+/// Shortcut for `loaded().cloud`.
+#[must_use]
+pub fn cloud() -> CloudConfig {
+    current().cloud
 }
 
 /// Shortcut for `loaded().gate`.

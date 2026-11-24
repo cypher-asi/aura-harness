@@ -1,0 +1,71 @@
+//! # aura-engine-cloud
+//!
+//! Layer: engine
+//!
+//! Cloud agents on boxd machines (<https://boxd.sh>): each cloud agent's
+//! kernel runs in an aura node on a boxd microVM of its own, and the
+//! local app is the hub that creates, sleeps, wakes and destroys those
+//! machines, mirrors their records and routes their mail.
+//!
+//! ## Surface
+//!
+//! - [`token`]: `BOXD_API_KEY` to a one-hour JWT, shared app-wide.
+//! - [`provider`]: the [`VmProvider`] seam and its domain types;
+//!   [`boxd`] implements it over boxd's gRPC API, [`fake`] in memory.
+//! - [`fleet`]: the machine of every cloud agent and its lifecycle
+//!   (create, claim, idle hibernation, wake, destroy, orphan sweep),
+//!   recorded on ledger agents through a [`fleet::VmLedger`].
+//! - [`snapshots`]: base and per-project snapshots holding a finished
+//!   build and a running node, keyed by a fingerprint.
+//! - [`delta`]: the project files a machine gets on top of its snapshot,
+//!   never including `.env` files.
+//! - [`machine_env`]: the allowlisted environment a machine gets.
+//! - [`cost`]: metered usage plus a live estimate since the last reading.
+//! - [`replica`]: checks and mirrors a node's record pages into the
+//!   local store.
+//! - [`mesh`]: the directory of which node holds which agent, mail ids
+//!   and dedup.
+//! - [`names`]: machine and ledger names.
+//!
+//! ## Invariants
+//!
+//! - The boxd key and tokens never leave this process: machines get an
+//!   explicit env allowlist, and node tokens travel only over boxd's
+//!   authenticated `Exec`.
+//! - Every external call has a timeout (rules.md §6.2).
+
+pub mod boxd;
+pub mod cost;
+pub mod delta;
+pub mod error;
+pub mod fake;
+pub mod fleet;
+pub mod machine_env;
+pub mod mesh;
+pub mod names;
+pub mod provider;
+pub mod replica;
+pub mod snapshots;
+pub mod token;
+
+pub mod proto {
+    //! Code generated from boxd's vendored `api.proto` (`boxd.api.v1`).
+    #![allow(
+        clippy::all,
+        clippy::pedantic,
+        clippy::nursery,
+        missing_docs,
+        rustdoc::all,
+        unreachable_pub
+    )]
+    tonic::include_proto!("boxd.api.v1");
+}
+
+pub use boxd::BoxdProvider;
+pub use error::{CloudError, CloudResult};
+pub use fake::FakeProvider;
+pub use provider::{
+    Balance, ExecOutput, MachineInfo, MachineLimit, MachineOrigin, MachineStatus, NewMachine,
+    OrgUsage, SnapshotInfo, UsageReading, VmProvider,
+};
+pub use token::TokenSource;

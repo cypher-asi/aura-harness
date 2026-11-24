@@ -76,7 +76,6 @@ futures-util = { workspace = true }
 # `/ws/terminal` PTY sessions (gateway/terminal_ws.rs).
 portable-pty = { workspace = true }
 which = { workspace = true }
-dotenvy = { workspace = true }
 dirs = { workspace = true }
 colored = { workspace = true }
 terminal_size = { workspace = true }

@@ -80,6 +80,13 @@ pub enum SystemKind {
     /// A `/compare` of Gate with another model (a
     /// [`ComparePayload`](super::compare::ComparePayload))
     Compare,
+    /// A cloud machine's state change or meter reading (a
+    /// [`VmPayload`](super::vm::VmPayload)), on the machine's ledger
+    /// agent. Written only by the hub's cloud fleet.
+    Vm,
+    /// The agent's single writer moved between this machine and a cloud
+    /// machine (a [`PlacementPayload`](super::vm::PlacementPayload)).
+    Placement,
 }
 
 /// Payload of a [`SystemKind::ModeChange`] transaction.

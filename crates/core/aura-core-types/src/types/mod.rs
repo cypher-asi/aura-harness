@@ -18,6 +18,7 @@ mod subagent;
 mod tool;
 pub mod trace;
 mod transaction;
+mod vm;
 
 pub use action::{Action, ActionKind};
 pub use compare::{
@@ -53,6 +54,9 @@ pub use tool::{
     ToolResultImage, ToolResultKind,
 };
 pub use transaction::{ModeChangePayload, SystemKind, Transaction, TransactionType};
+pub use vm::{
+    Placement, PlacementPayload, PriceRates, VmEvent, VmPayload, VmResources, VmSource, VmUsage,
+};
 
 #[cfg(test)]
 mod tests {

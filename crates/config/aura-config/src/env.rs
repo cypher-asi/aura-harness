@@ -100,6 +100,51 @@ pub const AURA_GATE_CRITERIA: &str = "AURA_GATE_CRITERIA";
 /// by [`crate::GateConfig::review_sample`].
 pub const AURA_GATE_REVIEW_SAMPLE: &str = "AURA_GATE_REVIEW_SAMPLE";
 
+// Cloud agents on boxd machines. `BOXD_*` are the names boxd's own SDKs
+// read, so one `.env` serves both. All are consumed by
+// [`crate::CloudConfig::from_env`] and nothing else.
+
+/// boxd API key (`bxd_…`), exchanged for a short-lived token. Consumed
+/// by [`crate::CloudConfig::credential`].
+pub const BOXD_API_KEY: &str = "BOXD_API_KEY";
+/// A boxd token the user already holds; wins over [`BOXD_API_KEY`].
+/// Consumed by [`crate::CloudConfig::credential`].
+pub const BOXD_TOKEN: &str = "BOXD_TOKEN";
+/// boxd API endpoint. Consumed by [`crate::CloudConfig::base_url`].
+pub const BOXD_BASE_URL: &str = "BOXD_BASE_URL";
+/// Deprecated older name for [`BOXD_BASE_URL`], read when the new one is
+/// unset.
+pub const BOXD_API_URL: &str = "BOXD_API_URL";
+/// Region for new machines (unset = Frankfurt). Consumed by
+/// [`crate::CloudConfig::region`].
+pub const BOXD_REGION: &str = "BOXD_REGION";
+/// boxd organization to act in. Consumed by [`crate::CloudConfig::org`].
+pub const BOXD_ORG: &str = "BOXD_ORG";
+/// Machine size for new cloud agents (`1x4`, `2x8`, `4x16`, `8x32`).
+/// Consumed by [`crate::CloudConfig::size`].
+pub const AURA_CLOUD_SIZE: &str = "AURA_CLOUD_SIZE";
+/// Idle seconds before a cloud machine hibernates. Consumed by
+/// [`crate::CloudConfig::idle_hibernate_secs`].
+pub const AURA_CLOUD_IDLE_HIBERNATE_SECS: &str = "AURA_CLOUD_IDLE_HIBERNATE_SECS";
+/// Idle seconds before a cloud machine goes to standby (`0` = off).
+/// Consumed by [`crate::CloudConfig::idle_standby_secs`].
+pub const AURA_CLOUD_IDLE_STANDBY_SECS: &str = "AURA_CLOUD_IDLE_STANDBY_SECS";
+/// Whether cloud machines are created isolated. Consumed by
+/// [`crate::CloudConfig::isolated`].
+pub const AURA_CLOUD_ISOLATED: &str = "AURA_CLOUD_ISOLATED";
+/// Whether a spawned child of a cloud agent gets a fork of its parent's
+/// machine. Consumed by [`crate::CloudConfig::fork_on_spawn`].
+pub const AURA_CLOUD_FORK_ON_SPAWN: &str = "AURA_CLOUD_FORK_ON_SPAWN";
+/// Price of one vCPU-hour, for the live cost estimate. Consumed by
+/// [`crate::CloudConfig::price_vcpu_hour`].
+pub const AURA_CLOUD_PRICE_VCPU_HOUR: &str = "AURA_CLOUD_PRICE_VCPU_HOUR";
+/// Price of one GiB-hour of memory. Consumed by
+/// [`crate::CloudConfig::price_mem_gib_hour`].
+pub const AURA_CLOUD_PRICE_MEM_GIB_HOUR: &str = "AURA_CLOUD_PRICE_MEM_GIB_HOUR";
+/// Price of one GiB-hour of disk. Consumed by
+/// [`crate::CloudConfig::price_disk_gib_hour`].
+pub const AURA_CLOUD_PRICE_DISK_GIB_HOUR: &str = "AURA_CLOUD_PRICE_DISK_GIB_HOUR";
+
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
 /// any of these names.
@@ -139,6 +184,20 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_GATE_REVIEW,
     AURA_GATE_CRITERIA,
     AURA_GATE_REVIEW_SAMPLE,
+    BOXD_API_KEY,
+    BOXD_TOKEN,
+    BOXD_BASE_URL,
+    BOXD_API_URL,
+    BOXD_REGION,
+    BOXD_ORG,
+    AURA_CLOUD_SIZE,
+    AURA_CLOUD_IDLE_HIBERNATE_SECS,
+    AURA_CLOUD_IDLE_STANDBY_SECS,
+    AURA_CLOUD_ISOLATED,
+    AURA_CLOUD_FORK_ON_SPAWN,
+    AURA_CLOUD_PRICE_VCPU_HOUR,
+    AURA_CLOUD_PRICE_MEM_GIB_HOUR,
+    AURA_CLOUD_PRICE_DISK_GIB_HOUR,
 ];
 
 // ---------------------------------------------------------------------------

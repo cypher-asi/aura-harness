@@ -70,6 +70,9 @@ pub use types::{
     ToolResult, ToolResultContent, ToolResultImage, ToolResultKind, Trace, Transaction,
     TransactionType, DEFAULT_SUBAGENT_TIMEOUT_MS, KERNEL_VERSION, MAX_TURNS,
 };
+pub use types::{
+    Placement, PlacementPayload, PriceRates, VmEvent, VmPayload, VmResources, VmSource, VmUsage,
+};
 
 // Convenience re-exports of mode/permission primitives so downstream
 // crates can pull from one place once they're migrated. These do not
