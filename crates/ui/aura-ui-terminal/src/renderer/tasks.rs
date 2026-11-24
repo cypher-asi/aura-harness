@@ -52,8 +52,7 @@ pub(super) fn render_tasks(
         return;
     }
     if list.rows().is_empty() {
-        let message = ["No tasks yet.", "Work agents do", "shows up here."];
-        render_empty(frame, inner, &message, theme);
+        render_empty(frame, inner, "No tasks yet.", theme);
         return;
     }
 

@@ -73,8 +73,7 @@ pub(super) fn render_plans(
         return;
     }
     if list.rows().is_empty() {
-        let message = ["No plans yet.", "/plan asks the agent", "to write one."];
-        render_empty(frame, inner, &message, theme);
+        render_empty(frame, inner, "No plans yet.", theme);
         return;
     }
 

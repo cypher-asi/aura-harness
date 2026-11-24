@@ -34,13 +34,7 @@ pub(super) fn render_processes(
         return;
     }
     if app.processes().is_empty() {
-        let message = [
-            "Nothing running.",
-            "Agent turns, spawned agents",
-            "and background commands",
-            "appear here.",
-        ];
-        render_empty(frame, inner, &message, theme);
+        render_empty(frame, inner, "Nothing running.", theme);
         return;
     }
 

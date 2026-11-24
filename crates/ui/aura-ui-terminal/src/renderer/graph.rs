@@ -5,6 +5,7 @@
 
 use super::header::HeaderInfo;
 use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollView};
+use super::side_list::render_empty;
 use super::text::display_width;
 use crate::app::graph::GraphRow;
 use crate::events::{TraceNode, TraceNodeStatus};
@@ -144,13 +145,7 @@ pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: 
     let tree = inner;
 
     if rows.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "  No steps recorded yet.",
-                Style::default().fg(theme.colors.muted),
-            ))),
-            tree,
-        );
+        render_empty(frame, tree, "No steps recorded yet.", theme);
         app.graph_mut().set_tree_area(None);
         app.set_detail_bounds(0, 0);
         return;

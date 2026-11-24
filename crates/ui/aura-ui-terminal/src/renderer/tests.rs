@@ -1344,10 +1344,11 @@ fn test_scoped_tabs_say_what_the_star_button_would_list() {
     app.select_pane_tab(crate::app::PaneTab::Side(
         crate::app::SidePanelTab::Processes,
     ));
-    let screen = render_rows(&mut app, 150).join("\n");
-    assert!(screen.contains("No processes for this agent."), "{screen}");
-    assert!(screen.contains("The * button lists"), "{screen}");
-    assert!(screen.contains("the project's 1."), "{screen}");
+    let screen = render_rows(&mut app, 240).join("\n");
+    assert!(
+        screen.contains("No processes for this agent. * 1."),
+        "{screen}"
+    );
 }
 
 #[test]
@@ -4042,6 +4043,7 @@ fn test_clicking_a_difficulty_row_then_a_model_picks_it_from_the_selector() {
     assert_eq!(app.chat_tab(), crate::app::ChatTab::Bench);
     app.handle_key(KeyEvent::from(KeyCode::Char('n')));
     app.bench_mut().form.b = BY_DIFFICULTY.to_string();
+    app.bench_mut().form.b_models = Default::default();
     let click = |app: &mut crate::App, column: u16, row: u16| {
         for kind in [
             MouseEventKind::Down(MouseButton::Left),

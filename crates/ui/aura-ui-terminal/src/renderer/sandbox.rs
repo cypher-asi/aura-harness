@@ -78,14 +78,10 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
 fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
     if app.sandbox().rows().is_empty() {
-        let message: &[&str] = if app.sandbox().root().is_some() {
-            &[
-                "Sandbox is empty.",
-                "Files the agent creates",
-                "will appear here.",
-            ]
+        let message = if app.sandbox().root().is_some() {
+            "Sandbox is empty."
         } else {
-            &["No sandbox yet."]
+            "No sandbox yet."
         };
         render_empty(frame, inner, message, theme);
         return;

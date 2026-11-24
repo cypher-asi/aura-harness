@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Empty panel messages fit on one line
+
+##### Changed
+
+- Every empty panel says so in one muted line, indented two columns,
+  instead of a headline followed by wrapped explanation lines. SANDBOX,
+  PROCESSES, TRACE, PLANS, TASKS, KERNEL, MEMBERS, POLICIES, INBOX, the
+  ARCHIVE list, the graph overlay, the flow canvas and the chat welcome
+  all share the same line, cut with an ellipsis on narrow panels rather
+  than wrapped. A tab whose items belong to other agents still points at
+  the `*` button, now on the same line.
+
 ### The classifier assesses the work, and Gate scores its difficulty
 
 ##### Changed

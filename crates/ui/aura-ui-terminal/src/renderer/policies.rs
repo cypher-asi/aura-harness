@@ -48,12 +48,7 @@ pub(super) fn render_policies(
 ) {
     let is_focused = app.focus() == PanelFocus::Records;
     let Some(view) = app.policies() else {
-        let message = [
-            "No kernel open for this agent.",
-            "Its policies are listed here",
-            "once it has a session.",
-        ];
-        render_empty(frame, inner, &message, theme);
+        render_empty(frame, inner, "No kernel open for this agent.", theme);
         return;
     };
     let lines = policy_lines(view, usize::from(inner.width), theme);

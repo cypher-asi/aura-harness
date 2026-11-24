@@ -3,7 +3,8 @@
 use super::detail::detail_header;
 use super::header::{self, HeaderInfo, PanelHeader};
 use super::markdown::is_inline_code;
-use super::text::{display_width, wrap_words, Measure};
+use super::side_list::{empty_line, render_empty};
+use super::text::{display_width, Measure};
 use crate::{
     animation::AURA_WIDTH,
     app::{
@@ -20,9 +21,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget, Wrap,
-    },
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget},
     Frame,
 };
 use std::ops::Range;
@@ -919,10 +918,10 @@ fn render_welcome(frame: &mut Frame, area: Rect, terminal: bool, theme: &Theme) 
     let text = if terminal {
         "Enter runs a command. Esc returns to chat."
     } else {
-        "Type a message to start chatting, $ for a terminal, or /help for commands."
+        "Type a message, $ for a terminal, /help for commands."
     };
     let welcome = Line::from(Span::styled(text, Style::default().fg(theme.colors.muted)));
-    frame.render_widget(Paragraph::new(welcome).wrap(Wrap { trim: true }), area);
+    frame.render_widget(Paragraph::new(welcome), area);
 }
 
 /// Render the agents panel: a PROJECTS | AGENTS header bar over either the
@@ -1021,14 +1020,9 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     }
 }
 
-/// Columns kept clear on each side of the text a list shows while it is
-/// empty, as the side panel's tabs keep them.
-const EMPTY_INDENT: usize = 2;
-
 /// Archive rows: each archived agent with the project it came from on the
-/// right, and the agents under it indented below. Empty, it says how
-/// agents get there, wrapped to the panel inside its padding. Only the
-/// rows in `window` are drawn; the total comes with them.
+/// right, and the agents under it indented below. Empty, a single muted
+/// line. Only the rows in `window` are drawn; the total comes with them.
 fn build_archived_lines<'a>(
     app: &App,
     inner: Rect,
@@ -1037,26 +1031,12 @@ fn build_archived_lines<'a>(
 ) -> (Vec<Line<'a>>, usize) {
     let archived = app.archived();
     if archived.is_empty() {
-        let muted = Style::default().fg(theme.colors.muted);
-        let room = usize::from(inner.width)
-            .saturating_sub(2 * EMPTY_INDENT)
-            .max(1);
-        let indent = " ".repeat(EMPTY_INDENT);
-        let lines: Vec<Line> = [
-            "No archived agents.",
-            "Delete on an agent in PROJECTS archives it.",
-        ]
-        .into_iter()
-        .flat_map(|sentence| wrap_words(sentence, room))
-        .map(|line| Line::from(Span::styled(format!("{indent}{line}"), muted)))
-        .collect();
-        let total = lines.len();
-        let shown = lines
-            .into_iter()
-            .skip(window.start)
-            .take(window.len())
-            .collect();
-        return (shown, total);
+        let line = empty_line("No archived agents.", inner.width, theme);
+        return if window.start == 0 && !window.is_empty() {
+            (vec![line], 1)
+        } else {
+            (Vec::new(), 1)
+        };
     }
     let is_focused = app.focus() == PanelFocus::Swarm;
     let width = inner.width as usize;
@@ -1887,23 +1867,7 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
 }
 
 fn render_empty_records(frame: &mut Frame, inner: Rect, theme: &Theme) {
-    let empty_msg = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "  No records yet.",
-            Style::default().fg(theme.colors.muted),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  Records will appear",
-            Style::default().fg(theme.colors.muted),
-        )),
-        Line::from(Span::styled(
-            "  as they are created.",
-            Style::default().fg(theme.colors.muted),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(empty_msg), inner);
+    render_empty(frame, inner, "No records yet.", theme);
 }
 
 /// Lines for the `rows` records starting at index `first`.

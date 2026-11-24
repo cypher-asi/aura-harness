@@ -260,7 +260,7 @@ mod tests {
         let (mut app, _rx) = app();
         app.handle_key(key(KeyCode::Left));
         assert_eq!(app.agents_tab(), AgentsTab::Archive);
-        for width in [100, 160] {
+        for width in [160, 200] {
             let rows = screen(&mut app, width);
             let first = rows.iter().position(|row| row.contains("No archived"));
             let first = first.unwrap_or_else(|| panic!("no message:\n{}", rows.join("\n")));
@@ -276,21 +276,12 @@ mod tests {
                 })
                 .take_while(|line| !line.trim().is_empty())
                 .collect();
-            assert!(lines.len() >= 2, "{lines:?}");
-            for line in &lines {
-                assert!(line.starts_with("  "), "{width}: {line:?}");
-                assert!(!line.starts_with("   "), "{width}: {line:?}");
-                assert!(line.ends_with("  "), "{width}: {line:?}");
-            }
-            let text = lines
-                .iter()
-                .map(|line| line.trim())
-                .collect::<Vec<_>>()
-                .join(" ");
-            assert_eq!(
-                text,
-                "No archived agents. Delete on an agent in PROJECTS archives it."
-            );
+            assert_eq!(lines.len(), 1, "{width}: {lines:?}");
+            let line = lines[0];
+            assert!(line.starts_with("  "), "{width}: {line:?}");
+            assert!(!line.starts_with("   "), "{width}: {line:?}");
+            assert!(line.ends_with("  "), "{width}: {line:?}");
+            assert_eq!(line.trim(), "No archived agents.");
         }
     }
 

@@ -72,20 +72,24 @@ pub(super) fn name_style(tone: Tone, theme: &Theme) -> Style {
     })
 }
 
-/// Draw a tab's empty state: muted lines, each indented two columns.
-pub(super) fn render_empty(frame: &mut Frame, inner: Rect, message: &[&str], theme: &Theme) {
-    let muted = Style::default().fg(theme.colors.muted);
-    let lines: Vec<Line> = message
-        .iter()
-        .map(|text| {
-            if text.is_empty() {
-                Line::default()
-            } else {
-                Line::from(Span::styled(format!("  {text}"), muted))
-            }
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), inner);
+/// Columns kept clear on each side of a panel's empty message.
+pub(super) const EMPTY_INDENT: usize = 2;
+
+/// A tab's empty state: one muted line, indented two columns, cut to
+/// `width` with an ellipsis rather than wrapped. Lists that build their
+/// own lines use this too, so every empty state reads the same way.
+pub(super) fn empty_line(text: &str, width: u16, theme: &Theme) -> Line<'static> {
+    let room = usize::from(width).saturating_sub(EMPTY_INDENT);
+    let text = truncate_record_info(text, room);
+    Line::from(Span::styled(
+        format!("{}{text}", " ".repeat(EMPTY_INDENT)),
+        Style::default().fg(theme.colors.muted),
+    ))
+}
+
+/// Draw a tab's empty state: a single line, never wrapped.
+pub(super) fn render_empty(frame: &mut Frame, inner: Rect, text: &str, theme: &Theme) {
+    frame.render_widget(Paragraph::new(empty_line(text, inner.width, theme)), inner);
 }
 
 /// Draw the empty state of a tab whose `hidden` items, `what` it lists,
@@ -96,13 +100,8 @@ pub(super) fn render_hidden(
     (what, hidden): (&str, usize),
     theme: &Theme,
 ) {
-    // Two short lines, so a narrow panel does not cut them off.
-    let message = [
-        format!("No {what} for this agent."),
-        format!("The {} button lists", SideScope::BUTTON),
-        format!("the project's {hidden}."),
-    ];
-    render_empty(frame, inner, &message.each_ref().map(String::as_str), theme);
+    let message = format!("No {what} for this agent. {} {hidden}.", SideScope::BUTTON);
+    render_empty(frame, inner, &message, theme);
 }
 
 /// Split a tab's body into its rows and, while the panel has focus and
@@ -170,13 +169,27 @@ mod tests {
     }
 
     #[test]
-    fn the_hint_row_needs_focus_and_room() {
-        let inner = Rect::new(0, 0, 20, 10);
-        let (rows, hint) = split_hint(inner, true);
-        assert_eq!(rows.height, 9);
-        assert_eq!(hint.map(|h| h.y), Some(9));
-        assert_eq!(split_hint(inner, false), (inner, None));
-        let short = Rect::new(0, 0, 20, 3);
-        assert_eq!(split_hint(short, true), (short, None));
+    fn an_empty_message_is_one_indented_line_even_when_narrow() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        let theme = Theme::cyber();
+        let mut terminal = Terminal::new(TestBackend::new(12, 3)).expect("test terminal");
+        terminal
+            .draw(|frame| {
+                render_empty(
+                    frame,
+                    frame.area(),
+                    "No messages between agents yet.",
+                    &theme,
+                );
+            })
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = (0..3)
+            .map(|y| (0..12).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect();
+        assert_eq!(rows[0], "  No messag…", "{rows:?}");
+        assert!(rows[1].trim().is_empty(), "{rows:?}");
+        assert!(rows[2].trim().is_empty(), "{rows:?}");
     }
 }

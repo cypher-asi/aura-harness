@@ -50,12 +50,7 @@ pub(super) fn render_inbox(
 ) {
     let is_focused = app.focus() == PanelFocus::Records;
     if app.inbox_rows().is_empty() {
-        let message = [
-            "No messages between agents yet.",
-            "Mail the agents of the run",
-            "send is threaded here.",
-        ];
-        render_empty(frame, inner, &message, theme);
+        render_empty(frame, inner, "No messages between agents yet.", theme);
         return;
     }
 

@@ -28,13 +28,7 @@ pub(super) fn render_trace_feed(
         return;
     }
     if feed.is_empty() {
-        let message = [
-            "No steps yet.",
-            "Model calls, tool calls and",
-            "harness decisions of this",
-            "session appear here.",
-        ];
-        render_empty(frame, inner, &message, theme);
+        render_empty(frame, inner, "No steps yet.", theme);
         return;
     }
 

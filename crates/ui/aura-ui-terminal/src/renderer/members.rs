@@ -4,16 +4,12 @@
 
 use super::panels::{cell_style, list_row, now_ms, render_scrollbar, CellState, ScrollView};
 use super::processes::{format_elapsed, status_icon};
-use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, MEMBERS_HINT};
+use super::side_list::{
+    empty_line, name_style, render_empty, render_hint, split_hint, Tone, MEMBERS_HINT,
+};
 use crate::app::{HoverTarget, MemberRow, PanelFocus};
 use crate::{App, Theme};
-use ratatui::{
-    layout::Rect,
-    style::Style,
-    text::{Line, Span},
-    widgets::Paragraph,
-    Frame,
-};
+use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 
 /// Draw the members into `inner`, the body below the tab bar of the
 /// panel bordered by `area`.
@@ -26,12 +22,7 @@ pub(super) fn render_members(
 ) {
     let is_focused = app.focus() == PanelFocus::Records;
     if app.members().is_empty() {
-        let message = [
-            "No agent on screen.",
-            "The agents its run brings",
-            "in are listed here.",
-        ];
-        render_empty(frame, inner, &message, theme);
+        render_empty(frame, inner, "No agent on screen.", theme);
         return;
     }
 
@@ -63,15 +54,10 @@ pub(super) fn render_members(
             list_row(width, member.depth, icon, &member.label, cell, Some(&time))
         })
         .collect();
-    if app.members().len() == 1 && visible >= 4 {
+    if app.members().len() == 1 && visible >= 2 {
         // The lead alone: say who would join.
-        let muted = Style::default().fg(theme.colors.muted);
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("  No agents joined yet.", muted)));
-        lines.push(Line::from(Span::styled(
-            "  Spawned agents appear here.",
-            muted,
-        )));
+        lines.push(empty_line("No agents joined yet.", inner.width, theme));
     }
     let view = ScrollView {
         total: app.members().len(),

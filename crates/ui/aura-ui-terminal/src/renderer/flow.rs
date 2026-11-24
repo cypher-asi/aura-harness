@@ -22,6 +22,7 @@ use super::flow_minimap::render_minimap;
 use super::flow_timeline::render_timeline;
 use super::graph::status_glyph;
 use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollView};
+use super::side_list::render_empty;
 use super::text::display_width;
 use crate::app::flow::layout::{FlowLayout, Wire, WireKind, CARD_WIDTH};
 use crate::app::flow::{FlowMode, FlowState, FlowView};
@@ -31,8 +32,6 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Wrap},
     Frame,
 };
 use std::ops::Range;
@@ -46,7 +45,6 @@ pub(super) fn render_flow(
     theme: &Theme,
     is_focused: bool,
 ) {
-    let muted = Style::default().fg(theme.colors.muted);
     let block = body_block((is_focused, app.host_chrome()), theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -63,20 +61,11 @@ pub(super) fn render_flow(
         app.flow_mut().set_view(None, false);
         app.flow_mut().set_minimap(None);
         let text = if app.flow().loaded() {
-            "Nothing recorded yet. Prompts, model calls, tool calls and the agents \
-             they start show up here as the agent works."
+            "Nothing recorded yet."
         } else {
             "Loading the graph…"
         };
-        let padded = Rect {
-            x: inner.x.saturating_add(1),
-            width: inner.width.saturating_sub(2),
-            ..inner
-        };
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(text, muted))).wrap(Wrap { trim: true }),
-            padded,
-        );
+        render_empty(frame, inner, text, theme);
         return;
     }
 
