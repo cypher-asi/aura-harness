@@ -25,7 +25,34 @@ cargo test --release -p aura-desktop -- --ignored --nocapture timings
 
 # The same conversation and reply in the terminal UI alone
 cargo test --release -p aura-ui-terminal -- --ignored --nocapture timings
+
+# Many agents at once: turns through the kernel and record store, and the
+# terminal UI applying and drawing their streams
+cargo test --release -p aura-agent --test many_agents_load -- --ignored --nocapture
+cargo test --release -p aura-ui-terminal --test ui_load -- --ignored --nocapture
 ```
+
+### Profiling under load
+
+The two load tests take their sizes from the environment:
+
+- `AURA_LOAD_AGENTS` is the list of agent counts to run, for example `1,8,32,64`.
+- `AURA_LOAD_STEPS` and `AURA_LOAD_RESULT_BYTES` set the tool steps in each agent's turn and the size of each result.
+- `AURA_LOAD_FRAMES` sets the frames the UI is streamed for.
+
+`many_agents_load` prints wall time, turn p50 and p99, iterations per second, CPU time and resident memory for each count. `ui_load` prints the time to apply a frame's commands, the time to draw it, and how many of 100 idle ticks still redrew. Compare a change against a run of the same command before it, on the same machine.
+
+To see where the time goes, build the test once and run its binary under a sampling profiler:
+
+```sh
+cargo test --release -p aura-agent --test many_agents_load --no-run
+perf record -g --call-graph dwarf -- target/release/deps/many_agents_load-<hash> --ignored --nocapture
+perf report
+# or, with cargo-flamegraph installed:
+cargo flamegraph --test many_agents_load -p aura-agent -- --ignored --nocapture
+```
+
+`RUST_LOG=aura=debug` shows the kernel's and the loop's spans in the same run.
 
 The desktop snapshot tests run the terminal UI in the window's shell, without a window, and draw whole screens (conversation, a working agent, the slash menu, dialogs) with the CPU rasterizer, so they run without a display or GPU. With `AURA_DESKTOP_SNAPSHOTS` set, each screen is saved as a PNG next to a `.txt` dump of its cells; without it they only check that something was drawn. With `AURA_DESKTOP_GPU=1`, on a machine with a graphics adapter, each screen is also drawn by the GPU and compared with the CPU's picture.
 
