@@ -17,7 +17,9 @@ use tokio_util::sync::CancellationToken;
 pub(crate) enum SteerSource {
     /// Typed by the user.
     User,
-    /// Written by the harness, e.g. a background job exiting.
+    /// Written by the harness, e.g. a background job exiting. Run as a
+    /// turn of its own, it carries on with the agent's latest task rather
+    /// than starting one (see [`super::tasks`]).
     Harness,
 }
 

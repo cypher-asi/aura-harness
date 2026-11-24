@@ -869,6 +869,10 @@ pub struct TaskView {
     pub plan: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_todo: Option<String>,
+    /// The request that builds its plan (`/build` or "implement"); the
+    /// plan's header in the TASKS tab stands for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub builds: bool,
     /// What the agent has done and has left to do
     #[serde(default)]
     pub items: Vec<TodoView>,

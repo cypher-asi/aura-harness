@@ -8,15 +8,39 @@
 //!
 //! A user's request is a task, and each piece of it an agent handed to
 //! another with `task` is a task under it, in the same group; each shows
-//! what its agent has done and has left. Plans being worked on, with
-//! todos left or with a task still open, start open, as do tasks still
-//! being worked on or left with work to do; the rest start folded. Folds
-//! the user makes stick across updates.
+//! what its agent has done and has left. Every row sits one level under
+//! the row it belongs to: a group's todos and tasks under its header, a
+//! task's items and then the tasks it handed out under the task.
+//!
+//! The request that builds a plan (`/build`, or a typed "implement") has
+//! no row in that plan's group: the header stands for it, and its items
+//! are the plan's todos. What it handed out moves up into the group, each
+//! task under the todo that names it, the rest after the todos. Under No
+//! Plan such a request is drawn like any other.
+//!
+//! ```text
+//! ▾ Auth rework              1/3     depth 0: the plan
+//!   ☒ Add session table              depth 1: its todos
+//!   ▣ Write the login handler
+//!     ⢎⡱ Write the login handler  → coder    depth 2: the build's part
+//!   ☐ Wire the middleware
+//!   ✓ Fix the typo  → coder          depth 1: a part naming no todo
+//!   ✓ Rename the crate       2/2     depth 1: another request
+//!     ☒ Find the uses                depth 2: its items, then its parts
+//! ▾ No Plan
+//!   ✓ Bump the version
+//! ```
+//!
+//! Plans being worked on, with todos left or with a task still open,
+//! start open, as do todos and tasks still being worked on or left with
+//! work to do; the rest start folded. Folds the user makes stick across
+//! updates.
 //!
 //! Only the tasks of the agents the side panel's scope lets through are
 //! listed, with every task under them, and only the plans those tasks
 //! work on or whose todos they do. The plan being worked on is always
-//! listed.
+//! listed. A request names its agent only when the scope spans the
+//! project.
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,15 +56,20 @@ use ratatui::layout::Rect;
 pub enum TaskRow {
     /// A group's header: a plan, or `None` for the No Plan group
     Plan { plan: Option<usize>, open: bool },
-    /// A todo of an open plan
-    Todo { plan: usize, todo: usize },
-    /// A task's title row, `depth` levels under the task it is part of
+    /// A todo of an open plan, one level under its header; `fold` says
+    /// whether the tasks nested under it show, `None` when it has none
+    Todo {
+        plan: usize,
+        todo: usize,
+        fold: Option<bool>,
+    },
+    /// A task's title row, `depth` levels under its group's header
     Task {
         task: usize,
         depth: usize,
         open: bool,
     },
-    /// An item of an open task
+    /// An item of an open task, one level under it
     Item {
         task: usize,
         item: usize,
@@ -70,12 +99,26 @@ impl TaskRow {
         }
     }
 
-    /// Whether the row's plan or task is open. Todos and items only show
-    /// under an open one.
+    /// Levels the row sits under its group's header: 0 for the header, 1
+    /// for its todos and top-level tasks, one more for each level below.
+    #[must_use]
+    pub const fn depth(self) -> usize {
+        match self {
+            Self::Plan { .. } => 0,
+            Self::Todo { .. } => 1,
+            Self::Task { depth, .. } | Self::Item { depth, .. } => depth,
+        }
+    }
+
+    /// Whether the row's plan, todo or task is open. Items, and todos
+    /// with nothing nested, only show under an open one.
     const fn is_open(self) -> bool {
         match self {
             Self::Plan { open, .. } | Self::Task { open, .. } => open,
-            Self::Todo { .. } | Self::Item { .. } => true,
+            Self::Todo {
+                fold: Some(open), ..
+            } => open,
+            Self::Todo { fold: None, .. } | Self::Item { .. } => true,
         }
     }
 }
@@ -134,6 +177,11 @@ pub struct TaskList {
     no_plan_open: Option<bool>,
     /// Which of `plans` are listed for the scoped tasks
     plans_shown: Vec<bool>,
+    /// Todos the user folded (`false`) or opened (`true`), by plan path
+    /// and todo index
+    todo_folds: HashMap<(String, usize), bool>,
+    /// Whether requests name their agent: the list spans the project
+    show_agents: bool,
     rows: Vec<TaskRow>,
     selected: usize,
 }
@@ -186,6 +234,18 @@ impl TaskList {
     #[must_use]
     pub fn rows(&self) -> &[TaskRow] {
         &self.rows
+    }
+
+    /// Name each request's agent (`true`, for a list spanning the
+    /// project), or not, since in one agent's scope it is the same agent.
+    pub const fn set_show_agents(&mut self, show: bool) {
+        self.show_agents = show;
+    }
+
+    /// Whether requests name their agent.
+    #[must_use]
+    pub const fn shows_agents(&self) -> bool {
+        self.show_agents
     }
 
     /// Highlighted row.
@@ -251,14 +311,16 @@ impl TaskList {
         self.selected = index.min(self.rows.len().saturating_sub(1));
     }
 
-    /// Highlight task `id`, opening its group and the tasks it is part
-    /// of. Returns whether it is listed.
+    /// Highlight task `id`, opening its group, the todo it is nested
+    /// under and the tasks it is part of. Returns whether it is listed.
     pub fn select_task(&mut self, id: &str) -> bool {
+        let mut chain = vec![id.to_string()];
         let mut parent = self.find(id).and_then(|task| task.parent.clone());
         let mut seen = HashSet::new();
         while let Some(id) = parent.filter(|id| seen.insert(id.clone())) {
             self.folds.insert(id.clone(), true);
             parent = self.find(&id).and_then(|task| task.parent.clone());
+            chain.push(id);
         }
         if let Some(root) = self.listed_root(id) {
             let group = self
@@ -268,6 +330,17 @@ impl TaskList {
             match group.and_then(|plan| self.plans.get(plan)) {
                 Some(plan) => {
                     let path = plan.path.clone();
+                    // A todo naming the task or one above it may hold it.
+                    let todos: Vec<usize> = plan
+                        .todos
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, todo)| todo.task.as_ref().is_some_and(|t| chain.contains(t)))
+                        .map(|(i, _)| i)
+                        .collect();
+                    for todo in todos {
+                        self.todo_folds.insert((path.clone(), todo), true);
+                    }
                     self.plan_folds.insert(path, true);
                 }
                 None => self.no_plan_open = Some(true),
@@ -275,6 +348,16 @@ impl TaskList {
         }
         self.rebuild(Some(RowKey::Task(id.to_string())));
         self.selected_task().is_some_and(|task| task.id == id)
+    }
+
+    /// Whether task `id` is the request building the plan whose group
+    /// it is in, which has no row of its own.
+    #[must_use]
+    pub fn is_hidden_build(&self, id: &str) -> bool {
+        let Some(root) = self.listed_root(id).and_then(|root| self.tasks.get(root)) else {
+            return false;
+        };
+        root.id == id && self.hides(root, self.plan_index().group_of(root))
     }
 
     /// The task of the highlighted row.
@@ -291,23 +374,36 @@ impl TaskList {
         self.plans.get(row.plan()?)
     }
 
-    /// Fold or open the group or task of the highlighted row. Folding
-    /// from a todo or an item moves the highlight to its header.
+    /// Fold or open the group, todo or task of the highlighted row.
+    /// Folding from a todo with nothing nested, or from an item, moves
+    /// the highlight to its header.
     pub fn toggle_selected(&mut self) {
         let Some(&row) = self.rows.get(self.selected) else {
             return;
         };
         let open = !row.is_open();
+        let plan_path = |plan: usize| self.plans.get(plan).map(|plan| plan.path.clone());
         let keep = match row {
             TaskRow::Plan { plan: None, .. } => {
                 self.no_plan_open = Some(open);
                 RowKey::NoPlan
             }
+            TaskRow::Todo {
+                plan,
+                todo,
+                fold: Some(_),
+            } => {
+                let Some(path) = plan_path(plan) else {
+                    return;
+                };
+                self.todo_folds.insert((path.clone(), todo), open);
+                RowKey::Todo(path, todo)
+            }
             TaskRow::Plan {
                 plan: Some(plan), ..
             }
             | TaskRow::Todo { plan, .. } => {
-                let Some(path) = self.plans.get(plan).map(|plan| plan.path.clone()) else {
+                let Some(path) = plan_path(plan) else {
                     return;
                 };
                 self.plan_folds.insert(path.clone(), open);
@@ -354,6 +450,24 @@ impl TaskList {
             .get(&plan.path)
             .copied()
             .unwrap_or_else(|| self.is_current(plan) || plan.has_open_todos() || has_open_task)
+    }
+
+    /// Whether todo `todo` of `plan` shows the tasks nested under it: as
+    /// the user left it, else while the todo is not closed.
+    fn is_todo_open(&self, plan: &PlanView, todo: usize) -> bool {
+        self.todo_folds
+            .get(&(plan.path.clone(), todo))
+            .copied()
+            .unwrap_or_else(|| plan.todos.get(todo).is_some_and(|t| !t.state.is_closed()))
+    }
+
+    /// Whether `root`, at the top of a tree in plan `group`'s group, is
+    /// the request building that plan, which the header stands for.
+    fn hides(&self, root: &TaskView, group: Option<usize>) -> bool {
+        root.builds
+            && group
+                .and_then(|plan| self.plans.get(plan))
+                .is_some_and(|plan| root.plan.as_deref() == Some(plan.path.as_str()))
     }
 
     /// The topmost listed task `id` is part of: the root of the tree it
@@ -407,7 +521,9 @@ impl TaskList {
             TaskRow::Plan {
                 plan: Some(plan), ..
             } => plan_path(plan).map(RowKey::Plan),
-            TaskRow::Todo { plan, todo } => plan_path(plan).map(|path| RowKey::Todo(path, todo)),
+            TaskRow::Todo { plan, todo, .. } => {
+                plan_path(plan).map(|path| RowKey::Todo(path, todo))
+            }
             TaskRow::Task { task, .. } => task_id(task).map(RowKey::Task),
             TaskRow::Item { task, item, .. } => task_id(task).map(|id| RowKey::Item(id, item)),
         }
@@ -426,7 +542,7 @@ impl TaskList {
                 },
                 RowKey::Plan(path),
             ) => plan_is(plan, path.as_str()),
-            (TaskRow::Todo { plan, todo }, RowKey::Todo(path, wanted)) => {
+            (TaskRow::Todo { plan, todo, .. }, RowKey::Todo(path, wanted)) => {
                 todo == *wanted && plan_is(plan, path.as_str())
             }
             (TaskRow::Task { task, .. }, RowKey::Task(id)) => task_is(task, id.as_str()),
@@ -499,16 +615,17 @@ impl TaskList {
     }
 
     /// Every task of the trees rooted at `tops`, in drawing order, with
-    /// its depth, whether folded or not. `seen` guards against parent
-    /// loops.
+    /// its depth, the tops at `depth`, whether folded or not. `seen`
+    /// guards against parent loops.
     fn walk(
         &self,
         tops: &[usize],
+        depth: usize,
         children: &HashMap<&str, Vec<usize>>,
         seen: &mut HashSet<usize>,
     ) -> Vec<(usize, usize)> {
         let mut tree = Vec::new();
-        let mut stack: Vec<(usize, usize)> = tops.iter().rev().map(|&top| (top, 0)).collect();
+        let mut stack: Vec<(usize, usize)> = tops.iter().rev().map(|&top| (top, depth)).collect();
         while let Some((task, depth)) = stack.pop() {
             if !seen.insert(task) {
                 continue;
@@ -519,6 +636,71 @@ impl TaskList {
             }
         }
         tree
+    }
+
+    /// The tasks of plan `plan`'s group, the trees rooted at `tops`, as
+    /// [`Self::walk`] lists them. A request building the plan has no row:
+    /// each of its parts goes under the todo naming it, or with the rest
+    /// in its place when no todo does.
+    fn group_trees(
+        &self,
+        plan: usize,
+        tops: &[usize],
+        children: &HashMap<&str, Vec<usize>>,
+        seen: &mut HashSet<usize>,
+    ) -> GroupTrees {
+        let todos = self.plans.get(plan).map_or(&[][..], |plan| &plan.todos);
+        let mut links: HashMap<&str, usize> = HashMap::new();
+        for (i, todo) in todos.iter().enumerate() {
+            if let Some(id) = todo.task.as_deref() {
+                links.entry(id).or_insert(i);
+            }
+        }
+        let mut nested: Vec<Vec<usize>> = vec![Vec::new(); todos.len()];
+        let mut rest = Vec::new();
+        let mut has_open_task = false;
+        for &top in tops {
+            let Some(root) = self.tasks.get(top) else {
+                continue;
+            };
+            if !self.hides(root, Some(plan)) {
+                rest.push(top);
+                continue;
+            }
+            if !seen.insert(top) {
+                continue;
+            }
+            has_open_task |= !root.state.is_closed();
+            let parts = children
+                .get(root.id.as_str())
+                .map_or(&[][..], Vec::as_slice);
+            for &part in parts {
+                let todo = self
+                    .tasks
+                    .get(part)
+                    .and_then(|part| links.get(part.id.as_str()))
+                    .and_then(|&todo| nested.get_mut(todo));
+                match todo {
+                    Some(under) => under.push(part),
+                    None => rest.push(part),
+                }
+            }
+        }
+        let under_todos: Vec<_> = nested
+            .iter()
+            .map(|tops| self.walk(tops, 2, children, seen))
+            .collect();
+        let rest = self.walk(&rest, 1, children, seen);
+        has_open_task |= under_todos
+            .iter()
+            .flatten()
+            .chain(&rest)
+            .any(|&(task, _)| !self.tasks[task].state.is_closed());
+        GroupTrees {
+            under_todos,
+            rest,
+            has_open_task,
+        }
     }
 
     /// Rows of the tasks in `tree`, as [`Self::walk`] lists them, leaving
@@ -590,30 +772,45 @@ impl TaskList {
         let mut seen = HashSet::new();
         for plan in order {
             let view = &self.plans[plan];
-            let tree = self.walk(&groups[plan], &children, &mut seen);
-            let has_open_task = tree
-                .iter()
-                .any(|&(task, _)| !self.tasks[task].state.is_closed());
-            let open = self.is_plan_open(view, has_open_task);
+            let trees = self.group_trees(plan, &groups[plan], &children, &mut seen);
+            let open = self.is_plan_open(view, trees.has_open_task);
             rows.push(TaskRow::Plan {
                 plan: Some(plan),
                 open,
             });
-            if open {
-                rows.extend((0..view.todos.len()).map(|todo| TaskRow::Todo { plan, todo }));
-                self.task_rows(&tree, &mut rows);
+            if !open {
+                continue;
             }
+            for (todo, tree) in trees.under_todos.iter().enumerate() {
+                let fold = (!tree.is_empty()).then(|| self.is_todo_open(view, todo));
+                rows.push(TaskRow::Todo { plan, todo, fold });
+                if fold == Some(true) {
+                    self.task_rows(tree, &mut rows);
+                }
+            }
+            self.task_rows(&trees.rest, &mut rows);
         }
         if !no_plan.is_empty() {
             let open = self.no_plan_open.unwrap_or(true);
             rows.push(TaskRow::Plan { plan: None, open });
             if open {
-                let tree = self.walk(&no_plan, &children, &mut seen);
+                let tree = self.walk(&no_plan, 1, &children, &mut seen);
                 self.task_rows(&tree, &mut rows);
             }
         }
         rows
     }
+}
+
+/// A plan group's tasks with their depths, as [`TaskList::walk`] lists
+/// them.
+struct GroupTrees {
+    /// The tasks nested under each of the plan's todos, by todo index
+    under_todos: Vec<Vec<(usize, usize)>>,
+    /// The other tasks, drawn after the todos
+    rest: Vec<(usize, usize)>,
+    /// Whether some task of the group, the hidden build too, is open
+    has_open_task: bool,
 }
 
 impl App {
@@ -717,11 +914,12 @@ impl App {
     }
 
     /// Highlight the task doing the highlighted todo, or say why it
-    /// can't: the row is not a todo, no task does it, the scope hides
-    /// the task, or the task is not loaded.
+    /// can't: the row is not a todo, no task does it, it is the plan's
+    /// build, which has no row, the scope hides the task, or the task is
+    /// not loaded.
     pub(super) fn jump_to_todo_task(&mut self) {
         let list = &self.task_list;
-        let Some(&TaskRow::Todo { plan, todo }) = list.rows.get(list.selected) else {
+        let Some(&TaskRow::Todo { plan, todo, .. }) = list.rows.get(list.selected) else {
             self.warn("Select a todo to jump to its task");
             return;
         };
@@ -734,6 +932,10 @@ impl App {
             self.warn("No task is doing this todo");
             return;
         };
+        if list.is_hidden_build(&task) {
+            self.warn("This todo is part of the plan's build");
+            return;
+        }
         if self.task_list.select_task(&task) {
             return;
         }
@@ -755,21 +957,25 @@ impl App {
         self.notification = Some((message.into(), NotificationType::Warning));
     }
 
-    /// Clicking a plan's or task's fold glyph folds or opens it; clicking
-    /// anywhere else on a row opens it as Enter does.
+    /// Clicking a plan's, todo's or task's fold glyph folds or opens it;
+    /// clicking anywhere else on a row opens it as Enter does.
     pub(super) fn click_task_row(&mut self, column: u16, row: u16) {
         let Some(index) = self.task_row_at(column, row) else {
             return;
         };
         self.task_list.select(index);
-        let fold_depth = match self.task_list.rows.get(index) {
-            Some(TaskRow::Plan { .. }) => Some(0),
-            Some(&TaskRow::Task { depth, .. }) => Some(depth),
-            _ => None,
+        let Some(&target) = self.task_list.rows.get(index) else {
+            return;
         };
-        let on_fold = self.areas.task_rows.is_some_and(|rows| {
-            fold_depth.is_some_and(|depth| super::processes::on_row_icon(column, rows.x, depth))
-        });
+        let has_fold = matches!(
+            target,
+            TaskRow::Plan { .. } | TaskRow::Task { .. } | TaskRow::Todo { fold: Some(_), .. }
+        );
+        let on_fold = has_fold
+            && self
+                .areas
+                .task_rows
+                .is_some_and(|rows| super::processes::on_row_icon(column, rows.x, target.depth()));
         if on_fold {
             self.task_list.toggle_selected();
         } else {
@@ -849,32 +1055,36 @@ mod tests {
         }
     }
 
-    /// The rows as text: `-`/`+` before an open/folded plan or task, `#`
-    /// before a todo, items indented under their task.
+    /// The rows as text, each indented two spaces per level: `-`/`+`
+    /// before an open/folded plan, todo or task, `#` before a todo.
     fn shape(list: &TaskList) -> Vec<String> {
         let fold = |open| if open { "-" } else { "+" };
         list.rows()
             .iter()
-            .map(|row| match *row {
-                TaskRow::Plan { plan, open } => format!(
-                    "{}{}",
-                    fold(open),
-                    plan.map_or("No Plan", |plan| list.plans()[plan].name.as_str())
-                ),
-                TaskRow::Todo { plan, todo } => {
-                    format!("#{}", list.plans()[plan].todos[todo].content)
-                }
-                TaskRow::Task { task, depth, open } => format!(
-                    "{}{}{}",
-                    "  ".repeat(depth),
-                    fold(open),
-                    list.tasks()[task].id
-                ),
-                TaskRow::Item { task, item, depth } => format!(
-                    "{}{}",
-                    "  ".repeat(depth),
-                    list.tasks()[task].items[item].content
-                ),
+            .map(|&row| {
+                let text = match row {
+                    TaskRow::Plan { plan, open } => format!(
+                        "{}{}",
+                        fold(open),
+                        plan.map_or("No Plan", |plan| list.plans()[plan].name.as_str())
+                    ),
+                    TaskRow::Todo {
+                        plan,
+                        todo,
+                        fold: folded,
+                    } => format!(
+                        "#{}{}",
+                        folded.map_or("", fold),
+                        list.plans()[plan].todos[todo].content
+                    ),
+                    TaskRow::Task { task, open, .. } => {
+                        format!("{}{}", fold(open), list.tasks()[task].id)
+                    }
+                    TaskRow::Item { task, item, .. } => {
+                        list.tasks()[task].items[item].content.clone()
+                    }
+                };
+                format!("{}{text}", "  ".repeat(row.depth()))
             })
             .collect()
     }
@@ -893,8 +1103,16 @@ mod tests {
         ]);
         assert_eq!(
             shape(&list),
-            ["-No Plan", "-a", "  a 0", "  -c", "    c 0", "  +b", "+old"],
-            "parts newest first, like the requests"
+            [
+                "-No Plan",
+                "  -a",
+                "    a 0",
+                "    -c",
+                "      c 0",
+                "    +b",
+                "  +old"
+            ],
+            "parts newest first, like the requests, each a level under its parent"
         );
     }
 
@@ -904,11 +1122,18 @@ mod tests {
         list.set_tasks(vec![task("a", None, R, 2)]);
         list.select(3);
         list.upsert(task("b", None, R, 0));
-        assert_eq!(shape(&list), ["-No Plan", "-b", "-a", "  a 0", "  a 1"]);
+        assert_eq!(
+            shape(&list),
+            ["-No Plan", "  -b", "  -a", "    a 0", "    a 1"]
+        );
         assert_eq!(list.selected(), 4, "still on a's second item");
 
         list.upsert(task("a", None, C, 2));
-        assert_eq!(shape(&list), ["-No Plan", "-b", "+a"], "a closed and folds");
+        assert_eq!(
+            shape(&list),
+            ["-No Plan", "  -b", "  +a"],
+            "a closed and folds"
+        );
         list.select(2);
         list.toggle_selected();
         assert_eq!(shape(&list).len(), 5, "the user opens it again");
@@ -918,12 +1143,12 @@ mod tests {
     fn selecting_a_folded_part_opens_its_request_and_group() {
         let mut list = TaskList::default();
         list.set_tasks(vec![task("b", Some("a"), C, 0), task("a", None, C, 0)]);
-        assert_eq!(shape(&list), ["-No Plan", "+a"]);
+        assert_eq!(shape(&list), ["-No Plan", "  +a"]);
         list.select(0);
         list.toggle_selected();
         assert_eq!(shape(&list), ["+No Plan"]);
         assert!(list.select_task("b"));
-        assert_eq!(shape(&list), ["-No Plan", "-a", "  +b"]);
+        assert_eq!(shape(&list), ["-No Plan", "  -a", "    +b"]);
         assert_eq!(list.selected(), 2);
         assert!(!list.select_task("missing"));
 
@@ -931,7 +1156,7 @@ mod tests {
         list.set_tasks(vec![planned("t", "p", C)]);
         assert_eq!(shape(&list), ["+p"], "a done plan with done tasks folds");
         assert!(list.select_task("t"));
-        assert_eq!(shape(&list), ["-p", "#p 0", "+t"]);
+        assert_eq!(shape(&list), ["-p", "  #p 0", "  +t"]);
         assert_eq!(list.selected(), 2);
     }
 
@@ -946,7 +1171,14 @@ mod tests {
         ]);
         assert_eq!(
             shape(&list),
-            ["-auth", "#auth 0", "#auth 1", "-build", "  -part", "+parser"],
+            [
+                "-auth",
+                "  #auth 0",
+                "  #auth 1",
+                "  -build",
+                "    -part",
+                "+parser"
+            ],
             "plans newest first, the part with its request"
         );
     }
@@ -960,7 +1192,7 @@ mod tests {
         list.set_tasks(vec![part, planned("root", "a", R)]);
         assert_eq!(
             shape(&list),
-            ["-a", "#a 0", "-root", "  -part", "-b", "#b 0"]
+            ["-a", "  #a 0", "  -root", "    -part", "-b", "  #b 0"]
         );
     }
 
@@ -974,8 +1206,16 @@ mod tests {
         list.set_tasks(vec![task("linked", None, R, 0), planned("own", "b", R)]);
         assert_eq!(
             shape(&list),
-            ["-a", "#a 0", "#a 1", "-linked", "-b", "#b 0", "-own"],
-            "a's todo names both, but own works on b"
+            [
+                "-a",
+                "  #a 0",
+                "  #a 1",
+                "  -linked",
+                "-b",
+                "  #b 0",
+                "  -own"
+            ],
+            "a's todo names both, but own works on b; a request nests under no todo"
         );
     }
 
@@ -995,7 +1235,7 @@ mod tests {
         app.show_side_tab(SidePanelTab::Tasks);
         assert_eq!(
             shape(app.task_list()),
-            ["-a", "#a 0", "#a 1", "-No Plan", "-loose"]
+            ["-a", "  #a 0", "  #a 1", "-No Plan", "  -loose"]
         );
         let press = |app: &mut App, code: KeyCode| app.handle_key(KeyEvent::from(code));
 
@@ -1026,7 +1266,7 @@ mod tests {
     fn no_plan_lists_tasks_of_no_listed_plan_and_only_when_there_are_some() {
         let mut list = TaskList::default();
         list.set_plans(vec![plan("a", &[Todo])]);
-        assert_eq!(shape(&list), ["-a", "#a 0"], "no No Plan header");
+        assert_eq!(shape(&list), ["-a", "  #a 0"], "no No Plan header");
 
         list.set_tasks(vec![
             planned("gone", "missing", R),
@@ -1035,7 +1275,7 @@ mod tests {
         ]);
         assert_eq!(
             shape(&list),
-            ["-a", "#a 0", "-t", "-No Plan", "-gone", "-loose"]
+            ["-a", "  #a 0", "  -t", "-No Plan", "  -gone", "  -loose"]
         );
     }
 
@@ -1043,7 +1283,7 @@ mod tests {
     fn a_plan_with_no_tasks_still_lists_its_todos() {
         let mut list = TaskList::default();
         list.set_plans(vec![plan("fresh", &[Todo, Todo])]);
-        assert_eq!(shape(&list), ["-fresh", "#fresh 0", "#fresh 1"]);
+        assert_eq!(shape(&list), ["-fresh", "  #fresh 0", "  #fresh 1"]);
         assert!(list.selected_task().is_none());
         assert_eq!(list.selected_plan().map(|p| p.name.as_str()), Some("fresh"));
     }
@@ -1059,7 +1299,15 @@ mod tests {
         list.set_tasks(vec![planned("t", "task", R), planned("d", "done", C)]);
         assert_eq!(
             shape(&list),
-            ["-todos", "#todos 0", "#todos 1", "-task", "#task 0", "-t", "+done"]
+            [
+                "-todos",
+                "  #todos 0",
+                "  #todos 1",
+                "-task",
+                "  #task 0",
+                "  -t",
+                "+done"
+            ]
         );
     }
 
@@ -1068,7 +1316,7 @@ mod tests {
         let mut list = TaskList::default();
         list.set_plans(vec![plan("a", &[Todo]), plan("b", &[Done])]);
         list.set_current_plan(Some(&plan("b", &[Done])));
-        assert_eq!(shape(&list), ["-b", "#b 0", "-a", "#a 0"]);
+        assert_eq!(shape(&list), ["-b", "  #b 0", "-a", "  #a 0"]);
         assert!(list.is_current(&list.plans()[1]));
     }
 
@@ -1101,18 +1349,18 @@ mod tests {
         list.toggle_selected();
         assert_eq!(
             shape(&list),
-            ["+a", "-b", "#b 0", "-No Plan", "-loose", "  loose 0"]
+            ["+a", "-b", "  #b 0", "-No Plan", "  -loose", "    loose 0"]
         );
         assert_eq!(list.selected(), 0);
         list.select(3);
         list.toggle_selected();
-        assert_eq!(shape(&list), ["+a", "-b", "#b 0", "+No Plan"]);
+        assert_eq!(shape(&list), ["+a", "-b", "  #b 0", "+No Plan"]);
 
         list.set_plans(vec![plan("a", &[Todo, Todo, Todo]), plan("b", &[Todo])]);
         list.set_tasks(vec![task("new", None, R, 0), task("loose", None, R, 1)]);
         assert_eq!(
             shape(&list),
-            ["+a", "-b", "#b 0", "+No Plan"],
+            ["+a", "-b", "  #b 0", "+No Plan"],
             "the folds survive updates"
         );
         assert_eq!(list.selected(), 3, "the highlight stays on No Plan");
@@ -1126,7 +1374,10 @@ mod tests {
         app.process_command(UiCommand::UpsertTask(task("b", Some("a"), R, 0)));
         app.focus = PanelFocus::Sandbox;
         app.show_side_tab(SidePanelTab::Tasks);
-        assert_eq!(shape(app.task_list()), ["-No Plan", "-a", "  a 0", "  -b"]);
+        assert_eq!(
+            shape(app.task_list()),
+            ["-No Plan", "  -a", "    a 0", "    -b"]
+        );
 
         app.handle_key(KeyEvent::from(KeyCode::End));
         app.handle_key(KeyEvent::from(KeyCode::Enter));
@@ -1135,7 +1386,7 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Home));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Left));
-        assert_eq!(shape(app.task_list()), ["-No Plan", "+a"]);
+        assert_eq!(shape(app.task_list()), ["-No Plan", "  +a"]);
         app.handle_key(KeyEvent::from(KeyCode::Char(' ')));
         assert_eq!(shape(app.task_list()).len(), 4, "Space opens it again");
 
@@ -1185,7 +1436,7 @@ mod tests {
             app_with_plan_file("---\nname: a\ntodos:\n- content: a 0\n- content: a 1\n---\n");
         app.process_command(UiCommand::SetPlans(vec![plan("a", &[Todo, Todo])]));
         app.process_command(UiCommand::SetTasks(vec![planned("t", "a", R)]));
-        assert_eq!(shape(app.task_list()), ["-a", "#a 0", "#a 1", "-t"]);
+        assert_eq!(shape(app.task_list()), ["-a", "  #a 0", "  #a 1", "  -t"]);
 
         app.handle_key(KeyEvent::from(KeyCode::Enter));
         assert_eq!(
@@ -1217,7 +1468,7 @@ mod tests {
         app.show_side_tab(SidePanelTab::Tasks);
         assert_eq!(
             shape(app.task_list()),
-            ["-a", "#a 0", "-t1", "-No Plan", "-t2"],
+            ["-a", "  #a 0", "  -t1", "-No Plan", "  -t2"],
             "t1 does a's todo, so it sits under a"
         );
 
@@ -1245,8 +1496,10 @@ mod tests {
         app.show_side_tab(SidePanelTab::Tasks);
         app.set_task_rows_area(Rect::new(10, 5, 30, 8), 0);
 
-        app.click_task_row(11, 6);
-        assert_eq!(shape(app.task_list()), ["-No Plan", "+a"]);
+        // `a` sits a level under No Plan, so its icon starts at column 3
+        // of the rows; column 1 is No Plan's fold glyph.
+        app.click_task_row(13, 6);
+        assert_eq!(shape(app.task_list()), ["-No Plan", "  +a"]);
         app.click_task_row(20, 6);
         assert_eq!(switched(&mut rx).as_deref(), Some("agent-a"));
         app.click_task_row(20, 5);
@@ -1295,5 +1548,199 @@ mod tests {
         let list = app.task_list();
         assert!(list.is_current(&list.plans()[1]));
         assert_eq!(list.plans()[1].todos.len(), 2);
+    }
+
+    /// Plan `auth` with todos `auth 0`, which `p1` does, and `auth 1`;
+    /// `build` builds it with two items of its own and hands out `p1`,
+    /// with an item, and then `p2`.
+    fn building() -> (PlanView, Vec<TaskView>) {
+        let mut auth = plan("auth", &[Doing, Todo]);
+        auth.todos[0].task = Some("p1".to_string());
+        let build = TaskView {
+            plan: Some(path("auth")),
+            builds: true,
+            ..task("build", None, R, 2)
+        };
+        let tasks = vec![
+            task("p2", Some("build"), R, 0),
+            task("p1", Some("build"), R, 1),
+            build,
+        ];
+        (auth, tasks)
+    }
+
+    /// An app on the focused TASKS tab listing `plans` and `tasks`.
+    fn app_on_tasks(plans: Vec<PlanView>, tasks: Vec<TaskView>) -> App {
+        let mut app = App::new();
+        app.process_command(UiCommand::SetPlans(plans));
+        app.process_command(UiCommand::SetTasks(tasks));
+        app.focus = PanelFocus::Sandbox;
+        app.show_side_tab(SidePanelTab::Tasks);
+        app
+    }
+
+    #[test]
+    fn the_build_request_has_no_row_and_its_parts_move_up_into_the_group() {
+        let (auth, tasks) = building();
+        let mut list = TaskList::default();
+        list.set_plans(vec![auth]);
+        list.set_tasks(tasks);
+        assert_eq!(
+            shape(&list),
+            [
+                "-auth",
+                "  #-auth 0",
+                "    -p1",
+                "      p1 0",
+                "  #auth 1",
+                "  -p2"
+            ],
+            "p1 under the todo it does, p2 after the todos, none of build's items"
+        );
+        let build = list.tasks().iter().position(|t| t.id == "build");
+        assert!(
+            list.rows().iter().all(|row| row.task() != build),
+            "no row of the build: {:?}",
+            list.rows()
+        );
+        assert!(list.is_hidden_build("build"));
+        assert!(!list.is_hidden_build("p1"), "only the request is hidden");
+    }
+
+    #[test]
+    fn a_build_whose_plan_is_not_listed_gets_a_row_under_no_plan() {
+        let (_, tasks) = building();
+        let mut list = TaskList::default();
+        list.set_plans(vec![plan("other", &[Todo])]);
+        list.set_tasks(tasks);
+        assert_eq!(
+            shape(&list),
+            [
+                "-other",
+                "  #other 0",
+                "-No Plan",
+                "  -build",
+                "    build 0",
+                "    build 1",
+                "    -p1",
+                "      p1 0",
+                "    -p2"
+            ]
+        );
+        assert!(!list.is_hidden_build("build"));
+    }
+
+    #[test]
+    fn a_tasks_items_and_then_its_parts_sit_one_level_under_it() {
+        let mut list = TaskList::default();
+        list.set_plans(vec![plan("p", &[Todo])]);
+        list.set_tasks(vec![
+            task("part", Some("request"), R, 1),
+            TaskView {
+                plan: Some(path("p")),
+                ..task("request", None, R, 2)
+            },
+        ]);
+        assert_eq!(
+            shape(&list),
+            [
+                "-p",
+                "  #p 0",
+                "  -request",
+                "    request 0",
+                "    request 1",
+                "    -part",
+                "      part 0"
+            ]
+        );
+        let depths: Vec<usize> = list.rows().iter().map(|row| row.depth()).collect();
+        assert_eq!(depths, [0, 1, 1, 2, 2, 2, 3]);
+    }
+
+    #[test]
+    fn requests_name_their_agent_only_across_the_project() {
+        let mut app = app_on_tasks(Vec::new(), vec![task("a", None, R, 0)]);
+        assert_eq!(app.side_scope(), SideScope::Agent);
+        assert!(!app.task_list().shows_agents());
+        app.toggle_side_scope();
+        assert!(app.task_list().shows_agents());
+        app.toggle_side_scope();
+        assert!(!app.task_list().shows_agents(), "back to the agent's scope");
+
+        let mut list = TaskList::default();
+        assert!(!list.shows_agents(), "a new list names no agent");
+        list.set_show_agents(true);
+        assert!(list.shows_agents());
+    }
+
+    #[test]
+    fn a_todo_with_a_part_under_it_folds_and_opens() {
+        let (auth, tasks) = building();
+        let mut app = app_on_tasks(vec![auth], tasks);
+        let press = |app: &mut App, code: KeyCode| app.handle_key(KeyEvent::from(code));
+        let open = [
+            "-auth",
+            "  #-auth 0",
+            "    -p1",
+            "      p1 0",
+            "  #auth 1",
+            "  -p2",
+        ];
+        let folded = ["-auth", "  #+auth 0", "  #auth 1", "  -p2"];
+        assert_eq!(shape(app.task_list()), open);
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(shape(app.task_list()), folded, "Left hides p1");
+        assert_eq!(app.task_list().selected(), 1, "the highlight stays on it");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(
+            shape(app.task_list()),
+            folded,
+            "Left on a folded todo leaves the plan open"
+        );
+        press(&mut app, KeyCode::Right);
+        assert_eq!(shape(app.task_list()), open, "Right shows p1 again");
+
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(shape(app.task_list()), folded, "Space folds it");
+        let (auth, tasks) = building();
+        app.process_command(UiCommand::SetPlans(vec![auth]));
+        app.process_command(UiCommand::SetTasks(tasks));
+        assert_eq!(shape(app.task_list()), folded, "the fold survives updates");
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(shape(app.task_list()), open, "Space opens it");
+    }
+
+    #[test]
+    fn t_on_a_todo_selects_its_nested_part_or_says_it_is_the_build() {
+        let (mut auth, tasks) = building();
+        auth.todos[1].task = Some("build".to_string());
+        let mut app = app_on_tasks(vec![auth], tasks);
+        let press = |app: &mut App, code: KeyCode| app.handle_key(KeyEvent::from(code));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(shape(app.task_list())[1], "  #+auth 0");
+
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(
+            app.task_list().selected_task().map(|t| t.id.as_str()),
+            Some("p1")
+        );
+        assert_eq!(
+            shape(app.task_list())[app.task_list().selected()],
+            "    -p1",
+            "the todo opens to show it"
+        );
+
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(
+            shape(app.task_list())[app.task_list().selected()],
+            "  #auth 1"
+        );
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(notice(&app), Some("This todo is part of the plan's build"));
+        assert_eq!(app.task_list().selected(), 4, "the highlight stays put");
     }
 }

@@ -65,9 +65,14 @@ themes keep working:
   `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
   ten, the rest are counted on a `muted` `N more` row. The boxes line up
   under the `⬢` above them. The TASKS tab draws a plan's todos and a
-  task's items the same way, with the boxes under the plan's fold arrow or
-  the task's icon. Tasks sit under the header of the plan they work on,
-  below its todos; tasks that work on no plan go under a `No Plan` header.
+  task's items the same way, but every child sits one level, two columns,
+  right of its parent: a plan's todos and its tasks one level under the
+  plan's fold arrow, a task's items and then the tasks it handed out one
+  level under the task's icon. Tasks sit under the header of the plan they
+  work on, below its todos; tasks that work on no plan go under a
+  `No Plan` header. The request that builds a plan has no row of its own:
+  the header stands for it, and what it handed out sits under the todo it
+  does, or after the todos.
 
 ### Borders and Panels
 

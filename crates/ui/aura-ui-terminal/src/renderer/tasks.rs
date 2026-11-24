@@ -2,19 +2,21 @@
 //! works on. Each plan's header shows its todo progress, then its todos,
 //! then the tasks working on it, each request with the parts it handed to
 //! other agents underneath and what each has done and has left. Tasks of
-//! no listed plan go last, under `No Plan`.
+//! no listed plan go last, under `No Plan`. Every row sits one level under
+//! the row it belongs to; the request building a plan has no row, its
+//! parts sitting under the todos they do (see [`crate::app::tasks`]).
 //!
 //! ```text
 //!  ▾  Auth rework                 1/3
-//!  ☒  Add session table
-//!  ▣  Write the login handler  → coder
-//!  ☐  Wire the middleware
-//!  ⢎⡱ Build the auth  Lead        1/2
-//!  ☒  Find the handler
-//!    ⢎⡱ Write the login handler  → coder  0/2
+//!    ☒  Add session table
+//!    ▣  Write the login handler
+//!      ⢎⡱ Write the login handler  → coder
+//!    ☐  Wire the middleware
+//!    ✓  Rename the crate          2/2
+//!      ☒  Find the uses
 //!  ▸  Parser cleanup              5/5
 //!  ▾  No Plan
-//!  ✓  Rename the crate  Agent     2/2
+//!    ✓  Bump the version
 //! ```
 
 use super::panels::{
@@ -110,6 +112,7 @@ fn row_line(
     app: &App,
     theme: &Theme,
 ) -> Line<'static> {
+    let depth = row.depth();
     match row {
         TaskRow::Plan { plan, open } => {
             let fold = StatusIcon::new(if open { "▾" } else { "▸" }, theme.colors.muted);
@@ -117,7 +120,7 @@ fn row_line(
                 Some(plan) => plan_line(plan, fold, (width, state), theme),
                 None => list_row(
                     width,
-                    0,
+                    depth,
                     fold,
                     NO_PLAN,
                     cell_style(theme, state, name_style(Tone::Settled, theme)),
@@ -125,28 +128,28 @@ fn row_line(
                 ),
             }
         }
-        TaskRow::Todo { plan, todo } => list
+        TaskRow::Todo { plan, todo, .. } => list
             .plans()
             .get(plan)
             .and_then(|plan| plan.todos.get(todo))
             .map_or_else(Line::default, |todo| {
-                // Depth 0: the box sits under the plan's fold arrow.
-                todo_line(todo, 0, (width, state), theme)
+                todo_line(todo, depth, (width, state), theme)
             }),
-        TaskRow::Task { task, depth, .. } => {
-            list.tasks().get(task).map_or_else(Line::default, |task| {
-                task_line(task, depth, (width, state), app, theme)
-            })
-        }
-        TaskRow::Item { task, item, depth } => list
+        TaskRow::Task { task, .. } => list.tasks().get(task).map_or_else(Line::default, |task| {
+            task_line(
+                task,
+                (depth, list.shows_agents()),
+                (width, state),
+                app,
+                theme,
+            )
+        }),
+        TaskRow::Item { task, item, .. } => list
             .tasks()
             .get(task)
             .and_then(|task| task.items.get(item))
             .map_or_else(Line::default, |item| {
-                // An item is a level below its task, but its box sits
-                // under the task's icon, as the checklist's boxes sit
-                // under its `⬢`.
-                todo_line(item, depth.saturating_sub(1), (width, state), theme)
+                todo_line(item, depth, (width, state), theme)
             }),
     }
 }
@@ -173,9 +176,11 @@ fn plan_line(
 }
 
 /// A task's title row: its icon, its title, who does it and its progress.
+/// A part names the kind of agent it was handed to; a request names its
+/// agent only when `show_agents`, as in the project's scope.
 fn task_line(
     task: &TaskView,
-    depth: usize,
+    (depth, show_agents): (usize, bool),
     (width, state): (usize, CellState),
     app: &App,
     theme: &Theme,
@@ -184,17 +189,17 @@ fn task_line(
     if task.state == TaskState::Cancelled {
         name = name.add_modifier(Modifier::CROSSED_OUT);
     }
-    let who = task.assignee.as_ref().map_or_else(
-        || task.agent_name.clone(),
-        |assignee| format!("→ {assignee}"),
-    );
+    let who = match &task.assignee {
+        Some(assignee) => Some(format!("→ {assignee}")),
+        None => show_agents.then(|| task.agent_name.clone()),
+    };
     let (closed, total) = task.progress();
     let progress = (total > 0).then(|| format!("{closed}/{total}"));
     list_row_with_detail(
         width,
         depth,
         task_icon(task, app, theme),
-        (task.title.lines().next().unwrap_or(""), Some(&who)),
+        (task.title.lines().next().unwrap_or(""), who.as_deref()),
         cell_style(theme, state, name),
         progress.as_deref(),
     )
@@ -274,5 +279,39 @@ mod tests {
         let screen = drawn(&mut app);
         assert!(screen.contains("No plans for this agent"), "{screen}");
         assert!(!screen.contains("No tasks yet."), "{screen}");
+    }
+
+    #[test]
+    fn requests_name_their_agent_only_across_the_project() {
+        let mut app = App::new();
+        app.process_command(UiCommand::SetTasks(vec![
+            TaskView {
+                id: "part".into(),
+                title: "Parse".into(),
+                agent_name: "Coder".into(),
+                assignee: Some("coder".into()),
+                parent: Some("request".into()),
+                ..TaskView::default()
+            },
+            TaskView {
+                id: "request".into(),
+                title: "Build".into(),
+                agent_name: "Lead".into(),
+                ..TaskView::default()
+            },
+        ]));
+        let screen = drawn(&mut app);
+        assert!(screen.contains("Build"), "{screen}");
+        assert!(!screen.contains("Lead"), "{screen}");
+        assert!(
+            screen.contains("Parse  → coder"),
+            "a part names its kind of agent in any scope: {screen}"
+        );
+
+        app.toggle_side_scope();
+        let screen = drawn(&mut app);
+        assert!(screen.contains("Build  Lead"), "{screen}");
+        assert!(screen.contains("Parse  → coder"), "{screen}");
+        assert!(!screen.contains("Coder"), "{screen}");
     }
 }

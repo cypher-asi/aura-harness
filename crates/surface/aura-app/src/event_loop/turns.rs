@@ -38,6 +38,21 @@ pub(super) struct Prompt {
     pub mentions: bool,
     /// Images pasted into the message
     pub images: Vec<ImageAttachment>,
+    /// What its turn is on the agent's task board
+    pub request: Request,
+}
+
+/// What a prompt's turn is on the agent's task board (see
+/// [`super::tasks`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Request {
+    /// A new request
+    New,
+    /// The request that builds the agent's plan (`/build` or "implement")
+    Build,
+    /// No request: a harness notice carries on with the agent's latest
+    /// task, which it is about
+    Resume,
 }
 
 impl Prompt {
@@ -47,15 +62,38 @@ impl Prompt {
             text,
             mentions: true,
             images,
+            request: Request::New,
         }
     }
 
-    /// A message written by the harness, given to the model as is.
+    /// A message written by the harness for something the user asked,
+    /// given to the model as is.
     pub(super) const fn plain(text: String) -> Self {
         Self {
             text,
             mentions: false,
             images: Vec::new(),
+            request: Request::New,
+        }
+    }
+
+    /// The message that starts building the agent's plan.
+    pub(super) const fn build(text: String) -> Self {
+        Self {
+            text,
+            mentions: false,
+            images: Vec::new(),
+            request: Request::Build,
+        }
+    }
+
+    /// A notice from the harness, such as a background job ending.
+    pub(super) const fn notice(text: String) -> Self {
+        Self {
+            text,
+            mentions: false,
+            images: Vec::new(),
+            request: Request::Resume,
         }
     }
 }
@@ -305,16 +343,7 @@ async fn run_prompt(
     mut turn: TurnParts<'_>,
 ) -> Outcome {
     drain_stale_inbox(session).await;
-    session.tasks.begin_request(
-        session.agent_id(),
-        session.kernel.agent_workspace(),
-        &session.identity.name,
-        &prompt.text,
-        session
-            .active_plan
-            .clone()
-            .filter(|_| session.building_plan),
-    );
+    begin_task(session, &prompt).await;
     let started = Instant::now();
     let model = turn.agent_loop.config().model.clone();
     live::note_retry(&session.kernel, session.agent_id(), &prompt.text, &model).await;
@@ -327,6 +356,28 @@ async fn run_prompt(
         }
     };
     finish(session, ran, &turn).await
+}
+
+/// Put the turn answering `prompt` on the task board: a new request,
+/// working on the plan while the agent builds it, or, for a harness
+/// notice, the agent's latest task again.
+async fn begin_task(session: &AgentSession, prompt: &Prompt) {
+    let agent_id = session.agent_id();
+    let workspace = session.kernel.agent_workspace();
+    match prompt.request {
+        Request::Resume => session.tasks.resume_request(agent_id, &workspace).await,
+        Request::New | Request::Build => session.tasks.begin_request(
+            agent_id,
+            workspace,
+            &session.identity.name,
+            &prompt.text,
+            session
+                .active_plan
+                .clone()
+                .filter(|_| session.building_plan),
+            prompt.request == Request::Build,
+        ),
+    }
 }
 
 /// Run the turn of `prompt` on `model`, which the user pinned: the prompt
@@ -462,6 +513,7 @@ pub(super) async fn model_message(session: &AgentSession, prompt: Prompt) -> Mes
         text,
         mentions,
         images,
+        ..
     } = prompt;
     let text = if mentions && !mentioned_paths(&text).is_empty() {
         let expanded = expand_mentions_in(session.kernel.agent_workspace(), text).await;

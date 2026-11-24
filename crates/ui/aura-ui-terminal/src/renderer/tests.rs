@@ -1566,8 +1566,9 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
         auth + 3,
         "the plan's tasks follow its todos"
     );
-    // A todo's box and a top-level task's icon sit under the plan's fold
-    // arrow.
+    // Every child sits one level, two columns, right of its parent: the
+    // todos' boxes and the top-level task's icon one indent right of the
+    // plan's fold arrow.
     let last_column = |row: usize, glyph: char| {
         rows[row]
             .chars()
@@ -1576,11 +1577,17 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
             .last()
             .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
     };
-    assert_eq!(last_column(auth + 1, '☒'), last_column(auth, '▾'));
-    assert_eq!(last_column(auth + 2, '▣'), last_column(auth, '▾'));
-    assert_eq!(last_column(auth + 3, '○'), last_column(auth, '▾'));
+    let child = last_column(auth, '▾') + 2;
+    assert_eq!(last_column(auth + 1, '☒'), child);
+    assert_eq!(last_column(auth + 2, '▣'), child);
+    assert_eq!(last_column(auth + 3, '○'), child);
     let parser = row_with("Parser cleanup");
     assert_eq!(parser, auth + 4);
+    assert_eq!(
+        last_column(parser, '▸'),
+        last_column(auth, '▾'),
+        "plan headers line up"
+    );
     assert!(rows[parser].contains("1/1"));
     let screen = rows.join("\n");
     assert!(
@@ -5200,6 +5207,16 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
     let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    // In one agent's scope every request is that agent's, so none names it.
+    let rows = render_rows(&mut app, 200);
+    let request = rows
+        .iter()
+        .position(|r| r.contains("Build the compiler"))
+        .unwrap_or_else(|| panic!("no request in:\n{}", rows.join("\n")));
+    assert!(!rows[request].contains("Lead"), "{}", rows[request]);
+
+    // Across the project, requests name their agent.
+    app.toggle_side_scope();
     let rows = render_rows(&mut app, 200);
     let row_with = |text: &str| {
         rows.iter()
@@ -5215,7 +5232,7 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
     );
     assert!(rows[no_plan].contains('▾'), "{}", rows[no_plan]);
     assert!(
-        rows[request].contains("Lead") && rows[request].contains("1/2"),
+        rows[request].contains("Build the compiler  Lead") && rows[request].contains("1/2"),
         "{}",
         rows[request]
     );
@@ -5229,7 +5246,9 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
         "{}",
         rows[request + 2]
     );
-    // An item's box sits under its task's icon.
+    // Every child sits one level, two columns, right of its parent: the
+    // request's icon right of No Plan's fold arrow, its items' boxes and
+    // its part's icon right of the request's icon.
     let last_column = |row: usize, glyph: char| {
         rows[row]
             .chars()
@@ -5238,14 +5257,16 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
             .last()
             .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
     };
-    assert_eq!(last_column(request + 1, '☒'), last_column(request, '○'));
-    assert_eq!(last_column(request + 2, '☐'), last_column(request, '○'));
-    // A top-level task's icon sits under its group's fold arrow.
-    assert_eq!(last_column(request, '○'), last_column(no_plan, '▾'));
+    assert_eq!(last_column(request, '○'), last_column(no_plan, '▾') + 2);
+    let child = last_column(request, '○') + 2;
+    assert_eq!(last_column(request + 1, '☒'), child);
+    assert_eq!(last_column(request + 2, '☐'), child);
     let part = row_with("Parse the source  → coder");
-    assert!(
-        part > request + 2,
-        "the part sits under the request's items"
+    assert_eq!(part, request + 3, "the part follows the request's items");
+    assert_eq!(
+        last_column(part, '✓'),
+        child,
+        "the part sits at its items' depth"
     );
     assert!(
         rows.iter().any(|r| r.contains("p plan")),

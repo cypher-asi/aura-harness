@@ -371,7 +371,8 @@ async fn steered_body(
 }
 
 /// A prompt from `source`. Harness notices keep their label so the model
-/// can tell them from the user.
+/// can tell them from the user, and carry on with the agent's latest task
+/// instead of starting one.
 fn prompt_work(source: SteerSource, text: String, shown: bool) -> Work {
     match source {
         SteerSource::User => Work::Prompt {
@@ -379,7 +380,7 @@ fn prompt_work(source: SteerSource, text: String, shown: bool) -> Work {
             shown,
         },
         SteerSource::Harness => Work::Prompt {
-            prompt: Prompt::plain(format!("{}{text}", source.prefix())),
+            prompt: Prompt::notice(format!("{}{text}", source.prefix())),
             shown: false,
         },
     }
@@ -767,17 +768,22 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
         &state.hub.tool_names(),
     );
     let work = match work {
-        Work::Build { path } => match plan_mode::start_build(state, &mut session, path).await {
-            Some(text) => Work::Prompt {
-                prompt: Prompt::plain(text),
-                shown: false,
-            },
-            None => {
-                state.idle.insert(agent_id, session);
-                return;
-            }
-        },
-        other => other,
+        Work::Prompt { prompt, shown }
+            if plan_mode::asks_to_build(
+                &prompt,
+                session.active_plan.as_deref(),
+                session.building_plan,
+            ) =>
+        {
+            info!(%agent_id, text = %prompt.text, "Message asks to build the plan");
+            build_work(state, &mut session, None, shown).await
+        }
+        Work::Build { path } => build_work(state, &mut session, path, false).await,
+        other => Some(other),
+    };
+    let Some(work) = work else {
+        state.idle.insert(agent_id, session);
+        return;
     };
     let ui = ui.with_shown(state.hub.record_panel.clone());
     let cancel = CancellationToken::new();
@@ -867,6 +873,23 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     state.in_flight += 1;
     turns::spawn(session, task, ui, cancel, state.work_done.clone());
     agents::send_agent_list(state).await;
+}
+
+/// The turn that builds the plan at `path`, or `session`'s plan, once
+/// [`plan_mode::start_build`] got it ready; `None` when it can't. `shown`
+/// is whether the chat already shows what asked for it: a typed
+/// "implement" is, so the long build prompt is not shown after it.
+async fn build_work(
+    state: &mut LoopState<'_>,
+    session: &mut AgentSession,
+    path: Option<String>,
+    shown: bool,
+) -> Option<Work> {
+    let text = plan_mode::start_build(state, session, path).await?;
+    Some(Work::Prompt {
+        prompt: Prompt::build(text),
+        shown,
+    })
 }
 
 /// The agent loop and tools for a turn of `session`, the recorder of its

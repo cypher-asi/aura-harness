@@ -7,6 +7,19 @@
 //! A task's items follow its agent's todo list, so it says what is done
 //! and what is left; it links to the plan it works on, and a spawned task
 //! to that plan's todo it was handed.
+//!
+//! Plans and requests:
+//! - The request that starts building a plan (`/build`, or the user
+//!   saying "implement") is marked [`TaskView::builds`]: the TASKS tab
+//!   shows it as the plan's header rather than as a task of its own.
+//! - Every request while the agent builds its plan links to that plan,
+//!   so follow-ups ("commit", "keep going") file under it too.
+//!
+//! A harness notice (a background command or agent ending) is not a
+//! request: it starts no task. Its turn reopens the agent's latest task
+//! in that workspace, marks it running and settles it when the turn ends,
+//! as a request's turn would ([`TaskBoard::resume_request`]). An agent
+//! with no task gets none.
 
 use super::record_ui::RecordPanelAgent;
 use super::subagents::lock;
@@ -153,6 +166,11 @@ struct Current {
     /// Whether it is on disk and shown yet: a request is not until its
     /// turn does something
     saved: bool,
+    /// Whether the end of the agent's turn settles it
+    /// ([`TaskBoard::end_request`]): a request, or a task a harness notice
+    /// reopened. A task handed over by a `task` call waits for that call
+    /// to report instead ([`TaskBoard::finish_spawn`]).
+    settles_with_turn: bool,
 }
 
 #[derive(Default)]
@@ -258,7 +276,8 @@ impl TaskBoard {
     }
 
     /// `agent`, named `name`, was asked `prompt` by the user in
-    /// `workspace`, working on the plan at `plan`. Nothing is kept until
+    /// `workspace`, working on the plan at `plan`; `builds` when the
+    /// request is the one that builds that plan. Nothing is kept until
     /// the turn does something ([`Self::touch`]). An agent doing a task
     /// it was handed keeps that one.
     pub(crate) fn begin_request(
@@ -268,6 +287,7 @@ impl TaskBoard {
         name: &str,
         prompt: &str,
         plan: Option<String>,
+        builds: bool,
     ) {
         let mut board = lock(&self.board);
         if board
@@ -285,6 +305,7 @@ impl TaskBoard {
                 state: TaskState::Running,
                 agent_id: agent.to_hex(),
                 agent_name: name.to_string(),
+                builds: builds && plan.is_some(),
                 plan,
                 updated_ms: now,
                 ..TaskView::default()
@@ -298,8 +319,47 @@ impl TaskBoard {
                 workspace,
                 record,
                 saved: false,
+                settles_with_turn: true,
             },
         );
+    }
+
+    /// A harness notice (a background job or agent ending) woke `agent`
+    /// in `workspace`. The notice is about work the agent already has, so
+    /// it starts no task: the agent's latest task there runs again, a
+    /// request or a task it was handed, and its turn settles it as it
+    /// would a request's. A task the agent is still doing stays as it
+    /// is; an agent with no task gets none.
+    pub(crate) async fn resume_request(&self, agent: AgentId, workspace: &Path) {
+        let shown = {
+            let board = &mut *lock(&self.board);
+            if board.current.contains_key(&agent) {
+                return;
+            }
+            let dir = tasks_dir(&board.aside, workspace);
+            let hex = agent.to_hex();
+            let Some(mut record) = load_from(&dir)
+                .into_iter()
+                .find(|record| record.view.agent_id == hex)
+            else {
+                return;
+            };
+            record.view.state = TaskState::Running;
+            record.view.updated_ms = now_ms();
+            keep(&dir, &record);
+            let shown = (workspace.to_path_buf(), record.view.clone());
+            board.current.insert(
+                agent,
+                Current {
+                    workspace: workspace.to_path_buf(),
+                    record,
+                    saved: true,
+                    settles_with_turn: true,
+                },
+            );
+            shown
+        };
+        self.show(shown).await;
     }
 
     /// `agent`'s turn did something: keep and show its task.
@@ -382,6 +442,7 @@ impl TaskBoard {
                     workspace,
                     record,
                     saved: true,
+                    settles_with_turn: false,
                 },
             );
             shown
@@ -405,25 +466,28 @@ impl TaskBoard {
         .await;
     }
 
-    /// `agent`'s turn answering the user ended: close its request as
-    /// `state`, with `summary`. A task it was handed is left to
-    /// [`Self::finish_spawn`].
+    /// `agent`'s turn ended: close its request, or the task a harness
+    /// notice reopened, as `state`, with `summary` when the turn said
+    /// something. A task it was handed is left to [`Self::finish_spawn`].
     pub(crate) async fn end_request(
         &self,
         agent: AgentId,
         end: impl FnOnce(&[TodoView]) -> TaskState,
         summary: Option<String>,
     ) {
-        let is_request = lock(&self.board)
+        let settles = lock(&self.board)
             .current
             .get(&agent)
-            .is_some_and(|current| current.record.view.parent.is_none());
-        if !is_request {
+            .is_some_and(|current| current.settles_with_turn);
+        if !settles {
             return;
         }
         self.finish(agent, |record| {
             record.view.state = end(&record.view.items);
-            record.view.summary = summary;
+            // A reopened task that only answered keeps what it said before.
+            if summary.is_some() {
+                record.view.summary = summary;
+            }
         })
         .await;
     }
@@ -642,7 +706,7 @@ mod tests {
         shown.set(lead);
         tasks.send_all(lead, dir.path()).await;
 
-        tasks.begin_request(lead, dir.path().to_path_buf(), "Lead", "hi", None);
+        tasks.begin_request(lead, dir.path().to_path_buf(), "Lead", "hi", None, false);
         tasks
             .end_request(lead, |items| request_state(false, false, items), None)
             .await;
@@ -654,6 +718,7 @@ mod tests {
             "Lead",
             "Fix the bug\nplease",
             None,
+            false,
         );
         tasks.touch(lead).await;
         tasks
@@ -687,7 +752,14 @@ mod tests {
         let (tasks, _rx, _shown) = board();
         let (lead, child) = (agent(1), agent(2));
         let plan = Some(".aura/plans/p.plan.md".to_string());
-        tasks.begin_request(lead, dir.path().to_path_buf(), "Lead", "Build it", plan);
+        tasks.begin_request(
+            lead,
+            dir.path().to_path_buf(),
+            "Lead",
+            "Build it",
+            plan,
+            true,
+        );
         let id = tasks
             .begin_spawn(Spawned {
                 parent: lead,
@@ -700,7 +772,14 @@ mod tests {
                 todo_id: Some("parser".to_string()),
             })
             .await;
-        tasks.begin_request(child, PathBuf::from("/elsewhere"), "coder #1", "x", None);
+        tasks.begin_request(
+            child,
+            PathBuf::from("/elsewhere"),
+            "coder #1",
+            "x",
+            None,
+            false,
+        );
         tasks
             .set_items(child, vec![item("lex", TodoState::Completed)])
             .await;
@@ -722,10 +801,163 @@ mod tests {
         assert_eq!(spawned.view.items.len(), 1);
         assert_eq!(spawned.tool_use_id.as_deref(), Some("call-1"));
         assert_eq!(request.view.state, TaskState::Completed);
+        assert!(request.view.builds, "the request that builds the plan");
+        assert!(!spawned.view.builds);
         assert_eq!(
             plan_tasks(dir.path(), ".aura/plans/p.plan.md").get("parser"),
             Some(&id)
         );
+    }
+
+    #[tokio::test]
+    async fn a_notice_after_a_finished_request_reopens_and_settles_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tasks, mut rx, shown) = board();
+        let lead = agent(1);
+        shown.set(lead);
+        tasks.send_all(lead, dir.path()).await;
+        tasks.begin_request(
+            lead,
+            dir.path().to_path_buf(),
+            "Lead",
+            "Run the slow tests",
+            None,
+            false,
+        );
+        tasks.touch(lead).await;
+        tasks
+            .set_items(lead, vec![item("run them", TodoState::InProgress)])
+            .await;
+        tasks
+            .end_request(
+                lead,
+                |items| request_state(false, false, items),
+                Some("Started them.".to_string()),
+            )
+            .await;
+        let id = load_all(dir.path())[0].view.id.clone();
+        upserts(&mut rx);
+
+        tasks.resume_request(lead, dir.path()).await;
+        let kept = load_all(dir.path());
+        assert_eq!(kept.len(), 1, "a notice starts no task");
+        assert_eq!(kept[0].view.state, TaskState::Running);
+        assert_eq!(
+            upserts(&mut rx).last().map(|v| v.state),
+            Some(TaskState::Running)
+        );
+
+        tasks
+            .set_items(lead, vec![item("run them", TodoState::Completed)])
+            .await;
+        tasks
+            .end_request(
+                lead,
+                |items| request_state(false, false, items),
+                Some("They pass.".to_string()),
+            )
+            .await;
+        let kept = load_all(dir.path());
+        assert_eq!(kept.len(), 1);
+        let view = &kept[0].view;
+        assert_eq!(view.id, id);
+        assert_eq!(view.title, "Run the slow tests");
+        assert_eq!(view.state, TaskState::Completed);
+        assert_eq!(view.summary.as_deref(), Some("They pass."));
+
+        tasks.resume_request(lead, dir.path()).await;
+        tasks
+            .end_request(lead, |items| request_state(false, false, items), None)
+            .await;
+        let view = &load_all(dir.path())[0].view;
+        assert_eq!(view.state, TaskState::Completed);
+        assert_eq!(
+            view.summary.as_deref(),
+            Some("They pass."),
+            "a turn that said nothing keeps the summary"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_notice_to_an_agent_with_no_tasks_records_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tasks, mut rx, shown) = board();
+        let (lead, other) = (agent(1), agent(2));
+        shown.set(other);
+        tasks.send_all(other, dir.path()).await;
+        tasks.begin_request(
+            lead,
+            dir.path().to_path_buf(),
+            "Lead",
+            "Fix it",
+            None,
+            false,
+        );
+        tasks.touch(lead).await;
+        tasks
+            .end_request(lead, |items| request_state(false, false, items), None)
+            .await;
+        upserts(&mut rx);
+
+        tasks.resume_request(other, dir.path()).await;
+        tasks
+            .end_request(other, |items| request_state(false, false, items), None)
+            .await;
+
+        let kept = load_all(dir.path());
+        assert_eq!(kept.len(), 1, "only the other agent's request");
+        assert_eq!(kept[0].view.agent_id, lead.to_hex());
+        assert_eq!(kept[0].view.state, TaskState::Completed);
+        assert!(upserts(&mut rx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_notice_to_a_finished_spawn_reopens_its_task_under_its_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tasks, _rx, _shown) = board();
+        let (lead, reviewer) = (agent(1), agent(2));
+        tasks.begin_request(
+            lead,
+            dir.path().to_path_buf(),
+            "Lead",
+            "Review it",
+            None,
+            false,
+        );
+        let id = tasks
+            .begin_spawn(Spawned {
+                parent: lead,
+                child: reviewer,
+                workspace: dir.path().to_path_buf(),
+                name: "reviewer #56",
+                assignee: "reviewer",
+                prompt: "Review the parser",
+                tool_use_id: None,
+                todo_id: None,
+            })
+            .await;
+        tasks
+            .finish_spawn(reviewer, Err("stopped".to_string()))
+            .await;
+        tasks
+            .end_request(lead, |items| request_state(false, false, items), None)
+            .await;
+
+        tasks.resume_request(reviewer, dir.path()).await;
+        tasks
+            .end_request(
+                reviewer,
+                |items| request_state(false, false, items),
+                Some("Reviewed.".to_string()),
+            )
+            .await;
+
+        let kept = load_all(dir.path());
+        assert_eq!(kept.len(), 2, "no task of its own for the notice");
+        let spawned = kept.iter().find(|r| r.view.id == id).unwrap();
+        assert!(spawned.view.parent.is_some());
+        assert_eq!(spawned.view.state, TaskState::Completed);
+        assert_eq!(spawned.view.summary.as_deref(), Some("Reviewed."));
     }
 
     #[tokio::test]
@@ -759,7 +991,14 @@ mod tests {
         let (tasks, _rx, _shown) = board();
         let tasks = Arc::new(tasks);
         let (lead, child) = (agent(1), agent(2));
-        tasks.begin_request(lead, workspace.clone(), "Lead", "Rename calc_total", None);
+        tasks.begin_request(
+            lead,
+            workspace.clone(),
+            "Lead",
+            "Rename calc_total",
+            None,
+            false,
+        );
         tasks.touch(lead).await;
 
         let first = tasks.set_aside(&workspace);

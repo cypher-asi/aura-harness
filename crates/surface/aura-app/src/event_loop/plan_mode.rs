@@ -8,12 +8,22 @@
 //! seeds its todo list with the plan's todos, and asks it to implement
 //! the plan; while it builds, its todo list is mirrored into the plan
 //! file (see [`super::agent_events`]).
+//!
+//! The plan-ready note invites the user to say "implement", so a typed
+//! message that is only that (see [`asks_to_build`]) builds the agent's
+//! plan exactly as `/build` does, as long as it has one it is not already
+//! building. Anything longer is a prompt like any other.
+//!
+//! On the task board (see [`super::tasks`]), the request that starts the
+//! build is marked as the plan's, and every request while the agent
+//! builds the plan links to it.
 
 use super::agent_events::AgentUi;
 use super::agents::AgentSession;
 use super::handlers::system_message;
 use super::hud::todo_views;
 use super::modes;
+use super::turns::Prompt;
 use super::LoopState;
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::AgentId;
@@ -136,6 +146,33 @@ pub(super) async fn send_plans_of(state: &LoopState<'_>, agent_id: AgentId) {
     state.hub.factory.tasks.send_all(agent_id, &workspace).await;
 }
 
+/// What the user may type to build the plan, once trimmed, lowercased
+/// and without a trailing `.` or `!`.
+const BUILD_PHRASES: [&str; 8] = [
+    "impl",
+    "implement",
+    "implement it",
+    "implement the plan",
+    "implement plan",
+    "build",
+    "build it",
+    "build the plan",
+];
+
+/// Whether `prompt` is the user asking to build `active_plan`, the
+/// agent's plan, which it is not `building` yet: a typed message that is
+/// only one of the [`BUILD_PHRASES`]. A harness notice, a message with
+/// images, or one that says more is a prompt for the model.
+pub(super) fn asks_to_build(prompt: &Prompt, active_plan: Option<&str>, building: bool) -> bool {
+    // Only text the user typed has mentions; the harness writes the rest.
+    if !prompt.mentions || !prompt.images.is_empty() || building || active_plan.is_none() {
+        return false;
+    }
+    let text = prompt.text.trim().to_lowercase();
+    let text = text.trim_end_matches(['.', '!']).trim_end();
+    BUILD_PHRASES.contains(&text)
+}
+
 /// Get `session` ready to build the plan at `path`, or its latest plan:
 /// switch it to a mode that edits, make the plan's todos its todo list,
 /// and show the plan. Returns the prompt that starts the build, or `None`
@@ -225,6 +262,47 @@ mod tests {
         assert_eq!(names, ["New", "Old"]);
         assert_eq!(plans[0].path, ".aura/plans/new_00000002.plan.md");
         assert_eq!(plans[0].todos[0].state, TodoState::Completed);
+    }
+
+    #[test]
+    fn only_a_bare_build_phrase_typed_with_a_plan_to_build_builds_it() {
+        let plan = Some(".aura/plans/p_00000001.plan.md");
+        let typed = |text: &str| Prompt::typed(text.to_string(), Vec::new());
+        for text in [
+            "impl",
+            "Implement",
+            "  implement it.  ",
+            "Implement the plan!",
+            "implement plan",
+            "BUILD",
+            "build it!!",
+            "build the plan.",
+        ] {
+            assert!(asks_to_build(&typed(text), plan, false), "{text:?}");
+        }
+        for text in [
+            "implement the parser",
+            "build it and commit",
+            "implement?",
+            "commit",
+            "keep going",
+            "",
+        ] {
+            assert!(!asks_to_build(&typed(text), plan, false), "{text:?}");
+        }
+        assert!(!asks_to_build(&typed("implement"), None, false), "no plan");
+        assert!(
+            !asks_to_build(&typed("implement"), plan, true),
+            "already building it"
+        );
+        assert!(
+            !asks_to_build(&Prompt::notice("implement".to_string()), plan, false),
+            "a harness notice"
+        );
+        assert!(
+            !asks_to_build(&Prompt::plain("implement".to_string()), plan, false),
+            "written by the harness"
+        );
     }
 
     #[test]
