@@ -12,6 +12,7 @@ use super::attachments::{expand_mentions_in, mentioned_paths};
 use super::gate;
 use super::gate::turn::{Ending, GateTurn, Routing};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
+use super::plan_mode::open_plan;
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
 use super::tasks::{request_state, summary_of};
@@ -117,6 +118,9 @@ pub(super) enum Task {
     /// `steering` while it runs.
     Turn {
         prompt: Prompt,
+        /// Whether the agent is in plan mode, where a request revises its
+        /// open plan (see [`begin_task`])
+        planning: bool,
         agent_loop: Box<AgentLoop>,
         tools: Vec<ToolDefinition>,
         steering: Steering,
@@ -204,6 +208,7 @@ async fn run(
     let outcome = match task {
         Task::Turn {
             prompt,
+            planning,
             agent_loop,
             tools,
             steering,
@@ -223,7 +228,7 @@ async fn run(
                 ui: &ui,
                 cancel: &cancel,
             };
-            run_prompt(&mut session, prompt, turn).await
+            run_prompt(&mut session, prompt, planning, turn).await
         }
         Task::Command { command, cols } => {
             run_user_command(&mut session, &command, cols, &ui).await;
@@ -337,13 +342,15 @@ pub(super) async fn record_turn_prompt(
 /// [`gate::turn`](super::gate::turn)): the prompt is recorded with its
 /// category and route, and the turn ends with an `Outcome` saying how it
 /// went; a prompt the classifier could not label fails the turn.
+/// `planning` is whether the agent is in plan mode.
 async fn run_prompt(
     session: &mut AgentSession,
     prompt: Prompt,
+    planning: bool,
     mut turn: TurnParts<'_>,
 ) -> Outcome {
     drain_stale_inbox(session).await;
-    begin_task(session, &prompt).await;
+    begin_task(session, &prompt, planning).await;
     let started = Instant::now();
     let model = turn.agent_loop.config().model.clone();
     live::note_retry(&session.kernel, session.agent_id(), &prompt.text, &model).await;
@@ -358,26 +365,48 @@ async fn run_prompt(
     finish(session, ran, &turn).await
 }
 
-/// Put the turn answering `prompt` on the task board: a new request,
-/// working on the plan while the agent builds it, or, for a harness
-/// notice, the agent's latest task again.
-async fn begin_task(session: &AgentSession, prompt: &Prompt) {
+/// Put the turn answering `prompt` on the task board: a new request, or,
+/// for a harness notice, the agent's latest task again. `planning` is
+/// whether the agent is in plan mode; [`request_plan`] says which plan
+/// the request works on.
+async fn begin_task(session: &AgentSession, prompt: &Prompt, planning: bool) {
     let agent_id = session.agent_id();
     let workspace = session.kernel.agent_workspace();
     match prompt.request {
         Request::Resume => session.tasks.resume_request(agent_id, &workspace).await,
-        Request::New | Request::Build => session.tasks.begin_request(
-            agent_id,
-            workspace,
-            &session.identity.name,
-            &prompt.text,
-            session
-                .active_plan
-                .clone()
-                .filter(|_| session.building_plan),
-            prompt.request == Request::Build,
-        ),
+        Request::New | Request::Build => {
+            let (plan, builds) = request_plan(session, planning);
+            session.tasks.begin_request(
+                agent_id,
+                workspace,
+                &session.identity.name,
+                &prompt.text,
+                plan,
+                builds,
+            );
+        }
     }
+}
+
+/// The plan a new request of `session` works on, and whether the request
+/// is that plan's own. In plan mode (`planning`) a request revises the
+/// agent's open plan ([`open_plan`]), so it files under that plan as a
+/// task of its own. While the agent builds its plan every request is the
+/// plan's, as the first one was: follow-ups such as "keep going" carry
+/// the same todo list, which the plan's todos already show.
+fn request_plan(session: &AgentSession, planning: bool) -> (Option<String>, bool) {
+    if planning {
+        let workspace = session.kernel.agent_workspace();
+        let plan = session
+            .active_plan
+            .clone()
+            .filter(|path| open_plan(&workspace, Some(path)).is_some());
+        return (plan, false);
+    }
+    if session.building_plan {
+        return (session.active_plan.clone(), true);
+    }
+    (None, false)
 }
 
 /// Run the turn of `prompt` on `model`, which the user pinned: the prompt
