@@ -129,8 +129,8 @@ pub(super) struct BarEnd {
 /// it.
 ///
 /// ```text
-/// │ SBX │ PRC │TRACE│PLANS│TASKS│ * │ ⤢ │
-/// │SBX │PRC │TRC │PLN│TSK│*│⤢│
+/// │ SBX │ PRC │TRACE│TASKS│ * │ ⤢ │
+/// │SBX │PRC │TRC │TSK│*│⤢│
 /// ```
 ///
 /// The cells are padded unless the tabs, laid out by `layout` for the
@@ -847,9 +847,9 @@ mod tests {
         assert_eq!(end.scope, Some(Rect::new(31, 1, 3, 1)));
         assert_eq!(end.expand, None);
         let off = draw(35, 10, &side_header(35, (true, false), false));
-        assert_eq!(row(&off, 0), "┌─────┬─────┬─────┬─────┬─────┬───┐");
-        assert_eq!(row(&off, 1), "│ SBX │ PRC │TRACE│PLANS│TASKS│ * │");
-        assert_eq!(row(&off, 2), "└─────┴─────┴─────┴─────┴─────┴───┘");
+        assert_eq!(row(&off, 0), "┌───────┬───────┬──────┬──────┬───┐");
+        assert_eq!(row(&off, 1), "│SANDBOX│  PRC  │TRACE │TASKS │ * │");
+        assert_eq!(row(&off, 2), "└───────┴───────┴──────┴──────┴───┘");
         let colors = Theme::cyber().colors;
         assert_eq!(off[(32, 1)].style().fg, Some(colors.muted));
 
@@ -869,45 +869,58 @@ mod tests {
         assert_eq!(end.scope, Some(Rect::new(31, 1, 3, 1)));
         assert_eq!(end.expand, Some(Rect::new(35, 1, 3, 1)));
         let buffer = draw(39, 10, &side_header(39, (true, true), false));
-        assert_eq!(row(&buffer, 0), "┌─────┬─────┬─────┬─────┬─────┬───┬───┐");
-        assert_eq!(row(&buffer, 1), "│ SBX │ PRC │TRACE│PLANS│TASKS│ * │ ⤢ │");
-        assert_eq!(row(&buffer, 2), "└─────┴─────┴─────┴─────┴─────┴───┴───┘");
+        assert_eq!(row(&buffer, 0), "┌───────┬───────┬──────┬──────┬───┬───┐");
+        assert_eq!(row(&buffer, 1), "│SANDBOX│  PRC  │TRACE │TASKS │ * │ ⤢ │");
+        assert_eq!(row(&buffer, 2), "└───────┴───────┴──────┴──────┴───┴───┘");
     }
 
     #[test]
     fn narrow_bars_tighten_their_buttons_then_drop_the_expand_button() {
-        // Five short labels and their dividers need 21 columns: 29 leaves
-        // them that beside two padded buttons, 28 does not.
-        let end = bar_end(Rect::new(0, 0, 29, 3), (true, true), SidePanelTab::layout);
-        assert_eq!(end.tabs, 21);
-        assert_eq!(end.scope, Some(Rect::new(21, 1, 3, 1)));
-        assert_eq!(end.expand, Some(Rect::new(25, 1, 3, 1)));
-        let buffer = draw(29, 10, &side_header(29, (true, true), false));
-        assert_eq!(row(&buffer, 1), "│SBX│PRC│TRC│PLN│TSK│ * │ ⤢ │");
-
-        let end = bar_end(Rect::new(0, 0, 28, 3), (true, true), SidePanelTab::layout);
-        assert_eq!(end.tabs, 24);
-        assert_eq!(end.scope, Some(Rect::new(24, 1, 1, 1)));
-        assert_eq!(end.expand, Some(Rect::new(26, 1, 1, 1)));
-        let buffer = draw(28, 10, &side_header(28, (true, true), false));
-        assert_eq!(row(&buffer, 0), "┌────┬────┬────┬───┬───┬─┬─┐");
-        assert_eq!(row(&buffer, 1), "│SBX │PRC │TRC │PLN│TSK│*│⤢│");
-        assert_eq!(row(&buffer, 2), "└────┴────┴────┴───┴───┴─┴─┘");
+        // Four short labels and their dividers need 17 columns: 25 leaves
+        // them that beside two padded buttons, 24 does not. Tight buttons
+        // leave them room down to 21; at 20 the expand button goes, and
+        // under 20 there are no buttons.
+        let end = bar_end(Rect::new(0, 0, 25, 3), (true, true), SidePanelTab::layout);
+        assert_eq!(end.tabs, 17);
+        assert_eq!(end.scope, Some(Rect::new(17, 1, 3, 1)));
+        assert_eq!(end.expand, Some(Rect::new(21, 1, 3, 1)));
+        let buffer = draw(25, 10, &side_header(25, (true, true), false));
+        assert_eq!(row(&buffer, 1), "│SBX│PRC│TRC│TSK│ * │ ⤢ │");
 
         let end = bar_end(Rect::new(0, 0, 24, 3), (true, true), SidePanelTab::layout);
-        assert_eq!(end.expand, None, "the expand button goes first");
-        assert_eq!((end.tabs, end.scope), (22, Some(Rect::new(22, 1, 1, 1))));
+        assert_eq!(end.tabs, 20);
+        assert_eq!(end.scope, Some(Rect::new(20, 1, 1, 1)));
+        assert_eq!(end.expand, Some(Rect::new(22, 1, 1, 1)));
+        let buffer = draw(24, 10, &side_header(24, (true, true), false));
+        assert_eq!(row(&buffer, 0), "┌────┬────┬────┬───┬─┬─┐");
+        assert_eq!(row(&buffer, 1), "│SBX │PRC │TRC │TSK│*│⤢│");
+        assert_eq!(row(&buffer, 2), "└────┴────┴────┴───┴─┴─┘");
 
-        let clipped = bar_end(Rect::new(0, 0, 21, 3), (true, true), SidePanelTab::layout);
+        let end = bar_end(Rect::new(0, 0, 21, 3), (true, true), SidePanelTab::layout);
+        assert_eq!(end.tabs, 17);
+        assert_eq!(end.expand, Some(Rect::new(19, 1, 1, 1)));
+
+        let end = bar_end(Rect::new(0, 0, 20, 3), (true, true), SidePanelTab::layout);
+        assert_eq!(end.expand, None, "the expand button goes first");
+        assert_eq!((end.tabs, end.scope), (18, Some(Rect::new(18, 1, 1, 1))));
+
+        let bare = bar_end(Rect::new(0, 0, 19, 3), (true, true), SidePanelTab::layout);
+        assert_eq!((bare.tabs, bare.scope, bare.expand), (19, None, None));
+    }
+
+    #[test]
+    fn tabs_too_many_for_a_tight_button_keep_a_padded_one() {
+        // Five short labels and their dividers need 21 columns, more than
+        // a 21-column bar leaves beside even one tight button.
+        const SHORT: [&str; 5] = ["ONE", "TWO", "SIX", "TEN", "ART"];
+        let five = |width| TabLayout::new([0, 1, 2, 3, 4], |i| SHORT[i], |i| SHORT[i], width);
+        let clipped = bar_end(Rect::new(0, 0, 21, 3), (true, true), five);
         assert_eq!(clipped.expand, None);
         assert_eq!(
             (clipped.tabs, clipped.scope),
             (17, Some(Rect::new(17, 1, 3, 1))),
             "tabs that fit beside nothing keep a padded button"
         );
-
-        let bare = bar_end(Rect::new(0, 0, 19, 3), (true, true), SidePanelTab::layout);
-        assert_eq!((bare.tabs, bare.scope, bare.expand), (19, None, None));
     }
 
     #[test]

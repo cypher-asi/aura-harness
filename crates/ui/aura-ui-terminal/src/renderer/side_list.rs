@@ -1,5 +1,5 @@
 //! Pieces shared by the tabs of the side panel (SANDBOX, PROCESSES, TRACE,
-//! PLANS, TASKS), so every tab draws its empty state, its rows area and its key
+//! TASKS), so every tab draws its empty state, its rows area and its key
 //! hint the same way.
 //!
 //! Every tab follows the same rules: rows are drawn with
@@ -23,10 +23,8 @@ pub(super) const SANDBOX_HINT: &str = "⏎ open  ←→ fold  ⇧←→ tabs";
 pub(super) const PROCESSES_HINT: &str = "⏎ open  o agent  k kill  l log  ⇧←→ tabs";
 /// Hint of the TRACE tab.
 pub(super) const TRACE_HINT: &str = "⏎ open  g graph  ⇧←→ tabs";
-/// Hint of the PLANS tab.
-pub(super) const PLANS_HINT: &str = "⏎ open  t task  ←→ fold  ⇧←→ tabs";
-/// Hint of the TASKS tab.
-pub(super) const TASKS_HINT: &str = "⏎ open  p plan  ←→ fold  ⇧←→ tabs";
+/// Hint of the TASKS tab, which also lists the plans the tasks work on.
+pub(super) const TASKS_HINT: &str = "⏎ open  p plan  t task  ←→ fold  ⇧←→ tabs";
 /// Hint of the Kernel panel's MEMBERS tab.
 pub(super) const MEMBERS_HINT: &str = "⏎ open  o chat  ⇧←→ tabs";
 /// Hint of the Kernel panel's POLICIES tab, a document with nothing to
@@ -38,13 +36,12 @@ pub(super) const INBOX_HINT: &str = "↑↓ move  ←→ fold  ⏎ open  ⇧←�
 /// Whether a side-panel row is still in play. This alone decides white
 /// versus gray text in every tab, so the tabs read the same way:
 ///
-/// | tab       | `Active` (foreground)        | `Settled` (muted)            |
-/// |-----------|------------------------------|------------------------------|
-/// | SANDBOX   | files and folders            | dot entries, "more" rows     |
-/// | PROCESSES | running, idle, paused        | exited, failed, killed       |
-/// | TRACE     | steps still pending          | finished steps               |
-/// | PLANS     | open plans and todos         | done plans, closed todos     |
-/// | TASKS     | running and open tasks       | done, failed, stopped tasks  |
+/// | tab       | `Active` (foreground)                    | `Settled` (muted)                            |
+/// |-----------|------------------------------------------|----------------------------------------------|
+/// | SANDBOX   | files and folders                        | dot entries, "more" rows                     |
+/// | PROCESSES | running, idle, paused                    | exited, failed, killed                       |
+/// | TRACE     | steps still pending                      | finished steps                               |
+/// | TASKS     | open plans and todos, running/open tasks | done plans, closed todos, done/failed tasks  |
 ///
 /// Status (ok, warning, error) is shown by the row's icon color only, never
 /// by its text.
@@ -144,7 +141,6 @@ mod tests {
             SANDBOX_HINT,
             PROCESSES_HINT,
             TRACE_HINT,
-            PLANS_HINT,
             TASKS_HINT,
             MEMBERS_HINT,
         ] {

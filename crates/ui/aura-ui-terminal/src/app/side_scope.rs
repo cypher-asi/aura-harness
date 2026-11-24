@@ -1,7 +1,8 @@
-//! Whose items the side panel's PROCESSES, TRACE, PLANS and TASKS tabs
-//! list: the active agent's, with the agents it spawned, or every agent's
-//! in its project. The `*` button at the right end of the panel's header
-//! bar switches every tab at once.
+//! Whose items the side panel's PROCESSES, TRACE and TASKS tabs list: the
+//! active agent's, with the agents it spawned, or every agent's in its
+//! project. The TASKS tab lists the plans those agents' tasks work on.
+//! The `*` button at the right end of the panel's header bar switches
+//! every tab at once.
 
 use std::collections::HashSet;
 
@@ -120,39 +121,7 @@ impl App {
         self.task_list.set_filter(agents.clone());
         self.process_filter = agents;
         self.reshow_processes();
-        self.refresh_plan_scope();
         self.refresh_members();
-    }
-
-    /// Filter the PLANS tab to the plans the tasks shown work on, or
-    /// whose todos they do; every plan when every task is shown. The plan
-    /// being worked on is always shown.
-    pub(super) fn refresh_plan_scope(&mut self) {
-        let paths = self.task_list.filtered().then(|| {
-            let tasks: HashSet<&str> = self
-                .task_list
-                .scoped_tasks()
-                .map(|task| task.id.as_str())
-                .collect();
-            let mut paths: HashSet<String> = self
-                .task_list
-                .scoped_tasks()
-                .filter_map(|task| task.plan.clone())
-                .collect();
-            paths.extend(
-                self.plan_list
-                    .plans()
-                    .iter()
-                    .filter(|plan| {
-                        plan.todos
-                            .iter()
-                            .any(|todo| todo.task.as_deref().is_some_and(|id| tasks.contains(id)))
-                    })
-                    .map(|plan| plan.path.clone()),
-            );
-            paths
-        });
-        self.plan_list.set_filter(paths);
     }
 }
 
@@ -273,14 +242,14 @@ mod tests {
     }
 
     fn plans(app: &App) -> Vec<&str> {
-        let list = app.plan_list();
+        let list = app.task_list();
         list.rows()
             .iter()
-            .filter_map(|row| match row {
-                crate::app::plans::PlanRow::Plan { plan, .. } => {
-                    Some(list.plans()[*plan].path.as_str())
-                }
-                crate::app::plans::PlanRow::Todo { .. } => None,
+            .filter_map(|row| match *row {
+                crate::app::tasks::TaskRow::Plan {
+                    plan: Some(plan), ..
+                } => Some(list.plans()[plan].path.as_str()),
+                _ => None,
             })
             .collect()
     }
@@ -294,7 +263,7 @@ mod tests {
         assert_eq!(tasks(&app), ["ta", "tac"]);
         assert_eq!(plans(&app), ["plan-a", "plan-c"]);
         assert_eq!(app.task_list().hidden(), 1);
-        assert_eq!(app.plan_list().hidden(), 1);
+        assert_eq!(app.task_list().hidden_plans(), 1);
     }
 
     #[test]

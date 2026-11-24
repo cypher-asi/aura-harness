@@ -480,9 +480,7 @@ pub struct App {
     /// Run graph shown by `/graph`
     pub(super) graph: graph::GraphState,
     pub(super) trace_feed: trace_feed::TraceFeed,
-    /// Plans of the PLANS tab
-    pub(super) plan_list: plans::PlanList,
-    /// Tasks of the TASKS tab
+    /// Plans and tasks of the TASKS tab
     pub(super) task_list: tasks::TaskList,
     /// Node to select once the requested graph loads.
     pub(super) pending_graph_node: Option<String>,
@@ -573,10 +571,6 @@ pub struct PanelAreas {
     pub trace_rows: Option<Rect>,
     /// Feed row shown at the top of `trace_rows`
     pub trace_scroll: usize,
-    /// Rows of the Plans tab inside the panel
-    pub plan_rows: Option<Rect>,
-    /// Plans row shown at the top of `plan_rows`
-    pub plans_scroll: usize,
     /// Rows of the Tasks tab inside the panel
     pub task_rows: Option<Rect>,
     /// Tasks row shown at the top of `task_rows`
@@ -649,8 +643,6 @@ pub(crate) enum HoverTarget {
     ProcessRow(usize),
     /// A row in the Trace tab.
     TraceRow(usize),
-    /// A row in the Plans tab.
-    PlanRow(usize),
     /// A row in the Tasks tab.
     TaskRow(usize),
     /// A chat row that expands or collapses agent activity.
@@ -1127,7 +1119,6 @@ impl App {
             pending_kill: None,
             graph: graph::GraphState::default(),
             trace_feed: trace_feed::TraceFeed::default(),
-            plan_list: plans::PlanList::default(),
             task_list: tasks::TaskList::default(),
             pending_graph_node: None,
             flow: flow::FlowState::default(),
@@ -1509,7 +1500,6 @@ impl App {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
-                    SidePanelTab::Plans => self.plan_list.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
                 }
             }
@@ -1570,7 +1560,6 @@ impl App {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
-                    SidePanelTab::Plans => self.plan_list.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
                 }
             }

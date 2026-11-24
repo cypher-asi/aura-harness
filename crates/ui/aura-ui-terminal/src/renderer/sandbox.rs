@@ -1,6 +1,6 @@
-//! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE | PLANS
-//! | TASKS header bar over the file tree of the active agent's workspace,
-//! the Processes list, the trace feed, the workspace's plans or its tasks.
+//! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE | TASKS
+//! header bar over the file tree of the active agent's workspace, the
+//! Processes list, the trace feed, or its tasks grouped under their plans.
 //! The bar ends in a `*` button that lists the whole project's processes,
 //! steps, plans and tasks instead of the active agent's, then a ⤢ button
 //! that maximizes the panel over the Record panel, or restores it.
@@ -68,7 +68,6 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         SidePanelTab::Trace => {
             super::trace_feed::render_trace_feed(frame, area, body, app, theme);
         }
-        SidePanelTab::Plans => super::plans::render_plans(frame, area, body, app, theme),
         SidePanelTab::Tasks => super::tasks::render_tasks(frame, area, body, app, theme),
     }
 }

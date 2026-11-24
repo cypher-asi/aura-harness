@@ -23,20 +23,14 @@ pub enum SidePanelTab {
     Processes,
     /// Live feed of recorded steps and harness decisions.
     Trace,
-    /// The workspace's plans, each with its todos.
-    Plans,
-    /// Work agents did or are doing, each with what is done and left.
+    /// Work agents did or are doing, grouped under the plans they work
+    /// on, each plan with its todos and each task with what is done and
+    /// left.
     Tasks,
 }
 
 impl SidePanelTab {
-    pub const ALL: [Self; 5] = [
-        Self::Sandbox,
-        Self::Processes,
-        Self::Trace,
-        Self::Plans,
-        Self::Tasks,
-    ];
+    pub const ALL: [Self; 4] = [Self::Sandbox, Self::Processes, Self::Trace, Self::Tasks];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -44,7 +38,6 @@ impl SidePanelTab {
             Self::Sandbox => "SANDBOX",
             Self::Processes => "PROCESSES",
             Self::Trace => "TRACE",
-            Self::Plans => "PLANS",
             Self::Tasks => "TASKS",
         }
     }
@@ -56,7 +49,6 @@ impl SidePanelTab {
             Self::Sandbox => "SBX",
             Self::Processes => "PRC",
             Self::Trace => "TRC",
-            Self::Plans => "PLN",
             Self::Tasks => "TSK",
         }
     }
@@ -72,8 +64,7 @@ impl SidePanelTab {
         match self {
             Self::Sandbox => Self::Processes,
             Self::Processes => Self::Trace,
-            Self::Trace => Self::Plans,
-            Self::Plans => Self::Tasks,
+            Self::Trace => Self::Tasks,
             Self::Tasks => Self::Sandbox,
         }
     }
@@ -83,8 +74,7 @@ impl SidePanelTab {
             Self::Sandbox => Self::Tasks,
             Self::Processes => Self::Sandbox,
             Self::Trace => Self::Processes,
-            Self::Plans => Self::Trace,
-            Self::Tasks => Self::Plans,
+            Self::Tasks => Self::Trace,
         }
     }
 }
@@ -243,15 +233,13 @@ impl App {
                     SidePanelTab::Sandbox => self.sandbox.select(index),
                     SidePanelTab::Processes => self.select_process(index),
                     SidePanelTab::Trace => self.trace_feed.select(index),
-                    SidePanelTab::Plans => self.plan_list.select(index),
                     SidePanelTab::Tasks => self.task_list.select(index),
                 }
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
-            (SidePanelTab::Plans, KeyCode::Char(' ')) => self.plan_list.toggle_selected(),
-            (SidePanelTab::Plans, KeyCode::Char('t')) => self.jump_to_todo_task(),
             (SidePanelTab::Tasks, KeyCode::Char(' ')) => self.task_list.toggle_selected(),
-            (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_task_plan(),
+            (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_row_plan(),
+            (SidePanelTab::Tasks, KeyCode::Char('t')) => self.jump_to_todo_task(),
             (SidePanelTab::Processes, KeyCode::Char('o')) => self.jump_to_selected_owner(),
             (SidePanelTab::Processes, KeyCode::Char('k') | KeyCode::Delete) => {
                 self.request_kill_selected();
@@ -354,9 +342,9 @@ impl App {
 
     /// Clicking a tab shows it. Clicking a row highlights it and opens it
     /// over the chat panel at once, the same in every tab: a file, a
-    /// process's details, a trace step, a plan (at the clicked todo).
-    /// Directories have nothing to open, so a click folds them; a plan
-    /// folds when its fold glyph is clicked.
+    /// process's details, a trace step, a plan (at the clicked todo), a
+    /// task's agent. Directories have nothing to open, so a click folds
+    /// them; plans and tasks fold when their fold glyph is clicked.
     pub(super) fn click_side_panel(&mut self, column: u16, row: u16) {
         if self.side_scope_at(column, row) {
             self.toggle_side_scope();
@@ -390,7 +378,6 @@ impl App {
                     self.open_selected_trace_entry();
                 }
             }
-            SidePanelTab::Plans => self.click_plan_row(column, row),
             SidePanelTab::Tasks => self.click_task_row(column, row),
         }
     }
@@ -446,7 +433,6 @@ impl App {
                 .process_row_at(column, row)
                 .map(HoverTarget::ProcessRow),
             SidePanelTab::Trace => self.trace_row_at(column, row).map(HoverTarget::TraceRow),
-            SidePanelTab::Plans => self.plan_row_at(column, row).map(HoverTarget::PlanRow),
             SidePanelTab::Tasks => self.task_row_at(column, row).map(HoverTarget::TaskRow),
         }
     }
@@ -513,12 +499,10 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Tasks);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-        assert_eq!(app.side_tab(), SidePanelTab::Plans);
-        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Trace);
         app.handle_key(key(KeyCode::Right));
         assert_eq!(app.side_tab(), SidePanelTab::Trace);
-        for _ in 0..3 {
+        for _ in 0..2 {
             app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         }
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);

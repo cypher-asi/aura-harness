@@ -1,29 +1,38 @@
-//! TASKS tab: the work agents did or are doing, each request with the
-//! parts it handed to other agents underneath, and what each has done and
-//! has left.
+//! TASKS tab: the work agents did or are doing, grouped under the plan it
+//! works on. Each plan's header shows its todo progress, then its todos,
+//! then the tasks working on it, each request with the parts it handed to
+//! other agents underneath and what each has done and has left. Tasks of
+//! no listed plan go last, under `No Plan`.
 //!
 //! ```text
-//!  ⢎⡱ Fix the login bug  Agent       1/3
+//!  ▾  Auth rework                 1/3
+//!  ☒  Add session table
+//!  ▣  Write the login handler  → coder
+//!  ☐  Wire the middleware
+//!  ⢎⡱ Build the auth  Lead        1/2
 //!  ☒  Find the handler
-//!  ▣  Write the fix  → coder
-//!  ☐  Add a test  → tester
-//!    ⢎⡱ Write the fix  → coder       0/2
-//!  ✓  Rename the crate  Agent       2/2
+//!    ⢎⡱ Write the login handler  → coder  0/2
+//!  ▸  Parser cleanup              5/5
+//!  ▾  No Plan
+//!  ✓  Rename the crate  Agent     2/2
 //! ```
 
 use super::panels::{
-    aura_icon, cell_style, list_row_with_detail, render_scrollbar, CellState, ScrollView,
+    aura_icon, cell_style, list_row, list_row_with_detail, render_scrollbar, CellState, ScrollView,
     StatusIcon,
 };
 use super::plans::{marker, marker_color, todo_style};
 use super::side_list::{
     name_style, render_empty, render_hidden, render_hint, split_hint, Tone, TASKS_HINT,
 };
-use crate::app::tasks::TaskRow;
+use crate::app::tasks::{TaskList, TaskRow};
 use crate::app::{HoverTarget, PanelFocus};
-use crate::events::{TaskState, TaskView};
+use crate::events::{PlanView, TaskState, TaskView, TodoView};
 use crate::{App, Theme};
 use ratatui::{layout::Rect, style::Modifier, text::Line, widgets::Paragraph, Frame};
+
+/// Label of the header of the tasks that work on no listed plan.
+const NO_PLAN: &str = "No Plan";
 
 /// A task's icon: the aura while an agent works on it, else how it ended.
 fn task_icon(task: &TaskView, app: &App, theme: &Theme) -> StatusIcon {
@@ -36,8 +45,8 @@ fn task_icon(task: &TaskView, app: &App, theme: &Theme) -> StatusIcon {
     }
 }
 
-/// Draw the tasks into `inner`, the body below the tab bar of the panel
-/// bordered by `area`.
+/// Draw the plans and tasks into `inner`, the body below the tab bar of
+/// the panel bordered by `area`.
 pub(super) fn render_tasks(
     frame: &mut Frame,
     area: Rect,
@@ -75,45 +84,7 @@ pub(super) fn render_tasks(
         .take(visible)
         .map(|(i, &row)| {
             let state = CellState::of(is_focused && i == list.selected(), hovered == Some(i));
-            let task = &list.tasks()[row.task()];
-            match row {
-                TaskRow::Task { depth, .. } => {
-                    let mut name = name_style(Tone::active_if(!task.state.is_closed()), theme);
-                    if task.state == TaskState::Cancelled {
-                        name = name.add_modifier(Modifier::CROSSED_OUT);
-                    }
-                    let who = task.assignee.as_ref().map_or_else(
-                        || task.agent_name.clone(),
-                        |assignee| format!("→ {assignee}"),
-                    );
-                    let (closed, total) = task.progress();
-                    let progress = (total > 0).then(|| format!("{closed}/{total}"));
-                    list_row_with_detail(
-                        width,
-                        depth,
-                        task_icon(task, app, theme),
-                        (task.title.lines().next().unwrap_or(""), Some(&who)),
-                        cell_style(theme, state, name),
-                        progress.as_deref(),
-                    )
-                }
-                TaskRow::Item { item, depth, .. } => {
-                    let item = &task.items[item];
-                    let icon = StatusIcon::new(marker(item.state), marker_color(item.state, theme));
-                    let agent = item.assignee.as_deref().map(|agent| format!("→ {agent}"));
-                    // An item is a level below its task, but its box sits
-                    // under the task's icon, as the checklist's boxes sit
-                    // under its `⬢`.
-                    list_row_with_detail(
-                        width,
-                        depth.saturating_sub(1),
-                        icon,
-                        (item.content.lines().next().unwrap_or(""), agent.as_deref()),
-                        cell_style(theme, state, todo_style(item.state, theme)),
-                        None,
-                    )
-                }
-            }
+            row_line(list, row, (width, state), app, theme)
         })
         .collect();
     let view = ScrollView {
@@ -126,4 +97,122 @@ pub(super) fn render_tasks(
     if let Some(hint) = hint {
         render_hint(frame, hint, TASKS_HINT, theme);
     }
+}
+
+/// The line of one row, `width` columns wide.
+fn row_line(
+    list: &TaskList,
+    row: TaskRow,
+    (width, state): (usize, CellState),
+    app: &App,
+    theme: &Theme,
+) -> Line<'static> {
+    match row {
+        TaskRow::Plan { plan, open } => {
+            let fold = StatusIcon::new(if open { "▾" } else { "▸" }, theme.colors.muted);
+            match plan.and_then(|plan| list.plans().get(plan)) {
+                Some(plan) => plan_line(plan, fold, (width, state), theme),
+                None => list_row(
+                    width,
+                    0,
+                    fold,
+                    NO_PLAN,
+                    cell_style(theme, state, name_style(Tone::Settled, theme)),
+                    None,
+                ),
+            }
+        }
+        TaskRow::Todo { plan, todo } => list
+            .plans()
+            .get(plan)
+            .and_then(|plan| plan.todos.get(todo))
+            .map_or_else(Line::default, |todo| {
+                // Depth 0: the box sits under the plan's fold arrow.
+                todo_line(todo, 0, (width, state), theme)
+            }),
+        TaskRow::Task { task, depth, .. } => {
+            list.tasks().get(task).map_or_else(Line::default, |task| {
+                task_line(task, depth, (width, state), app, theme)
+            })
+        }
+        TaskRow::Item { task, item, depth } => list
+            .tasks()
+            .get(task)
+            .and_then(|task| task.items.get(item))
+            .map_or_else(Line::default, |item| {
+                // An item is a level below its task, but its box sits
+                // under the task's icon, as the checklist's boxes sit
+                // under its `⬢`.
+                todo_line(item, depth.saturating_sub(1), (width, state), theme)
+            }),
+    }
+}
+
+/// A plan's header: its fold glyph, its name and its todo progress.
+fn plan_line(
+    plan: &PlanView,
+    fold: StatusIcon,
+    (width, state): (usize, CellState),
+    theme: &Theme,
+) -> Line<'static> {
+    let (closed, total) = plan.progress();
+    // A plan with nothing left to do settles like its todos; one with no
+    // todos yet is still open.
+    let tone = Tone::active_if(total == 0 || plan.has_open_todos());
+    list_row(
+        width,
+        0,
+        fold,
+        &plan.name,
+        cell_style(theme, state, name_style(tone, theme)),
+        Some(&format!("{closed}/{total}")),
+    )
+}
+
+/// A task's title row: its icon, its title, who does it and its progress.
+fn task_line(
+    task: &TaskView,
+    depth: usize,
+    (width, state): (usize, CellState),
+    app: &App,
+    theme: &Theme,
+) -> Line<'static> {
+    let mut name = name_style(Tone::active_if(!task.state.is_closed()), theme);
+    if task.state == TaskState::Cancelled {
+        name = name.add_modifier(Modifier::CROSSED_OUT);
+    }
+    let who = task.assignee.as_ref().map_or_else(
+        || task.agent_name.clone(),
+        |assignee| format!("→ {assignee}"),
+    );
+    let (closed, total) = task.progress();
+    let progress = (total > 0).then(|| format!("{closed}/{total}"));
+    list_row_with_detail(
+        width,
+        depth,
+        task_icon(task, app, theme),
+        (task.title.lines().next().unwrap_or(""), Some(&who)),
+        cell_style(theme, state, name),
+        progress.as_deref(),
+    )
+}
+
+/// A plan's todo or a task's item: its box, its first line and who does
+/// it.
+fn todo_line(
+    todo: &TodoView,
+    depth: usize,
+    (width, state): (usize, CellState),
+    theme: &Theme,
+) -> Line<'static> {
+    let icon = StatusIcon::new(marker(todo.state), marker_color(todo.state, theme));
+    let agent = todo.assignee.as_deref().map(|agent| format!("→ {agent}"));
+    list_row_with_detail(
+        width,
+        depth,
+        icon,
+        (todo.content.lines().next().unwrap_or(""), agent.as_deref()),
+        cell_style(theme, state, todo_style(todo.state, theme)),
+        None,
+    )
 }

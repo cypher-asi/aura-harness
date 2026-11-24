@@ -975,23 +975,14 @@ impl App {
                     .as_ref()
                     .is_some_and(|p| Some(p.path.as_str()) != current)
                 {
-                    self.show_side_tab(SidePanelTab::Plans);
+                    self.show_side_tab(SidePanelTab::Tasks);
                 }
-                self.plan_list.set_current(plan.as_ref());
+                self.task_list.set_current_plan(plan.as_ref());
                 self.active_plan = plan;
             }
-            UiCommand::SetPlans(plans) => {
-                self.plan_list.set_plans(plans);
-                self.refresh_plan_scope();
-            }
-            UiCommand::SetTasks(tasks) => {
-                self.task_list.set_tasks(tasks);
-                self.refresh_plan_scope();
-            }
-            UiCommand::UpsertTask(task) => {
-                self.task_list.upsert(task);
-                self.refresh_plan_scope();
-            }
+            UiCommand::SetPlans(plans) => self.task_list.set_plans(plans),
+            UiCommand::SetTasks(tasks) => self.task_list.set_tasks(tasks),
+            UiCommand::UpsertTask(task) => self.task_list.upsert(task),
         }
     }
 

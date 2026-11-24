@@ -64,8 +64,10 @@ themes keep working:
 - **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
   `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
   ten, the rest are counted on a `muted` `N more` row. The boxes line up
-  under the `⬢` above them. The PLANS and TASKS tabs draw their todos the
-  same way, with the boxes under the plan's fold arrow or the task's icon.
+  under the `⬢` above them. The TASKS tab draws a plan's todos and a
+  task's items the same way, with the boxes under the plan's fold arrow or
+  the task's icon. Tasks sit under the header of the plan they work on,
+  below its todos; tasks that work on no plan go under a `No Plan` header.
 
 ### Borders and Panels
 

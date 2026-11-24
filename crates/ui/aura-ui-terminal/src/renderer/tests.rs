@@ -1204,7 +1204,7 @@ fn test_sandbox_panel_sits_below_record() {
         "{}",
         rows[sandbox]
     );
-    assert!(rows[sandbox].contains("PLN"), "{}", rows[sandbox]);
+    assert!(rows[sandbox].contains("TASKS"), "{}", rows[sandbox]);
     assert!(
         rows[sandbox + 3].contains("▸  src"),
         "{}",
@@ -1230,12 +1230,12 @@ fn test_side_panel_header_matches_the_agents_header() {
     );
     assert_eq!(
         widths.len(),
-        7,
+        6,
         "the tabs and the two buttons fill the bar: {widths:?}"
     );
-    assert_eq!(widths[5..], [3, 3]);
+    assert_eq!(widths[4..], [3, 3]);
     assert!(
-        widths[..5].iter().all(|w| w.abs_diff(widths[0]) <= 1),
+        widths[..4].iter().all(|w| w.abs_diff(widths[0]) <= 1),
         "{widths:?}"
     );
     assert_eq!(
@@ -1247,7 +1247,7 @@ fn test_side_panel_header_matches_the_agents_header() {
     let rows = render_rows(&mut app, 260);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
     assert!(rows[tabs].contains("PROCESSES"), "{}", rows[tabs]);
-    assert_eq!(widths.len(), 7, "{widths:?}");
+    assert_eq!(widths.len(), 6, "{widths:?}");
 }
 
 #[test]
@@ -1472,7 +1472,8 @@ fn test_trace_tab_lists_live_steps() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    for _ in 0..3 {
+    // Sandbox, then back past TASKS to TRACE.
+    for _ in 0..2 {
         let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     }
     let screen = render_rows(&mut app, 160).join("\n");
@@ -1492,18 +1493,18 @@ fn test_files_command_toggles_sandbox_panel() {
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 150).join("\n");
     assert!(!screen.contains("KRN"));
-    assert!(!screen.contains("PLN"));
+    assert!(!screen.contains("TASKS"));
 
     submit(&mut app, "/files");
     let screen = render_rows(&mut app, 150).join("\n");
-    assert!(screen.contains("PLN"), "{screen}");
+    assert!(screen.contains("TASKS"), "{screen}");
     assert!(!screen.contains("KRN"));
 }
 
 #[test]
-fn test_plans_tab_lists_plans_with_their_todos() {
+fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
     use crate::app::PanelFocus;
-    use crate::events::{PlanView, TodoState, TodoView, UiCommand};
+    use crate::events::{PlanView, TaskState, TaskView, TodoState, TodoView, UiCommand};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let todo = |content: &str, state| TodoView {
@@ -1512,10 +1513,11 @@ fn test_plans_tab_lists_plans_with_their_todos() {
         assignee: None,
         task: None,
     };
+    let auth_path = ".aura/plans/auth_00000001.plan.md";
     let mut app = crate::App::new();
     app.process_command(UiCommand::SetPlans(vec![
         PlanView {
-            path: ".aura/plans/auth_00000001.plan.md".into(),
+            path: auth_path.into(),
             name: "Auth rework".into(),
             todos: vec![
                 todo("Add session table", TodoState::Completed),
@@ -1528,12 +1530,18 @@ fn test_plans_tab_lists_plans_with_their_todos() {
             todos: vec![todo("Split the lexer", TodoState::Completed)],
         },
     ]));
+    app.process_command(UiCommand::SetTasks(vec![TaskView {
+        id: "auth".into(),
+        title: "Build the auth".into(),
+        state: TaskState::Open,
+        agent_name: "Lead".into(),
+        plan: Some(auth_path.into()),
+        ..TaskView::default()
+    }]));
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    for _ in 0..2 {
-        let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-    }
+    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     let rows = render_rows(&mut app, 160);
     let row_with = |text: &str| {
         rows.iter()
@@ -1553,7 +1561,13 @@ fn test_plans_tab_lists_plans_with_their_todos() {
         "{}",
         rows[auth + 2]
     );
-    // A todo's box sits under its plan's fold arrow.
+    assert_eq!(
+        row_with("Build the auth"),
+        auth + 3,
+        "the plan's tasks follow its todos"
+    );
+    // A todo's box and a top-level task's icon sit under the plan's fold
+    // arrow.
     let last_column = |row: usize, glyph: char| {
         rows[row]
             .chars()
@@ -1564,12 +1578,18 @@ fn test_plans_tab_lists_plans_with_their_todos() {
     };
     assert_eq!(last_column(auth + 1, '☒'), last_column(auth, '▾'));
     assert_eq!(last_column(auth + 2, '▣'), last_column(auth, '▾'));
+    assert_eq!(last_column(auth + 3, '○'), last_column(auth, '▾'));
     let parser = row_with("Parser cleanup");
-    assert_eq!(parser, auth + 3);
+    assert_eq!(parser, auth + 4);
     assert!(rows[parser].contains("1/1"));
+    let screen = rows.join("\n");
     assert!(
-        !rows.join("\n").contains("Split the lexer"),
+        !screen.contains("Split the lexer"),
         "done plans start folded"
+    );
+    assert!(
+        !screen.contains("No Plan"),
+        "every task works on a plan: {screen}"
     );
 
     // Plans: open ones white, settled ones gray. Todos look as in the
@@ -5107,6 +5127,13 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
             .unwrap_or_else(|| panic!("no {text} in:\n{}", rows.join("\n")))
     };
     let request = row_with("Build the compiler");
+    let no_plan = row_with("No Plan");
+    assert_eq!(
+        no_plan + 1,
+        request,
+        "a task with no plan sits under the No Plan header"
+    );
+    assert!(rows[no_plan].contains('▾'), "{}", rows[no_plan]);
     assert!(
         rows[request].contains("Lead") && rows[request].contains("1/2"),
         "{}",
@@ -5133,6 +5160,8 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
     };
     assert_eq!(last_column(request + 1, '☒'), last_column(request, '○'));
     assert_eq!(last_column(request + 2, '☐'), last_column(request, '○'));
+    // A top-level task's icon sits under its group's fold arrow.
+    assert_eq!(last_column(request, '○'), last_column(no_plan, '▾'));
     let part = row_with("Parse the source  → coder");
     assert!(
         part > request + 2,
