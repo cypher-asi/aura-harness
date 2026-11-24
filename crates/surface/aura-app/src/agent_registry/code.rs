@@ -242,6 +242,16 @@ fn coded(agents: &[RegisteredAgent]) -> impl Iterator<Item = (&str, &str)> {
 pub(super) struct PrefixTable(BTreeMap<String, String>);
 
 impl PrefixTable {
+    /// The table as stored: each source key's prefix.
+    pub(super) fn to_map(&self) -> BTreeMap<String, String> {
+        self.0.clone()
+    }
+
+    /// The table stored as `map`.
+    pub(super) fn from_map(map: BTreeMap<String, String>) -> Self {
+        Self(map)
+    }
+
     /// Whether no key has reserved a prefix yet.
     pub(super) fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -380,6 +390,16 @@ pub(super) fn migrate(agents: &mut [RegisteredAgent], prefixes: &mut PrefixTable
 pub(super) struct LastNumbers(BTreeMap<String, u64>);
 
 impl LastNumbers {
+    /// The numbers as stored: each prefix's highest number.
+    pub(super) fn to_map(&self) -> BTreeMap<String, u64> {
+        self.0.clone()
+    }
+
+    /// The numbers stored as `map`.
+    pub(super) fn from_map(map: BTreeMap<String, u64>) -> Self {
+        Self(map)
+    }
+
     /// Whether no prefix has been given a number yet.
     pub(super) fn is_empty(&self) -> bool {
         self.0.is_empty()

@@ -148,6 +148,9 @@ impl RocksStore {
             cf::TRACE_RUNS,
             cf::TRACE_STEPS,
             cf::TRACE_INDEX,
+            cf::AGENTS,
+            cf::PROJECTS,
+            cf::REGISTRY_META,
         ];
         let mut cf_names = expected_cf_names
             .iter()
@@ -242,6 +245,12 @@ impl RocksStore {
         self.cipher.as_ref()
     }
 
+    /// Whether writes `fsync`, for subsystems that share the database
+    /// and must be as durable.
+    pub(crate) const fn sync_writes(&self) -> bool {
+        self.sync_writes
+    }
+
     /// Create write options based on `sync_writes` setting.
     fn write_opts(&self) -> WriteOptions {
         let mut opts = WriteOptions::default();
@@ -287,6 +296,9 @@ impl RocksStore {
                 | cf::PROCESS_RUNS
                 | cf::TRACE_RUNS
                 | cf::TRACE_STEPS
+                | cf::AGENTS
+                | cf::PROJECTS
+                | cf::REGISTRY_META
         )
     }
 
@@ -945,6 +957,45 @@ pub enum FaultAt {
     /// Observing partial state here is expected and documents the
     /// failure mode that `append_entry_atomic` prevents.
     InsideBatch,
+}
+
+/// Why [`write_batch_with_fault`] failed.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug)]
+pub(crate) enum FaultWriteError {
+    /// The writes the fault mode calls for went through; this is the
+    /// injected failure.
+    Injected(FaultAt),
+    /// A real write failed before the fault was reached.
+    Write(rocksdb::Error),
+}
+
+/// Write `full` or `partial` the way `fault` says, then fail. Shared by
+/// the fault hooks of stores that commit through one `WriteBatch`:
+///
+/// * [`FaultAt::BeforeBatchWrite`]: writes nothing.
+/// * [`FaultAt::AfterBatchWrite`]: commits `full`.
+/// * [`FaultAt::InsideBatch`]: commits only `partial`, the part of the
+///   change a non-atomic writer would have got onto disk.
+///
+/// It never succeeds, so the return value is the error.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn write_batch_with_fault(
+    db: &DBWithThreadMode<MultiThreaded>,
+    opts: &WriteOptions,
+    full: WriteBatch,
+    partial: WriteBatch,
+    fault: FaultAt,
+) -> FaultWriteError {
+    let written = match fault {
+        FaultAt::BeforeBatchWrite => Ok(()),
+        FaultAt::AfterBatchWrite => db.write_opt(full, opts),
+        FaultAt::InsideBatch => db.write_opt(partial, opts),
+    };
+    match written {
+        Ok(()) => FaultWriteError::Injected(fault),
+        Err(error) => FaultWriteError::Write(error),
+    }
 }
 
 #[cfg(any(test, feature = "test-support"))]

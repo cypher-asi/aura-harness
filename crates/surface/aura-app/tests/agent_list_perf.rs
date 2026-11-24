@@ -28,12 +28,12 @@ fn time_agent_list() {
     };
     let dir = std::path::PathBuf::from(dir);
     let launch = std::env::current_dir().unwrap();
-    let mut registry = time("load registry", 3, || {
-        AgentRegistry::load_or_init_in(&dir, &launch).unwrap()
-    });
     let started = Instant::now();
     let store = RocksStore::open(dir.join("db"), false).unwrap();
     println!("open store {:?}", started.elapsed());
+    let mut registry = time("load registry", 3, || {
+        AgentRegistry::open(aura_store_db::AgentStore::for_store(&store), &dir, &launch).unwrap()
+    });
     println!(
         "agents {} listed {} archived rows {}",
         registry.agents().len(),

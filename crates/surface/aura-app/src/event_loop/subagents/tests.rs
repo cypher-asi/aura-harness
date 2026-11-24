@@ -485,16 +485,22 @@ async fn in_bench_needs_a_bench_run_above_and_survives_a_parent_cycle() {
 
     // A hand-edited registry can make the root its child's child.
     {
-        let path = fixture._data.path().join("agents.json");
-        let body = std::fs::read_to_string(&path).unwrap();
-        let mut file: serde_json::Value = serde_json::from_str(&body).unwrap();
-        for agent in file["agents"].as_array_mut().unwrap() {
-            if agent["zns_id"] == root.zns_id.as_str() {
-                agent["parent"] = child.zns_id.clone().into();
-            }
-        }
-        std::fs::write(&path, file.to_string()).unwrap();
-        *lock(&fixture.hub.registry) =
+        let mut registry = lock(&fixture.hub.registry);
+        let store = registry.store().clone();
+        let mut snapshot = store.load().unwrap();
+        let mut row = snapshot
+            .agents
+            .drain(..)
+            .find(|agent| agent.agent_id == root.agent_id())
+            .unwrap();
+        row.parent = Some(child.agent_id());
+        store
+            .apply(&aura_store_db::agents::RegistryDiff {
+                agents_put: vec![row],
+                ..Default::default()
+            })
+            .unwrap();
+        *registry =
             AgentRegistry::load_or_init_in(fixture._data.path(), fixture.workspace.path()).unwrap();
     }
     assert!(!fixture.hub.in_bench(child.agent_id()));

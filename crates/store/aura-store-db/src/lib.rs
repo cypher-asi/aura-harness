@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::all)]
 
+pub mod agents;
 mod error;
 mod keys;
 pub mod migrate;
@@ -29,6 +30,10 @@ mod store;
 pub mod traces;
 pub mod vault;
 
+pub use agents::{
+    AgentRecord, AgentStore, AgentStoreError, ProjectRecord, RegistryDiff, RegistryMeta,
+    RegistrySnapshot,
+};
 pub use aura_core_types::AgentStatus;
 pub use error::StoreError;
 pub use keys::{AgentMetaKey, InboxKey, KeyCodec, MetaField, RecordKey};
@@ -40,6 +45,9 @@ pub use processes::{
 #[cfg(any(test, feature = "test-support"))]
 pub use rocks_store::FaultAt;
 pub use rocks_store::RocksStore;
+/// Re-exported so callers can stage rows of several stores (e.g.
+/// [`AgentStore::stage`]) into one atomic batch.
+pub use rocksdb::WriteBatch;
 pub use seal::{SealCipher, SealError, SEAL_MAGIC, SEAL_VERSION};
 pub use store::{DequeueToken, ReadStore, Store, WriteStore};
 pub use traces::{TraceStore, TraceStoreError};
@@ -96,4 +104,17 @@ pub mod cf {
     /// Runs of each owner (agent id in hex). Keyed `{owner}/{run_id}`
     /// with an empty value; keys only, plaintext in both modes.
     pub const TRACE_INDEX: &str = "trace_index";
+    /// Agents of the terminal registry. Keyed by the 32 raw bytes of
+    /// the agent id (blake3 of its ZNS id); value is a JSON-serialised
+    /// [`crate::agents::AgentRecord`], sealed at rest in sealed mode.
+    /// See [`crate::agents`].
+    pub const AGENTS: &str = "agents";
+    /// Projects of the terminal registry. Keyed by the project id
+    /// (utf-8); value is a JSON-serialised
+    /// [`crate::agents::ProjectRecord`], sealed at rest in sealed mode.
+    pub const PROJECTS: &str = "projects";
+    /// Registry-wide settings. Keys `version`, `active`, `prefixes` and
+    /// `last_numbers`; values are JSON, sealed at rest in sealed mode.
+    /// See [`crate::agents::RegistryMeta`].
+    pub const REGISTRY_META: &str = "registry_meta";
 }

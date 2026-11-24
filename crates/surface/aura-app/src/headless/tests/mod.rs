@@ -196,12 +196,19 @@ fn hub_setup(
     let (commands, mut ui) = mpsc::channel(256);
     tokio::spawn(async move { while ui.recv().await.is_some() {} });
     let (process_manager, completions) = background_process_manager();
+    let store = Arc::new(RocksStore::open(data.join("db"), false).unwrap());
+    let registry = AgentRegistry::open(
+        aura_store_db::AgentStore::for_store(&store),
+        data,
+        &workspace,
+    )
+    .unwrap();
     let setup = HubSetup {
         data_dir: data.to_path_buf(),
         workspace_root: workspace.clone(),
-        registry: AgentRegistry::load_or_init_in(data, &workspace).unwrap(),
+        registry,
         definitions: AgentDefinitions::load_or_seed(data).unwrap(),
-        store: Arc::new(RocksStore::open(data.join("db"), false).unwrap()),
+        store,
         provider,
         tool_config,
         base: TurnBase {

@@ -150,13 +150,19 @@ pub async fn start(
     let workspace_root = std::env::current_dir().context("resolving working directory")?;
     tokio::fs::create_dir_all(&data_dir).await?;
 
-    let mut registry = AgentRegistry::load_or_init_in(&data_dir, &workspace_root)
-        .context("loading agent registry")?;
+    // The registry lives in the record store's database, so open that
+    // first: RocksDB allows one handle per process on it.
+    let store_path = session_helpers::resolve_store_path(&data_dir);
+    let store = session_helpers::open_store(&store_path)
+        .with_context(|| format!("opening {}", store_path.display()))?;
+    let mut registry = AgentRegistry::open(
+        aura_store_db::AgentStore::for_store(&store),
+        &data_dir,
+        &workspace_root,
+    )
+    .context("loading agent registry")?;
     let definitions =
         AgentDefinitions::load_or_seed(&data_dir).context("loading permanent agents")?;
-
-    let store_path = session_helpers::resolve_store_path(&data_dir);
-    let store = session_helpers::open_store(&store_path)?;
 
     // A spawn the app closed or was killed on before its turn recorded
     // anything can't resume: there is nothing to resume from. Archive it

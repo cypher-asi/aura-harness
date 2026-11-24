@@ -21,6 +21,14 @@ fn hex(zns: &str) -> String {
     Identity::new(zns, "x").agent_id.to_hex()
 }
 
+/// The registry stored in `dir`'s database, as the JSON of the in-memory
+/// registry it loads as.
+fn stored_body(dir: &Path) -> String {
+    let rocks = shared_store(&dir.join(DB_DIR)).unwrap();
+    let snapshot = AgentStore::for_store(&rocks).load().unwrap();
+    serde_json::to_string_pretty(&persist::from_snapshot(snapshot)).unwrap()
+}
+
 #[test]
 fn seeds_from_legacy_identity_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -38,7 +46,7 @@ fn seeds_from_legacy_identity_file() {
     );
     let project = registry.project_of(registry.active().agent_id()).unwrap();
     assert_eq!(project.folder, launch.path().canonicalize().unwrap());
-    assert!(dir.path().join(REGISTRY_FILE).exists());
+    assert!(!registry.store().is_empty().unwrap());
 }
 
 #[test]
@@ -119,19 +127,33 @@ fn cached_agent_id_is_the_identitys() {
 }
 
 #[test]
-fn set_active_to_the_active_agent_does_not_rewrite_the_file() {
+fn set_active_to_the_active_agent_does_not_rewrite_the_store() {
     let dir = tempfile::tempdir().unwrap();
     let launch = tempfile::tempdir().unwrap();
     let mut registry = open(dir.path(), launch.path());
     let agent = registry.create(None).unwrap();
     registry.set_active(agent.agent_id()).unwrap();
-    let path = dir.path().join(REGISTRY_FILE);
-    fs::remove_file(&path).unwrap();
+    // Clear the stored active agent behind the registry's back, so a
+    // write shows.
+    let store = registry.store().clone();
+    let stored_active = || store.load().unwrap().meta.unwrap().active;
+    let mut meta = store.load().unwrap().meta.unwrap();
+    meta.active = None;
+    store
+        .apply(&aura_store_db::agents::RegistryDiff {
+            meta: Some(meta),
+            ..Default::default()
+        })
+        .unwrap();
     registry.set_active(agent.agent_id()).unwrap();
-    assert!(!path.exists(), "nothing changed, so nothing is written");
+    assert_eq!(
+        stored_active(),
+        None,
+        "nothing changed, so nothing is written"
+    );
     let first = registry.agents()[0].agent_id();
     registry.set_active(first).unwrap();
-    assert!(path.exists());
+    assert_eq!(stored_active(), Some(first));
 }
 
 #[test]
@@ -415,7 +437,7 @@ fn a_version_2_project_with_every_agent_archived_stays_off_the_list() {
     let project = agent.project_id.clone().unwrap();
     registry.archive(agent.agent_id()).unwrap();
     registry.file.version = 2;
-    registry.save().unwrap();
+    registry.persist().unwrap();
 
     // Before version 3 it was not shown, so it stays hidden until one of
     // its agents is restored.
@@ -681,7 +703,7 @@ fn a_version_0_registry_becomes_one_project_per_folder() {
         [("Agent 2".to_string(), 0)]
     );
 
-    let body = fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap();
+    let body = stored_body(dir.path());
     assert!(!body.contains("member_of"), "{body}");
     assert!(body.contains("\"version\": 3"), "{body}");
 }
@@ -1376,7 +1398,7 @@ fn backfilled_instances_keep_their_numbers_in_any_order() {
 
 /// The highest numbers given, as saved in `dir`'s registry file.
 fn saved_last_numbers(dir: &Path) -> serde_json::Value {
-    let body = fs::read_to_string(dir.join(REGISTRY_FILE)).unwrap();
+    let body = stored_body(dir);
     let saved: serde_json::Value = serde_json::from_str(&body).unwrap();
     saved["last_numbers"].clone()
 }
@@ -1449,7 +1471,7 @@ fn a_registry_without_codes_gets_them_on_load_and_keeps_them() {
     assert_eq!(first, expected);
     assert_eq!(second, first, "the same registry backfills the same codes");
 
-    let body = fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap();
+    let body = stored_body(dir.path());
     let saved: serde_json::Value = serde_json::from_str(&body).unwrap();
     let saved: Vec<&str> = saved["agents"]
         .as_array()
@@ -1544,14 +1566,11 @@ fn older_codes_and_prefixes_are_migrated_on_load_and_kept() {
     );
 
     // Saved migrated, so loading again changes nothing.
-    let body = fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap();
+    let body = stored_body(dir.path());
     let reloaded = open(dir.path(), launch.path());
     assert_eq!(codes(&reloaded), first);
     assert_codes_consistent(&reloaded);
-    assert_eq!(
-        fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap(),
-        body
-    );
+    assert_eq!(stored_body(dir.path()), body);
 }
 
 #[test]
@@ -1582,7 +1601,7 @@ fn codes_stay_valid_and_unique_over_many_definitions() {
 
 /// The prefix table as saved in `dir`'s registry file.
 fn saved_prefixes(dir: &Path) -> serde_json::Value {
-    let body = fs::read_to_string(dir.join(REGISTRY_FILE)).unwrap();
+    let body = stored_body(dir);
     let saved: serde_json::Value = serde_json::from_str(&body).unwrap();
     saved["prefixes"].clone()
 }
@@ -1609,7 +1628,7 @@ fn definitions_reserve_their_prefix_before_any_instance_exists() {
     assert_eq!((code_of(&engineer), code_of(&reviewer)), ("RE1", "REV1"));
 
     let mut reloaded = open(dir.path(), launch.path());
-    let body = fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap();
+    let body = stored_body(dir.path());
     assert_eq!(
         reloaded.reserve_prefixes(&keys).unwrap(),
         ["RE", "REV", "EX"]
@@ -1618,13 +1637,10 @@ fn definitions_reserve_their_prefix_before_any_instance_exists() {
     assert_eq!(code_of(&explorer), "EX1");
     assert_codes_consistent(&reloaded);
     // Asking again reserves nothing new, so the file is left alone.
-    let after = fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap();
+    let after = stored_body(dir.path());
     assert_ne!(after, body, "creating the explorer saved");
     reloaded.reserve_prefixes(&keys).unwrap();
-    assert_eq!(
-        fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap(),
-        after
-    );
+    assert_eq!(stored_body(dir.path()), after);
 }
 
 #[test]
@@ -1746,4 +1762,308 @@ fn codes_serialize_only_when_present() {
     let back: RegisteredAgent = serde_json::from_str(&json).unwrap();
     assert_eq!(back, agent);
     assert_eq!(back.code.as_deref(), Some("RE36"));
+}
+
+/// `value[key]` as a string, `None` when absent or null.
+fn json_str(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+/// `value[key]` as a flag, `false` when absent.
+fn json_flag(value: &serde_json::Value, key: &str) -> bool {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn json_time(value: &serde_json::Value) -> DateTime<Utc> {
+    value["created_at"].as_str().unwrap().parse().unwrap()
+}
+
+/// Assert, field by field, that `registry` holds what the version 3
+/// registry file `file` does, in its order.
+fn assert_matches_file(registry: &AgentRegistry, file: &serde_json::Value) {
+    let agents = file["agents"].as_array().unwrap();
+    let zns: Vec<&str> = registry
+        .agents()
+        .iter()
+        .map(|a| a.zns_id.as_str())
+        .collect();
+    let want: Vec<&str> = agents
+        .iter()
+        .map(|a| a["zns_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(zns, want, "same agents in the same order");
+    for (agent, want) in registry.agents().iter().zip(agents) {
+        let id = &agent.zns_id;
+        assert_eq!(Some(agent.name.clone()), json_str(want, "name"), "{id}");
+        assert_eq!(agent.created_at, json_time(want), "{id}");
+        assert_eq!(agent.definition, json_str(want, "definition"), "{id}");
+        assert_eq!(agent.parent, json_str(want, "parent"), "{id}");
+        assert_eq!(agent.project_id, json_str(want, "project_id"), "{id}");
+        assert_eq!(
+            agent.folder,
+            json_str(want, "folder").map(PathBuf::from),
+            "{id}"
+        );
+        assert_eq!(agent.archived, json_flag(want, "archived"), "{id}");
+        assert_eq!(agent.removed, json_flag(want, "removed"), "{id}");
+        assert_eq!(agent.title, json_str(want, "title"), "{id}");
+        assert_eq!(agent.code, json_str(want, "code"), "{id}");
+        assert_eq!(agent.subtitle, json_str(want, "subtitle"), "{id}");
+    }
+
+    let projects = file["projects"].as_array().unwrap();
+    assert_eq!(registry.projects().len(), projects.len());
+    for (project, want) in registry.projects().iter().zip(projects) {
+        let id = &project.id;
+        assert_eq!(Some(project.id.clone()), json_str(want, "id"));
+        assert_eq!(
+            Some(project.folder.clone()),
+            json_str(want, "folder").map(PathBuf::from),
+            "{id}"
+        );
+        assert_eq!(project.created_at, json_time(want), "{id}");
+        assert_eq!(project.removed, json_flag(want, "removed"), "{id}");
+    }
+
+    assert_eq!(
+        u64::from(registry.file.version),
+        file["version"].as_u64().unwrap()
+    );
+    assert_eq!(registry.file.active, json_str(file, "active"));
+    assert_eq!(
+        Some(registry.active().zns_id.clone()),
+        json_str(file, "active")
+    );
+    assert_eq!(
+        serde_json::to_value(registry.file.prefixes.to_map()).unwrap(),
+        file["prefixes"]
+    );
+    assert_eq!(
+        serde_json::to_value(registry.file.last_numbers.to_map()).unwrap(),
+        file["last_numbers"]
+    );
+}
+
+#[test]
+fn importing_a_v3_agents_json_matches_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let home = launch.path().canonicalize().unwrap();
+    let away = other.path().canonicalize().unwrap();
+    let file = serde_json::json!({
+        "version": 3,
+        "active": "0://terminal/re1",
+        "projects": [
+            {"id": "p-home", "folder": home, "created_at": "2026-01-02T03:04:05.123456789Z"},
+            {"id": "p-away", "folder": away, "created_at": "2026-01-03T00:00:00Z", "removed": true},
+        ],
+        "agents": [
+            {"zns_id": "0://terminal/main", "name": "Terminal Agent",
+             "created_at": "2026-01-02T03:04:05Z", "project_id": "p-home", "code": "AG1"},
+            {"zns_id": "0://terminal/re1", "name": "rust-engineer #1",
+             "created_at": "2026-01-02T04:00:00.5Z", "definition": "rust-engineer",
+             "parent": "0://terminal/main", "project_id": "p-home", "code": "RE1",
+             "subtitle": "fixing the build"},
+            {"zns_id": "0://terminal/re2", "name": "rust-engineer #2",
+             "created_at": "2026-01-02T05:00:00Z", "definition": "rust-engineer",
+             "parent": "0://terminal/re1", "project_id": "p-home", "code": "RE2"},
+            {"zns_id": "0://terminal/old", "name": "Agent 2",
+             "created_at": "2026-01-02T06:00:00Z", "project_id": "p-home", "archived": true,
+             "code": "AG2"},
+            {"zns_id": "0://terminal/docs", "name": "Agent 3",
+             "created_at": "2026-01-02T07:00:00Z", "project_id": "p-home",
+             "folder": away.join("docs"), "title": "Docs pass", "code": "AG3"},
+            {"zns_id": "0://terminal/away", "name": "Agent",
+             "created_at": "2026-01-03T00:00:00Z", "project_id": "p-away", "archived": true,
+             "code": "AG4"},
+        ],
+        "prefixes": {"agent": "AG", "rust-engineer": "RE", "reviewer": "REV"},
+        "last_numbers": {"AG": 7, "RE": 5},
+    });
+    let bytes = serde_json::to_vec_pretty(&file).unwrap();
+    fs::write(dir.path().join(REGISTRY_FILE), &bytes).unwrap();
+
+    let registry = open(dir.path(), launch.path());
+    assert_matches_file(&registry, &file);
+    assert!(!dir.path().join(REGISTRY_FILE).exists());
+    assert_eq!(
+        fs::read(dir.path().join(MIGRATED_REGISTRY_FILE)).unwrap(),
+        bytes
+    );
+    let snapshot = registry.store().load().unwrap();
+    drop(registry);
+
+    // Read back from the store: the file is gone.
+    let reloaded = open(dir.path(), launch.path());
+    assert_matches_file(&reloaded, &file);
+    assert_eq!(reloaded.store().load().unwrap(), snapshot);
+    assert!(!dir.path().join(REGISTRY_FILE).exists());
+}
+
+#[test]
+fn first_run_without_a_file_seeds_one_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+
+    let registry = open(dir.path(), launch.path());
+    assert_eq!(registry.agents().len(), 1);
+    let agent = registry.active().clone();
+    assert_eq!(agent.name, DEFAULT_AGENT_NAME);
+    assert!(
+        agent.zns_id.starts_with("0://terminal/"),
+        "{}",
+        agent.zns_id
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join(LEGACY_IDENTITY_FILE)).unwrap(),
+        agent.zns_id
+    );
+    assert_eq!(
+        registry.project_of(agent.agent_id()).unwrap().folder,
+        launch.path().canonicalize().unwrap()
+    );
+    assert!(!dir.path().join(REGISTRY_FILE).exists());
+    assert!(!dir.path().join(MIGRATED_REGISTRY_FILE).exists());
+    drop(registry);
+
+    let reloaded = open(dir.path(), launch.path());
+    assert_eq!(reloaded.agents(), std::slice::from_ref(&agent));
+    assert!(!dir.path().join(REGISTRY_FILE).exists());
+}
+
+/// What a reload must keep: the list, the Archive, every project and
+/// agent, and the active agent.
+type State = (
+    Vec<(String, usize)>,
+    Vec<(String, usize)>,
+    Vec<Project>,
+    Vec<RegisteredAgent>,
+    String,
+);
+
+fn state(registry: &AgentRegistry) -> State {
+    let ids = |tree: Vec<(&RegisteredAgent, usize)>| {
+        tree.into_iter()
+            .map(|(a, d)| (a.agent_id().to_hex(), d))
+            .collect()
+    };
+    (
+        ids(registry.tree()),
+        ids(registry.archived_tree()),
+        registry.projects().to_vec(),
+        registry.agents().to_vec(),
+        registry.active().zns_id.clone(),
+    )
+}
+
+#[test]
+fn changes_survive_a_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let first = registry.active().clone();
+    let home = first.project_id.clone().unwrap();
+    let second = registry.create_in_project(&home).unwrap();
+    let third = registry.create_in_project(&home).unwrap();
+    let child = registry
+        .create_instance("reviewer", Some(second.zns_id.clone()))
+        .unwrap();
+    let (away_agent, _) = registry.open_project(other.path()).unwrap();
+    let away = away_agent.project_id.clone().unwrap();
+
+    let reload = |registry: AgentRegistry, what: &str| {
+        let before = state(&registry);
+        drop(registry);
+        let reloaded = open(dir.path(), launch.path());
+        assert_eq!(state(&reloaded), before, "after {what}");
+        reloaded
+    };
+
+    registry
+        .reorder_agents(
+            &home,
+            &[
+                third.agent_id().to_hex(),
+                first.agent_id().to_hex(),
+                second.agent_id().to_hex(),
+            ],
+        )
+        .unwrap();
+    let mut registry = reload(registry, "reorder_agents");
+    let order: Vec<String> = registry
+        .tree()
+        .iter()
+        .filter(|(a, _)| a.project_id.as_deref() == Some(home.as_str()))
+        .map(|(a, _)| a.zns_id.clone())
+        .collect();
+    assert!(order.starts_with(&[third.zns_id.clone(), first.zns_id.clone()]));
+
+    registry
+        .reorder_projects(&[away.clone(), home.clone()])
+        .unwrap();
+    let mut registry = reload(registry, "reorder_projects");
+    let ids: Vec<&str> = registry.projects().iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, [away.as_str(), home.as_str()]);
+
+    registry.archive(second.agent_id()).unwrap();
+    let mut registry = reload(registry, "archive");
+    assert!(registry.find(second.agent_id()).unwrap().archived);
+    assert!(registry
+        .archived_tree()
+        .iter()
+        .any(|(a, _)| a.zns_id == child.zns_id));
+
+    registry.restore(second.agent_id()).unwrap();
+    let mut registry = reload(registry, "restore");
+    assert!(!registry.find(second.agent_id()).unwrap().archived);
+
+    registry.set_active(away_agent.agent_id()).unwrap();
+    registry.remove_project(&away).unwrap();
+    let registry = reload(registry, "remove_project");
+    assert!(registry.project(&away).unwrap().removed);
+    assert!(registry.find(away_agent.agent_id()).is_none());
+    assert_eq!(registry.file.active, None);
+}
+
+#[test]
+fn a_dangling_parent_survives_reloads_byte_for_byte() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let file = serde_json::json!({
+        "version": REGISTRY_VERSION,
+        "projects": [{"id": "p", "folder": launch.path(), "created_at": "2026-10-31T01:48:50Z"}],
+        "agents": [
+            {"zns_id": "0://terminal/a", "name": "Agent", "created_at": "2026-10-31T01:48:50Z",
+             "project_id": "p", "code": "AG1"},
+            {"zns_id": "0://terminal/orphan", "name": "reviewer #1",
+             "created_at": "2026-10-31T01:48:50Z", "definition": "reviewer",
+             "parent": "0://terminal/gone", "project_id": "p", "code": "REV1"},
+        ],
+    });
+    fs::write(dir.path().join(REGISTRY_FILE), file.to_string()).unwrap();
+    let orphan = Identity::new("0://terminal/orphan", "x").agent_id;
+
+    let registry = open(dir.path(), launch.path());
+    assert!(registry.find(orphan).unwrap().parent.is_some());
+    assert!(registry.find(orphan).unwrap().needs_subtitle());
+    let snapshot = registry.store().load().unwrap();
+    let body = stored_body(dir.path());
+    drop(registry);
+
+    for _ in 0..2 {
+        let reloaded = open(dir.path(), launch.path());
+        let agent = reloaded.find(orphan).unwrap();
+        assert!(agent.parent.is_some());
+        assert!(agent.needs_subtitle());
+        assert_eq!(reloaded.store().load().unwrap(), snapshot);
+        assert_eq!(stored_body(dir.path()), body);
+    }
 }

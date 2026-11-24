@@ -44,12 +44,15 @@ pub const ALL_CFS: &[&str] = &[
     cf::TRACE_RUNS,
     cf::TRACE_STEPS,
     cf::TRACE_INDEX,
+    cf::AGENTS,
+    cf::PROJECTS,
+    cf::REGISTRY_META,
 ];
 
 /// Column families whose **values** are sealed in sealed mode — the
 /// content-bearing set covered by per-value sealing across the store
 /// implementations (`RocksStore`, memory store, skill install store,
-/// secrets vault, process store).
+/// secrets vault, process store, trace store, agent store).
 ///
 /// Deliberately excluded (plaintext in both modes, see `crate::seal`
 /// module docs): `agent_meta` (pure counters/status bytes that must be
@@ -71,6 +74,9 @@ pub const SEALED_VALUE_CFS: &[&str] = &[
     cf::PROCESS_RUNS,
     cf::TRACE_RUNS,
     cf::TRACE_STEPS,
+    cf::AGENTS,
+    cf::PROJECTS,
+    cf::REGISTRY_META,
 ];
 
 /// Maximum entries staged per `WriteBatch` while copying.

@@ -274,19 +274,24 @@ async fn build(
     tokio::fs::create_dir_all(data_dir)
         .await
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let registry = AgentRegistry::load_or_init_in(data_dir, &workspace_root)
-        .context("loading agent registry")?;
-    let definitions =
-        AgentDefinitions::load_or_seed(data_dir).context("loading permanent agents")?;
     let store_path = session_helpers::resolve_store_path(data_dir);
     // RocksDB allows one process per store, so a terminal open on the
-    // same data directory makes this fail rather than share it.
+    // same data directory makes this fail rather than share it. The
+    // registry lives in the same database, so it is opened first.
     let store = session_helpers::open_store(&store_path).with_context(|| {
         format!(
             "opening {} (is a terminal or another `aura -p` using this data directory?)",
             store_path.display()
         )
     })?;
+    let registry = AgentRegistry::open(
+        aura_store_db::AgentStore::for_store(&store),
+        data_dir,
+        &workspace_root,
+    )
+    .context("loading agent registry")?;
+    let definitions =
+        AgentDefinitions::load_or_seed(data_dir).context("loading permanent agents")?;
 
     let (tool_config, tools, web_tools) = agent_tools(false);
     let tool_filter = ToolFilter::new(&args.allowed_tools, &args.disallowed_tools);

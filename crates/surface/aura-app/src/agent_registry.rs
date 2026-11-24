@@ -1,8 +1,16 @@
 //! Persistent list of the projects and agents the terminal UI manages.
 //!
-//! Stored as `<data_dir>/agents.json`. The legacy single-agent
-//! `agent_identity.txt` is folded in as the first entry so existing
-//! records stay attached to the agent that wrote them.
+//! Stored in the `agents`, `projects` and `registry_meta` column families
+//! of the agent-state database at `<data_dir>/db` (see
+//! [`aura_store_db::agents`]), one row per agent and per project, so a
+//! change writes only the rows it touched, in one batch. List order is
+//! each row's `position`; parent links and the active agent are stored as
+//! [`AgentId`]s (in memory they are ZNS ids; see `persist`).
+//!
+//! `<data_dir>/agents.json`, where the registry used to live, is read
+//! only once: to import it when the store holds no registry yet. The
+//! legacy single-agent `agent_identity.txt` is folded in as the first
+//! entry so existing records stay attached to the agent that wrote them.
 //!
 //! A project is one folder: no two projects share one, and a project is
 //! called by its folder's name. Every agent belongs to a project. The
@@ -13,14 +21,20 @@
 
 use anyhow::Context;
 use aura_core_types::{AgentId, Identity};
+use aura_store_db::{AgentStore, RocksStore};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
 
 const REGISTRY_FILE: &str = "agents.json";
+/// What [`REGISTRY_FILE`] is renamed to once imported into the store.
+const MIGRATED_REGISTRY_FILE: &str = "agents.json.migrated";
+/// Directory of the agent-state database under the data directory.
+const DB_DIR: &str = "db";
 const LEGACY_IDENTITY_FILE: &str = "agent_identity.txt";
 /// Where the desktop app saved which projects each tab held, by the ids
 /// of the agents that headed them before projects had ids of their own.
@@ -273,13 +287,53 @@ struct RegistryFile {
     last_numbers: code::LastNumbers,
 }
 
-/// File-backed agent registry.
-#[derive(Debug)]
+/// Agent registry backed by the agent-state database.
 pub struct AgentRegistry {
-    path: PathBuf,
+    store: AgentStore,
+    /// The rows `store` holds, as last written or read.
+    persisted: persist::Persisted,
+    /// Data directory the registry belongs to, for log context.
+    data_dir: PathBuf,
     /// Folder of the project agents go in when nothing else says which.
     launch_dir: PathBuf,
     file: RegistryFile,
+    /// The database handle [`Self::load_or_init_in`] opened, held so the
+    /// process-wide cache hands the same one to the next registry on it.
+    _keep_open: Option<Arc<RocksStore>>,
+}
+
+impl std::fmt::Debug for AgentRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentRegistry")
+            .field("store", &self.store)
+            .field("data_dir", &self.data_dir)
+            .field("launch_dir", &self.launch_dir)
+            .field("file", &self.file)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Database handles [`AgentRegistry::load_or_init_in`] opened, by path,
+/// so a second registry on a data directory shares the live handle
+/// instead of failing on the database lock.
+static OPEN: Mutex<Option<HashMap<PathBuf, Weak<RocksStore>>>> = Mutex::new(None);
+
+/// The live handle on the database at `path`, opened when there is none.
+fn shared_store(path: &Path) -> anyhow::Result<Arc<RocksStore>> {
+    let mut open = OPEN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let open = open.get_or_insert_with(HashMap::new);
+    open.retain(|_, store| store.strong_count() > 0);
+    if let Some(store) = open.get(path).and_then(Weak::upgrade) {
+        return Ok(store);
+    }
+    let store = Arc::new(
+        RocksStore::open(path, false)
+            .with_context(|| format!("opening agent registry database {}", path.display()))?,
+    );
+    open.insert(path.to_path_buf(), Arc::downgrade(&store));
+    Ok(store)
 }
 
 /// `folder` made canonical when it exists, else as given.
@@ -327,35 +381,59 @@ impl AgentRegistry {
     /// the launch directory.
     ///
     /// # Errors
-    /// Returns an error if the registry or identity file cannot be read,
-    /// parsed, or written.
+    /// As [`Self::load_or_init_in`].
     pub fn load_or_init(data_dir: &Path) -> anyhow::Result<Self> {
         let launch_dir = std::env::current_dir().context("resolving working directory")?;
         Self::load_or_init_in(data_dir, &launch_dir)
     }
 
-    /// Load `<data_dir>/agents.json`, seeding it from the legacy identity
-    /// file (or a fresh identity) when it does not exist yet, and bringing
-    /// an older registry up to date. Agents nothing places go in the
-    /// project for `launch_dir`.
+    /// [`Self::open`] on the database at `<data_dir>/db`, opened here (or
+    /// shared with another registry on it in this process). For tests and
+    /// benches; the app opens the database itself and calls
+    /// [`Self::open`].
     ///
     /// # Errors
-    /// Returns an error if the registry or identity file cannot be read,
-    /// parsed, or written.
+    /// Returns an error if the database cannot be opened, or as
+    /// [`Self::open`].
+    #[doc(hidden)]
     pub fn load_or_init_in(data_dir: &Path, launch_dir: &Path) -> anyhow::Result<Self> {
-        let path = data_dir.join(REGISTRY_FILE);
-        let file = if path.exists() {
-            let body =
-                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-            serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))?
+        let rocks = shared_store(&data_dir.join(DB_DIR))?;
+        let mut registry = Self::open(AgentStore::for_store(&rocks), data_dir, launch_dir)?;
+        registry._keep_open = Some(rocks);
+        Ok(registry)
+    }
+
+    /// Load the registry from `store`, importing `<data_dir>/agents.json`
+    /// once when the store holds no registry yet, seeding it from the
+    /// legacy identity file (or a fresh identity) when there is neither,
+    /// and bringing an older registry up to date. Agents nothing places
+    /// go in the project for `launch_dir`.
+    ///
+    /// # Errors
+    /// Returns an error if the store, registry or identity file cannot be
+    /// read, parsed, or written.
+    pub fn open(store: AgentStore, data_dir: &Path, launch_dir: &Path) -> anyhow::Result<Self> {
+        let imported = store
+            .is_empty()
+            .with_context(|| format!("reading agent registry in {}", data_dir.display()))?;
+        let (file, persisted) = if imported {
+            (read_registry_file(data_dir)?, persist::Persisted::default())
         } else {
-            RegistryFile::default()
+            let snapshot = store
+                .load()
+                .with_context(|| format!("loading agent registry in {}", data_dir.display()))?;
+            let file = persist::from_snapshot(snapshot);
+            let persisted = persist::Persisted::of(&persist::to_rows(&file));
+            (file, persisted)
         };
 
         let mut registry = Self {
-            path,
+            store,
+            persisted,
+            data_dir: data_dir.to_path_buf(),
             launch_dir: canonical(launch_dir),
             file,
+            _keep_open: None,
         };
         let mut changed = false;
         if registry.file.version < 2 {
@@ -388,15 +466,18 @@ impl AgentRegistry {
             .last_numbers
             .raise_to_codes(&registry.file.agents);
         let coded = registry.assign_missing_codes();
-        if changed {
-            registry.save()?;
+        if changed || imported {
+            registry.persist()?;
+            if imported {
+                retire_registry_file(data_dir);
+            }
         } else if migrated || coded || reserved || seeded {
             // Codes alone are no reason to refuse to start, say on a
             // read-only data directory: the next load assigns the same
             // ones again, as backfilling is deterministic.
-            if let Err(error) = registry.save() {
+            if let Err(error) = registry.persist() {
                 tracing::warn!(
-                    path = %registry.path.display(),
+                    data_dir = %registry.data_dir.display(),
                     error = %format!("{error:#}"),
                     "could not save the agents' new codes"
                 );
@@ -446,7 +527,7 @@ impl AgentRegistry {
             .map(|key| self.file.prefixes.prefix_for(key, &self.file.agents))
             .collect();
         if self.file.prefixes.len() != before {
-            self.save()?;
+            self.persist()?;
         }
         Ok(prefixes)
     }
@@ -618,7 +699,7 @@ impl AgentRegistry {
                 return Ok(());
             }
             self.file.active = Some(agent.zns_id.clone());
-            self.save()?;
+            self.persist()?;
         }
         Ok(())
     }
@@ -889,7 +970,7 @@ impl AgentRegistry {
             anyhow::bail!("no such agent");
         };
         self.file.agents[index].folder = Some(folder);
-        self.save()
+        self.persist()
     }
 
     /// Drop `agent_id`, registered for work that never started, from the
@@ -911,7 +992,7 @@ impl AgentRegistry {
             return Ok(());
         }
         self.file.agents.remove(index);
-        self.save()
+        self.persist()
     }
 
     /// The agents holding comparisons, oldest first.
@@ -934,7 +1015,7 @@ impl AgentRegistry {
             anyhow::bail!("no such agent");
         };
         self.file.agents[index].title = Some(title.to_string());
-        self.save()
+        self.persist()
     }
 
     /// Give `agent_id` the subtask name `subtitle`. Blank subtitles are
@@ -952,7 +1033,7 @@ impl AgentRegistry {
             anyhow::bail!("no such agent");
         };
         self.file.agents[index].subtitle = Some(subtitle.to_string());
-        self.save()
+        self.persist()
     }
 
     /// Whether nothing registered spawned `agent`: it is listed at the top
@@ -1088,7 +1169,7 @@ impl AgentRegistry {
             ));
         }
         self.file.agents.push(agent.clone());
-        self.save()?;
+        self.persist()?;
         Ok(agent)
     }
 
@@ -1298,7 +1379,7 @@ impl AgentRegistry {
             anyhow::bail!("it is the last agent in the list; create another project first");
         }
         self.file.agents[index].archived = true;
-        self.save()
+        self.persist()
     }
 
     /// Bring `agent_id` back from the Archive, with the agents that spawned
@@ -1334,7 +1415,7 @@ impl AgentRegistry {
         {
             project.removed = false;
         }
-        self.save()
+        self.persist()
     }
 
     /// Take project `project_id` off the list with its agents. Agents in
@@ -1395,7 +1476,7 @@ impl AgentRegistry {
         {
             self.file.active = None;
         }
-        self.save()?;
+        self.persist()?;
         Ok(gone)
     }
 
@@ -1410,7 +1491,7 @@ impl AgentRegistry {
             .filter(|&i| order.contains(&self.file.projects[i].id))
             .collect();
         if reorder_slots(&mut self.file.projects, &slots, order, |p| p.id.clone()) {
-            self.save()?;
+            self.persist()?;
         }
         Ok(())
     }
@@ -1433,7 +1514,7 @@ impl AgentRegistry {
         if reorder_slots(&mut self.file.agents, &slots, order, |a| {
             a.agent_id().to_hex()
         }) {
-            self.save()?;
+            self.persist()?;
         }
         Ok(())
     }
@@ -1445,18 +1526,63 @@ impl AgentRegistry {
             .position(|agent| agent.agent_id() == agent_id)
     }
 
-    fn save(&self) -> anyhow::Result<()> {
-        let body =
-            serde_json::to_string_pretty(&self.file).context("serialising agent registry")?;
-        let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, body).with_context(|| format!("writing {}", tmp.display()))?;
-        if self.path.exists() {
-            // Windows fs::rename refuses to overwrite; remove first.
-            let _ = fs::remove_file(&self.path);
+    /// Write the rows that changed since the last write, in one batch.
+    /// What is remembered as stored moves on only once the batch landed,
+    /// so a failed write is retried by the next one.
+    fn persist(&mut self) -> anyhow::Result<()> {
+        let (diff, next) = self.persisted.diff(persist::to_rows(&self.file));
+        if diff.is_empty() {
+            return Ok(());
         }
-        fs::rename(&tmp, &self.path)
-            .with_context(|| format!("renaming {} -> {}", tmp.display(), self.path.display()))?;
+        self.store.apply(&diff).with_context(|| {
+            format!(
+                "saving agent registry in {} ({} agents, {} projects changed)",
+                self.data_dir.display(),
+                diff.agents_put.len() + diff.agents_del.len(),
+                diff.projects_put.len() + diff.projects_del.len(),
+            )
+        })?;
+        self.persisted = next;
         Ok(())
+    }
+
+    /// The store the registry is kept in.
+    #[cfg(test)]
+    pub(crate) fn store(&self) -> &AgentStore {
+        &self.store
+    }
+}
+
+/// The registry in `<data_dir>/agents.json`, for the one-time import into
+/// the store; empty when there is no such file.
+fn read_registry_file(data_dir: &Path) -> anyhow::Result<RegistryFile> {
+    let path = data_dir.join(REGISTRY_FILE);
+    if !path.exists() {
+        return Ok(RegistryFile::default());
+    }
+    let body = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// Rename `<data_dir>/agents.json` to `agents.json.migrated` once its
+/// contents are in the store, so it is never imported again and the
+/// original stays on disk. A failed rename is only logged: the store is
+/// not empty any more, so the file is not read again either way.
+fn retire_registry_file(data_dir: &Path) {
+    let path = data_dir.join(REGISTRY_FILE);
+    if !path.exists() {
+        return;
+    }
+    let target = data_dir.join(MIGRATED_REGISTRY_FILE);
+    if let Err(error) = fs::rename(&path, &target) {
+        tracing::warn!(
+            from = %path.display(),
+            to = %target.display(),
+            %error,
+            "could not rename the imported agent registry"
+        );
+    } else {
+        tracing::info!(to = %target.display(), "imported agents.json into the store");
     }
 }
 
@@ -1533,6 +1659,7 @@ fn legacy_or_new_zns_id(data_dir: &Path) -> anyhow::Result<String> {
 }
 
 mod code;
+mod persist;
 
 #[cfg(test)]
 mod tests;
