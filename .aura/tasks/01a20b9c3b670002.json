@@ -1,0 +1,11 @@
+{
+  "id": "01a20b9c3b670002",
+  "title": "is it not creating independ runs for A and B? B is reusing As cache?",
+  "state": "completed",
+  "agent_id": "0d38d7002ecdbb87d1480e45795e2e241ceb0b0a00563877b8dd7d367e17803c",
+  "agent_name": "Agent 1251",
+  "items": [],
+  "summary": "The runs are independent. B isn't reusing A's conversation, workspace or context. What they share is the provider's prompt cache, which works per account and per prompt prefix. Both arms call Claude with the same credentials and an identical start to the request: the same system prompt, the same tool definitions and the same task prompt. Whichever arm sends that prefix first pays to write it to t…",
+  "updated_ms": 1795491142372,
+  "created_ms": 1795491117927
+}

@@ -28,13 +28,14 @@ use aura_exec_tools::todo::{
     apply_todo_write, assign_task, report_task, task_reports, task_todo, TodoItem,
     TODO_WRITE_TOOL_NAME,
 };
+use aura_exec_tools::RunScratch;
 use aura_model::{ContentBlock, Message, Role};
 use aura_store_record::ReadStore;
 use aura_ui_terminal::UiCommand;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -198,6 +199,12 @@ pub struct KernelFactory {
     post_edit_check: Option<(PostEditCheckConfig, mpsc::Sender<UiCommand>)>,
     /// Every agent's current task; the hub gives it a way to show them
     pub(crate) tasks: Arc<TaskBoard>,
+    /// Prompt-cache scope of each agent whose kernel is scoped: a
+    /// `/compare` run's agents, and the agents opened under them
+    cache_salts: Mutex<HashMap<AgentId, String>>,
+    /// Scratch folder of each agent whose commands get their own: a
+    /// `/compare` run's agents, and the agents opened under them
+    run_scratches: Mutex<HashMap<AgentId, RunScratch>>,
 }
 
 impl KernelFactory {
@@ -210,9 +217,56 @@ impl KernelFactory {
             file_checkpoints: None,
             post_edit_check: None,
             tasks: Arc::default(),
+            cache_salts: Mutex::default(),
+            run_scratches: Mutex::default(),
         }
     }
 
+    /// Scope the prompt cache of `agent`'s kernels, and of the kernels of
+    /// the agents opened under it, to `salt` from the next
+    /// [`Self::open`] on.
+    pub(crate) fn scope_cache(&self, agent: AgentId, salt: String) {
+        lock(&self.cache_salts).insert(agent, salt);
+    }
+
+    /// The prompt-cache scope of `agent`'s kernels, if they have one.
+    pub(crate) fn cache_salt_of(&self, agent: AgentId) -> Option<String> {
+        lock(&self.cache_salts).get(&agent).cloned()
+    }
+
+    /// Run `agent`'s commands, and those of the agents opened under it,
+    /// with `scratch` from the next [`Self::open`] on.
+    pub(crate) fn give_scratch(&self, agent: AgentId, scratch: RunScratch) {
+        lock(&self.run_scratches).insert(agent, scratch);
+    }
+
+    /// The scratch folder of `agent`'s commands, if they have one.
+    pub(crate) fn run_scratch_of(&self, agent: AgentId) -> Option<RunScratch> {
+        lock(&self.run_scratches).get(&agent).cloned()
+    }
+}
+
+/// The entry of `agent` in `by_agent`, else of the nearest agent in
+/// `parent_chain` with one, remembered as `agent`'s so a later open
+/// without the chain (the session reopened from its record) keeps it.
+fn inherited<T: Clone>(
+    by_agent: &Mutex<HashMap<AgentId, T>>,
+    agent: AgentId,
+    parent_chain: &[AgentId],
+) -> Option<T> {
+    let mut by_agent = lock(by_agent);
+    if let Some(value) = by_agent.get(&agent) {
+        return Some(value.clone());
+    }
+    let value = parent_chain
+        .iter()
+        .find_map(|ancestor| by_agent.get(ancestor))
+        .cloned()?;
+    by_agent.insert(agent, value.clone());
+    Some(value)
+}
+
+impl KernelFactory {
     /// Give sessions `files` to checkpoint each turn's file changes in. The
     /// kernels' executors must report changes to the same checkpoints.
     #[must_use]
@@ -274,14 +328,25 @@ impl KernelFactory {
         folder: Option<PathBuf>,
     ) -> anyhow::Result<AgentSession> {
         let identity = agent.identity();
-        let kernel = Arc::new((self.build_kernel)(
-            identity.agent_id,
-            parent_chain,
-            folder,
-        )?);
+        let salt = inherited(&self.cache_salts, identity.agent_id, &parent_chain);
+        let scratch = inherited(&self.run_scratches, identity.agent_id, &parent_chain);
+        let mut kernel = (self.build_kernel)(identity.agent_id, parent_chain, folder)?;
+        if let Some(salt) = salt {
+            kernel = kernel.with_cache_salt(salt);
+        }
+        if let Some(scratch) = scratch {
+            kernel = kernel.with_run_scratch(scratch);
+        }
+        let kernel = Arc::new(kernel);
         let post_edit_check = self.post_edit_check.as_ref().map(|(config, commands)| {
-            PostEditCheck::new(kernel.agent_workspace(), config.clone())
-                .with_notifier(check_notifier(commands.clone(), identity.agent_id))
+            let check = PostEditCheck::new(kernel.agent_workspace(), config.clone())
+                .with_notifier(check_notifier(commands.clone(), identity.agent_id));
+            // The check builds where the run's own commands do, so the
+            // arms of a comparison don't share its output either.
+            match kernel.run_scratch() {
+                Some(scratch) => check.with_run_scratch(scratch.clone()),
+                None => check,
+            }
         });
         let active_plan = latest_plan_path(self.store.as_ref(), identity.agent_id);
         let mut session = AgentSession {

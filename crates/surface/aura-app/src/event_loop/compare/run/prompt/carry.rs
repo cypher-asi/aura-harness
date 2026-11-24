@@ -25,7 +25,7 @@ impl Attempting<'_, '_> {
         let (parts, asked) = (self.parts, &self.asked);
         let attempt = Attempt {
             session: self.session,
-            live: &parts.ctx.hub.gate,
+            live: parts.gate,
             candidates: &parts.ctx.plan.candidates,
             task: asked.text,
             ran: (self.current.model.as_str(), routed_effort(&self.config)),

@@ -9,6 +9,7 @@ use crate::event_loop::subagents::{AgentHub, ArmRouting};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{AgentId, CompareArm, CompareCopy, CompareRun, OutcomePayload};
 use aura_gate::compare::{run_name, PlanReading};
+use aura_gate::live::GateLive;
 use aura_ui_terminal::events::BenchTaskSetup;
 use aura_ui_terminal::UiCommand;
 use std::collections::HashMap;
@@ -31,6 +32,10 @@ pub(super) struct Context {
     pub arms: [String; 2],
     /// How the turns and subtasks of each arm's runs are routed, A first
     pub routing: [ArmRouting; 2],
+    /// Each arm's own view of Gate, A first: detached copies of the
+    /// shared table as it stood when the comparison started, so neither
+    /// arm routes on what the other observed or drew
+    pub gates: [Arc<GateLive>; 2],
     /// Where this comparison's copies go
     pub dir: PathBuf,
     /// Root of the user's git repository, when the workspace is in one

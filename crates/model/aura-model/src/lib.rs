@@ -24,6 +24,7 @@
 #![warn(clippy::all)]
 
 pub mod anthropic;
+mod cache_scope;
 pub mod console;
 mod credentialed;
 mod error;

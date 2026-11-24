@@ -35,7 +35,8 @@ use aura_core_modes::KernelMode;
 use aura_core_types::{
     AgentId, ContextHash, Hash, PolicyDecision, RecordEntry, RuntimeCapabilityInstall, ToolState,
 };
-use aura_model::ModelProvider;
+use aura_exec_traits::RunScratch;
+use aura_model::{ModelProvider, ModelRequest};
 use aura_plugin_hooks::PluginHookHost;
 use aura_store_db::Store;
 use aura_store_record::DEFAULT_SUMMARY_CHUNK_BYTES;
@@ -43,6 +44,8 @@ use aura_store_snapshot::{NoopSnapshotStore, SnapshotStore};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
+mod cache_salt_tests;
 #[cfg(test)]
 mod mode_switch_tests;
 mod process;
@@ -151,6 +154,16 @@ pub struct KernelConfig {
     /// can show the policy decision before the tool runs and the record
     /// feed stays gapless.
     pub record_observer: Option<Arc<dyn RecordObserver>>,
+    /// Prompt-cache scope of every model request this kernel sends (see
+    /// [`aura_model::ModelRequest::scope_cache`]). Requests from kernels
+    /// with different salts never share provider prompt-cache entries;
+    /// `None` (default) leaves requests unscoped.
+    pub cache_salt: Option<String>,
+    /// The run's private folder for its commands' temp files, caches and
+    /// builds (see [`aura_exec_traits::RunScratch`]). Kernels with
+    /// different scratch folders never share those through the command
+    /// environment; `None` (default) leaves commands on the shared ones.
+    pub run_scratch: Option<RunScratch>,
 }
 
 impl Default for KernelConfig {
@@ -170,6 +183,8 @@ impl Default for KernelConfig {
             audited_lite_threshold_bytes: DEFAULT_SUMMARY_CHUNK_BYTES,
             plugin_hooks: None,
             record_observer: None,
+            cache_salt: None,
+            run_scratch: None,
         }
     }
 }
@@ -534,6 +549,41 @@ impl Kernel {
         self.store
             .get_runtime_capabilities(self.agent_id)
             .map_err(|e| crate::KernelError::Store(format!("get_runtime_capabilities: {e}")))
+    }
+
+    /// The same kernel, scoping the prompt cache of every model request it
+    /// sends to `salt` (see [`KernelConfig::cache_salt`]).
+    #[must_use]
+    pub fn with_cache_salt(mut self, salt: impl Into<String>) -> Self {
+        self.config.cache_salt = Some(salt.into());
+        self
+    }
+
+    /// The prompt-cache scope of this kernel's model requests, if any.
+    #[must_use]
+    pub fn cache_salt(&self) -> Option<&str> {
+        self.config.cache_salt.as_deref()
+    }
+
+    /// The same kernel, running its commands with `scratch` (see
+    /// [`KernelConfig::run_scratch`]).
+    #[must_use]
+    pub fn with_run_scratch(mut self, scratch: RunScratch) -> Self {
+        self.config.run_scratch = Some(scratch);
+        self
+    }
+
+    /// The scratch folder of this kernel's commands, if any.
+    #[must_use]
+    pub fn run_scratch(&self) -> Option<&RunScratch> {
+        self.config.run_scratch.as_ref()
+    }
+
+    /// Scope `request`'s prompt cache to the kernel's salt, when it has one.
+    pub(super) fn scope_request(&self, request: &mut ModelRequest) {
+        if let Some(salt) = self.config.cache_salt.as_deref() {
+            request.scope_cache(salt);
+        }
     }
 
     /// Returns the kernel's configured [`KernelMode`].

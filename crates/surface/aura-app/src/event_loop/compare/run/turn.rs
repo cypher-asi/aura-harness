@@ -20,6 +20,7 @@ use aura_core_types::{
     AgentId, ArmSpec, CompareCopy, CompareRun, Hash, OutcomePayload, PromptCategory, RunTurn,
 };
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
+use aura_gate::live::GateLive;
 use aura_gate::route::Decision;
 use aura_ui_terminal::events::ProcessStatus;
 use aura_ui_terminal::{ApprovalLevel, PermissionMode};
@@ -33,6 +34,9 @@ pub(super) struct RunParts<'a> {
     pub run: &'a RunSpec,
     /// How the run's turns and subtasks are routed
     pub routing: &'a ArmRouting,
+    /// The run's arm's own view of Gate, which routes its turns and
+    /// subtasks
+    pub gate: &'a Arc<GateLive>,
     /// Stops the run, and is stopped with the comparison
     pub cancel: CancellationToken,
     /// The run's chat
@@ -143,7 +147,8 @@ fn begin<'a>(ctx: &'a Context, session: &mut AgentSession, run: &'a RunSpec) -> 
     hub.set_permissions(agent_id, permissions);
     modes::apply(&session.kernel, permissions, &hub.tool_names());
     let routing = &ctx.routing[run.arm.index()];
-    hub.begin_compare_run(agent_id, routing.clone());
+    let gate = &ctx.gates[run.arm.index()];
+    hub.begin_compare_run(agent_id, routing.clone(), Arc::clone(gate));
     let task = run
         .example
         .map_or(ctx.plan.task.as_str(), |task| task.title.as_str());
@@ -167,6 +172,7 @@ fn begin<'a>(ctx: &'a Context, session: &mut AgentSession, run: &'a RunSpec) -> 
         ctx,
         run,
         routing,
+        gate,
         cancel,
         ui,
         recorder,

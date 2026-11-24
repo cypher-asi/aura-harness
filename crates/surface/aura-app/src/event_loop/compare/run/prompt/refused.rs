@@ -26,7 +26,7 @@ impl Attempting<'_, '_> {
         self.asked.refused.push(model.clone());
         let work = Work::turn(category).of(self.asked.difficulty);
         let candidates = &parts.ctx.plan.candidates;
-        let next = followup::reroute(&parts.ctx.hub.gate, &work, candidates, self.asked.refused);
+        let next = followup::reroute(parts.gate, &work, candidates, self.asked.refused);
         let Some(next) = next else {
             return false;
         };

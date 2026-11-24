@@ -247,6 +247,9 @@ impl AnthropicProvider {
 mod tests;
 
 #[cfg(test)]
+mod cache_scope_tests;
+
+#[cfg(test)]
 mod transport_tests;
 
 #[cfg(test)]

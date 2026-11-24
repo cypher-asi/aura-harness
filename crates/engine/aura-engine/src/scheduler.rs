@@ -127,6 +127,15 @@ pub struct AgentIdentity {
     pub max_context_tokens: usize,
     /// JWT auth token forwarded onto outbound model requests.
     pub auth_token: Option<String>,
+    /// Prompt-cache scope of the agent's kernel (see
+    /// [`KernelConfig::cache_salt`]). Spawned agents inherit it with the
+    /// rest of the identity, so a benchmark run's children share its
+    /// cache scope and no other.
+    pub cache_salt: Option<String>,
+    /// Scratch folder of the agent's commands (see
+    /// [`KernelConfig::run_scratch`]). Spawned agents inherit it with the
+    /// rest of the identity, so a run's children work in its scratch.
+    pub run_scratch: Option<aura_exec_tools::RunScratch>,
 }
 
 impl AgentIdentity {
@@ -204,6 +213,22 @@ impl AgentIdentityRegistry {
     #[must_use]
     pub fn get(&self, agent_id: AgentId) -> Option<AgentIdentity> {
         self.inner.get(&agent_id).map(|entry| entry.value().clone())
+    }
+
+    /// The cache salt registered for `agent_id`, if any.
+    #[must_use]
+    pub fn cache_salt(&self, agent_id: AgentId) -> Option<String> {
+        self.inner
+            .get(&agent_id)
+            .and_then(|entry| entry.value().cache_salt.clone())
+    }
+
+    /// The scratch folder registered for `agent_id`, if any.
+    #[must_use]
+    pub fn run_scratch(&self, agent_id: AgentId) -> Option<aura_exec_tools::RunScratch> {
+        self.inner
+            .get(&agent_id)
+            .and_then(|entry| entry.value().run_scratch.clone())
     }
 
     /// Clear the entry — primarily used by tests asserting the
@@ -523,6 +548,10 @@ impl Scheduler {
             kernel_config.workspace_base = workspace_base;
             kernel_config.use_workspace_base_as_root = use_as_root;
         }
+        // The salt is the agent's, whatever loop config the caller passed,
+        // so a spawned agent's calls stay in its root's cache scope.
+        kernel_config.cache_salt = self.identity_registry.cache_salt(agent_id);
+        kernel_config.run_scratch = self.identity_registry.run_scratch(agent_id);
         // The store-backed claim is the scheduler-side mitigation for
         // `Kernel::next_seq`'s read-before-append window: only one scheduler
         // kernel is constructed for an agent while a claim is held.
@@ -631,6 +660,8 @@ mod tests {
             request_kind: ModelRequestKind::Chat,
             max_context_tokens: 200_000,
             auth_token: None,
+            cache_salt: None,
+            run_scratch: None,
         }
     }
 
@@ -850,5 +881,66 @@ mod tests {
             "scheduler must construct at most one Kernel per agent claim"
         );
         claim.release().unwrap();
+    }
+
+    /// Answers like [`MockProvider`], keeping the cache salt of each
+    /// request it was sent.
+    #[derive(Default)]
+    struct SaltCapture {
+        salts: std::sync::Mutex<Vec<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelProvider for SaltCapture {
+        fn name(&self) -> &'static str {
+            "salt-capture"
+        }
+
+        async fn complete(
+            &self,
+            request: aura_model::ModelRequest,
+        ) -> Result<aura_model::ModelResponse, aura_model::ReasonerError> {
+            self.salts.lock().unwrap().push(request.cache_salt.clone());
+            MockProvider::simple_response("done")
+                .complete(request)
+                .await
+        }
+
+        async fn health_check(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn scheduled_kernels_carry_the_registered_cache_salt() {
+        let provider = Arc::new(SaltCapture::default());
+        let (scheduler, store, _dir) = create_test_scheduler_with_provider(provider.clone());
+        let (salted, plain) = (AgentId::generate(), AgentId::generate());
+        let identity = AgentIdentity {
+            cache_salt: Some("5a17".to_string()),
+            ..test_identity("claude-opus-4-7")
+        };
+        scheduler.identity_registry().register(salted, identity);
+        scheduler
+            .identity_registry()
+            .register(plain, test_identity("claude-opus-4-7"));
+        let explicit = test_identity("claude-opus-4-7").into_loop_config();
+        enqueue_prompt(&store, salted, "hello");
+        scheduler
+            .schedule_agent_with_overrides(salted, Some(explicit), None)
+            .await
+            .unwrap();
+        let salts = std::mem::take(&mut *provider.salts.lock().unwrap());
+        assert!(!salts.is_empty());
+        assert!(
+            salts.iter().all(|s| s.as_deref() == Some("5a17")),
+            "{salts:?}"
+        );
+
+        enqueue_prompt(&store, plain, "hello");
+        scheduler.schedule_agent(plain).await.unwrap();
+        let salts = provider.salts.lock().unwrap().clone();
+        assert!(!salts.is_empty());
+        assert!(salts.iter().all(Option::is_none), "{salts:?}");
     }
 }

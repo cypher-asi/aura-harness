@@ -1,0 +1,14 @@
+{
+  "id": "01a20bdee05d0009",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust). Follow .cursor/rules.md. Linux, Landlock confinement.",
+  "state": "completed",
+  "agent_id": "107b748455ed7d566cff1c0624d3e7b7b1ef2f68dc3c40b9090e7aa2c6463cd0",
+  "agent_name": "rust-engineer #93",
+  "assignee": "rust-engineer",
+  "parent": "01a20bad2b690000",
+  "items": [],
+  "summary": "I ran out of time before changing any code, so nothing is done yet: Parts 1 and 2 aren't implemented, no tests were added, and fmt, clippy and the test suites were not run. The working tree is as I found it. Below is what I verified, the plan for the change, and the gaps I found beyond the ones you listed.",
+  "updated_ms": 1795495902191,
+  "created_ms": 1795495485533,
+  "tool_use_id": "toolu_01MtNjeNuamB1NbWsZAtzHa4"
+}

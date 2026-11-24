@@ -4,6 +4,7 @@ use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
 use aura_core_types::ToolResult;
 use aura_core_types::{Capability, ToolDefinition};
+use aura_exec_traits::RunScratch;
 use std::path::Path;
 use tracing::{debug, instrument};
 
@@ -1396,9 +1397,11 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
 
     let sandbox = ctx.sandbox.clone();
     let confine = ctx.confine_writes;
+    let scratch = ctx.run_scratch.clone();
 
     if let Some(cols) = tty_cols {
         let sandbox = sandbox.clone();
+        let scratch = scratch.clone();
         let (cwd, shell_script, program, cmd_args, tags) = (
             cwd.clone(),
             shell_script.clone(),
@@ -1418,7 +1421,7 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
             let run =
                 || pty::cmd_run_in_pty(&sandbox, &command, cwd.as_deref(), cols, timeout_ms, &tags);
             if confine {
-                match crate::confine::run_confined(sandbox.root(), || Ok(run())) {
+                match crate::confine::run_confined(sandbox.root(), scratch.as_ref(), || Ok(run())) {
                     Ok(result) => result,
                     Err(e) => Some(Err(e)),
                 }
@@ -1435,7 +1438,7 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
 
     if let Some(script) = shell_script {
         return super::spawn_blocking_tool(move || {
-            confined_if(confine, &sandbox, || {
+            confined_if(confine, &sandbox, scratch.as_ref(), || {
                 cmd_run_shell_script(&sandbox, &script, cwd.as_deref(), timeout_ms, &tags)
             })
         })
@@ -1449,7 +1452,7 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
     })?;
 
     super::spawn_blocking_tool(move || {
-        confined_if(confine, &sandbox, || {
+        confined_if(confine, &sandbox, scratch.as_ref(), || {
             run_program(
                 &sandbox,
                 &program,
@@ -1463,15 +1466,17 @@ async fn execute_run_command(args: RunArgs, ctx: &ToolContext) -> Result<ToolRes
     .await
 }
 
-/// Run `f`, on a thread confined to writing in the sandbox when `confine`
-/// is set (see [`crate::confine`]).
+/// Run `f`, on a thread confined to writing in the sandbox (and `scratch`
+/// in place of the shared temp and cache folders) when `confine` is set
+/// (see [`crate::confine`]).
 fn confined_if<T: Send>(
     confine: bool,
     sandbox: &Sandbox,
+    scratch: Option<&RunScratch>,
     f: impl FnOnce() -> Result<T, ToolError> + Send,
 ) -> Result<T, ToolError> {
     if confine {
-        crate::confine::run_confined(sandbox.root(), f)
+        crate::confine::run_confined(sandbox.root(), scratch, f)
     } else {
         f()
     }
@@ -1524,10 +1529,15 @@ fn run_in_background(
     cmd.stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(stderr_log));
-    let child = confined_if(ctx.confine_writes, &ctx.sandbox, || {
-        cmd.spawn()
-            .map_err(|e| ToolError::CommandFailed(format!("Failed to spawn '{command}': {e}")))
-    })?;
+    let child = confined_if(
+        ctx.confine_writes,
+        &ctx.sandbox,
+        ctx.run_scratch.as_ref(),
+        || {
+            cmd.spawn()
+                .map_err(|e| ToolError::CommandFailed(format!("Failed to spawn '{command}': {e}")))
+        },
+    )?;
     let pid = child.id();
 
     hook.adopt(

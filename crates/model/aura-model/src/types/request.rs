@@ -377,6 +377,12 @@ pub struct ModelRequest {
     /// Optional retention hint paired with `prompt_cache_key`. See
     /// [`PromptCacheRetention`] for the wire values.
     pub prompt_cache_retention: Option<PromptCacheRetention>,
+    /// Keeps this request's provider prompt-cache entries apart from those
+    /// of requests with another salt, or none, even when everything else
+    /// they send is the same (the two arms of a `/compare`). Each provider
+    /// writes it as a short inert marker into the earliest prompt content
+    /// it caches; `None` sends the request exactly as without this field.
+    pub cache_salt: Option<String>,
     /// Optional request-contract metadata used by provider-bound validation.
     pub metadata: ModelRequestMetadata,
 }
@@ -386,6 +392,18 @@ impl ModelRequest {
     #[must_use]
     pub fn builder(model: impl Into<String>, system: impl Into<String>) -> ModelRequestBuilder {
         ModelRequestBuilder::new(model, system)
+    }
+
+    /// Give the request `salt` as its [`Self::cache_salt`]. It is also
+    /// the OpenAI-family `prompt_cache_key` of a request that has none, so
+    /// the router does not pin differently salted requests to one cache
+    /// partition.
+    pub fn scope_cache(&mut self, salt: &str) {
+        self.cache_salt = Some(salt.to_string());
+        if self.prompt_cache_key.is_none() {
+            self.prompt_cache_key =
+                Some(aura_core_protocol::clamp_prompt_cache_key(salt.to_string()));
+        }
     }
 }
 
@@ -409,6 +427,7 @@ pub struct ModelRequestBuilder {
     aura_org_id: Option<String>,
     prompt_cache_key: Option<String>,
     prompt_cache_retention: Option<PromptCacheRetention>,
+    cache_salt: Option<String>,
     metadata: ModelRequestMetadata,
 }
 
@@ -436,6 +455,7 @@ impl ModelRequestBuilder {
             aura_org_id: None,
             prompt_cache_key: None,
             prompt_cache_retention: None,
+            cache_salt: None,
             metadata: ModelRequestMetadata::default(),
         }
     }
@@ -559,6 +579,13 @@ impl ModelRequestBuilder {
         self
     }
 
+    /// Set the [`ModelRequest::cache_salt`].
+    #[must_use]
+    pub fn cache_salt(mut self, salt: Option<String>) -> Self {
+        self.cache_salt = salt;
+        self
+    }
+
     #[must_use]
     pub const fn request_kind(mut self, kind: ModelRequestKind) -> Self {
         self.metadata.kind = Some(kind);
@@ -617,6 +644,7 @@ impl ModelRequestBuilder {
                 .prompt_cache_key
                 .map(aura_core_protocol::clamp_prompt_cache_key),
             prompt_cache_retention: self.prompt_cache_retention,
+            cache_salt: self.cache_salt,
             metadata: self.metadata,
         })
     }

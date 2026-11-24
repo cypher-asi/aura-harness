@@ -211,6 +211,8 @@ impl AutomatonBridge {
             max_context_tokens: usize::try_from(crate::context_window_for_model(model))
                 .unwrap_or(usize::MAX),
             auth_token: auth_token.map(String::from),
+            cache_salt: None,
+            run_scratch: None,
         };
         scheduler.identity_registry().register(agent_id, identity);
     }

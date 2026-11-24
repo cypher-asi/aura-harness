@@ -17,6 +17,16 @@
 //! What the log says each sign of failure has earned
 //! ([`GateLive::tiers`]) decides which signs have work reviewed before it
 //! stands.
+//!
+//! A [`GateLive::snapshot`] is a detached copy for work that must not
+//! steer or be steered by other work, such as one arm of a `/compare`:
+//! its table and tiers are frozen as they were when it was taken, and it
+//! draws from a generator of its own. It is no record observer, so
+//! nothing it routes is learned by it. It still writes to the same
+//! attempt log, lists its decisions with the original's for `/gate`, and
+//! shares the notes of which model each agent's work is on: those are
+//! facts about one agent's work, which only that agent's subtasks read,
+//! never something learned from another agent.
 
 use crate::runtime::now_ms;
 use aura_config::GateConfig;
@@ -29,7 +39,7 @@ use aura_gate_route::stats::GateStats;
 use aura_gate_route::{Candidate, Decision, Random, SplitMix64, Work};
 use aura_model::ThinkingEffort;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 #[cfg(any(test, feature = "test-support"))]
 mod learn;
@@ -57,11 +67,14 @@ pub struct GateLive {
     settings: GateConfig,
     pub(crate) stats: Mutex<GateStats>,
     rng: Mutex<SplitMix64>,
-    recent: Mutex<VecDeque<RecentRoute>>,
-    /// The model Gate sent each agent's work in flight to
-    working_on: Mutex<HashMap<AgentId, String>>,
-    /// Where attempts are logged, once set
-    pub(crate) log: OnceLock<AttemptLog>,
+    /// Shared with the snapshots taken of it, so `/gate` lists theirs too
+    recent: Arc<Mutex<VecDeque<RecentRoute>>>,
+    /// The model Gate sent each agent's work in flight to; shared with
+    /// the snapshots taken of it
+    working_on: Arc<Mutex<HashMap<AgentId, String>>>,
+    /// Where attempts are logged, once set; shared with the snapshots
+    /// taken of it
+    pub(crate) log: OnceLock<Arc<AttemptLog>>,
     /// What each sign of failure has earned in the attempt log, as last
     /// read
     pub(crate) tiers: Mutex<Tiers>,
@@ -93,10 +106,31 @@ impl GateLive {
             settings,
             stats: Mutex::new(GateStats::default()),
             rng: Mutex::new(rng),
-            recent: Mutex::new(VecDeque::with_capacity(RECENT_DECISIONS)),
-            working_on: Mutex::new(HashMap::new()),
+            recent: Arc::new(Mutex::new(VecDeque::with_capacity(RECENT_DECISIONS))),
+            working_on: Arc::new(Mutex::new(HashMap::new())),
             log: OnceLock::new(),
             tiers: Mutex::new(Tiers::default()),
+        }
+    }
+
+    /// A detached copy of the table and tiers as they are now, drawing
+    /// from a generator seeded with `seed` (see the module docs). What is
+    /// observed on either afterwards leaves the other as it is; the same
+    /// `seed` gives the same draws.
+    #[must_use]
+    pub fn snapshot(&self, seed: u64) -> Self {
+        let log = OnceLock::new();
+        if let Some(shared) = self.log.get() {
+            let _ = log.set(Arc::clone(shared));
+        }
+        Self {
+            settings: self.settings,
+            stats: Mutex::new(self.stats()),
+            rng: Mutex::new(SplitMix64::seeded(seed)),
+            recent: Arc::clone(&self.recent),
+            working_on: Arc::clone(&self.working_on),
+            log,
+            tiers: Mutex::new(self.tiers()),
         }
     }
 

@@ -55,7 +55,26 @@ struct GatedProvider {
     inner: MockProvider,
     gate: Arc<Semaphore>,
     judges: Arc<Barrier>,
+    /// The agent whose kernel sends through this provider
+    agent: AgentId,
+    /// Every request the fixture's kernels sent, in order
+    sent: SentLog,
 }
+
+/// One model request a kernel of the fixture sent, as its provider got
+/// it.
+#[derive(Clone, Debug)]
+struct Sent {
+    /// The agent whose kernel sent it
+    agent: AgentId,
+    /// Its system prompt, which tells Gate's calls from the work
+    system: String,
+    /// Its prompt-cache scope
+    cache_salt: Option<String>,
+}
+
+/// The requests the fixture's kernels sent, oldest first.
+type SentLog = Arc<std::sync::Mutex<Vec<Sent>>>;
 
 /// How long the comparison judge of work "judged together" waits for a
 /// second judge.
@@ -71,6 +90,11 @@ impl ModelProvider for GatedProvider {
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
+        self.sent.lock().unwrap().push(Sent {
+            agent: self.agent,
+            system: request.system.clone(),
+            cache_salt: request.cache_salt.clone(),
+        });
         if request.model.as_str() == REFUSING_MODEL {
             return Err(ReasonerError::Api {
                 status: 401,
@@ -395,7 +419,19 @@ struct Fixture {
     second: AgentId,
     files: crate::file_checkpoints::FileCheckpoints,
     workspace: std::path::PathBuf,
+    /// Every request the hub's kernels sent
+    sent: SentLog,
     _dirs: Vec<TempDir>,
+}
+
+impl Fixture {
+    /// The requests `agent`'s kernels sent, oldest first.
+    fn sent_by(&self, agent: AgentId) -> Vec<Sent> {
+        (self.sent.lock().unwrap().iter())
+            .filter(|sent| sent.agent == agent)
+            .cloned()
+            .collect()
+    }
 }
 
 /// Gate settings for tests: the defaults, without exploring.
@@ -475,12 +511,15 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
     let gate = Arc::new(Semaphore::new(0));
     let provider_gate = Arc::clone(&gate);
     let judges = Arc::new(Barrier::new(2));
+    let sent = SentLog::default();
+    let provider_sent = Arc::clone(&sent);
     let workspace_root = workspace.path().to_path_buf();
     let checkpoints = crate::session_checkpoint::Checkpoints::new(data.path());
     let prompter = Arc::clone(&approvals);
     let files = crate::file_checkpoints::FileCheckpoints::new(data.path());
     let factory_files = files.clone();
     let hook_files = files.clone();
+    let check_commands = commands_tx.clone();
     let mut captured = None;
     let hub = AgentHub::new(parts, |dispatcher| {
         captured = Some(dispatcher);
@@ -492,6 +531,8 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
                     inner: MockProvider::simple_response("Done."),
                     gate: Arc::clone(&provider_gate),
                     judges: Arc::clone(&judges),
+                    agent: agent_id,
+                    sent: Arc::clone(&provider_sent),
                 });
                 let workspace_base = folder.unwrap_or_else(|| workspace_root.clone());
                 prompter.set_folder(agent_id, workspace_base.clone());
@@ -519,6 +560,14 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
         )
         .with_checkpoints(checkpoints)
         .with_file_checkpoints(factory_files)
+        // Switched off, so no session runs it, but every session has one
+        // to look at.
+        .with_post_edit_check(
+            aura_agent::PostEditCheckConfig::from_lookup(|name| {
+                (name == aura_agent::post_edit_check::CHECK_COMMAND_ENV).then(|| "off".to_string())
+            }),
+            check_commands,
+        )
     });
     let fixture = Fixture {
         hub,
@@ -531,6 +580,7 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
         second,
         files,
         workspace: workspace.path().canonicalize().unwrap(),
+        sent,
         _dirs: vec![data, db, workspace],
     };
     (fixture, commands)

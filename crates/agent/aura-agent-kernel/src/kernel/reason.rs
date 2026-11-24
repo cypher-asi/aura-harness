@@ -22,7 +22,11 @@ impl Kernel {
     ///
     /// # Errors
     /// Returns error if the model call or storage fails.
-    pub async fn reason(&self, request: ModelRequest) -> Result<ReasonResult, crate::KernelError> {
+    pub async fn reason(
+        &self,
+        mut request: ModelRequest,
+    ) -> Result<ReasonResult, crate::KernelError> {
+        self.scope_request(&mut request);
         // Bound the reasoner call with the kernel-config timeout so a hung
         // provider cannot stall the agent indefinitely. (Wave 5 / T2.6 +
         // T7.3.)
@@ -138,8 +142,9 @@ impl Kernel {
     /// Returns error if the model call fails.
     pub async fn reason_streaming(
         &self,
-        request: ModelRequest,
+        mut request: ModelRequest,
     ) -> Result<(ReasonStreamHandle, StreamEventStream), crate::KernelError> {
+        self.scope_request(&mut request);
         // Snapshot the record window *before* invoking the provider so
         // the context hash computed at finalization time depends solely
         // on the state observed at the start of the reasoning call

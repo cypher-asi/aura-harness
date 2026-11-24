@@ -86,7 +86,7 @@ pub struct RunOf<'a> {
 impl GateLive {
     /// Log attempts to `log` from here on. The first call decides.
     pub fn log_attempts_to(&self, log: AttemptLog) {
-        let _ = self.log.set(log);
+        let _ = self.log.set(std::sync::Arc::new(log));
         self.learn_tiers();
     }
 
@@ -112,7 +112,7 @@ impl GateLive {
 
     /// The attempt log, when attempts are logged.
     pub fn attempt_log(&self) -> Option<&AttemptLog> {
-        self.log.get()
+        self.log.get().map(|log| &**log)
     }
 
     fn append(&self, line: &Line) {

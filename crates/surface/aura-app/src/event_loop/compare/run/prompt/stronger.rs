@@ -66,7 +66,7 @@ impl Attempting<'_, '_> {
         };
         let ran_at = self.config.held_thinking_effort();
         let ran = (self.current.model.as_str(), routed_effort(&self.config));
-        let (gate, candidates) = (&self.parts.ctx.hub.gate, &self.parts.ctx.plan.candidates);
+        let (gate, candidates) = (self.parts.gate, &self.parts.ctx.plan.candidates);
         let Some(next) = stronger(gate, candidates, category, ran, signal) else {
             return ControlFlow::Break(Ended {
                 signal,
@@ -92,8 +92,8 @@ impl Attempting<'_, '_> {
             return ControlFlow::Continue(None);
         };
         self.settle(failed).await;
-        let (hub, plan) = (&self.parts.ctx.hub, &self.parts.ctx.plan);
-        let Some(judge) = live::judge_for(&hub.gate, &plan.candidates, failed) else {
+        let plan = &self.parts.ctx.plan;
+        let Some(judge) = live::judge_for(self.parts.gate, &plan.candidates, failed) else {
             return ControlFlow::Continue(None);
         };
         let shown = Failed {
@@ -121,7 +121,7 @@ impl Attempting<'_, '_> {
     async fn settle(&mut self, failed: &OutcomePayload) {
         let agent_id = self.session.agent_id();
         let terms = self.terms();
-        (self.parts.ctx.hub.gate).log_attempt(agent_id, failed, terms, self.left.take());
+        (self.parts.gate).log_attempt(agent_id, failed, terms, self.left.take());
         live::record(&self.session.kernel, agent_id, failed).await;
     }
 

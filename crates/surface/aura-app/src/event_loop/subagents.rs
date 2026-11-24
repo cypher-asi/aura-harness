@@ -228,6 +228,15 @@ pub(crate) enum ArmRouting {
     ByDifficulty(aura_gate::compare::DifficultyRoutes),
 }
 
+/// A running `/compare` run's arm, as its subtasks see it.
+#[derive(Debug, Clone)]
+struct CompareArmRun {
+    routing: ArmRouting,
+    /// The arm's own view of Gate (see [`GateLive::snapshot`]), so the
+    /// arms never route on each other's observations or draws
+    gate: Arc<GateLive>,
+}
+
 /// How a turn of one of the user's agents leads under Gate once its
 /// prompt asks for work a lead takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -345,8 +354,9 @@ pub struct AgentHub {
     pub(crate) traces: Arc<Traces>,
     /// What Gate has learned, and its latest decisions.
     pub(crate) gate: Arc<GateLive>,
-    /// How the subtasks of each running `/compare` run are routed.
-    compare_arms: Mutex<HashMap<AgentId, ArmRouting>>,
+    /// How the subtasks of each running `/compare` run are routed, and
+    /// the arm's own view of Gate they are routed on.
+    compare_arms: Mutex<HashMap<AgentId, CompareArmRun>>,
     /// Per workspace, the lock that runs write subtasks one at a time
     write_locks: Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     /// Agents doing a write subtask while holding their workspace's lock
@@ -443,9 +453,15 @@ impl AgentHub {
     }
 
     /// Route the subtasks of the `/compare` run `agent` (and theirs) as
-    /// `routing` says, until [`Self::end_compare_run`].
-    pub(crate) fn begin_compare_run(&self, agent: AgentId, routing: ArmRouting) {
-        lock(&self.compare_arms).insert(agent, routing);
+    /// `routing` says, on `gate`, its arm's own view of Gate, until
+    /// [`Self::end_compare_run`].
+    pub(crate) fn begin_compare_run(
+        &self,
+        agent: AgentId,
+        routing: ArmRouting,
+        gate: Arc<GateLive>,
+    ) {
+        lock(&self.compare_arms).insert(agent, CompareArmRun { routing, gate });
     }
 
     /// The `/compare` run `agent` ended.
@@ -453,12 +469,19 @@ impl AgentHub {
         lock(&self.compare_arms).remove(&agent);
     }
 
-    /// How the subtasks of `agent` are routed when it works for a
-    /// `/compare` run, directly or through the agents between.
-    fn compare_routing(&self, agent: AgentId) -> Option<ArmRouting> {
+    /// How the subtasks of `agent` are routed, and on which view of Gate,
+    /// when it works for a `/compare` run, directly or through the agents
+    /// between.
+    fn compare_arm(&self, agent: AgentId) -> Option<CompareArmRun> {
         let ancestry = lock(&self.registry).ancestry(agent);
         let arms = lock(&self.compare_arms);
         ancestry.iter().find_map(|id| arms.get(id).cloned())
+    }
+
+    /// How the subtasks of `agent` are routed when it works for a
+    /// `/compare` run (see [`Self::compare_arm`]).
+    fn compare_routing(&self, agent: AgentId) -> Option<ArmRouting> {
+        self.compare_arm(agent).map(|arm| arm.routing)
     }
 
     /// Hand `session`, whose work ended, to the event loop to keep, and
@@ -911,7 +934,15 @@ impl AgentHub {
     ) {
         if let Some(agents) = &self.agents {
             let mode = self.mode_of(agent).agent_mode();
-            agents.register(agent, name, folder, config, mode, self.notices.clone());
+            let cache_salt = self.factory.cache_salt_of(agent);
+            let run_scratch = self.factory.run_scratch_of(agent);
+            let turn = super::host::RootTurn {
+                config,
+                mode,
+                cache_salt: cache_salt.as_deref(),
+                run_scratch: run_scratch.as_ref(),
+            };
+            agents.register(agent, name, folder, &turn, self.notices.clone());
             self.processes.add_root(agent);
         }
     }
@@ -1452,6 +1483,9 @@ impl AgentHub {
             slot.hold(first.session.agent_id());
         }
         let candidates = first.gate.candidates.clone();
+        // The view Gate routed the first attempt on: its `/compare` arm's
+        // own under a run, so the retry escalates on the same one.
+        let live = Arc::clone(&first.gate.live);
         let alone = slot.as_ref().is_some_and(WriteSlot::exclusive)
             && request.spawn_mode != Some(SpawnMode::Detached);
         let snapshot = if alone && candidates.is_some() {
@@ -1502,7 +1536,7 @@ impl AgentHub {
         } else {
             OutcomeSignal::Error
         };
-        let escalated = self.gate.escalate(
+        let escalated = live.escalate(
             RouteLevel::Subtask,
             category,
             (&first.model, first.effort),
@@ -1600,7 +1634,10 @@ impl AgentHub {
         definition: &AgentDefinition,
         config: &mut AgentLoopConfig,
     ) -> SubtaskGate {
-        let arm = self.compare_routing(request.parent_agent_id);
+        let arm = self.compare_arm(request.parent_agent_id);
+        let live = arm
+            .as_ref()
+            .map_or_else(|| Arc::clone(&self.gate), |arm| Arc::clone(&arm.gate));
         let base = lock(&self.base);
         let explicit = explicit_model(request);
         if let Some(model) = explicit {
@@ -1611,7 +1648,7 @@ impl AgentHub {
         let mut candidates = base.gate.candidates.clone();
         let mut explore = true;
         let mut table = None;
-        match arm {
+        match arm.map(|arm| arm.routing) {
             Some(ArmRouting::Pinned(model)) => {
                 if !pinned {
                     base.limits.configure(config, &model);
@@ -1638,9 +1675,9 @@ impl AgentHub {
             kind: definition.name.clone(),
             classifier: base.gate.classifier.clone(),
             candidates: if pinned { None } else { candidates },
-            lead_model: self.gate.model_of(request.parent_agent_id),
+            lead_model: live.model_of(request.parent_agent_id),
             limits: base.limits,
-            live: Arc::clone(&self.gate),
+            live,
             explore,
             escalation: None,
             table,

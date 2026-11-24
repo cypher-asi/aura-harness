@@ -410,7 +410,7 @@ impl AgentToolExecutor for TaskToolExecutor {
             aura_context_prompts::model_messages::auto_build::auto_build_status_line(&cmd),
         );
 
-        match crate::verify::run_build_command(project_root, &cmd, None).await {
+        match crate::verify::run_build_command(project_root, &cmd, None, None).await {
             Ok(result) => {
                 let mut output = String::new();
                 if !result.stdout.is_empty() {
@@ -509,7 +509,7 @@ pub async fn run_project_build_check(
         return Ok(());
     };
 
-    let result = match crate::verify::run_build_command(project_root, &cmd, None).await {
+    let result = match crate::verify::run_build_command(project_root, &cmd, None, None).await {
         Ok(r) => r,
         Err(e) => {
             return Err(format!("failed to run build command `{cmd}`: {e}"));

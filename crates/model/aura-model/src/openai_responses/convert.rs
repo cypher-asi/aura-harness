@@ -8,16 +8,20 @@
 use serde_json::{json, Map, Value};
 
 use super::{reasoning_items, TOOL_NAMESPACE};
-use crate::{ContentBlock, ModelRequest, Role, ToolChoice, ToolResultContent};
+use crate::{cache_scope, ContentBlock, ModelRequest, Role, ToolChoice, ToolResultContent};
 
 /// Build the JSON body for `POST /responses`.
 pub(super) fn request_body(request: &ModelRequest) -> Value {
     let mut body = Map::new();
     body.insert("model".into(), json!(request.model.as_str()));
+    let salt = request.cache_salt.as_deref();
+    // OpenAI caches from the first token, so a salt opens the system
+    // text; the preamble stays first because the plan requires it there.
+    let system = cache_scope::opening(&request.system, salt);
     let instructions = match request.system_preamble.as_deref() {
-        Some(preamble) if request.system.is_empty() => preamble.to_string(),
-        Some(preamble) => format!("{preamble}\n\n{}", request.system),
-        None => request.system.clone(),
+        Some(preamble) if system.is_empty() => preamble.to_string(),
+        Some(preamble) => format!("{preamble}\n\n{system}"),
+        None => system.into_owned(),
     };
     if !instructions.is_empty() {
         body.insert("instructions".into(), json!(instructions));
@@ -41,7 +45,7 @@ pub(super) fn request_body(request: &ModelRequest) -> Value {
             json!([{
                 "type": "namespace",
                 "name": TOOL_NAMESPACE,
-                "description": "Aura harness tools",
+                "description": cache_scope::closing("Aura harness tools", salt),
                 "tools": tools,
             }]),
         );

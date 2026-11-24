@@ -173,3 +173,102 @@ fn decisions_are_remembered_up_to_the_limit() {
         .is_none());
     assert_eq!(live.recent().len(), RECENT_DECISIONS);
 }
+
+/// How many outcomes `live`'s table holds for Haiku's questions.
+fn haiku_tries(live: &GateLive) -> Option<u32> {
+    live.with_stats(|stats| {
+        stats
+            .row(RouteLevel::Turn, PromptCategory::Question, HAIKU)
+            .map(|row| row.tries)
+    })
+}
+
+#[test]
+fn a_snapshot_is_detached_from_the_table_it_was_taken_of() {
+    let live = GateLive::default();
+    let learn = |live: &GateLive, n| {
+        live.learn(
+            RouteLevel::Turn,
+            (PromptCategory::Question, None),
+            HAIKU,
+            None,
+            (n, true),
+        );
+    };
+    learn(&live, 2);
+    let snapshot = live.snapshot(7);
+    assert_eq!(
+        haiku_tries(&snapshot),
+        Some(2),
+        "it starts as the table was"
+    );
+
+    learn(&live, 3);
+    let agent_id = AgentId::generate();
+    let p = prompt(agent_id, "what is gate?");
+    let p = RecordEntry::builder(1, p).build();
+    let o = outcome(agent_id, p.tx.hash, OutcomeSignal::ChecksFailed);
+    live.on_entry(&p);
+    live.on_entry(&RecordEntry::builder(2, o).build());
+    assert_eq!(haiku_tries(&live), Some(6));
+    assert_eq!(
+        haiku_tries(&snapshot),
+        Some(2),
+        "the original's learning stays out"
+    );
+
+    learn(&snapshot, 4);
+    snapshot.on_entry(&RecordEntry::builder(3, prompt(agent_id, "and again?")).build());
+    assert_eq!(haiku_tries(&snapshot), Some(6));
+    assert_eq!(
+        haiku_tries(&live),
+        Some(6),
+        "and the snapshot's stays in it"
+    );
+}
+
+#[test]
+fn snapshots_draw_from_their_own_seeded_generator() {
+    let live = GateLive::with_rng(GateConfig::defaults(), SplitMix64::seeded(1));
+    let draws = |live: &GateLive| -> Vec<bool> { (0..64).map(|_| live.sampled(0.5)).collect() };
+    let (one, same, other) = (live.snapshot(11), live.snapshot(11), live.snapshot(12));
+    // Draws on the original or another snapshot move no snapshot's.
+    let _ = draws(&live);
+    let _ = draws(&other);
+    let first = draws(&one);
+    assert_eq!(first, draws(&same), "the same seed draws the same");
+    assert_ne!(
+        first,
+        draws(&live.snapshot(12)),
+        "another seed draws others"
+    );
+    assert_ne!(first, draws(&one), "a snapshot's draws go on");
+}
+
+#[test]
+fn a_snapshot_shares_the_attempt_log_and_what_agents_are_on() {
+    let dir = TempDir::new().unwrap();
+    let live = GateLive::default();
+    live.log_attempts_to(aura_gate_attempts::AttemptLog::in_data_dir(dir.path()));
+    let agent_id = AgentId::generate();
+    live.note_model(agent_id, HAIKU);
+    let snapshot = live.snapshot(3);
+    assert_eq!(snapshot.model_of(agent_id).as_deref(), Some(HAIKU));
+    assert_eq!(
+        snapshot.attempt_log().map(|log| log.path().to_path_buf()),
+        live.attempt_log().map(|log| log.path().to_path_buf())
+    );
+    let candidates = candidates(
+        &catalog("local/qwen3:4b", &[]),
+        |p| p == ProviderKind::Claude,
+        |_| false,
+    );
+    snapshot
+        .decide(&Work::turn(PromptCategory::Debugging), &candidates)
+        .unwrap();
+    assert_eq!(
+        live.recent().len(),
+        1,
+        "/gate lists the snapshot's decisions"
+    );
+}

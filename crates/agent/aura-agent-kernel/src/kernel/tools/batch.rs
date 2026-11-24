@@ -101,7 +101,8 @@ pub(super) async fn process_many<'a>(
             ToolRun::Executor => {
                 let ctx = ExecuteContext::new(kernel.agent_id, action_id, workspace.clone())
                     .with_tool_use_id(proposal.tool_use_id.clone())
-                    .with_confined_writes(kernel.confines_writes(slot));
+                    .with_confined_writes(kernel.confines_writes(slot))
+                    .with_run_scratch(kernel.config.run_scratch.clone());
                 Box::pin(async move {
                     let started = Instant::now();
                     let effect = kernel.execute_with_timeout(&ctx, &action, &tool_name).await;

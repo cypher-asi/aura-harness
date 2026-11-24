@@ -343,7 +343,9 @@ impl<'a, 'p> Attempting<'a, 'p> {
     pub(super) fn point(&mut self, next: &Decision) {
         let hub = &self.parts.ctx.hub;
         hub.model_limits().route(&mut self.config, next);
-        hub.gate.note_model(self.session.agent_id(), &next.model.id);
+        self.parts
+            .gate
+            .note_model(self.session.agent_id(), &next.model.id);
         self.current.model.clone_from(&next.model.id);
         show_routed(self.parts, &self.asked, &self.current.model);
     }
@@ -367,11 +369,7 @@ impl<'a, 'p> Attempting<'a, 'p> {
         }
         if let (false, Some(outcome)) = (recorded, &outcome) {
             let terms = self.terms();
-            parts
-                .ctx
-                .hub
-                .gate
-                .log_attempt(agent_id, outcome, terms, self.left);
+            parts.gate.log_attempt(agent_id, outcome, terms, self.left);
             live::record(&self.session.kernel, agent_id, outcome).await;
         }
         let asked = self.asked;

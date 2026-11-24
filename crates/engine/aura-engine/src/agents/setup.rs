@@ -182,6 +182,8 @@ mod tests {
             request_kind: aura_model::ModelRequestKind::Chat,
             max_context_tokens: 200_000,
             auth_token: Some("parent-jwt".to_string()),
+            cache_salt: None,
+            run_scratch: None,
         }
     }
 

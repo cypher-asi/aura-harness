@@ -44,9 +44,11 @@ async fn subtasks_of_a_run_follow_its_arm_not_the_users_selection() {
     let candidates = gate_on_zos(&fixture).gate_candidates();
     let route_of = |child: AgentId| first_prompt(&state, child).route;
 
-    fixture
-        .hub
-        .begin_compare_run(first, subagents::ArmRouting::Pinned(OPUS.to_string()));
+    fixture.hub.begin_compare_run(
+        first,
+        subagents::ArmRouting::Pinned(OPUS.to_string()),
+        Arc::clone(&fixture.hub.gate),
+    );
     let pinned = dispatch(&fixture, first, "what changed?").await;
     assert_eq!(
         route_of(pinned),
@@ -60,6 +62,7 @@ async fn subtasks_of_a_run_follow_its_arm_not_the_users_selection() {
             candidates,
             delegate: true,
         },
+        Arc::clone(&fixture.hub.gate),
     );
     let routed = dispatch(&fixture, first, "what changed?").await;
     assert_eq!(
@@ -135,9 +138,11 @@ async fn assert_subtasks_go_by_difficulty(
     let runnable = state.models.runnable_models();
     let routes = aura_gate::compare::DifficultyRoutes::of(&payload.arm_b, &runnable).unwrap();
     let first = fixture.first;
-    fixture
-        .hub
-        .begin_compare_run(first, subagents::ArmRouting::ByDifficulty(routes));
+    fixture.hub.begin_compare_run(
+        first,
+        subagents::ArmRouting::ByDifficulty(routes),
+        Arc::clone(&fixture.hub.gate),
+    );
     for (prompt, model) in [("what changed? (easy)", HAIKU), ("what changed?", SONNET)] {
         let child = dispatch(fixture, first, prompt).await;
         let route = first_prompt(state, child).route;
@@ -317,6 +322,7 @@ async fn a_runs_arm_decides_whether_its_lead_delegates() {
                 candidates: candidates.clone(),
                 delegate,
             },
+            Arc::clone(&fixture.hub.gate),
         );
         assert_eq!(fixture.hub.leads(first, None), leads);
         assert_eq!(
@@ -325,8 +331,10 @@ async fn a_runs_arm_decides_whether_its_lead_delegates() {
             "an instance of a permanent agent never leads"
         );
     }
-    fixture
-        .hub
-        .begin_compare_run(first, subagents::ArmRouting::Pinned(OPUS.to_string()));
+    fixture.hub.begin_compare_run(
+        first,
+        subagents::ArmRouting::Pinned(OPUS.to_string()),
+        Arc::clone(&fixture.hub.gate),
+    );
     assert_eq!(fixture.hub.leads(first, None), None);
 }

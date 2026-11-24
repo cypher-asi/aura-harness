@@ -8,6 +8,7 @@ use super::judge::judge_all;
 use super::plan::ComparePlan;
 use super::schedule::run_all;
 use super::setup::set_up;
+use super::start::compare_cache_salt;
 use crate::agent_registry::RegisteredAgent;
 use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::agents::AgentSession;
@@ -22,7 +23,7 @@ use aura_core_types::{
     AgentId, CompareArm, ComparePayload, CompareStatus, SystemKind, Transaction,
 };
 use aura_gate::compare::{plan_shares, run_name, PlanReading};
-use aura_gate::live::{self, RunOf};
+use aura_gate::live::{self, GateLive, RunOf};
 use aura_ui_terminal::events::BenchTaskSetup;
 use aura_ui_terminal::UiCommand;
 use std::collections::HashMap;
@@ -69,6 +70,7 @@ pub(crate) async fn run(
         cancel.clone(),
     ));
     let routing = CompareArm::BOTH.map(|arm| arm_routing(&plan.arms[arm.index()], &plan));
+    let gates = arm_gates(&hub.gate, host.agent_id());
     let ctx = Arc::new(Context {
         hub,
         commands,
@@ -76,6 +78,7 @@ pub(crate) async fn run(
         host,
         arms,
         routing,
+        gates,
         dir,
         repo,
         cancel,
@@ -85,6 +88,29 @@ pub(crate) async fn run(
     });
     let ran = run_all(&ctx, &session, &user_ui, &mut payload).await;
     conclude(&ctx, session, &user_ui, ran, payload).await;
+}
+
+/// Each arm's own view of Gate in the comparison on agent `compare`, A
+/// first: A's a snapshot of `shared`, B's one of A's, so both start from
+/// the same table, each drawing from a generator seeded from its arm's
+/// cache salt.
+fn arm_gates(shared: &GateLive, compare: AgentId) -> [Arc<GateLive>; 2] {
+    let a = shared.snapshot(arm_seed(compare, CompareArm::A));
+    let b = a.snapshot(arm_seed(compare, CompareArm::B));
+    [Arc::new(a), Arc::new(b)]
+}
+
+/// The seed of `arm`'s view of Gate in the comparison on agent
+/// `compare`: its cache salt read as hex, else the first eight bytes of a
+/// BLAKE3 hash of the salt.
+fn arm_seed(compare: AgentId, arm: CompareArm) -> u64 {
+    let salt = compare_cache_salt(compare, arm);
+    u64::from_str_radix(&salt, 16).unwrap_or_else(|_| {
+        let hash = blake3::hash(salt.as_bytes());
+        hash.as_bytes()
+            .first_chunk::<8>()
+            .map_or(0, |bytes| u64::from_le_bytes(*bytes))
+    })
 }
 
 /// The session of the comparison's agent `host`; `None`, with why shown

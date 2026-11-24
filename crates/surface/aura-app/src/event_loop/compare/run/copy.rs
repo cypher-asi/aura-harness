@@ -10,6 +10,7 @@ use crate::isolation::{
     CopyIsolation, IsolatedWorkspace, Isolation, IsolationStrategy, WorktreeIsolation,
 };
 use aura_core_types::{AgentId, CompareCopy, ComparePayload};
+use aura_exec_tools::RunScratch;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::warn;
@@ -76,6 +77,13 @@ pub(super) fn prepare_copy(
     Ok((CompareCopy { baseline, ..copy }, note))
 }
 
+/// The scratch folder of run `name`'s commands (see
+/// [`aura_exec_tools::RunScratch`]): beside its copy in `dir`, not in it,
+/// so nothing the run's tools write there shows in its changes.
+pub(super) fn scratch_dir(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.tmp"))
+}
+
 /// What the run of `agent_id` changed in `copy` since it was made, as a
 /// patch, read off the async runtime; empty, with the problem logged,
 /// when it can't be read.
@@ -110,30 +118,7 @@ pub(crate) fn remove_copies(payload: &ComparePayload) -> Vec<String> {
         let Some(parent) = copy.root.parent().map(Path::to_path_buf) else {
             continue;
         };
-        let workspace = IsolatedWorkspace {
-            root: copy.root.clone(),
-            strategy: if copy.git_dir.is_some() {
-                IsolationStrategy::Copy
-            } else {
-                IsolationStrategy::Worktree
-            },
-        };
-        let removed = if copy.git_dir.is_some() {
-            CopyIsolation::new(&parent).teardown(&workspace)
-        } else {
-            WorktreeIsolation::new(&parent).teardown(&workspace)
-        };
-        if let Err(e) = removed {
-            problems.push(format!("{}: {e}", run.name));
-        }
-        if let Some(git_dir) = copy.git_dir.as_deref().filter(|dir| dir.exists()) {
-            if let Err(e) = std::fs::remove_dir_all(git_dir) {
-                problems.push(format!("{}: {e}", git_dir.display()));
-            }
-        }
-        if copy.root.exists() {
-            problems.push(format!("{} is still there", copy.root.display()));
-        }
+        remove_copy(&run.name, copy, &parent, &mut problems);
         if !parents.contains(&parent) {
             parents.push(parent);
         }
@@ -149,6 +134,44 @@ pub(crate) fn remove_copies(payload: &ComparePayload) -> Vec<String> {
         let _ = std::fs::remove_dir(parent);
     }
     problems
+}
+
+/// Remove run `name`'s `copy` in `parent`, its git folder and its scratch
+/// folder, adding to `problems` what could not be removed.
+fn remove_copy(name: &str, copy: &CompareCopy, parent: &Path, problems: &mut Vec<String>) {
+    let workspace = IsolatedWorkspace {
+        root: copy.root.clone(),
+        strategy: if copy.git_dir.is_some() {
+            IsolationStrategy::Copy
+        } else {
+            IsolationStrategy::Worktree
+        },
+    };
+    let removed = if copy.git_dir.is_some() {
+        CopyIsolation::new(parent).teardown(&workspace)
+    } else {
+        WorktreeIsolation::new(parent).teardown(&workspace)
+    };
+    if let Err(e) = removed {
+        problems.push(format!("{name}: {e}"));
+    }
+    if let Some(git_dir) = copy.git_dir.as_deref().filter(|dir| dir.exists()) {
+        if let Err(e) = std::fs::remove_dir_all(git_dir) {
+            problems.push(format!("{}: {e}", git_dir.display()));
+        }
+    }
+    if copy.root.exists() {
+        problems.push(format!("{} is still there", copy.root.display()));
+    }
+    let scratch = copy
+        .root
+        .file_name()
+        .map(|dir_name| RunScratch::new(scratch_dir(parent, &dir_name.to_string_lossy())));
+    if let Some(scratch) = scratch.filter(|scratch| scratch.dir().exists()) {
+        if let Err(e) = scratch.remove() {
+            problems.push(format!("{}: {e}", scratch.dir().display()));
+        }
+    }
 }
 
 /// What each run of `payload` changed since its copy was made, by run

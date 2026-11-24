@@ -1,0 +1,37 @@
+{
+  "id": "01a20bad2b690000",
+  "title": "keep going wher eyou left off",
+  "state": "completed",
+  "agent_id": "0d38d7002ecdbb87d1480e45795e2e241ceb0b0a00563877b8dd7d367e17803c",
+  "agent_name": "Agent 1251",
+  "items": [
+    {
+      "content": "Map every channel through which arm A and arm B can share data",
+      "state": "completed",
+      "assignee": "explorer"
+    },
+    {
+      "content": "Per-arm prompt-cache salt: ModelRequest.cache_salt filled by kernel, applied in Anthropic/OpenRouter/OpenAI/ChatGPT request builders so the first cacheable prefix differs per arm",
+      "state": "completed",
+      "assignee": "tests"
+    },
+    {
+      "content": "Per-arm Gate isolation: frozen GateLive snapshot + own seeded RNG per arm; compare runs do not feed the live table during the compare",
+      "state": "completed",
+      "assignee": "tests"
+    },
+    {
+      "content": "Sandbox: per-run TMPDIR and tool caches, drop shared /tmp, read allowlist that hides sibling copies and other compares",
+      "state": "completed",
+      "assignee": "implement"
+    },
+    {
+      "content": "Review all three changes + fmt/clippy/test gates",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    }
+  ],
+  "summary": "The previous change was cancelled before it touched any code (the working tree is clean), so I'm restarting it.",
+  "updated_ms": 1795498164226,
+  "created_ms": 1795492227945
+}

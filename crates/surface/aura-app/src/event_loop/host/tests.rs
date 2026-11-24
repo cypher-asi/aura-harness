@@ -26,10 +26,21 @@ impl BackgroundProcessHook for NoBackground {
 }
 
 fn agents(dir: &TempDir, reply: &str) -> TerminalAgents {
+    agents_on(
+        dir,
+        Arc::new(MockProvider::simple_response(reply.to_string())),
+    )
+}
+
+/// [`agents`] whose spawned agents' kernels call `provider`.
+fn agents_on(
+    dir: &TempDir,
+    provider: Arc<dyn aura_model::ModelProvider + Send + Sync>,
+) -> TerminalAgents {
     let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
     let scheduler = Arc::new(Scheduler::new(
         Arc::clone(&store),
-        Arc::new(MockProvider::simple_response(reply.to_string())),
+        provider,
         Vec::new(),
         Vec::new(),
         dir.path().to_path_buf(),
@@ -76,8 +87,12 @@ async fn spawned_agent_replies_with_a_notice_and_is_listed() {
         root,
         "Lead",
         dir.path().to_path_buf(),
-        &default_agent_config_with_auth("mock-model", None),
-        AgentMode::Agent,
+        &RootTurn {
+            config: &default_agent_config_with_auth("mock-model", None),
+            mode: AgentMode::Agent,
+            cache_salt: None,
+            run_scratch: None,
+        },
         notices,
     );
     table.add_root(root);
@@ -120,5 +135,90 @@ async fn spawned_agent_replies_with_a_notice_and_is_listed() {
     assert!(
         agents.host().tree(root).len() > 1,
         "helper stays listed after replying: {outcome:?}"
+    );
+}
+
+/// Answers like [`MockProvider`], keeping the cache salt of each request
+/// it was sent.
+#[derive(Default)]
+struct SaltCapture {
+    salts: std::sync::Mutex<Vec<Option<String>>>,
+}
+
+#[async_trait::async_trait]
+impl aura_model::ModelProvider for SaltCapture {
+    fn name(&self) -> &'static str {
+        "salt-capture"
+    }
+
+    async fn complete(
+        &self,
+        request: aura_model::ModelRequest,
+    ) -> Result<aura_model::ModelResponse, aura_model::ReasonerError> {
+        self.salts.lock().unwrap().push(request.cache_salt.clone());
+        MockProvider::simple_response("all done")
+            .complete(request)
+            .await
+    }
+
+    async fn health_check(&self) -> bool {
+        true
+    }
+}
+
+/// Spawn a helper under a root registered with `cache_salt`, wait for its
+/// reply, and return the salts of the requests the helper sent.
+async fn spawned_salts(cache_salt: Option<&str>) -> Vec<Option<String>> {
+    let dir = TempDir::new().unwrap();
+    let provider = Arc::new(SaltCapture::default());
+    let agents = agents_on(&dir, provider.clone());
+    let root = AgentId::generate();
+    let (notices, mut notice_rx) = mpsc::unbounded_channel();
+    let turn = RootTurn {
+        config: &default_agent_config_with_auth("mock-model", None),
+        mode: AgentMode::Agent,
+        cache_salt,
+        run_scratch: None,
+    };
+    agents.register(root, "Lead", dir.path().to_path_buf(), &turn, notices);
+    let child = ChildAgentSpec {
+        name: "helper".into(),
+        role: "helper".into(),
+        permissions: AgentPermissions::full_access(),
+        tool_permissions: None,
+        parent_tool_permissions: None,
+        system_prompt_override: None,
+        preassigned_agent_id: None,
+        initial_prompt: Some("go".into()),
+    };
+    agents
+        .hooks_for(root)
+        .spawn_child(&root, None, child)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(20), notice_rx.recv())
+        .await
+        .expect("timed out waiting for the reply")
+        .expect("notices closed");
+    let salts = provider.salts.lock().unwrap().clone();
+    salts
+}
+
+#[tokio::test]
+async fn a_spawned_agent_shares_its_roots_cache_salt() {
+    let salts = spawned_salts(Some("5a175a175a175a17")).await;
+    assert!(!salts.is_empty());
+    assert!(
+        salts
+            .iter()
+            .all(|s| s.as_deref() == Some("5a175a175a175a17")),
+        "{salts:?}"
+    );
+
+    let salts = spawned_salts(None).await;
+    assert!(!salts.is_empty());
+    assert!(
+        salts.iter().all(Option::is_none),
+        "an unsalted root's spawns: {salts:?}"
     );
 }

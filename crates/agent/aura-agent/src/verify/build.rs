@@ -58,7 +58,7 @@ pub async fn capture_build_baseline(
             None => return HashSet::new(),
         },
     };
-    match runner::run_build_command(project_root, &cmd, None).await {
+    match runner::run_build_command(project_root, &cmd, None, None).await {
         Ok(result) if !result.success => {
             let errors = parse_individual_error_signatures(&result.stderr);
             if !errors.is_empty() {
@@ -270,7 +270,7 @@ async fn run_build_step(
         },
     );
 
-    Ok(runner::run_build_command(base_path, build_cmd, Some(line_tx)).await?)
+    Ok(runner::run_build_command(base_path, build_cmd, Some(line_tx), None).await?)
 }
 
 async fn handle_build_success(

@@ -13,6 +13,8 @@ use tracing::warn;
 
 use aura_core_types::{Action, ActionId, AgentId, Effect, EffectStatus, ToolResult};
 
+use crate::RunScratch;
+
 // ---------------------------------------------------------------------------
 // Error
 // ---------------------------------------------------------------------------
@@ -80,6 +82,9 @@ pub struct ExecuteContext {
     /// (plus temp and cache folders). Set under the `yolo` approval level,
     /// where nothing asks before a command runs.
     pub confine_writes: bool,
+    /// The run's private folder for command temp files, caches and builds
+    /// (see [`RunScratch`]); `None` outside runs that need one.
+    pub run_scratch: Option<RunScratch>,
 }
 
 /// Execution limits enforced by the executor.
@@ -120,7 +125,15 @@ impl ExecuteContext {
             limits: ExecuteLimits::default(),
             tool_use_id: None,
             confine_writes: false,
+            run_scratch: None,
         }
+    }
+
+    /// Give the commands this action spawns the run's scratch folder.
+    #[must_use]
+    pub fn with_run_scratch(mut self, run_scratch: Option<RunScratch>) -> Self {
+        self.run_scratch = run_scratch;
+        self
     }
 
     /// Confine the writes of the commands this action spawns to the

@@ -118,21 +118,20 @@ impl TerminalAgents {
     }
 
     /// Make `agent` a root that can spawn agents working in `folder` on
-    /// `config`'s model, in session `mode`, which they inherit. Called
-    /// before each of its turns, so a model or mode change reaches the
-    /// agents it spawns next.
+    /// `turn`'s model, in its mode, which they inherit along with its cache
+    /// salt. Called before each of its turns, so a model or mode change
+    /// reaches the agents it spawns next.
     pub fn register(
         &self,
         agent: AgentId,
         name: &str,
         folder: PathBuf,
-        config: &AgentLoopConfig,
-        mode: AgentMode,
+        turn: &RootTurn<'_>,
         notices: NoticeSender,
     ) {
         self.scheduler
             .identity_registry()
-            .register(agent, identity(config));
+            .register(agent, identity(turn));
         let mut env = AgentEnv::new(Arc::clone(&self.factory));
         env.workspace = Some((folder, true));
         self.host.register_root(RootAgent {
@@ -140,17 +139,29 @@ impl TerminalAgents {
             name: name.to_string(),
             permissions: AgentPermissions::full_access(),
             tool_permissions: None,
-            mode,
-            model: config.model.clone(),
+            mode: turn.mode,
+            model: turn.config.model.clone(),
             env,
             inbox: Some(Arc::new(TerminalInbox { notices })),
         });
     }
 }
 
-/// What agents spawned under a terminal agent inherit from its turn
-/// config.
-fn identity(config: &AgentLoopConfig) -> AgentIdentity {
+/// What a terminal agent's next turn gives the agents it spawns.
+pub struct RootTurn<'a> {
+    /// The turn's loop config: model, credentials and system prompt
+    pub config: &'a AgentLoopConfig,
+    /// The session mode spawns inherit
+    pub mode: AgentMode,
+    /// Prompt-cache scope of the agent's kernel, which its spawns share
+    pub cache_salt: Option<&'a str>,
+    /// Scratch folder of the agent's commands, which its spawns share
+    pub run_scratch: Option<&'a aura_exec_tools::RunScratch>,
+}
+
+/// What agents spawned under a terminal agent inherit from its turn.
+fn identity(turn: &RootTurn<'_>) -> AgentIdentity {
+    let config = turn.config;
     AgentIdentity {
         reasoning_effort: config.user_thinking_effort,
         upstream_provider_family: config.upstream_provider_family.clone(),
@@ -168,6 +179,8 @@ fn identity(config: &AgentLoopConfig) -> AgentIdentity {
             .and_then(|tokens| usize::try_from(tokens).ok())
             .unwrap_or(200_000),
         auth_token: config.auth_token.clone(),
+        cache_salt: turn.cache_salt.map(str::to_string),
+        run_scratch: turn.run_scratch.cloned(),
     }
 }
 

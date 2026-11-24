@@ -317,6 +317,7 @@ impl ToolExecutor {
         tool_ctx.current_action_id = Some(ctx.action_id);
         tool_ctx.background_processes = self.background_processes.clone();
         tool_ctx.confine_writes = ctx.confine_writes;
+        tool_ctx.run_scratch = ctx.run_scratch.clone();
 
         let Some(tool) = self.tools.get(tool_name.as_str()) else {
             return Err(ToolError::UnknownTool(tool_name.clone()));

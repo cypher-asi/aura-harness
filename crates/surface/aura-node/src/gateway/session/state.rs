@@ -462,6 +462,8 @@ impl Session {
             request_kind: ModelRequestKind::Chat,
             max_context_tokens: usize::try_from(self.context_window_tokens).unwrap_or(usize::MAX),
             auth_token: self.auth_token.clone(),
+            cache_salt: None,
+            run_scratch: None,
         }
     }
 

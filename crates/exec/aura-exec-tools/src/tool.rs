@@ -12,11 +12,11 @@ use aura_core_types::{
     ActionId, AgentId, AgentMode, AgentPermissions, AgentToolPermissions, Capability, KernelMode,
     ToolDefinition, ToolResult, UserToolDefaults,
 };
-use aura_exec_traits::SpawnHook;
 pub use aura_exec_traits::{
     AgentControlHook, AgentReadHook, BackgroundJob, BackgroundProcess, BackgroundProcessHook,
     FileChangeHook, SubagentDispatchHook,
 };
+use aura_exec_traits::{RunScratch, SpawnHook};
 use std::sync::Arc;
 
 /// Context provided to tools during execution.
@@ -107,6 +107,10 @@ pub struct ToolContext {
     /// [`crate::confine`]), and skip the command allowlists since the
     /// confinement bounds them; set under the `yolo` approval level.
     pub confine_writes: bool,
+    /// The run's private folder for command temp files, caches and builds;
+    /// commands get variables naming it and, when confined, write there
+    /// instead of the shared temp and cache folders.
+    pub run_scratch: Option<RunScratch>,
 }
 
 impl ToolContext {
@@ -136,6 +140,7 @@ impl ToolContext {
             current_action_id: None,
             background_processes: None,
             confine_writes: false,
+            run_scratch: None,
         }
     }
 }

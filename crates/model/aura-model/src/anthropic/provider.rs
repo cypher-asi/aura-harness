@@ -2,7 +2,7 @@ use super::api_types::{ApiRequest, ApiResponse, StreamingApiRequest};
 use super::convert::{
     build_request_system, convert_messages_to_api, convert_response_to_aura,
     convert_tool_entries_to_api, extended_cache_ttl, request_uses_computer_tool,
-    resolve_output_config, resolve_thinking, tool_choice_for, COMPUTER_USE_BETA,
+    resolve_output_config, resolve_thinking, system_salt, tool_choice_for, COMPUTER_USE_BETA,
     EXTENDED_CACHE_TTL_BETA,
 };
 use super::origin_tag::{tag_response, tag_stream};
@@ -1975,6 +1975,7 @@ fn build_api_request(
             Some(convert_tool_entries_to_api(
                 &request.tools,
                 prompt_caching_enabled,
+                request.cache_salt.as_deref(),
             ))
         },
         tool_choice: if request.tools.is_empty() {
@@ -2515,7 +2516,11 @@ impl ModelProvider for AnthropicProvider {
                     self.anthropic_request_features_enabled(request_ref, &model);
                 let openai_features_enabled =
                     Self::supports_openai_proxy_features(request_ref, &model);
-                let system = build_request_system(request_ref, prompt_caching_enabled);
+                let system = build_request_system(
+                    request_ref,
+                    prompt_caching_enabled,
+                    system_salt(request_ref, openai_features_enabled),
+                );
                 let (openai_cache_key, openai_cache_retention) = if openai_features_enabled {
                     (
                         // Already clamped to OpenAI's 64-char limit when the
@@ -2667,7 +2672,11 @@ impl ModelProvider for AnthropicProvider {
                     self.anthropic_request_features_enabled(request_ref, &model);
                 let openai_features_enabled =
                     Self::supports_openai_proxy_features(request_ref, &model);
-                let system = build_request_system(request_ref, prompt_caching_enabled);
+                let system = build_request_system(
+                    request_ref,
+                    prompt_caching_enabled,
+                    system_salt(request_ref, openai_features_enabled),
+                );
                 let thinking = anthropic_features_enabled
                     .then(|| resolve_thinking(request_ref, &model))
                     .flatten();
@@ -2700,6 +2709,7 @@ impl ModelProvider for AnthropicProvider {
                         Some(convert_tool_entries_to_api(
                             &request_ref.tools,
                             prompt_caching_enabled,
+                            request_ref.cache_salt.as_deref(),
                         ))
                     },
                     tool_choice: if request_ref.tools.is_empty() {

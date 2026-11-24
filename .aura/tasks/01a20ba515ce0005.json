@@ -1,0 +1,14 @@
+{
+  "id": "01a20ba515ce0005",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust). Read-only. Keep your final reply UNDER 3500 characters (it gets truncated bey…",
+  "state": "completed",
+  "agent_id": "51491b56a91dfd4d7ca9ea098dfcdc2136f01c48455626ce3f2e819f042ac018",
+  "agent_name": "explorer #57",
+  "assignee": "explorer",
+  "parent": "01a20b9edde10003",
+  "items": [],
+  "summary": "I traced every channel I asked about. Two are real cross-arm leaks: Gate's live table, and command reads/temp dirs that aren't confined. The rest are separate, read-only, or only affect timing. The kernel doesn't know its arm when it is built, so plumbing a per-arm value needs a small change.",
+  "updated_ms": 1795491921965,
+  "created_ms": 1795491698126,
+  "tool_use_id": "toolu_011as5NxEPAbW8NcXR2Bp5te"
+}

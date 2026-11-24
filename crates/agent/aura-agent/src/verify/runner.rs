@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use aura_exec_tools::RunScratch;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
@@ -140,13 +141,23 @@ fn needs_shell(cmd: &str) -> bool {
 /// shell (`cmd /C` on Windows, `sh -c` on Unix).
 ///
 /// If `output_tx` is provided, stdout/stderr lines are streamed through
-/// the channel as they arrive.
+/// the channel as they arrive. With a `scratch`, the command gets the
+/// run's temp, cache and build variables (see [`RunScratch::vars`]), like
+/// the commands the run's tools start; it is not write-confined.
 pub async fn run_build_command(
     project_dir: &Path,
     build_command: &str,
     output_tx: Option<UnboundedSender<String>>,
+    scratch: Option<&RunScratch>,
 ) -> Result<BuildResult, BuildRunnerError> {
-    run_build_command_with_timeout(project_dir, build_command, output_tx, BUILD_TIMEOUT).await
+    run_build_command_with_timeout(
+        project_dir,
+        build_command,
+        output_tx,
+        scratch,
+        BUILD_TIMEOUT,
+    )
+    .await
 }
 
 /// [`run_build_command`] with a caller-chosen timeout. The process is
@@ -155,6 +166,7 @@ pub async fn run_build_command_with_timeout(
     project_dir: &Path,
     build_command: &str,
     output_tx: Option<UnboundedSender<String>>,
+    scratch: Option<&RunScratch>,
     timeout: Duration,
 ) -> Result<BuildResult, BuildRunnerError> {
     if build_command.split_whitespace().next().is_none() {
@@ -164,10 +176,17 @@ pub async fn run_build_command_with_timeout(
     info!(
         dir = %project_dir.display(),
         command = %build_command,
+        scratch = ?scratch.map(RunScratch::dir),
         "running build verification"
     );
 
-    let mut child = spawn_build_child(project_dir, build_command)?;
+    let mut child = build_child_command(project_dir, build_command, scratch)
+        .spawn()
+        .map_err(|e| BuildRunnerError::SpawnFailed {
+            command: build_command.to_string(),
+            cwd: project_dir.display().to_string(),
+            source: e,
+        })?;
 
     let (stdout_handle, stderr_handle) = spawn_output_collectors(&mut child, output_tx);
 
@@ -184,64 +203,76 @@ pub async fn run_build_command_with_timeout(
     Ok(result)
 }
 
-fn spawn_build_child(
+/// The command that runs `build_command` in `project_dir`, with piped
+/// output, killed when dropped, and with `scratch`'s variables if any.
+fn build_child_command(
     project_dir: &Path,
     build_command: &str,
-) -> Result<tokio::process::Child, BuildRunnerError> {
-    let child = if needs_shell(build_command) {
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            let mut c = Command::new("cmd");
-            c.as_std_mut().raw_arg(format!("/C {build_command}"));
-            c.current_dir(project_dir)
-                .kill_on_drop(true)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            Command::new("sh")
-                .args(["-c", build_command])
-                .current_dir(project_dir)
-                .kill_on_drop(true)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-        }
+    scratch: Option<&RunScratch>,
+) -> Command {
+    let mut command = if needs_shell(build_command) {
+        shell_command(build_command)
     } else {
-        let parts: Vec<&str> = build_command.split_whitespace().collect();
-        // On Windows, Rust's `Command::new("npm")` ignores `PATHEXT` so
-        // node-ecosystem shims (`npm.cmd`, `yarn.cmd`, `pnpm.cmd`,
-        // `vite.cmd`, etc.) fail with `program not found` even when they
-        // are clearly on PATH. Resolve the bare name through `which`
-        // first (which *does* honour `PATHEXT`) so the build/test gate
-        // can run npm scripts on Windows without forcing operators to
-        // wrap every command in `cmd /C`.
-        #[cfg(target_os = "windows")]
-        let program: std::ffi::OsString = windows_resolve_program(parts[0], project_dir)
-            .map_or_else(|| parts[0].into(), std::path::PathBuf::into_os_string);
-        #[cfg(not(target_os = "windows"))]
-        let program: std::ffi::OsString = parts[0].into();
-
-        Command::new(&program)
-            .args(&parts[1..])
-            .current_dir(project_dir)
-            .kill_on_drop(true)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+        direct_command(project_dir, build_command)
+    };
+    command
+        .current_dir(project_dir)
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, dir) in scratch.iter().flat_map(|scratch| scratch.vars()) {
+        command.env(key, dir);
     }
-    .map_err(|e| BuildRunnerError::SpawnFailed {
-        command: build_command.to_string(),
-        cwd: project_dir.display().to_string(),
-        source: e,
-    })?;
-    Ok(child)
+    command
 }
 
-/// PATHEXT-aware bare-name resolution used by [`spawn_build_child`] on
+/// `build_command` run by the system shell.
+fn shell_command(build_command: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new("cmd");
+        command.as_std_mut().raw_arg(format!("/C {build_command}"));
+        command
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut command = Command::new("sh");
+        command.args(["-c", build_command]);
+        command
+    }
+}
+
+/// `build_command` split on whitespace and run without a shell.
+fn direct_command(project_dir: &Path, build_command: &str) -> Command {
+    let mut parts = build_command.split_whitespace();
+    let program = resolve_program(parts.next().unwrap_or_default(), project_dir);
+    let mut command = Command::new(program);
+    command.args(parts);
+    command
+}
+
+/// The program to start for the bare name `first`.
+///
+/// On Windows, Rust's `Command::new("npm")` ignores `PATHEXT` so
+/// node-ecosystem shims (`npm.cmd`, `yarn.cmd`, `pnpm.cmd`, `vite.cmd`,
+/// etc.) fail with `program not found` even when they are clearly on
+/// PATH. Resolve the bare name through `which` first (which *does* honour
+/// `PATHEXT`) so the build/test gate can run npm scripts on Windows
+/// without forcing operators to wrap every command in `cmd /C`.
+#[cfg(target_os = "windows")]
+fn resolve_program(first: &str, project_dir: &Path) -> std::ffi::OsString {
+    windows_resolve_program(first, project_dir)
+        .map_or_else(|| first.into(), std::path::PathBuf::into_os_string)
+}
+
+/// The program to start for the bare name `first`: the name itself.
+#[cfg(not(target_os = "windows"))]
+fn resolve_program(first: &str, _project_dir: &Path) -> std::ffi::OsString {
+    first.into()
+}
+
+/// PATHEXT-aware bare-name resolution used by [`direct_command`] on
 /// Windows. See the analogous helper in
 /// `aura_exec_tools::fs_tools::cmd` — kept duplicated here to avoid widening
 /// `aura-exec-tools`' public surface for what's a small, very local fix.
@@ -1045,7 +1076,7 @@ Finished in 0.05 seconds
 
     #[tokio::test]
     async fn run_build_command_rejects_empty_command() {
-        let err = run_build_command(std::path::Path::new("."), "  ", None)
+        let err = run_build_command(std::path::Path::new("."), "  ", None, None)
             .await
             .unwrap_err();
         assert!(
@@ -1059,7 +1090,7 @@ Finished in 0.05 seconds
         let dir = tempfile::tempdir().unwrap();
         let command = "__aura_missing_command_for_runner_test__";
 
-        let err = run_build_command(dir.path(), command, None)
+        let err = run_build_command(dir.path(), command, None, None)
             .await
             .unwrap_err();
         let msg = err.to_string();
@@ -1069,6 +1100,69 @@ Finished in 0.05 seconds
             msg.contains(&dir.path().display().to_string()),
             "missing directory context: {msg}"
         );
+    }
+
+    /// The variables `command` sets, by name.
+    fn envs_of(command: &Command) -> std::collections::HashMap<String, Option<std::ffi::OsString>> {
+        command
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(std::ffi::OsStr::to_os_string),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn build_commands_with_a_scratch_get_its_variables_whether_shelled_or_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = RunScratch::new(dir.path().join("a-1.tmp"));
+        for build_command in ["cargo check --workspace", "cargo fmt --check && cargo test"] {
+            let command = build_child_command(dir.path(), build_command, Some(&scratch));
+            let envs = envs_of(&command);
+            for (key, value) in scratch.vars() {
+                assert_eq!(
+                    envs.get(key),
+                    Some(&Some(value.into_os_string())),
+                    "{build_command}: {key}"
+                );
+            }
+            assert_eq!(command.as_std().get_current_dir(), Some(dir.path()));
+        }
+    }
+
+    #[test]
+    fn build_commands_without_a_scratch_keep_the_harness_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        for build_command in ["cargo check", "make && make test"] {
+            let command = build_child_command(dir.path(), build_command, None);
+            assert!(envs_of(&command).is_empty(), "{build_command}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_build_run_with_a_scratch_sees_its_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = RunScratch::new(dir.path().join("a-1.tmp"));
+        let result = run_build_command(
+            dir.path(),
+            "echo \"$TMPDIR|$CARGO_TARGET_DIR\"",
+            None,
+            Some(&scratch),
+        )
+        .await
+        .unwrap();
+        assert!(result.success, "{result:?}");
+        let expected = format!(
+            "{}|{}",
+            scratch.dir().join("tmp").display(),
+            scratch.dir().join("target").display()
+        );
+        assert_eq!(result.stdout.trim(), expected);
     }
 
     #[test]
@@ -1085,7 +1179,7 @@ no test markers here
     /// `windows_resolve_program` must keep its hands off any input that
     /// already looks like a path or carries an explicit executable
     /// extension. Returning `None` here is the contract that lets
-    /// `spawn_build_child` fall through to `Command::new(parts[0])` with
+    /// `resolve_program` fall back to `Command::new` with
     /// the operator's original string, which is critical so we don't
     /// silently rewrite (for example) a project-local `./build.cmd`
     /// into a `.cmd` that happens to share a name on PATH.

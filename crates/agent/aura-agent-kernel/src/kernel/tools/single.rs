@@ -68,7 +68,8 @@ pub(super) async fn process_one(
                 .map_err(|e| crate::KernelError::Internal(format!("create workspace: {e}")))?;
             let ctx = ExecuteContext::new(kernel.agent_id, action_id, workspace)
                 .with_tool_use_id(tool_use_id)
-                .with_confined_writes(kernel.confines_writes(&authorized));
+                .with_confined_writes(kernel.confines_writes(&authorized))
+                .with_run_scratch(kernel.config.run_scratch.clone());
             let started = Instant::now();
             let effect = kernel.execute_with_timeout(&ctx, &action, &tool_name).await;
             (effect, elapsed_ms(started))

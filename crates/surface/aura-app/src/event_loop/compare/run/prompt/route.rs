@@ -55,7 +55,7 @@ pub(super) async fn route<'a>(
     let decision = decide(parts, &mut config, work.as_ref(), prompt.refused);
     let model = config.model.clone();
     let led = lead.is_some_and(|lead| {
-        let gate = &parts.ctx.hub.gate;
+        let gate = parts.gate;
         gate.note_model(session.agent_id(), &model);
         let led =
             category.is_some_and(|category| gate.way((category, difficulty), &model, false).led);
@@ -184,10 +184,10 @@ async fn criteria(
     config: &AgentLoopConfig,
 ) -> Option<Arc<Criteria>> {
     let category = category.filter(|_| parts.gate_arm())?;
-    let (hub, plan) = (&parts.ctx.hub, &parts.ctx.plan);
+    let plan = &parts.ctx.plan;
     let held = live::hold_to_criteria(
         &session.kernel,
-        (&hub.gate, &plan.candidates),
+        (parts.gate, &plan.candidates),
         category,
         difficulty,
         text,
@@ -214,15 +214,13 @@ fn decide(
     work: Option<&Work<'_>>,
     refused: &[String],
 ) -> Option<Decision> {
-    let (hub, plan) = (&parts.ctx.hub, &parts.ctx.plan);
+    let (hub, plan, gate) = (&parts.ctx.hub, &parts.ctx.plan, parts.gate);
     let decision = match (parts.routing, work) {
         (ArmRouting::Gate { .. }, Some(work)) if !refused.is_empty() => {
-            followup::reroute(&hub.gate, work, &plan.candidates, refused)
+            followup::reroute(gate, work, &plan.candidates, refused)
         }
-        (ArmRouting::Gate { .. }, Some(work)) if plan.learn => {
-            hub.gate.decide(work, &plan.candidates)
-        }
-        (ArmRouting::Gate { .. }, Some(work)) => hub.gate.redecide(work, &plan.candidates),
+        (ArmRouting::Gate { .. }, Some(work)) if plan.learn => gate.decide(work, &plan.candidates),
+        (ArmRouting::Gate { .. }, Some(work)) => gate.redecide(work, &plan.candidates),
         (ArmRouting::ByDifficulty(routes), Some(work)) => Some(routes.decide(work)),
         _ => None,
     };

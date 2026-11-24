@@ -57,7 +57,7 @@ pub async fn run_full_test_suite(
         anyhow::bail!("run_full_test_suite called with empty test_command");
     }
     let start = Instant::now();
-    let result = runner::run_build_command(project_root, test_command, None).await?;
+    let result = runner::run_build_command(project_root, test_command, None, None).await?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     let (tests, summary) =
@@ -105,7 +105,7 @@ pub async fn run_and_handle_tests(
     );
 
     let test_start = Instant::now();
-    let test_result = runner::run_build_command(base_path, test_command, None).await?;
+    let test_result = runner::run_build_command(base_path, test_command, None, None).await?;
     let dur = test_start.elapsed().as_millis() as u64;
 
     let (tests, summary) = runner::parse_test_output(

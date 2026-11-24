@@ -22,6 +22,7 @@ use crate::types::{
 };
 use crate::verify::run_build_command_with_timeout;
 use async_trait::async_trait;
+use aura_exec_tools::RunScratch;
 use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -244,6 +245,9 @@ pub type CheckNotifier = Arc<dyn Fn(&CheckReport) + Send + Sync>;
 pub struct PostEditCheck {
     root: PathBuf,
     config: PostEditCheckConfig,
+    /// The run's private folder, which the check's temp, cache and build
+    /// variables point beneath, as for the run's own commands.
+    scratch: Option<RunScratch>,
     last_failure: Mutex<Option<u64>>,
     notifier: Option<CheckNotifier>,
 }
@@ -255,9 +259,25 @@ impl PostEditCheck {
         Self {
             root: root.into(),
             config,
+            scratch: None,
             last_failure: Mutex::new(None),
             notifier: None,
         }
+    }
+
+    /// Run the check with `scratch`'s temp, cache and build variables
+    /// (see [`RunScratch::vars`]), so a run whose commands have a scratch
+    /// folder builds there too. The check is not write-confined.
+    #[must_use]
+    pub fn with_run_scratch(mut self, scratch: RunScratch) -> Self {
+        self.scratch = Some(scratch);
+        self
+    }
+
+    /// The scratch folder the check runs with, if any.
+    #[must_use]
+    pub fn run_scratch(&self) -> Option<&RunScratch> {
+        self.scratch.as_ref()
     }
 
     /// Report every run to `notifier`.
@@ -279,9 +299,14 @@ impl PostEditCheck {
     pub async fn run(&self) -> Option<AutoBuildResult> {
         let command = self.command()?;
         info!(command = %command.command, root = %self.root.display(), "Running post-edit check");
-        let result =
-            run_build_command_with_timeout(&self.root, &command.command, None, self.config.timeout)
-                .await;
+        let result = run_build_command_with_timeout(
+            &self.root,
+            &command.command,
+            None,
+            self.scratch.as_ref(),
+            self.config.timeout,
+        )
+        .await;
 
         let (outcome, output) = match result {
             Ok(build) if build.success => {
@@ -670,6 +695,26 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let check = PostEditCheck::new(dir.path(), config(&[]));
             assert!(check.run().await.is_none());
+        }
+
+        #[tokio::test]
+        async fn a_check_with_a_run_scratch_builds_in_it() {
+            let dir = tempfile::tempdir().unwrap();
+            let scratch = RunScratch::new(dir.path().join("a-1.tmp"));
+            let target = scratch.dir().join("target");
+            let command = format!(
+                "test \"$CARGO_TARGET_DIR\" = '{}' || {{ echo \"error: target $CARGO_TARGET_DIR\"; exit 1; }}",
+                target.display()
+            );
+            let (check, _) = check_in(dir.path(), &command);
+            let without = check.run().await.unwrap();
+            assert!(!without.success, "the harness's own target dir is used");
+
+            let (check, _) = check_in(dir.path(), &command);
+            let check = check.with_run_scratch(scratch.clone());
+            assert_eq!(check.run_scratch(), Some(&scratch));
+            let with = check.run().await.unwrap();
+            assert!(with.success, "{}", with.output);
         }
 
         /// Counts tool calls; every call succeeds.

@@ -18,6 +18,7 @@ pub mod domain;
 mod executor;
 mod hooks;
 mod router;
+mod scratch;
 mod spawn_hook;
 
 pub use executor::{
@@ -28,4 +29,5 @@ pub use hooks::{
     BackgroundProcessHook, FileChangeHook, SubagentDispatchHook,
 };
 pub use router::ExecutorRouter;
+pub use scratch::RunScratch;
 pub use spawn_hook::{ChildAgentSpec, NoopSpawnHook, SpawnError, SpawnHook, SpawnOutcome};

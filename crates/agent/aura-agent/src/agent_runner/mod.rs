@@ -636,7 +636,7 @@ impl AgentRunner {
                 )));
             }
 
-            let result = run_build_command(params.project_root, &command, None)
+            let result = run_build_command(params.project_root, &command, None, None)
                 .await
                 .map_err(|e| crate::AgentError::BuildFailed(e.to_string()))?;
 

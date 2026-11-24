@@ -356,3 +356,67 @@ async fn http_errors_are_classified() {
         matches!(err, ReasonerError::Api { status: 401, ref message } if message.contains("token expired"))
     );
 }
+
+fn salted(salt: Option<&str>, preamble: Option<&str>) -> Value {
+    let mut req = request(vec![Message::user("hi")]);
+    req.cache_salt = salt.map(str::to_string);
+    req.system_preamble = preamble.map(str::to_string);
+    convert::request_body(&req)
+}
+
+#[test]
+fn no_salt_sends_the_body_as_without_the_field() {
+    for preamble in [None, Some("You are Codex.")] {
+        let mut unsalted = ModelRequest::builder("gpt-5.4", "be helpful")
+            .request_kind(ModelRequestKind::Chat)
+            .auth_token(Some("chatgpt-token".to_string()))
+            .tools(vec![tool()])
+            .message(Message::user("hi"))
+            .try_build()
+            .unwrap();
+        unsalted.system_preamble = preamble.map(str::to_string);
+        assert_eq!(salted(None, preamble), convert::request_body(&unsalted));
+    }
+    assert_eq!(
+        salted(None, None)["tools"][0]["description"],
+        "Aura harness tools"
+    );
+}
+
+#[test]
+fn salt_scopes_the_namespace_and_instructions() {
+    let a = salted(Some("x:A"), None);
+    let b = salted(Some("x:B"), None);
+
+    assert_ne!(a["tools"], b["tools"]);
+    assert_eq!(
+        a["tools"][0]["description"],
+        "Aura harness tools\n\n[cache scope: x:A]"
+    );
+    assert_ne!(a["instructions"], b["instructions"]);
+    assert_eq!(a["instructions"], "[cache scope: x:A]\n\nbe helpful");
+    assert_eq!(b["instructions"], "[cache scope: x:B]\n\nbe helpful");
+    assert_eq!(a["input"], b["input"]);
+}
+
+#[test]
+fn salt_follows_the_required_preamble() {
+    let a = salted(Some("x:A"), Some("You are Codex."));
+    assert_eq!(
+        a["instructions"],
+        "You are Codex.\n\n[cache scope: x:A]\n\nbe helpful"
+    );
+
+    let mut req = request(vec![Message::user("hi")]);
+    req.system = String::new();
+    req.cache_salt = Some("x:B".into());
+    assert_eq!(
+        convert::request_body(&req)["instructions"],
+        "[cache scope: x:B]"
+    );
+    req.system_preamble = Some("You are Codex.".into());
+    assert_eq!(
+        convert::request_body(&req)["instructions"],
+        "You are Codex.\n\n[cache scope: x:B]"
+    );
+}

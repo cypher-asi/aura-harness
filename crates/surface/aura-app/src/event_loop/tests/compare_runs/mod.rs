@@ -15,6 +15,10 @@
 //!   model, by difficulty, or by Gate
 //! - `escalation`: a Gate run that fails its checks carrying on on a
 //!   stronger model
+//! - `gate_isolation`: each arm routing, its subtasks too, on a detached
+//!   view of Gate drawing from a generator of its own
+//! - `scratch`: each run's commands get temp, cache and build folders of
+//!   their own beside its copy, which its subtasks share
 //! - `sessions`: a session replayed prompt by prompt from the BENCH tab
 //! - `examples`: example tasks run from the BENCH tab, each in a fixture
 //!   of its own with a check of its own
@@ -25,13 +29,16 @@
 
 mod applying;
 mod asking;
+mod cache_salt;
 mod escalation;
 mod examples;
+mod gate_isolation;
 mod judging;
 mod pins;
 mod placement;
 mod routing;
 mod running;
+mod scratch;
 mod sessions;
 mod stopping;
 

@@ -357,12 +357,15 @@ pub(super) fn build_system_block(
 }
 
 /// [`build_system_block`] for `request`, with its `system_preamble` (if
-/// any) as a separate first block.
+/// any) as a separate first block. A `salt` (see [`system_salt`]) opens
+/// the system text, after the preamble, which stays first.
 pub(super) fn build_request_system(
     request: &ModelRequest,
     prompt_caching_enabled: bool,
+    salt: Option<&str>,
 ) -> Option<serde_json::Value> {
-    let system = build_system_block(&request.system, prompt_caching_enabled);
+    let system_text = crate::cache_scope::opening(&request.system, salt);
+    let system = build_system_block(&system_text, prompt_caching_enabled);
     let Some(preamble) = request
         .system_preamble
         .as_deref()
@@ -375,6 +378,17 @@ pub(super) fn build_request_system(
         blocks.extend(rest);
     }
     Some(serde_json::Value::Array(blocks))
+}
+
+/// The salt the system text opens with, if any: `request`'s
+/// [`ModelRequest::cache_salt`] when no tool carries it (see
+/// [`convert_tool_entries_to_api`]), or always for an `openai_family`
+/// upstream, which caches every prefix of the prompt from its first token,
+/// wherever the router renders the tools.
+pub(super) fn system_salt(request: &ModelRequest, openai_family: bool) -> Option<&str> {
+    let salt = request.cache_salt.as_deref()?;
+    let tools_carry_it = request.tools.iter().any(|t| t.name != COMPUTER_TOOL_NAME);
+    (openai_family || !tools_carry_it).then_some(salt)
 }
 
 pub(super) fn convert_messages_to_api(
@@ -761,11 +775,23 @@ pub(super) fn request_uses_computer_tool(tools: &[ToolDefinition]) -> bool {
 /// server tool entry. Every other tool is forwarded unchanged, so
 /// requests without a `computer` tool serialize byte-identically to the
 /// pre-computer-use contract.
+///
+/// A `salt` ([`ModelRequest::cache_salt`]) closes the description of the
+/// first tool that keeps one: the tool list is the first prefix Anthropic
+/// caches, so differently salted requests share no entry.
 pub(super) fn convert_tool_entries_to_api(
     tools: &[ToolDefinition],
     prompt_caching_enabled: bool,
+    salt: Option<&str>,
 ) -> Vec<ApiToolEntry> {
-    convert_tools_to_api(tools, prompt_caching_enabled)
+    let mut api_tools = convert_tools_to_api(tools, prompt_caching_enabled);
+    if let Some(salt) = salt {
+        if let Some(tool) = api_tools.iter_mut().find(|t| t.name != COMPUTER_TOOL_NAME) {
+            tool.description =
+                crate::cache_scope::closing(&tool.description, Some(salt)).into_owned();
+        }
+    }
+    api_tools
         .into_iter()
         .map(|tool| {
             if tool.name == COMPUTER_TOOL_NAME {
