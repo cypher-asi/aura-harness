@@ -100,6 +100,13 @@ impl AgentHooks {
         }
     }
 
+    /// `target` as an agent another node holds.
+    fn remote_target(host: &HostInner, target: &str) -> Option<AgentId> {
+        AgentId::from_hex(target.trim())
+            .ok()
+            .filter(|id| host.is_remote(*id))
+    }
+
     fn unknown(target: &str) -> String {
         format!("unknown agent '{target}'; call list_agents to see the agents you can reach")
     }
@@ -170,7 +177,11 @@ impl AgentControlHook for AgentHooks {
         subject: Option<&str>,
     ) -> Result<(), String> {
         let host = self.host()?;
-        if let Some(target) = self.local_target(&host, target_agent_id)? {
+        let target = match self.local_target(&host, target_agent_id)? {
+            Some(target) => Some(target),
+            None => Self::remote_target(&host, target_agent_id),
+        };
+        if let Some(target) = target {
             return host.deliver_message(
                 Some(self.caller),
                 target,
@@ -297,6 +308,7 @@ impl AgentReadHook for AgentHooks {
                 value
             })
             .collect();
+        agents.extend(host.remote_peers(root));
         if let Some(remote) = self.env().and_then(|env| env.remote_read) {
             if let Ok(serde_json::Value::Array(more)) = remote.list_agents(org_id).await {
                 agents.extend(more);

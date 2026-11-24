@@ -34,6 +34,7 @@ use super::hooks::AgentHooks;
 use super::inbox::{InboxMessage, MessageKind, ParentInbox};
 use super::mail::{MailMessage, MailObserver, ThreadId, Threads};
 use super::observer::{HostedTurn, TurnObserver};
+use super::remote::{RemoteMail, RemoteRouter};
 use super::setup;
 use crate::scheduler::{ScheduleOverrides, Scheduler};
 
@@ -353,6 +354,8 @@ pub(super) struct HostInner {
     /// Which thread each message between agents goes in.
     threads: Mutex<Threads>,
     mail_observer: Mutex<Option<Arc<dyn MailObserver>>>,
+    /// Carries mail to agents other nodes hold.
+    remote: Mutex<Option<Arc<dyn RemoteRouter>>>,
 }
 
 impl AgentHost {
@@ -374,6 +377,7 @@ impl AgentHost {
                 observer: Mutex::new(None),
                 threads: Mutex::new(Threads::default()),
                 mail_observer: Mutex::new(None),
+                remote: Mutex::new(None),
             }),
         }
     }
@@ -388,6 +392,33 @@ impl AgentHost {
     /// parent. Messages from the user are not mail and are not shown.
     pub fn set_mail_observer(&self, observer: Arc<dyn MailObserver>) {
         *self.inner.mail_observer.lock() = Some(observer);
+    }
+
+    /// Send mail for agents this host does not hold through `router`
+    /// from now on.
+    pub fn set_remote_router(&self, router: Arc<dyn RemoteRouter>) {
+        *self.inner.remote.lock() = Some(router);
+    }
+
+    /// Hand `mail` from an agent on another node to the agent here it is
+    /// for, in the thread it names.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the recipient is unknown or stopped here.
+    pub fn deliver_remote(&self, mail: RemoteMail) -> Result<(), String> {
+        let envelope = Envelope {
+            from: Some(mail.from),
+            from_name: mail.from_name,
+            kind: mail.kind,
+            text: mail.text,
+            thread: mail.thread,
+            subject: mail.subject,
+            waiter: None,
+            events: None,
+            cancel: None,
+        };
+        self.inner.enqueue(mail.to, envelope)
     }
 
     /// Register or refresh a top-level agent. Its existing children are
@@ -1087,9 +1118,10 @@ impl HostInner {
     fn enqueue(self: &Arc<Self>, to: AgentId, envelope: Envelope) -> Result<(), String> {
         let (root_inbox, mail) = {
             let mut agents = self.agents.lock();
-            let entry = agents
-                .get_mut(&to)
-                .ok_or_else(|| format!("unknown agent {to}"))?;
+            let Some(entry) = agents.get_mut(&to) else {
+                drop(agents);
+                return self.route_remote(to, envelope);
+            };
             let mut mail = unsent_mail(&envelope, to, &entry.name);
             if let Some(mail) = mail.as_mut() {
                 self.record_mail(mail);
@@ -1139,6 +1171,54 @@ impl HostInner {
                 Ok(())
             }
         }
+    }
+
+    /// Send `envelope` for `to` to the node holding it, or fail as an
+    /// unknown agent when no node does.
+    fn route_remote(&self, to: AgentId, envelope: Envelope) -> Result<(), String> {
+        let router = self.remote.lock().clone();
+        let unknown = || format!("unknown agent {to}");
+        let Some(router) = router else {
+            return Err(unknown());
+        };
+        let Some(to_name) = router.name_of(to) else {
+            return Err(unknown());
+        };
+        let Some(from) = envelope.from else {
+            return Err("only agents can message agents on other nodes".to_string());
+        };
+        let mut mail = unsent_mail(&envelope, to, &to_name);
+        router.route(RemoteMail {
+            from,
+            from_name: envelope.from_name,
+            to,
+            kind: envelope.kind,
+            thread: envelope.thread,
+            subject: envelope.subject,
+            text: envelope.text,
+        })?;
+        if let Some(mail) = mail.as_mut() {
+            self.record_mail(mail);
+            self.show_mail(mail);
+        }
+        Ok(())
+    }
+
+    /// The router's peers for agents under `root`.
+    pub(super) fn remote_peers(&self, root: AgentId) -> Vec<serde_json::Value> {
+        self.remote
+            .lock()
+            .clone()
+            .map(|router| router.peers(root))
+            .unwrap_or_default()
+    }
+
+    /// Whether another node holds `agent`.
+    pub(super) fn is_remote(&self, agent: AgentId) -> bool {
+        self.remote
+            .lock()
+            .clone()
+            .is_some_and(|router| router.name_of(agent).is_some())
     }
 
     /// Start the next queued turn if the agent is free to run one.

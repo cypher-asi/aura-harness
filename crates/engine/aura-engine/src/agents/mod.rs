@@ -27,6 +27,7 @@ mod host;
 mod inbox;
 mod mail;
 mod observer;
+mod remote;
 mod setup;
 
 #[cfg(test)]
@@ -40,3 +41,4 @@ pub use host::{
 pub use inbox::{InboxMessage, MessageKind, ParentInbox};
 pub use mail::{MailMessage, MailObserver, ThreadId};
 pub use observer::{HostedTurn, TurnObserver};
+pub use remote::{RemoteMail, RemoteRouter};

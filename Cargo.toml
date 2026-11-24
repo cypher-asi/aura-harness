@@ -133,6 +133,10 @@ governor = "0.8"
 # Storage
 rocksdb = "0.24"
 
+# Host facts for the HOST tab and cloud nodes (cross-platform: the
+# desktop app also runs on Windows and macOS).
+sysinfo = { version = "0.33", default-features = false, features = ["system", "disk", "network"] }
+
 # Concurrency
 dashmap = "5.5"
 parking_lot = "0.12"

@@ -19,6 +19,7 @@
 //!   build and a running node, keyed by a fingerprint.
 //! - [`delta`]: the project files a machine gets on top of its snapshot,
 //!   never including `.env` files.
+//! - [`host`]: samples a host's name, addresses, CPU, memory and disk.
 //! - [`machine_env`]: the allowlisted environment a machine gets.
 //! - [`cost`]: metered usage plus a live estimate since the last reading.
 //! - [`replica`]: checks and mirrors a node's record pages into the
@@ -40,6 +41,7 @@ pub mod delta;
 pub mod error;
 pub mod fake;
 pub mod fleet;
+pub mod host;
 pub mod machine_env;
 pub mod mesh;
 pub mod names;

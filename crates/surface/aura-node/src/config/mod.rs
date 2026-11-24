@@ -139,6 +139,13 @@ pub struct NodeConfig {
     /// the agent/user permission state to be effectively FullAccess before any
     /// per-session bypass is enabled.
     pub allow_unrestricted_full_access: bool,
+    /// Whether this node runs on a cloud machine for a hub
+    /// (`AURA_CLOUD_NODE=1`): it then only accepts the tokens the hub
+    /// gives it through `aura node claim`, never its own startup token.
+    pub cloud_node: bool,
+    /// The project directory on a cloud machine (`AURA_WORKSPACE`), which
+    /// `GET /v1/workspace/patch` diffs.
+    pub workspace: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for NodeConfig {
@@ -163,6 +170,8 @@ impl std::fmt::Debug for NodeConfig {
                 "allow_unrestricted_full_access",
                 &self.allow_unrestricted_full_access,
             )
+            .field("cloud_node", &self.cloud_node)
+            .field("workspace", &self.workspace)
             .finish()
     }
 }
@@ -183,6 +192,8 @@ impl Default for NodeConfig {
             require_auth: false,
             swarm_internal_token: None,
             allow_unrestricted_full_access: false,
+            cloud_node: false,
+            workspace: None,
         }
     }
 }
@@ -293,6 +304,15 @@ impl NodeConfig {
         if let Ok(val) = std::env::var("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS") {
             let v = val.trim();
             config.allow_unrestricted_full_access = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(val) = std::env::var("AURA_CLOUD_NODE") {
+            let v = val.trim();
+            config.cloud_node = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(val) = std::env::var("AURA_WORKSPACE") {
+            if !val.trim().is_empty() {
+                config.workspace = Some(PathBuf::from(val.trim()));
+            }
         }
         config
     }
