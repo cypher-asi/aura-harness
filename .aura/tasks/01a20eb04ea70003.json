@@ -1,0 +1,14 @@
+{
+  "id": "01a20eb04ea70003",
+  "title": "Review a small change in the Rust workspace at the repo root (/home/n3o/code/aura-harness). Read-only: report findings,…",
+  "state": "completed",
+  "agent_id": "de3cb06a93b51cae8ee653d9d84978a57a5bfdf525c1fb0536ce5d2d7eaa65b9",
+  "agent_name": "reviewer #55",
+  "assignee": "reviewer",
+  "parent": "01a20eb005730002",
+  "items": [],
+  "summary": "I found no compile or test failures, but the new default isn't safe for every user. Most people will get an error from the default form, and once arm B is changed there's no way back to the default.",
+  "updated_ms": 1795543002978,
+  "created_ms": 1795542765223,
+  "tool_use_id": "toolu_01WUhLsMzP8KgtHTyNKW8Q4K"
+}

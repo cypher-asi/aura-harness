@@ -337,8 +337,9 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 }
 
 /// `● local  http://127.0.0.1:8080` when signed out, otherwise where you are
-/// signed in: `● alice (zOS) · CLAUDE MAX 20X · CHATGPT  http://...`. The dot
-/// reflects API connectivity.
+/// signed in: `alice (zOS) · ● CLAUDE MAX 20X · CHATGPT  http://...`. The dot
+/// reflects API connectivity and sits in front of the sign-in that serves
+/// the chat's model, or in front of everything when none of them does.
 fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     let (icon, icon_color) = if app.api_active() {
         ("● ", theme.colors.success)
@@ -347,19 +348,42 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     };
     let muted = Style::default().fg(theme.colors.muted);
     let signed_in = Style::default().fg(theme.colors.primary);
-    let mut spans = vec![Span::styled(icon, Style::default().fg(icon_color))];
+
+    // Each sign-in, tagged with the provider id it serves models for.
+    let mut segments: Vec<(Option<&str>, Vec<Span<'a>>)> = Vec::new();
     if let Some(user) = app.user() {
-        spans.push(Span::styled(user, signed_in));
-        spans.push(Span::styled(" (zOS)", muted));
+        segments.push((
+            Some("zos"),
+            vec![Span::styled(user, signed_in), Span::styled(" (zOS)", muted)],
+        ));
     }
     for plan in app.plans() {
-        if spans.len() > 1 {
+        segments.push((
+            plan.split_whitespace().next(),
+            vec![Span::styled(plan.to_uppercase(), signed_in)],
+        ));
+    }
+    if segments.is_empty() {
+        segments.push((None, vec![Span::styled("local", muted)]));
+    }
+
+    let active = current_provider(app)
+        .and_then(|provider| {
+            segments
+                .iter()
+                .position(|(id, _)| id.is_some_and(|id| id.eq_ignore_ascii_case(provider)))
+        })
+        .unwrap_or(0);
+
+    let mut spans = Vec::new();
+    for (index, (_, segment)) in segments.into_iter().enumerate() {
+        if index > 0 {
             spans.push(Span::styled(" · ", muted));
         }
-        spans.push(Span::styled(plan.to_uppercase(), signed_in));
-    }
-    if spans.len() == 1 {
-        spans.push(Span::styled("local", muted));
+        if index == active {
+            spans.push(Span::styled(icon, Style::default().fg(icon_color)));
+        }
+        spans.extend(segment);
     }
     if let Some(url) = app.api_url() {
         spans.push(Span::styled(
@@ -368,6 +392,20 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
         ));
     }
     spans
+}
+
+/// Provider id (`zos`, `claude`, `chatgpt`, `openrouter`) that serves the
+/// chat's model. Under Gate it is the one serving Gate's next pick, read
+/// from the route label, e.g. `claude-sonnet-4-6 (claude plan)`.
+fn current_provider(app: &App) -> Option<&str> {
+    if app.current_model() == "gate" {
+        let (_, backend) = app.model_route()?.rsplit_once('(')?;
+        return match backend.split_whitespace().next()?.trim_end_matches(')') {
+            "cloud" => Some("zos"),
+            id => Some(id),
+        };
+    }
+    app.current_model_option()?.provider.as_deref()
 }
 
 /// `high thinking`: the thinking level pinned for every turn, brighter

@@ -10,6 +10,10 @@
 //! below, so while a reply streams in nothing above the line still being
 //! written moves. Only lists at the top of a text segment are looked at:
 //! lists in quotes and lists nested in an item keep their blank lines.
+//!
+//! The plan also marks where each item of such a list starts, so the
+//! renderer can set an item apart from one before it that took several
+//! rows (see [`Item`]).
 
 use super::{indent, is_list_item, is_rule, list_item, table};
 
@@ -30,6 +34,23 @@ pub(super) struct LinePlan {
     /// A field that starts a record right after the one before, so a
     /// blank row goes above it
     pub(super) gap: bool,
+    /// An item of a list at the top of the text, and how it follows the
+    /// item before it
+    pub(super) item: Option<Item>,
+}
+
+/// Where a list item stands among the items of its list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Item {
+    /// The list's first item
+    First,
+    /// A later item, which a blank row sets apart from the item before
+    /// it when that one took more than one row: a wall of wrapped items
+    /// reads as one paragraph otherwise, while short items stay tight
+    Next,
+    /// A field after a field, which stays tight to it (or is parted by
+    /// [`LinePlan::gap`] when it starts a record)
+    Field,
 }
 
 /// The label a field item's body starts with.
@@ -167,7 +188,8 @@ fn list_at(lines: &[&str], start: usize) -> (Vec<usize>, usize) {
 /// labels or more, so a list of notes, every one `Note:`, stays one.
 fn plan_list(lines: &[&str], items: &[usize], plan: &mut [LinePlan]) {
     let mut run: Option<Run<'_>> = None;
-    for &item in items {
+    for (n, &item) in items.iter().enumerate() {
+        plan[item].item = Some(if n == 0 { Item::First } else { Item::Next });
         let Some(label) = field_label(lines[item]) else {
             run = None;
             continue;
@@ -178,10 +200,12 @@ fn plan_list(lines: &[&str], items: &[usize], plan: &mut [LinePlan]) {
                 // A field above in the list puts `item` past the first line.
                 // The blank lines the text has before a record are kept.
                 plan[item].gap = !lines[item - 1].trim().is_empty();
+                plan[item].item = Some(Item::Field);
                 current.record = vec![label.text];
             }
             Some(current) => {
                 skip_blanks_before(lines, item, plan);
+                plan[item].item = Some(Item::Field);
                 current.add(label.text);
             }
         }
@@ -366,7 +390,31 @@ mod tests {
         let lines = [
             "> - A: 1", ">", "> - B: 2", "- x", "  - A: 1", "", "  - B: 2",
         ];
-        assert!(plan(&lines).iter().all(|line| *line == LinePlan::default()));
+        let planned = plan(&lines);
+        assert!(planned.iter().all(|line| !line.skip && !line.gap));
+        let items: Vec<Option<Item>> = planned.iter().map(|line| line.item).collect();
+        assert_eq!(
+            items,
+            [None, None, None, Some(Item::First), None, None, None],
+            "only the top list's items are marked"
+        );
+    }
+
+    #[test]
+    fn items_are_marked_first_next_or_field() {
+        let lines = ["- one", "  more", "- A: 1", "", "- B: 2", "- plain"];
+        let items: Vec<Option<Item>> = plan(&lines).iter().map(|line| line.item).collect();
+        assert_eq!(
+            items,
+            [
+                Some(Item::First),
+                None,
+                Some(Item::Next),
+                None,
+                Some(Item::Field),
+                Some(Item::Next)
+            ]
+        );
     }
 
     #[test]

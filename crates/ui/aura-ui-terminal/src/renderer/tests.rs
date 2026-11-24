@@ -3023,6 +3023,86 @@ fn test_header_shows_zos_user_and_plans() {
     );
 }
 
+fn select_model(app: &mut crate::App, id: &str, provider: Option<&str>, route: Option<&str>) {
+    use crate::events::{ModelOptionView, UiCommand};
+
+    app.process_command(UiCommand::SetModels {
+        options: vec![ModelOptionView {
+            id: id.to_string(),
+            label: id.to_string(),
+            local: false,
+            installed: true,
+            group: "Cloud".to_string(),
+            provider: provider.map(str::to_string),
+            available: true,
+            context_window: None,
+        }],
+        current: id.to_string(),
+        route: route.map(str::to_string),
+        user: app.user().map(str::to_string),
+        plans: app.plans().to_vec(),
+        thinking: None,
+    });
+}
+
+#[test]
+fn test_header_dot_sits_in_front_of_the_plan_serving_the_model() {
+    let mut app = app_with_auth(Some("alice"), &["Claude Max 20x", "OpenRouter"]);
+    let header = |app: &mut crate::App| render_rows(app, 120)[0].trim_end().to_string();
+
+    select_model(&mut app, "openrouter/qwen", Some("openrouter"), None);
+    assert!(
+        header(&mut app)
+            .ends_with("alice (zOS) · CLAUDE MAX 20X · ● OPENROUTER  http://127.0.0.1:8080"),
+        "{:?}",
+        header(&mut app)
+    );
+
+    select_model(&mut app, "claude/claude-sonnet-4-6", Some("claude"), None);
+    assert!(
+        header(&mut app)
+            .ends_with("alice (zOS) · ● CLAUDE MAX 20X · OPENROUTER  http://127.0.0.1:8080"),
+        "{:?}",
+        header(&mut app)
+    );
+
+    select_model(&mut app, "aura-claude-haiku-4-5", Some("zos"), None);
+    assert!(
+        header(&mut app)
+            .ends_with("● alice (zOS) · CLAUDE MAX 20X · OPENROUTER  http://127.0.0.1:8080"),
+        "{:?}",
+        header(&mut app)
+    );
+}
+
+#[test]
+fn test_header_dot_follows_gates_pick() {
+    let mut app = app_with_auth(Some("alice"), &["Claude Max 20x", "OpenRouter"]);
+    select_model(
+        &mut app,
+        "gate",
+        None,
+        Some("claude-sonnet-4-6 (claude plan)"),
+    );
+    let header = render_rows(&mut app, 120)[0].trim_end().to_string();
+    assert!(
+        header.ends_with("alice (zOS) · ● CLAUDE MAX 20X · OPENROUTER  http://127.0.0.1:8080"),
+        "{header:?}"
+    );
+}
+
+#[test]
+fn test_header_dot_stays_in_front_for_a_local_model() {
+    let rows = render_rows(&mut app_with_auth(Some("alice"), &["Claude Max 20x"]), 120);
+    assert!(
+        rows[0]
+            .trim_end()
+            .ends_with("● alice (zOS) · CLAUDE MAX 20X  http://127.0.0.1:8080"),
+        "{:?}",
+        rows[0]
+    );
+}
+
 #[test]
 fn test_input_shows_gate_instead_of_its_pick() {
     use crate::events::{ModelOptionView, UiCommand};

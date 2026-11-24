@@ -7,6 +7,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Long list items are spaced apart
+
+##### Changed
+
+- In chat text, a list item that wraps or runs on to more lines gets a
+  blank row before the next item, so a list of long points no longer
+  reads as one block of text. Short one-line items, nested items and
+  lists of `Label: value` fields stay tight, and a list already written
+  with blank lines between its items gets no second one.
+
+### BENCH compares Gate with Opus 5.5 by default
+
+##### Changed
+
+- A new benchmark on the BENCH form runs every task of SWE-bench Pro
+  Hard once per arm, Gate (arm A, which routes each turn by its
+  difficulty) against Opus 5.5 (arm B). Arm B names the Opus 5.5 you can
+  run, on your Claude plan first, then any other route such as
+  OpenRouter's `claude-opus-5.5`. With none, the server's strongest Opus
+  stands in, so the default form never fails for lack of a Claude plan.
+  ←/→ on arm B move on from Opus 5.5 to the other models and back.
+
 ### Empty panel messages fit on one line
 
 ##### Changed

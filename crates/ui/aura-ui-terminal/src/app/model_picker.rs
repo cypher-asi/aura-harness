@@ -251,9 +251,12 @@ impl ModelPicker {
 }
 
 /// The model `/model <query>` names exactly: the one with that id, else
-/// one with that label the user can run now (labels such as `Claude Opus
-/// 4.7` are shared across routes), else any with that label. Case is
-/// ignored. Other names go to the event loop, which resolves aliases.
+/// one with that label the user can run now on a linked plan (labels such
+/// as `Claude Opus 4.7` are shared across routes, and a linked Claude or
+/// ChatGPT plan is what the user already pays for), else one with that
+/// label they can run now on any route, else any with that label. Case is
+/// ignored. Other names go to the event loop, which resolves aliases with
+/// the same preference for linked plans.
 #[must_use]
 pub fn exact_match<'a>(models: &'a [ModelOptionView], query: &str) -> Option<&'a ModelOptionView> {
     let query = query.trim();
@@ -265,8 +268,14 @@ pub fn exact_match<'a>(models: &'a [ModelOptionView], query: &str) -> Option<&'a
     models
         .iter()
         .find(|m| m.id.eq_ignore_ascii_case(query))
+        .or_else(|| labelled().find(|m| m.available && on_plan(m)))
         .or_else(|| labelled().find(|m| m.available))
         .or_else(|| labelled().next())
+}
+
+/// Whether `model` is served by a personal plan (Claude or ChatGPT).
+fn on_plan(model: &ModelOptionView) -> bool {
+    matches!(model.provider.as_deref(), Some("claude" | "chatgpt"))
 }
 
 /// Case-insensitive substring match on id or label; `query` is lowercase.
@@ -487,6 +496,30 @@ mod tests {
             Some("chatgpt/gpt-5".to_string())
         );
         assert_eq!(id(exact_match(&models, "opus")), None);
+    }
+
+    #[test]
+    fn exact_label_prefers_a_linked_plan_over_other_runnable_routes() {
+        let routed = |id: &str, provider: &str| ModelOptionView {
+            provider: Some(provider.to_string()),
+            ..model(id, "Claude Opus 4.7", true)
+        };
+        let models = vec![
+            routed("aura-claude-opus-4-7", "zos"),
+            routed("openrouter/anthropic/claude-opus-4.7", "openrouter"),
+            routed("claude/claude-opus-4-7", "claude"),
+        ];
+        assert_eq!(
+            exact_match(&models, "claude opus 4.7").map(|m| m.id.as_str()),
+            Some("claude/claude-opus-4-7")
+        );
+        // Without the plan linked, the first runnable route wins.
+        let mut unlinked = models.clone();
+        unlinked[2].available = false;
+        assert_eq!(
+            exact_match(&unlinked, "claude opus 4.7").map(|m| m.id.as_str()),
+            Some("aura-claude-opus-4-7")
+        );
     }
 
     #[test]

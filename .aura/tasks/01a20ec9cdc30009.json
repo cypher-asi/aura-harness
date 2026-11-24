@@ -1,0 +1,22 @@
+{
+  "id": "01a20ec9cdc30009",
+  "title": "commit",
+  "state": "completed",
+  "agent_id": "c1cd42326cfde93b6438003053e21407cd91da59a437505f6f1785fe07f55ed8",
+  "agent_name": "Agent 1494",
+  "items": [
+    {
+      "content": "Implement merged TASKS tab (plans grouped above tasks, No Plan header) in aura-ui-terminal",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the change for regressions and missing tests",
+      "state": "cancelled",
+      "assignee": "reviewer"
+    }
+  ],
+  "summary": "I committed the change as `45e87302` (\"Merge the PLANS side tab into TASKS\") on `main`, covering the 14 files in `aura-ui-terminal`. The review you cancelled still hasn't been run on it.",
+  "updated_ms": 1795544461692,
+  "created_ms": 1795544436163
+}

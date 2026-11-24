@@ -206,8 +206,21 @@ const MAX_REPEATS: u32 = 10;
 /// The built-in SWE-bench Pro Hard suite that new benchmarks run.
 const DEFAULT_SUITE: &str = "swe_bench_pro_hard";
 
-/// The model Gate is compared with by default.
-const DEFAULT_AGAINST: &str = "opus-5-5";
+/// Arm B's starting value: Opus 5.5. The form swaps it for the id of the
+/// Opus 5.5 the user can run ([`App::default_bench_against`]) once the
+/// model list is in, so it resolves on any route and cycles with the
+/// other models.
+pub const DEFAULT_AGAINST: &str = "opus-5-5";
+
+/// Whether `id` names Opus 5.5 on any route: `claude/claude-opus-5-5`,
+/// `aura-claude-opus-5-5`, `openrouter/anthropic/claude-opus-5.5`. Variants
+/// such as `claude-opus-5-5-fast` are not it.
+fn is_opus_5_5(id: &str) -> bool {
+    let name = id.rsplit('/').next().unwrap_or(id).to_ascii_lowercase();
+    let name = name.replace('.', "-");
+    let name = name.strip_prefix("aura-").unwrap_or(&name);
+    name.strip_prefix("claude-").unwrap_or(name) == DEFAULT_AGAINST
+}
 
 /// One attempt per task on each arm, so repeated runs are opt-in.
 const DEFAULT_REPEATS: u32 = 1;
@@ -227,7 +240,8 @@ pub struct BenchForm {
     pub tasks: usize,
     /// `gate`, `gate:nodelegate`, [`BY_DIFFICULTY`] or a model id
     pub a: String,
-    /// As `a`; [`DEFAULT_AGAINST`] by default, or empty for the strongest Opus
+    /// As `a`; [`DEFAULT_AGAINST`] until the form names the Opus 5.5 the
+    /// user runs, empty for the strongest Opus
     pub b: String,
     /// The models of arm A's easy, medium and hard work when `a` is
     /// [`BY_DIFFICULTY`]; empty until chosen
@@ -713,6 +727,31 @@ impl App {
             .unwrap_or_else(|| DEFAULT_CLASSIFIER.to_string())
     }
 
+    /// Arm B's default: the Opus 5.5 the user can run, on their Claude
+    /// plan when they have one, else empty for the strongest Opus there
+    /// is, which the server picks.
+    #[must_use]
+    pub fn default_bench_against(&self) -> String {
+        let opus: Vec<String> = self
+            .bench_model_choices()
+            .into_iter()
+            .filter(|id| is_opus_5_5(id))
+            .collect();
+        opus.iter()
+            .find(|id| id.starts_with("claude/"))
+            .or_else(|| opus.first())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Put the runnable Opus 5.5 in place of arm B's [`DEFAULT_AGAINST`],
+    /// once the model list is in; an arm the user chose is left alone.
+    fn settle_bench_against(&mut self) {
+        if self.bench.form.b == DEFAULT_AGAINST && !self.models.is_empty() {
+            self.bench.form.b = self.default_bench_against();
+        }
+    }
+
     /// Open the model selector, as `/model` does, to pick the model of the
     /// form's row `field` (a difficulty's, or the classifier's), filtered
     /// by `filter` and on the row's model when it has one.
@@ -923,6 +962,7 @@ impl App {
             // in; a classifier the user chose is left alone.
             self.bench.form.classifier = self.default_bench_classifier();
         }
+        self.settle_bench_against();
         self.bench.form.estimate = None;
         self.bench.form.waiting = false;
         self.send_bench(BenchRequest::Sessions);
@@ -1105,6 +1145,7 @@ impl App {
                 }
             }
             FormField::A | FormField::B => {
+                self.settle_bench_against();
                 let choices = self.bench_arm_choices(field == FormField::B);
                 let form = &mut self.bench.form;
                 let value = if field == FormField::A {
@@ -1148,6 +1189,12 @@ impl App {
         if self.bench.form.ready() {
             self.send_bench(BenchRequest::Start);
             return;
+        }
+        if self.bench.form.b == DEFAULT_AGAINST {
+            // `opus-5-5` itself matches only a Claude plan's id; with no
+            // runnable Opus 5.5 (or no model list yet) the server's
+            // strongest Opus stands in.
+            self.bench.form.b = self.default_bench_against();
         }
         let form = self.bench.form.clone();
         let work = match self.bench.work() {
@@ -1393,7 +1440,12 @@ mod tests {
 
     #[test]
     fn default_submission_prepares_the_full_suite_against_opus_5_5() {
-        let mut app = App::new();
+        let mut app = app_with_models(&[
+            ("gate", "Gate"),
+            ("openrouter/anthropic/claude-opus-5.5", "Claude Opus 5.5"),
+            (OPUS_5_5, "Claude Opus 5.5"),
+            ("claude/claude-sonnet-5-5", "Claude Sonnet 5.5"),
+        ]);
         let id = app.active_agent_id.clone();
         let examples = vec![
             example("coding", "easy 1"),
@@ -1421,8 +1473,77 @@ mod tests {
             }
         );
         assert_eq!(spec.a, "gate");
-        assert_eq!(spec.b, DEFAULT_AGAINST);
+        assert_eq!(spec.b, OPUS_5_5, "the Claude plan's Opus 5.5");
         assert_eq!(spec.repeats, 1);
+    }
+
+    const OPUS_5_5: &str = "claude/claude-opus-5-5";
+
+    #[test]
+    fn opus_5_5_is_found_on_any_route_but_not_as_a_variant() {
+        for id in [
+            OPUS_5_5,
+            "aura-claude-opus-5-5",
+            "openrouter/anthropic/claude-opus-5.5",
+        ] {
+            assert!(is_opus_5_5(id), "{id}");
+        }
+        for id in [
+            "claude/claude-opus-5-5-fast",
+            "claude/claude-opus-4-7",
+            "claude/claude-sonnet-5-5",
+            "openrouter/anthropic/claude-opus-5.55",
+        ] {
+            assert!(!is_opus_5_5(id), "{id}");
+        }
+
+        let openrouter = "openrouter/anthropic/claude-opus-5.5";
+        let app = app_with_models(&[("gate", "Gate"), (openrouter, "Claude Opus 5.5")]);
+        assert_eq!(app.default_bench_against(), openrouter, "without a plan");
+        let none = app_with_models(&[("claude/claude-opus-4-7", "Claude Opus 4.7")]);
+        assert_eq!(
+            none.default_bench_against(),
+            "",
+            "the server's strongest Opus stands in"
+        );
+    }
+
+    #[test]
+    fn arm_b_starts_on_the_runnable_opus_5_5_and_cycles_from_it() {
+        let mut app = app_with_models(&[
+            ("gate", "Gate"),
+            ("claude/claude-sonnet-5-5", "Claude Sonnet 5.5"),
+            (OPUS_5_5, "Claude Opus 5.5"),
+            ("chatgpt/gpt-5.4", "GPT-5.4"),
+        ]);
+        app.open_bench_form();
+        assert_eq!(app.bench.form.b, OPUS_5_5);
+        app.bench.form.field = FormField::B;
+        app.change_form_value(true);
+        assert_eq!(app.bench.form.b, "chatgpt/gpt-5.4");
+        app.change_form_value(false);
+        assert_eq!(app.bench.form.b, OPUS_5_5, "and back to the default");
+        app.change_form_value(false);
+        assert_eq!(app.bench.form.b, "claude/claude-sonnet-5-5");
+    }
+
+    #[test]
+    fn with_no_model_list_the_default_arm_b_is_sent_as_the_strongest_opus() {
+        let mut app = App::new();
+        app.models.clear();
+        app.open_bench_form();
+        assert_eq!(app.bench.form.b, DEFAULT_AGAINST, "kept until models load");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        app.event_tx = Some(tx);
+        app.submit_bench_form();
+        let sent = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
+            UiEvent::Bench {
+                request: BenchRequest::Prepare(spec),
+                ..
+            } => Some(spec.b),
+            _ => None,
+        });
+        assert_eq!(sent.as_deref(), Some(""));
     }
 
     #[test]

@@ -1,0 +1,14 @@
+{
+  "id": "01a20ede733d0011",
+  "title": "Review commit `45e87302` in this repo (`git show 45e87302`, crate `crates/ui/aura-ui-terminal`). Spec: `.aura/plans/mer…",
+  "state": "completed",
+  "agent_id": "52702be009edcad3828b2a2c1e720ad938eb452afb214d06a2f88a3e1a02d523",
+  "agent_name": "reviewer #57",
+  "assignee": "reviewer",
+  "parent": "01a20ede46000010",
+  "items": [],
+  "summary": "Nothing blocks this commit. `cargo test -p aura-ui-terminal` passes (1089 passed, 2 ignored), and so does `cargo clippy -p aura-ui-terminal --all-targets --all-features -- -D warnings`. I found no index panics or production `unwrap`/`expect` in the changed code. Every direct index is safe, because `rebuild` recomputes `scoped` and `plans_shown` before `build_rows` runs, and the renderer only read…",
+  "updated_ms": 1795546202414,
+  "created_ms": 1795545789245,
+  "tool_use_id": "toolu_01EsxWd2UtsR9MNAWPVUwBAm"
+}

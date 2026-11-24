@@ -170,7 +170,10 @@ the frontends is for and how a session is started from either of them:\n\n\
 ```rust\nlet session = start(&options).await?;\n\n// then\nsession.run();\n```\n\n\n\
 - Both UIs share one event loop\n- Fonts are Geist Mono and Inter\n\
 # A heading right after a list\n\
-> quoted\n\n---\n\n1. first\n2. second\r\n\r\nA line after a CRLF gap\n  \n\
+> quoted\n\n---\n\n1. first\n2. second\r\n\r\n\
+- **Wrapped.** a point that runs on long enough to wrap in a narrow pane\n\
+- **Next.** another point that runs on long enough to wrap as well\n\
+- short\n\nA line after a CRLF gap\n  \n\
 ```\nunclosed code\n";
 
     /// A loose list of fields in two records, then a paragraph.
@@ -242,8 +245,9 @@ Both are new in this change.\n";
 
     /// A reply of lines of every kind in an order no one would write.
     fn jumble(dice: &mut Dice) -> String {
-        const LINES: [&str; 29] = [
+        const LINES: [&str; 30] = [
             "plain text that goes on for long enough to wrap in a narrow pane",
+            "- a list item that goes on for long enough to wrap in a narrow pane",
             "short",
             "",
             "",

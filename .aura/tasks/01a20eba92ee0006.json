@@ -1,0 +1,14 @@
+{
+  "id": "01a20eba92ee0006",
+  "title": "Finish an in-progress refactor in `crates/ui/aura-ui-terminal` so it compiles and passes the gate. Spec: `.aura/plans/m…",
+  "state": "completed",
+  "agent_id": "e6591b44158fd2d0a1abc4a25a74b36f2627fc4325486474c9237876fb73721d",
+  "agent_name": "rust-engineer #97",
+  "assignee": "rust-engineer",
+  "parent": "01a20eb359e00004",
+  "items": [],
+  "summary": "The refactor is finished: the crate compiles and passes fmt, clippy and its tests, and the whole workspace still builds. I didn't have to change any app-side logic, and I didn't touch `app/benchmarks.rs`, `renderer/benchmarks.rs` or `CHANGELOG.md`.",
+  "updated_ms": 1795543867934,
+  "created_ms": 1795543438062,
+  "tool_use_id": "toolu_01RrBhWPTgig75sCdbtJDXG5"
+}

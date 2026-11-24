@@ -1,0 +1,11 @@
+{
+  "id": "01a20eb005730002",
+  "title": "review with opus and fix anything necesssayr",
+  "state": "completed",
+  "agent_id": "a9adc383b0d5d1c446033f5b9f3da5ed4a55effc620431b1911ae84f37b8c565",
+  "agent_name": "Agent 1493",
+  "items": [],
+  "summary": "Now the tests: update the default-submission test and add coverage for how Opus 5.5 is resolved and cycled.",
+  "updated_ms": 1795543207899,
+  "created_ms": 1795542746483
+}

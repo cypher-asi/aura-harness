@@ -4,7 +4,7 @@
 use super::panels::body_block;
 use super::text::display_width;
 use crate::app::benchmarks::{
-    BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY,
+    BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST,
 };
 use crate::events::{
     arm_letter, cost_per_fix, run_order, unpriced_note, BenchArm, BenchBaseline, BenchCost,
@@ -1403,7 +1403,8 @@ const LIVE_STATUS_AT: usize = 13;
 /// How an arm's value reads in the form.
 fn arm_reads(value: &str, arm_b: bool) -> String {
     match value {
-        "" if arm_b => "the strongest Opus (default)".to_string(),
+        "" if arm_b => "the strongest Opus".to_string(),
+        DEFAULT_AGAINST if arm_b => "Opus 5.5 (default)".to_string(),
         "gate" => "gate · Gate routes each turn".to_string(),
         "gate:nodelegate" => "gate:nodelegate · Gate without enforced delegation".to_string(),
         BY_DIFFICULTY => "by difficulty · a model for easy, medium and hard work".to_string(),

@@ -38,19 +38,24 @@
 //! ## Ranking
 //!
 //! Among the matches the best one wins, comparing in this order:
-//! available to the user now; a release rather than a preview,
-//! experimental, distilled or free variant; higher [`ModelTier`]; higher
-//! version (the numbers in its key, a dated snapshot's date left out);
-//! served on the route of the current model (so switching from Sonnet to
-//! Haiku on the Claude plan stays there, even when the plan lists a
-//! dated id); shorter key, a trailing date left out (the base model
-//! before its `-mini` or `-pro` siblings); then the route order. For an
+//! available to the user now; served by a linked plan (Claude or
+//! ChatGPT), so with a Claude Max plan linked `opus` names the plan's
+//! Opus rather than OpenRouter's or aura-router's, even when another
+//! route lists a newer version or the current model is on another
+//! route; a release rather than a preview, experimental, distilled or
+//! free variant; higher [`ModelTier`]; higher version (the numbers in its
+//! key, a dated snapshot's date left out); served on the route of the
+//! current model (so switching from Sonnet to Haiku on aura-router stays
+//! there, even when OpenRouter lists the same model); shorter key, a
+//! trailing date left out (the base model before its `-mini` or `-pro`
+//! siblings); then the route order. For an
 //! available model that order is Claude plan, ChatGPT plan, aura-router,
 //! OpenRouter, local: subscriptions the user already pays for come
 //! first. For an unavailable one aura-router comes first (then Claude
 //! plan, ChatGPT plan, OpenRouter, local), since its one `/login`
 //! unlocks most models. The earlier candidate in the list wins any
-//! remaining tie, so the result is deterministic.
+//! remaining tie, so the result is deterministic. Naming the route
+//! (`openrouter opus`) or the full id still picks another route.
 //!
 //! An unavailable model is still returned when no available one
 //! matches: the caller can then tell the user which sign-in it needs.
@@ -198,6 +203,7 @@ where
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Rank {
     available: bool,
+    on_linked_plan: bool,
     is_release: bool,
     tier: ModelTier,
     version: Vec<u32>,
@@ -213,6 +219,8 @@ impl Rank {
         let backend = backend_for(candidate.id);
         Self {
             available: candidate.available,
+            on_linked_plan: candidate.available
+                && matches!(backend, ModelBackend::Claude | ModelBackend::Chatgpt),
             is_release: is_release(candidate.id),
             tier: candidate.tier,
             version: version(&key),
@@ -492,10 +500,62 @@ mod tests {
     }
 
     #[test]
-    fn opus_stays_on_the_router_route_of_the_current_model() {
+    fn opus_prefers_the_linked_claude_plan_over_the_current_router_route() {
         assert_eq!(
             resolve_alias("opus", &catalog(), "aura-claude-sonnet-4-6"),
+            Some("claude/claude-opus-4-7")
+        );
+        assert_eq!(
+            resolve_alias("opus", &catalog(), "openrouter/anthropic/claude-haiku-4.5"),
+            Some("claude/claude-opus-4-7")
+        );
+    }
+
+    #[test]
+    fn opus_stays_on_the_router_route_of_the_current_model_without_a_plan() {
+        let candidates: Vec<_> = catalog()
+            .into_iter()
+            .map(|c| {
+                if c.id.starts_with("claude/") {
+                    unavailable(c)
+                } else {
+                    c
+                }
+            })
+            .collect();
+        assert_eq!(
+            resolve_alias("opus", &candidates, "aura-claude-sonnet-4-6"),
             Some("aura-claude-opus-4-7")
+        );
+    }
+
+    #[test]
+    fn linked_plan_beats_a_newer_version_on_openrouter() {
+        let candidates = [
+            candidate(
+                "openrouter/anthropic/claude-opus-4.8",
+                "Claude Opus 4.8",
+                ModelTier::Frontier,
+            ),
+            candidate(
+                "aura-claude-opus-4-8",
+                "Claude Opus 4.8",
+                ModelTier::Frontier,
+            ),
+            candidate(
+                "claude/claude-opus-4-7",
+                "Claude Opus 4.7",
+                ModelTier::Frontier,
+            ),
+        ];
+        assert_eq!(
+            resolve_alias("opus", &candidates, GATE_MODEL_ID),
+            Some("claude/claude-opus-4-7")
+        );
+        // Naming the route still reaches it.
+        assert_eq!(
+            resolve_alias("openrouter opus", &candidates, GATE_MODEL_ID),
+            Some("openrouter/anthropic/claude-opus-4.8")
         );
     }
 
@@ -561,9 +621,10 @@ mod tests {
             resolve_alias("haiku", &candidates, ""),
             Some("claude/claude-haiku-4-5-20251001")
         );
+        // The linked plan wins over the current route.
         assert_eq!(
             resolve_alias("haiku", &candidates, "aura-claude-sonnet-4-6"),
-            Some("aura-claude-haiku-4-5")
+            Some("claude/claude-haiku-4-5-20251001")
         );
     }
 
@@ -826,7 +887,7 @@ mod tests {
         );
         assert_eq!(
             resolve_alias("Claude Opus 4.7", &catalog(), "aura-claude-sonnet-4-6"),
-            Some("aura-claude-opus-4-7")
+            Some("claude/claude-opus-4-7")
         );
         let candidates = only_openrouter_available(catalog());
         assert_eq!(

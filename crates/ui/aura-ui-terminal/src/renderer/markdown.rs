@@ -9,6 +9,10 @@
 //! its label is muted, the blank lines between two fields are not drawn,
 //! and a blank row sets each record apart where the first label of a run
 //! of fields comes back (see [`fields`]).
+//!
+//! A blank row sets a list item apart from the item before it when that
+//! one took more than one row, so long wrapped items read as separate
+//! points while short ones stay tight.
 
 mod fields;
 mod inline;
@@ -54,6 +58,8 @@ pub(crate) fn render_markdown_flow(
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut flow = Vec::new();
     let mut previous = None;
+    // Row of `out` where the current item of a top-level list starts
+    let mut item_start = None;
     let mut i = 0;
     while i < lines.len() {
         if plan[i].skip {
@@ -68,10 +74,19 @@ pub(crate) fn render_markdown_flow(
         } else {
             Block::of(lines[i], previous)
         };
-        let parted = plan[i].gap || Block::parts(previous, block);
+        // Only the item before is looked at, never the ones below, so
+        // nothing above an item still streaming in moves.
+        let spaced = plan[i].item == Some(fields::Item::Next)
+            && item_start.is_some_and(|start: usize| {
+                out[start..].iter().filter(|line| line.width() > 0).count() > 1
+            });
+        let parted = plan[i].gap || spaced || Block::parts(previous, block);
         if parted && out.last().is_some_and(|last| last.width() > 0) {
             out.push(Line::default());
             flow.push(Some(0));
+        }
+        if plan[i].item.is_some() {
+            item_start = Some(out.len());
         }
         previous = block;
         if table {

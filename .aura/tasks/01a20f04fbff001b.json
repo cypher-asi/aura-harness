@@ -1,0 +1,12 @@
+{
+  "id": "01a20f04fbff001b",
+  "title": "make sure we can put api key in env file",
+  "state": "completed",
+  "agent_id": "45fd8023a4d5f78ba21e1580c29ba9b0a2a5b0378a8178809c11ec6417c1adb0",
+  "agent_name": "Agent 1524",
+  "plan": ".aura/plans/cloud-agents-on-daytona-vms_7305fa9c.plan.md",
+  "items": [],
+  "summary": "I've updated the plan so the Daytona API key, and every other cloud setting, can go in a `.env` file.",
+  "updated_ms": 1795548410940,
+  "created_ms": 1795548314623
+}

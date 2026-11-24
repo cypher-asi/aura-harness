@@ -172,7 +172,53 @@ fn blocks_already_parted_by_the_text_get_no_second_blank_line() {
 #[test]
 fn indented_lines_after_a_list_item_continue_it() {
     let lines = render("- one\n  more of one\n- two", 40);
-    assert_eq!(texts(&lines), ["• one", "  more of one", "• two"]);
+    assert_eq!(texts(&lines), ["• one", "  more of one", "", "• two"]);
+}
+
+#[test]
+fn short_list_items_stay_tight() {
+    let lines = render("- one\n- two\n- three", 40);
+    assert_eq!(texts(&lines), ["• one", "• two", "• three"]);
+}
+
+#[test]
+fn items_that_wrap_are_parted_from_the_next_item() {
+    let md = "1. **First.** a point long enough to wrap\n\
+              2. **Second.** another point that wraps too\n\
+              3. short";
+    let (lines, flow) = super::render_markdown_flow(md, 24, base(), &theme(), Measure::GRID);
+    let texts = texts(&lines);
+    let blanks: Vec<usize> = (0..texts.len()).filter(|&i| texts[i].is_empty()).collect();
+    let starts: Vec<usize> = (0..texts.len())
+        .filter(|&i| texts[i].starts_with(char::is_numeric))
+        .collect();
+    assert_eq!(starts.len(), 3, "{texts:?}");
+    assert_eq!(blanks, [starts[1] - 1, starts[2] - 1], "{texts:?}");
+    assert!(blanks.iter().all(|&i| flow[i] == Some(0)));
+}
+
+#[test]
+fn an_item_after_a_short_one_gets_no_gap_even_when_it_wraps() {
+    let lines = render("- a\n- a point long enough to wrap\n- b", 16);
+    assert_eq!(
+        texts(&lines),
+        ["• a", "• a point long", "  enough to wrap", "", "• b"]
+    );
+}
+
+#[test]
+fn loose_lists_get_no_second_gap() {
+    let lines = render("- a point long enough to wrap\n\n- b", 16);
+    assert_eq!(
+        texts(&lines),
+        ["• a point long", "  enough to wrap", "", "• b"]
+    );
+}
+
+#[test]
+fn nested_items_stay_tight_under_their_parent() {
+    let lines = render("- top\n  - x\n  - y\n- next", 40);
+    assert_eq!(texts(&lines), ["• top", "  ◦ x", "  ◦ y", "", "• next"]);
 }
 
 #[test]
@@ -237,14 +283,14 @@ fn bullets_nest_and_wrapped_lines_hang_under_the_text() {
     let lines = render("- one two three\n  - nested\n* star\n+ plus", 10);
     assert_eq!(
         texts(&lines),
-        ["• one two", "  three", "  ◦ nested", "• star", "• plus"]
+        ["• one two", "  three", "  ◦ nested", "", "• star", "• plus"]
     );
 }
 
 #[test]
 fn ordered_lists_keep_their_numbers() {
     let lines = render("1. first item\n10) tenth", 9);
-    assert_eq!(texts(&lines), ["1. first", "   item", "10) tenth"]);
+    assert_eq!(texts(&lines), ["1. first", "   item", "", "10) tenth"]);
 }
 
 #[test]

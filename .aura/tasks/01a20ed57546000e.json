@@ -1,0 +1,11 @@
+{
+  "id": "01a20ed57546000e",
+  "title": "basically, if you use slash model opus, and are logged in to max plan claude, it should pick from there not open router…",
+  "state": "cancelled",
+  "agent_id": "265259267f27ed38f25f349b9b27a381dbd9db6c3f81fac2cee2d1ba80959826",
+  "agent_name": "Agent 1544",
+  "items": [],
+  "summary": "Now update the tests that encoded the old behavior and add coverage.",
+  "updated_ms": 1795545798355,
+  "created_ms": 1795545199942
+}

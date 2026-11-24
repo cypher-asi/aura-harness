@@ -1,0 +1,12 @@
+{
+  "id": "01a20eaf89aa0001",
+  "title": "combine plans and tasks bottom right. Call tasks and have plan still show above. If task doesn't have plan just have No…",
+  "state": "completed",
+  "agent_id": "c1cd42326cfde93b6438003053e21407cd91da59a437505f6f1785fe07f55ed8",
+  "agent_name": "Agent 1494",
+  "plan": ".aura/plans/merge-plans-into-the-tasks-side-tab_e714f436.plan.md",
+  "items": [],
+  "summary": "I've written the plan; nothing has been changed yet. The PLANS tab in the bottom-right panel goes away, so the tabs become `SANDBOX | PROCESSES | TRACE | TASKS`. The TASKS tab groups each task under the plan it works on, with the plan's header and todos shown above its tasks. Tasks with no plan go under a \"No Plan\" header, which only appears when such tasks exist.",
+  "updated_ms": 1795542963336,
+  "created_ms": 1795542714794
+}
