@@ -2713,7 +2713,7 @@ mod tests {
             shown.contains("‹ 2 of 2 · Write a file, Fix a bug ›"),
             "{shown}"
         );
-        assert!(shown.contains("3 per task"), "{shown}");
+        assert!(shown.contains("1 per task"), "{shown}");
         assert!(shown.contains("each task's own"), "{shown}");
 
         app.bench_mut().form.work = 0;
@@ -2729,11 +2729,13 @@ mod tests {
         use crate::app::benchmarks::BY_DIFFICULTY;
         let theme = Theme::default();
         let mut app = App::new();
+        app.bench_mut().form.b.clear();
         let shown = text(&form_lines(&app, &theme, 120));
         assert!(!shown.contains("Medium"), "{shown}");
 
         let form = &mut app.bench_mut().form;
         form.b = BY_DIFFICULTY.to_string();
+        form.b_models = Default::default();
         form.b_models[0] = "openrouter/deepseek/deepseek-v3.2".to_string();
         form.field = FormField::BEasy;
         let shown = text(&form_lines(&app, &theme, 120));

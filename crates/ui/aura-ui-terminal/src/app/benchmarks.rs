@@ -203,26 +203,36 @@ pub enum WorkChoice<'a> {
 /// Most runs per arm the form offers.
 const MAX_REPEATS: u32 = 10;
 
-/// Example tasks the form starts at.
-const DEFAULT_TASKS: usize = 5;
+/// The built-in SWE-bench Pro Hard suite that new benchmarks run.
+const DEFAULT_SUITE: &str = "swe_bench_pro_hard";
+
+/// The model Gate is compared with by default.
+const DEFAULT_AGAINST: &str = "opus-5-5";
+
+/// One attempt per task on each arm, so repeated runs are opt-in.
+const DEFAULT_REPEATS: u32 = 1;
+
+/// A work selection waiting for the example suites to arrive.
+const DEFAULT_WORK: usize = usize::MAX;
 
 /// The new-benchmark form.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BenchForm {
     pub field: FormField,
-    /// Index into [`BenchState::work_choices`]
+    /// Index into [`BenchState::work_choices`], or [`DEFAULT_WORK`] while
+    /// the examples that determine the default suite are loading
     pub work: usize,
     pub prompt: String,
     /// How many of the chosen example tasks to run, the first ones first
     pub tasks: usize,
-    /// `gate`, `gate:nodelegate` or a model id
+    /// `gate`, `gate:nodelegate`, [`BY_DIFFICULTY`] or a model id
     pub a: String,
-    /// As `a`; empty for the strongest Opus
+    /// As `a`; [`DEFAULT_AGAINST`] by default, or empty for the strongest Opus
     pub b: String,
     /// The models of arm A's easy, medium and hard work when `a` is
     /// [`BY_DIFFICULTY`]; empty until chosen
     pub a_models: [String; 3],
-    /// As `a_models`, for arm B
+    /// As `a_models`, for arm B; empty until chosen
     pub b_models: [String; 3],
     /// The model that classifies each run's prompt, or
     /// [`AUTO_CLASSIFIER`] for Gate's choice; [`DEFAULT_CLASSIFIER`]
@@ -242,15 +252,15 @@ impl Default for BenchForm {
     fn default() -> Self {
         Self {
             field: FormField::Work,
-            work: 0,
+            work: DEFAULT_WORK,
             prompt: String::new(),
-            tasks: DEFAULT_TASKS,
+            tasks: 0,
             a: "gate".to_string(),
-            b: String::new(),
+            b: DEFAULT_AGAINST.to_string(),
             a_models: Default::default(),
             b_models: Default::default(),
             classifier: DEFAULT_CLASSIFIER.to_string(),
-            repeats: 3,
+            repeats: DEFAULT_REPEATS,
             check: String::new(),
             budget: String::new(),
             estimate: None,
@@ -448,6 +458,38 @@ impl BenchState {
             .collect()
     }
 
+    /// Resolve the default work choice and its full task count from the
+    /// available examples, preferring [`DEFAULT_SUITE`].
+    fn default_work(examples: &[BenchExample]) -> (WorkChoice<'_>, usize) {
+        let tasks = examples
+            .iter()
+            .filter(|example| example.suite == DEFAULT_SUITE)
+            .count();
+        if tasks > 0 {
+            (WorkChoice::Examples(Some(DEFAULT_SUITE)), tasks)
+        } else if examples.is_empty() {
+            (WorkChoice::LastPrompt, 0)
+        } else {
+            (WorkChoice::Examples(None), examples.len())
+        }
+    }
+
+    /// Start the form on its shared defaults, including the full default
+    /// suite when its examples are already cached.
+    fn reset_form(&mut self) {
+        self.form = BenchForm::default();
+        if self.examples.is_empty() {
+            return;
+        }
+        let (work, tasks) = Self::default_work(&self.examples);
+        self.form.work = self
+            .work_choices()
+            .iter()
+            .position(|choice| *choice == work)
+            .unwrap_or(DEFAULT_WORK);
+        self.form.tasks = tasks;
+    }
+
     /// What the form's work row cycles through: every example task, then
     /// each suite's on their own.
     #[must_use]
@@ -458,11 +500,24 @@ impl BenchState {
             WorkChoice::Examples(None),
         ];
         let suites = self.suites();
-        if suites.len() > 1 {
+        if suites.len() > 1 || suites.contains(&DEFAULT_SUITE) {
             choices.extend(suites.into_iter().map(|s| WorkChoice::Examples(Some(s))));
         }
         choices.extend(self.sessions.iter().map(WorkChoice::Session));
         choices
+    }
+
+    /// The index of the work the form has chosen, or the default work while
+    /// its sentinel is waiting for examples.
+    fn work_index(&self) -> usize {
+        if self.form.work != DEFAULT_WORK {
+            return self.form.work;
+        }
+        let (work, _) = Self::default_work(&self.examples);
+        self.work_choices()
+            .iter()
+            .position(|choice| *choice == work)
+            .unwrap_or(0)
     }
 
     /// How many example tasks the chosen work has; 0 when it is not
@@ -475,11 +530,20 @@ impl BenchState {
         }
     }
 
+    /// Clamp the task count to the chosen work without changing a valid
+    /// count the user entered.
+    fn clamp_tasks(&mut self) {
+        let most = self.example_count();
+        if most > 0 {
+            self.form.tasks = self.form.tasks.clamp(1, most);
+        }
+    }
+
     /// The work the form has chosen.
     #[must_use]
     pub fn work(&self) -> WorkChoice<'_> {
         self.work_choices()
-            .get(self.form.work)
+            .get(self.work_index())
             .copied()
             .unwrap_or(WorkChoice::LastPrompt)
     }
@@ -753,12 +817,15 @@ impl App {
     ) {
         if agent_id == self.active_agent_id {
             self.bench.sessions = sessions;
-            let choices = self.bench.work_choices().len();
-            self.bench.form.work = self.bench.form.work.min(choices.saturating_sub(1));
-            if !examples.is_empty() {
-                self.bench.form.tasks = self.bench.form.tasks.clamp(1, examples.len());
-            }
             self.bench.examples = examples;
+            if self.bench.form.work == DEFAULT_WORK && !self.bench.examples.is_empty() {
+                self.bench.form.work = self.bench.work_index();
+                self.bench.form.tasks = self.bench.example_count();
+            } else if self.bench.form.work != DEFAULT_WORK {
+                let choices = self.bench.work_choices().len();
+                self.bench.form.work = self.bench.form.work.min(choices.saturating_sub(1));
+            }
+            self.bench.clamp_tasks();
         }
     }
 
@@ -779,7 +846,7 @@ impl App {
             Err(problem) => (problem, NotificationType::Warning),
         });
         if started {
-            self.bench.form = BenchForm::default();
+            self.bench.reset_form();
             self.bench.mode = BenchMode::List;
             self.bench.selected = 0;
         }
@@ -1025,11 +1092,12 @@ impl App {
         match field {
             FormField::Work => {
                 let count = self.bench.work_choices().len();
+                let current = self.bench.work_index();
                 let form = &mut self.bench.form;
                 form.work = if forward {
-                    (form.work + 1) % count
+                    (current + 1) % count
                 } else {
-                    (form.work + count - 1) % count
+                    (current + count - 1) % count
                 };
                 let most = self.bench.example_count();
                 if most > 0 {
@@ -1298,6 +1366,145 @@ mod tests {
     }
 
     #[test]
+    fn default_form_runs_each_task_once_against_opus_5_5() {
+        let form = BenchForm::default();
+        assert_eq!(form.repeats, DEFAULT_REPEATS);
+        assert_eq!(form.a, "gate");
+        assert_eq!(form.b, DEFAULT_AGAINST);
+        assert!(form.b_models.iter().all(String::is_empty));
+        assert_eq!(form.arm_value(1), Ok(DEFAULT_AGAINST.to_string()));
+        assert_eq!(BenchState::default().work(), WorkChoice::LastPrompt);
+    }
+
+    #[test]
+    fn sessions_select_the_full_default_suite_regardless_of_its_position() {
+        let mut app = App::new();
+        let id = app.active_agent_id.clone();
+        let examples = vec![
+            example("coding", "easy 1"),
+            example(DEFAULT_SUITE, "hard 1"),
+            example("gate_hard", "other 1"),
+            example(DEFAULT_SUITE, "hard 2"),
+        ];
+        app.cmd_bench_sessions(&id, Vec::new(), examples);
+        assert_eq!(app.bench.work(), WorkChoice::Examples(Some(DEFAULT_SUITE)));
+        assert_eq!(app.bench.form.tasks, 2);
+    }
+
+    #[test]
+    fn default_submission_prepares_the_full_suite_against_opus_5_5() {
+        let mut app = App::new();
+        let id = app.active_agent_id.clone();
+        let examples = vec![
+            example("coding", "easy 1"),
+            example(DEFAULT_SUITE, "hard 1"),
+            example(DEFAULT_SUITE, "hard 2"),
+        ];
+        app.cmd_bench_sessions(&id, Vec::new(), examples);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        app.event_tx = Some(tx);
+
+        app.submit_bench_form();
+        let event = rx.try_recv().expect("prepare request");
+        let UiEvent::Bench {
+            request: BenchRequest::Prepare(spec),
+            ..
+        } = event
+        else {
+            panic!("expected a benchmark prepare request");
+        };
+        assert_eq!(
+            spec.work,
+            BenchWork::Examples {
+                suite: Some(DEFAULT_SUITE.to_string()),
+                tasks: 2,
+            }
+        );
+        assert_eq!(spec.a, "gate");
+        assert_eq!(spec.b, DEFAULT_AGAINST);
+        assert_eq!(spec.repeats, 1);
+    }
+
+    #[test]
+    fn the_default_suite_is_explicit_even_when_it_is_the_only_suite() {
+        let mut app = App::new();
+        let id = app.active_agent_id.clone();
+        app.cmd_bench_sessions(
+            &id,
+            Vec::new(),
+            vec![example(DEFAULT_SUITE, "one"), example(DEFAULT_SUITE, "two")],
+        );
+        assert_eq!(app.bench.work(), WorkChoice::Examples(Some(DEFAULT_SUITE)));
+        assert_eq!(app.bench.form.tasks, 2);
+        assert!(app
+            .bench
+            .work_choices()
+            .contains(&WorkChoice::Examples(Some(DEFAULT_SUITE))));
+    }
+
+    #[test]
+    fn absent_default_suite_falls_back_to_all_examples() {
+        let mut app = App::new();
+        let id = app.active_agent_id.clone();
+        app.cmd_bench_sessions(
+            &id,
+            Vec::new(),
+            vec![example("coding", "one"), example("gate_hard", "two")],
+        );
+        assert_eq!(app.bench.work(), WorkChoice::Examples(None));
+        assert_eq!(app.bench.form.tasks, 2);
+
+        let mut empty = App::new();
+        let id = empty.active_agent_id.clone();
+        empty.cmd_bench_sessions(&id, Vec::new(), Vec::new());
+        assert_eq!(empty.bench.work(), WorkChoice::LastPrompt);
+    }
+
+    #[test]
+    fn refreshing_examples_preserves_a_user_chosen_work_selection() {
+        let mut app = App::new();
+        let id = app.active_agent_id.clone();
+        let examples = vec![
+            example("coding", "easy 1"),
+            example(DEFAULT_SUITE, "hard 1"),
+            example(DEFAULT_SUITE, "hard 2"),
+        ];
+        app.cmd_bench_sessions(&id, Vec::new(), examples.clone());
+        app.bench.form.field = FormField::Work;
+        app.change_form_value(true);
+        assert_eq!(app.bench.work(), WorkChoice::LastPrompt);
+        app.bench.form.tasks = 1;
+
+        app.cmd_bench_sessions(&id, Vec::new(), examples);
+        assert_eq!(app.bench.work(), WorkChoice::LastPrompt);
+        assert_eq!(app.bench.form.tasks, 1);
+    }
+
+    #[test]
+    fn successful_submission_resets_to_the_full_cached_suite() {
+        let mut app = App::new();
+        let id = app.active_agent_id.clone();
+        app.cmd_bench_sessions(
+            &id,
+            Vec::new(),
+            vec![
+                example("coding", "easy 1"),
+                example(DEFAULT_SUITE, "hard 1"),
+                example(DEFAULT_SUITE, "hard 2"),
+            ],
+        );
+        app.bench.mode = BenchMode::Form;
+        app.bench.form.work = 1;
+        app.bench.form.repeats = 3;
+
+        app.cmd_bench_notice(Ok("started".to_string()));
+        assert_eq!(app.bench.work(), WorkChoice::Examples(Some(DEFAULT_SUITE)));
+        assert_eq!(app.bench.form.tasks, 2);
+        assert_eq!(app.bench.form.repeats, DEFAULT_REPEATS);
+        assert_eq!(app.bench.form.b, DEFAULT_AGAINST);
+    }
+
+    #[test]
     fn the_tasks_row_counts_from_one_to_the_example_tasks() {
         let mut app = App::new();
         let id = app.active_agent_id.clone();
@@ -1305,7 +1512,7 @@ mod tests {
             .map(|i| example("coding", &format!("task {i}")))
             .collect();
         app.cmd_bench_sessions(&id, Vec::new(), titles);
-        assert_eq!(app.bench.form.tasks, DEFAULT_TASKS);
+        assert_eq!(app.bench.form.tasks, 7);
         app.bench.form.work = 2;
         app.bench.form.field = FormField::Tasks;
         for _ in 0..5 {
@@ -1403,6 +1610,7 @@ mod tests {
     #[test]
     fn difficulty_rows_show_only_for_a_by_difficulty_arm() {
         let mut app = three_models();
+        app.bench.form.b.clear();
         assert!(app
             .bench_arm_choices(true)
             .contains(&BY_DIFFICULTY.to_string()));
@@ -1550,6 +1758,7 @@ mod tests {
     #[test]
     fn the_classifier_row_starts_on_haiku_cycles_models_and_is_sent() {
         let mut app = three_models();
+        app.bench.form.b.clear();
         app.bench.mode = BenchMode::Form;
         app.bench.form.field = FormField::B;
         app.move_form_field(true);
