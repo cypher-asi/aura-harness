@@ -1,22 +1,22 @@
 //! TASKS tab: the work agents did or are doing, grouped under the plan it
-//! works on. Each plan's header shows its todo progress, then its todos,
-//! then the tasks working on it, each request with the parts it handed to
-//! other agents underneath and what each has done and has left. Tasks of
-//! no listed plan go last, under `No Plan`. Every row sits one level under
-//! the row it belongs to; the request building a plan has no row, its
-//! parts sitting under the todos they do (see [`crate::app::tasks`]).
+//! works on. Each plan's header shows its todo progress, then its todos.
+//! Work of no listed plan goes last, under
+//! `No Plan`. Requests have no row: their todo items are listed, and a
+//! task handed out sits one level under the todo or item it does (see
+//! [`crate::app::tasks`]). Every other row's icon sits under its
+//! header's fold arrow.
 //!
 //! ```text
 //!  ▾  Auth rework                 1/3
-//!    ☒  Add session table
-//!    ▣  Write the login handler
-//!      ⢎⡱ Write the login handler  → coder
-//!    ☐  Wire the middleware
-//!    ✓  Rename the crate          2/2
-//!      ☒  Find the uses
+//!  ☒  Add session table
+//!  ▣  Write the login handler
+//!    ⢎⡱ Write the login handler  → coder
+//!  ☐  Wire the middleware
 //!  ▸  Parser cleanup              5/5
 //!  ▾  No Plan
-//!    ✓  Bump the version
+//!  ☒  Find the uses  → explorer
+//!    ✓  Find the uses of calc_total  → explorer
+//!  ✓  Fix the typo  → coder
 //! ```
 
 use super::panels::{
@@ -136,21 +136,13 @@ fn row_line(
                 todo_line(todo, depth, (width, state), theme)
             }),
         TaskRow::Task { task, .. } => list.tasks().get(task).map_or_else(Line::default, |task| {
-            task_line(
-                task,
-                (depth, list.shows_agents()),
-                (width, state),
-                app,
-                theme,
-            )
+            task_line(task, depth, (width, state), app, theme)
         }),
-        TaskRow::Item { task, item, .. } => list
-            .tasks()
-            .get(task)
-            .and_then(|task| task.items.get(item))
-            .map_or_else(Line::default, |item| {
+        TaskRow::Item { task, item, .. } => {
+            list.item(task, item).map_or_else(Line::default, |item| {
                 todo_line(item, depth, (width, state), theme)
-            }),
+            })
+        }
     }
 }
 
@@ -175,12 +167,12 @@ fn plan_line(
     )
 }
 
-/// A task's title row: its icon, its title, who does it and its progress.
-/// A part names the kind of agent it was handed to; a request names its
-/// agent only when `show_agents`, as in the project's scope.
+/// A handed-out task's row: its icon, its title and the kind of agent it
+/// was handed to. Its agent's own checklist is not listed, so no
+/// progress either.
 fn task_line(
     task: &TaskView,
-    (depth, show_agents): (usize, bool),
+    depth: usize,
     (width, state): (usize, CellState),
     app: &App,
     theme: &Theme,
@@ -189,19 +181,17 @@ fn task_line(
     if task.state == TaskState::Cancelled {
         name = name.add_modifier(Modifier::CROSSED_OUT);
     }
-    let who = match &task.assignee {
-        Some(assignee) => Some(format!("→ {assignee}")),
-        None => show_agents.then(|| task.agent_name.clone()),
-    };
-    let (closed, total) = task.progress();
-    let progress = (total > 0).then(|| format!("{closed}/{total}"));
+    let who = task
+        .assignee
+        .as_ref()
+        .map(|assignee| format!("→ {assignee}"));
     list_row_with_detail(
         width,
         depth,
         task_icon(task, app, theme),
         (task.title.lines().next().unwrap_or(""), who.as_deref()),
         cell_style(theme, state, name),
-        progress.as_deref(),
+        None,
     )
 }
 
@@ -282,36 +272,61 @@ mod tests {
     }
 
     #[test]
-    fn requests_name_their_agent_only_across_the_project() {
+    fn row_icons_sit_under_the_headers_arrow_and_tasks_one_level_in() {
         let mut app = App::new();
         app.process_command(UiCommand::SetTasks(vec![
             TaskView {
                 id: "part".into(),
                 title: "Parse".into(),
+                state: TaskState::Completed,
                 agent_name: "Coder".into(),
                 assignee: Some("coder".into()),
                 parent: Some("request".into()),
+                items: vec![TodoView {
+                    content: "lex".into(),
+                    state: TodoState::Pending,
+                    assignee: None,
+                    task: None,
+                }],
                 ..TaskView::default()
             },
             TaskView {
                 id: "request".into(),
-                title: "Build".into(),
+                title: "Build it".into(),
                 agent_name: "Lead".into(),
+                items: vec![TodoView {
+                    content: "Write the parser".into(),
+                    state: TodoState::InProgress,
+                    assignee: Some("coder".into()),
+                    task: Some("part".into()),
+                }],
                 ..TaskView::default()
             },
         ]));
         let screen = drawn(&mut app);
-        assert!(screen.contains("Build"), "{screen}");
+        let lines: Vec<&str> = screen.lines().collect();
+        let column = |line: &str, glyph: char| {
+            line.chars()
+                .position(|c| c == glyph)
+                .unwrap_or_else(|| panic!("no {glyph} in:\n{screen}"))
+        };
+        assert!(lines[0].contains("No Plan"), "{screen}");
+        assert!(lines[1].contains("Write the parser  → coder"), "{screen}");
+        assert!(lines[2].contains("Parse  → coder"), "{screen}");
+        assert_eq!(column(lines[1], '▣'), column(lines[0], '▾'), "{screen}");
+        assert_eq!(
+            column(lines[2], '✓').saturating_sub(column(lines[0], '▾')),
+            2,
+            "{screen}"
+        );
+        assert!(
+            !screen.contains("Build it"),
+            "the request has no row: {screen}"
+        );
         assert!(!screen.contains("Lead"), "{screen}");
         assert!(
-            screen.contains("Parse  → coder"),
-            "a part names its kind of agent in any scope: {screen}"
+            !screen.contains("lex"),
+            "a task's own list is not listed: {screen}"
         );
-
-        app.toggle_side_scope();
-        let screen = drawn(&mut app);
-        assert!(screen.contains("Build  Lead"), "{screen}");
-        assert!(screen.contains("Parse  → coder"), "{screen}");
-        assert!(!screen.contains("Coder"), "{screen}");
     }
 }

@@ -64,15 +64,15 @@ themes keep working:
 - **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
   `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
   ten, the rest are counted on a `muted` `N more` row. The boxes line up
-  under the `⬢` above them. The TASKS tab draws a plan's todos and a
-  task's items the same way, but every child sits one level, two columns,
-  right of its parent: a plan's todos and its tasks one level under the
-  plan's fold arrow, a task's items and then the tasks it handed out one
-  level under the task's icon. Tasks sit under the header of the plan they
-  work on, below its todos; tasks that work on no plan go under a
-  `No Plan` header. The request that builds a plan has no row of its own:
-  the header stands for it, and what it handed out sits under the todo it
-  does, or after the todos.
+  under the `⬢` above them. The TASKS tab draws a plan's todos and the
+  agents' todo items the same way, with their boxes right under their
+  group header's fold arrow, as the checklist's sit under its `⬢`. What the
+  user asked has no row: each request's items stand for it, merged per
+  agent since the list carries over between requests. Only a task an
+  agent handed out is indented, one level (two columns) under the todo or
+  item it does; one doing none sits at the left edge after the items.
+  Work goes under the header of the plan it works on, below its todos,
+  or else under a `No Plan` header.
 
 ### Borders and Panels
 

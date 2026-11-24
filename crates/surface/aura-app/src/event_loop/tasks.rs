@@ -171,6 +171,76 @@ struct Current {
     /// reopened. A task handed over by a `task` call waits for that call
     /// to report instead ([`TaskBoard::finish_spawn`]).
     settles_with_turn: bool,
+    /// The todo id of each of `record.view.items`, in order. The views
+    /// carry no ids, and a spawn names its todo by id.
+    item_ids: Vec<String>,
+    /// For each todo id, the newest task spawned to do it. Kept apart
+    /// from the items because every todo update replaces them whole and
+    /// the link has to outlive that.
+    todo_tasks: HashMap<String, String>,
+}
+
+impl Current {
+    fn new(workspace: PathBuf, record: TaskRecord, saved: bool, settles_with_turn: bool) -> Self {
+        Self {
+            workspace,
+            record,
+            saved,
+            settles_with_turn,
+            item_ids: Vec::new(),
+            todo_tasks: HashMap::new(),
+        }
+    }
+
+    /// The task `task` does the todo `todo` now, in place of any earlier
+    /// one. Returns whether an item already on the list changed.
+    fn link_todo(&mut self, todo: &str, task: &str) -> bool {
+        self.todo_tasks.insert(todo.to_string(), task.to_string());
+        let mut changed = false;
+        for (id, item) in self.item_ids.iter().zip(&mut self.record.view.items) {
+            if id == todo && item.task.as_deref() != Some(task) {
+                item.task = Some(task.to_string());
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// The todo list is now `items`, each with its todo id; an item a
+    /// spawned task is doing names it.
+    fn set_items(&mut self, items: Vec<(String, TodoView)>) {
+        let (ids, mut views): (Vec<String>, Vec<TodoView>) = items.into_iter().unzip();
+        for (id, view) in ids.iter().zip(&mut views) {
+            if let Some(task) = self.todo_tasks.get(id) {
+                view.task = Some(task.clone());
+            }
+        }
+        self.item_ids = ids;
+        self.record.view.items = views;
+    }
+}
+
+/// Link the todo `todo` of `parent`'s current task to the spawned task
+/// `task`, saving the parent when an item it shows changed. Returns what
+/// to show then.
+fn link_parent(
+    board: &mut Board,
+    parent: AgentId,
+    todo: &str,
+    task: &str,
+    now: u64,
+) -> Option<(PathBuf, TaskView)> {
+    let current = board.current.get_mut(&parent)?;
+    if !current.link_todo(todo, task) {
+        return None;
+    }
+    current.record.view.updated_ms = now;
+    current.saved = true;
+    keep(
+        &tasks_dir(&board.aside, &current.workspace),
+        &current.record,
+    );
+    Some((current.workspace.clone(), current.record.view.clone()))
 }
 
 #[derive(Default)]
@@ -313,15 +383,9 @@ impl TaskBoard {
             created_ms: now,
             tool_use_id: None,
         };
-        board.current.insert(
-            agent,
-            Current {
-                workspace,
-                record,
-                saved: false,
-                settles_with_turn: true,
-            },
-        );
+        board
+            .current
+            .insert(agent, Current::new(workspace, record, false, true));
     }
 
     /// A harness notice (a background job or agent ending) woke `agent`
@@ -350,12 +414,7 @@ impl TaskBoard {
             let shown = (workspace.to_path_buf(), record.view.clone());
             board.current.insert(
                 agent,
-                Current {
-                    workspace: workspace.to_path_buf(),
-                    record,
-                    saved: true,
-                    settles_with_turn: true,
-                },
+                Current::new(workspace.to_path_buf(), record, true, true),
             );
             shown
         };
@@ -369,13 +428,20 @@ impl TaskBoard {
 
     /// Change `agent`'s task with `change`, then keep and show it.
     pub(crate) async fn change(&self, agent: AgentId, change: impl FnOnce(&mut TaskRecord)) {
+        self.change_current(agent, |current| change(&mut current.record))
+            .await;
+    }
+
+    /// Change `agent`'s current entry with `change`, then keep and show
+    /// its task if that changed or was not kept yet.
+    async fn change_current(&self, agent: AgentId, change: impl FnOnce(&mut Current)) {
         let shown = {
             let board = &mut *lock(&self.board);
             let Some(current) = board.current.get_mut(&agent) else {
                 return;
             };
             let before = current.record.clone();
-            change(&mut current.record);
+            change(current);
             if current.saved && current.record == before {
                 return;
             }
@@ -390,9 +456,11 @@ impl TaskBoard {
         self.show(shown).await;
     }
 
-    /// `agent`'s todo list is now `items`.
-    pub(crate) async fn set_items(&self, agent: AgentId, items: Vec<TodoView>) {
-        self.change(agent, |record| record.view.items = items).await;
+    /// `agent`'s todo list is now `items`, each with its todo id, which
+    /// links an item to the task spawned to do it ([`Self::begin_spawn`]).
+    pub(crate) async fn set_items(&self, agent: AgentId, items: Vec<(String, TodoView)>) {
+        self.change_current(agent, |current| current.set_items(items))
+            .await;
     }
 
     /// `agent`'s request works on the plan at `plan` now.
@@ -406,11 +474,13 @@ impl TaskBoard {
     }
 
     /// A `task` call handed work to a spawned agent: start its task,
-    /// under its parent's. Returns the task's id.
+    /// under its parent's. A spawn for one of the parent's todos links
+    /// that item to it at once, so the link shows before the next todo
+    /// update. Returns the task's id.
     pub(crate) async fn begin_spawn(&self, spawned: Spawned<'_>) -> String {
         self.touch(spawned.parent).await;
-        let shown = {
-            let mut board = lock(&self.board);
+        let (shown, parent_shown) = {
+            let board = &mut *lock(&self.board);
             let parent = board.current.get(&spawned.parent);
             let workspace = parent.map_or(spawned.workspace, |p| p.workspace.clone());
             let (parent_id, plan) = parent.map_or((None, None), |p| {
@@ -426,7 +496,7 @@ impl TaskBoard {
                     agent_name: spawned.name.to_string(),
                     assignee: Some(spawned.assignee.to_string()),
                     parent: parent_id,
-                    plan_todo: spawned.todo_id.filter(|_| plan.is_some()),
+                    plan_todo: plan.as_ref().and(spawned.todo_id.clone()),
                     plan,
                     updated_ms: now,
                     ..TaskView::default()
@@ -435,20 +505,22 @@ impl TaskBoard {
                 tool_use_id: spawned.tool_use_id,
             };
             keep(&tasks_dir(&board.aside, &workspace), &record);
+            let parent_shown = spawned
+                .todo_id
+                .as_deref()
+                .and_then(|todo| link_parent(board, spawned.parent, todo, &record.view.id, now));
             let shown = (workspace.clone(), record.view.clone());
-            board.current.insert(
-                spawned.child,
-                Current {
-                    workspace,
-                    record,
-                    saved: true,
-                    settles_with_turn: false,
-                },
-            );
-            shown
+            board
+                .current
+                .insert(spawned.child, Current::new(workspace, record, true, false));
+            (shown, parent_shown)
         };
         let id = shown.1.id.clone();
+        // The spawned task first, so the item never names a task not shown.
         self.show(shown).await;
+        if let Some(parent_shown) = parent_shown {
+            self.show(parent_shown).await;
+        }
         id
     }
 
@@ -651,6 +723,46 @@ mod tests {
         }
     }
 
+    fn todo(id: &str, content: &str, state: TodoState) -> (String, TodoView) {
+        (id.to_string(), item(content, state))
+    }
+
+    /// Two todos, `a` and `b`, as the lead's list gives them.
+    fn two_todos() -> Vec<(String, TodoView)> {
+        vec![
+            todo("a", "find it", TodoState::InProgress),
+            todo("b", "fix it", TodoState::Pending),
+        ]
+    }
+
+    /// A spawn by `parent` of `child`, for the todo `todo_id`.
+    fn spawn_of(
+        parent: AgentId,
+        child: AgentId,
+        workspace: &Path,
+        todo_id: Option<&str>,
+    ) -> Spawned<'static> {
+        Spawned {
+            parent,
+            child,
+            workspace: workspace.to_path_buf(),
+            name: "coder #1",
+            assignee: "coder",
+            prompt: "Fix it",
+            tool_use_id: None,
+            todo_id: todo_id.map(str::to_string),
+        }
+    }
+
+    /// The task each of the request's items names, from disk.
+    fn request_item_tasks(workspace: &Path) -> Vec<Option<String>> {
+        load_all(workspace)
+            .into_iter()
+            .find(|record| record.view.parent.is_none())
+            .map(|record| record.view.items.into_iter().map(|i| i.task).collect())
+            .unwrap_or_default()
+    }
+
     fn agent(n: u8) -> AgentId {
         AgentId::new([n; 32])
     }
@@ -722,7 +834,7 @@ mod tests {
         );
         tasks.touch(lead).await;
         tasks
-            .set_items(lead, vec![item("find it", TodoState::InProgress)])
+            .set_items(lead, vec![todo("1", "find it", TodoState::InProgress)])
             .await;
         tasks.set_plan(lead, ".aura/plans/fix.plan.md").await;
         tasks
@@ -781,7 +893,7 @@ mod tests {
             false,
         );
         tasks
-            .set_items(child, vec![item("lex", TodoState::Completed)])
+            .set_items(child, vec![todo("1", "lex", TodoState::Completed)])
             .await;
         tasks
             .finish_spawn(child, Ok("Parser written.".to_string()))
@@ -810,6 +922,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_spawn_for_a_todo_links_the_item_already_on_the_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tasks, mut rx, shown) = board();
+        let (lead, child) = (agent(1), agent(2));
+        shown.set(lead);
+        tasks.send_all(lead, dir.path()).await;
+        tasks.begin_request(lead, dir.path().to_path_buf(), "Lead", "Fix", None, false);
+        tasks.set_items(lead, two_todos()).await;
+        upserts(&mut rx);
+
+        let id = tasks
+            .begin_spawn(spawn_of(lead, child, dir.path(), Some("b")))
+            .await;
+
+        assert_eq!(request_item_tasks(dir.path()), vec![None, Some(id.clone())]);
+        let shown = upserts(&mut rx);
+        let last = shown.last().unwrap();
+        assert!(last.parent.is_none(), "the parent is shown after the spawn");
+        assert_eq!(last.items[1].task.as_ref(), Some(&id));
+        assert!(shown.iter().any(|view| view.id == id));
+    }
+
+    #[tokio::test]
+    async fn a_spawn_for_a_todo_links_the_item_when_the_list_comes_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tasks, _rx, _shown) = board();
+        let (lead, child) = (agent(1), agent(2));
+        tasks.begin_request(lead, dir.path().to_path_buf(), "Lead", "Fix", None, false);
+        let id = tasks
+            .begin_spawn(spawn_of(lead, child, dir.path(), Some("b")))
+            .await;
+
+        tasks.set_items(lead, two_todos()).await;
+        assert_eq!(request_item_tasks(dir.path()), vec![None, Some(id.clone())]);
+
+        let mut done = two_todos();
+        done[1].1.state = TodoState::Completed;
+        tasks.set_items(lead, done).await;
+        assert_eq!(
+            request_item_tasks(dir.path()),
+            vec![None, Some(id)],
+            "the link outlives the list it was made on"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_spawn_without_a_todo_links_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tasks, _rx, _shown) = board();
+        let (lead, child) = (agent(1), agent(2));
+        tasks.begin_request(lead, dir.path().to_path_buf(), "Lead", "Fix", None, false);
+        tasks.set_items(lead, two_todos()).await;
+        tasks
+            .begin_spawn(spawn_of(lead, child, dir.path(), None))
+            .await;
+        assert_eq!(request_item_tasks(dir.path()), vec![None, None]);
+
+        tasks.set_items(lead, two_todos()).await;
+        assert_eq!(request_item_tasks(dir.path()), vec![None, None]);
+    }
+
+    #[tokio::test]
+    async fn a_second_spawn_for_a_todo_replaces_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tasks, _rx, _shown) = board();
+        let (lead, first, second) = (agent(1), agent(2), agent(3));
+        tasks.begin_request(lead, dir.path().to_path_buf(), "Lead", "Fix", None, false);
+        tasks.set_items(lead, two_todos()).await;
+        tasks
+            .begin_spawn(spawn_of(lead, first, dir.path(), Some("b")))
+            .await;
+        let newer = tasks
+            .begin_spawn(spawn_of(lead, second, dir.path(), Some("b")))
+            .await;
+        assert_eq!(
+            request_item_tasks(dir.path()),
+            vec![None, Some(newer.clone())]
+        );
+
+        tasks.set_items(lead, two_todos()).await;
+        assert_eq!(request_item_tasks(dir.path()), vec![None, Some(newer)]);
+    }
+
+    #[tokio::test]
     async fn a_notice_after_a_finished_request_reopens_and_settles_it() {
         let dir = tempfile::tempdir().unwrap();
         let (tasks, mut rx, shown) = board();
@@ -826,7 +1022,7 @@ mod tests {
         );
         tasks.touch(lead).await;
         tasks
-            .set_items(lead, vec![item("run them", TodoState::InProgress)])
+            .set_items(lead, vec![todo("1", "run them", TodoState::InProgress)])
             .await;
         tasks
             .end_request(
@@ -848,7 +1044,7 @@ mod tests {
         );
 
         tasks
-            .set_items(lead, vec![item("run them", TodoState::Completed)])
+            .set_items(lead, vec![todo("1", "run them", TodoState::Completed)])
             .await;
         tasks
             .end_request(

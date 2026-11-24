@@ -1529,7 +1529,10 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
             name: "Auth rework".into(),
             todos: vec![
                 todo("Add session table", TodoState::Completed),
-                todo("Write the login handler", TodoState::InProgress),
+                TodoView {
+                    task: Some("handler".into()),
+                    ..todo("Write the login handler", TodoState::InProgress)
+                },
             ],
         },
         PlanView {
@@ -1538,14 +1541,25 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
             todos: vec![todo("Split the lexer", TodoState::Completed)],
         },
     ]));
-    app.process_command(UiCommand::SetTasks(vec![TaskView {
-        id: "auth".into(),
-        title: "Build the auth".into(),
-        state: TaskState::Open,
-        agent_name: "Lead".into(),
-        plan: Some(auth_path.into()),
-        ..TaskView::default()
-    }]));
+    app.process_command(UiCommand::SetTasks(vec![
+        TaskView {
+            id: "handler".into(),
+            title: "Write the handler".into(),
+            state: TaskState::Completed,
+            assignee: Some("coder".into()),
+            parent: Some("auth".into()),
+            ..TaskView::default()
+        },
+        TaskView {
+            id: "auth".into(),
+            title: "Build the auth".into(),
+            state: TaskState::Open,
+            agent_name: "Lead".into(),
+            plan: Some(auth_path.into()),
+            builds: true,
+            ..TaskView::default()
+        },
+    ]));
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
@@ -1570,13 +1584,12 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
         rows[auth + 2]
     );
     assert_eq!(
-        row_with("Build the auth"),
+        row_with("Write the handler  → coder"),
         auth + 3,
-        "the plan's tasks follow its todos"
+        "the task doing a todo sits under it"
     );
-    // Every child sits one level, two columns, right of its parent: the
-    // todos' boxes and the top-level task's icon one indent right of the
-    // plan's fold arrow.
+    // The todos' boxes sit right under the plan's fold arrow; only the
+    // task under a todo is indented, one level.
     let last_column = |row: usize, glyph: char| {
         rows[row]
             .chars()
@@ -1585,17 +1598,13 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
             .last()
             .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
     };
-    let child = last_column(auth, '▾') + 2;
-    assert_eq!(last_column(auth + 1, '☒'), child);
-    assert_eq!(last_column(auth + 2, '▣'), child);
-    assert_eq!(last_column(auth + 3, '○'), child);
+    let arrow = last_column(auth, '▾');
+    assert_eq!(last_column(auth + 1, '☒'), arrow);
+    assert_eq!(last_column(auth + 2, '▣'), arrow);
+    assert_eq!(last_column(auth + 3, '✓'), arrow + 2);
     let parser = row_with("Parser cleanup");
     assert_eq!(parser, auth + 4);
-    assert_eq!(
-        last_column(parser, '▸'),
-        last_column(auth, '▾'),
-        "plan headers line up"
-    );
+    assert_eq!(last_column(parser, '▸'), arrow, "plan headers line up");
     assert!(rows[parser].contains("1/1"));
     let screen = rows.join("\n");
     assert!(
@@ -1603,8 +1612,8 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
         "done plans start folded"
     );
     assert!(
-        !screen.contains("No Plan"),
-        "every task works on a plan: {screen}"
+        !screen.contains("Build the auth") && !screen.contains("No Plan"),
+        "the build is the plan's header: {screen}"
     );
 
     // Plans: open ones white, settled ones gray. Todos look as in the
@@ -5183,7 +5192,7 @@ fn test_spawn_guides_join_each_agent_to_its_parent() {
 }
 
 #[test]
-fn test_tasks_tab_lists_requests_with_their_parts() {
+fn test_tasks_tab_lists_requests_items_not_what_was_asked() {
     use crate::app::PanelFocus;
     use crate::events::{TaskState, TaskView, TodoState, TodoView, UiCommand};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -5221,48 +5230,32 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
     let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-    // In one agent's scope every request is that agent's, so none names it.
-    let rows = render_rows(&mut app, 200);
-    let request = rows
-        .iter()
-        .position(|r| r.contains("Build the compiler"))
-        .unwrap_or_else(|| panic!("no request in:\n{}", rows.join("\n")));
-    assert!(!rows[request].contains("Lead"), "{}", rows[request]);
-
-    // Across the project, requests name their agent.
-    app.toggle_side_scope();
     let rows = render_rows(&mut app, 200);
     let row_with = |text: &str| {
         rows.iter()
             .position(|r| r.contains(text))
             .unwrap_or_else(|| panic!("no {text} in:\n{}", rows.join("\n")))
     };
-    let request = row_with("Build the compiler");
-    let no_plan = row_with("No Plan");
-    assert_eq!(
-        no_plan + 1,
-        request,
-        "a task with no plan sits under the No Plan header"
+    let screen = rows.join("\n");
+    assert!(
+        !screen.contains("Build the compiler") && !screen.contains("Lead"),
+        "what the user asked has no row: {screen}"
     );
+    let no_plan = row_with("No Plan");
     assert!(rows[no_plan].contains('▾'), "{}", rows[no_plan]);
     assert!(
-        rows[request].contains("Build the compiler  Lead") && rows[request].contains("1/2"),
+        rows[no_plan + 1].contains("☒  Write the parser  → coder"),
         "{}",
-        rows[request]
+        rows[no_plan + 1]
     );
     assert!(
-        rows[request + 1].contains("☒  Write the parser  → coder"),
+        rows[no_plan + 2].contains("☐  Write the checker"),
         "{}",
-        rows[request + 1]
+        rows[no_plan + 2]
     );
-    assert!(
-        rows[request + 2].contains("☐  Write the checker"),
-        "{}",
-        rows[request + 2]
-    );
-    // Every child sits one level, two columns, right of its parent: the
-    // request's icon right of No Plan's fold arrow, its items' boxes and
-    // its part's icon right of the request's icon.
+    let part = row_with("Parse the source  → coder");
+    assert_eq!(part, no_plan + 3, "the part doing no item follows them");
+    // Every icon sits right under the header's fold arrow.
     let last_column = |row: usize, glyph: char| {
         rows[row]
             .chars()
@@ -5271,17 +5264,10 @@ fn test_tasks_tab_lists_requests_with_their_parts() {
             .last()
             .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
     };
-    assert_eq!(last_column(request, '○'), last_column(no_plan, '▾') + 2);
-    let child = last_column(request, '○') + 2;
-    assert_eq!(last_column(request + 1, '☒'), child);
-    assert_eq!(last_column(request + 2, '☐'), child);
-    let part = row_with("Parse the source  → coder");
-    assert_eq!(part, request + 3, "the part follows the request's items");
-    assert_eq!(
-        last_column(part, '✓'),
-        child,
-        "the part sits at its items' depth"
-    );
+    let arrow = last_column(no_plan, '▾');
+    assert_eq!(last_column(no_plan + 1, '☒'), arrow);
+    assert_eq!(last_column(no_plan + 2, '☐'), arrow);
+    assert_eq!(last_column(part, '✓'), arrow);
     assert!(
         rows.iter().any(|r| r.contains("p plan")),
         "the hint names the plan key"

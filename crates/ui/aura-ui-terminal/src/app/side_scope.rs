@@ -119,8 +119,6 @@ impl App {
         let agents = self.scope_agents();
         self.trace_feed.set_filter(agents.clone());
         self.task_list.set_filter(agents.clone());
-        self.task_list
-            .set_show_agents(self.side_scope == SideScope::Project);
         self.process_filter = agents;
         self.reshow_processes();
         self.refresh_members();
@@ -336,8 +334,8 @@ mod tests {
     }
 
     /// The TASKS tab's rows as text, each indented two spaces per level:
-    /// a plan header by path, a todo as `#` and its plan's path, a task
-    /// by id.
+    /// a plan header by path, a todo as `#` and its plan's path, an item
+    /// by its content, a task as `@` and its id.
     fn rows(app: &App) -> Vec<String> {
         let list = app.task_list();
         list.rows()
@@ -347,9 +345,10 @@ mod tests {
                     TaskRow::Plan { plan, .. } => plan
                         .map_or_else(|| "No Plan".into(), |plan| list.plans()[plan].path.clone()),
                     TaskRow::Todo { plan, .. } => format!("#{}", list.plans()[plan].path),
-                    TaskRow::Task { task, .. } | TaskRow::Item { task, .. } => {
-                        list.tasks()[task].id.clone()
+                    TaskRow::Item { task, item, .. } => {
+                        list.tasks()[task].items[item].content.clone()
                     }
+                    TaskRow::Task { task, .. } => format!("@{}", list.tasks()[task].id),
                 };
                 format!("{}{text}", "  ".repeat(row.depth()))
             })
@@ -361,11 +360,18 @@ mod tests {
     }
 
     /// `tx` of `a` is a part of `tb` of `b` and does `plan-c`'s todo;
-    /// `tn` of `b` works on no plan.
+    /// `tn` of `b` works on no plan and has an item.
     fn app_with_cross_agent_tasks() -> App {
         let mut app = app();
+        let mut tn = task("tn", "b", None, None);
+        tn.items = vec![TodoView {
+            content: "tn's".into(),
+            state: TodoState::Pending,
+            assignee: None,
+            task: None,
+        }];
         app.process_command(UiCommand::SetTasks(vec![
-            task("tn", "b", None, None),
+            tn,
             task("tx", "a", Some("tb"), None),
             task("tb", "b", None, Some("plan-b")),
         ]));
@@ -381,30 +387,21 @@ mod tests {
         let mut app = app_with_cross_agent_tasks();
         assert_eq!(
             rows(&app),
-            ["plan-c", "  #plan-c", "  tx"],
-            "without tb, tx goes with the plan whose todo it does"
+            ["plan-c", "#plan-c", "  @tx"],
+            "without tb, tx is a task under the todo of plan-c it does"
         );
 
         app.toggle_side_scope();
         assert_eq!(
             rows(&app),
-            [
-                "plan-b",
-                "  #plan-b",
-                "  tb",
-                "    tx",
-                "plan-c",
-                "  #plan-c",
-                "No Plan",
-                "  tn"
-            ],
-            "tx joins tb under plan-b, and tn needs No Plan"
+            ["plan-b", "#plan-b", "@tx", "plan-c", "#plan-c", "No Plan", "tn's"],
+            "tx joins tb's plan, and tn's item needs No Plan"
         );
 
         app.toggle_side_scope();
         assert_eq!(
             rows(&app),
-            ["plan-c", "  #plan-c", "  tx"],
+            ["plan-c", "#plan-c", "  @tx"],
             "No Plan goes again"
         );
     }
@@ -414,15 +411,15 @@ mod tests {
         let mut app = app_with_cross_agent_tasks();
         app.task_list.select(0);
         app.toggle_side_scope();
-        assert_eq!(app.task_list().selected(), 4);
+        assert_eq!(app.task_list().selected(), 3);
         assert_eq!(highlighted(&app).as_deref(), Some("plan-c"));
         app.toggle_side_scope();
         assert_eq!(highlighted(&app).as_deref(), Some("plan-c"));
 
         app.task_list.select(1);
         app.toggle_side_scope();
-        assert_eq!(app.task_list().selected(), 5);
-        assert_eq!(highlighted(&app).as_deref(), Some("  #plan-c"));
+        assert_eq!(app.task_list().selected(), 4);
+        assert_eq!(highlighted(&app).as_deref(), Some("#plan-c"));
         app.toggle_side_scope();
         assert_eq!(app.task_list().selected(), 1);
     }
@@ -440,14 +437,13 @@ mod tests {
         let mut current = plan("plan-z", None);
         current.todos = vec![current.todos[0].clone(); 4];
         app.process_command(UiCommand::SetPlan(Some(current)));
-        assert_eq!(rows(&app).len(), 8, "plan-z and its 4 todos, then plan-a");
+        assert_eq!(rows(&app).len(), 7, "plan-z and its 4 todos, then plan-a");
         app.task_list.select(4);
-        assert_eq!(highlighted(&app).as_deref(), Some("  #plan-z"));
+        assert_eq!(highlighted(&app).as_deref(), Some("#plan-z"));
 
         app.process_command(UiCommand::SetPlan(None));
-        assert_eq!(rows(&app), ["plan-a", "  #plan-a", "  ta"]);
-        assert_eq!(app.task_list().selected(), 2);
-        assert_eq!(highlighted(&app).as_deref(), Some("  ta"));
+        assert_eq!(rows(&app), ["plan-a", "#plan-a"]);
+        assert_eq!(app.task_list().selected(), 1);
         assert_eq!(app.task_list().hidden_plans(), 1);
     }
 
@@ -458,7 +454,7 @@ mod tests {
         app.focus = crate::app::PanelFocus::Sandbox;
         app.show_side_tab(crate::app::SidePanelTab::Tasks);
         app.task_list.select(1);
-        assert_eq!(highlighted(&app).as_deref(), Some("  #plan-a"));
+        assert_eq!(highlighted(&app).as_deref(), Some("#plan-a"));
 
         app.handle_key(KeyEvent::from(KeyCode::Char('t')));
         assert_eq!(

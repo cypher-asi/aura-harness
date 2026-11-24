@@ -481,10 +481,12 @@ impl TurnEventSink for UiCommandSink {
                 match serde_json::from_str::<Vec<TodoItem>>(&message) {
                     Ok(todos) => {
                         let views = todo_views(&todos);
-                        self.plan
-                            .tasks
-                            .set_items(self.plan.agent, views.clone())
-                            .await;
+                        let items = todos
+                            .iter()
+                            .map(|todo| todo.id.clone())
+                            .zip(views.iter().cloned())
+                            .collect();
+                        self.plan.tasks.set_items(self.plan.agent, items).await;
                         self.ui.send(UiCommand::SetTodos(views)).await;
                         self.sync_plan(&todos).await;
                     }
