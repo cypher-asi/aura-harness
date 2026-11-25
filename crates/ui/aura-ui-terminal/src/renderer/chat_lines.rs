@@ -6,6 +6,7 @@ use super::activity::{
     activity_lines, collapsed_hint, group_header_of, records_link, running_tool_lines, GroupView,
     StepNumber, StepTally, Tally, ToolParts,
 };
+use super::boot::boot_lines;
 use super::command::shell_lines;
 use super::diff::diff_message_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
@@ -273,7 +274,9 @@ impl ChatLineCache {
             let members = &shown[run.clone()];
             let key = members[0].version().0;
             let is_group = members.len() > 1 && members[0].activity_step().is_some();
-            let live = members.iter().any(|m| m.is_live_activity())
+            let live = members
+                .iter()
+                .any(|m| m.is_live_activity() || m.is_live_boot())
                 || (is_group && groups.turn_live && i + 1 == runs.len());
             let view = is_group
                 .then(|| group_view(groups.open.get(&key).copied(), groups.expand_all, live));
@@ -611,6 +614,7 @@ fn is_notice(message: &Message) -> bool {
     message.role() == MessageRole::System
         && message.activity_step().is_none()
         && message.shell_run().is_none()
+        && message.boot_console().is_none()
         && !message.content().trim().is_empty()
         && !message.content().contains('\n')
 }
@@ -917,7 +921,19 @@ fn single_lines(
 ) -> (Laid, Vec<ToggleRow>) {
     let Some(step) = message.activity_step() else {
         let laid = message_lines(message, (width, measure), theme, spinner);
-        return (laid, Vec::new());
+        // A boot console still going shows everything; once done it
+        // folds and opens on its header.
+        let toggles = message
+            .boot_console()
+            .filter(|console| !console.is_running())
+            .map(|_| ToggleRow {
+                line: 0,
+                target: ToggleTarget::Step(message.version().0),
+                open: message.is_expanded(),
+            })
+            .into_iter()
+            .collect();
+        return (laid, toggles);
     };
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut toggles = vec![ToggleRow {
@@ -972,6 +988,13 @@ fn message_lines(
     if let Some(block) = message.diff_block() {
         return (
             diff_message_lines(block, width, theme),
+            Vec::new(),
+            Vec::new(),
+        );
+    }
+    if let Some(console) = message.boot_console() {
+        return (
+            boot_lines(console, message.is_expanded(), spinner, width, theme),
             Vec::new(),
             Vec::new(),
         );

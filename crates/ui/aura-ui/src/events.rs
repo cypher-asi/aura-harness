@@ -476,6 +476,76 @@ pub struct FileDiffData {
     pub diff: String,
 }
 
+/// Where a step of a boot console is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BootStageState {
+    /// Under way
+    Running,
+    /// Finished after `ms`
+    Done {
+        /// Milliseconds it took
+        ms: u64,
+    },
+    /// Not needed, and why
+    Skipped(String),
+    /// Failed, and why
+    Failed(String),
+}
+
+/// A line of command output in a boot console.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootLogLine {
+    /// Whether the command printed it on stderr
+    pub stderr: bool,
+    /// The line, without terminal escapes
+    pub text: String,
+}
+
+/// A change to a boot console ([`UiCommand::Boot`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BootUpdate {
+    /// The console starts, headed `title`, e.g. `Moving to the cloud`
+    Begin {
+        /// What is happening
+        title: String,
+    },
+    /// A step started, finished, failed or was skipped
+    Stage {
+        /// Stable key of the step
+        key: String,
+        /// What the step does, e.g. `Creating machine`
+        label: String,
+        /// Where it is
+        state: BootStageState,
+    },
+    /// Something known about the machine; replaces an earlier fact with
+    /// the same key
+    Fact {
+        /// What it is, e.g. `region`
+        key: String,
+        /// Its value
+        value: String,
+    },
+    /// Lines commands printed, oldest first
+    Log(Vec<BootLogLine>),
+    /// How far a step has got
+    Progress {
+        /// Stable key of the step
+        key: String,
+        /// Done so far
+        done: u64,
+        /// Out of
+        total: u64,
+    },
+    /// The console is done; `summary` says how it went
+    End {
+        /// Whether it went through
+        ok: bool,
+        /// One line on how it went
+        summary: String,
+    },
+}
+
 /// Commands sent from the application logic to the UI.
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -568,6 +638,16 @@ pub enum UiCommand {
         title: String,
         /// One entry per changed file
         files: Vec<FileDiffData>,
+    },
+
+    /// A machine coming up, or an agent moving between machines, shown as
+    /// a live boot console in the chat. The first update for an `id` adds
+    /// the console; later ones change it.
+    Boot {
+        /// Console id
+        id: String,
+        /// What changed
+        update: BootUpdate,
     },
 
     /// Update a tool's completion status

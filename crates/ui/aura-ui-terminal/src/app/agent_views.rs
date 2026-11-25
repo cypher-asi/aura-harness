@@ -156,10 +156,14 @@ impl App {
     }
 
     /// Whether the chat on screen changes from frame to frame: it waits
-    /// for its history or fades in, on the CHAT tab.
+    /// for its history, fades in or shows a machine booting, on the CHAT
+    /// tab.
     #[must_use]
     pub fn chat_animating(&self) -> bool {
-        self.chat_tab() == ChatTab::Chat && (self.chat_loading() || self.chat_fading().is_some())
+        self.chat_tab() == ChatTab::Chat
+            && (self.chat_loading()
+                || self.chat_fading().is_some()
+                || self.messages.iter().rev().any(Message::is_live_boot))
     }
 
     /// Whether the agent with hex id `agent_id` has a turn in flight.

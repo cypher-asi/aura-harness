@@ -28,6 +28,8 @@
 //!   and dedup.
 //! - [`plans`]: each user's plan tokens as boxd host-bound secrets.
 //! - [`names`]: machine and ledger names.
+//! - [`boot`]: what a machine coming up shows while it happens, for the
+//!   chat's boot console.
 //!
 //! ## Invariants
 //!
@@ -36,6 +38,7 @@
 //!   authenticated `Exec`.
 //! - Every external call has a timeout (rules.md §6.2).
 
+pub mod boot;
 pub mod boxd;
 pub mod cost;
 pub mod delta;
@@ -65,6 +68,7 @@ pub mod proto {
     tonic::include_proto!("boxd.api.v1");
 }
 
+pub use boot::{BootEvent, BootReporter, BootStage, StageState};
 pub use boxd::BoxdProvider;
 pub use error::{CloudError, CloudResult};
 pub use fake::FakeProvider;

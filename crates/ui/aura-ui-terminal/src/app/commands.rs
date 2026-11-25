@@ -4,8 +4,8 @@ use super::{
     App, AppState, DetailView, NotificationType, PanelFocus, PendingApproval, SidePanelTab,
 };
 use crate::{
-    components::{elapsed_ms, Activity, Message, MessageRole, ToolStatus, ToolStep},
-    events::{CallUsage, RewindScope, UiCommand, UiEvent},
+    components::{elapsed_ms, Activity, BootConsole, Message, MessageRole, ToolStatus, ToolStep},
+    events::{BootUpdate, CallUsage, RewindScope, UiCommand, UiEvent},
     mode_command::{parse_approval_command, ApprovalLevel, PermissionMode, SlashModeCommand},
     terminal::KeyResult,
 };
@@ -899,6 +899,7 @@ impl App {
             UiCommand::ShowDiff { title, files } => {
                 self.add_message(Message::diff(&title, files));
             }
+            UiCommand::Boot { id, update } => self.cmd_boot(&id, update),
             UiCommand::CommandFinished { output, exit_code } => {
                 if let Some(message) = self
                     .messages
@@ -1250,6 +1251,26 @@ impl App {
                 message.update_activity(|activity| activity.finish("interrupted"));
             }
         }
+    }
+
+    /// Change boot console `id`, adding it on its first update.
+    fn cmd_boot(&mut self, id: &str, update: BootUpdate) {
+        if let Some(message) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.boot_console().is_some_and(|console| console.id == id))
+        {
+            message.update_boot(|console| console.apply(update));
+            return;
+        }
+        let title = match &update {
+            BootUpdate::Begin { title } => title.as_str(),
+            _ => "Cloud machine",
+        };
+        let mut console = BootConsole::new(id, title);
+        console.apply(update);
+        self.add_message(Message::boot(console));
     }
 
     fn cmd_notification(&mut self, msg: &str, prefix: &str, kind: NotificationType) {

@@ -16,12 +16,16 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use aura_core_types::{AgentId, Placement};
+use aura_engine_cloud::{BootEvent, BootReporter, StageState};
 use aura_store_db::Store;
-use aura_ui_terminal::events::{MessageData, MessageRole, ToolData};
+use aura_ui_terminal::events::{
+    BootLogLine, BootStageState, BootUpdate, MessageData, MessageRole, ToolData,
+};
 use aura_ui_terminal::host::{HostAction, HostRow, HostView, PlacementState, PlacementView};
 use aura_ui_terminal::UiCommand;
 use parking_lot::Mutex;
@@ -115,6 +119,115 @@ fn env_file() -> PathBuf {
         .map(|home| home.path)
         .unwrap_or_else(|_| PathBuf::from("aura_data"))
         .join(".env")
+}
+
+/// Numbers boot consoles, so each move or wake gets one of its own.
+static NEXT_BOOT: AtomicU64 = AtomicU64::new(1);
+
+/// A boot console in an agent's chat: what a move or a wake shows while
+/// it happens. It appears on [`Self::begin`] or with the first event.
+#[derive(Clone)]
+struct BootConsoleUi {
+    ui: AgentUi,
+    id: String,
+    title: String,
+    begun: Arc<AtomicBool>,
+}
+
+impl BootConsoleUi {
+    fn new(ui: AgentUi, title: &str) -> Self {
+        Self {
+            ui,
+            id: format!("boot-{}", NEXT_BOOT.fetch_add(1, Ordering::Relaxed)),
+            title: title.to_string(),
+            begun: Arc::default(),
+        }
+    }
+
+    async fn send(&self, update: BootUpdate) {
+        self.ui
+            .send(UiCommand::Boot {
+                id: self.id.clone(),
+                update,
+            })
+            .await;
+    }
+
+    /// Show the console now.
+    async fn begin(&self) {
+        if !self.begun.swap(true, Ordering::Relaxed) {
+            self.send(BootUpdate::Begin {
+                title: self.title.clone(),
+            })
+            .await;
+        }
+    }
+
+    async fn show(&self, events: Vec<BootEvent>) {
+        self.begin().await;
+        for update in boot_updates(events) {
+            self.send(update).await;
+        }
+    }
+
+    /// Show everything sent on `events` until its reporter is dropped.
+    fn pump(
+        &self,
+        mut events: tokio::sync::mpsc::UnboundedReceiver<BootEvent>,
+    ) -> tokio::task::JoinHandle<()> {
+        let console = self.clone();
+        tokio::spawn(async move {
+            let mut batch = Vec::new();
+            while events.recv_many(&mut batch, 256).await > 0 {
+                console.show(std::mem::take(&mut batch)).await;
+            }
+        })
+    }
+
+    /// End the console with `summary`. Returns `false` when it never
+    /// showed, so the caller says how it went another way.
+    async fn end(&self, ok: bool, summary: String) -> bool {
+        if !self.begun.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.send(BootUpdate::End { ok, summary }).await;
+        true
+    }
+}
+
+/// `events` as console updates, runs of log lines sent as one.
+fn boot_updates(events: Vec<BootEvent>) -> Vec<BootUpdate> {
+    let mut updates = Vec::new();
+    for event in events {
+        let update = match event {
+            BootEvent::Stage { stage, state } => BootUpdate::Stage {
+                key: stage.key().to_string(),
+                label: stage.label().to_string(),
+                state: match state {
+                    StageState::Started => BootStageState::Running,
+                    StageState::Done { ms } => BootStageState::Done { ms },
+                    StageState::Skipped(reason) => BootStageState::Skipped(reason),
+                    StageState::Failed(reason) => BootStageState::Failed(reason),
+                },
+            },
+            BootEvent::Fact { key, value } => BootUpdate::Fact { key, value },
+            BootEvent::Log { stderr, line, .. } => {
+                let line = BootLogLine { stderr, text: line };
+                if let Some(BootUpdate::Log(lines)) = updates.last_mut() {
+                    lines.push(line);
+                    continue;
+                }
+                BootUpdate::Log(vec![line])
+            }
+            BootEvent::Progress { stage, done, total } => BootUpdate::Progress {
+                key: stage.key().to_string(),
+                done,
+                total,
+            },
+        };
+        updates.push(update);
+    }
+    updates
 }
 
 async fn system(state: &LoopState<'_>, agent: AgentId, text: impl Into<String>) {
@@ -470,25 +583,28 @@ pub(super) async fn handle_set_placement(
             state.cloud.shared.moving.lock().insert(agent);
             // The local kernel must not write for it from here on.
             state.idle.remove(&agent);
-            system(state, agent, "Moving this agent to its own cloud machine. The first move of a project builds its snapshot, which can take a while.").await;
             let shared = Arc::clone(&state.cloud.shared);
-            let ui = AgentUi::new(state.commands.clone(), agent);
+            let console = BootConsoleUi::new(
+                AgentUi::new(state.commands.clone(), agent),
+                "Moving to the cloud",
+            );
+            console.begin().await;
             tokio::spawn(async move {
-                let result = hub.place(request).await;
+                let (boot, events) = BootReporter::channel();
+                let shown = console.pump(events);
+                let result = hub.place(request, &boot).await;
+                drop(boot);
+                let _ = shown.await;
                 shared.moving.lock().remove(&agent);
-                let note = match result {
-                    Ok(view) => format!(
+                let (ok, note) = match result {
+                    Ok(view) => (true, format!(
                         "Now running in the cloud on {} ({} vCPU). Its record syncs back here; `/local` brings it back.",
                         view.machine.name, view.machine.vcpu
-                    ),
-                    Err(err) => format!("Could not move the agent to the cloud: {err}"),
+                    )),
+                    Err(err) => (false, format!("Could not move the agent to the cloud: {err}")),
                 };
                 info!(%agent, %note, "placement");
-                ui.send(UiCommand::ShowMessage(MessageData::new(
-                    MessageRole::System,
-                    note,
-                )))
-                .await;
+                console.end(ok, note).await;
             });
         }
         PlacementView::Local => {
@@ -498,13 +614,6 @@ pub(super) async fn handle_set_placement(
             if let Some(project) = &project {
                 hub.set_project_default(project, Placement::Local);
             }
-            state.cloud.shared.moving.lock().insert(agent);
-            system(
-                state,
-                agent,
-                "Bringing this agent back: copying its record and pulling its changes.",
-            )
-            .await;
             recall(state, &hub, agent, "returned to local");
         }
     }
@@ -513,25 +622,33 @@ pub(super) async fn handle_set_placement(
 fn recall(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, reason: &'static str) {
     let shared = Arc::clone(&state.cloud.shared);
     let hub = Arc::clone(hub);
-    let ui = AgentUi::new(state.commands.clone(), agent);
+    let console = BootConsoleUi::new(
+        AgentUi::new(state.commands.clone(), agent),
+        "Bringing the agent back",
+    );
     shared.moving.lock().insert(agent);
     tokio::spawn(async move {
-        let result = hub.recall(agent, reason).await;
+        console.begin().await;
+        let (boot, events) = BootReporter::channel();
+        let shown = console.pump(events);
+        let result = hub.recall(agent, reason, &boot).await;
+        drop(boot);
+        let _ = shown.await;
         shared.moving.lock().remove(&agent);
-        let note = match result {
+        let (ok, note) = match result {
             Ok(outcome) => {
                 shared.stale.lock().insert(agent);
-                format!("Back on this machine: {}.", outcome.describe())
+                (
+                    true,
+                    format!("Back on this machine: {}.", outcome.describe()),
+                )
             }
-            Err(err) => {
-                format!("Could not bring the agent back (it keeps running in the cloud): {err}")
-            }
+            Err(err) => (
+                false,
+                format!("Could not bring the agent back (it keeps running in the cloud): {err}"),
+            ),
         };
-        ui.send(UiCommand::ShowMessage(MessageData::new(
-            MessageRole::System,
-            note,
-        )))
-        .await;
+        console.end(ok, note).await;
     });
 }
 
@@ -600,10 +717,22 @@ pub(super) async fn handle_host_action(
                 Ok(()) => "The cloud machine is asleep; it wakes on the next message.".to_string(),
                 Err(err) => format!("Could not put the machine to sleep: {err}"),
             },
-            HostAction::Wake => match hub.wake(agent).await {
-                Ok(()) => "The cloud machine is awake.".to_string(),
-                Err(err) => format!("Could not wake the machine: {err}"),
-            },
+            HostAction::Wake => {
+                let console = BootConsoleUi::new(ui.clone(), "Waking cloud machine");
+                let (boot, events) = BootReporter::channel();
+                let shown = console.pump(events);
+                let result = hub.wake(agent, &boot).await;
+                drop(boot);
+                let _ = shown.await;
+                let (ok, note) = match result {
+                    Ok(()) => (true, "The cloud machine is awake.".to_string()),
+                    Err(err) => (false, format!("Could not wake the machine: {err}")),
+                };
+                if console.end(ok, note.clone()).await {
+                    return;
+                }
+                note
+            }
             HostAction::Flip => return,
         };
         ui.send(UiCommand::ShowMessage(MessageData::new(
@@ -762,7 +891,30 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
 async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) {
     let mut streaming = false;
     let mut thinking = false;
+    // A sleeping machine's wake, shown until the turn's first event.
+    let mut waking: Option<BootConsoleUi> = None;
     while let Some(event) = rx.recv().await {
+        if let RemoteEvent::Boot(event) = event {
+            waking
+                .get_or_insert_with(|| BootConsoleUi::new(ui.clone(), "Waking cloud machine"))
+                .show(vec![event])
+                .await;
+            continue;
+        }
+        if let Some(console) = waking.take() {
+            match &event {
+                RemoteEvent::Failed(err) => {
+                    console
+                        .end(false, format!("Could not wake the machine: {err}"))
+                        .await;
+                }
+                _ => {
+                    console
+                        .end(true, "Awake; the turn runs on it.".to_string())
+                        .await;
+                }
+            }
+        }
         if thinking && !matches!(event, RemoteEvent::Thinking(_)) {
             ui.send(UiCommand::FinishThinking).await;
             thinking = false;
@@ -773,6 +925,7 @@ async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) 
         }
         match event {
             RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
+            RemoteEvent::Boot(_) => {}
             RemoteEvent::Text(text) => {
                 if !streaming {
                     ui.send(UiCommand::StartStreaming).await;
@@ -826,6 +979,11 @@ async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) 
                 break;
             }
         }
+    }
+    if let Some(console) = waking {
+        console
+            .end(false, "The turn ended while the machine woke.".to_string())
+            .await;
     }
     if thinking {
         ui.send(UiCommand::FinishThinking).await;
@@ -883,5 +1041,61 @@ mod owner_tests {
         assert_eq!(plan_of_model("aura-claude-sonnet"), None);
         assert_eq!(plan_of_model("local/qwen3:4b"), None);
         assert_eq!(plan_of_model("zos/x"), None);
+    }
+}
+
+#[cfg(test)]
+mod boot_tests {
+    use super::*;
+    use aura_engine_cloud::BootStage;
+
+    #[tokio::test]
+    async fn boot_events_become_console_updates_with_log_runs_joined() {
+        let (boot, mut events) = BootReporter::channel();
+        boot.fact("machine", "aura-1");
+        let _ = boot
+            .run(BootStage::Snapshot, async {
+                boot.log(BootStage::Snapshot, false, "$ cargo build");
+                boot.log(BootStage::Snapshot, true, "Compiling aura");
+                Ok::<_, String>(())
+            })
+            .await;
+        drop(boot);
+        let mut batch = Vec::new();
+        while events.recv_many(&mut batch, 64).await > 0 {}
+
+        let updates = boot_updates(batch);
+        assert_eq!(updates.len(), 4, "{updates:?}");
+        assert!(matches!(
+            &updates[0],
+            BootUpdate::Fact { key, value } if key == "machine" && value == "aura-1"
+        ));
+        assert!(matches!(
+            &updates[1],
+            BootUpdate::Stage { key, state: BootStageState::Running, .. } if key == "snapshot"
+        ));
+        let BootUpdate::Log(lines) = &updates[2] else {
+            panic!("expected a log run: {updates:?}");
+        };
+        assert_eq!(
+            lines,
+            &vec![
+                BootLogLine {
+                    stderr: false,
+                    text: "$ cargo build".into()
+                },
+                BootLogLine {
+                    stderr: true,
+                    text: "Compiling aura".into()
+                },
+            ]
+        );
+        assert!(matches!(
+            &updates[3],
+            BootUpdate::Stage {
+                state: BootStageState::Done { .. },
+                ..
+            }
+        ));
     }
 }

@@ -632,6 +632,46 @@ fn test_switching_back_shows_a_turn_that_finished_meanwhile() {
 }
 
 #[test]
+fn a_boot_console_is_updated_in_place_in_its_agents_chat() {
+    use crate::events::{BootStageState, BootUpdate};
+    let (mut app, _rx) = app_with_agents();
+    let boot = |update: BootUpdate| UiCommand::ForAgent {
+        agent_id: "bb".to_string(),
+        command: Box::new(UiCommand::Boot {
+            id: "boot-1".to_string(),
+            update,
+        }),
+    };
+    app.process_command(boot(BootUpdate::Begin {
+        title: "Moving to the cloud".into(),
+    }));
+    app.process_command(boot(BootUpdate::Stage {
+        key: "create".into(),
+        label: "Creating machine".into(),
+        state: BootStageState::Running,
+    }));
+    assert!(app.messages().is_empty(), "the console is in bb's chat");
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    assert_eq!(app.messages().len(), 1);
+    assert!(app.chat_animating(), "a running console animates the chat");
+    app.process_command(boot(BootUpdate::Stage {
+        key: "create".into(),
+        label: "Creating machine".into(),
+        state: BootStageState::Done { ms: 900 },
+    }));
+    app.process_command(boot(BootUpdate::End {
+        ok: true,
+        summary: "Now running in the cloud.".into(),
+    }));
+    assert_eq!(app.messages().len(), 1, "updates change the one console");
+    let console = app.messages()[0].boot_console().expect("console");
+    assert_eq!(console.steps[0].state, BootStageState::Done { ms: 900 });
+    assert!(!console.is_running());
+    assert!(!app.chat_animating());
+}
+
+#[test]
 fn only_what_changes_the_screen_asks_for_a_frame() {
     let (mut app, _rx) = app_with_agents();
     assert!(app.take_redraw(), "nothing is drawn yet");

@@ -46,14 +46,16 @@ use aura_core_protocol::{
 };
 use aura_core_types::{AgentId, Placement, PlacementPayload, VmPayload};
 use aura_engine::{AgentHost, MessageKind, RemoteMail, RemoteRouter, ThreadId};
+use aura_engine_cloud::boot::human_bytes;
 use aura_engine_cloud::cost::{latest_reading, CostEstimate, CostModel, CostSample};
 use aura_engine_cloud::fleet::{MachineView, ProvisionRequest, VmFleet};
-use aura_engine_cloud::machine_env::WORKSPACE_DIR;
+use aura_engine_cloud::machine_env::{MachineEnv, WORKSPACE_DIR};
 use aura_engine_cloud::mesh::{global_thread, Directory, Holder, MailBook, HUB_NODE};
 use aura_engine_cloud::plans::{PlanCredentials, PlanStatus, PlanSync, SYNC_EVERY};
-use aura_engine_cloud::snapshots::{AuraBinary, SnapshotBuilder};
+use aura_engine_cloud::snapshots::{AuraBinary, SnapshotBuilder, SnapshotRecord};
 use aura_engine_cloud::{
-    delta, names, replica, CloudError, CloudResult, MachineOrigin, VmProvider,
+    delta, names, replica, BootEvent, BootReporter, BootStage, CloudError, CloudResult,
+    MachineOrigin, VmProvider,
 };
 use aura_store_db::Store;
 use futures_util::{SinkExt, StreamExt};
@@ -148,6 +150,8 @@ impl PatchOutcome {
 pub enum RemoteEvent {
     /// The machine is waking or the run is starting.
     Status(String),
+    /// A step of waking a sleeping machine.
+    Boot(BootEvent),
     /// Reply text.
     Text(String),
     /// Thinking text.
@@ -650,19 +654,24 @@ impl CloudHub {
         ))
     }
 
-    async fn awake_node(&self, agent: &str) -> CloudResult<NodeClient> {
-        self.fleet.ensure_awake(agent).await?;
+    async fn awake_node(&self, agent: &str, boot: &BootReporter) -> CloudResult<NodeClient> {
+        self.fleet.ensure_awake_reported(agent, boot).await?;
         self.node(agent)
     }
 
-    /// Move `request.agent`'s single writer to a cloud machine. The
-    /// caller must hold the agent idle until this returns.
+    /// Move `request.agent`'s single writer to a cloud machine, showing
+    /// each step on `boot`. The caller must hold the agent idle until
+    /// this returns.
     ///
     /// # Errors
     ///
     /// When the snapshot, the machine or the record import fails; the
     /// agent then stays here and any machine made for it is destroyed.
-    pub async fn place(self: &Arc<Self>, request: PlaceRequest) -> CloudResult<MachineView> {
+    pub async fn place(
+        self: &Arc<Self>,
+        request: PlaceRequest,
+        boot: &BootReporter,
+    ) -> CloudResult<MachineView> {
         let hex = request.agent.to_hex();
         if self.is_placed(request.agent) {
             return self.fleet.view(&hex).ok_or_else(|| CloudError::NotFound {
@@ -677,55 +686,46 @@ impl CloudHub {
             .map(|parent| parent.to_hex())
             .filter(|parent| self.config.fork_on_spawn && self.fleet.has(parent));
         let owner_tag = names::owner_tag(&request.owner);
+        boot.fact("agent", request.name.clone());
         let (secrets, plans) = match self.plan_sync() {
-            Some(sync) => match sync.ensure_owner(&request.owner).await {
-                Ok(secrets) => (secrets, sync.templates(&request.owner)),
-                Err(err) => {
-                    tracing::warn!(owner = %owner_tag, error = %err, "could not set the plan secrets; the machine gets no plans");
-                    (Vec::new(), Vec::new())
-                }
-            },
-            None => (Vec::new(), Vec::new()),
+            Some(sync) => {
+                boot.run(BootStage::Plans, async {
+                    Ok::<_, CloudError>(match sync.ensure_owner(&request.owner).await {
+                        Ok(secrets) => {
+                            let plans = sync.templates(&request.owner);
+                            boot.fact("plans", format!("{} plan sign-in(s) shared", plans.len()));
+                            (secrets, plans)
+                        }
+                        Err(err) => {
+                            tracing::warn!(owner = %owner_tag, error = %err, "could not set the plan secrets; the machine gets no plans");
+                            boot.log(BootStage::Plans, true, format!("no plans for this machine: {err}"));
+                            (Vec::new(), Vec::new())
+                        }
+                    })
+                })
+                .await?
+            }
+            None => {
+                boot.skip(BootStage::Plans, "no plan sign-ins here");
+                (Vec::new(), Vec::new())
+            }
         };
         let (origin, base_commit, seal) = match parent.as_deref().and_then(|p| self.fleet.view(p)) {
-            Some(parent_view) => (
-                MachineOrigin::Fork(parent_view.machine.name.clone()),
-                None,
-                vec![parent_view.agent.clone()],
-            ),
+            Some(parent_view) => {
+                boot.skip(
+                    BootStage::Snapshot,
+                    format!("forking the parent's machine {}", parent_view.machine.name),
+                );
+                (
+                    MachineOrigin::Fork(parent_view.machine.name.clone()),
+                    None,
+                    vec![parent_view.agent.clone()],
+                )
+            }
             None => {
-                let mut record = self
-                    .snapshots
-                    .ensure_project(
-                        &request.project_id,
-                        &request.project_dir,
-                        request.build_command.as_deref(),
-                        false,
-                    )
+                let record = boot
+                    .run(BootStage::Snapshot, self.project_snapshot(&request, boot))
                     .await?;
-                // The delta is taken against the snapshot's commit; when
-                // this repository no longer has it, rebuild from HEAD.
-                let missing = match record.commit.clone() {
-                    Some(commit) => {
-                        let dir = request.project_dir.clone();
-                        !tokio::task::spawn_blocking(move || delta::has_commit(&dir, &commit))
-                            .await
-                            .unwrap_or(false)
-                    }
-                    None => false,
-                };
-                if missing {
-                    tracing::info!(project = %request.project_id, "the project snapshot's commit is gone here; rebuilding it");
-                    record = self
-                        .snapshots
-                        .ensure_project(
-                            &request.project_id,
-                            &request.project_dir,
-                            request.build_command.as_deref(),
-                            true,
-                        )
-                        .await?;
-                }
                 (
                     MachineOrigin::Snapshot(record.name),
                     record.commit,
@@ -735,20 +735,35 @@ impl CloudHub {
         };
         let view = self
             .fleet
-            .provision(ProvisionRequest {
-                agent: hex.clone(),
-                agent_zns: request.agent_zns.clone(),
-                code: request.code.clone(),
-                project: request.project_id.clone(),
-                name: names::machine_name(request.code.as_deref(), &request.agent),
-                origin,
-                seal,
-                owner: owner_tag.clone(),
-                secrets,
-                plans,
-            })
+            .provision_reported(
+                ProvisionRequest {
+                    agent: hex.clone(),
+                    agent_zns: request.agent_zns.clone(),
+                    code: request.code.clone(),
+                    project: request.project_id.clone(),
+                    name: names::machine_name(request.code.as_deref(), &request.agent),
+                    origin,
+                    seal,
+                    owner: owner_tag.clone(),
+                    secrets,
+                    plans,
+                },
+                boot,
+            )
             .await?;
-        if let Err(err) = self.seed(&request, &view, base_commit.as_deref()).await {
+        let env = MachineEnv::for_agent(view.machine.vcpu).into_map();
+        boot.fact("workspace", WORKSPACE_DIR);
+        boot.fact(
+            "env",
+            format!(
+                "{} (allowlist)",
+                env.keys().map(String::as_str).collect::<Vec<_>>().join(" ")
+            ),
+        );
+        if let Err(err) = self
+            .seed(&request, &view, base_commit.as_deref(), boot)
+            .await
+        {
             tracing::warn!(agent = %hex, error = %err, "could not move the agent to its machine; destroying it");
             let _ = self.fleet.destroy(&hex, "placement failed").await;
             return Err(err);
@@ -782,6 +797,45 @@ impl CloudHub {
         Ok(self.fleet.view(&hex).unwrap_or(view))
     }
 
+    /// The project snapshot a new machine starts from, rebuilt from HEAD
+    /// when this repository no longer has the snapshot's commit (the
+    /// delta is taken against it).
+    async fn project_snapshot(
+        &self,
+        request: &PlaceRequest,
+        boot: &BootReporter,
+    ) -> CloudResult<SnapshotRecord> {
+        let ensure = |force| {
+            self.snapshots.ensure_project_reported(
+                &request.project_id,
+                &request.project_dir,
+                request.build_command.as_deref(),
+                force,
+                boot,
+            )
+        };
+        let record = ensure(false).await?;
+        let missing = match record.commit.clone() {
+            Some(commit) => {
+                let dir = request.project_dir.clone();
+                !tokio::task::spawn_blocking(move || delta::has_commit(&dir, &commit))
+                    .await
+                    .unwrap_or(false)
+            }
+            None => false,
+        };
+        if !missing {
+            return Ok(record);
+        }
+        tracing::info!(project = %request.project_id, "the project snapshot's commit is gone here; rebuilding it");
+        boot.log(
+            BootStage::Snapshot,
+            false,
+            "the snapshot's commit is gone here; rebuilding it from HEAD",
+        );
+        ensure(true).await
+    }
+
     /// Bring the project files up to date on the machine and give its
     /// node the agent's record.
     async fn seed(
@@ -789,52 +843,114 @@ impl CloudHub {
         request: &PlaceRequest,
         view: &MachineView,
         base_commit: Option<&str>,
+        boot: &BootReporter,
     ) -> CloudResult<()> {
-        let provider = self.fleet.provider();
-        if let Some(base) = base_commit {
-            let dir = request.project_dir.clone();
-            let base = base.to_string();
-            let packed = tokio::task::spawn_blocking(move || -> CloudResult<Option<Vec<u8>>> {
-                let changes = delta::collect(&dir, &base)?;
+        match base_commit {
+            Some(base) => {
+                boot.run(
+                    BootStage::SyncFiles,
+                    self.sync_files(request, view, base, boot),
+                )
+                .await?;
+            }
+            None => boot.skip(BootStage::SyncFiles, "the fork has its parent's files"),
+        }
+        boot.run(
+            BootStage::ImportRecord,
+            self.import_record(request, view, boot),
+        )
+        .await
+    }
+
+    /// Write the project's changes since `base` to the machine.
+    async fn sync_files(
+        &self,
+        request: &PlaceRequest,
+        view: &MachineView,
+        base: &str,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
+        boot.fact("base commit", base.chars().take(12).collect::<String>());
+        let dir = request.project_dir.clone();
+        let commit = base.to_string();
+        let packed =
+            tokio::task::spawn_blocking(move || -> CloudResult<Option<(usize, Vec<u8>)>> {
+                let changes = delta::collect(&dir, &commit)?;
                 if changes.is_empty() {
                     return Ok(None);
                 }
-                delta::pack(&dir, &changes).map(Some)
+                let count = changes.files.len() + changes.deleted.len();
+                delta::pack(&dir, &changes).map(|bytes| Some((count, bytes)))
             })
             .await
             .map_err(|err| {
                 CloudError::io("pack changes", std::io::Error::other(err.to_string()))
             })??;
-            if let Some(bytes) = packed {
-                provider
-                    .upload(&view.machine.name, DELTA_PATH, bytes)
-                    .await?;
-                let out = provider
-                    .exec(
-                        &view.machine.name,
-                        delta::APPLY_DELTA,
-                        None,
-                        Duration::from_secs(120),
-                    )
-                    .await?;
-                if !out.success() {
-                    return Err(CloudError::ExecFailed {
-                        machine: view.machine.name.clone(),
-                        command: "apply changes".into(),
-                        exit_code: out.exit_code,
-                        stderr: out.stderr_tail(400),
-                    });
-                }
-            }
+        let Some((count, bytes)) = packed else {
+            boot.fact("changes", "none since the snapshot");
+            return Ok(());
+        };
+        boot.fact(
+            "changes",
+            format!(
+                "{count} file(s) since the snapshot, {} packed",
+                human_bytes(bytes.len() as u64)
+            ),
+        );
+        let provider = self.fleet.provider();
+        boot.log(
+            BootStage::SyncFiles,
+            false,
+            format!("upload {DELTA_PATH} ({})", human_bytes(bytes.len() as u64)),
+        );
+        provider
+            .upload(&view.machine.name, DELTA_PATH, bytes)
+            .await?;
+        boot.log(BootStage::SyncFiles, false, "$ apply changes");
+        let mut lines = boot.output(BootStage::SyncFiles);
+        let out = provider
+            .exec_streaming(
+                &view.machine.name,
+                delta::APPLY_DELTA,
+                None,
+                Duration::from_secs(120),
+                &mut |stderr, chunk| lines.chunk(stderr, chunk),
+            )
+            .await?;
+        lines.finish();
+        if out.success() {
+            Ok(())
+        } else {
+            Err(CloudError::ExecFailed {
+                machine: view.machine.name.clone(),
+                command: "apply changes".into(),
+                exit_code: out.exit_code,
+                stderr: out.stderr_tail(400),
+            })
         }
+    }
+
+    /// Give the machine's node the agent's record, page by page.
+    async fn import_record(
+        &self,
+        request: &PlaceRequest,
+        view: &MachineView,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
         let node = self.node(&view.agent)?;
         let head = self
             .store
             .get_head_seq(request.agent)
             .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))?;
         let remote = node.head(request.agent).await.unwrap_or(0);
+        boot.fact("record", format!("{head} entries"));
         let mut from = remote + 1;
         loop {
+            boot.progress(
+                BootStage::ImportRecord,
+                from.saturating_sub(1).min(head),
+                head,
+            );
             let entries = if from > head {
                 Vec::new()
             } else {
@@ -854,6 +970,7 @@ impl CloudHub {
             })
             .await?;
             if done {
+                boot.progress(BootStage::ImportRecord, head, head);
                 return Ok(());
             }
             from += count;
@@ -894,17 +1011,24 @@ impl CloudHub {
 
     /// Bring `agent`'s single writer back here: seal it on its node,
     /// copy the rest of its record, pull its work into the project and
-    /// destroy the machine.
+    /// destroy the machine, showing each step on `boot`.
     ///
     /// # Errors
     ///
     /// When the node can't be sealed or its record can't be copied; the
     /// agent then stays placed.
-    pub async fn recall(&self, agent: AgentId, reason: &str) -> CloudResult<PatchOutcome> {
+    pub async fn recall(
+        &self,
+        agent: AgentId,
+        reason: &str,
+        boot: &BootReporter,
+    ) -> CloudResult<PatchOutcome> {
         let hex = agent.to_hex();
         let Some(placed) = self.placements.lock().agents.get(&hex).cloned() else {
             return Ok(PatchOutcome::Empty);
         };
+        boot.fact("machine", placed.machine.clone());
+        boot.fact("project folder", placed.project_dir.display().to_string());
         if self.fleet.view(&hex).is_none() {
             // The machine is gone (deleted outside aura): the record the
             // mirror already holds is all there is.
@@ -917,30 +1041,52 @@ impl CloudHub {
                 ),
             });
         }
-        let node = self.awake_node(&hex).await?;
-        let sealed = node.seal(agent).await?;
-        self.mirror_from(&node, agent).await?;
-        let local = self
-            .store
-            .get_head_seq(agent)
-            .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))?;
-        if local < sealed.head_seq {
-            return Err(CloudError::Node {
-                node: node.node().to_string(),
-                op: "recall",
-                message: format!("copied up to {local} of {} entries", sealed.head_seq),
-            });
-        }
-        let outcome = match node.patch().await {
-            Ok(patch) => {
-                self.apply_patch(&hex, &placed.project_dir, &patch.patch, patch.files)
-                    .await
+        let node = self.awake_node(&hex, boot).await?;
+        let sealed = boot.run(BootStage::Seal, node.seal(agent)).await?;
+        boot.fact("sealed at", format!("entry {}", sealed.head_seq));
+        boot.run(BootStage::CopyRecord, async {
+            let copied = self.mirror_from(&node, agent).await?;
+            boot.fact("copied", format!("{copied} new entries"));
+            let local = self
+                .store
+                .get_head_seq(agent)
+                .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))?;
+            boot.progress(
+                BootStage::CopyRecord,
+                local.min(sealed.head_seq),
+                sealed.head_seq,
+            );
+            if local < sealed.head_seq {
+                return Err(CloudError::Node {
+                    node: node.node().to_string(),
+                    op: "recall",
+                    message: format!("copied up to {local} of {} entries", sealed.head_seq),
+                });
             }
-            Err(err) => PatchOutcome::Saved {
-                path: self.home.join(&hex),
-                reason: format!("could not read the machine's changes: {err}"),
-            },
-        };
+            Ok(())
+        })
+        .await?;
+        let outcome = boot
+            .run(BootStage::PullChanges, async {
+                let outcome = match node.patch().await {
+                    Ok(patch) => {
+                        self.apply_patch(&hex, &placed.project_dir, &patch.patch, patch.files)
+                            .await
+                    }
+                    Err(err) => PatchOutcome::Saved {
+                        path: self.home.join(&hex),
+                        reason: format!("could not read the machine's changes: {err}"),
+                    },
+                };
+                if let PatchOutcome::Applied { files } = &outcome {
+                    for file in files {
+                        boot.log(BootStage::PullChanges, false, format!("M {file}"));
+                    }
+                }
+                boot.fact("changes", outcome.describe());
+                Ok::<_, CloudError>(outcome)
+            })
+            .await?;
         record_placement(
             &self.ledger,
             &names::machine_ledger(&placed.zns),
@@ -951,7 +1097,12 @@ impl CloudHub {
             ),
         )?;
         self.forget_placement(&hex, &placed.project);
-        match self.fleet.destroy(&hex, reason).await {
+        let destroyed = boot
+            .run(BootStage::Destroy, async {
+                Ok::<_, CloudError>(self.fleet.destroy(&hex, reason).await)
+            })
+            .await?;
+        match destroyed {
             Ok(Some(id)) => {
                 let fleet = Arc::clone(&self.fleet);
                 let ledger = names::machine_ledger(&placed.zns);
@@ -965,6 +1116,11 @@ impl CloudHub {
             Ok(None) => {}
             Err(err) => {
                 tracing::warn!(agent = %hex, error = %err, "could not destroy the machine; the orphan sweep will");
+                boot.log(
+                    BootStage::Destroy,
+                    true,
+                    format!("could not destroy it ({err}); the orphan sweep will"),
+                );
             }
         }
         Ok(outcome)
@@ -991,7 +1147,7 @@ impl CloudHub {
         let Some(placed) = self.placements.lock().agents.get(&hex).cloned() else {
             return Ok(PatchOutcome::Empty);
         };
-        let node = self.awake_node(&hex).await?;
+        let node = self.awake_node(&hex, &BootReporter::none()).await?;
         let patch = node.patch().await?;
         let outcome = self
             .apply_patch(&hex, &placed.project_dir, &patch.patch, patch.files)
@@ -1087,7 +1243,21 @@ impl CloudHub {
             let _ = tx
                 .send(RemoteEvent::Status("Waking cloud machine".into()))
                 .await;
-            let node = match hub.awake_node(&hex).await {
+            // A machine that sleeps shows itself waking; the events all
+            // reach the turn's stream before anything else does.
+            let (boot, mut events) = BootReporter::channel();
+            let shown = tx.clone();
+            let forward = tokio::spawn(async move {
+                while let Some(event) = events.recv().await {
+                    if shown.send(RemoteEvent::Boot(event)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let awake = hub.awake_node(&hex, &boot).await;
+            drop(boot);
+            let _ = forward.await;
+            let node = match awake {
                 Ok(node) => node,
                 Err(err) => {
                     let _ = tx.send(RemoteEvent::Failed(err.to_string())).await;
@@ -1134,14 +1304,15 @@ impl CloudHub {
         Ok(())
     }
 
-    /// Wake `agent`'s machine and reopen its mesh socket.
+    /// Wake `agent`'s machine and reopen its mesh socket, showing the
+    /// wake on `boot`.
     ///
     /// # Errors
     ///
     /// When it has no machine or waking fails.
-    pub async fn wake(self: &Arc<Self>, agent: AgentId) -> CloudResult<()> {
+    pub async fn wake(self: &Arc<Self>, agent: AgentId, boot: &BootReporter) -> CloudResult<()> {
         let hex = agent.to_hex();
-        self.fleet.ensure_awake(&hex).await?;
+        self.fleet.ensure_awake_reported(&hex, boot).await?;
         self.open_link(&hex);
         Ok(())
     }
@@ -1999,7 +2170,9 @@ mod tests {
         let agent = AgentId::new([5; 32]);
         assert!(!hub.is_placed(agent));
         assert_eq!(
-            hub.recall(agent, "test").await.expect("recall"),
+            hub.recall(agent, "test", &BootReporter::none())
+                .await
+                .expect("recall"),
             PatchOutcome::Empty
         );
         assert_eq!(hub.placement_of(agent), Placement::Local);

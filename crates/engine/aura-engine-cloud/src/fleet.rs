@@ -36,6 +36,7 @@ use aura_core_types::{VmEvent, VmPayload, VmResources, VmSource};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use crate::boot::{human_bytes, BootReporter, BootStage};
 use crate::error::{CloudError, CloudResult};
 use crate::machine_env::MachineEnv;
 use crate::names::{
@@ -257,6 +258,70 @@ fn now_ms() -> u64 {
     u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 
+/// What boxd says about a machine it just made, as boot facts.
+fn machine_facts(boot: &BootReporter, machine: &MachineInfo, networks: &[String]) {
+    boot.fact("machine", machine.name.clone());
+    boot.fact(
+        "region",
+        if machine.region.is_empty() {
+            "home region".to_string()
+        } else {
+            machine.region.clone()
+        },
+    );
+    boot.fact(
+        "size",
+        format!(
+            "{} vCPU · {} memory · {} disk",
+            machine.vcpu,
+            human_bytes(machine.memory_bytes),
+            human_bytes(machine.disk_bytes)
+        ),
+    );
+    if let Some(source) = &machine.source {
+        boot.fact(
+            "source",
+            match source {
+                VmSource::Snapshot { name, version } => match version {
+                    Some(version) => format!("snapshot {name} v{version}"),
+                    None => format!("snapshot {name}"),
+                },
+                VmSource::Fork { parent } => format!("fork of {parent}"),
+                VmSource::Image { image } if image.is_empty() => "boxd default image".into(),
+                VmSource::Image { image } => format!("image {image}"),
+            },
+        );
+    }
+    boot.fact("boot time", format!("{} ms", machine.boot_ms));
+    boot.fact(
+        "network",
+        if machine.isolated {
+            "isolated".to_string()
+        } else if networks.is_empty() {
+            "default".to_string()
+        } else {
+            networks.join(", ")
+        },
+    );
+    if !machine.domain.is_empty() {
+        boot.fact("domain", format!("https://{}", machine.domain));
+    }
+    if !machine.public_ip.is_empty() {
+        boot.fact("address", machine.public_ip.clone());
+    }
+}
+
+/// What a node answered its claim with, as boot facts.
+fn claim_facts(boot: &BootReporter, claimed: &NodeClaimed) {
+    boot.fact(
+        "node",
+        format!("{} on port {}", claimed.node_id, claimed.port),
+    );
+    if claimed.sealed > 0 {
+        boot.fact("sealed", format!("{} inherited agents", claimed.sealed));
+    }
+}
+
 fn random_token() -> BoxdToken {
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
@@ -364,13 +429,38 @@ impl VmFleet {
     /// [`CloudError::MachineLimit`] when the org is full; provider and
     /// claim errors otherwise (the machine is destroyed again then).
     pub async fn provision(&self, request: ProvisionRequest) -> CloudResult<MachineView> {
-        let limit = self.provider.machine_limit().await?;
-        if !limit.has_room() {
-            return Err(CloudError::MachineLimit {
-                count: limit.count,
-                max: limit.max,
-            });
-        }
+        self.provision_reported(request, &BootReporter::none())
+            .await
+    }
+
+    /// [`Self::provision`], showing each stage and what boxd reports
+    /// about the machine on `boot`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::provision`].
+    pub async fn provision_reported(
+        &self,
+        request: ProvisionRequest,
+        boot: &BootReporter,
+    ) -> CloudResult<MachineView> {
+        let limit = boot
+            .run(BootStage::Quota, async {
+                let limit = self.provider.machine_limit().await?;
+                if limit.has_room() {
+                    Ok(limit)
+                } else {
+                    Err(CloudError::MachineLimit {
+                        count: limit.count,
+                        max: limit.max,
+                    })
+                }
+            })
+            .await?;
+        boot.fact(
+            "quota",
+            format!("{} of {} machines in use", limit.count, limit.max),
+        );
         if let MachineOrigin::Fork(parent) = &request.origin {
             // A fork inherits its parent's secrets, so never across owners.
             let parent_owner = self
@@ -420,7 +510,13 @@ impl VmFleet {
             delete_after_secs: None,
             secrets: request.secrets.clone(),
         };
-        let machine = self.provider.create(&spec, &request.origin).await?;
+        let machine = boot
+            .run(
+                BootStage::Create,
+                self.provider.create(&spec, &request.origin),
+            )
+            .await?;
+        machine_facts(boot, &machine, &spec.networks);
         let event = match request.origin {
             MachineOrigin::Fork(_) => VmEvent::Forked,
             _ => VmEvent::Created,
@@ -459,18 +555,46 @@ impl VmFleet {
                 seen_ms: now_ms(),
             },
         );
-        // boxd's bot check would answer API calls with a 503.
-        if let Err(err) = self.provider.set_bot_protection(&machine.name, false).await {
-            tracing::warn!(machine = %machine.name, error = %err, "could not turn bot protection off");
+        boot.run(BootStage::Configure, async {
+            // boxd's bot check would answer API calls with a 503.
+            if let Err(err) = self.provider.set_bot_protection(&machine.name, false).await {
+                tracing::warn!(machine = %machine.name, error = %err, "could not turn bot protection off");
+                boot.log(BootStage::Configure, true, format!("bot protection stays on: {err}"));
+            } else {
+                boot.log(BootStage::Configure, false, "bot protection off for the node API");
+            }
+            match self
+                .provider
+                .set_auto_hibernate(&machine.name, AUTO_HIBERNATE_BACKSTOP_SECS)
+                .await
+            {
+                Ok(()) => boot.log(
+                    BootStage::Configure,
+                    false,
+                    format!(
+                        "boxd hibernates it after {} min idle",
+                        AUTO_HIBERNATE_BACKSTOP_SECS / 60
+                    ),
+                ),
+                Err(err) => {
+                    tracing::warn!(machine = %machine.name, error = %err, "could not set the hibernation backstop");
+                    boot.log(
+                        BootStage::Configure,
+                        true,
+                        format!("no hibernation backstop: {err}"),
+                    );
+                }
+            }
+            Ok::<_, CloudError>(())
+        })
+        .await?;
+        let claimed = boot
+            .run(BootStage::Claim, self.claim(&request.agent, &request.seal))
+            .await;
+        if let Ok(claimed) = &claimed {
+            claim_facts(boot, claimed);
         }
-        if let Err(err) = self
-            .provider
-            .set_auto_hibernate(&machine.name, AUTO_HIBERNATE_BACKSTOP_SECS)
-            .await
-        {
-            tracing::warn!(machine = %machine.name, error = %err, "could not set the hibernation backstop");
-        }
-        if let Err(err) = self.claim(&request.agent, &request.seal).await {
+        if let Err(err) = claimed {
             self.row(
                 &ledger,
                 &VmPayload {
@@ -616,6 +740,21 @@ impl VmFleet {
     ///
     /// When it has no machine, or waking or claiming fails.
     pub async fn ensure_awake(&self, agent: &str) -> CloudResult<MachineView> {
+        self.ensure_awake_reported(agent, &BootReporter::none())
+            .await
+    }
+
+    /// [`Self::ensure_awake`], showing a wake and a claim on `boot`; a
+    /// machine that is already up shows nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::ensure_awake`].
+    pub async fn ensure_awake_reported(
+        &self,
+        agent: &str,
+        boot: &BootReporter,
+    ) -> CloudResult<MachineView> {
         let (machine, state, ledger, claimed) = {
             let machines = self.machines.lock();
             let entry = machines.get(agent).ok_or_else(|| CloudError::NotFound {
@@ -637,10 +776,14 @@ impl VmFleet {
             });
         }
         if state.is_asleep() || matches!(state, VmState::Error(_)) {
+            boot.fact("machine", machine.name.clone());
+            boot.fact("woke from", state.label().to_string());
             self.set_state(agent, VmState::Waking);
             let started = Instant::now();
-            self.provider.wake(&machine.name).await?;
+            boot.run(BootStage::Wake, self.provider.wake(&machine.name))
+                .await?;
             let boot_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            boot.fact("wake time", format!("{boot_ms} ms"));
             let mut info = machine.clone();
             info.status = MachineStatus::Running;
             self.row(
@@ -660,7 +803,8 @@ impl VmFleet {
             }
         }
         if !claimed {
-            self.claim(agent, &[]).await?;
+            let claimed = boot.run(BootStage::Claim, self.claim(agent, &[])).await?;
+            claim_facts(boot, &claimed);
         }
         self.view(agent).ok_or(CloudError::NotFound {
             what: "machine",
@@ -1047,6 +1191,7 @@ impl Drop for WorkGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::boot::{BootEvent, StageState};
     use crate::fake::FakeProvider;
     use aura_core_types::VmUsage;
 
@@ -1189,6 +1334,115 @@ mod tests {
             ledger.events("0://cloud/vm/terminal/aa"),
             vec![VmEvent::Created, VmEvent::Claimed]
         );
+    }
+
+    fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<BootEvent>) -> Vec<BootEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    fn stage_trail(events: &[BootEvent]) -> Vec<(BootStage, &'static str)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                BootEvent::Stage { stage, state } => Some((
+                    *stage,
+                    match state {
+                        StageState::Started => "started",
+                        StageState::Done { .. } => "done",
+                        StageState::Skipped(_) => "skipped",
+                        StageState::Failed(_) => "failed",
+                    },
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn fact<'a>(events: &'a [BootEvent], wanted: &str) -> Option<&'a str> {
+        events.iter().rev().find_map(|event| match event {
+            BootEvent::Fact { key, value } if key == wanted => Some(value.as_str()),
+            _ => None,
+        })
+    }
+
+    #[tokio::test]
+    async fn provisioning_shows_each_stage_and_the_machine() {
+        let (fleet, _, _) = fleet(Duration::from_secs(300));
+        let (boot, mut rx) = BootReporter::channel();
+        fleet
+            .provision_reported(request("aa", MachineOrigin::Fresh), &boot)
+            .await
+            .expect("provision");
+        let events = drain(&mut rx);
+        assert_eq!(
+            stage_trail(&events),
+            vec![
+                (BootStage::Quota, "started"),
+                (BootStage::Quota, "done"),
+                (BootStage::Create, "started"),
+                (BootStage::Create, "done"),
+                (BootStage::Configure, "started"),
+                (BootStage::Configure, "done"),
+                (BootStage::Claim, "started"),
+                (BootStage::Claim, "done"),
+            ]
+        );
+        assert_eq!(fact(&events, "machine"), Some("aura-re36-aa"));
+        assert_eq!(fact(&events, "network"), Some("isolated"));
+        assert_eq!(fact(&events, "node"), Some("aura-re36-aa on port 8080"));
+        assert!(fact(&events, "size").is_some_and(|size| size.contains("vCPU")));
+        let token = fleet.node_token("aa").expect("token");
+        assert!(
+            !format!("{events:?}").contains(token.expose()),
+            "the node token is never shown"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_claim_shows_as_a_failed_stage() {
+        let (fleet, fake, _) = fleet(Duration::from_secs(300));
+        fake.on_exec(Arc::new(|_, _, _| crate::ExecOutput {
+            exit_code: 127,
+            stdout: Vec::new(),
+            stderr: b"aura: command not found".to_vec(),
+        }));
+        let (boot, mut rx) = BootReporter::channel();
+        fleet
+            .provision_reported(request("aa", MachineOrigin::Fresh), &boot)
+            .await
+            .expect_err("claim fails");
+        let trail = stage_trail(&drain(&mut rx));
+        assert_eq!(trail.last(), Some(&(BootStage::Claim, "failed")));
+    }
+
+    #[tokio::test]
+    async fn waking_shows_only_when_the_machine_sleeps() {
+        let (fleet, _, _) = fleet(Duration::from_secs(300));
+        fleet
+            .provision(request("aa", MachineOrigin::Fresh))
+            .await
+            .expect("provision");
+        let (boot, mut rx) = BootReporter::channel();
+        fleet
+            .ensure_awake_reported("aa", &boot)
+            .await
+            .expect("awake");
+        assert!(drain(&mut rx).is_empty(), "an awake machine shows nothing");
+        fleet.set_state("aa", VmState::Hibernated);
+        fleet
+            .ensure_awake_reported("aa", &boot)
+            .await
+            .expect("wake");
+        let events = drain(&mut rx);
+        assert_eq!(
+            stage_trail(&events),
+            vec![(BootStage::Wake, "started"), (BootStage::Wake, "done")]
+        );
+        assert_eq!(fact(&events, "woke from"), Some("asleep"));
     }
 
     #[tokio::test]

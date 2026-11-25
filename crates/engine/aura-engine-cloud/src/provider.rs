@@ -341,6 +341,22 @@ pub trait VmProvider: Send + Sync {
         stdin: Option<Vec<u8>>,
         timeout: Duration,
     ) -> CloudResult<ExecOutput>;
+    /// [`Self::exec`], handing each piece of output to `on_chunk`
+    /// (`true` for stderr) as it arrives. By default the whole output is
+    /// handed over once the command ends.
+    async fn exec_streaming(
+        &self,
+        machine: &str,
+        command: &str,
+        stdin: Option<Vec<u8>>,
+        timeout: Duration,
+        on_chunk: &mut (dyn for<'chunk> FnMut(bool, &'chunk [u8]) + Send),
+    ) -> CloudResult<ExecOutput> {
+        let output = self.exec(machine, command, stdin, timeout).await?;
+        on_chunk(false, &output.stdout);
+        on_chunk(true, &output.stderr);
+        Ok(output)
+    }
     /// Write `bytes` to `path` in the machine.
     async fn upload(&self, machine: &str, path: &str, bytes: Vec<u8>) -> CloudResult<u64>;
     /// Read `path` from the machine, at most `max_bytes`.

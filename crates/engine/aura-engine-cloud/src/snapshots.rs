@@ -33,6 +33,7 @@ use aura_core_types::{VmEvent, VmPayload};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+use crate::boot::{human_bytes, BootReporter, BootStage};
 use crate::delta;
 use crate::error::{CloudError, CloudResult};
 use crate::fleet::VmLedger;
@@ -318,6 +319,15 @@ impl SnapshotBuilder {
     ///
     /// When a build step fails.
     pub async fn ensure_base(&self) -> CloudResult<SnapshotRecord> {
+        self.ensure_base_reported(&BootReporter::none()).await
+    }
+
+    /// [`Self::ensure_base`], showing a build on `boot`.
+    ///
+    /// # Errors
+    ///
+    /// When a build step fails.
+    pub async fn ensure_base_reported(&self, boot: &BootReporter) -> CloudResult<SnapshotRecord> {
         // The binary itself is part of the base: a new build of the same
         // version must still reach new machines.
         let version = match &self.binary {
@@ -336,9 +346,20 @@ impl SnapshotBuilder {
         let current = self.record(BASE_SNAPSHOT).await;
         if self.usable(current.as_ref(), &fingerprint).await? {
             if let Some(record) = current {
+                boot.fact(
+                    "base image",
+                    format!("{BASE_SNAPSHOT} v{} (cached)", record.version),
+                );
                 return Ok(record);
             }
         }
+        boot.fact(
+            "base image",
+            format!(
+                "{BASE_SNAPSHOT}: building ({}, aura {version})",
+                rebuild_reason(current.as_ref(), &fingerprint, false)
+            ),
+        );
         let mut steps = Vec::new();
         if let AuraBinary::Upload(path) = &self.binary {
             let bytes = tokio::fs::read(path).await.map_err(|err| {
@@ -370,6 +391,7 @@ impl SnapshotBuilder {
                 &origin,
                 None,
                 &ledger,
+                boot,
             )
             .await?;
         let record = SnapshotRecord {
@@ -397,7 +419,32 @@ impl SnapshotBuilder {
         build_command: Option<&str>,
         force: bool,
     ) -> CloudResult<SnapshotRecord> {
-        let base = self.ensure_base().await?;
+        self.ensure_project_reported(
+            project_id,
+            project_dir,
+            build_command,
+            force,
+            &BootReporter::none(),
+        )
+        .await
+    }
+
+    /// [`Self::ensure_project`], showing what it finds and builds on
+    /// `boot`.
+    ///
+    /// # Errors
+    ///
+    /// When the project is not a git repository with a commit, or a
+    /// build step fails.
+    pub async fn ensure_project_reported(
+        &self,
+        project_id: &str,
+        project_dir: &Path,
+        build_command: Option<&str>,
+        force: bool,
+        boot: &BootReporter,
+    ) -> CloudResult<SnapshotRecord> {
+        let base = self.ensure_base_reported(boot).await?;
         let dir = project_dir.to_path_buf();
         let command = build_command.map_or_else(|| default_build_command(&dir), str::to_string);
         let fingerprint = {
@@ -411,9 +458,22 @@ impl SnapshotBuilder {
         let current = self.record(project_id).await;
         if !force && self.usable(current.as_ref(), &fingerprint).await? {
             if let Some(record) = current {
+                boot.fact(
+                    "snapshot",
+                    format!("{} v{} (cached)", record.name, record.version),
+                );
                 return Ok(record);
             }
         }
+        boot.fact(
+            "snapshot",
+            format!(
+                "{}: building ({})",
+                names::project_snapshot(project_id),
+                rebuild_reason(current.as_ref(), &fingerprint, force)
+            ),
+        );
+        boot.fact("build command", command.clone());
         let (commit, archive) = {
             let dir = dir.clone();
             tokio::task::spawn_blocking(move || {
@@ -455,8 +515,10 @@ impl SnapshotBuilder {
                 &origin,
                 Some(project_id),
                 &ledger,
+                boot,
             )
             .await?;
+        boot.fact("snapshot", format!("{name} v{version} (built)"));
         let record = SnapshotRecord {
             name,
             fingerprint,
@@ -493,6 +555,7 @@ impl SnapshotBuilder {
         manifest: &SnapshotOrigin,
         project: Option<&str>,
         ledger: &str,
+        boot: &BootReporter,
     ) -> CloudResult<u64> {
         let nonce = &uuid::Uuid::new_v4().simple().to_string()[..6];
         let mut labels = BTreeMap::new();
@@ -516,6 +579,15 @@ impl SnapshotBuilder {
         };
         tracing::info!(snapshot, builder = %spec.name, "building cloud snapshot");
         let machine = self.provider.create(&spec, &origin).await?;
+        boot.fact(
+            "builder",
+            format!(
+                "{} ({} vCPU, {})",
+                machine.name,
+                machine.vcpu,
+                human_bytes(machine.memory_bytes)
+            ),
+        );
         let mut all = packages
             .into_iter()
             .map(|command| Step::Run {
@@ -524,7 +596,9 @@ impl SnapshotBuilder {
             })
             .collect::<Vec<_>>();
         all.extend(steps);
-        let outcome = self.run_build(&machine.name, all, manifest, snapshot).await;
+        let outcome = self
+            .run_build(&machine.name, all, manifest, snapshot, boot)
+            .await;
         if let Err(err) = self.provider.destroy(&machine.name).await {
             tracing::warn!(builder = %machine.name, error = %err, "could not destroy a snapshot builder; its delete-after will");
         }
@@ -560,6 +634,7 @@ impl SnapshotBuilder {
         steps: Vec<Step>,
         manifest: &SnapshotOrigin,
         snapshot: &str,
+        boot: &BootReporter,
     ) -> CloudResult<u64> {
         let env = MachineEnv::for_agent(self.size.vcpu());
         let manifest_json =
@@ -596,9 +671,17 @@ impl SnapshotBuilder {
             command: format!("{STOP_NODE}; {START_NODE}"),
             timeout: SHORT_STEP_TIMEOUT,
         });
-        for step in all {
-            self.run_step(builder, step).await?;
+        let total = all.len() as u64;
+        for (done, step) in (0..).zip(all) {
+            boot.progress(BootStage::Snapshot, done, total);
+            self.run_step(builder, step, boot).await?;
         }
+        boot.progress(BootStage::Snapshot, total, total);
+        boot.log(
+            BootStage::Snapshot,
+            false,
+            format!("saving snapshot {snapshot}"),
+        );
         let saved = self.provider.save_snapshot(builder, snapshot).await?;
         let deadline = tokio::time::Instant::now() + READY_WAIT;
         loop {
@@ -620,15 +703,28 @@ impl SnapshotBuilder {
         }
     }
 
-    async fn run_step(&self, builder: &str, step: Step) -> CloudResult<()> {
+    async fn run_step(&self, builder: &str, step: Step, boot: &BootReporter) -> CloudResult<()> {
         match step {
             Step::Upload { path, bytes } => {
+                boot.log(
+                    BootStage::Snapshot,
+                    false,
+                    format!("upload {path} ({})", human_bytes(bytes.len() as u64)),
+                );
                 self.provider.upload(builder, &path, bytes).await?;
                 Ok(())
             }
             Step::Run { command, timeout } => {
+                boot.log(BootStage::Snapshot, false, format!("$ {command}"));
                 let wrapped = format!("set -a; [ -f /etc/aura/machine.env ] && . /etc/aura/machine.env; set +a; {command}");
-                let output = self.provider.exec(builder, &wrapped, None, timeout).await?;
+                let mut lines = boot.output(BootStage::Snapshot);
+                let output = self
+                    .provider
+                    .exec_streaming(builder, &wrapped, None, timeout, &mut |stderr, bytes| {
+                        lines.chunk(stderr, bytes);
+                    })
+                    .await?;
+                lines.finish();
                 if output.success() {
                     Ok(())
                 } else {
@@ -647,6 +743,22 @@ impl SnapshotBuilder {
 enum Step {
     Upload { path: String, bytes: Vec<u8> },
     Run { command: String, timeout: Duration },
+}
+
+/// Why a snapshot is built now rather than reused.
+fn rebuild_reason(
+    current: Option<&SnapshotRecord>,
+    fingerprint: &str,
+    force: bool,
+) -> &'static str {
+    match current {
+        _ if force => "rebuild asked for",
+        None => "first build",
+        Some(record) if record.fingerprint != fingerprint => {
+            "toolchain, lockfiles or build changed"
+        }
+        Some(_) => "no longer on boxd",
+    }
 }
 
 fn now_ms() -> u64 {
@@ -792,6 +904,68 @@ mod tests {
         assert!(err.to_string().contains("failed to fetch"), "{err}");
         assert!(fake.machine_names().is_empty());
         assert_eq!(ledger.events("0://cloud/project/p1"), vec![VmEvent::Error]);
+    }
+
+    #[tokio::test]
+    async fn a_build_shows_its_commands_and_their_output() {
+        use crate::boot::BootEvent;
+        let dir = project();
+        let home = tempfile::tempdir().expect("home");
+        let fake = FakeProvider::new();
+        fake.on_exec(Arc::new(|_, command, _| crate::ExecOutput {
+            exit_code: 0,
+            stdout: if command.contains("cargo fetch") {
+                b"\x1b[32m   Compiling\x1b[0m x v0.1.0\n    Finished\n".to_vec()
+            } else {
+                Vec::new()
+            },
+            stderr: Vec::new(),
+        }));
+        let (builder, _) = builder(&fake, home.path());
+        let (boot, mut rx) = BootReporter::channel();
+        builder
+            .ensure_project_reported("p1", dir.path(), None, false, &boot)
+            .await
+            .expect("build");
+        let mut lines = Vec::new();
+        let mut facts = Vec::new();
+        let mut progressed = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                BootEvent::Log { line, .. } => lines.push(line),
+                BootEvent::Fact { key, value } => facts.push((key, value)),
+                BootEvent::Progress { .. } => progressed = true,
+                BootEvent::Stage { .. } => {}
+            }
+        }
+        assert!(progressed);
+        assert!(lines
+            .iter()
+            .any(|l| l.starts_with("$ ") && l.contains("cargo fetch")));
+        assert!(
+            lines.iter().any(|l| l == "   Compiling x v0.1.0"),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l == "saving snapshot aura-proj-p1"));
+        assert!(facts
+            .iter()
+            .any(|(k, v)| k == "snapshot" && v.contains("first build")));
+        assert!(facts
+            .iter()
+            .any(|(k, v)| k == "snapshot" && v.ends_with("(built)")));
+
+        let (boot, mut rx) = BootReporter::channel();
+        builder
+            .ensure_project_reported("p1", dir.path(), None, false, &boot)
+            .await
+            .expect("reuse");
+        let mut cached = false;
+        while let Ok(event) = rx.try_recv() {
+            if let BootEvent::Fact { key, value } = event {
+                cached |= key == "snapshot" && value.ends_with("(cached)");
+            }
+        }
+        assert!(cached);
     }
 
     #[tokio::test]

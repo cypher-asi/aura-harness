@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::app::image_preview::ImagePreview;
-use crate::components::Activity;
+use crate::components::{Activity, BootConsole};
 use crate::events::{CallUsage, FileDiffData, MessageRole, SourceUsage};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -47,6 +47,8 @@ pub struct Message {
     sources: Vec<SourceUsage>,
     /// Set when the message shows file changes
     diff: Option<DiffBlock>,
+    /// Set when the message is a boot console
+    boot: Option<BootConsole>,
     /// Images the user pasted into the message, drawn under its text
     images: Vec<Arc<ImagePreview>>,
     /// Who wrote it, when it is a post of a channel: drawn above its text
@@ -71,6 +73,7 @@ impl Clone for Message {
             usage: self.usage,
             sources: self.sources.clone(),
             diff: self.diff.clone(),
+            boot: self.boot.clone(),
             images: self.images.clone(),
             author: self.author.clone(),
             id: next_message_id(),
@@ -115,6 +118,7 @@ impl Message {
             usage: None,
             sources: Vec::new(),
             diff: None,
+            boot: None,
             images: Vec::new(),
             author: None,
             id: next_message_id(),
@@ -179,6 +183,36 @@ impl Message {
         self.diff.as_ref()
     }
 
+    /// A boot console, drawn as a collapsible block that shows everything
+    /// while it runs.
+    #[must_use]
+    pub fn boot(console: BootConsole) -> Self {
+        let mut message = Self::new(MessageRole::System, &console.title);
+        message.boot = Some(console);
+        message
+    }
+
+    /// The boot console this message shows, if it is one.
+    #[must_use]
+    pub const fn boot_console(&self) -> Option<&BootConsole> {
+        self.boot.as_ref()
+    }
+
+    /// Change the boot console this message shows.
+    pub fn update_boot(&mut self, update: impl FnOnce(&mut BootConsole)) {
+        if let Some(console) = &mut self.boot {
+            update(console);
+            self.touch();
+        }
+    }
+
+    /// Whether this is a boot console still going (drawn with a spinner
+    /// and a running clock).
+    #[must_use]
+    pub fn is_live_boot(&self) -> bool {
+        self.boot.as_ref().is_some_and(BootConsole::is_running)
+    }
+
     /// A step the agent took, drawn as a collapsible block.
     #[must_use]
     pub fn activity(activity: Activity, expanded: bool) -> Self {
@@ -217,7 +251,7 @@ impl Message {
 
     /// Show or hide an activity block's full detail.
     pub fn set_expanded(&mut self, expanded: bool) {
-        if self.activity.is_some() && self.expanded != expanded {
+        if (self.activity.is_some() || self.boot.is_some()) && self.expanded != expanded {
             self.expanded = expanded;
             self.touch();
         }

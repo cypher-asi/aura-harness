@@ -18,6 +18,7 @@ use std::time::Instant;
 use aura_app::cloud::{CloudHub, PatchOutcome, PlaceRequest};
 use aura_core_types::{AgentId, RecordEntry, Transaction};
 use aura_engine_cloud::snapshots::AuraBinary;
+use aura_engine_cloud::BootReporter;
 use aura_store_db::{RocksStore, Store};
 
 fn git(dir: &Path, args: &[&str]) {
@@ -99,18 +100,21 @@ async fn an_agent_moves_to_the_cloud_works_there_and_comes_back() {
 
     let started = Instant::now();
     let placed = hub
-        .place(PlaceRequest {
-            agent,
-            agent_zns: format!("0://test/cloud-live/{}", &agent.to_hex()[..8]),
-            name: "cloud live".into(),
-            code: Some("CL1".into()),
-            project_id: "cloud-live-hello".into(),
-            project_dir: dir.clone(),
-            build_command: None,
-            fork_from: None,
-            owner: aura_app::cloud::hub::Owner::Local,
-            owner_name: None,
-        })
+        .place(
+            PlaceRequest {
+                agent,
+                agent_zns: format!("0://test/cloud-live/{}", &agent.to_hex()[..8]),
+                name: "cloud live".into(),
+                code: Some("CL1".into()),
+                project_id: "cloud-live-hello".into(),
+                project_dir: dir.clone(),
+                build_command: None,
+                fork_from: None,
+                owner: aura_app::cloud::hub::Owner::Local,
+                owner_name: None,
+            },
+            &BootReporter::none(),
+        )
         .await;
     let view = match placed {
         Ok(view) => view,
@@ -150,7 +154,9 @@ async fn an_agent_moves_to_the_cloud_works_there_and_comes_back() {
             "mirrored {mirrored} entries; local head {}",
             store.get_head_seq(agent).unwrap_or(0)
         );
-        let outcome = hub.recall(agent, "live test").await?;
+        let outcome = hub
+            .recall(agent, "live test", &BootReporter::none())
+            .await?;
         println!("recall: {}", outcome.describe());
         Ok::<_, aura_engine_cloud::CloudError>(outcome)
     }
@@ -239,18 +245,21 @@ async fn a_cloud_agent_answers_on_each_linked_plan() {
         &auth,
     ))));
     let view = hub
-        .place(PlaceRequest {
-            agent,
-            agent_zns: format!("0://test/cloud-plans/{}", &agent.to_hex()[..8]),
-            name: "cloud plans".into(),
-            code: Some("CP1".into()),
-            project_id: "cloud-live-hello".into(),
-            project_dir: dir,
-            build_command: None,
-            fork_from: None,
-            owner: owner.clone(),
-            owner_name: None,
-        })
+        .place(
+            PlaceRequest {
+                agent,
+                agent_zns: format!("0://test/cloud-plans/{}", &agent.to_hex()[..8]),
+                name: "cloud plans".into(),
+                code: Some("CP1".into()),
+                project_id: "cloud-live-hello".into(),
+                project_dir: dir,
+                build_command: None,
+                fork_from: None,
+                owner: owner.clone(),
+                owner_name: None,
+            },
+            &BootReporter::none(),
+        )
         .await
         .expect("place");
     println!("placed on {}", view.machine.name);

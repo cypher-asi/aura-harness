@@ -715,6 +715,18 @@ impl VmProvider for BoxdProvider {
         stdin: Option<Vec<u8>>,
         timeout: Duration,
     ) -> CloudResult<ExecOutput> {
+        self.exec_streaming(machine, command, stdin, timeout, &mut |_, _| {})
+            .await
+    }
+
+    async fn exec_streaming(
+        &self,
+        machine: &str,
+        command: &str,
+        stdin: Option<Vec<u8>>,
+        timeout: Duration,
+        on_chunk: &mut (dyn for<'chunk> FnMut(bool, &'chunk [u8]) + Send),
+    ) -> CloudResult<ExecOutput> {
         const OP: &str = "Exec";
         let channel = self.channel(&self.endpoint_of(machine))?;
         let mut chunks = vec![proto::ExecChunk {
@@ -743,6 +755,9 @@ impl VmProvider for BoxdProvider {
                 .await
                 .map_err(|status| CloudError::rpc(OP, &status))?
             {
+                if !chunk.data.is_empty() {
+                    on_chunk(chunk.is_stderr, &chunk.data);
+                }
                 if chunk.is_stderr {
                     output.stderr.extend_from_slice(&chunk.data);
                 } else {
