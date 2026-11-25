@@ -1097,6 +1097,8 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
         .finish(&processes::turn_id(agent_id), status);
     if failure.is_none() && !cancelled {
         channels::post_replies(state, agent_id).await;
+    } else {
+        channels::drop_unanswered(state, agent_id);
     }
 
     if let Some(problem) = failure {

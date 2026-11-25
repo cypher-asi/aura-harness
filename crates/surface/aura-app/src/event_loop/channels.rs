@@ -685,4 +685,6 @@ async fn show_error(state: &LoopState<'_>, message: String) {
 mod tests;
 
 mod chat;
-pub(crate) use chat::{post_replies, route_user_message, send_posts_of, take_digest, ChannelChat};
+pub(crate) use chat::{
+    drop_unanswered, post_replies, route_user_message, send_posts_of, take_digest, ChannelChat,
+};
