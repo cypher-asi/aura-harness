@@ -76,6 +76,20 @@ impl ChannelState {
         self.open.as_deref().and_then(|id| self.find(id))
     }
 
+    /// The open channel, when `agent_id` is its coordinator.
+    pub(super) fn coordinated_by(&self, agent_id: &str) -> Option<&ChannelSummary> {
+        self.open_channel()
+            .filter(|channel| channel.coordinator_id == agent_id)
+    }
+
+    /// Posts of the open channel, oldest first, when `agent_id` is its
+    /// coordinator: its chat shows them. Empty otherwise.
+    pub(super) fn coordinator_posts(&self, agent_id: &str) -> &[ChannelPostView] {
+        self.coordinated_by(agent_id)
+            .and_then(|channel| self.posts.get(&channel.id))
+            .map_or(&[], Vec::as_slice)
+    }
+
     /// Rows the highlight can be on in the view that is showing.
     fn selectable_rows(&self) -> usize {
         match self.open_channel() {
@@ -124,6 +138,20 @@ impl App {
         self.channels.open_channel()
     }
 
+    /// The open channel, while the chat shows its coordinator.
+    #[must_use]
+    pub(crate) fn coordinated_channel(&self) -> Option<&ChannelSummary> {
+        self.channels.coordinated_by(&self.active_agent_id)
+    }
+
+    /// The chat panel's title while it shows the open channel's
+    /// coordinator, `#slug · coordinator`; `None` for every other agent.
+    #[must_use]
+    pub(crate) fn coordinator_chat_title(&self) -> Option<String> {
+        self.coordinated_channel()
+            .map(|channel| format!("#{} · coordinator", channel.slug))
+    }
+
     /// Whether a channel is open in the CHANNELS tab. Only a listed
     /// channel is opened, and one that drops out of the list closes, so
     /// this agrees with [`Self::open_channel`].
@@ -139,9 +167,9 @@ impl App {
     }
 
     /// Posts of channel `id`, oldest first.
-    #[allow(
-        dead_code,
-        reason = "kept as they arrive; the open channel's posts are not drawn yet"
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "the chat reads them through `coordinator_posts`")
     )]
     #[must_use]
     pub(crate) fn channel_posts(&self, id: &str) -> &[ChannelPostView] {

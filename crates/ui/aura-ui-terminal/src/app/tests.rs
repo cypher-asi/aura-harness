@@ -5498,3 +5498,121 @@ fn test_projects_side_tab_is_listed_and_reached_only_in_a_channel() {
     }
     assert!(!shown.contains(&SidePanelTab::Projects), "{shown:?}");
 }
+
+// ========================================================================
+// Channel coordinator chat
+// ========================================================================
+
+/// The app of [`app_with_workspace`] with `#zode` open and the chat on
+/// `active`; `co` coordinates the channel, `RE36` and `SUB2` work in it.
+fn app_in_channel(active: &str) -> (tempfile::TempDir, App) {
+    use crate::events::{AgentSummary, ChannelSummary};
+    let member = |id: &str, code: &str, name: &str, depth: usize| AgentSummary {
+        id: id.to_string(),
+        code: Some(code.to_string()),
+        name: name.to_string(),
+        depth,
+        ..AgentSummary::default()
+    };
+    let (dir, mut app, _rx) = app_with_workspace();
+    app.process_command(UiCommand::SetChannels(vec![ChannelSummary {
+        id: "c1".to_string(),
+        slug: "zode".to_string(),
+        coordinator_id: "co".to_string(),
+        members: vec![
+            member("co", "CO1", "Lead", 0),
+            member("re", "RE36", "Reviewer", 1),
+            member("sb", "SUB2", "Scout", 2),
+        ],
+        ..ChannelSummary::default()
+    }]));
+    app.process_command(UiCommand::SetActiveAgent(active.to_string()));
+    app.open_channel_by_id("c1");
+    app.focus = PanelFocus::Chat;
+    (dir, app)
+}
+
+#[test]
+fn test_at_in_a_coordinator_chat_lists_members_before_files() {
+    let (_dir, mut app) = app_in_channel("co");
+    type_keys(&mut app, "ask @");
+    let paths = mention_paths(&app);
+    assert_eq!(paths[..3], ["CO1", "RE36", "SUB2"], "{paths:?}");
+    assert!(paths[3..].contains(&"src/main.rs".to_string()), "{paths:?}");
+    let roles: Vec<_> = app
+        .mention_matches()
+        .iter()
+        .filter_map(|candidate| candidate.member.as_ref().map(|member| member.role))
+        .collect();
+    assert_eq!(roles, ["coordinator", "agent", "subagent"]);
+
+    type_keys(&mut app, "rev");
+    assert_eq!(mention_paths(&app), ["RE36"], "names match too");
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(app.input(), "ask @RE36 ");
+    assert!(app.mention_matches().is_empty(), "inserting closes it");
+}
+
+#[test]
+fn test_at_matches_member_codes_ignoring_case_and_tab_finishes_them() {
+    let (_dir, mut app) = app_in_channel("co");
+    type_keys(&mut app, "@sub");
+    assert_eq!(mention_paths(&app), ["SUB2"]);
+    app.handle_key(KeyEvent::from(KeyCode::Tab));
+    assert_eq!(app.input(), "@SUB2 ");
+}
+
+#[test]
+fn test_at_outside_a_coordinator_chat_lists_only_files() {
+    let (_dir, mut app) = app_in_channel("re");
+    type_keys(&mut app, "@");
+    let matches = app.mention_matches();
+    assert!(!matches.is_empty());
+    assert!(
+        matches.iter().all(|candidate| candidate.member.is_none()),
+        "{matches:?}"
+    );
+
+    app.close_channel();
+    app.process_command(UiCommand::SetActiveAgent("co".to_string()));
+    app.input.clear();
+    app.cursor_pos = 0;
+    type_keys(&mut app, "@RE");
+    assert_eq!(mention_paths(&app), ["README.md"]);
+}
+
+#[test]
+fn test_coordinator_chat_title_names_the_channel() {
+    let (_dir, app) = app_in_channel("co");
+    assert_eq!(
+        app.coordinator_chat_title().as_deref(),
+        Some("#zode · coordinator")
+    );
+    let (_dir, app) = app_in_channel("re");
+    assert_eq!(app.coordinator_chat_title(), None);
+}
+
+#[test]
+fn test_coordinator_chat_shows_the_channel_posts() {
+    use crate::events::{ChannelPostAuthor, ChannelPostView};
+    let (_dir, mut app) = app_in_channel("co");
+    assert!(app.pane_is_empty());
+    app.process_command(UiCommand::SetChannelPosts {
+        channel_id: "c1".to_string(),
+        posts: vec![ChannelPostView {
+            seq: 1,
+            author: ChannelPostAuthor::User,
+            text: "@RE36 look".to_string(),
+            at_ms: 1,
+            ..ChannelPostView::default()
+        }],
+    });
+    assert_eq!(app.channel_posts("c1").len(), 1);
+    assert!(!app.pane_is_empty(), "the posts fill the chat");
+    let ((_, posts), _, _) = app.chat_line_cache();
+    assert_eq!(posts.len(), 1);
+
+    app.process_command(UiCommand::SetActiveAgent("re".to_string()));
+    let ((_, posts), _, _) = app.chat_line_cache();
+    assert!(posts.is_empty(), "only the coordinator's chat shows them");
+}

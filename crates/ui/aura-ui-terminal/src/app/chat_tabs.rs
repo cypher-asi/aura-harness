@@ -203,7 +203,28 @@ impl App {
     }
 
     fn chat_tab_at(&self, column: u16, row: u16) -> Option<ChatTab> {
-        tab_at(self.areas.chat_tabs, column, row, ChatTab::layout)
+        tab_at(self.areas.chat_tabs, column, row, |width| {
+            self.chat_tab_layout(width)
+        })
+    }
+
+    /// The chat panel's tabs in a header bar `width` columns wide. While
+    /// the chat shows a channel's coordinator they use their short labels
+    /// and keep room after them for its title,
+    /// [`Self::coordinator_chat_title`]: with full labels the tabs fill a
+    /// chat panel of usual width and the title would never show.
+    #[must_use]
+    pub(crate) fn chat_tab_layout(&self, width: u16) -> TabLayout<ChatTab> {
+        if self.coordinated_channel().is_some() {
+            TabLayout::with_info(
+                ChatTab::ALL,
+                ChatTab::short_label,
+                ChatTab::short_label,
+                width,
+            )
+        } else {
+            ChatTab::layout(width)
+        }
     }
 
     /// The chat panel's tab under the pointer.

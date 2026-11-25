@@ -49,6 +49,8 @@ pub struct Message {
     diff: Option<DiffBlock>,
     /// Images the user pasted into the message, drawn under its text
     images: Vec<Arc<ImagePreview>>,
+    /// Who wrote it, when it is a post of a channel: drawn above its text
+    author: Option<String>,
     /// Unique to this message, clones included
     id: u64,
     /// Bumped on every change
@@ -70,6 +72,7 @@ impl Clone for Message {
             sources: self.sources.clone(),
             diff: self.diff.clone(),
             images: self.images.clone(),
+            author: self.author.clone(),
             id: next_message_id(),
             revision: 0,
         }
@@ -113,9 +116,36 @@ impl Message {
             sources: Vec::new(),
             diff: None,
             images: Vec::new(),
+            author: None,
             id: next_message_id(),
             revision: 0,
         }
+    }
+
+    /// A post of a channel by `author`, shown as a message of `role`. Its
+    /// id is `id` rather than a fresh one, so a post rebuilt every frame
+    /// keeps the lines laid out for it; `revision` says what it was built
+    /// from.
+    #[must_use]
+    pub(crate) fn post(
+        (id, revision): (u64, u64),
+        role: MessageRole,
+        author: String,
+        (content, timestamp): (&str, DateTime<Utc>),
+    ) -> Self {
+        Self {
+            author: Some(author),
+            timestamp,
+            id,
+            revision,
+            ..Self::new(role, content)
+        }
+    }
+
+    /// Who wrote the message, when it is a post of a channel.
+    #[must_use]
+    pub fn author(&self) -> Option<&str> {
+        self.author.as_deref()
     }
 
     /// File changes, drawn as one diff per file under `title`.

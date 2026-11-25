@@ -15,8 +15,12 @@ use super::segments::{
 use super::text::Measure;
 use crate::app::{ImageHit, ToggleRow, ToggleTarget};
 use crate::components::{Activity, Message, MessageRole};
+use crate::events::{
+    merge_timeline, ChannelPostAuthor, ChannelPostView, MessageData, TimelineItem,
+};
 use crate::Theme;
-use ratatui::text::Line;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -141,13 +145,15 @@ impl ChatLineCache {
 
     /// Bring the cache up to date with the messages of its pane drawn
     /// `width` columns wide, prose as wide as `measure` makes it. Activity
-    /// still in progress is redrawn every frame, with `spinner`.
+    /// still in progress is redrawn every frame, with `spinner`. The chat
+    /// (not the terminal pane) shows `posts`, the posts of the channel the
+    /// agent coordinates, among its messages by time.
     ///
     /// Returns `true` when every block was reflowed because the width or
     /// theme changed, so line positions from the last frame no longer apply.
     pub(crate) fn update(
         &mut self,
-        messages: &VecDeque<Message>,
+        (messages, posts): (&VecDeque<Message>, &[ChannelPostView]),
         (width, measure): (usize, Measure),
         theme: &Theme,
         spinner: &str,
@@ -159,10 +165,13 @@ impl ChatLineCache {
             self.theme = Some(theme.clone());
             self.entries.clear();
         }
-        let shown: Vec<&Message> = messages
+        let history: Vec<&Message> = messages
             .iter()
             .filter(|m| m.shell_run().is_some() == self.terminal && !m.is_empty_reply())
             .collect();
+        let posts: &[ChannelPostView] = if self.terminal { &[] } else { posts };
+        let post_messages: Vec<Message> = posts.iter().map(post_message).collect();
+        let shown = interleave_posts(history, posts, &post_messages);
         let runs = block_runs(&shown);
         let places = if self.terminal {
             vec![TurnPlace::alone(); runs.len()]
@@ -350,6 +359,9 @@ impl Layout<'_> {
                 single_lines(members[0], &block.place, (width, measure), theme, spinner)
             }
         };
+        if let Some(author) = members[0].author().filter(|_| members.len() == 1) {
+            put_author_label(author, (&mut lines, &mut toggles, &mut prose), theme);
+        }
         let mut images = Vec::new();
         if !terminal && members.len() == 1 && !members[0].images().is_empty() {
             let (more, hits) = super::images::message_image_lines(members[0], width, theme);
@@ -490,6 +502,15 @@ fn turn_places<'a>(shown: &[&'a Message], runs: &[Range<usize>]) -> Vec<TurnPlac
     let mut started_ms = shown.first().map_or(0, |m| m.timestamp_ms());
     for run in runs {
         let first = shown[run.start];
+        // A post neither starts the agent's turn nor ends it.
+        if first.author().is_some() {
+            places.push(TurnPlace {
+                meta: None,
+                first_step: steps + 1,
+                started_ms,
+            });
+            continue;
+        }
         if first.role() == MessageRole::User {
             close_turn(&mut places, last_agent.take(), meta.take());
             steps = 0;
@@ -514,6 +535,103 @@ fn turn_places<'a>(shown: &[&'a Message], runs: &[Range<usize>]) -> Vec<TurnPlac
     }
     close_turn(&mut places, last_agent, meta);
     places
+}
+
+/// Set on the id of a channel post's message, so it never meets the ids
+/// of the conversation's messages, which count up from 0.
+const POST_ID: u64 = 1 << 63;
+
+/// The message a channel post is drawn as: the user's as a prompt, an
+/// agent's as a reply, each under its author's label. Its id comes from
+/// the post's `seq` and its revision from what it shows, so the lines laid
+/// out for it are reused until it changes.
+fn post_message(post: &ChannelPostView) -> Message {
+    let (role, author) = match &post.author {
+        ChannelPostAuthor::User => (MessageRole::User, "You"),
+        ChannelPostAuthor::Agent { code, name, .. } => (
+            MessageRole::Assistant,
+            code.as_deref()
+                .filter(|code| !code.is_empty())
+                .unwrap_or(name),
+        ),
+    };
+    let label = if post.reply_to.is_some() {
+        format!("{author} ↩")
+    } else {
+        author.to_string()
+    };
+    let mut hasher = std::hash::DefaultHasher::new();
+    (&label, &post.text, post.at_ms).hash(&mut hasher);
+    let at = i64::try_from(post.at_ms)
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .unwrap_or_default();
+    Message::post(
+        (POST_ID | post.seq, hasher.finish()),
+        role,
+        label,
+        (&post.text, at),
+    )
+}
+
+/// `history` with `post_messages`, the messages of `posts`, among it in
+/// the order [`merge_timeline`] puts them.
+fn interleave_posts<'a>(
+    history: Vec<&'a Message>,
+    posts: &[ChannelPostView],
+    post_messages: &'a [Message],
+) -> Vec<&'a Message> {
+    if posts.is_empty() {
+        return history;
+    }
+    // Only the times are merged on; each list keeps its order, so the
+    // merged entries are taken from the front of their own list.
+    let stamps: Vec<MessageData> = history
+        .iter()
+        .map(|message| MessageData {
+            role: message.role(),
+            content: String::new(),
+            is_streaming: false,
+            timestamp_ms: Some(message.timestamp_ms()),
+            command: None,
+            activity: None,
+            model: None,
+            usage: None,
+            sources: Vec::new(),
+        })
+        .collect();
+    let mut history = history.into_iter();
+    let mut post_messages = post_messages.iter();
+    merge_timeline(&stamps, posts)
+        .into_iter()
+        .filter_map(|item| match item {
+            TimelineItem::Message(_) => history.next(),
+            TimelineItem::Post(_) => post_messages.next(),
+        })
+        .collect()
+}
+
+/// Put a post's `author` label above its lines, moving the rows of its
+/// toggles and prose down to match.
+fn put_author_label(
+    author: &str,
+    (lines, toggles, prose): (
+        &mut Vec<Line<'static>>,
+        &mut [ToggleRow],
+        &mut Vec<Option<u16>>,
+    ),
+    theme: &Theme,
+) {
+    let style = Style::default()
+        .fg(theme.colors.primary)
+        .add_modifier(Modifier::BOLD);
+    lines.insert(0, Line::from(Span::styled(author.to_string(), style)));
+    for toggle in toggles {
+        toggle.line += 1;
+    }
+    if !prose.is_empty() {
+        prose.insert(0, None);
+    }
 }
 
 /// Put the footer of a turn's latest reply, `meta`, under its last block
@@ -794,13 +912,13 @@ mod tests {
         let size = (40, Measure::GRID);
         let chat = long_chat(40);
         let mut whole = ChatLineCache::default();
-        whole.update(&chat, size, &theme, "*", &groups);
+        whole.update((&chat, &[]), size, &theme, "*", &groups);
 
         let mut grown = ChatLineCache::default();
         let mut so_far = VecDeque::new();
         for message in &chat {
             so_far.push_back(message.clone());
-            grown.update(&so_far, size, &theme, "*", &groups);
+            grown.update((&so_far, &[]), size, &theme, "*", &groups);
         }
         let drawn = |cache: &ChatLineCache| {
             cache

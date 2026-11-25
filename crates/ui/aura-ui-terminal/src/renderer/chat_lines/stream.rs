@@ -472,12 +472,12 @@ Both are new in this change.\n";
         let chars: Vec<char> = REPLY.chars().collect();
         for chunk in chars.chunks(5) {
             messages[1].append(&chunk.iter().collect::<String>());
-            cache.update(&messages, size, &theme, "*", &groups);
+            cache.update((&messages, &[]), size, &theme, "*", &groups);
             let shown = cache.blocks().nth(1).expect("the reply's block");
 
             let done = Message::new(MessageRole::Assistant, messages[1].content());
             let mut fresh = ChatLineCache::default();
-            fresh.update(&[done].into(), size, &theme, "*", &groups);
+            fresh.update((&[done].into(), &[]), size, &theme, "*", &groups);
             let whole = fresh.blocks().next().expect("the reply's block");
             assert_eq!(
                 shown.lines,
@@ -489,7 +489,7 @@ Both are new in this change.\n";
 
         let streamed = cache.blocks().nth(1).map(|block| block.lines.clone());
         messages[1].set_streaming(false);
-        cache.update(&messages, size, &theme, "*", &groups);
+        cache.update((&messages, &[]), size, &theme, "*", &groups);
         assert_eq!(
             cache.blocks().nth(1).map(|block| block.lines.clone()),
             streamed

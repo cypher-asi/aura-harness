@@ -63,8 +63,9 @@ use crate::{
     alerts::AlertSettings,
     components::{Activity, Message},
     events::{
-        empty_projects, starts_project, AgentDefinitionSummary, AgentSummary, ModelOptionView,
-        PlanView, ProcessSummary, ProjectSummary, RecordSummary, UiCommand, UiEvent,
+        empty_projects, starts_project, AgentDefinitionSummary, AgentSummary, ChannelPostView,
+        ModelOptionView, PlanView, ProcessSummary, ProjectSummary, RecordSummary, UiCommand,
+        UiEvent,
     },
     input::InputHistory,
     renderer::{ChatLineCache, GroupState},
@@ -1379,11 +1380,16 @@ impl App {
         self.scroll_offset = self.scroll_offset.min(max);
     }
 
-    /// Messages along with the cache of the lines the open pane draws them
-    /// as.
+    /// Messages, and the posts of the channel the agent on screen
+    /// coordinates, along with the cache of the lines the open pane draws
+    /// them as.
     pub(crate) fn chat_line_cache(
         &mut self,
-    ) -> (&VecDeque<Message>, &mut ChatLineCache, GroupState<'_>) {
+    ) -> (
+        (&VecDeque<Message>, &[ChannelPostView]),
+        &mut ChatLineCache,
+        GroupState<'_>,
+    ) {
         let groups = GroupState {
             open: &self.group_open,
             expand_all: self.activity_expanded,
@@ -1395,7 +1401,8 @@ impl App {
         } else {
             &mut self.chat_lines
         };
-        (&self.messages, cache, groups)
+        let posts = self.channels.coordinator_posts(&self.active_agent_id);
+        ((&self.messages, posts), cache, groups)
     }
 
     /// Whether the chat panel shows the terminal pane: the shell commands
@@ -1408,10 +1415,16 @@ impl App {
     /// Whether the open pane has nothing to show.
     #[must_use]
     pub fn pane_is_empty(&self) -> bool {
-        !self
-            .messages
-            .iter()
-            .any(|m| m.shell_run().is_some() == self.terminal_mode)
+        let has_posts = !self.terminal_mode
+            && !self
+                .channels
+                .coordinator_posts(&self.active_agent_id)
+                .is_empty();
+        !has_posts
+            && !self
+                .messages
+                .iter()
+                .any(|m| m.shell_run().is_some() == self.terminal_mode)
     }
 
     /// Fit the chat scroll position to a conversation `total_lines` long shown

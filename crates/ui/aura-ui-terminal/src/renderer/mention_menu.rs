@@ -1,5 +1,6 @@
-//! `@` file picker, drawn over the bottom of the Chat panel like the
-//! slash menu so it sits directly above the input line.
+//! `@` picker, drawn over the bottom of the Chat panel like the slash
+//! menu so it sits directly above the input line: a channel's members,
+//! then files and folders.
 
 use crate::{App, Theme};
 use ratatui::{
@@ -46,15 +47,28 @@ pub(super) fn render_mention_menu(frame: &mut Frame, chat: Rect, app: &App, them
             } else {
                 ("  ", theme.colors.foreground)
             };
-            Line::from(vec![
+            let mut spans = vec![
                 Span::styled(marker, Style::default().fg(theme.colors.primary)),
                 Span::styled(format!("@{}", candidate.path), Style::default().fg(color)),
-            ])
+            ];
+            if let Some(member) = &candidate.member {
+                spans.push(Span::raw(format!("  {}", member.name)));
+                spans.push(Span::styled(
+                    format!("  {}", member.role),
+                    Style::default().fg(theme.colors.muted),
+                ));
+            }
+            Line::from(spans)
         })
         .collect();
 
+    let title = if matches.iter().any(|candidate| candidate.member.is_some()) {
+        " MEMBERS · FILES "
+    } else {
+        " FILES "
+    };
     let block = Block::default()
-        .title(" FILES ")
+        .title(title)
         .title_bottom(
             Line::from(" ↑/↓ select  Tab complete  Enter insert  Esc close ").right_aligned(),
         )

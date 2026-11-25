@@ -1,10 +1,13 @@
 //! `@` mentions: a fuzzy file and folder picker shown above the input
-//! while an `@path` word is typed.
+//! while an `@path` word is typed. In the chat of a channel's coordinator
+//! the channel's members come first, to be mentioned by code.
 //!
 //! The picker only completes text. The surface reads the mentioned files
-//! when the message is sent, so the chat keeps the short `@path`.
+//! when the message is sent, so the chat keeps the short `@path`; a
+//! `@CODE` names a member, matched without regard to case.
 
 use super::{App, AppState};
+use crate::events::AgentSummary;
 use crate::terminal::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
@@ -29,14 +32,57 @@ const INDEX_TTL: Duration = Duration::from_secs(30);
 /// are huge and rarely what the user means.
 const SKIPPED_DIRS: &[&str] = &[".git", "target", "node_modules"];
 
-/// A file or folder the picker can insert.
+/// A file, folder or channel member the picker can insert.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MentionCandidate {
-    /// Path relative to the workspace root with `/` separators; folders
-    /// end in `/`
+    /// What goes after the `@`: a path relative to the workspace root
+    /// with `/` separators, folders ending in `/`, or a member's code
     pub path: String,
     /// Whether it is a folder
     pub is_dir: bool,
+    /// Set when it is a member of the channel
+    pub member: Option<MentionMember>,
+}
+
+/// A member of a channel as the picker lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MentionMember {
+    /// Display name
+    pub name: String,
+    /// `coordinator`, `agent` or `subagent`
+    pub role: &'static str,
+}
+
+/// The members of a channel whose code or name starts with `query`,
+/// ignoring case, in the channel's order. A member without a code cannot
+/// be mentioned, so is left out.
+fn member_matches(members: &[AgentSummary], query: &str) -> Vec<MentionCandidate> {
+    let query = query.to_lowercase();
+    members
+        .iter()
+        .filter_map(|member| {
+            let code = member.code.as_deref().filter(|code| !code.is_empty())?;
+            let matches = code.to_lowercase().starts_with(&query)
+                || member.name.to_lowercase().starts_with(&query);
+            matches.then(|| MentionCandidate {
+                path: code.to_string(),
+                is_dir: false,
+                member: Some(MentionMember {
+                    name: member.name.clone(),
+                    role: member_role(member.depth),
+                }),
+            })
+        })
+        .collect()
+}
+
+/// What a member at `depth` in its channel's tree is.
+const fn member_role(depth: usize) -> &'static str {
+    match depth {
+        0 => "coordinator",
+        1 => "agent",
+        _ => "subagent",
+    }
 }
 
 impl MentionCandidate {
@@ -95,7 +141,11 @@ impl MentionIndex {
                 if is_dir && depth + 1 < MAX_DEPTH {
                     queue.push_back((dir.join(&name), path.clone(), depth + 1));
                 }
-                entries.push(MentionCandidate { path, is_dir });
+                entries.push(MentionCandidate {
+                    path,
+                    is_dir,
+                    member: None,
+                });
             }
         }
         Self::finished(root, entries)
@@ -326,7 +376,12 @@ impl App {
             self.mentions.dismissed = None;
         }
         let word = word.filter(|(start, _, _)| self.mentions.dismissed != Some(*start));
-        let (Some((start, _, query)), Some(root)) = (word, self.sandbox.root()) else {
+        let members = self
+            .channels
+            .coordinated_by(&self.active_agent_id)
+            .map_or(&[][..], |channel| channel.members.as_slice());
+        let root = self.sandbox.root();
+        let Some((start, _, query)) = word.filter(|_| root.is_some() || !members.is_empty()) else {
             self.mentions.query = None;
             self.mentions.matches.clear();
             return;
@@ -339,23 +394,28 @@ impl App {
         {
             return;
         }
-        // A new `@` word walks the tree again so files created since show
-        // up; typing within one word reuses the walk.
-        let opening = self.mentions.query.is_none();
-        let stale = self
-            .mentions
-            .index
-            .as_ref()
-            .is_none_or(|index| opening || !index.is_fresh_for(root));
-        if stale {
-            self.mentions.index = Some(MentionIndex::build(root));
+        let mut matches = member_matches(members, query);
+        if let Some(root) = root {
+            // A new `@` word walks the tree again so files created since
+            // show up; typing within one word reuses the walk.
+            let opening = self.mentions.query.is_none();
+            let stale = self
+                .mentions
+                .index
+                .as_ref()
+                .is_none_or(|index| opening || !index.is_fresh_for(root));
+            if stale {
+                self.mentions.index = Some(MentionIndex::build(root));
+            }
+            matches.extend(
+                self.mentions
+                    .index
+                    .as_ref()
+                    .map(|index| index.rank(query))
+                    .unwrap_or_default(),
+            );
         }
-        self.mentions.matches = self
-            .mentions
-            .index
-            .as_ref()
-            .map(|index| index.rank(query))
-            .unwrap_or_default();
+        self.mentions.matches = matches;
         self.mentions.query = Some((start, query.to_string()));
         self.mentions.cursor = 0;
     }
@@ -422,6 +482,7 @@ mod tests {
         MentionCandidate {
             path: path.to_string(),
             is_dir: path.ends_with('/'),
+            member: None,
         }
     }
 

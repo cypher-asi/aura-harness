@@ -72,11 +72,12 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             Some(HoverTarget::ChatTab(tab)) => Some(tab),
             _ => None,
         };
+        let title = app.coordinator_chat_title();
         let header = PanelHeader {
-            layout: ChatTab::layout(tabs),
+            layout: app.chat_tab_layout(tabs),
             active: Some(app.chat_tab()),
             hovered,
-            title: None,
+            title: title.as_deref(),
             info: None,
             close: None,
             expand,
@@ -282,9 +283,9 @@ fn render_chat_lines(
         _ => None,
     };
     let measure = Measure::prose(app.prose_measure(), theme);
-    let (messages, cache, groups) = app.chat_line_cache();
+    let (shown, cache, groups) = app.chat_line_cache();
     let width = padded.width as usize;
-    let reflowed = cache.update(messages, (width, measure), theme, spinner, &groups);
+    let reflowed = cache.update(shown, (width, measure), theme, spinner, &groups);
     let gap = cache.block_gap();
     let mut toggle_rows = Vec::new();
     let mut image_hits = Vec::new();

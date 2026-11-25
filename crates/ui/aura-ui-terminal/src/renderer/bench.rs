@@ -86,9 +86,9 @@ impl Bench {
         let spinner = self.app.spinner_char();
         let measure = Measure::prose(self.app.prose_measure(), &self.theme);
         let width = usize::from(self.app.chat_width());
-        let (messages, cache, groups) = self.app.chat_line_cache();
+        let (shown, cache, groups) = self.app.chat_line_cache();
         let t = Instant::now();
-        cache.update(messages, (width, measure), &self.theme, spinner, &groups);
+        cache.update(shown, (width, measure), &self.theme, spinner, &groups);
         t.elapsed()
     }
 }

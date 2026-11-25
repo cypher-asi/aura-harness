@@ -6363,3 +6363,96 @@ fn test_open_channel_side_panel_shows_projects_workers_and_tasks() {
         "the Record panel hides: {screen}"
     );
 }
+
+/// [`channels_app`] with the chat on `active` and `#zode` open.
+fn channel_chat_app(active: &str) -> crate::App {
+    use crate::events::UiCommand;
+    let mut app = channels_app();
+    app.process_command(UiCommand::SetActiveAgent(active.to_string()));
+    app.open_channel_by_id("c1");
+    app
+}
+
+#[test]
+fn channel_posts_render_between_history_messages_by_time() {
+    use crate::components::MessageRole;
+    use crate::events::{ChannelPostAuthor, ChannelPostView, MessageData, UiCommand};
+
+    let mut app = channel_chat_app("co");
+    let at = |role, text: &str, ms| MessageData {
+        timestamp_ms: Some(ms),
+        ..MessageData::new(role, text)
+    };
+    app.process_command(UiCommand::LoadConversation(vec![
+        at(MessageRole::User, "kickoff question", 1000),
+        at(MessageRole::Assistant, "coordinator answer", 3000),
+    ]));
+    app.process_command(UiCommand::SetChannelPosts {
+        channel_id: "c1".to_string(),
+        posts: vec![ChannelPostView {
+            seq: 2,
+            author: ChannelPostAuthor::Agent {
+                id: "wk".to_string(),
+                code: Some("RE36".to_string()),
+                name: "Worker".to_string(),
+            },
+            text: "zebra crossing report".to_string(),
+            reply_to: Some(1),
+            at_ms: 2000,
+            ..ChannelPostView::default()
+        }],
+    });
+
+    let rows = render_rows(&mut app, 120);
+    let screen = rows.join("\n");
+    let row_with = |needle: &str| {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in:\n{screen}"))
+    };
+    let first = row_with("kickoff question");
+    let post = row_with("zebra crossing report");
+    let second = row_with("coordinator answer");
+    assert!(
+        first < post && post < second,
+        "{first} {post} {second}:\n{screen}"
+    );
+    // The label sits above the post's text, after the first message.
+    let label = (first + 1..post)
+        .rev()
+        .find(|&y| rows[y].contains("RE36"))
+        .unwrap_or_else(|| panic!("no RE36 label above the post:\n{screen}"));
+    assert!(rows[label].contains('↩'), "{}", rows[label]);
+}
+
+#[test]
+fn coordinator_chat_header_names_the_channel() {
+    // At 120 columns the tabs shrink to short labels and the title shows,
+    // cut to the room left; a wider screen shows all of it.
+    const WIDTH: u16 = 160;
+    let header = "#zode · coordinator";
+    let shows = |app: &mut crate::App| render_rows(app, WIDTH).iter().any(|r| r.contains(header));
+
+    let mut app = channel_chat_app("co");
+    let narrow = render_rows(&mut app, 120).join("\n");
+    assert!(narrow.contains("#zode · coord"), "{narrow}");
+    assert!(
+        shows(&mut app),
+        "{}",
+        render_rows(&mut app, WIDTH).join("\n")
+    );
+
+    app.close_channel();
+    assert!(
+        !shows(&mut app),
+        "{}",
+        render_rows(&mut app, WIDTH).join("\n")
+    );
+
+    let mut app = channel_chat_app("wk");
+    assert!(
+        !shows(&mut app),
+        "{}",
+        render_rows(&mut app, WIDTH).join("\n")
+    );
+}
