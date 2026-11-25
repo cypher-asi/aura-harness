@@ -42,7 +42,7 @@ pub(super) fn split_footer(frame: &mut Frame, row: Rect, app: &App, theme: &Them
         return row;
     };
     let color = match (state.moving.is_some(), state.placement) {
-        (true, _) => theme.colors.warning,
+        (true, _) => theme.colors.success,
         (false, PlacementView::Cloud) => theme.colors.primary,
         (false, PlacementView::Local) => theme.colors.muted,
     };

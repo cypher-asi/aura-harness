@@ -352,20 +352,67 @@ fn log_lines(console: &BootConsole, live: bool, width: usize, theme: &Theme) -> 
         ]));
     }
     for line in console.log.iter().skip(console.log.len() - shown) {
-        let style = if line.stderr {
-            Style::default().fg(theme.colors.warning)
-        } else if line.text.starts_with("$ ") {
-            Style::default().fg(theme.colors.text)
-        } else {
-            Style::default().fg(theme.colors.muted)
-        };
-        lines.push(Line::from(vec![
-            Span::raw(BODY),
-            Span::styled("│ ", faint),
-            Span::styled(fit(&line.text, text_width), style),
-        ]));
+        let mut spans = vec![Span::raw(BODY), Span::styled("│ ", faint)];
+        spans.extend(log_spans(&line.text, theme));
+        lines.push(clip(Line::from(spans), BODY.len() + 2 + text_width));
     }
     lines
+}
+
+/// A status verb as build tools print it, right-aligned after spaces:
+/// `   Compiling tokio v1.49.0`, `  Downloaded serde`, `    Finished`.
+fn status_verb(text: &str) -> Option<(&str, &str, &str)> {
+    let body = text.trim_start();
+    let indent = &text[..text.len() - body.len()];
+    let (verb, rest) = body.split_once(' ').unwrap_or((body, ""));
+    let mut chars = verb.chars();
+    let looks_like = chars.next().is_some_and(|c| c.is_ascii_uppercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c == '-')
+        && (verb.ends_with("ing") || verb.ends_with("ed") || verb == "Fresh");
+    (!indent.is_empty() && verb.len() >= 4 && looks_like).then_some((indent, verb, rest))
+}
+
+/// A line of command output in color: the command run, build tools'
+/// status verbs, warnings and errors stand out; the rest is quiet.
+fn log_spans(text: &str, theme: &Theme) -> Vec<Span<'static>> {
+    let plain = |s: &str, color| Span::styled(s.to_string(), Style::default().fg(color));
+    let bold = |s: &str, color| {
+        Span::styled(
+            s.to_string(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )
+    };
+    if let Some(command) = text.strip_prefix("$ ") {
+        return vec![
+            plain("$ ", theme.colors.faint),
+            plain(command, theme.colors.text),
+        ];
+    }
+    if let Some((indent, verb, rest)) = status_verb(text) {
+        let mut spans = vec![
+            Span::raw(indent.to_string()),
+            bold(verb, theme.colors.success),
+            Span::raw(" "),
+        ];
+        // `name v1.2.3 (/path)`: the name brighter than what follows.
+        let (name, tail) = rest.split_once(' ').unwrap_or((rest, ""));
+        spans.push(plain(name, theme.colors.text));
+        if !tail.is_empty() {
+            spans.push(plain(&format!(" {tail}"), theme.colors.muted));
+        }
+        return spans;
+    }
+    for (word, color) in [
+        ("error", theme.colors.error),
+        ("warning", theme.colors.warning),
+    ] {
+        if let Some(rest) = text.strip_prefix(word) {
+            if rest.starts_with(':') || rest.starts_with('[') {
+                return vec![bold(word, color), plain(rest, theme.colors.text)];
+            }
+        }
+    }
+    vec![plain(text, theme.colors.muted)]
 }
 
 #[cfg(test)]
@@ -494,6 +541,39 @@ mod tests {
         for line in boot_lines(&console, true, "⠋", 40, &theme) {
             assert!(line.width() <= 40, "{line:?}");
         }
+    }
+
+    #[test]
+    fn build_output_is_colored_by_what_it_says() {
+        let theme = Theme::cyber();
+        let colors = |text: &str| -> Vec<(String, Option<ratatui::style::Color>)> {
+            log_spans(text, &theme)
+                .into_iter()
+                .map(|s| (s.content.to_string(), s.style.fg))
+                .collect()
+        };
+        let compiling = colors("   Compiling tokio v1.49.0 (/workspace/tokio)");
+        assert_eq!(
+            compiling[1],
+            ("Compiling".to_string(), Some(theme.colors.success))
+        );
+        assert_eq!(compiling[3], ("tokio".to_string(), Some(theme.colors.text)));
+        assert_eq!(compiling[4].1, Some(theme.colors.muted));
+        assert_eq!(
+            colors("error[E0599]: no variant")[0],
+            ("error".to_string(), Some(theme.colors.error))
+        );
+        assert_eq!(
+            colors("warning: unused import")[0].1,
+            Some(theme.colors.warning)
+        );
+        assert_eq!(colors("$ cargo fetch")[1].1, Some(theme.colors.text));
+        // Prose that only starts like a status line stays quiet.
+        assert_eq!(
+            colors("Compiling went fine"),
+            [("Compiling went fine".to_string(), Some(theme.colors.muted))]
+        );
+        assert_eq!(colors("  Note this").len(), 1);
     }
 
     #[test]
