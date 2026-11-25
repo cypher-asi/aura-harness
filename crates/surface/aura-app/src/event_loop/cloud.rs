@@ -153,6 +153,16 @@ impl BootConsoleUi {
             .await;
     }
 
+    async fn stage(&self, key: &str, label: &str, state: BootStageState) {
+        self.begin().await;
+        self.send(BootUpdate::Stage {
+            key: key.to_string(),
+            label: label.to_string(),
+            state,
+        })
+        .await;
+    }
+
     /// Show the console now.
     async fn begin(&self) {
         if !self.begun.swap(true, Ordering::Relaxed) {
@@ -275,6 +285,48 @@ async fn ensure_hub(state: &mut LoopState<'_>) -> Result<Arc<CloudHub>, String> 
     *state.cloud.shared.hub.lock() = Some(Arc::clone(&hub));
     start_publisher(state);
     Ok(hub)
+}
+
+/// The hub, started if need be. With a `console`, it shows at once, the
+/// start as its first stage.
+async fn connect(
+    state: &mut LoopState<'_>,
+    console: Option<&BootConsoleUi>,
+) -> Result<Arc<CloudHub>, String> {
+    let Some(console) = console else {
+        return ensure_hub(state).await;
+    };
+    console.begin().await;
+    if let Some(hub) = state.cloud.hub() {
+        return Ok(hub);
+    }
+    let (key, label) = ("connect", "Connecting to boxd");
+    console.stage(key, label, BootStageState::Running).await;
+    let started = std::time::Instant::now();
+    let hub = ensure_hub(state).await;
+    let done = match &hub {
+        Ok(_) => BootStageState::Done {
+            ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        },
+        Err(err) => BootStageState::Failed(err.clone()),
+    };
+    console.stage(key, label, done).await;
+    hub
+}
+
+/// Say why a move or a return can't go ahead: on its console, if shown.
+async fn refuse(
+    state: &LoopState<'_>,
+    console: Option<&BootConsoleUi>,
+    agent: AgentId,
+    note: String,
+) {
+    match console {
+        Some(console) => {
+            console.end(false, note).await;
+        }
+        None => system(state, agent, note).await,
+    }
 }
 
 /// Why the user signed in here may not manage cloud agent `agent`: only
@@ -549,10 +601,18 @@ pub(super) async fn handle_set_placement(
     if state.cloud.is_moving(agent) {
         return;
     }
-    let hub = match ensure_hub(state).await {
+    // A move shows from the moment it's asked for, connecting included.
+    let placed = state.cloud.hub().is_some_and(|hub| hub.is_placed(agent));
+    let console = (matches!(placement, PlacementView::Cloud) && !placed).then(|| {
+        BootConsoleUi::new(
+            AgentUi::new(state.commands.clone(), agent),
+            "Moving to the cloud",
+        )
+    });
+    let hub = match connect(state, console.as_ref()).await {
         Ok(hub) => hub,
         Err(err) => {
-            system(state, agent, err).await;
+            refuse(state, console.as_ref(), agent, err).await;
             return;
         }
     };
@@ -560,21 +620,25 @@ pub(super) async fn handle_set_placement(
         .project_of(agent)
         .map(|p| p.id.clone());
     if let Some(refusal) = foreign_owner(state, &hub, agent) {
-        system(state, agent, refusal).await;
+        refuse(state, console.as_ref(), agent, refusal).await;
         return;
     }
     match placement {
         PlacementView::Cloud => {
+            let Some(console) = console else { return };
             if hub.is_placed(agent) {
+                console
+                    .end(true, "This agent already runs in the cloud.".to_string())
+                    .await;
                 return;
             }
             let Some(request) = place_request(state, &hub, agent) else {
-                system(
-                    state,
-                    agent,
-                    "This agent has no project folder to run in the cloud.",
-                )
-                .await;
+                console
+                    .end(
+                        false,
+                        "This agent has no project folder to run in the cloud.".to_string(),
+                    )
+                    .await;
                 return;
             };
             if let Some(project) = &project {
@@ -584,11 +648,6 @@ pub(super) async fn handle_set_placement(
             // The local kernel must not write for it from here on.
             state.idle.remove(&agent);
             let shared = Arc::clone(&state.cloud.shared);
-            let console = BootConsoleUi::new(
-                AgentUi::new(state.commands.clone(), agent),
-                "Moving to the cloud",
-            );
-            console.begin().await;
             tokio::spawn(async move {
                 let (boot, events) = BootReporter::channel();
                 let shown = console.pump(events);
