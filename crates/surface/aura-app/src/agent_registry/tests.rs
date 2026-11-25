@@ -632,20 +632,23 @@ fn the_archive_lists_the_newest_archived_first() {
     registry.archive_at(c.agent_id(), at(1)).unwrap();
     registry.archive_at(undated.agent_id(), at(4)).unwrap();
     // A registry written before the date was kept has no `archived_at`.
-    let path = dir.path().join(REGISTRY_FILE);
-    let mut file: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    let agents = file["agents"].as_array_mut().unwrap();
-    let entry = agents
-        .iter_mut()
-        .find(|entry| entry["zns_id"] == undated.zns_id.as_str())
-        .unwrap();
-    entry
-        .as_object_mut()
+    let store = registry.store().clone();
+    let mut row = store
+        .load()
         .unwrap()
-        .remove("archived_at")
+        .agents
+        .into_iter()
+        .find(|row| row.agent_id == undated.agent_id())
         .unwrap();
-    fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+    row.archived_at = None;
+    store
+        .apply(&aura_store_db::agents::RegistryDiff {
+            agents_put: vec![row],
+            ..Default::default()
+        })
+        .unwrap();
+    drop(store);
+    drop(registry);
 
     let registry = open(dir.path(), launch.path());
     assert_eq!(registry.find(undated.agent_id()).unwrap().archived_at, None);
@@ -1970,26 +1973,26 @@ fn importing_a_v3_agents_json_matches_the_file() {
         ],
         "agents": [
             {"zns_id": "0://terminal/main", "name": "Terminal Agent",
-             "created_at": "2026-01-02T03:04:05Z", "project_id": "p-home", "code": "AG1"},
+             "created_at": "2026-01-02T03:04:05Z", "project_id": "p-home", "code": "AGE1"},
             {"zns_id": "0://terminal/re1", "name": "rust-engineer #1",
              "created_at": "2026-01-02T04:00:00.5Z", "definition": "rust-engineer",
-             "parent": "0://terminal/main", "project_id": "p-home", "code": "RE1",
+             "parent": "0://terminal/main", "project_id": "p-home", "code": "REN1",
              "subtitle": "fixing the build"},
             {"zns_id": "0://terminal/re2", "name": "rust-engineer #2",
              "created_at": "2026-01-02T05:00:00Z", "definition": "rust-engineer",
-             "parent": "0://terminal/re1", "project_id": "p-home", "code": "RE2"},
+             "parent": "0://terminal/re1", "project_id": "p-home", "code": "REN2"},
             {"zns_id": "0://terminal/old", "name": "Agent 2",
              "created_at": "2026-01-02T06:00:00Z", "project_id": "p-home", "archived": true,
-             "code": "AG2"},
+             "code": "AGE2"},
             {"zns_id": "0://terminal/docs", "name": "Agent 3",
              "created_at": "2026-01-02T07:00:00Z", "project_id": "p-home",
-             "folder": away.join("docs"), "title": "Docs pass", "code": "AG3"},
+             "folder": away.join("docs"), "title": "Docs pass", "code": "AGE3"},
             {"zns_id": "0://terminal/away", "name": "Agent",
              "created_at": "2026-01-03T00:00:00Z", "project_id": "p-away", "archived": true,
-             "code": "AG4"},
+             "code": "AGE4"},
         ],
-        "prefixes": {"agent": "AG", "rust-engineer": "RE", "reviewer": "REV"},
-        "last_numbers": {"AG": 7, "RE": 5},
+        "prefixes": {"agent": "AGE", "rust-engineer": "REN", "reviewer": "REV"},
+        "last_numbers": {"AGE": 7, "REN": 5},
     });
     let bytes = serde_json::to_vec_pretty(&file).unwrap();
     fs::write(dir.path().join(REGISTRY_FILE), &bytes).unwrap();
@@ -2054,13 +2057,13 @@ fn empty_store_beside_a_migrated_file_reimports_it_instead_of_seeding() {
         ],
         "agents": [
             {"zns_id": "0://terminal/main", "name": "Terminal Agent",
-             "created_at": "2026-01-02T03:04:05Z", "project_id": "p-home", "code": "AG1"},
+             "created_at": "2026-01-02T03:04:05Z", "project_id": "p-home", "code": "AGE1"},
             {"zns_id": "0://terminal/re1", "name": "rust-engineer #1",
              "created_at": "2026-01-02T04:00:00Z", "definition": "rust-engineer",
-             "parent": "0://terminal/main", "project_id": "p-home", "code": "RE1"},
+             "parent": "0://terminal/main", "project_id": "p-home", "code": "REN1"},
         ],
-        "prefixes": {"agent": "AG", "rust-engineer": "RE"},
-        "last_numbers": {"AG": 1, "RE": 1},
+        "prefixes": {"agent": "AGE", "rust-engineer": "REN"},
+        "last_numbers": {"AGE": 1, "REN": 1},
     });
     let bytes = serde_json::to_vec_pretty(&file).unwrap();
     // What a power loss after the rename leaves: the file renamed, the
