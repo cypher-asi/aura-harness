@@ -1,0 +1,22 @@
+{
+  "id": "01a20f756832000b",
+  "title": "also add a copy button",
+  "state": "completed",
+  "agent_id": "62df5f9fac986193d8696609dc97372710e4a24792bdfb9b4d564afbbc7f4895",
+  "agent_name": "Agent 1545",
+  "items": [
+    {
+      "content": "Add clickable Copy button to chat code blocks",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the change",
+      "state": "completed",
+      "assignee": "reviewer"
+    }
+  ],
+  "summary": "The crate builds now (the other in-progress work has settled), so I'll have the remaining items finished.",
+  "updated_ms": 1795557589700,
+  "created_ms": 1795555682354
+}

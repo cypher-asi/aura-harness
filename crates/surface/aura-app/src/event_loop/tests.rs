@@ -1384,6 +1384,41 @@ async fn archiving_the_active_agent_lists_it_gone_before_opening_the_next() {
     assert!(listed < history, "{sent:?}");
 }
 
+/// An agent in the Archive can be opened; it stays there, and a later
+/// list refresh keeps it as the one on screen.
+#[tokio::test]
+async fn an_archived_agent_opens_and_stays_archived() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let (first, second) = (fixture.first, fixture.second);
+    let mut state = loop_state(&fixture, &mut b);
+    assert_eq!(state.active, first);
+
+    handle_ui_event(&mut state, UiEvent::ArchiveAgent(second.to_hex()), &links).await;
+    handle_ui_event(&mut state, UiEvent::SelectAgent(second.to_hex()), &links).await;
+    assert_eq!(state.active, second);
+    let _ = drain(&mut commands);
+
+    handle_ui_event(&mut state, UiEvent::RefreshAgents, &links).await;
+    let sent = drain(&mut commands);
+    let hex = second.to_hex();
+    let last_active = sent.iter().rev().find_map(|(_, c)| match c {
+        UiCommand::SetActiveAgent(id) => Some(id.clone()),
+        _ => None,
+    });
+    assert_eq!(last_active.as_deref(), Some(hex.as_str()), "{sent:?}");
+    let archived_row = sent.iter().rev().find_map(|(_, c)| match c {
+        UiCommand::SetArchivedAgents(rows) => rows.iter().find(|row| row.id == hex).cloned(),
+        _ => None,
+    });
+    assert!(
+        archived_row.is_some_and(|row| row.is_active),
+        "the open agent is marked active in the Archive: {sent:?}"
+    );
+    assert!(lock_registry_agent(&fixture, second).archived);
+}
+
 #[tokio::test]
 async fn switching_to_a_busy_agent_keeps_its_live_chat() {
     let (fixture, mut commands) = fixture();

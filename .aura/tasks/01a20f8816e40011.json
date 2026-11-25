@@ -1,0 +1,14 @@
+{
+  "id": "01a20f8816e40011",
+  "title": "Review an uncommitted feature in the Rust crate `crates/ui/aura-ui-terminal`: a clickable \"⧉ Copy\" button in the top bo…",
+  "state": "completed",
+  "agent_id": "3e1e17ea63a293492d6ecd9083775eac637172347d91b31258d80e5686de5be9",
+  "agent_name": "reviewer #59",
+  "assignee": "reviewer",
+  "parent": "01a20f756832000b",
+  "items": [],
+  "summary": "I found three significant bugs, with the worst in the selection unframing. The hit-line bookkeeping looks correct, and there is no `unwrap`/`expect` in the production paths you listed.",
+  "updated_ms": 1795557277384,
+  "created_ms": 1795556906724,
+  "tool_use_id": "toolu_01AiMNURMd1An7B3NisbTnAa"
+}

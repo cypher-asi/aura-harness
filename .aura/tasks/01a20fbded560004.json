@@ -1,0 +1,11 @@
+{
+  "id": "01a20fbded560004",
+  "title": "when entering archive panel collapse by default subagents",
+  "state": "completed",
+  "agent_id": "d099c90220e96cafc70d726ddd110aebc6d373bb6ebeaf42b8874e9c5142f066",
+  "agent_name": "Agent 1529",
+  "items": [],
+  "summary": "The Archive tab has no folding yet. Let me see how the projects list folds subagents so the Archive can work the same way.",
+  "updated_ms": 1795561991481,
+  "created_ms": 1795560435030
+}

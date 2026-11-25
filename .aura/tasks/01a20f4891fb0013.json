@@ -1,0 +1,11 @@
+{
+  "id": "01a20f4891fb0013",
+  "title": "navigating large txt using arrow keys does not move cursor to where you would expent. Pressing down should take you imm…",
+  "state": "completed",
+  "agent_id": "2167191a314a1634e8d52298d9825c2052c41669f93651a5d805707bbf625bf1",
+  "agent_name": "Agent 1538",
+  "items": [],
+  "summary": "Now update the renderer imports, the plan width, the return value, and the tests module.",
+  "updated_ms": 1795552919676,
+  "created_ms": 1795552743931
+}

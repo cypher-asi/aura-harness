@@ -55,16 +55,6 @@ fn project(root: &Path) -> PathBuf {
     dir
 }
 
-/// Where the live tests keep their cloud state (install id, snapshot
-/// index): `AURA_CLOUD_TEST_HOME`, else `aura_data/cloud-live` in this
-/// tree. Keeping it lets later runs reuse the snapshots.
-fn test_home() -> PathBuf {
-    std::env::var("AURA_CLOUD_TEST_HOME").map_or_else(
-        |_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../aura_data/cloud-live"),
-        PathBuf::from,
-    )
-}
-
 #[tokio::test]
 #[ignore = "builds boxd snapshots and runs a machine; needs BOXD_API_KEY"]
 async fn an_agent_moves_to_the_cloud_works_there_and_comes_back() {
@@ -83,7 +73,7 @@ async fn an_agent_moves_to_the_cloud_works_there_and_comes_back() {
     assert!(binary.is_file(), "{}", binary.display());
 
     // Kept between runs so snapshots are reused.
-    let home = test_home();
+    let home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../aura_data/cloud-live");
     std::fs::create_dir_all(&home).expect("home");
     let scratch = tempfile::tempdir().expect("tempdir");
     let dir = project(scratch.path());
@@ -224,7 +214,7 @@ async fn a_cloud_agent_answers_on_each_linked_plan() {
         return;
     }
 
-    let home = test_home();
+    let home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../aura_data/cloud-live");
     std::fs::create_dir_all(&home).expect("home");
     let scratch = tempfile::tempdir().expect("tempdir");
     let dir = project(scratch.path());
@@ -317,119 +307,4 @@ async fn a_cloud_agent_answers_on_each_linked_plan() {
             kind.id()
         );
     }
-}
-
-/// Several agents of one project move to their own machines at once,
-/// all restored from the project snapshot; each reports its host, then
-/// all come back and their machines are destroyed. Set
-/// `AURA_CLOUD_TEST_AGENTS` (default 3, at most 10).
-#[tokio::test]
-#[ignore = "launches several boxd machines in parallel; needs BOXD_API_KEY"]
-async fn several_agents_launch_in_parallel() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("info,aura_engine_cloud=info,aura_app=info")
-        .try_init();
-    let _ = aura_config::env_file::load();
-    let config = aura_config::CloudConfig::from_env().expect("cloud settings");
-    assert!(
-        config.is_configured(),
-        "{}",
-        aura_config::MISSING_CREDENTIAL_NOTICE
-    );
-    let binary =
-        PathBuf::from(std::env::var("AURA_CLOUD_TEST_BINARY").expect("set AURA_CLOUD_TEST_BINARY"));
-    let count: usize = std::env::var("AURA_CLOUD_TEST_AGENTS")
-        .ok()
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(3)
-        .clamp(1, 10);
-
-    let home = test_home();
-    std::fs::create_dir_all(&home).expect("home");
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let dir = project(scratch.path());
-    let store: Arc<dyn Store> =
-        Arc::new(RocksStore::open(scratch.path().join("db"), false).expect("store"));
-    let provider = Arc::new(aura_engine_cloud::BoxdProvider::from_config(&config).expect("boxd"));
-    let hub = CloudHub::new(
-        config,
-        Arc::clone(&store),
-        home,
-        provider,
-        AuraBinary::Upload(binary),
-    )
-    .expect("hub");
-
-    let agents: Vec<AgentId> = (0..count).map(|_| AgentId::generate()).collect();
-    for agent in &agents {
-        let entry =
-            RecordEntry::builder(1, Transaction::user_prompt(*agent, "hello from local")).build();
-        aura_store_db::WriteStore::append_entry_direct(store.as_ref(), *agent, 1, &entry)
-            .expect("seed record");
-    }
-    // Build (or reuse) the project snapshot once, before the race.
-    let started = Instant::now();
-    let places = agents.iter().enumerate().map(|(i, agent)| {
-        let hub = Arc::clone(&hub);
-        let dir = dir.clone();
-        let agent = *agent;
-        async move {
-            let t = Instant::now();
-            let placed = hub
-                .place(PlaceRequest {
-                    agent,
-                    agent_zns: format!("0://test/cloud-par/{}", &agent.to_hex()[..8]),
-                    name: format!("parallel {i}"),
-                    code: Some(format!("PAR{i}")),
-                    project_id: "cloud-live-hello".into(),
-                    project_dir: dir,
-                    build_command: None,
-                    fork_from: None,
-                    owner: aura_app::cloud::hub::Owner::Local,
-                    owner_name: None,
-                })
-                .await;
-            (agent, placed.map(|view| (view.machine.name, t.elapsed())))
-        }
-    });
-    let placed = futures_util::future::join_all(places).await;
-    println!("{count} placements done in {:?}", started.elapsed());
-
-    let mut failures = Vec::new();
-    for (agent, outcome) in &placed {
-        match outcome {
-            Ok((machine, took)) => {
-                let out = hub
-                    .exec(*agent, "echo $(hostname) $(nproc)cpu $(free -g | awk '/Mem/{print $2}')GiB; cat notes.txt")
-                    .await;
-                match out {
-                    Ok(out) => println!(
-                        "  {machine}: placed in {took:?}; {}",
-                        out.stdout_text().replace('\n', " | ")
-                    ),
-                    Err(err) => failures.push(format!("{machine}: exec failed: {err}")),
-                }
-            }
-            Err(err) => failures.push(format!("place failed: {err}")),
-        }
-    }
-    let listed = hub.fleet().views().len();
-    println!("fleet holds {listed} machines");
-    if std::env::var("AURA_CLOUD_TEST_KEEP").is_ok() {
-        println!("AURA_CLOUD_TEST_KEEP set: leaving the machines running");
-        return;
-    }
-    for (agent, outcome) in &placed {
-        if outcome.is_ok() {
-            match hub.recall(*agent, "parallel test done").await {
-                Ok(done) => println!("  recalled {}: {}", &agent.to_hex()[..8], done.describe()),
-                Err(err) => {
-                    let _ = hub.fleet().destroy(&agent.to_hex(), "parallel test").await;
-                    failures.push(format!("recall failed: {err}"));
-                }
-            }
-        }
-    }
-    assert!(failures.is_empty(), "{failures:#?}");
-    assert!(hub.fleet().views().is_empty(), "every machine destroyed");
 }

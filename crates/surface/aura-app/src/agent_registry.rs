@@ -131,6 +131,10 @@ pub struct RegisteredAgent {
     /// the agents it spawned, until restored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
+    /// When it was moved to the Archive; orders the Archive, newest first.
+    /// None for listed agents and for ones archived before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<DateTime<Utc>>,
     /// Taken off the list with its project, but kept because agents it
     /// spawned sit in the Archive. Restoring one of them brings it back.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -142,15 +146,16 @@ pub struct RegisteredAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Short code name shown beside the agent in the UI, `<PREFIX><N>`
-    /// such as `RE36` for `rust-engineer #36`. Unique in the registry and
+    /// such as `REN36` for `rust-engineer #36`. Unique in the registry and
     /// never changed once assigned: the registry gives one to every agent
     /// it registers, and to agents of older registries when it loads them
-    /// (older `RE-36` codes become `RE36`).
+    /// (older `REN-36` codes become `REN36`; two-letter ones such as
+    /// `RE36` are given a new three-letter code).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     /// Short name of the subtask a spawned permanent-agent instance was
     /// given ("Fix parser escapes"), written by the title model from the
-    /// task prompt. Shown after the code (`RE36: Fix parser escapes`)
+    /// task prompt. Shown after the code (`REN36: Fix parser escapes`)
     /// unless the agent has a title; `name` stays the agent's identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<String>,
@@ -378,7 +383,11 @@ impl AgentRegistry {
             });
             changed = true;
         }
-        let migrated = code::migrate(&mut registry.file.agents, &mut registry.file.prefixes);
+        let migrated = code::migrate(
+            &mut registry.file.agents,
+            &mut registry.file.prefixes,
+            &mut registry.file.last_numbers,
+        );
         let reserved = registry
             .file
             .prefixes
@@ -426,7 +435,7 @@ impl AgentRegistry {
         changed
     }
 
-    /// The code prefix (the abbreviation, such as `RE` for
+    /// The code prefix (the abbreviation, such as `REN` for
     /// `rust-engineer`) of each of `keys`, in the same order. A key is a
     /// definition name, or `agent` for agents without one.
     ///
@@ -606,6 +615,20 @@ impl AgentRegistry {
             .or_else(|| self.tree().first().map(|(agent, _)| *agent))
             .or(stored)
             .unwrap_or(&self.file.agents[0])
+    }
+
+    /// The agent open now: the stored active agent even when it sits in
+    /// the Archive, since an archived agent can be opened and chatted with
+    /// without leaving it. Falls back to [`Self::active`] when the stored
+    /// one is unknown or left behind by a removal.
+    #[must_use]
+    pub fn current(&self) -> &RegisteredAgent {
+        self.file
+            .active
+            .as_deref()
+            .and_then(|zns| self.file.agents.iter().find(|a| a.zns_id == zns))
+            .filter(|agent| !agent.removed)
+            .unwrap_or_else(|| self.active())
     }
 
     /// Remember `agent_id` as the active agent.
@@ -1068,6 +1091,7 @@ impl AgentRegistry {
             project_id: None,
             folder: None,
             archived: false,
+            archived_at: None,
             removed: false,
             title: None,
             code: None,
@@ -1131,37 +1155,42 @@ impl AgentRegistry {
         }
     }
 
-    /// The Archive: each archived agent no archived agent spawned, project
-    /// by project, followed by the agents it spawned, with depth counted
-    /// from it.
+    /// The Archive: each archived agent no archived agent spawned, the
+    /// most recently archived first, followed by the agents it spawned,
+    /// with depth counted from it. Agents archived before the date was
+    /// kept come last; ties keep project order, then registry order, so
+    /// the Archive does not move as agents in it are used.
     #[must_use]
     pub fn archived_tree(&self) -> Vec<(&RegisteredAgent, usize)> {
         let index = self.index();
         let mut walk = Walk::new(self.file.agents.len());
-        let heads =
+        let is_head =
             |agent: &&RegisteredAgent| agent.archived && !index.spawners(agent).any(|p| p.archived);
+        let mut heads: Vec<&RegisteredAgent> = Vec::new();
         for project in &self.file.projects {
-            for agent in self
-                .file
+            heads.extend(
+                self.file
+                    .agents
+                    .iter()
+                    .filter(|a| a.project_id.as_deref() == Some(project.id.as_str()))
+                    .filter(is_head),
+            );
+        }
+        heads.extend(
+            self.file
                 .agents
                 .iter()
-                .filter(|a| a.project_id.as_deref() == Some(project.id.as_str()))
-                .filter(heads)
-            {
-                self.visit(&index, agent, 0, true, &mut walk);
-            }
-        }
-        for agent in self
-            .file
-            .agents
-            .iter()
-            .filter(|a| {
-                a.project_id
-                    .as_deref()
-                    .is_none_or(|id| self.project(id).is_none())
-            })
-            .filter(heads)
-        {
+                .filter(|a| {
+                    a.project_id
+                        .as_deref()
+                        .is_none_or(|id| self.project(id).is_none())
+                })
+                .filter(is_head),
+        );
+        // Stable, so equal dates keep the order above; None sorts lowest,
+        // so reversed it comes last.
+        heads.sort_by_key(|agent| std::cmp::Reverse(agent.archived_at));
+        for agent in heads {
             self.visit(&index, agent, 0, true, &mut walk);
         }
         walk.out
@@ -1280,15 +1309,28 @@ impl AgentRegistry {
     }
 
     /// Move `agent_id`, and the agents it spawned, to the Archive. The
-    /// other agents of its project stay listed.
+    /// other agents of its project stay listed. An agent already in the
+    /// Archive is left as it is, keeping its date and place there.
     ///
     /// # Errors
     /// Returns an error if the agent is unknown, it is the last listed
     /// agent, or the registry cannot be written.
     pub fn archive(&mut self, agent_id: AgentId) -> anyhow::Result<()> {
+        self.archive_at(agent_id, Utc::now())
+    }
+
+    /// [`Self::archive`], dated `at`, so tests can fix the Archive order.
+    pub(crate) fn archive_at(
+        &mut self,
+        agent_id: AgentId,
+        at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
         let Some(index) = self.position(agent_id) else {
             anyhow::bail!("no such agent");
         };
+        if self.file.agents[index].archived {
+            return Ok(());
+        }
         let hiding: HashSet<AgentId> = self.subtree(agent_id).into_iter().collect();
         if self
             .tree()
@@ -1297,7 +1339,9 @@ impl AgentRegistry {
         {
             anyhow::bail!("it is the last agent in the list; create another project first");
         }
-        self.file.agents[index].archived = true;
+        let agent = &mut self.file.agents[index];
+        agent.archived = true;
+        agent.archived_at = Some(at);
         self.save()
     }
 
@@ -1323,6 +1367,7 @@ impl AgentRegistry {
         for agent in &mut self.file.agents {
             if restoring.contains(&agent.zns_id) {
                 agent.archived = false;
+                agent.archived_at = None;
                 agent.removed = false;
             }
         }

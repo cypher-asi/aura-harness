@@ -1,0 +1,14 @@
+{
+  "id": "01a20f37048b000d",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust workspace). Follow repo rules: no unwrap/expect in production code, clippy clea…",
+  "state": "failed",
+  "agent_id": "b17008b8a9bfb6c08f6fb0ae30412bacfe4322c38f1c1b07c1065c4eaed2929b",
+  "agent_name": "rust-engineer #104",
+  "assignee": "rust-engineer",
+  "parent": "01a20f3683f6000c",
+  "items": [],
+  "summary": "ran out of time: it stopped after 4 minutes without a reply",
+  "updated_ms": 1795552164018,
+  "created_ms": 1795551593611,
+  "tool_use_id": "toolu_01BpWWXhnbZeFbeuCxnMyWya"
+}

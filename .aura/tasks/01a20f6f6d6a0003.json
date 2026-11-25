@@ -1,0 +1,14 @@
+{
+  "id": "01a20f6f6d6a0003",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust workspace). Users report that typing in the chat input box of the terminal UI i…",
+  "state": "completed",
+  "agent_id": "2a78d1bfe3610fe15ecaa2507805aef9b9c6eda41bf5f8305b6187d3ab4ef04a",
+  "agent_name": "explorer #59",
+  "assignee": "explorer",
+  "parent": "01a20f6eb0810001",
+  "items": [],
+  "summary": "That notice is the benchmark I already used: the numbers in my report come from it, and it exited cleanly (2 passed, 0 failed).",
+  "updated_ms": 1795555719103,
+  "created_ms": 1795555290474,
+  "tool_use_id": "toolu_01J31BjLXS7b4XDsoMEyxkad"
+}

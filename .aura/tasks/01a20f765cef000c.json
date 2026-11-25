@@ -1,0 +1,14 @@
+{
+  "id": "01a20f765cef000c",
+  "title": "Add a clickable \"Copy\" button to fenced code blocks shown in the chat of the terminal UI crate `crates/ui/aura-ui-termi…",
+  "state": "completed",
+  "agent_id": "0f9134c403221314e323fc4c80612f28dfe87b9f5baf6a03e3a3928067423609",
+  "agent_name": "rust-engineer #110",
+  "assignee": "rust-engineer",
+  "parent": "01a20f756832000b",
+  "items": [],
+  "summary": "The code-block Copy button is mostly written but not finished, and none of it has been compiled or tested. The crate doesn't build at all right now because of someone else's in-progress, untracked work: `app/host_tab.rs` calls `text_width` and `show_notification`, which don't exist, uses a missing `NotificationType::Info`, and `renderer/sandbox.rs` doesn't handle `SidePanelTab::Host`. I didn't to…",
+  "updated_ms": 1795556171235,
+  "created_ms": 1795555745007,
+  "tool_use_id": "toolu_01Toh9E7stg2f2C38o9HmmJN"
+}

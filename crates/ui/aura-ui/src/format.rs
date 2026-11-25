@@ -5,8 +5,41 @@
 /// streaming in, the label is built from the fields that have arrived;
 /// it is empty until one has.
 pub fn format_tool_label(tool_name: &str, args_json: &str) -> String {
-    let args = parse_tool_args(args_json);
-    if args.as_object().is_some_and(serde_json::Map::is_empty) && !is_complete_json(args_json) {
+    format_tool_label_of(tool_name, &ToolArgs::parse(args_json))
+}
+
+/// A tool call's arguments, parsed once for everything drawn from them:
+/// they can run to hundreds of KB while a file's content streams in.
+#[derive(Debug, Clone)]
+pub struct ToolArgs {
+    /// The arguments as [`parse_tool_args`] reads them
+    pub value: serde_json::Value,
+    /// Whether they are a whole JSON value rather than a streaming prefix
+    pub complete: bool,
+}
+
+impl ToolArgs {
+    /// Parse `args_json`, whole or still streaming in.
+    #[must_use]
+    pub fn parse(args_json: &str) -> Self {
+        match serde_json::from_str(args_json) {
+            Ok(value) => Self {
+                value,
+                complete: true,
+            },
+            Err(_) => Self {
+                value: serde_json::Value::Object(complete_string_fields(args_json)),
+                complete: false,
+            },
+        }
+    }
+}
+
+/// [`format_tool_label`] from arguments already parsed.
+#[must_use]
+pub fn format_tool_label_of(tool_name: &str, parsed: &ToolArgs) -> String {
+    let args = &parsed.value;
+    if args.as_object().is_some_and(serde_json::Map::is_empty) && !parsed.complete {
         return String::new();
     }
     let text = |key: &str| {
@@ -45,7 +78,7 @@ pub fn format_tool_label(tool_name: &str, args_json: &str) -> String {
             }
         }
         "find_files" => in_path(format!("Found {}", text("pattern").unwrap_or_default())),
-        "run_command" => format!("Ran {}", format_tool_summary_from_value(tool_name, &args)),
+        "run_command" => format!("Ran {}", format_tool_summary_from_value(tool_name, args)),
         "task" => {
             let agent = match text("subagent_type") {
                 Some(kind) => format!("Delegated to @{kind}"),
@@ -57,7 +90,7 @@ pub fn format_tool_label(tool_name: &str, args_json: &str) -> String {
             }
         }
         _ => {
-            let summary = format_tool_summary_from_value(tool_name, &args);
+            let summary = format_tool_summary_from_value(tool_name, args);
             if summary.is_empty() {
                 tool_name.to_string()
             } else {
@@ -70,8 +103,7 @@ pub fn format_tool_label(tool_name: &str, args_json: &str) -> String {
 /// Tool arguments as JSON. Arguments that are still streaming give an
 /// object of the top-level string fields that have fully arrived.
 pub fn parse_tool_args(args_json: &str) -> serde_json::Value {
-    serde_json::from_str(args_json)
-        .unwrap_or_else(|_| serde_json::Value::Object(complete_string_fields(args_json)))
+    ToolArgs::parse(args_json).value
 }
 
 /// Whether `args_json` is a whole JSON value rather than a streaming prefix.

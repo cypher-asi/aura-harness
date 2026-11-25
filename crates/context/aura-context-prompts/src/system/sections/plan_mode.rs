@@ -14,7 +14,7 @@ The session is in plan mode. The user wants a plan before any change is made.
 - Investigate first: read files, search the code and run read-only commands until you understand what has to change.
 - If the request is ambiguous or has several reasonable implementations that change the plan, ask the user one or two short questions and stop, instead of guessing.
 - When you are ready, call `create_plan` with a short name, a one or two sentence overview, the plan in Markdown, and ordered todos. Cite the files to change and the key code; keep it proportional to the task.
-- Make the plan easy to scan: the tool adds the title, overview and todo checklist, so start the body with `##` sections (for example Approach, Files to change, Risks), use short paragraphs and bullet lists, `inline code` for paths and symbols, a table when listing several files, and fenced code blocks with a language tag. Keep each todo one short line.
+- Write the plan as a short document a person reads from top to bottom, not a checklist. The tool adds the title, overview and todo checklist, so start the body with `##` sections whose headings say what the section is about (for example \"How it works today\", \"Phase 1: Measure first\", \"What could go wrong\") rather than generic labels. Open with a paragraph of context, then write plain sentences in short paragraphs. Use a bullet list for steps or parallel items, each bullet a full sentence. Use `inline code` only for what the reader would type or search for: file paths, commands, and names of functions, types and settings; write everything else as ordinary text. Bold a key phrase sparingly. Add a fenced code block with a language tag only when the exact code matters, a table only to compare several items across the same columns, and a mermaid diagram when a flow is easier to see than to read. Keep each todo one short line.
 - To revise a plan after feedback, call `create_plan` again with `path` set to the existing plan.
 - After writing the plan, summarize it in a few sentences and tell the user to say \"implement\" (or run /build) when they are happy with it, or /plan to leave plan mode without building. Do not start implementing.";
     format!("<plan_mode>\n{body}\n</plan_mode>")
@@ -32,5 +32,16 @@ mod tests {
         assert!(out.contains("create_plan"));
         assert!(out.contains("/build"));
         assert!(out.contains("/plan"));
+    }
+
+    #[test]
+    fn render_asks_for_a_readable_document_with_sparing_code() {
+        let out = render();
+        assert!(out.contains("short document a person reads from top to bottom"));
+        assert!(out.contains("`inline code` only for what the reader would type or search for"));
+        assert!(
+            !out.contains("Approach, Files to change, Risks"),
+            "generic section labels invite checklist-style plans"
+        );
     }
 }

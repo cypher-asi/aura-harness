@@ -1,0 +1,97 @@
+{
+  "id": "01a210050dfd0021",
+  "title": "how are we looking here? keep cooking",
+  "state": "completed",
+  "agent_id": "4efea89ca948413e47fea770455d4e1e3e3522aaad72b1b5a66323a2ad110d07",
+  "agent_name": "Agent 1557",
+  "plan": ".aura/plans/channels-persistent-channels-with-a-coordinator_5fa9dc49.plan.md",
+  "builds": true,
+  "items": [
+    {
+      "content": "Add AgentStore (agents, projects, registry_meta CFs) with fault hook",
+      "state": "completed",
+      "assignee": "tests"
+    },
+    {
+      "content": "Back AgentRegistry with AgentStore: diff persist, positions, id links",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Open store first; one-batch agents.json import and rename",
+      "state": "completed",
+      "assignee": "tests"
+    },
+    {
+      "content": "Add ChannelStore (channels, channel_members, channel_posts) with atomic create",
+      "state": "completed",
+      "assignee": "tests"
+    },
+    {
+      "content": "Seed coordinator.md; create_channel in one batch; prompt block",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Inherit channel membership on all parent spawn paths",
+      "state": "completed",
+      "assignee": "rust-engineer",
+      "task": "01a21017bae50024"
+    },
+    {
+      "content": "Add channel UiEvents, UiCommands and ChannelSummary",
+      "state": "completed",
+      "assignee": "implement",
+      "task": "01a2101ba6510026"
+    },
+    {
+      "content": "Wire stores into harness, record_loader and send_channel",
+      "state": "completed",
+      "assignee": "rust-engineer",
+      "task": "01a21023623f0029"
+    },
+    {
+      "content": "Member @mention routing, posts and coordinator summary",
+      "state": "completed",
+      "assignee": "rust-engineer",
+      "task": "01a2102b5064002b"
+    },
+    {
+      "content": "AgentsTab::Channels first; channel list and open-channel panel",
+      "state": "completed",
+      "assignee": "rust-engineer",
+      "task": "01a21039ee6e0030"
+    },
+    {
+      "content": "Tall right panel with channel PROJECTS tab",
+      "state": "completed",
+      "assignee": "rust-engineer",
+      "task": "01a21041ed780031"
+    },
+    {
+      "content": "Chat header, post blocks, member-first @ picker",
+      "state": "completed",
+      "assignee": "tests",
+      "task": "01a21053e41b0035"
+    },
+    {
+      "content": "New-channel form and link/unlink project menu",
+      "state": "completed",
+      "assignee": "rust-engineer",
+      "task": "01a2105f1dbd0039"
+    },
+    {
+      "content": "Run fmt, clippy -D warnings, tests, aura-desktop check",
+      "state": "completed",
+      "assignee": "rust-engineer",
+      "task": "01a2107a7e460042"
+    },
+    {
+      "content": "Commit Part 1 and Part 2 on channels branch",
+      "state": "completed"
+    }
+  ],
+  "summary": "All 111 pass, so the coordinator step is done. Moving on to membership on spawn.",
+  "updated_ms": 1795574288390,
+  "created_ms": 1795565096445
+}

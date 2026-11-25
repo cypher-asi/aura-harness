@@ -1,0 +1,14 @@
+{
+  "id": "01a20f48603f0012",
+  "title": "Repo /home/n3o/code/aura-harness, crate `crates/ui/aura-ui-terminal`. Other people are editing unrelated parts of this …",
+  "state": "completed",
+  "agent_id": "dfdf77ee275e060f72856e6fc495fba09b0c7d73b7ce5e88bcc26e267cbf569e",
+  "agent_name": "rust-engineer #108",
+  "assignee": "rust-engineer",
+  "parent": "01a20f3683f6000c",
+  "items": [],
+  "summary": "Clicking an archived agent or pressing Enter on it in the Archive tab now opens its chat on the right and stays on the Archive. It no longer unarchives. Unarchiving only happens through the right-click \"Unarchive\" item (unchanged) or the new `/unarchive` command. The focused tests and clippy both pass.",
+  "updated_ms": 1795553246210,
+  "created_ms": 1795552731199,
+  "tool_use_id": "toolu_01AyJgWGW94FvBJvMViNtRtw"
+}

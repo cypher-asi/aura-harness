@@ -1,0 +1,14 @@
+{
+  "id": "01a20f2bf0970006",
+  "title": "Fix how tasks are recorded so the TASKS side tab can be organized. The fixes are in `crates/surface/aura-app` (mainly `…",
+  "state": "completed",
+  "agent_id": "fe19558b1697742b2bc06d21add963278171be6d08dd09a992b71efbabb961a4",
+  "agent_name": "rust-engineer #100",
+  "assignee": "rust-engineer",
+  "parent": "01a20f2a1bef0004",
+  "items": [],
+  "summary": "Everything is coded and `cargo build -p aura-app --tests` succeeds, but I ran out of time before the gate. Tests, clippy and rustfmt have not been run, and the end-to-end test for follow-up requests (item 2) is not written.",
+  "updated_ms": 1795551280983,
+  "created_ms": 1795550867607,
+  "tool_use_id": "toolu_01FKqVRdu2oUKKyz8yqpZKxR"
+}

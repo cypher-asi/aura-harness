@@ -433,9 +433,9 @@ fn line_texts(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
 #[test]
 fn roster_rows_end_in_their_abbreviation_lined_up_at_the_far_right() {
     let mut app = roster_app(&[
-        ("rust-engineer", Some("RE")),
+        ("rust-engineer", Some("REN")),
         ("reviewer", Some("REV")),
-        ("explorer", Some("EX")),
+        ("explorer", Some("EXP")),
     ]);
     let rows = render_rows(&mut app, 120);
     // The panel's text from just after the name to its right border.
@@ -445,9 +445,9 @@ fn roster_rows_end_in_their_abbreviation_lined_up_at_the_far_right() {
         after[..after.find('│').expect("border")].to_string()
     };
     for (name, abbreviation) in [
-        ("rust-engineer", "RE "),
+        ("rust-engineer", "REN"),
         ("reviewer", "REV"),
-        ("explorer", "EX "),
+        ("explorer", "EXP"),
     ] {
         let end = end_of(name);
         assert!(
@@ -476,7 +476,7 @@ fn roster_rows_end_in_their_abbreviation_lined_up_at_the_far_right() {
     // selected first row as on the others.
     let theme = test_theme();
     let buffer = render_buffer(&mut app, 120);
-    for (name, abbreviation) in [("rust-engineer", "RE"), ("explorer", "EX")] {
+    for (name, abbreviation) in [("rust-engineer", "REN"), ("explorer", "EXP")] {
         let line = row_of(&buffer, name);
         let (_, cell) = find_cell(&buffer, line, &format!("{abbreviation} ")).unwrap();
         let (_, at) = find_cell(&buffer, line, "@").unwrap();
@@ -493,7 +493,7 @@ fn roster_rows_end_in_their_abbreviation_lined_up_at_the_far_right() {
 #[test]
 fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
     use crate::animation::AURA_WIDTH;
-    let app = roster_app(&[("rust-engineer", Some("RE")), ("reviewer", Some("REV"))]);
+    let app = roster_app(&[("rust-engineer", Some("REN")), ("reviewer", Some("REV"))]);
     let theme = test_theme();
     // ` `, the icon column and its pad, then ` REV `.
     let around = 1 + AURA_WIDTH + 1 + 5;
@@ -508,7 +508,7 @@ fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
             panic!("{texts:?}");
         };
         if width >= around + 4 {
-            assert!(engineer.ends_with(" RE  "), "{engineer:?}");
+            assert!(engineer.ends_with(" REN "), "{engineer:?}");
             assert!(reviewer.ends_with(" REV "), "{reviewer:?}");
             assert!(
                 engineer.contains("rust-engineer") || engineer.contains('…'),
@@ -2086,11 +2086,9 @@ fn test_agent_space_shows_permanent_agents_to_add() {
 }
 
 #[test]
-fn test_header_shows_local_url_and_model_moves_to_the_footer() {
+fn test_header_shows_local_and_model_moves_to_the_footer() {
     let rows = render_with_user(None, 120);
-    assert!(rows[0]
-        .trim_end()
-        .ends_with("● local  http://127.0.0.1:8080"));
+    assert!(rows[0].trim_end().ends_with("● local  ☰"));
     assert!(!rows[0].contains("qwen3:4b"));
 
     let n = rows.len();
@@ -2293,18 +2291,17 @@ fn test_typing_beside_the_stop_button_wraps_before_it() {
 fn test_typed_newlines_grow_the_input_box_a_row_each() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    let theme = test_theme();
     let area = Rect::new(0, 0, 60, 20);
     let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
     let mut app = app_with_model(None);
     type_text(&mut app, "a");
-    assert_eq!(super::input::input_rows(area, &app, &theme, 20), 1);
+    assert_eq!(super::input::input_rows(area, &app, 20), 1);
     for c in ["b", "c"] {
         app.handle_key(shift_enter);
         type_text(&mut app, c);
     }
     assert_eq!(app.input(), "a\nb\nc");
-    assert_eq!(super::input::input_rows(area, &app, &theme, 20), 3);
+    assert_eq!(super::input::input_rows(area, &app, 20), 3);
 
     let (rows, (x, y)) = render_with_cursor(&mut app, 120);
     let n = rows.len();
@@ -2328,7 +2325,7 @@ fn test_typed_newlines_grow_the_input_box_a_row_each() {
 
     // A trailing break opens an empty row with the cursor at its start.
     app.handle_key(shift_enter);
-    assert_eq!(super::input::input_rows(area, &app, &theme, 20), 4);
+    assert_eq!(super::input::input_rows(area, &app, 20), 4);
     let (rows, (x, y)) = render_with_cursor(&mut app, 120);
     let n = rows.len();
     assert!(in_box(&rows[n - 4]).starts_with("│   c "), "{rows:#?}");
@@ -2344,7 +2341,6 @@ fn test_shift_enter_on_an_empty_prompt_grows_the_box() {
     use crate::app::PanelFocus;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    let theme = test_theme();
     let area = Rect::new(0, 0, 60, 20);
     let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
     for focus in [
@@ -2367,18 +2363,18 @@ fn test_shift_enter_on_an_empty_prompt_grows_the_box() {
                 app.handle_key(KeyEvent::from(KeyCode::Tab));
             }
             assert_eq!(app.focus(), focus);
-            assert_eq!(super::input::input_rows(area, &app, &theme, 20), 1);
+            assert_eq!(super::input::input_rows(area, &app, 20), 1);
             let (before, _) = render_with_cursor(&mut app, 120);
 
             app.handle_key(shift_enter);
             assert_eq!(app.input(), "\n", "{focus:?} busy={busy}");
             assert_eq!(
-                super::input::input_rows(area, &app, &theme, 20),
+                super::input::input_rows(area, &app, 20),
                 2,
                 "{focus:?} busy={busy}"
             );
             app.handle_key(shift_enter);
-            assert_eq!(super::input::input_rows(area, &app, &theme, 20), 3);
+            assert_eq!(super::input::input_rows(area, &app, 20), 3);
 
             let (rows, (_, y)) = render_with_cursor(&mut app, 120);
             let divider_row = |rows: &[String]| {
@@ -2419,6 +2415,101 @@ fn render_with_cursor(app: &mut crate::App, width: u16) -> (Vec<String>, (u16, u
         })
         .collect();
     (rows, (cursor.x, cursor.y))
+}
+
+/// A draft of `n` rows, "row 1" to "row n", one per line.
+fn numbered_rows(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("row {i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Whether the screen shows the draft row `row NN`.
+fn shows_row(rows: &[String], i: usize) -> bool {
+    let label = format!("row {i:02}");
+    rows.iter().any(|r| r.contains(&label))
+}
+
+#[test]
+fn test_wheel_scrolls_an_overflowing_input_and_clamps_at_its_ends() {
+    use crossterm::event::MouseEventKind;
+
+    let mut app = app_with_model(None);
+    app.handle_paste(&numbered_rows(20));
+    let rows = render_rows(&mut app, 120);
+    assert!(shows_row(&rows, 20) && !shows_row(&rows, 1), "{rows:#?}");
+    let input = app.areas.input.expect("input drawn");
+    let over = (input.x + 4, input.y);
+    let drawn = app.areas.input_rows.expect("rows recorded");
+    assert!(drawn.total > drawn.visible, "{drawn:?}");
+    let max_top = drawn.total - drawn.visible;
+    assert_eq!(drawn.top, max_top, "follows the cursor on the last row");
+
+    mouse_at(&mut app, MouseEventKind::ScrollUp, over);
+    let (rows, (_, cursor_y)) = render_with_cursor(&mut app, 120);
+    assert_eq!(app.areas.input_rows.map(|r| r.top), Some(max_top - 1));
+    assert!(!shows_row(&rows, 20), "the last row scrolled out");
+    assert_ne!(
+        usize::from(cursor_y),
+        rows.len() - INPUT_FROM_BOTTOM,
+        "the cursor is not drawn on a row it is not on"
+    );
+
+    for _ in 0..30 {
+        mouse_at(&mut app, MouseEventKind::ScrollUp, over);
+    }
+    let rows = render_rows(&mut app, 120);
+    assert_eq!(app.areas.input_rows.map(|r| r.top), Some(0), "clamps at 0");
+    assert!(shows_row(&rows, 1), "{rows:#?}");
+
+    for _ in 0..30 {
+        mouse_at(&mut app, MouseEventKind::ScrollDown, over);
+    }
+    let rows = render_rows(&mut app, 120);
+    assert_eq!(app.areas.input_rows.map(|r| r.top), Some(max_top));
+    assert!(shows_row(&rows, 20), "{rows:#?}");
+    assert_eq!(app.input(), numbered_rows(20), "scrolling leaves the draft");
+}
+
+#[test]
+fn test_typing_after_scrolling_the_input_brings_the_cursor_back() {
+    use crossterm::event::MouseEventKind;
+
+    let mut app = app_with_model(None);
+    app.handle_paste(&numbered_rows(20));
+    render_rows(&mut app, 120);
+    let input = app.areas.input.expect("input drawn");
+    for _ in 0..30 {
+        mouse_at(&mut app, MouseEventKind::ScrollUp, (input.x + 4, input.y));
+    }
+    let rows = render_rows(&mut app, 120);
+    assert!(shows_row(&rows, 1), "{rows:#?}");
+
+    type_text(&mut app, "!");
+    let (rows, (_, cursor_y)) = render_with_cursor(&mut app, 120);
+    assert!(rows.iter().any(|r| r.contains("row 20!")), "{rows:#?}");
+    assert!(!shows_row(&rows, 1), "{rows:#?}");
+    assert_eq!(usize::from(cursor_y), rows.len() - INPUT_FROM_BOTTOM);
+}
+
+#[test]
+fn test_wheel_over_a_short_input_leaves_it_alone() {
+    use crossterm::event::MouseEventKind;
+
+    let mut app = app_with_model(None);
+    type_text(&mut app, "hello");
+    let before = render_rows(&mut app, 120);
+    let input = app.areas.input.expect("input drawn");
+    mouse_at(&mut app, MouseEventKind::ScrollUp, (input.x + 4, input.y));
+    assert_eq!(app.input_scroll_top(), None);
+    let after = render_rows(&mut app, 120);
+    let n = before.len();
+    assert_eq!(
+        before[n - INPUT_FROM_BOTTOM],
+        after[n - INPUT_FROM_BOTTOM],
+        "the input row is unchanged"
+    );
 }
 
 #[test]
@@ -2620,6 +2711,43 @@ fn test_hovered_agent_row_shows_an_archive_button_left_of_its_time() {
     let after = render_rows(&mut app, 120);
     assert_eq!(after[line], before[line]);
     assert_eq!(after[other], before[other]);
+}
+
+#[test]
+fn test_header_hamburger_hides_and_restores_the_right_column() {
+    use crate::app::{HoverTarget, PanelFocus};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = app_with_model(None);
+    app.sandbox_panel_visible = false;
+    app.focus = PanelFocus::Records;
+    let rows = render_rows(&mut app, 120);
+    assert!(rows[0].trim_end().ends_with('☰'), "{:?}", rows[0]);
+    assert!(!rows[0].contains("http://"), "{:?}", rows[0]);
+    let cell = app.side_toggle_area().expect("drawn");
+    let mouse = |kind| MouseEvent {
+        kind,
+        column: cell.x + 1,
+        row: cell.y,
+        modifiers: KeyModifiers::empty(),
+    };
+    app.handle_mouse(mouse(MouseEventKind::Moved));
+    assert_eq!(app.hover(), Some(HoverTarget::SideToggle));
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+    assert!(!app.side_column_shown());
+    assert!(!app.record_panel_visible());
+    assert_eq!(app.focus(), PanelFocus::Chat, "off the hidden panel");
+    let hidden = render_rows(&mut app, 120);
+    assert!(
+        !hidden.iter().any(|row| row.contains("No records yet")),
+        "the Record panel is gone"
+    );
+    assert_eq!(app.side_toggle_area(), Some(cell), "the button stays put");
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+    assert!(app.record_panel_visible(), "the Record panel comes back");
+    assert!(!app.sandbox_panel_visible(), "only what was shown");
 }
 
 #[test]
@@ -3019,9 +3147,7 @@ fn test_notification_uses_the_footer_gap_without_a_right_column() {
 #[test]
 fn test_header_shows_logged_in_user() {
     let rows = render_with_user(Some("alice"), 120);
-    assert!(rows[0]
-        .trim_end()
-        .ends_with("● alice (zOS)  http://127.0.0.1:8080"));
+    assert!(rows[0].trim_end().ends_with("● alice (zOS)  ☰"));
     assert!(!rows[0].contains("local"));
 }
 
@@ -3029,9 +3155,7 @@ fn test_header_shows_logged_in_user() {
 fn test_header_shows_linked_plans_without_zos() {
     let rows = render_rows(&mut app_with_auth(None, &["Claude Max 20x"]), 120);
     assert!(
-        rows[0]
-            .trim_end()
-            .ends_with("● CLAUDE MAX 20X  http://127.0.0.1:8080"),
+        rows[0].trim_end().ends_with("● CLAUDE MAX 20X  ☰"),
         "{:?}",
         rows[0]
     );
@@ -3039,18 +3163,18 @@ fn test_header_shows_linked_plans_without_zos() {
 }
 
 #[test]
-fn test_header_shows_zos_user_and_plans() {
+fn test_header_shows_only_one_sign_in() {
     let rows = render_rows(
         &mut app_with_auth(Some("alice"), &["ChatGPT Pro", "Claude"]),
         120,
     );
     assert!(
-        rows[0]
-            .trim_end()
-            .ends_with("● alice (zOS) · CHATGPT PRO · CLAUDE  http://127.0.0.1:8080"),
+        rows[0].trim_end().ends_with("● alice (zOS)  ☰"),
         "{:?}",
         rows[0]
     );
+    assert!(!rows[0].contains("CHATGPT PRO"), "{:?}", rows[0]);
+    assert!(!rows[0].contains("CLAUDE"), "{:?}", rows[0]);
 }
 
 fn select_model(app: &mut crate::App, id: &str, provider: Option<&str>, route: Option<&str>) {
@@ -3076,37 +3200,31 @@ fn select_model(app: &mut crate::App, id: &str, provider: Option<&str>, route: O
 }
 
 #[test]
-fn test_header_dot_sits_in_front_of_the_plan_serving_the_model() {
+fn test_header_shows_the_sign_in_serving_the_model() {
     let mut app = app_with_auth(Some("alice"), &["Claude Max 20x", "OpenRouter"]);
     let header = |app: &mut crate::App| render_rows(app, 120)[0].trim_end().to_string();
 
     select_model(&mut app, "openrouter/qwen", Some("openrouter"), None);
-    assert!(
-        header(&mut app)
-            .ends_with("alice (zOS) · CLAUDE MAX 20X · ● OPENROUTER  http://127.0.0.1:8080"),
-        "{:?}",
-        header(&mut app)
-    );
+    let shown = header(&mut app);
+    assert!(shown.ends_with("● OPENROUTER  ☰"), "{shown:?}");
+    assert!(!shown.contains("CLAUDE MAX 20X"), "{shown:?}");
+    assert!(!shown.contains("alice"), "{shown:?}");
 
     select_model(&mut app, "claude/claude-sonnet-4-6", Some("claude"), None);
-    assert!(
-        header(&mut app)
-            .ends_with("alice (zOS) · ● CLAUDE MAX 20X · OPENROUTER  http://127.0.0.1:8080"),
-        "{:?}",
-        header(&mut app)
-    );
+    let shown = header(&mut app);
+    assert!(shown.ends_with("● CLAUDE MAX 20X  ☰"), "{shown:?}");
+    assert!(!shown.contains("OPENROUTER"), "{shown:?}");
+    assert!(!shown.contains("alice"), "{shown:?}");
 
     select_model(&mut app, "aura-claude-haiku-4-5", Some("zos"), None);
-    assert!(
-        header(&mut app)
-            .ends_with("● alice (zOS) · CLAUDE MAX 20X · OPENROUTER  http://127.0.0.1:8080"),
-        "{:?}",
-        header(&mut app)
-    );
+    let shown = header(&mut app);
+    assert!(shown.ends_with("● alice (zOS)  ☰"), "{shown:?}");
+    assert!(!shown.contains("CLAUDE MAX 20X"), "{shown:?}");
+    assert!(!shown.contains("OPENROUTER"), "{shown:?}");
 }
 
 #[test]
-fn test_header_dot_follows_gates_pick() {
+fn test_header_follows_gates_pick() {
     let mut app = app_with_auth(Some("alice"), &["Claude Max 20x", "OpenRouter"]);
     select_model(
         &mut app,
@@ -3115,22 +3233,17 @@ fn test_header_dot_follows_gates_pick() {
         Some("claude-sonnet-4-6 (claude plan)"),
     );
     let header = render_rows(&mut app, 120)[0].trim_end().to_string();
-    assert!(
-        header.ends_with("alice (zOS) · ● CLAUDE MAX 20X · OPENROUTER  http://127.0.0.1:8080"),
-        "{header:?}"
-    );
+    assert!(header.ends_with("● CLAUDE MAX 20X  ☰"), "{header:?}");
+    assert!(!header.contains("OPENROUTER"), "{header:?}");
+    assert!(!header.contains("alice"), "{header:?}");
 }
 
 #[test]
-fn test_header_dot_stays_in_front_for_a_local_model() {
+fn test_header_shows_the_first_sign_in_for_a_local_model() {
     let rows = render_rows(&mut app_with_auth(Some("alice"), &["Claude Max 20x"]), 120);
-    assert!(
-        rows[0]
-            .trim_end()
-            .ends_with("● alice (zOS) · CLAUDE MAX 20X  http://127.0.0.1:8080"),
-        "{:?}",
-        rows[0]
-    );
+    let header = rows[0].trim_end();
+    assert!(header.ends_with("● alice (zOS)  ☰"), "{header:?}");
+    assert!(!header.contains("CLAUDE MAX 20X"), "{header:?}");
 }
 
 #[test]
@@ -4862,6 +4975,57 @@ fn test_todo_checklist_and_list() {
 }
 
 #[test]
+fn test_clicking_the_todo_checklist_lists_every_item() {
+    use crate::events::{TodoState, UiCommand};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetTodos(
+        (0..12)
+            .map(|i| todo(&format!("Step {i}"), TodoState::Pending))
+            .collect(),
+    ));
+    submit_message(&mut app, "go on");
+    let click_on = |app: &mut crate::App, needle: &str| {
+        let rows = render_rows(app, 160);
+        let row = rows
+            .iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("{needle:?} not in:\n{}", rows.join("\n")));
+        let column = rows[row]
+            .find(needle.trim())
+            .map_or(0, |at| rows[row][..at].chars().count());
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.handle_mouse(MouseEvent {
+                kind,
+                column: u16::try_from(column).unwrap(),
+                row: u16::try_from(row).unwrap(),
+                modifiers: KeyModifiers::empty(),
+            });
+        }
+    };
+
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("2 more"), "{screen}");
+    assert!(!screen.contains("Step 11"), "{screen}");
+
+    click_on(&mut app, "2 more");
+    assert!(app.todos_expanded());
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("☐ Step 11"), "{screen}");
+    assert!(screen.contains("show less"), "{screen}");
+    assert!(!screen.contains("2 more"), "{screen}");
+
+    click_on(&mut app, "show less");
+    assert!(!app.todos_expanded());
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("2 more"), "{screen}");
+}
+
+#[test]
 fn test_context_and_cost_commands_write_to_the_chat() {
     use crate::events::{CallStats, ContextView, UiCommand};
 
@@ -5475,6 +5639,72 @@ fn clicking_copy_log_copies_the_log_and_says_so() {
     );
 }
 
+#[test]
+fn clicking_a_code_blocks_copy_button_copies_its_code() {
+    use crate::components::{Message, MessageRole};
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let code = "cargo test -p aura-ui-terminal\necho done";
+    let mut app = crate::App::new();
+    app.add_message(Message::new(MessageRole::User, "how do I test it?"));
+    app.add_message(Message::new(
+        MessageRole::Assistant,
+        &format!("Run this:\n\n```bash\n{code}\n```\n\nThen check the output."),
+    ));
+    let buffer = render_buffer(&mut app, 120);
+    let row = row_of(&buffer, "⧉ Copy");
+    let (column, _) = find_cell(&buffer, row, "⧉ Copy").unwrap();
+
+    // Hovering paints the button in the accent.
+    mouse_at(&mut app, MouseEventKind::Moved, (column, row));
+    let buffer = render_buffer(&mut app, 120);
+    let (_, style) = find_cell(&buffer, row, "⧉ Copy").unwrap();
+    assert_eq!(style.fg, Some(test_theme().colors.success));
+
+    mouse_at(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        (column, row),
+    );
+    mouse_at(
+        &mut app,
+        MouseEventKind::Up(MouseButton::Left),
+        (column, row),
+    );
+    assert!(app.copy_pending(), "the click asked for a copy");
+    assert!(app.selection().is_none(), "the click started no selection");
+    let buffer = render_buffer(&mut app, 120);
+    assert_eq!(app.take_copy_text(&buffer).as_deref(), Some(code));
+    app.notify_copied(code.chars().count(), &Ok(()));
+    assert!(app
+        .notification()
+        .is_some_and(|(message, _)| message.contains("Copied the code")));
+}
+
+#[test]
+fn a_copy_button_drawn_over_does_not_copy() {
+    use crate::components::{Message, MessageRole};
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = crate::App::new();
+    app.add_message(Message::new(
+        MessageRole::Assistant,
+        "Run this:\n\n```bash\nls\n```",
+    ));
+    let mut buffer = render_buffer(&mut app, 120);
+    let row = row_of(&buffer, "⧉ Copy");
+    let (column, _) = find_cell(&buffer, row, "⧉ Copy").unwrap();
+    // A menu drawn over the button, as the slash menu is after the chat.
+    buffer.set_string(column, row, "/clear  ", ratatui::style::Style::default());
+    app.drop_covered_code_copies(&buffer);
+    mouse_at(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        (column, row),
+    );
+    assert!(!app.copy_pending(), "nothing to copy under the menu");
+}
+
 // ========================================================================
 // Plan mode badge
 // ========================================================================
@@ -5754,7 +5984,7 @@ fn char_column(row: &str, needle: &str) -> usize {
 #[test]
 fn no_agent_row_shows_a_code_at_the_right_edge() {
     use crate::events::UiCommand;
-    let mut app = app_with_coded_agents(Some("RE36"), Some("AG1"));
+    let mut app = app_with_coded_agents(Some("REN36"), Some("AGE1"));
     app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
 
     let rows = render_rows(&mut app, 120);
@@ -5763,8 +5993,8 @@ fn no_agent_row_shows_a_code_at_the_right_edge() {
     // Neither the root agent nor its spawn shows its code; the time alone
     // ends the row and both names line up.
     assert!(rows[aa].contains(" 3m │"), "{:?}", rows[aa]);
-    assert!(!rows[aa].contains("RE36"), "{:?}", rows[aa]);
-    assert!(!rows[bb].contains("AG1"), "{:?}", rows[bb]);
+    assert!(!rows[aa].contains("REN36"), "{:?}", rows[aa]);
+    assert!(!rows[bb].contains("AGE1"), "{:?}", rows[bb]);
     // The time is the last text before the panel's right border; the
     // agent's code used to sit between them.
     let row = &rows[aa];
@@ -5786,7 +6016,7 @@ fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_the_time
         row: u16::try_from(row).unwrap(),
         modifiers: KeyModifiers::empty(),
     };
-    let mut app = app_with_coded_agents(Some("RE36"), Some("AG1"));
+    let mut app = app_with_coded_agents(Some("REN36"), Some("AGE1"));
 
     let before = render_rows(&mut app, 120);
     let line = line_with(&before, "Terminal Ag");
@@ -5909,7 +6139,7 @@ fn agent_rows_without_codes_are_laid_out_as_before() {
     );
 
     // In the panel, a coded agent gets the same rows as one without.
-    let mut app = app_with_coded_agents(Some("RE36"), Some("AG1"));
+    let mut app = app_with_coded_agents(Some("REN36"), Some("AGE1"));
     let rows = render_rows(&mut app, 120);
     let aa = &rows[line_with(&rows, "Terminal Ag")];
     assert!(aa.contains(" 3m │"), "{aa:?}");
@@ -6160,4 +6390,43 @@ fn test_reply_footer_names_a_lone_sign_in_without_repeating_its_totals() {
         meta.join(" · "),
         "claude-opus-5-5 ×28 · high thinking · 1.6M tok · $0.998 · via Claude plan"
     );
+}
+
+#[test]
+fn a_leading_plan_command_is_drawn_in_the_accent() {
+    let theme = test_theme();
+    let accent = theme.colors.success;
+    let spans = super::input::chat_spans("/plan add @src/a.rs", &theme);
+    assert_eq!(spans[0].content, "/plan");
+    assert_eq!(spans[0].style.fg, Some(accent));
+    assert!(spans[0].style.add_modifier.contains(Modifier::BOLD));
+    assert!(spans[1..].iter().all(|s| s.style.fg != Some(accent)));
+    assert!(spans
+        .iter()
+        .any(|s| s.content == "@src/a.rs" && s.style.add_modifier.contains(Modifier::UNDERLINED)));
+
+    for plain in ["/planner", "/pla", "src/plan", "/build x /plan"] {
+        let spans = super::input::chat_spans(plain, &theme);
+        assert!(spans.iter().all(|s| s.style.fg != Some(accent)), "{plain}");
+    }
+
+    // Anywhere in the draft, each `/plan` word takes the accent.
+    let spans = super::input::chat_spans("fix it /plan then /PLAN", &theme);
+    let lit: Vec<&str> = spans
+        .iter()
+        .filter(|s| s.style.fg == Some(accent))
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert_eq!(lit, ["/plan", "/PLAN"]);
+
+    // On screen, the typed `/plan` takes the accent.
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut app = crate::App::new();
+    for c in "fix it /plan".chars() {
+        app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::empty()));
+    }
+    let buffer = render_buffer(&mut app, 120);
+    let row = row_of(&buffer, "fix it /plan");
+    let (_, slash) = find_cell(&buffer, row, "/plan").unwrap();
+    assert_eq!(slash.fg, Some(accent));
 }

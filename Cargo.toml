@@ -83,6 +83,21 @@ members = [
 [profile.dev]
 debug = 0
 
+# The terminal UI lays out and draws its whole screen on one thread,
+# every frame while anything runs and after every key. Unoptimized, a
+# frame of a long session takes ~10 ms and typing lags behind; with the
+# dependencies optimized (built once, then cached) and the UI crates at
+# opt-level 1 it takes ~2.5 ms, close to a release build, while the UI
+# crates still rebuild quickly. `cargo test` builds with this profile too.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.aura-ui-terminal]
+opt-level = 1
+
+[profile.dev.package.aura-ui]
+opt-level = 1
+
 [profile.test]
 debug = 0
 

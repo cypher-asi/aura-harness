@@ -879,6 +879,17 @@ impl App {
             return KeyResult::continue_running();
         }
 
+        if let Some(message) = super::commands::strip_plan(&text) {
+            // A `/plan` word anywhere sends the rest in plan mode, never
+            // as a build request ("/plan implement auth" asks for a plan).
+            // On its own it enters or leaves plan mode.
+            if message.is_empty() {
+                self.request_plan_toggle();
+                return KeyResult::continue_running();
+            }
+            self.request_plan_mode();
+            return self.send_user_message(message, busy, agent_id);
+        }
         if text.starts_with('/') {
             return self.handle_command(&text);
         }
@@ -886,6 +897,12 @@ impl App {
             self.request_build("");
             return KeyResult::continue_running();
         }
+        self.send_user_message(text, busy, agent_id)
+    }
+
+    /// Show `text` in the chat (or queue it while `busy`) and send it to
+    /// `agent_id`, with any attached images it names.
+    fn send_user_message(&mut self, text: String, busy: bool, agent_id: String) -> KeyResult {
         let (images, previews) = self.take_images(&text);
 
         // A busy agent reads the message before its next step, or once its

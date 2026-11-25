@@ -230,7 +230,7 @@ impl Demo {
             AgentDefinitionSummary {
                 name: "reviewer".into(),
                 description: "Reviews a diff for bugs and missing tests.".into(),
-                abbreviation: Some("RE".into()),
+                abbreviation: Some("REV".into()),
             },
             AgentDefinitionSummary {
                 name: "researcher".into(),

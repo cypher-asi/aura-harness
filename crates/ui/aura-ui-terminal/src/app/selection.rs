@@ -152,6 +152,8 @@ impl Selection {
 
     /// The selected text, one line per row with trailing blanks removed:
     /// rows in view from `buffer`, the others as they were last kept.
+    /// Code block frames are left out and their wrapped lines joined, so
+    /// a command copied from one runs as it is.
     #[must_use]
     pub fn text(&self, buffer: &Buffer) -> String {
         let lines: Vec<String> = self
@@ -185,7 +187,7 @@ impl Selection {
                 line.trim_end().to_string()
             })
             .collect();
-        lines.join("\n")
+        crate::components::unframe_code(&lines).join("\n")
     }
 }
 

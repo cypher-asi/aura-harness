@@ -1,0 +1,14 @@
+{
+  "id": "01a20f4617fa0010",
+  "title": "Update and add tests in `crates/ui/aura-ui-terminal` after a layout change to the TASKS side tab. The production code i…",
+  "state": "completed",
+  "agent_id": "a0e90cf98fb09d506e39092d48d66a875ffb82b7cef0ac0cd17a27f704edd2ca",
+  "agent_name": "rust-engineer #107",
+  "assignee": "rust-engineer",
+  "parent": "01a20f2a1bef0004",
+  "items": [],
+  "summary": "I fixed all 20 failing tests in `crates/ui/aura-ui-terminal` and added the new ones; the last run of `cargo test -p aura-ui-terminal --lib -- tasks side_scope` passed 44 of 44. I didn't change any production code. Out of time, I didn't run the crate's full test suite, and the filtered tests weren't re-run after the final `cargo fmt -p aura-ui-terminal`.",
+  "updated_ms": 1795552997317,
+  "created_ms": 1795552581626,
+  "tool_use_id": "toolu_01JMG3qPk9NqKFVNyunMX8AN"
+}

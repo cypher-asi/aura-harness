@@ -1,0 +1,15 @@
+{
+  "id": "01a2106a9381003d",
+  "title": "Review the `channels` branch in the git worktree /home/n3o/code/aura-harness/.worktrees/channels (read-only; do NOT run…",
+  "state": "completed",
+  "agent_id": "b5a0f9b5673292ccc3c359a8c15d2be7551677941aa8348b87bb2a3a403ac3e6",
+  "agent_name": "reviewer #63",
+  "assignee": "reviewer",
+  "parent": "01a210050dfd0021",
+  "plan": ".aura/plans/channels-persistent-channels-with-a-coordinator_5fa9dc49.plan.md",
+  "items": [],
+  "summary": "I read the branch only; I didn't run cargo. There are two serious problems: removing a project silently drops channel coordinators and members, and the `agents.json` import can be lost on a power cut. Several medium problems are in @mention reply tracking.",
+  "updated_ms": 1795572178474,
+  "created_ms": 1795571749761,
+  "tool_use_id": "toolu_01ULSkwzteVFGKueaJMkzkSU"
+}

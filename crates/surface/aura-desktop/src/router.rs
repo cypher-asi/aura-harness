@@ -186,6 +186,14 @@ impl Tabs {
             .position(|tab| tab.projects.iter().any(|project| project == root))
     }
 
+    /// Whether `agent` is in the Archive, as last listed.
+    fn is_archived(&self, agent: &str) -> bool {
+        matches!(
+            &self.lists[3],
+            Some(UiCommand::SetArchivedAgents(rows)) if rows.iter().any(|row| row.id == agent)
+        )
+    }
+
     /// The tab that gets what the session sends without an address: the
     /// one showing the session's active agent. That is the tab holding it
     /// once it shows it; until then, as right after a project moved, the
@@ -266,7 +274,10 @@ impl Tabs {
         }
         match command {
             UiCommand::SetActiveAgent(agent) => {
-                if self.owner(&agent).is_some() {
+                // An archived agent opened from the Archive is never in a
+                // list of `SetAgents`: waiting for one would hold back its
+                // chat until the next refresh.
+                if self.owner(&agent).is_some() || self.is_archived(&agent) {
                     self.session_switched(agent);
                 } else {
                     // A new agent: the list that names it follows.
@@ -537,7 +548,12 @@ impl Tabs {
         if self.focus_sent.as_deref() == Some(agent.as_str()) {
             self.focus_sent = None;
         }
-        let index = self.owner(&agent).unwrap_or(self.front);
+        // An agent no tab holds, such as an archived one, stays in the tab
+        // showing it rather than following the tab in front.
+        let index = self
+            .owner(&agent)
+            .or_else(|| self.tabs.iter().position(|tab| tab.agent() == agent))
+            .unwrap_or(self.front);
         if self.focus_sent.is_none() && self.front().agent().is_empty() {
             self.front = index;
         }
@@ -1165,6 +1181,34 @@ mod tests {
         switch(&mut tabs, TWO, "a3");
         let _ = sent(&mut events);
         (tabs, events)
+    }
+
+    #[test]
+    fn an_archived_agent_opens_in_the_tab_that_asked_and_nothing_waits_for_it() {
+        let (mut tabs, mut events) = two_tabs();
+        let archive = UiCommand::SetArchivedAgents(vec![AgentSummary {
+            id: "z9".into(),
+            name: "Z9".into(),
+            ..AgentSummary::default()
+        }]);
+        tabs.apply(archive.clone());
+
+        tabs.forward(1, UiEvent::SelectAgent("z9".into()));
+        assert!(sent(&mut events).contains(&r#"SelectAgent("z9")"#.to_string()));
+        // The session's answer, then a refresh of the lists after a turn.
+        tabs.apply(UiCommand::SetActiveAgent("z9".into()));
+        tabs.apply(list(TWO, "z9"));
+        tabs.apply(archive);
+        tabs.apply(UiCommand::SetActiveAgent("z9".into()));
+        assert_eq!(shown(&tabs), ["a1", "z9"]);
+        assert_eq!(tabs.front_index(), 1);
+
+        // What comes next lands at once, in its tab, without waiting for
+        // a list that would name the agent.
+        let before = messages(&tabs);
+        tabs.apply(message("reply"));
+        assert_eq!(messages(&tabs), [before[0], before[1] + 1]);
+        assert_eq!(shown(&tabs), ["a1", "z9"]);
     }
 
     #[test]

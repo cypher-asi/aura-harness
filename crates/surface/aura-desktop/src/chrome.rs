@@ -22,7 +22,7 @@ mod quads;
 
 use crate::geom::{Color, Point, Rectangle, Size};
 use crate::grid::{self, Metrics, Palette};
-use crate::tab_bar::unit;
+use crate::tab_bar::{self, unit};
 use aura_ui_terminal::{Pane, PaneChrome, PaneSplits, PaneTab, SideScope};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -61,6 +61,9 @@ pub enum Hit {
     /// The rest of a title bar
     Bar(Pane),
     Divider(Divider),
+    /// The hamburger box under the window's close box, which hides or
+    /// shows the right column
+    SideToggle,
 }
 
 /// What the bars show, and where the grid sits.
@@ -70,6 +73,10 @@ pub struct Model {
     /// Whether an overlay covers any bar, which then leaves the dividers
     /// alone too
     pub covered: bool,
+    /// When the header row keeps the hamburger button's cells blank for
+    /// the front end to draw, and nothing covers them: the columns left
+    /// and right of every panel, which the window's boxes line up with
+    pub side_toggle: Option<(u16, u16)>,
     /// Top-left corner of the grid
     pub origin: Point,
     pub metrics: Metrics,
@@ -78,22 +85,42 @@ pub struct Model {
 
 impl Model {
     /// The bars in `panes` that `buffer` still shows empty: an overlay
-    /// drawn over a bar keeps it.
-    pub fn new(panes: &[PaneChrome], buffer: &Buffer, at: (Point, Metrics, Palette)) -> Self {
+    /// drawn over a bar keeps it. `side_toggle` is where the header keeps
+    /// the hamburger button's cells, if it does.
+    pub fn new(
+        panes: &[PaneChrome],
+        side_toggle: Option<Rect>,
+        buffer: &Buffer,
+        at: (Point, Metrics, Palette),
+    ) -> Self {
         let (origin, metrics, palette) = at;
         let shown: Vec<PaneChrome> = panes
             .iter()
             .filter(|pane| is_empty(pane.bar, buffer))
             .cloned()
             .collect();
+        let edges = panes
+            .iter()
+            .map(|pane| pane.area.x)
+            .min()
+            .zip(panes.iter().map(|pane| pane.area.right()).max());
+        let side_toggle =
+            edges.filter(|_| side_toggle.is_some_and(|cells| is_blank(cells, buffer)));
         Self {
             covered: shown.len() < panes.len(),
             panes: shown,
+            side_toggle,
             origin,
             metrics,
             palette,
         }
     }
+}
+
+/// Whether every cell of `area` is blank.
+fn is_blank(area: Rect, buffer: &Buffer) -> bool {
+    area.positions()
+        .all(|at| buffer.cell(at).is_some_and(|cell| cell.symbol() == " "))
 }
 
 /// Whether a bar's rows hold only its frame.
@@ -163,6 +190,8 @@ pub struct Layout {
     /// Where the panels are, in cells: left, right, and the right
     /// column's top and bottom
     span: (u16, u16, u16, u16),
+    /// The hamburger box, when the header has the button
+    side_toggle: Option<Rectangle>,
 }
 
 impl Layout {
@@ -245,13 +274,24 @@ impl Layout {
                 }
             }
         }
-        Self { bars, bands, span }
+        let side_toggle = model
+            .side_toggle
+            .map(|(left, right)| side_toggle_box(model, left, right));
+        Self {
+            bars,
+            bands,
+            span,
+            side_toggle,
+        }
     }
 
     /// Dividers win over the bars they cross.
     pub fn hit(&self, at: Point) -> Option<Hit> {
         if let Some(band) = self.bands.iter().find(|band| band.rect.contains(at)) {
             return Some(Hit::Divider(band.divider));
+        }
+        if self.side_toggle.is_some_and(|rect| rect.contains(at)) {
+            return Some(Hit::SideToggle);
         }
         let bar = self.bars.iter().find(|bar| bar.rect.contains(at))?;
         if bar.close.is_some_and(|close| close.contains(at)) {
@@ -269,6 +309,23 @@ impl Layout {
         });
         Some(tab.map_or(Hit::Bar(bar.pane), Hit::Tab))
     }
+}
+
+/// The hamburger box: as big as the window's close box and right under
+/// it, its right edge on the close box's (see the tab bar's model in
+/// `shell.rs`, which lines its boxes up with the panels' outer borders
+/// from column `left` to `right`), and centered on the header row, in
+/// the half cell above it and the half below that the border of the
+/// panels' tops leaves.
+fn side_toggle_box(model: &Model, left: u16, right: u16) -> Rectangle {
+    let cell = model.metrics.cell;
+    let side = tab_bar::box_height(&model.metrics);
+    let bar_x = (model.origin.x + (f32::from(left) + 0.5) * cell.width).round();
+    let end =
+        (bar_x + f32::from(right.saturating_sub(left).saturating_sub(1)) * cell.width).round();
+    let x = (end - side).round();
+    let top = (model.origin.y + (cell.height - side) / 2.0).round();
+    Rectangle::new(Point::new(x, top), Size::new(end - x, side))
 }
 
 /// The boxes of one bar, packed from the left; short labels when the
@@ -472,6 +529,12 @@ impl Chrome {
         bar.scope.map(|(rect, _)| rect)
     }
 
+    /// The hamburger box under the window's close box, if it is drawn.
+    #[cfg(test)]
+    pub const fn side_toggle_box(&self) -> Option<Rectangle> {
+        self.layout.side_toggle
+    }
+
     /// The middle of the band of `divider`, if there is one.
     #[cfg(test)]
     pub fn band(&self, divider: Divider) -> Option<Point> {
@@ -518,6 +581,7 @@ mod tests {
         Model {
             panes,
             covered: false,
+            side_toggle: None,
             origin: Point::new(6.0, 6.0),
             metrics: Metrics::new(14.0),
             palette: Palette::from_theme(&aura_ui_terminal::Theme::by_name("cyber")),
@@ -772,13 +836,13 @@ mod tests {
         let Model { panes, palette, .. } = four_panes();
         let at = (Point::default(), Metrics::new(14.0), palette);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 140, 40));
-        let model = Model::new(&panes, &buffer, at);
+        let model = Model::new(&panes, None, &buffer, at);
         assert_eq!(model.panes.len(), 4);
         assert!(!model.covered);
         assert_eq!(Layout::of(&model).bands.len(), 3);
 
         buffer.set_string(50, 1, "Approve?", ratatui::style::Style::default());
-        let model = Model::new(&panes, &buffer, at);
+        let model = Model::new(&panes, None, &buffer, at);
         let left: Vec<Pane> = model.panes.iter().map(|p| p.pane).collect();
         assert_eq!(left, [Pane::Agents, Pane::Records, Pane::Side]);
         assert!(model.covered);

@@ -1,0 +1,75 @@
+{
+  "id": "01a20fc89ad6000e",
+  "title": "Implement the plan in `.aura/plans/channels-persistent-channels-with-a-coordinator_5fa9dc49.plan.md`. Read it first. Yo…",
+  "state": "cancelled",
+  "agent_id": "4efea89ca948413e47fea770455d4e1e3e3522aaad72b1b5a66323a2ad110d07",
+  "agent_name": "Agent 1557",
+  "plan": ".aura/plans/channels-persistent-channels-with-a-coordinator_5fa9dc49.plan.md",
+  "builds": true,
+  "items": [
+    {
+      "content": "Add AgentStore (agents, projects, registry_meta CFs) with fault hook",
+      "state": "pending",
+      "assignee": "rust-engineer",
+      "task": "01a20fd23fe90012"
+    },
+    {
+      "content": "Back AgentRegistry with AgentStore: diff persist, positions, id links",
+      "state": "pending"
+    },
+    {
+      "content": "Open store first; one-batch agents.json import and rename",
+      "state": "pending"
+    },
+    {
+      "content": "Add ChannelStore (channels, channel_members, channel_posts) with atomic create",
+      "state": "pending"
+    },
+    {
+      "content": "Seed coordinator.md; create_channel in one batch; prompt block",
+      "state": "pending"
+    },
+    {
+      "content": "Inherit channel membership on all parent spawn paths",
+      "state": "pending"
+    },
+    {
+      "content": "Add channel UiEvents, UiCommands and ChannelSummary",
+      "state": "pending"
+    },
+    {
+      "content": "Wire stores into harness, record_loader and send_channel",
+      "state": "pending"
+    },
+    {
+      "content": "Member @mention routing, posts and coordinator summary",
+      "state": "pending"
+    },
+    {
+      "content": "AgentsTab::Channels first; channel list and open-channel panel",
+      "state": "pending"
+    },
+    {
+      "content": "Tall right panel with channel PROJECTS tab",
+      "state": "pending"
+    },
+    {
+      "content": "Chat header, post blocks, member-first @ picker",
+      "state": "pending"
+    },
+    {
+      "content": "New-channel form and link/unlink project menu",
+      "state": "pending"
+    },
+    {
+      "content": "Run fmt, clippy -D warnings, tests, aura-desktop check",
+      "state": "pending"
+    },
+    {
+      "content": "Commit Part 1 and Part 2 on channels branch",
+      "state": "pending"
+    }
+  ],
+  "updated_ms": 1795562633926,
+  "created_ms": 1795561134806
+}

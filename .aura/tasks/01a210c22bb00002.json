@@ -1,0 +1,12 @@
+{
+  "id": "01a210c22bb00002",
+  "title": "make plans more like a readable document. [image 1] use regular body text with console text where necessary. Sharing cu…",
+  "state": "completed",
+  "agent_id": "33ee2dc7572ef19e8a099f745c184c49b356894aa013a8bce77b1e51f50596ff",
+  "agent_name": "Agent 1595",
+  "plan": ".aura/plans/plans-that-read-like-a-document_c365dfec.plan.md",
+  "items": [],
+  "summary": "I wrote the plan to `.aura/plans/plans-that-read-like-a-document_c365dfec.plan.md`, and wrote it in the new style so you can see what it would produce.",
+  "updated_ms": 1795577569754,
+  "created_ms": 1795577490352
+}

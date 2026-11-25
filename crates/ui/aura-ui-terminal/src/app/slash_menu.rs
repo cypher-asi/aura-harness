@@ -66,6 +66,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("log", "Show this agent's run log and where log.json is stored"),
     command("project", "Show the current project's folder and agents"),
     command("archive", "Move the current agent to the Archive"),
+    command("unarchive", "Move the current agent back from the Archive"),
     command("remove-project", "Remove the current project from the list"),
     command("clear", "Clear messages"),
     command("context", "Show what fills the context window"),
@@ -120,7 +121,12 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show or set how much the model thinks",
         needs_args: false,
     },
-    command("plan", "Enter plan mode, or leave it"),
+    SlashCommand {
+        name: "plan",
+        args: "[message]",
+        description: "Enter or leave plan mode; anywhere in a message, send it in plan mode",
+        needs_args: false,
+    },
     SlashCommand {
         name: "build",
         args: "[plan path]",

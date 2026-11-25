@@ -589,11 +589,20 @@ async fn stop_busy(state: &mut LoopState<'_>, agents: &[AgentId]) -> Vec<String>
 /// After agents left the list, show the one the registry opens now if the
 /// active agent was among them; otherwise just refresh the list.
 async fn after_list_shrank(state: &mut LoopState<'_>, gone: &[AgentId]) {
+    let next = gone.contains(&state.active).then(|| {
+        // The lists mark the stored active agent even when it is archived,
+        // so the next one is stored first for them to mark it.
+        let mut registry = lock(&state.hub.registry);
+        let next = registry.active().agent_id();
+        if let Err(e) = registry.set_active(next) {
+            warn!(agent_id = %next, error = %e, "Could not save the active agent");
+        }
+        next
+    });
     // The agents leave the list at once; opening the next one can take a
     // while when it has a long record.
     state.hub.send_agent_list().await;
-    if gone.contains(&state.active) {
-        let next = lock(&state.hub.registry).active().agent_id();
+    if let Some(next) = next {
         activate_agent(state, next, Chat::Reload).await;
     }
 }

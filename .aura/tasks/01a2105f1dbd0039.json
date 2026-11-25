@@ -1,0 +1,16 @@
+{
+  "id": "01a2105f1dbd0039",
+  "title": "Work ONLY in /home/n3o/code/aura-harness/.worktrees/channels (git worktree, branch `channels`). Don't touch anything ou…",
+  "state": "completed",
+  "agent_id": "265281b469d67b0b1e51a27c697799c9039c7d0021f6d880c77511ebf575abdb",
+  "agent_name": "rust-engineer #132",
+  "assignee": "rust-engineer",
+  "parent": "01a210050dfd0021",
+  "plan": ".aura/plans/channels-persistent-channels-with-a-coordinator_5fa9dc49.plan.md",
+  "plan_todo": "create-form",
+  "items": [],
+  "summary": "The new-channel form and the Channels-tab context menu are built and wired in, but I ran out of time before the full checks. Only the filtered run `timeout 400 cargo test -p aura-ui-terminal --lib channel` ran, and all 24 tests it picked up passed. That filter missed one of my new tests, `test_link_project_lists_unlinked_projects_and_sends_link_project`, so the `LinkProject` path has never been r…",
+  "updated_ms": 1795571522212,
+  "created_ms": 1795570998717,
+  "tool_use_id": "toolu_012tEnShFCbKkHtFb2Wtd4h4"
+}

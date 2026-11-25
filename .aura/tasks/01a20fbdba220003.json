@@ -1,0 +1,14 @@
+{
+  "id": "01a20fbdba220003",
+  "title": "Repo /home/n3o/code/aura-harness, crate crates/ui/aura-ui-terminal (ratatui TUI). Do NOT edit files. Read-only audit, b…",
+  "state": "completed",
+  "agent_id": "3c4c8b9a3b533d98d9d449b72801e26349b86bf9c872c3b2462b0876fe3dd35e",
+  "agent_name": "explorer #60",
+  "assignee": "explorer",
+  "parent": "01a20fbcc2440001",
+  "items": [],
+  "summary": "I didn't find anything per keystroke whose cost grows with records, the file tree or chat line count. The chat panel, your main suspect, is not it: `render_chat_lines` (`panels.rs:274`) never concatenates lines, never clones off-screen lines, and never gives ratatui a full-history Paragraph. It skips blocks above the viewport (`panels.rs:365`), clones only visible rows (`:376-387`), and builds th…",
+  "updated_ms": 1795560841695,
+  "created_ms": 1795560421922,
+  "tool_use_id": "toolu_01A5NMTwmJEtEiGDTVisANET"
+}

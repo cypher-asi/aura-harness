@@ -1,0 +1,13 @@
+{
+  "id": "01a210c2af9d0003",
+  "title": "did we run the test? let's run the test to launch some cloud vms",
+  "state": "completed",
+  "agent_id": "45fd8023a4d5f78ba21e1580c29ba9b0a2a5b0378a8178809c11ec6417c1adb0",
+  "agent_name": "Agent 1524",
+  "plan": ".aura/plans/cloud-agents-on-your-model-plans-claude-max-chat_637dd4bc.plan.md",
+  "builds": true,
+  "items": [],
+  "summary": "Yes, we ran both live tests in the last step and both passed, but each one destroys its machine when it finishes, which is why `boxd machine list` shows nothing now. I'll run them again and also launch several machines in parallel, since running many at once is the point.",
+  "updated_ms": 1795578642624,
+  "created_ms": 1795577524125
+}
