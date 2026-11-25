@@ -77,6 +77,42 @@ pub struct WorkspacePatch {
     pub files: Vec<String>,
 }
 
+/// How a cloud node calls one plan provider for its owner. The bearer is
+/// a boxd host-bound placeholder (`bxds_...`) the node reads from its own
+/// environment variable `env`; boxd's egress proxy puts the owner's real
+/// token in on the way to the provider. Never a real token.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanTemplate {
+    /// Provider id (`claude`, `chatgpt`, `openrouter`).
+    pub provider: String,
+    /// Environment variable holding the placeholder (the boxd secret's
+    /// name).
+    pub env: String,
+    /// Extra headers the provider requires.
+    #[serde(default)]
+    pub headers: Vec<(String, String)>,
+    /// Text the provider requires at the start of the system prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_preamble: Option<String>,
+    /// The placeholder, filled in on the machine by `aura node claim`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+}
+
+impl std::fmt::Debug for PlanTemplate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlanTemplate")
+            .field("provider", &self.provider)
+            .field("env", &self.env)
+            .field("headers", &self.headers.len())
+            .field("placeholder", &self.placeholder.is_some())
+            .finish()
+    }
+}
+
+/// Prefix of every boxd placeholder for a host-bound secret.
+pub const PLACEHOLDER_PREFIX: &str = "bxds_";
+
 /// What the hub tells a node when it takes it over (`claim`, on a
 /// machine made from a snapshot) or after a fork (`rebind`). Sent over
 /// boxd's authenticated `Exec`, never over the public domain.
@@ -92,12 +128,27 @@ pub struct NodeClaim {
     /// agents), hex ids.
     #[serde(default)]
     pub seal: Vec<String>,
+    /// Owner tag of the user the machine belongs to; never a user id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// How the node calls its owner's plans; placeholders are filled on
+    /// the machine.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plans: Vec<PlanTemplate>,
 }
 
 impl std::fmt::Display for NodeClaim {
     /// Never shows the tokens.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NodeClaim({}, seal {})", self.node_id, self.seal.len())
+        let plans: Vec<&str> = self.plans.iter().map(|p| p.provider.as_str()).collect();
+        write!(
+            f,
+            "NodeClaim({}, owner {}, plans [{}], seal {})",
+            self.node_id,
+            self.owner.as_deref().unwrap_or("-"),
+            plans.join(","),
+            self.seal.len()
+        )
     }
 }
 
@@ -123,9 +174,23 @@ mod tests {
             node_token: "node-secret-123".into(),
             mesh_token: "mesh-secret-456".into(),
             seal: vec!["aa".into()],
+            owner: Some("a11ce000".into()),
+            plans: vec![PlanTemplate {
+                provider: "claude".into(),
+                env: "AURA_A11CE000_INST01_CLAUDE".into(),
+                headers: vec![("anthropic-beta".into(), "oauth-2025-04-20".into())],
+                system_preamble: None,
+                placeholder: Some("bxds_secret-placeholder".into()),
+            }],
         };
         let text = claim.to_string();
         assert!(!text.contains("secret"), "{text}");
+        assert!(
+            text.contains("owner a11ce000") && text.contains("plans [claude]"),
+            "{text}"
+        );
+        let debug = format!("{:?}", claim.plans[0]);
+        assert!(!debug.contains("bxds_"), "{debug}");
         let json = serde_json::to_string(&claim).expect("json");
         assert_eq!(
             serde_json::from_str::<NodeClaim>(&json).expect("parse"),

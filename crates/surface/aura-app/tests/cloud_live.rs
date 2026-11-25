@@ -108,6 +108,8 @@ async fn an_agent_moves_to_the_cloud_works_there_and_comes_back() {
             project_dir: dir.clone(),
             build_command: None,
             fork_from: None,
+            owner: aura_app::cloud::hub::Owner::Local,
+            owner_name: None,
         })
         .await;
     let view = match placed {
@@ -174,4 +176,135 @@ async fn an_agent_moves_to_the_cloud_works_there_and_comes_back() {
         "the machine is destroyed"
     );
     println!("round trip done in {:?}", started.elapsed());
+}
+
+/// A small model per plan, for one cheap turn.
+fn plan_model(kind: aura_core_auth::ProviderKind) -> &'static str {
+    match kind {
+        aura_core_auth::ProviderKind::Claude => "claude/claude-haiku-4-5",
+        aura_core_auth::ProviderKind::Chatgpt => "chatgpt/gpt-5-mini",
+        _ => "openrouter/openai/gpt-4o-mini",
+    }
+}
+
+/// One real turn on each plan linked here, run on a cloud machine that
+/// holds only boxd placeholders for the tokens. Ignored by default; it
+/// needs `BOXD_API_KEY`, at least one plan linked here (`aura login
+/// claude`), and `AURA_CLOUD_TEST_BINARY` built from this tree.
+#[tokio::test]
+#[ignore = "runs real plan turns on a boxd machine; needs BOXD_API_KEY and a linked plan"]
+async fn a_cloud_agent_answers_on_each_linked_plan() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("info,aura_engine_cloud=debug,aura_app=debug")
+        .try_init();
+    let _ = aura_config::env_file::load();
+    let config = aura_config::CloudConfig::from_env().expect("cloud settings");
+    assert!(
+        config.is_configured(),
+        "{}",
+        aura_config::MISSING_CREDENTIAL_NOTICE
+    );
+    let binary =
+        PathBuf::from(std::env::var("AURA_CLOUD_TEST_BINARY").expect("set AURA_CLOUD_TEST_BINARY"));
+    let auth = Arc::new(aura_auth::AuthManager::new().expect("auth"));
+    let owner = auth.owner();
+    let linked = auth.linked_plans(&owner);
+    if linked.is_empty() {
+        println!("no plan linked here; link one with `aura login claude` to run this test");
+        return;
+    }
+
+    let home = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../aura_data/cloud-live");
+    std::fs::create_dir_all(&home).expect("home");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let dir = project(scratch.path());
+    let store: Arc<dyn Store> =
+        Arc::new(RocksStore::open(scratch.path().join("db"), false).expect("store"));
+    let agent = AgentId::generate();
+    let entry =
+        RecordEntry::builder(1, Transaction::user_prompt(agent, "hello from local")).build();
+    aura_store_db::WriteStore::append_entry_direct(store.as_ref(), agent, 1, &entry)
+        .expect("seed record");
+    let provider = Arc::new(aura_engine_cloud::BoxdProvider::from_config(&config).expect("boxd"));
+    let hub = CloudHub::new(
+        config,
+        Arc::clone(&store),
+        home,
+        provider,
+        AuraBinary::Upload(binary),
+    )
+    .expect("hub");
+    hub.set_current_owner(owner.clone());
+    hub.set_plan_credentials(Arc::new(aura_app::cloud::plans::VaultPlans(Arc::clone(
+        &auth,
+    ))));
+    let view = hub
+        .place(PlaceRequest {
+            agent,
+            agent_zns: format!("0://test/cloud-plans/{}", &agent.to_hex()[..8]),
+            name: "cloud plans".into(),
+            code: Some("CP1".into()),
+            project_id: "cloud-live-hello".into(),
+            project_dir: dir,
+            build_command: None,
+            fork_from: None,
+            owner: owner.clone(),
+            owner_name: None,
+        })
+        .await
+        .expect("place");
+    println!("placed on {}", view.machine.name);
+
+    let result = async {
+        // The machine sees only placeholders for its owner's plan secrets.
+        let env = hub
+            .exec(
+                agent,
+                "env | grep '^AURA_.*_\\(CLAUDE\\|CHATGPT\\|OPENROUTER\\)=' || true",
+            )
+            .await?;
+        let text = env.stdout_text();
+        println!("plan secrets on the machine: {}", text.lines().count());
+        for line in text.lines() {
+            let value = line.split_once('=').map_or("", |(_, v)| v);
+            assert!(
+                value.starts_with("bxds_"),
+                "a real value reached the machine: {}",
+                line.split('=').next().unwrap_or("")
+            );
+        }
+        let mut answers = Vec::new();
+        for kind in &linked {
+            let mut rx = hub.run_turn(
+                agent,
+                "Reply with the single word: pong".into(),
+                Some(plan_model(*kind).into()),
+                None,
+                tokio_util::sync::CancellationToken::new(),
+            );
+            let mut reply = String::new();
+            let mut failed = None;
+            while let Some(event) = rx.recv().await {
+                match event {
+                    aura_app::cloud::RemoteEvent::Text(text) => reply.push_str(&text),
+                    aura_app::cloud::RemoteEvent::Failed(err) => failed = Some(err),
+                    aura_app::cloud::RemoteEvent::Done { .. } => break,
+                    _ => {}
+                }
+            }
+            println!("{}: {reply:?} {failed:?}", kind.id());
+            answers.push((*kind, reply, failed));
+        }
+        Ok::<_, aura_engine_cloud::CloudError>(answers)
+    }
+    .await;
+    let _ = hub.fleet().destroy(&agent.to_hex(), "live test done").await;
+    for (kind, reply, failed) in result.expect("cloud turns") {
+        assert!(failed.is_none(), "{} turn failed: {failed:?}", kind.id());
+        assert!(
+            reply.to_ascii_lowercase().contains("pong"),
+            "{}: {reply:?}",
+            kind.id()
+        );
+    }
 }

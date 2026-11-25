@@ -633,6 +633,8 @@ mod tests {
                 node_token: NODE_TOKEN.into(),
                 mesh_token: "mesh-token-for-tests-0123".into(),
                 seal: Vec::new(),
+                owner: None,
+                plans: Vec::new(),
             },
             8080,
         );

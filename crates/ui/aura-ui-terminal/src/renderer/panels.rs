@@ -1265,10 +1265,24 @@ fn build_swarm_lines<'a>(
                     (button, color)
                 });
                 let buttons: &[_] = if pointer_on_row { &buttons } else { &[] };
-                let badge = agent.plan_mode.then_some(RowBadge {
-                    text: PLAN_BADGE,
-                    color: theme.colors.success,
-                });
+                // Plan mode wins the badge; otherwise a cloud agent shows
+                // a cloud, dimmed with its owner's name for another user's.
+                let cloud = app.cloud_badge(&agent.id);
+                let badge = if agent.plan_mode {
+                    Some(RowBadge {
+                        text: PLAN_BADGE,
+                        color: theme.colors.success,
+                    })
+                } else {
+                    cloud.as_ref().map(|(text, foreign)| RowBadge {
+                        text,
+                        color: if *foreign {
+                            theme.colors.faint
+                        } else {
+                            theme.colors.primary
+                        },
+                    })
+                };
                 let end = AgentRowEnd::agent(ago.as_deref());
                 lines.push(tree_row(
                     width,

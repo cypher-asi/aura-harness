@@ -53,6 +53,7 @@ async fn record_auth_change(state: &LoopState<'_>, payload: serde_json::Value) {
 /// current model lost its sign-in. Gate's candidates follow the new
 /// sign-ins.
 async fn publish_auth(state: &mut LoopState<'_>) {
+    super::cloud::on_auth_change(state);
     let summary = auth_summary(
         &state.auth,
         state.agent_loop.config_mut().auth_token.as_deref(),

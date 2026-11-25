@@ -126,6 +126,11 @@ fn host_lines(view: &HostView, project: bool, theme: &Theme) -> Vec<Line<'static
             } else {
                 format!(" · {} · {}", row.per_hour, row.total)
             };
+            let owner = row
+                .owner
+                .as_ref()
+                .map(|owner| format!(" · {owner}"))
+                .unwrap_or_default();
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
@@ -133,7 +138,7 @@ fn host_lines(view: &HostView, project: bool, theme: &Theme) -> Vec<Line<'static
                     Style::default().fg(theme.colors.foreground),
                 ),
                 Span::styled(
-                    format!("  {} · {}{cost}", row.host, row.state),
+                    format!("  {} · {}{cost}{owner}", row.host, row.state),
                     Style::default().fg(theme.colors.muted),
                 ),
             ]));
@@ -215,6 +220,7 @@ mod tests {
                 state: "ready".into(),
                 per_hour: "€0.05/h".into(),
                 total: "€0.12".into(),
+                owner: Some("Alice".into()),
             }],
             project_total: Some("1 cloud machine".into()),
             as_of: None,
@@ -239,7 +245,7 @@ mod tests {
         assert!(
             project
                 .iter()
-                .any(|l| l.contains("RE36  aura-re36-3f9c · ready · €0.05/h · €0.12")),
+                .any(|l| l.contains("RE36  aura-re36-3f9c · ready · €0.05/h · €0.12 · Alice")),
             "{project:?}"
         );
     }

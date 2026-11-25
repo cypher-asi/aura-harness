@@ -235,6 +235,20 @@ if [[ -n "$store_hits" ]]; then
     done <<<"$store_hits"
 fi
 
+# Cloud agents, multi-user: raw user identities never reach boxd. The
+# cloud engine sees users only as owner tags (`names::owner_tag`); a
+# `user_id`, `primary_zid` or `display_name` read there could end up in a
+# machine label, secret name, ledger row or log. Literal test values
+# (`user_id: "..."`) and quoted JSON keys are not reads.
+owner_hits=$(rg -n -P --glob '!target/**' --type rust \
+    '(?<!")\b(user_id|primary_zid|display_name)\b(?!: ")' \
+    crates/engine/aura-engine-cloud/src || true)
+if [[ -n "$owner_hits" ]]; then
+    while IFS= read -r line; do
+        report "§cloud" "raw user identity in the cloud engine (use names::owner_tag)" "$line"
+    done <<<"$owner_hits"
+fi
+
 if (( violations > 0 )); then
     echo ""
     echo "Invariant band check failed with ${violations} violation(s)." >&2

@@ -28,6 +28,7 @@ aura-auth = { path = "../../auth/aura-auth" }
 aura-node = { path = "../aura-node" }
 aura-engine = { path = "../../engine/aura-engine" }
 aura-engine-cloud = { path = "../../engine/aura-engine-cloud" }
+aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }
 thiserror = { workspace = true }
 anyhow = { workspace = true }

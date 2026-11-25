@@ -40,6 +40,13 @@ pub fn switch_label(state: &PlacementState) -> String {
     if let Some(moving) = &state.moving {
         return format!("◐ {moving}");
     }
+    if let Some(owner) = state
+        .owner
+        .as_deref()
+        .filter(|_| state.placement == PlacementView::Cloud)
+    {
+        return format!("☁ {owner}");
+    }
     let mut label = format!("{} {}", state.placement.mark(), state.placement.label());
     if let Some(machine) = state
         .machine_state
@@ -85,6 +92,17 @@ impl App {
                 cloud_ready: self.cloud.cloud_ready,
                 ..PlacementState::default()
             })
+    }
+
+    /// The projects-list badge of `agent_id`: ` ☁` for a cloud agent,
+    /// ` ☁ alice` for another user's, with whether it is someone else's.
+    #[must_use]
+    pub fn cloud_badge(&self, agent_id: &str) -> Option<(String, bool)> {
+        let state = self.cloud.placements.get(agent_id)?;
+        (state.placement == PlacementView::Cloud).then(|| match &state.owner {
+            Some(owner) => (format!(" ☁ {owner}"), true),
+            None => (" ☁".to_string(), false),
+        })
     }
 
     /// Where `agent_id` runs.
@@ -136,6 +154,15 @@ impl App {
     /// Ask for the agent on screen to run at `placement`.
     pub(super) fn request_placement(&mut self, placement: PlacementView) {
         let current = self.placement();
+        if let Some(owner) = current
+            .owner
+            .as_deref()
+            .filter(|_| current.placement == PlacementView::Cloud)
+        {
+            let note = format!("Placed by {owner}; sign in as {owner} to manage it");
+            self.notify(&note, NotificationType::Warning);
+            return;
+        }
         if current.moving.is_some() {
             self.notify("A move is already under way", NotificationType::Success);
             return;
@@ -294,6 +321,41 @@ mod tests {
             ..PlacementState::default()
         };
         assert_eq!(switch_label(&moving), "◐ moving to cloud");
+        let foreign = PlacementState {
+            placement: PlacementView::Cloud,
+            owner: Some("Alice".into()),
+            ..PlacementState::default()
+        };
+        assert_eq!(switch_label(&foreign), "☁ Alice");
+    }
+
+    #[test]
+    fn another_users_cloud_agent_is_marked_and_not_moved() {
+        let (mut app, mut rx) = app();
+        app.process_command(UiCommand::SetPlacement {
+            agent_id: "aa".into(),
+            state: PlacementState {
+                placement: PlacementView::Cloud,
+                owner: Some("Alice".into()),
+                ..PlacementState::default()
+            },
+        });
+        app.process_command(UiCommand::SetPlacement {
+            agent_id: "bb".into(),
+            state: PlacementState {
+                placement: PlacementView::Cloud,
+                ..PlacementState::default()
+            },
+        });
+        assert_eq!(app.cloud_badge("aa"), Some((" ☁ Alice".into(), true)));
+        assert_eq!(app.cloud_badge("bb"), Some((" ☁".into(), false)));
+        assert_eq!(app.cloud_badge("cc"), None);
+        app.handle_command("/local");
+        assert!(rx.try_recv().is_err(), "only Alice can bring it back");
+        assert!(app
+            .notification
+            .as_ref()
+            .is_some_and(|(text, _)| text.contains("Placed by Alice")));
     }
 
     #[test]

@@ -484,6 +484,7 @@ impl SnapshotBuilder {
             packages: Vec::new(),
             networks: Vec::new(),
             delete_after_secs: Some(BUILDER_TTL_SECS),
+            secrets: Vec::new(),
         };
         tracing::info!(snapshot, builder = %spec.name, "building cloud snapshot");
         let machine = self.provider.create(&spec, &origin).await?;

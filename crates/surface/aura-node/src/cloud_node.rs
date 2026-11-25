@@ -55,6 +55,9 @@ struct Claim {
 /// Cloud-node state shared by the router.
 pub struct CloudNode {
     enabled: bool,
+    /// Where this node's model client gets its owner's plan credentials;
+    /// filled at each claim.
+    plans: RwLock<Option<Arc<PlanResolver>>>,
     claim: RwLock<Option<Claim>>,
     sealed: RwLock<HashSet<AgentId>>,
     workspace: Option<PathBuf>,
@@ -85,11 +88,18 @@ impl CloudNode {
         let manifest = config.cloud_node.then(|| PathBuf::from(SNAPSHOT_MANIFEST));
         Arc::new(Self {
             enabled: config.cloud_node,
+            plans: RwLock::new(None),
             claim: RwLock::new(None),
             sealed: RwLock::new(HashSet::new()),
             workspace,
             sampler: Arc::new(Mutex::new(HostSampler::new(disk_path, manifest))),
         })
+    }
+
+    /// Fill `plans` from every claim from now on (the node's model client
+    /// reads its credentials there).
+    pub fn attach_plans(&self, plans: Arc<PlanResolver>) {
+        *self.plans.write().unwrap_or_else(PoisonError::into_inner) = Some(plans);
     }
 
     /// Whether this node runs on a cloud machine.
@@ -143,6 +153,14 @@ impl CloudNode {
             }
         }
         let node_id = claim.node_id.clone();
+        if let Some(plans) = self
+            .plans
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            plans.set(claim.owner.clone(), &claim.plans);
+        }
         *self.claim.write().unwrap_or_else(PoisonError::into_inner) = Some(Claim {
             node_id: claim.node_id,
             node_token: Zeroizing::new(claim.node_token),
@@ -256,6 +274,122 @@ pub async fn serve_claims(node: Arc<CloudNode>, path: PathBuf, port: u16) -> any
     }
 }
 
+/// The plan credentials of the cloud node's owner, as its claim gave
+/// them: each bearer is a boxd `bxds_` placeholder, which boxd's egress
+/// proxy swaps for the owner's real token on the way to the provider.
+/// Before a claim, and for plans without a placeholder, it answers
+/// "not linked".
+#[derive(Default)]
+pub struct PlanResolver {
+    inner: RwLock<(Option<String>, Vec<aura_core_protocol::cloud::PlanTemplate>)>,
+}
+
+impl std::fmt::Debug for PlanResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        f.debug_struct("PlanResolver")
+            .field("owner", &inner.0)
+            .field("plans", &inner.1.len())
+            .finish()
+    }
+}
+
+impl PlanResolver {
+    /// Use `plans` of `owner` from now on.
+    pub fn set(&self, owner: Option<String>, plans: &[aura_core_protocol::cloud::PlanTemplate]) {
+        let usable: Vec<_> = plans
+            .iter()
+            .filter(|plan| {
+                plan.placeholder
+                    .as_deref()
+                    .is_some_and(|p| p.starts_with(aura_core_protocol::cloud::PLACEHOLDER_PREFIX))
+            })
+            .cloned()
+            .collect();
+        tracing::info!(
+            owner = owner.as_deref().unwrap_or("-"),
+            plans = usable.len(),
+            "cloud node plans set"
+        );
+        *self.inner.write().unwrap_or_else(PoisonError::into_inner) = (owner, usable);
+    }
+
+    /// The owner tag the plans belong to.
+    #[must_use]
+    pub fn owner(&self) -> Option<String> {
+        self.inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .0
+            .clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl aura_core_auth::CredentialResolver for PlanResolver {
+    async fn inference_credential(
+        &self,
+        provider: aura_core_auth::ProviderKind,
+    ) -> Result<aura_core_auth::InferenceCredential, aura_core_auth::AuthError> {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        let plan = inner
+            .1
+            .iter()
+            .find(|plan| plan.provider == provider.id())
+            .ok_or(aura_core_auth::AuthError::NotLinked(provider))?;
+        let bearer = plan
+            .placeholder
+            .clone()
+            .ok_or(aura_core_auth::AuthError::NotLinked(provider))?;
+        Ok(aura_core_auth::InferenceCredential {
+            provider,
+            bearer,
+            headers: plan.headers.clone(),
+            system_preamble: plan.system_preamble.clone(),
+        })
+    }
+}
+
+/// Fill each plan template's placeholder in `claim` from `lookup` (the
+/// machine's environment): boxd puts a `bxds_` placeholder for each of
+/// the owner's host-bound secrets there. A plan whose variable is unset
+/// stays without one (its requests then fail as not linked).
+///
+/// # Errors
+///
+/// When a template names a secret that is not the claim owner's plan
+/// secret, or a variable holds anything but a `bxds_` placeholder: a real
+/// token must never end up on a machine.
+pub fn fill_placeholders(
+    claim: &mut NodeClaim,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> Result<usize, String> {
+    let owner = claim.owner.clone().unwrap_or_default();
+    let mut filled = 0;
+    for plan in &mut claim.plans {
+        if !aura_engine_cloud::names::is_plan_secret_of(&plan.env, &owner) {
+            return Err(format!(
+                "plan {} names {}, which is not this machine owner's secret",
+                plan.provider, plan.env
+            ));
+        }
+        let Some(value) = lookup(&plan.env).filter(|v| !v.trim().is_empty()) else {
+            plan.placeholder = None;
+            continue;
+        };
+        let value = value.trim().to_string();
+        if !value.starts_with(aura_core_protocol::cloud::PLACEHOLDER_PREFIX) {
+            return Err(format!(
+                "{} holds a value that is not a boxd placeholder; refusing to keep a plan token on this machine",
+                plan.env
+            ));
+        }
+        plan.placeholder = Some(value);
+        filled += 1;
+    }
+    Ok(filled)
+}
+
 /// Send `claim` (JSON) to the node listening on `path` and return its
 /// answer. Used by `aura node claim --stdin`.
 ///
@@ -320,6 +454,8 @@ mod tests {
             node_token: "node-token-0123456789".into(),
             mesh_token: "mesh-token-0123456789".into(),
             seal,
+            owner: None,
+            plans: Vec::new(),
         }
     }
 
@@ -398,5 +534,85 @@ mod tests {
         let err = send_claim(&path, b"not json").await.expect_err("bad claim");
         assert!(err.to_string().contains("bad claim"), "{err}");
         server.abort();
+    }
+
+    fn claim_with(owner: &str, env: &str) -> NodeClaim {
+        NodeClaim {
+            node_id: "aura-x".into(),
+            node_token: "t".into(),
+            mesh_token: "m".into(),
+            seal: Vec::new(),
+            owner: Some(owner.into()),
+            plans: vec![aura_core_protocol::cloud::PlanTemplate {
+                provider: "claude".into(),
+                env: env.into(),
+                headers: Vec::new(),
+                system_preamble: None,
+                placeholder: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn placeholders_are_filled_and_real_tokens_refused() {
+        let env = "AURA_A11CE000_INST01_CLAUDE";
+        let mut claim = claim_with("a11ce000", env);
+        let filled = fill_placeholders(&mut claim, |name| {
+            (name == env).then(|| "bxds_abc123".to_string())
+        })
+        .expect("filled");
+        assert_eq!(filled, 1);
+        assert_eq!(claim.plans[0].placeholder.as_deref(), Some("bxds_abc123"));
+
+        let mut unset = claim_with("a11ce000", env);
+        assert_eq!(fill_placeholders(&mut unset, |_| None).expect("unset"), 0);
+        assert!(unset.plans[0].placeholder.is_none());
+
+        let mut leaked = claim_with("a11ce000", env);
+        let err = fill_placeholders(&mut leaked, |_| Some("sk-ant-oat01-real".into()))
+            .expect_err("real token");
+        assert!(err.contains("not a boxd placeholder"), "{err}");
+        assert!(!err.contains("sk-ant"), "the value is never echoed");
+
+        let mut foreign = claim_with("a11ce000", "AURA_B0B00000_INST01_CLAUDE");
+        let err = fill_placeholders(&mut foreign, |_| Some("bxds_x".into())).expect_err("foreign");
+        assert!(err.contains("not this machine owner's"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_plan_resolver_answers_from_the_claim_only() {
+        use aura_core_auth::{AuthError, CredentialResolver, ProviderKind};
+        let node = CloudNode::new(&NodeConfig {
+            cloud_node: true,
+            ..NodeConfig::default()
+        });
+        let plans = Arc::new(PlanResolver::default());
+        node.attach_plans(Arc::clone(&plans));
+        let err = plans
+            .inference_credential(ProviderKind::Claude)
+            .await
+            .expect_err("before the claim");
+        assert!(matches!(err, AuthError::NotLinked(ProviderKind::Claude)));
+
+        let mut claim = claim_with("a11ce000", "AURA_A11CE000_INST01_CLAUDE");
+        claim.plans[0].headers = vec![("anthropic-beta".into(), "oauth-2025-04-20".into())];
+        claim.plans[0].system_preamble = Some("You are Claude Code".into());
+        claim.plans[0].placeholder = Some("bxds_abc".into());
+        node.apply_claim(claim, 8080);
+        let credential = plans
+            .inference_credential(ProviderKind::Claude)
+            .await
+            .expect("claude");
+        assert_eq!(credential.bearer, "bxds_abc");
+        assert_eq!(credential.headers[0].0, "anthropic-beta");
+        assert_eq!(
+            credential.system_preamble.as_deref(),
+            Some("You are Claude Code")
+        );
+        assert_eq!(plans.owner().as_deref(), Some("a11ce000"));
+        assert!(plans
+            .inference_credential(ProviderKind::Chatgpt)
+            .await
+            .is_err());
     }
 }

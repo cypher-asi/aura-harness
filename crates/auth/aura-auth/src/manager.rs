@@ -534,8 +534,58 @@ impl AuthManager {
         &self,
         provider: ProviderKind,
     ) -> Result<InferenceCredential, ProviderError> {
+        self.inference_credential_for(&self.owner(), provider, REFRESH_MARGIN_SECS)
+            .await
+    }
+
+    /// What a `provider` credential looks like (its headers and system
+    /// preamble) with an empty bearer: the template a cloud machine fills
+    /// with its placeholder. `None` for non-plan providers.
+    #[must_use]
+    pub fn credential_shape(&self, provider: ProviderKind) -> Option<InferenceCredential> {
+        let adapter = self.subscription(provider).ok()?;
+        let tokens = aura_core_auth::OAuthTokens {
+            access_token: String::new(),
+            refresh_token: None,
+            id_token: None,
+            scope: String::new(),
+            expires_at: Utc::now(),
+        };
+        Some(adapter.credential(&tokens))
+    }
+
+    /// The plans `owner` has linked and can use (not waiting for a new
+    /// sign-in, plan usage enabled).
+    #[must_use]
+    pub fn linked_plans(&self, owner: &Owner) -> Vec<ProviderKind> {
+        self.vault
+            .links_for(owner)
+            .into_iter()
+            .filter(|link| self.subscriptions.contains_key(&link.provider))
+            .filter(|link| link.plan_enabled)
+            .filter(|link| !matches!(link.status, LinkStatus::ReauthRequired { .. }))
+            .map(|link| link.provider)
+            .collect()
+    }
+
+    /// `owner`'s credential for `provider`, refreshed when it expires
+    /// within `margin_secs`. Any owner in the vault, not only the one
+    /// signed in: the cloud hub keeps every placing user's tokens fresh.
+    /// Refreshes run under the link's lock, so one refresh token is never
+    /// spent twice.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::NotLinked`] when `owner` has no link to it;
+    /// [`ProviderError::ReauthRequired`] when it needs a new sign-in.
+    pub async fn inference_credential_for(
+        &self,
+        owner: &Owner,
+        provider: ProviderKind,
+        margin_secs: i64,
+    ) -> Result<InferenceCredential, ProviderError> {
         let adapter = self.subscription(provider)?;
-        let owner = self.owner();
+        let owner = owner.clone();
         let link = self
             .vault
             .link(&owner, provider)
@@ -560,13 +610,13 @@ impl AuthManager {
         }
         let mut tokens = self.stored_tokens(&link)?;
         let now = Utc::now();
-        if tokens.expires_within(now, REFRESH_MARGIN_SECS) {
+        if tokens.expires_within(now, margin_secs) {
             // Another process may have refreshed them since they were
             // kept, spending the refresh token held here.
             self.vault.forget_tokens(&link);
             tokens = self.stored_tokens(&link)?;
         }
-        if !tokens.expires_within(now, REFRESH_MARGIN_SECS) {
+        if !tokens.expires_within(now, margin_secs) {
             return Ok(adapter.credential(&tokens));
         }
 

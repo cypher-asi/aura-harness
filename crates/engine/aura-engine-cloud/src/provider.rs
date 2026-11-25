@@ -155,6 +155,10 @@ pub struct NewMachine {
     pub networks: Vec<String>,
     /// Delete the machine this long after creation.
     pub delete_after_secs: Option<u64>,
+    /// boxd secrets the machine gets by name (unattached secrets set with
+    /// [`VmProvider::set_secret`]): its owner's plan secrets, nothing else.
+    /// Forks inherit their parent's.
+    pub secrets: Vec<String>,
 }
 
 impl NewMachine {
@@ -170,6 +174,7 @@ impl NewMachine {
             packages: Vec::new(),
             networks: Vec::new(),
             delete_after_secs: None,
+            secrets: Vec::new(),
         }
     }
 }
@@ -283,6 +288,31 @@ pub struct Balance {
 
 /// A machine host. Every call has its own timeout inside the
 /// implementation (rules.md §6.2).
+/// A boxd secret bound to the hosts it may be sent to: machines listing
+/// it hold only a `bxds_` placeholder, and boxd's egress proxy puts the
+/// value into requests to `domains`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HostSecret {
+    /// Secret name.
+    pub name: String,
+    /// Its value; never logged.
+    pub value: zeroize::Zeroizing<String>,
+    /// Hosts it may be sent to (`api.anthropic.com`).
+    pub domains: Vec<String>,
+    /// Parts of a request it is replaced in (`headers`); empty = all.
+    pub replace_in: Vec<String>,
+}
+
+impl std::fmt::Debug for HostSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostSecret")
+            .field("name", &self.name)
+            .field("domains", &self.domains)
+            .field("replace_in", &self.replace_in)
+            .finish_non_exhaustive()
+    }
+}
+
 #[async_trait]
 pub trait VmProvider: Send + Sync {
     /// Create a machine from `origin`.
@@ -327,6 +357,11 @@ pub trait VmProvider: Send + Sync {
     async fn machine_usage(&self, machine: &str) -> CloudResult<UsageReading>;
     /// The org's usage since `since_ms`.
     async fn org_usage(&self, since_ms: u64) -> CloudResult<OrgUsage>;
+    /// Create or rotate an unattached, host-bound secret. Rotating keeps
+    /// the placeholder machines hold.
+    async fn set_secret(&self, secret: &HostSecret) -> CloudResult<()>;
+    /// Remove a secret; one that is gone is not an error.
+    async fn remove_secret(&self, name: &str) -> CloudResult<()>;
     /// The org's credit balance.
     async fn balance(&self) -> CloudResult<Balance>;
 }
