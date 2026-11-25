@@ -484,7 +484,9 @@ async fn handle_ui_event(
             images,
         } => {
             let agent_id = state.agent_or_active(&agent_id);
-            deliver_with_images(state, agent_id, SteerSource::User, text, images, shown).await;
+            if !channels::route_user_message(state, agent_id, &text, &images, shown).await {
+                deliver_with_images(state, agent_id, SteerSource::User, text, images, shown).await;
+            }
         }
         UiEvent::RunCommand {
             agent_id,
@@ -861,7 +863,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
     let mut steering = None;
     let mut row = None;
     let task = match work {
-        Work::Prompt { prompt, shown } => {
+        Work::Prompt { mut prompt, shown } => {
             info!(%agent_id, text = %prompt.text, "Processing user message");
             // A local model with no server used to sit there until the
             // 10-minute request timeout; the probe answers in well under a
@@ -869,6 +871,11 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             if local_model_unavailable(state, &ui).await {
                 state.idle.insert(agent_id, session);
                 return;
+            }
+            // In the prompt rather than the system prompt, which stays the
+            // same between turns so the provider's prompt cache covers it.
+            if prompt.mentions {
+                prompt.preamble = channels::take_digest(&state.hub, agent_id).await;
             }
             ui.send(UiCommand::TurnStarted {
                 prompt: (!shown).then(|| prompt.text.clone()),
@@ -1088,6 +1095,9 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
     state
         .processes
         .finish(&processes::turn_id(agent_id), status);
+    if failure.is_none() && !cancelled {
+        channels::post_replies(state, agent_id).await;
+    }
 
     if let Some(problem) = failure {
         let ui = AgentUi::new(state.commands.clone(), agent_id);

@@ -968,6 +968,46 @@ pub struct ChannelPostView {
     pub at_ms: u64,
 }
 
+/// One entry of a coordinator's chat: a message of its conversation or a
+/// post of its channel.
+#[derive(Debug, Clone, Copy)]
+pub enum TimelineItem<'a> {
+    /// A message of the conversation
+    Message(&'a MessageData),
+    /// A post of the channel
+    Post(&'a ChannelPostView),
+}
+
+/// `history` and `posts` in one list ordered by time. A message without a
+/// timestamp counts as sent now, after every post. On equal times the
+/// message comes first; otherwise each list keeps its own order, so
+/// entries out of order within a list stay where they were relative to
+/// each other.
+#[must_use]
+pub fn merge_timeline<'a>(
+    history: &'a [MessageData],
+    posts: &'a [ChannelPostView],
+) -> Vec<TimelineItem<'a>> {
+    let mut out = Vec::with_capacity(history.len() + posts.len());
+    let mut messages = history.iter().peekable();
+    let mut posts = posts.iter().peekable();
+    loop {
+        match (messages.peek(), posts.peek()) {
+            (Some(message), Some(post)) => {
+                if message.timestamp_ms.is_some_and(|at| at <= post.at_ms) {
+                    out.extend(messages.next().map(TimelineItem::Message));
+                } else {
+                    out.extend(posts.next().map(TimelineItem::Post));
+                }
+            }
+            (Some(_), None) => out.extend(messages.next().map(TimelineItem::Message)),
+            (None, Some(_)) => out.extend(posts.next().map(TimelineItem::Post)),
+            (None, None) => break,
+        }
+    }
+    out
+}
+
 /// Orders a channel's members for display: the coordinator first, then
 /// each agent followed by the agents it spawned, depth-first. Siblings keep
 /// their order in `members`. Each member comes with the hex id of the agent
@@ -1967,6 +2007,61 @@ pub struct ProcessSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn message_at(content: &str, at: Option<u64>) -> MessageData {
+        MessageData {
+            timestamp_ms: at,
+            ..MessageData::new(MessageRole::User, content)
+        }
+    }
+
+    fn post_at(text: &str, at_ms: u64) -> ChannelPostView {
+        ChannelPostView {
+            text: text.into(),
+            at_ms,
+            ..ChannelPostView::default()
+        }
+    }
+
+    /// Each item as `m:<content>` or `p:<text>`.
+    fn labels(items: &[TimelineItem<'_>]) -> Vec<String> {
+        items
+            .iter()
+            .map(|item| match item {
+                TimelineItem::Message(m) => format!("m:{}", m.content),
+                TimelineItem::Post(p) => format!("p:{}", p.text),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn merge_timeline_orders_by_time_with_messages_first_on_ties() {
+        let history = [message_at("a", Some(10)), message_at("c", Some(30))];
+        let posts = [post_at("b", 20), post_at("tie", 30), post_at("d", 40)];
+        assert_eq!(
+            labels(&merge_timeline(&history, &posts)),
+            ["m:a", "p:b", "m:c", "p:tie", "p:d"]
+        );
+    }
+
+    #[test]
+    fn merge_timeline_puts_untimed_messages_after_every_post() {
+        let history = [message_at("a", Some(10)), message_at("now", None)];
+        let posts = [post_at("b", 5), post_at("c", u64::MAX)];
+        assert_eq!(
+            labels(&merge_timeline(&history, &posts)),
+            ["p:b", "m:a", "p:c", "m:now"]
+        );
+    }
+
+    #[test]
+    fn merge_timeline_keeps_either_list_alone_as_is() {
+        let history = [message_at("x", None), message_at("y", Some(1))];
+        assert_eq!(labels(&merge_timeline(&history, &[])), ["m:x", "m:y"]);
+        let posts = [post_at("p", 9), post_at("q", 3)];
+        assert_eq!(labels(&merge_timeline(&[], &posts)), ["p:p", "p:q"]);
+        assert!(merge_timeline(&[], &[]).is_empty());
+    }
 
     #[test]
     fn a_policy_view_counts_its_tools_by_state() {

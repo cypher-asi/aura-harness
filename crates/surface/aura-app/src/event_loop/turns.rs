@@ -40,6 +40,9 @@ pub(super) struct Prompt {
     pub images: Vec<ImageAttachment>,
     /// What its turn is on the agent's task board
     pub request: Request,
+    /// Context the model gets ahead of `text`, which the chat and the
+    /// record leave out (a coordinator's channel digest)
+    pub preamble: Option<String>,
 }
 
 /// What a prompt's turn is on the agent's task board (see
@@ -63,6 +66,7 @@ impl Prompt {
             mentions: true,
             images,
             request: Request::New,
+            preamble: None,
         }
     }
 
@@ -74,6 +78,7 @@ impl Prompt {
             mentions: false,
             images: Vec::new(),
             request: Request::New,
+            preamble: None,
         }
     }
 
@@ -84,6 +89,7 @@ impl Prompt {
             mentions: false,
             images: Vec::new(),
             request: Request::Build,
+            preamble: None,
         }
     }
 
@@ -94,6 +100,7 @@ impl Prompt {
             mentions: false,
             images: Vec::new(),
             request: Request::Resume,
+            preamble: None,
         }
     }
 }
@@ -513,6 +520,7 @@ pub(super) async fn model_message(session: &AgentSession, prompt: Prompt) -> Mes
         text,
         mentions,
         images,
+        preamble,
         ..
     } = prompt;
     let text = if mentions && !mentioned_paths(&text).is_empty() {
@@ -523,6 +531,10 @@ pub(super) async fn model_message(session: &AgentSession, prompt: Prompt) -> Mes
         expanded.text
     } else {
         text
+    };
+    let text = match preamble {
+        Some(preamble) => format!("{preamble}\n\n{text}"),
+        None => text,
     };
     if images.is_empty() {
         return Message::user(text);

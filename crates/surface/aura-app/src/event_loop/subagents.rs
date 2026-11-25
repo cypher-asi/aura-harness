@@ -369,6 +369,8 @@ pub struct AgentHub {
     /// Every agent in a channel, kept beside the channel store so the
     /// Projects tree can leave them out without reading the store.
     pub(crate) channel_members: Mutex<HashSet<AgentId>>,
+    /// Replies the channels wait for and what each coordinator has seen.
+    pub(crate) channel_chat: super::channels::ChannelChat,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -470,6 +472,7 @@ impl AgentHub {
                 last_active: Mutex::default(),
                 channel_members: Mutex::new(super::channels::load_members(parts.channels.as_ref())),
                 channels: parts.channels,
+                channel_chat: super::channels::ChannelChat::default(),
             }
         })
     }

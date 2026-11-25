@@ -677,3 +677,6 @@ async fn show_error(state: &LoopState<'_>, message: String) {
 
 #[cfg(test)]
 mod tests;
+
+mod chat;
+pub(crate) use chat::{post_replies, route_user_message, send_posts_of, take_digest, ChannelChat};

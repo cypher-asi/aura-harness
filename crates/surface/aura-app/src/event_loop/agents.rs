@@ -936,6 +936,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
                 .await;
             super::hud::send_session_of(state, agent_id).await;
         }
+        super::channels::send_posts_of(state.commands, &state.hub, agent_id).await;
     }
     // One replace-all command: clears the previous agent's records even
     // when this agent's history can't be read.

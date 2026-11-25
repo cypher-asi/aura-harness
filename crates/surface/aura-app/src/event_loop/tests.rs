@@ -23,6 +23,7 @@ use aura_ui_terminal::{ApprovalLevel, PermissionMode};
 use tempfile::TempDir;
 use tokio::sync::{Barrier, Semaphore};
 
+mod channel_chat;
 mod compare_runs;
 mod delegation;
 mod escalation;
