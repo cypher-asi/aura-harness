@@ -624,7 +624,7 @@ mod tests {
             agent("dd", 0),
             agent("ee", 1),
         ]));
-        app.handle_key(key(KeyCode::Left));
+        app.show_agents_tab(AgentsTab::Archive);
         app.handle_key(key(KeyCode::Char(' ')));
         let rows = screen(&mut app, 100);
         click(&mut app, cell_of(&rows, "EE"));
@@ -728,7 +728,7 @@ mod tests {
             archived_at("dd", 0, Local::now()),
             agent("ee", 0),
         ]));
-        app.handle_key(key(KeyCode::Left));
+        app.show_agents_tab(AgentsTab::Archive);
         let rows = screen(&mut app, 100);
         let row_of = |name: &str| cell_of(&rows, name).1;
         assert!(row_of("Today") < row_of("DD"));
@@ -743,7 +743,7 @@ mod tests {
             agent("dd", 0),
             agent("ee", 0),
         ]));
-        app.handle_key(key(KeyCode::Left));
+        app.show_agents_tab(AgentsTab::Archive);
         app.handle_key(key(KeyCode::Down));
         assert_eq!(app.selected_archived(), 1);
 
@@ -776,7 +776,7 @@ mod tests {
             agent("hh", 0),
             agent("ii", 1),
         ]));
-        app.handle_key(key(KeyCode::Left));
+        app.show_agents_tab(AgentsTab::Archive);
         assert_eq!(app.agents_tab(), AgentsTab::Archive);
         (app, rx)
     }
@@ -848,7 +848,7 @@ mod tests {
             agent("ee", 1),
             ff,
         ]));
-        app.handle_key(key(KeyCode::Left));
+        app.show_agents_tab(AgentsTab::Archive);
         assert_eq!(app.shown_active_archived(), Some(0));
         assert_eq!(app.selected_archived(), 0);
         app.toggle_archived(0);
