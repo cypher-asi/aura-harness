@@ -383,6 +383,98 @@ async fn a_spawned_task_is_named_after_its_subtask_by_the_title_model() {
     assert_eq!(listed.name, row.name);
 }
 
+/// The commands `fixture` sent the UI so far, without waiting.
+fn sent_commands(fixture: &mut Fixture) -> Vec<UiCommand> {
+    std::iter::from_fn(|| fixture.commands.try_recv().ok()).collect()
+}
+
+fn thread_subjects(commands: &[UiCommand]) -> Vec<(String, String)> {
+    commands
+        .iter()
+        .filter_map(|command| match command {
+            UiCommand::SetThreadSubject { thread_id, subject } => {
+                Some((thread_id.clone(), subject.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_spawned_tasks_inbox_thread_gets_a_subject_from_the_title_model() {
+    let mut fixture = titled_fixture("Parser escapes", "mock-title");
+    let _mail = fixture.hub.open_mail();
+    let parent = lock(&fixture.hub.registry).active().agent_id();
+
+    let result = fixture
+        .dispatcher
+        .dispatch(request(
+            parent,
+            "reviewer",
+            "Work ONLY in /tmp/x\nThe parser mangles backslash escapes; fix it",
+        ))
+        .await
+        .unwrap();
+    let thread = task_id(result.child_agent_id.unwrap());
+
+    let wait = async {
+        loop {
+            match fixture.commands.recv().await {
+                Some(UiCommand::SetThreadSubject { thread_id, subject }) => {
+                    break (thread_id, subject)
+                }
+                Some(_) => {}
+                None => panic!("the UI channel closed"),
+            }
+        }
+    };
+    let (thread_id, subject) = tokio::time::timeout(Duration::from_secs(30), wait)
+        .await
+        .expect("the thread was never given a subject");
+    assert_eq!(thread_id, thread);
+    assert_eq!(subject, "Parser escapes");
+}
+
+#[tokio::test]
+async fn task_threads_get_no_subject_call_in_a_benchmark_or_without_mail() {
+    // Mail collected, but under a benchmark's run.
+    let mut bench = titled_fixture("Model subject", "mock-title");
+    let _mail = bench.hub.open_mail();
+    let parent = lock(&bench.hub.registry).active().agent_id();
+    bench
+        .hub
+        .traces
+        .start(parent, RunMeta::new("mock-model", RunSource::Bench))
+        .unwrap();
+    bench
+        .dispatcher
+        .dispatch(request(parent, "reviewer", "check the build"))
+        .await
+        .unwrap();
+    // No call was started, so none can still be on its way.
+    assert!(thread_subjects(&sent_commands(&mut bench)).is_empty());
+
+    // A model to ask, but no INBOX to show the subject (`aura -p`).
+    let mut headless = titled_fixture("Model subject", "mock-title");
+    let parent = lock(&headless.hub.registry).active().agent_id();
+    headless
+        .dispatcher
+        .dispatch(request(parent, "reviewer", "check the build"))
+        .await
+        .unwrap();
+    assert!(thread_subjects(&sent_commands(&mut headless)).is_empty());
+}
+
+#[tokio::test]
+async fn a_thread_whose_sender_is_not_running_is_not_titled() {
+    let mut fixture = titled_fixture("Model subject", "mock-title");
+    let idle = lock(&fixture.hub.registry).active().agent_id();
+    fixture
+        .hub
+        .title_thread(idle, "t1".into(), "Check the lexer".into());
+    assert!(thread_subjects(&sent_commands(&mut fixture)).is_empty());
+}
+
 #[tokio::test]
 async fn without_a_title_model_a_subtask_is_named_from_its_prompt() {
     let mut fixture = fixture("Looks good.");

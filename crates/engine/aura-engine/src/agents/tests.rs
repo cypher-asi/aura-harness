@@ -689,6 +689,46 @@ async fn mail_subject_threads_messages_sent_through_the_hook() {
 }
 
 #[tokio::test]
+async fn only_the_mail_that_opens_a_thread_named_from_its_text_is_marked() {
+    let h = harness(AgentHostConfig::default());
+    let mut mail = observe_mail(&h.host);
+    let child = h
+        .hooks
+        .spawn_child(&h.root, None, helper_spec("helper", None))
+        .await
+        .unwrap()
+        .child_agent_id;
+    assert_no_mail(&mut mail);
+    let child_hooks = h.host.hooks_for(child);
+    let root_hex = h.root.to_hex();
+
+    let sends = [
+        ("Found a parser bug\ndetails", None),
+        ("and another one", None),
+        ("bench numbers", Some("Benchmarks")),
+    ];
+    for (text, subject) in sends {
+        child_hooks
+            .deliver_message_in_thread(&root_hex, None, None, None, text, None, None, subject)
+            .await
+            .unwrap();
+    }
+
+    let opened = next_mail(&mut mail).await;
+    assert_eq!(opened.subject, "Found a parser bug");
+    assert!(opened.subject_from_text, "{opened:?}");
+
+    let continued = next_mail(&mut mail).await;
+    assert_eq!(continued.thread, opened.thread);
+    assert!(!continued.subject_from_text, "{continued:?}");
+
+    let given = next_mail(&mut mail).await;
+    assert_ne!(given.thread, opened.thread);
+    assert!(!given.subject_from_text, "{given:?}");
+    assert_no_mail(&mut mail);
+}
+
+#[tokio::test]
 async fn user_messages_are_not_mail() {
     let mut h = harness(AgentHostConfig::default());
     let mut mail = observe_mail(&h.host);

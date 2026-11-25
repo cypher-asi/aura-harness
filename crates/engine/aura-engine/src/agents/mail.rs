@@ -14,6 +14,11 @@
 //!
 //! Host threads are named `t1`, `t2`, ... in the order they are created.
 //!
+//! A subject taken from the first line of the text is only a stand-in:
+//! [`Resolved::from_text`] marks the call that created such a thread, and
+//! the message that opened it carries [`MailMessage::subject_from_text`],
+//! so an observer can write a better subject for it later.
+//!
 //! Both indexes are bounded ([`MAX_INDEX_ENTRIES`]); the entry written
 //! longest ago is forgotten first. A forgotten subject or pair just
 //! starts a new thread next time.
@@ -59,6 +64,10 @@ pub struct MailMessage {
     pub text: String,
     /// When it was sent, in Unix milliseconds.
     pub sent_ms: u64,
+    /// Whether this message opened its thread and the thread's subject
+    /// was made from its text, not given; a better subject may be written
+    /// for it.
+    pub subject_from_text: bool,
 }
 
 /// Sees every message between agents as it is delivered. Called without
@@ -85,9 +94,27 @@ struct ThreadRef {
 }
 
 impl ThreadRef {
-    fn pair(&self) -> (ThreadId, String) {
-        (self.id.clone(), self.subject.clone())
+    /// This thread as the place a message joins, not one it created.
+    fn joined(&self) -> Resolved {
+        Resolved {
+            thread: self.id.clone(),
+            subject: self.subject.clone(),
+            from_text: false,
+        }
     }
+}
+
+/// The thread [`Threads`] picked for a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Resolved {
+    /// Conversation the message goes in.
+    pub(crate) thread: ThreadId,
+    /// Display subject of `thread`.
+    pub(crate) subject: String,
+    /// Whether this call created `thread` and named it after the
+    /// message's text. Only the message that opens such a thread is
+    /// marked, so a better subject is asked for once per thread.
+    pub(crate) from_text: bool,
 }
 
 /// Most entries each [`Threads`] index keeps.
@@ -181,8 +208,9 @@ impl Threads {
         }
     }
 
-    /// The thread for a message from `from` to `to` in `root`'s tree,
-    /// and its display subject. See the module docs for the rules.
+    /// The thread for a message from `from` to `to` in `root`'s tree.
+    /// See the module docs for the rules; only the fallback that names a
+    /// new thread after `text` is [`Resolved::from_text`].
     pub(crate) fn resolve(
         &mut self,
         root: AgentId,
@@ -190,27 +218,27 @@ impl Threads {
         to: AgentId,
         subject: Option<&str>,
         text: &str,
-    ) -> (ThreadId, String) {
+    ) -> Resolved {
         if let Some(subject) = subject {
             let key = normalize_subject(subject);
             if !key.is_empty() {
                 if let Some(thread) = self.by_subject.get(&(root, key.clone())) {
-                    return thread.pair();
+                    return thread.joined();
                 }
-                return self.create(root, key, display_subject(subject));
+                return self.create(root, key, display_subject(subject), false);
             }
         }
         if let Some(thread) = self.by_pair.get(&pair_key(from, to)) {
-            return thread.pair();
+            return thread.joined();
         }
         self.new_thread(root, text)
     }
 
     /// Start a new thread in `root`'s tree, named after the first line of
-    /// `text`.
-    pub(crate) fn new_thread(&mut self, root: AgentId, text: &str) -> (ThreadId, String) {
+    /// `text`. The result is always [`Resolved::from_text`].
+    pub(crate) fn new_thread(&mut self, root: AgentId, text: &str) -> Resolved {
         let subject = derived_subject(text);
-        self.create(root, normalize_subject(&subject), subject)
+        self.create(root, normalize_subject(&subject), subject, true)
     }
 
     /// Note that a message from `from` to `to` went in `thread`, and
@@ -234,14 +262,18 @@ impl Threads {
     }
 
     /// A new thread under `key`. A later explicit subject with the same
-    /// key joins the newest thread created under it.
-    fn create(&mut self, root: AgentId, key: String, subject: String) -> (ThreadId, String) {
+    /// key joins the newest thread created under it. `from_text` says
+    /// whether `subject` was derived from the message rather than given.
+    fn create(&mut self, root: AgentId, key: String, subject: String, from_text: bool) -> Resolved {
         self.next_thread += 1;
         let thread = ThreadRef {
             id: ThreadId(format!("t{}", self.next_thread)),
             subject,
         };
-        let out = thread.pair();
+        let out = Resolved {
+            from_text,
+            ..thread.joined()
+        };
         if !key.is_empty() {
             self.by_subject.insert((root, key), thread);
         }
@@ -322,13 +354,12 @@ mod tests {
     fn same_subject_in_the_same_tree_joins_the_thread() {
         let mut threads = Threads::default();
         let (root, a, b, c) = ids();
-        let (first, subject) = threads.resolve(root, a, b, Some("Parser review"), "hi");
-        let (again, again_subject) =
-            threads.resolve(root, c, a, Some("Re: RE:  parser REVIEW"), "x");
-        assert_eq!(first, again);
-        assert_eq!(subject, "Parser review");
-        assert_eq!(again_subject, "Parser review");
-        assert_eq!(first, ThreadId("t1".into()));
+        let first = threads.resolve(root, a, b, Some("Parser review"), "hi");
+        let again = threads.resolve(root, c, a, Some("Re: RE:  parser REVIEW"), "x");
+        assert_eq!(first.thread, again.thread);
+        assert_eq!(first.subject, "Parser review");
+        assert_eq!(again.subject, "Parser review");
+        assert_eq!(first.thread, ThreadId("t1".into()));
     }
 
     #[test]
@@ -336,9 +367,11 @@ mod tests {
         let mut threads = Threads::default();
         let (root, a, b, _) = ids();
         let other_root = AgentId::generate();
-        let (first, _) = threads.resolve(root, a, b, Some("Parser"), "hi");
-        let (other_subject, _) = threads.resolve(root, a, b, Some("Benchmarks"), "hi");
-        let (other_tree, _) = threads.resolve(other_root, a, b, Some("Parser"), "hi");
+        let first = threads.resolve(root, a, b, Some("Parser"), "hi").thread;
+        let other_subject = threads.resolve(root, a, b, Some("Benchmarks"), "hi").thread;
+        let other_tree = threads
+            .resolve(other_root, a, b, Some("Parser"), "hi")
+            .thread;
         assert_ne!(first, other_subject);
         assert_ne!(first, other_tree);
         assert_ne!(other_subject, other_tree);
@@ -348,39 +381,75 @@ mod tests {
     fn no_subject_continues_the_last_thread_between_the_pair() {
         let mut threads = Threads::default();
         let (root, a, b, c) = ids();
-        let (first, subject) = threads.resolve(root, a, b, Some("Parser"), "hi");
-        threads.record(a, b, &first, &subject);
+        let first = threads.resolve(root, a, b, Some("Parser"), "hi");
+        threads.record(a, b, &first.thread, &first.subject);
 
-        let (reply, reply_subject) = threads.resolve(root, b, a, None, "answer");
-        assert_eq!(reply, first);
-        assert_eq!(reply_subject, "Parser");
+        let reply = threads.resolve(root, b, a, None, "answer");
+        assert_eq!(reply.thread, first.thread);
+        assert_eq!(reply.subject, "Parser");
 
-        let (fresh, fresh_subject) = threads.resolve(root, a, c, None, "\n  Check the lexer\nmore");
-        assert_ne!(fresh, first);
-        assert_eq!(fresh_subject, "Check the lexer");
+        let fresh = threads.resolve(root, a, c, None, "\n  Check the lexer\nmore");
+        assert_ne!(fresh.thread, first.thread);
+        assert_eq!(fresh.subject, "Check the lexer");
     }
 
     #[test]
     fn the_latest_recorded_thread_wins_for_the_pair() {
         let mut threads = Threads::default();
         let (root, a, b, _) = ids();
-        let (first, s1) = threads.resolve(root, a, b, Some("One"), "x");
-        threads.record(a, b, &first, &s1);
-        let (second, s2) = threads.resolve(root, a, b, Some("Two"), "x");
-        threads.record(b, a, &second, &s2);
-        assert_eq!(threads.resolve(root, a, b, None, "x").0, second);
+        let first = threads.resolve(root, a, b, Some("One"), "x");
+        threads.record(a, b, &first.thread, &first.subject);
+        let second = threads.resolve(root, a, b, Some("Two"), "x");
+        threads.record(b, a, &second.thread, &second.subject);
+        assert_eq!(threads.resolve(root, a, b, None, "x").thread, second.thread);
     }
 
     #[test]
     fn new_thread_always_creates_and_can_be_joined_by_subject() {
         let mut threads = Threads::default();
         let (root, a, b, _) = ids();
-        let (first, subject) = threads.new_thread(root, "Look at the parser");
-        let (second, _) = threads.new_thread(root, "Look at the parser");
-        assert_ne!(first, second);
-        assert_eq!(subject, "Look at the parser");
-        let (joined, _) = threads.resolve(root, b, a, Some("re: look at the parser"), "x");
-        assert_eq!(joined, second, "the newest thread with that subject");
+        let first = threads.new_thread(root, "Look at the parser");
+        let second = threads.new_thread(root, "Look at the parser");
+        assert_ne!(first.thread, second.thread);
+        assert_eq!(first.subject, "Look at the parser");
+        let joined = threads.resolve(root, b, a, Some("re: look at the parser"), "x");
+        assert_eq!(
+            joined.thread, second.thread,
+            "the newest thread with that subject"
+        );
+    }
+
+    #[test]
+    fn only_a_thread_created_from_the_text_is_marked() {
+        let mut threads = Threads::default();
+        let (root, a, b, c) = ids();
+
+        let started = threads.new_thread(root, "Look at the parser");
+        assert!(
+            started.from_text,
+            "new_thread names the thread after the text"
+        );
+
+        let fallback = threads.resolve(root, a, b, None, "Check the lexer");
+        assert!(
+            fallback.from_text,
+            "no pair and no subject: named from text"
+        );
+        threads.record(a, b, &fallback.thread, &fallback.subject);
+
+        let given = threads.resolve(root, a, c, Some("Benchmarks"), "x");
+        assert!(!given.from_text, "an explicit subject is not derived");
+
+        let continued = threads.resolve(root, b, a, None, "answer");
+        assert_eq!(continued.thread, fallback.thread);
+        assert!(!continued.from_text, "continuing the pair creates nothing");
+
+        let joined = threads.resolve(root, c, b, Some("re: look at the parser"), "x");
+        assert_eq!(joined.thread, started.thread);
+        assert!(
+            !joined.from_text,
+            "joining an existing subject creates nothing"
+        );
     }
 
     #[test]
@@ -397,7 +466,9 @@ mod tests {
     fn message_ids_increase() {
         let mut threads = Threads::default();
         let (root, a, b, _) = ids();
-        let (thread, subject) = threads.new_thread(root, "x");
+        let Resolved {
+            thread, subject, ..
+        } = threads.new_thread(root, "x");
         let first = threads.record(a, b, &thread, &subject);
         let second = threads.record(b, a, &thread, &subject);
         assert!(second > first);
@@ -427,21 +498,28 @@ mod tests {
         let mut threads = Threads::with_index_cap(2);
         let (root, a, b, c) = ids();
         let d = AgentId::generate();
-        let (ab, ab_subject) = threads.resolve(root, a, b, Some("First"), "x");
-        threads.record(a, b, &ab, &ab_subject);
-        let (ac, ac_subject) = threads.resolve(root, a, c, Some("Second"), "x");
-        threads.record(a, c, &ac, &ac_subject);
-        let (ad, ad_subject) = threads.resolve(root, a, d, Some("Third"), "x");
-        threads.record(a, d, &ad, &ad_subject);
+        let ab = threads.resolve(root, a, b, Some("First"), "x");
+        threads.record(a, b, &ab.thread, &ab.subject);
+        let ac = threads.resolve(root, a, c, Some("Second"), "x");
+        threads.record(a, c, &ac.thread, &ac.subject);
+        let ad = threads.resolve(root, a, d, Some("Third"), "x");
+        threads.record(a, d, &ad.thread, &ad.subject);
 
-        assert_eq!(threads.resolve(root, a, b, Some("Third"), "x").0, ad);
+        assert_eq!(
+            threads.resolve(root, a, b, Some("Third"), "x").thread,
+            ad.thread
+        );
         assert_ne!(
-            threads.resolve(root, a, b, Some("First"), "x").0,
-            ab,
+            threads.resolve(root, a, b, Some("First"), "x").thread,
+            ab.thread,
             "the oldest subject was evicted"
         );
-        assert_ne!(threads.resolve(root, b, a, None, "x").0, ab, "a↔b evicted");
-        assert_eq!(threads.resolve(root, d, a, None, "x").0, ad);
+        assert_ne!(
+            threads.resolve(root, b, a, None, "x").thread,
+            ab.thread,
+            "a↔b evicted"
+        );
+        assert_eq!(threads.resolve(root, d, a, None, "x").thread, ad.thread);
     }
 
     fn ids() -> (AgentId, AgentId, AgentId, AgentId) {

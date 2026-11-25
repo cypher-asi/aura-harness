@@ -295,8 +295,15 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             Some(notice) = notice_rx.recv() => {
                 notices::handle_notice(&mut state, notice).await;
             }
-            Some(view) = mail_rx.recv() => {
-                mail::forward(state.commands, view).await;
+            Some(item) = mail_rx.recv() => {
+                if let Some(sender) = item.title_from {
+                    state.hub.title_thread(
+                        sender,
+                        item.view.thread_id.clone(),
+                        item.view.text.clone(),
+                    );
+                }
+                mail::forward(state.commands, item.view).await;
             }
             Some(outcome) = link_rx.recv() => {
                 auth::handle_link_outcome(&mut state, outcome).await;
