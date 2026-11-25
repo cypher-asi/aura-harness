@@ -565,7 +565,11 @@ fn header_bar(rows: &[String], label: &str) -> (usize, Vec<usize>) {
     let at = rows[tabs][..rows[tabs].find(label).unwrap()]
         .chars()
         .count();
-    let left = grid[tabs][..=at].iter().rposition(|&c| c == '│').unwrap();
+    // The bar's left frame, not the divider of a tab before `label`.
+    let left = (0..=at)
+        .rev()
+        .find(|&x| grid[tabs][x] == '│' && grid[tabs - 1][x] == '┌')
+        .unwrap_or_else(|| panic!("no frame left of {label} in:\n{}", rows.join("\n")));
     let right = left
         + grid[tabs - 1][left..]
             .iter()
@@ -593,12 +597,33 @@ fn header_bar(rows: &[String], label: &str) -> (usize, Vec<usize>) {
 
 #[test]
 fn test_agents_header_is_a_bar_of_equal_tabs() {
+    use crate::app::AgentsTab;
     let mut app = crate::App::new();
     for width in [120, 160] {
         let rows = render_rows(&mut app, width);
-        let (tabs, widths) = header_bar(&rows, "PROJECTS");
-        assert!(rows[tabs].contains("AGENTS"));
-        assert_eq!(widths.len(), 3, "the tabs fill the bar: {widths:?}");
+        // A cell too narrow for its label shows the short one.
+        let first = if rows.iter().any(|row| row.contains("CHANNELS")) {
+            "CHANNELS"
+        } else {
+            "CHN"
+        };
+        let (tabs, widths) = header_bar(&rows, first);
+        let bar_width = widths.iter().sum::<usize>() + widths.len() + 1;
+        let layout = AgentsTab::layout(u16::try_from(bar_width).unwrap());
+        let tab_order: Vec<AgentsTab> = layout.cells.iter().map(|cell| cell.tab).collect();
+        assert_eq!(tab_order, AgentsTab::ALL);
+        let order: Vec<Option<usize>> = layout
+            .cells
+            .iter()
+            .map(|cell| rows[tabs].find(cell.label))
+            .collect();
+        assert!(order.iter().all(Option::is_some), "{}", rows[tabs]);
+        assert!(
+            order.windows(2).all(|pair| pair[0] < pair[1]),
+            "{}",
+            rows[tabs]
+        );
+        assert_eq!(widths.len(), 4, "the tabs fill the bar: {widths:?}");
         let (min, max) = (widths.iter().min(), widths.iter().max());
         assert!(max.zip(min).is_some_and(|(a, b)| a - b <= 1), "{widths:?}");
     }
@@ -6160,4 +6185,84 @@ fn test_reply_footer_names_a_lone_sign_in_without_repeating_its_totals() {
         meta.join(" · "),
         "claude-opus-5-5 ×28 · high thinking · 1.6M tok · $0.998 · via Claude plan"
     );
+}
+
+/// An app showing the CHANNELS tab with `#zode`, whose coordinator spawned
+/// a worker.
+fn channels_app() -> crate::App {
+    use crate::app::{AgentsTab, PaneTab};
+    use crate::events::{AgentSummary, ChannelSummary, UiCommand};
+    let member = |id: &str, name: &str, depth: usize| AgentSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        depth,
+        ..AgentSummary::default()
+    };
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetChannels(vec![ChannelSummary {
+        id: "c1".to_string(),
+        slug: "zode".to_string(),
+        title: "Zode release".to_string(),
+        description: "Ship it".to_string(),
+        coordinator_id: "co".to_string(),
+        members: vec![member("co", "Coordinator", 0), member("wk", "Worker", 1)],
+        ..ChannelSummary::default()
+    }]));
+    app.select_pane_tab(PaneTab::Agents(AgentsTab::Channels));
+    app
+}
+
+#[test]
+fn test_channels_tab_lists_channels_over_new_channel() {
+    let mut app = channels_app();
+    let rows = render_rows(&mut app, 120);
+    let row_with = |needle: &str| {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in:\n{}", rows.join("\n")))
+    };
+    let channel = row_with("#zode");
+    let new_channel = row_with("New channel");
+    assert!(rows[new_channel].contains('+'), "{}", rows[new_channel]);
+    assert!(channel < new_channel);
+    // "+ New channel" is pinned to the panel's last row, above its border.
+    assert!(
+        rows[new_channel + 1].contains('└'),
+        "{}",
+        rows[new_channel + 1]
+    );
+}
+
+#[test]
+fn test_channels_tab_says_when_there_are_none() {
+    use crate::app::{AgentsTab, PaneTab};
+    let mut app = crate::App::new();
+    app.select_pane_tab(PaneTab::Agents(AgentsTab::Channels));
+    let screen = render_rows(&mut app, 120).join("\n");
+    assert!(screen.contains("No channels yet."), "{screen}");
+    assert!(screen.contains("New channel"), "{screen}");
+}
+
+#[test]
+fn test_open_channel_shows_its_title_description_and_members() {
+    let mut app = channels_app();
+    app.open_channel_by_id("c1");
+    let rows = render_rows(&mut app, 120);
+    let at = |needle: &str| {
+        rows.iter()
+            .enumerate()
+            .find_map(|(y, row)| row.find(needle).map(|x| (y, row[..x].chars().count())))
+            .unwrap_or_else(|| panic!("no {needle:?} in:\n{}", rows.join("\n")))
+    };
+    let back = at("‹ #zode");
+    let title = at("Zode release");
+    let description = at("Ship it");
+    let heading = at("MEMBERS");
+    let coordinator = at("Coordinator");
+    let worker = at("Worker");
+    let order = [back, title, description, heading, coordinator, worker].map(|(y, _)| y);
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+    assert_eq!(worker.0, coordinator.0 + 1);
+    assert!(worker.1 > coordinator.1, "the worker is indented");
+    assert!(!rows.iter().any(|row| row.contains("New channel")));
 }

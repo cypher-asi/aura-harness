@@ -7,6 +7,7 @@ mod agent_views;
 mod archive;
 pub(crate) mod bench_progress;
 pub mod benchmarks;
+mod channels;
 mod chat_tabs;
 mod commands;
 mod context_menu;
@@ -421,6 +422,8 @@ pub struct App {
     pub(super) copy_requested: bool,
     /// Which list the agents panel shows
     pub(super) agents_tab: AgentsTab,
+    /// Channels, and the one open in the CHANNELS tab
+    pub(super) channels: channels::ChannelState,
     /// Permanent agents
     pub(super) definitions: Vec<AgentDefinitionSummary>,
     /// Highlighted row in the roster
@@ -624,6 +627,10 @@ pub(crate) enum HoverTarget {
     ArchiveAgent(usize),
     /// A row in the roster, including "+ New agent".
     DefinitionRow(usize),
+    /// A selectable row of the CHANNELS tab: a channel or "+ New channel"
+    /// in the list, the back row (0) or a member (`1 + i`) of an open
+    /// channel.
+    ChannelRow(usize),
     /// A row in the Archive.
     ArchivedRow(usize),
     /// A row in the sandbox tree.
@@ -1093,6 +1100,7 @@ impl App {
             selection_scrolled: None,
             copy_requested: false,
             agents_tab: AgentsTab::default(),
+            channels: channels::ChannelState::default(),
             definitions: Vec::new(),
             selected_definition: 0,
             definitions_scroll: 0,
@@ -1488,6 +1496,9 @@ impl App {
                 self.selected_record = self.selected_record.saturating_sub(lines);
             }
             PanelFocus::Swarm => match self.agents_tab {
+                AgentsTab::Channels => {
+                    self.move_channel_highlight(-isize::try_from(lines).unwrap_or(isize::MAX));
+                }
                 AgentsTab::Projects => {
                     self.agents_scroll = self.agents_scroll.saturating_sub(lines);
                     self.agents_scroll_detached = true;
@@ -1544,6 +1555,9 @@ impl App {
                 }
             }
             PanelFocus::Swarm => match self.agents_tab {
+                AgentsTab::Channels => {
+                    self.move_channel_highlight(isize::try_from(lines).unwrap_or(isize::MAX));
+                }
                 AgentsTab::Projects => {
                     let visible = self
                         .areas
@@ -2225,6 +2239,11 @@ impl App {
                     return Some(button.target(index));
                 }
                 return Some(HoverTarget::ProjectRow(index));
+            }
+        }
+        if self.agents_tab == AgentsTab::Channels {
+            if let Some(index) = self.channel_row_at(column, row) {
+                return Some(HoverTarget::ChannelRow(index));
             }
         }
         if self.agents_tab == AgentsTab::Roster {

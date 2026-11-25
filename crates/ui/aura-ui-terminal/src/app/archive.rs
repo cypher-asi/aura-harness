@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn the_empty_archive_says_so_inside_the_panels_padding() {
         let (mut app, _rx) = app();
-        app.handle_key(key(KeyCode::Left));
+        app.show_agents_tab(AgentsTab::Archive);
         assert_eq!(app.agents_tab(), AgentsTab::Archive);
         for width in [160, 200] {
             let rows = screen(&mut app, width);
@@ -292,7 +292,7 @@ mod tests {
             agent("dd", 0),
             agent("ee", 1),
         ]));
-        app.handle_key(key(KeyCode::Left));
+        app.show_agents_tab(AgentsTab::Archive);
         let rows = screen(&mut app, 100);
         let column = |name: &str| {
             let row = rows.iter().find(|row| row.contains(name));
@@ -333,7 +333,7 @@ mod tests {
             agent("dd", 0),
             agent("ee", 1),
         ]));
-        app.handle_key(key(KeyCode::Left));
+        app.show_agents_tab(AgentsTab::Archive);
         assert_eq!(app.agents_tab(), AgentsTab::Archive);
         assert_eq!(app.archived().len(), 2);
 

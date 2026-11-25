@@ -343,7 +343,7 @@ impl App {
         match self.agents_tab {
             AgentsTab::Projects => {}
             AgentsTab::Archive => return self.open_archive_menu(column, row),
-            AgentsTab::Roster => return false,
+            AgentsTab::Roster | AgentsTab::Channels => return false,
         }
         let Some(index) = self.project_row_at(column, row) else {
             return false;
@@ -847,9 +847,8 @@ mod tests {
             agent("dd", 0),
             agent("ee", 1),
         ]));
-        // Left switches the agents panel's tab only while it has focus.
         app.focus = PanelFocus::Swarm;
-        app.handle_key(key(KeyCode::Left));
+        app.show_agents_tab(AgentsTab::Archive);
         assert_eq!(app.agents_tab(), AgentsTab::Archive);
         (app, rx)
     }

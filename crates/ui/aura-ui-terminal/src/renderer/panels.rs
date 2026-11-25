@@ -924,8 +924,9 @@ fn render_welcome(frame: &mut Frame, area: Rect, terminal: bool, theme: &Theme) 
     frame.render_widget(Paragraph::new(welcome), area);
 }
 
-/// Render the agents panel: a PROJECTS | AGENTS header bar over either the
-/// live agents or the roster of permanent agents.
+/// Render the agents panel: a CHANNELS | PROJECTS | AGENTS | ARCHIVE header
+/// bar over the channels, the live agents, the roster of permanent agents
+/// or the archived agents.
 pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let hosted = app.host_chrome();
@@ -961,6 +962,7 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         ..body
     };
     match app.agents_tab() {
+        AgentsTab::Channels => super::channels::render_channels(frame, area, body, app, theme),
         AgentsTab::Projects => {
             let rows_area = Rect {
                 height: body.height - 1,
@@ -1379,7 +1381,7 @@ pub(super) fn aura_icon(app: &App) -> StatusIcon {
 
 /// The braille spinner the chat shows beside work in flight, for a
 /// working agent or folded project in the projects list.
-fn working_icon(app: &App, theme: &Theme) -> StatusIcon {
+pub(super) fn working_icon(app: &App, theme: &Theme) -> StatusIcon {
     StatusIcon::new(app.spinner_char(), theme.colors.muted)
 }
 

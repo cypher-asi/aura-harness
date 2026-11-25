@@ -1102,11 +1102,11 @@ fn test_arrows_toggle_agents_tabs_without_switching_agent() {
     app.handle_key(key(KeyCode::Left));
     assert_eq!(app.agents_tab(), AgentsTab::Projects);
     app.handle_key(key(KeyCode::Left));
-    assert_eq!(app.agents_tab(), AgentsTab::Archive);
+    assert_eq!(app.agents_tab(), AgentsTab::Channels);
     app.handle_key(key(KeyCode::Left));
-    assert_eq!(app.agents_tab(), AgentsTab::Roster);
-    app.handle_key(key(KeyCode::Right));
     assert_eq!(app.agents_tab(), AgentsTab::Archive);
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.agents_tab(), AgentsTab::Channels);
     app.handle_key(key(KeyCode::Right));
     assert_eq!(app.agents_tab(), AgentsTab::Projects);
 
@@ -1143,26 +1143,34 @@ fn test_clicking_tab_bar_switches_tabs() {
     let (mut app, _rx) = app_with_agents();
     app.areas.swarm = Some(Rect::new(0, 0, 24, 20));
     app.set_agent_tabs_area(Rect::new(0, 0, 24, 3));
-    let roster = AgentsTab::layout(24)
-        .cells
-        .into_iter()
-        .find(|cell| cell.tab == AgentsTab::Roster)
-        .unwrap();
+    let start = |tab: AgentsTab| {
+        AgentsTab::layout(24)
+            .cells
+            .into_iter()
+            .find(|cell| cell.tab == tab)
+            .unwrap()
+            .start
+    };
 
     app.handle_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
-        roster.start,
+        start(AgentsTab::Roster),
         0,
     ));
     assert_eq!(app.agents_tab(), AgentsTab::Roster);
     assert_eq!(app.focus(), PanelFocus::Swarm);
 
-    let divider = roster.start - 1;
+    let divider = start(AgentsTab::Roster) - 1;
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), divider, 1));
     assert_eq!(app.agents_tab(), AgentsTab::Roster);
 
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 2));
+    let projects = start(AgentsTab::Projects);
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), projects, 2));
     assert_eq!(app.agents_tab(), AgentsTab::Projects);
+
+    let channels = start(AgentsTab::Channels);
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), channels, 1));
+    assert_eq!(app.agents_tab(), AgentsTab::Channels);
 }
 
 #[test]
@@ -1181,7 +1189,12 @@ fn test_mouse_move_hovers_clickable_items() {
     assert_eq!(app.project_rows()[2], ProjectListRow::Gap);
     assert_eq!(app.hover(), None);
 
-    app.handle_mouse(mouse(MouseEventKind::Moved, 2, 1));
+    let projects = AgentsTab::layout(24)
+        .cells
+        .into_iter()
+        .find(|cell| cell.tab == AgentsTab::Projects)
+        .unwrap();
+    app.handle_mouse(mouse(MouseEventKind::Moved, projects.start, 1));
     assert_eq!(
         app.hover(),
         Some(HoverTarget::AgentTab(AgentsTab::Projects))
@@ -5335,4 +5348,56 @@ fn a_loading_chat_draws_no_welcome_and_says_it_loads_after_a_moment() {
     load_chat_of(&mut app, "bb", "bb's history");
     let text = drawn_text(&mut app);
     assert!(text.contains("bb's history"), "{text}");
+}
+
+#[test]
+fn test_agents_tabs_put_channels_first_and_open_on_projects() {
+    let labels = AgentsTab::ALL.map(AgentsTab::label);
+    assert_eq!(labels, ["CHANNELS", "PROJECTS", "AGENTS", "ARCHIVE"]);
+    assert_eq!(App::new().agents_tab(), AgentsTab::Projects);
+}
+
+/// The app with one channel, `#zode`, showing the CHANNELS tab with focus.
+fn app_with_channel() -> (App, mpsc::Receiver<UiEvent>) {
+    let (mut app, rx) = app_with_agents();
+    app.process_command(UiCommand::SetChannels(vec![
+        crate::events::ChannelSummary {
+            id: "c1".to_string(),
+            slug: "zode".to_string(),
+            title: "Zode release".to_string(),
+            coordinator_id: "aa".to_string(),
+            members: vec![agent("aa", "Coordinator")],
+            ..crate::events::ChannelSummary::default()
+        },
+    ]));
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.agents_tab(), AgentsTab::Channels);
+    (app, rx)
+}
+
+#[test]
+fn test_enter_opens_a_channel_and_esc_closes_it() {
+    let (mut app, mut rx) = app_with_channel();
+
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.channel_open());
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(id)) if id == "c1"));
+
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!app.channel_open());
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CloseChannel)));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_enter_on_the_back_row_closes_the_channel() {
+    let (mut app, mut rx) = app_with_channel();
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(_))));
+    assert_eq!(app.selected_channel_row(), 0, "the back row is highlighted");
+
+    app.handle_key(key(KeyCode::Enter));
+    assert!(!app.channel_open());
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CloseChannel)));
 }

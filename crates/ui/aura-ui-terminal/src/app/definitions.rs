@@ -10,6 +10,8 @@ use std::path::PathBuf;
 /// Views of the agents panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AgentsTab {
+    /// Channels: shared conversations with a coordinator and its agents.
+    Channels,
     /// Live agents: the ones the user talks to and the instances they spawned.
     #[default]
     Projects,
@@ -20,11 +22,12 @@ pub enum AgentsTab {
 }
 
 impl AgentsTab {
-    pub const ALL: [Self; 3] = [Self::Projects, Self::Roster, Self::Archive];
+    pub const ALL: [Self; 4] = [Self::Channels, Self::Projects, Self::Roster, Self::Archive];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Channels => "CHANNELS",
             Self::Projects => "PROJECTS",
             Self::Roster => "AGENTS",
             Self::Archive => "ARCHIVE",
@@ -35,6 +38,7 @@ impl AgentsTab {
     #[must_use]
     pub const fn short_label(self) -> &'static str {
         match self {
+            Self::Channels => "CHN",
             Self::Projects => "PRJ",
             Self::Roster => "AGT",
             Self::Archive => "ARC",
@@ -44,9 +48,10 @@ impl AgentsTab {
     /// The next tab (`forward`) or the one before, wrapping, for Left / Right.
     const fn shifted(self, forward: bool) -> Self {
         match (self, forward) {
+            (Self::Channels, true) | (Self::Roster, false) => Self::Projects,
             (Self::Projects, true) | (Self::Archive, false) => Self::Roster,
-            (Self::Roster, true) | (Self::Projects, false) => Self::Archive,
-            (Self::Archive, true) | (Self::Roster, false) => Self::Projects,
+            (Self::Roster, true) | (Self::Channels, false) => Self::Archive,
+            (Self::Archive, true) | (Self::Projects, false) => Self::Channels,
         }
     }
 
@@ -90,6 +95,7 @@ impl App {
             return;
         }
         match self.agents_tab {
+            AgentsTab::Channels => self.click_channel_row(column, row),
             AgentsTab::Projects => self.click_agent_row(column, row),
             AgentsTab::Roster => self.click_definition_row(column, row),
             AgentsTab::Archive => self.click_archived_row(column, row),

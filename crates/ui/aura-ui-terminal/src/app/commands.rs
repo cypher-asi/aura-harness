@@ -901,11 +901,14 @@ impl App {
             }
             UiCommand::SetPlacement { agent_id, state } => self.cmd_set_placement(agent_id, state),
             UiCommand::SetHost(view) => self.cmd_set_host(*view),
-            // The terminal UI shows channels in a later step.
-            UiCommand::SetChannels(_)
-            | UiCommand::SetChannelTasks { .. }
-            | UiCommand::ChannelPost { .. }
-            | UiCommand::SetChannelPosts { .. } => {}
+            UiCommand::SetChannels(channels) => self.set_channels(channels),
+            UiCommand::SetChannelTasks { channel_id, tasks } => {
+                self.set_channel_tasks(channel_id, tasks);
+            }
+            UiCommand::ChannelPost { channel_id, post } => self.add_channel_post(channel_id, post),
+            UiCommand::SetChannelPosts { channel_id, posts } => {
+                self.set_channel_posts(channel_id, posts);
+            }
             UiCommand::ClearConversation => self.cmd_clear_conversation(),
             UiCommand::NewRecord(record) => self.cmd_new_record(record),
             UiCommand::SetProjects(projects) => self.projects = projects,

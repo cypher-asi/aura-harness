@@ -471,6 +471,14 @@ impl App {
             return KeyResult::continue_running();
         }
         if self.focus == PanelFocus::Swarm
+            && self.agents_tab == AgentsTab::Channels
+            && self.input.is_empty()
+            && !word_motion
+            && self.handle_channels_key(key)
+        {
+            return KeyResult::continue_running();
+        }
+        if self.focus == PanelFocus::Swarm
             && self.agents_tab == AgentsTab::Archive
             && self.input.is_empty()
             && !word_motion
@@ -560,6 +568,10 @@ impl App {
                 }
             },
             PanelFocus::Swarm => match self.agents_tab {
+                AgentsTab::Channels => {
+                    self.handle_channels_key(key);
+                    KeyResult::continue_running()
+                }
                 AgentsTab::Projects => self.handle_swarm_key(key),
                 AgentsTab::Roster => {
                     self.handle_definitions_key(key);

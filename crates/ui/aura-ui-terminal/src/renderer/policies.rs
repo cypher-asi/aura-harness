@@ -207,7 +207,7 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
 }
 
 /// A section's title, with a muted note after it.
-fn heading(title: &'static str, note: Option<String>, theme: &Theme) -> Line<'static> {
+pub(super) fn heading(title: &'static str, note: Option<String>, theme: &Theme) -> Line<'static> {
     let mut spans = vec![
         Span::raw(" "),
         Span::styled(
