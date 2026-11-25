@@ -31,6 +31,27 @@ fn time_agent_list() {
     let started = Instant::now();
     let store = RocksStore::open(dir.join("db"), false).unwrap();
     println!("open store {:?}", started.elapsed());
+    let agents = aura_store_db::AgentStore::for_store(&store);
+    if !agents.is_empty().unwrap() {
+        let rows = time("store load (agent rows)", 3, || {
+            agents.load().unwrap().agents
+        });
+        time("derive id of every row", 3, || {
+            rows.iter()
+                .map(|row| aura_store_db::agents::derive_agent_id(&row.zns_id))
+                .count()
+        });
+        let bytes: Vec<Vec<u8>> = rows
+            .iter()
+            .map(|r| serde_json::to_vec(r).unwrap())
+            .collect();
+        time("decode every row", 3, || {
+            bytes
+                .iter()
+                .map(|b| serde_json::from_slice::<aura_store_db::AgentRecord>(b).unwrap())
+                .count()
+        });
+    }
     let mut registry = time("load registry", 3, || {
         AgentRegistry::open(aura_store_db::AgentStore::for_store(&store), &dir, &launch).unwrap()
     });
