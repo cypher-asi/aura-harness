@@ -681,6 +681,18 @@ fn a_tick_asks_for_a_frame_only_while_something_moves() {
     app.take_redraw();
     app.tick();
     assert!(app.take_redraw(), "a working agent's spinner turns");
+    let frame = app.animation_frame();
+    app.tick();
+    app.tick();
+    assert!(!app.take_redraw(), "spinners alone turn every few ticks");
+    assert_eq!(
+        app.animation_frame(),
+        frame,
+        "and step one frame when they do"
+    );
+    app.tick();
+    assert!(app.take_redraw());
+    assert_eq!(app.animation_frame(), frame + 1);
 }
 
 #[test]

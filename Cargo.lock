@@ -1049,6 +1049,7 @@ dependencies = [
  "aura-gate-route",
  "aura-model",
  "aura-store-db",
+ "rayon",
  "serde_json",
  "tempfile",
  "tokio",

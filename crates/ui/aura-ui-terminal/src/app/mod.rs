@@ -123,6 +123,10 @@ use crate::events::MAX_RECORDS;
 /// past its top or bottom.
 const SELECTION_SCROLL_EVERY: Duration = Duration::from_millis(40);
 
+/// Ticks per spinner step when spinners are all that moves: agents off
+/// screen, tasks and processes at work don't redraw every frame.
+const SPINNER_TICKS: usize = 3;
+
 /// Most rows the chat scrolls in one step under a dragged selection; it
 /// scrolls a row per row the pointer is past the edge, up to this.
 const SELECTION_SCROLL_MOST: u16 = 8;
@@ -254,6 +258,8 @@ pub struct App {
     pub(super) sandbox_stale: bool,
     /// Animation frame counter for spinners
     pub(super) animation_frame: usize,
+    /// Ticks until spinners turn again while nothing else animates
+    pub(super) spinner_wait: usize,
     /// Whether the screen may look different since the host last drew
     /// it; see [`Self::take_redraw`]
     pub(super) redraw: bool,
@@ -1018,6 +1024,7 @@ impl App {
             sandbox: SandboxTree::default(),
             sandbox_stale: false,
             animation_frame: 0,
+            spinner_wait: 0,
             redraw: true,
             records: VecDeque::new(),
             selected_record: 0,
@@ -2755,7 +2762,13 @@ impl App {
     /// Whether agent `index` has spawned agents listed under it, so it
     /// can fold.
     pub(crate) fn agent_has_spawns(&self, index: usize) -> bool {
-        self.spawn_end(index) > index + 1
+        let next = index + 1;
+        match (self.agents.get(index), self.agents.get(next)) {
+            (Some(agent), Some(after)) => {
+                after.depth > agent.depth && !starts_project(&self.agents, next)
+            }
+            _ => false,
+        }
     }
 
     /// Whether agent `index` is folded shut over the agents it spawned.
@@ -3397,7 +3410,6 @@ impl App {
     /// Process pending updates from the command channel, and scroll the
     /// chat under a selection held past its top or bottom.
     pub fn tick(&mut self) {
-        self.animation_frame = self.animation_frame.wrapping_add(1);
         let shown = self.notification.is_some();
         self.expire_notification();
         if !self.selection_scrolling() {
@@ -3425,7 +3437,22 @@ impl App {
         } else {
             self.processing_since = None;
         }
-        if shown || self.animating() {
+        let turns = if shown || self.animates_every_tick() {
+            true
+        } else if self.spinners_turning() {
+            let due = self.spinner_wait == 0;
+            self.spinner_wait = if due {
+                SPINNER_TICKS - 1
+            } else {
+                self.spinner_wait - 1
+            };
+            due
+        } else {
+            self.spinner_wait = 0;
+            false
+        };
+        if turns {
+            self.animation_frame = self.animation_frame.wrapping_add(1);
             self.redraw = true;
         }
     }
@@ -3451,9 +3478,24 @@ impl App {
     /// or BENCH tab animates.
     #[must_use]
     pub fn animating(&self) -> bool {
+        self.animates_every_tick() || self.spinners_turning()
+    }
+
+    /// Whether what changes from tick to tick is more than spinner glyphs:
+    /// the agent on screen at work, a notification, a selection scrolling
+    /// the chat, or the chat, LOG or BENCH tab animating.
+    fn animates_every_tick(&self) -> bool {
         self.is_busy()
             || self.notification.is_some()
-            || self.agents.iter().any(|agent| agent.running)
+            || self.selection_scrolling()
+            || self.bench_animating()
+            || self.log_animating()
+            || self.chat_animating()
+    }
+
+    /// Whether a spinner turns for an agent, task or process at work.
+    fn spinners_turning(&self) -> bool {
+        self.agents.iter().any(|agent| agent.running)
             || self
                 .task_list
                 .tasks()
@@ -3463,10 +3505,6 @@ impl App {
                 .processes
                 .iter()
                 .any(|process| process.status == crate::events::ProcessStatus::Running)
-            || self.selection_scrolling()
-            || self.bench_animating()
-            || self.log_animating()
-            || self.chat_animating()
     }
 
     /// Apply every command waiting in the command channel. Between frames

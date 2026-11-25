@@ -603,19 +603,32 @@ fn os_row(inner: &Inner, process: &OsProcess) -> Row {
 /// of the agent that owns it (a background agent or task before that
 /// agent's turn). Turns are always at the top.
 fn arrange(rows: Vec<Row>) -> Vec<ProcessSummary> {
-    let parent_of = |row: &Row| -> Option<usize> {
-        if let Some(ppid) = row.ppid {
-            if let Some(i) = rows.iter().position(|r| r.summary.pid == Some(ppid)) {
-                return Some(i);
+    let mut by_pid: HashMap<u32, usize> = HashMap::new();
+    let mut by_subject: HashMap<&str, usize> = HashMap::new();
+    let mut by_subject_not_turn: HashMap<&str, usize> = HashMap::new();
+    for (i, row) in rows.iter().enumerate() {
+        if let Some(pid) = row.summary.pid {
+            by_pid.entry(pid).or_insert(i);
+        }
+        if let Some(subject) = row.subject.as_deref() {
+            by_subject.entry(subject).or_insert(i);
+            if row.summary.kind != ProcessKind::Turn {
+                by_subject_not_turn.entry(subject).or_insert(i);
             }
+        }
+    }
+    let parent_of = |row: &Row| -> Option<usize> {
+        if let Some(i) = row.ppid.and_then(|ppid| by_pid.get(&ppid)) {
+            return Some(*i);
         }
         if row.summary.kind == ProcessKind::Turn {
             return None;
         }
-        let owner = Some(&row.summary.owner_agent_id);
-        rows.iter()
-            .position(|r| r.subject.as_ref() == owner && r.summary.kind != ProcessKind::Turn)
-            .or_else(|| rows.iter().position(|r| r.subject.as_ref() == owner))
+        let owner = row.summary.owner_agent_id.as_str();
+        by_subject_not_turn
+            .get(owner)
+            .or_else(|| by_subject.get(owner))
+            .copied()
     };
     let parents: Vec<Option<usize>> = rows
         .iter()

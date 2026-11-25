@@ -926,10 +926,12 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
                 .send(UiCommand::ChatReady)
                 .await;
         } else {
-            let history = conversation_history(store, agent_id).unwrap_or_else(|e| {
-                warn!(error = %e, "Failed to rebuild conversation from record");
-                Vec::new()
-            });
+            let history = lock(&state.hub.shown_chats)
+                .get_or_read(store, agent_id, || conversation_history(store, agent_id))
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "Failed to rebuild conversation from record");
+                    Vec::new()
+                });
             AgentUi::new(state.commands.clone(), agent_id)
                 .send(UiCommand::LoadConversation(history))
                 .await;
@@ -938,7 +940,9 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
     }
     // One replace-all command: clears the previous agent's records even
     // when this agent's history can't be read.
-    let (records, problem) = match recent_record_summaries(store, agent_id) {
+    let read = lock(&state.hub.shown_records)
+        .get_or_read(store, agent_id, || recent_record_summaries(store, agent_id));
+    let (records, problem) = match read {
         Ok(summaries) => (summaries, None),
         Err(e) => (Vec::new(), Some(e)),
     };

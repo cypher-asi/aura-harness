@@ -1088,6 +1088,28 @@ fn last_activity_is_reused_until_the_head_moves() {
 }
 
 #[test]
+fn a_shown_agents_reads_are_kept_until_its_record_grows() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RocksStore::open(dir.path(), false).unwrap();
+    let agent = AgentId::generate();
+    let mut kept = ByHead::default();
+    let reads = std::cell::Cell::new(0);
+    let read = |kept: &mut ByHead<usize>| {
+        kept.get_or_read(&store, agent, || {
+            reads.set(reads.get() + 1);
+            Ok(reads.get())
+        })
+        .unwrap()
+    };
+    assert_eq!(read(&mut kept), 1);
+    assert_eq!(read(&mut kept), 1, "same head, nothing read");
+
+    append(&store, 1, text_tx(agent, TransactionType::AgentMsg, "one"));
+    assert_eq!(read(&mut kept), 2, "the record grew");
+    assert_eq!(read(&mut kept), 2);
+}
+
+#[test]
 fn list_rows_match_the_registry_for_compares_and_the_archive() {
     use crate::agent_registry::AgentRegistry;
     let data = tempfile::tempdir().unwrap();

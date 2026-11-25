@@ -74,7 +74,8 @@ use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision};
 use aura_model::{Message, ModelCallPurpose, ThinkingEffort, ToolDefinition};
 use aura_ui_terminal::events::{
-    AgentDefinitionSummary, AgentSummary, MailView, ProcessKind, ProcessStatus, ProcessSummary,
+    AgentDefinitionSummary, AgentSummary, MailView, MessageData, ProcessKind, ProcessStatus,
+    ProcessSummary, RecordSummary,
 };
 use aura_ui_terminal::{PermissionMode, UiCommand};
 use std::collections::hash_map::Entry;
@@ -363,6 +364,10 @@ pub struct AgentHub {
     writing: Mutex<HashSet<AgentId>>,
     /// When each agent was last active, for the agent lists
     last_active: Mutex<crate::record_loader::LastActive>,
+    /// The chats of the agents shown last, as read from their records
+    pub(super) shown_chats: Mutex<crate::record_loader::ByHead<Vec<MessageData>>>,
+    /// The Record panel rows of the agents shown last
+    pub(super) shown_records: Mutex<crate::record_loader::ByHead<Vec<RecordSummary>>>,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -448,6 +453,8 @@ impl AgentHub {
                 write_locks: Mutex::new(HashMap::new()),
                 writing: Mutex::new(HashSet::new()),
                 last_active: Mutex::default(),
+                shown_chats: Mutex::default(),
+                shown_records: Mutex::default(),
             }
         })
     }
