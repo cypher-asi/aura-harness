@@ -5905,3 +5905,25 @@ fn test_right_click_on_the_channel_side_panel_opens_its_menu() {
         menu_items(&app)
     );
 }
+
+#[test]
+fn test_kernel_panel_commands_leave_the_layout_alone_while_a_channel_is_open() {
+    let (_dir, mut app) = app_in_channel("co");
+    let before = (
+        app.record_panel_visible,
+        app.side_expanded,
+        app.sandbox_panel_visible,
+    );
+    app.show_members();
+    app.show_policies();
+    app.show_inbox();
+    assert_eq!(
+        (
+            app.record_panel_visible,
+            app.side_expanded,
+            app.sandbox_panel_visible,
+        ),
+        before
+    );
+    assert!(!app.record_panel_visible(), "the channel still fills the column");
+}
