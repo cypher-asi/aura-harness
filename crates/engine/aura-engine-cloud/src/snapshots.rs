@@ -250,6 +250,10 @@ pub struct SnapshotBuilder {
     index_path: PathBuf,
     /// One build at a time per process; also guards the index file.
     index: Mutex<Option<SnapshotIndex>>,
+    /// One build per snapshot at a time: callers asking for a snapshot
+    /// being built wait for that build and reuse it instead of starting
+    /// their own (parallel placements in one project).
+    building: parking_lot::Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl SnapshotBuilder {
@@ -276,7 +280,13 @@ impl SnapshotBuilder {
             binary,
             index_path,
             index: Mutex::new(None),
+            building: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// The build lock of snapshot `key`.
+    fn build_lock(&self, key: &str) -> Arc<Mutex<()>> {
+        Arc::clone(self.building.lock().entry(key.to_string()).or_default())
     }
 
     async fn record(&self, key: &str) -> Option<SnapshotRecord> {
@@ -318,6 +328,8 @@ impl SnapshotBuilder {
     ///
     /// When a build step fails.
     pub async fn ensure_base(&self) -> CloudResult<SnapshotRecord> {
+        let lock = self.build_lock(BASE_SNAPSHOT);
+        let _building = lock.lock().await;
         // The binary itself is part of the base: a new build of the same
         // version must still reach new machines.
         let version = match &self.binary {
@@ -398,6 +410,8 @@ impl SnapshotBuilder {
         force: bool,
     ) -> CloudResult<SnapshotRecord> {
         let base = self.ensure_base().await?;
+        let lock = self.build_lock(project_id);
+        let _building = lock.lock().await;
         let dir = project_dir.to_path_buf();
         let command = build_command.map_or_else(|| default_build_command(&dir), str::to_string);
         let fingerprint = {
@@ -409,6 +423,19 @@ impl SnapshotBuilder {
                 .map_err(|err| CloudError::io("fingerprint project", std::io::Error::other(err)))?
         };
         let current = self.record(project_id).await;
+        // A forced rebuild (the snapshot's commit is gone from this
+        // repository) that another caller already did while this one
+        // waited for the build lock: reuse it.
+        let fresh = match current.as_ref().and_then(|r| r.commit.clone()) {
+            Some(commit) if force => {
+                let dir = dir.clone();
+                tokio::task::spawn_blocking(move || delta::has_commit(&dir, &commit))
+                    .await
+                    .unwrap_or(false)
+            }
+            _ => false,
+        };
+        let force = force && !fresh;
         if !force && self.usable(current.as_ref(), &fingerprint).await? {
             if let Some(record) = current {
                 return Ok(record);
@@ -829,5 +856,53 @@ mod tests {
         std::fs::write(&path, b"build two").expect("write");
         assert_ne!(binary_digest(&path).expect("digest"), one);
         assert_eq!(one.len(), 16);
+    }
+
+    #[tokio::test]
+    async fn parallel_callers_share_one_build() {
+        let home = tempfile::tempdir().expect("home");
+        let dir = project();
+        let fake = FakeProvider::new();
+        let (builder, _) = builder(&fake, home.path());
+        let builder = Arc::new(builder);
+        let calls = (0..3).map(|_| {
+            let builder = Arc::clone(&builder);
+            let dir = dir.path().to_path_buf();
+            async move { builder.ensure_project("p1", &dir, None, false).await }
+        });
+        let records = futures_util::future::join_all(calls).await;
+        let names: Vec<String> = records
+            .into_iter()
+            .map(|r| r.expect("record").name)
+            .collect();
+        assert!(names.iter().all(|n| n == &names[0]), "{names:?}");
+        let creates = fake.calls_matching("Create(");
+        assert_eq!(
+            creates.len(),
+            2,
+            "one base and one project builder: {creates:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_forced_rebuild_already_done_is_reused() {
+        let home = tempfile::tempdir().expect("home");
+        let dir = project();
+        let fake = FakeProvider::new();
+        let (builder, _) = builder(&fake, home.path());
+        builder
+            .ensure_project("p1", dir.path(), None, true)
+            .await
+            .expect("first");
+        // Its commit is in the repository now: a second forced call reuses it.
+        builder
+            .ensure_project("p1", dir.path(), None, true)
+            .await
+            .expect("second");
+        assert_eq!(
+            fake.calls_matching("SaveSnapshot(").len(),
+            2,
+            "base + one project build"
+        );
     }
 }
