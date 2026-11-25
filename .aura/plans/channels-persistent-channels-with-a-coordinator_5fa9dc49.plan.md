@@ -16,7 +16,7 @@ todos:
   status: completed
 - id: perf
   content: Run agent_list_perf on a copy of real data, branch vs main
-  status: in_progress
+  status: completed
 - id: merge-main
   content: Merge main into channels, resolve conflicts, run all checks
   status: in_progress
@@ -35,7 +35,7 @@ Move the agent registry from agents.json into the shared RocksDB keyed by AgentI
 - [x] Keep store and registry in step when registering the coordinator fails
 - [x] Save each coordinator's last-summary time in the channel store
 - [x] Right-click menu in the right-hand channel panel
-- [~] Run agent_list_perf on a copy of real data, branch vs main
+- [x] Run agent_list_perf on a copy of real data, branch vs main
 - [~] Merge main into channels, resolve conflicts, run all checks
 - [ ] Merge channels into main
 

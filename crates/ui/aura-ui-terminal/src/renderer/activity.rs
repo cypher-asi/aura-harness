@@ -2,7 +2,7 @@
 //! a one-line header or expanded to show everything. Consecutive steps are
 //! drawn as a group under one summary line (`Explored 4 files, 2 searches`).
 
-use super::command::wrap_spans;
+use super::command::{script_lines, wrap_spans};
 use super::diff::diff_stat_spans;
 use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::panels::format_elapsed;
@@ -661,14 +661,13 @@ fn tool_body(
                 theme,
             ));
         }
+    } else if let Some(command) = (step.name == "run_command")
+        .then(|| command_lines(&step.args, body, theme))
+        .flatten()
+    {
+        lines.extend(command);
     } else {
-        for line in pretty_args(&step.args).lines() {
-            if line.is_empty() {
-                lines.push(body.line(String::new(), muted, theme));
-            } else {
-                body.push_wrapped(&mut lines, line, muted, theme);
-            }
-        }
+        push_args(&mut lines, &step.args, body, theme);
     }
 
     let Some(result) = step.result.as_deref() else {
@@ -710,6 +709,91 @@ fn tool_body(
         ));
     }
     lines
+}
+
+/// `args` as [`pretty_args`] lays them out, under the rule.
+fn push_args(lines: &mut Vec<Line<'static>>, args: &str, body: &Body, theme: &Theme) {
+    let muted = Style::default().fg(theme.colors.muted);
+    for line in pretty_args(args).lines() {
+        if line.is_empty() {
+            lines.push(body.line(String::new(), muted, theme));
+        } else {
+            body.push_wrapped(lines, line, muted, theme);
+        }
+    }
+}
+
+/// A `run_command` call's arguments: the command as `$ …` rows, then how
+/// it ran (`in web · background · timeout 2m 00s`) and any other
+/// arguments. `None` while they stream in or when they hold no command.
+fn command_lines(args: &str, body: &Body, theme: &Theme) -> Option<Vec<Line<'static>>> {
+    use serde_json::Value;
+    let Ok(Value::Object(mut args)) = serde_json::from_str::<Value>(args) else {
+        return None;
+    };
+    let mut take = |key: &str| args.remove(key);
+    let command = match (take("shell_script"), take("command")) {
+        (Some(Value::String(script)), _) | (None, Some(Value::String(script))) => script,
+        _ => {
+            let program = take("program")?;
+            let words = take("args")
+                .and_then(|a| a.as_array().cloned())
+                .unwrap_or_default();
+            std::iter::once(program.as_str()?.to_string())
+                .chain(words.iter().filter_map(Value::as_str).map(shell_word))
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+    };
+    let mut lines: Vec<Line<'static>> = script_lines(&command, body.width, theme)
+        .into_iter()
+        .map(|line| body.wrap_line(line, theme))
+        .collect();
+
+    let background = take("background").and_then(|v| v.as_bool()) == Some(true);
+    let mut how = Vec::new();
+    if let Some(Value::String(dir)) = take("cwd").or_else(|| take("working_dir")) {
+        how.push(format!("in {dir}"));
+    }
+    if background {
+        how.push("background".to_string());
+    }
+    let timeout_ms = take("timeout_ms").and_then(|v| v.as_u64()).or_else(|| {
+        take("timeout_secs")
+            .and_then(|v| v.as_u64())
+            .map(|s| s * 1000)
+    });
+    if let Some(ms) = timeout_ms.filter(|_| !background) {
+        how.push(format!(
+            "timeout {}",
+            format_elapsed(Duration::from_millis(ms))
+        ));
+    }
+    if let Some(cols) = take("tty_cols").and_then(|v| v.as_u64()) {
+        how.push(format!("tty {cols} columns"));
+    }
+    take("allow_shell");
+    let muted = Style::default().fg(theme.colors.muted);
+    if !how.is_empty() {
+        body.push_wrapped(&mut lines, &how.join(" · "), muted, theme);
+    }
+    if !args.is_empty() {
+        push_args(&mut lines, &Value::Object(args).to_string(), body, theme);
+    }
+    Some(lines)
+}
+
+/// `arg` as one shell word, quoted when it needs to be.
+fn shell_word(arg: &str) -> String {
+    let plain = !arg.is_empty()
+        && arg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,+@%".contains(c));
+    if plain {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', r"'\''"))
+    }
 }
 
 /// `▸ Read main.rs L1-80`, `▸ ✗ Ran cargo test · exit 101`, cut to fit on
@@ -1046,6 +1130,65 @@ mod tests {
         assert!(text.contains("│ subagent_type: explore"), "{text}");
         assert!(!text.contains("**"), "{text}");
         assert!(!text.contains("|---|"), "{text}");
+    }
+
+    #[test]
+    fn expanded_command_shows_a_prompt_one_statement_to_a_row() {
+        let args = serde_json::json!({
+            "allow_shell": true,
+            "background": true,
+            "cwd": ".worktrees/channels-merge",
+            "shell_script": "cargo fmt --all -- --check && echo FMT_OK; \
+                             cargo clippy --all-targets 2>&1 | grep -E '^(error|warning)' | head -40; \
+                             echo DONE",
+        });
+        let result = crate::app::format::format_tool_result(
+            "run_command",
+            "Started in the background (pid 42): cargo fmt\nJob id: 7697e889\n\
+             Output: ./aura_data/processes/7697e889.log\nYou will get a message.",
+        );
+        let step = tool_step(
+            "run_command",
+            &args.to_string(),
+            ToolStatus::Success,
+            Some(&result),
+        );
+        let lines = activity_lines(&step, true, None, "⠋", 60, &Theme::default());
+        assert_eq!(
+            texts(&lines)[1..],
+            [
+                "    │ $ cargo fmt --all -- --check &&",
+                "    │   echo FMT_OK",
+                "    │   cargo clippy --all-targets 2>&1 | grep -E ",
+                "    │     '^(error|warning)' | head -40",
+                "    │   echo DONE",
+                "    │ in .worktrees/channels-merge · background",
+                "    │ ",
+                "    │ Started in the background · pid 42",
+                "    │ job 7697e889",
+                "    │ log ./aura_data/processes/7697e889.log",
+            ]
+        );
+    }
+
+    #[test]
+    fn expanded_program_call_quotes_its_args_and_keeps_other_keys() {
+        let args = serde_json::json!({
+            "program": "git",
+            "args": ["commit", "-m", "fix it's done"],
+            "timeout_secs": 90,
+            "extra": 1,
+        });
+        let step = tool_step("run_command", &args.to_string(), ToolStatus::Success, None);
+        let lines = activity_lines(&step, true, None, "⠋", 80, &Theme::default());
+        assert_eq!(
+            texts(&lines)[1..],
+            [
+                r"    │ $ git commit -m 'fix it'\''s done'",
+                "    │ timeout 1m 30s",
+                "    │ extra: 1",
+            ]
+        );
     }
 
     #[test]

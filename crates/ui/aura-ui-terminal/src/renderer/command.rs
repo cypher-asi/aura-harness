@@ -1,7 +1,7 @@
 //! Shell command rendering: highlighted command lines and terminal output.
 
 use super::input::prompt_spans;
-use crate::app::shell_input::{tokens, TokenKind};
+use crate::app::shell_input::{statements, tokens, TokenKind};
 use crate::components::ShellRun;
 use crate::Theme;
 use ratatui::{
@@ -80,6 +80,49 @@ pub(super) fn shell_lines(
         )));
     }
     lines
+}
+
+/// A script the agent ran, as `$ cargo fmt &&` / `  echo OK` rows at most
+/// `width` columns wide: one statement to a row, colored by token, and a
+/// statement too long for its row wrapping further in.
+pub(super) fn script_lines(script: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    const HANG: &str = "    ";
+    let prompt = Style::default().fg(theme.colors.faint);
+    let room = width.saturating_sub(HANG.len()).max(1);
+    let mut lines = Vec::new();
+    for (i, statement) in statements(script).iter().enumerate() {
+        let rows = split_at_newlines(owned(command_spans(statement, theme)))
+            .into_iter()
+            .flat_map(|row| wrap_spans(row, room));
+        for (j, mut row) in rows.enumerate() {
+            let lead = match (i, j) {
+                (0, 0) => "$ ",
+                (_, 0) => "  ",
+                _ => HANG,
+            };
+            row.insert(0, Span::styled(lead, prompt));
+            lines.push(Line::from(row));
+        }
+    }
+    lines
+}
+
+/// `spans` cut into one row for each line of their text.
+fn split_at_newlines(spans: Vec<Span<'static>>) -> Vec<Vec<Span<'static>>> {
+    let mut rows = vec![Vec::new()];
+    for span in spans {
+        for (i, piece) in span.content.split('\n').enumerate() {
+            if i > 0 {
+                rows.push(Vec::new());
+            }
+            if !piece.is_empty() {
+                if let Some(row) = rows.last_mut() {
+                    row.push(Span::styled(piece.to_string(), span.style));
+                }
+            }
+        }
+    }
+    rows
 }
 
 pub(super) fn owned(spans: Vec<Span<'_>>) -> Vec<Span<'static>> {

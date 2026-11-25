@@ -229,7 +229,7 @@ fn format_task_result(result: &str) -> Option<String> {
 
 fn format_command_result(result: &str) -> String {
     let Ok(envelope) = serde_json::from_str::<serde_json::Value>(result) else {
-        return result.to_string();
+        return format_background_start(result).unwrap_or_else(|| result.to_string());
     };
     let field = |key: &str| {
         envelope
@@ -262,6 +262,20 @@ fn format_command_result(result: &str) -> String {
         parts.push("(no output)".to_string());
     }
     parts.join("\n")
+}
+
+/// What `run_command` says when it starts a command in the background,
+/// as its pid, job id and log, without the command (shown with the call)
+/// or the directions meant for the model.
+fn format_background_start(result: &str) -> Option<String> {
+    let rest = result.strip_prefix("Started in the background (pid ")?;
+    let (pid, rest) = rest.split_once("): ")?;
+    let (_, rest) = rest.rsplit_once("\nJob id: ")?;
+    let (job, rest) = rest.split_once("\nOutput: ")?;
+    let log = rest.lines().next()?;
+    Some(format!(
+        "Started in the background · pid {pid}\njob {job}\nlog {log}"
+    ))
 }
 
 /// Format a tool summary given parsed JSON args.
