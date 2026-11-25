@@ -43,7 +43,7 @@ use crate::names::{self, BASE_SNAPSHOT, LABEL_INSTALL, LABEL_PROJECT, LABEL_ROLE
 use crate::provider::{MachineOrigin, NewMachine, VmProvider};
 
 /// Bump when [`base_packages`] or the node start changes.
-pub const BOOTSTRAP_VERSION: &str = "2";
+pub const BOOTSTRAP_VERSION: &str = "3";
 /// Where a machine finds out which snapshot it came from.
 pub const SNAPSHOT_MANIFEST: &str = "/etc/aura/snapshot.json";
 /// Builders delete themselves after this long, seconds.
@@ -79,7 +79,7 @@ pub fn base_packages() -> Vec<String> {
         "sudo apt-get update -y".into(),
         "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
          build-essential clang mold cmake pkg-config libssl-dev libclang-dev git curl ca-certificates \
-         python3 nodejs npm libdbus-1-3 libssl3"
+         python3 nodejs npm libdbus-1-3 libdbus-1-dev libssl3"
             .into(),
         "curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
          --component rustfmt --component clippy"
