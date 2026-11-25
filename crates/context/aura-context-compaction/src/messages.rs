@@ -424,20 +424,32 @@ pub fn estimate_message_chars(messages: &[Message]) -> usize {
                 .map(|block| match block {
                     ContentBlock::Text { text } => text.len(),
                     ContentBlock::Thinking { thinking, .. } => thinking.len(),
-                    ContentBlock::ToolUse { input, .. } => {
-                        serde_json::to_string(input).map_or(0, |s| s.len())
-                    }
+                    ContentBlock::ToolUse { input, .. } => json_len(input),
                     ContentBlock::ToolResult { content, .. } => match content {
                         ToolResultContent::Text(t) => t.len(),
-                        ToolResultContent::Json(v) => {
-                            serde_json::to_string(v).map_or(0, |s| s.len())
-                        }
+                        ToolResultContent::Json(v) => json_len(v),
                     },
                     ContentBlock::Image { source } => source.data.len(),
                 })
                 .sum::<usize>()
         })
         .sum()
+}
+
+/// Length of `value` written as compact JSON, without writing it out.
+pub(crate) fn json_len(value: &serde_json::Value) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    serde_json::to_writer(&mut count, value).map_or(0, |()| count.0)
 }
 
 /// Select the compaction tier based on context utilization percentage.

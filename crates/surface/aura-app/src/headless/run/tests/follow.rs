@@ -167,8 +167,10 @@ async fn a_change_the_model_ran_itself_is_not_nudged_but_still_judged() {
     );
     let requests = run.requests.lock().unwrap();
     let said = |message: &aura_model::Message| message.text_content();
-    assert!((requests.iter().flat_map(|request| &request.messages))
-        .all(|message| !aura_gate::evidence::transcript::said::is_nudge(&said(message))));
+    assert!(
+        (requests.iter().flat_map(|request| request.messages.iter()))
+            .all(|message| !aura_gate::evidence::transcript::said::is_nudge(&said(message)))
+    );
     let unverified = aura_gate::judge::turn::UNVERIFIED_SYSTEM_PROMPT;
     assert_eq!(requests[5].system.as_str(), unverified);
     assert_eq!(run.signals(), [(GATE_SONNET, OutcomeSignal::JudgedPass)]);

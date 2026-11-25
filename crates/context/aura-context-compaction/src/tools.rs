@@ -16,8 +16,7 @@ pub struct ToolSurfaceReport {
 /// Estimate the on-wire size of a `ToolDefinition`.
 #[must_use]
 pub fn tool_definition_chars(tool: &ToolDefinition) -> usize {
-    let schema_chars = serde_json::to_string(&tool.input_schema).map_or(0, |s| s.len());
-    tool.name.len() + tool.description.len() + schema_chars
+    tool.name.len() + tool.description.len() + crate::messages::json_len(&tool.input_schema)
 }
 
 /// Sum the per-tool char estimate across an effective tool surface.

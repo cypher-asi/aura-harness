@@ -142,6 +142,7 @@ fn emit_stream_event(
     event_tx: Option<&Sender<AgentLoopEvent>>,
     stream_event: &StreamEvent,
     accumulator: &StreamAccumulator,
+    last_snapshot: &mut Option<Instant>,
 ) {
     if event_tx.is_none() {
         return;
@@ -167,7 +168,10 @@ fn emit_stream_event(
             );
         }
         StreamEvent::InputJsonDelta { .. } => {
-            if let Some(ref tool) = accumulator.current_tool_use {
+            let due = last_snapshot
+                .is_none_or(|at| at.elapsed() >= super::stream_pump::TOOL_INPUT_SNAPSHOT_INTERVAL);
+            if let Some(tool) = accumulator.current_tool_use.as_ref().filter(|_| due) {
+                *last_snapshot = Some(Instant::now());
                 emit(
                     event_tx,
                     AgentLoopEvent::ToolInputSnapshot {
@@ -227,6 +231,7 @@ async fn drain_remaining_stream(
     cancellation_token: Option<&CancellationToken>,
 ) -> DrainOutcome {
     let mut accumulator = StreamAccumulator::new();
+    let mut last_snapshot = None;
 
     loop {
         let next = if let Some(token) = cancellation_token {
@@ -243,7 +248,7 @@ async fn drain_remaining_stream(
         match next {
             Some(Ok(event)) => {
                 accumulator.process(&event);
-                emit_stream_event(event_tx, &event, &accumulator);
+                emit_stream_event(event_tx, &event, &accumulator, &mut last_snapshot);
             }
             Some(Err(e)) => return DrainOutcome::Transport(e),
             None => return DrainOutcome::Completed(Box::new(accumulator)),

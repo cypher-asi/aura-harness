@@ -115,10 +115,10 @@ fn compaction_pressure_tokens(
         .min(max_ctx)
 }
 
-fn heuristic_context_tokens(messages: &[aura_model::Message]) -> u64 {
+fn heuristic_context_tokens(messages: &super::state::History) -> u64 {
     #[allow(clippy::cast_possible_truncation)]
     {
-        (compaction::estimate_message_chars(messages) / CHARS_PER_TOKEN) as u64
+        (messages.chars() / CHARS_PER_TOKEN) as u64
     }
 }
 
@@ -212,7 +212,7 @@ pub(super) fn compact_if_needed(
     let estimated_tokens = current_context_tokens(state);
     state.result.estimated_context_tokens = estimated_tokens;
     let reserved_tokens = reserved_output_tokens(config, max_ctx);
-    let raw_message_bytes = compaction::estimate_message_chars(&state.messages);
+    let raw_message_bytes = state.messages.chars();
     let request_kind = effective_compaction_request_kind(config, iteration);
 
     // Phase 8: fire `PreCompact` hook. A `Block` decision skips
@@ -338,7 +338,7 @@ pub(super) fn compact_for_overflow(
         return false;
     }
     sanitize::validate_and_repair(&mut state.messages);
-    let before_chars = compaction::estimate_message_chars(&state.messages);
+    let before_chars = state.messages.chars();
     let before_tokens = current_context_tokens(state);
 
     let report = compaction::recover_overflow(&mut state.messages, tier);
@@ -689,7 +689,7 @@ mod tests {
 
         assert!(matches!(outcome, CompactionOutcome::None), "{outcome:?}");
         assert_eq!(
-            serde_json::to_string(&state.messages).unwrap(),
+            serde_json::to_string(&*state.messages).unwrap(),
             before,
             "below the trigger the cached prefix must stay byte-identical"
         );

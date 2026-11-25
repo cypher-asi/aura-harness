@@ -7,7 +7,8 @@
 //! in [`super::run`] and [`super::stop_reason`].
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use aura_core_types::trace::HarnessDecision;
 use aura_model::{Message, ModelRequest, ModelRequestKind, Role, ThinkingEffort, ToolDefinition};
@@ -74,7 +75,7 @@ pub(crate) struct LoopState {
     /// ([`Self::reason_less`]).
     pub(crate) effort_lowered: u8,
     pub(crate) last_context_tokens_estimate: Option<u64>,
-    pub(crate) messages: Vec<Message>,
+    pub(crate) messages: History,
     pub(crate) build_baseline: Option<BuildBaseline>,
     /// Per-iteration net file-op accumulator. Reset at the top of
     /// every iteration. Tracks writes so the
@@ -123,6 +124,75 @@ pub(crate) struct LoopState {
     task_reports_seen: usize,
 }
 
+/// The conversation, shared with the model request last sent from it.
+/// Changing it copies the messages only while that request still holds
+/// them.
+#[derive(Debug, Default)]
+pub(crate) struct History {
+    messages: Arc<Vec<Message>>,
+    /// [`aura_context_compaction::estimate_message_chars`] of `messages`, or
+    /// [`UNCOUNTED`] until asked for since they last changed
+    chars: AtomicUsize,
+}
+
+const UNCOUNTED: usize = usize::MAX;
+
+impl History {
+    /// The messages, for a model request.
+    pub(crate) fn shared(&self) -> Arc<Vec<Message>> {
+        Arc::clone(&self.messages)
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<Message> {
+        Arc::unwrap_or_clone(self.messages)
+    }
+
+    /// [`aura_context_compaction::estimate_message_chars`] of the messages, counted
+    /// once per change.
+    pub(crate) fn chars(&self) -> usize {
+        let chars = self.chars.load(Ordering::Relaxed);
+        if chars != UNCOUNTED {
+            return chars;
+        }
+        let chars = aura_context_compaction::estimate_message_chars(&self.messages);
+        self.chars.store(chars, Ordering::Relaxed);
+        chars
+    }
+}
+
+impl Clone for History {
+    fn clone(&self) -> Self {
+        Self {
+            messages: Arc::clone(&self.messages),
+            chars: AtomicUsize::new(self.chars.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+impl From<Vec<Message>> for History {
+    fn from(messages: Vec<Message>) -> Self {
+        Self {
+            messages: Arc::new(messages),
+            chars: AtomicUsize::new(UNCOUNTED),
+        }
+    }
+}
+
+impl std::ops::Deref for History {
+    type Target = Vec<Message>;
+
+    fn deref(&self) -> &Vec<Message> {
+        &self.messages
+    }
+}
+
+impl std::ops::DerefMut for History {
+    fn deref_mut(&mut self) -> &mut Vec<Message> {
+        *self.chars.get_mut() = UNCOUNTED;
+        Arc::make_mut(&mut self.messages)
+    }
+}
+
 impl LoopState {
     pub(crate) fn decide(&mut self, decision: HarnessDecision) {
         self.decisions.push(decision);
@@ -156,7 +226,7 @@ impl LoopState {
             build_cooldown: 0,
             effort_lowered: 0,
             last_context_tokens_estimate: None,
-            messages,
+            messages: messages.into(),
             build_baseline: None,
             turn_diff: turn_diff::TurnDiff::default(),
             session_read_paths: std::collections::HashSet::new(),
@@ -471,7 +541,7 @@ impl LoopState {
             None => builder,
         };
         builder
-            .messages(self.messages.clone())
+            .messages(self.messages.shared())
             .tools(effective_tools)
             .tool_choice(tool_choice)
             .thinking_effort(thinking_effort)
@@ -893,5 +963,37 @@ mod reply_size_tests {
         state.reason_less();
         let request = next_request(&mut state, &config);
         assert_eq!(request.thinking_effort, Some(ThinkingEffort::Max));
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn a_request_keeps_the_messages_it_was_sent_with() {
+        let mut history = History::from(vec![Message::user("one")]);
+        let sent = history.shared();
+        assert!(
+            Arc::ptr_eq(&sent, &history.shared()),
+            "sending copies nothing"
+        );
+        assert_eq!(history.chars(), 3);
+
+        history.push(Message::user("three"));
+        assert_eq!(sent.len(), 1);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.chars(), 8, "a change is counted again");
+
+        drop(sent);
+        let before = history.shared();
+        drop(before);
+        let unshared = Arc::as_ptr(&history.shared());
+        history.push(Message::user("x"));
+        assert_eq!(
+            Arc::as_ptr(&history.shared()),
+            unshared,
+            "nothing holds it: no copy"
+        );
     }
 }

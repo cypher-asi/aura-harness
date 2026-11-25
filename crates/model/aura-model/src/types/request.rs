@@ -314,8 +314,9 @@ pub struct ModelRequest {
     pub model: ModelName,
     /// System prompt
     pub system: String,
-    /// Conversation messages
-    pub messages: Vec<Message>,
+    /// Conversation messages, shared with the conversation they were
+    /// taken from: an agent asks again with all of them each step
+    pub messages: Arc<Vec<Message>>,
     /// Available tools
     pub tools: Vec<ToolDefinition>,
     /// Tool choice mode
@@ -411,7 +412,7 @@ impl ModelRequest {
 pub struct ModelRequestBuilder {
     model: String,
     system: String,
-    messages: Vec<Message>,
+    messages: Arc<Vec<Message>>,
     tools: Vec<ToolDefinition>,
     tool_choice: ToolChoice,
     max_tokens: Option<u32>,
@@ -438,7 +439,7 @@ impl ModelRequestBuilder {
         Self {
             model: model.into(),
             system: system.into(),
-            messages: Vec::new(),
+            messages: Arc::default(),
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
             max_tokens: None,
@@ -462,15 +463,15 @@ impl ModelRequestBuilder {
 
     /// Set messages.
     #[must_use]
-    pub fn messages(mut self, messages: Vec<Message>) -> Self {
-        self.messages = messages;
+    pub fn messages(mut self, messages: impl Into<Arc<Vec<Message>>>) -> Self {
+        self.messages = messages.into();
         self
     }
 
     /// Add a message.
     #[must_use]
     pub fn message(mut self, message: Message) -> Self {
-        self.messages.push(message);
+        Arc::make_mut(&mut self.messages).push(message);
         self
     }
 

@@ -9,7 +9,6 @@ use tracing::warn;
 use crate::events::AgentLoopEvent;
 use crate::types::AgentLoopResult;
 use aura_config::CHARS_PER_TOKEN;
-use aura_context_compaction as compaction;
 
 use super::streaming;
 use super::{AgentLoop, AgentLoopConfig, LoopState};
@@ -274,7 +273,7 @@ pub(super) fn accumulate_response(
 
     state.messages.push(sanitized_message);
 
-    let raw_message_bytes = compaction::estimate_message_chars(&state.messages);
+    let raw_message_bytes = state.messages.chars();
     #[allow(clippy::cast_possible_truncation)]
     let message_tokens = (raw_message_bytes / CHARS_PER_TOKEN) as u64;
     let provider_tokens = response

@@ -93,6 +93,7 @@ mod synthesize;
 #[cfg(test)]
 mod tests;
 
+pub(in crate::agent_loop) use driver::TOOL_INPUT_SNAPSHOT_INTERVAL;
 pub(in crate::agent_loop) use retry::stream_retry_params;
 
 use driver::drive_stream;
