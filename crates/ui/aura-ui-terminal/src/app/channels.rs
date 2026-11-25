@@ -295,14 +295,6 @@ impl App {
         self.request_agent_switch(target);
     }
 
-    /// Start creating a channel: the "+ New channel" row.
-    pub(crate) fn start_new_channel(&mut self) {
-        self.notification = Some((
-            "New channel form coming".to_string(),
-            NotificationType::Warning,
-        ));
-    }
-
     /// Highlighted row of the list, where `channels().len()` is
     /// "+ New channel".
     #[must_use]
@@ -458,6 +450,75 @@ impl App {
     pub(super) fn move_channel_highlight(&mut self, delta: isize) {
         let row = self.channels.highlighted().saturating_add_signed(delta);
         self.channels.set_highlighted(row);
+    }
+
+    /// The channel a right click at a screen cell of the CHANNELS tab is
+    /// on: anywhere in the open channel's view, or the channel row under
+    /// the pointer in the list, which it highlights. `None` on "+ New
+    /// channel" or empty space.
+    pub(super) fn channel_menu_target_at(&mut self, column: u16, row: u16) -> Option<String> {
+        if let Some(channel) = self.channels.open_channel() {
+            return Some(channel.id.clone());
+        }
+        let index = self.channel_row_at(column, row)?;
+        let id = self.channels.list.get(index)?.id.clone();
+        self.channels.set_highlighted(index);
+        Some(id)
+    }
+
+    /// Listed projects channel `id` is not linked to, as `(id, name)`.
+    pub(super) fn linkable_projects(&self, id: &str) -> Vec<(String, String)> {
+        let Some(channel) = self.channels.find(id) else {
+            return Vec::new();
+        };
+        self.projects
+            .iter()
+            .filter(|project| {
+                !channel
+                    .projects
+                    .iter()
+                    .any(|linked| linked.id == project.id)
+            })
+            .map(|project| (project.id.clone(), project.name.clone()))
+            .collect()
+    }
+
+    /// Projects channel `id` is linked to, as `(id, name)`.
+    pub(super) fn linked_projects(&self, id: &str) -> Vec<(String, String)> {
+        self.channels.find(id).map_or_else(Vec::new, |channel| {
+            channel
+                .projects
+                .iter()
+                .map(|project| (project.id.clone(), project.name.clone()))
+                .collect()
+        })
+    }
+
+    /// Ask to confirm archiving channel `id`, as deleting a permanent
+    /// agent asks: the next key is `y` to go ahead, anything else cancels.
+    pub(super) fn request_archive_channel(&mut self, id: String) {
+        let Some(slug) = self.channels.find(&id).map(|channel| channel.slug.clone()) else {
+            return;
+        };
+        self.notification = Some((
+            format!("Archive channel #{slug}? Press y to confirm"),
+            NotificationType::Warning,
+        ));
+        self.pending_archive_channel = Some(id);
+    }
+
+    /// Resolve a pending channel archive with `key`. Returns `false` when
+    /// nothing was pending.
+    pub(super) fn handle_pending_archive_channel(&mut self, key: KeyEvent) -> bool {
+        let Some(id) = self.pending_archive_channel.take() else {
+            return false;
+        };
+        if matches!(key.code, KeyCode::Char('y' | 'Y')) {
+            self.try_send_event(UiEvent::ArchiveChannel(id));
+        } else {
+            self.notification = Some(("Cancelled".to_string(), NotificationType::Warning));
+        }
+        true
     }
 
     /// Keys of the CHANNELS tab. Returns whether the key was used.

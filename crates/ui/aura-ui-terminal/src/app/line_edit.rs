@@ -27,46 +27,7 @@ impl App {
     /// - Ctrl or Alt + Delete, Alt+D: delete the word after the cursor
     /// - Ctrl+U/K: delete to the start or end
     pub(super) fn edit_input(&mut self, key: KeyEvent) -> Option<LineEdit> {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        let text = self.input.as_str();
-        let len = text.len();
-        let pos = self.cursor_pos.min(len);
-        let (target, delete) = match key.code {
-            // Ctrl+Alt is AltGr on Windows, which types characters.
-            KeyCode::Char(c) if ctrl == alt => {
-                self.input.insert(pos, c);
-                self.cursor_pos = pos + c.len_utf8();
-                return Some(LineEdit::Changed);
-            }
-            KeyCode::Char('b') if ctrl => (prev_char(text, pos), false),
-            KeyCode::Char('f') if ctrl => (next_char(text, pos), false),
-            KeyCode::Left | KeyCode::Char('b') if ctrl || alt => (prev_word(text, pos), false),
-            KeyCode::Right | KeyCode::Char('f') if ctrl || alt => (next_word(text, pos), false),
-            KeyCode::Left => (prev_char(text, pos), false),
-            KeyCode::Right => (next_char(text, pos), false),
-            KeyCode::Home => (0, false),
-            KeyCode::End => (len, false),
-            KeyCode::Char('a') if ctrl => (0, false),
-            KeyCode::Char('e') if ctrl => (len, false),
-            KeyCode::Backspace if ctrl || alt => (prev_word(text, pos), true),
-            KeyCode::Char('w' | 'h') if ctrl => (prev_word(text, pos), true),
-            KeyCode::Backspace => (prev_char(text, pos), true),
-            KeyCode::Delete if ctrl || alt => (next_word(text, pos), true),
-            KeyCode::Char('d') if alt => (next_word(text, pos), true),
-            KeyCode::Delete => (next_char(text, pos), true),
-            KeyCode::Char('u') if ctrl => (0, true),
-            KeyCode::Char('k') if ctrl => (len, true),
-            _ => return None,
-        };
-        let (start, end) = (target.min(pos), target.max(pos));
-        if !delete || start == end {
-            self.cursor_pos = target;
-            return Some(LineEdit::Moved);
-        }
-        self.input.replace_range(start..end, "");
-        self.cursor_pos = start;
-        Some(LineEdit::Changed)
+        edit_line(&mut self.input, &mut self.cursor_pos, key)
     }
 
     /// Break the input line at the cursor.
@@ -95,6 +56,52 @@ impl App {
             None => false,
         }
     }
+}
+
+/// Apply `key` to `text`, whose cursor is the byte offset `cursor`, if it
+/// is an editing key; see [`App::edit_input`] for the keys. Any line, not
+/// only the input line, edits this way.
+pub(super) fn edit_line(text: &mut String, cursor: &mut usize, key: KeyEvent) -> Option<LineEdit> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let len = text.len();
+    let pos = (*cursor).min(len);
+    let line = text.as_str();
+    let (target, delete) = match key.code {
+        // Ctrl+Alt is AltGr on Windows, which types characters.
+        KeyCode::Char(c) if ctrl == alt => {
+            text.insert(pos, c);
+            *cursor = pos + c.len_utf8();
+            return Some(LineEdit::Changed);
+        }
+        KeyCode::Char('b') if ctrl => (prev_char(line, pos), false),
+        KeyCode::Char('f') if ctrl => (next_char(line, pos), false),
+        KeyCode::Left | KeyCode::Char('b') if ctrl || alt => (prev_word(line, pos), false),
+        KeyCode::Right | KeyCode::Char('f') if ctrl || alt => (next_word(line, pos), false),
+        KeyCode::Left => (prev_char(line, pos), false),
+        KeyCode::Right => (next_char(line, pos), false),
+        KeyCode::Home => (0, false),
+        KeyCode::End => (len, false),
+        KeyCode::Char('a') if ctrl => (0, false),
+        KeyCode::Char('e') if ctrl => (len, false),
+        KeyCode::Backspace if ctrl || alt => (prev_word(line, pos), true),
+        KeyCode::Char('w' | 'h') if ctrl => (prev_word(line, pos), true),
+        KeyCode::Backspace => (prev_char(line, pos), true),
+        KeyCode::Delete if ctrl || alt => (next_word(line, pos), true),
+        KeyCode::Char('d') if alt => (next_word(line, pos), true),
+        KeyCode::Delete => (next_char(line, pos), true),
+        KeyCode::Char('u') if ctrl => (0, true),
+        KeyCode::Char('k') if ctrl => (len, true),
+        _ => return None,
+    };
+    let (start, end) = (target.min(pos), target.max(pos));
+    if !delete || start == end {
+        *cursor = target;
+        return Some(LineEdit::Moved);
+    }
+    text.replace_range(start..end, "");
+    *cursor = start;
+    Some(LineEdit::Changed)
 }
 
 /// Whether `key` asks for a line break rather than a send: Shift+Enter

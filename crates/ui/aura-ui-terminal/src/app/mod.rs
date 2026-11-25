@@ -7,6 +7,7 @@ mod agent_views;
 mod archive;
 pub(crate) mod bench_progress;
 pub mod benchmarks;
+pub(crate) mod channel_form;
 mod channels;
 mod chat_tabs;
 mod commands;
@@ -71,7 +72,7 @@ use crate::{
     renderer::{ChatLineCache, GroupState},
 };
 pub use chat_tabs::ChatTab;
-pub(crate) use context_menu::MenuTarget;
+pub(crate) use context_menu::{MenuTarget, SubmenuEntry};
 pub use context_menu::{WorkspaceMove, WorkspaceTarget};
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 pub use definitions::AgentsTab;
@@ -166,6 +167,8 @@ pub enum AppState {
     SelectingFolder,
     /// A project's details are shown over the screen
     ShowingProjectInfo,
+    /// The new-channel form is open
+    NewChannel,
 }
 
 /// Pending approval request.
@@ -447,6 +450,10 @@ pub struct App {
     pub(super) archived_scroll: usize,
     /// Folder browser for a new project, while it is open
     pub(super) folder_picker: Option<FolderPicker>,
+    /// The new-channel form, while it is open
+    pub(super) channel_form: Option<channel_form::ChannelForm>,
+    /// Id of the channel waiting for `y` to be archived
+    pub(super) pending_archive_channel: Option<String>,
     /// Menu a right click opened on the projects list
     pub(super) context_menu: Option<context_menu::ContextMenu>,
     /// The host's workspaces, which the menu offers to move a project to
@@ -1113,6 +1120,8 @@ impl App {
             selected_archived: 0,
             archived_scroll: 0,
             folder_picker: None,
+            channel_form: None,
+            pending_archive_channel: None,
             context_menu: None,
             workspaces: context_menu::Workspaces::default(),
             workspace_move: None,
@@ -3105,6 +3114,7 @@ impl App {
                     | AppState::LoginPassword
                     | AppState::LinkCode
                     | AppState::SelectingFolder
+                    | AppState::NewChannel
             )
     }
 

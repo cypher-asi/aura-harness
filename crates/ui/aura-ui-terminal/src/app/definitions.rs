@@ -79,6 +79,7 @@ impl App {
         self.agents_tab = tab;
         self.pending_delete = None;
         self.pending_remove_project = None;
+        self.pending_archive_channel = None;
     }
 
     /// Left shows the tab before, Right the one after.

@@ -17,8 +17,15 @@
 //! [`App::take_workspace_move`]; the session hears nothing of it, since
 //! workspaces are the host's alone. An agent moves with its whole project,
 //! because a workspace holds projects, not single agents.
+//!
+//! On the CHANNELS tab the menu opens on a channel row of the list, or
+//! anywhere in the open channel's view, and offers "Link project" and
+//! "Unlink project", whose submenus list the projects the channel is not
+//! linked to and those it is (each item is left out when its list would
+//! be empty), and "Archive channel…", which asks for `y` first.
 
 use super::{contains, AgentsTab, App, AppState, PanelFocus, ProjectListRow};
+use crate::events::UiEvent;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
 
@@ -67,10 +74,25 @@ impl Workspaces {
     }
 }
 
-/// The list of workspaces "Move to workspace" opens beside the menu.
+/// An entry of a submenu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SubmenuEntry {
+    /// Where "Move to workspace" sends the project
+    Workspace(WorkspaceTarget),
+    /// A project "Link project" or "Unlink project" acts on
+    Project {
+        /// Project id
+        id: String,
+        /// What it is called
+        name: String,
+    },
+}
+
+/// The list an item with a submenu opens beside the menu: workspaces for
+/// "Move to workspace", projects for "Link project" and "Unlink project".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Submenu {
-    pub entries: Vec<WorkspaceTarget>,
+    pub entries: Vec<SubmenuEntry>,
     /// Highlighted entry
     pub selected: usize,
     /// Where the submenu was drawn in the last frame
@@ -128,6 +150,8 @@ pub(crate) enum MenuTarget {
     /// because archived agents are not in the projects list, so its
     /// items must not look the id up there.
     Archived(String),
+    /// A channel, by id
+    Channel(String),
 }
 
 /// An entry of the menu.
@@ -142,12 +166,20 @@ pub(crate) enum MenuItem {
     MoveToWorkspace,
     RemoveProject,
     Restore,
+    /// Opens the submenu of projects the channel is not linked to
+    LinkProject,
+    /// Opens the submenu of projects the channel is linked to
+    UnlinkProject,
+    ArchiveChannel,
 }
 
 impl MenuItem {
     /// Whether the item opens a submenu rather than running.
     pub(crate) fn has_submenu(self) -> bool {
-        self == Self::MoveToWorkspace
+        matches!(
+            self,
+            Self::MoveToWorkspace | Self::LinkProject | Self::UnlinkProject
+        )
     }
 }
 
@@ -236,8 +268,10 @@ impl App {
         self.workspaces = workspaces;
         self.redraw = true;
         let targets = match self.context_menu.as_ref() {
-            Some(menu) => self.workspace_targets(&menu.target),
-            None => return,
+            Some(menu) if menu.items.contains(&MenuItem::MoveToWorkspace) => {
+                self.workspace_targets(&menu.target)
+            }
+            _ => return,
         };
         let Some(menu) = self.context_menu.as_mut() else {
             return;
@@ -245,11 +279,11 @@ impl App {
         if targets.is_empty() {
             // The item would lead nowhere now.
             menu.submenu = None;
-            menu.items.retain(|item| !item.has_submenu());
+            menu.items.retain(|&item| item != MenuItem::MoveToWorkspace);
             menu.selected = menu.selected.min(menu.items.len().saturating_sub(1));
         } else if let Some(submenu) = menu.submenu.as_mut() {
             submenu.selected = submenu.selected.min(targets.len() - 1);
-            submenu.entries = targets;
+            submenu.entries = targets.into_iter().map(SubmenuEntry::Workspace).collect();
         }
     }
 
@@ -279,7 +313,30 @@ impl App {
             MenuTarget::Project(_) | MenuTarget::Agent(_) => {
                 self.workspaces.targets(self.listed_project_count() > 1)
             }
-            MenuTarget::Archived(_) => Vec::new(),
+            MenuTarget::Archived(_) | MenuTarget::Channel(_) => Vec::new(),
+        }
+    }
+
+    /// What the highlighted item's submenu lists.
+    fn submenu_entries(&self, menu: &ContextMenu) -> Vec<SubmenuEntry> {
+        let projects = |list: Vec<(String, String)>| {
+            list.into_iter()
+                .map(|(id, name)| SubmenuEntry::Project { id, name })
+                .collect()
+        };
+        match (menu.items.get(menu.selected), &menu.target) {
+            (Some(MenuItem::MoveToWorkspace), target) => self
+                .workspace_targets(target)
+                .into_iter()
+                .map(SubmenuEntry::Workspace)
+                .collect(),
+            (Some(MenuItem::LinkProject), MenuTarget::Channel(id)) => {
+                projects(self.linkable_projects(id))
+            }
+            (Some(MenuItem::UnlinkProject), MenuTarget::Channel(id)) => {
+                projects(self.linked_projects(id))
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -306,7 +363,7 @@ impl App {
                 let folded = match &menu.target {
                     MenuTarget::Project(id) => self.collapsed_projects.contains(id),
                     MenuTarget::Agent(id) => self.collapsed_agents.contains(id),
-                    MenuTarget::Archived(_) => false,
+                    MenuTarget::Archived(_) | MenuTarget::Channel(_) => false,
                 };
                 if folded {
                     "Expand"
@@ -319,6 +376,9 @@ impl App {
             MenuItem::MoveToWorkspace => "Move to workspace",
             MenuItem::RemoveProject => "Remove project…",
             MenuItem::Restore => "Unarchive",
+            MenuItem::LinkProject => "Link project",
+            MenuItem::UnlinkProject => "Unlink project",
+            MenuItem::ArchiveChannel => "Archive channel…",
         }
     }
 
@@ -343,7 +403,8 @@ impl App {
         match self.agents_tab {
             AgentsTab::Projects => {}
             AgentsTab::Archive => return self.open_archive_menu(column, row),
-            AgentsTab::Roster | AgentsTab::Channels => return false,
+            AgentsTab::Channels => return self.open_channel_menu(column, row),
+            AgentsTab::Roster => return false,
         }
         let Some(index) = self.project_row_at(column, row) else {
             return false;
@@ -409,11 +470,34 @@ impl App {
         true
     }
 
-    /// Open the submenu of workspaces beside the highlighted item, if
-    /// that item has one and it isn't open yet.
-    fn open_workspace_submenu(&mut self) {
+    /// A right click on the CHANNELS tab: open the menu of the channel
+    /// under the pointer, or of the open channel.
+    fn open_channel_menu(&mut self, column: u16, row: u16) -> bool {
+        let Some(id) = self.channel_menu_target_at(column, row) else {
+            return false;
+        };
+        let mut items = Vec::new();
+        if !self.linkable_projects(&id).is_empty() {
+            items.push(MenuItem::LinkProject);
+        }
+        if !self.linked_projects(&id).is_empty() {
+            items.push(MenuItem::UnlinkProject);
+        }
+        items.push(MenuItem::ArchiveChannel);
+        self.focus = PanelFocus::Swarm;
+        self.context_menu = Some(ContextMenu::new(
+            MenuTarget::Channel(id),
+            items,
+            Position::new(column, row),
+        ));
+        true
+    }
+
+    /// Open the submenu beside the highlighted item, if that item has
+    /// one, it isn't open yet and it would list something.
+    fn open_submenu(&mut self) {
         let entries = match self.context_menu.as_ref() {
-            Some(menu) => self.workspace_targets(&menu.target),
+            Some(menu) => self.submenu_entries(menu),
             None => return,
         };
         let Some(menu) = self.context_menu.as_mut() else {
@@ -436,7 +520,7 @@ impl App {
         };
         menu.selected = index;
         if menu.highlights_submenu_item() {
-            self.open_workspace_submenu();
+            self.open_submenu();
         } else {
             menu.submenu = None;
         }
@@ -486,7 +570,7 @@ impl App {
                     if let Some(submenu) = menu.submenu.as_mut() {
                         submenu.selected = index;
                     }
-                    self.run_workspace_entry();
+                    self.run_submenu_entry();
                 } else if let Some(index) = item {
                     self.point_at_menu_item(index);
                     let opens_submenu = self
@@ -533,7 +617,7 @@ impl App {
             }
             match key.code {
                 KeyCode::Left | KeyCode::Esc => menu.submenu = None,
-                KeyCode::Enter => self.run_workspace_entry(),
+                KeyCode::Enter => self.run_submenu_entry(),
                 KeyCode::Right => {}
                 _ => {
                     self.context_menu = None;
@@ -548,7 +632,7 @@ impl App {
         }
         match key.code {
             KeyCode::Enter | KeyCode::Right if menu.highlights_submenu_item() => {
-                self.open_workspace_submenu();
+                self.open_submenu();
             }
             KeyCode::Enter => self.run_context_menu_item(),
             KeyCode::Esc => self.context_menu = None,
@@ -560,28 +644,46 @@ impl App {
         true
     }
 
-    /// Close the menu and ask the host to move the project it was opened
-    /// on, or the project of the agent it was opened on, to the
-    /// highlighted workspace of the submenu.
-    fn run_workspace_entry(&mut self) {
+    /// Close the menu and run the highlighted entry of its submenu: ask
+    /// the host to move the project it was opened on (or its agent's
+    /// project) to that workspace, or link or unlink that project.
+    fn run_submenu_entry(&mut self) {
         let Some(menu) = self.context_menu.take() else {
             return;
         };
-        let Some(to) = menu
+        let item = menu.items.get(menu.selected).copied();
+        let Some(entry) = menu
             .submenu
-            .as_ref()
-            .and_then(|submenu| submenu.entries.get(submenu.selected))
-            .copied()
+            .and_then(|submenu| submenu.entries.into_iter().nth(submenu.selected))
         else {
             return;
         };
-        let project = match menu.target {
-            MenuTarget::Project(key) => Some(key),
-            MenuTarget::Agent(id) => self.project_key_of_agent(&id),
-            MenuTarget::Archived(_) => None,
-        };
-        if let Some(project) = project {
-            self.workspace_move = Some(WorkspaceMove { project, to });
+        match (entry, menu.target) {
+            (SubmenuEntry::Workspace(to), target) => {
+                let project = match target {
+                    MenuTarget::Project(key) => Some(key),
+                    MenuTarget::Agent(id) => self.project_key_of_agent(&id),
+                    MenuTarget::Archived(_) | MenuTarget::Channel(_) => None,
+                };
+                if let Some(project) = project {
+                    self.workspace_move = Some(WorkspaceMove { project, to });
+                }
+            }
+            (SubmenuEntry::Project { id: project_id, .. }, MenuTarget::Channel(channel_id)) => {
+                let event = match item {
+                    Some(MenuItem::LinkProject) => UiEvent::LinkProject {
+                        channel_id,
+                        project_id,
+                    },
+                    Some(MenuItem::UnlinkProject) => UiEvent::UnlinkProject {
+                        channel_id,
+                        project_id,
+                    },
+                    _ => return,
+                };
+                self.try_send_event(event);
+            }
+            (SubmenuEntry::Project { .. }, _) => {}
         }
     }
 
@@ -599,6 +701,12 @@ impl App {
                     self.restore_agent(id);
                 }
             }
+            MenuTarget::Channel(id) => {
+                // Link and Unlink open their submenus instead of running.
+                if item == MenuItem::ArchiveChannel {
+                    self.request_archive_channel(id);
+                }
+            }
             MenuTarget::Project(key) => match item {
                 MenuItem::AddAgent => self.add_agent_to_project(&key),
                 MenuItem::Fold => {
@@ -612,7 +720,10 @@ impl App {
                 MenuItem::Open
                 | MenuItem::Archive
                 | MenuItem::MoveToWorkspace
-                | MenuItem::Restore => {}
+                | MenuItem::Restore
+                | MenuItem::LinkProject
+                | MenuItem::UnlinkProject
+                | MenuItem::ArchiveChannel => {}
             },
             MenuTarget::Agent(id) => {
                 let Some(index) = self.agents.iter().position(|agent| agent.id == id) else {
@@ -624,7 +735,12 @@ impl App {
                     MenuItem::Archive => self.archive_agent(id),
                     MenuItem::RemoveProject => self.request_remove_project_of(&id),
                     MenuItem::Restore => self.restore_agent(id),
-                    MenuItem::AddAgent | MenuItem::Info | MenuItem::MoveToWorkspace => {}
+                    MenuItem::AddAgent
+                    | MenuItem::Info
+                    | MenuItem::MoveToWorkspace
+                    | MenuItem::LinkProject
+                    | MenuItem::UnlinkProject
+                    | MenuItem::ArchiveChannel => {}
                 }
             }
         }
@@ -1066,9 +1182,9 @@ mod tests {
         assert_eq!(
             entries,
             &[
-                WorkspaceTarget::Existing(0),
-                WorkspaceTarget::Existing(2),
-                WorkspaceTarget::New
+                SubmenuEntry::Workspace(WorkspaceTarget::Existing(0)),
+                SubmenuEntry::Workspace(WorkspaceTarget::Existing(2)),
+                SubmenuEntry::Workspace(WorkspaceTarget::New)
             ],
             "every workspace but this one, then a new one"
         );
@@ -1108,7 +1224,7 @@ mod tests {
         app.handle_key(key(KeyCode::Up));
         app.handle_key(key(KeyCode::Enter));
         let entries = &submenu(&app).expect("Enter opens it").entries;
-        assert_eq!(entries, &[WorkspaceTarget::New]);
+        assert_eq!(entries, &[SubmenuEntry::Workspace(WorkspaceTarget::New)]);
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(
             app.take_workspace_move(),
@@ -1226,7 +1342,10 @@ mod tests {
         let open = submenu(&app).expect("still open");
         assert_eq!(
             open.entries,
-            [WorkspaceTarget::Existing(1), WorkspaceTarget::New]
+            [
+                SubmenuEntry::Workspace(WorkspaceTarget::Existing(1)),
+                SubmenuEntry::Workspace(WorkspaceTarget::New)
+            ]
         );
         assert_eq!(open.selected, 1, "kept in range");
 
@@ -1266,7 +1385,10 @@ mod tests {
             app.handle_key(key(KeyCode::Right));
             submenu(app).expect("Right opens it").entries.clone()
         };
-        assert_eq!(open_submenu(&mut app), [WorkspaceTarget::Existing(1)]);
+        assert_eq!(
+            open_submenu(&mut app),
+            [SubmenuEntry::Workspace(WorkspaceTarget::Existing(1))]
+        );
         let rows = screen(&mut app, 30);
         assert!(rows.iter().any(|row| row.contains("Workspace 2")));
         assert!(!rows.iter().any(|row| row.contains("New workspace")));
@@ -1277,7 +1399,10 @@ mod tests {
         app.process_command(empty_project("ee"));
         assert_eq!(
             open_submenu(&mut app),
-            [WorkspaceTarget::Existing(1), WorkspaceTarget::New]
+            [
+                SubmenuEntry::Workspace(WorkspaceTarget::Existing(1)),
+                SubmenuEntry::Workspace(WorkspaceTarget::New)
+            ]
         );
     }
 

@@ -67,6 +67,10 @@ impl App {
             }
             AppState::SelectingModel => self.handle_model_selector_key(key),
             AppState::SelectingFolder => self.handle_folder_picker_key(key),
+            AppState::NewChannel => {
+                self.handle_channel_form_key(key);
+                KeyResult::continue_running()
+            }
             AppState::Idle | AppState::Processing => self.handle_normal_key(key),
         }
     }
@@ -360,6 +364,7 @@ impl App {
     fn handle_normal_key(&mut self, key: KeyEvent) -> KeyResult {
         if self.handle_pending_delete(key)
             || self.handle_pending_remove_project(key)
+            || self.handle_pending_archive_channel(key)
             || self.handle_pending_kill(key)
         {
             return KeyResult::continue_running();

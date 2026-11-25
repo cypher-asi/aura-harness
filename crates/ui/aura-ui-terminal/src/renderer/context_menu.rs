@@ -5,14 +5,15 @@
 //! whole row.
 //!
 //! An item with a submenu ends in `›`. Its submenu, the workspaces to move
-//! a project to, is a second box with its first entry on the item's row,
+//! a project to or the projects to link to or unlink from a channel, is a
+//! second box with its first entry on the item's row,
 //! right of the menu, or left of it when there is no room on the right,
 //! and moved up to stay on screen.
 
 use super::hud::truncate;
 use super::panels::{cell_style, CellState};
 use super::text::display_width;
-use crate::app::{AppState, WorkspaceTarget};
+use crate::app::{AppState, SubmenuEntry, WorkspaceTarget};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -45,7 +46,8 @@ pub(super) fn render_context_menu(frame: &mut Frame, app: &mut App, theme: &Them
         .map(|&item| (app.menu_label(menu, item), item.has_submenu()))
         .collect();
     let (anchor, selected) = (menu.anchor, menu.selected);
-    let parent = menu.items.iter().position(|item| item.has_submenu());
+    // A submenu is only open beside the highlighted item.
+    let parent = menu.submenu.is_some().then_some(menu.selected);
 
     let screen = frame.area();
     let widest = rows
@@ -109,7 +111,7 @@ fn render_submenu(frame: &mut Frame, app: &mut App, theme: &Theme, menu: Rect, r
     let labels: Vec<String> = submenu
         .entries
         .iter()
-        .map(|&target| entry_label(app.workspace_labels(), target))
+        .map(|entry| entry_label(app.workspace_labels(), entry))
         .collect();
     let selected = submenu.selected;
 
@@ -161,9 +163,14 @@ fn render_submenu(frame: &mut Frame, app: &mut App, theme: &Theme, menu: Rect, r
     app.set_context_submenu_area(area);
 }
 
-/// What a submenu entry reads: `Workspace 2  NOTES / CC`, or `New
-/// workspace`. Workspaces are numbered from 1, as the tab bar shows them.
-fn entry_label(titles: &[String], target: WorkspaceTarget) -> String {
+/// What a submenu entry reads: `Workspace 2  NOTES / CC`, `New
+/// workspace`, or a project's name. Workspaces are numbered from 1, as
+/// the tab bar shows them.
+fn entry_label(titles: &[String], entry: &SubmenuEntry) -> String {
+    let target = match entry {
+        SubmenuEntry::Workspace(target) => *target,
+        SubmenuEntry::Project { name, .. } => return truncate(name, MAX_TITLE),
+    };
     match target {
         WorkspaceTarget::New => "New workspace".to_string(),
         WorkspaceTarget::Existing(index) => {

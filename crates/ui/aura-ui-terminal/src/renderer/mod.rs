@@ -3,6 +3,7 @@
 mod activity;
 mod bench_panel;
 mod benchmarks;
+mod channel_form;
 mod channel_side;
 mod channels;
 mod chat_lines;
@@ -158,6 +159,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     mention_menu::render_mention_menu(frame, chat, app, theme);
     context_menu::render_context_menu(frame, app, theme);
     overlays::render_folder_picker(frame, app, theme);
+    channel_form::render_channel_form(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
     app.drop_covered_prose(frame.buffer_mut());
     app.drop_covered_chat(frame.buffer_mut());

@@ -5616,3 +5616,245 @@ fn test_coordinator_chat_shows_the_channel_posts() {
     let ((_, posts), _, _) = app.chat_line_cache();
     assert!(posts.is_empty(), "only the coordinator's chat shows them");
 }
+
+// ========================================================================
+// New-channel form and the CHANNELS tab's menu
+// ========================================================================
+
+/// `app_with_channel` with "+ New channel" chosen.
+fn app_with_channel_form() -> (App, mpsc::Receiver<UiEvent>) {
+    let (mut app, rx) = app_with_channel();
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.selected_channel(), app.channels().len());
+    app.handle_key(key(KeyCode::Enter));
+    (app, rx)
+}
+
+#[test]
+fn test_new_channel_row_opens_the_form() {
+    let (mut app, mut rx) = app_with_channel_form();
+    assert_eq!(app.state(), AppState::NewChannel);
+    let form = app.channel_form().expect("the form is open");
+    assert_eq!(form.focus(), super::channel_form::ChannelField::Slug);
+    let text = drawn_text(&mut app);
+    for label in ["New channel", "Slug", "Title", "Description", "Esc cancel"] {
+        assert!(text.contains(label), "{label}:\n{text}");
+    }
+    assert!(rx.try_recv().is_err(), "opening sends nothing");
+}
+
+#[test]
+fn test_an_invalid_slug_shows_the_hint_and_blocks_submit() {
+    let (mut app, mut rx) = app_with_channel_form();
+    type_keys(&mut app, "bad slug!");
+    let text = drawn_text(&mut app);
+    assert!(text.contains(super::channel_form::SLUG_HINT), "{text}");
+
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+    assert_eq!(app.state(), AppState::NewChannel, "still open");
+    assert!(rx.try_recv().is_err(), "nothing sent");
+
+    // Enter on the last field submits, but not this slug either.
+    app.handle_key(key(KeyCode::BackTab));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.state(), AppState::NewChannel);
+    assert_eq!(
+        app.channel_form().map(|form| form.focus()),
+        Some(super::channel_form::ChannelField::Slug),
+        "the cursor goes back to the slug"
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_a_valid_form_submits_create_channel_and_closes() {
+    let (mut app, mut rx) = app_with_channel_form();
+    type_keys(&mut app, "Zode-2");
+    let text = drawn_text(&mut app);
+    assert!(
+        !text.contains(super::channel_form::SLUG_HINT),
+        "uppercase is lowercased, so the slug is good:\n{text}"
+    );
+    app.handle_key(key(KeyCode::Tab));
+    type_keys(&mut app, "Zode two");
+    app.handle_key(key(KeyCode::Down));
+    type_keys(&mut app, "Ship it");
+    app.handle_key(key(KeyCode::Enter));
+
+    assert_eq!(app.state(), AppState::Idle);
+    assert!(app.channel_form().is_none());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::CreateChannel { slug, title, description })
+            if slug == "zode-2" && title == "Zode two" && description == "Ship it"
+    ));
+    assert!(rx.try_recv().is_err(), "exactly one event");
+}
+
+#[test]
+fn test_esc_cancels_the_form_without_an_event() {
+    let (mut app, mut rx) = app_with_channel_form();
+    type_keys(&mut app, "zode");
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.state(), AppState::Idle);
+    assert!(app.channel_form().is_none());
+    assert!(rx.try_recv().is_err());
+}
+
+/// `app_with_channel` where `#zode` is linked to project `beta` and the
+/// app also lists project `alpha`.
+fn app_with_linkable_channel() -> (App, mpsc::Receiver<UiEvent>) {
+    let (mut app, rx) = app_with_channel();
+    let project = |id: &str, name: &str| crate::events::ProjectSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        ..crate::events::ProjectSummary::default()
+    };
+    app.process_command(UiCommand::SetProjects(vec![
+        project("p1", "alpha"),
+        project("p2", "beta"),
+    ]));
+    app.process_command(UiCommand::SetChannels(vec![
+        crate::events::ChannelSummary {
+            id: "c1".to_string(),
+            slug: "zode".to_string(),
+            title: "Zode release".to_string(),
+            coordinator_id: "aa".to_string(),
+            members: vec![agent("aa", "Coordinator")],
+            projects: vec![crate::events::ChannelProjectView {
+                id: "p2".to_string(),
+                name: "beta".to_string(),
+                folder: "/src/beta".to_string(),
+            }],
+            ..crate::events::ChannelSummary::default()
+        },
+    ]));
+    (app, rx)
+}
+
+/// Draw the app and right-click the first cell showing `text`.
+fn right_click_on(app: &mut App, text: &str) {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let drawn = drawn_text(app);
+    let rows: Vec<&str> = drawn.lines().collect();
+    let row = rows
+        .iter()
+        .position(|row| row.contains(text))
+        .unwrap_or_else(|| panic!("no {text}:\n{drawn}"));
+    let line = rows[row];
+    let column = line[..line.find(text).unwrap_or(0)].chars().count();
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: u16::try_from(column).unwrap(),
+        row: u16::try_from(row).unwrap(),
+        modifiers: KeyModifiers::NONE,
+    });
+}
+
+fn menu_items(app: &App) -> Vec<super::context_menu::MenuItem> {
+    app.context_menu()
+        .map(|menu| menu.items.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn test_a_channels_menu_offers_link_unlink_and_archive() {
+    use super::context_menu::MenuItem;
+    let (mut app, _rx) = app_with_linkable_channel();
+    right_click_on(&mut app, "#zode");
+    assert_eq!(
+        menu_items(&app),
+        [
+            MenuItem::LinkProject,
+            MenuItem::UnlinkProject,
+            MenuItem::ArchiveChannel
+        ]
+    );
+    let text = drawn_text(&mut app);
+    for label in ["Link project", "Unlink project", "Archive channel"] {
+        assert!(text.contains(label), "{label}:\n{text}");
+    }
+}
+
+#[test]
+fn test_a_channel_without_links_offers_no_unlink() {
+    use super::context_menu::MenuItem;
+    let (mut app, _rx) = app_with_channel();
+    app.process_command(UiCommand::SetProjects(vec![
+        crate::events::ProjectSummary {
+            id: "p1".to_string(),
+            name: "alpha".to_string(),
+            ..crate::events::ProjectSummary::default()
+        },
+    ]));
+    right_click_on(&mut app, "#zode");
+    assert_eq!(
+        menu_items(&app),
+        [MenuItem::LinkProject, MenuItem::ArchiveChannel]
+    );
+}
+
+#[test]
+fn test_link_project_lists_unlinked_projects_and_sends_link_project() {
+    let (mut app, mut rx) = app_with_linkable_channel();
+    right_click_on(&mut app, "#zode");
+    app.handle_key(key(KeyCode::Enter));
+    let entries = app
+        .context_menu()
+        .and_then(|menu| menu.submenu.as_ref())
+        .map(|submenu| submenu.entries.clone())
+        .expect("Enter opens the projects");
+    assert_eq!(
+        entries,
+        [SubmenuEntry::Project {
+            id: "p1".to_string(),
+            name: "alpha".to_string()
+        }],
+        "only the project not linked yet"
+    );
+    assert!(drawn_text(&mut app).contains("alpha"));
+
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.context_menu().is_none());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::LinkProject { channel_id, project_id })
+            if channel_id == "c1" && project_id == "p1"
+    ));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_unlink_project_in_the_open_channel_sends_unlink_project() {
+    let (mut app, mut rx) = app_with_linkable_channel();
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(_))));
+    // Anywhere in the open channel's view: its member row.
+    right_click_on(&mut app, "Coordinator");
+    app.handle_key(key(KeyCode::Down));
+    app.handle_key(key(KeyCode::Right));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UnlinkProject { channel_id, project_id })
+            if channel_id == "c1" && project_id == "p2"
+    ));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn test_archive_channel_asks_first() {
+    let (mut app, mut rx) = app_with_linkable_channel();
+    right_click_on(&mut app, "#zode");
+    app.handle_key(key(KeyCode::End));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(rx.try_recv().is_err(), "not before y");
+    app.handle_key(key(KeyCode::Char('n')));
+    assert!(rx.try_recv().is_err(), "anything else cancels");
+
+    right_click_on(&mut app, "#zode");
+    app.handle_key(key(KeyCode::End));
+    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Char('y')));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::ArchiveChannel(id)) if id == "c1"));
+}
