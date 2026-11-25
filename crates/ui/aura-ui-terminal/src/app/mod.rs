@@ -2077,6 +2077,14 @@ impl App {
             self.hover = None;
             return;
         }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Right)
+            && self.panel_at(mouse.column, mouse.row) == Some(PanelFocus::Sandbox)
+            && self.open_channel_side_menu(mouse.column, mouse.row)
+        {
+            self.clear_selection();
+            self.hover = None;
+            return;
+        }
         // Right-click in the input box pastes, as in a terminal.
         if mouse.kind == MouseEventKind::Down(MouseButton::Right)
             && contains(self.areas.input, mouse.column, mouse.row)

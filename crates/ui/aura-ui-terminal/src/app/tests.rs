@@ -5892,3 +5892,16 @@ fn test_archive_channel_asks_first() {
     app.handle_key(key(KeyCode::Char('y')));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::ArchiveChannel(id)) if id == "c1"));
 }
+
+#[test]
+fn test_right_click_on_the_channel_side_panel_opens_its_menu() {
+    let (mut app, _rx) = app_with_linkable_channel();
+    let id = app.channels()[0].id.clone();
+    app.open_channel_by_id(&id);
+    right_click_on(&mut app, "LINKED PROJECTS");
+    assert!(
+        menu_items(&app).contains(&super::context_menu::MenuItem::ArchiveChannel),
+        "{:?}",
+        menu_items(&app)
+    );
+}

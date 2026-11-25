@@ -476,6 +476,24 @@ impl App {
         let Some(id) = self.channel_menu_target_at(column, row) else {
             return false;
         };
+        self.open_menu_of_channel(id, column, row)
+    }
+
+    /// A right click on the side panel's PROJECTS tab of the open channel:
+    /// the open channel's menu, there. Returns whether a menu opened.
+    pub(super) fn open_channel_side_menu(&mut self, column: u16, row: u16) -> bool {
+        if self.side_tab() != super::SidePanelTab::Projects {
+            return false;
+        }
+        let Some(id) = self.open_channel().map(|channel| channel.id.clone()) else {
+            return false;
+        };
+        self.context_menu = None;
+        self.open_menu_of_channel(id, column, row)
+    }
+
+    /// Open channel `id`'s menu at `column`, `row`.
+    fn open_menu_of_channel(&mut self, id: String, column: u16, row: u16) -> bool {
         let mut items = Vec::new();
         if !self.linkable_projects(&id).is_empty() {
             items.push(MenuItem::LinkProject);
