@@ -5925,5 +5925,8 @@ fn test_kernel_panel_commands_leave_the_layout_alone_while_a_channel_is_open() {
         ),
         before
     );
-    assert!(!app.record_panel_visible(), "the channel still fills the column");
+    assert!(
+        !app.record_panel_visible(),
+        "the channel still fills the column"
+    );
 }
