@@ -78,30 +78,60 @@ pub(super) fn render_tasks(
         Some(HoverTarget::TaskRow(index)) => Some(index),
         _ => None,
     };
-    let width = inner.width as usize;
-    let app = &*app;
-    let list = app.task_list();
+    let view = TreeView {
+        first: scroll,
+        focused: is_focused,
+        hovered,
+    };
+    render_task_tree(frame, (area, rows_area), app.task_list(), view, app, theme);
+    if let Some(hint) = hint {
+        render_hint(frame, hint, TASKS_HINT, theme);
+    }
+}
+
+/// How a task tree is drawn: where it starts and which row is lit.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TreeView {
+    /// First row drawn
+    pub(super) first: usize,
+    /// Whether the panel has focus, so the highlighted row is lit
+    pub(super) focused: bool,
+    /// Row under the mouse
+    pub(super) hovered: Option<usize>,
+}
+
+/// Draw `list`'s rows from `view.first` into `rows_area`, inside the
+/// panel bordered by `area`, with the scrollbar on its border. The TASKS
+/// tab and the channel's PROJECTS tab both draw their tasks with this.
+pub(super) fn render_task_tree(
+    frame: &mut Frame,
+    (area, rows_area): (Rect, Rect),
+    list: &TaskList,
+    view: TreeView,
+    app: &App,
+    theme: &Theme,
+) {
+    let visible = usize::from(rows_area.height);
+    let width = usize::from(rows_area.width);
     let lines: Vec<Line> = list
         .rows()
         .iter()
         .enumerate()
-        .skip(scroll)
+        .skip(view.first)
         .take(visible)
         .map(|(i, &row)| {
-            let state = CellState::of(is_focused && i == list.selected(), hovered == Some(i));
+            let lit = view.focused && i == list.selected();
+            let state = CellState::of(lit, view.hovered == Some(i));
             row_line(list, row, (width, state), app, theme)
         })
         .collect();
-    let view = ScrollView {
+    let scroll = ScrollView {
         total: list.rows().len(),
         visible,
-        first: scroll,
+        first: view.first,
     };
     frame.render_widget(Paragraph::new(lines), rows_area);
-    render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-    if let Some(hint) = hint {
-        render_hint(frame, hint, TASKS_HINT, theme);
-    }
+    render_scrollbar(frame, area, rows_area, scroll, view.focused, theme);
 }
 
 /// The line of one row, `width` columns wide.

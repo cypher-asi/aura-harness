@@ -48,6 +48,9 @@ impl App {
                     let _ = tx.try_send(UiEvent::ShowHistory(None));
                 }
             }
+            "kernel" | "record" | "k" | "r" if self.channel_open() => {
+                self.notify_channel_owns_column();
+            }
             "kernel" | "record" | "k" | "r" => {
                 if self.side_maximized() {
                     // Hidden under the side panel, it comes back.
@@ -74,6 +77,9 @@ impl App {
                         let _ = tx.try_send(UiEvent::RefreshAgents);
                     }
                 }
+            }
+            "files" | "sandbox" | "f" if self.channel_open() => {
+                self.notify_channel_owns_column();
             }
             "files" | "sandbox" | "f" => {
                 self.sandbox_panel_visible = !self.sandbox_panel_visible;

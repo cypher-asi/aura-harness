@@ -5401,3 +5401,100 @@ fn test_enter_on_the_back_row_closes_the_channel() {
     assert!(!app.channel_open());
     assert!(matches!(rx.try_recv(), Ok(UiEvent::CloseChannel)));
 }
+
+#[test]
+fn test_an_open_channel_fills_the_right_column_with_its_projects_tab() {
+    let (mut app, _rx) = app_with_channel();
+    app.process_command(UiCommand::SetChannelTasks {
+        channel_id: "c1".to_string(),
+        tasks: vec![crate::events::TaskView {
+            id: "t1".to_string(),
+            title: "Ship zode".to_string(),
+            parent: Some("request".to_string()),
+            ..crate::events::TaskView::default()
+        }],
+    });
+    // A layout of the user's own: Record shown, the side panel hidden
+    // and not maximized, on TRACE.
+    app.record_panel_visible = true;
+    app.side_expanded = false;
+    app.sandbox_panel_visible = false;
+    app.side_tab = SidePanelTab::Trace;
+
+    app.handle_key(key(KeyCode::Enter));
+    assert!(app.channel_open());
+    assert!(!app.record_panel_visible());
+    assert!(app.sandbox_panel_visible(), "shown though the user hid it");
+    assert!(app.side_maximized());
+    assert_eq!(app.side_tab(), SidePanelTab::Projects);
+    assert_eq!(
+        SidePanelTab::tabs(true).first(),
+        Some(&SidePanelTab::Projects)
+    );
+    assert!(
+        !app.channel_task_list().rows().is_empty(),
+        "tasks that came before the channel opened are listed"
+    );
+
+    // The panel toggles leave the layout alone while the channel is open.
+    app.handle_command("/kernel");
+    app.handle_command("/files");
+    app.toggle_side_expanded();
+    assert!(!app.record_panel_visible());
+    assert!(app.sandbox_panel_visible());
+    assert!(
+        (
+            app.record_panel_visible,
+            app.sandbox_panel_visible,
+            app.side_expanded
+        ) == (true, false, false),
+        "the user's flags are untouched"
+    );
+
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!app.channel_open());
+    assert!(app.record_panel_visible());
+    assert!(!app.sandbox_panel_visible());
+    assert!(!app.side_expanded());
+    assert!(!app.side_maximized());
+    assert_eq!(app.side_tab(), SidePanelTab::Trace);
+}
+
+#[test]
+fn test_a_channel_dropped_from_the_list_gives_back_the_side_tab() {
+    let (mut app, _rx) = app_with_channel();
+    app.side_tab = SidePanelTab::Tasks;
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.side_tab(), SidePanelTab::Projects);
+
+    app.process_command(UiCommand::SetChannels(Vec::new()));
+    assert!(!app.channel_open());
+    assert_eq!(app.side_tab(), SidePanelTab::Tasks);
+}
+
+#[test]
+fn test_projects_side_tab_is_listed_and_reached_only_in_a_channel() {
+    assert!(!SidePanelTab::tabs(false).contains(&SidePanelTab::Projects));
+    for &tab in SidePanelTab::tabs(false) {
+        assert_ne!(tab.next(false), SidePanelTab::Projects, "{tab:?}");
+        assert_ne!(tab.prev(false), SidePanelTab::Projects, "{tab:?}");
+    }
+    assert_eq!(SidePanelTab::Tasks.next(true), SidePanelTab::Projects);
+    assert_eq!(SidePanelTab::Sandbox.prev(true), SidePanelTab::Projects);
+    assert_eq!(SidePanelTab::Projects.next(false), SidePanelTab::Sandbox);
+
+    let mut app = App::new();
+    app.show_side_tab(SidePanelTab::Trace);
+    app.show_side_tab(SidePanelTab::Projects);
+    assert_eq!(app.side_tab(), SidePanelTab::Trace, "no channel is open");
+    let mut shown = Vec::new();
+    for _ in 0..SidePanelTab::tabs(false).len() * 2 {
+        app.handle_side_tab_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+        shown.push(app.side_tab());
+        app.handle_side_tab_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        app.handle_side_tab_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        shown.push(app.side_tab());
+    }
+    assert!(!shown.contains(&SidePanelTab::Projects), "{shown:?}");
+}

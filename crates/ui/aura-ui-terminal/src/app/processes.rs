@@ -16,6 +16,9 @@ pub(super) const SIDE_PAGE: isize = 10;
 /// Views of the right-hand panel below the Record panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidePanelTab {
+    /// The open channel's linked projects, the members at work and their
+    /// tasks. Listed only while a channel is open, first.
+    Projects,
     /// File tree of the active agent's workspace.
     #[default]
     Sandbox,
@@ -33,7 +36,8 @@ pub enum SidePanelTab {
 }
 
 impl SidePanelTab {
-    pub const ALL: [Self; 5] = [
+    /// The tabs listed while no channel is open.
+    const OUTSIDE_CHANNEL: [Self; 5] = [
         Self::Sandbox,
         Self::Processes,
         Self::Host,
@@ -41,9 +45,31 @@ impl SidePanelTab {
         Self::Tasks,
     ];
 
+    /// The tabs listed while a channel is open: its PROJECTS first.
+    const IN_CHANNEL: [Self; 6] = [
+        Self::Projects,
+        Self::Sandbox,
+        Self::Processes,
+        Self::Host,
+        Self::Trace,
+        Self::Tasks,
+    ];
+
+    /// The tabs the header bar lists, in order, with a channel open or
+    /// not.
+    #[must_use]
+    pub const fn tabs(channel_open: bool) -> &'static [Self] {
+        if channel_open {
+            &Self::IN_CHANNEL
+        } else {
+            &Self::OUTSIDE_CHANNEL
+        }
+    }
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Projects => "PROJECTS",
             Self::Sandbox => "SANDBOX",
             Self::Processes => "PROCESSES",
             Self::Host => "HOST",
@@ -56,6 +82,7 @@ impl SidePanelTab {
     #[must_use]
     pub const fn short_label(self) -> &'static str {
         match self {
+            Self::Projects => "PRJ",
             Self::Sandbox => "SBX",
             Self::Processes => "PRC",
             Self::Host => "HST",
@@ -65,30 +92,36 @@ impl SidePanelTab {
     }
 
     /// The tabs' cells in a header bar `width` columns wide, as drawn and
-    /// as clicks are mapped back.
+    /// as clicks are mapped back, with a channel open or not.
     #[must_use]
-    pub fn layout(width: u16) -> TabLayout<Self> {
-        TabLayout::new(Self::ALL, Self::label, Self::short_label, width)
-    }
-
-    pub(super) const fn next(self) -> Self {
-        match self {
-            Self::Sandbox => Self::Processes,
-            Self::Processes => Self::Host,
-            Self::Host => Self::Trace,
-            Self::Trace => Self::Tasks,
-            Self::Tasks => Self::Sandbox,
+    pub fn layout(width: u16, channel_open: bool) -> TabLayout<Self> {
+        if channel_open {
+            TabLayout::new(Self::IN_CHANNEL, Self::label, Self::short_label, width)
+        } else {
+            TabLayout::new(Self::OUTSIDE_CHANNEL, Self::label, Self::short_label, width)
         }
     }
 
-    pub(super) const fn prev(self) -> Self {
-        match self {
-            Self::Sandbox => Self::Tasks,
-            Self::Processes => Self::Sandbox,
-            Self::Host => Self::Processes,
-            Self::Trace => Self::Host,
-            Self::Tasks => Self::Trace,
-        }
+    /// The tab after this one in [`Self::tabs`], wrapping around. A tab
+    /// that is not listed goes to the first.
+    pub(super) fn next(self, channel_open: bool) -> Self {
+        let tabs = Self::tabs(channel_open);
+        let next = tabs
+            .iter()
+            .position(|&tab| tab == self)
+            .map_or(0, |at| (at + 1) % tabs.len());
+        tabs.get(next).copied().unwrap_or_default()
+    }
+
+    /// The tab before this one in [`Self::tabs`], wrapping around. A tab
+    /// that is not listed goes to the last.
+    pub(super) fn prev(self, channel_open: bool) -> Self {
+        let tabs = Self::tabs(channel_open);
+        let prev = tabs
+            .iter()
+            .position(|&tab| tab == self)
+            .map_or(tabs.len() - 1, |at| (at + tabs.len() - 1) % tabs.len());
+        tabs.get(prev).copied().unwrap_or_default()
     }
 }
 
@@ -135,7 +168,12 @@ impl App {
         self.processes_scroll
     }
 
+    /// Show `tab`. PROJECTS is only shown while a channel is open; asked
+    /// for without one, nothing changes.
     pub(super) fn show_side_tab(&mut self, tab: SidePanelTab) {
+        if tab == SidePanelTab::Projects && !self.channel_open() {
+            return;
+        }
         self.side_tab = tab;
         self.pending_kill = None;
     }
@@ -218,8 +256,8 @@ impl App {
             return false;
         }
         match key.code {
-            KeyCode::Left => self.show_side_tab(self.side_tab.prev()),
-            KeyCode::Right => self.show_side_tab(self.side_tab.next()),
+            KeyCode::Left => self.show_side_tab(self.side_tab.prev(self.channel_open())),
+            KeyCode::Right => self.show_side_tab(self.side_tab.next(self.channel_open())),
             _ => return false,
         }
         true
@@ -251,10 +289,12 @@ impl App {
                     }
                     SidePanelTab::Trace => self.trace_feed.select(index),
                     SidePanelTab::Tasks => self.task_list.select(index),
+                    SidePanelTab::Projects => self.select_channel_task(index),
                 }
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
             (SidePanelTab::Tasks, KeyCode::Char(' ')) => self.task_list.toggle_selected(),
+            (SidePanelTab::Projects, KeyCode::Char(' ')) => self.toggle_channel_task(),
             (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_row_plan(),
             (SidePanelTab::Tasks, KeyCode::Char('t')) => self.jump_to_todo_task(),
             (SidePanelTab::Processes, KeyCode::Char('o')) => self.jump_to_selected_owner(),
@@ -397,11 +437,15 @@ impl App {
                 }
             }
             SidePanelTab::Tasks => self.click_task_row(column, row),
+            SidePanelTab::Projects => {}
         }
     }
 
     fn side_tab_at(&self, column: u16, row: u16) -> Option<SidePanelTab> {
-        tab_at(self.areas.side_tabs, column, row, SidePanelTab::layout)
+        let channel_open = self.channel_open();
+        tab_at(self.areas.side_tabs, column, row, |width| {
+            SidePanelTab::layout(width, channel_open)
+        })
     }
 
     pub(super) fn sandbox_row_at(&self, column: u16, row: u16) -> Option<usize> {
@@ -453,6 +497,7 @@ impl App {
             SidePanelTab::Host => None,
             SidePanelTab::Trace => self.trace_row_at(column, row).map(HoverTarget::TraceRow),
             SidePanelTab::Tasks => self.task_row_at(column, row).map(HoverTarget::TaskRow),
+            SidePanelTab::Projects => None,
         }
     }
 }

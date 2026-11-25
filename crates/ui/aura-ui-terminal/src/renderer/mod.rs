@@ -3,6 +3,7 @@
 mod activity;
 mod bench_panel;
 mod benchmarks;
+mod channel_side;
 mod channels;
 mod chat_lines;
 mod command;

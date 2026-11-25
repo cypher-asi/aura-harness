@@ -344,8 +344,15 @@ impl App {
         (index < self.inbox.rows.len()).then_some(index)
     }
 
-    /// Show the Kernel panel's INBOX tab, focused, as `/inbox` does.
+    /// Show the Kernel panel's INBOX tab, focused, as `/inbox` does. While
+    /// a channel is open its panel owns the column, so this only says so:
+    /// changing the layout flags here would leave a different layout behind
+    /// when the channel closes.
     pub(super) fn show_inbox(&mut self) {
+        if self.channel_open() {
+            self.notify_channel_owns_column();
+            return;
+        }
         self.record_panel_visible = true;
         self.side_expanded = false;
         self.show_records_tab(RecordsTab::Inbox);

@@ -6266,3 +6266,100 @@ fn test_open_channel_shows_its_title_description_and_members() {
     assert!(worker.1 > coordinator.1, "the worker is indented");
     assert!(!rows.iter().any(|row| row.contains("New channel")));
 }
+
+#[test]
+fn test_open_channel_side_panel_shows_projects_workers_and_tasks() {
+    use crate::app::SidePanelTab;
+    use crate::events::{AgentSummary, ChannelProjectView, ChannelSummary, TaskView, UiCommand};
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetChannels(vec![ChannelSummary {
+        id: "c1".to_string(),
+        slug: "zode".to_string(),
+        title: "Zode release".to_string(),
+        coordinator_id: "co".to_string(),
+        projects: vec![ChannelProjectView {
+            id: "p1".to_string(),
+            name: "zodeproj".to_string(),
+            folder: "/src/zodeproj".to_string(),
+        }],
+        members: vec![
+            AgentSummary {
+                id: "co".to_string(),
+                name: "Lead".to_string(),
+                ..AgentSummary::default()
+            },
+            AgentSummary {
+                id: "wk".to_string(),
+                name: "Busybee".to_string(),
+                code: Some("BB7".to_string()),
+                running: true,
+                depth: 1,
+                ..AgentSummary::default()
+            },
+        ],
+        ..ChannelSummary::default()
+    }]));
+    app.open_channel_by_id("c1");
+    app.process_command(UiCommand::SetChannelTasks {
+        channel_id: "c1".to_string(),
+        // A part the coordinator handed the worker: requests have no row
+        // of their own in the TASKS tree, their parts do.
+        tasks: vec![TaskView {
+            id: "t1".to_string(),
+            title: "Polish the zode docs".to_string(),
+            agent_id: "wk".to_string(),
+            agent_name: "Busybee".to_string(),
+            parent: Some("request".to_string()),
+            ..TaskView::default()
+        }],
+    });
+    assert_eq!(app.side_tab(), SidePanelTab::Projects);
+
+    let rows = render_rows(&mut app, 140);
+    let screen = rows.join("\n");
+    let row_with = |needle: &str| {
+        rows.iter()
+            .position(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in:\n{screen}"))
+    };
+    let linked = row_with("LINKED PROJECTS");
+    let project = row_with("zodeproj");
+    let working = row_with("WORKING NOW");
+    let worker = row_with("BB7  Busybee");
+    let tasks = row_with("TASKS");
+    let task = row_with("Polish the zode docs");
+    assert!(rows[project].contains("/src/zodeproj"), "{}", rows[project]);
+    let order = [linked, project, working, worker, task];
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+    assert!(tasks < task);
+    assert!(!screen.contains("Nobody is working"), "{screen}");
+    // Only the side panel's columns: the left panel lists Lead too.
+    let column = rows[working]
+        .find("WORKING NOW")
+        .map(|at| rows[working][..at].chars().count())
+        .unwrap();
+    assert!(
+        rows[working..tasks].iter().all(|row| !row
+            .chars()
+            .skip(column)
+            .collect::<String>()
+            .contains("Lead")),
+        "Lead is not working: {screen}"
+    );
+
+    // The side bar's first tab is PROJECTS, just before SANDBOX.
+    let bar = rows
+        .iter()
+        .find(|row| row.contains("SANDBOX") || row.contains("SBX"))
+        .unwrap_or_else(|| panic!("no side bar in:\n{screen}"));
+    let sandbox = bar.find("SANDBOX").or_else(|| bar.find("SBX")).unwrap();
+    let before = bar[..sandbox]
+        .split('│')
+        .map(str::trim)
+        .rfind(|cell| !cell.is_empty());
+    assert!(matches!(before, Some("PROJECTS" | "PRJ")), "{bar}");
+    assert!(
+        !screen.contains("RECORD"),
+        "the Record panel hides: {screen}"
+    );
+}

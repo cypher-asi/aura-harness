@@ -1518,6 +1518,7 @@ impl App {
                     SidePanelTab::Host => self.scroll_host(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
+                    SidePanelTab::Projects => self.move_channel_task(delta),
                 }
             }
         }
@@ -1582,6 +1583,7 @@ impl App {
                     SidePanelTab::Host => self.scroll_host(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
+                    SidePanelTab::Projects => self.move_channel_task(delta),
                 }
             }
         }
@@ -2587,9 +2589,11 @@ impl App {
         self.record_panel_visible && !self.chat_expanded && !self.side_maximized()
     }
 
-    /// Whether the side panel, shown, takes the Record panel's room too.
+    /// Whether the side panel, shown, takes the Record panel's room too:
+    /// the user maximized it, or a channel is open, whose panel fills the
+    /// right column until it closes.
     const fn side_maximized(&self) -> bool {
-        self.side_expanded && self.sandbox_panel_visible
+        self.channel_open() || (self.side_expanded && self.sandbox_panel_visible)
     }
 
     /// Check if the Swarm panel is visible.
@@ -2598,10 +2602,11 @@ impl App {
         self.swarm_panel_visible && !self.chat_expanded
     }
 
-    /// Check if the Sandbox panel is visible.
+    /// Check if the Sandbox panel is visible. It shows while a channel is
+    /// open even when the user hid it.
     #[must_use]
     pub const fn sandbox_panel_visible(&self) -> bool {
-        self.sandbox_panel_visible && !self.chat_expanded
+        (self.sandbox_panel_visible || self.channel_open()) && !self.chat_expanded
     }
 
     /// Whether the chat panel fills the screen, the other panels hidden.
@@ -2627,8 +2632,12 @@ impl App {
     }
 
     /// Maximize the side panel over the Record panel, focused, or put it
-    /// back below it with the split it had.
+    /// back below it with the split it had. While a channel is open the
+    /// panel fills the column anyway, so this does nothing.
     pub fn toggle_side_expanded(&mut self) {
+        if self.channel_open() {
+            return;
+        }
         self.side_expanded = !self.side_expanded;
         if self.side_expanded {
             self.focus = PanelFocus::Sandbox;

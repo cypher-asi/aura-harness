@@ -816,9 +816,9 @@ mod tests {
         on: bool,
     ) -> PanelHeader<'static, SidePanelTab> {
         let bar = Rect::new(0, 0, width, 3);
-        let end = bar_end(bar, buttons, SidePanelTab::layout);
+        let end = bar_end(bar, buttons, |width| SidePanelTab::layout(width, false));
         PanelHeader {
-            layout: SidePanelTab::layout(end.tabs),
+            layout: SidePanelTab::layout(end.tabs, false),
             active: Some(SidePanelTab::Sandbox),
             hovered: None,
             title: None,
@@ -842,7 +842,9 @@ mod tests {
     #[test]
     fn scoped_bars_end_in_a_star_button_lit_while_on() {
         let bar = Rect::new(0, 0, 35, 3);
-        let end = bar_end(bar, (true, false), SidePanelTab::layout);
+        let end = bar_end(bar, (true, false), |width| {
+            SidePanelTab::layout(width, false)
+        });
         assert_eq!(end.tabs, 31);
         assert_eq!(end.scope, Some(Rect::new(31, 1, 3, 1)));
         assert_eq!(end.expand, None);
@@ -857,14 +859,18 @@ mod tests {
         assert_eq!(on[(32, 1)].style().fg, Some(colors.foreground));
         assert!(on[(32, 1)].style().add_modifier.contains(Modifier::BOLD));
 
-        let narrow = bar_end(Rect::new(0, 0, 16, 3), (true, false), SidePanelTab::layout);
+        let narrow = bar_end(Rect::new(0, 0, 16, 3), (true, false), |width| {
+            SidePanelTab::layout(width, false)
+        });
         assert_eq!((narrow.tabs, narrow.scope), (16, None));
     }
 
     #[test]
     fn the_expand_button_sits_right_of_the_star_button() {
         let bar = Rect::new(0, 0, 39, 3);
-        let end = bar_end(bar, (true, true), SidePanelTab::layout);
+        let end = bar_end(bar, (true, true), |width| {
+            SidePanelTab::layout(width, false)
+        });
         assert_eq!(end.tabs, 31);
         assert_eq!(end.scope, Some(Rect::new(31, 1, 3, 1)));
         assert_eq!(end.expand, Some(Rect::new(35, 1, 3, 1)));
@@ -880,14 +886,18 @@ mod tests {
         // them that beside two padded buttons, 28 does not. Tight buttons
         // leave them room down to 25; at 24 the expand button goes, and
         // under 20 there are no buttons.
-        let end = bar_end(Rect::new(0, 0, 29, 3), (true, true), SidePanelTab::layout);
+        let end = bar_end(Rect::new(0, 0, 29, 3), (true, true), |width| {
+            SidePanelTab::layout(width, false)
+        });
         assert_eq!(end.tabs, 21);
         assert_eq!(end.scope, Some(Rect::new(21, 1, 3, 1)));
         assert_eq!(end.expand, Some(Rect::new(25, 1, 3, 1)));
         let buffer = draw(29, 10, &side_header(29, (true, true), false));
         assert_eq!(row(&buffer, 1), "│SBX│PRC│HST│TRC│TSK│ * │ ⤢ │");
 
-        let end = bar_end(Rect::new(0, 0, 28, 3), (true, true), SidePanelTab::layout);
+        let end = bar_end(Rect::new(0, 0, 28, 3), (true, true), |width| {
+            SidePanelTab::layout(width, false)
+        });
         assert_eq!(end.tabs, 24);
         assert_eq!(end.scope, Some(Rect::new(24, 1, 1, 1)));
         assert_eq!(end.expand, Some(Rect::new(26, 1, 1, 1)));
@@ -896,15 +906,21 @@ mod tests {
         assert_eq!(row(&buffer, 1), "│SBX │PRC │HOST│TRC│TSK│*│⤢│");
         assert_eq!(row(&buffer, 2), "└────┴────┴────┴───┴───┴─┴─┘");
 
-        let end = bar_end(Rect::new(0, 0, 25, 3), (true, true), SidePanelTab::layout);
+        let end = bar_end(Rect::new(0, 0, 25, 3), (true, true), |width| {
+            SidePanelTab::layout(width, false)
+        });
         assert_eq!(end.tabs, 21);
         assert_eq!(end.expand, Some(Rect::new(23, 1, 1, 1)));
 
-        let end = bar_end(Rect::new(0, 0, 24, 3), (true, true), SidePanelTab::layout);
+        let end = bar_end(Rect::new(0, 0, 24, 3), (true, true), |width| {
+            SidePanelTab::layout(width, false)
+        });
         assert_eq!(end.expand, None, "the expand button goes first");
         assert_eq!((end.tabs, end.scope), (22, Some(Rect::new(22, 1, 1, 1))));
 
-        let bare = bar_end(Rect::new(0, 0, 19, 3), (true, true), SidePanelTab::layout);
+        let bare = bar_end(Rect::new(0, 0, 19, 3), (true, true), |width| {
+            SidePanelTab::layout(width, false)
+        });
         assert_eq!((bare.tabs, bare.scope, bare.expand), (19, None, None));
     }
 

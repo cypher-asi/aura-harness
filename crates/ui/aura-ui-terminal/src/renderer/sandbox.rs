@@ -1,6 +1,8 @@
 //! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE | TASKS
 //! header bar over the file tree of the active agent's workspace, the
 //! Processes list, the trace feed, or its tasks grouped under their plans.
+//! While a channel is open the bar starts with PROJECTS, the channel's
+//! own view (see `channel_side`), and the panel fills the right column.
 //! The bar ends in a `*` button that lists the whole project's processes,
 //! steps, plans and tasks instead of the active agent's, then a ⤢ button
 //! that maximizes the panel over the Record panel, or restores it.
@@ -21,7 +23,11 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
-    let end = header::bar_end(bar, (true, true), SidePanelTab::layout);
+    // An open channel's panel fills the column until it closes, so there
+    // is nothing for the expand button to do.
+    let channel_open = app.channel_open();
+    let layout = |width| SidePanelTab::layout(width, channel_open);
+    let end = header::bar_end(bar, (true, !channel_open), layout);
     if !hosted {
         app.set_side_tabs_area(Rect {
             width: end.tabs,
@@ -35,13 +41,13 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         _ => None,
     };
     let header = PanelHeader {
-        layout: SidePanelTab::layout(end.tabs),
+        layout: layout(end.tabs),
         active: Some(app.side_tab()),
         hovered,
         title: None,
         info: None,
         close: None,
-        expand: Some(header::ExpandButton {
+        expand: (!channel_open).then(|| header::ExpandButton {
             expanded: app.side_expanded(),
             hovered: app.hover() == Some(HoverTarget::ExpandSide),
             cell: end.expand,
@@ -70,6 +76,9 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             super::trace_feed::render_trace_feed(frame, area, body, app, theme);
         }
         SidePanelTab::Tasks => super::tasks::render_tasks(frame, area, body, app, theme),
+        SidePanelTab::Projects => {
+            super::channel_side::render_channel_side(frame, area, body, app, theme);
+        }
     }
 }
 

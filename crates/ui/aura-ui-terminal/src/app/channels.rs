@@ -11,8 +11,16 @@
 //! `CloseChannel`) so it can send the channel's posts and tasks. A
 //! channel that drops out of `SetChannels` closes here without telling
 //! it: the session already knows it is gone.
+//!
+//! While a channel is open the right column is one tall side panel whose
+//! PROJECTS tab, first and selected on opening, shows the channel (see
+//! [`App::side_maximized`]). The user's own layout flags are left alone,
+//! and the side tab shown before the channel opened comes back when it
+//! closes, so closing gives back exactly the layout there was.
 
-use super::{contains, follow_selection, AgentsTab, App, NotificationType};
+use super::processes::SIDE_PAGE;
+use super::tasks::TaskList;
+use super::{contains, follow_selection, AgentsTab, App, NotificationType, SidePanelTab};
 use crate::events::{ChannelPostView, ChannelSummary, TaskView, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -49,6 +57,14 @@ pub(crate) struct ChannelState {
     back_area: Option<Rect>,
     /// Where the open channel's member rows were drawn this frame
     member_rows_area: Option<Rect>,
+    /// The open channel's tasks as the side panel's PROJECTS tab lists
+    /// them, in the TASKS tab's tree
+    task_list: TaskList,
+    /// First visible row of `task_list`
+    tasks_scroll: usize,
+    /// The side tab shown before the channel opened, shown again when it
+    /// closes
+    side_tab_before: Option<SidePanelTab>,
 }
 
 impl ChannelState {
@@ -108,17 +124,15 @@ impl App {
         self.channels.open_channel()
     }
 
-    /// Whether a channel is open in the CHANNELS tab.
+    /// Whether a channel is open in the CHANNELS tab. Only a listed
+    /// channel is opened, and one that drops out of the list closes, so
+    /// this agrees with [`Self::open_channel`].
     #[must_use]
-    pub(crate) fn channel_open(&self) -> bool {
-        self.open_channel().is_some()
+    pub(crate) const fn channel_open(&self) -> bool {
+        self.channels.open.is_some()
     }
 
     /// Tasks of channel `id`'s agents, newest first.
-    #[allow(
-        dead_code,
-        reason = "kept as they arrive; the open channel's posts and tasks are not drawn yet"
-    )]
     #[must_use]
     pub(crate) fn channel_tasks(&self, id: &str) -> &[TaskView] {
         self.channels.tasks.get(id).map_or(&[], Vec::as_slice)
@@ -127,7 +141,7 @@ impl App {
     /// Posts of channel `id`, oldest first.
     #[allow(
         dead_code,
-        reason = "kept as they arrive; the open channel's posts and tasks are not drawn yet"
+        reason = "kept as they arrive; the open channel's posts are not drawn yet"
     )]
     #[must_use]
     pub(crate) fn channel_posts(&self, id: &str) -> &[ChannelPostView] {
@@ -140,10 +154,19 @@ impl App {
         if self.channels.find(id).is_none() {
             return;
         }
+        if self.channels.open.is_none() {
+            self.channels.side_tab_before = Some(self.side_tab);
+        }
         self.channels.open = Some(id.to_string());
         self.channels.selected_row = 0;
         self.channels.members_scroll = 0;
         self.channels.forget_areas();
+        self.channels.task_list = TaskList::default();
+        self.channels
+            .task_list
+            .set_tasks(self.channel_tasks(id).to_vec());
+        self.channels.tasks_scroll = 0;
+        self.show_side_tab(SidePanelTab::Projects);
         self.show_agents_tab(AgentsTab::Channels);
         self.try_send_event(UiEvent::OpenChannel(id.to_string()));
     }
@@ -153,8 +176,95 @@ impl App {
         if self.channels.open.take().is_none() {
             return;
         }
-        self.channels.forget_areas();
+        self.left_channel();
         self.try_send_event(UiEvent::CloseChannel);
+    }
+
+    /// Undo what opening the channel did to the panels, now that
+    /// `channels.open` is `None`: show the side tab there was before it.
+    fn left_channel(&mut self) {
+        self.channels.forget_areas();
+        self.channels.task_list = TaskList::default();
+        self.channels.tasks_scroll = 0;
+        let before = self.channels.side_tab_before.take().unwrap_or_default();
+        self.show_side_tab(before);
+    }
+
+    /// Say why `/kernel` and `/files` leave the right column as it is:
+    /// the open channel's panel fills it until the channel closes, and
+    /// the layout they would change comes back then.
+    pub(super) fn notify_channel_owns_column(&mut self) {
+        self.notification = Some((
+            "The channel fills the right column; close it to change the panels".to_string(),
+            NotificationType::Warning,
+        ));
+    }
+
+    /// The open channel's tasks, as the side panel's PROJECTS tab lists
+    /// them.
+    #[must_use]
+    pub(crate) const fn channel_task_list(&self) -> &TaskList {
+        &self.channels.task_list
+    }
+
+    /// Keep the highlighted channel task inside `visible` rows, returning
+    /// the first row to draw.
+    pub(crate) fn sync_channel_tasks_scroll(&mut self, visible: usize) -> usize {
+        let state = &mut self.channels;
+        state.tasks_scroll = follow_selection(
+            state.tasks_scroll,
+            state.task_list.selected(),
+            visible,
+            state.task_list.rows().len(),
+        );
+        state.tasks_scroll
+    }
+
+    /// Move the PROJECTS tab's task highlight `delta` rows, as the wheel
+    /// does.
+    pub(super) fn move_channel_task(&mut self, delta: isize) {
+        self.channels.task_list.move_by(delta);
+    }
+
+    /// Highlight the PROJECTS tab's task row `index` (clamped).
+    pub(super) fn select_channel_task(&mut self, index: usize) {
+        self.channels.task_list.select(index);
+    }
+
+    /// Fold or open what is under the highlighted channel task row.
+    pub(super) fn toggle_channel_task(&mut self) {
+        self.channels.task_list.toggle_selected();
+    }
+
+    /// Keys of the side panel's PROJECTS tab, which move through the
+    /// channel's tasks as the TASKS tab does: Enter shows the agent of
+    /// the highlighted task, Right unfolds and Left folds.
+    pub(super) fn handle_channel_side_key(&mut self, key: KeyEvent) {
+        let list = &mut self.channels.task_list;
+        match key.code {
+            KeyCode::Up => list.move_by(-1),
+            KeyCode::Down => list.move_by(1),
+            KeyCode::PageUp => list.move_by(-SIDE_PAGE),
+            KeyCode::PageDown => list.move_by(SIDE_PAGE),
+            KeyCode::Home => list.select(0),
+            KeyCode::End => list.select(usize::MAX),
+            KeyCode::Right => list.set_selected_open(true),
+            KeyCode::Left => list.set_selected_open(false),
+            KeyCode::Enter => self.open_channel_task_agent(),
+            _ => {}
+        }
+    }
+
+    /// Show the agent doing the highlighted channel task in the chat.
+    fn open_channel_task_agent(&mut self) {
+        let Some(task) = self.channels.task_list.selected_task() else {
+            return;
+        };
+        if task.agent_id.is_empty() || task.agent_id == self.active_agent_id {
+            return;
+        }
+        let target = task.agent_id.clone();
+        self.request_agent_switch(target);
     }
 
     /// Start creating a channel: the "+ New channel" row.
@@ -246,7 +356,7 @@ impl App {
             .is_some_and(|id| self.channels.find(id).is_none());
         if gone {
             self.channels.open = None;
-            self.channels.forget_areas();
+            self.left_channel();
         }
         self.channels.selected = self.channels.selected.min(self.channels.list.len());
         let rows = self.channels.selectable_rows();
@@ -256,6 +366,10 @@ impl App {
     }
 
     pub(super) fn set_channel_tasks(&mut self, channel_id: String, tasks: Vec<TaskView>) {
+        if self.channels.open.as_deref() == Some(channel_id.as_str()) {
+            // The tree keeps its own copy, to fold and highlight in.
+            self.channels.task_list.set_tasks(tasks.clone());
+        }
         self.channels.tasks.insert(channel_id, tasks);
     }
 

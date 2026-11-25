@@ -600,6 +600,10 @@ impl App {
                     self.handle_tasks_key(key);
                     KeyResult::continue_running()
                 }
+                SidePanelTab::Projects => {
+                    self.handle_channel_side_key(key);
+                    KeyResult::continue_running()
+                }
             },
         }
     }
