@@ -1,0 +1,29 @@
+{
+  "id": "01a2112837a80009",
+  "title": "finish this",
+  "state": "completed",
+  "agent_id": "f2c77540ef7a7d174339af9a5a9a026e69eba7243c7dd2967e71e1186a842507",
+  "agent_name": "Agent 1598",
+  "items": [
+    {
+      "content": "Hub: choose a cloud-compatible binary (AURA_CLOUD_BINARY / well-known path), check its glibc needs locally before creating a builder, verify the binary runs on the builder after install",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Add scripts/build-cloud-binary.sh that builds aura in Docker against old glibc and installs it where the hub looks",
+      "state": "completed"
+    },
+    {
+      "content": "Run the script to produce the compatible binary and verify its glibc requirement <= 2.39",
+      "state": "completed"
+    },
+    {
+      "content": "Review changes, run fmt/clippy/tests",
+      "state": "completed"
+    }
+  ],
+  "summary": "The fix is in, but two steps are left that I couldn't do from here. Then the move should work. I haven't tried a real move to the cloud yet.",
+  "updated_ms": 1795586227887,
+  "created_ms": 1795584178088
+}

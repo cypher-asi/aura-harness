@@ -161,6 +161,13 @@ impl Hud {
         (done, total)
     }
 
+    /// Whether any todo item is still pending or in progress. A list with
+    /// every item closed is finished and no longer shows in the chat.
+    #[must_use]
+    pub fn has_open_todos(&self) -> bool {
+        self.todos.iter().any(|t| !t.state.is_closed())
+    }
+
     /// The item being worked on, else the next one not started.
     #[must_use]
     pub fn current_todo(&self) -> Option<&TodoView> {

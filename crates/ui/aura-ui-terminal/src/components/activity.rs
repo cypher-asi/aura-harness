@@ -1,8 +1,8 @@
 //! What the agent did on its way to a reply: a thinking block or a tool call.
 
-use crate::components::ToolStatus;
+use crate::components::{quiet_for, LiveOutput, ToolStatus};
 use crate::events::ActivityData;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// One step of agent activity shown in the chat as a collapsible block.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +51,8 @@ pub struct ToolStep {
     pub policy: Option<String>,
     /// Whether the call waits for the user to approve it
     pub awaiting_approval: bool,
+    /// What a running command has printed so far
+    pub live: LiveOutput,
 }
 
 impl Activity {
@@ -80,6 +82,7 @@ impl Activity {
             diff: None,
             policy: None,
             awaiting_approval: false,
+            live: LiveOutput::default(),
         })
     }
 
@@ -113,9 +116,26 @@ impl Activity {
                 step.status = ToolStatus::Error;
                 step.result = Some(reason.to_string());
                 step.duration_ms = elapsed_ms(step.started);
+                step.live.clear();
             }
             _ => {}
         }
+    }
+}
+
+impl ToolStep {
+    /// How long this call, a running command, has printed nothing, once
+    /// that reaches [`QUIET_AFTER`](crate::components::QUIET_AFTER).
+    /// `None` for other calls and for one waiting for approval.
+    #[must_use]
+    pub fn quiet_for(&self) -> Option<Duration> {
+        if self.name != "run_command"
+            || self.status != ToolStatus::Running
+            || self.awaiting_approval
+        {
+            return None;
+        }
+        quiet_for(self.started, &self.live)
     }
 }
 
@@ -154,6 +174,7 @@ impl From<&ActivityData> for Activity {
                 diff: None,
                 policy: policy.clone(),
                 awaiting_approval: false,
+                live: LiveOutput::default(),
             }),
         }
     }

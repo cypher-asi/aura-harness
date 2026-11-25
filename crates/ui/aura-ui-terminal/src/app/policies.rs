@@ -32,10 +32,10 @@ impl App {
     }
 
     /// Show the Kernel panel's POLICIES tab, focused, as `/policies` does.
-    /// While a channel owns the column this only says so (see
+    /// In the channel app this only says so (see
     /// [`Self::show_inbox`]).
     pub(super) fn show_policies(&mut self) {
-        if self.channel_open() {
+        if self.channel_app() {
             self.notify_channel_owns_column();
             return;
         }

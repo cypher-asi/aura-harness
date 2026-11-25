@@ -348,6 +348,7 @@ mod tests {
                     TaskRow::Item { task, item, .. } => {
                         list.tasks()[task].items[item].content.clone()
                     }
+                    TaskRow::Round { first, .. } => format!("~{}", list.tasks()[first].id),
                     TaskRow::Task { task, .. } => format!("@{}", list.tasks()[task].id),
                 };
                 format!("{}{text}", "  ".repeat(row.depth()))

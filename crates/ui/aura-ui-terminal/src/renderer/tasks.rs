@@ -2,9 +2,10 @@
 //! works on. Each plan's header shows its todo progress, then its todos.
 //! Work of no listed plan goes last, under
 //! `No Plan`. Requests have no row: their todo items are listed, and a
-//! task handed out sits one level under the todo or item it does (see
-//! [`crate::app::tasks`]). Every other row's icon sits under its
-//! header's fold arrow.
+//! task handed out sits one level under the todo or item it does, titled
+//! by it. Builds of a todo list the plan no longer has are listed under
+//! an earlier round's header (see [`crate::app::tasks`]). Every other
+//! row's icon sits under its header's fold arrow.
 //!
 //! ```text
 //!  ▾  Auth rework                 1/3
@@ -12,10 +13,11 @@
 //!  ▣  Write the login handler
 //!    ⢎⡱ Write the login handler  → coder
 //!  ☐  Wire the middleware
+//!  ▸  Build the auth              4/4
 //!  ▸  Parser cleanup              5/5
 //!  ▾  No Plan
 //!  ☒  Find the uses  → explorer
-//!    ✓  Find the uses of calc_total  → explorer
+//!    ✓  Find the uses  → explorer
 //!  ✓  Fix the typo  → coder
 //! ```
 
@@ -37,11 +39,13 @@ use ratatui::{layout::Rect, style::Modifier, text::Line, widgets::Paragraph, Fra
 const NO_PLAN: &str = "No Plan";
 
 /// A task's icon: the aura while an agent works on it, else how it ended.
-fn task_icon(task: &TaskView, app: &App, theme: &Theme) -> StatusIcon {
+/// A failure a newer task made up for (`stale`) is no longer an error.
+fn task_icon(task: &TaskView, stale: bool, app: &App, theme: &Theme) -> StatusIcon {
     match task.state {
         TaskState::Running => aura_icon(app),
         TaskState::Open => StatusIcon::new("○", theme.colors.warning),
         TaskState::Completed => StatusIcon::new("✓", theme.colors.success),
+        TaskState::Failed if stale => StatusIcon::new("✗", theme.colors.muted),
         TaskState::Failed => StatusIcon::new("✗", theme.colors.error),
         TaskState::Cancelled => StatusIcon::new("✗", theme.colors.muted),
     }
@@ -158,6 +162,14 @@ fn row_line(
                 ),
             }
         }
+        TaskRow::Round {
+            first,
+            open,
+            progress,
+        } => list.tasks().get(first).map_or_else(Line::default, |first| {
+            let fold = StatusIcon::new(if open { "▾" } else { "▸" }, theme.colors.muted);
+            round_line(first, fold, progress, (width, state), theme)
+        }),
         TaskRow::Todo { plan, todo, .. } => list
             .plans()
             .get(plan)
@@ -165,9 +177,12 @@ fn row_line(
             .map_or_else(Line::default, |todo| {
                 todo_line(todo, depth, (width, state), theme)
             }),
-        TaskRow::Task { task, .. } => list.tasks().get(task).map_or_else(Line::default, |task| {
-            task_line(task, depth, (width, state), app, theme)
-        }),
+        TaskRow::Task { task, stale, .. } => {
+            list.tasks().get(task).map_or_else(Line::default, |task| {
+                let title = list.title_of(row);
+                task_line(task, (title, stale), depth, (width, state), app, theme)
+            })
+        }
         TaskRow::Item { task, item, .. } => {
             list.item(task, item).map_or_else(Line::default, |item| {
                 todo_line(item, depth, (width, state), theme)
@@ -184,24 +199,51 @@ fn plan_line(
     theme: &Theme,
 ) -> Line<'static> {
     let (closed, total) = plan.progress();
-    // A plan with nothing left to do settles like its todos; one with no
-    // todos yet is still open.
-    let tone = Tone::active_if(total == 0 || plan.has_open_todos());
+    // A plan with nothing left to do settles like its todos, marked done;
+    // one with no todos yet is still open.
+    let open = total == 0 || plan.has_open_todos();
+    let tone = Tone::active_if(open);
+    let progress = if open {
+        format!("{closed}/{total}")
+    } else {
+        format!("✓ {closed}/{total}")
+    };
     list_row(
         width,
         0,
         fold,
         &plan.name,
         cell_style(theme, state, name_style(tone, theme)),
+        Some(&progress),
+    )
+}
+
+/// An earlier round's header: its fold glyph, what its first request
+/// asked and its items' progress.
+fn round_line(
+    first: &TaskView,
+    fold: StatusIcon,
+    (closed, total): (usize, usize),
+    (width, state): (usize, CellState),
+    theme: &Theme,
+) -> Line<'static> {
+    let tone = Tone::active_if(closed < total);
+    list_row(
+        width,
+        0,
+        fold,
+        first.title.lines().next().unwrap_or(""),
+        cell_style(theme, state, name_style(tone, theme)),
         Some(&format!("{closed}/{total}")),
     )
 }
 
-/// A handed-out task's row: its icon, its title and the kind of agent it
-/// was handed to. Its agent's own checklist is not listed, so no
-/// progress either.
+/// A handed-out task's row: its icon, its `title` and the kind of agent
+/// it was handed to. Its agent's own checklist is not listed, so no
+/// progress either. `stale` when a newer task does its todo instead.
 fn task_line(
     task: &TaskView,
+    (title, stale): (&str, bool),
     depth: usize,
     (width, state): (usize, CellState),
     app: &App,
@@ -218,8 +260,8 @@ fn task_line(
     list_row_with_detail(
         width,
         depth,
-        task_icon(task, app, theme),
-        (task.title.lines().next().unwrap_or(""), who.as_deref()),
+        task_icon(task, stale, app, theme),
+        (title, who.as_deref()),
         cell_style(theme, state, name),
         None,
     )
@@ -251,16 +293,20 @@ mod tests {
     use crate::events::{AgentSummary, TodoState, UiCommand};
     use ratatui::{backend::TestBackend, Terminal};
 
-    /// The screen after drawing the TASKS tab into a 60x4 frame.
-    fn drawn(app: &mut App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(60, 4)).unwrap();
+    /// The buffer after drawing the TASKS tab into a 60-column frame
+    /// `height` rows tall.
+    fn buffer_of(app: &mut App, height: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(60, height)).unwrap();
         terminal
             .draw(|frame| {
                 let area = frame.area();
                 render_tasks(frame, area, area, app, &Theme::default());
             })
             .unwrap();
-        let buffer = terminal.backend().buffer();
+        terminal.backend().buffer().clone()
+    }
+
+    fn text_of(buffer: &ratatui::buffer::Buffer) -> String {
         (0..buffer.area.height)
             .map(|y| {
                 (0..buffer.area.width)
@@ -269,6 +315,11 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The screen after drawing the TASKS tab into a 60x4 frame.
+    fn drawn(app: &mut App) -> String {
+        text_of(&buffer_of(app, 4))
     }
 
     #[test]
@@ -342,7 +393,11 @@ mod tests {
         };
         assert!(lines[0].contains("No Plan"), "{screen}");
         assert!(lines[1].contains("Write the parser  → coder"), "{screen}");
-        assert!(lines[2].contains("Parse  → coder"), "{screen}");
+        assert!(
+            lines[2].contains("Write the parser  → coder"),
+            "a task is titled by the item it does: {screen}"
+        );
+        assert!(!screen.contains("Parse "), "{screen}");
         assert_eq!(column(lines[1], '▣'), column(lines[0], '▾'), "{screen}");
         assert_eq!(
             column(lines[2], '✓').saturating_sub(column(lines[0], '▾')),
@@ -358,5 +413,72 @@ mod tests {
             !screen.contains("lex"),
             "a task's own list is not listed: {screen}"
         );
+    }
+
+    #[test]
+    fn an_earlier_round_lists_its_items_and_a_replaced_failure_is_muted() {
+        let path = ".aura/plans/ch.plan.md";
+        let todo = |content: &str, state, task: Option<&str>| TodoView {
+            content: content.into(),
+            state,
+            assignee: None,
+            task: task.map(Into::into),
+        };
+        let try_at = |id: &str| TaskView {
+            id: id.into(),
+            title: format!("Work ONLY in the worktree {id}"),
+            state: TaskState::Failed,
+            agent_id: format!("agent-{id}"),
+            assignee: Some("coder".into()),
+            parent: Some("b1".into()),
+            plan: Some(path.into()),
+            plan_todo: Some("a".into()),
+            ..TaskView::default()
+        };
+        let build = |id: &str, items| TaskView {
+            id: id.into(),
+            title: format!("asked {id}"),
+            agent_id: "lead".into(),
+            plan: Some(path.into()),
+            builds: true,
+            items,
+            ..TaskView::default()
+        };
+        let mut app = App::new();
+        app.process_command(UiCommand::SetPlans(vec![PlanView {
+            path: path.into(),
+            name: "ch".into(),
+            todos: vec![todo("new", TodoState::Pending, None)],
+        }]));
+        app.process_command(UiCommand::SetTasks(vec![
+            build("b2", vec![todo("new", TodoState::Pending, None)]),
+            try_at("t2"),
+            try_at("t1"),
+            build(
+                "b1",
+                vec![todo("Add the store", TodoState::InProgress, Some("t2"))],
+            ),
+        ]));
+        let buffer = buffer_of(&mut app, 6);
+        let screen = text_of(&buffer);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert!(
+            lines[2].contains("asked b1") && lines[2].contains("0/1"),
+            "{screen}"
+        );
+        assert!(lines[3].contains("▣  Add the store"), "{screen}");
+        assert!(lines[4].contains("✗  Add the store  → coder"), "{screen}");
+        assert!(lines[5].contains("✗  Add the store  → coder"), "{screen}");
+        assert!(!screen.contains("Work ONLY"), "{screen}");
+
+        let theme = Theme::default();
+        let icon_color = |y: u16| {
+            (0..buffer.area.width)
+                .map(|x| &buffer[(x, y)])
+                .find(|cell| cell.symbol() == "✗")
+                .map_or_else(|| panic!("no ✗ on row {y}:\n{screen}"), |cell| cell.fg)
+        };
+        assert_eq!(icon_color(4), theme.colors.muted, "t1 was replaced by t2");
+        assert_eq!(icon_color(5), theme.colors.error, "t2 is the newest try");
     }
 }

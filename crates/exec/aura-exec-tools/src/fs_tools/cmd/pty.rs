@@ -2,6 +2,7 @@
 //! output the way it would in an interactive terminal (`ls` columns,
 //! `git` / `grep` colors).
 
+use super::live::LiveOutput;
 use super::stop::Registration;
 use super::{truncate_output, STDOUT_TRUNCATE_LIMIT};
 use crate::error::ToolError;
@@ -114,14 +115,21 @@ pub(super) fn cmd_run_in_pty(
 
     let stop = Registration::new(tags, child.process_id());
     let mut captured = Vec::new();
-    let status = match wait_capturing(child.as_mut(), &rx, &mut captured, timeout_ms, &stop) {
+    let live = &tags.output;
+    let waited = wait_capturing(child.as_mut(), &rx, &mut captured, timeout_ms, &stop, live);
+    let status = match waited {
         Ok(status) => status,
-        Err(e) => return Some(Err(e)),
+        Err(e) => {
+            live.finish();
+            return Some(Err(e));
+        }
     };
     let deadline = Instant::now() + DRAIN_GRACE;
     while let Ok(chunk) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        live.push(&chunk);
         capture(&mut captured, &chunk);
     }
+    live.finish();
     drop(writer);
     drop(pair.master);
 
@@ -217,10 +225,12 @@ fn wait_capturing(
     captured: &mut Vec<u8>,
     timeout_ms: u64,
     stop: &Registration,
+    live: &LiveOutput,
 ) -> Result<portable_pty::ExitStatus, ToolError> {
     let timeout = Duration::from_millis(timeout_ms);
     let start = Instant::now();
     loop {
+        live.tick();
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
             Ok(None) => {}
@@ -242,7 +252,10 @@ fn wait_capturing(
             ));
         }
         match rx.recv_timeout(Duration::from_millis(10)) {
-            Ok(chunk) => capture(captured, &chunk),
+            Ok(chunk) => {
+                live.push(&chunk);
+                capture(captured, &chunk);
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 std::thread::sleep(Duration::from_millis(10));

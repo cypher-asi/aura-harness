@@ -58,7 +58,8 @@ const MIN_TEXT_WIDTH: u16 = 8;
 #[must_use]
 pub(super) fn height(app: &App) -> u16 {
     let len = app.queue().len();
-    if len == 0 {
+    // With no channel open the chat shows no agent's queue.
+    if len == 0 || app.channel_app_empty() {
         return 0;
     }
     if app.queue_collapsed() {
@@ -84,7 +85,7 @@ struct RowLook {
 /// its parts went.
 pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let len = app.queue().len();
-    if len == 0 || area.height < BORDER_ROWS + 1 || area.width < 6 {
+    if len == 0 || app.channel_app_empty() || area.height < BORDER_ROWS + 1 || area.width < 6 {
         app.set_queue_areas(QueueAreas::default());
         return;
     }

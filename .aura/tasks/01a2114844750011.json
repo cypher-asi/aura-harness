@@ -1,0 +1,13 @@
+{
+  "id": "01a2114844750011",
+  "title": "channels list should just show slug in list #zode",
+  "state": "completed",
+  "agent_id": "c20658d93330a8034085732e2cc42decaf2258f4e355e3ce3093f8f98ea4bb2f",
+  "agent_name": "Agent 1605",
+  "plan": ".aura/plans/channels-as-their-own-app-list-on-the-left-chat_469b21d0.plan.md",
+  "builds": true,
+  "items": [],
+  "summary": "Now I'll make the list show only the slug.",
+  "updated_ms": 1795586674367,
+  "created_ms": 1795586278517
+}

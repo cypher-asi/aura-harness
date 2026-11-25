@@ -160,6 +160,7 @@ pub(super) async fn handle_agent_success(
 ) {
     session.messages.clone_from(&result.messages);
     session.todos.clone_from(&result.todos);
+    let finished = super::plan_mode::finish_done_todos(session);
     ui.send(UiCommand::SetContext(context_view(
         &result,
         forwarded.context_limit,
@@ -177,6 +178,10 @@ pub(super) async fn handle_agent_success(
     // entry in the Record panel and the turn's models under the reply.
     emit_response_to_ui(&result, forwarded, ui).await;
     record_response(session, &result.total_text).await;
+    if let Some(plan) = &finished {
+        let workspace = session.kernel.agent_workspace();
+        super::plan_mode::announce_finished_plan(ui, &workspace, plan).await;
+    }
     session.save_checkpoint().await;
 
     // Memory ingestion now fires automatically via TurnObserver inside

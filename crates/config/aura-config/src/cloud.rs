@@ -16,13 +16,14 @@
 //! - An empty or blank variable counts as unset.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::env::{
-    ConfigError, AURA_CLOUD_FORK_ON_SPAWN, AURA_CLOUD_IDLE_HIBERNATE_SECS,
+    ConfigError, AURA_CLOUD_BINARY, AURA_CLOUD_FORK_ON_SPAWN, AURA_CLOUD_IDLE_HIBERNATE_SECS,
     AURA_CLOUD_IDLE_STANDBY_SECS, AURA_CLOUD_ISOLATED, AURA_CLOUD_PRICE_DISK_GIB_HOUR,
     AURA_CLOUD_PRICE_MEM_GIB_HOUR, AURA_CLOUD_PRICE_VCPU_HOUR, AURA_CLOUD_SIZE, BOXD_API_KEY,
     BOXD_API_URL, BOXD_BASE_URL, BOXD_ORG, BOXD_REGION, BOXD_TOKEN,
@@ -322,6 +323,9 @@ pub struct CloudConfig {
     pub price_mem_gib_hour: Option<f64>,
     /// Override of the price of a GiB-hour of disk written.
     pub price_disk_gib_hour: Option<f64>,
+    /// Linux aura build for the base snapshot (`AURA_CLOUD_BINARY`);
+    /// `None` lets the hub pick one.
+    pub binary: Option<PathBuf>,
 }
 
 impl CloudConfig {
@@ -341,6 +345,7 @@ impl CloudConfig {
             price_vcpu_hour: None,
             price_mem_gib_hour: None,
             price_disk_gib_hour: None,
+            binary: None,
         }
     }
 
@@ -419,6 +424,7 @@ impl CloudConfig {
             price_vcpu_hour: parse_price(&get, AURA_CLOUD_PRICE_VCPU_HOUR)?,
             price_mem_gib_hour: parse_price(&get, AURA_CLOUD_PRICE_MEM_GIB_HOUR)?,
             price_disk_gib_hour: parse_price(&get, AURA_CLOUD_PRICE_DISK_GIB_HOUR)?,
+            binary: get(AURA_CLOUD_BINARY).map(PathBuf::from),
         })
     }
 
@@ -641,8 +647,10 @@ mod tests {
             (AURA_CLOUD_PRICE_VCPU_HOUR, "0.05"),
             (BOXD_REGION, "nyc"),
             (BOXD_ORG, "acme"),
+            (AURA_CLOUD_BINARY, " /opt/aura-linux "),
         ])
         .expect("parse");
+        assert_eq!(cfg.binary, Some(PathBuf::from("/opt/aura-linux")));
         assert_eq!(cfg.size, MachineSize::S8x32);
         assert_eq!(cfg.idle_hibernate_secs, 60);
         assert_eq!(cfg.idle_standby_secs, 20);

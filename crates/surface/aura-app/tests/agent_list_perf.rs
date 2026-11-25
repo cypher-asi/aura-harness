@@ -37,19 +37,20 @@ fn time_agent_list() {
             agents.load().unwrap().agents
         });
         time("derive id of every row", 3, || {
-            rows.iter()
-                .map(|row| aura_store_db::agents::derive_agent_id(&row.zns_id))
-                .count()
+            for row in &rows {
+                std::hint::black_box(aura_store_db::agents::derive_agent_id(&row.zns_id));
+            }
         });
         let bytes: Vec<Vec<u8>> = rows
             .iter()
             .map(|r| serde_json::to_vec(r).unwrap())
             .collect();
         time("decode every row", 3, || {
-            bytes
-                .iter()
-                .map(|b| serde_json::from_slice::<aura_store_db::AgentRecord>(b).unwrap())
-                .count()
+            for b in &bytes {
+                std::hint::black_box(
+                    serde_json::from_slice::<aura_store_db::AgentRecord>(b).unwrap(),
+                );
+            }
         });
     }
     let mut registry = time("load registry", 3, || {

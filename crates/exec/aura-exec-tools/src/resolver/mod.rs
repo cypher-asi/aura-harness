@@ -29,7 +29,8 @@ use crate::catalog::ToolCatalog;
 use crate::catalog::ToolProfile;
 use crate::domain_tools::DomainToolExecutor;
 use crate::tool::{
-    AgentControlHook, AgentReadHook, BackgroundProcessHook, SubagentDispatchHook, Tool,
+    AgentControlHook, AgentReadHook, BackgroundProcessHook, CommandOutputHook,
+    SubagentDispatchHook, Tool,
 };
 use crate::ToolConfig;
 use crate::ToolExecutor;
@@ -163,6 +164,13 @@ impl ToolResolver {
     #[must_use]
     pub fn with_background_process_hook(mut self, hook: Arc<dyn BackgroundProcessHook>) -> Self {
         self.inner = self.inner.with_background_process_hook(hook);
+        self
+    }
+
+    /// Show `hook` what foreground `run_command` calls print while they run.
+    #[must_use]
+    pub fn with_command_output_hook(mut self, hook: Arc<dyn CommandOutputHook>) -> Self {
+        self.inner = self.inner.with_command_output_hook(hook);
         self
     }
 

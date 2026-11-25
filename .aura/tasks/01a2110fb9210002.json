@@ -1,0 +1,14 @@
+{
+  "id": "01a2110fb9210002",
+  "title": "Fix: moving an agent to the cloud fails because the hub uploads its own `aura` binary (std::env::current_exe(), see `cr…",
+  "state": "completed",
+  "agent_id": "803d6eead5b55ab612a1ad1b4553cb5101449d7a615b2cfbd0559ad6288587cb",
+  "agent_name": "rust-engineer #138",
+  "assignee": "rust-engineer",
+  "parent": "01a2110ec91a0001",
+  "items": [],
+  "summary": "The glibc preflight and the builder-side check are in and tested in `aura-engine-cloud`. The binary selection in `hub.rs` is written but has never been compiled or tested, and I did not get to run your full check command.",
+  "updated_ms": 1795583015741,
+  "created_ms": 1795582572833,
+  "tool_use_id": "toolu_01AnpLbYtfYdWgByESBEzHCV"
+}

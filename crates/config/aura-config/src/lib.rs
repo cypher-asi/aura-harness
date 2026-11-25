@@ -80,6 +80,27 @@
 //! | `AURA_GATE_REVIEW_SAMPLE` | f64 (0..=1) | `0.25` | [`GateConfig::review_sample`] |
 //! | `AURA_HOME` | path | `~/.aura` | [`AuraHome::resolve`] (read-only `CODEX_HOME` compat alias also honoured during V1 transition) |
 //!
+//! ### Cloud agent env vars
+//!
+//! Read by [`CloudConfig::from_env`], also from `.env` files. `BOXD_*`
+//! are the names boxd's own tools use.
+//!
+//! | Env var | Type | Default | Field |
+//! | --- | --- | --- | --- |
+//! | `BOXD_TOKEN`, else `BOXD_API_KEY` | string | unset (cloud off) | [`CloudConfig::credential`] |
+//! | `BOXD_BASE_URL` (older name `BOXD_API_URL`) | URL | `https://boxd.sh:9443` | [`CloudConfig::base_url`] |
+//! | `BOXD_REGION` | string | the endpoint's | [`CloudConfig::region`] |
+//! | `BOXD_ORG` | string | the key's own | [`CloudConfig::org`] |
+//! | `AURA_CLOUD_SIZE` | machine size | `4x16` | [`CloudConfig::size`] |
+//! | `AURA_CLOUD_IDLE_HIBERNATE_SECS` | u64 | `300` | [`CloudConfig::idle_hibernate_secs`] |
+//! | `AURA_CLOUD_IDLE_STANDBY_SECS` | u64 | `0` | [`CloudConfig::idle_standby_secs`] |
+//! | `AURA_CLOUD_ISOLATED` | bool | `true` | [`CloudConfig::isolated`] |
+//! | `AURA_CLOUD_FORK_ON_SPAWN` | bool | `true` | [`CloudConfig::fork_on_spawn`] |
+//! | `AURA_CLOUD_PRICE_VCPU_HOUR` | f64 | boxd's | [`CloudConfig::price_vcpu_hour`] |
+//! | `AURA_CLOUD_PRICE_MEM_GIB_HOUR` | f64 | boxd's | [`CloudConfig::price_mem_gib_hour`] |
+//! | `AURA_CLOUD_PRICE_DISK_GIB_HOUR` | f64 | boxd's | [`CloudConfig::price_disk_gib_hour`] |
+//! | `AURA_CLOUD_BINARY` | path | unset (the hub picks) | [`CloudConfig::binary`] |
+//!
 //! Tool-sandbox knobs (`file_ops::SKIP_DIRS`, `INCLUDE_EXTENSIONS`),
 //! console formatting constants, transport-layer debug / emergency /
 //! WAF env vars (`AURA_LLM_WAF_SAFE_JSON`,

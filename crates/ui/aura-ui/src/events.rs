@@ -637,6 +637,15 @@ pub enum UiCommand {
         max_attempts: u32,
     },
 
+    /// What a running command call just printed, shown in the call's
+    /// block until its result arrives
+    ToolOutput {
+        /// Tool use ID
+        id: String,
+        /// The next piece of output, possibly with ANSI styling
+        chunk: String,
+    },
+
     /// What a file-changing tool call did to its file, as unified diff
     /// hunks, shown in the call's block
     ToolDiff {
@@ -672,6 +681,13 @@ pub enum UiCommand {
         result: String,
         /// Whether the tool succeeded
         success: bool,
+    },
+
+    /// What the shell command from the last [`UiEvent::RunCommand`] just
+    /// printed, while it is still running
+    CommandOutput {
+        /// The next piece of terminal output, possibly with ANSI styling
+        chunk: String,
     },
 
     /// Output of the shell command from the last [`UiEvent::RunCommand`]

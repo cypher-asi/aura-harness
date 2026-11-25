@@ -133,6 +133,18 @@ pub trait FileChangeHook: Send + Sync {
     async fn after_change(&self, path: &Path, tool_use_id: Option<&str>, succeeded: bool);
 }
 
+/// Told what a foreground `run_command` prints while it is still running,
+/// so a surface can show it live.
+///
+/// Called from plain threads reading the command's output, so it must not
+/// block; output it can't take may be dropped, as the call's result still
+/// carries all of it.
+pub trait CommandOutputHook: Send + Sync {
+    /// `chunk` is the next piece of output of the call `tool_use_id`,
+    /// stdout and stderr interleaved as they arrived.
+    fn output(&self, tool_use_id: &str, chunk: &[u8]);
+}
+
 /// A command `run_command` started in the background, with its output
 /// going to `log_path`.
 pub struct BackgroundProcess {

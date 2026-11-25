@@ -105,7 +105,7 @@ impl App {
                     let _ = tx.try_send(UiEvent::ShowHistory(None));
                 }
             }
-            "kernel" | "record" | "k" | "r" if self.channel_open() => {
+            "kernel" | "record" | "k" | "r" if self.channel_app() => {
                 self.notify_channel_owns_column();
             }
             "kernel" | "record" | "k" | "r" => {
@@ -135,7 +135,7 @@ impl App {
                     }
                 }
             }
-            "files" | "sandbox" | "f" if self.channel_open() => {
+            "files" | "sandbox" | "f" if self.channel_app() => {
                 self.notify_channel_owns_column();
             }
             "files" | "sandbox" | "f" => {
@@ -883,7 +883,10 @@ impl App {
                 attempt,
                 max_attempts,
             } => {
-                self.update_tool(&id, |tool| tool.retry = Some((attempt, max_attempts)));
+                self.update_tool(&id, |tool| {
+                    tool.retry = Some((attempt, max_attempts));
+                    tool.live.clear();
+                });
             }
             UiCommand::CompleteTool {
                 id,
@@ -893,11 +896,28 @@ impl App {
                 self.cmd_complete_tool(&id, &result, success);
                 self.refresh_sandbox();
             }
+            UiCommand::ToolOutput { id, chunk } => {
+                self.update_tool(&id, |tool| {
+                    if tool.status == ToolStatus::Running {
+                        tool.live.push(&chunk);
+                    }
+                });
+            }
             UiCommand::ToolDiff { id, diff } => {
                 self.update_tool(&id, |tool| tool.diff = Some(diff));
             }
             UiCommand::ShowDiff { title, files } => {
                 self.add_message(Message::diff(&title, files));
+            }
+            UiCommand::CommandOutput { chunk } => {
+                if let Some(message) = self
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.is_running_shell())
+                {
+                    message.append_shell_output(&chunk);
+                }
             }
             UiCommand::Boot { id, update } => self.cmd_boot(&id, update),
             UiCommand::CommandFinished { output, exit_code } => {
@@ -982,8 +1002,9 @@ impl App {
             UiCommand::SetPlacement { agent_id, state } => self.cmd_set_placement(agent_id, state),
             UiCommand::SetHost(view) => self.cmd_set_host(*view),
             UiCommand::SetChannels(channels) => self.set_channels(channels),
-            UiCommand::SetChannelTasks { channel_id, tasks } => {
-                self.set_channel_tasks(channel_id, tasks);
+            UiCommand::SetChannelTasks { .. } => {
+                // The channel app shows only its chat, members and info;
+                // members' tasks are seen from PROJECTS.
             }
             UiCommand::ChannelPost { channel_id, post } => self.add_channel_post(channel_id, post),
             UiCommand::SetChannelPosts { channel_id, posts } => {
@@ -1241,6 +1262,7 @@ impl App {
             };
             tool.retry = None;
             tool.duration_ms = elapsed_ms(tool.started);
+            tool.live.clear();
         });
     }
 
@@ -1547,6 +1569,7 @@ impl App {
         }
         self.agents_scroll_detached = false;
         self.select_visible_active();
+        self.follow_active_agent_out_of_channel();
     }
 }
 

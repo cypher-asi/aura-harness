@@ -59,6 +59,12 @@ const LIVE_THINKING_LINES: usize = 3;
 /// Output lines shown in an expanded tool block.
 const MAX_RESULT_LINES: usize = 200;
 
+/// Lines of a running command's output shown under its collapsed block.
+const LIVE_PREVIEW_LINES: usize = 3;
+
+/// Lines of a running command's output shown in its open block.
+const LIVE_OUTPUT_LINES: usize = 20;
+
 /// Streaming tool input at least this large shows its size in the header.
 const STREAMING_SIZE_MIN_BYTES: usize = 1024;
 
@@ -583,7 +589,7 @@ impl ToolParts {
         let body = if expanded {
             tool_body(step, diff.as_ref(), body, theme)
         } else {
-            Vec::new()
+            live_preview(step, body, theme)
         };
         Self {
             expanded,
@@ -668,6 +674,16 @@ fn tool_body(
         lines.extend(command);
     } else {
         push_args(&mut lines, &step.args, body, theme);
+    }
+
+    if step.status == ToolStatus::Running && !step.live.is_empty() {
+        if !lines.is_empty() {
+            lines.push(body.line(String::new(), Style::default(), theme));
+        }
+        let style = Style::default().fg(theme.colors.foreground);
+        for line in step.live.tail(LIVE_OUTPUT_LINES) {
+            body.push_wrapped(&mut lines, &line, style, theme);
+        }
     }
 
     let Some(result) = step.result.as_deref() else {
@@ -796,6 +812,20 @@ fn shell_word(arg: &str) -> String {
     }
 }
 
+/// The last lines a running command printed, under its collapsed block,
+/// each cut to one row.
+fn live_preview(step: &ToolStep, body: &Body, theme: &Theme) -> Vec<Line<'static>> {
+    if step.status != ToolStatus::Running {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(theme.colors.muted);
+    step.live
+        .tail(LIVE_PREVIEW_LINES)
+        .into_iter()
+        .map(|line| body.line(truncate(&line, body.width), muted, theme))
+        .collect()
+}
+
 /// `▸ Read main.rs L1-80`, `▸ ✗ Ran cargo test · exit 101`, cut to fit on
 /// one line.
 fn tool_header(
@@ -811,9 +841,13 @@ fn tool_header(
         ToolStatus::Denied => ("⊘ ", theme.colors.warning),
     };
     let meta = tool_meta(step, parts.streaming_kb);
+    let quiet = quiet_meta(step);
     let stat_width: usize = parts.stat.iter().map(|s| display_width(&s.content)).sum();
-    let used =
-        display_width(&marker.content) + display_width(icon) + display_width(&meta) + stat_width;
+    let used = display_width(&marker.content)
+        + display_width(icon)
+        + display_width(&meta)
+        + display_width(&quiet)
+        + stat_width;
     let label = truncate(&parts.label, width.saturating_sub(used));
 
     let mut spans = vec![
@@ -823,7 +857,21 @@ fn tool_header(
     spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
     spans.extend(parts.stat.iter().cloned());
     spans.push(Span::styled(meta, Style::default().fg(theme.colors.muted)));
+    if !quiet.is_empty() {
+        spans.push(Span::styled(
+            quiet,
+            Style::default().fg(theme.colors.warning),
+        ));
+    }
     Line::from(spans)
+}
+
+/// ` · no output 1m 20s` after a running command that has printed nothing
+/// for a while, so a stalled command stands out; empty otherwise.
+fn quiet_meta(step: &ToolStep) -> String {
+    step.quiet_for()
+        .map(|quiet| format!(" · no output {}", format_elapsed(quiet)))
+        .unwrap_or_default()
 }
 
 /// What a file-changing call did to its file: the diff the harness sent
@@ -971,6 +1019,7 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::LiveOutput;
     use crate::themes::Theme;
 
     fn texts(lines: &[Line<'_>]) -> Vec<String> {
@@ -997,6 +1046,7 @@ mod tests {
             diff: None,
             policy: None,
             awaiting_approval: false,
+            live: LiveOutput::default(),
         })
     }
 
@@ -1271,6 +1321,123 @@ mod tests {
         assert!(!header.contains("1m"), "{header}");
     }
 
+    fn running_command(output: &str) -> Activity {
+        let mut activity = tool_step(
+            "run_command",
+            r#"{"shell_script":"cargo test"}"#,
+            ToolStatus::Running,
+            None,
+        );
+        if let Activity::Tool(step) = &mut activity {
+            step.started = Some(std::time::Instant::now());
+            step.live.push(output);
+        }
+        activity
+    }
+
+    #[test]
+    fn a_running_command_shows_its_last_lines_collapsed_and_more_open() {
+        let output: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+        let activity = running_command(&output);
+
+        let collapsed = texts(&activity_lines(
+            &activity,
+            false,
+            None,
+            "⠋",
+            80,
+            &Theme::default(),
+        ));
+        assert_eq!(collapsed.len(), 4, "{collapsed:?}");
+        assert!(collapsed[0].contains("Ran cargo test"), "{collapsed:?}");
+        assert_eq!(
+            collapsed[1..],
+            ["    │ line 28", "    │ line 29", "    │ line 30"]
+        );
+
+        let open = texts(&activity_lines(
+            &activity,
+            true,
+            None,
+            "⠋",
+            80,
+            &Theme::default(),
+        ));
+        let shown: Vec<&String> = open.iter().filter(|l| l.contains("│ line ")).collect();
+        assert_eq!(shown.len(), LIVE_OUTPUT_LINES, "{open:?}");
+        assert!(shown[0].ends_with("line 11"), "{open:?}");
+        assert!(open.last().unwrap().ends_with("line 30"), "{open:?}");
+    }
+
+    #[test]
+    fn a_finished_command_shows_no_live_output() {
+        let mut activity = running_command("partial\n");
+        if let Activity::Tool(step) = &mut activity {
+            step.status = ToolStatus::Success;
+        }
+        let collapsed = texts(&activity_lines(
+            &activity,
+            false,
+            None,
+            "⠋",
+            80,
+            &Theme::default(),
+        ));
+        assert_eq!(collapsed.len(), 1, "{collapsed:?}");
+    }
+
+    #[test]
+    fn a_long_quiet_command_says_how_long_it_printed_nothing() {
+        let ago =
+            |secs| std::time::Instant::now().checked_sub(std::time::Duration::from_secs(secs));
+        let mut activity = running_command("");
+        if let Activity::Tool(step) = &mut activity {
+            step.started = ago(95);
+        }
+        let header = texts(&activity_lines(
+            &activity,
+            false,
+            None,
+            "⠋",
+            80,
+            &Theme::default(),
+        ))
+        .remove(0);
+        assert!(header.ends_with(" · 1m 35s · no output 1m 35s"), "{header}");
+
+        if let Activity::Tool(step) = &mut activity {
+            step.live.push("still going\n");
+        }
+        let header = texts(&activity_lines(
+            &activity,
+            false,
+            None,
+            "⠋",
+            80,
+            &Theme::default(),
+        ))
+        .remove(0);
+        assert!(!header.contains("no output"), "{header}");
+
+        let mut read = tool_step("read_file", "{}", ToolStatus::Running, None);
+        if let Activity::Tool(step) = &mut read {
+            step.started = ago(95);
+        }
+        let header = texts(&activity_lines(
+            &read,
+            false,
+            None,
+            "⠋",
+            80,
+            &Theme::default(),
+        ))
+        .remove(0);
+        assert!(
+            !header.contains("no output"),
+            "only commands print: {header}"
+        );
+    }
+
     #[test]
     fn long_label_is_cut_to_width() {
         let activity = Activity::Tool(ToolStep {
@@ -1285,6 +1452,7 @@ mod tests {
             diff: None,
             policy: None,
             awaiting_approval: false,
+            live: LiveOutput::default(),
         });
         let lines = activity_lines(&activity, false, None, "⠋", 40, &Theme::default());
         let header = &texts(&lines)[0];

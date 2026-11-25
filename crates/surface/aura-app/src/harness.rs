@@ -294,10 +294,10 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
         event_loop::TerminalAgents::new(
             host,
             scheduler,
-            Arc::new(event_loop::TerminalChildKernels::new(
-                tool_config.clone(),
-                Arc::clone(&background),
-            )),
+            Arc::new(
+                event_loop::TerminalChildKernels::new(tool_config.clone(), Arc::clone(&background))
+                    .with_command_output(commands.clone()),
+            ),
         )
     });
     let kernel_agents = agents.clone();
@@ -335,12 +335,15 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
                         .chain(parent_chain.iter().copied())
                         .collect();
                     let file_hook = factory_files.hook(chain, Some(diff_commands.clone()));
+                    let command_output =
+                        event_loop::TerminalCommandOutput::new(diff_commands.clone(), agent_id);
                     let mut executor = ToolExecutor::new(tool_config.clone())
                         .with_caller_permissions(AgentPermissions::full_access())
                         .with_parent_chain(parent_chain)
                         .with_subagent_dispatch_hook(Arc::clone(&dispatcher))
                         .with_background_process_hook(Arc::clone(&kernel_background))
-                        .with_file_change_hook(file_hook);
+                        .with_file_change_hook(file_hook)
+                        .with_command_output_hook(Arc::new(command_output));
                     if let Some(agents) = &kernel_agents {
                         let hooks = agents.hooks_for(agent_id);
                         executor = executor

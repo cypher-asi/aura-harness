@@ -631,7 +631,10 @@ pub(super) async fn handle_create(state: &mut LoopState<'_>, new: NewChannel) {
 }
 
 /// `UiEvent::OpenChannel`: make the channel's coordinator the active
-/// agent, as selecting it would, and show the channel's tasks.
+/// agent, as selecting it would, and show the channel's tasks. A UI that
+/// put the coordinator on screen itself asked for it just before
+/// (`SelectAgent` or `FocusAgent`), so it is active already and its chat
+/// is not loaded a second time.
 pub(super) async fn handle_open(state: &mut LoopState<'_>, channel_id: &str) {
     let channel = match open_channel_record(&state.hub, channel_id).await {
         Ok(channel) => channel,
@@ -640,7 +643,9 @@ pub(super) async fn handle_open(state: &mut LoopState<'_>, channel_id: &str) {
             return;
         }
     };
-    super::agents::handle_select_agent(state, &channel.coordinator.to_hex()).await;
+    if state.active != channel.coordinator {
+        super::agents::handle_select_agent(state, &channel.coordinator.to_hex()).await;
+    }
     state.open_channel = Some(channel.id.clone());
     if let Err(error) = super::tasks::send_channel(&state.hub, &channel.id).await {
         warn!(

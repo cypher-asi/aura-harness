@@ -26,7 +26,7 @@ pub use executor::{
 };
 pub use hooks::{
     AgentControlHook, AgentReadHook, AutomatonController, BackgroundJob, BackgroundProcess,
-    BackgroundProcessHook, FileChangeHook, SubagentDispatchHook,
+    BackgroundProcessHook, CommandOutputHook, FileChangeHook, SubagentDispatchHook,
 };
 pub use router::ExecutorRouter;
 pub use scratch::RunScratch;

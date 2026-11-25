@@ -56,8 +56,8 @@ pub use computer_tool::{computer_tool_definition, ComputerTool, COMPUTER_TOOL_NA
 pub use error::ToolError;
 pub use executor::ToolExecutor;
 pub use fs_tools::{
-    cmd_run_with_threshold, cmd_spawn, output_to_tool_result, stop_commands, ProcessTags,
-    ThresholdResult, AGENT_ID_VAR, HARNESS_PID_VAR, TOOL_USE_ID_VAR,
+    cmd_run_with_threshold, cmd_spawn, output_to_tool_result, stop_commands, LiveOutput,
+    ProcessTags, ThresholdResult, AGENT_ID_VAR, HARNESS_PID_VAR, TOOL_USE_ID_VAR,
 };
 pub use git_tool::{
     GitCommitPushTool, GitCommitTool, GitPushTool, GIT_LOCAL_TOOL_NAMES, GIT_REMOTE_TOOL_NAMES,
@@ -74,7 +74,7 @@ pub use sandbox::Sandbox;
 pub use schema::{from_claude_json, to_claude_json, SchemaError};
 pub use tool::{
     AgentControlHook, AgentReadHook, BackgroundJob, BackgroundProcess, BackgroundProcessHook,
-    FileChangeHook, SubagentDispatchHook, Tool, ToolContext,
+    CommandOutputHook, FileChangeHook, SubagentDispatchHook, Tool, ToolContext,
 };
 
 /// Command execution policy for `run_command`.

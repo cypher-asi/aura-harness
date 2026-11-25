@@ -79,6 +79,68 @@ async fn a_plan_with_every_todo_closed_is_not_continued() {
 }
 
 #[tokio::test]
+async fn closing_every_todo_of_the_plan_being_built_completes_it() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    give_plan(&fixture, &mut state, "pending");
+
+    turn(&mut state, &mut done, &links, first, "close every todo").await;
+
+    let session = &state.idle[&first];
+    assert!(!session.building_plan);
+    assert!(session.todos.is_empty(), "a finished list is dropped");
+    assert_eq!(session.active_plan, None, "the next /plan writes a new one");
+    let plan = aura_exec_tools::plan_tools::PlanFile::load(&fixture.workspace.join(PLAN)).unwrap();
+    assert_eq!(plan.progress(), (2, 2));
+
+    let hex = first.to_hex();
+    let shown: Vec<UiCommand> = drain(&mut commands)
+        .into_iter()
+        .filter(|(to, _)| to.as_deref() == Some(hex.as_str()))
+        .map(|(_, command)| command)
+        .collect();
+    let last_todos = shown.iter().rev().find_map(|c| match c {
+        UiCommand::SetTodos(todos) => Some(todos),
+        _ => None,
+    });
+    assert_eq!(last_todos.map(Vec::len), Some(0), "the chat drops the list");
+    assert!(shown
+        .iter()
+        .any(|c| matches!(c, UiCommand::ShowMessage(m) if m.content == "Plan complete: Parser")));
+    assert!(
+        matches!(
+            shown
+                .iter()
+                .rev()
+                .find(|c| matches!(c, UiCommand::SetPlan(_))),
+            Some(UiCommand::SetPlan(None))
+        ),
+        "no plan is being worked on"
+    );
+
+    // A new list is the agent's own: it is not filed under the finished
+    // plan, nor mirrored into it.
+    turn(&mut state, &mut done, &links, first, "start new todos").await;
+    let session = &state.idle[&first];
+    let ids: Vec<&str> = session.todos.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids, ["x"]);
+    assert!(!session.building_plan);
+    let after = aura_exec_tools::plan_tools::PlanFile::load(&fixture.workspace.join(PLAN)).unwrap();
+    assert_eq!(after.meta.todos, plan.meta.todos);
+    assert_eq!(
+        kept_tasks(&fixture)
+            .iter()
+            .filter(|t| t.0.is_none())
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn a_request_in_plan_mode_files_under_the_open_plan() {
     let (fixture, _commands) = fixture();
     let mut b = borrowed(&fixture);

@@ -214,6 +214,41 @@ under three columns.
   with the status at the right, on the screen's last row. Parts that
   don't fit drop from the right.
 
+### Plan Documents
+
+```text
+│ PLAN Plans that read like a document     2/5 TODOS ✕ │
+┌──────────────────────────────────────────────────────┐
+│  Plans that read like a document                     │
+│                                                      │
+│  Change the guidance the agent gets for writing...   │
+│                                                      │
+│  TODOS  2/5                                          │
+│  ☒ Rewrite the plan-writing bullet                   │
+│  ▣ Update the create_plan description                │
+│  ────────────────────────────────────────────────    │
+│                                                      │
+│  Why plans read badly today                          │
+│                                                      │
+│  The agent writes plans the way it is told to...     │
+└ 1-12/80  Esc close  s source  ↑↓ PgUp/PgDn scroll ───┘
+```
+
+- A plan opened from the TASKS tab, a `create_plan` or `read_file` step
+  in the chat, or the sandbox tree reads as a document over the chat
+  panel, never as its source: no frontmatter, no generated-header marker.
+- **Title** bold `foreground`; **overview** `muted`; the `TODOS` label
+  bold `muted` with its `closed/total`; todos drawn as everywhere else
+  (`☒ ▣ ☐`, struck through when cancelled); a `faint` rule; then the body
+  set like a reply. The text uses the chat's own column, with the same
+  side padding, width limit and centering, so it does not move sideways
+  when a plan opens over the chat.
+- Flowing text is prose, so the desktop sets it in its proportional face
+  with inline code in monospace; code blocks, tables and rules stay on
+  the grid.
+- Opening at a todo scrolls it near the top once. `s` shows the source in
+  the file view, on that todo's checklist item.
+
 ### Interactive Elements
 
 - **Selected item**: `selection` fill, `on_selection` text

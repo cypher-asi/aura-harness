@@ -94,7 +94,7 @@ pub(super) async fn handle_rewind(
     };
     if let Some(cut) = cut {
         session.messages.truncate(cut);
-        session.todos = todos_from_history(&session.messages);
+        session.todos = super::plan_mode::unfinished_todos(todos_from_history(&session.messages));
         blocking({
             let files = files.clone();
             let undone = undone.clone();

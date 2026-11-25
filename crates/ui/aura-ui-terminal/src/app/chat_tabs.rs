@@ -136,7 +136,12 @@ impl App {
     /// with their own input history; the graph and the timeline ask for
     /// the flow of the agent on screen, unless the other has it, the
     /// benchmarks for the latest of them, and the log for the agent's.
+    /// The channel app has only CHAT: any other tab asked for there,
+    /// by key, click or command, is not shown.
     pub(super) fn show_chat_tab(&mut self, tab: ChatTab) {
+        if self.channel_app() && tab != ChatTab::Chat {
+            return;
+        }
         let flow_was_open = self.flow.is_open();
         self.set_chat_tab(tab);
         self.clear_selection();
@@ -170,9 +175,10 @@ impl App {
     /// scrolls the chat to its bottom nor moves the timeline's selection,
     /// and it asks for nothing: the switch asks for what the tab shows of
     /// the new agent. The input holds the draft the agent was left with,
-    /// typed under this tab, so Enter does with it what it did then.
+    /// typed under this tab, so Enter does with it what it did then. In
+    /// the channel app, which has only CHAT, any other tab stays put away.
     pub(super) fn restore_chat_tab(&mut self, tab: ChatTab) {
-        if tab == self.chat_tab() {
+        if tab == self.chat_tab() || (self.channel_app() && tab != ChatTab::Chat) {
             return;
         }
         self.set_chat_tab(tab);
@@ -208,20 +214,13 @@ impl App {
         })
     }
 
-    /// The chat panel's tabs in a header bar `width` columns wide. While
-    /// the chat shows a channel's coordinator they use their short labels
-    /// and keep room after them for its title,
-    /// [`Self::coordinator_chat_title`]: with full labels the tabs fill a
-    /// chat panel of usual width and the title would never show.
+    /// The chat panel's tabs in a header bar `width` columns wide. The
+    /// channel app has only CHAT, so there the bar has no tabs and shows
+    /// the channel's title instead ([`Self::channel_chat_title`]).
     #[must_use]
     pub(crate) fn chat_tab_layout(&self, width: u16) -> TabLayout<ChatTab> {
-        if self.coordinated_channel().is_some() {
-            TabLayout::with_info(
-                ChatTab::ALL,
-                ChatTab::short_label,
-                ChatTab::short_label,
-                width,
-            )
+        if self.channel_app() {
+            TabLayout::new([], ChatTab::label, ChatTab::short_label, width)
         } else {
             ChatTab::layout(width)
         }

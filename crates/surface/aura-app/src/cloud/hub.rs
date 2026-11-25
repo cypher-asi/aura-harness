@@ -291,6 +291,27 @@ fn io(context: impl Into<String>) -> impl FnOnce(std::io::Error) -> CloudError {
     move |err| CloudError::io(context, err)
 }
 
+/// The aura binary the base snapshot gets: `AURA_CLOUD_BINARY`, else
+/// `<home>/bin/aura` when it exists, else the running executable.
+fn choose_binary(env: Option<&Path>, home: &Path, current_exe: Option<PathBuf>) -> AuraBinary {
+    if let Some(path) = env {
+        tracing::info!(path = %path.display(), "cloud aura binary from AURA_CLOUD_BINARY");
+        return AuraBinary::Upload(path.to_path_buf());
+    }
+    let built = aura_engine_cloud::snapshots::cloud_binary_path(home);
+    if built.is_file() {
+        tracing::info!(path = %built.display(), "cloud aura binary from the cloud home");
+        return AuraBinary::Upload(built);
+    }
+    match current_exe {
+        Some(path) => {
+            tracing::info!(path = %path.display(), "cloud aura binary is the running executable");
+            AuraBinary::Upload(path)
+        }
+        None => AuraBinary::Installed,
+    }
+}
+
 fn load_placements(path: &Path) -> PlacementFile {
     std::fs::read(path)
         .ok()
@@ -336,7 +357,7 @@ impl CloudHub {
             config.isolated,
             env!("CARGO_PKG_VERSION"),
             binary,
-            home.join("snapshots.json"),
+            home.clone(),
         );
         let hub = Arc::new(Self {
             costs: CostModel::from_config(&config),
@@ -373,10 +394,15 @@ impl CloudHub {
         home: PathBuf,
     ) -> CloudResult<Arc<Self>> {
         let provider = Arc::new(aura_engine_cloud::BoxdProvider::from_config(&config)?);
-        let binary = std::env::current_exe()
-            .ok()
-            .filter(|_| cfg!(target_os = "linux"))
-            .map_or(AuraBinary::Installed, AuraBinary::Upload);
+        let binary = if cfg!(target_os = "linux") {
+            choose_binary(
+                config.binary.as_deref(),
+                &home,
+                std::env::current_exe().ok(),
+            )
+        } else {
+            AuraBinary::Installed
+        };
         Self::new(config, store, home, provider, binary)
     }
 
@@ -1962,6 +1988,38 @@ mod tests {
     use aura_core_protocol::{ErrorMsg, TextDelta, ToolUseStart};
     use aura_engine_cloud::FakeProvider;
     use aura_store_db::RocksStore;
+
+    #[test]
+    fn choose_binary_prefers_env_then_cloud_home_then_running_exe() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let exe = PathBuf::from("/usr/bin/aura-running");
+        let env = PathBuf::from("/opt/aura-linux");
+
+        // Nothing built in the cloud home: the running executable.
+        assert_eq!(
+            choose_binary(None, home.path(), Some(exe.clone())),
+            AuraBinary::Upload(exe.clone())
+        );
+        assert_eq!(
+            choose_binary(None, home.path(), None),
+            AuraBinary::Installed
+        );
+
+        // A build in the cloud home wins over the running executable.
+        let built = aura_engine_cloud::snapshots::cloud_binary_path(home.path());
+        std::fs::create_dir_all(built.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&built, b"elf").expect("write");
+        assert_eq!(
+            choose_binary(None, home.path(), Some(exe.clone())),
+            AuraBinary::Upload(built)
+        );
+
+        // AURA_CLOUD_BINARY wins over both.
+        assert_eq!(
+            choose_binary(Some(&env), home.path(), Some(exe)),
+            AuraBinary::Upload(env)
+        );
+    }
 
     fn hub() -> (Arc<CloudHub>, FakeProvider, tempfile::TempDir) {
         let dir = tempfile::tempdir().expect("tempdir");

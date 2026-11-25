@@ -90,6 +90,18 @@ pub(super) fn detail_header(app: &App, theme: &Theme) -> Option<(String, Option<
                 Some(HeaderInfo::count(count, unit, theme.colors.muted)),
             ))
         }
+        DetailView::Plan(doc) => {
+            let (closed, total) = doc.progress();
+            let title = format!("PLAN {}", truncate_record_info(&doc.title, 40));
+            Some((
+                title,
+                Some(HeaderInfo::count(
+                    format!("{closed}/{total}"),
+                    "TODOS",
+                    theme.colors.muted,
+                )),
+            ))
+        }
     }
 }
 
@@ -117,19 +129,37 @@ pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, t
     }
     // Not an image view: clear any stale detail image rect.
     app.set_detail_image_rect(None);
-    let bounds = match app.file_view_mut() {
-        Some((file, scroll)) => Some(draw_file(frame, (area, rows, hosted), file, scroll, theme)),
-        None => draw_record(frame, (area, rows, hosted), app, theme),
+    // A plan's text sits in the chat's column, so selection and the
+    // scrollbar follow that column rather than the detail view's rows.
+    let mut text = rows;
+    let bounds = if matches!(app.detail_view(), Some(DetailView::Plan(_))) {
+        super::plan_doc::draw_plan(frame, (area, rows, hosted), app, theme).map(|plan| {
+            text = plan.column;
+            Drawn {
+                max_scroll: plan.max_scroll,
+                shown: plan.shown,
+                top_row: plan.first,
+                view: plan.view,
+                thread_headers: Vec::new(),
+            }
+        })
+    } else {
+        match app.file_view_mut() {
+            Some((file, scroll)) => {
+                Some(draw_file(frame, (area, rows, hosted), file, scroll, theme))
+            }
+            None => draw_record(frame, (area, rows, hosted), app, theme),
+        }
     };
     if let Some(mut drawn) = bounds {
         if matches!(app.detail_view(), Some(DetailView::Thread(_))) {
             app.set_thread_header_rows(std::mem::take(&mut drawn.thread_headers));
         }
         app.set_detail_bounds(drawn.max_scroll, drawn.shown);
-        app.set_chat_rows(Some((rows, drawn.top_row)));
+        app.set_chat_rows(Some((text, drawn.top_row)));
         let scrollbar = chat_scrollbar(
             ScrollTarget::Detail,
-            (area, rows),
+            (area, text),
             drawn.view,
             drawn.max_scroll,
         );
@@ -175,7 +205,10 @@ fn draw_record(
             headers = header_lines;
             lines
         }
-        DetailView::File(_) | DetailView::Graph | DetailView::Image(_) => return None,
+        // Drawn by `plan_doc::draw_plan`.
+        DetailView::Plan(_) | DetailView::File(_) | DetailView::Graph | DetailView::Image(_) => {
+            return None
+        }
     };
     let source = Source::Styled(lines);
     let width = usize::from(rows.width).max(1);

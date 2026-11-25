@@ -1,9 +1,12 @@
 //! Errors from the cloud layer. Every variant names the operation and,
 //! where there is one, the machine or snapshot it was about.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use thiserror::Error;
+
+use crate::glibc::GlibcVersion;
 
 /// Result alias for this crate.
 pub type CloudResult<T> = Result<T, CloudError>;
@@ -107,6 +110,37 @@ pub enum CloudError {
         /// The error.
         #[source]
         source: std::io::Error,
+    },
+    /// The local aura binary needs a newer glibc than the machines have,
+    /// so it would not start there. Found before any builder is made.
+    #[error(
+        "the aura binary at {} needs glibc {needs} but cloud machines have {has}; \
+         build one with `scripts/build-cloud-binary.sh` (it installs to {}) \
+         or set AURA_CLOUD_BINARY",
+        path.display(),
+        install_to.display()
+    )]
+    IncompatibleBinary {
+        /// The binary that would have been uploaded.
+        path: PathBuf,
+        /// The newest glibc it references.
+        needs: GlibcVersion,
+        /// The machines' glibc.
+        has: GlibcVersion,
+        /// Where the hub looks for a cloud build of aura.
+        install_to: PathBuf,
+    },
+    /// The uploaded aura binary failed to start on a builder machine.
+    #[error(
+        "uploaded aura binary does not run on the cloud image (builder {machine}, exit {exit_code}): {stderr}"
+    )]
+    BinaryDoesNotRun {
+        /// The builder it was tried on.
+        machine: String,
+        /// Its exit code.
+        exit_code: i32,
+        /// The end of its stderr (e.g. the loader's complaint).
+        stderr: String,
     },
 }
 

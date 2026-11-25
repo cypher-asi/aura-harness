@@ -144,7 +144,7 @@ mod tests {
         ProcessTags {
             agent_id: Some(AgentId::generate().to_hex()),
             tool_use_id: Some("toolu_stop".into()),
-            scratch: None,
+            ..ProcessTags::default()
         }
     }
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::components::{Activity, Message, MessageRole, ToolStatus};
+use crate::components::{Activity, Message, MessageRole, ToolStatus, ToolStep};
 use crate::events::{ActivityData, CallUsage, MessageData, ModelOptionView, UiCommand, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use ratatui::layout::Rect;
@@ -313,6 +313,107 @@ fn test_command_output_fills_the_shell_message() {
     assert_eq!(run.output.as_deref(), Some("nope\n"));
     assert_eq!(run.exit_code, Some(1));
     assert_eq!(app.working_label(), None);
+}
+
+#[test]
+fn a_typed_command_shows_its_output_as_it_runs_until_it_finishes() {
+    let mut app = App::new();
+    submit(&mut app, "$cargo build");
+    app.process_command(UiCommand::CommandOutput {
+        chunk: "Compiling a\n".to_string(),
+    });
+    app.process_command(UiCommand::CommandOutput {
+        chunk: "Compiling b\n".to_string(),
+    });
+    let run = app.messages()[0].shell_run().expect("shell message");
+    assert_eq!(run.live.tail(5), ["Compiling a", "Compiling b"]);
+
+    app.process_command(UiCommand::CommandFinished {
+        output: "Compiling a\nCompiling b\nFinished\n".to_string(),
+        exit_code: None,
+    });
+    let run = app.messages()[0].shell_run().expect("shell message");
+    assert!(run.live.is_empty(), "the full output replaces it");
+    app.process_command(UiCommand::CommandOutput {
+        chunk: "late\n".to_string(),
+    });
+    let run = app.messages()[0].shell_run().expect("shell message");
+    assert!(run.live.is_empty(), "a finished command takes no more");
+}
+
+/// The tool step of `app`'s last message.
+fn last_tool(app: &App) -> &ToolStep {
+    match app.messages().back().and_then(Message::activity_step) {
+        Some(Activity::Tool(tool)) => tool,
+        other => panic!("expected a tool step, got {other:?}"),
+    }
+}
+
+fn run_command_call(app: &mut App, id: &str) {
+    app.process_command(UiCommand::ShowTool(crate::events::ToolData {
+        id: id.to_string(),
+        name: "run_command".to_string(),
+        args: r#"{"shell_script":"cargo test"}"#.to_string(),
+    }));
+}
+
+#[test]
+fn a_running_call_keeps_its_output_until_its_result_arrives() {
+    let mut app = App::new();
+    submit(&mut app, "test it");
+    run_command_call(&mut app, "t1");
+    app.process_command(UiCommand::ToolOutput {
+        id: "t1".to_string(),
+        chunk: "running 3 tests\n".to_string(),
+    });
+    assert_eq!(last_tool(&app).live.tail(5), ["running 3 tests"]);
+    assert!(last_tool(&app).live.last_at().is_some());
+
+    app.process_command(UiCommand::CompleteTool {
+        id: "t1".to_string(),
+        result: "ok".to_string(),
+        success: true,
+    });
+    assert!(last_tool(&app).live.is_empty());
+    app.process_command(UiCommand::ToolOutput {
+        id: "t1".to_string(),
+        chunk: "late\n".to_string(),
+    });
+    assert!(
+        last_tool(&app).live.is_empty(),
+        "a finished call takes no more"
+    );
+}
+
+#[test]
+fn the_working_line_counts_the_running_call_not_the_turn() {
+    let mut app = App::new();
+    submit(&mut app, "test it");
+    app.processing_since = Instant::now().checked_sub(Duration::from_secs(600));
+    assert!(app.working_times().0.unwrap() >= Duration::from_secs(600));
+
+    run_command_call(&mut app, "t1");
+    let (elapsed, quiet) = app.working_times();
+    assert!(elapsed.unwrap() < Duration::from_secs(5), "{elapsed:?}");
+    assert_eq!(quiet, None, "it only just started");
+
+    app.messages.back_mut().unwrap().update_activity(|step| {
+        if let Activity::Tool(tool) = step {
+            tool.started = Instant::now().checked_sub(Duration::from_secs(90));
+        }
+    });
+    let (elapsed, quiet) = app.working_times();
+    assert!(elapsed.unwrap() >= Duration::from_secs(90));
+    assert!(
+        quiet.unwrap() >= Duration::from_secs(90),
+        "nothing printed yet"
+    );
+
+    app.process_command(UiCommand::ToolOutput {
+        id: "t1".to_string(),
+        chunk: "test a ... ok\n".to_string(),
+    });
+    assert_eq!(app.working_times().1, None, "it just printed");
 }
 
 #[test]
@@ -5574,43 +5675,139 @@ fn app_with_channel() -> (App, mpsc::Receiver<UiEvent>) {
 }
 
 #[test]
-fn test_enter_opens_a_channel_and_esc_closes_it() {
+fn test_enter_opens_a_channel_and_leaving_the_tab_closes_it() {
     let (mut app, mut rx) = app_with_channel();
 
     app.handle_key(key(KeyCode::Enter));
     assert!(app.channel_open());
     assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(id)) if id == "c1"));
+    assert_eq!(app.agents_tab(), AgentsTab::Channels, "the list stays");
 
+    // Esc and Backspace leave the channel open: the tab is how to leave.
     app.handle_key(key(KeyCode::Esc));
+    app.handle_key(key(KeyCode::Backspace));
+    assert!(app.channel_open());
+
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.agents_tab(), AgentsTab::Projects);
     assert!(!app.channel_open());
     assert!(matches!(rx.try_recv(), Ok(UiEvent::CloseChannel)));
-    assert!(rx.try_recv().is_err());
+    assert!(
+        rx.try_recv().is_err(),
+        "the coordinator was on screen before"
+    );
+
+    // Coming back opens the channel it was left on.
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.agents_tab(), AgentsTab::Channels);
+    assert!(app.channel_open());
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(id)) if id == "c1"));
+}
+
+/// [`app_with_channel`]'s app, but `#zode` is coordinated by `bb`, so
+/// `aa`, on screen, is not a member.
+fn app_with_others_channel() -> (App, mpsc::Receiver<UiEvent>) {
+    let (mut app, rx) = app_with_channel();
+    app.process_command(UiCommand::SetChannels(vec![
+        crate::events::ChannelSummary {
+            id: "c1".to_string(),
+            slug: "zode".to_string(),
+            title: "Zode release".to_string(),
+            coordinator_id: "bb".to_string(),
+            members: vec![agent("bb", "Coordinator")],
+            ..crate::events::ChannelSummary::default()
+        },
+    ]));
+    (app, rx)
 }
 
 #[test]
-fn test_enter_on_the_back_row_closes_the_channel() {
-    let (mut app, mut rx) = app_with_channel();
+fn test_leaving_channels_gives_back_the_agent_there_was_before() {
+    let (mut app, mut rx) = app_with_others_channel();
     app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(_))));
-    assert_eq!(app.selected_channel_row(), 0, "the back row is highlighted");
+    // The session confirms the coordinator on screen.
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    assert!(app.channel_open());
 
-    app.handle_key(key(KeyCode::Enter));
-    assert!(!app.channel_open());
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.agents_tab(), AgentsTab::Projects);
     assert!(matches!(rx.try_recv(), Ok(UiEvent::CloseChannel)));
+    assert!(
+        matches!(
+            rx.try_recv(),
+            Ok(UiEvent::SelectAgent(id) | UiEvent::FocusAgent(id)) if id == "aa"
+        ),
+        "aa, on screen before the channel, comes back"
+    );
 }
 
 #[test]
-fn test_an_open_channel_fills_the_right_column_with_its_projects_tab() {
+fn test_opening_a_channel_shows_its_coordinator_at_once_not_the_agent_before() {
+    let (mut app, mut rx) = app_with_others_channel();
+    load_chat_of(&mut app, "aa", "aa's history");
+    assert!(app.messages().iter().any(|m| m.content() == "aa's history"));
+
+    app.handle_key(key(KeyCode::Enter));
+    // Asked for before the channel, so the session has it active by then
+    // and does not load it twice.
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(id)) if id == "c1"));
+    assert_eq!(app.active_agent_id(), "bb", "before the session answers");
+    assert!(app.chat_loading(), "waits blank for its history");
+    let text = drawn_text(&mut app);
+    assert!(!text.contains("aa's history"), "{text}");
+
+    // An answer the session gave for aa before it got the request is old.
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    assert_eq!(app.active_agent_id(), "bb");
+    assert!(app.channel_open());
+
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    load_chat_of(&mut app, "bb", "coordinator history");
+    assert!(!app.chat_loading());
+    assert!(drawn_text(&mut app).contains("coordinator history"));
+}
+
+#[test]
+fn test_reopening_a_channel_shows_the_coordinators_held_chat_at_once() {
+    let (mut app, mut rx) = app_with_others_channel();
+    app.handle_key(key(KeyCode::Enter));
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    load_chat_of(&mut app, "bb", "coordinator history");
+    app.handle_key(key(KeyCode::Right));
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    while rx.try_recv().is_ok() {}
+
+    app.handle_key(key(KeyCode::Left));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::FocusAgent(id)) if id == "bb"));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(id)) if id == "c1"));
+    assert!(!app.chat_loading(), "the held chat needs no reload");
+    assert!(drawn_text(&mut app).contains("coordinator history"));
+}
+
+#[test]
+fn test_a_non_member_on_screen_takes_the_user_back_to_projects() {
+    let (mut app, mut rx) = app_with_others_channel();
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(_))));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(_))));
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    assert!(app.channel_open());
+
+    // Once the coordinator came, another agent put on screen is the user
+    // going to it.
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    assert!(!app.channel_open());
+    assert_eq!(app.agents_tab(), AgentsTab::Projects);
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::CloseChannel)));
+    assert!(rx.try_recv().is_err(), "nothing is asked for in its place");
+}
+
+#[test]
+fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     let (mut app, _rx) = app_with_channel();
-    app.process_command(UiCommand::SetChannelTasks {
-        channel_id: "c1".to_string(),
-        tasks: vec![crate::events::TaskView {
-            id: "t1".to_string(),
-            title: "Ship zode".to_string(),
-            parent: Some("request".to_string()),
-            ..crate::events::TaskView::default()
-        }],
-    });
     // A layout of the user's own: Record shown, the side panel hidden
     // and not maximized, on TRACE.
     app.record_panel_visible = true;
@@ -5620,25 +5817,33 @@ fn test_an_open_channel_fills_the_right_column_with_its_projects_tab() {
 
     app.handle_key(key(KeyCode::Enter));
     assert!(app.channel_open());
-    assert!(!app.record_panel_visible());
+    assert!(!app.record_panel_visible(), "no Kernel panel in a channel");
     assert!(app.sandbox_panel_visible(), "shown though the user hid it");
     assert!(app.side_maximized());
-    assert_eq!(app.side_tab(), SidePanelTab::Projects);
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
     assert_eq!(
-        SidePanelTab::tabs(true).first(),
-        Some(&SidePanelTab::Projects)
-    );
-    assert!(
-        !app.channel_task_list().rows().is_empty(),
-        "tasks that came before the channel opened are listed"
+        SidePanelTab::tabs(true),
+        [SidePanelTab::ChannelMembers, SidePanelTab::ChannelInfo]
     );
 
-    // The panel toggles leave the layout alone while the channel is open.
-    app.handle_command("/kernel");
-    app.handle_command("/files");
+    // Shift+arrows go between the channel's two tabs only.
+    let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+    assert!(app.handle_side_tab_key(shift(KeyCode::Right)));
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
+    assert!(app.handle_side_tab_key(shift(KeyCode::Right)));
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
+    assert!(app.handle_side_tab_key(shift(KeyCode::Left)));
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
+
+    // The agent panels stay away, and the user's flags are untouched.
+    for command in ["/kernel", "/files", "/inbox", "/members", "/policies"] {
+        app.handle_command(command);
+        assert!(!app.record_panel_visible(), "{command}");
+        assert!(app.sandbox_panel_visible(), "{command}");
+    }
     app.toggle_side_expanded();
-    assert!(!app.record_panel_visible());
-    assert!(app.sandbox_panel_visible());
+    app.show_side_tab(SidePanelTab::Trace);
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
     assert!(
         (
             app.record_panel_visible,
@@ -5649,7 +5854,7 @@ fn test_an_open_channel_fills_the_right_column_with_its_projects_tab() {
     );
 
     app.focus = PanelFocus::Swarm;
-    app.handle_key(key(KeyCode::Esc));
+    app.handle_key(key(KeyCode::Right));
     assert!(!app.channel_open());
     assert!(app.record_panel_visible());
     assert!(!app.sandbox_panel_visible());
@@ -5663,27 +5868,41 @@ fn test_a_channel_dropped_from_the_list_gives_back_the_side_tab() {
     let (mut app, _rx) = app_with_channel();
     app.side_tab = SidePanelTab::Tasks;
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.side_tab(), SidePanelTab::Projects);
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
 
     app.process_command(UiCommand::SetChannels(Vec::new()));
     assert!(!app.channel_open());
     assert_eq!(app.side_tab(), SidePanelTab::Tasks);
+    assert_eq!(app.agents_tab(), AgentsTab::Channels);
+    assert!(
+        !app.sandbox_panel_visible(),
+        "nothing to show beside the list"
+    );
 }
 
 #[test]
-fn test_projects_side_tab_is_listed_and_reached_only_in_a_channel() {
-    assert!(!SidePanelTab::tabs(false).contains(&SidePanelTab::Projects));
-    for &tab in SidePanelTab::tabs(false) {
-        assert_ne!(tab.next(false), SidePanelTab::Projects, "{tab:?}");
-        assert_ne!(tab.prev(false), SidePanelTab::Projects, "{tab:?}");
+fn test_channel_side_tabs_are_listed_and_reached_only_in_a_channel() {
+    let channel_tabs = [SidePanelTab::ChannelMembers, SidePanelTab::ChannelInfo];
+    for tab in channel_tabs {
+        assert!(!SidePanelTab::tabs(false).contains(&tab));
     }
-    assert_eq!(SidePanelTab::Tasks.next(true), SidePanelTab::Projects);
-    assert_eq!(SidePanelTab::Sandbox.prev(true), SidePanelTab::Projects);
-    assert_eq!(SidePanelTab::Projects.next(false), SidePanelTab::Sandbox);
+    for &tab in SidePanelTab::tabs(false) {
+        assert!(!tab.next(false).is_channel_tab(), "{tab:?}");
+        assert!(!tab.prev(false).is_channel_tab(), "{tab:?}");
+    }
+    assert_eq!(
+        SidePanelTab::ChannelInfo.next(true),
+        SidePanelTab::ChannelMembers
+    );
+    assert_eq!(
+        SidePanelTab::Sandbox.next(true),
+        SidePanelTab::ChannelMembers
+    );
 
     let mut app = App::new();
     app.show_side_tab(SidePanelTab::Trace);
-    app.show_side_tab(SidePanelTab::Projects);
+    app.show_side_tab(SidePanelTab::ChannelMembers);
+    app.show_side_tab(SidePanelTab::ChannelInfo);
     assert_eq!(app.side_tab(), SidePanelTab::Trace, "no channel is open");
     let mut shown = Vec::new();
     for _ in 0..SidePanelTab::tabs(false).len() * 2 {
@@ -5693,7 +5912,103 @@ fn test_projects_side_tab_is_listed_and_reached_only_in_a_channel() {
         app.handle_side_tab_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         shown.push(app.side_tab());
     }
-    assert!(!shown.contains(&SidePanelTab::Projects), "{shown:?}");
+    assert!(!shown.iter().any(|tab| tab.is_channel_tab()), "{shown:?}");
+}
+
+#[test]
+fn test_a_channel_has_only_the_chat_tab() {
+    let (mut app, _rx) = app_with_channel();
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.chat_tab(), ChatTab::Chat);
+
+    for tab in ChatTab::ALL {
+        app.show_chat_tab(tab);
+        assert_eq!(app.chat_tab(), ChatTab::Chat, "{tab:?} is an agent tab");
+        app.restore_chat_tab(tab);
+        assert_eq!(app.chat_tab(), ChatTab::Chat, "{tab:?} put back");
+    }
+    app.focus = PanelFocus::Chat;
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    for command in ["/log", "/bench"] {
+        app.handle_command(command);
+    }
+    assert_eq!(app.chat_tab(), ChatTab::Chat);
+    assert!(
+        app.chat_tab_layout(80).cells.is_empty(),
+        "the bar has no tabs"
+    );
+
+    // Back among the agents the tabs come back.
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Right));
+    app.show_chat_tab(ChatTab::Terminal);
+    assert_eq!(app.chat_tab(), ChatTab::Terminal);
+    assert!(!app.chat_tab_layout(80).cells.is_empty());
+}
+
+#[test]
+fn test_opening_a_channel_puts_the_chat_on_chat() {
+    let (mut app, _rx) = app_with_agents();
+    app.show_chat_tab(ChatTab::Terminal);
+    app.process_command(UiCommand::SetChannels(vec![
+        crate::events::ChannelSummary {
+            id: "c1".to_string(),
+            slug: "zode".to_string(),
+            coordinator_id: "aa".to_string(),
+            members: vec![agent("aa", "Coordinator")],
+            ..crate::events::ChannelSummary::default()
+        },
+    ]));
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.agents_tab(), AgentsTab::Channels);
+    assert_eq!(
+        app.chat_tab(),
+        ChatTab::Chat,
+        "the channel app has only CHAT"
+    );
+}
+
+#[test]
+fn test_channels_with_nothing_open_hide_the_right_column_and_refuse_to_send() {
+    let (mut app, mut rx) = app_with_channel();
+    assert!(app.channel_app_empty());
+    assert!(!app.record_panel_visible());
+    assert!(!app.sandbox_panel_visible());
+    assert_eq!(app.channel_placeholder().as_deref(), Some("Pick a channel"));
+
+    app.input = "hello".to_string();
+    app.cursor_pos = app.input.len();
+    app.submit_input();
+    assert_eq!(app.input(), "hello", "the draft is kept");
+    assert!(rx.try_recv().is_err(), "nothing is sent");
+    assert!(app
+        .notification
+        .as_ref()
+        .is_some_and(|(text, _)| text.contains("Pick a channel")));
+
+    app.input.clear();
+    app.cursor_pos = 0;
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.channel_placeholder().as_deref(), Some("Message #zode"));
+    assert!(app.sandbox_panel_visible());
+}
+
+#[test]
+fn test_members_side_tab_moves_its_highlight_and_switches_nothing() {
+    let (_dir, mut app) = app_in_channel("co");
+    app.focus = PanelFocus::Sandbox;
+    assert_eq!(app.selected_channel_member(), 0);
+    for _ in 0..3 {
+        app.handle_key(key(KeyCode::Down));
+    }
+    assert_eq!(app.selected_channel_member(), 2, "clamped to the members");
+    app.handle_key(key(KeyCode::Home));
+    assert_eq!(app.selected_channel_member(), 0);
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.active_agent_id(), "co", "rows only show");
+    assert!(app.channel_open());
 }
 
 // ========================================================================
@@ -5725,6 +6040,10 @@ fn app_in_channel(active: &str) -> (tempfile::TempDir, App) {
     }]));
     app.process_command(UiCommand::SetActiveAgent(active.to_string()));
     app.open_channel_by_id("c1");
+    // Opening puts the coordinator on screen; the session confirms it,
+    // then the test's agent comes on screen as a member's chat would.
+    app.process_command(UiCommand::SetActiveAgent("co".to_string()));
+    app.process_command(UiCommand::SetActiveAgent(active.to_string()));
     app.focus = PanelFocus::Chat;
     (dir, app)
 }
@@ -5779,14 +6098,13 @@ fn test_at_outside_a_coordinator_chat_lists_only_files() {
 }
 
 #[test]
-fn test_coordinator_chat_title_names_the_channel() {
+fn test_the_chat_bar_names_the_channel_and_has_no_tabs() {
     let (_dir, app) = app_in_channel("co");
     assert_eq!(
-        app.coordinator_chat_title().as_deref(),
-        Some("#zode · coordinator")
+        app.channel_chat_title(),
+        Some(("#zode".to_string(), String::new()))
     );
-    let (_dir, app) = app_in_channel("re");
-    assert_eq!(app.coordinator_chat_title(), None);
+    assert!(app.chat_tab_layout(80).cells.is_empty());
 }
 
 #[test]
@@ -5965,12 +6283,18 @@ fn app_with_linkable_channel() -> (App, mpsc::Receiver<UiEvent>) {
 
 /// Draw the app and right-click the first cell showing `text`.
 fn right_click_on(app: &mut App, text: &str) {
+    right_click_on_where(app, text, |_| true);
+}
+
+/// Draw the app and right-click the first cell showing `text` on a row
+/// `pick` accepts, e.g. to skip the chat bar's title.
+fn right_click_on_where(app: &mut App, text: &str, pick: impl Fn(&str) -> bool) {
     use crossterm::event::{MouseButton, MouseEventKind};
     let drawn = drawn_text(app);
     let rows: Vec<&str> = drawn.lines().collect();
     let row = rows
         .iter()
-        .position(|row| row.contains(text))
+        .position(|row| row.contains(text) && pick(row))
         .unwrap_or_else(|| panic!("no {text}:\n{drawn}"));
     let line = rows[row];
     let column = line[..line.find(text).unwrap_or(0)].chars().count();
@@ -6060,8 +6384,9 @@ fn test_unlink_project_in_the_open_channel_sends_unlink_project() {
     let (mut app, mut rx) = app_with_linkable_channel();
     app.handle_key(key(KeyCode::Enter));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(_))));
-    // Anywhere in the open channel's view: its member row.
-    right_click_on(&mut app, "Coordinator");
+    // On the open channel's row of the list, which shows only its slug, not
+    // the chat bar's title row.
+    right_click_on_where(&mut app, "#zode", |row| !row.contains("Zode release"));
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Right));
     app.handle_key(key(KeyCode::Enter));
@@ -6095,6 +6420,7 @@ fn test_right_click_on_the_channel_side_panel_opens_its_menu() {
     let (mut app, _rx) = app_with_linkable_channel();
     let id = app.channels()[0].id.clone();
     app.open_channel_by_id(&id);
+    app.show_side_tab(SidePanelTab::ChannelInfo);
     right_click_on(&mut app, "LINKED PROJECTS");
     assert!(
         menu_items(&app).contains(&super::context_menu::MenuItem::ArchiveChannel),

@@ -1,11 +1,12 @@
 //! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE | TASKS
 //! header bar over the file tree of the active agent's workspace, the
 //! Processes list, the trace feed, or its tasks grouped under their plans.
-//! While a channel is open the bar starts with PROJECTS, the channel's
-//! own view (see `channel_side`), and the panel fills the right column.
-//! The bar ends in a `*` button that lists the whole project's processes,
-//! steps, plans and tasks instead of the active agent's, then a ⤢ button
-//! that maximizes the panel over the Record panel, or restores it.
+//! While a channel is open the bar lists only the channel's MEMBERS and
+//! INFO (see `channel_side`), and the panel fills the right column.
+//! Outside a channel the bar ends in a `*` button that lists the whole
+//! project's processes, steps, plans and tasks instead of the active
+//! agent's, then a ⤢ button that maximizes the panel over the Record
+//! panel, or restores it.
 
 use super::header::{self, PanelHeader};
 use super::panels::{
@@ -23,11 +24,12 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
-    // An open channel's panel fills the column until it closes, so there
-    // is nothing for the expand button to do.
+    // An open channel's panel fills the column until it closes, and lists
+    // only the channel's own tabs, so the expand and scope buttons, agent
+    // features, are left out.
     let channel_open = app.channel_open();
     let layout = |width| SidePanelTab::layout(width, channel_open);
-    let end = header::bar_end(bar, (true, !channel_open), layout);
+    let end = header::bar_end(bar, (!channel_open, !channel_open), layout);
     if !hosted {
         app.set_side_tabs_area(Rect {
             width: end.tabs,
@@ -52,7 +54,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             hovered: app.hover() == Some(HoverTarget::ExpandSide),
             cell: end.expand,
         }),
-        scope: Some(header::ScopeButton {
+        scope: (!channel_open).then(|| header::ScopeButton {
             on: app.side_scope() == SideScope::Project,
             hovered: app.hover() == Some(HoverTarget::SideScope),
             cell: end.scope,
@@ -76,8 +78,11 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             super::trace_feed::render_trace_feed(frame, area, body, app, theme);
         }
         SidePanelTab::Tasks => super::tasks::render_tasks(frame, area, body, app, theme),
-        SidePanelTab::Projects => {
-            super::channel_side::render_channel_side(frame, area, body, app, theme);
+        SidePanelTab::ChannelMembers => {
+            super::channel_side::render_channel_members(frame, area, body, app, theme);
+        }
+        SidePanelTab::ChannelInfo => {
+            super::channel_side::render_channel_info(frame, body, app, theme);
         }
     }
 }

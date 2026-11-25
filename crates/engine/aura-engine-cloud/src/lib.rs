@@ -17,6 +17,8 @@
 //!   recorded on ledger agents through a [`fleet::VmLedger`].
 //! - [`snapshots`]: base and per-project snapshots holding a finished
 //!   build and a running node, keyed by a fingerprint.
+//! - [`glibc`]: the glibc a Linux aura binary needs versus the one the
+//!   machines have, checked before a base snapshot is built.
 //! - [`delta`]: the project files a machine gets on top of its snapshot,
 //!   never including `.env` files.
 //! - [`host`]: samples a host's name, addresses, CPU, memory and disk.
@@ -45,6 +47,7 @@ pub mod delta;
 pub mod error;
 pub mod fake;
 pub mod fleet;
+pub mod glibc;
 pub mod host;
 pub mod machine_env;
 pub mod mesh;

@@ -217,9 +217,8 @@ fn visit_rust_sources(root: &Path, visitor: &mut dyn FnMut(&Path, &str)) {
     if !root.exists() {
         return;
     }
-    let entries = match fs::read_dir(root) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
     };
     for entry in entries.flatten() {
         let path = entry.path();

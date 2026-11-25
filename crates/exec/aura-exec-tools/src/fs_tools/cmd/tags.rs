@@ -4,9 +4,11 @@
 //! [`RunScratch`] also points its commands' temp, cache and build folders
 //! there.
 
+use super::live::LiveOutput;
 use crate::tool::ToolContext;
 use aura_exec_traits::RunScratch;
 use std::ffi::OsString;
+use std::sync::Arc;
 
 /// Hex id of the agent whose tool call started the process.
 pub const AGENT_ID_VAR: &str = "AURA_AGENT_ID";
@@ -23,16 +25,23 @@ pub struct ProcessTags {
     /// The run's private folder, which the command's temp, cache and
     /// build variables point beneath.
     pub scratch: Option<RunScratch>,
+    /// Where the command's output goes while it runs.
+    pub output: LiveOutput,
 }
 
 impl ProcessTags {
     /// Tags for a command run by the tool call in `ctx`.
     #[must_use]
     pub fn for_context(ctx: &ToolContext) -> Self {
+        let output = match (&ctx.command_output, &ctx.current_tool_use_id) {
+            (Some(hook), Some(id)) => LiveOutput::new(Arc::clone(hook), id.clone()),
+            _ => LiveOutput::default(),
+        };
         Self {
             agent_id: ctx.caller_agent_id.map(|id| id.to_hex()),
             tool_use_id: ctx.current_tool_use_id.clone(),
             scratch: ctx.run_scratch.clone(),
+            output,
         }
     }
 

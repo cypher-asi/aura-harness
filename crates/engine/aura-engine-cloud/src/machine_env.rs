@@ -65,6 +65,9 @@ impl MachineEnv {
             ("AURA_CLOUD_NODE", "1".to_string()),
             ("CARGO_BUILD_JOBS", vcpu.max(1).to_string()),
             ("CARGO_INCREMENTAL", "1".to_string()),
+            // Overrides a repo `[build] target-dir` that points outside the
+            // workspace, where the machine user can't write.
+            ("CARGO_TARGET_DIR", format!("{WORKSPACE_DIR}/target")),
             // mold through env, not the repo's cargo config.
             ("RUSTFLAGS", "-C link-arg=-fuse-ld=mold".to_string()),
             ("RUST_LOG", "info".to_string()),
@@ -127,6 +130,10 @@ mod tests {
         assert_eq!(
             env.as_map().get("CARGO_BUILD_JOBS").map(String::as_str),
             Some("4")
+        );
+        assert_eq!(
+            env.as_map().get("CARGO_TARGET_DIR").map(String::as_str),
+            Some("/workspace/target")
         );
     }
 

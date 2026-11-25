@@ -27,6 +27,7 @@
 
 #![deny(clippy::too_many_lines)]
 
+mod answers;
 mod applying;
 mod asking;
 mod cache_salt;

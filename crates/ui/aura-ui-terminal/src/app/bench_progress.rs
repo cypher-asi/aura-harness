@@ -93,8 +93,12 @@ impl App {
     }
 
     /// The benchmark of the picked tab, or of the newest when none is.
+    /// None in the channel app: benchmarks are an agent feature.
     #[must_use]
     pub(crate) fn bench_panel_shown(&self) -> Option<&BenchView> {
+        if self.channel_app() {
+            return None;
+        }
         let views = self.bench_panel_views();
         let picked = self.bench_panel.picked.as_deref();
         views

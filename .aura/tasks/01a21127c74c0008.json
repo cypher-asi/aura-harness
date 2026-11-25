@@ -1,0 +1,11 @@
+{
+  "id": "01a21127c74c0008",
+  "title": "Don't show project name in title area on right for archive list",
+  "state": "completed",
+  "agent_id": "424afabc81c7b2a035f35069ef150f9c40e3b7a312f893e71d48457d4e35b685",
+  "agent_name": "Agent 1608",
+  "items": [],
+  "summary": "Let me check renderer tests that assert the project shows on archive rows.",
+  "updated_ms": 1795584399246,
+  "created_ms": 1795584149324
+}

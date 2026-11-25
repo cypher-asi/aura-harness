@@ -9,7 +9,8 @@ fn create_test_sandbox() -> (Sandbox, TempDir) {
 
 #[test]
 fn short_output_is_read_whole() {
-    assert_eq!(read_capped(&b"hello\nworld\n"[..]), b"hello\nworld\n");
+    let kept = read_capped(&b"hello\nworld\n"[..], &LiveOutput::default());
+    assert_eq!(kept, b"hello\nworld\n");
 }
 
 #[test]
@@ -17,7 +18,7 @@ fn long_output_keeps_its_start_and_end() {
     let mut output = vec![b'a'; PIPE_KEEP_BYTES];
     output.extend(vec![b'm'; 3 * PIPE_KEEP_BYTES]);
     output.extend(vec![b'z'; PIPE_KEEP_BYTES]);
-    let kept = read_capped(&output[..]);
+    let kept = read_capped(&output[..], &LiveOutput::default());
     let marker = format!(
         "\n... ({} bytes of output dropped) ...\n",
         3 * PIPE_KEEP_BYTES
@@ -1441,6 +1442,60 @@ async fn test_commands_carry_the_calling_agent_in_their_environment() {
         out.trim(),
         format!("{} toolu_7 {}", agent.to_hex(), std::process::id())
     );
+}
+
+/// Output hook that keeps each chunk with when it arrived.
+#[derive(Default)]
+struct RecordOutput(std::sync::Mutex<Vec<(std::time::Instant, String, Vec<u8>)>>);
+
+impl crate::CommandOutputHook for RecordOutput {
+    fn output(&self, tool_use_id: &str, chunk: &[u8]) {
+        self.0.lock().unwrap().push((
+            std::time::Instant::now(),
+            tool_use_id.to_string(),
+            chunk.to_vec(),
+        ));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_foreground_output_reaches_the_hook_while_the_command_runs() {
+    let config = command_config(crate::CommandPolicy {
+        enabled: true,
+        allow_shell: true,
+        binary_allowlist: vec!["echo".to_string(), "sleep".to_string()],
+        ..Default::default()
+    });
+    for tty in [false, true] {
+        let (mut ctx, _dir) = tool_ctx(config.clone());
+        let hook = std::sync::Arc::new(RecordOutput::default());
+        ctx.command_output = Some(hook.clone());
+        ctx.current_tool_use_id = Some("toolu_live".into());
+        let mut args = serde_json::json!({ "shell_script": "echo a; sleep 0.5; echo b" });
+        if tty {
+            args["tty_cols"] = serde_json::json!(80);
+        }
+
+        let result = CmdRunTool.execute(&ctx, args).await.unwrap();
+        let returned = std::time::Instant::now();
+
+        assert!(result.ok, "{result:?}");
+        assert_eq!(String::from_utf8_lossy(&result.stdout), "a\nb\n");
+        let chunks = hook.0.lock().unwrap();
+        let (first_at, id, first) = chunks.first().expect("output reached the hook");
+        assert_eq!(id, "toolu_live");
+        assert!(String::from_utf8_lossy(first).starts_with('a'), "{first:?}");
+        assert!(
+            returned.duration_since(*first_at) >= std::time::Duration::from_millis(300),
+            "tty={tty}: the first line came only as the command ended"
+        );
+        let all: Vec<u8> = chunks.iter().flat_map(|(_, _, c)| c.clone()).collect();
+        assert_eq!(
+            String::from_utf8_lossy(&all).replace("\r\n", "\n"),
+            "a\nb\n"
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]

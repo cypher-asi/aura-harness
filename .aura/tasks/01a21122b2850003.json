@@ -1,0 +1,16 @@
+{
+  "id": "01a21122b2850003",
+  "title": "Goal: in the Rust workspace at /home/n3o/code/aura-harness, opening a plan file (`.aura/plans/*.plan.md`) must show it …",
+  "state": "completed",
+  "agent_id": "dfa71dffa907d7b1a69be81573490713b8932d04757b27d69353592e2e2c86ed",
+  "agent_name": "rust-engineer #140",
+  "assignee": "rust-engineer",
+  "parent": "01a21121b4c30001",
+  "plan": ".aura/plans/plans-that-read-like-a-document_c365dfec.plan.md",
+  "plan_todo": "doc-view",
+  "items": [],
+  "summary": "The baseline test run I started before writing any code has finished, and it passes: `cargo test -p aura-ui-terminal` gave",
+  "updated_ms": 1795584297203,
+  "created_ms": 1795583816325,
+  "tool_use_id": "toolu_0154ufM1tPEVWSPEpNstxv8j"
+}

@@ -25,9 +25,8 @@ pub(super) const PROCESSES_HINT: &str = "⏎ open  o agent  k kill  l log  ⇧�
 pub(super) const TRACE_HINT: &str = "⏎ open  g graph  ⇧←→ tabs";
 /// Hint of the TASKS tab, which also lists the plans the tasks work on.
 pub(super) const TASKS_HINT: &str = "⏎ open  p plan  t task  ←→ fold  ⇧←→ tabs";
-/// Hint of the PROJECTS tab of an open channel, whose tasks fold as the
-/// TASKS tab's do.
-pub(super) const CHANNEL_HINT: &str = "⏎ agent  ←→ fold  ⇧←→ tabs";
+/// Hint of an open channel's MEMBERS tab, whose rows only show.
+pub(super) const CHANNEL_MEMBERS_HINT: &str = "↑↓ move  ⇧←→ tabs";
 /// Hint of the Kernel panel's MEMBERS tab.
 pub(super) const MEMBERS_HINT: &str = "⏎ open  o chat  ⇧←→ tabs";
 /// Hint of the Kernel panel's POLICIES tab, a document with nothing to

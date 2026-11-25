@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::app::image_preview::ImagePreview;
-use crate::components::{Activity, BootConsole};
+use crate::components::{Activity, BootConsole, LiveOutput};
 use crate::events::{CallUsage, FileDiffData, MessageRole, SourceUsage};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -100,6 +100,8 @@ pub struct ShellRun {
     pub output: Option<String>,
     /// Exit code of a failed command
     pub exit_code: Option<i32>,
+    /// What the command has printed so far, while it runs
+    pub live: LiveOutput,
 }
 
 impl Message {
@@ -276,8 +278,17 @@ impl Message {
             command: command.to_string(),
             output: None,
             exit_code: None,
+            live: LiveOutput::default(),
         });
         message
+    }
+
+    /// Add `chunk` to what a running shell command has printed so far.
+    pub fn append_shell_output(&mut self, chunk: &str) {
+        if let Some(run) = self.shell.as_mut().filter(|run| run.output.is_none()) {
+            run.live.push(chunk);
+            self.touch();
+        }
     }
 
     /// The shell command this message shows, if it is one.
@@ -297,6 +308,7 @@ impl Message {
         if let Some(run) = &mut self.shell {
             run.output = Some(output.to_string());
             run.exit_code = exit_code;
+            run.live.clear();
             self.touch();
         }
     }

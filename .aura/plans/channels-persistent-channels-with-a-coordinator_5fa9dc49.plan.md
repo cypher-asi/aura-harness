@@ -19,10 +19,10 @@ todos:
   status: completed
 - id: merge-main
   content: Merge main into channels, resolve conflicts, run all checks
-  status: in_progress
+  status: completed
 - id: merge
   content: Merge channels into main
-  status: pending
+  status: completed
 ---
 
 # Channels: persistent #channels with a coordinator, spawned agents and subagents
@@ -36,8 +36,8 @@ Move the agent registry from agents.json into the shared RocksDB keyed by AgentI
 - [x] Save each coordinator's last-summary time in the channel store
 - [x] Right-click menu in the right-hand channel panel
 - [x] Run agent_list_perf on a copy of real data, branch vs main
-- [~] Merge main into channels, resolve conflicts, run all checks
-- [ ] Merge channels into main
+- [x] Merge main into channels, resolve conflicts, run all checks
+- [x] Merge channels into main
 
 <!-- end of generated header: edit below -->
 

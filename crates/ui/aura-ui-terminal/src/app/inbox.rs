@@ -367,12 +367,12 @@ impl App {
         (index < self.inbox.rows.len()).then_some(index)
     }
 
-    /// Show the Kernel panel's INBOX tab, focused, as `/inbox` does. While
-    /// a channel is open its panel owns the column, so this only says so:
+    /// Show the Kernel panel's INBOX tab, focused, as `/inbox` does. The
+    /// channel app has no Kernel panel, so there this only says so:
     /// changing the layout flags here would leave a different layout behind
-    /// when the channel closes.
+    /// when the user goes back to the agents.
     pub(super) fn show_inbox(&mut self) {
-        if self.channel_open() {
+        if self.channel_app() {
             self.notify_channel_owns_column();
             return;
         }

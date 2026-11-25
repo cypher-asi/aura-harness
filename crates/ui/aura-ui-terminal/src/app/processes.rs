@@ -16,9 +16,12 @@ pub(super) const SIDE_PAGE: isize = 10;
 /// Views of the right-hand panel below the Record panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SidePanelTab {
-    /// The open channel's linked projects, the members at work and their
-    /// tasks. Listed only while a channel is open, first.
-    Projects,
+    /// The open channel's members: its coordinator and the agents it
+    /// spawned. Listed only while a channel is open, first.
+    ChannelMembers,
+    /// The open channel's description, coordinator and linked projects.
+    /// Listed only while a channel is open.
+    ChannelInfo,
     /// File tree of the active agent's workspace.
     #[default]
     Sandbox,
@@ -36,7 +39,7 @@ pub enum SidePanelTab {
 }
 
 impl SidePanelTab {
-    /// The tabs listed while no channel is open.
+    /// The tabs listed while no channel is open: the agent app's.
     const OUTSIDE_CHANNEL: [Self; 5] = [
         Self::Sandbox,
         Self::Processes,
@@ -45,15 +48,9 @@ impl SidePanelTab {
         Self::Tasks,
     ];
 
-    /// The tabs listed while a channel is open: its PROJECTS first.
-    const IN_CHANNEL: [Self; 6] = [
-        Self::Projects,
-        Self::Sandbox,
-        Self::Processes,
-        Self::Host,
-        Self::Trace,
-        Self::Tasks,
-    ];
+    /// The tabs listed while a channel is open: the channel's own, and
+    /// none of the agent app's.
+    const IN_CHANNEL: [Self; 2] = [Self::ChannelMembers, Self::ChannelInfo];
 
     /// The tabs the header bar lists, in order, with a channel open or
     /// not.
@@ -66,10 +63,18 @@ impl SidePanelTab {
         }
     }
 
+    /// Whether this is one of a channel's own tabs, listed only while a
+    /// channel is open.
+    #[must_use]
+    pub const fn is_channel_tab(self) -> bool {
+        matches!(self, Self::ChannelMembers | Self::ChannelInfo)
+    }
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Projects => "PROJECTS",
+            Self::ChannelMembers => "MEMBERS",
+            Self::ChannelInfo => "INFO",
             Self::Sandbox => "SANDBOX",
             Self::Processes => "PROCESSES",
             Self::Host => "HOST",
@@ -82,7 +87,8 @@ impl SidePanelTab {
     #[must_use]
     pub const fn short_label(self) -> &'static str {
         match self {
-            Self::Projects => "PRJ",
+            Self::ChannelMembers => "MBR",
+            Self::ChannelInfo => "INF",
             Self::Sandbox => "SBX",
             Self::Processes => "PRC",
             Self::Host => "HST",
@@ -168,10 +174,11 @@ impl App {
         self.processes_scroll
     }
 
-    /// Show `tab`. PROJECTS is only shown while a channel is open; asked
-    /// for without one, nothing changes.
+    /// Show `tab`. A channel's tabs are only shown while a channel is
+    /// open, and the agent app's only while none is; asked for in the
+    /// wrong one, nothing changes.
     pub(super) fn show_side_tab(&mut self, tab: SidePanelTab) {
-        if tab == SidePanelTab::Projects && !self.channel_open() {
+        if tab.is_channel_tab() != self.channel_open() {
             return;
         }
         self.side_tab = tab;
@@ -289,12 +296,12 @@ impl App {
                     }
                     SidePanelTab::Trace => self.trace_feed.select(index),
                     SidePanelTab::Tasks => self.task_list.select(index),
-                    SidePanelTab::Projects => self.select_channel_task(index),
+                    SidePanelTab::ChannelMembers => self.select_channel_member(index),
+                    SidePanelTab::ChannelInfo => {}
                 }
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
             (SidePanelTab::Tasks, KeyCode::Char(' ')) => self.task_list.toggle_selected(),
-            (SidePanelTab::Projects, KeyCode::Char(' ')) => self.toggle_channel_task(),
             (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_row_plan(),
             (SidePanelTab::Tasks, KeyCode::Char('t')) => self.jump_to_todo_task(),
             (SidePanelTab::Processes, KeyCode::Char('o')) => self.jump_to_selected_owner(),
@@ -437,7 +444,8 @@ impl App {
                 }
             }
             SidePanelTab::Tasks => self.click_task_row(column, row),
-            SidePanelTab::Projects => {}
+            SidePanelTab::ChannelMembers => self.click_channel_member(column, row),
+            SidePanelTab::ChannelInfo => {}
         }
     }
 
@@ -497,7 +505,10 @@ impl App {
             SidePanelTab::Host => None,
             SidePanelTab::Trace => self.trace_row_at(column, row).map(HoverTarget::TraceRow),
             SidePanelTab::Tasks => self.task_row_at(column, row).map(HoverTarget::TaskRow),
-            SidePanelTab::Projects => None,
+            SidePanelTab::ChannelMembers => self
+                .channel_member_row_at(column, row)
+                .map(HoverTarget::ChannelMemberRow),
+            SidePanelTab::ChannelInfo => None,
         }
     }
 }

@@ -3,8 +3,8 @@
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use crate::tool::{
-    builtin_tools, AgentControlHook, AgentReadHook, BackgroundProcessHook, FileChangeHook,
-    SubagentDispatchHook, Tool, ToolContext,
+    builtin_tools, AgentControlHook, AgentReadHook, BackgroundProcessHook, CommandOutputHook,
+    FileChangeHook, SubagentDispatchHook, Tool, ToolContext,
 };
 use crate::ToolConfig;
 use async_trait::async_trait;
@@ -35,6 +35,7 @@ pub struct ToolExecutor {
     agent_read_hook: Option<Arc<dyn AgentReadHook>>,
     subagent_dispatch: Option<Arc<dyn SubagentDispatchHook>>,
     background_processes: Option<Arc<dyn BackgroundProcessHook>>,
+    command_output: Option<Arc<dyn CommandOutputHook>>,
     caller_permissions: Option<AgentPermissions>,
     caller_tool_permissions: Option<AgentToolPermissions>,
     user_tool_defaults: UserToolDefaults,
@@ -77,6 +78,7 @@ impl ToolExecutor {
             agent_read_hook: None,
             subagent_dispatch: None,
             background_processes: None,
+            command_output: None,
             caller_permissions: None,
             caller_tool_permissions: None,
             user_tool_defaults: UserToolDefaults::default(),
@@ -93,6 +95,13 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_file_change_hook(mut self, hook: Arc<dyn FileChangeHook>) -> Self {
         self.file_change_hook = Some(hook);
+        self
+    }
+
+    /// Show `hook` what foreground `run_command` calls print while they run.
+    #[must_use]
+    pub fn with_command_output_hook(mut self, hook: Arc<dyn CommandOutputHook>) -> Self {
+        self.command_output = Some(hook);
         self
     }
 
@@ -316,6 +325,7 @@ impl ToolExecutor {
         tool_ctx.current_tool_use_id = ctx.tool_use_id.clone();
         tool_ctx.current_action_id = Some(ctx.action_id);
         tool_ctx.background_processes = self.background_processes.clone();
+        tool_ctx.command_output = self.command_output.clone();
         tool_ctx.confine_writes = ctx.confine_writes;
         tool_ctx.run_scratch = ctx.run_scratch.clone();
 

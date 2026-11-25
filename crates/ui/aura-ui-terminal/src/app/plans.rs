@@ -1,15 +1,17 @@
-//! Plan files as the TASKS side tab opens them: over the chat panel, with
-//! the cursor on the todo the user picked, found in the plan's generated
-//! `## Todos` checklist when it has one, else in its frontmatter or text.
+//! Plan files as the TASKS side tab opens them: as a document over the
+//! chat panel, at the todo the user picked. Their source, which `s` shows,
+//! puts the cursor on that todo's item in the plan's generated `## Todos`
+//! checklist when it has one, else on a line mentioning it.
 
+use super::plan_doc::TodoFocus;
 use super::tasks::TaskRow;
-use super::{App, DetailView};
+use super::App;
 use crate::app::file_view::FileView;
 
 /// Line ending the generated header of a plan file, as
 /// `aura_exec_tools::plan_tools::HEADER_END` writes it (this crate does
 /// not depend on the tools crate).
-const PLAN_HEADER_END: &str = "<!-- end of generated header: edit below -->";
+pub(super) const PLAN_HEADER_END: &str = "<!-- end of generated header: edit below -->";
 
 /// Text of a generated checklist item `- [x] text`, or `None` when
 /// `line` is not one.
@@ -40,7 +42,7 @@ fn checklist_lines(lines: &[&str]) -> Vec<usize> {
 
 /// Item lines of the checklist ending at the marker on line `marker`, or
 /// empty when the lines before it are not a `## Todos` checklist.
-fn checklist_before(lines: &[&str], marker: usize) -> Vec<usize> {
+pub(super) fn checklist_before(lines: &[&str], marker: usize) -> Vec<usize> {
     let Some(heading) = (0..marker).rev().find(|&index| {
         let line = lines.get(index).copied().unwrap_or_default();
         !is_checklist_block_line(line)
@@ -73,7 +75,12 @@ fn is_checklist_block_line(line: &str) -> bool {
 /// checklist has one item per todo, else the checklist item or first line
 /// mentioning the content's first line, so opening a plan from a todo
 /// lands on it.
-fn todo_line(view: &FileView, index: usize, todo_count: usize, content: &str) -> Option<usize> {
+pub(super) fn todo_line(
+    view: &FileView,
+    index: usize,
+    todo_count: usize,
+    content: &str,
+) -> Option<usize> {
     let lines = view.body.lines();
     let items = checklist_lines(&lines);
     if items.len() == todo_count {
@@ -97,99 +104,46 @@ fn todo_line(view: &FileView, index: usize, todo_count: usize, content: &str) ->
         .or_else(|| lines.iter().position(|line| line.contains(needle)))
 }
 
-/// Whether `line` is the frontmatter `id:` line of the todo with id `id`,
-/// plain or YAML-quoted.
-fn is_id_line(line: &str, id: &str) -> bool {
-    let Some(value) = line.trim_start_matches(['-', ' ']).strip_prefix("id: ") else {
-        return false;
-    };
-    value == id
-        || ['\'', '"'].iter().any(|&quote| {
-            value
-                .strip_prefix(quote)
-                .and_then(|rest| rest.strip_suffix(quote))
-                == Some(id)
-        })
-}
-
-/// Number of todos in the frontmatter: the top-level `- ` lines between
-/// the opening and closing `---`. `None` without a closed frontmatter.
-fn frontmatter_todo_count(lines: &[&str]) -> Option<usize> {
-    if lines.first().map(|line| line.trim_end()) != Some("---") {
-        return None;
-    }
-    let close = lines
-        .iter()
-        .skip(1)
-        .position(|line| line.trim_end() == "---")?;
-    Some(
-        lines
-            .iter()
-            .skip(1)
-            .take(close)
-            .filter(|line| line.starts_with("- "))
-            .count(),
-    )
-}
-
-/// 0-based line of `view` showing the todo with id `id`: its checklist
-/// item when the plan's checklist has one item per todo, else its `id:`
-/// line in the frontmatter.
-fn todo_id_line(view: &FileView, id: &str) -> Option<usize> {
-    let lines = view.body.lines();
-    let id_line = lines.iter().position(|line| is_id_line(line, id))?;
-    let items = checklist_lines(&lines);
-    if frontmatter_todo_count(&lines) != Some(items.len()) {
-        return Some(id_line);
-    }
-    // Todos are the only top-level `- ` items in the frontmatter, so the
-    // number before this one is its place in the checklist.
-    let ordinal = lines
-        .iter()
-        .take(id_line)
-        .filter(|line| line.starts_with("- "))
-        .count();
-    Some(items.get(ordinal).copied().unwrap_or(id_line))
-}
-
 impl App {
     /// Open the plan of the TASKS tab's highlighted plan header or todo
-    /// over the chat panel, with the cursor on the todo when it is one.
+    /// as a document over the chat panel, at the todo when it is one.
     pub(super) fn open_selected_plan(&mut self) {
         let list = self.task_list();
         let (Some(plan), Some(root)) = (list.selected_plan(), self.sandbox.root()) else {
             return;
         };
+        let file = root.join(&plan.path);
+        // Owned, so the list's borrow of `self` ends before opening.
         let todo = match list.rows().get(list.selected()) {
-            Some(&TaskRow::Todo { todo, .. }) => plan.todos.get(todo).map(|found| (todo, found)),
+            Some(&TaskRow::Todo { todo, .. }) => plan
+                .todos
+                .get(todo)
+                .map(|found| (todo, plan.todos.len(), found.content.clone())),
             _ => None,
         };
-        let mut view = FileView::load(&root.join(&plan.path), Some(root));
-        if let Some(line) =
-            todo.and_then(|(index, todo)| todo_line(&view, index, plan.todos.len(), &todo.content))
-        {
-            view.jump_to(line);
-        }
-        self.open_detail(DetailView::File(Box::new(view)));
+        let focus = todo.as_ref().map(|(index, count, content)| TodoFocus::Nth {
+            index: *index,
+            count: *count,
+            content,
+        });
+        self.open_plan_doc(&file, focus);
     }
 
-    /// Open the plan at workspace-relative `path` over the chat panel,
-    /// with the cursor on its todo with id `todo` when there is one.
-    pub(super) fn open_plan_at(&mut self, path: &str, todo: Option<&str>) {
+    /// Open the plan at workspace-relative `path` as a document over the
+    /// chat panel, at its todo with id `todo` when there is one.
+    pub(crate) fn open_plan_at(&mut self, path: &str, todo: Option<&str>) {
         let Some(root) = self.sandbox.root() else {
             return;
         };
-        let mut view = FileView::load(&root.join(path), Some(root));
-        if let Some(line) = todo.and_then(|id| todo_id_line(&view, id)) {
-            view.jump_to(line);
-        }
-        self.open_detail(DetailView::File(Box::new(view)));
+        let file = root.join(path);
+        self.open_plan_doc(&file, todo.map(TodoFocus::Id));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::DetailView;
     use crate::events::{PlanView, TodoState, TodoView, UiCommand};
     use crossterm::event::{KeyCode, KeyEvent};
 
@@ -236,22 +190,12 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Enter));
-        let Some(DetailView::File(view)) = app.detail_view() else {
-            panic!("the plan opens as a file");
-        };
-        assert_eq!(
-            view.vim.line(),
-            17,
-            "the cursor lands on the checklist item"
-        );
+        assert_eq!(focus(&app), Some(1), "the plan opens at the todo");
 
-        for (id, line) in [("x", 16), ("y", 17)] {
+        for (id, index) in [("x", 0), ("y", 1)] {
             app.close_detail();
             app.open_plan_at(".aura/plans/a.plan.md", Some(id));
-            let Some(DetailView::File(view)) = app.detail_view() else {
-                panic!("the plan opens as a file");
-            };
-            assert_eq!(view.vim.line(), line, "todo {id}");
+            assert_eq!(focus(&app), Some(index), "todo {id}");
         }
     }
 
@@ -302,16 +246,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn todo_id_lines_match_quoted_ids() {
-        for line in ["- id: 1", "  id: '1'", "- id: \"1\""] {
-            assert!(is_id_line(line, "1"), "{line}");
-        }
-        for line in ["- id: 12", "- id: '1", "- id: \"1'", "- content: 1"] {
-            assert!(!is_id_line(line, "1"), "{line}");
-        }
-    }
-
     /// A plan file with a generated header in a temp sandbox, opened in
     /// the TASKS tab.
     fn app_with_plan(text: &str, todos: &[&str]) -> (App, tempfile::TempDir) {
@@ -330,11 +264,12 @@ mod tests {
         (app, dir)
     }
 
-    fn cursor_line(app: &App) -> usize {
-        let Some(DetailView::File(view)) = app.detail_view() else {
-            panic!("the plan opens as a file");
+    /// The todo the open plan document is focused on.
+    fn focus(app: &App) -> Option<usize> {
+        let Some(DetailView::Plan(doc)) = app.detail_view() else {
+            panic!("the plan opens as a document");
         };
-        view.vim.line()
+        doc.focus
     }
 
     #[test]
@@ -350,18 +285,19 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Enter));
-        assert_eq!(cursor_line(&app), 17, "the second todo's item");
+        assert_eq!(focus(&app), Some(1), "the second todo");
 
-        for (id, line) in [("1", 16), ("2", 17)] {
+        for (id, index) in [("1", 0), ("2", 1)] {
             app.close_detail();
             app.open_plan_at(".aura/plans/a.plan.md", Some(id));
-            assert_eq!(cursor_line(&app), line, "quoted id {id}");
+            assert_eq!(focus(&app), Some(index), "quoted id {id}");
         }
     }
 
     #[test]
-    fn a_checklist_that_disagrees_with_the_todos_falls_back() {
-        // A hand-edited header with one item for two todos.
+    fn a_checklist_that_disagrees_with_the_todos_is_not_trusted() {
+        // A hand-edited header with one item for two todos: the
+        // frontmatter's todos are the plan's.
         let text = format!(
             "---\nname: a\ntodos:\n\
              - id: x\n  content: first\n\
@@ -371,10 +307,12 @@ mod tests {
         let (mut app, _dir) = app_with_plan(&text, &["first", "second"]);
         app.handle_key(KeyEvent::from(KeyCode::Down));
         app.handle_key(KeyEvent::from(KeyCode::Enter));
-        assert_eq!(cursor_line(&app), 4, "first is only in the frontmatter");
+        assert_eq!(focus(&app), Some(0), "first is in the frontmatter");
 
-        app.close_detail();
-        app.open_plan_at(".aura/plans/a.plan.md", Some("x"));
-        assert_eq!(cursor_line(&app), 3, "the id line, not the lone item");
+        for (id, index) in [("x", 0), ("y", 1)] {
+            app.close_detail();
+            app.open_plan_at(".aura/plans/a.plan.md", Some(id));
+            assert_eq!(focus(&app), Some(index), "todo {id}, not the lone item");
+        }
     }
 }

@@ -9,6 +9,7 @@
 //!
 //! `BOXD_API_KEY` must be set (a `.env` works). The binary goes into the
 //! base snapshot; it must run on the machines' Ubuntu (glibc 2.39).
+//! `scripts/build-cloud-binary.sh` builds one and prints where it put it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

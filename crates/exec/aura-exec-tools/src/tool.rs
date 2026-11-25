@@ -14,7 +14,7 @@ use aura_core_types::{
 };
 pub use aura_exec_traits::{
     AgentControlHook, AgentReadHook, BackgroundJob, BackgroundProcess, BackgroundProcessHook,
-    FileChangeHook, SubagentDispatchHook,
+    CommandOutputHook, FileChangeHook, SubagentDispatchHook,
 };
 use aura_exec_traits::{RunScratch, SpawnHook};
 use std::sync::Arc;
@@ -103,6 +103,8 @@ pub struct ToolContext {
     /// Takes over commands `run_command` starts with `background: true`,
     /// and backs the job tools. `None` makes such calls fail.
     pub background_processes: Option<Arc<dyn BackgroundProcessHook>>,
+    /// Shown what a foreground `run_command` prints while it runs.
+    pub command_output: Option<Arc<dyn CommandOutputHook>>,
     /// Commands may only write inside the workspace (see
     /// [`crate::confine`]), and skip the command allowlists since the
     /// confinement bounds them; set under the `yolo` approval level.
@@ -139,6 +141,7 @@ impl ToolContext {
             current_tool_use_id: None,
             current_action_id: None,
             background_processes: None,
+            command_output: None,
             confine_writes: false,
             run_scratch: None,
         }

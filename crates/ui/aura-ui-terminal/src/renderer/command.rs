@@ -48,8 +48,12 @@ pub(super) fn prompt_line(
         .collect()
 }
 
+/// Lines of a typed command's output shown while it still runs.
+const LIVE_SHELL_LINES: usize = 200;
+
 /// Terminal lines for a command that was run: the prompt and command as
-/// they were typed, then the output, then the exit code if it failed.
+/// they were typed, then the output (the end of it so far, while it
+/// runs), then the exit code if it failed.
 pub(super) fn shell_lines(
     run: &ShellRun,
     prompt: &str,
@@ -58,8 +62,10 @@ pub(super) fn shell_lines(
 ) -> Vec<Line<'static>> {
     let mut lines = prompt_line(prompt, &run.command, width, theme);
 
-    let output = run.output.as_deref().unwrap_or_default();
-    let output = output.trim_end_matches('\n');
+    let output = match &run.output {
+        Some(output) => output.trim_end_matches('\n').to_string(),
+        None => run.live.styled_tail(LIVE_SHELL_LINES).join("\n"),
+    };
     if !output.is_empty() {
         let base = Style::default().fg(theme.colors.foreground);
         for line in output.split('\n') {

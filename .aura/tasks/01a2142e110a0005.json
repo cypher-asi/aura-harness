@@ -1,0 +1,34 @@
+{
+  "id": "01a2142e110a0005",
+  "title": "Implement the plan in `.aura/plans/finish-a-plan-when-its-todos-are-done_13af6bfb.plan.md`. Read it first. Your todo li…",
+  "state": "completed",
+  "agent_id": "2a5b9035437070a854d018523c6b79c5b149524addb04236e7b187c006eb65ed",
+  "agent_name": "Agent 1616",
+  "plan": ".aura/plans/finish-a-plan-when-its-todos-are-done_13af6bfb.plan.md",
+  "builds": true,
+  "items": [
+    {
+      "content": "Add finish_done_todos and unfinished_todos in plan_mode.rs; call it from handle_agent_success",
+      "state": "completed"
+    },
+    {
+      "content": "Apply unfinished_todos on checkpoint restore, history rebuild and rewind; filter finished plans out of latest_plan_path",
+      "state": "completed"
+    },
+    {
+      "content": "Add Hud::has_open_todos and hide the live-tail checklist once every todo is closed",
+      "state": "completed"
+    },
+    {
+      "content": "Show a check mark on finished plan headers in the TASKS tab",
+      "state": "completed"
+    },
+    {
+      "content": "Add app and renderer tests, then run fmt, clippy and the aura-app and aura-ui-terminal tests",
+      "state": "completed"
+    }
+  ],
+  "summary": "Now write the plan_mode functions.",
+  "updated_ms": 1795635461069,
+  "created_ms": 1795634893066
+}

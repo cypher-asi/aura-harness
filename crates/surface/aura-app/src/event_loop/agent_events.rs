@@ -86,13 +86,20 @@ impl AgentUi {
 
     /// Send `command` to this agent's chat.
     pub(crate) async fn send(&self, command: UiCommand) {
-        let _ = self
-            .commands
-            .send(UiCommand::ForAgent {
-                agent_id: self.agent_id.to_hex(),
-                command: Box::new(command),
-            })
-            .await;
+        let _ = self.commands.send(self.for_agent(command)).await;
+    }
+
+    /// [`Self::send`] without waiting: `command` is dropped when the UI
+    /// is behind.
+    pub(crate) fn try_send(&self, command: UiCommand) {
+        let _ = self.commands.try_send(self.for_agent(command));
+    }
+
+    fn for_agent(&self, command: UiCommand) -> UiCommand {
+        UiCommand::ForAgent {
+            agent_id: self.agent_id.to_hex(),
+            command: Box::new(command),
+        }
     }
 }
 

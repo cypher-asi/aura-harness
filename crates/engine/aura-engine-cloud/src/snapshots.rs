@@ -37,6 +37,7 @@ use crate::boot::{human_bytes, BootReporter, BootStage};
 use crate::delta;
 use crate::error::{CloudError, CloudResult};
 use crate::fleet::VmLedger;
+use crate::glibc::{self, GlibcVersion, MACHINE_GLIBC};
 use crate::machine_env::MachineEnv;
 use crate::names::{self, BASE_SNAPSHOT, LABEL_INSTALL, LABEL_PROJECT, LABEL_ROLE, ROLE_BUILDER};
 use crate::provider::{MachineOrigin, NewMachine, VmProvider};
@@ -130,6 +131,67 @@ pub fn binary_digest(path: &Path) -> CloudResult<String> {
     std::io::copy(&mut file, &mut hasher)
         .map_err(|err| CloudError::io(format!("read {}", path.display()), err))?;
     Ok(hasher.finalize().to_hex()[..16].to_string())
+}
+
+/// Where the hub looks for a Linux build of aura made for the machines
+/// (`scripts/build-cloud-binary.sh` installs there), under the cloud
+/// home (`AURA_HOME/cloud`).
+#[must_use]
+pub fn cloud_binary_path(home: &Path) -> PathBuf {
+    home.join("bin").join("aura")
+}
+
+/// Run on a builder right after the binary is installed: fails, with
+/// the loader's complaint on stderr, when the binary can't start there.
+/// `--help` is handled by argument parsing and exits 0 without touching
+/// the machine.
+pub const CHECK_BINARY: &str = "/usr/local/bin/aura --help >/dev/null";
+
+/// The aura binary to upload, read once for its digest, its glibc needs
+/// and the upload itself.
+struct LocalBinary {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    digest: String,
+    glibc: Option<GlibcVersion>,
+}
+
+impl LocalBinary {
+    /// Read and inspect `path`. Blocking.
+    fn read(path: PathBuf) -> CloudResult<Self> {
+        let bytes = std::fs::read(&path)
+            .map_err(|err| CloudError::io(format!("read aura binary {}", path.display()), err))?;
+        let digest = blake3::hash(&bytes).to_hex()[..16].to_string();
+        let glibc = glibc::required_glibc(&bytes);
+        Ok(Self {
+            path,
+            bytes,
+            digest,
+            glibc,
+        })
+    }
+
+    /// [`CloudError::IncompatibleBinary`] when the machines' glibc is
+    /// too old for it.
+    fn ensure_loads_on_machines(&self, home: &Path) -> CloudResult<()> {
+        match self.glibc {
+            Some(needs) if needs > MACHINE_GLIBC => Err(CloudError::IncompatibleBinary {
+                path: self.path.clone(),
+                needs,
+                has: MACHINE_GLIBC,
+                install_to: cloud_binary_path(home),
+            }),
+            needs => {
+                tracing::debug!(
+                    path = %self.path.display(),
+                    needs = ?needs.map(|version| version.to_string()),
+                    has = %MACHINE_GLIBC,
+                    "aura binary's glibc fits the cloud image"
+                );
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Fingerprint of a project snapshot. Reads the lockfiles (blocking).
@@ -248,13 +310,16 @@ pub struct SnapshotBuilder {
     isolated: bool,
     aura_version: String,
     binary: AuraBinary,
+    /// The cloud home (`AURA_HOME/cloud`).
+    home: PathBuf,
     index_path: PathBuf,
     /// One build at a time per process; also guards the index file.
     index: Mutex<Option<SnapshotIndex>>,
 }
 
 impl SnapshotBuilder {
-    /// A builder; the index lives at `index_path`.
+    /// A builder keeping its index in `home` (`AURA_HOME/cloud`), where
+    /// [`cloud_binary_path`] also lives.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
@@ -265,7 +330,7 @@ impl SnapshotBuilder {
         isolated: bool,
         aura_version: impl Into<String>,
         binary: AuraBinary,
-        index_path: PathBuf,
+        home: PathBuf,
     ) -> Self {
         Self {
             provider,
@@ -275,7 +340,8 @@ impl SnapshotBuilder {
             isolated,
             aura_version: aura_version.into(),
             binary,
-            index_path,
+            index_path: home.join("snapshots.json"),
+            home,
             index: Mutex::new(None),
         }
     }
@@ -317,7 +383,10 @@ impl SnapshotBuilder {
     ///
     /// # Errors
     ///
-    /// When a build step fails.
+    /// [`CloudError::IncompatibleBinary`] before any machine is made when
+    /// the binary needs a newer glibc than the machines have;
+    /// [`CloudError::BinaryDoesNotRun`] when it fails to start on the
+    /// builder anyway; otherwise when a build step fails.
     pub async fn ensure_base(&self) -> CloudResult<SnapshotRecord> {
         self.ensure_base_reported(&BootReporter::none()).await
     }
@@ -326,22 +395,26 @@ impl SnapshotBuilder {
     ///
     /// # Errors
     ///
-    /// When a build step fails.
+    /// As [`Self::ensure_base`].
     pub async fn ensure_base_reported(&self, boot: &BootReporter) -> CloudResult<SnapshotRecord> {
-        // The binary itself is part of the base: a new build of the same
-        // version must still reach new machines.
-        let version = match &self.binary {
+        let local = match &self.binary {
             AuraBinary::Upload(path) => {
                 let path = path.clone();
-                let digest = tokio::task::spawn_blocking(move || binary_digest(&path))
+                let local = tokio::task::spawn_blocking(move || LocalBinary::read(path))
                     .await
                     .map_err(|err| {
-                        CloudError::io("hash aura binary", std::io::Error::other(err))
+                        CloudError::io("inspect aura binary", std::io::Error::other(err))
                     })??;
-                format!("{}+{digest}", self.aura_version)
+                Some(local)
             }
-            AuraBinary::Installed => self.aura_version.clone(),
+            AuraBinary::Installed => None,
         };
+        // The binary itself is part of the base: a new build of the same
+        // version must still reach new machines.
+        let version = local.as_ref().map_or_else(
+            || self.aura_version.clone(),
+            |local| format!("{}+{}", self.aura_version, local.digest),
+        );
         let fingerprint = base_fingerprint(self.size, &version);
         let current = self.record(BASE_SNAPSHOT).await;
         if self.usable(current.as_ref(), &fingerprint).await? {
@@ -361,19 +434,18 @@ impl SnapshotBuilder {
             ),
         );
         let mut steps = Vec::new();
-        if let AuraBinary::Upload(path) = &self.binary {
-            let bytes = tokio::fs::read(path).await.map_err(|err| {
-                CloudError::io(format!("read aura binary {}", path.display()), err)
-            })?;
+        if let Some(local) = local {
+            local.ensure_loads_on_machines(&self.home)?;
             steps.push(Step::Upload {
                 path: "/tmp/aura".into(),
-                bytes,
+                bytes: local.bytes,
             });
             steps.push(Step::Run {
                 command: "sudo install -m 0755 /tmp/aura /usr/local/bin/aura && rm -f /tmp/aura"
                     .into(),
                 timeout: SHORT_STEP_TIMEOUT,
             });
+            steps.push(Step::CheckBinary);
         }
         let origin = SnapshotOrigin {
             name: BASE_SNAPSHOT.into(),
@@ -736,13 +808,36 @@ impl SnapshotBuilder {
                     })
                 }
             }
+            Step::CheckBinary => {
+                let output = self
+                    .provider
+                    .exec(builder, CHECK_BINARY, None, SHORT_STEP_TIMEOUT)
+                    .await?;
+                if output.success() {
+                    Ok(())
+                } else {
+                    Err(CloudError::BinaryDoesNotRun {
+                        machine: builder.to_string(),
+                        exit_code: output.exit_code,
+                        stderr: output.stderr_tail(800),
+                    })
+                }
+            }
         }
     }
 }
 
 enum Step {
-    Upload { path: String, bytes: Vec<u8> },
-    Run { command: String, timeout: Duration },
+    Upload {
+        path: String,
+        bytes: Vec<u8>,
+    },
+    Run {
+        command: String,
+        timeout: Duration,
+    },
+    /// [`CHECK_BINARY`], failing as [`CloudError::BinaryDoesNotRun`].
+    CheckBinary,
 }
 
 /// Why a snapshot is built now rather than reused.
@@ -795,6 +890,14 @@ mod tests {
     }
 
     fn builder(fake: &FakeProvider, home: &Path) -> (SnapshotBuilder, Arc<MemoryLedger>) {
+        builder_with(fake, home, AuraBinary::Installed)
+    }
+
+    fn builder_with(
+        fake: &FakeProvider,
+        home: &Path,
+        binary: AuraBinary,
+    ) -> (SnapshotBuilder, Arc<MemoryLedger>) {
         let ledger = Arc::new(MemoryLedger::default());
         let builder = SnapshotBuilder::new(
             Arc::new(fake.clone()),
@@ -803,10 +906,111 @@ mod tests {
             MachineSize::S4x16,
             true,
             "0.1.0",
-            AuraBinary::Installed,
-            home.join("cloud/snapshots.json"),
+            binary,
+            home.join("cloud"),
         );
         (builder, ledger)
+    }
+
+    /// A stand-in binary whose string table needs glibc `2.<minor>`.
+    fn fake_binary(dir: &Path, minor: u32) -> PathBuf {
+        let path = dir.join("aura");
+        let strtab = format!("\x7fELF\0libc.so.6\0GLIBC_2.2.5\0GLIBC_2.{minor}\0");
+        std::fs::write(&path, strtab).expect("write binary");
+        path
+    }
+
+    #[tokio::test]
+    async fn a_binary_needing_a_newer_glibc_is_refused_before_any_machine() {
+        let home = tempfile::tempdir().expect("home");
+        let binary = fake_binary(home.path(), 43);
+        let fake = FakeProvider::new();
+        let (builder, _) = builder_with(&fake, home.path(), AuraBinary::Upload(binary.clone()));
+
+        let err = builder.ensure_base().await.expect_err("refused");
+        assert!(
+            matches!(
+                &err,
+                CloudError::IncompatibleBinary { needs, has, .. }
+                    if *needs == GlibcVersion::new(2, 43) && *has == MACHINE_GLIBC
+            ),
+            "{err:?}"
+        );
+        let message = err.to_string();
+        for part in [
+            binary.display().to_string(),
+            "glibc 2.43".into(),
+            "have 2.39".into(),
+            "scripts/build-cloud-binary.sh".into(),
+            cloud_binary_path(&home.path().join("cloud"))
+                .display()
+                .to_string(),
+            "AURA_CLOUD_BINARY".into(),
+        ] {
+            assert!(message.contains(&part), "{part} missing from: {message}");
+        }
+        assert!(
+            fake.calls_matching("Create(").is_empty(),
+            "{:?}",
+            fake.calls()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_uploaded_binary_is_started_once_installed() {
+        let home = tempfile::tempdir().expect("home");
+        let binary = fake_binary(home.path(), 34);
+        let fake = FakeProvider::new();
+        let (builder, _) = builder_with(&fake, home.path(), AuraBinary::Upload(binary));
+
+        builder.ensure_base().await.expect("build");
+        let calls = fake.calls();
+        let position = |needle: &str| {
+            calls
+                .iter()
+                .position(|call| call.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} not run: {calls:?}"))
+        };
+        assert!(position("install -m 0755 /tmp/aura") < position(CHECK_BINARY));
+        assert!(position(CHECK_BINARY) < position("nohup aura run"));
+    }
+
+    #[tokio::test]
+    async fn a_binary_that_does_not_start_on_the_builder_says_why() {
+        let home = tempfile::tempdir().expect("home");
+        let binary = fake_binary(home.path(), 34);
+        let fake = FakeProvider::new();
+        fake.on_exec(Arc::new(|_, command, _| {
+            let fails = command == CHECK_BINARY;
+            crate::ExecOutput {
+                exit_code: i32::from(fails),
+                stdout: Vec::new(),
+                stderr: if fails {
+                    b"aura: /lib/x86_64-linux-gnu/libm.so.6: version `GLIBC_2.43' not found"
+                        .to_vec()
+                } else {
+                    Vec::new()
+                },
+            }
+        }));
+        let (builder, ledger) = builder_with(&fake, home.path(), AuraBinary::Upload(binary));
+
+        let err = builder.ensure_base().await.expect_err("check fails");
+        assert!(
+            matches!(err, CloudError::BinaryDoesNotRun { exit_code: 1, .. }),
+            "{err:?}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("uploaded aura binary does not run on the cloud image"),
+            "{message}"
+        );
+        assert!(message.contains("GLIBC_2.43' not found"), "{message}");
+        assert!(fake.machine_names().is_empty(), "builder destroyed");
+        assert_eq!(
+            ledger.events("0://cloud/project/base"),
+            vec![VmEvent::Error]
+        );
     }
 
     #[test]

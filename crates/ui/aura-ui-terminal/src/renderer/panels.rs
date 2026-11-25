@@ -26,6 +26,11 @@ use ratatui::{
 };
 use std::ops::Range;
 
+/// What the chat says in the channel app with no channel open.
+const PICK_A_CHANNEL: &str = "Pick a channel on the left to open its chat.";
+/// What it says when there are no channels to pick.
+const NO_CHANNEL_YET: &str = "No channels yet. Start one with + New channel on the left.";
+
 /// Render the Chat panel: a CHAT | TERMINAL | GRAPH header bar over the
 /// conversation, the shell commands run this session, or the flow between
 /// the agent and the agents it spawned. While a record, file, process or
@@ -72,13 +77,26 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             Some(HoverTarget::ChatTab(tab)) => Some(tab),
             _ => None,
         };
-        let title = app.coordinator_chat_title();
+        let channel_title = app.channel_chat_title();
+        let (title, info) = match &channel_title {
+            Some((slug, title)) => (
+                Some(slug.as_str()),
+                Some(title)
+                    .filter(|title| !title.trim().is_empty())
+                    .map(|title| HeaderInfo {
+                        text: title.clone(),
+                        short: String::new(),
+                        color: theme.colors.muted,
+                    }),
+            ),
+            None => (None, None),
+        };
         let header = PanelHeader {
             layout: app.chat_tab_layout(tabs),
             active: Some(app.chat_tab()),
             hovered,
-            title: title.as_deref(),
-            info: None,
+            title,
+            info,
             close: None,
             expand,
             scope: None,
@@ -110,6 +128,20 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     app.set_chat_width(padded.width);
     app.set_chat_text_area(padded);
 
+    if app.channel_app_empty() {
+        // The channel app with nothing open: no agent's chat shows here.
+        app.set_chat_images(Vec::new());
+        app.set_chat_code_copies(Vec::new());
+        app.set_chat_rows(Some((padded, 0)));
+        let message = if app.channels().is_empty() {
+            NO_CHANNEL_YET
+        } else {
+            PICK_A_CHANNEL
+        };
+        render_empty(frame, padded, message, theme);
+        return;
+    }
+
     let tail = if terminal {
         LiveTail::default()
     } else {
@@ -130,7 +162,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         app.set_chat_images(Vec::new());
         app.set_chat_code_copies(Vec::new());
         app.set_chat_rows(Some((padded, 0)));
-        render_welcome(frame, padded, terminal, theme);
+        render_welcome(frame, padded, (terminal, app.channel_open()), theme);
         return;
     }
 
@@ -563,7 +595,7 @@ struct ChatRows {
 
 /// How many of `area`'s columns a prose `line` covers, and where its
 /// inline code falls.
-fn prose_columns(line: &Line<'_>, area: Rect, theme: &Theme) -> (u16, Vec<Range<u16>>) {
+pub(super) fn prose_columns(line: &Line<'_>, area: Rect, theme: &Theme) -> (u16, Vec<Range<u16>>) {
     let mut code: Vec<Range<u16>> = Vec::new();
     let mut column = area.x;
     let end = area.right();
@@ -591,7 +623,7 @@ fn prose_columns(line: &Line<'_>, area: Rect, theme: &Theme) -> (u16, Vec<Range<
     clippy::cast_precision_loss,
     clippy::cast_sign_loss
 )]
-fn pack_prose(
+pub(super) fn pack_prose(
     buffer: &mut Buffer,
     line: &Line<'_>,
     (row, indent): (Rect, u16),
@@ -820,7 +852,7 @@ fn render_lines_below_hint(frame: &mut Frame, panel: Rect, below: usize, theme: 
 /// chat is inset further, stops at [`MAX_CHAT_WIDTH`] columns so long
 /// lines stay readable, then gives up [`CHAT_NARROW_PERCENT`] of that
 /// width and sits centered, with equal padding on both sides.
-fn terminal_text_area(area: Rect, terminal: bool) -> Rect {
+pub(super) fn terminal_text_area(area: Rect, terminal: bool) -> Rect {
     if terminal {
         return Rect {
             x: area.x.saturating_add(1),
@@ -902,7 +934,9 @@ impl LiveTail {
 }
 
 fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
-    let checklist = if app.state() == AppState::Processing {
+    // A list with every item closed is finished: it stops showing even
+    // while the turn goes on, and shows again once new items open.
+    let checklist = if app.state() == AppState::Processing && app.hud().has_open_todos() {
         let frame = theme.animate_spinners.then(|| app.animation_frame());
         super::hud::todo_checklist(app.hud(), width, theme, frame, app.todos_expanded())
     } else {
@@ -926,7 +960,9 @@ fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
 }
 
 /// `⬢ Thinking… 12s` — shown below the conversation, flush with the
-/// prose, while a turn is in flight and no reply text is streaming. It
+/// prose, while a turn is in flight and no reply text is streaming; a
+/// running tool call counts its own time, and a command that has printed
+/// nothing for a while says so (`· no output 45s`). It
 /// stays the last line even while a group of steps is still growing above
 /// it, and a band of light sweeps across its label to show work goes on.
 pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Line<'a>> {
@@ -946,10 +982,17 @@ pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Lin
     } else {
         spans.push(Span::styled(label, label_style.fg(theme.colors.foreground)));
     }
-    if let Some(elapsed) = app.processing_elapsed().filter(|e| e.as_secs() > 0) {
+    let (elapsed, quiet) = app.working_times();
+    if let Some(elapsed) = elapsed.filter(|e| e.as_secs() > 0) {
         spans.push(Span::styled(
             format!(" {}", format_elapsed(elapsed)),
             Style::default().fg(theme.colors.muted),
+        ));
+    }
+    if let Some(quiet) = quiet {
+        spans.push(Span::styled(
+            format!(" · no output {}", format_elapsed(quiet)),
+            Style::default().fg(theme.colors.warning),
         ));
     }
     Some(Line::from(spans))
@@ -984,9 +1027,12 @@ fn render_chat_loading(frame: &mut Frame, area: Rect, theme: &Theme) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn render_welcome(frame: &mut Frame, area: Rect, terminal: bool, theme: &Theme) {
+fn render_welcome(frame: &mut Frame, area: Rect, (terminal, channel): (bool, bool), theme: &Theme) {
     let text = if terminal {
         "Enter runs a command. Esc returns to chat."
+    } else if channel {
+        // A channel has no terminal: `$` does nothing there.
+        "Message the coordinator, @CODE a member, /help for commands."
     } else {
         "Type a message, $ for a terminal, /help for commands."
     };
@@ -1093,8 +1139,9 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
 }
 
 /// Archive rows: a muted header for each day agents were archived on, then
-/// each archived agent with the project it came from on the right, and
-/// the agents under it indented below while it is open. An agent with
+/// each archived agent, with the agents under it indented below while it
+/// is open, each showing how long ago it was last active on the right.
+/// An agent with
 /// agents under it shows ▸ in the icon column while folded over them,
 /// as it starts, and ▾ once opened. Empty, a single muted line. Only
 /// the rows in `window` are drawn; the total comes with them. Unfocused,
@@ -1143,11 +1190,10 @@ fn build_archived_lines<'a>(
             };
             let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index)
                 || matches!(menu_target, Some(MenuTarget::Archived(id)) if *id == agent.id);
+            // Top-level rows leave the right side blank; agents under them
+            // show how long ago they were last active.
             let side = if agent.depth == 0 {
-                agent
-                    .project
-                    .as_deref()
-                    .map(|project| truncate_agent_name(project, (width / 3).max(4)))
+                None
             } else {
                 agent.last_active_ms.map(|ms| format_ago(ms, now_ms))
             };

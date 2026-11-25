@@ -31,6 +31,7 @@ mod members;
 pub mod mentions;
 mod model_picker;
 mod panes;
+mod plan_doc;
 pub mod plans;
 mod policies;
 mod processes;
@@ -63,7 +64,7 @@ mod tests;
 
 use crate::{
     alerts::AlertSettings,
-    components::{Activity, Message},
+    components::{quiet_for, Activity, Message, ShellRun, ToolStep},
     events::{
         empty_projects, starts_project, AgentDefinitionSummary, AgentSummary, ChannelPostView,
         ModelOptionView, PlanView, ProcessSummary, ProjectSummary, RecordSummary, UiCommand,
@@ -86,6 +87,7 @@ pub use inbox::{InboxRow, ThreadView};
 pub use members::{MemberRow, RecordsTab};
 pub use model_picker::{ModelPicker, ModelTab, PickerLayout, PickerTarget};
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
+pub(crate) use plan_doc::PlanDoc;
 pub use processes::SidePanelTab;
 pub use prose::{ProseMeasure, ProseRow};
 use ratatui::{
@@ -670,6 +672,9 @@ pub enum DetailView {
     /// A thread of mail between agents, from the INBOX tab, kept up to
     /// date as its messages arrive.
     Thread(Box<ThreadView>),
+    /// A plan file read as a document: title, overview, todo checklist
+    /// and body, without its frontmatter. `s` shows its source.
+    Plan(Box<PlanDoc>),
 }
 
 /// Clickable item under the pointer.
@@ -694,10 +699,10 @@ pub(crate) enum HoverTarget {
     ArchiveAgent(usize),
     /// A row in the roster, including "+ New agent".
     DefinitionRow(usize),
-    /// A selectable row of the CHANNELS tab: a channel or "+ New channel"
-    /// in the list, the back row (0) or a member (`1 + i`) of an open
-    /// channel.
+    /// A selectable row of the CHANNELS tab: a channel or "+ New channel".
     ChannelRow(usize),
+    /// A member row of an open channel's MEMBERS side tab.
+    ChannelMemberRow(usize),
     /// A row in the Archive.
     ArchivedRow(usize),
     /// A row in the sandbox tree.
@@ -1325,28 +1330,59 @@ impl App {
         if reply_streaming {
             return None;
         }
-        if let Some(run) = self
-            .messages
-            .back()
-            .filter(|m| m.is_running_shell())
-            .and_then(Message::shell_run)
-        {
+        if let Some(run) = self.running_shell() {
             let program = run.command.split_whitespace().next().unwrap_or_default();
             return Some(format!("running {program}"));
         }
-        if let Some(Activity::Tool(tool)) = self
-            .messages
-            .iter()
-            .rev()
-            .filter_map(Message::activity_step)
-            .find(|a| a.is_running())
-        {
+        if let Some(tool) = self.running_tool() {
             return Some(format!("running {}", tool.name));
         }
         if self.status.starts_with("Running") {
             return Some("running".to_string());
         }
         Some("thinking".to_string())
+    }
+
+    /// How long the work [`Self::working_label`] names has gone on: the
+    /// running tool call's own time, else the turn's. With it, how long a
+    /// running command has printed nothing, once that is long enough to
+    /// suggest it is stuck.
+    #[must_use]
+    pub fn working_times(&self) -> (Option<Duration>, Option<Duration>) {
+        if let Some(run) = self.running_shell() {
+            let quiet = quiet_for(self.processing_since, &run.live);
+            return (self.processing_elapsed(), quiet);
+        }
+        if let Some(tool) = self.running_tool() {
+            let elapsed = tool.started.map(|since| since.elapsed());
+            return (
+                elapsed.or_else(|| self.processing_elapsed()),
+                tool.quiet_for(),
+            );
+        }
+        (self.processing_elapsed(), None)
+    }
+
+    /// The shell command the user typed, while it runs.
+    fn running_shell(&self) -> Option<&ShellRun> {
+        self.messages
+            .back()
+            .filter(|m| m.is_running_shell())
+            .and_then(Message::shell_run)
+    }
+
+    /// The latest step still in progress, when it is a tool call.
+    fn running_tool(&self) -> Option<&ToolStep> {
+        match self
+            .messages
+            .iter()
+            .rev()
+            .filter_map(Message::activity_step)
+            .find(|a| a.is_running())
+        {
+            Some(Activity::Tool(tool)) => Some(tool),
+            _ => None,
+        }
     }
 
     /// Time since the in-flight turn started.
@@ -1697,7 +1733,8 @@ impl App {
                     SidePanelTab::Host => self.scroll_host(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
-                    SidePanelTab::Projects => self.move_channel_task(delta),
+                    SidePanelTab::ChannelMembers => self.move_channel_member(delta),
+                    SidePanelTab::ChannelInfo => {}
                 }
             }
         }
@@ -1762,7 +1799,8 @@ impl App {
                     SidePanelTab::Host => self.scroll_host(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
-                    SidePanelTab::Projects => self.move_channel_task(delta),
+                    SidePanelTab::ChannelMembers => self.move_channel_member(delta),
+                    SidePanelTab::ChannelInfo => {}
                 }
             }
         }
@@ -2862,10 +2900,10 @@ impl App {
     }
 
     /// Whether the side panel, shown, takes the Record panel's room too:
-    /// the user maximized it, or a channel is open, whose panel fills the
-    /// right column until it closes.
+    /// the user maximized it, or the channel app is on screen, which has
+    /// no Record panel and whose own panel fills the right column.
     const fn side_maximized(&self) -> bool {
-        self.channel_open() || (self.side_expanded && self.sandbox_panel_visible)
+        self.channel_app() || (self.side_expanded && self.sandbox_panel_visible)
     }
 
     /// Check if the Swarm panel is visible.
@@ -2875,10 +2913,13 @@ impl App {
     }
 
     /// Check if the Sandbox panel is visible. It shows while a channel is
-    /// open even when the user hid it.
+    /// open even when the user hid it, and hides in the channel app with
+    /// no channel open, which has nothing to show there.
     #[must_use]
     pub const fn sandbox_panel_visible(&self) -> bool {
-        (self.sandbox_panel_visible || self.channel_open()) && !self.chat_expanded
+        (self.sandbox_panel_visible || self.channel_open())
+            && !self.chat_expanded
+            && !self.channel_app_empty()
     }
 
     /// Whether the chat panel fills the screen, the other panels hidden.
@@ -2904,10 +2945,10 @@ impl App {
     }
 
     /// Maximize the side panel over the Record panel, focused, or put it
-    /// back below it with the split it had. While a channel is open the
-    /// panel fills the column anyway, so this does nothing.
+    /// back below it with the split it had. The channel app's panel fills
+    /// the column anyway, so there this does nothing.
     pub fn toggle_side_expanded(&mut self) {
-        if self.channel_open() {
+        if self.channel_app() {
             return;
         }
         self.side_expanded = !self.side_expanded;
@@ -3528,13 +3569,20 @@ impl App {
         self.detail.is_some() && contains(self.areas.detail_close, column, row)
     }
 
-    /// Open the highlighted sandbox row: a file over the chat panel; a
-    /// directory, which has nothing to show, folds or unfolds.
+    /// Open the highlighted sandbox row: a file over the chat panel, a
+    /// plan file as a document; a directory, which has nothing to show,
+    /// folds or unfolds.
     pub(super) fn activate_selected_sandbox_row(&mut self) {
         let Some(row) = self.sandbox.rows().get(self.sandbox.selected()) else {
             return;
         };
         match row.kind {
+            SandboxEntryKind::File | SandboxEntryKind::Symlink
+                if plan_doc::is_plan_file(&row.path) =>
+            {
+                let path = row.path.clone();
+                self.open_plan_doc(&path, None);
+            }
             SandboxEntryKind::File | SandboxEntryKind::Symlink => {
                 let view = FileView::load(&row.path, self.sandbox.root());
                 self.open_detail(DetailView::File(Box::new(view)));
@@ -3567,10 +3615,14 @@ impl App {
         self.detail_scrolled();
     }
 
-    /// An open file's cursor follows a scroll instead of pulling it back.
+    /// An open file's cursor follows a scroll instead of pulling it back;
+    /// an open plan stops scrolling to its focused todo, so a later frame
+    /// does not snap back to it.
     fn detail_scrolled(&mut self) {
-        if let Some(DetailView::File(file)) = self.detail.as_mut() {
-            file.vim.scrolled();
+        match self.detail.as_mut() {
+            Some(DetailView::File(file)) => file.vim.scrolled(),
+            Some(DetailView::Plan(doc)) => doc.scroll_to_focus = false,
+            _ => {}
         }
     }
 
@@ -3725,23 +3777,37 @@ impl App {
             self.try_send_event(UiEvent::SelectAgent(agent_id));
             return;
         }
-        let loaded = self.views.get(&agent_id).is_some_and(|view| view.loaded);
+        self.switch_on_screen(&agent_id);
+    }
+
+    /// Put `agent_id` on screen now and ask the session for it: a chat
+    /// held in memory shows as it is (`FocusAgent`), any other waits,
+    /// blank, for its history (`SelectAgent`). [`Self::request_agent_switch`]
+    /// does this for listed agents; an open channel does it for its
+    /// coordinator, which the projects list leaves out. Returns whether
+    /// the request went out, and with it the switch.
+    pub(super) fn switch_on_screen(&mut self, agent_id: &str) -> bool {
+        if agent_id == self.active_agent_id {
+            return true;
+        }
+        let loaded = self.views.get(agent_id).is_some_and(|view| view.loaded);
         let event = if loaded {
-            UiEvent::FocusAgent(agent_id.clone())
+            UiEvent::FocusAgent(agent_id.to_string())
         } else {
-            UiEvent::SelectAgent(agent_id.clone())
+            UiEvent::SelectAgent(agent_id.to_string())
         };
         // A request that never left gets no answer, and a switch waiting
         // for one would drop every later `SetActiveAgent`.
         if !self.try_send_event(event) {
-            return;
+            return false;
         }
         if self.switch_sent.is_none() && self.confirmed_agent.is_empty() {
             self.confirmed_agent.clone_from(&self.active_agent_id);
         }
-        self.switch_sent = Some(agent_id.clone());
-        self.apply_active_agent(&agent_id);
+        self.switch_sent = Some(agent_id.to_string());
+        self.apply_active_agent(agent_id);
         self.start_chat_loading();
+        true
     }
 
     /// Send `event` to the session. Returns whether it went out.

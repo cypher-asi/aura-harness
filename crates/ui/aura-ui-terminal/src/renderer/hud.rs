@@ -402,7 +402,13 @@ fn columns(text: &str, skip: usize, width: usize) -> String {
 /// has it open.
 pub(super) fn render_todo_panel(frame: &mut Frame, chat: Rect, app: &App, theme: &Theme) {
     let hud = app.hud();
-    if !app.todos_open() || hud.todos.is_empty() || chat.height < 3 || chat.width < 8 {
+    // Todos are an agent feature; the channel app's chat has none.
+    if app.channel_app()
+        || !app.todos_open()
+        || hud.todos.is_empty()
+        || chat.height < 3
+        || chat.width < 8
+    {
         return;
     }
     let rows = hud.todos.len().min(MAX_TODO_ROWS);

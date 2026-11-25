@@ -19,6 +19,8 @@
 //! - `label`: the label read out of its reply, its tool call or its text
 //! - `difficulty`: the difficulty an assessment adds up to
 
+#[cfg(test)]
+mod choice_tests;
 mod difficulty;
 mod label;
 mod prompt;

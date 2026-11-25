@@ -75,10 +75,29 @@ impl App {
         self.areas.agent_tabs = Some(area);
     }
 
+    /// Show `tab`. CHANNELS is an app of its own (see `channels`):
+    /// leaving it closes the open channel and gives back the agent there
+    /// was before, and coming back opens the channel it was left on.
     pub(super) fn show_agents_tab(&mut self, tab: AgentsTab) {
-        if tab == AgentsTab::Archive && self.agents_tab != AgentsTab::Archive {
+        let was = self.agents_tab;
+        if tab == AgentsTab::Archive && was != AgentsTab::Archive {
             self.fold_all_archived();
         }
+        self.set_agents_tab(tab);
+        let channels = AgentsTab::Channels;
+        if was == channels && tab != channels {
+            self.leave_channel_app();
+        } else if was != channels && tab == channels {
+            self.enter_channel_app();
+            if let Some(id) = self.channel_to_reopen() {
+                self.open_channel_by_id(&id);
+            }
+        }
+    }
+
+    /// Make `tab` the one shown, without entering or leaving the channel
+    /// app: for callers that do that part themselves.
+    pub(super) fn set_agents_tab(&mut self, tab: AgentsTab) {
         self.agents_tab = tab;
         self.pending_delete = None;
         self.pending_remove_project = None;

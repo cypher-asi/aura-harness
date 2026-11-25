@@ -1,0 +1,12 @@
+{
+  "id": "01a2142277a90001",
+  "title": "create test plan",
+  "state": "completed",
+  "agent_id": "33ee2dc7572ef19e8a099f745c184c49b356894aa013a8bce77b1e51f50596ff",
+  "agent_name": "Agent 1595",
+  "plan": ".aura/plans/test-plan-reading-plans-as-documents_d159d201.plan.md",
+  "items": [],
+  "summary": "I wrote a test plan to `.aura/plans/test-plan-reading-plans-as-documents_d159d201.plan.md`. It does two jobs: it lists the checks to do by hand, and it is the sample plan to open while you do them.",
+  "updated_ms": 1795634173020,
+  "created_ms": 1795634132905
+}

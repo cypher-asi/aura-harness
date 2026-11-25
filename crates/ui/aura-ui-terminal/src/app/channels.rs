@@ -1,27 +1,40 @@
-//! The agents panel's CHANNELS tab: the list of channels, and the channel
-//! that is open in it, with its coordinator and the agents it spawned.
+//! Channels, an app of their own beside the agents: the agents panel's
+//! CHANNELS tab lists them, the chat panel holds the open channel's
+//! conversation and nothing else, and the right column is one panel with
+//! the channel's MEMBERS and INFO tabs.
+//!
+//! The agents panel's tab picks the app on screen. A channel is open only
+//! while CHANNELS shows:
+//!
+//! - Leaving CHANNELS closes the open channel (telling the session,
+//!   `CloseChannel`), and gives back the agent that was on screen when
+//!   the user came to CHANNELS, if it is still listed.
+//! - Coming back to CHANNELS opens the channel that was open on leaving,
+//!   if it is still listed.
+//! - The session putting on screen an agent that is not a member of the
+//!   open channel (a notification jumping to it, say) is the user going
+//!   to that agent: the panel moves to PROJECTS, with nothing given back.
 //!
 //! The list's rows are the channels, then "+ New channel" (index
-//! `channels.len()`), which the panel pins to its bottom row. An open
-//! channel's selectable rows are its back row (0), then one per member
-//! (`1 + index`); the title, description and `MEMBERS` heading between
-//! them take no highlight.
+//! `channels.len()`), which the panel pins to its bottom row. Enter or a
+//! click opens a channel, or starts a new one; the list stays on screen.
 //!
-//! Opening and closing a channel is told to the session (`OpenChannel`,
-//! `CloseChannel`) so it can send the channel's posts and tasks. A
-//! channel that drops out of `SetChannels` closes here without telling
-//! it: the session already knows it is gone.
+//! Opening a channel is told to the session (`OpenChannel`), which puts
+//! the coordinator on screen and sends the channel's posts. A channel
+//! that drops out of `SetChannels` closes here without telling it: the
+//! session already knows it is gone.
 //!
-//! While a channel is open the right column is one tall side panel whose
-//! PROJECTS tab, first and selected on opening, shows the channel (see
-//! [`App::side_maximized`]). The user's own layout flags are left alone,
-//! and the side tab shown before the channel opened comes back when it
-//! closes, so closing gives back exactly the layout there was.
+//! While a channel is open the right column is one tall side panel with
+//! only MEMBERS and INFO (see [`App::side_maximized`]). The user's own
+//! layout flags are left alone, and the side tab shown before the channel
+//! opened comes back when it closes, so leaving gives back exactly the
+//! layout there was. With CHANNELS showing and no channel open there is
+//! nothing to show beside the list: the right column hides, and the chat
+//! asks for a channel to be picked.
 
 use super::processes::SIDE_PAGE;
-use super::tasks::TaskList;
-use super::{contains, follow_selection, AgentsTab, App, NotificationType, SidePanelTab};
-use crate::events::{ChannelPostView, ChannelSummary, TaskView, UiEvent};
+use super::{contains, follow_selection, AgentsTab, App, ChatTab, NotificationType, SidePanelTab};
+use crate::events::{ChannelPostView, ChannelSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use std::collections::HashMap;
@@ -29,39 +42,42 @@ use std::collections::HashMap;
 /// Rows a PageUp or PageDown moves the highlight by.
 const PAGE_STEP: usize = 5;
 
-/// What the CHANNELS tab knows about channels, and where it is in them.
+/// What the CHANNELS app knows about channels, and where it is in them.
 #[derive(Debug, Default)]
 pub(crate) struct ChannelState {
     /// Every channel that is not archived, in list order
     list: Vec<ChannelSummary>,
-    /// Id of the channel open in the panel
+    /// Id of the open channel
     open: Option<String>,
-    /// Tasks of each channel's agents, newest first, by channel id
-    tasks: HashMap<String, Vec<TaskView>>,
     /// Posts of each channel, by `seq`, by channel id
     posts: HashMap<String, Vec<ChannelPostView>>,
     /// Highlighted row of the list; `list.len()` is "+ New channel"
     selected: usize,
     /// First visible row of the list
     scroll: usize,
-    /// Highlighted row of the open channel: 0 is the back row, then its
-    /// members
-    selected_row: usize,
-    /// First visible member row of the open channel
-    members_scroll: usize,
     /// Where the list's rows were drawn this frame
     rows_area: Option<Rect>,
     /// Where "+ New channel" was drawn this frame
     new_channel_area: Option<Rect>,
-    /// Where the open channel's back row was drawn this frame
-    back_area: Option<Rect>,
-    /// Where the open channel's member rows were drawn this frame
+    /// The channel open when the user last left CHANNELS, opened again
+    /// on coming back
+    last_open: Option<String>,
+    /// The agent on screen when the user came to CHANNELS, given back on
+    /// leaving
+    agent_before: Option<String>,
+    /// The chat panel's tab that agent was on, given back with it
+    chat_tab_before: ChatTab,
+    /// Whether the session has yet to put a member of the open channel
+    /// on screen. Opening a channel asks it for the coordinator, and
+    /// until it comes the agent before it is still on screen; that agent
+    /// is not a member, but it is not the user leaving either.
+    awaiting_member: bool,
+    /// Highlighted row of the MEMBERS side tab
+    member_selected: usize,
+    /// First visible row of the MEMBERS side tab
+    member_scroll: usize,
+    /// Where the MEMBERS side tab's rows were drawn this frame
     member_rows_area: Option<Rect>,
-    /// The open channel's tasks as the side panel's PROJECTS tab lists
-    /// them, in the TASKS tab's tree
-    task_list: TaskList,
-    /// First visible row of `task_list`
-    tasks_scroll: usize,
     /// The side tab shown before the channel opened, shown again when it
     /// closes
     side_tab_before: Option<SidePanelTab>,
@@ -90,29 +106,25 @@ impl ChannelState {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// Rows the highlight can be on in the view that is showing.
-    fn selectable_rows(&self) -> usize {
-        match self.open_channel() {
-            Some(channel) => 1 + channel.members.len(),
-            None => self.list.len() + 1,
-        }
+    /// Whether `agent_id` is the open channel's coordinator or one of its
+    /// members. `false` with no channel open.
+    fn is_open_member(&self, agent_id: &str) -> bool {
+        self.open_channel()
+            .is_some_and(|channel| is_member(channel, agent_id))
     }
 
-    fn highlighted(&self) -> usize {
-        if self.open.is_some() {
-            self.selected_row
-        } else {
-            self.selected
-        }
+    /// Members of the open channel: none with no channel open.
+    fn open_members(&self) -> usize {
+        self.open_channel()
+            .map_or(0, |channel| channel.members.len())
     }
 
-    fn set_highlighted(&mut self, row: usize) {
-        let row = row.min(self.selectable_rows().saturating_sub(1));
-        if self.open.is_some() {
-            self.selected_row = row;
-        } else {
-            self.selected = row;
-        }
+    fn set_selected(&mut self, row: usize) {
+        self.selected = row.min(self.list.len());
+    }
+
+    fn set_member_selected(&mut self, row: usize) {
+        self.member_selected = row.min(self.open_members().saturating_sub(1));
     }
 
     /// Where the views were drawn is only good for the frame that drew
@@ -120,9 +132,13 @@ impl ChannelState {
     fn forget_areas(&mut self) {
         self.rows_area = None;
         self.new_channel_area = None;
-        self.back_area = None;
         self.member_rows_area = None;
     }
+}
+
+/// Whether `agent_id` is `channel`'s coordinator or one of its members.
+fn is_member(channel: &ChannelSummary, agent_id: &str) -> bool {
+    channel.coordinator_id == agent_id || channel.members.iter().any(|m| m.id == agent_id)
 }
 
 impl App {
@@ -132,16 +148,40 @@ impl App {
         &self.channels.list
     }
 
-    /// The channel open in the CHANNELS tab, if any.
+    /// The open channel, if any.
     #[must_use]
     pub(crate) fn open_channel(&self) -> Option<&ChannelSummary> {
         self.channels.open_channel()
+    }
+
+    /// Row of the list the open channel is on.
+    #[must_use]
+    pub(crate) fn open_channel_row(&self) -> Option<usize> {
+        let open = self.channels.open.as_deref()?;
+        self.channels
+            .list
+            .iter()
+            .position(|channel| channel.id == open)
     }
 
     /// The open channel, while the chat shows its coordinator.
     #[must_use]
     pub(crate) fn coordinated_channel(&self) -> Option<&ChannelSummary> {
         self.channels.coordinated_by(&self.active_agent_id)
+    }
+
+    /// Whether the channel app is on screen: the agents panel shows
+    /// CHANNELS, so the chat and the right column are the channels'.
+    #[must_use]
+    pub(crate) const fn channel_app(&self) -> bool {
+        matches!(self.agents_tab, AgentsTab::Channels)
+    }
+
+    /// Whether the channel app is on screen with no channel open: the
+    /// chat asks for one to be picked and the right column hides.
+    #[must_use]
+    pub(crate) const fn channel_app_empty(&self) -> bool {
+        self.channel_app() && !self.channel_open()
     }
 
     /// Codes of the members `text`, typed in the coordinator's chat, goes
@@ -184,26 +224,33 @@ impl App {
         (!codes.is_empty()).then_some(codes)
     }
 
-    /// The chat panel's title while it shows the open channel's
-    /// coordinator, `#slug · coordinator`; `None` for every other agent.
+    /// The chat panel's title in the channel app: `#slug`, with the
+    /// channel's title as its info. `None` with no channel open.
     #[must_use]
-    pub(crate) fn coordinator_chat_title(&self) -> Option<String> {
-        self.coordinated_channel()
-            .map(|channel| format!("#{} · coordinator", channel.slug))
+    pub(crate) fn channel_chat_title(&self) -> Option<(String, String)> {
+        self.open_channel()
+            .map(|channel| (format!("#{}", channel.slug), channel.title.clone()))
     }
 
-    /// Whether a channel is open in the CHANNELS tab. Only a listed
-    /// channel is opened, and one that drops out of the list closes, so
-    /// this agrees with [`Self::open_channel`].
+    /// What the empty input says in the channel app: who a message goes
+    /// to, or that a channel has to be picked first. `None` outside it.
+    #[must_use]
+    pub(crate) fn channel_placeholder(&self) -> Option<String> {
+        if !self.channel_app() {
+            return None;
+        }
+        Some(self.open_channel().map_or_else(
+            || "Pick a channel".to_string(),
+            |channel| format!("Message #{}", channel.slug),
+        ))
+    }
+
+    /// Whether a channel is open. Only a listed channel is opened, and
+    /// one that drops out of the list closes, so this agrees with
+    /// [`Self::open_channel`].
     #[must_use]
     pub(crate) const fn channel_open(&self) -> bool {
         self.channels.open.is_some()
-    }
-
-    /// Tasks of channel `id`'s agents, newest first.
-    #[must_use]
-    pub(crate) fn channel_tasks(&self, id: &str) -> &[TaskView] {
-        self.channels.tasks.get(id).map_or(&[], Vec::as_slice)
     }
 
     /// Posts of channel `id`, oldest first.
@@ -216,30 +263,95 @@ impl App {
         self.channels.posts.get(id).map_or(&[], Vec::as_slice)
     }
 
-    /// Open the listed channel `id` in the CHANNELS tab and tell the
-    /// session. A channel that is not listed is not opened.
-    pub(crate) fn open_channel_by_id(&mut self, id: &str) {
-        if self.channels.find(id).is_none() {
+    /// The user came to the channel app from another tab: remember the
+    /// agent on screen and its chat tab, to give back on leaving, and
+    /// show CHAT, the only view a channel has.
+    pub(super) fn enter_channel_app(&mut self) {
+        self.channels.agent_before = Some(self.active_agent_id.clone()).filter(|id| !id.is_empty());
+        self.channels.chat_tab_before = self.chat_tab();
+        self.show_channel_chat();
+    }
+
+    /// The user left the channel app for another tab: close the open
+    /// channel, remembering it for coming back, and give back the agent
+    /// that was on screen before, on the chat tab it was on.
+    pub(super) fn leave_channel_app(&mut self) {
+        if let Some(open) = self.channels.open.clone() {
+            self.channels.last_open = Some(open);
+        }
+        self.close_channel();
+        let tab = self.channels.chat_tab_before;
+        let Some(before) = self.channels.agent_before.take() else {
             return;
+        };
+        if !self.agents.iter().any(|agent| agent.id == before) {
+            return;
+        }
+        self.request_agent_switch(before.clone());
+        // A chat held in memory comes on screen at once; one asked for
+        // opens on CHAT when it arrives.
+        if self.active_agent_id == before {
+            self.restore_chat_tab(tab);
+        }
+    }
+
+    /// The channel open when the user last left CHANNELS, if it is still
+    /// listed.
+    pub(super) fn channel_to_reopen(&self) -> Option<String> {
+        self.channels
+            .last_open
+            .clone()
+            .filter(|id| self.channels.find(id).is_some())
+    }
+
+    /// Put CHAT on the chat panel, with nothing covering it.
+    fn show_channel_chat(&mut self) {
+        self.close_detail();
+        if self.chat_tab() != ChatTab::Chat {
+            self.show_chat_tab(ChatTab::Chat);
+        }
+    }
+
+    /// Open the listed channel `id` in the channel app and tell the
+    /// session. A channel that is not listed, or is open already, is
+    /// left as it is.
+    pub(crate) fn open_channel_by_id(&mut self, id: &str) {
+        let Some(row) = self.channels.list.iter().position(|c| c.id == id) else {
+            return;
+        };
+        if self.channels.open.as_deref() == Some(id) {
+            return;
+        }
+        if self.agents_tab != AgentsTab::Channels {
+            self.enter_channel_app();
+            self.set_agents_tab(AgentsTab::Channels);
         }
         if self.channels.open.is_none() {
             self.channels.side_tab_before = Some(self.side_tab);
         }
         self.channels.open = Some(id.to_string());
-        self.channels.selected_row = 0;
-        self.channels.members_scroll = 0;
+        self.channels.last_open = Some(id.to_string());
+        self.channels.selected = row;
+        self.channels.member_selected = 0;
+        self.channels.member_scroll = 0;
         self.channels.forget_areas();
-        self.channels.task_list = TaskList::default();
-        self.channels
-            .task_list
-            .set_tasks(self.channel_tasks(id).to_vec());
-        self.channels.tasks_scroll = 0;
-        self.show_side_tab(SidePanelTab::Projects);
-        self.show_agents_tab(AgentsTab::Channels);
+        self.show_side_tab(SidePanelTab::ChannelMembers);
+        self.show_channel_chat();
+        // The coordinator comes on screen now, as a listed agent does when
+        // clicked, rather than once the session answers: until then the
+        // chat would show the agent before it under the channel's title.
+        // Its chat shows at once when held, else waits blank for its
+        // history and fades in. The request goes out before `OpenChannel`,
+        // so the session has made it active by then and does not load it
+        // a second time.
+        let coordinator = self.channels.list[row].coordinator_id.clone();
+        let switched = !coordinator.is_empty() && self.switch_on_screen(&coordinator);
+        self.channels.awaiting_member =
+            !switched && !self.channels.is_open_member(&self.active_agent_id);
         self.try_send_event(UiEvent::OpenChannel(id.to_string()));
     }
 
-    /// Close the open channel, back to the list, and tell the session.
+    /// Close the open channel and tell the session.
     pub(crate) fn close_channel(&mut self) {
         if self.channels.open.take().is_none() {
             return;
@@ -252,87 +364,38 @@ impl App {
     /// `channels.open` is `None`: show the side tab there was before it.
     fn left_channel(&mut self) {
         self.channels.forget_areas();
-        self.channels.task_list = TaskList::default();
-        self.channels.tasks_scroll = 0;
+        self.channels.awaiting_member = false;
         let before = self.channels.side_tab_before.take().unwrap_or_default();
         self.show_side_tab(before);
     }
 
-    /// Say why `/kernel` and `/files` leave the right column as it is:
-    /// the open channel's panel fills it until the channel closes, and
-    /// the layout they would change comes back then.
+    /// The session put the active agent on screen. While a channel is
+    /// open, a member coming ends the wait for the coordinator; any other
+    /// agent, once that wait is over, means the user went to it, so the
+    /// agent app comes back with it on screen.
+    pub(super) fn follow_active_agent_out_of_channel(&mut self) {
+        if !self.channel_open() {
+            return;
+        }
+        if self.channels.is_open_member(&self.active_agent_id) {
+            self.channels.awaiting_member = false;
+            return;
+        }
+        if self.channels.awaiting_member {
+            return;
+        }
+        // The agent on screen is the one to keep: nothing is given back.
+        self.channels.agent_before = None;
+        self.show_agents_tab(AgentsTab::Projects);
+    }
+
+    /// Say why the agent panels (`/kernel`, `/files`, `/inbox`, ...) are
+    /// not shown: the channel app has only its chat and its own panel.
     pub(super) fn notify_channel_owns_column(&mut self) {
         self.notification = Some((
-            "The channel fills the right column; close it to change the panels".to_string(),
+            "Channels have only a chat; switch to PROJECTS for agent panels".to_string(),
             NotificationType::Warning,
         ));
-    }
-
-    /// The open channel's tasks, as the side panel's PROJECTS tab lists
-    /// them.
-    #[must_use]
-    pub(crate) const fn channel_task_list(&self) -> &TaskList {
-        &self.channels.task_list
-    }
-
-    /// Keep the highlighted channel task inside `visible` rows, returning
-    /// the first row to draw.
-    pub(crate) fn sync_channel_tasks_scroll(&mut self, visible: usize) -> usize {
-        let state = &mut self.channels;
-        state.tasks_scroll = follow_selection(
-            state.tasks_scroll,
-            state.task_list.selected(),
-            visible,
-            state.task_list.rows().len(),
-        );
-        state.tasks_scroll
-    }
-
-    /// Move the PROJECTS tab's task highlight `delta` rows, as the wheel
-    /// does.
-    pub(super) fn move_channel_task(&mut self, delta: isize) {
-        self.channels.task_list.move_by(delta);
-    }
-
-    /// Highlight the PROJECTS tab's task row `index` (clamped).
-    pub(super) fn select_channel_task(&mut self, index: usize) {
-        self.channels.task_list.select(index);
-    }
-
-    /// Fold or open what is under the highlighted channel task row.
-    pub(super) fn toggle_channel_task(&mut self) {
-        self.channels.task_list.toggle_selected();
-    }
-
-    /// Keys of the side panel's PROJECTS tab, which move through the
-    /// channel's tasks as the TASKS tab does: Enter shows the agent of
-    /// the highlighted task, Right unfolds and Left folds.
-    pub(super) fn handle_channel_side_key(&mut self, key: KeyEvent) {
-        let list = &mut self.channels.task_list;
-        match key.code {
-            KeyCode::Up => list.move_by(-1),
-            KeyCode::Down => list.move_by(1),
-            KeyCode::PageUp => list.move_by(-SIDE_PAGE),
-            KeyCode::PageDown => list.move_by(SIDE_PAGE),
-            KeyCode::Home => list.select(0),
-            KeyCode::End => list.select(usize::MAX),
-            KeyCode::Right => list.set_selected_open(true),
-            KeyCode::Left => list.set_selected_open(false),
-            KeyCode::Enter => self.open_channel_task_agent(),
-            _ => {}
-        }
-    }
-
-    /// Show the agent doing the highlighted channel task in the chat.
-    fn open_channel_task_agent(&mut self) {
-        let Some(task) = self.channels.task_list.selected_task() else {
-            return;
-        };
-        if task.agent_id.is_empty() || task.agent_id == self.active_agent_id {
-            return;
-        }
-        let target = task.agent_id.clone();
-        self.request_agent_switch(target);
     }
 
     /// Highlighted row of the list, where `channels().len()` is
@@ -348,43 +411,12 @@ impl App {
         self.channels.scroll
     }
 
-    /// Highlighted row of the open channel: 0 is the back row, `1 + i`
-    /// is member `i`.
-    #[must_use]
-    pub(crate) const fn selected_channel_row(&self) -> usize {
-        self.channels.selected_row
-    }
-
-    /// First visible member row of the open channel.
-    #[must_use]
-    pub(crate) const fn channel_members_scroll(&self) -> usize {
-        self.channels.members_scroll
-    }
-
     /// Keep the list's highlight inside rows `visible_rows` tall.
     /// "+ New channel" is pinned below them, so it never scrolls.
     pub(crate) fn sync_channels_scroll(&mut self, visible_rows: usize) {
         let state = &mut self.channels;
         state.scroll =
             follow_selection(state.scroll, state.selected, visible_rows, state.list.len());
-    }
-
-    /// Keep the highlighted member inside rows `visible_rows` tall. The
-    /// back row sits above them, so highlighting it leaves them as they
-    /// are.
-    pub(crate) fn sync_channel_members_scroll(&mut self, visible_rows: usize) {
-        let members = self
-            .open_channel()
-            .map_or(0, |channel| channel.members.len());
-        let state = &mut self.channels;
-        let Some(member) = state.selected_row.checked_sub(1) else {
-            state.members_scroll = state
-                .members_scroll
-                .min(members.saturating_sub(visible_rows.max(1)));
-            return;
-        };
-        state.members_scroll =
-            follow_selection(state.members_scroll, member, visible_rows, members);
     }
 
     /// Record where the list's rows were drawn this frame.
@@ -395,16 +427,6 @@ impl App {
     /// Record where "+ New channel" was drawn this frame.
     pub(crate) fn set_new_channel_area(&mut self, area: Rect) {
         self.channels.new_channel_area = Some(area);
-    }
-
-    /// Record where the open channel's back row was drawn this frame.
-    pub(crate) fn set_channel_back_area(&mut self, area: Rect) {
-        self.channels.back_area = Some(area);
-    }
-
-    /// Record where the open channel's member rows were drawn this frame.
-    pub(crate) fn set_channel_member_rows_area(&mut self, area: Rect) {
-        self.channels.member_rows_area = Some(area);
     }
 
     pub(super) fn set_channels(&mut self, list: Vec<ChannelSummary>) {
@@ -418,19 +440,16 @@ impl App {
             self.channels.open = None;
             self.left_channel();
         }
+        if self.channel_to_reopen().is_none() {
+            self.channels.last_open = None;
+        }
+        if let Some(row) = self.open_channel_row() {
+            self.channels.selected = row;
+        }
         self.channels.selected = self.channels.selected.min(self.channels.list.len());
-        let rows = self.channels.selectable_rows();
-        if self.channels.open.is_some() {
-            self.channels.selected_row = self.channels.selected_row.min(rows.saturating_sub(1));
-        }
-    }
-
-    pub(super) fn set_channel_tasks(&mut self, channel_id: String, tasks: Vec<TaskView>) {
-        if self.channels.open.as_deref() == Some(channel_id.as_str()) {
-            // The tree keeps its own copy, to fold and highlight in.
-            self.channels.task_list.set_tasks(tasks.clone());
-        }
-        self.channels.tasks.insert(channel_id, tasks);
+        let members = self.channels.open_members();
+        self.channels.member_selected =
+            self.channels.member_selected.min(members.saturating_sub(1));
     }
 
     pub(super) fn set_channel_posts(&mut self, channel_id: String, posts: Vec<ChannelPostView>) {
@@ -450,31 +469,18 @@ impl App {
         }
     }
 
-    /// Selectable row drawn at a screen cell, in the view that is showing.
+    /// Row of the list drawn at a screen cell: a channel, or
+    /// "+ New channel" (`channels().len()`).
     pub(super) fn channel_row_at(&self, column: u16, row: u16) -> Option<usize> {
         let state = &self.channels;
-        match state.open_channel() {
-            Some(channel) => {
-                if contains(state.back_area, column, row) {
-                    return Some(0);
-                }
-                let rows = state
-                    .member_rows_area
-                    .filter(|&rows| contains(Some(rows), column, row))?;
-                let member = state.members_scroll + usize::from(row - rows.y);
-                (member < channel.members.len()).then_some(1 + member)
-            }
-            None => {
-                if contains(state.new_channel_area, column, row) {
-                    return Some(state.list.len());
-                }
-                let rows = state
-                    .rows_area
-                    .filter(|&rows| contains(Some(rows), column, row))?;
-                let index = state.scroll + usize::from(row - rows.y);
-                (index < state.list.len()).then_some(index)
-            }
+        if contains(state.new_channel_area, column, row) {
+            return Some(state.list.len());
         }
+        let rows = state
+            .rows_area
+            .filter(|&rows| contains(Some(rows), column, row))?;
+        let index = state.scroll + usize::from(row - rows.y);
+        (index < state.list.len()).then_some(index)
     }
 
     /// Clicking a row highlights it and acts on it, as Enter does.
@@ -482,27 +488,22 @@ impl App {
         let Some(index) = self.channel_row_at(column, row) else {
             return;
         };
-        self.channels.set_highlighted(index);
+        self.channels.set_selected(index);
         self.activate_channel_row();
     }
 
     /// Move the highlight `delta` rows, as the wheel does.
     pub(super) fn move_channel_highlight(&mut self, delta: isize) {
-        let row = self.channels.highlighted().saturating_add_signed(delta);
-        self.channels.set_highlighted(row);
+        let row = self.channels.selected.saturating_add_signed(delta);
+        self.channels.set_selected(row);
     }
 
-    /// The channel a right click at a screen cell of the CHANNELS tab is
-    /// on: anywhere in the open channel's view, or the channel row under
-    /// the pointer in the list, which it highlights. `None` on "+ New
-    /// channel" or empty space.
+    /// The channel row of the list a right click at a screen cell is on,
+    /// which it highlights. `None` on "+ New channel" or empty space.
     pub(super) fn channel_menu_target_at(&mut self, column: u16, row: u16) -> Option<String> {
-        if let Some(channel) = self.channels.open_channel() {
-            return Some(channel.id.clone());
-        }
         let index = self.channel_row_at(column, row)?;
         let id = self.channels.list.get(index)?.id.clone();
-        self.channels.set_highlighted(index);
+        self.channels.set_selected(index);
         Some(id)
     }
 
@@ -563,41 +564,98 @@ impl App {
 
     /// Keys of the CHANNELS tab. Returns whether the key was used.
     pub(super) fn handle_channels_key(&mut self, key: KeyEvent) -> bool {
-        let current = self.channels.highlighted();
+        let current = self.channels.selected;
         match key.code {
-            KeyCode::Up => self.channels.set_highlighted(current.saturating_sub(1)),
-            KeyCode::Down => self.channels.set_highlighted(current + 1),
+            KeyCode::Up => self.channels.set_selected(current.saturating_sub(1)),
+            KeyCode::Down => self.channels.set_selected(current + 1),
             KeyCode::PageUp => self
                 .channels
-                .set_highlighted(current.saturating_sub(PAGE_STEP)),
-            KeyCode::PageDown => self.channels.set_highlighted(current + PAGE_STEP),
-            KeyCode::Home => self.channels.set_highlighted(0),
-            KeyCode::End => self.channels.set_highlighted(usize::MAX),
+                .set_selected(current.saturating_sub(PAGE_STEP)),
+            KeyCode::PageDown => self.channels.set_selected(current + PAGE_STEP),
+            KeyCode::Home => self.channels.set_selected(0),
+            KeyCode::End => self.channels.set_selected(usize::MAX),
             KeyCode::Enter => self.activate_channel_row(),
-            KeyCode::Esc | KeyCode::Backspace if self.channel_open() => self.close_channel(),
             KeyCode::Left | KeyCode::Right => self.shift_agents_tab(key.code),
             _ => return false,
         }
         true
     }
 
-    /// Act on the highlighted row: open a channel, start a new one, go
-    /// back to the list, or show a member's chat.
+    /// Act on the highlighted row: open its channel, or start a new one.
     fn activate_channel_row(&mut self) {
-        let Some(channel) = self.channels.open_channel() else {
-            let selected = self.channels.list.get(self.channels.selected);
-            match selected.map(|channel| channel.id.clone()) {
-                Some(id) => self.open_channel_by_id(&id),
-                None => self.start_new_channel(),
-            }
-            return;
-        };
-        let Some(member) = self.channels.selected_row.checked_sub(1) else {
-            self.close_channel();
-            return;
-        };
-        if let Some(id) = channel.members.get(member).map(|agent| agent.id.clone()) {
-            self.request_agent_switch(id);
+        let selected = self.channels.list.get(self.channels.selected);
+        match selected.map(|channel| channel.id.clone()) {
+            Some(id) => self.open_channel_by_id(&id),
+            None => self.start_new_channel(),
+        }
+    }
+
+    // ---- The MEMBERS side tab ------------------------------------------
+
+    /// Highlighted row of the MEMBERS side tab.
+    #[must_use]
+    pub(crate) const fn selected_channel_member(&self) -> usize {
+        self.channels.member_selected
+    }
+
+    /// Keep the highlighted member inside rows `visible_rows` tall,
+    /// returning the first row to draw.
+    pub(crate) fn sync_channel_members_scroll(&mut self, visible_rows: usize) -> usize {
+        let members = self.channels.open_members();
+        let state = &mut self.channels;
+        state.member_scroll = follow_selection(
+            state.member_scroll,
+            state.member_selected,
+            visible_rows,
+            members,
+        );
+        state.member_scroll
+    }
+
+    /// Record where the MEMBERS side tab's rows were drawn this frame.
+    pub(crate) fn set_channel_member_rows_area(&mut self, area: Rect) {
+        self.channels.member_rows_area = Some(area);
+    }
+
+    /// Member row of the MEMBERS side tab drawn at a screen cell.
+    pub(super) fn channel_member_row_at(&self, column: u16, row: u16) -> Option<usize> {
+        let state = &self.channels;
+        let rows = state
+            .member_rows_area
+            .filter(|&rows| contains(Some(rows), column, row))?;
+        let index = state.member_scroll + usize::from(row - rows.y);
+        (index < state.open_members()).then_some(index)
+    }
+
+    /// Highlight member row `index` (clamped). Members only show; going
+    /// to a member's own chat would leave the channel app.
+    pub(super) fn select_channel_member(&mut self, index: usize) {
+        self.channels.set_member_selected(index);
+    }
+
+    /// Move the MEMBERS highlight `delta` rows, as the wheel does.
+    pub(super) fn move_channel_member(&mut self, delta: isize) {
+        let row = self.channels.member_selected.saturating_add_signed(delta);
+        self.channels.set_member_selected(row);
+    }
+
+    /// Clicking a member row highlights it.
+    pub(super) fn click_channel_member(&mut self, column: u16, row: u16) {
+        if let Some(index) = self.channel_member_row_at(column, row) {
+            self.select_channel_member(index);
+        }
+    }
+
+    /// Keys of the MEMBERS side tab, which move its highlight.
+    pub(super) fn handle_channel_members_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up => self.move_channel_member(-1),
+            KeyCode::Down => self.move_channel_member(1),
+            KeyCode::PageUp => self.move_channel_member(-SIDE_PAGE),
+            KeyCode::PageDown => self.move_channel_member(SIDE_PAGE),
+            KeyCode::Home => self.select_channel_member(0),
+            KeyCode::End => self.select_channel_member(usize::MAX),
+            _ => {}
         }
     }
 }

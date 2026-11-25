@@ -4,6 +4,7 @@
 //! agents they spawn on its own tasks. A child's reply to a terminal agent
 //! comes back as a [`Notice`], so it starts a turn like any other message.
 
+use super::command_output::TerminalCommandOutput;
 use super::notices::{Notice, NoticeSender};
 use async_trait::async_trait;
 use aura_agent::AgentLoopConfig;
@@ -15,8 +16,10 @@ use aura_engine::{
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::{BackgroundProcessHook, ToolCatalog, ToolConfig};
 use aura_model::{ModelRequestKind, ToolDefinition};
+use aura_ui_terminal::UiCommand;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 /// Tools for working with background agents. `delegate_task` is left out:
 /// for agents in this host it is `send_to_agent` under another name. `task`
@@ -36,6 +39,8 @@ pub struct TerminalChildKernels {
     catalog: Arc<ToolCatalog>,
     tool_config: ToolConfig,
     background: Arc<dyn BackgroundProcessHook>,
+    /// Where spawned agents' commands show what they print as they run.
+    commands: Option<mpsc::Sender<UiCommand>>,
 }
 
 impl TerminalChildKernels {
@@ -45,15 +50,28 @@ impl TerminalChildKernels {
             catalog: Arc::new(ToolCatalog::new()),
             tool_config,
             background,
+            commands: None,
         }
+    }
+
+    /// Show what spawned agents' commands print, as they run, in their
+    /// chats through `commands`.
+    #[must_use]
+    pub fn with_command_output(mut self, commands: mpsc::Sender<UiCommand>) -> Self {
+        self.commands = Some(commands);
+        self
     }
 }
 
 impl ChildKernelFactory for TerminalChildKernels {
-    fn build_child(&self, _request: &ChildKernelRequest) -> ChildKernel {
-        let resolver =
+    fn build_child(&self, request: &ChildKernelRequest) -> ChildKernel {
+        let mut resolver =
             aura_engine::executor::build_tool_resolver(&self.catalog, &self.tool_config, None)
                 .with_background_process_hook(Arc::clone(&self.background));
+        if let Some(commands) = &self.commands {
+            let output = TerminalCommandOutput::new(commands.clone(), request.child_agent_id);
+            resolver = resolver.with_command_output_hook(Arc::new(output));
+        }
         let mut tools = self.catalog.executor_builtin_tools();
         tools.extend(agent_tool_definitions());
         ChildKernel { resolver, tools }

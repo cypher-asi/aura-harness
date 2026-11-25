@@ -105,6 +105,8 @@ impl AgentSession {
         if !is_resumable(&self.messages) {
             self.messages.pop();
         }
+        // Kept as saved: a terminal turn drops a finished list before it
+        // checkpoints, and a headless `--resume` reports the list it had.
         self.todos = checkpoint.todos;
         self.usage = checkpoint.usage;
         self.started_ms = checkpoint.started_ms;
@@ -348,7 +350,10 @@ impl KernelFactory {
                 None => check,
             }
         });
-        let active_plan = latest_plan_path(self.store.as_ref(), identity.agent_id);
+        // A finished plan is not picked back up; the next `/plan` writes
+        // a new one.
+        let active_plan = latest_plan_path(self.store.as_ref(), identity.agent_id)
+            .filter(|path| !super::plan_mode::is_finished_plan(&kernel.agent_workspace(), path));
         let mut session = AgentSession {
             identity,
             model_gateway: KernelModelGateway::new(kernel.clone()),
@@ -377,7 +382,7 @@ impl KernelFactory {
                         warn!(error = %e, "Failed to rebuild model history from record");
                         Vec::new()
                     });
-            session.todos = todos_from_history(&messages);
+            session.todos = super::plan_mode::unfinished_todos(todos_from_history(&messages));
             session.messages = messages;
             session.resume_plan_build();
         }
@@ -933,6 +938,10 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
     // The chat next: it is what the UI waits on, blank, while the rest
     // (records, traces) can fill in after it.
     if chat == Chat::Reload {
+        // A coordinator's chat shows its channel's posts among its
+        // messages. They go first, so the chat that fades in has them
+        // already instead of reflowing a moment later when they come.
+        super::channels::send_posts_of(state.commands, &state.hub, agent_id).await;
         if state.hub.is_running(agent_id) {
             // Its chat is live in the UI already; say so, so a UI that
             // switched to it ahead of this answer stops waiting.
@@ -951,7 +960,6 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
                 .await;
             super::hud::send_session_of(state, agent_id).await;
         }
-        super::channels::send_posts_of(state.commands, &state.hub, agent_id).await;
     }
     // One replace-all command: clears the previous agent's records even
     // when this agent's history can't be read.

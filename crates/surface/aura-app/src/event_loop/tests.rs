@@ -305,6 +305,8 @@ impl ModelProvider for GatedProvider {
 /// The one tool call a turn whose last message is `last` makes, for the
 /// delegation tests: "write a note" writes `notes/<model>.txt`, "touch a
 /// file" runs `touch touched.txt`, "read the big file" reads `big.txt`,
+/// "close every todo" marks todos `a` and `b` completed, "start new
+/// todos" replaces the todo list with one item `x`,
 /// and "change files by shell" appends the model to `tracked.txt` and
 /// `target/out` and writes `shell-<model>.txt` with a shell command, which
 /// on a first attempt also deletes `gone.txt`.
@@ -327,6 +329,21 @@ fn scripted(last: &str, request: &ModelRequest) -> Option<MockResponse> {
     }
     if last.contains("read the big file") {
         return call("read_file", serde_json::json!({ "path": "big.txt" }));
+    }
+    if last.contains("close every todo") {
+        return call(
+            "todo_write",
+            serde_json::json!({
+                "merge": true,
+                "todos": [{ "id": "a", "status": "completed" }, { "id": "b", "status": "completed" }],
+            }),
+        );
+    }
+    if last.contains("start new todos") {
+        return call(
+            "todo_write",
+            serde_json::json!({ "todos": [{ "id": "x", "content": "Fresh work" }] }),
+        );
     }
     if last.contains("change files by shell") {
         let model = request.model.as_str();
@@ -3533,4 +3550,54 @@ async fn selecting_the_active_agent_again_sends_its_chat() {
     assert!(!focused
         .iter()
         .any(|(_, c)| matches!(c, UiCommand::LoadConversation(_))));
+}
+
+#[tokio::test]
+async fn a_channel_opens_with_its_posts_before_its_chat_and_loads_it_once() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+
+    let create = UiEvent::CreateChannel {
+        slug: "zode".to_string(),
+        title: "Zode".to_string(),
+        description: String::new(),
+    };
+    handle_ui_event(&mut state, create, &links).await;
+    let sent = drain(&mut commands);
+    let at = |wanted: fn(&UiCommand) -> bool| sent.iter().position(|(_, c)| wanted(c));
+    let posts = at(|c| matches!(c, UiCommand::SetChannelPosts { .. })).expect("posts sent");
+    let chat = at(|c| matches!(c, UiCommand::LoadConversation(_))).expect("chat sent");
+    assert!(
+        posts < chat,
+        "the chat fades in with its posts, not before them"
+    );
+    let channel_id = sent
+        .iter()
+        .find_map(|(_, c)| match c {
+            UiCommand::SetChannels(list) => list.first().map(|channel| channel.id.clone()),
+            _ => None,
+        })
+        .expect("the channel is listed");
+    let coordinator = state.active;
+
+    // A UI that switched to the coordinator itself asked for it first; the
+    // channel opening after does not load its chat again.
+    handle_ui_event(
+        &mut state,
+        UiEvent::FocusAgent(coordinator.to_hex()),
+        &links,
+    )
+    .await;
+    let _ = drain(&mut commands);
+    handle_ui_event(&mut state, UiEvent::OpenChannel(channel_id), &links).await;
+    let opened = drain(&mut commands);
+    assert_eq!(state.active, coordinator);
+    assert!(
+        !opened
+            .iter()
+            .any(|(_, c)| matches!(c, UiCommand::LoadConversation(_))),
+        "{opened:?}"
+    );
 }

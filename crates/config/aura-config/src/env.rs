@@ -144,6 +144,10 @@ pub const AURA_CLOUD_PRICE_MEM_GIB_HOUR: &str = "AURA_CLOUD_PRICE_MEM_GIB_HOUR";
 /// Price of one GiB-hour of disk. Consumed by
 /// [`crate::CloudConfig::price_disk_gib_hour`].
 pub const AURA_CLOUD_PRICE_DISK_GIB_HOUR: &str = "AURA_CLOUD_PRICE_DISK_GIB_HOUR";
+/// Path to a Linux aura build to put in the cloud base snapshot, one
+/// that runs on the machines' glibc. Consumed by
+/// [`crate::CloudConfig::binary`].
+pub const AURA_CLOUD_BINARY: &str = "AURA_CLOUD_BINARY";
 
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
@@ -198,6 +202,7 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_CLOUD_PRICE_VCPU_HOUR,
     AURA_CLOUD_PRICE_MEM_GIB_HOUR,
     AURA_CLOUD_PRICE_DISK_GIB_HOUR,
+    AURA_CLOUD_BINARY,
 ];
 
 // ---------------------------------------------------------------------------

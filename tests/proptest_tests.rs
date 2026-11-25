@@ -284,7 +284,7 @@ mod serialization_tests {
         #[test]
         fn decision_json_roundtrip(
             num_accepted in 0usize..5,
-            num_rejected in 0usize..5
+            num_rejected in 0u32..5
         ) {
             let mut decision = Decision::new();
 
@@ -293,7 +293,7 @@ mod serialization_tests {
             }
 
             for i in 0..num_rejected {
-                decision.reject(i as u32, format!("Reason {i}"));
+                decision.reject(i, format!("Reason {i}"));
             }
 
             let json = serde_json::to_string(&decision).unwrap();

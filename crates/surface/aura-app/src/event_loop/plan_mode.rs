@@ -25,7 +25,9 @@
 //! - In plan mode, each request revises the open plan.
 //!
 //! Once every todo is closed, the plan no longer is: prompts don't carry
-//! on with it and plan-mode requests don't file under it.
+//! on with it and plan-mode requests don't file under it. A build whose
+//! todo list closes completes the plan ([`finish_done_todos`]): the agent
+//! drops the list and the plan, so the next `/plan` writes a new one.
 //!
 //! On the task board (see [`super::tasks`] and `turns::begin_task`),
 //! every request while the agent builds its plan is the plan's own
@@ -42,7 +44,9 @@ use super::turns::{Prompt, Request};
 use super::LoopState;
 use aura_context_prompts::model_messages::build_plan::{build_plan_prompt, continue_plan_note};
 use aura_core_types::AgentId;
-use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile, TodoStatus, PLANS_DIR};
+use aura_exec_tools::plan_tools::{
+    is_plan_path, sync_todo_list, todo_items, PlanFile, TodoStatus, PLANS_DIR,
+};
 use aura_exec_tools::todo::TodoItem;
 use aura_ui_terminal::events::{PlanView, TodoState, TodoView};
 use aura_ui_terminal::{PermissionMode, UiCommand};
@@ -319,6 +323,62 @@ pub(super) async fn continue_build(
     true
 }
 
+/// `todos`, or none once every item is closed: a finished list has
+/// nothing left to carry into the next turn or show in the chat.
+pub(crate) fn unfinished_todos(todos: Vec<TodoItem>) -> Vec<TodoItem> {
+    if todos.iter().all(|todo| todo.status.is_closed()) {
+        Vec::new()
+    } else {
+        todos
+    }
+}
+
+/// Whether the plan at `path` (relative to `workspace`) is finished: it
+/// loads, has todos, and every one of them is closed. A plan with no
+/// todos yet is still being written.
+pub(crate) fn is_finished_plan(workspace: &Path, path: &str) -> bool {
+    is_plan_path(path)
+        && PlanFile::load(&workspace.join(path)).is_ok_and(|plan| {
+            !plan.meta.todos.is_empty() && plan.meta.todos.iter().all(|t| t.status.is_closed())
+        })
+}
+
+/// Close out `session`'s todo list once every item on it is closed. The
+/// list is dropped, so it no longer shows in the chat or carries into the
+/// next turn. When the agent was building its plan, the plan gets the
+/// final list, stops being the agent's plan, and is returned as the UI
+/// shows it, for [`announce_finished_plan`]; the next `/plan` then writes
+/// a new one.
+pub(super) fn finish_done_todos(session: &mut AgentSession) -> Option<PlanView> {
+    if session.todos.is_empty() || !session.todos.iter().all(|t| t.status.is_closed()) {
+        return None;
+    }
+    let todos = std::mem::take(&mut session.todos);
+    if !session.building_plan {
+        return None;
+    }
+    session.building_plan = false;
+    let path = session.active_plan.take()?;
+    let workspace = session.kernel.agent_workspace();
+    // The turn mirrors each `todo_write` into the plan, but todos closed
+    // by an agent reporting back may not have been; the plan keeps the
+    // list as it ended.
+    if let Err(e) = sync_todo_list(&workspace.join(&path), &todos) {
+        warn!(%path, error = %e, "Could not update the finished plan's todos");
+    }
+    info!(agent_id = %session.agent_id(), %path, "Plan complete");
+    plan_view(&workspace, &path)
+}
+
+/// Tell the user `plan` is complete, and show the plans with it closed
+/// and none being worked on.
+pub(super) async fn announce_finished_plan(ui: &AgentUi, workspace: &Path, plan: &PlanView) {
+    ui.send(system_message(format!("Plan complete: {}", plan.name)))
+        .await;
+    ui.send(UiCommand::SetPlans(plan_views(workspace))).await;
+    ui.send(UiCommand::SetPlan(None)).await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +490,42 @@ mod tests {
             let plan = open_plan(dir.path(), Some(path));
             assert_eq!(plan.map(|p| p.meta.todos.len()), Some(2), "{open}");
         }
+    }
+
+    #[test]
+    fn a_list_with_every_item_closed_is_dropped() {
+        let item = |status| TodoItem {
+            id: "a".into(),
+            content: "A".into(),
+            status,
+            assignee: None,
+        };
+        let done = vec![item(TodoStatus::Completed), item(TodoStatus::Cancelled)];
+        assert!(unfinished_todos(done).is_empty());
+        for open in [TodoStatus::Pending, TodoStatus::InProgress] {
+            let list = vec![item(TodoStatus::Completed), item(open)];
+            assert_eq!(unfinished_todos(list.clone()), list, "{open:?}");
+        }
+        assert!(unfinished_todos(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn a_plan_is_finished_once_it_has_todos_and_all_are_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(PLANS_DIR)).unwrap();
+        let path = ".aura/plans/p_00000001.plan.md";
+        let write = |todos: &str| {
+            std::fs::write(dir.path().join(path), format!("---\nname: P\n{todos}---\n")).unwrap();
+        };
+
+        assert!(!is_finished_plan(dir.path(), path), "no plan file");
+        write("todos: []\n");
+        assert!(!is_finished_plan(dir.path(), path), "no todos yet");
+        write("todos:\n  - id: a\n    content: A\n    status: in_progress\n");
+        assert!(!is_finished_plan(dir.path(), path), "a todo open");
+        write("todos:\n  - id: a\n    content: A\n    status: completed\n");
+        assert!(is_finished_plan(dir.path(), path));
+        assert!(!is_finished_plan(dir.path(), "notes/p.plan.md"));
     }
 
     #[test]

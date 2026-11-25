@@ -27,6 +27,7 @@ mod members;
 mod mention_menu;
 mod overlays;
 mod panels;
+mod plan_doc;
 mod plans;
 mod policies;
 mod processes;

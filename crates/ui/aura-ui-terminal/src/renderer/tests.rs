@@ -1608,10 +1608,10 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
         "{}",
         rows[auth + 2]
     );
-    assert_eq!(
-        row_with("Write the handler  → coder"),
-        auth + 3,
-        "the task doing a todo sits under it"
+    assert!(
+        rows[auth + 3].contains("✓  Write the login handler  →"),
+        "the task doing a todo sits under it, titled by the todo: {}",
+        rows[auth + 3]
     );
     // The todos' boxes sit right under the plan's fold arrow; only the
     // task under a todo is indented, one level.
@@ -1630,7 +1630,16 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
     let parser = row_with("Parser cleanup");
     assert_eq!(parser, auth + 4);
     assert_eq!(last_column(parser, '▸'), arrow, "plan headers line up");
-    assert!(rows[parser].contains("1/1"));
+    assert!(
+        rows[parser].contains("✓ 1/1"),
+        "a finished plan is marked done: {}",
+        rows[parser]
+    );
+    assert!(
+        !rows[auth].contains("✓ 1/2"),
+        "an open plan is not: {}",
+        rows[auth]
+    );
     let screen = rows.join("\n");
     assert!(
         !screen.contains("Split the lexer"),
@@ -5000,6 +5009,32 @@ fn test_todo_checklist_and_list() {
 }
 
 #[test]
+fn a_todo_list_with_every_item_closed_leaves_the_live_tail() {
+    use crate::events::{TodoState, UiCommand};
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "go on");
+    app.process_command(UiCommand::SetTodos(vec![
+        todo("Read the parser", TodoState::Completed),
+        todo("Drop the old lexer", TodoState::Cancelled),
+    ]));
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(
+        !screen.contains("Working on") && !screen.contains("Read the parser"),
+        "a finished list does not show while the turn goes on: {screen}"
+    );
+    assert!(screen.contains("⬢ Thinking…"), "{screen}");
+
+    // New items bring the checklist back.
+    app.process_command(UiCommand::SetTodos(vec![
+        todo("Read the parser", TodoState::Completed),
+        todo("Run the tests", TodoState::Pending),
+    ]));
+    let screen = render_rows(&mut app, 160).join("\n");
+    assert!(screen.contains("⬢ Working on 2 to-dos"), "{screen}");
+}
+
+#[test]
 fn test_clicking_the_todo_checklist_lists_every_item() {
     use crate::events::{TodoState, UiCommand};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -6455,6 +6490,9 @@ fn test_channels_tab_lists_channels_over_new_channel() {
     let new_channel = row_with("New channel");
     assert!(rows[new_channel].contains('+'), "{}", rows[new_channel]);
     assert!(channel < new_channel);
+    // The row is the slug and nothing else: no title, no description.
+    assert!(!rows[channel].contains("Zode release"), "{}", rows[channel]);
+    assert!(!rows[channel].contains("Ship it"), "{}", rows[channel]);
     // "+ New channel" is pinned to the panel's last row, above its border.
     assert!(
         rows[new_channel + 1].contains('└'),
@@ -6474,76 +6512,71 @@ fn test_channels_tab_says_when_there_are_none() {
 }
 
 #[test]
-fn test_open_channel_shows_its_title_description_and_members() {
+fn test_an_open_channel_keeps_the_list_and_lists_its_members_on_the_right() {
+    use crate::events::{ChannelSummary, UiCommand};
     let mut app = channels_app();
+    let mut channels = app.channels().to_vec();
+    channels.push(ChannelSummary {
+        id: "c2".to_string(),
+        slug: "docs".to_string(),
+        ..ChannelSummary::default()
+    });
+    app.process_command(UiCommand::SetChannels(channels));
     app.open_channel_by_id("c1");
-    let rows = render_rows(&mut app, 120);
+    let rows = render_rows(&mut app, 140);
+    let screen = rows.join("\n");
     let at = |needle: &str| {
         rows.iter()
             .enumerate()
             .find_map(|(y, row)| row.find(needle).map(|x| (y, row[..x].chars().count())))
-            .unwrap_or_else(|| panic!("no {needle:?} in:\n{}", rows.join("\n")))
+            .unwrap_or_else(|| panic!("no {needle:?} in:\n{screen}"))
     };
-    let back = at("‹ #zode");
-    let title = at("Zode release");
-    let description = at("Ship it");
-    let heading = at("MEMBERS");
+    // The left panel is still the list.
+    at("#docs");
+    at("New channel");
+    assert!(!screen.contains("‹ #zode"), "{screen}");
+    // The members are in the right column, the worker under its parent.
     let coordinator = at("Coordinator");
     let worker = at("Worker");
-    let order = [back, title, description, heading, coordinator, worker].map(|(y, _)| y);
-    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     assert_eq!(worker.0, coordinator.0 + 1);
     assert!(worker.1 > coordinator.1, "the worker is indented");
-    assert!(!rows.iter().any(|row| row.contains("New channel")));
+    assert!(coordinator.1 > 100, "in the right column: {screen}");
+    // Only the channel's own tabs, and none of the agent panels.
+    assert!(screen.contains("MEMBERS"), "{screen}");
+    assert!(screen.contains("INFO"), "{screen}");
+    for agent_feature in [
+        "SANDBOX",
+        "PROCESSES",
+        "TRACE",
+        "KERNEL",
+        "POLICIES",
+        "INBOX",
+    ] {
+        assert!(
+            !screen.contains(agent_feature),
+            "{agent_feature}:\n{screen}"
+        );
+    }
+    for chat_tab in ["TERMINAL", "GRAPH", "BENCH"] {
+        assert!(!screen.contains(chat_tab), "{chat_tab}:\n{screen}");
+    }
 }
 
 #[test]
-fn test_open_channel_side_panel_shows_projects_workers_and_tasks() {
-    use crate::app::SidePanelTab;
-    use crate::events::{AgentSummary, ChannelProjectView, ChannelSummary, TaskView, UiCommand};
-    let mut app = crate::App::new();
-    app.process_command(UiCommand::SetChannels(vec![ChannelSummary {
-        id: "c1".to_string(),
-        slug: "zode".to_string(),
-        title: "Zode release".to_string(),
-        coordinator_id: "co".to_string(),
-        projects: vec![ChannelProjectView {
-            id: "p1".to_string(),
-            name: "zodeproj".to_string(),
-            folder: "/src/zodeproj".to_string(),
-        }],
-        members: vec![
-            AgentSummary {
-                id: "co".to_string(),
-                name: "Lead".to_string(),
-                ..AgentSummary::default()
-            },
-            AgentSummary {
-                id: "wk".to_string(),
-                name: "Busybee".to_string(),
-                code: Some("BB7".to_string()),
-                running: true,
-                depth: 1,
-                ..AgentSummary::default()
-            },
-        ],
-        ..ChannelSummary::default()
-    }]));
+fn test_channel_info_tab_shows_what_the_channel_is() {
+    use crate::app::{PaneTab, SidePanelTab};
+    use crate::events::{ChannelProjectView, UiCommand};
+    let mut app = channels_app();
+    let mut channels = app.channels().to_vec();
+    channels[0].projects = vec![ChannelProjectView {
+        id: "p1".to_string(),
+        name: "zodeproj".to_string(),
+        folder: "/src/zodeproj".to_string(),
+    }];
+    app.process_command(UiCommand::SetChannels(channels));
     app.open_channel_by_id("c1");
-    app.process_command(UiCommand::SetChannelTasks {
-        channel_id: "c1".to_string(),
-        // A part the coordinator handed the worker: requests have no row
-        // of their own in the TASKS tree, their parts do.
-        tasks: vec![TaskView {
-            id: "t1".to_string(),
-            title: "Polish the zode docs".to_string(),
-            agent_id: "wk".to_string(),
-            agent_name: "Busybee".to_string(),
-            parent: Some("request".to_string()),
-            ..TaskView::default()
-        }],
-    });
-    assert_eq!(app.side_tab(), SidePanelTab::Projects);
+    app.select_pane_tab(PaneTab::Side(SidePanelTab::ChannelInfo));
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
 
     let rows = render_rows(&mut app, 140);
     let screen = rows.join("\n");
@@ -6552,46 +6585,27 @@ fn test_open_channel_side_panel_shows_projects_workers_and_tasks() {
             .position(|row| row.contains(needle))
             .unwrap_or_else(|| panic!("no {needle:?} in:\n{screen}"))
     };
+    let description = row_with("Ship it");
+    let coordinator = row_with("COORDINATOR");
+    let members = row_with("2 agents");
     let linked = row_with("LINKED PROJECTS");
     let project = row_with("zodeproj");
-    let working = row_with("WORKING NOW");
-    let worker = row_with("BB7  Busybee");
-    let tasks = row_with("TASKS");
-    let task = row_with("Polish the zode docs");
     assert!(rows[project].contains("/src/zodeproj"), "{}", rows[project]);
-    let order = [linked, project, working, worker, task];
+    let order = [description, coordinator, members, linked, project];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
-    assert!(tasks < task);
-    assert!(!screen.contains("Nobody is working"), "{screen}");
-    // Only the side panel's columns: the left panel lists Lead too.
-    let column = rows[working]
-        .find("WORKING NOW")
-        .map(|at| rows[working][..at].chars().count())
-        .unwrap();
-    assert!(
-        rows[working..tasks].iter().all(|row| !row
-            .chars()
-            .skip(column)
-            .collect::<String>()
-            .contains("Lead")),
-        "Lead is not working: {screen}"
-    );
+}
 
-    // The side bar's first tab is PROJECTS, just before SANDBOX.
-    let bar = rows
-        .iter()
-        .find(|row| row.contains("SANDBOX") || row.contains("SBX"))
-        .unwrap_or_else(|| panic!("no side bar in:\n{screen}"));
-    let sandbox = bar.find("SANDBOX").or_else(|| bar.find("SBX")).unwrap();
-    let before = bar[..sandbox]
-        .split('│')
-        .map(str::trim)
-        .rfind(|cell| !cell.is_empty());
-    assert!(matches!(before, Some("PROJECTS" | "PRJ")), "{bar}");
-    assert!(
-        !screen.contains("RECORD"),
-        "the Record panel hides: {screen}"
-    );
+#[test]
+fn test_channels_with_nothing_open_ask_for_one_and_hide_the_right_column() {
+    let mut app = channels_app();
+    let screen = render_rows(&mut app, 140).join("\n");
+    assert!(screen.contains("Pick a channel on the left"), "{screen}");
+    for agent_feature in ["SANDBOX", "KERNEL", "TERMINAL", "GRAPH"] {
+        assert!(
+            !screen.contains(agent_feature),
+            "{agent_feature}:\n{screen}"
+        );
+    }
 }
 
 /// [`channels_app`] with the chat on `active` and `#zode` open.
@@ -6656,34 +6670,27 @@ fn channel_posts_render_between_history_messages_by_time() {
 }
 
 #[test]
-fn coordinator_chat_header_names_the_channel() {
-    // At 120 columns the tabs shrink to short labels and the title shows,
-    // cut to the room left; a wider screen shows all of it.
-    const WIDTH: u16 = 160;
-    let header = "#zode · coordinator";
-    let shows = |app: &mut crate::App| render_rows(app, WIDTH).iter().any(|r| r.contains(header));
-
+fn channel_chat_header_names_the_channel_and_has_no_tabs() {
     let mut app = channel_chat_app("co");
-    let narrow = render_rows(&mut app, 120).join("\n");
-    assert!(narrow.contains("#zode · coord"), "{narrow}");
-    assert!(
-        shows(&mut app),
-        "{}",
-        render_rows(&mut app, WIDTH).join("\n")
-    );
+    let rows = render_rows(&mut app, 140);
+    let screen = rows.join("\n");
+    // The chat bar: `#zode` with its title at the bar's far end. The list's
+    // row on the left shows only the slug.
+    let bar = rows
+        .iter()
+        .find(|row| row.contains("#zode") && row.contains("Zode release"))
+        .unwrap_or_else(|| panic!("no #zode in the chat bar:\n{screen}"));
+    for tab in ["CHAT", "CHT", "TERMINAL", "TRM", "LOG"] {
+        assert!(!bar.contains(tab), "{tab}: {bar}");
+    }
+    assert!(screen.contains("Message #zode"), "{screen}");
 
-    app.close_channel();
+    // Back among the agents, the tabs come back.
+    app.select_pane_tab(crate::app::PaneTab::Agents(crate::app::AgentsTab::Projects));
+    let screen = render_rows(&mut app, 140).join("\n");
     assert!(
-        !shows(&mut app),
-        "{}",
-        render_rows(&mut app, WIDTH).join("\n")
-    );
-
-    let mut app = channel_chat_app("wk");
-    assert!(
-        !shows(&mut app),
-        "{}",
-        render_rows(&mut app, WIDTH).join("\n")
+        screen.contains("TERMINAL") || screen.contains("TRM"),
+        "{screen}"
     );
 }
 

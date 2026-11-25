@@ -105,6 +105,11 @@ impl App {
         if self.handle_thread_key(key) {
             return;
         }
+        if matches!(self.detail, Some(super::DetailView::Plan(_))) && key.code == KeyCode::Char('s')
+        {
+            self.show_plan_source();
+            return;
+        }
         let page = self.detail_page_rows();
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.close_detail(),
@@ -605,10 +610,11 @@ impl App {
                     self.handle_tasks_key(key);
                     KeyResult::continue_running()
                 }
-                SidePanelTab::Projects => {
-                    self.handle_channel_side_key(key);
+                SidePanelTab::ChannelMembers => {
+                    self.handle_channel_members_key(key);
                     KeyResult::continue_running()
                 }
+                SidePanelTab::ChannelInfo => KeyResult::continue_running(),
             },
         }
     }
@@ -865,6 +871,15 @@ impl App {
 
     /// Submit the current input.
     pub(super) fn submit_input(&mut self) -> KeyResult {
+        // The channel app with no channel open has nobody to send to; the
+        // draft stays for when one is picked. Commands still run.
+        if self.channel_app_empty() && !self.input.trim_start().starts_with('/') {
+            self.notification = Some((
+                "Pick a channel to send a message".to_string(),
+                NotificationType::Warning,
+            ));
+            return KeyResult::continue_running();
+        }
         let text = std::mem::take(&mut self.input);
         self.cursor_pos = 0;
         self.history().add(&text);

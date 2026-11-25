@@ -19,8 +19,8 @@
 //! because a workspace holds projects, not single agents.
 //!
 //! On the CHANNELS tab the menu opens on a channel row of the list, or
-//! anywhere in the open channel's view, and offers "Link project" and
-//! "Unlink project", whose submenus list the projects the channel is not
+//! anywhere in the open channel's INFO side tab, and offers "Link project"
+//! and "Unlink project", whose submenus list the projects the channel is not
 //! linked to and those it is (each item is left out when its list would
 //! be empty), and "Archive channel…", which asks for `y` first.
 
@@ -479,10 +479,10 @@ impl App {
         self.open_menu_of_channel(id, column, row)
     }
 
-    /// A right click on the side panel's PROJECTS tab of the open channel:
+    /// A right click on the side panel's INFO tab of the open channel:
     /// the open channel's menu, there. Returns whether a menu opened.
     pub(super) fn open_channel_side_menu(&mut self, column: u16, row: u16) -> bool {
-        if self.side_tab() != super::SidePanelTab::Projects {
+        if self.side_tab() != super::SidePanelTab::ChannelInfo {
             return false;
         }
         let Some(id) = self.open_channel().map(|channel| channel.id.clone()) else {

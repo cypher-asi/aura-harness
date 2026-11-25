@@ -67,6 +67,10 @@ impl App {
     pub fn set_prose_measure(&mut self, measure: ProseMeasure) {
         self.prose_measure = Some(measure);
         self.chat_lines = ChatLineCache::default();
+        // An open plan was laid out with the old widths too.
+        if let Some(super::DetailView::Plan(doc)) = self.detail.as_mut() {
+            doc.layout.key = None;
+        }
     }
 
     pub(crate) const fn prose_measure(&self) -> Option<ProseMeasure> {

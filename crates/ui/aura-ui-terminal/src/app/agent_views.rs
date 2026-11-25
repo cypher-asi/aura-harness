@@ -282,8 +282,7 @@ impl App {
             let graphed = self.upsert_graph(&run_id, nodes);
             // Any agent's step may be in the log on screen, as a subagent's.
             self.log.mark_stale();
-            let feed_shown = (self.sandbox_panel_visible || self.channel_open())
-                && self.side_tab == SidePanelTab::Trace;
+            let feed_shown = self.sandbox_panel_visible() && self.side_tab == SidePanelTab::Trace;
             self.redraw |= graphed || feed_shown;
             return;
         }

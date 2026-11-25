@@ -11,6 +11,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ##### Changed
 
+- Opening a plan now shows it as a document to read instead of its raw
+  Markdown file. This works from the TASKS tab, from a `create_plan` or
+  `read_file` step in the chat, and from the sandbox tree. The view
+  shows the title, the overview, the todos with their check boxes and
+  progress, and then the plan's body set like an agent's reply. The
+  frontmatter and the generated-header marker are hidden. In the
+  desktop app the text is set in the proportional face, like chat
+  replies, with inline code kept in monospace. Opening a plan at a todo
+  scrolls to that todo, and `s` shows the source file.
 - Plans are written as a short document to read top to bottom instead
   of a checklist of identifiers. The agent is now asked for section
   headings that say what each part is about, an opening paragraph of

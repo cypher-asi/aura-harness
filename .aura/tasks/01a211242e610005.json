@@ -1,0 +1,12 @@
+{
+  "id": "01a211242e610005",
+  "title": "for channels:",
+  "state": "completed",
+  "agent_id": "c20658d93330a8034085732e2cc42decaf2258f4e355e3ce3093f8f98ea4bb2f",
+  "agent_name": "Agent 1605",
+  "plan": ".aura/plans/channels-as-their-own-app-list-on-the-left-chat_469b21d0.plan.md",
+  "items": [],
+  "summary": "I've written the plan; nothing is changed yet. The idea is that the tab you pick in the left panel decides which \"app\" is on screen. CHANNELS is the channel app. PROJECTS, ROSTER and ARCHIVE keep today's agent layout. All the work is in `aura-ui-terminal`; the session code already handles opening and closing channels.",
+  "updated_ms": 1795584216508,
+  "created_ms": 1795583913569
+}

@@ -1,0 +1,38 @@
+{
+  "id": "01a21427f9750003",
+  "title": "Implement the plan in `.aura/plans/plan-view-uses-the-chat-s-side-padding_38034938.plan.md`. Read it first. Your todo l…",
+  "state": "completed",
+  "agent_id": "33ee2dc7572ef19e8a099f745c184c49b356894aa013a8bce77b1e51f50596ff",
+  "agent_name": "Agent 1595",
+  "plan": ".aura/plans/plan-view-uses-the-chat-s-side-padding_38034938.plan.md",
+  "builds": true,
+  "items": [
+    {
+      "content": "Make terminal_text_area pub(super) in renderer/panels.rs",
+      "state": "completed"
+    },
+    {
+      "content": "Lay out and draw the plan in the chat's text column; drop MAX_TEXT_WIDTH",
+      "state": "completed"
+    },
+    {
+      "content": "Pass the plan's column to set_chat_rows and chat_scrollbar in detail.rs",
+      "state": "completed"
+    },
+    {
+      "content": "Add a test that plan and chat text share the same column at two widths",
+      "state": "completed"
+    },
+    {
+      "content": "Update the STYLEGUIDE plan-document section",
+      "state": "completed"
+    },
+    {
+      "content": "Run fmt, clippy -D warnings and aura-ui-terminal tests",
+      "state": "completed"
+    }
+  ],
+  "summary": "Scrollbar sits on the panel's right border and only uses `rows` for its vertical extent, so passing the new column works. Now the edit:",
+  "updated_ms": 1795634801694,
+  "created_ms": 1795634493813
+}

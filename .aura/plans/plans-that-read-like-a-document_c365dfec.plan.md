@@ -2,20 +2,20 @@
 name: Plans that read like a document
 overview: Change the guidance the agent gets for writing plans so a plan reads as a short document in plain sentences, like the Cursor example, with code formatting kept for the things a reader would actually type or search for.
 todos:
-- id: prompt
-  content: Rewrite the plan-writing bullet in plan_mode.rs for document-style plans
+- id: doc-view
+  content: Add a rendered plan document view (DetailView::Plan) with title, todos, Markdown body, scrolling and prose rows
   status: completed
-- id: tool-desc
-  content: Update the create_plan `plan` parameter description in plan_tools.rs to match
+  assignee: rust-engineer
+- id: open-paths
+  content: Open plans as documents from the TASKS tab, chat tool steps and the sandbox tree; `s` shows the raw source
   status: completed
-- id: test
-  content: Extend the plan_mode test to pin the document-style guidance
+  assignee: rust-engineer
+- id: review
+  content: Review the change for bugs, regressions and missing tests
   status: completed
-- id: changelog
-  content: Add a short Unreleased entry to CHANGELOG.md
-  status: completed
+  assignee: reviewer
 - id: gate
-  content: Run fmt, clippy -D warnings and tests for aura-context-prompts and aura-exec-tools
+  content: fmt, clippy -D warnings, tests for aura-ui-terminal and aura-desktop; CHANGELOG and STYLEGUIDE
   status: completed
 ---
 
@@ -25,11 +25,10 @@ Change the guidance the agent gets for writing plans so a plan reads as a short 
 
 ## Todos
 
-- [x] Rewrite the plan-writing bullet in plan_mode.rs for document-style plans
-- [x] Update the create_plan `plan` parameter description in plan_tools.rs to match
-- [x] Extend the plan_mode test to pin the document-style guidance
-- [x] Add a short Unreleased entry to CHANGELOG.md
-- [x] Run fmt, clippy -D warnings and tests for aura-context-prompts and aura-exec-tools
+- [x] Add a rendered plan document view (DetailView::Plan) with title, todos, Markdown body, scrolling and prose rows (@rust-engineer)
+- [x] Open plans as documents from the TASKS tab, chat tool steps and the sandbox tree; `s` shows the raw source (@rust-engineer)
+- [x] Review the change for bugs, regressions and missing tests (@reviewer)
+- [x] fmt, clippy -D warnings, tests for aura-ui-terminal and aura-desktop; CHANGELOG and STYLEGUIDE
 
 <!-- end of generated header: edit below -->
 
