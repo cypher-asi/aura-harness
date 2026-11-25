@@ -1086,6 +1086,19 @@ PR.
 
 ---
 
+### Cloud agents: users and plan tokens
+
+These hold for every cloud agent (`aura-engine-cloud`, `aura-app/src/cloud/`, the cloud node):
+
+1. **Plan tokens and refresh tokens never enter a machine.** Machines hold only boxd `bxds_` placeholders for host-bound secrets; `aura node claim` refuses any other value (`cloud_node::fill_placeholders`).
+2. **A machine lists only its owner's plan secrets.** `VmFleet::provision` refuses any other name (`names::is_plan_secret_of`).
+3. **A fork never crosses owners**: it would inherit the parent owner's secrets.
+4. **Mail never crosses owners.** Directories list only the node owner's agents, and the hub refuses mail between agents of different owners.
+5. **Only an agent's owner manages it**: moving, pulling, sleeping, waking, archiving and sending it work.
+6. **Raw user identities never reach boxd or logs**; only the owner tag (`names::owner_tag`) does. This is pinned by the `§cloud` band in `scripts/check_invariants.sh`.
+
+The two-owner tests in `aura-engine-cloud` (`fleet`, `plans`, `mesh`), `aura-app` (`cloud::hub`, `event_loop::cloud`) and `aura-node` (`cloud_node`) cover these.
+
 ## CI enforcement
 
 [`scripts/check_invariants.sh`](../scripts/check_invariants.sh) is the

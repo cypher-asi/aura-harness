@@ -71,6 +71,9 @@ impl App {
     }
 
     pub(super) fn show_agents_tab(&mut self, tab: AgentsTab) {
+        if tab == AgentsTab::Archive && self.agents_tab != AgentsTab::Archive {
+            self.fold_all_archived();
+        }
         self.agents_tab = tab;
         self.pending_delete = None;
         self.pending_remove_project = None;

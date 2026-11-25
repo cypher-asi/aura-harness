@@ -13,8 +13,8 @@ use parking_lot::Mutex;
 
 use crate::error::{CloudError, CloudResult};
 use crate::provider::{
-    Balance, ExecOutput, MachineInfo, MachineLimit, MachineOrigin, MachineStatus, NewMachine,
-    OrgUsage, SnapshotInfo, UsageReading, VmProvider, MACHINE_DISK_BYTES,
+    Balance, ExecOutput, HostSecret, MachineInfo, MachineLimit, MachineOrigin, MachineStatus,
+    NewMachine, OrgUsage, SnapshotInfo, UsageReading, VmProvider, MACHINE_DISK_BYTES,
 };
 
 /// Answers an `exec`: machine name, command and stdin to output.
@@ -29,6 +29,9 @@ struct State {
     /// Names of destroyed machines by id: usage stays readable by id.
     retired: HashMap<String, String>,
     calls: Vec<String>,
+    secrets: BTreeMap<String, HostSecret>,
+    /// The secret names each machine was given, by machine name.
+    machine_secrets: HashMap<String, Vec<String>>,
     next_id: u64,
     max_machines: u32,
     largest_size: Option<MachineSize>,
@@ -49,6 +52,33 @@ impl Default for FakeProvider {
 }
 
 impl FakeProvider {
+    /// The value of secret `name`, if set.
+    #[must_use]
+    pub fn secret_value(&self, name: &str) -> Option<String> {
+        self.state
+            .lock()
+            .secrets
+            .get(name)
+            .map(|secret| secret.value.as_str().to_string())
+    }
+
+    /// Every secret set, by name.
+    #[must_use]
+    pub fn secrets(&self) -> BTreeMap<String, HostSecret> {
+        self.state.lock().secrets.clone()
+    }
+
+    /// The secret names machine `name` was given.
+    #[must_use]
+    pub fn machine_secrets(&self, name: &str) -> Vec<String> {
+        self.state
+            .lock()
+            .machine_secrets
+            .get(name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// An empty fake with room for 50 machines and every size.
     #[must_use]
     pub fn new() -> Self {
@@ -201,6 +231,19 @@ impl VmProvider for FakeProvider {
                 message: format!("name '{}' is already taken", spec.name),
             });
         }
+        // boxd fails a create naming a secret that doesn't resolve.
+        if let Some(missing) = spec
+            .secrets
+            .iter()
+            .find(|name| !state.secrets.contains_key(*name))
+        {
+            return Err(CloudError::Rpc {
+                op: "CreateVm",
+                code: "FailedPrecondition".into(),
+                message: format!("secret {missing} does not exist"),
+            });
+        }
+        let mut secrets = spec.secrets.clone();
         let (vcpu, source) = match origin {
             MachineOrigin::Fresh => {
                 if let Some(largest) = state.largest_size.filter(|largest| spec.size > *largest) {
@@ -258,6 +301,12 @@ impl VmProvider for FakeProvider {
                     .map(|((_, path), bytes)| ((spec.name.clone(), path.clone()), bytes.clone()))
                     .collect();
                 state.files.extend(copied);
+                // A fork inherits its parent's secret names.
+                secrets = state
+                    .machine_secrets
+                    .get(&parent_name)
+                    .cloned()
+                    .unwrap_or_default();
                 (
                     parent_info.vcpu,
                     VmSource::Fork {
@@ -286,6 +335,7 @@ impl VmProvider for FakeProvider {
             boot_ms: 6,
         };
         state.machines.insert(info.name.clone(), info.clone());
+        state.machine_secrets.insert(info.name.clone(), secrets);
         Ok(info)
     }
 
@@ -499,6 +549,25 @@ impl VmProvider for FakeProvider {
             complete: false,
             machines,
         })
+    }
+
+    async fn set_secret(&self, secret: &HostSecret) -> CloudResult<()> {
+        self.log(format!(
+            "SetSecret({}, {})",
+            secret.name,
+            secret.domains.join(",")
+        ));
+        self.state
+            .lock()
+            .secrets
+            .insert(secret.name.clone(), secret.clone());
+        Ok(())
+    }
+
+    async fn remove_secret(&self, name: &str) -> CloudResult<()> {
+        self.log(format!("RemoveSecret({name})"));
+        self.state.lock().secrets.remove(name);
+        Ok(())
     }
 
     async fn balance(&self) -> CloudResult<Balance> {

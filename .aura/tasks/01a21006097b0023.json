@@ -1,0 +1,11 @@
+{
+  "id": "01a21006097b0023",
+  "title": "try now",
+  "state": "completed",
+  "agent_id": "45fd8023a4d5f78ba21e1580c29ba9b0a2a5b0378a8178809c11ec6417c1adb0",
+  "agent_name": "Agent 1524",
+  "items": [],
+  "summary": "The test binary is built and the base snapshot is building on a real machine (`aura-base-build-dc9bf3`). This step runs `apt` and rustup, so it should take a few minutes.",
+  "updated_ms": 1795566352932,
+  "created_ms": 1795565160827
+}

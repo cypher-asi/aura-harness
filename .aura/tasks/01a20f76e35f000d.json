@@ -1,0 +1,14 @@
+{
+  "id": "01a20f76e35f000d",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust workspace, follow `.cursor/rules.md`: no unwrap in prod code, clippy -D warning…",
+  "state": "completed",
+  "agent_id": "557734f5342e957a81d2bbfee8b8c63af8714d9ed5dd3b6ec51eb97eaf0292b3",
+  "agent_name": "rust-engineer #111",
+  "assignee": "rust-engineer",
+  "parent": "01a20f6eb0810001",
+  "items": [],
+  "summary": "No perf. Let me read the key files.",
+  "updated_ms": 1795556682926,
+  "created_ms": 1795555779423,
+  "tool_use_id": "toolu_014pvjEy8cGSp9Hws4nDUjLT"
+}

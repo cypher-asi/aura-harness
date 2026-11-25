@@ -41,15 +41,25 @@ pub(in crate::gateway) async fn run_ws_handler(
     Path(run_id): Path<String>,
     State(state): State<RouterState>,
 ) -> Response {
-    if state.config.require_auth {
-        if let Err(status) = crate::auth::check_bearer(&headers, &state.config.auth_token) {
-            crate::inbound_console::ws_rejection_line(
-                "upgrade.run",
-                "unauthorized",
-                Some(&format!("run_id={run_id}")),
-            );
-            return status.into_response();
-        }
+    // A cloud node's hub calls with its claimed node token, which the
+    // auth middleware already checked; its startup token is never used.
+    let authorized = if state.cloud.enabled() {
+        state
+            .cloud
+            .authorize(&headers, "/stream")
+            .map(|_| String::new())
+    } else if state.config.require_auth {
+        crate::auth::check_bearer(&headers, &state.config.auth_token)
+    } else {
+        Ok(String::new())
+    };
+    if let Err(status) = authorized {
+        crate::inbound_console::ws_rejection_line(
+            "upgrade.run",
+            "unauthorized",
+            Some(&format!("run_id={run_id}")),
+        );
+        return status.into_response();
     }
 
     let Some(permit) = try_acquire_ws_slot(&state.ws_slots) else {

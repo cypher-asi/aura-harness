@@ -1,0 +1,14 @@
+{
+  "id": "01a20f96537b0013",
+  "title": "Review a performance change in /home/n3o/code/aura-harness, crate `crates/ui/aura-ui-terminal` (Rust, ratatui TUI). Do …",
+  "state": "completed",
+  "agent_id": "87d0514cc33f66ac6b93255a0f2a0bfd47a1717b1606ec44712cb4319f32f551",
+  "agent_name": "reviewer #61",
+  "assignee": "reviewer",
+  "parent": "01a20f6eb0810001",
+  "items": [],
+  "summary": "I found no correctness bugs or regressions in the parts you scoped. Both requested test runs pass: `chat_lines` ran 13 tests and `input` ran 53. The tasks-tab test you mentioned isn't in either filter, so it didn't come up.",
+  "updated_ms": 1795558046099,
+  "created_ms": 1795557839739,
+  "tool_use_id": "toolu_01XBLijpZYThfQxqmvjjk1PC"
+}

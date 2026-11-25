@@ -8,6 +8,9 @@
 //!   whose name says it is a secret, unless the name is on
 //!   [`ALLOWED_SECRET_NAMES`] (none today: node tokens travel over
 //!   `Exec`).
+//! - Plan tokens never go into a machine's env either: a machine names its
+//!   owner's boxd plan secrets in its spec (`NewMachine::secrets`, see
+//!   [`crate::plans`]) and so holds only `bxds_` placeholders.
 
 use std::collections::BTreeMap;
 

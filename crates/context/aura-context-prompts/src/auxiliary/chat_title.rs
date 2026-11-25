@@ -24,7 +24,7 @@ pub fn chat_title_user_prompt(prompt: &str, reply: &str) -> String {
 
 /// System prompt for naming a subtask a coding agent handed to a helper
 /// agent. The name sits after the helper's code in a narrow tree row
-/// (`RE36: Parser escapes`), so it is tighter than a chat title.
+/// (`REN36: Parser escapes`), so it is tighter than a chat title.
 pub const SUBTASK_TITLE_SYSTEM_PROMPT: &str = "\
 You label subtasks that a coding agent hands to helper agents, for a narrow \
 sidebar tree. Reply with only the label: 1 to 3 words in sentence case naming \
@@ -38,6 +38,25 @@ trailing punctuation, no prefix like \"Title:\".";
 #[must_use]
 pub fn subtask_title_user_prompt(prompt: &str) -> String {
     format!("Task:\n{prompt}\n\nLabel this subtask.")
+}
+
+/// System prompt for the subject of a thread of messages agents send
+/// each other. Agents' messages open with workspace and tool boilerplate
+/// that would otherwise become the subject, so the prompt says to skip it.
+pub const MAIL_SUBJECT_SYSTEM_PROMPT: &str = "\
+You write email-style subjects for messages coding agents send each other, \
+shown in a narrow inbox list. Reply with only the subject: 3 to 6 words in \
+sentence case naming what the message asks or reports, such as \"Inbox \
+subject titles\", \"Review parser escapes\" or \"Benchmark results for \
+Gate\". Ignore boilerplate such as workspace paths, \"Work ONLY in ...\" \
+lines, and instructions about tools or committing. No quotes, no trailing \
+punctuation, no prefix like \"Subject:\".";
+
+/// The user message for the mail subject call: the thread's first
+/// message, already shortened by the caller.
+#[must_use]
+pub fn mail_subject_user_prompt(text: &str) -> String {
+    format!("Message:\n{text}\n\nWrite its subject.")
 }
 
 #[cfg(test)]
@@ -55,5 +74,12 @@ mod tests {
     fn subtask_prompt_holds_the_task() {
         let prompt = subtask_title_user_prompt("Implement the parser escapes");
         assert!(prompt.contains("Task:\nImplement the parser escapes"));
+    }
+
+    #[test]
+    fn mail_subject_prompt_holds_the_message() {
+        let prompt = mail_subject_user_prompt("Please review the parser escapes");
+        assert!(prompt.contains("Message:\nPlease review the parser escapes"));
+        assert!(prompt.ends_with("Write its subject."));
     }
 }

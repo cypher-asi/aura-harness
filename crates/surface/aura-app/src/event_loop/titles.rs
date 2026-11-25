@@ -7,21 +7,29 @@
 //!
 //! Subtasks get a subtitle the same way: when a `task` call spawns an
 //! instance of a permanent agent, the same model names the subtask from
-//! its prompt, shown as `<code>: <subtask>` (`RE36: Fix parser escapes`).
+//! its prompt, shown as `<code>: <subtask>` (`REN36: Fix parser escapes`).
+//!
+//! INBOX threads named after the first line of their opening message (a
+//! `task` prompt, or a message sent without a subject) get a subject the
+//! same way, sent to the UI as [`UiCommand::SetThreadSubject`]. When the
+//! model gives none the thread keeps the subject it has, so no fallback is
+//! sent.
 
 use super::subagents::AgentHub;
 use aura_agent::{AgentLoopConfig, KernelModelGateway};
 use aura_context_prompts::auxiliary::chat_title::{
-    chat_title_user_prompt, subtask_title_user_prompt, CHAT_TITLE_SYSTEM_PROMPT,
-    SUBTASK_TITLE_SYSTEM_PROMPT,
+    chat_title_user_prompt, mail_subject_user_prompt, subtask_title_user_prompt,
+    CHAT_TITLE_SYSTEM_PROMPT, MAIL_SUBJECT_SYSTEM_PROMPT, SUBTASK_TITLE_SYSTEM_PROMPT,
 };
 use aura_core_types::{AgentId, BenchSource};
 use aura_model::{
     Message, ModelCallPurpose, ModelProvider, ModelRequest, ModelRequestKind, Role, ThinkingEffort,
     ToolChoice,
 };
+use aura_ui_terminal::UiCommand;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Environment variable naming the model that writes titles.
@@ -37,6 +45,9 @@ const MAX_FALLBACK_CHARS: usize = 40;
 const MAX_SUBTITLE_CHARS: usize = 28;
 /// Longest subtask name made from the prompt when the model gives none.
 const MAX_SUBTITLE_FALLBACK_CHARS: usize = 24;
+/// Longest INBOX thread subject kept, in characters. Thread rows share
+/// their width with a count, the participants and a time.
+const MAX_SUBJECT_CHARS: usize = 48;
 /// Leading verbs a subtask name made from its prompt drops: they open most
 /// task prompts ("Implement the ...") and say nothing about the subtask.
 const FILLER_VERBS: &[&str] = &[
@@ -60,6 +71,8 @@ enum TitleKind {
     Chat,
     /// A subtask a spawned helper works on, shown after its code.
     Subtask,
+    /// An INBOX thread, from the message that opened it.
+    Subject,
 }
 
 impl TitleKind {
@@ -67,6 +80,7 @@ impl TitleKind {
         match self {
             Self::Chat => CHAT_TITLE_SYSTEM_PROMPT,
             Self::Subtask => SUBTASK_TITLE_SYSTEM_PROMPT,
+            Self::Subject => MAIL_SUBJECT_SYSTEM_PROMPT,
         }
     }
 
@@ -74,6 +88,7 @@ impl TitleKind {
         match self {
             Self::Chat => chat_title_user_prompt(prompt, reply),
             Self::Subtask => subtask_title_user_prompt(prompt),
+            Self::Subject => mail_subject_user_prompt(prompt),
         }
     }
 
@@ -81,12 +96,13 @@ impl TitleKind {
         match self {
             Self::Chat => MAX_TITLE_CHARS,
             Self::Subtask => MAX_SUBTITLE_CHARS,
+            Self::Subject => MAX_SUBJECT_CHARS,
         }
     }
 
     fn fallback(self, prompt: &str) -> String {
         match self {
-            Self::Chat => fallback_title(prompt),
+            Self::Chat | Self::Subject => fallback_title(prompt),
             Self::Subtask => fallback_subtitle(prompt),
         }
     }
@@ -146,6 +162,39 @@ pub(super) fn spawn_subtitle(
     });
 }
 
+/// Write a subject for INBOX thread `thread_id` from `text`, the message
+/// that opened it, in the background, and send it to the UI over
+/// `commands`. Nothing is sent when the model gives no subject: the thread
+/// already has one made from `text`.
+pub(super) fn spawn_subject(
+    commands: mpsc::Sender<UiCommand>,
+    thread_id: String,
+    gateway: KernelModelGateway,
+    config: AgentLoopConfig,
+    model: String,
+    text: String,
+) {
+    tokio::spawn(async move {
+        if let Some(subject) = subject_for(&gateway, &config, &model, &text).await {
+            // A closed channel means the UI is gone; nobody is left to show it.
+            let _ = commands
+                .send(UiCommand::SetThreadSubject { thread_id, subject })
+                .await;
+        }
+    });
+}
+
+/// The subject `model` writes for a thread opened by `text`, or `None`
+/// when the call fails, says nothing usable or times out.
+async fn subject_for(
+    provider: &dyn ModelProvider,
+    config: &AgentLoopConfig,
+    model: &str,
+    text: &str,
+) -> Option<String> {
+    ask(TitleKind::Subject, provider, config, model, text, &[]).await
+}
+
 /// The subtitle of a subtask spawned under a benchmark's run: the start of
 /// its `prompt`, without a model call, as [`bench_title`] names the
 /// benchmark, so a run costs only what it measures.
@@ -180,6 +229,26 @@ async fn generate_kind(
     prompt: &str,
     messages: &[Message],
 ) -> String {
+    match ask(kind, provider, config, model, prompt, messages).await {
+        Some(title) => title,
+        None => {
+            // Made from the prompt, so the title itself is not logged.
+            info!(%model, "Titled chat from its prompt");
+            kind.fallback(prompt)
+        }
+    }
+}
+
+/// The title of `kind` the model writes, or `None` when the call fails,
+/// says nothing usable or takes longer than [`TITLE_TIMEOUT`].
+async fn ask(
+    kind: TitleKind,
+    provider: &dyn ModelProvider,
+    config: &AgentLoopConfig,
+    model: &str,
+    prompt: &str,
+    messages: &[Message],
+) -> Option<String> {
     let reply = last_reply(messages);
     let request = ModelRequest::builder(model, kind.system_prompt())
         .messages(vec![Message::user(kind.user_prompt(
@@ -220,17 +289,10 @@ async fn generate_kind(
             None
         }
     };
-    match titled {
-        Some(title) => {
-            info!(%model, %title, "Titled chat");
-            title
-        }
-        None => {
-            // Made from the prompt, so the title itself is not logged.
-            info!(%model, "Titled chat from its prompt");
-            kind.fallback(prompt)
-        }
+    if let Some(title) = &titled {
+        info!(%model, %title, "Titled chat");
     }
+    titled
 }
 
 /// Text of the latest assistant message in `messages`.
@@ -244,14 +306,17 @@ fn last_reply(messages: &[Message]) -> String {
         .unwrap_or_default()
 }
 
+/// Labels a model may put before its answer, though asked not to.
+const ANSWER_LABELS: [&str; 4] = ["Title:", "title:", "Subject:", "subject:"];
+
 /// The title in the model's `reply`: its first line without quotes, a
-/// `Title:` label or trailing punctuation, cut to `max` characters. `None`
-/// when nothing is left.
+/// `Title:` or `Subject:` label or trailing punctuation, cut to `max`
+/// characters. `None` when nothing is left.
 fn sanitize(reply: &str, max: usize) -> Option<String> {
     let line = reply.lines().map(str::trim).find(|l| !l.is_empty())?;
-    let line = line
-        .strip_prefix("Title:")
-        .or_else(|| line.strip_prefix("title:"))
+    let line = ANSWER_LABELS
+        .iter()
+        .find_map(|label| line.strip_prefix(label))
         .unwrap_or(line);
     let line = line
         .trim()
@@ -545,5 +610,44 @@ mod tests {
         assert_eq!(title, "fix the build");
         // The paused clock jumps straight to the deadline, no sooner.
         assert_eq!(started.elapsed(), TITLE_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn thread_subjects_use_the_subject_prompt_and_limit() {
+        let provider = MockProvider::simple_response("Subject: \"Inbox subject titles.\"");
+        let config = AgentLoopConfig::for_agent("aura-claude-opus-4-7");
+        let subject = subject_for(
+            &provider,
+            &config,
+            "aura-claude-haiku-4-5",
+            "Work ONLY in /home/n3o/code/x\nUse haiku for inbox subjects",
+        )
+        .await;
+        assert_eq!(subject.as_deref(), Some("Inbox subject titles"));
+        assert_eq!(
+            TitleKind::Subject.system_prompt(),
+            MAIL_SUBJECT_SYSTEM_PROMPT
+        );
+        assert!(TitleKind::Subject.max_chars() <= TitleKind::Chat.max_chars());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_model_writes_no_thread_subject() {
+        let config = AgentLoopConfig::for_agent("aura-claude-opus-4-7");
+        let subject = subject_for(&Silent, &config, "aura-claude-haiku-4-5", "Review it").await;
+        assert_eq!(subject, None, "the thread keeps the subject it has");
+    }
+
+    #[tokio::test]
+    async fn an_empty_answer_writes_no_thread_subject() {
+        let config = AgentLoopConfig::for_agent("aura-claude-opus-4-7");
+        let subject = subject_for(
+            &MockProvider::simple_response("  \n\"\" "),
+            &config,
+            "aura-claude-haiku-4-5",
+            "Review it",
+        )
+        .await;
+        assert_eq!(subject, None);
     }
 }

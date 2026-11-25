@@ -28,6 +28,9 @@ pub struct Holder {
     pub project: String,
     /// Display name.
     pub name: String,
+    /// Owner tag of the user the agent belongs to. Agents only see and
+    /// mail agents of the same owner.
+    pub owner: String,
 }
 
 /// Which node holds which agent.
@@ -81,15 +84,34 @@ impl Directory {
         nodes
     }
 
-    /// The directory frame for `node`: every agent of `project` it does
-    /// not hold itself.
+    /// The owner of the agents `node` holds.
+    #[must_use]
+    pub fn owner_of_node(&self, node: &str) -> Option<String> {
+        self.agents
+            .lock()
+            .values()
+            .find(|holder| holder.node == node)
+            .map(|holder| holder.owner.clone())
+    }
+
+    /// The owner of `agent`, if a node holds it.
+    #[must_use]
+    pub fn owner_of(&self, agent: &str) -> Option<String> {
+        self.holder(agent).map(|holder| holder.owner)
+    }
+
+    /// The directory frame for `node`: every agent of `project` with the
+    /// same owner that it does not hold itself. Other users' agents are
+    /// never listed.
     #[must_use]
     pub fn frame_for(&self, node: &str, project: &str) -> MeshFrame {
+        let owner = self.owner_of_node(node);
         let peers = self
             .agents
             .lock()
             .iter()
             .filter(|(_, holder)| holder.project == project && holder.node != node)
+            .filter(|(_, holder)| owner.as_deref() == Some(holder.owner.as_str()))
             .map(|(agent, holder)| MeshPeer {
                 agent_id: agent.clone(),
                 name: holder.name.clone(),
@@ -184,6 +206,7 @@ mod tests {
 
     fn holder(node: &str, project: &str) -> Holder {
         Holder {
+            owner: "a11ce000".into(),
             node: node.into(),
             url: (node != HUB_NODE).then(|| format!("https://{node}.boxd.sh")),
             project: project.into(),
@@ -220,6 +243,30 @@ mod tests {
             peers[1].url.as_deref(),
             Some("https://aura-ex2-1111.boxd.sh")
         );
+    }
+
+    #[test]
+    fn directories_never_list_another_owners_agents() {
+        let dir = Directory::new();
+        dir.place("aa", holder("aura-a-1111", "p1"));
+        dir.place(
+            "bb",
+            Holder {
+                owner: "b0b00000".into(),
+                ..holder("aura-b-2222", "p1")
+            },
+        );
+        dir.place("cc", holder("aura-c-3333", "p1"));
+        assert_eq!(dir.owner_of("bb").as_deref(), Some("b0b00000"));
+        let MeshFrame::Directory { peers } = dir.frame_for("aura-a-1111", "p1") else {
+            panic!("not a directory frame");
+        };
+        let ids: Vec<&str> = peers.iter().map(|p| p.agent_id.as_str()).collect();
+        assert_eq!(ids, vec!["cc"]);
+        let MeshFrame::Directory { peers } = dir.frame_for("aura-b-2222", "p1") else {
+            panic!("not a directory frame");
+        };
+        assert!(peers.is_empty(), "Bob's node sees none of Alice's agents");
     }
 
     #[test]

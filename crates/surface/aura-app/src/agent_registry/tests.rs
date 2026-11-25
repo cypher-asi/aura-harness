@@ -21,6 +21,12 @@ fn hex(zns: &str) -> String {
     Identity::new(zns, "x").agent_id.to_hex()
 }
 
+/// A fixed archive time, `second` seconds into 2026.
+fn at(second: u32) -> DateTime<Utc> {
+    use chrono::TimeZone;
+    Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, second).unwrap()
+}
+
 #[test]
 fn seeds_from_legacy_identity_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -437,9 +443,9 @@ fn unarchiving_an_agent_brings_back_only_that_agent() {
     let project = first.project_id.clone().unwrap();
     let second = registry.create_in_project(&project).unwrap();
     let third = registry.create_in_project(&project).unwrap();
-    registry.archive(first.agent_id()).unwrap();
-    registry.archive(second.agent_id()).unwrap();
-    registry.archive(third.agent_id()).unwrap();
+    registry.archive_at(first.agent_id(), at(1)).unwrap();
+    registry.archive_at(second.agent_id(), at(2)).unwrap();
+    registry.archive_at(third.agent_id(), at(3)).unwrap();
     assert_eq!(names(registry.tree()), [(legacy.name.clone(), 0)]);
 
     registry.restore(second.agent_id()).unwrap();
@@ -447,9 +453,10 @@ fn unarchiving_an_agent_brings_back_only_that_agent() {
         names(registry.tree()),
         [(legacy.name.clone(), 0), (second.name.clone(), 0)]
     );
+    // The Archive lists the newest archived first.
     assert_eq!(
         names(registry.archived_tree()),
-        [(first.name.clone(), 0), (third.name.clone(), 0)]
+        [(third.name.clone(), 0), (first.name.clone(), 0)]
     );
 
     // It comes back in its old place.
@@ -478,20 +485,21 @@ fn restoring_an_agent_whose_project_was_removed_puts_back_just_that_agent() {
     let nested = registry
         .create_instance("tests", Some(other.zns_id.clone()))
         .unwrap();
-    registry.archive(added.agent_id()).unwrap();
-    registry.archive(nested.agent_id()).unwrap();
+    registry.archive_at(added.agent_id(), at(1)).unwrap();
+    registry.archive_at(nested.agent_id(), at(2)).unwrap();
 
     let gone = registry.remove_project(&project).unwrap();
     assert_eq!(gone, [site.agent_id(), other.agent_id()]);
     assert!(registry.find(site.agent_id()).is_none());
     assert!(registry.find(other.agent_id()).unwrap().removed);
     assert_eq!(names(registry.tree()), [(legacy.name.clone(), 0)]);
+    // Newest archived first; what an agent spawned stays under it.
     assert_eq!(
         names(registry.archived_tree()),
         [
+            (nested.name.clone(), 0),
             (added.name.clone(), 0),
-            (spawned.name.clone(), 1),
-            (nested.name.clone(), 0)
+            (spawned.name.clone(), 1)
         ]
     );
 
@@ -588,6 +596,97 @@ fn archived_agents_move_to_the_archive_with_what_they_spawned() {
     registry.restore(grandchild.agent_id()).unwrap();
     assert_eq!(registry.tree().len(), 3);
     assert!(registry.archived_tree().is_empty());
+}
+
+#[test]
+fn the_archive_lists_the_newest_archived_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let [a, b, c, undated] = [(); 4].map(|()| registry.create(None).unwrap());
+    // Out of registry order, so the dates decide.
+    registry.archive_at(a.agent_id(), at(2)).unwrap();
+    registry.archive_at(b.agent_id(), at(3)).unwrap();
+    registry.archive_at(c.agent_id(), at(1)).unwrap();
+    registry.archive_at(undated.agent_id(), at(4)).unwrap();
+    // A registry written before the date was kept has no `archived_at`.
+    let path = dir.path().join(REGISTRY_FILE);
+    let mut file: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let agents = file["agents"].as_array_mut().unwrap();
+    let entry = agents
+        .iter_mut()
+        .find(|entry| entry["zns_id"] == undated.zns_id.as_str())
+        .unwrap();
+    entry
+        .as_object_mut()
+        .unwrap()
+        .remove("archived_at")
+        .unwrap();
+    fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+
+    let registry = open(dir.path(), launch.path());
+    assert_eq!(registry.find(undated.agent_id()).unwrap().archived_at, None);
+    assert_eq!(
+        names(registry.archived_tree()),
+        [(b.name, 0), (a.name, 0), (c.name, 0), (undated.name, 0)]
+    );
+}
+
+#[test]
+fn archiving_an_archived_agent_keeps_its_date_and_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let first = registry.create(None).unwrap();
+    let second = registry.create(None).unwrap();
+    registry.archive_at(first.agent_id(), at(1)).unwrap();
+    registry.archive_at(second.agent_id(), at(2)).unwrap();
+
+    registry.archive(first.agent_id()).unwrap();
+    assert_eq!(
+        registry.find(first.agent_id()).unwrap().archived_at,
+        Some(at(1))
+    );
+    assert_eq!(
+        names(registry.archived_tree()),
+        [(second.name, 0), (first.name, 0)]
+    );
+}
+
+#[test]
+fn restoring_clears_the_archive_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let agent = registry.create(None).unwrap();
+    registry.archive_at(agent.agent_id(), at(1)).unwrap();
+
+    registry.restore(agent.agent_id()).unwrap();
+    assert_eq!(registry.find(agent.agent_id()).unwrap().archived_at, None);
+    let reloaded = open(dir.path(), launch.path());
+    let restored = reloaded.find(agent.agent_id()).unwrap();
+    assert!(!restored.archived);
+    assert_eq!(restored.archived_at, None);
+}
+
+#[test]
+fn the_current_agent_may_be_archived_but_the_startup_agent_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let legacy = registry.active().clone();
+    let agent = registry.create(None).unwrap();
+    registry.set_active(agent.agent_id()).unwrap();
+    // The legacy agent stays listed, so this one can be archived.
+    registry.archive(agent.agent_id()).unwrap();
+
+    // Opened from the Archive.
+    registry.set_active(agent.agent_id()).unwrap();
+    assert_eq!(registry.current().agent_id(), agent.agent_id());
+    assert_ne!(registry.active().agent_id(), agent.agent_id());
+    assert_eq!(registry.active(), &legacy);
+    assert!(registry.find(agent.agent_id()).unwrap().archived);
 }
 
 #[test]
@@ -868,7 +967,7 @@ fn the_label_is_the_code_then_the_title_or_else_the_subtitle() {
     // Agents nobody spawned show their chat title alone; the panel has
     // the code in a column of its own.
     let mut top = AgentRegistry::new_agent("Agent 2".to_string());
-    top.code = Some("AG2".to_string());
+    top.code = Some("AGE2".to_string());
     assert_eq!(top.display_name(), "Agent 2");
     top.title = Some("Task build issue".to_string());
     assert_eq!(top.display_name(), "Task build issue");
@@ -1058,7 +1157,7 @@ fn split_code(code: &str) -> (&str, u64) {
 }
 
 /// Checks the code invariants over every agent of `registry`: each has a
-/// `<PREFIX><N>` code with a prefix of two or three uppercase letters, no
+/// `<PREFIX><N>` code with a prefix of exactly three uppercase letters, no
 /// two share one, all agents of a source key share a prefix and no two
 /// keys do.
 fn assert_codes_consistent(registry: &AgentRegistry) {
@@ -1068,7 +1167,7 @@ fn assert_codes_consistent(registry: &AgentRegistry) {
         let code = code_of(agent);
         assert!(seen.insert(code.to_string()), "{code} given twice");
         let (prefix, number) = split_code(code);
-        assert!((2..=3).contains(&prefix.len()), "{code}");
+        assert_eq!(prefix.len(), 3, "{code}");
         assert!(prefix.bytes().all(|b| b.is_ascii_uppercase()), "{code}");
         assert!(number > 0, "{code}");
         let key = agent.definition.clone().unwrap_or_else(|| "agent".into());
@@ -1089,7 +1188,7 @@ fn instance_codes_are_numbered_like_their_names() {
     for n in 1..=3 {
         let agent = registry.create_instance("rust-engineer", None).unwrap();
         assert_eq!(agent.name, format!("rust-engineer #{n}"));
-        assert_eq!(code_of(&agent), format!("RE{n}"));
+        assert_eq!(code_of(&agent), format!("REN{n}"));
         let (_, name_number) = agent.name.rsplit_once('#').unwrap();
         let (_, code_number) = split_code(code_of(&agent));
         assert_eq!(code_number.to_string(), name_number);
@@ -1099,12 +1198,12 @@ fn instance_codes_are_numbered_like_their_names() {
 }
 
 #[test]
-fn a_one_word_definition_takes_its_first_two_letters() {
+fn a_one_word_definition_takes_its_first_three_letters() {
     let dir = tempfile::tempdir().unwrap();
     let launch = tempfile::tempdir().unwrap();
     let mut registry = open(dir.path(), launch.path());
     let explorer = registry.create_instance("explorer", None).unwrap();
-    assert_eq!(code_of(&explorer), "EX1");
+    assert_eq!(code_of(&explorer), "EXP1");
 }
 
 #[test]
@@ -1116,22 +1215,22 @@ fn a_definition_whose_prefix_is_taken_uses_the_next_candidate() {
     let reviewer = registry.create_instance("reviewer", None).unwrap();
     let second = registry.create_instance("reviewer", None).unwrap();
     let engineer_2 = registry.create_instance("rust-engineer", None).unwrap();
-    // `RE` is taken: the first word's start and the second's initial.
+    // `REN` is taken: the first word's start and the second's initial.
     let research = registry.create_instance("research-engineer", None).unwrap();
-    // `re` has no candidate of its own but `RE`: `R` then `AA`.
+    // `re`'s only candidate of its own, `REE`, is taken: `R` then `AA`.
     let re = registry.create_instance("re", None).unwrap();
 
-    assert_eq!(code_of(&engineer), "RE1");
+    assert_eq!(code_of(&engineer), "REN1");
     assert_eq!(code_of(&reviewer), "REV1");
     assert_eq!(code_of(&second), "REV2");
-    assert_eq!(code_of(&engineer_2), "RE2");
+    assert_eq!(code_of(&engineer_2), "REN2");
     assert_eq!(code_of(&research), "REE1");
     assert_eq!(code_of(&re), "RAA1");
     assert_codes_consistent(&registry);
 }
 
 #[test]
-fn agents_without_a_definition_are_coded_ag() {
+fn agents_without_a_definition_are_coded_age() {
     let dir = tempfile::tempdir().unwrap();
     let launch = tempfile::tempdir().unwrap();
     let folder = tempfile::tempdir().unwrap();
@@ -1148,12 +1247,12 @@ fn agents_without_a_definition_are_coded_ag() {
         .create_child("gate-1", &project.zns_id, None)
         .unwrap();
 
-    assert_eq!(code_of(&instance), "RE1");
+    assert_eq!(code_of(&instance), "REN1");
     let generic: Vec<&str> = [&terminal, &unnamed, &named, &project, &in_project, &child]
         .into_iter()
         .map(code_of)
         .collect();
-    assert_eq!(generic, ["AG1", "AG2", "AG3", "AG4", "AG5", "AG6"]);
+    assert_eq!(generic, ["AGE1", "AGE2", "AGE3", "AGE4", "AGE5", "AGE6"]);
 }
 
 #[test]
@@ -1210,20 +1309,20 @@ fn a_dropped_instance_number_is_never_handed_out_again() {
         .add_instance_to_project("rust-engineer", &project)
         .unwrap();
     let second = registry.create_instance("rust-engineer", None).unwrap();
-    assert_eq!((code_of(&first), code_of(&second)), ("RE1", "RE2"));
+    assert_eq!((code_of(&first), code_of(&second)), ("REN1", "REN2"));
 
     // Dropping `#1` leaves `#2`, so the next instance is `#3`: names stay
     // unique and the code still matches the name's number.
     registry.remove_project(&project).unwrap();
     let third = registry.create_instance("rust-engineer", None).unwrap();
     assert_eq!(third.name, "rust-engineer #3");
-    assert_eq!(code_of(&third), "RE3");
+    assert_eq!(code_of(&third), "REN3");
 
     // Dropping the highest, `#3`, does not free its number either.
     registry.forget(third.agent_id()).unwrap();
     let fourth = registry.create_instance("rust-engineer", None).unwrap();
     assert_eq!(fourth.name, "rust-engineer #4");
-    assert_eq!(code_of(&fourth), "RE4");
+    assert_eq!(code_of(&fourth), "REN4");
     assert_codes_consistent(&registry);
 }
 
@@ -1234,12 +1333,12 @@ fn forgetting_the_highest_instance_does_not_free_its_number() {
     let mut registry = open(dir.path(), launch.path());
     registry.create_instance("rust-engineer", None).unwrap();
     let second = registry.create_instance("rust-engineer", None).unwrap();
-    assert_eq!(code_of(&second), "RE2");
+    assert_eq!(code_of(&second), "REN2");
 
     registry.forget(second.agent_id()).unwrap();
     let next = registry.create_instance("rust-engineer", None).unwrap();
     assert_eq!(next.name, "rust-engineer #3");
-    assert_eq!(code_of(&next), "RE3");
+    assert_eq!(code_of(&next), "REN3");
     assert_codes_consistent(&registry);
 }
 
@@ -1255,13 +1354,13 @@ fn removing_the_project_of_the_highest_instance_does_not_free_its_number() {
     let highest = registry
         .add_instance_to_project("rust-engineer", &project)
         .unwrap();
-    assert_eq!(code_of(&highest), "RE2");
+    assert_eq!(code_of(&highest), "REN2");
 
     registry.remove_project(&project).unwrap();
     assert!(registry.find(highest.agent_id()).is_none());
     let next = registry.create_instance("rust-engineer", None).unwrap();
     assert_eq!(next.name, "rust-engineer #3");
-    assert_eq!(code_of(&next), "RE3");
+    assert_eq!(code_of(&next), "REN3");
     assert_codes_consistent(&registry);
 }
 
@@ -1271,14 +1370,14 @@ fn a_forgotten_generic_agents_code_is_never_handed_out_again() {
     let launch = tempfile::tempdir().unwrap();
     let mut registry = open(dir.path(), launch.path());
     let root = registry.active().clone();
-    assert_eq!(code_of(&root), "AG1");
+    assert_eq!(code_of(&root), "AGE1");
     // As `/compare` registers a run and forgets it when it never starts.
     let run = registry.create_child("a-1", &root.zns_id, None).unwrap();
-    assert_eq!(code_of(&run), "AG2");
+    assert_eq!(code_of(&run), "AGE2");
 
     registry.forget(run.agent_id()).unwrap();
     let next = registry.create_child("a-1", &root.zns_id, None).unwrap();
-    assert_eq!(code_of(&next), "AG3");
+    assert_eq!(code_of(&next), "AGE3");
     assert_codes_consistent(&registry);
 }
 
@@ -1297,12 +1396,12 @@ fn the_highest_number_given_survives_a_reload() {
     let mut reloaded = open(dir.path(), launch.path());
     let next = reloaded.create_instance("rust-engineer", None).unwrap();
     assert_eq!(next.name, "rust-engineer #3");
-    assert_eq!(code_of(&next), "RE3");
+    assert_eq!(code_of(&next), "REN3");
     let child = reloaded.create_child("a-1", &root.zns_id, None).unwrap();
-    assert_eq!(code_of(&child), "AG3");
+    assert_eq!(code_of(&child), "AGE3");
     assert_eq!(
         saved_last_numbers(dir.path()),
-        serde_json::json!({"AG": 3, "RE": 3})
+        serde_json::json!({"AGE": 3, "REN": 3})
     );
 }
 
@@ -1320,27 +1419,27 @@ fn loading_a_registry_without_last_numbers_seeds_them_from_its_codes() {
         "version": REGISTRY_VERSION,
         "projects": [{"id": "p", "folder": launch.path(), "created_at": "2026-10-31T01:48:50Z"}],
         "agents": [
-            agent("0://terminal/agent", "Agent", None, Some("AG1")),
-            agent("0://terminal/re1", "rust-engineer #1", Some("rust-engineer"), Some("RE1")),
-            agent("0://terminal/re2", "rust-engineer #2", Some("rust-engineer"), Some("RE2")),
+            agent("0://terminal/agent", "Agent", None, Some("AGE1")),
+            agent("0://terminal/re1", "rust-engineer #1", Some("rust-engineer"), Some("REN1")),
+            agent("0://terminal/re2", "rust-engineer #2", Some("rust-engineer"), Some("REN2")),
             // Written before codes: backfilled, and counted.
             agent("0://terminal/re5", "rust-engineer #5", Some("rust-engineer"), None),
         ],
-        "prefixes": {"agent": "AG", "rust-engineer": "RE"},
+        "prefixes": {"agent": "AGE", "rust-engineer": "REN"},
     });
     fs::write(dir.path().join(REGISTRY_FILE), file.to_string()).unwrap();
 
     let mut registry = open(dir.path(), launch.path());
-    assert_eq!(code_of(&registry.agents()[3]), "RE5");
+    assert_eq!(code_of(&registry.agents()[3]), "REN5");
     assert_eq!(
         saved_last_numbers(dir.path()),
-        serde_json::json!({"AG": 1, "RE": 5})
+        serde_json::json!({"AGE": 1, "REN": 5})
     );
     let highest = registry.agents()[3].agent_id();
     registry.forget(highest).unwrap();
     let next = registry.create_instance("rust-engineer", None).unwrap();
     assert_eq!(next.name, "rust-engineer #6");
-    assert_eq!(code_of(&next), "RE6");
+    assert_eq!(code_of(&next), "REN6");
 }
 
 #[test]
@@ -1366,11 +1465,11 @@ fn backfilled_instances_keep_their_numbers_in_any_order() {
 
     let mut registry = open(dir.path(), launch.path());
     let got: Vec<&str> = registry.agents().iter().map(code_of).collect();
-    assert_eq!(got, ["RE5", "RE3"]);
+    assert_eq!(got, ["REN5", "REN3"]);
     let next = registry.create_instance("rust-engineer", None).unwrap();
     assert_eq!(
         (next.name.as_str(), code_of(&next)),
-        ("rust-engineer #6", "RE6")
+        ("rust-engineer #6", "REN6")
     );
 }
 
@@ -1440,10 +1539,10 @@ fn a_registry_without_codes_gets_them_on_load_and_keeps_them() {
     let (dir, first) = load();
     let (_other, second) = load();
     let expected = [
-        ("0://terminal/agent", "AG1"),
-        ("0://terminal/re36", "RE36"),
+        ("0://terminal/agent", "AGE1"),
+        ("0://terminal/re36", "REN36"),
         ("0://terminal/rev", "REV1"),
-        ("0://terminal/agent2", "AG2"),
+        ("0://terminal/agent2", "AGE2"),
     ]
     .map(|(zns, code)| (zns.to_string(), Some(code.to_string())));
     assert_eq!(first, expected);
@@ -1457,7 +1556,7 @@ fn a_registry_without_codes_gets_them_on_load_and_keeps_them() {
         .iter()
         .map(|a| a["code"].as_str().unwrap())
         .collect();
-    assert_eq!(saved, ["AG1", "RE36", "REV1", "AG2"]);
+    assert_eq!(saved, ["AGE1", "REN36", "REV1", "AGE2"]);
     assert_eq!(codes(&open(dir.path(), launch.path())), first);
 }
 
@@ -1476,8 +1575,8 @@ fn backfilling_keeps_the_codes_a_registry_has() {
         "projects": [{"id": "p", "folder": launch.path(), "created_at": "2026-10-31T01:48:50Z"}],
         "agents": [
             agent("0://terminal/re36", "rust-engineer #36", Some("rust-engineer"), None),
-            agent("0://terminal/rev", "reviewer #1", Some("reviewer"), Some("RE1")),
-            agent("0://terminal/agent", "Agent", None, Some("AG5")),
+            agent("0://terminal/rev", "reviewer #1", Some("reviewer"), Some("REN1")),
+            agent("0://terminal/agent", "Agent", None, Some("AGE5")),
             agent("0://terminal/agent2", "Agent 2", None, None),
             agent("0://terminal/rev2", "reviewer #2", Some("reviewer"), None),
         ],
@@ -1486,9 +1585,9 @@ fn backfilling_keeps_the_codes_a_registry_has() {
 
     let registry = open(dir.path(), launch.path());
     let got: Vec<&str> = registry.agents().iter().map(code_of).collect();
-    // `RE` is the reviewer's, coded later in the list but coded already,
-    // so the engineer takes its first three-letter candidate.
-    assert_eq!(got, ["RUE36", "RE1", "AG5", "AG6", "RE2"]);
+    // `REN` is the reviewer's (a hand edit), coded later in the list but
+    // coded already, so the engineer takes its next candidate.
+    assert_eq!(got, ["RUE36", "REN1", "AGE5", "AGE6", "REN2"]);
     assert_codes_consistent(&registry);
 }
 
@@ -1507,9 +1606,10 @@ fn older_codes_and_prefixes_are_migrated_on_load_and_kept() {
         "agents": [
             agent("0://terminal/agent", "Agent", None, "AG-1"),
             agent("0://terminal/re36", "rust-engineer #36", Some("rust-engineer"), "RE-36"),
-            agent("0://terminal/rev", "reviewer #1", Some("reviewer"), "REVI-1"),
+            // Three letters: joined up and kept.
+            agent("0://terminal/rev", "reviewer #1", Some("reviewer"), "REV-1"),
             agent("0://terminal/res", "research-engineer #1", Some("research-engineer"), "RE2-1"),
-            // Hand-edited to the code `RE-36` becomes: it is dropped.
+            // A two-letter code in the current format is dropped too.
             agent("0://terminal/re37", "rust-engineer #37", Some("rust-engineer"), "RE36"),
         ],
         "prefixes": {
@@ -1527,11 +1627,11 @@ fn older_codes_and_prefixes_are_migrated_on_load_and_kept() {
     let (dir, first) = load();
     let (_other, second) = load();
     let expected = [
-        ("0://terminal/agent", "AG1"),
-        ("0://terminal/re36", "RE36"),
+        ("0://terminal/agent", "AGE1"),
+        ("0://terminal/re36", "REN36"),
         ("0://terminal/rev", "REV1"),
         ("0://terminal/res", "REE1"),
-        ("0://terminal/re37", "RE37"),
+        ("0://terminal/re37", "REN37"),
     ]
     .map(|(zns, code)| (zns.to_string(), Some(code.to_string())));
     assert_eq!(first, expected);
@@ -1539,7 +1639,7 @@ fn older_codes_and_prefixes_are_migrated_on_load_and_kept() {
     assert_eq!(
         saved_prefixes(dir.path()),
         serde_json::json!({
-            "agent": "AG", "rust-engineer": "RE", "reviewer": "REV", "research-engineer": "REE",
+            "agent": "AGE", "rust-engineer": "REN", "reviewer": "REV", "research-engineer": "REE",
         })
     );
 
@@ -1595,27 +1695,27 @@ fn definitions_reserve_their_prefix_before_any_instance_exists() {
     let keys = ["rust-engineer", "reviewer", "explorer"];
     assert_eq!(
         registry.reserve_prefixes(&keys).unwrap(),
-        ["RE", "REV", "EX"]
+        ["REN", "REV", "EXP"]
     );
     assert_eq!(
         saved_prefixes(dir.path()),
         serde_json::json!({
-            "agent": "AG", "rust-engineer": "RE", "reviewer": "REV", "explorer": "EX",
+            "agent": "AGE", "rust-engineer": "REN", "reviewer": "REV", "explorer": "EXP",
         })
     );
 
     let engineer = registry.create_instance("rust-engineer", None).unwrap();
     let reviewer = registry.create_instance("reviewer", None).unwrap();
-    assert_eq!((code_of(&engineer), code_of(&reviewer)), ("RE1", "REV1"));
+    assert_eq!((code_of(&engineer), code_of(&reviewer)), ("REN1", "REV1"));
 
     let mut reloaded = open(dir.path(), launch.path());
     let body = fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap();
     assert_eq!(
         reloaded.reserve_prefixes(&keys).unwrap(),
-        ["RE", "REV", "EX"]
+        ["REN", "REV", "EXP"]
     );
     let explorer = reloaded.create_instance("explorer", None).unwrap();
-    assert_eq!(code_of(&explorer), "EX1");
+    assert_eq!(code_of(&explorer), "EXP1");
     assert_codes_consistent(&reloaded);
     // Asking again reserves nothing new, so the file is left alone.
     let after = fs::read_to_string(dir.path().join(REGISTRY_FILE)).unwrap();
@@ -1634,9 +1734,9 @@ fn prefixes_are_reserved_in_the_order_asked() {
     let mut registry = open(dir.path(), launch.path());
     assert_eq!(
         registry
-            .reserve_prefixes(&["reviewer", "rust-engineer"])
+            .reserve_prefixes(&["research-engineer", "rust-engineer"])
             .unwrap(),
-        ["RE", "RUE"]
+        ["REN", "RUE"]
     );
     let engineer = registry.create_instance("rust-engineer", None).unwrap();
     assert_eq!(code_of(&engineer), "RUE1");
@@ -1656,13 +1756,13 @@ fn a_registry_without_a_prefix_table_rebuilds_it_from_its_codes() {
         "version": REGISTRY_VERSION,
         "projects": [{"id": "p", "folder": launch.path(), "created_at": "2026-10-31T01:48:50Z"}],
         "agents": [
-            agent("0://terminal/rev", "reviewer #1", Some("reviewer"), "RE1"),
+            agent("0://terminal/rev", "reviewer #1", Some("reviewer"), "REW1"),
             agent("0://terminal/re36", "rust-engineer #36", Some("rust-engineer"), "RUS36"),
-            agent("0://terminal/agent", "Agent", None, "AG5"),
-            agent("0://terminal/rev2", "reviewer #2", Some("reviewer"), "RE2"),
-            // Hand-edited: `RE` is the reviewer's, so this code is dropped
+            agent("0://terminal/agent", "Agent", None, "AGT5"),
+            agent("0://terminal/rev2", "reviewer #2", Some("reviewer"), "REW2"),
+            // Hand-edited: `REW` is the reviewer's, so this code is dropped
             // and the key gets a prefix of its own.
-            agent("0://terminal/re", "re #1", Some("re"), "RE7"),
+            agent("0://terminal/re", "re #1", Some("re"), "REW7"),
         ],
     });
     fs::write(dir.path().join(REGISTRY_FILE), file.to_string()).unwrap();
@@ -1670,19 +1770,19 @@ fn a_registry_without_a_prefix_table_rebuilds_it_from_its_codes() {
     let mut registry = open(dir.path(), launch.path());
     assert_eq!(
         saved_prefixes(dir.path()),
-        serde_json::json!({"reviewer": "RE", "rust-engineer": "RUS", "agent": "AG", "re": "RAA"})
+        serde_json::json!({"reviewer": "REW", "rust-engineer": "RUS", "agent": "AGT", "re": "REE"})
     );
-    assert_eq!(code_of(&registry.agents()[4]), "RAA1");
+    assert_eq!(code_of(&registry.agents()[4]), "REE1");
     assert_codes_consistent(&registry);
     let keys = ["rust-engineer", "reviewer", "agent", "explorer", "re"];
     assert_eq!(
         registry.reserve_prefixes(&keys).unwrap(),
-        ["RUS", "RE", "AG", "EX", "RAA"]
+        ["RUS", "REW", "AGT", "EXP", "REE"]
     );
     let engineer = registry.create_instance("rust-engineer", None).unwrap();
     assert_eq!(code_of(&engineer), "RUS37");
     let reviewer = registry.create_instance("reviewer", None).unwrap();
-    assert_eq!(code_of(&reviewer), "RE3");
+    assert_eq!(code_of(&reviewer), "REW3");
 }
 
 #[test]
@@ -1709,7 +1809,11 @@ fn reserved_prefixes_are_unique_across_definitions() {
     let prefixes = registry.reserve_prefixes(&keys).unwrap();
     let unique: HashSet<&String> = prefixes.iter().collect();
     assert_eq!(unique.len(), keys.len(), "{prefixes:?}");
-    assert_eq!(prefixes[..3], ["RE", "REE", "REV"]);
+    assert_eq!(prefixes[..3], ["REE", "REN", "REV"]);
+    assert!(
+        prefixes.iter().all(|prefix| prefix.len() == 3),
+        "{prefixes:?}"
+    );
 
     let mut reloaded = open(dir.path(), launch.path());
     assert_eq!(reloaded.reserve_prefixes(&keys).unwrap(), prefixes);
@@ -1740,10 +1844,10 @@ fn codes_serialize_only_when_present() {
     let back: RegisteredAgent = serde_json::from_value(json).unwrap();
     assert_eq!(back.code, None);
 
-    agent.code = Some("RE36".to_string());
+    agent.code = Some("REN36".to_string());
     let json = serde_json::to_string(&agent).unwrap();
-    assert!(json.contains(r#""code":"RE36""#), "{json}");
+    assert!(json.contains(r#""code":"REN36""#), "{json}");
     let back: RegisteredAgent = serde_json::from_str(&json).unwrap();
     assert_eq!(back, agent);
-    assert_eq!(back.code.as_deref(), Some("RE36"));
+    assert_eq!(back.code.as_deref(), Some("REN36"));
 }

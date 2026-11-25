@@ -1,0 +1,11 @@
+{
+  "id": "01a2101a5ada0025",
+  "title": "can it start by running a local LLM?",
+  "state": "completed",
+  "agent_id": "45fd8023a4d5f78ba21e1580c29ba9b0a2a5b0378a8178809c11ec6417c1adb0",
+  "agent_name": "Agent 1524",
+  "items": [],
+  "summary": "Not yet. Today a cloud agent can only use models served by aura-router.",
+  "updated_ms": 1795566536184,
+  "created_ms": 1795566492378
+}

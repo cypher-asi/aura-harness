@@ -4,6 +4,7 @@
 //! lowercase ASCII letters, digits and `-`, at most 63 characters, and
 //! never start or end with `-`.
 
+use aura_core_auth::{Owner, ProviderKind};
 use aura_core_types::AgentId;
 
 /// Label every machine of this install carries, with the install id.
@@ -12,12 +13,71 @@ pub const LABEL_INSTALL: &str = "aura.install";
 pub const LABEL_AGENT: &str = "aura.agent";
 /// Label naming the project a machine works on.
 pub const LABEL_PROJECT: &str = "aura.project";
+/// Label naming the owner tag of the user a machine belongs to.
+pub const LABEL_OWNER: &str = "aura.owner";
 /// Label naming what a machine is for: `agent` or `builder`.
 pub const LABEL_ROLE: &str = "aura.role";
 /// [`LABEL_ROLE`] of agent machines.
 pub const ROLE_AGENT: &str = "agent";
 /// [`LABEL_ROLE`] of snapshot builders.
 pub const ROLE_BUILDER: &str = "builder";
+
+/// The owner as it may appear outside this machine: 8 hex characters of
+/// `blake3("aura-owner:" + owner)`. Machine labels, secret names, ledger
+/// rows and logs carry this, never the user id or email.
+#[must_use]
+pub fn owner_tag(owner: &Owner) -> String {
+    let hash = blake3::hash(format!("aura-owner:{owner}").as_bytes());
+    hash.to_hex()[..8].to_string()
+}
+
+/// The plans whose tokens cloud machines can use, in a fixed order.
+pub const PLAN_KINDS: [ProviderKind; 3] = [
+    ProviderKind::Claude,
+    ProviderKind::Chatgpt,
+    ProviderKind::OpenRouter,
+];
+
+/// Name of the boxd secret holding `owner_tag`'s `kind` plan token for
+/// install `install`: `AURA_<owner8>_<install6>_CLAUDE`. `None` for
+/// providers that are not plans ([`PLAN_KINDS`]).
+#[must_use]
+pub fn plan_secret(owner_tag: &str, install: &str, kind: ProviderKind) -> Option<String> {
+    let suffix = match kind {
+        ProviderKind::Claude => "CLAUDE",
+        ProviderKind::Chatgpt => "CHATGPT",
+        ProviderKind::OpenRouter => "OPENROUTER",
+        ProviderKind::Local | ProviderKind::Zos => return None,
+    };
+    let clean = |raw: &str, len: usize| -> String {
+        raw.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .take(len)
+            .collect::<String>()
+            .to_ascii_uppercase()
+    };
+    Some(format!(
+        "AURA_{}_{}_{suffix}",
+        clean(owner_tag, 8),
+        clean(install, 6)
+    ))
+}
+
+/// Whether `name` is one of `owner_tag`'s plan secrets (any install).
+#[must_use]
+pub fn is_plan_secret_of(name: &str, owner_tag: &str) -> bool {
+    let prefix = format!("AURA_{}_", owner_tag.to_ascii_uppercase());
+    name.starts_with(&prefix)
+        && ["_CLAUDE", "_CHATGPT", "_OPENROUTER"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+}
+
+/// ZNS id of the ledger agent holding an owner's plan-sync rows.
+#[must_use]
+pub fn owner_ledger(owner_tag: &str) -> String {
+    format!("0://cloud/owner/{owner_tag}")
+}
 
 /// Name of the base snapshot (toolchains and the aura binary).
 pub const BASE_SNAPSHOT: &str = "aura-base";
@@ -113,6 +173,31 @@ mod tests {
         let name = machine_name(Some(&long), &id);
         assert!(name.len() <= 63, "{name}");
         assert!(!name.ends_with('-'));
+    }
+
+    #[test]
+    fn owner_tags_hide_the_user_and_name_their_secrets() {
+        let alice = Owner::Zos {
+            user_id: "user-alice".into(),
+        };
+        let bob = Owner::Zos {
+            user_id: "user-bob".into(),
+        };
+        let tag = owner_tag(&alice);
+        assert_eq!(tag.len(), 8);
+        assert_eq!(tag, owner_tag(&alice), "stable");
+        assert_ne!(tag, owner_tag(&bob));
+        assert_ne!(tag, owner_tag(&Owner::Local));
+        assert!(!tag.contains("alice"));
+        let name = plan_secret(&tag, "ab12cd-ef", ProviderKind::Claude).expect("plan");
+        assert_eq!(
+            name,
+            format!("AURA_{}_AB12CD_CLAUDE", tag.to_ascii_uppercase())
+        );
+        assert!(is_plan_secret_of(&name, &tag));
+        assert!(!is_plan_secret_of(&name, &owner_tag(&bob)));
+        assert_eq!(plan_secret(&tag, "i", ProviderKind::Zos), None);
+        assert_eq!(owner_ledger(&tag), format!("0://cloud/owner/{tag}"));
     }
 
     #[test]

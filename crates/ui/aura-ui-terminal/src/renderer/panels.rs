@@ -10,9 +10,9 @@ use crate::{
     app::{
         scrollbar::{ScrollTarget, ScrollbarArea},
         tab_bar::TabLayout,
-        AgentButton, AgentRowEnd, AgentsTab, AppState, ChatScroll, ChatTab, HoverTarget, ImageHit,
-        MenuTarget, Pane, PanelFocus, ProjectListRow, ProseRow, RecordsTab, ToggleRow,
-        ToggleTarget,
+        AgentButton, AgentRowEnd, AgentsTab, AppState, ArchiveRow, ChatScroll, ChatTab,
+        HoverTarget, ImageHit, MenuTarget, Pane, PanelFocus, ProjectListRow, ProseRow, RecordsTab,
+        ToggleRow, ToggleTarget,
     },
     App, Theme,
 };
@@ -118,6 +118,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         // The agent's history is on its way: neither the welcome text nor
         // a partial chat, which would flash before the real one.
         app.set_chat_images(Vec::new());
+        app.set_chat_code_copies(Vec::new());
         app.set_chat_rows(Some((padded, 0)));
         if app.chat_loading_shown() {
             render_chat_loading(frame, padded, theme);
@@ -126,6 +127,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     }
     if app.pane_is_empty() && tail.lines.is_empty() {
         app.set_chat_images(Vec::new());
+        app.set_chat_code_copies(Vec::new());
         app.set_chat_rows(Some((padded, 0)));
         render_welcome(frame, padded, terminal, theme);
         return;
@@ -288,6 +290,7 @@ fn render_chat_lines(
     let gap = cache.block_gap();
     let mut toggle_rows = Vec::new();
     let mut image_hits = Vec::new();
+    let mut code_hits = Vec::new();
     let mut message_rows = 0;
     let mut last_prompt_row = None;
     for (i, block) in cache.blocks().enumerate() {
@@ -305,19 +308,30 @@ fn render_chat_lines(
             line: message_rows + hit.line,
             ..*hit
         }));
+        code_hits.extend(block.codes.iter().map(|hit| crate::app::CodeCopyHit {
+            line: message_rows + hit.line,
+            ..hit.clone()
+        }));
         message_rows += block.lines.len();
     }
     let tail_gap = usize::from(message_rows > 0 && !tail.lines.is_empty());
+    let tail_start = message_rows + tail_gap;
+    let checklist_open = app.todos_expanded();
+    toggle_rows.extend((0..tail.checklist_rows).map(|row| ToggleRow {
+        line: tail_start + row,
+        target: ToggleTarget::TodoChecklist,
+        open: checklist_open,
+    }));
     let tail_toggle = app
         .turn_started_ms()
         .zip(tail.status_row)
         .map(|(started, row)| ToggleRow {
-            line: message_rows + tail_gap + row,
+            line: tail_start + row,
             target: ToggleTarget::TurnRecords(started),
             open: false,
         });
     toggle_rows.extend(tail_toggle);
-    let content = message_rows + tail_gap + tail.lines.len();
+    let content = tail_start + tail.lines.len();
     let height = padded.height as usize;
     // Blank rows after the end, enough that scrolling to the bottom can
     // bring the latest prompt to the top with the reply filling in below,
@@ -385,11 +399,12 @@ fn render_chat_lines(
     if tail_gap > 0 {
         push_visible(&mut visible, &mut line_index, start, rows, blank);
     }
+    let checklist_hovered = hovered_activity == Some(ToggleTarget::TodoChecklist);
     for (row, line) in tail.lines.iter().enumerate() {
         let mut line = line.clone();
-        if tail.status_row == Some(row)
-            && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target))
-        {
+        let status_hovered = tail.status_row == Some(row)
+            && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target));
+        if status_hovered || (checklist_hovered && tail.is_checklist_label(row)) {
             apply_activity_hover(&mut line, theme);
         }
         push_visible(&mut visible, &mut line_index, start, rows, line);
@@ -458,7 +473,13 @@ fn render_chat_lines(
             super::images::highlight_caption(frame.buffer_mut(), row, theme);
         }
     }
+    if let Some(HoverTarget::CopyCode(line)) = app.hover() {
+        if let Some(hit) = code_hits.iter().find(|hit| hit.line == line) {
+            highlight_copy_button(frame.buffer_mut(), hit, (padded, start), theme);
+        }
+    }
     app.set_chat_images(image_hits);
+    app.set_chat_code_copies(code_hits);
     if smooth {
         let width = frame.buffer_mut().area.width;
         let mut below = row_below(
@@ -726,6 +747,32 @@ fn push_visible<'a>(
     *line_index += 1;
 }
 
+/// Draw a hovered code block's copy button in the accent, so it reads as
+/// something to click; `start` is the chat line at the top of `padded`.
+fn highlight_copy_button(
+    buffer: &mut ratatui::buffer::Buffer,
+    hit: &crate::app::CodeCopyHit,
+    (padded, start): (Rect, usize),
+    theme: &Theme,
+) {
+    let Some(row) = hit
+        .line
+        .checked_sub(start)
+        .and_then(|row| u16::try_from(row).ok())
+        .filter(|row| *row < padded.height)
+    else {
+        return;
+    };
+    let button = Rect {
+        x: padded.x.saturating_add(hit.x),
+        y: padded.y + row,
+        width: hit.width,
+        height: 1,
+    }
+    .intersection(padded);
+    buffer.set_style(button, Style::default().fg(theme.colors.success));
+}
+
 /// Hover style on an activity header. Status colors stay.
 fn apply_activity_hover(line: &mut Line<'_>, theme: &Theme) {
     let status = [
@@ -833,18 +880,35 @@ const fn chat_inset(width: u16) -> u16 {
 #[derive(Default)]
 struct LiveTail {
     lines: Vec<Line<'static>>,
+    /// Rows at the top of `lines` taken by the to-do checklist, each of
+    /// which expands or collapses it when clicked.
+    checklist_rows: usize,
+    /// Whether the checklist's last row is `N more` or `show less`.
+    checklist_footer: bool,
     /// Row in `lines` of the working line, which opens the turn's records
     /// when clicked.
     status_row: Option<usize>,
 }
 
+impl LiveTail {
+    /// Whether `row` is one the mouse lights up over the checklist: the
+    /// header and the `N more` or `show less` under the items, which say
+    /// what a click does.
+    fn is_checklist_label(&self, row: usize) -> bool {
+        (row == 0 && self.checklist_rows > 0)
+            || (self.checklist_footer && row + 1 == self.checklist_rows)
+    }
+}
+
 fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
-    let mut lines = if app.state() == AppState::Processing {
+    let checklist = if app.state() == AppState::Processing {
         let frame = theme.animate_spinners.then(|| app.animation_frame());
-        super::hud::todo_checklist(app.hud(), width, theme, frame)
+        super::hud::todo_checklist(app.hud(), width, theme, frame, app.todos_expanded())
     } else {
-        Vec::new()
+        super::hud::TodoChecklist::default()
     };
+    let checklist_rows = checklist.lines.len();
+    let mut lines = checklist.lines;
     let status_row = working_indicator_line(app, theme).map(|line| {
         if !lines.is_empty() {
             lines.push(Line::default());
@@ -852,7 +916,12 @@ fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
         lines.push(line);
         lines.len() - 1
     });
-    LiveTail { lines, status_row }
+    LiveTail {
+        lines,
+        checklist_rows,
+        checklist_footer: checklist.has_footer,
+        status_row,
+    }
 }
 
 /// `⬢ Thinking… 12s` — shown below the conversation, flush with the
@@ -1020,9 +1089,13 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     }
 }
 
-/// Archive rows: each archived agent with the project it came from on the
-/// right, and the agents under it indented below. Empty, a single muted
-/// line. Only the rows in `window` are drawn; the total comes with them.
+/// Archive rows: a muted header for each day agents were archived on, then
+/// each archived agent with the project it came from on the right, and
+/// the agents under it indented below while it is open. An agent with
+/// agents under it shows ▸ in the icon column while folded over them,
+/// as it starts, and ▾ once opened. Empty, a single muted line. Only
+/// the rows in `window` are drawn; the total comes with them. Unfocused,
+/// the agent on screen keeps the highlight, or the folded agent over it.
 fn build_archived_lines<'a>(
     app: &App,
     inner: Rect,
@@ -1039,16 +1112,32 @@ fn build_archived_lines<'a>(
         };
     }
     let is_focused = app.focus() == PanelFocus::Swarm;
+    let shown_active = app.shown_active_archived();
     let width = inner.width as usize;
     let now_ms = now_ms();
     let menu_target = app.context_menu().map(|menu| &menu.target);
-    let shown = archived
-        .iter()
-        .enumerate()
+    let rows = app.archive_rows();
+    let total = rows.len();
+    let shown = rows
+        .into_iter()
         .skip(window.start)
         .take(window.len())
-        .map(|(index, agent)| {
-            let selected = is_focused && index == app.selected_archived();
+        .filter_map(|row| {
+            let index = match row {
+                ArchiveRow::Day(label) => {
+                    return Some(
+                        empty_line(&label, inner.width, theme)
+                            .patch_style(Style::default().add_modifier(Modifier::BOLD)),
+                    );
+                }
+                ArchiveRow::Agent { index } => index,
+            };
+            let agent = archived.get(index)?;
+            let selected = if is_focused {
+                index == app.selected_archived()
+            } else {
+                shown_active == Some(index)
+            };
             let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index)
                 || matches!(menu_target, Some(MenuTarget::Archived(id)) if *id == agent.id);
             let side = if agent.depth == 0 {
@@ -1059,10 +1148,16 @@ fn build_archived_lines<'a>(
             } else {
                 agent.last_active_ms.map(|ms| format_ago(ms, now_ms))
             };
-            list_row(
+            // ▸ over folded agents under it, ▾ once opened.
+            let marker = match (app.archived_has_spawns(index), app.archived_folded(index)) {
+                (false, _) => "",
+                (true, true) => "▸",
+                (true, false) => "▾",
+            };
+            Some(list_row(
                 width,
                 agent.depth,
-                StatusIcon::new("", theme.colors.muted),
+                StatusIcon::new(marker, theme.colors.muted),
                 &agent.name,
                 cell_style(
                     theme,
@@ -1074,10 +1169,10 @@ fn build_archived_lines<'a>(
                     }),
                 ),
                 side.as_deref(),
-            )
+            ))
         })
         .collect();
-    (shown, archived.len())
+    (shown, total)
 }
 
 /// A project is its own row under a folder icon, with a "+" on the right
@@ -1099,9 +1194,9 @@ fn build_archived_lines<'a>(
 ///
 /// ```text
 ///  🗁  WEBSITE                 +
-///  ⢎⡱ Agent            1m AG1
+///  ⢎⡱ Agent            1m AGE1
 ///      reviewer #1     2d REV1
-///     Agent 2          5m AG2
+///     Agent 2          5m AGE2
 ///
 ///  🗀  RESEARCH                +
 ///  …
@@ -1265,10 +1360,24 @@ fn build_swarm_lines<'a>(
                     (button, color)
                 });
                 let buttons: &[_] = if pointer_on_row { &buttons } else { &[] };
-                let badge = agent.plan_mode.then_some(RowBadge {
-                    text: PLAN_BADGE,
-                    color: theme.colors.success,
-                });
+                // Plan mode wins the badge; otherwise a cloud agent shows
+                // a cloud, dimmed with its owner's name for another user's.
+                let cloud = app.cloud_badge(&agent.id);
+                let badge = if agent.plan_mode {
+                    Some(RowBadge {
+                        text: PLAN_BADGE,
+                        color: theme.colors.success,
+                    })
+                } else {
+                    cloud.as_ref().map(|(text, foreign)| RowBadge {
+                        text,
+                        color: if *foreign {
+                            theme.colors.faint
+                        } else {
+                            theme.colors.primary
+                        },
+                    })
+                };
                 let end = AgentRowEnd::agent(ago.as_deref());
                 lines.push(tree_row(
                     width,

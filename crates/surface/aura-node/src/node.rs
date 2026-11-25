@@ -171,9 +171,20 @@ impl Node {
         let executors = vec![resolver];
         info!("Executors configured");
 
-        let provider = aura_model::default_provider_from_env()
-            .context("building default model provider")?
-            .provider;
+        // A cloud node calls its owner's plans (Claude, ChatGPT,
+        // OpenRouter) directly, with boxd placeholders its claim brings;
+        // everything else still goes to aura-router.
+        let plans = Arc::new(crate::cloud_node::PlanResolver::default());
+        let provider = if self.config.cloud_node {
+            let resolver: Arc<dyn aura_core_auth::CredentialResolver> = plans.clone();
+            aura_model::routed_provider(Some(resolver))
+                .context("building the cloud node's model provider")?
+                .provider
+        } else {
+            aura_model::default_provider_from_env()
+                .context("building default model provider")?
+                .provider
+        };
 
         let memory_model =
             configured_memory_model(std::env::var("AURA_MEMORY_MODEL").ok().as_deref());
@@ -305,6 +316,7 @@ impl Node {
             trigger_registrar: Some(trigger_registrar),
             router_url,
         });
+        state.cloud_node().attach_plans(Arc::clone(&plans));
         if self.config.cloud_node {
             start_claim_socket(&state, &self.config.data_dir, addr.port());
         }

@@ -31,14 +31,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aura_config::{BoxdToken, CloudConfig, MachineSize};
-use aura_core_protocol::cloud::{NodeClaim, NodeClaimed};
+use aura_core_protocol::cloud::{NodeClaim, NodeClaimed, PlanTemplate};
 use aura_core_types::{VmEvent, VmPayload, VmResources, VmSource};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CloudError, CloudResult};
 use crate::machine_env::MachineEnv;
-use crate::names::{self, LABEL_AGENT, LABEL_INSTALL, LABEL_PROJECT, LABEL_ROLE, ROLE_AGENT};
+use crate::names::{
+    self, LABEL_AGENT, LABEL_INSTALL, LABEL_OWNER, LABEL_PROJECT, LABEL_ROLE, ROLE_AGENT,
+};
 use crate::provider::{
     MachineInfo, MachineOrigin, MachineStatus, NewMachine, UsageReading, VmProvider,
 };
@@ -143,6 +145,8 @@ impl VmState {
 pub struct MachineView {
     /// Agent, hex.
     pub agent: String,
+    /// Owner tag of the user it belongs to.
+    pub owner: String,
     /// Project id.
     pub project: String,
     /// Ledger agent ZNS id.
@@ -182,9 +186,18 @@ pub struct ProvisionRequest {
     pub origin: MachineOrigin,
     /// Agents on the copy to seal (forks).
     pub seal: Vec<String>,
+    /// Owner tag of the user placing the agent ([`names::owner_tag`]).
+    pub owner: String,
+    /// The owner's plan secrets the machine lists (only theirs; forks
+    /// inherit their parent's, which must have the same owner).
+    pub secrets: Vec<String>,
+    /// How the machine's node calls the owner's plans (sent in its claim).
+    pub plans: Vec<PlanTemplate>,
 }
 
 struct Entry {
+    owner: String,
+    plans: Vec<PlanTemplate>,
     project: String,
     ledger: String,
     machine: MachineInfo,
@@ -194,6 +207,11 @@ struct Entry {
     node_token: Option<BoxdToken>,
     usage: Option<UsageReading>,
     seen_ms: u64,
+}
+
+/// Key of a mesh token: one per owner and project.
+fn mesh_key(owner: &str, project: &str) -> String {
+    format!("{owner}/{project}")
 }
 
 /// Settings of the fleet.
@@ -290,15 +308,17 @@ impl VmFleet {
             }),
             isolated: machine.isolated,
             status: Some(machine.status.as_str().to_string()),
+            owner: machine.labels.get(LABEL_OWNER).cloned(),
             ..VmPayload::new(event, machine.id.clone(), machine.name.clone())
         }
     }
 
-    /// The project's mesh token, minted on first use.
-    fn mesh_token(&self, project: &str) -> BoxdToken {
+    /// The mesh token of `owner`'s agents in `project`, minted on first
+    /// use. Owners never share one: their nodes can't reach each other.
+    fn mesh_token(&self, owner: &str, project: &str) -> BoxdToken {
         self.mesh_tokens
             .lock()
-            .entry(project.to_string())
+            .entry(mesh_key(owner, project))
             .or_insert_with(random_token)
             .clone()
     }
@@ -314,8 +334,27 @@ impl VmFleet {
 
     /// The project's mesh token, if one was minted.
     #[must_use]
-    pub fn project_mesh_token(&self, project: &str) -> Option<BoxdToken> {
-        self.mesh_tokens.lock().get(project).cloned()
+    pub fn project_mesh_token(&self, owner: &str, project: &str) -> Option<BoxdToken> {
+        self.mesh_tokens
+            .lock()
+            .get(&mesh_key(owner, project))
+            .cloned()
+    }
+
+    /// Every machine of `owner`, sorted by agent.
+    #[must_use]
+    pub fn views_of(&self, owner: &str) -> Vec<MachineView> {
+        self.views()
+            .into_iter()
+            .filter(|view| view.owner == owner)
+            .collect()
+    }
+
+    /// Replace the plan templates `agent`'s next claims send.
+    pub fn set_plans(&self, agent: &str, plans: Vec<PlanTemplate>) {
+        if let Some(entry) = self.machines.lock().get_mut(agent) {
+            entry.plans = plans;
+        }
     }
 
     /// Create, configure and claim a machine for an agent.
@@ -332,8 +371,36 @@ impl VmFleet {
                 max: limit.max,
             });
         }
+        if let MachineOrigin::Fork(parent) = &request.origin {
+            // A fork inherits its parent's secrets, so never across owners.
+            let parent_owner = self
+                .machines
+                .lock()
+                .values()
+                .find(|entry| entry.machine.name == *parent || entry.machine.id == *parent)
+                .map(|entry| entry.owner.clone());
+            if parent_owner.as_deref() != Some(request.owner.as_str()) {
+                return Err(CloudError::BadState {
+                    machine: parent.clone(),
+                    state: "another user's machine".into(),
+                    op: "fork it",
+                });
+            }
+        }
+        if let Some(foreign) = request
+            .secrets
+            .iter()
+            .find(|name| !names::is_plan_secret_of(name, &request.owner))
+        {
+            return Err(CloudError::BadState {
+                machine: request.name.clone(),
+                state: format!("asked for secret {foreign}"),
+                op: "list a secret that is not its owner's plan",
+            });
+        }
         let ledger = names::machine_ledger(&request.agent_zns);
         let mut labels = BTreeMap::new();
+        labels.insert(LABEL_OWNER.to_string(), request.owner.clone());
         labels.insert(LABEL_INSTALL.to_string(), self.settings.install.clone());
         labels.insert(LABEL_AGENT.to_string(), request.agent.clone());
         labels.insert(LABEL_PROJECT.to_string(), request.project.clone());
@@ -351,6 +418,7 @@ impl VmFleet {
                 vec![format!("aura-{}", names::dns_fragment(&request.project))]
             },
             delete_after_secs: None,
+            secrets: request.secrets.clone(),
         };
         let machine = self.provider.create(&spec, &request.origin).await?;
         let event = match request.origin {
@@ -378,6 +446,8 @@ impl VmFleet {
         self.machines.lock().insert(
             request.agent.clone(),
             Entry {
+                owner: request.owner.clone(),
+                plans: request.plans.clone(),
                 project: request.project.clone(),
                 ledger: ledger.clone(),
                 machine: machine.clone(),
@@ -424,7 +494,7 @@ impl VmFleet {
     ///
     /// When the command fails or answers something unreadable.
     pub async fn claim(&self, agent: &str, seal: &[String]) -> CloudResult<NodeClaimed> {
-        let (machine, project, ledger) = {
+        let (machine, project, ledger, owner, plans) = {
             let machines = self.machines.lock();
             let entry = machines.get(agent).ok_or_else(|| CloudError::NotFound {
                 what: "machine",
@@ -434,14 +504,18 @@ impl VmFleet {
                 entry.machine.clone(),
                 entry.project.clone(),
                 entry.ledger.clone(),
+                entry.owner.clone(),
+                entry.plans.clone(),
             )
         };
         let node_token = random_token();
         let claim = NodeClaim {
             node_id: machine.name.clone(),
             node_token: node_token.expose().to_string(),
-            mesh_token: self.mesh_token(&project).expose().to_string(),
+            mesh_token: self.mesh_token(&owner, &project).expose().to_string(),
             seal: seal.to_vec(),
+            owner: (!owner.is_empty()).then(|| owner.clone()),
+            plans,
         };
         let stdin = serde_json::to_vec(&claim).map_err(|err| CloudError::InvalidResponse {
             op: "claim",
@@ -496,6 +570,7 @@ impl VmFleet {
         agent_zns: &str,
         project: &str,
         machine: &str,
+        plans: Vec<PlanTemplate>,
     ) -> CloudResult<MachineView> {
         let info = self
             .provider
@@ -511,9 +586,12 @@ impl VmFleet {
             MachineStatus::Error => VmState::Error("boxd reports an error".into()),
             _ => VmState::Claiming,
         };
+        let owner = info.labels.get(LABEL_OWNER).cloned().unwrap_or_default();
         self.machines.lock().insert(
             agent.to_string(),
             Entry {
+                owner,
+                plans,
                 project: project.to_string(),
                 ledger: names::machine_ledger(agent_zns),
                 machine: info,
@@ -925,6 +1003,7 @@ impl VmFleet {
         .then(|| self.settings.idle_hibernate.saturating_sub(idle).as_secs());
         Some(MachineView {
             agent: agent.to_string(),
+            owner: entry.owner.clone(),
             project: entry.project.clone(),
             ledger: entry.ledger.clone(),
             machine: entry.machine.clone(),
@@ -1018,7 +1097,69 @@ mod tests {
             name: format!("aura-re36-{agent}"),
             origin,
             seal: Vec::new(),
+            owner: ALICE.into(),
+            secrets: Vec::new(),
+            plans: Vec::new(),
         }
+    }
+
+    const ALICE: &str = "a11ce000";
+    const BOB: &str = "b0b00000";
+
+    #[tokio::test]
+    async fn machines_carry_their_owner_and_only_their_owners_secrets() {
+        let (fleet, fake, ledger) = fleet(Duration::from_secs(300));
+        let secret = |owner: &str| {
+            crate::names::plan_secret(owner, "inst-1", aura_core_auth::ProviderKind::Claude)
+                .expect("name")
+        };
+        for owner in [ALICE, BOB] {
+            fake.set_secret(&crate::provider::HostSecret {
+                name: secret(owner),
+                value: zeroize::Zeroizing::new("unlinked".into()),
+                domains: vec!["api.anthropic.com".into()],
+                replace_in: Vec::new(),
+            })
+            .await
+            .expect("secret");
+        }
+        let mut aa = request("aa", MachineOrigin::Fresh);
+        aa.secrets = vec![secret(ALICE)];
+        let view = fleet.provision(aa).await.expect("aa");
+        assert_eq!(view.owner, ALICE);
+        assert_eq!(
+            view.machine.labels.get(LABEL_OWNER).map(String::as_str),
+            Some(ALICE)
+        );
+        assert_eq!(fake.machine_secrets("aura-re36-aa"), vec![secret(ALICE)]);
+        assert!(ledger
+            .rows()
+            .iter()
+            .all(|(_, row)| row.owner.as_deref() == Some(ALICE)));
+
+        // Bob's secret is refused for Alice's machine.
+        let mut cc = request("cc", MachineOrigin::Fresh);
+        cc.secrets = vec![secret(BOB)];
+        let err = fleet.provision(cc).await.expect_err("foreign secret");
+        assert!(err.to_string().contains("not its owner's plan"), "{err}");
+
+        // Bob can't fork Alice's machine.
+        let mut bb = request("bb", MachineOrigin::Fork("aura-re36-aa".into()));
+        bb.owner = BOB.into();
+        let err = fleet.provision(bb).await.expect_err("cross-owner fork");
+        assert!(err.to_string().contains("another user's machine"), "{err}");
+        // Alice can, and the fork keeps her secrets.
+        let dd = request("dd", MachineOrigin::Fork("aura-re36-aa".into()));
+        fleet.provision(dd).await.expect("same-owner fork");
+        assert_eq!(fake.machine_secrets("aura-re36-dd"), vec![secret(ALICE)]);
+
+        assert_eq!(fleet.views_of(ALICE).len(), 2);
+        assert!(fleet.views_of(BOB).is_empty());
+        assert!(fleet.project_mesh_token(ALICE, "p1").is_some());
+        assert!(
+            fleet.project_mesh_token(BOB, "p1").is_none(),
+            "mesh tokens are per owner"
+        );
     }
 
     #[tokio::test]
@@ -1269,7 +1410,7 @@ mod tests {
             fleet.node_token("aa").map(|t| t.expose().to_string()),
             fleet.node_token("bb").map(|t| t.expose().to_string())
         );
-        assert!(fleet.project_mesh_token("p1").is_some());
+        assert!(fleet.project_mesh_token(ALICE, "p1").is_some());
     }
 
     #[tokio::test]
@@ -1287,7 +1428,7 @@ mod tests {
             settings(Duration::from_secs(300)),
         ));
         restarted
-            .adopt("aa", "0://terminal/aa", "p1", "aura-re36-aa")
+            .adopt("aa", "0://terminal/aa", "p1", "aura-re36-aa", Vec::new())
             .await
             .expect("adopt");
         assert!(restarted.node_token("aa").is_none());

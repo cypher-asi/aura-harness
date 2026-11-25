@@ -7,7 +7,7 @@
 //! / for commands · @ for files · $ for a terminal · Ctrl+O steps
 //! ```
 
-use super::text::display_width;
+use super::text::{display_width, wrap_words};
 use crate::app::format::format_tokens;
 use crate::app::hud::Hud;
 use crate::app::NotificationType;
@@ -441,16 +441,57 @@ pub(super) fn render_todo_panel(frame: &mut Frame, chat: Rect, app: &App, theme:
 
 /// `⬢ Working on 3 to-dos` over the to-do list, as the chat's live tail
 /// while a turn is in flight. With an animation `frame`, a band of light
-/// sweeps across `Working` to show the work goes on.
+/// sweeps across `Working` to show the work goes on. Short, it lists the
+/// first [`MAX_TODO_ROWS`] items cut to one row each and counts the rest;
+/// `expanded`, it lists every item in full and offers to show less.
 pub(super) fn todo_checklist(
     hud: &Hud,
     width: usize,
     theme: &Theme,
     frame: Option<usize>,
-) -> Vec<Line<'static>> {
+    expanded: bool,
+) -> TodoChecklist {
     if hud.todos.is_empty() {
-        return Vec::new();
+        return TodoChecklist::default();
     }
+    let mut lines = vec![checklist_header(hud, theme, frame)];
+    let room = width.saturating_sub(2);
+    let footer = if expanded {
+        lines.extend(
+            hud.todos
+                .iter()
+                .flat_map(|todo| todo_lines_in_full(todo, room, theme)),
+        );
+        Some("  show less".to_string())
+    } else {
+        lines.extend(
+            hud.todos
+                .iter()
+                .take(MAX_TODO_ROWS)
+                .map(|todo| todo_line(todo, room, theme)),
+        );
+        let more = hud.todos.len().saturating_sub(MAX_TODO_ROWS);
+        (more > 0).then(|| format!("  {more} more"))
+    };
+    let has_footer = footer.is_some();
+    lines.extend(
+        footer.map(|text| Line::from(Span::styled(text, Style::default().fg(theme.colors.muted)))),
+    );
+    TodoChecklist { lines, has_footer }
+}
+
+/// The rows of the chat's to-do checklist.
+#[derive(Debug, Default)]
+pub(super) struct TodoChecklist {
+    pub(super) lines: Vec<Line<'static>>,
+    /// Whether the last row is `N more` or `show less`, which with the
+    /// header is what lights up under the mouse.
+    pub(super) has_footer: bool,
+}
+
+/// `⬢ Working on 3 to-dos`, with `Working` shimmering on an animation
+/// `frame`.
+fn checklist_header(hud: &Hud, theme: &Theme, frame: Option<usize>) -> Line<'static> {
     let (_, total) = hud.todo_progress();
     let plural = if total == 1 { "" } else { "s" };
     let label_style = Style::default().add_modifier(Modifier::BOLD);
@@ -471,22 +512,7 @@ pub(super) fn todo_checklist(
         format!(" on {total} to-do{plural}"),
         Style::default().fg(theme.colors.secondary),
     ));
-    let mut lines = vec![Line::from(header)];
-    let room = width.saturating_sub(2);
-    lines.extend(
-        hud.todos
-            .iter()
-            .take(MAX_TODO_ROWS)
-            .map(|todo| todo_line(todo, room, theme)),
-    );
-    let more = hud.todos.len().saturating_sub(MAX_TODO_ROWS);
-    if more > 0 {
-        lines.push(Line::from(Span::styled(
-            format!("  {more} more"),
-            Style::default().fg(theme.colors.muted),
-        )));
-    }
-    lines
+    Line::from(header)
 }
 
 /// `▣ Write the parser`: a to-do's box, under the header's `⬢`, then its
@@ -507,6 +533,40 @@ fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
         Span::styled(truncate(&todo.content, room), text_style),
         Span::styled(agent, Style::default().fg(theme.colors.faint)),
     ])
+}
+
+/// A to-do's box and its whole text, wrapped to `room` columns, with
+/// later rows indented to start under the text rather than the box. The
+/// `→ agent` it is assigned to ends the last row when it fits there.
+fn todo_lines_in_full(todo: &TodoView, room: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let mark = super::plans::marker(todo.state);
+    let mark_color = super::plans::marker_color(todo.state, theme);
+    let text_style = super::plans::todo_style(todo.state, theme);
+    let lead = format!("{mark} ");
+    let indent = " ".repeat(display_width(&lead));
+    let rows = wrap_words(&todo.content, room);
+    let last = rows.len().saturating_sub(1);
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let mut spans = vec![if i == 0 {
+                Span::styled(lead.clone(), Style::default().fg(mark_color))
+            } else {
+                Span::raw(indent.clone())
+            }];
+            let agent = todo
+                .assignee
+                .as_deref()
+                .filter(|_| i == last)
+                .map(|agent| format!("  → {agent}"))
+                .filter(|agent| display_width(&text) + display_width(agent) <= room);
+            spans.push(Span::styled(text, text_style));
+            spans.extend(
+                agent.map(|agent| Span::styled(agent, Style::default().fg(theme.colors.faint))),
+            );
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// `text` cut to `width` columns, ending in `…` when cut.
@@ -614,7 +674,7 @@ mod tests {
             ],
             ..Hud::default()
         };
-        let lines = todo_checklist(&hud, 40, &theme, None);
+        let lines = todo_checklist(&hud, 40, &theme, None, false).lines;
         let text = |line: &Line<'_>| -> String { line.spans.iter().map(|s| &*s.content).collect() };
         let rows: Vec<String> = lines.iter().map(text).collect();
         assert_eq!(
@@ -648,7 +708,7 @@ mod tests {
             ..Hud::default()
         };
         let header = |frame| {
-            let lines = todo_checklist(&hud, 40, &theme, frame);
+            let lines = todo_checklist(&hud, 40, &theme, frame, false).lines;
             lines[0].spans.clone()
         };
         let text = |spans: &[Span<'_>]| -> String { spans.iter().map(|s| &*s.content).collect() };
@@ -665,28 +725,89 @@ mod tests {
         assert_eq!(steady[1].style.fg, Some(theme.colors.foreground));
     }
 
+    fn text_of(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| &*s.content).collect()
+    }
+
+    fn pending(content: &str) -> TodoView {
+        TodoView {
+            content: content.to_string(),
+            state: TodoState::Pending,
+            assignee: None,
+            task: None,
+        }
+    }
+
     #[test]
     fn checklist_counts_what_it_leaves_out() {
         let theme = Theme::default();
         let hud = Hud {
             todos: (0..MAX_TODO_ROWS + 2)
-                .map(|i| TodoView {
-                    content: format!("step {i}"),
-                    state: TodoState::Pending,
-                    assignee: None,
-                    task: None,
-                })
+                .map(|i| pending(&format!("step {i}")))
                 .collect(),
             ..Hud::default()
         };
-        let lines = todo_checklist(&hud, 40, &theme, None);
-        assert_eq!(lines.len(), MAX_TODO_ROWS + 2);
-        let last: String = lines[MAX_TODO_ROWS + 1]
-            .spans
-            .iter()
-            .map(|s| &*s.content)
-            .collect();
+        let checklist = todo_checklist(&hud, 40, &theme, None, false);
+        assert_eq!(checklist.lines.len(), MAX_TODO_ROWS + 2);
+        assert!(checklist.has_footer);
+        let last = text_of(&checklist.lines[MAX_TODO_ROWS + 1]);
         assert_eq!(last.trim(), "2 more");
+    }
+
+    #[test]
+    fn short_checklist_cuts_long_items_to_one_row() {
+        let theme = Theme::default();
+        let hud = Hud {
+            todos: vec![pending("parse every config file the user has")],
+            ..Hud::default()
+        };
+        let checklist = todo_checklist(&hud, 20, &theme, None, false);
+        let rows: Vec<String> = checklist.lines.iter().map(text_of).collect();
+        assert_eq!(rows[1..], ["☐ parse every confi…"]);
+        assert!(!checklist.has_footer);
+    }
+
+    #[test]
+    fn expanded_checklist_lists_every_item_in_full() {
+        let theme = Theme::default();
+        let mut todos: Vec<TodoView> = (0..MAX_TODO_ROWS + 2)
+            .map(|i| pending(&format!("step {i}")))
+            .collect();
+        todos[0] = TodoView {
+            assignee: Some("bob".to_string()),
+            ..pending("parse the config files and tests too")
+        };
+        let hud = Hud {
+            todos,
+            ..Hud::default()
+        };
+        let checklist = todo_checklist(&hud, 20, &theme, None, true);
+        let rows: Vec<String> = checklist.lines.iter().map(text_of).collect();
+        // The long item wraps at words, later rows under its text, and its
+        // agent ends the last row.
+        assert_eq!(
+            rows[1..4],
+            ["☐ parse the config", "  files and tests", "  too  → bob"]
+        );
+        assert_eq!(rows.len(), 1 + 3 + MAX_TODO_ROWS + 1 + 1);
+        assert_eq!(
+            rows[rows.len() - 2],
+            format!("☐ step {}", MAX_TODO_ROWS + 1)
+        );
+        assert_eq!(rows[rows.len() - 1].trim(), "show less");
+        assert!(checklist.has_footer);
+    }
+
+    #[test]
+    fn expanded_checklist_breaks_a_word_too_long_for_a_row() {
+        let theme = Theme::default();
+        let hud = Hud {
+            todos: vec![pending("abcdefghijkl")],
+            ..Hud::default()
+        };
+        let checklist = todo_checklist(&hud, 7, &theme, None, true);
+        let rows: Vec<String> = checklist.lines.iter().map(text_of).collect();
+        assert_eq!(rows[1..4], ["☐ abcde", "  fghij", "  kl"]);
     }
 
     #[test]

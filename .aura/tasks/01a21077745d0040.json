@@ -1,0 +1,13 @@
+{
+  "id": "01a21077745d0040",
+  "title": "yes go ahead and execute a live run",
+  "state": "completed",
+  "agent_id": "45fd8023a4d5f78ba21e1580c29ba9b0a2a5b0378a8178809c11ec6417c1adb0",
+  "agent_name": "Agent 1524",
+  "plan": ".aura/plans/cloud-agents-on-your-model-plans-claude-max-chat_637dd4bc.plan.md",
+  "builds": true,
+  "items": [],
+  "summary": "Plan secrets are now set in boxd. The base snapshot is building (a few minutes).",
+  "updated_ms": 1795576977703,
+  "created_ms": 1795572593757
+}

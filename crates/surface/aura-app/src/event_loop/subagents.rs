@@ -33,7 +33,7 @@ use super::approvals::TerminalApprovals;
 use super::gate::subtask::{explicit_model, Judgement, SubtaskEnd, SubtaskGate, SubtaskLabel};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
 use super::host::{agent_tool_definitions, TerminalAgents};
-use super::mail::{MailSender, Mailbox, TaskMail};
+use super::mail::{MailItem, MailSender, Mailbox, TaskMail};
 use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
 use super::processes::{now_ms, task_id, ProcessTable};
@@ -86,7 +86,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Record entries read per scan when adding up an agent's model calls.
 const SCAN_BATCH: usize = 500;
@@ -766,7 +766,7 @@ impl AgentHub {
         let mut rows = agent_summaries(
             &registry,
             self.factory.store.as_ref(),
-            registry.active().agent_id(),
+            registry.current().agent_id(),
             &running,
         );
         drop(registry);
@@ -849,7 +849,9 @@ impl AgentHub {
     /// Name the subtask `child` was spawned for with `prompt`: by the
     /// title model in the background, through the child's `kernel` with
     /// `config`'s credentials, or at once from the prompt under a
-    /// benchmark's run, whose agents are named without model calls.
+    /// benchmark's run, whose agents are named without model calls. The
+    /// same model writes a subject for the INBOX `thread` the task opens,
+    /// when it opens one and mail is collected.
     async fn name_subtask(
         self: &Arc<Self>,
         request: &SubagentDispatchRequest,
@@ -857,6 +859,7 @@ impl AgentHub {
         kernel: &Arc<Kernel>,
         config: &AgentLoopConfig,
         prompt: &str,
+        thread: Option<String>,
     ) {
         if self.in_bench(request.parent_agent_id) {
             self.apply_subtitle(child, &super::titles::bench_subtitle(prompt))
@@ -869,9 +872,19 @@ impl AgentHub {
             child,
             aura_agent::KernelModelGateway::new(Arc::clone(kernel)),
             config.clone(),
-            super::titles::title_model(classifier),
+            super::titles::title_model(classifier.clone()),
             prompt.to_string(),
         );
+        if let Some(thread) = thread.filter(|_| self.mail_open()) {
+            super::titles::spawn_subject(
+                self.commands.clone(),
+                thread,
+                aura_agent::KernelModelGateway::new(Arc::clone(kernel)),
+                config.clone(),
+                super::titles::title_model(classifier),
+                prompt.to_string(),
+            );
+        }
     }
 
     /// The projects, the Agents panel rows and the Archive, in the order
@@ -895,16 +908,16 @@ impl AgentHub {
             crate::record_loader::ListRows::build(&registry, &running)
         };
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
-        for (agent_id, row) in &mut rows.listed {
+        for (agent_id, row) in rows.listed.iter_mut().chain(rows.archived.iter_mut()) {
             self.mark_plan_mode(*agent_id, row);
         }
         let active = rows.active;
         (rows.into_commands(), active)
     }
 
-    /// Mark `row`, the Agents panel row of `agent_id`, when the agent is
-    /// in plan mode. Archived agents run no turns, so their rows are left
-    /// unmarked.
+    /// Mark `row`, the Agents panel or Archive row of `agent_id`, when the
+    /// agent is in plan mode. Archived agents can be opened and run turns
+    /// too, so their rows are marked as well.
     fn mark_plan_mode(&self, agent_id: AgentId, row: &mut AgentSummary) {
         row.plan_mode = self.mode_of(agent_id) == PermissionMode::Plan;
     }
@@ -967,7 +980,7 @@ impl AgentHub {
     /// arrives, for the event loop. A later call replaces the earlier
     /// channel. Surfaces that never call it (`aura -p`) collect none, so
     /// nothing piles up unread.
-    pub(crate) fn open_mail(&self) -> mpsc::UnboundedReceiver<MailView> {
+    pub(crate) fn open_mail(&self) -> mpsc::UnboundedReceiver<MailItem> {
         let (tx, rx) = mpsc::unbounded_channel();
         if let Some(agents) = &self.agents {
             agents
@@ -978,13 +991,53 @@ impl AgentHub {
         rx
     }
 
-    /// Show `view` in the INBOX tab, if mail is collected.
+    /// Show `view` in the INBOX tab, if mail is collected. A `task`
+    /// thread is titled when its subtask is named ([`Self::name_subtask`]),
+    /// so its mail asks for no subject.
     fn post_mail(&self, view: MailView) {
         if let Some(mail) = lock(&self.mail).as_ref() {
             // A closed channel means the event loop ended; nobody is left
             // to show it.
-            let _ = mail.send(view);
+            let _ = mail.send(MailItem {
+                view,
+                title_from: None,
+            });
         }
+    }
+
+    /// Whether mail is collected for the INBOX tab ([`Self::open_mail`]).
+    fn mail_open(&self) -> bool {
+        lock(&self.mail).is_some()
+    }
+
+    /// Have the title model write a subject for INBOX thread `thread_id`,
+    /// opened by `sender` with `text`, through the sender's kernel with
+    /// the terminal's credentials. Skipped under a benchmark's run, whose
+    /// agents make no model calls but the ones it measures, and when the
+    /// sender has no work in flight: its kernel is only reachable then,
+    /// and the thread keeps the subject made from `text`.
+    pub(super) fn title_thread(&self, sender: AgentId, thread_id: String, text: String) {
+        if self.in_bench(sender) {
+            return;
+        }
+        let Some(kernel) = self.running_kernel(sender) else {
+            debug!(%sender, %thread_id, "Thread sender has no running kernel; not titled");
+            return;
+        };
+        // Only the credentials are used; the turn's prompt and tools are
+        // not, so the base config does without loading instructions.
+        let (config, classifier) = {
+            let base = lock(&self.base);
+            (base.config.clone(), base.gate.classifier.clone())
+        };
+        super::titles::spawn_subject(
+            self.commands.clone(),
+            thread_id,
+            aura_agent::KernelModelGateway::new(kernel),
+            config,
+            super::titles::title_model(classifier),
+            text,
+        );
     }
 
     /// Tell the Processes tab what every agent is called.
@@ -1379,8 +1432,10 @@ impl AgentHub {
         // Observers report on the agent they were installed for, not this one.
         config.observers.clear();
         // Named beside the turn, not after it, so the name shows within a
-        // second or two.
-        self.name_subtask(request, child_id, &session.kernel, &config, &prompt)
+        // second or two. Only the first attempt opens the task's thread
+        // (`task:<first child>`); a retry posts to it.
+        let thread = escalation.is_none().then(|| task_id(child_id));
+        self.name_subtask(request, child_id, &session.kernel, &config, &prompt, thread)
             .await;
         if let Some(addendum) = request
             .system_prompt_addendum
@@ -1435,7 +1490,7 @@ impl AgentHub {
     /// Whether `agent` works under a benchmark: it, or an agent above it
     /// in the registry, runs a benchmark's run (its trace is a bench
     /// run), or it is a `/compare` run or a subtask of one. So a subtask
-    /// nested under a run (bench arm, `RE1`, `REV1`) is treated like the
+    /// nested under a run (bench arm, `REN1`, `REV1`) is treated like the
     /// run's direct subtasks, though its own trace is a TUI run.
     /// [`AgentRegistry::ancestry`] stops after as many steps as there are
     /// agents, so a hand-edited parent cycle cannot loop.

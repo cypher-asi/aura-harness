@@ -1,0 +1,14 @@
+{
+  "id": "01a20f44cf3a000f",
+  "title": "Repo /home/n3o/code/aura-harness. NOTE: other people are editing unrelated parts of this working tree concurrently (thr…",
+  "state": "completed",
+  "agent_id": "73e7f90e2187742baa64d636bf4fba7761b0e5b55bd0f91ab636089aab30dfda",
+  "agent_name": "rust-engineer #106",
+  "assignee": "rust-engineer",
+  "parent": "01a20f3683f6000c",
+  "items": [],
+  "summary": "I've made the archive-order tests deterministic and added the new tests. The focused test run and clippy both pass, and I didn't commit.",
+  "updated_ms": 1795552693524,
+  "created_ms": 1795552497466,
+  "tool_use_id": "toolu_01HP2wdGkjPbeHriKVVrGBs5"
+}

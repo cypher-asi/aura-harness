@@ -78,6 +78,9 @@ pub struct PlacementPayload {
     /// (local), by boxd name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// Owner tag of the user who placed the agent (never a raw user id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 impl PlacementPayload {
@@ -89,7 +92,15 @@ impl PlacementPayload {
             from,
             to,
             machine,
+            owner: None,
         }
+    }
+
+    /// The same row, tagged with its owner.
+    #[must_use]
+    pub fn with_owner(mut self, owner: Option<String>) -> Self {
+        self.owner = owner;
+        self
     }
 
     /// The payload as stored on the transaction.
@@ -262,6 +273,9 @@ pub struct VmPayload {
     /// Snapshot name, on `snapshot_saved`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<String>,
+    /// Owner tag of the user the machine belongs to (never a raw user id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 impl VmPayload {
@@ -284,6 +298,7 @@ impl VmPayload {
             usage: None,
             currency: None,
             snapshot: None,
+            owner: None,
         }
     }
 
@@ -436,5 +451,28 @@ mod tests {
         let cost = rates.price(4.0, 16.0, 100.0);
         assert!((cost - (0.156 + 0.192 + 0.008)).abs() < 1e-9, "{cost}");
         assert_eq!(rates.currency, "eur");
+    }
+
+    #[test]
+    fn owner_tags_round_trip_and_old_rows_have_none() {
+        let row = PlacementPayload::new(Placement::Local, Placement::Cloud, Some("m".into()))
+            .with_owner(Some("3f9c0a1b".into()));
+        let back = PlacementPayload::from_bytes(&row.to_bytes()).expect("parse");
+        assert_eq!(back.owner.as_deref(), Some("3f9c0a1b"));
+        let old = br#"{"system_kind":"placement","from":"local","to":"cloud"}"#;
+        assert_eq!(
+            PlacementPayload::from_bytes(old).map(|p| p.owner),
+            Some(None)
+        );
+        let vm = VmPayload {
+            owner: Some("3f9c0a1b".into()),
+            ..VmPayload::new(VmEvent::Created, "id", "m")
+        };
+        assert_eq!(
+            VmPayload::from_bytes(&vm.to_bytes())
+                .and_then(|v| v.owner)
+                .as_deref(),
+            Some("3f9c0a1b")
+        );
     }
 }

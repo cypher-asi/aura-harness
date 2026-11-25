@@ -1,0 +1,26 @@
+{
+  "id": "01a20f7259630009",
+  "title": "alignment looks weird, item left icon (check, box, etc.) should be directly under top arrow, plus we shouldn't show wha…",
+  "state": "completed",
+  "agent_id": "c1cd42326cfde93b6438003053e21407cd91da59a437505f6f1785fe07f55ed8",
+  "agent_name": "Agent 1494",
+  "items": [
+    {
+      "content": "aura-app: link each spawned task to the request todo it was handed (TodoView.task on request items)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "aura-ui-terminal: no request rows, merged items, icons under the header arrow, nested task only under its item",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Update/add TASKS tests, gate, commit",
+      "state": "completed"
+    }
+  ],
+  "summary": "Nothing was changed; the agent was cut off before starting. Retrying.",
+  "updated_ms": 1795558862573,
+  "created_ms": 1795555481955
+}

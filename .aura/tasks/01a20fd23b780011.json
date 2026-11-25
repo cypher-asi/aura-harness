@@ -1,0 +1,11 @@
+{
+  "id": "01a20fd23b780011",
+  "title": "for top right: claude max, open router, etc., only show the active one and then switch when model switches",
+  "state": "completed",
+  "agent_id": "9e5daca26ff69ead145dc560cb5ccdfca29873ed87409ad6d83a473894f460f9",
+  "agent_name": "Agent 1562",
+  "items": [],
+  "summary": "Small, self-contained change. I'll do it directly.",
+  "updated_ms": 1795561990920,
+  "created_ms": 1795561765752
+}

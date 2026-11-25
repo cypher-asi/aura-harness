@@ -26,6 +26,7 @@
 //!   local store.
 //! - [`mesh`]: the directory of which node holds which agent, mail ids
 //!   and dedup.
+//! - [`plans`]: each user's plan tokens as boxd host-bound secrets.
 //! - [`names`]: machine and ledger names.
 //!
 //! ## Invariants
@@ -45,6 +46,7 @@ pub mod host;
 pub mod machine_env;
 pub mod mesh;
 pub mod names;
+pub mod plans;
 pub mod provider;
 pub mod replica;
 pub mod snapshots;
@@ -67,7 +69,7 @@ pub use boxd::BoxdProvider;
 pub use error::{CloudError, CloudResult};
 pub use fake::FakeProvider;
 pub use provider::{
-    Balance, ExecOutput, MachineInfo, MachineLimit, MachineOrigin, MachineStatus, NewMachine,
-    OrgUsage, SnapshotInfo, UsageReading, VmProvider,
+    Balance, ExecOutput, HostSecret, MachineInfo, MachineLimit, MachineOrigin, MachineStatus,
+    NewMachine, OrgUsage, SnapshotInfo, UsageReading, VmProvider,
 };
 pub use token::TokenSource;

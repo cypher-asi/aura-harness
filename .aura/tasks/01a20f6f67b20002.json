@@ -1,0 +1,11 @@
+{
+  "id": "01a20f6f67b20002",
+  "title": "now",
+  "state": "completed",
+  "agent_id": "6034f48d463302e356de4f7184f89ce9f256e43e39cc292888d7e45b9335d963",
+  "agent_name": "Agent 1542",
+  "items": [],
+  "summary": "Deleting `aura/target` worked. You now have **784 GB free** and the disk is at **56%**, down from 83%.",
+  "updated_ms": 1795555299263,
+  "created_ms": 1795555289010
+}

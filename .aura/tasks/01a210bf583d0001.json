@@ -1,0 +1,13 @@
+{
+  "id": "01a210bf583d0001",
+  "title": "spawn a subagent and send a message to them",
+  "state": "completed",
+  "agent_id": "5f795105b57bd11a8053072b866f2b429d21100e94916b7bc5e2d41a0dffc1d1",
+  "agent_name": "Agent 1586",
+  "plan": ".aura/plans/haiku-subjects-for-inbox-threads_762c409c.plan.md",
+  "builds": true,
+  "items": [],
+  "summary": "Both replies are in and I've stopped `inbox-probe`. Whether the new subjects worked still needs checking in your INBOX tab, since the notices I receive keep the old first-line subject.",
+  "updated_ms": 1795577328006,
+  "created_ms": 1795577305149
+}

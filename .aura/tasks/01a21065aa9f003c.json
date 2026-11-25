@@ -1,0 +1,15 @@
+{
+  "id": "01a21065aa9f003c",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust workspace). The worktree has OTHER people's uncommitted edits in many files; do…",
+  "state": "completed",
+  "agent_id": "b70c97b9b2c1f7f36f0c85dd80e21fc36ba5594d687ac3318f12c45f88e72214",
+  "agent_name": "rust-engineer #134",
+  "assignee": "rust-engineer",
+  "parent": "01a21064da0e003a",
+  "plan": ".aura/plans/haiku-subjects-for-inbox-threads_762c409c.plan.md",
+  "items": [],
+  "summary": "The flag now goes from `Threads` through `Envelope` to `MailMessage`. Only the delivery that opened a thread whose subject came from its first line has `subject_from_text == true`. Nothing is committed.",
+  "updated_ms": 1795572649094,
+  "created_ms": 1795571427999,
+  "tool_use_id": "toolu_01Bv4GFsZyGcdVf71m94ydfR"
+}

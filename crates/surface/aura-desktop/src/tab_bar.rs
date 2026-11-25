@@ -63,7 +63,8 @@ pub fn height(metrics: &Metrics) -> f32 {
     metrics.pad + box_height(metrics)
 }
 
-fn box_height(metrics: &Metrics) -> f32 {
+/// Side of a window box, and of the header's hamburger box below them.
+pub(crate) fn box_height(metrics: &Metrics) -> f32 {
     (metrics.cell.height * 1.25).round()
 }
 

@@ -1539,7 +1539,7 @@ fn test_an_agents_buttons_leave_room_for_its_time() {
     let (tx, _rx) = mpsc::channel(8);
     let mut app = App::new().with_event_sender(tx);
     app.process_command(UiCommand::SetAgents(vec![crate::events::AgentSummary {
-        code: Some("RE36".to_string()),
+        code: Some("REN36".to_string()),
         ..agent("aa", "A")
     }]));
     let mut app = with_agent_areas(app);
@@ -2553,6 +2553,56 @@ fn test_clicking_a_group_summary_flips_what_it_shows() {
 
     app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
     assert!(app.group_open.is_empty());
+}
+
+#[test]
+fn test_clicking_the_todo_checklist_expands_and_collapses_it() {
+    use crate::events::{TodoState, TodoView};
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = App::new();
+    app.areas.chat = Some(Rect::new(0, 0, 60, 20));
+    app.set_chat_text_area(Rect::new(2, 1, 56, 18));
+    let click = |app: &mut App| {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            app.handle_mouse(MouseEvent {
+                kind,
+                column: 10,
+                row: 1,
+                modifiers: KeyModifiers::empty(),
+            });
+        }
+    };
+    let checklist = |open| ToggleRow {
+        line: 0,
+        target: ToggleTarget::TodoChecklist,
+        open,
+    };
+
+    assert!(!app.todos_expanded());
+    app.set_chat_layout(vec![checklist(false)], 0);
+    click(&mut app);
+    assert!(app.todos_expanded());
+
+    app.set_chat_layout(vec![checklist(true)], 0);
+    click(&mut app);
+    assert!(!app.todos_expanded());
+
+    // An emptied list starts the next one short.
+    click(&mut app);
+    assert!(app.todos_expanded());
+    app.process_command(UiCommand::SetTodos(vec![TodoView {
+        content: "next".to_string(),
+        state: TodoState::Pending,
+        assignee: None,
+        task: None,
+    }]));
+    assert!(app.todos_expanded());
+    app.process_command(UiCommand::SetTodos(Vec::new()));
+    assert!(!app.todos_expanded());
 }
 
 #[test]
@@ -4052,6 +4102,101 @@ fn test_plan_works_mid_turn_but_build_waits() {
     assert!(rx.try_recv().is_err());
     app.handle_command("/plan");
     assert!(matches!(rx.try_recv(), Ok(UiEvent::TogglePlan(_))));
+}
+
+#[test]
+fn test_plan_with_a_message_sends_it_in_plan_mode() {
+    let (mut app, mut rx) = app_with_events();
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(UiCommand::SetPlan(Some(sample_plan())));
+
+    // Even a build phrase after `/plan` is a request for a plan.
+    submit(&mut app, "/plan implement auth");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode { agent_id, mode: crate::PermissionMode::Plan }) if agent_id == "aa"
+    ));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { agent_id, text, shown: true, .. })
+            if agent_id == "aa" && text == "implement auth"
+    ));
+    assert_eq!(app.state(), AppState::Processing);
+    assert_eq!(app.messages().back().unwrap().content(), "implement auth");
+
+    // Already in plan mode, it stays there rather than toggling out.
+    app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
+    app.state = AppState::Idle;
+    submit(&mut app, "/PLAN  add\nlogout ");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode {
+            mode: crate::PermissionMode::Plan,
+            ..
+        })
+    ));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "add\nlogout"
+    ));
+    assert!(app.notification().is_none());
+}
+
+#[test]
+fn test_plan_message_parsing() {
+    use super::commands::{plan_ranges, strip_plan};
+    let ranges = |text: &str| -> Vec<(usize, usize)> {
+        plan_ranges(text).iter().map(|r| (r.start, r.end)).collect()
+    };
+    assert_eq!(ranges("/plan"), [(0, 5)]);
+    assert_eq!(ranges("/Plan do it"), [(0, 5)]);
+    assert_eq!(ranges("fix it /plan"), [(7, 12)]);
+    assert_eq!(ranges("a /plan b\n/PLAN"), [(2, 7), (10, 15)]);
+    for plain in [
+        "/planner",
+        "/pla",
+        "src/plan",
+        "x /plan/y",
+        "/plé",
+        "/build a /plan",
+    ] {
+        assert!(plan_ranges(plain).is_empty(), "{plain}");
+    }
+    assert_eq!(strip_plan("/plan").as_deref(), Some(""));
+    assert_eq!(strip_plan("  /plan   ").as_deref(), Some(""));
+    assert_eq!(strip_plan("/plan fix it ").as_deref(), Some("fix it"));
+    assert_eq!(strip_plan("fix /plan it").as_deref(), Some("fix it"));
+    assert_eq!(strip_plan("fix it /plan").as_deref(), Some("fix it"));
+    assert_eq!(strip_plan("fix it"), None);
+    assert_eq!(strip_plan("/planfix"), None);
+}
+
+#[test]
+fn test_plan_anywhere_in_a_message_sends_it_in_plan_mode() {
+    let (mut app, mut rx) = app_with_events();
+    submit(&mut app, "add a logout button /plan");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::SetMode {
+            mode: crate::PermissionMode::Plan,
+            ..
+        })
+    ));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::UserMessage { text, .. }) if text == "add a logout button"
+    ));
+}
+
+#[test]
+fn test_bare_plan_still_toggles() {
+    let (mut app, mut rx) = app_with_events();
+    submit(&mut app, "/plan ");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::TogglePlan(_))));
+    assert!(rx.try_recv().is_err());
+    submit(&mut app, " /plan");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::TogglePlan(_))));
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]

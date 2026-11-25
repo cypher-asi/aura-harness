@@ -1,0 +1,12 @@
+{
+  "id": "01a20f2634bd0001",
+  "title": "let's change plan to support this instead of daytona: https://boxd.sh/",
+  "state": "completed",
+  "agent_id": "45fd8023a4d5f78ba21e1580c29ba9b0a2a5b0378a8178809c11ec6417c1adb0",
+  "agent_name": "Agent 1524",
+  "plan": ".aura/plans/cloud-agents-on-boxd-machines_845e1a51.plan.md",
+  "items": [],
+  "summary": "The boxd plan replaces the Daytona one, so I'll remove the old file to avoid confusion.",
+  "updated_ms": 1795550791115,
+  "created_ms": 1795550491837
+}

@@ -11,6 +11,7 @@
 //! out again.
 
 use super::super::markdown::{may_continue_list, may_join_list};
+use crate::app::CodeCopyHit;
 use crate::components::{Message, MessageRole};
 use ratatui::text::Line;
 
@@ -23,8 +24,16 @@ pub(super) struct Settled {
     lines: usize,
 }
 
-/// Lines and, for each, whether it is prose (see `BlockLines::prose`).
-type Laid = (Vec<Line<'static>>, Vec<Option<u16>>);
+/// Lines, whether each is prose (see `BlockLines::prose`), and the copy
+/// buttons of the code blocks among them, `line` counted in the lines.
+pub(super) type Laid = (Vec<Line<'static>>, Vec<Option<u16>>, Vec<CodeCopyHit>);
+
+/// The block's laid out lines, prose flags and copy buttons, to add to.
+type LaidMut<'a> = (
+    &'a mut Vec<Line<'static>>,
+    &'a mut Vec<Option<u16>>,
+    &'a mut Vec<CodeCopyHit>,
+);
 
 /// Whether `message` is a reply still being written, which is laid out a
 /// part at a time.
@@ -38,37 +47,49 @@ pub(super) fn applies(message: &Message) -> bool {
 
 impl Settled {
     /// Lay `content` out as `render` would in one go, calling it only for
-    /// what was not settled before. `lines` and `prose` are the block's as
-    /// the last call left them, with whatever was put after them since.
+    /// what was not settled before. `laid` is the block's as the last call
+    /// left it, with whatever was put after it since.
     pub(super) fn extend(
         &mut self,
         content: &str,
-        (lines, prose): (&mut Vec<Line<'static>>, &mut Vec<Option<u16>>),
+        laid: LaidMut<'_>,
         render: impl Fn(&str) -> Laid,
     ) {
         if !content.starts_with(self.text.as_str()) {
             // The reply was replaced, not added to
             *self = Self::default();
         }
+        let (lines, prose, codes) = laid;
         lines.truncate(self.lines);
         prose.truncate(self.lines);
+        let settled = self.lines;
+        codes.retain(|hit| hit.line < settled);
         let mut rest = &content[self.text.len()..];
         if let Some(found) = last_break(rest) {
-            add((lines, prose), render(&rest[..found.before]));
+            add((lines, prose, codes), render(&rest[..found.before]));
             let gap = vec![Line::default(); found.blank];
-            add((lines, prose), (gap, vec![Some(0); found.blank]));
+            add(
+                (lines, prose, codes),
+                (gap, vec![Some(0); found.blank], Vec::new()),
+            );
             self.lines = lines.len();
             self.text.push_str(&rest[..found.after]);
             rest = &rest[found.after..];
         }
-        add((lines, prose), render(rest));
+        add((lines, prose, codes), render(rest));
     }
 }
 
-/// Put `more` lines after `lines`, whose last may have no entry in `prose`.
-fn add((lines, prose): (&mut Vec<Line<'static>>, &mut Vec<Option<u16>>), (more, flags): Laid) {
+/// Put `more` lines after `lines`, whose last may have no entry in `prose`,
+/// with their copy buttons moved down to match.
+pub(super) fn add((lines, prose, codes): LaidMut<'_>, (more, flags, hits): Laid) {
     prose.resize(lines.len(), None);
     prose.extend(flags);
+    let start = lines.len();
+    codes.extend(hits.into_iter().map(|hit| CodeCopyHit {
+        line: start + hit.line,
+        ..hit
+    }));
     lines.extend(more);
 }
 
@@ -170,10 +191,7 @@ the frontends is for and how a session is started from either of them:\n\n\
 ```rust\nlet session = start(&options).await?;\n\n// then\nsession.run();\n```\n\n\n\
 - Both UIs share one event loop\n- Fonts are Geist Mono and Inter\n\
 # A heading right after a list\n\
-> quoted\n\n---\n\n1. first\n2. second\r\n\r\n\
-- **Wrapped.** a point that runs on long enough to wrap in a narrow pane\n\
-- **Next.** another point that runs on long enough to wrap as well\n\
-- short\n\nA line after a CRLF gap\n  \n\
+> quoted\n\n---\n\n1. first\n2. second\r\n\r\nA line after a CRLF gap\n  \n\
 ```\nunclosed code\n";
 
     /// A loose list of fields in two records, then a paragraph.
@@ -198,7 +216,7 @@ Both are new in this change.\n";
 
     /// Prose flags as the renderer reads them: lines past the end are not
     /// prose.
-    fn flags((lines, prose): &Laid) -> Vec<Option<u16>> {
+    fn flags((lines, prose, _): &Laid) -> Vec<Option<u16>> {
         (0..lines.len())
             .map(|i| prose.get(i).copied().flatten())
             .collect()
@@ -220,11 +238,12 @@ Both are new in this change.\n";
                 end += 1;
             }
             let so_far = &content[..end];
-            settled.extend(so_far, (&mut laid.0, &mut laid.1), |text| {
+            settled.extend(so_far, (&mut laid.0, &mut laid.1, &mut laid.2), |text| {
                 at_once(text, width, &theme)
             });
             let whole = at_once(so_far, width, &theme);
             assert_eq!(laid.0, whole.0, "lines after {so_far:?}");
+            assert_eq!(laid.2, whole.2, "copy buttons after {so_far:?}");
             assert_eq!(flags(&laid), flags(&whole), "prose after {so_far:?}");
         }
         assert_eq!(end, content.len(), "the chunks ran out early");
@@ -245,9 +264,8 @@ Both are new in this change.\n";
 
     /// A reply of lines of every kind in an order no one would write.
     fn jumble(dice: &mut Dice) -> String {
-        const LINES: [&str; 30] = [
+        const LINES: [&str; 29] = [
             "plain text that goes on for long enough to wrap in a narrow pane",
-            "- a list item that goes on for long enough to wrap in a narrow pane",
             "short",
             "",
             "",
@@ -384,7 +402,7 @@ Both are new in this change.\n";
 
     #[test]
     fn a_list_of_fields_streamed_is_laid_out_as_it_would_be_at_once() {
-        let (lines, _) = at_once(FIELDS, 80, &Theme::cyber());
+        let (lines, _, _) = at_once(FIELDS, 80, &Theme::cyber());
         let blank = lines.iter().filter(|line| line.width() == 0).count();
         assert_eq!(
             blank, 3,
@@ -425,9 +443,10 @@ Both are new in this change.\n";
             "",
             "other\n\ntext\n\nhere",
         ] {
-            settled.extend(content, (&mut laid.0, &mut laid.1), render);
+            settled.extend(content, (&mut laid.0, &mut laid.1, &mut laid.2), render);
             let whole = render(content);
             assert_eq!(laid.0, whole.0, "{content:?}");
+            assert_eq!(laid.2, whole.2, "{content:?}");
             assert_eq!(flags(&laid), flags(&whole), "{content:?}");
         }
     }
@@ -443,7 +462,7 @@ Both are new in this change.\n";
         let mut so_far = String::new();
         for chunk in chars.chunks(12) {
             so_far.extend(chunk);
-            settled.extend(&so_far, (&mut laid.0, &mut laid.1), |text| {
+            settled.extend(&so_far, (&mut laid.0, &mut laid.1, &mut laid.2), |text| {
                 seen.borrow_mut().push(text.len());
                 at_once(text, 80, &theme)
             });

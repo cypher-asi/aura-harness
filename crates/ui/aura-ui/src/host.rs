@@ -60,6 +60,10 @@ pub struct PlacementState {
     pub machine_state: Option<String>,
     /// Whether cloud mode is set up (a boxd key is loaded).
     pub cloud_ready: bool,
+    /// The user who placed the agent, when it is not the one signed in
+    /// here: only they can move or manage it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 /// One labelled fact in the HOST tab.
@@ -126,6 +130,10 @@ pub struct HostRow {
     pub per_hour: String,
     /// Cost so far as shown, or empty for local.
     pub total: String,
+    /// The user whose plan and money the agent spends, when another
+    /// user's agents share the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 /// Buttons the HOST tab offers.

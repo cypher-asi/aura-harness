@@ -9,6 +9,7 @@ pub(crate) mod bench_progress;
 pub mod benchmarks;
 mod chat_tabs;
 mod commands;
+pub(crate) use commands::plan_ranges;
 mod context_menu;
 mod definitions;
 pub mod file_view;
@@ -68,6 +69,7 @@ use crate::{
     input::InputHistory,
     renderer::{ChatLineCache, GroupState},
 };
+pub use archive::ArchiveRow;
 pub use chat_tabs::ChatTab;
 pub(crate) use context_menu::MenuTarget;
 pub use context_menu::{WorkspaceMove, WorkspaceTarget};
@@ -251,6 +253,9 @@ pub struct App {
     /// Whether the side panel fills the right column, over the Record
     /// panel, while it is shown
     pub(super) side_expanded: bool,
+    /// Which of the Record and side panels were shown when the hamburger
+    /// button hid the right column, to show again when it comes back
+    pub(super) side_column_hidden: Option<(bool, bool)>,
     /// File tree of the active agent's sandbox
     pub(super) sandbox: SandboxTree,
     /// Whether a tool may have changed files since the tree was read; the
@@ -318,8 +323,6 @@ pub struct App {
     /// What was typed for the agents not on screen, by agent ID; each
     /// agent gets its draft back when it comes on screen again
     pub(super) drafts: HashMap<String, queue_panel::Draft>,
-    /// API URL for the swarm
-    pub(super) api_url: Option<String>,
     /// Whether the API is currently active
     pub(super) api_active: bool,
     /// Stored email during login flow (between email and password steps)
@@ -403,6 +406,8 @@ pub struct App {
     pub(super) just_queued: Option<String>,
     /// Image thumbnails in the chat in the last frame
     pub(super) image_hits: Vec<ImageHit>,
+    /// Copy buttons of code blocks in the chat in the last frame
+    pub(super) code_copy_hits: Vec<CodeCopyHit>,
     /// Thumbnails of the images waiting in the input, in the last frame
     pub(super) pending_image_areas: Vec<(Rect, usize)>,
     /// Absolute cell rect where the detail-view image was drawn in the last
@@ -445,6 +450,9 @@ pub struct App {
     pub(super) archived: Vec<AgentSummary>,
     /// Highlighted row of the Archive
     pub(super) selected_archived: usize,
+    /// Archived agents opened over the agents under them; every other one
+    /// with agents under it is folded. Cleared on entering the Archive.
+    pub(super) opened_archived: HashSet<String>,
     /// First visible row of the Archive
     pub(super) archived_scroll: usize,
     /// Folder browser for a new project, while it is open
@@ -466,6 +474,8 @@ pub struct App {
     pub(super) bench_panel: bench_progress::BenchPanel,
     /// Whether the full todo list is shown above the input
     pub(super) todos_open: bool,
+    /// Whether the chat's live to-do checklist lists every item in full
+    pub(super) todos_expanded: bool,
     /// When to get the user's attention
     pub(super) alert_settings: AlertSettings,
     /// Messages for the user that the terminal should ring the bell for
@@ -504,6 +514,40 @@ pub struct App {
     pub(super) copy_pending_text: Option<String>,
     /// What that text is, for the notice once it is copied
     pub(super) copy_label: Option<String>,
+    /// Where the wheel scrolled the input box's text, if it did
+    pub(super) input_view: Option<InputView>,
+}
+
+/// Rows of the input box's wrapped text in the last frame.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct InputRows {
+    /// Text row drawn on the box's first row
+    pub(crate) top: usize,
+    /// Rows the text wraps to
+    pub(crate) total: usize,
+    /// Rows the box had room to show
+    pub(crate) visible: usize,
+}
+
+impl InputRows {
+    /// Highest `top` that still fills the box.
+    const fn max_top(self) -> usize {
+        self.total.saturating_sub(self.visible)
+    }
+}
+
+/// Where the wheel scrolled the input box's text, and the draft and
+/// cursor it was scrolled on. Any edit or cursor move changes one of
+/// those, so comparing them tells when the view should follow the cursor
+/// again without every key path having to reset it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct InputView {
+    /// Text row to show on the box's first row
+    top: usize,
+    /// The input when it was scrolled
+    input: String,
+    /// The cursor when it was scrolled
+    cursor: usize,
 }
 
 /// Screen areas of the content panels from the last rendered frame.
@@ -544,6 +588,12 @@ pub struct PanelAreas {
     /// Stop button at the right end of the input box's first row, drawn
     /// while the agent on screen is busy
     pub input_stop: Option<Rect>,
+    /// Columns the input box wrapped its text at, which Up and Down
+    /// follow to move between the rows drawn
+    pub input_wrap: Option<usize>,
+    /// Rows of the input box's text and which of them it showed, which
+    /// the wheel scrolls from
+    pub(crate) input_rows: Option<InputRows>,
     /// Record panel (including border)
     pub records: Option<Rect>,
     /// Header bar of the record panel
@@ -573,6 +623,9 @@ pub struct PanelAreas {
     /// Button right of that one that maximizes the panel over the Record
     /// panel, or restores it
     pub side_expand: Option<Rect>,
+    /// Hamburger button at the right end of the header row that hides
+    /// the right column or shows it again
+    pub side_toggle: Option<Rect>,
     /// Rows of the Processes tab inside the panel
     pub process_rows: Option<Rect>,
     /// Process row shown at the top of `process_rows`
@@ -649,6 +702,9 @@ pub(crate) enum HoverTarget {
     /// The button right of it that maximizes the side panel or restores
     /// it.
     ExpandSide,
+    /// The hamburger button at the right end of the header row, which
+    /// hides the right column or shows it again.
+    SideToggle,
     /// A row in the Processes tab.
     ProcessRow(usize),
     /// A row in the Trace tab.
@@ -661,6 +717,9 @@ pub(crate) enum HoverTarget {
     ChatImage(u64, usize),
     /// A thumbnail above the input, by its `[image N]` label.
     PendingImage(usize),
+    /// The copy button of a code block in the chat, by the chat line of
+    /// the block's top border.
+    CopyCode(usize),
 }
 
 /// What clicking an activity row in the chat expands or collapses.
@@ -672,6 +731,8 @@ pub(crate) enum ToggleTarget {
     Step(u64),
     /// The kernel records of a turn, by when its prompt was sent (Unix ms)
     TurnRecords(u64),
+    /// The live to-do checklist under the conversation
+    TodoChecklist,
 }
 
 /// A thumbnail in the chat that opens its image when clicked.
@@ -689,6 +750,21 @@ pub(crate) struct ImageHit {
     pub message: u64,
     /// Which of the message's images
     pub index: usize,
+}
+
+/// The copy button in the top border of a code block in the chat, which
+/// copies the block's code when clicked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodeCopyHit {
+    /// Chat line of the block's top border
+    pub line: usize,
+    /// First column of the button, counted from the chat text's left edge
+    pub x: u16,
+    /// Columns the button takes
+    pub width: u16,
+    /// The code as written in the message, shared with the line cache so
+    /// handing hits out each frame does not copy it
+    pub code: std::sync::Arc<str>,
 }
 
 /// A chat row that expands or collapses `target` when clicked.
@@ -1021,6 +1097,7 @@ impl App {
             sandbox_panel_visible: true,
             chat_expanded: false,
             side_expanded: false,
+            side_column_hidden: None,
             sandbox: SandboxTree::default(),
             sandbox_stale: false,
             animation_frame: 0,
@@ -1052,7 +1129,6 @@ impl App {
             switch_sent: None,
             confirmed_agent: String::new(),
             drafts: HashMap::new(),
-            api_url: None,
             api_active: false,
             login_email: String::new(),
             models: Vec::new(),
@@ -1090,6 +1166,7 @@ impl App {
             queued_images: VecDeque::new(),
             just_queued: None,
             image_hits: Vec::new(),
+            code_copy_hits: Vec::new(),
             pending_image_areas: Vec::new(),
             detail_image_rect: None,
             selection: None,
@@ -1109,6 +1186,7 @@ impl App {
             pending_remove_project: None,
             archived: Vec::new(),
             selected_archived: 0,
+            opened_archived: HashSet::new(),
             archived_scroll: 0,
             folder_picker: None,
             context_menu: None,
@@ -1119,6 +1197,7 @@ impl App {
             queue_panel: queue_panel::QueuePanel::default(),
             bench_panel: bench_progress::BenchPanel::default(),
             todos_open: false,
+            todos_expanded: false,
             alert_settings: AlertSettings::default(),
             alerts: Vec::new(),
             side_tab: SidePanelTab::default(),
@@ -1138,6 +1217,7 @@ impl App {
             log: run_log::LogState::default(),
             copy_pending_text: None,
             copy_label: None,
+            input_view: None,
         }
     }
 
@@ -1269,6 +1349,13 @@ impl App {
         self.todos_open
     }
 
+    /// Whether the chat's live to-do checklist lists every item in full,
+    /// rather than the first few cut to one row each.
+    #[must_use]
+    pub const fn todos_expanded(&self) -> bool {
+        self.todos_expanded
+    }
+
     /// Get the messages.
     #[must_use]
     pub const fn messages(&self) -> &VecDeque<Message> {
@@ -1330,8 +1417,70 @@ impl App {
         self.toggle_rows.iter().find(|r| r.line == line).copied()
     }
 
-    /// Open or close the group of steps, or the step, at screen `row`.
-    /// Returns whether anything was toggled.
+    /// Record where the chat drew code blocks' copy buttons this frame.
+    pub(crate) fn set_chat_code_copies(&mut self, hits: Vec<CodeCopyHit>) {
+        self.code_copy_hits = hits;
+    }
+
+    /// The code block copy button at a screen cell, using the last frame.
+    /// A view over the chat hides the buttons.
+    fn code_copy_at(&self, column: u16, row: u16) -> Option<&CodeCopyHit> {
+        if self.detail.is_some() {
+            return None;
+        }
+        let area = self
+            .areas
+            .chat_text
+            .filter(|area| contains(Some(*area), column, row))?;
+        let line = self.chat_first_line + usize::from(row - area.y);
+        let x = column - area.x;
+        self.code_copy_hits
+            .iter()
+            .find(|hit| hit.line == line && (hit.x..hit.x + hit.width).contains(&x))
+    }
+
+    /// Forget the copy buttons a menu or overlay was drawn over, so a click
+    /// on what covers one does not copy.
+    pub(crate) fn drop_covered_code_copies(&mut self, buffer: &Buffer) {
+        let Some(area) = self.areas.chat_text else {
+            self.code_copy_hits.clear();
+            return;
+        };
+        let first = self.chat_first_line;
+        self.code_copy_hits.retain(|hit| {
+            let Some(y) = hit
+                .line
+                .checked_sub(first)
+                .and_then(|offset| u16::try_from(offset).ok())
+                .map(|offset| area.y.saturating_add(offset))
+            else {
+                return false;
+            };
+            let x = area.x.saturating_add(hit.x);
+            let drawn: String = (x..x.saturating_add(hit.width))
+                .filter_map(|x| buffer.cell((x, y)).map(ratatui::buffer::Cell::symbol))
+                .collect();
+            drawn == crate::components::COPY_BUTTON
+        });
+    }
+
+    /// Copy the code of the block whose copy button is at a screen cell
+    /// after the next frame. Returns whether there was one.
+    fn copy_code_at(&mut self, column: u16, row: u16) -> bool {
+        let Some(code) = self
+            .code_copy_at(column, row)
+            .map(|hit| hit.code.to_string())
+        else {
+            return false;
+        };
+        self.copy_pending_text = Some(code);
+        self.copy_label = Some("the code".to_string());
+        true
+    }
+
+    /// Open or close the group of steps, the step or the to-do checklist
+    /// at screen `row`, or open a turn's records. Returns whether anything
+    /// was toggled.
     fn toggle_activity_at(&mut self, column: u16, row: u16) -> bool {
         let Some(toggle) = self.toggle_row_at(column, row) else {
             return false;
@@ -1351,6 +1500,7 @@ impl App {
                 message.set_expanded(expanded);
             }
             ToggleTarget::TurnRecords(started_ms) => self.show_turn_records(started_ms),
+            ToggleTarget::TodoChecklist => self.todos_expanded = !self.todos_expanded,
         }
         true
     }
@@ -1503,7 +1653,7 @@ impl App {
                     self.select_definition_row(self.selected_definition.saturating_sub(lines));
                 }
                 AgentsTab::Archive => {
-                    self.select_archived_row(self.selected_archived.saturating_sub(lines));
+                    self.move_archived_by(-isize::try_from(lines).unwrap_or(isize::MAX));
                 }
             },
             PanelFocus::Sandbox => {
@@ -1564,7 +1714,7 @@ impl App {
                     self.select_definition_row(self.selected_definition.saturating_add(lines));
                 }
                 AgentsTab::Archive => {
-                    self.select_archived_row(self.selected_archived.saturating_add(lines));
+                    self.move_archived_by(isize::try_from(lines).unwrap_or(isize::MAX));
                 }
             },
             PanelFocus::Sandbox => {
@@ -1916,6 +2066,69 @@ impl App {
         self.areas.input_stop = area;
     }
 
+    /// Record the columns the input box wrapped its text at this frame,
+    /// or that it was not drawn.
+    pub(crate) fn set_input_wrap_width(&mut self, width: Option<usize>) {
+        self.areas.input_wrap = width;
+    }
+
+    /// Record the rows of the input box's text this frame and which of
+    /// them it showed, or that it was not drawn.
+    pub(crate) fn set_input_rows(&mut self, rows: Option<InputRows>) {
+        self.areas.input_rows = rows;
+    }
+
+    /// Text row the wheel scrolled the input box to, while the input and
+    /// cursor are as they were when it scrolled; `None` once either
+    /// changed, so the box follows the cursor again.
+    #[must_use]
+    pub(crate) fn input_scroll_top(&self) -> Option<usize> {
+        self.input_view
+            .as_ref()
+            .filter(|view| view.cursor == self.cursor_pos && view.input == self.input)
+            .map(|view| view.top)
+    }
+
+    /// The wheel over the input box scrolls its text a row per notch
+    /// while it has more rows than the box shows. Returns whether it did,
+    /// so the event does not also scroll a panel.
+    fn scroll_input(&mut self, mouse: MouseEvent) -> bool {
+        let up = match mouse.kind {
+            MouseEventKind::ScrollUp => true,
+            MouseEventKind::ScrollDown => false,
+            _ => return false,
+        };
+        if !contains(self.areas.input, mouse.column, mouse.row) {
+            return false;
+        }
+        let Some(rows) = self
+            .areas
+            .input_rows
+            .filter(|rows| rows.total > rows.visible)
+        else {
+            return false;
+        };
+        // Several notches can arrive between frames, so keep counting
+        // from the last one rather than from what was drawn.
+        let scrolled = self.input_scroll_top();
+        let top = scrolled.map_or(rows.top, |top| top.min(rows.max_top()));
+        let top = if up {
+            top.saturating_sub(1)
+        } else {
+            (top + 1).min(rows.max_top())
+        };
+        if let Some(view) = self.input_view.as_mut().filter(|_| scrolled.is_some()) {
+            view.top = top;
+        } else {
+            self.input_view = Some(InputView {
+                top,
+                input: self.input.clone(),
+                cursor: self.cursor_pos,
+            });
+        }
+        true
+    }
+
     /// Where the input box's stop button was drawn last frame.
     #[cfg(test)]
     pub(crate) const fn input_stop_area(&self) -> Option<Rect> {
@@ -1965,6 +2178,7 @@ impl App {
     }
 
     /// Handle a mouse event: the wheel scrolls the panel under the pointer,
+    /// or the input box's text while it has more rows than the box shows,
     /// a left click focuses it, clicking an agent row switches to it,
     /// clicking a record shows it over the chat panel, and clicking a
     /// sandbox row selects it and opens or closes a directory, or shows a
@@ -2030,6 +2244,14 @@ impl App {
         }
         if self.context_menu_mouse(mouse.kind, mouse.column, mouse.row) {
             self.hover = None;
+            return;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && contains(self.areas.side_toggle, mouse.column, mouse.row)
+        {
+            self.toggle_side_column();
+            self.clear_selection();
+            self.hover = self.hover_target(mouse.column, mouse.row);
             return;
         }
         if self.queue_mouse(mouse.kind, mouse.column, mouse.row)
@@ -2107,6 +2329,10 @@ impl App {
             }
             _ => {}
         }
+        if self.scroll_input(mouse) {
+            self.hover = self.hover_target(mouse.column, mouse.row);
+            return;
+        }
         let Some(panel) = self.panel_at(mouse.column, mouse.row) else {
             return;
         };
@@ -2136,7 +2362,10 @@ impl App {
             MouseEventKind::ScrollDown => self.scroll_panel_down(panel, step),
             MouseEventKind::Down(MouseButton::Left) => {
                 self.focus = panel;
-                if panel == PanelFocus::Chat && self.open_image_at(mouse.column, mouse.row) {
+                if panel == PanelFocus::Chat
+                    && (self.open_image_at(mouse.column, mouse.row)
+                        || self.copy_code_at(mouse.column, mouse.row))
+                {
                     self.clear_selection();
                     self.hover = None;
                     return;
@@ -2223,6 +2452,9 @@ impl App {
         if contains(self.areas.input_stop, column, row) {
             return Some(HoverTarget::StopTurn);
         }
+        if contains(self.areas.side_toggle, column, row) {
+            return Some(HoverTarget::SideToggle);
+        }
         if self.agents_tab == AgentsTab::Projects {
             if let Some(index) = self.project_row_at(column, row) {
                 if self.project_add_at(index, column).is_some() {
@@ -2262,6 +2494,9 @@ impl App {
         }
         if let Some(target) = self.image_at(column, row) {
             return Some(target);
+        }
+        if let Some(hit) = self.code_copy_at(column, row) {
+            return Some(HoverTarget::CopyCode(hit.line));
         }
         self.hovered_activity(column, row)
     }
@@ -2628,6 +2863,62 @@ impl App {
         self.areas.side_expand = area;
     }
 
+    /// Whether the right column, the Record panel above the side panel,
+    /// is on screen.
+    #[must_use]
+    pub const fn side_column_shown(&self) -> bool {
+        self.record_panel_visible() || self.sandbox_panel_visible()
+    }
+
+    /// Hide the right column, remembering which of its panels were shown,
+    /// or show those again, as the hamburger button at the right end of
+    /// the header does. With nothing remembered, or nothing to show, both
+    /// come back. While the chat is expanded the column is not on screen,
+    /// so the button restores the chat and shows the column.
+    ///
+    /// Only the panels' own flags change, so `/kernel`, `/files` and the
+    /// tabs that open the Record panel show the column again as usual.
+    pub fn toggle_side_column(&mut self) {
+        if self.side_column_shown() {
+            self.side_column_hidden = Some((self.record_panel_visible, self.sandbox_panel_visible));
+            self.record_panel_visible = false;
+            self.sandbox_panel_visible = false;
+            if matches!(self.focus, PanelFocus::Records | PanelFocus::Sandbox) {
+                self.focus = PanelFocus::Chat;
+            }
+            return;
+        }
+        self.chat_expanded = false;
+        let remembered = self.side_column_hidden.take();
+        if self.record_panel_visible || self.sandbox_panel_visible {
+            // It was only under the expanded chat.
+            return;
+        }
+        let (records, side) = remembered
+            .filter(|&shown| shown != (false, false))
+            .unwrap_or((true, true));
+        self.record_panel_visible = records;
+        self.sandbox_panel_visible = side;
+        if side {
+            self.sandbox.refresh();
+        }
+    }
+
+    /// Record where the header's hamburger button was drawn this frame,
+    /// or that it was not.
+    pub fn set_side_toggle_area(&mut self, area: Option<Rect>) {
+        self.areas.side_toggle = area;
+    }
+
+    /// The header row's cells of the hamburger button that shows or hides
+    /// the right column (see [`Self::toggle_side_column`]) in the last
+    /// frame. A front end that draws the chrome finds them blank and draws
+    /// the button there itself.
+    #[must_use]
+    pub const fn side_toggle_area(&self) -> Option<Rect> {
+        self.areas.side_toggle
+    }
+
     /// File tree of the active agent's sandbox.
     #[must_use]
     pub const fn sandbox(&self) -> &SandboxTree {
@@ -2976,12 +3267,6 @@ impl App {
     #[must_use]
     pub fn active_agent_id(&self) -> &str {
         &self.active_agent_id
-    }
-
-    /// Get the API URL (if set).
-    #[must_use]
-    pub fn api_url(&self) -> Option<&str> {
-        self.api_url.as_deref()
     }
 
     /// Check if the API is active.

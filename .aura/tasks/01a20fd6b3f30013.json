@@ -1,0 +1,11 @@
+{
+  "id": "01a20fd6b3f30013",
+  "title": "curl -fsSL https://boxd.sh/downloads/onboard.sh | sh",
+  "state": "completed",
+  "agent_id": "45fd8023a4d5f78ba21e1580c29ba9b0a2a5b0378a8178809c11ec6417c1adb0",
+  "agent_name": "Agent 1524",
+  "items": [],
+  "summary": "My sandbox can't write to `~/.local/bin`, so I'll install the binary inside the workspace instead (`aura_data/bin`, which is gitignored).",
+  "updated_ms": 1795562486268,
+  "created_ms": 1795562058739
+}

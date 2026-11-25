@@ -1,0 +1,31 @@
+{
+  "id": "01a20f3683f6000c",
+  "title": "implement and commit",
+  "state": "open",
+  "agent_id": "ef901a3e15abf982d305397fb88dd95d7ea9db9fd497788d5a79dd2933a27570",
+  "agent_name": "Agent 1530",
+  "items": [
+    {
+      "content": "Backend: archived_at in registry, idempotent archive, sorted archived_tree, current(), archived_at_ms in AgentSummary, rows keep archived active agent, after_list_shrank, tests",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Terminal UI: archive row model with day headers, click/Enter opens agent, selection by id, /unarchive, rendering, tests",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the changes for bugs and regressions",
+      "state": "completed",
+      "assignee": "reviewer"
+    },
+    {
+      "content": "fmt, clippy -D warnings, tests; commit",
+      "state": "pending"
+    }
+  ],
+  "summary": "Backend code is in place; the agent timed out before finishing tests. Two existing order assertions fail and new tests are missing. Sending a focused follow-up.",
+  "updated_ms": 1795554000608,
+  "created_ms": 1795551560694
+}

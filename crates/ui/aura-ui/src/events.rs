@@ -612,6 +612,15 @@ pub enum UiCommand {
     /// [`Self::SetProcesses`]: the UI files it under its thread and shows
     /// it while either agent is in the run on screen.
     AddMail(MailView),
+    /// A better subject for thread `thread_id`, written by the title model
+    /// after its first message. Global like [`Self::AddMail`]; it replaces
+    /// the subject the thread's messages carry, whichever arrives first.
+    SetThreadSubject {
+        /// The thread named
+        thread_id: String,
+        /// Its subject, in place of the one its messages carry
+        subject: String,
+    },
 
     /// A command for the chat of one agent. Agents work in parallel, so
     /// anything an agent's turn sends is addressed to it; the UI applies it
@@ -1483,9 +1492,9 @@ pub struct AgentDefinitionSummary {
     pub name: String,
     /// What it does and when to spawn it
     pub description: String,
-    /// Its unique abbreviation, the prefix of its instances' codes (`RE`
-    /// for `rust-engineer`, whose instances are `RE1`, `RE2`, …), when
-    /// known
+    /// Its unique abbreviation, always three uppercase letters and the
+    /// prefix of its instances' codes (`REN` for `rust-engineer`, whose
+    /// instances are `REN1`, `REN2`, …), when known
     #[serde(default)]
     pub abbreviation: Option<String>,
 }
@@ -1508,6 +1517,10 @@ pub struct AgentSummary {
     /// Time of its latest record, in Unix milliseconds
     #[serde(default)]
     pub last_active_ms: Option<u64>,
+    /// When it was moved to the Archive, in Unix milliseconds; none for
+    /// listed agents
+    #[serde(default)]
+    pub archived_at_ms: Option<u64>,
     /// Permanent agent this is an instance of
     #[serde(default)]
     pub definition: Option<String>,
@@ -1531,13 +1544,13 @@ pub struct AgentSummary {
     /// of changing code
     #[serde(default)]
     pub plan_mode: bool,
-    /// Short code name, such as `RE36`, unique among the agents and never
+    /// Short code name, such as `REN36`, unique among the agents and never
     /// changed; shown at the right end of the agent's row
     #[serde(default)]
     pub code: Option<String>,
     /// Short name of the subtask a spawned agent works on, such as
     /// `Fix parser escapes`. `name` already shows it after the code
-    /// (`RE36: Fix parser escapes`); kept apart so UIs can style it.
+    /// (`REN36: Fix parser escapes`); kept apart so UIs can style it.
     #[serde(default)]
     pub subtitle: Option<String>,
 }

@@ -23,6 +23,6 @@ pub use mesh::{
     MeshAgent, MeshFrame, MeshMail, MeshMailKind, MeshPeer, MeshProcess, MESH_PROTOCOL,
 };
 pub use sync::{
-    NodeClaim, NodeClaimed, RecordPage, SealResponse, SyncImport, SyncImported, TracePage,
-    WorkspacePatch,
+    NodeClaim, NodeClaimed, PlanTemplate, RecordPage, SealResponse, SyncImport, SyncImported,
+    TracePage, WorkspacePatch, PLACEHOLDER_PREFIX,
 };
