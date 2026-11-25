@@ -127,6 +127,17 @@ pub fn head_commit(project: &Path) -> CloudResult<String> {
     Ok(git(project, &["rev-parse", "HEAD"])?.trim().to_string())
 }
 
+/// Whether `project` has `commit` (a snapshot's commit can be gone after
+/// a rebase, a `git gc` or a fresh clone).
+#[must_use]
+pub fn has_commit(project: &Path, commit: &str) -> bool {
+    git(
+        project,
+        &["cat-file", "-e", &format!("{commit}^{{commit}}")],
+    )
+    .is_ok()
+}
+
 /// What changed in `project` since `base_commit`, without denied files.
 ///
 /// # Errors
@@ -248,11 +259,19 @@ pub fn archive_commit(project: &Path, commit: &str) -> CloudResult<Vec<u8>> {
 }
 
 /// Shell run in a machine to apply a delta uploaded to
-/// `/tmp/aura-delta.tgz`.
+/// `/tmp/aura-delta.tgz`, then commit it there: the machine's patch is
+/// taken against its `HEAD`, so it then holds only the machine's own
+/// work, not the files this machine sent it.
 pub const APPLY_DELTA: &str = "set -e; cd \"$AURA_WORKSPACE\"; \
 tar -xzf /tmp/aura-delta.tgz; \
 if [ -s .aura-deleted ]; then tr '\\n' '\\0' < .aura-deleted | xargs -0 rm -f --; fi; \
-rm -f .aura-deleted /tmp/aura-delta.tgz";
+rm -f .aura-deleted /tmp/aura-delta.tgz; \
+git add -A; git -c user.name=aura -c user.email=aura@localhost commit -q --allow-empty -m 'aura: changes from the hub'";
+
+/// Shell run in a machine after its patch was applied locally: commit
+/// its work there, so the next pull holds only what came after.
+pub const MARK_PULLED: &str = "set -e; cd \"$AURA_WORKSPACE\"; git add -A; \
+git -c user.name=aura -c user.email=aura@localhost commit -q --allow-empty -m 'aura: pulled to the hub'";
 
 /// Shell run in a builder to unpack a `git archive` uploaded to
 /// `/tmp/aura-project.tgz` and commit it, so the machine can diff its
@@ -365,5 +384,10 @@ mod tests {
         assert!(!archive_commit(dir.path(), &base)
             .expect("archive")
             .is_empty());
+        assert!(has_commit(dir.path(), &base));
+        assert!(!has_commit(
+            dir.path(),
+            "e91dfbe90eb7b51f7b0459ce0c829d439a150396"
+        ));
     }
 }

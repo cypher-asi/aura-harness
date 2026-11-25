@@ -552,7 +552,7 @@ impl CloudHub {
                 vec![parent_view.agent.clone()],
             ),
             None => {
-                let record = self
+                let mut record = self
                     .snapshots
                     .ensure_project(
                         &request.project_id,
@@ -561,6 +561,29 @@ impl CloudHub {
                         false,
                     )
                     .await?;
+                // The delta is taken against the snapshot's commit; when
+                // this repository no longer has it, rebuild from HEAD.
+                let missing = match record.commit.clone() {
+                    Some(commit) => {
+                        let dir = request.project_dir.clone();
+                        !tokio::task::spawn_blocking(move || delta::has_commit(&dir, &commit))
+                            .await
+                            .unwrap_or(false)
+                    }
+                    None => false,
+                };
+                if missing {
+                    tracing::info!(project = %request.project_id, "the project snapshot's commit is gone here; rebuilding it");
+                    record = self
+                        .snapshots
+                        .ensure_project(
+                            &request.project_id,
+                            &request.project_dir,
+                            request.build_command.as_deref(),
+                            true,
+                        )
+                        .await?;
+                }
                 (
                     MachineOrigin::Snapshot(record.name),
                     record.commit,
@@ -822,9 +845,28 @@ impl CloudHub {
         };
         let node = self.awake_node(&hex).await?;
         let patch = node.patch().await?;
-        Ok(self
+        let outcome = self
             .apply_patch(&hex, &placed.project_dir, &patch.patch, patch.files)
-            .await)
+            .await;
+        if matches!(outcome, PatchOutcome::Applied { .. }) {
+            // The machine keeps working; the next pull starts from here.
+            if let Some(view) = self.fleet.view(&hex) {
+                let marked = self
+                    .fleet
+                    .provider()
+                    .exec(
+                        &view.machine.name,
+                        delta::MARK_PULLED,
+                        None,
+                        Duration::from_secs(60),
+                    )
+                    .await;
+                if let Err(err) = marked {
+                    tracing::warn!(agent = %hex, error = %err, "could not mark the pulled work on the machine; the next pull repeats it");
+                }
+            }
+        }
+        Ok(outcome)
     }
 
     async fn apply_patch(

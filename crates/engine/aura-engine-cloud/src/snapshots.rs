@@ -41,7 +41,7 @@ use crate::names::{self, BASE_SNAPSHOT, LABEL_INSTALL, LABEL_PROJECT, LABEL_ROLE
 use crate::provider::{MachineOrigin, NewMachine, VmProvider};
 
 /// Bump when [`base_packages`] or the node start changes.
-pub const BOOTSTRAP_VERSION: &str = "1";
+pub const BOOTSTRAP_VERSION: &str = "2";
 /// Where a machine finds out which snapshot it came from.
 pub const SNAPSHOT_MANIFEST: &str = "/etc/aura/snapshot.json";
 /// Builders delete themselves after this long, seconds.
@@ -53,26 +53,36 @@ pub const SHORT_STEP_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long to wait for a saved snapshot to become ready.
 pub const READY_WAIT: Duration = Duration::from_secs(10 * 60);
 
+/// Stops a running node and waits for it to exit: a machine restored
+/// from a snapshot comes back with the snapshot's node running, and a
+/// new node can't open the store until the old one lets go of it.
+/// `-x` matches by process name; `-f` would match this shell too.
+pub const STOP_NODE: &str = "pkill -x aura || true; \
+for i in $(seq 1 30); do pgrep -x aura >/dev/null || break; sleep 1; done; \
+pkill -9 -x aura || true; while pgrep -x aura >/dev/null; do sleep 1; done";
+
 /// Starts the node unclaimed, in the background, with the machine env.
 pub const START_NODE: &str = "set -e; sudo mkdir -p /var/log/aura; sudo chown \"$(id -u)\" /var/log/aura; \
 set -a; . /etc/aura/machine.env; set +a; \
-nohup aura run --ui none > /var/log/aura/node.log 2>&1 & \
+nohup aura run --ui none > /var/log/aura/node.log 2>&1 < /dev/null & \
 for i in $(seq 1 60); do curl -fsS \"http://127.0.0.1:${AURA_LISTEN_ADDR##*:}/health\" >/dev/null 2>&1 && exit 0; sleep 1; done; \
 echo 'aura node did not come up' >&2; tail -n 40 /var/log/aura/node.log >&2; exit 1";
 
-/// First-boot commands of the base builder.
+/// Setup commands of the base builder, run in order as the machine's
+/// user (with `sudo` where root is needed), so the toolchains land in
+/// that user's home.
 #[must_use]
 pub fn base_packages() -> Vec<String> {
     vec![
         "sudo apt-get update -y".into(),
         "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
          build-essential clang mold cmake pkg-config libssl-dev libclang-dev git curl ca-certificates \
-         python3 nodejs npm"
+         python3 nodejs npm libdbus-1-3 libssl3"
             .into(),
         "curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
          --component rustfmt --component clippy"
             .into(),
-        "sudo ln -sf \"$HOME/.cargo/bin/\"* /usr/local/bin/".into(),
+        "sudo ln -sf \"$HOME/.cargo/bin/\"* /usr/local/bin/ && cargo --version".into(),
         format!(
             "sudo mkdir -p /etc/aura {ws} {data} && sudo chown \"$(id -u)\" {ws} {data}",
             ws = crate::machine_env::WORKSPACE_DIR,
@@ -469,15 +479,23 @@ impl SnapshotBuilder {
             isolated: self.isolated,
             labels,
             env: MachineEnv::for_agent(self.size.vcpu()).into_map(),
-            packages,
+            // boxd runs first-boot packages as root in the background;
+            // the setup runs as steps instead, in order, as the user.
+            packages: Vec::new(),
             networks: Vec::new(),
             delete_after_secs: Some(BUILDER_TTL_SECS),
         };
         tracing::info!(snapshot, builder = %spec.name, "building cloud snapshot");
         let machine = self.provider.create(&spec, &origin).await?;
-        let outcome = self
-            .run_build(&machine.name, steps, manifest, snapshot)
-            .await;
+        let mut all = packages
+            .into_iter()
+            .map(|command| Step::Run {
+                command,
+                timeout: STEP_TIMEOUT,
+            })
+            .collect::<Vec<_>>();
+        all.extend(steps);
+        let outcome = self.run_build(&machine.name, all, manifest, snapshot).await;
         if let Err(err) = self.provider.destroy(&machine.name).await {
             tracing::warn!(builder = %machine.name, error = %err, "could not destroy a snapshot builder; its delete-after will");
         }
@@ -521,7 +539,8 @@ impl SnapshotBuilder {
                 message: err.to_string(),
             })?;
         let mut all = vec![
-            // Wait for first-boot packages, then lay down the machine env.
+            // Wait for the image's own first boot, then lay down the
+            // machine env.
             Step::Run {
                 command: "command -v cloud-init >/dev/null 2>&1 && cloud-init status --wait >/dev/null 2>&1; true".into(),
                 timeout: STEP_TIMEOUT,
@@ -545,7 +564,7 @@ impl SnapshotBuilder {
             timeout: SHORT_STEP_TIMEOUT,
         });
         all.push(Step::Run {
-            command: format!("pkill -f 'aura run --ui none' || true; {START_NODE}"),
+            command: format!("{STOP_NODE}; {START_NODE}"),
             timeout: SHORT_STEP_TIMEOUT,
         });
         for step in all {

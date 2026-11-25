@@ -339,10 +339,17 @@ pub fn create_vm_request(
 /// Map boxd's machine answer.
 #[must_use]
 pub fn machine_info(vm: proto::GetVmResponse) -> MachineInfo {
-    let domain = if vm.access_domain.is_empty() {
-        format!("{}.boxd.sh", vm.name)
+    // `access_domain` is the cluster's domain (`boxd.sh`); the machine
+    // is served at `<name>.<access_domain>`.
+    let base = if vm.access_domain.is_empty() {
+        "boxd.sh"
     } else {
-        vm.access_domain.clone()
+        vm.access_domain.as_str()
+    };
+    let domain = if base.starts_with(&format!("{}.", vm.name)) {
+        base.to_string()
+    } else {
+        format!("{}.{base}", vm.name)
     };
     let source = vm.source_info.as_ref().and_then(|source| {
         match source.kind.to_ascii_lowercase().as_str() {
@@ -975,9 +982,23 @@ mod tests {
             }),
             ..Default::default()
         };
-        let info = machine_info(vm);
+        let info = machine_info(vm.clone());
         assert_eq!(info.status, MachineStatus::Standby);
         assert_eq!(info.domain, "aura-re36-3f9c.boxd.sh");
+        let live = machine_info(proto::GetVmResponse {
+            access_domain: "boxd.sh".into(),
+            ..vm.clone()
+        });
+        assert_eq!(
+            live.domain, "aura-re36-3f9c.boxd.sh",
+            "boxd sends the cluster domain"
+        );
+        assert_eq!(live.url(), "https://aura-re36-3f9c.boxd.sh");
+        let full = machine_info(proto::GetVmResponse {
+            access_domain: "aura-re36-3f9c.example.dev".into(),
+            ..vm
+        });
+        assert_eq!(full.domain, "aura-re36-3f9c.example.dev");
         assert_eq!(info.disk_bytes, MACHINE_DISK_BYTES);
         assert_eq!(info.created_ms, 1_700_000_000_000);
         assert_eq!(info.size(), Some(MachineSize::S4x16));
