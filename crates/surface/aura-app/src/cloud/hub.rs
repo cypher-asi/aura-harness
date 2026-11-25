@@ -1378,12 +1378,32 @@ fn chat_request(agent: AgentId, model: Option<String>, auth_jwt: Option<String>)
             ..WorkspaceLocation::default()
         },
         project: None,
-        agent_permissions: AgentPermissionsWire::default(),
+        agent_permissions: cloud_agent_permissions(),
         tool_permissions: None,
         agent_capabilities: AgentCapabilities::default(),
         auth_jwt,
         user_id: "hub".to_string(),
         mode: None,
+    }
+}
+
+/// What a cloud agent may do on its machine. Sent explicitly: an empty
+/// bundle means full access on a node, which includes computer use, and
+/// a cloud machine has no screen (and OpenRouter refuses the computer
+/// tool's server-tool entry).
+fn cloud_agent_permissions() -> AgentPermissionsWire {
+    use aura_core_protocol::CapabilityWire;
+    AgentPermissionsWire {
+        capabilities: vec![
+            CapabilityWire::SpawnAgent,
+            CapabilityWire::ControlAgent,
+            CapabilityWire::ReadAgent,
+            CapabilityWire::ListAgents,
+            CapabilityWire::InvokeProcess,
+            CapabilityWire::ReadAllProjects,
+            CapabilityWire::WriteAllProjects,
+        ],
+        ..AgentPermissionsWire::default()
     }
 }
 
@@ -1994,6 +2014,18 @@ mod tests {
             }
             .describe(),
             "pulled 1 changed file(s)"
+        );
+    }
+
+    #[test]
+    fn cloud_turns_never_offer_computer_use() {
+        let request = chat_request(AgentId::new([1; 32]), None, None);
+        let json = serde_json::to_value(&request.agent_permissions).expect("json");
+        let text = json.to_string();
+        assert!(!text.contains("computer"), "{text}");
+        assert!(
+            text.contains("spawnAgent") || text.contains("spawn_agent"),
+            "{text}"
         );
     }
 }

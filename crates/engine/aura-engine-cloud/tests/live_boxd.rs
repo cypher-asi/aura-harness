@@ -121,3 +121,34 @@ async fn a_machine_runs_commands_and_is_destroyed() {
     println!("after destroy: {:?}", gone.map(|m| m.status));
     result.expect("probe commands");
 }
+
+/// Which `org` value boxd's `SetVar` accepts for an unattached secret.
+#[tokio::test]
+#[ignore = "sets and removes a throwaway boxd secret; needs BOXD_API_KEY"]
+async fn which_org_value_secrets_take() {
+    let boxd = provider();
+    let (orgs, default) = boxd.orgs().await.expect("orgs");
+    println!("default org id: {default}");
+    let mut candidates = vec![String::new()];
+    for (id, slug, name) in &orgs {
+        println!("org: id={id} slug={slug} name={name}");
+        candidates.extend([id.clone(), slug.clone(), name.clone()]);
+    }
+    let _ = aura_config::env_file::load();
+    for org in candidates {
+        let mut config = aura_config::CloudConfig::from_env().expect("cloud settings");
+        config.org = (!org.is_empty()).then(|| org.clone());
+        let probe = BoxdProvider::from_config(&config).expect("provider");
+        let secret = aura_engine_cloud::HostSecret {
+            name: "AURA_PROBE_SECRET_ORG".into(),
+            value: zeroize::Zeroizing::new("unlinked".into()),
+            domains: vec!["example.com".into()],
+            replace_in: vec!["headers".into()],
+        };
+        let set = probe.set_secret(&secret).await;
+        println!("org {org:?}: set {set:?}");
+        if set.is_ok() {
+            println!("  remove {:?}", probe.remove_secret(&secret.name).await);
+        }
+    }
+}

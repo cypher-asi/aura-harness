@@ -117,6 +117,20 @@ pub fn base_fingerprint(size: MachineSize, aura_version: &str) -> String {
     hasher.finalize().to_hex()[..16].to_string()
 }
 
+/// The first 16 hex characters of `path`'s blake3 hash. Blocking.
+///
+/// # Errors
+///
+/// When the file can't be read.
+pub fn binary_digest(path: &Path) -> CloudResult<String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|err| CloudError::io(format!("open {}", path.display()), err))?;
+    let mut hasher = blake3::Hasher::new();
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|err| CloudError::io(format!("read {}", path.display()), err))?;
+    Ok(hasher.finalize().to_hex()[..16].to_string())
+}
+
 /// Fingerprint of a project snapshot. Reads the lockfiles (blocking).
 #[must_use]
 pub fn project_fingerprint(project: &Path, base: &str, build_command: &str) -> String {
@@ -304,7 +318,21 @@ impl SnapshotBuilder {
     ///
     /// When a build step fails.
     pub async fn ensure_base(&self) -> CloudResult<SnapshotRecord> {
-        let fingerprint = base_fingerprint(self.size, &self.aura_version);
+        // The binary itself is part of the base: a new build of the same
+        // version must still reach new machines.
+        let version = match &self.binary {
+            AuraBinary::Upload(path) => {
+                let path = path.clone();
+                let digest = tokio::task::spawn_blocking(move || binary_digest(&path))
+                    .await
+                    .map_err(|err| {
+                        CloudError::io("hash aura binary", std::io::Error::other(err))
+                    })??;
+                format!("{}+{digest}", self.aura_version)
+            }
+            AuraBinary::Installed => self.aura_version.clone(),
+        };
+        let fingerprint = base_fingerprint(self.size, &version);
         let current = self.record(BASE_SNAPSHOT).await;
         if self.usable(current.as_ref(), &fingerprint).await? {
             if let Some(record) = current {
@@ -790,5 +818,16 @@ mod tests {
             "{}",
             creates[1]
         );
+    }
+
+    #[test]
+    fn binary_digests_change_with_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("aura");
+        std::fs::write(&path, b"build one").expect("write");
+        let one = binary_digest(&path).expect("digest");
+        std::fs::write(&path, b"build two").expect("write");
+        assert_ne!(binary_digest(&path).expect("digest"), one);
+        assert_eq!(one.len(), 16);
     }
 }

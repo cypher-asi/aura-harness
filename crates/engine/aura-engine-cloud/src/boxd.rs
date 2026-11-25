@@ -125,6 +125,32 @@ impl BoxdProvider {
         self.base_url.clone()
     }
 
+    /// The organizations the key can act in, as `(id, slug, name)`, and
+    /// the caller's default org id.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails.
+    pub async fn orgs(&self) -> CloudResult<(Vec<(String, String, String)>, String)> {
+        let answer = self
+            .unary(
+                "ListOrgs",
+                &self.home(),
+                proto::ListOrgsRequest {},
+                CALL_TIMEOUT,
+                |mut c, r| async move { c.list_orgs(r).await },
+            )
+            .await?;
+        Ok((
+            answer
+                .orgs
+                .into_iter()
+                .map(|org| (org.id, org.slug, org.name))
+                .collect(),
+            answer.default_org_id,
+        ))
+    }
+
     /// The org to keep secrets in: `BOXD_ORG`, or the org boxd names as
     /// the caller's default (the one an org-fenced key creates in).
     async fn secret_org(&self) -> CloudResult<String> {
@@ -389,14 +415,26 @@ pub fn restore_request(
     request
 }
 
-/// The org a key keeps secrets in: its default org, or its only one.
+/// The org a key keeps secrets in: its default org, or its only one, by
+/// slug (`SetVar` refuses org ids: "org not found").
 #[must_use]
 pub fn pick_org(answer: &proto::ListOrgsResponse) -> Option<String> {
-    if !answer.default_org_id.is_empty() {
-        return Some(answer.default_org_id.clone());
+    let slug = |org: &proto::OrgSummary| {
+        if org.slug.is_empty() {
+            org.name.clone()
+        } else {
+            org.slug.clone()
+        }
+    };
+    if let Some(org) = answer
+        .orgs
+        .iter()
+        .find(|org| org.id == answer.default_org_id)
+    {
+        return Some(slug(org));
     }
     match answer.orgs.as_slice() {
-        [only] => Some(only.id.clone()),
+        [only] => Some(slug(only)),
         _ => None,
     }
 }
@@ -1204,18 +1242,19 @@ mod tests {
     fn the_secret_org_is_the_default_or_the_only_one() {
         let org = |id: &str| proto::OrgSummary {
             id: id.into(),
+            slug: format!("{id}-slug"),
             ..Default::default()
         };
         let answer = proto::ListOrgsResponse {
             orgs: vec![org("a"), org("b")],
             default_org_id: "b".into(),
         };
-        assert_eq!(pick_org(&answer).as_deref(), Some("b"));
+        assert_eq!(pick_org(&answer).as_deref(), Some("b-slug"));
         let one = proto::ListOrgsResponse {
             orgs: vec![org("a")],
             default_org_id: String::new(),
         };
-        assert_eq!(pick_org(&one).as_deref(), Some("a"));
+        assert_eq!(pick_org(&one).as_deref(), Some("a-slug"));
         let many = proto::ListOrgsResponse {
             orgs: vec![org("a"), org("b")],
             default_org_id: String::new(),
