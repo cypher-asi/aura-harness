@@ -1,0 +1,14 @@
+{
+  "id": "01a20f7dfa4d000f",
+  "title": "Finish a half-done feature in the Rust crate `crates/ui/aura-ui-terminal` (ratatui TUI): a clickable \"⧉ Copy\" button in…",
+  "state": "completed",
+  "agent_id": "31e8480ea185bd3d807a1221d894a512420d58bf7e4ff6a57013c207fdad0148",
+  "agent_name": "rust-engineer #113",
+  "assignee": "rust-engineer",
+  "parent": "01a20f756832000b",
+  "items": [],
+  "summary": "The feature code is finished, but none of the new tests have been run. After my edits the crate stopped building because of other uncommitted work (a `typing_timings` function defined twice in `renderer/bench.rs`, and an `archived_at_ms` field `app/archive.rs` uses that `AgentSummary` doesn't have). I didn't touch either file. I also didn't get to `cargo fmt -p aura-ui-terminal`.",
+  "updated_ms": 1795556655368,
+  "created_ms": 1795556244045,
+  "tool_use_id": "toolu_01MxM7JAyc9UTMD3xJ4A5xyy"
+}

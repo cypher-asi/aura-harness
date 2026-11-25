@@ -585,12 +585,14 @@ impl Tool for CreatePlanTool {
                     },
                     "plan": {
                         "type": "string",
-                        "description": "The plan body in Markdown. The title, overview and \
+                        "description": "The plan body in Markdown, written as a short document \
+                                        a person reads top to bottom. The title, overview and \
                                         todo checklist are added for you, so do not repeat \
-                                        them. Use `##` sections (e.g. Approach, Files to \
-                                        change, Risks), short paragraphs and bullet lists, \
-                                        `inline code` for paths and symbols, and fenced code \
-                                        blocks with a language tag for snippets"
+                                        them. Use `##` sections whose headings say what each \
+                                        is about, plain sentences in short paragraphs, and \
+                                        bullets that are full sentences. Keep `inline code` \
+                                        for file paths, commands and code names; add fenced \
+                                        code blocks, tables or diagrams only when they help"
                     },
                     "todos": {
                         "type": "array",

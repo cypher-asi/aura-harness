@@ -18,6 +18,7 @@ pub use crate::events::MessageRole;
 pub(crate) use activity::elapsed_ms;
 pub use activity::{Activity, ThinkingStep, ToolStep};
 pub use code_block::{highlight_code_line, CodeBlock};
+pub(crate) use code_block::{unframe_code, COPY_BUTTON};
 pub use diff::{DiffLine, DiffLineType, DiffView};
 pub use header::HeaderBar;
 pub use input::InputField;

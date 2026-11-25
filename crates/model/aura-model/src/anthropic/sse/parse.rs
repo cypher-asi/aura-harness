@@ -46,7 +46,7 @@ pub(super) fn pop_event_block(buffer: &mut String) -> Option<String> {
     } else {
         2
     };
-    *buffer = buffer[event_end + delimiter_len..].to_string();
+    buffer.drain(..event_end + delimiter_len);
 
     Some(event_str)
 }
@@ -73,19 +73,19 @@ pub(super) fn parse_sse_event(event_str: &str) -> Option<StreamEvent> {
         }
 
         if let Some(suffix) = line.strip_prefix("event:") {
-            event_type = Some(suffix.trim().to_string());
+            event_type = Some(suffix.trim());
         } else if let Some(suffix) = line.strip_prefix("data:") {
-            data = Some(suffix.trim().to_string());
+            data = Some(suffix.trim());
         }
     }
 
     let data = data?;
 
-    if event_type.as_deref() == Some("ping") {
+    if event_type == Some("ping") {
         return Some(StreamEvent::Ping);
     }
 
-    let sse_event: SseEvent = match serde_json::from_str(&data) {
+    let sse_event: SseEvent = match serde_json::from_str(data) {
         Ok(e) => e,
         Err(e) => {
             tracing::warn!(error = %e, "malformed SSE JSON payload");

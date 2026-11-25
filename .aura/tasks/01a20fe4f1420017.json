@@ -1,0 +1,16 @@
+{
+  "id": "01a20fe4f1420017",
+  "title": "Work ONLY in /home/n3o/code/aura-harness/.worktrees/channels (git worktree, branch `channels`). Never touch files outsi…",
+  "state": "completed",
+  "agent_id": "8a35fccf6973a99469a85992b2060a4427c9c27e6fe8b1d9d4e89ac37fc39296",
+  "agent_name": "rust-engineer #119",
+  "assignee": "rust-engineer",
+  "parent": "01a20fe026810015",
+  "plan": ".aura/plans/channels-persistent-channels-with-a-coordinator_5fa9dc49.plan.md",
+  "plan_todo": "registry-backend",
+  "items": [],
+  "summary": "`AgentRegistry` now saves to the `agents`, `projects` and `registry_meta` column families of `<data_dir>/db` instead of rewriting `agents.json`. `cargo check -p aura-app --tests` is clean and `cargo test -p aura-app --lib agent_registry` passes (67 tests). I ran out of time before `cargo fmt --all`, the clippy check, and the `--lib subagents` and `--lib record_loader` test runs, so the subagents …",
+  "updated_ms": 1795563446916,
+  "created_ms": 1795562991938,
+  "tool_use_id": "toolu_017R2xrrf7uhH5GFupZnsDMW"
+}

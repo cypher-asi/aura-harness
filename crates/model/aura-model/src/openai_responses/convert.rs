@@ -73,7 +73,7 @@ fn tool_choice(choice: &ToolChoice) -> Value {
 
 fn input_items(request: &ModelRequest) -> Vec<Value> {
     let mut items = Vec::new();
-    for message in &request.messages {
+    for message in &*request.messages {
         match message.role {
             Role::User => user_items(&message.content, &mut items),
             Role::Assistant => assistant_items(&message.content, &mut items),

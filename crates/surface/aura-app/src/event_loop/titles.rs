@@ -7,7 +7,7 @@
 //!
 //! Subtasks get a subtitle the same way: when a `task` call spawns an
 //! instance of a permanent agent, the same model names the subtask from
-//! its prompt, shown as `<code>: <subtask>` (`RE36: Fix parser escapes`).
+//! its prompt, shown as `<code>: <subtask>` (`REN36: Fix parser escapes`).
 //!
 //! INBOX threads named after the first line of their opening message (a
 //! `task` prompt, or a message sent without a subject) get a subject the

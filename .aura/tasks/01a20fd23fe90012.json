@@ -1,0 +1,16 @@
+{
+  "id": "01a20fd23fe90012",
+  "title": "Work ONLY in the git worktree /home/n3o/code/aura-harness/.worktrees/channels (branch `channels`). Never edit files und…",
+  "state": "failed",
+  "agent_id": "96a0180a1770dcbf2fbe1e679249a6ab4d4be46ac50b3fc5ecb2f4af8ee67ff4",
+  "agent_name": "rust-engineer #118",
+  "assignee": "rust-engineer",
+  "parent": "01a20fc89ad6000e",
+  "plan": ".aura/plans/channels-persistent-channels-with-a-coordinator_5fa9dc49.plan.md",
+  "plan_todo": "agent-store",
+  "items": [],
+  "summary": "ran out of time: it stopped after 9 minutes without a reply",
+  "updated_ms": 1795562336460,
+  "created_ms": 1795561766889,
+  "tool_use_id": "toolu_01J9ATXAP7FAKnBATUwEpfod"
+}

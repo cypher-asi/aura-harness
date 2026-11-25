@@ -100,7 +100,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         .height
         .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 3 + queue_rows + bench_rows)
         .max(1);
-    let input_rows = input::input_rows(column, app, theme, max_input_rows);
+    let input_rows = input::input_rows(column, app, max_input_rows);
     let chat_column = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -130,11 +130,11 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         width: content.width,
         ..rows[0]
     });
-    render_header(frame, header, app, theme);
-
     app.set_prose_rows(Vec::new());
     app.clear_chat_scroll();
     let chat = render_content_panels(frame, (swarm, chat_column[0], right), app, theme);
+    // After the panels, which start this frame's clickable areas afresh.
+    render_header(frame, header, app, theme);
     images::render_pending_images(frame, chat, app, theme);
     detail::render_detail_view(frame, chat, app, theme);
     app.track_selection(frame.buffer_mut());
@@ -144,8 +144,10 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     bench_panel::render(frame, chat_column[1], app, theme);
     queue_panel::render(frame, chat_column[2], app, theme);
     app.set_input_area(chat_column[3]);
-    let stop = input::render_input(frame, chat_column[3], app, theme);
-    app.set_input_stop_area(stop);
+    let drawn = input::render_input(frame, chat_column[3], app, theme);
+    app.set_input_stop_area(drawn.stop);
+    app.set_input_wrap_width(drawn.wrap_width);
+    app.set_input_rows(drawn.rows);
     let footer_gap = hud::render_footer(frame, inset_edges(chat_column[4]), app, theme);
     app.set_footer_area(inset_edges(chat_column[4]));
     let (records, sandbox) = split_right_column(right, app);
@@ -162,6 +164,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     channel_form::render_channel_form(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
     app.drop_covered_prose(frame.buffer_mut());
+    app.drop_covered_code_copies(frame.buffer_mut());
     app.drop_covered_chat(frame.buffer_mut());
     app.trim_covered_scrollbar(frame.buffer_mut());
     app.flow_mut().take_canvas_marks(frame.buffer_mut());
@@ -314,8 +317,48 @@ fn split_right_column(right: Option<Rect>, app: &App) -> (Option<Rect>, Option<R
     }
 }
 
-/// Render the header bar.
-fn render_header(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+/// Columns of the header's hamburger button: a space, then its glyph in
+/// the header's last column, where the text there always ends.
+const SIDE_TOGGLE_WIDTH: u16 = 2;
+
+/// The hamburger button's glyph. A front end that draws the chrome
+/// leaves the cells blank and draws its own.
+const SIDE_TOGGLE_GLYPH: &str = "☰";
+
+/// Render the header bar: the title on the left, the sign-in status and
+/// the hamburger button that shows or hides the right column on the right.
+fn render_header(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
+    let toggle = (area.width >= 40 && area.height > 0).then(|| {
+        Rect::new(
+            area.right() - SIDE_TOGGLE_WIDTH,
+            area.y,
+            SIDE_TOGGLE_WIDTH,
+            1,
+        )
+    });
+    app.set_side_toggle_area(toggle);
+    if let Some(cell) = toggle {
+        if !app.host_chrome() {
+            let style = if app.hover() == Some(crate::app::HoverTarget::SideToggle) {
+                Style::default()
+                    .bg(theme.colors.surface_hover)
+                    .fg(theme.colors.foreground)
+            } else {
+                Style::default().fg(theme.colors.muted)
+            };
+            let buf = frame.buffer_mut();
+            buf.set_style(cell, style);
+            buf.set_string(cell.x + 1, cell.y, SIDE_TOGGLE_GLYPH, style);
+        }
+    }
+    // The status keeps a column of space from the button.
+    let area = Rect {
+        width: area
+            .width
+            .saturating_sub(toggle.map_or(0, |cell| cell.width + 1)),
+        ..area
+    };
+
     let status_spans = header_status_spans(app, theme);
     let status_width = spans_width(&status_spans);
     let right_width = u16::try_from(status_width.max(30) + 1).unwrap_or(u16::MAX);
@@ -342,10 +385,10 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|s| text::display_width(&s.content)).sum()
 }
 
-/// `● local  http://127.0.0.1:8080` when signed out, otherwise where you are
-/// signed in: `alice (zOS) · ● CLAUDE MAX 20X · CHATGPT  http://...`. The dot
-/// reflects API connectivity and sits in front of the sign-in that serves
-/// the chat's model, or in front of everything when none of them does.
+/// `● local` when signed out, otherwise the one sign-in that serves the
+/// chat's model: `● CLAUDE MAX 20X`.
+/// It follows the model as it changes; when no sign-in serves it (a local
+/// model, say) the first one is shown. The dot reflects API connectivity.
 fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
     let (icon, icon_color) = if app.api_active() {
         ("● ", theme.colors.success)
@@ -381,21 +424,9 @@ fn header_status_spans<'a>(app: &'a App, theme: &Theme) -> Vec<Span<'a>> {
         })
         .unwrap_or(0);
 
-    let mut spans = Vec::new();
-    for (index, (_, segment)) in segments.into_iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(" · ", muted));
-        }
-        if index == active {
-            spans.push(Span::styled(icon, Style::default().fg(icon_color)));
-        }
+    let mut spans = vec![Span::styled(icon, Style::default().fg(icon_color))];
+    if let Some((_, segment)) = segments.into_iter().nth(active) {
         spans.extend(segment);
-    }
-    if let Some(url) = app.api_url() {
-        spans.push(Span::styled(
-            format!("  {url}"),
-            Style::default().fg(theme.colors.muted),
-        ));
     }
     spans
 }

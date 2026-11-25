@@ -644,23 +644,14 @@ fn wait_with_threshold(
     mut child: std::process::Child,
     threshold: std::time::Duration,
 ) -> ThresholdResult {
-    use std::io::Read;
     use std::thread;
     use std::time::Instant;
 
     let start = Instant::now();
     loop {
         if let Ok(Some(status)) = child.try_wait() {
-            let stdout = child.stdout.take().map_or_else(Vec::new, |mut s| {
-                let mut buf = Vec::new();
-                let _ = s.read_to_end(&mut buf);
-                buf
-            });
-            let stderr = child.stderr.take().map_or_else(Vec::new, |mut s| {
-                let mut buf = Vec::new();
-                let _ = s.read_to_end(&mut buf);
-                buf
-            });
+            let stdout = child.stdout.take().map_or_else(Vec::new, read_capped);
+            let stderr = child.stderr.take().map_or_else(Vec::new, read_capped);
             return ThresholdResult::Completed(std::process::Output {
                 status,
                 stdout,
@@ -674,12 +665,47 @@ fn wait_with_threshold(
 }
 
 /// Read `pipe` to its end on its own thread.
-fn drain_pipe<R: std::io::Read + Send + 'static>(mut pipe: R) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = pipe.read_to_end(&mut buf);
-        buf
-    })
+fn drain_pipe<R: std::io::Read + Send + 'static>(pipe: R) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || read_capped(pipe))
+}
+
+/// Bytes of a pipe's output kept from its start, and as many from its
+/// end; the middle of a runaway program's output is dropped as it is
+/// read, so many agents' builds can't fill memory.
+const PIPE_KEEP_BYTES: usize = 512 * 1024;
+
+/// Read `pipe` to its end, keeping its first and last [`PIPE_KEEP_BYTES`]
+/// and a line saying how much was cut between them.
+fn read_capped<R: std::io::Read>(mut pipe: R) -> Vec<u8> {
+    let mut head = Vec::new();
+    let mut tail = std::collections::VecDeque::<u8>::new();
+    let mut cut = 0usize;
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let n = match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        let mut bytes = &chunk[..n];
+        if head.len() < PIPE_KEEP_BYTES {
+            let room = (PIPE_KEEP_BYTES - head.len()).min(bytes.len());
+            head.extend_from_slice(&bytes[..room]);
+            bytes = &bytes[room..];
+        }
+        tail.extend(bytes);
+        if tail.len() > PIPE_KEEP_BYTES {
+            let over = tail.len() - PIPE_KEEP_BYTES;
+            tail.drain(..over);
+            cut += over;
+        }
+    }
+    if cut > 0 {
+        head.extend_from_slice(format!("\n... ({cut} bytes of output dropped) ...\n").as_bytes());
+    }
+    head.extend(tail);
+    head
 }
 
 /// Wait for a child process with a hard timeout (kills on timeout).

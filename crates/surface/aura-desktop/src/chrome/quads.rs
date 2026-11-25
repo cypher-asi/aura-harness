@@ -1,7 +1,7 @@
 //! The title bars as quads.
 
 use super::{Chrome, Hit, Kind};
-use crate::geom::{rgba, Color, Point};
+use crate::geom::{rgba, Color, Point, Rectangle};
 use crate::scene::{fill, Layers, Quad};
 use crate::tab_bar::{
     label_size,
@@ -140,6 +140,38 @@ impl Chrome {
                 corners(&mut out.under, middle, (reach, line), expanded, ink);
             }
         }
+        if let Some(mut rect) = self.layout.side_toggle {
+            rect.y += top;
+            let (edge, ink) = if self.hover == Some(Hit::SideToggle) {
+                (palette.muted, palette.fg)
+            } else {
+                (palette.faint, palette.muted)
+            };
+            outline(&mut out.under, rect, edge, line);
+            // As wide as the window boxes' glyphs: their arm each way.
+            let arm = (unit(&model.metrics) * 0.55).round();
+            hamburger(&mut out.under, rect, (arm, line), ink);
+        }
+    }
+}
+
+/// Three bars centered in `rect`, about `arm` pixels each way from the
+/// middle, strokes `line` pixels thick. The glyph is laid out from the
+/// box's edges rather than from a rounded middle, which lands half a
+/// pixel off and then rounds a whole pixel right and down in a box of
+/// odd size; its width takes the box's parity so the margins match.
+fn hamburger(out: &mut Vec<Quad>, rect: Rectangle, size: (f32, f32), ink: Color) {
+    let (arm, line) = size;
+    let mut width = 2.0 * arm + line;
+    if (rect.width - width).rem_euclid(2.0) != 0.0 {
+        width -= 1.0;
+    }
+    let step = (arm * 0.7).round().max(2.0 * line);
+    let height = 2.0 * step + line;
+    let left = rect.x + ((rect.width - width) / 2.0).floor();
+    let top = rect.y + ((rect.height - height) / 2.0).floor();
+    for offset in [0.0, step, 2.0 * step] {
+        fill(out, left, top + offset, width, line, ink);
     }
 }
 
@@ -171,5 +203,51 @@ fn corners(out: &mut Vec<Quad>, middle: Point, size: (f32, f32), restore: bool, 
         let (x, w) = span(corner.x, dx, line);
         let (y, h) = span(corner.y, dy, arm);
         fill(out, x, y, w, h, ink);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geom::Size;
+
+    /// Pixels between the glyph and the box on the left, right, top
+    /// and bottom.
+    fn margins(side: i16) -> [i64; 4] {
+        let size = f32::from(side);
+        let rect = Rectangle::new(Point::new(10.0, 20.0), Size::new(size, size));
+        let mut out = Vec::new();
+        hamburger(&mut out, rect, (4.0, 1.0), Color::from_rgb8(255, 255, 255));
+        assert_eq!(out.len(), 3, "three bars");
+        let left = out.iter().map(|q| i64::from(q.x)).min().unwrap();
+        let right = out
+            .iter()
+            .map(|q| i64::from(q.x) + i64::from(q.w))
+            .max()
+            .unwrap();
+        let top = out.iter().map(|q| i64::from(q.y)).min().unwrap();
+        let bottom = out
+            .iter()
+            .map(|q| i64::from(q.y) + i64::from(q.h))
+            .max()
+            .unwrap();
+        let side = i64::from(side);
+        [left - 10, 10 + side - right, top - 20, 20 + side - bottom]
+    }
+
+    #[test]
+    fn the_hamburger_sits_in_the_middle_of_an_odd_box() {
+        let [left, right, top, bottom] = margins(23);
+        assert_eq!(left, right, "centered across");
+        assert_eq!(top, bottom, "centered down");
+    }
+
+    #[test]
+    fn the_hamburger_sits_in_the_middle_of_an_even_box_across() {
+        let [left, right, top, bottom] = margins(24);
+        assert_eq!(left, right, "centered across");
+        // Three equal bars with equal gaps have an odd height, so an even
+        // box leaves one pixel more on one side.
+        assert!(top.abs_diff(bottom) <= 1, "{top} {bottom}");
     }
 }

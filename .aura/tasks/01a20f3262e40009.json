@@ -1,0 +1,14 @@
+{
+  "id": "01a20f3262e40009",
+  "title": "Goal: agent abbreviations (the code prefixes in `crates/surface/aura-app/src/agent_registry/code.rs`, e.g. `RE` in `RE3…",
+  "state": "failed",
+  "agent_id": "b092f25cc25c94b823a1c4a2fb2afe2f5c53e8478a356c159e0f75ce56a3c3c4",
+  "agent_name": "rust-engineer #102",
+  "assignee": "rust-engineer",
+  "parent": "01a20f3166e90008",
+  "items": [],
+  "summary": "ran out of time: it stopped after 5 minutes without a reply",
+  "updated_ms": 1795551860148,
+  "created_ms": 1795551290084,
+  "tool_use_id": "toolu_012MLXmNjdAaB2DUKv7VLgUs"
+}

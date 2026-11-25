@@ -22,7 +22,7 @@ use aura_ui_terminal::{
     UiCommand,
 };
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -555,18 +555,18 @@ pub(crate) struct ListRows {
 
 impl ListRows {
     /// The rows of every list, in one walk of each. `running` holds the
-    /// agents currently working on a task for their parent.
+    /// agents currently working on a task for their parent. The open
+    /// agent is marked active in whichever list it is in, since an
+    /// archived agent can be opened without leaving the Archive.
     pub(crate) fn build(registry: &AgentRegistry, running: &HashSet<AgentId>) -> Self {
-        let active = registry.active().agent_id();
+        let active = registry.current().agent_id();
         let mut names = ProjectNames::default();
         let listed = rows(registry, registry.tree(), active, running, &mut names);
-        let none = HashSet::new();
-        let unknown = AgentId::new([0; 32]);
         let archived = rows(
             registry,
             registry.archived_tree(),
-            unknown,
-            &none,
+            active,
+            running,
             &mut names,
         );
         let count = |rows: &[(AgentId, AgentSummary)], project: &str| {
@@ -656,6 +656,49 @@ fn set_activity(row: &mut AgentSummary, (record_count, last_active_ms): (u64, Op
     row.last_active = last_active_ms.map_or_else(|| "-".to_string(), format_local_time);
 }
 
+/// Agents whose reads a [`ByHead`] keeps.
+const READS_KEPT: usize = 8;
+
+/// What was read from the records of the agents shown last, each kept
+/// until its record grows: records are only appended to, so the same head
+/// reads the same. Switching back to an agent then decodes nothing.
+#[derive(Debug)]
+pub struct ByHead<T>(VecDeque<(AgentId, u64, T)>);
+
+impl<T> Default for ByHead<T> {
+    fn default() -> Self {
+        Self(VecDeque::new())
+    }
+}
+
+impl<T: Clone> ByHead<T> {
+    /// What `read` gives for `agent_id`'s record as it is in `store`.
+    ///
+    /// # Errors
+    /// Returns what `read` fails with; failures are not kept.
+    pub fn get_or_read(
+        &mut self,
+        store: &dyn ReadStore,
+        agent_id: AgentId,
+        read: impl FnOnce() -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let Ok(head) = store.get_head_seq(agent_id) else {
+            return read();
+        };
+        if let Some(at) = self.0.iter().position(|(id, _, _)| *id == agent_id) {
+            if let Some(kept) = self.0.remove(at).filter(|(_, seen, _)| *seen == head) {
+                let value = kept.2.clone();
+                self.0.push_front(kept);
+                return Ok(value);
+            }
+        }
+        let value = read()?;
+        self.0.push_front((agent_id, head, value.clone()));
+        self.0.truncate(READS_KEPT);
+        Ok(value)
+    }
+}
+
 /// When each agent was last active, by the head of its record: the latest
 /// entry, which is decoded whole, is only read again once the head moves.
 #[derive(Debug, Default)]
@@ -699,16 +742,17 @@ pub fn agent_summaries(
 }
 
 /// Rows for the Archive. Each archived agent's `project` names the project
-/// it was in, so the row can say where it came from.
+/// it was in, so the row can say where it came from. The open agent's row
+/// is marked active.
 #[must_use]
 pub fn archived_summaries(registry: &AgentRegistry, store: &dyn ReadStore) -> Vec<AgentSummary> {
     let none = HashSet::new();
-    let unknown = AgentId::new([0; 32]);
+    let active = registry.current().agent_id();
     let mut names = ProjectNames::default();
     let rows = rows(
         registry,
         registry.archived_tree(),
-        unknown,
+        active,
         &none,
         &mut names,
     );
@@ -814,6 +858,9 @@ fn rows(
                 record_count: 0,
                 last_active: "-".to_string(),
                 last_active_ms: None,
+                archived_at_ms: agent
+                    .archived_at
+                    .and_then(|at| u64::try_from(at.timestamp_millis()).ok()),
                 definition: agent.definition.clone(),
                 depth,
                 running: running.contains(&agent_id),

@@ -307,6 +307,7 @@ impl Shell {
                     | chrome::Hit::Close(_)
                     | chrome::Hit::Expand(_)
                     | chrome::Hit::Scope(_)
+                    | chrome::Hit::SideToggle
             )
         ) {
             CursorIcon::Pointer
@@ -349,10 +350,11 @@ impl Shell {
         }
     }
 
-    /// A button went down on a panel's title bar or a divider: left picks
-    /// the tab, closes what covers the panel, expands or restores it,
-    /// switches its lists between the agent's and the project's, focuses
-    /// the panel or starts dragging the divider.
+    /// A button went down on a panel's title bar, a divider or the
+    /// hamburger box: left picks the tab, closes what covers the panel,
+    /// expands or restores it, switches its lists between the agent's and
+    /// the project's, focuses the panel, starts dragging the divider, or
+    /// hides or shows the right column.
     fn chrome_press(&mut self, hit: chrome::Hit, button: MouseButton) {
         if button != MouseButton::Left {
             return;
@@ -365,6 +367,7 @@ impl Shell {
             chrome::Hit::Scope(pane) => tui.toggle_pane_scope(pane),
             chrome::Hit::Bar(pane) => tui.focus_pane(pane),
             chrome::Hit::Divider(divider) => self.pointer.dragging = Some(divider),
+            chrome::Hit::SideToggle => tui.toggle_side_column(),
         }
     }
 
@@ -710,6 +713,41 @@ mod tests {
         stage.shell.pointer_left();
         assert!(stage.shell.dirty());
         assert!(plain == stage.pixels());
+    }
+
+    #[test]
+    fn the_hamburger_box_under_the_close_box_hides_and_shows_the_right_column() {
+        let mut stage = stage();
+        stage.draw();
+        let close = stage.shell.bar.spot(Hit::Close).expect("the close box");
+        let rect = stage
+            .shell
+            .chrome
+            .side_toggle_box()
+            .expect("the hamburger box");
+        let bar = tab_bar::height(&stage.shell.metrics);
+        let middle = Point::new(rect.center_x(), rect.center_y() + bar);
+        assert!((middle.x - close.x).abs() <= 1.0, "{middle:?} {close:?}");
+        assert!(rect.y + bar > close.y, "below it");
+
+        stage.shell.pointer_moved(middle);
+        assert_eq!(stage.shell.chrome.hover(), Some(chrome::Hit::SideToggle));
+        assert_eq!(stage.shell.cursor_icon(), CursorIcon::Pointer);
+        assert!(stage.shell.tabs.front().tui.side_column_shown());
+        stage.shell.button(MouseButton::Left, true, stage.now);
+        stage.shell.button(MouseButton::Left, false, stage.now);
+        stage.draw();
+        assert!(!stage.shell.tabs.front().tui.side_column_shown());
+        assert_eq!(
+            stage.shell.chrome.side_toggle_box(),
+            Some(rect),
+            "it stays put"
+        );
+
+        stage.shell.pointer_moved(middle);
+        stage.shell.button(MouseButton::Left, true, stage.now);
+        stage.shell.button(MouseButton::Left, false, stage.now);
+        assert!(stage.shell.tabs.front().tui.side_column_shown());
     }
 
     #[test]

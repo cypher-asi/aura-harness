@@ -566,7 +566,7 @@ async fn subtasks_nested_under_a_benchmark_run_are_named_without_a_model_call() 
         .traces
         .start(run, RunMeta::new("mock-model", RunSource::Bench))
         .unwrap();
-    // A subtask of the run (`RE1`), working on a trace of its own that is
+    // A subtask of the run (`REN1`), working on a trace of its own that is
     // no bench run, as a spawned instance's is.
     let middle = lock(&fixture.hub.registry)
         .create_instance("rust-engineer", Some(run_zns))

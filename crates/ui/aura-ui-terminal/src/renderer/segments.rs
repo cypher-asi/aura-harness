@@ -3,6 +3,7 @@
 use super::markdown::{render_markdown_flow, wrap_spans};
 use super::text::{display_width, wrap_words, Measure};
 use crate::app::format::{format_partial_cost, format_tokens};
+use crate::app::CodeCopyHit;
 use crate::components::{CodeBlock, MessageRole};
 use crate::events::{CallUsage, SourceUsage};
 use crate::Theme;
@@ -10,6 +11,7 @@ use ratatui::{
     style::Style,
     text::{Line, Span},
 };
+use std::sync::Arc;
 
 /// `[claude-sonnet-5-5 ×2 · 27.9k tok · $0.040 · via Claude plan]`
 /// — the dim line closing a turn. `meta` (see [`reply_meta`]) loses its
@@ -241,23 +243,32 @@ fn plain_lines(text: &str, width: usize, style: Style, measure: Measure) -> Vec<
     lines
 }
 
+/// A fenced code block between blank rows, with a copy button in its top
+/// border when it fits. Returns the button's hit, its `line` counted in
+/// `lines`.
 pub(super) fn render_code_segment(
     lines: &mut Vec<Line<'_>>,
     language: &str,
     code: &str,
     width: usize,
     theme: &Theme,
-) {
+) -> Option<CodeCopyHit> {
     lines.push(Line::from(""));
+    let top = lines.len();
     let code_block = CodeBlock::new(language, code);
-    for code_line in code_block.render(theme, width) {
-        lines.push(Line::from(
-            code_line
-                .spans
-                .into_iter()
-                .map(|s| Span::styled(s.content.to_string(), s.style))
-                .collect::<Vec<_>>(),
-        ));
-    }
+    // An empty block has nothing to copy, so it gets no button.
+    let (rendered, button) = if code.is_empty() {
+        (code_block.render(theme, width), None)
+    } else {
+        code_block.render_copyable(theme, width)
+    };
+    lines.extend(rendered);
     lines.push(Line::from(""));
+    let button = button?;
+    Some(CodeCopyHit {
+        line: top,
+        x: u16::try_from(button.start).ok()?,
+        width: u16::try_from(button.len()).ok()?,
+        code: Arc::from(code),
+    })
 }

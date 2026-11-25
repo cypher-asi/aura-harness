@@ -24,7 +24,7 @@ pub fn chat_title_user_prompt(prompt: &str, reply: &str) -> String {
 
 /// System prompt for naming a subtask a coding agent handed to a helper
 /// agent. The name sits after the helper's code in a narrow tree row
-/// (`RE36: Parser escapes`), so it is tighter than a chat title.
+/// (`REN36: Parser escapes`), so it is tighter than a chat title.
 pub const SUBTASK_TITLE_SYSTEM_PROMPT: &str = "\
 You label subtasks that a coding agent hands to helper agents, for a narrow \
 sidebar tree. Reply with only the label: 1 to 3 words in sentence case naming \

@@ -1,0 +1,15 @@
+{
+  "id": "01a21065a7c1003b",
+  "title": "Repo: /home/n3o/code/aura-harness (Rust workspace). The worktree has OTHER people's uncommitted edits in many files; do…",
+  "state": "completed",
+  "agent_id": "679db509d605bad37c51907df1226ffcdfab0eeafa9e8b4559be899ef724b55e",
+  "agent_name": "rust-engineer #133",
+  "assignee": "rust-engineer",
+  "parent": "01a21064da0e003a",
+  "plan": ".aura/plans/haiku-subjects-for-inbox-threads_762c409c.plan.md",
+  "items": [],
+  "summary": "The prompt and UI half is in place. Tests, clippy and rustfmt all pass. I changed only the four files you listed and committed nothing.",
+  "updated_ms": 1795572163034,
+  "created_ms": 1795571427265,
+  "tool_use_id": "toolu_01MLb17ERZVShG9ZzKebtsrU"
+}

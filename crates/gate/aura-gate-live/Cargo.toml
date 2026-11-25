@@ -24,6 +24,7 @@ aura-gate-lead = { path = "../aura-gate-lead" }
 aura-gate-route = { path = "../aura-gate-route" }
 aura-model = { path = "../../model/aura-model" }
 aura-store-db = { path = "../../store/aura-store-db" }
+rayon = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 

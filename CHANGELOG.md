@@ -7,15 +7,56 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Long list items are spaced apart
+### Plans read like a document
 
 ##### Changed
 
-- In chat text, a list item that wraps or runs on to more lines gets a
-  blank row before the next item, so a list of long points no longer
-  reads as one block of text. Short one-line items, nested items and
-  lists of `Label: value` fields stay tight, and a list already written
-  with blank lines between its items gets no second one.
+- Plans are written as a short document to read top to bottom instead
+  of a checklist of identifiers. The agent is now asked for section
+  headings that say what each part is about, an opening paragraph of
+  context, plain sentences and full-sentence bullets. Code formatting
+  is kept for file paths, commands and code names, and tables, code
+  blocks and diagrams appear only where they help. Both the plan-mode
+  prompt and the `create_plan` tool description carry this guidance.
+
+### Typing stays quick while a long turn runs
+
+##### Fixed
+
+- Typing in the chat input no longer lags while the agent works through
+  a long turn. The running group of steps was laid out from scratch on
+  every frame, parsing each call's arguments (hundreds of KB for a file
+  write) and diffing each edit several times over; a key in a turn of
+  300 steps took about 28 ms to show in a release build. A step that is
+  done is now laid out once and kept until it changes, which brings that
+  to under 1.5 ms.
+- A tool call still running, such as a file write whose content is
+  streaming in, no longer parses its arguments and diffs its edit again
+  on every frame: those are worked out once each time the call changes,
+  and only its header, with the spinner and the seconds, is redrawn. A
+  call's arguments are parsed once for its label, diff and size instead
+  of three or four times.
+- Sizing the input box no longer styles all of its text a second time
+  each frame, so a long pasted input stays quick to type into.
+
+##### Changed
+
+- Development builds (`cargo build`, `cargo run`, `cargo test`) optimize
+  the dependencies (`opt-level = 2`, built once and then cached) and the
+  two UI crates (`opt-level = 1`). Unoptimized, a key and its frame in a
+  long session took 10 to 25 ms, and a frame drawn only to turn the
+  spinners about 11 ms, many times a second; they now take about 2 ms.
+  The first development build after this rebuilds every dependency once.
+
+### Code blocks keep their text inside the border
+
+##### Fixed
+
+- A code line wider than its box wraps onto the rows below inside the
+  border instead of running over it. Widths count display columns, so
+  tabs, accented and wide characters no longer push the right border
+  out, and a pane too narrow for the language label draws a plain top
+  border.
 
 ### BENCH compares Gate with Opus 5.5 by default
 

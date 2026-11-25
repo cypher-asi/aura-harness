@@ -1,0 +1,14 @@
+{
+  "id": "01a20f7763d2000e",
+  "title": "Rework how the TASKS side tab in `crates/ui/aura-ui-terminal` lays out its rows. This step is production code only: `sr…",
+  "state": "failed",
+  "agent_id": "91b789a541195091e515ddc8bb314fde637d80525aa4db04535e155612e6ce5b",
+  "agent_name": "rust-engineer #112",
+  "assignee": "rust-engineer",
+  "parent": "01a20f7259630009",
+  "items": [],
+  "summary": "ran out of time: it stopped after 0 minutes without a reply",
+  "updated_ms": 1795556383270,
+  "created_ms": 1795555812306,
+  "tool_use_id": "toolu_01CMRZFgTbFjv4i9nZ6Rutmi"
+}

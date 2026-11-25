@@ -7,7 +7,7 @@ use super::diff::diff_stat_spans;
 use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::panels::format_elapsed;
 use super::text::{display_width, wrap_words};
-use crate::app::format::{file_name, format_tool_label, is_complete_json, parse_tool_args};
+use crate::app::format::{file_name, format_tool_label_of, parse_tool_args, ToolArgs};
 use crate::components::{Activity, CodeBlock, DiffView, ThinkingStep, ToolStatus, ToolStep};
 use crate::Theme;
 use ratatui::{
@@ -89,7 +89,48 @@ pub(super) fn activity_lines(
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let marker = if activity.is_running() {
+    let marker = step_marker(activity.is_running(), expanded, number, spinner, theme);
+    let body = Body::new(body_indent(number), width);
+    match activity {
+        Activity::Thinking(step) => thinking_lines(step, marker, expanded, &body, theme),
+        Activity::Tool(step) => {
+            ToolParts::new(step, expanded, &body, theme).into_lines(step, marker, width, theme)
+        }
+    }
+}
+
+/// The lines of a running tool step from `parts`, which [`ToolParts::of`]
+/// made from the step as it is: only its header, which turns `spinner`
+/// and counts the seconds, is drawn afresh. The same lines as
+/// [`activity_lines`] draws.
+pub(super) fn running_tool_lines(
+    step: &ToolStep,
+    parts: &ToolParts,
+    number: Option<StepNumber>,
+    spinner: &str,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let marker = step_marker(
+        step.status == ToolStatus::Running,
+        parts.expanded,
+        number,
+        spinner,
+        theme,
+    );
+    parts.lines(step, marker, width, theme)
+}
+
+/// The marker before a step's label: `spinner` while it runs, else an
+/// arrow that says whether it is open, after its number in a group.
+fn step_marker(
+    running: bool,
+    expanded: bool,
+    number: Option<StepNumber>,
+    spinner: &str,
+    theme: &Theme,
+) -> Span<'static> {
+    let marker = if running {
         spinner
     } else if expanded {
         "▾"
@@ -106,15 +147,10 @@ pub(super) fn activity_lines(
         ),
         None => INDENT.to_string(),
     };
-    let marker = Span::styled(
+    Span::styled(
         format!("{lead}{marker} "),
         Style::default().fg(theme.colors.faint),
-    );
-    let body = Body::new(body_indent(number), width);
-    match activity {
-        Activity::Thinking(step) => thinking_lines(step, marker, expanded, &body, theme),
-        Activity::Tool(step) => tool_lines(step, marker, expanded, &body, width, theme),
-    }
+    )
 }
 
 /// Columns before the marker of a step, numbered or not.
@@ -150,8 +186,23 @@ pub(super) fn collapsed_hint(steps: usize, theme: &Theme) -> Line<'static> {
 
 /// The summary line of a group of steps: `▸ Explored 4 files, 2 searches`.
 /// `progress` (` · step 7 · 42s`) follows the summary while the group runs.
+#[cfg(test)]
 pub(super) fn group_header(
     steps: &[&Activity],
+    view: GroupView,
+    live: bool,
+    progress: &str,
+    spinner: &str,
+    width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let tally = Tally::of(steps.iter().map(|step| StepTally::of(step)));
+    group_header_of(&tally, view, live, progress, spinner, width, theme)
+}
+
+/// [`group_header`] for steps already added up into `tally`.
+pub(super) fn group_header_of(
+    tally: &Tally,
     view: GroupView,
     live: bool,
     progress: &str,
@@ -170,7 +221,6 @@ pub(super) fn group_header(
         format!("{INDENT}{marker} "),
         Style::default().fg(theme.colors.faint),
     );
-    let tally = Tally::of(steps);
     let failed = if tally.failed > 0 {
         format!(" · {} failed", tally.failed)
     } else {
@@ -196,9 +246,64 @@ pub(super) fn group_header(
     Line::from(spans)
 }
 
+/// What one step adds to its group's [`Tally`]. Finding a tool's path
+/// parses its arguments, which can be hundreds of KB for a write, so a
+/// live group keeps each step's from frame to frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StepTally {
+    kind: StepKind,
+    /// Whether the call failed or was denied
+    failed: bool,
+}
+
+/// What kind of work a step was, for its group's summary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StepKind {
+    /// Thinking, and for how long once done
+    Thought(Option<u64>),
+    /// A path read, listed or checked
+    Explored(String),
+    Searched,
+    /// A path written, edited or deleted
+    Edited(String),
+    Ran,
+    Other,
+}
+
+impl StepTally {
+    pub(super) fn of(step: &Activity) -> Self {
+        let tool = match step {
+            Activity::Thinking(thinking) => {
+                return Self {
+                    kind: StepKind::Thought(thinking.duration_ms),
+                    failed: false,
+                }
+            }
+            Activity::Tool(tool) => tool,
+        };
+        let path = || {
+            parse_tool_args(&tool.args)
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map_or_else(|| ".".to_string(), str::to_string)
+        };
+        let kind = match tool.name.as_str() {
+            "read_file" | "list_files" | "stat_file" => StepKind::Explored(path()),
+            "search_code" | "find_files" => StepKind::Searched,
+            "write_file" | "edit_file" | "delete_file" => StepKind::Edited(path()),
+            "run_command" => StepKind::Ran,
+            _ => StepKind::Other,
+        };
+        Self {
+            kind,
+            failed: matches!(tool.status, ToolStatus::Error | ToolStatus::Denied),
+        }
+    }
+}
+
 /// What a group's steps add up to.
 #[derive(Debug, Default)]
-struct Tally {
+pub(super) struct Tally {
     /// Paths read, listed or checked
     files: BTreeSet<String>,
     /// Searches by content or file name
@@ -216,41 +321,36 @@ struct Tally {
 }
 
 impl Tally {
-    fn of(steps: &[&Activity]) -> Self {
+    /// What `steps` add up to, each as [`StepTally::of`] it.
+    pub(super) fn of<S: std::borrow::Borrow<StepTally>>(
+        steps: impl IntoIterator<Item = S>,
+    ) -> Self {
         let mut tally = Self::default();
         for step in steps {
-            match step {
-                Activity::Thinking(thinking) => {
-                    if let Some(ms) = thinking.duration_ms {
-                        tally.thought_ms = Some(tally.thought_ms.unwrap_or(0) + ms);
-                    }
-                }
-                Activity::Tool(tool) => tally.add_tool(tool),
-            }
+            tally.add(step.borrow());
         }
         tally
     }
 
-    fn add_tool(&mut self, tool: &ToolStep) {
-        if matches!(tool.status, ToolStatus::Error | ToolStatus::Denied) {
+    fn add(&mut self, step: &StepTally) {
+        if step.failed {
             self.failed += 1;
         }
-        let path = || {
-            parse_tool_args(&tool.args)
-                .get("path")
-                .and_then(serde_json::Value::as_str)
-                .map_or_else(|| ".".to_string(), str::to_string)
-        };
-        match tool.name.as_str() {
-            "read_file" | "list_files" | "stat_file" => {
-                self.files.insert(path());
+        match &step.kind {
+            StepKind::Thought(ms) => {
+                if let Some(ms) = ms {
+                    self.thought_ms = Some(self.thought_ms.unwrap_or(0) + ms);
+                }
             }
-            "search_code" | "find_files" => self.searches += 1,
-            "write_file" | "edit_file" | "delete_file" => {
-                self.edits.insert(path());
+            StepKind::Explored(path) => {
+                self.files.insert(path.clone());
             }
-            "run_command" => self.commands += 1,
-            _ => self.other += 1,
+            StepKind::Searched => self.searches += 1,
+            StepKind::Edited(path) => {
+                self.edits.insert(path.clone());
+            }
+            StepKind::Ran => self.commands += 1,
+            StepKind::Other => self.other += 1,
         }
     }
 
@@ -428,20 +528,111 @@ fn thinking_lines(
     lines
 }
 
-fn tool_lines(
-    step: &ToolStep,
-    marker: Span<'static>,
+/// What a tool step is drawn from that changes only with the step: its
+/// label, its diff stats and everything under its header. Working these
+/// out parses the call's arguments, which grow to hundreds of KB while a
+/// file's content streams in, and diffs an edit's texts, so a running
+/// step keeps its parts from frame to frame and only its header, with
+/// the spinner and the seconds, is drawn again.
+#[derive(Debug, Clone)]
+pub(super) struct ToolParts {
+    /// Whether the step is drawn open
     expanded: bool,
-    body: &Body,
-    width: usize,
-    theme: &Theme,
-) -> Vec<Line<'static>> {
-    let diff = tool_diff(step);
-    let mut lines = vec![tool_header(step, marker, width, diff.as_ref(), theme)];
-    if !expanded {
-        return lines;
+    /// First line of the step's label, before it is cut to fit
+    label: String,
+    /// ` · +12 -3` after the label, for a call that changed a file
+    stat: Vec<Span<'static>>,
+    /// Size in KB of a large input still streaming in
+    streaming_kb: Option<usize>,
+    /// The lines under the header while the step is open
+    body: Vec<Line<'static>>,
+}
+
+impl ToolParts {
+    /// The parts of `step` drawn `width` columns wide, numbered `number`
+    /// inside a group.
+    pub(super) fn of(
+        step: &ToolStep,
+        expanded: bool,
+        number: Option<StepNumber>,
+        width: usize,
+        theme: &Theme,
+    ) -> Self {
+        let body = Body::new(body_indent(number), width);
+        Self::new(step, expanded, &body, theme)
     }
 
+    fn new(step: &ToolStep, expanded: bool, body: &Body, theme: &Theme) -> Self {
+        let args = ToolArgs::parse(&step.args);
+        let diff = tool_diff(step, &args.value);
+        let mut stat = Vec::new();
+        if let Some(view) = diff.as_ref().filter(|v| !v.is_empty()) {
+            stat.push(Span::styled(" · ", Style::default().fg(theme.colors.muted)));
+            stat.extend(diff_stat_spans(view, theme));
+        }
+        let label = format_tool_label_of(&step.name, &args);
+        let label = match label.lines().next() {
+            Some(first) if !first.is_empty() => first.to_string(),
+            _ => step.name.clone(),
+        };
+        let streaming_kb = (step.status == ToolStatus::Running
+            && !step.awaiting_approval
+            && step.args.len() >= STREAMING_SIZE_MIN_BYTES
+            && !args.complete)
+            .then_some(step.args.len() / 1024);
+        let body = if expanded {
+            tool_body(step, diff.as_ref(), body, theme)
+        } else {
+            Vec::new()
+        };
+        Self {
+            expanded,
+            label,
+            stat,
+            streaming_kb,
+            body,
+        }
+    }
+
+    /// The step's lines: its header after `marker`, then its body.
+    fn lines(
+        &self,
+        step: &ToolStep,
+        marker: Span<'static>,
+        width: usize,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let mut lines = Vec::with_capacity(1 + self.body.len());
+        lines.push(tool_header(step, self, marker, width, theme));
+        lines.extend(self.body.iter().cloned());
+        lines
+    }
+
+    /// [`Self::lines`], taking the body rather than copying it.
+    fn into_lines(
+        mut self,
+        step: &ToolStep,
+        marker: Span<'static>,
+        width: usize,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        let body = std::mem::take(&mut self.body);
+        let mut lines = Vec::with_capacity(1 + body.len());
+        lines.push(tool_header(step, &self, marker, width, theme));
+        lines.extend(body);
+        lines
+    }
+}
+
+/// What an open tool step shows under its header: the policy that let it
+/// run, its diff or arguments, then what it returned.
+fn tool_body(
+    step: &ToolStep,
+    diff: Option<&DiffView>,
+    body: &Body,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
     let muted = Style::default().fg(theme.colors.muted);
     if let Some(policy) = &step.policy {
         let color = if step.status == ToolStatus::Denied {
@@ -456,7 +647,7 @@ fn tool_lines(
             theme,
         );
     }
-    if let Some(view) = &diff {
+    if let Some(view) = diff {
         body.push_wrapped(&mut lines, view.path(), muted, theme);
         let diff_lines = view.styled_lines(theme, body.width);
         let total = diff_lines.len();
@@ -488,7 +679,7 @@ fn tool_lines(
     if result.is_empty() {
         return lines;
     }
-    if lines.len() > 1 {
+    if !lines.is_empty() {
         lines.push(body.line(String::new(), Style::default(), theme));
     }
     let style = Style::default().fg(
@@ -525,9 +716,9 @@ fn tool_lines(
 /// one line.
 fn tool_header(
     step: &ToolStep,
+    parts: &ToolParts,
     marker: Span<'static>,
     width: usize,
-    diff: Option<&DiffView>,
     theme: &Theme,
 ) -> Line<'static> {
     let (icon, icon_color) = match step.status {
@@ -535,26 +726,18 @@ fn tool_header(
         ToolStatus::Error => ("✗ ", theme.colors.error),
         ToolStatus::Denied => ("⊘ ", theme.colors.warning),
     };
-    let meta = tool_meta(step);
-    let mut stat = Vec::new();
-    if let Some(view) = diff.filter(|v| !v.is_empty()) {
-        stat.push(Span::styled(" · ", Style::default().fg(theme.colors.muted)));
-        stat.extend(diff_stat_spans(view, theme));
-    }
-    let stat_width: usize = stat.iter().map(|s| display_width(&s.content)).sum();
+    let meta = tool_meta(step, parts.streaming_kb);
+    let stat_width: usize = parts.stat.iter().map(|s| display_width(&s.content)).sum();
     let used =
         display_width(&marker.content) + display_width(icon) + display_width(&meta) + stat_width;
-    let label = format_tool_label(&step.name, &step.args);
-    let label = label.lines().next().unwrap_or_default();
-    let label = if label.is_empty() { &step.name } else { label };
-    let label = truncate(label, width.saturating_sub(used));
+    let label = truncate(&parts.label, width.saturating_sub(used));
 
     let mut spans = vec![
         marker,
         Span::styled(icon.to_string(), Style::default().fg(icon_color)),
     ];
     spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
-    spans.extend(stat);
+    spans.extend(parts.stat.iter().cloned());
     spans.push(Span::styled(meta, Style::default().fg(theme.colors.muted)));
     Line::from(spans)
 }
@@ -563,8 +746,7 @@ fn tool_header(
 /// once the call ran, else for `edit_file` the text it replaces against
 /// the replacement (also while the arguments stream in, and for calls
 /// restored from history). `None` for other calls and failed edits.
-fn tool_diff(step: &ToolStep) -> Option<DiffView> {
-    let args = parse_tool_args(&step.args);
+fn tool_diff(step: &ToolStep, args: &serde_json::Value) -> Option<DiffView> {
     let text = |key: &str| args.get(key).and_then(serde_json::Value::as_str);
     let path = text("path").unwrap_or_default();
     if let Some(diff) = &step.diff {
@@ -581,9 +763,10 @@ fn tool_diff(step: &ToolStep) -> Option<DiffView> {
 }
 
 /// ` · retrying (2/3) · 12s` while running, with ` · 14 KB` while a large
-/// input is still streaming in; ` · error: …` once failed. A finished call
-/// keeps how long it took once that reaches a second.
-fn tool_meta(step: &ToolStep) -> String {
+/// input of `streaming_kb` is still streaming in; ` · error: …` once
+/// failed. A finished call keeps how long it took once that reaches a
+/// second.
+fn tool_meta(step: &ToolStep, streaming_kb: Option<usize>) -> String {
     let mut parts = Vec::new();
     match step.status {
         ToolStatus::Running if step.awaiting_approval => {
@@ -593,8 +776,8 @@ fn tool_meta(step: &ToolStep) -> String {
             if let Some((attempt, max)) = step.retry {
                 parts.push(format!("retrying ({attempt}/{max})"));
             }
-            if step.args.len() >= STREAMING_SIZE_MIN_BYTES && !is_complete_json(&step.args) {
-                parts.push(format!("{} KB", step.args.len() / 1024));
+            if let Some(kb) = streaming_kb {
+                parts.push(format!("{kb} KB"));
             }
             if let Some(elapsed) = live_elapsed(step.started) {
                 parts.push(elapsed);

@@ -36,6 +36,7 @@ fn agent(zns_id: &str, position: u64) -> AgentRecord {
         title: None,
         code: None,
         subtitle: None,
+        archived_at: None,
     }
 }
 

@@ -1,0 +1,12 @@
+{
+  "id": "01a2105a8ea50038",
+  "title": "keep working on plan",
+  "state": "completed",
+  "agent_id": "5f795105b57bd11a8053072b866f2b429d21100e94916b7bc5e2d41a0dffc1d1",
+  "agent_name": "Agent 1586",
+  "plan": ".aura/plans/haiku-subjects-for-inbox-threads_762c409c.plan.md",
+  "items": [],
+  "summary": "I've written the plan: INBOX threads will get a short subject from Haiku (the title model), the same way agent sessions get their names.",
+  "updated_ms": 1795570741635,
+  "created_ms": 1795570699941
+}

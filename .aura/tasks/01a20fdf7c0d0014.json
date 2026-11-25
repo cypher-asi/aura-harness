@@ -1,0 +1,13 @@
+{
+  "id": "01a20fdf7c0d0014",
+  "title": "is this working?",
+  "state": "completed",
+  "agent_id": "4efea89ca948413e47fea770455d4e1e3e3522aaad72b1b5a66323a2ad110d07",
+  "agent_name": "Agent 1557",
+  "plan": ".aura/plans/channels-persistent-channels-with-a-coordinator_5fa9dc49.plan.md",
+  "builds": true,
+  "items": [],
+  "summary": "No, it isn't working yet. The first of the 15 steps (the `AgentStore`) is still unfinished.",
+  "updated_ms": 1795562651368,
+  "created_ms": 1795562634253
+}

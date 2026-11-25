@@ -4,8 +4,12 @@ use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
 use aura_core_types::ToolDefinition;
 use aura_core_types::ToolResult;
+use rayon::prelude::*;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use tracing::{debug, instrument};
 
 /// Maximum compiled regex size (bytes) accepted by `search_code`.
@@ -186,7 +190,7 @@ pub fn search_code(
 
     debug!(?search_root, "Searching code");
 
-    let regex = Regex::new(pattern)
+    let regex = cached_regex(pattern)
         .map_err(|e| ToolError::InvalidArguments(format!("Invalid regex: {e}")))?;
 
     if regex.as_str().len() > SEARCH_REGEX_SIZE_LIMIT {
@@ -202,83 +206,46 @@ pub fn search_code(
 
     let mut results = Vec::new();
     let mut match_count = 0usize;
+    let search = FileSearch {
+        root: &search_root,
+        regex: &regex,
+        mode,
+        context_lines,
+        limit: max_results,
+    };
 
-    for entry in super::walk::walk(&search_root, should_skip_dir).filter_map(Result::ok) {
-        if results.len() >= max_results {
+    let mut files = super::walk::walk(&search_root, should_skip_dir)
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|t| t.is_file()))
+        .map(ignore::DirEntry::into_path)
+        .filter(|path| {
+            file_pattern_regex.as_ref().is_none_or(|fp_regex| {
+                fp_regex.is_match(path.file_name().and_then(|n| n.to_str()).unwrap_or(""))
+            })
+        })
+        .filter(|path| is_text_file(path));
+    // Files are read and matched in parallel a chunk at a time, and their
+    // hits taken in walk order, so the result is what reading them one by
+    // one gives.
+    'chunks: while results.len() < max_results {
+        let chunk: Vec<PathBuf> = files.by_ref().take(SEARCH_CHUNK_FILES).collect();
+        if chunk.is_empty() {
             break;
         }
-
-        let entry_path = entry.path();
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
-
-        if let Some(ref fp_regex) = file_pattern_regex {
-            let file_name = entry_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            if !fp_regex.is_match(file_name) {
-                continue;
+        let hits: Vec<Option<FileHits>> = chunk.par_iter().map(|p| search.file(p)).collect();
+        for hits in hits.into_iter().flatten() {
+            if results.len() >= max_results {
+                break 'chunks;
             }
-        }
-
-        if !is_text_file(entry_path) {
-            continue;
-        }
-
-        if entry_path
-            .metadata()
-            .map_or(true, |m| m.len() > MAX_SEARCH_FILE_SIZE)
-        {
-            continue;
-        }
-
-        if let Ok(file_content) = fs::read_to_string(entry_path) {
-            let lines: Vec<&str> = file_content.lines().collect();
-            let relative_path = entry_path
-                .strip_prefix(&search_root)
-                .unwrap_or(entry_path)
-                .to_string_lossy();
-
             match mode {
                 OutputMode::Content => {
-                    for (line_idx, line) in lines.iter().enumerate() {
-                        if results.len() >= max_results {
-                            break;
-                        }
-                        if !regex.is_match(line) {
-                            continue;
-                        }
-                        match_count += 1;
-                        if context_lines == 0 {
-                            results.push(format!(
-                                "{relative_path}:{}:{}",
-                                line_idx + 1,
-                                clip_line(line)
-                            ));
-                        } else {
-                            results.push(format_match_with_context(
-                                &relative_path,
-                                &lines,
-                                line_idx,
-                                context_lines,
-                            ));
-                        }
-                    }
+                    let room = max_results - results.len();
+                    match_count += hits.lines.len().min(room);
+                    results.extend(hits.lines.into_iter().take(room));
                 }
-                OutputMode::FilesWithMatches => {
-                    if lines.iter().any(|line| regex.is_match(line)) {
-                        match_count += 1;
-                        results.push(relative_path.into_owned());
-                    }
-                }
-                OutputMode::Count => {
-                    let count = lines.iter().filter(|line| regex.is_match(line)).count();
-                    if count > 0 {
-                        match_count += count;
-                        results.push(format!("{relative_path}:{count}"));
-                    }
+                OutputMode::FilesWithMatches | OutputMode::Count => {
+                    match_count += hits.matches;
+                    results.extend(hits.lines);
                 }
             }
         }
@@ -305,6 +272,107 @@ pub fn search_code(
         result = result.with_metadata("truncated", "true");
     }
     Ok(result)
+}
+
+/// Files `search_code` reads in parallel before taking their hits.
+const SEARCH_CHUNK_FILES: usize = 64;
+
+/// Compiled patterns kept between calls; agents repeat their searches.
+const REGEX_CACHE_SIZE: usize = 64;
+
+/// `pattern` compiled, from the cache when it was compiled before.
+fn cached_regex(pattern: &str) -> Result<regex::Regex, regex::Error> {
+    static CACHE: OnceLock<Mutex<HashMap<String, regex::Regex>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Mutex::default);
+    if let Some(regex) = cache
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(pattern)
+    {
+        return Ok(regex.clone());
+    }
+    let regex = regex::Regex::new(pattern)?;
+    let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    if cache.len() >= REGEX_CACHE_SIZE {
+        cache.clear();
+    }
+    cache.insert(pattern.to_string(), regex.clone());
+    Ok(regex)
+}
+
+/// What one file gave a search: the lines to print, and how many
+/// matches they stand for.
+struct FileHits {
+    lines: Vec<String>,
+    matches: usize,
+}
+
+/// One `search_code` call's pattern and output settings.
+struct FileSearch<'a> {
+    root: &'a Path,
+    regex: &'a regex::Regex,
+    mode: OutputMode,
+    context_lines: usize,
+    /// Most lines one file can add, the call's `max_results`
+    limit: usize,
+}
+
+impl FileSearch<'_> {
+    /// The hits in the file at `path`, or `None` when it has none or
+    /// can't be read as text.
+    fn file(&self, path: &Path) -> Option<FileHits> {
+        if path
+            .metadata()
+            .map_or(true, |m| m.len() > MAX_SEARCH_FILE_SIZE)
+        {
+            return None;
+        }
+        let file_content = fs::read_to_string(path).ok()?;
+        let lines: Vec<&str> = file_content.lines().collect();
+        let relative_path = path
+            .strip_prefix(self.root)
+            .unwrap_or(path)
+            .to_string_lossy();
+        let regex = self.regex;
+        let hits = match self.mode {
+            OutputMode::Content => {
+                let out: Vec<String> = lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, line)| regex.is_match(line))
+                    .take(self.limit)
+                    .map(|(line_idx, line)| {
+                        if self.context_lines == 0 {
+                            format!("{relative_path}:{}:{}", line_idx + 1, clip_line(line))
+                        } else {
+                            format_match_with_context(
+                                &relative_path,
+                                &lines,
+                                line_idx,
+                                self.context_lines,
+                            )
+                        }
+                    })
+                    .collect();
+                FileHits {
+                    matches: out.len(),
+                    lines: out,
+                }
+            }
+            OutputMode::FilesWithMatches => FileHits {
+                lines: vec![relative_path.into_owned()],
+                matches: usize::from(lines.iter().any(|line| regex.is_match(line))),
+            },
+            OutputMode::Count => {
+                let count = lines.iter().filter(|line| regex.is_match(line)).count();
+                FileHits {
+                    lines: vec![format!("{relative_path}:{count}")],
+                    matches: count,
+                }
+            }
+        };
+        (hits.matches > 0).then_some(hits)
+    }
 }
 
 /// Whether `search_code` should attempt to read a file.

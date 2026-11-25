@@ -75,7 +75,8 @@ use aura_gate::route::{Candidate, Decision};
 use aura_model::{Message, ModelCallPurpose, ThinkingEffort, ToolDefinition};
 use aura_store_db::ChannelStore;
 use aura_ui_terminal::events::{
-    AgentDefinitionSummary, AgentSummary, MailView, ProcessKind, ProcessStatus, ProcessSummary,
+    AgentDefinitionSummary, AgentSummary, MailView, MessageData, ProcessKind, ProcessStatus,
+    ProcessSummary, RecordSummary,
 };
 use aura_ui_terminal::{PermissionMode, UiCommand};
 use std::collections::hash_map::Entry;
@@ -371,6 +372,10 @@ pub struct AgentHub {
     pub(crate) channel_members: Mutex<HashSet<AgentId>>,
     /// Replies the channels wait for and what each coordinator has seen.
     pub(crate) channel_chat: super::channels::ChannelChat,
+    /// The chats of the agents shown last, as read from their records
+    pub(super) shown_chats: Mutex<crate::record_loader::ByHead<Vec<MessageData>>>,
+    /// The Record panel rows of the agents shown last
+    pub(super) shown_records: Mutex<crate::record_loader::ByHead<Vec<RecordSummary>>>,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -476,6 +481,8 @@ impl AgentHub {
                 channel_members: Mutex::new(channel_members),
                 channels: parts.channels,
                 channel_chat: super::channels::ChannelChat::default(),
+                shown_chats: Mutex::default(),
+                shown_records: Mutex::default(),
             }
         })
     }
@@ -795,7 +802,7 @@ impl AgentHub {
         let mut rows = agent_summaries(
             &registry,
             self.factory.store.as_ref(),
-            registry.active().agent_id(),
+            registry.current().agent_id(),
             &running,
         );
         drop(registry);
@@ -941,7 +948,12 @@ impl AgentHub {
         };
         rows.split_members(&lock(&self.channel_members));
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
-        for (agent_id, row) in rows.listed.iter_mut().chain(rows.members.iter_mut()) {
+        for (agent_id, row) in rows
+            .listed
+            .iter_mut()
+            .chain(rows.archived.iter_mut())
+            .chain(rows.members.iter_mut())
+        {
             self.mark_plan_mode(*agent_id, row);
         }
         let active = rows.active;
@@ -964,9 +976,9 @@ impl AgentHub {
         &self.commands
     }
 
-    /// Mark `row`, the Agents panel row of `agent_id`, when the agent is
-    /// in plan mode. Archived agents run no turns, so their rows are left
-    /// unmarked.
+    /// Mark `row`, the Agents panel or Archive row of `agent_id`, when the
+    /// agent is in plan mode. Archived agents can be opened and run turns
+    /// too, so their rows are marked as well.
     fn mark_plan_mode(&self, agent_id: AgentId, row: &mut AgentSummary) {
         row.plan_mode = self.mode_of(agent_id) == PermissionMode::Plan;
     }
@@ -1546,7 +1558,7 @@ impl AgentHub {
     /// Whether `agent` works under a benchmark: it, or an agent above it
     /// in the registry, runs a benchmark's run (its trace is a bench
     /// run), or it is a `/compare` run or a subtask of one. So a subtask
-    /// nested under a run (bench arm, `RE1`, `REV1`) is treated like the
+    /// nested under a run (bench arm, `REN1`, `REV1`) is treated like the
     /// run's direct subtasks, though its own trace is a TUI run.
     /// [`AgentRegistry::ancestry`] stops after as many steps as there are
     /// agents, so a hand-edited parent cycle cannot loop.

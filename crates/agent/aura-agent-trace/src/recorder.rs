@@ -597,6 +597,7 @@ pub struct RunRecorder {
     writer: Mutex<Option<JoinHandle<()>>>,
     listeners: Mutex<Vec<Listener>>,
     record_listeners: Mutex<Vec<RecordListener>>,
+    records_in_flight: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     sinks: Sinks,
     dropped: AtomicU64,
 }
@@ -654,6 +655,7 @@ impl RunRecorder {
             writer: Mutex::new(Some(writer)),
             listeners: Mutex::new(Vec::new()),
             record_listeners: Mutex::new(Vec::new()),
+            records_in_flight: Mutex::new(None),
             sinks,
             dropped: AtomicU64::new(0),
         })))
@@ -765,6 +767,18 @@ impl RunRecorder {
         lock(&self.record_listeners).push(Box::new(f));
     }
 
+    /// Call `wait` before a turn ends or the run flushes, to take in the
+    /// record rows still on their way to [`Self::on_record`].
+    pub fn wait_for_records(&self, wait: impl Fn() + Send + Sync + 'static) {
+        *lock(&self.records_in_flight) = Some(Box::new(wait));
+    }
+
+    fn take_records_in_flight(&self) {
+        if let Some(wait) = lock(&self.records_in_flight).as_ref() {
+            wait();
+        }
+    }
+
     /// Update metadata (title, mode, task id) after start.
     pub fn update_meta(&self, f: impl FnOnce(&mut RunMeta)) {
         {
@@ -839,6 +853,7 @@ impl RunRecorder {
 
     /// Record the end of a turn.
     pub fn end_turn(&self, result: &AgentLoopResult) {
+        self.take_records_in_flight();
         let step = lock(&self.builder).turn_end(result, now_ms());
         self.emit(step);
     }
@@ -894,6 +909,7 @@ impl RunRecorder {
 
     /// Block until queued steps are on disk.
     pub fn flush(&self) {
+        self.take_records_in_flight();
         let (ack_tx, ack_rx) = mpsc::sync_channel(1);
         let sent = lock(&self.tx)
             .as_ref()

@@ -3,7 +3,8 @@
 mod stream;
 
 use super::activity::{
-    activity_lines, collapsed_hint, group_header, records_link, GroupView, StepNumber,
+    activity_lines, collapsed_hint, group_header_of, records_link, running_tool_lines, GroupView,
+    StepNumber, StepTally, Tally, ToolParts,
 };
 use super::command::shell_lines;
 use super::diff::diff_message_lines;
@@ -13,7 +14,7 @@ use super::segments::{
     reply_meta,
 };
 use super::text::Measure;
-use crate::app::{ImageHit, ToggleRow, ToggleTarget};
+use crate::app::{CodeCopyHit, ImageHit, ToggleRow, ToggleTarget};
 use crate::components::{Activity, Message, MessageRole};
 use crate::events::{
     merge_timeline, ChannelPostAuthor, ChannelPostView, MessageData, TimelineItem,
@@ -27,7 +28,7 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::ops::Range;
 use std::sync::OnceLock;
-use stream::Settled;
+use stream::{Laid, Settled};
 
 /// How the groups of agent steps in the chat are shown.
 #[derive(Debug, Clone, Copy)]
@@ -108,12 +109,92 @@ pub(crate) struct BlockLines {
     pub toggles: Vec<ToggleRow>,
     /// Image thumbnails, `line` counted from the block's first line
     pub images: Vec<ImageHit>,
+    /// Copy buttons of code blocks, `line` counted from the block's first
+    /// line
+    pub codes: Vec<CodeCopyHit>,
     /// Whether each line is prose, the user's or the agent's flowing text:
     /// `Some` of the columns its marker, quote bar or indent takes. Lines
     /// past the end are not.
     pub prose: Vec<Option<u16>>,
     /// How much of a reply that is still streaming is laid out for good
     settled: Option<Settled>,
+    /// The steps of a group still running, by the id of each step's
+    /// message, so its next frame lays out only the steps that changed
+    steps: HashMap<u64, StepLines>,
+}
+
+/// One step of a live group as drawn. A group grows while its turn runs,
+/// and is laid out again every frame for its spinner and clocks; a step
+/// that is done looks the same from frame to frame, so its lines and its
+/// part of the group's summary (which parse the call's arguments, up to
+/// hundreds of KB for a write) are kept.
+#[derive(Debug)]
+struct StepLines {
+    /// The step's message version, which every change to it moves
+    version: (u64, u64),
+    /// What the step adds to the group's summary line
+    tally: StepTally,
+    /// The step's lines and the number they were drawn with, or `None`
+    /// while it runs, as its spinner and clock change every frame
+    lines: Option<(Option<StepNumber>, Vec<Line<'static>>)>,
+    /// What a running tool step is drawn from besides its header, and the
+    /// number it was drawn with
+    running: Option<(Option<StepNumber>, ToolParts)>,
+}
+
+impl StepLines {
+    fn new(member: &Message, step: &Activity) -> Self {
+        Self {
+            version: member.version(),
+            tally: StepTally::of(step),
+            lines: None,
+            running: None,
+        }
+    }
+
+    /// What `kept` had of `member` when it has not changed since, else a
+    /// fresh start.
+    fn take(kept: Option<&mut KeptSteps>, member: &Message, step: &Activity) -> Self {
+        kept.and_then(|kept| kept.remove(&member.version().0))
+            .filter(|before| before.version == member.version())
+            .unwrap_or_else(|| Self::new(member, step))
+    }
+
+    /// The lines of `step`, `member`'s, numbered `number`: the ones kept
+    /// when it was drawn the same way before, else laid out afresh and
+    /// kept when `keeping`. A finished step keeps its lines; a running
+    /// tool keeps all but its header, which turns `spinner` and counts
+    /// the seconds.
+    fn draw(
+        &mut self,
+        (member, step): (&Message, &Activity),
+        number: Option<StepNumber>,
+        keeping: bool,
+        (width, theme, spinner): (usize, &Theme, &str),
+    ) -> Vec<Line<'static>> {
+        if let Some((drawn_as, lines)) = &self.lines {
+            if *drawn_as == number {
+                return lines.clone();
+            }
+        }
+        let expanded = member.is_expanded();
+        let lines = match step {
+            Activity::Tool(tool) if keeping && step.is_running() => {
+                let parts = match self.running.take() {
+                    Some((drawn_as, parts)) if drawn_as == number => parts,
+                    _ => ToolParts::of(tool, expanded, number, width, theme),
+                };
+                let lines = running_tool_lines(tool, &parts, number, spinner, width, theme);
+                self.running = Some((number, parts));
+                lines
+            }
+            _ => activity_lines(step, expanded, number, spinner, width, theme),
+        };
+        if keeping && !step.is_running() {
+            self.lines = Some((number, lines.clone()));
+        }
+        lines
+    }
 }
 
 impl ChatLineCache {
@@ -221,7 +302,7 @@ impl ChatLineCache {
                 live,
                 place: *place,
             };
-            if layout.streams(&block) {
+            if layout.streams(&block) || layout.keeps_steps(&block) {
                 let before = self.entries.remove(&key);
                 self.entries.insert(key, layout.block(&block, before));
             } else {
@@ -284,6 +365,14 @@ impl Layout<'_> {
             && stream::applies(block.members[0])
     }
 
+    /// Whether `block` is a group of steps, or one step, still running,
+    /// laid out from the steps it had the last time.
+    fn keeps_steps(self, block: &Stale<'_>) -> bool {
+        block.live
+            && (block.view.is_some()
+                || (block.members.len() == 1 && block.members[0].activity_step().is_some()))
+    }
+
     /// The lines of `blocks`, in order. A width or theme change, an agent
     /// switch or a chat's first frame lays out every block, which is
     /// shared out across threads.
@@ -315,48 +404,73 @@ impl Layout<'_> {
         let members = block.members;
         let shell = members[0].shell_run().filter(|_| terminal);
         let mut settled = None;
-        let (mut lines, mut toggles, mut prose) = match (shell, block.view) {
+        let mut steps = HashMap::new();
+        let ((mut lines, mut prose, mut codes), mut toggles) = match (shell, block.view) {
             (Some(run), _) => (
-                shell_lines(run, self.prompt, width, theme),
-                Vec::new(),
+                (
+                    shell_lines(run, self.prompt, width, theme),
+                    Vec::new(),
+                    Vec::new(),
+                ),
                 Vec::new(),
             ),
             (None, Some(view)) => {
-                let (lines, toggles) = group_lines(
+                // Only a live group is laid out again while it stays the
+                // same, so only its steps are worth keeping.
+                let kept = block
+                    .live
+                    .then(|| before.map(|block| block.steps).unwrap_or_default());
+                let (lines, toggles, kept) = group_lines(
                     members,
-                    view,
-                    block.live,
+                    (view, block.live),
                     &block.place,
-                    width,
-                    theme,
-                    spinner,
+                    (width, theme, spinner),
+                    kept,
                 );
-                (lines, toggles, Vec::new())
+                steps = kept;
+                ((lines, Vec::new(), Vec::new()), toggles)
             }
             (None, None) if members.len() > 1 => {
-                let mut lines = Vec::new();
-                let mut prose = Vec::new();
+                let mut laid = Laid::default();
                 for member in members {
-                    let (more, flags) = message_lines(member, (width, measure), theme, spinner);
-                    prose.resize(lines.len(), None);
-                    prose.extend(flags);
-                    lines.extend(more);
+                    let more = message_lines(member, (width, measure), theme, spinner);
+                    stream::add((&mut laid.0, &mut laid.1, &mut laid.2), more);
                 }
-                (lines, Vec::new(), prose)
+                (laid, Vec::new())
             }
             (None, None) if self.streams(block) => {
-                let (mut lines, mut prose, mut state) = before
-                    .map_or_else(Default::default, |block| {
-                        (block.lines, block.prose, block.settled.unwrap_or_default())
+                let (mut lines, mut prose, mut codes, mut state) =
+                    before.map_or_else(Default::default, |block| {
+                        (
+                            block.lines,
+                            block.prose,
+                            block.codes,
+                            block.settled.unwrap_or_default(),
+                        )
                     });
-                state.extend(members[0].content(), (&mut lines, &mut prose), |text| {
-                    content_lines(text, MessageRole::Assistant, (width, measure), theme)
-                });
+                state.extend(
+                    members[0].content(),
+                    (&mut lines, &mut prose, &mut codes),
+                    |text| content_lines(text, MessageRole::Assistant, (width, measure), theme),
+                );
                 settled = Some(state);
-                (lines, Vec::new(), prose)
+                ((lines, prose, codes), Vec::new())
             }
             (None, None) => {
-                single_lines(members[0], &block.place, (width, measure), theme, spinner)
+                // A lone step that runs is drawn again every frame; one
+                // that is done is cached whole, so keeps nothing.
+                let mut kept = (block.live && members[0].activity_step().is_some())
+                    .then(|| before.map(|block| block.steps).unwrap_or_default());
+                let laid = single_lines(
+                    members[0],
+                    &block.place,
+                    (width, measure),
+                    theme,
+                    spinner,
+                    kept.as_mut(),
+                );
+                steps = kept.unwrap_or_default();
+                laid
             }
         };
         if let Some(author) = members[0].author().filter(|_| members.len() == 1) {
@@ -377,7 +491,12 @@ impl Layout<'_> {
         }
         let user = !terminal && members.len() == 1 && members[0].role() == MessageRole::User;
         if user {
-            frame_user_block(&mut lines, &mut toggles, &mut images, &mut prose);
+            frame_user_block(
+                &mut lines,
+                &mut toggles,
+                (&mut images, &mut codes),
+                &mut prose,
+            );
         }
         BlockLines {
             revision: block.revision,
@@ -385,8 +504,10 @@ impl Layout<'_> {
             lines,
             toggles,
             images,
+            codes,
             prose,
             settled,
+            steps,
         }
     }
 }
@@ -440,12 +561,12 @@ pub(crate) const USER_FRAME_ROWS: usize = 2;
 
 /// Make room for the frame around a user's message: [`USER_FRAME_ROWS`]
 /// blank rows before and after its lines, with the rows of its toggles,
-/// images and prose moved down to match. The panel draws the border on
-/// the outermost of them.
+/// images, copy buttons and prose moved down to match. The panel draws
+/// the border on the outermost of them.
 fn frame_user_block(
     lines: &mut Vec<Line<'static>>,
     toggles: &mut [ToggleRow],
-    images: &mut [ImageHit],
+    (images, codes): (&mut [ImageHit], &mut [CodeCopyHit]),
     prose: &mut Vec<Option<u16>>,
 ) {
     let pad = USER_FRAME_ROWS;
@@ -455,6 +576,9 @@ fn frame_user_block(
         toggle.line += pad;
     }
     for hit in images {
+        hit.line += pad;
+    }
+    for hit in codes {
         hit.line += pad;
     }
     if !prose.is_empty() {
@@ -669,20 +793,36 @@ fn group_progress(steps: &[&Activity], place: &TurnPlace<'_>) -> String {
     progress
 }
 
+/// What a live group keeps of its steps from frame to frame, by the id of
+/// each step's message.
+type KeptSteps = HashMap<u64, StepLines>;
+
 /// A group's summary line, then every step, numbered, or a row to show
 /// them while the group is collapsed.
+///
+/// A live group passes what it `kept` of its steps the last frame: a step
+/// whose message has not changed since is drawn from that instead of
+/// being laid out again (see [`StepLines::draw`]), and what the steps are
+/// drawn as now is returned for the next frame.
 fn group_lines(
     members: &[&Message],
-    view: GroupView,
-    live: bool,
+    (view, live): (GroupView, bool),
     place: &TurnPlace<'_>,
-    width: usize,
-    theme: &Theme,
-    spinner: &str,
-) -> (Vec<Line<'static>>, Vec<ToggleRow>) {
-    let steps: Vec<&Activity> = members.iter().filter_map(|m| m.activity_step()).collect();
+    (width, theme, spinner): (usize, &Theme, &str),
+    mut kept: Option<KeptSteps>,
+) -> (Vec<Line<'static>>, Vec<ToggleRow>, KeptSteps) {
+    let steps: Vec<(&Message, &Activity)> = members
+        .iter()
+        .filter_map(|member| member.activity_step().map(|step| (*member, step)))
+        .collect();
+    let keeping = kept.is_some();
+    let mut drawn: Vec<StepLines> = steps
+        .iter()
+        .map(|&(member, step)| StepLines::take(kept.as_mut(), member, step))
+        .collect();
     let progress = if live {
-        group_progress(&steps, place)
+        let activities: Vec<&Activity> = steps.iter().map(|&(_, step)| step).collect();
+        group_progress(&activities, place)
     } else {
         String::new()
     };
@@ -693,8 +833,9 @@ fn group_lines(
         target: group,
         open: view != GroupView::Collapsed,
     }];
-    lines.push(group_header(
-        &steps, view, live, &progress, spinner, width, theme,
+    let tally = Tally::of(drawn.iter().map(|step| &step.tally));
+    lines.push(group_header_of(
+        &tally, view, live, &progress, spinner, width, theme,
     ));
     if view == GroupView::Collapsed {
         toggles.push(ToggleRow {
@@ -703,39 +844,43 @@ fn group_lines(
             open: false,
         });
         lines.push(collapsed_hint(steps.len(), theme));
-        return (lines, toggles);
+    } else {
+        let mut number = place.first_step;
+        let last = place.first_step + steps.len().saturating_sub(1);
+        for (&(member, step), kept) in steps.iter().zip(&mut drawn) {
+            let step_number = StepNumber::new(number, last);
+            toggles.push(ToggleRow {
+                line: lines.len(),
+                target: ToggleTarget::Step(member.version().0),
+                open: member.is_expanded(),
+            });
+            lines.extend(kept.draw(
+                (member, step),
+                Some(step_number),
+                keeping,
+                (width, theme, spinner),
+            ));
+            push_records_link(
+                &mut lines,
+                &mut toggles,
+                (step, member.is_expanded()),
+                Some(step_number),
+                place,
+                (width, theme),
+            );
+            number += 1;
+        }
     }
-    let mut number = place.first_step;
-    let last = place.first_step + steps.len().saturating_sub(1);
-    for member in members {
-        let Some(step) = member.activity_step() else {
-            continue;
-        };
-        let step_number = StepNumber::new(number, last);
-        toggles.push(ToggleRow {
-            line: lines.len(),
-            target: ToggleTarget::Step(member.version().0),
-            open: member.is_expanded(),
-        });
-        lines.extend(activity_lines(
-            step,
-            member.is_expanded(),
-            Some(step_number),
-            spinner,
-            width,
-            theme,
-        ));
-        push_records_link(
-            &mut lines,
-            &mut toggles,
-            (step, member.is_expanded()),
-            Some(step_number),
-            place,
-            (width, theme),
-        );
-        number += 1;
-    }
-    (lines, toggles)
+    let kept = if keeping {
+        steps
+            .iter()
+            .zip(drawn)
+            .map(|(&(member, _), step)| (member.version().0, step))
+            .collect()
+    } else {
+        KeptSteps::new()
+    };
+    (lines, toggles, kept)
 }
 
 /// After an open thinking step, the row that jumps to the records its
@@ -759,17 +904,20 @@ fn push_records_link(
     lines.push(records_link(number, width, theme));
 }
 
-/// A block of one message; a lone agent step toggles on its header.
+/// A block of one message, and its rows that toggle; a lone agent step
+/// toggles on its header. A lone step still running is drawn from what
+/// it `kept` the last frame, as a live group's steps are.
 fn single_lines(
     message: &Message,
     place: &TurnPlace<'_>,
     (width, measure): (usize, Measure),
     theme: &Theme,
     spinner: &str,
-) -> (Vec<Line<'static>>, Vec<ToggleRow>, Vec<Option<u16>>) {
+    kept: Option<&mut KeptSteps>,
+) -> (Laid, Vec<ToggleRow>) {
     let Some(step) = message.activity_step() else {
-        let (lines, prose) = message_lines(message, (width, measure), theme, spinner);
-        return (lines, Vec::new(), prose);
+        let laid = message_lines(message, (width, measure), theme, spinner);
+        return (laid, Vec::new());
     };
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut toggles = vec![ToggleRow {
@@ -777,14 +925,21 @@ fn single_lines(
         target: ToggleTarget::Step(message.version().0),
         open: message.is_expanded(),
     }];
-    lines.extend(activity_lines(
-        step,
-        message.is_expanded(),
-        None,
-        spinner,
-        width,
-        theme,
-    ));
+    match kept {
+        Some(kept) => {
+            let mut drawn = StepLines::take(Some(kept), message, step);
+            lines.extend(drawn.draw((message, step), None, true, (width, theme, spinner)));
+            kept.insert(message.version().0, drawn);
+        }
+        None => lines.extend(activity_lines(
+            step,
+            message.is_expanded(),
+            None,
+            spinner,
+            width,
+            theme,
+        )),
+    }
     push_records_link(
         &mut lines,
         &mut toggles,
@@ -793,28 +948,33 @@ fn single_lines(
         place,
         (width, theme),
     );
-    (lines, toggles, Vec::new())
+    ((lines, Vec::new(), Vec::new()), toggles)
 }
 
-/// The lines of one chat message, and whether each is prose. What the user
-/// sent follows a `> ` prompt and system messages a `* `; the agent's
-/// replies stand on their own, like a program's output.
+/// The lines of one chat message, whether each is prose, and the copy
+/// buttons of its code blocks. What the user sent follows a `> ` prompt
+/// and system messages a `* `; the agent's replies stand on their own,
+/// like a program's output.
 fn message_lines(
     message: &Message,
     (width, measure): (usize, Measure),
     theme: &Theme,
     spinner: &str,
-) -> (Vec<Line<'static>>, Vec<Option<u16>>) {
+) -> Laid {
     if let Some(activity) = message.activity_step() {
         let lines = activity_lines(activity, message.is_expanded(), None, spinner, width, theme);
-        return (lines, Vec::new());
+        return (lines, Vec::new(), Vec::new());
     }
     if let Some(run) = message.shell_run() {
         let lines = shell_lines(run, &message.timestamp_local(), width, theme);
-        return (lines, Vec::new());
+        return (lines, Vec::new(), Vec::new());
     }
     if let Some(block) = message.diff_block() {
-        return (diff_message_lines(block, width, theme), Vec::new());
+        return (
+            diff_message_lines(block, width, theme),
+            Vec::new(),
+            Vec::new(),
+        );
     }
     let role = message.role();
     let (prompt, prompt_color, msg_color) = message_style(role, theme);
@@ -826,22 +986,24 @@ fn message_lines(
             width,
             Measure::GRID,
         );
-        return (lines, Vec::new());
+        return (lines, Vec::new(), Vec::new());
     }
     content_lines(message.content(), role, (width, measure), theme)
 }
 
-/// The lines of the text a message of `role` says, and whether each is
-/// prose: fenced code set apart from the text around it.
+/// The lines of the text a message of `role` says, whether each is prose,
+/// and the copy buttons of its code blocks: fenced code set apart from
+/// the text around it.
 fn content_lines(
     content: &str,
     role: MessageRole,
     (width, measure): (usize, Measure),
     theme: &Theme,
-) -> (Vec<Line<'static>>, Vec<Option<u16>>) {
+) -> Laid {
     let (prompt, prompt_color, msg_color) = message_style(role, theme);
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut prose = Vec::new();
+    let mut codes = Vec::new();
     for (i, segment) in parse_content_segments(content).into_iter().enumerate() {
         prose.resize(lines.len(), None);
         match segment {
@@ -865,11 +1027,13 @@ fn content_lines(
                         Measure::GRID,
                     ));
                 }
-                render_code_segment(&mut lines, &language, &code, width, theme);
+                codes.extend(render_code_segment(
+                    &mut lines, &language, &code, width, theme,
+                ));
             }
         }
     }
-    (lines, prose)
+    (lines, prose, codes)
 }
 
 #[cfg(test)]
@@ -934,5 +1098,199 @@ mod tests {
         };
         assert!(whole.blocks().count() > PARALLEL_BLOCKS * 4);
         assert!(drawn(&whole) == drawn(&grown), "the same lines either way");
+    }
+
+    /// A `read_file` step that succeeded, or one still running.
+    fn read_step(i: usize, done: bool) -> Message {
+        let args = format!("{{\"path\":\"src/{i}.rs\"}}");
+        let mut step = Message::activity(
+            Activity::tool(&format!("call-{i}"), "read_file", &args),
+            false,
+        );
+        if done {
+            step.update_activity(|activity| {
+                if let Activity::Tool(tool) = activity {
+                    tool.status = crate::components::ToolStatus::Success;
+                    tool.result = Some("fn main() {}".to_string());
+                }
+            });
+        }
+        step
+    }
+
+    #[test]
+    fn a_live_group_drawn_from_its_kept_steps_matches_one_laid_out_afresh() {
+        let theme = Theme::cyber();
+        let open = HashMap::new();
+        let groups = GroupState {
+            open: &open,
+            expand_all: false,
+            turn_live: true,
+        };
+        let size = (60, Measure::GRID);
+        let mut chat = VecDeque::from([Message::new(MessageRole::User, "look around")]);
+        let mut kept = ChatLineCache::default();
+        // A group's first line is its summary, drawn afresh every frame
+        // with the clock of a running group, so it is left out: a second
+        // passing between the two layouts would tell them apart.
+        let lines = |cache: &ChatLineCache| {
+            cache
+                .blocks()
+                .map(|block| {
+                    let skip = usize::from(!block.user);
+                    (block.lines[skip..].to_vec(), block.toggles.len())
+                })
+                .collect::<Vec<_>>()
+        };
+        // Past nine steps the numbers widen, which moves every step's
+        // marker; one step opened midway and one failing change only
+        // their own lines.
+        for i in 0..12 {
+            let mut step = read_step(i, i != 7);
+            if i == 7 {
+                step.update_activity(|activity| activity.finish("denied"));
+            }
+            chat.push_back(step);
+            if i == 5 {
+                if let Some(step) = chat.get_mut(3) {
+                    step.set_expanded(true);
+                }
+            }
+            kept.update((&chat, &[]), size, &theme, "*", &groups);
+            let mut fresh = ChatLineCache::default();
+            fresh.update((&chat, &[]), size, &theme, "*", &groups);
+            assert!(lines(&kept) == lines(&fresh), "step {i}: the same lines");
+        }
+        let texts: Vec<String> = kept
+            .blocks()
+            .flat_map(|block| block.lines.iter().map(ToString::to_string))
+            .collect();
+        assert!(
+            texts.iter().any(|line| line.contains("1 failed")),
+            "{texts:#?}"
+        );
+        assert!(
+            texts.iter().any(|line| line.contains("fn main() {}")),
+            "the open step"
+        );
+    }
+
+    #[test]
+    fn a_live_group_keeps_its_finished_steps_but_not_running_ones() {
+        let theme = Theme::cyber();
+        let open = HashMap::new();
+        let live = GroupState {
+            open: &open,
+            expand_all: false,
+            turn_live: true,
+        };
+        let size = (60, Measure::GRID);
+        let mut chat = VecDeque::from([
+            Message::new(MessageRole::User, "look around"),
+            read_step(0, true),
+            read_step(1, true),
+            read_step(2, false),
+        ]);
+        let mut cache = ChatLineCache::default();
+        cache.update((&chat, &[]), size, &theme, "*", &live);
+        let group = |cache: &ChatLineCache| {
+            cache
+                .blocks()
+                .find(|block| !block.user)
+                .map(|block| {
+                    let mut steps: Vec<(u64, bool)> = block
+                        .steps
+                        .iter()
+                        .map(|(id, step)| (*id, step.lines.is_some()))
+                        .collect();
+                    steps.sort_unstable();
+                    steps
+                })
+                .unwrap_or_default()
+        };
+        let ids: Vec<u64> = chat.iter().skip(1).map(|m| m.version().0).collect();
+        let mut expected = vec![(ids[0], true), (ids[1], true), (ids[2], false)];
+        expected.sort_unstable();
+        assert_eq!(
+            group(&cache),
+            expected,
+            "a running step's spinner and clock move, so it is laid out every frame"
+        );
+
+        if let Some(step) = chat.back_mut() {
+            step.update_activity(|activity| activity.finish("read"));
+        }
+        cache.update((&chat, &[]), size, &theme, "*", &live);
+        assert!(group(&cache).iter().all(|&(_, kept)| kept));
+
+        // Once the turn ends the group is cached whole and keeps no steps.
+        let done = GroupState {
+            turn_live: false,
+            ..live
+        };
+        cache.update((&chat, &[]), size, &theme, "*", &done);
+        assert!(group(&cache).is_empty());
+    }
+
+    /// A `write_file` call still running whose content has streamed in
+    /// `bytes` long, its JSON not yet closed. It has no start time, so it
+    /// shows no clock that could tick between two layouts.
+    fn streaming_write(id: &str, bytes: usize) -> Message {
+        let content = "fn main() {}\n".repeat(bytes / 13 + 1);
+        let args = format!(
+            "{{\"path\":\"src/{id}.rs\",\"content\":{}",
+            serde_json::to_string(&content).unwrap_or_default()
+        );
+        let mut call = Activity::tool(id, "write_file", &args);
+        if let Activity::Tool(tool) = &mut call {
+            tool.started = None;
+        }
+        Message::activity(call, false)
+    }
+
+    #[test]
+    fn a_running_tool_drawn_from_its_kept_parts_matches_one_laid_out_afresh() {
+        let theme = Theme::cyber();
+        let open = HashMap::new();
+        let groups = GroupState {
+            open: &open,
+            expand_all: false,
+            turn_live: true,
+        };
+        let size = (70, Measure::GRID);
+        let lines = |cache: &ChatLineCache| {
+            // A live group's summary line carries a clock (see above), and
+            // is drawn afresh every frame anyway.
+            cache
+                .blocks()
+                .flat_map(|block| block.lines.iter().map(ToString::to_string))
+                .filter(|line| !line.contains(" · step "))
+                .collect::<Vec<_>>()
+        };
+        // A lone step, then the same step at the end of a group, open
+        // and closed, as the spinner turns.
+        let mut chat = VecDeque::from([
+            Message::new(MessageRole::User, "write it"),
+            streaming_write("w0", 4_000),
+        ]);
+        let mut kept = ChatLineCache::default();
+        for (frame, spinner) in ["⠋", "⠙", "⠹", "⠸"].into_iter().enumerate() {
+            if frame == 2 {
+                chat.insert(1, read_step(0, true));
+                if let Some(step) = chat.back_mut() {
+                    step.set_expanded(true);
+                }
+            }
+            kept.update((&chat, &[]), size, &theme, spinner, &groups);
+            let mut fresh = ChatLineCache::default();
+            fresh.update((&chat, &[]), size, &theme, spinner, &groups);
+            let (kept, fresh) = (lines(&kept), lines(&fresh));
+            assert_eq!(kept, fresh, "frame {frame}");
+            assert!(
+                kept.iter()
+                    .any(|line| line.contains(spinner) && line.contains(" KB")),
+                "frame {frame}: the spinner turns on the running step\n{kept:#?}"
+            );
+        }
     }
 }

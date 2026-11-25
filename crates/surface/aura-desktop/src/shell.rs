@@ -508,7 +508,8 @@ impl Shell {
                 self.panes
                     .extend(tui.pane_chrome().iter().map(|chrome| chrome.area));
                 let at = (self.metrics.origin(area, cols), self.metrics, self.palette);
-                let model = chrome::Model::new(tui.pane_chrome(), frame.buffer, at);
+                let model =
+                    chrome::Model::new(tui.pane_chrome(), tui.side_toggle_area(), frame.buffer, at);
                 self.chrome.update(model, self.pointer.on_grid);
             }
             Err(e) => tracing::warn!(error = %e, "render failed"),

@@ -52,6 +52,7 @@ pub(super) fn render_flow(
     // Nothing of the conversation is on screen to click or select.
     app.set_chat_layout(Vec::new(), 0);
     app.set_chat_images(Vec::new());
+    app.set_chat_code_copies(Vec::new());
     app.set_chat_width(inner.width);
     app.set_chat_text_area(inner);
 

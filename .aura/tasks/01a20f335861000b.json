@@ -1,0 +1,14 @@
+{
+  "id": "01a20f335861000b",
+  "title": "Reorganize how the TASKS side tab in `crates/ui/aura-ui-terminal` draws its rows. The user called the current view \"dis…",
+  "state": "failed",
+  "agent_id": "2f33cc635446519f0cac72672e81c5ec82f912e0bbb81e9ad7f518479f07d4fc",
+  "agent_name": "rust-engineer #103",
+  "assignee": "rust-engineer",
+  "parent": "01a20f2a1bef0004",
+  "items": [],
+  "summary": "ran out of time: it stopped after 1 minutes without a reply",
+  "updated_ms": 1795551922920,
+  "created_ms": 1795551352929,
+  "tool_use_id": "toolu_01RvcpnNxwHGPtmEnrTQqGeK"
+}

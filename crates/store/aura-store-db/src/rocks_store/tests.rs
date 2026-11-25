@@ -151,6 +151,17 @@ fn test_scan_record() {
 
     let entries = store.scan_record(agent_id, 1, 2).unwrap();
     assert_eq!(entries.len(), 2);
+
+    for (from, limit) in [(1, 10), (3, 10), (2, 2), (9, 4)] {
+        let full: Vec<_> = store
+            .scan_record(agent_id, from, limit)
+            .unwrap()
+            .into_iter()
+            .map(|entry| (entry.seq, entry.context_hash))
+            .collect();
+        let hashes = store.scan_context_hashes(agent_id, from, limit).unwrap();
+        assert_eq!(hashes, full, "from {from}, limit {limit}");
+    }
 }
 
 #[test]

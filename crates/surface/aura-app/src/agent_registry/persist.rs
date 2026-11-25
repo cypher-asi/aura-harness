@@ -83,6 +83,7 @@ fn agent_row(
         title: agent.title.clone(),
         code: agent.code.clone(),
         subtitle: agent.subtitle.clone(),
+        archived_at: agent.archived_at,
     }
 }
 
@@ -160,6 +161,7 @@ pub(super) fn from_snapshot(snapshot: RegistrySnapshot) -> RegistryFile {
             title: record.title,
             code: record.code,
             subtitle: record.subtitle,
+            archived_at: record.archived_at,
             legacy_member_of: None,
             id: IdCache::default(),
         })

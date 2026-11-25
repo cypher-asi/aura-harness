@@ -164,6 +164,10 @@ pub struct AgentRecord {
     /// Short name of the subtask a spawned instance was given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtitle: Option<String>,
+    /// When the agent was moved to the Archive, if it is archived and that
+    /// was recorded; the Archive lists the latest first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<DateTime<Utc>>,
 }
 
 /// One project of the registry, the value of a [`crate::cf::PROJECTS`]

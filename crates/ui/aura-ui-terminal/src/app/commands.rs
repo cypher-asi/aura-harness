@@ -11,6 +11,63 @@ use crate::{
 };
 use tracing::debug;
 
+/// The word that sends a message in plan mode, wherever it is typed.
+const PLAN_WORD: &str = "/plan";
+
+/// Byte ranges of every `/plan` word in `text` (any case): bounded by
+/// whitespace or the ends of the text, so `/planner` and `src/plan` are
+/// not it. None when `text` is another slash command (`/build x /plan`),
+/// which keeps its own meaning. The input draws them in the accent so it
+/// is clear the message goes in plan mode.
+pub(crate) fn plan_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    let first_word = text.split(char::is_whitespace).next().unwrap_or("");
+    if first_word.starts_with('/') && !first_word.eq_ignore_ascii_case(PLAN_WORD) {
+        return Vec::new();
+    }
+    text.char_indices()
+        .filter(|&(i, c)| {
+            c == '/'
+                && text[..i]
+                    .chars()
+                    .next_back()
+                    .is_none_or(char::is_whitespace)
+                && text
+                    .get(i..i + PLAN_WORD.len())
+                    .is_some_and(|word| word.eq_ignore_ascii_case(PLAN_WORD))
+                && text[i + PLAN_WORD.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(char::is_whitespace)
+        })
+        .map(|(i, _)| i..i + PLAN_WORD.len())
+        .collect()
+}
+
+/// `text` without its `/plan` words, trimmed, when it has any: the
+/// message to send in plan mode, or empty for a bare `/plan` (the
+/// toggle). `None` when there is no `/plan` word.
+pub(crate) fn strip_plan(text: &str) -> Option<String> {
+    let ranges = plan_ranges(text);
+    if ranges.is_empty() {
+        return None;
+    }
+    let mut message = String::with_capacity(text.len());
+    let mut last = 0;
+    for range in ranges {
+        message.push_str(&text[last..range.start]);
+        last = range.end;
+        // Drop the space after the word too, so "fix /plan it" reads
+        // "fix it" rather than "fix  it".
+        if text[last..].starts_with(' ')
+            && message.chars().next_back().is_none_or(char::is_whitespace)
+        {
+            last += 1;
+        }
+    }
+    message.push_str(&text[last..]);
+    Some(message.trim().to_string())
+}
+
 impl App {
     /// Handle a slash command.
     pub(super) fn handle_command(&mut self, text: &str) -> KeyResult {
@@ -102,6 +159,7 @@ impl App {
                 let id = self.active_agent_id.clone();
                 self.archive_agent(id);
             }
+            "unarchive" => self.unarchive_active_agent(),
             "remove-project" => {
                 let id = self.active_agent_id.clone();
                 self.request_remove_project_of(&id);
@@ -471,9 +529,22 @@ impl App {
     /// `/plan`: enter plan mode, or leave it when the agent is already there.
     /// The event loop knows the mode from before plan mode, so the same
     /// command restores it.
-    fn request_plan_toggle(&mut self) {
+    pub(super) fn request_plan_toggle(&mut self) {
         if let Some(tx) = &self.event_tx {
             let _ = tx.try_send(UiEvent::TogglePlan(self.active_agent_id.clone()));
+        }
+    }
+
+    /// `/plan <message>`: put the active agent in plan mode, staying there
+    /// when it already is, so the message that follows is sent under it.
+    /// The event loop handles events in order, so the switch is recorded
+    /// before the message starts a turn.
+    pub(super) fn request_plan_mode(&mut self) {
+        if let Some(tx) = &self.event_tx {
+            let _ = tx.try_send(UiEvent::SetMode {
+                agent_id: self.active_agent_id.clone(),
+                mode: PermissionMode::Plan,
+            });
         }
     }
 
@@ -888,6 +959,8 @@ impl App {
             UiCommand::SetTodos(todos) => {
                 if todos.is_empty() {
                     self.todos_open = false;
+                    // The next list starts short, whatever the last one did.
+                    self.todos_expanded = false;
                 }
                 self.hud.todos = todos;
             }
@@ -975,8 +1048,7 @@ impl App {
             UiCommand::BenchNotice(notice) => self.cmd_bench_notice(notice),
             UiCommand::LogView(view) => self.cmd_log_view(*view),
             UiCommand::LogNotice { agent_id, notice } => self.cmd_log_notice(&agent_id, notice),
-            UiCommand::SetApiStatus { url, active } => {
-                self.api_url = url;
+            UiCommand::SetApiStatus { active, .. } => {
                 self.api_active = active;
             }
             UiCommand::SetModels {
@@ -1404,9 +1476,10 @@ impl App {
         }
     }
 
-    /// Mark the agent on screen as the active one in the agents list.
+    /// Mark the agent on screen as the active one in the agents list and
+    /// the Archive.
     fn mark_active_agent(&mut self) {
-        for agent in &mut self.agents {
+        for agent in self.agents.iter_mut().chain(self.archived.iter_mut()) {
             agent.is_active = agent.id == self.active_agent_id;
         }
     }

@@ -35,7 +35,7 @@ use super::{emit_event, StreamPumpOutcome};
 /// Shortest gap between two `ToolInputSnapshot`s of a streaming tool
 /// call. Each snapshot carries the whole input so far, so one per wire
 /// delta would copy a large `write_file` body thousands of times.
-const TOOL_INPUT_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
+pub(in crate::agent_loop) const TOOL_INPUT_SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The `tool_use` block currently streaming, announced to the client
 /// with `ToolStart` but not yet closed.

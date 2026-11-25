@@ -110,7 +110,7 @@ impl ModelContentProfile {
         let mut last_user_text_bytes = 0usize;
         let mut max_tool_result_bytes = 0usize;
 
-        for message in &request.messages {
+        for message in &*request.messages {
             let mut message_text_bytes = 0usize;
             for block in &message.content {
                 match block {
@@ -330,7 +330,7 @@ fn content_signature(request: &ModelRequest) -> String {
 
     write(&mut hash, request.model.as_str().as_bytes());
     write(&mut hash, request.system.as_bytes());
-    for message in &request.messages {
+    for message in &*request.messages {
         write(&mut hash, format!("{:?}", message.role).as_bytes());
         for block in &message.content {
             match block {

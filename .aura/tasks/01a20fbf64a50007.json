@@ -1,0 +1,54 @@
+{
+  "id": "01a20fbf64a50007",
+  "title": "commit",
+  "state": "open",
+  "agent_id": "ef901a3e15abf982d305397fb88dd95d7ea9db9fd497788d5a79dd2933a27570",
+  "agent_name": "Agent 1530",
+  "plan": ".aura/plans/archive-open-in-place-date-headers-stable-order_9c4132a3.plan.md",
+  "builds": true,
+  "items": [
+    {
+      "content": "Add archived_at, make archive() a no-op when already archived, add archive_at/current(), sort archived_tree newest first",
+      "state": "pending"
+    },
+    {
+      "content": "Send archived_at_ms; use current() in ListRows/agent_summaries; mark active and plan mode on archived rows",
+      "state": "pending"
+    },
+    {
+      "content": "after_list_shrank: set the next agent active before sending lists",
+      "state": "pending"
+    },
+    {
+      "content": "Add AgentSummary::archived_at_ms in aura-ui events",
+      "state": "pending"
+    },
+    {
+      "content": "ArchiveRow model with day headers; click/Enter open the agent; selection by id; keys skip headers",
+      "state": "pending"
+    },
+    {
+      "content": "Render day headers and the active highlight in build_archived_lines",
+      "state": "pending"
+    },
+    {
+      "content": "Add /unarchive slash command; mark_active_agent covers archived rows",
+      "state": "pending"
+    },
+    {
+      "content": "Registry, event-loop, UI and desktop router tests; update order assertions",
+      "state": "pending"
+    },
+    {
+      "content": "Run fmt, clippy -D warnings, and tests for the touched crates",
+      "state": "pending"
+    },
+    {
+      "content": "Commit (blocked: another agent is mid-edit in aura-ui-terminal, tree does not compile)",
+      "state": "pending"
+    }
+  ],
+  "summary": "The missing methods have just appeared, so someone is editing `archive.rs` right now. I'll check the build again.",
+  "updated_ms": 1795560622214,
+  "created_ms": 1795560531109
+}

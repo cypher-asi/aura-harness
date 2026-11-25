@@ -589,11 +589,20 @@ async fn stop_busy(state: &mut LoopState<'_>, agents: &[AgentId]) -> Vec<String>
 /// After agents left the list, show the one the registry opens now if the
 /// active agent was among them; otherwise just refresh the list.
 async fn after_list_shrank(state: &mut LoopState<'_>, gone: &[AgentId]) {
+    let next = gone.contains(&state.active).then(|| {
+        // The lists mark the stored active agent even when it is archived,
+        // so the next one is stored first for them to mark it.
+        let mut registry = lock(&state.hub.registry);
+        let next = registry.active().agent_id();
+        if let Err(e) = registry.set_active(next) {
+            warn!(agent_id = %next, error = %e, "Could not save the active agent");
+        }
+        next
+    });
     // The agents leave the list at once; opening the next one can take a
     // while when it has a long record.
     state.hub.send_agent_list().await;
-    if gone.contains(&state.active) {
-        let next = lock(&state.hub.registry).active().agent_id();
+    if let Some(next) = next {
         activate_agent(state, next, Chat::Reload).await;
     }
 }
@@ -931,10 +940,12 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
                 .send(UiCommand::ChatReady)
                 .await;
         } else {
-            let history = conversation_history(store, agent_id).unwrap_or_else(|e| {
-                warn!(error = %e, "Failed to rebuild conversation from record");
-                Vec::new()
-            });
+            let history = lock(&state.hub.shown_chats)
+                .get_or_read(store, agent_id, || conversation_history(store, agent_id))
+                .unwrap_or_else(|e| {
+                    warn!(error = %e, "Failed to rebuild conversation from record");
+                    Vec::new()
+                });
             AgentUi::new(state.commands.clone(), agent_id)
                 .send(UiCommand::LoadConversation(history))
                 .await;
@@ -944,7 +955,9 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
     }
     // One replace-all command: clears the previous agent's records even
     // when this agent's history can't be read.
-    let (records, problem) = match recent_record_summaries(store, agent_id) {
+    let read = lock(&state.hub.shown_records)
+        .get_or_read(store, agent_id, || recent_record_summaries(store, agent_id));
+    let (records, problem) = match read {
         Ok(summaries) => (summaries, None),
         Err(e) => (Vec::new(), Some(e)),
     };

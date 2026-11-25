@@ -53,7 +53,7 @@ mod gate_commands;
 mod runner;
 mod trace_commands;
 
-pub use runner::{desktop_launch, run, run_cli, runtime_thread_start};
+pub use runner::{desktop_launch, run, run_cli, runtime_builder, runtime_thread_start};
 
 /// The `aura-node` entrypoint; `aura-node` owns the gateway binary.
 pub use aura_node::run_node;

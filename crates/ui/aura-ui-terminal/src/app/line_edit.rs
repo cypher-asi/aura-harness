@@ -37,16 +37,26 @@ impl App {
         self.cursor_pos = pos + 1;
     }
 
-    /// Move the cursor to the same column on the line above (`up`) or
-    /// below in a multi-line input. Returns `false`, leaving the cursor
-    /// where it was, when there is no line that way, so the key can recall
-    /// history instead.
+    /// Move the cursor to the same column on the row above (`up`) or
+    /// below, following the rows the input box drew last frame, so a
+    /// long wrapped line is walked row by row like any other. Before the
+    /// box is drawn it goes by the typed lines instead. Returns `false`,
+    /// leaving the cursor where it was, when there is no row that way, so
+    /// the key can recall history instead.
     pub(super) fn move_cursor_line(&mut self, up: bool) -> bool {
         let pos = self.cursor_pos.min(self.input.len());
-        let target = if up {
-            line_above(&self.input, pos)
-        } else {
-            line_below(&self.input, pos)
+        let target = match self.areas.input_wrap {
+            Some(width) => {
+                let offset = self.input[..pos].chars().count();
+                crate::input_wrap::row_move(&self.input, width, offset, up).map(|offset| {
+                    self.input
+                        .char_indices()
+                        .nth(offset)
+                        .map_or(self.input.len(), |(i, _)| i)
+                })
+            }
+            None if up => line_above(&self.input, pos),
+            None => line_below(&self.input, pos),
         };
         match target {
             Some(target) => {
@@ -340,6 +350,24 @@ mod tests {
         assert_eq!(line_below(text, 8), None, "last line");
         assert_eq!(line_below("ab\n", 1), Some(3), "onto an empty last line");
         assert_eq!(line_above("é\nab", 4), Some(2), "columns count chars");
+    }
+
+    #[test]
+    fn up_and_down_follow_the_wrapped_rows_drawn() {
+        // Wrapped at 8: "one two " / "three " / "four".
+        let mut app = app_with("one two three four", 2);
+        app.areas.input_wrap = Some(8);
+        assert!(app.move_cursor_line(false));
+        assert_eq!(app.cursor_pos, 10);
+        assert!(app.move_cursor_line(false));
+        assert_eq!(app.cursor_pos, 16);
+        assert!(!app.move_cursor_line(false), "last row");
+        assert!(app.move_cursor_line(true));
+        assert_eq!(app.cursor_pos, 10);
+
+        // Unwrapped, it is one line, so Up has nowhere to go.
+        app.areas.input_wrap = None;
+        assert!(!app.move_cursor_line(true));
     }
 
     #[test]
