@@ -87,9 +87,14 @@ pub(crate) async fn create_channel(
             return Err(error);
         }
     };
-    let coordinator = lock(&hub.registry)
-        .adopt(draft)
-        .with_context(|| format!("registering the coordinator of #{slug}"))?;
+    let coordinator = {
+        let mut registry = lock(&hub.registry);
+        let coordinator = registry
+            .adopt(draft)
+            .with_context(|| format!("registering the coordinator of #{slug}"))?;
+        registry.mark_channel_members([channel.coordinator]);
+        coordinator
+    };
     lock(&hub.channel_members).insert(channel.coordinator);
     info!(
         channel_id = %channel.id,
@@ -201,7 +206,7 @@ pub(crate) fn join_parent_channel(
         joined_at: chrono::Utc::now(),
     };
     let workspace = {
-        let registry = lock(&hub.registry);
+        let mut registry = lock(&hub.registry);
         let row = registry
             .row_of(child_id)
             .with_context(|| format!("{} is not registered", child_id.to_hex()))?;
@@ -220,6 +225,7 @@ pub(crate) fn join_parent_channel(
         store
             .write(batch)
             .with_context(|| format!("adding {} to channel {channel_id}", child_id.to_hex()))?;
+        registry.mark_channel_members([child_id]);
         registry.project_folder(child_id)
     };
     lock(&hub.channel_members).insert(child_id);

@@ -297,6 +297,10 @@ pub struct AgentRegistry {
     /// Folder of the project agents go in when nothing else says which.
     launch_dir: PathBuf,
     file: RegistryFile,
+    /// Agents in a channel, as the hub tells it
+    /// ([`Self::mark_channel_members`]). They live with their channel, not
+    /// a project: removing their project keeps them, and they stay listed.
+    channel_members: HashSet<AgentId>,
     /// The database handle [`Self::load_or_init_in`] opened, held so the
     /// process-wide cache hands the same one to the next registry on it.
     _keep_open: Option<Arc<RocksStore>>,
@@ -436,6 +440,7 @@ impl AgentRegistry {
             data_dir: data_dir.to_path_buf(),
             launch_dir: canonical(launch_dir),
             file,
+            channel_members: HashSet::new(),
             _keep_open: None,
         };
         let mut changed = false;
@@ -1199,6 +1204,19 @@ impl AgentRegistry {
                 }
             }
         }
+        // Channel members belong to their channel, not their project: they
+        // stay listed when it is removed. `visit` skips the ones the
+        // projects already listed.
+        if !self.channel_members.is_empty() {
+            for agent in self.file.agents.iter().filter(|a| {
+                self.channel_members.contains(&a.agent_id())
+                    && index.is_top_level(a)
+                    && !a.archived
+                    && !a.removed
+            }) {
+                self.visit(&index, agent, 0, false, &mut walk);
+            }
+        }
         walk.out
     }
 
@@ -1308,12 +1326,14 @@ impl AgentRegistry {
 
     /// Whether `agent` is on the list: its project is, and neither it nor
     /// an agent that spawned it is archived or left behind by a removal.
+    /// A channel member's project doesn't count: it belongs to its channel.
     fn is_listed(&self, agent: &RegisteredAgent) -> bool {
-        let project_listed = agent
-            .project_id
-            .as_deref()
-            .and_then(|id| self.project(id))
-            .is_some_and(|p| !p.removed);
+        let project_listed = self.channel_members.contains(&agent.agent_id())
+            || agent
+                .project_id
+                .as_deref()
+                .and_then(|id| self.project(id))
+                .is_some_and(|p| !p.removed);
         project_listed
             && !agent.archived
             && !agent.removed
@@ -1440,9 +1460,18 @@ impl AgentRegistry {
         if self.project(project_id).is_none() {
             anyhow::bail!("no such project");
         }
-        let in_project = |a: &RegisteredAgent| a.project_id.as_deref() == Some(project_id);
+        let members = &self.channel_members;
+        // Channel members are not the project's to remove: they stay, and
+        // the project's own agents decide whether it is the last one.
+        let in_project = |a: &RegisteredAgent| {
+            a.project_id.as_deref() == Some(project_id) && !members.contains(&a.agent_id())
+        };
         let tree = self.tree();
-        if tree.iter().all(|(agent, _)| in_project(agent)) {
+        if tree
+            .iter()
+            .filter(|(agent, _)| !members.contains(&agent.agent_id()))
+            .all(|(agent, _)| in_project(agent))
+        {
             anyhow::bail!("it is the last project in the list; create another one first");
         }
         let gone: Vec<AgentId> = tree
@@ -1575,6 +1604,12 @@ impl AgentRegistry {
     #[must_use]
     pub fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Tell the registry these agents are channel members: removing their
+    /// project keeps them, and they stay listed (see `is_listed`).
+    pub(crate) fn mark_channel_members(&mut self, members: impl IntoIterator<Item = AgentId>) {
+        self.channel_members.extend(members);
     }
 
     /// A fresh coordinator for the channel `slug`, working in `folder`,

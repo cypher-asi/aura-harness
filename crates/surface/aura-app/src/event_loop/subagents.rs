@@ -435,13 +435,16 @@ impl AgentHub {
             parts.commands.clone(),
             parts.record_panel.clone(),
         ));
+        let channel_members = super::channels::load_members(parts.channels.as_ref());
+        let mut registry = parts.registry;
+        registry.mark_channel_members(channel_members.iter().copied());
         Arc::new_cyclic(|hub: &Weak<Self>| {
             let dispatcher: Arc<dyn SubagentDispatchHook> =
                 Arc::new(TerminalSubagentDispatcher { hub: hub.clone() });
             let mut factory = factory(dispatcher);
             factory.tasks = tasks;
             Self {
-                registry: Mutex::new(parts.registry),
+                registry: Mutex::new(registry),
                 definitions: Mutex::new(parts.definitions),
                 skills: Mutex::new(parts.skills),
                 base: Mutex::new(parts.base),
@@ -470,7 +473,7 @@ impl AgentHub {
                 write_locks: Mutex::new(HashMap::new()),
                 writing: Mutex::new(HashSet::new()),
                 last_active: Mutex::default(),
-                channel_members: Mutex::new(super::channels::load_members(parts.channels.as_ref())),
+                channel_members: Mutex::new(channel_members),
                 channels: parts.channels,
                 channel_chat: super::channels::ChannelChat::default(),
             }

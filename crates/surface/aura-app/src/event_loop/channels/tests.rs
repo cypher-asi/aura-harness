@@ -301,6 +301,51 @@ async fn summaries_list_the_coordinator_first_and_nest_spawned_members() {
 }
 
 #[tokio::test]
+async fn removing_the_launch_project_keeps_channel_members() {
+    let mut fixture = fixture("Looks good.");
+    let channel = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    let agent = spawn_under(&mut fixture, channel.coordinator).await;
+    let other = tempfile::TempDir::new().unwrap();
+    let launch_project = {
+        let mut registry = lock(&fixture.hub.registry);
+        let project = registry
+            .find(channel.coordinator)
+            .and_then(|a| a.project_id.clone())
+            .unwrap();
+        // Another project, so the launch project is not the last one.
+        registry.open_project(other.path()).unwrap();
+        registry.remove_project(&project).unwrap();
+        project
+    };
+
+    {
+        let registry = lock(&fixture.hub.registry);
+        assert!(registry.project(&launch_project).is_some_and(|p| p.removed));
+        for member in [channel.coordinator, agent] {
+            assert!(registry.find(member).is_some(), "{}", member.to_hex());
+        }
+        let rows = registry.store().load().unwrap().agents;
+        for member in [channel.coordinator, agent] {
+            assert!(rows.iter().any(|row| row.agent_id == member));
+        }
+    }
+    let members: Vec<AgentId> = store(&fixture)
+        .members(&channel.id)
+        .unwrap()
+        .into_iter()
+        .map(|m| m.agent_id)
+        .collect();
+    assert_eq!(members, [channel.coordinator, agent]);
+
+    // They are still listed, so the channel still shows them.
+    let summaries = channel_summaries(&fixture.hub).await.unwrap();
+    let ids: Vec<String> = summaries[0].members.iter().map(|m| m.id.clone()).collect();
+    assert_eq!(ids, [channel.coordinator.to_hex(), agent.to_hex()]);
+}
+
+#[tokio::test]
 async fn linked_and_unlinked_projects_show_in_the_summaries() {
     let fixture = fixture("unused");
     let channel = create_channel(&fixture.hub, new_channel("site"))
