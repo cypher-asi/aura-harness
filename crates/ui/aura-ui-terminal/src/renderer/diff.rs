@@ -2,7 +2,8 @@
 
 use super::segments::{message_style, prefixed_lines};
 use super::text::Measure;
-use crate::components::{DiffBlock, DiffView, MessageRole};
+use super::{more_label, MoreRows};
+use crate::components::{DiffBlock, DiffView, MessageRole, MoreSection};
 use crate::Theme;
 use ratatui::{
     style::{Modifier, Style},
@@ -27,12 +28,15 @@ pub(super) fn diff_stat_spans(view: &DiffView, theme: &Theme) -> Vec<Span<'stati
     ]
 }
 
-/// Lines for a message showing `block`, drawn `width` columns wide.
+/// Lines for a message showing `block`, drawn `width` columns wide with
+/// `more` lines past the cut, and the row that shows more, if any.
 pub(super) fn diff_message_lines(
     block: &DiffBlock,
+    more: usize,
     width: usize,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, MoreRows) {
+    let cap = MAX_DIFF_LINES + more;
     let (prompt, prompt_color, _) = message_style(MessageRole::System, theme);
     let mut lines = prefixed_lines(
         (prompt, prompt_color),
@@ -58,7 +62,7 @@ pub(super) fn diff_message_lines(
         lines.push(Line::default());
         lines.push(Line::from(header));
         for line in view.styled_lines(theme, width) {
-            if shown < MAX_DIFF_LINES {
+            if shown < cap {
                 lines.push(line);
                 shown += 1;
             } else {
@@ -66,11 +70,13 @@ pub(super) fn diff_message_lines(
             }
         }
     }
+    let mut rows = MoreRows::new();
     if hidden > 0 {
+        rows.push((lines.len(), MoreSection::Diff));
         lines.push(Line::from(Span::styled(
-            format!("… {hidden} more lines"),
+            more_label(hidden),
             Style::default().fg(theme.colors.muted),
         )));
     }
-    lines
+    (lines, rows)
 }

@@ -4943,6 +4943,103 @@ fn draw(app: &mut App, terminal: &mut ratatui::Terminal<ratatui::backend::TestBa
         .unwrap();
 }
 
+/// The screen cell where `text` is drawn, if it is.
+fn cell_of(
+    terminal: &ratatui::Terminal<ratatui::backend::TestBackend>,
+    text: &str,
+) -> Option<(u16, u16)> {
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height).find_map(|y| {
+        let row: String = (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect();
+        let at = row.find(text)?;
+        let x = u16::try_from(row[..at].chars().count()).ok()?;
+        Some((x, y))
+    })
+}
+
+fn click_at(app: &mut App, (column, row): (u16, u16)) {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), column, row));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), column, row));
+}
+
+#[test]
+fn clicking_the_earlier_lines_row_of_a_boot_console_loads_them() {
+    use crate::components::{
+        BootConsole, LIVE_BOOT_LOG_LINES, MAX_BOOT_LOG_LINES, MORE_PAGE_LINES,
+    };
+    use crate::events::{BootLogLine, BootUpdate};
+
+    let mut console = BootConsole::new("boot-1", "Moving to the cloud");
+    console.apply(BootUpdate::Log(
+        (0..MAX_BOOT_LOG_LINES + 100)
+            .map(|i| BootLogLine {
+                stderr: false,
+                text: format!("build line {i}"),
+            })
+            .collect(),
+    ));
+    let mut app = App::new();
+    app.add_message(Message::boot(console));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    draw(&mut app, &mut terminal);
+    let hidden = MAX_BOOT_LOG_LINES + 100 - LIVE_BOOT_LOG_LINES;
+    let row = cell_of(&terminal, &format!("… {hidden} earlier lines"))
+        .expect("the earlier lines row is on screen");
+
+    click_at(&mut app, row);
+    let shown = |app: &App| app.messages()[0].boot_console().unwrap().log_shown();
+    assert_eq!(shown(&app), LIVE_BOOT_LOG_LINES + MORE_PAGE_LINES);
+
+    // Past what memory holds, the rest comes back from the spill file.
+    for _ in 0..3 {
+        app.messages
+            .back_mut()
+            .unwrap()
+            .show_more(crate::components::MoreSection::BootLog);
+    }
+    let console = app.messages()[0].boot_console().unwrap();
+    assert_eq!(console.hidden(), 0);
+    assert_eq!(
+        console.earlier.front().map(|l| l.text.as_str()),
+        Some("build line 0")
+    );
+}
+
+#[test]
+fn clicking_the_more_lines_row_of_a_tool_result_shows_the_rest() {
+    let output: Vec<String> = (0..250).map(|i| format!("result line {i}")).collect();
+    let mut app = App::new();
+    app.add_message(Message::activity(
+        Activity::Tool(ToolStep {
+            id: "t1".to_string(),
+            name: "read_file".to_string(),
+            args: r#"{"path":"big.txt"}"#.to_string(),
+            status: ToolStatus::Success,
+            result: Some(output.join("\n")),
+            retry: None,
+            started: None,
+            duration_ms: Some(10),
+            diff: None,
+            policy: None,
+            awaiting_approval: false,
+            live: crate::components::LiveOutput::default(),
+        }),
+        true,
+    ));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    draw(&mut app, &mut terminal);
+    assert!(cell_of(&terminal, "result line 249").is_none());
+    let row = cell_of(&terminal, "… 50 more lines").expect("the more lines row is on screen");
+
+    click_at(&mut app, row);
+    draw(&mut app, &mut terminal);
+    assert!(cell_of(&terminal, "result line 249").is_some());
+    assert!(cell_of(&terminal, "more lines").is_none());
+}
+
 #[test]
 fn test_dragging_the_chat_scrollbar_scrolls_without_selecting() {
     use crossterm::event::{MouseButton, MouseEventKind};

@@ -3,10 +3,122 @@
 
 use crate::events::{BootLogLine, BootStageState, BootUpdate};
 use std::collections::VecDeque;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
-/// Most log lines a console keeps; older ones are dropped.
+/// Most log lines a console keeps in memory; older ones go to its spill
+/// file.
 pub const MAX_BOOT_LOG_LINES: usize = 500;
+
+/// Log lines shown while a console runs, before any earlier are asked for.
+pub const LIVE_BOOT_LOG_LINES: usize = 8;
+
+/// Numbers spill files, so two consoles never share one.
+static NEXT_SPILL: AtomicU64 = AtomicU64::new(0);
+
+/// The log lines a console dropped from memory, in a temporary file that
+/// goes when the last copy of the console does.
+#[derive(Debug)]
+struct Spill {
+    path: PathBuf,
+    file: File,
+    /// Where each line starts in the file
+    starts: Vec<u64>,
+    /// Where the file ends
+    end: u64,
+}
+
+impl Spill {
+    fn create() -> Option<Self> {
+        let path = std::env::temp_dir().join(format!(
+            "aura-boot-{}-{}.log",
+            std::process::id(),
+            NEXT_SPILL.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .ok()?;
+        Some(Self {
+            path,
+            file,
+            starts: Vec::new(),
+            end: 0,
+        })
+    }
+
+    /// Add `lines` at the end. Each is a byte saying whether it was
+    /// stderr, then its text.
+    fn append(&mut self, lines: &[BootLogLine]) -> std::io::Result<()> {
+        let mut bytes = Vec::new();
+        let mut starts = Vec::with_capacity(lines.len());
+        for line in lines {
+            starts.push(self.end + bytes.len() as u64);
+            bytes.push(if line.stderr { b'2' } else { b'1' });
+            bytes.extend_from_slice(line.text.as_bytes());
+        }
+        self.file.seek(SeekFrom::Start(self.end))?;
+        self.file.write_all(&bytes)?;
+        self.starts.extend(starts);
+        self.end += bytes.len() as u64;
+        Ok(())
+    }
+
+    /// Lines `from..to` of the file.
+    fn read(&mut self, from: usize, to: usize) -> std::io::Result<Vec<BootLogLine>> {
+        let start = self.starts[from];
+        let stop = self.starts.get(to).copied().unwrap_or(self.end);
+        let mut bytes = vec![0; usize::try_from(stop - start).unwrap_or(0)];
+        self.file.seek(SeekFrom::Start(start))?;
+        self.file.read_exact(&mut bytes)?;
+        Ok((from..to)
+            .map(|i| {
+                let at = usize::try_from(self.starts[i] - start).unwrap_or(0);
+                let next = self
+                    .starts
+                    .get(i + 1)
+                    .map_or(bytes.len(), |s| usize::try_from(s - start).unwrap_or(0))
+                    .min(bytes.len());
+                let line = &bytes[at.min(next)..next];
+                BootLogLine {
+                    stderr: line.first() == Some(&b'2'),
+                    text: String::from_utf8_lossy(line.get(1..).unwrap_or_default()).into_owned(),
+                }
+            })
+            .collect())
+    }
+}
+
+impl Drop for Spill {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// A console's spill file, shared by its copies.
+#[derive(Debug, Clone)]
+struct SpillFile(Arc<Mutex<Spill>>);
+
+impl SpillFile {
+    fn lock(&self) -> MutexGuard<'_, Spill> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl PartialEq for SpillFile {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for SpillFile {}
 
 /// One step of a boot console.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +179,13 @@ pub struct BootConsole {
     pub log: VecDeque<BootLogLine>,
     /// Log lines dropped from the front
     pub dropped: usize,
+    /// The dropped lines just before `log` read back from the spill file
+    /// as they were asked for: always the last `earlier.len()` dropped
+    pub earlier: VecDeque<BootLogLine>,
+    /// Lines of `log` shown above the newest while it runs
+    revealed: usize,
+    /// Where the dropped lines went, unless that could not be written
+    spill: Option<SpillFile>,
     /// Set once it ended
     pub outcome: Option<BootOutcome>,
 }
@@ -83,7 +202,79 @@ impl BootConsole {
             facts: Vec::new(),
             log: VecDeque::new(),
             dropped: 0,
+            earlier: VecDeque::new(),
+            revealed: 0,
+            spill: None,
             outcome: None,
+        }
+    }
+
+    /// Lines of `log` shown: the newest few while it runs, more as
+    /// earlier ones are asked for, all of them once it ended.
+    #[must_use]
+    pub fn log_shown(&self) -> usize {
+        if self.is_running() {
+            (LIVE_BOOT_LOG_LINES + self.revealed).min(self.log.len())
+        } else {
+            self.log.len()
+        }
+    }
+
+    /// Log lines before those shown.
+    #[must_use]
+    pub fn hidden(&self) -> usize {
+        self.dropped - self.earlier.len() + self.log.len() - self.log_shown()
+    }
+
+    /// How many of [`Self::hidden`] can still be shown: all of them,
+    /// unless the spill file could not be written.
+    #[must_use]
+    pub fn can_show(&self) -> usize {
+        let spilled = if self.spill.is_some() {
+            self.dropped - self.earlier.len()
+        } else {
+            0
+        };
+        self.log.len() - self.log_shown() + spilled
+    }
+
+    /// Show up to `count` more lines before those shown: first the ones
+    /// still in memory, then ones read back from the spill file.
+    pub fn show_earlier(&mut self, count: usize) {
+        let in_memory = (self.log.len() - self.log_shown()).min(count);
+        self.revealed += in_memory;
+        let rest = count - in_memory;
+        let Some(spill) = self.spill.as_ref().filter(|_| rest > 0) else {
+            return;
+        };
+        let to = self.dropped - self.earlier.len();
+        let from = to.saturating_sub(rest);
+        if from == to {
+            return;
+        }
+        if let Ok(lines) = spill.lock().read(from, to) {
+            for line in lines.into_iter().rev() {
+                self.earlier.push_front(line);
+            }
+        }
+    }
+
+    /// Write `lines`, just dropped from the log, to the spill file. The
+    /// file is made with the first lines dropped, and given up on if a
+    /// write fails, as it would no longer hold every dropped line.
+    fn spill(&mut self, lines: &[BootLogLine]) {
+        if lines.is_empty() {
+            return;
+        }
+        if self.spill.is_none() && self.dropped == lines.len() {
+            self.spill = Spill::create().map(|spill| SpillFile(Arc::new(Mutex::new(spill))));
+        }
+        let failed = self
+            .spill
+            .as_ref()
+            .is_some_and(|spill| spill.lock().append(lines).is_err());
+        if failed {
+            self.spill = None;
         }
     }
 
@@ -187,13 +378,20 @@ impl BootConsole {
                 }
             }
             BootUpdate::Log(lines) => {
+                let mut gone = Vec::new();
                 for line in lines {
                     if self.log.len() == MAX_BOOT_LOG_LINES {
-                        self.log.pop_front();
+                        if let Some(old) = self.log.pop_front() {
+                            if !self.earlier.is_empty() {
+                                self.earlier.push_back(old.clone());
+                            }
+                            gone.push(old);
+                        }
                         self.dropped += 1;
                     }
                     self.log.push_back(line);
                 }
+                self.spill(&gone);
             }
             BootUpdate::Progress { key, done, total } => {
                 self.step(&key, None).progress = Some((done, total));
@@ -320,5 +518,72 @@ mod tests {
         assert_eq!(console.log.len(), MAX_BOOT_LOG_LINES);
         assert_eq!(console.dropped, 20);
         assert_eq!(console.log.front().map(|l| l.text.as_str()), Some("20"));
+    }
+
+    fn numbered(range: std::ops::Range<usize>) -> BootUpdate {
+        BootUpdate::Log(
+            range
+                .map(|i| BootLogLine {
+                    stderr: i % 7 == 0,
+                    text: format!("line {i}"),
+                })
+                .collect(),
+        )
+    }
+
+    fn texts(lines: &VecDeque<BootLogLine>) -> Vec<String> {
+        lines.iter().map(|l| l.text.clone()).collect()
+    }
+
+    #[test]
+    fn earlier_lines_come_from_memory_then_from_the_spill_file() {
+        let mut console = BootConsole::new("b1", "t");
+        console.apply(numbered(0..MAX_BOOT_LOG_LINES + 300));
+        console.apply(numbered(MAX_BOOT_LOG_LINES + 300..MAX_BOOT_LOG_LINES + 350));
+        assert_eq!(console.dropped, 350);
+        assert_eq!(console.log_shown(), LIVE_BOOT_LOG_LINES);
+        assert_eq!(
+            console.hidden(),
+            350 + MAX_BOOT_LOG_LINES - LIVE_BOOT_LOG_LINES
+        );
+        assert_eq!(console.can_show(), console.hidden());
+
+        console.show_earlier(MAX_BOOT_LOG_LINES - LIVE_BOOT_LOG_LINES + 100);
+        assert_eq!(console.log_shown(), MAX_BOOT_LOG_LINES, "memory first");
+        assert_eq!(
+            texts(&console.earlier),
+            (250..350).map(|i| format!("line {i}")).collect::<Vec<_>>()
+        );
+        assert!(console.earlier[0].stderr == (250 % 7 == 0));
+        assert_eq!(console.hidden(), 250);
+
+        console.apply(numbered(850..852));
+        assert_eq!(
+            console.earlier.back().map(|l| l.text.as_str()),
+            Some("line 351"),
+            "lines dropped once earlier ones show stay shown"
+        );
+        console.show_earlier(1000);
+        assert_eq!(console.earlier.len(), 352);
+        assert_eq!(console.earlier[0].text, "line 0");
+        assert_eq!(console.hidden(), 0);
+        assert_eq!(console.can_show(), 0);
+    }
+
+    #[test]
+    fn the_spill_file_goes_with_the_last_copy() {
+        let mut console = BootConsole::new("b1", "t");
+        console.apply(numbered(0..MAX_BOOT_LOG_LINES + 1));
+        let path = console
+            .spill
+            .as_ref()
+            .map(|s| s.lock().path.clone())
+            .unwrap();
+        assert!(path.exists());
+        let copy = console.clone();
+        drop(console);
+        assert!(path.exists());
+        drop(copy);
+        assert!(!path.exists());
     }
 }

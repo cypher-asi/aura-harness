@@ -64,6 +64,16 @@ use ratatui::{
 /// outermost column would overhang the panel borders.
 pub(super) const EDGE_INSET: u16 = 1;
 
+/// Rows of a block that show more of a part cut short when clicked, each
+/// counted from the block's first line.
+type MoreRows = Vec<(usize, crate::components::MoreSection)>;
+
+/// `… 340 more lines · click to show 200 more`, for `hidden` lines cut.
+fn more_label(hidden: usize) -> String {
+    let page = hidden.min(crate::components::MORE_PAGE_LINES);
+    format!("… {hidden} more lines · click to show {page} more")
+}
+
 fn inset_edges(area: Rect) -> Rect {
     Rect {
         x: area.x.saturating_add(EDGE_INSET),

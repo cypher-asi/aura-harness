@@ -4,7 +4,8 @@
 //! run on it; once done it folds to its outcome and opens on a click.
 
 use super::text::{display_width, wrap_words};
-use crate::components::BootConsole;
+use super::MoreRows;
+use crate::components::{BootConsole, MoreSection, MORE_PAGE_LINES};
 use crate::events::BootStageState;
 use crate::Theme;
 use ratatui::{
@@ -17,9 +18,6 @@ const INDENT: &str = "  ";
 
 /// Columns before a step, a fact or a log line.
 const BODY: &str = "    ";
-
-/// Log lines shown while the console runs.
-const LIVE_LOG_LINES: usize = 8;
 
 /// Widest a fact's key column gets.
 const MAX_KEY_WIDTH: usize = 14;
@@ -88,15 +86,16 @@ fn clip(line: Line<'static>, width: usize) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Lines for `console` drawn `width` columns wide. `spinner` turns in
-/// the header and on the running step.
+/// Lines for `console` drawn `width` columns wide, and the row that loads
+/// earlier log lines, if any. `spinner` turns in the header and on the
+/// running step.
 pub(super) fn boot_lines(
     console: &BootConsole,
     expanded: bool,
     spinner: &str,
     width: usize,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, MoreRows) {
     let faint = Style::default().fg(theme.colors.faint);
     let mut lines = vec![clip(header(console, expanded, spinner, theme), width)];
     if console.is_running() {
@@ -119,7 +118,7 @@ pub(super) fn boot_lines(
                 Span::raw(BODY),
                 Span::styled("click to show the boot log", faint),
             ]));
-            return lines;
+            return (lines, MoreRows::new());
         }
     }
     lines.extend(
@@ -132,12 +131,16 @@ pub(super) fn boot_lines(
         lines.push(Line::default());
         lines.extend(facts);
     }
-    let log = log_lines(console, console.is_running(), width, theme);
+    let log = log_lines(console, width, theme);
+    let mut more = MoreRows::new();
     if !log.is_empty() {
         lines.push(Line::default());
+        if console.hidden() > 0 && console.can_show() > 0 {
+            more.push((lines.len(), MoreSection::BootLog));
+        }
         lines.extend(log);
     }
-    lines
+    (lines, more)
 }
 
 fn header(console: &BootConsole, expanded: bool, spinner: &str, theme: &Theme) -> Line<'static> {
@@ -335,23 +338,34 @@ fn fact_lines(console: &BootConsole, width: usize, theme: &Theme) -> Vec<Line<'s
     lines
 }
 
-fn log_lines(console: &BootConsole, live: bool, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+/// The log as far back as it is shown, under a row saying how many
+/// lines come before, which loads more of them when clicked.
+fn log_lines(console: &BootConsole, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let faint = Style::default().fg(theme.colors.faint);
-    let shown = if live {
-        console.log.len().min(LIVE_LOG_LINES)
-    } else {
-        console.log.len()
-    };
-    let hidden = console.dropped + console.log.len() - shown;
+    let shown = console.log_shown();
+    let hidden = console.hidden();
     let text_width = width.saturating_sub(BODY.len() + 2).max(10);
     let mut lines = Vec::new();
     if hidden > 0 {
-        lines.push(Line::from(vec![
+        let page = console.can_show().min(MORE_PAGE_LINES);
+        let mut spans = vec![
             Span::raw(BODY),
             Span::styled(format!("│ … {hidden} earlier lines"), faint),
-        ]));
+        ];
+        if page > 0 {
+            spans.push(Span::styled(
+                format!(" · click to load {page} more"),
+                Style::default().fg(theme.colors.muted),
+            ));
+        }
+        lines.push(clip(Line::from(spans), width));
     }
-    for line in console.log.iter().skip(console.log.len() - shown) {
+    let skipped = console.log.len() - shown;
+    for line in console
+        .earlier
+        .iter()
+        .chain(console.log.iter().skip(skipped))
+    {
         let mut spans = vec![Span::raw(BODY), Span::styled("│ ", faint)];
         spans.extend(log_spans(&line.text, theme));
         lines.push(clip(Line::from(spans), BODY.len() + 2 + text_width));
@@ -420,6 +434,16 @@ mod tests {
     use super::*;
     use crate::events::{BootLogLine, BootUpdate};
 
+    fn boot_lines(
+        console: &BootConsole,
+        expanded: bool,
+        spinner: &str,
+        width: usize,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        super::boot_lines(console, expanded, spinner, width, theme).0
+    }
+
     fn text(lines: &[Line<'_>]) -> String {
         lines
             .iter()
@@ -474,9 +498,35 @@ mod tests {
         assert!(shown.contains("✓ Step snapshot  3m 12s"), "{shown}");
         assert!(shown.contains("⠋ Step create"), "{shown}");
         assert!(shown.contains("region   nyc"), "{shown}");
-        assert!(shown.contains("│ … 4 earlier lines"), "{shown}");
+        assert!(
+            shown.contains("│ … 4 earlier lines · click to load 4 more"),
+            "{shown}"
+        );
         assert!(shown.contains("│ line 11"));
         assert!(!shown.contains("│ line 3\n"));
+    }
+
+    #[test]
+    fn the_earlier_lines_row_loads_more_until_none_are_left() {
+        let theme = Theme::cyber();
+        let mut console = console();
+        let (lines, more) = super::boot_lines(&console, false, "⠋", 80, &theme);
+        assert_eq!(more.len(), 1);
+        let (row, section) = more[0];
+        assert_eq!(section, MoreSection::BootLog);
+        assert!(text(&lines[row..=row]).contains("4 earlier lines"));
+
+        console.show_earlier(2);
+        let shown = text(&boot_lines(&console, false, "⠋", 80, &theme));
+        assert!(shown.contains("│ … 2 earlier lines"), "{shown}");
+        assert!(shown.contains("│ line 2\n"), "{shown}");
+
+        console.show_earlier(MORE_PAGE_LINES);
+        let (lines, more) = super::boot_lines(&console, false, "⠋", 80, &theme);
+        assert!(more.is_empty());
+        let shown = text(&lines);
+        assert!(!shown.contains("earlier lines"), "{shown}");
+        assert!(shown.contains("│ line 0\n"), "{shown}");
     }
 
     #[test]

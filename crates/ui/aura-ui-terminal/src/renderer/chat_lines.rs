@@ -4,7 +4,7 @@ mod stream;
 
 use super::activity::{
     activity_lines, collapsed_hint, group_header_of, records_link, running_tool_lines, GroupView,
-    StepNumber, StepTally, Tally, ToolParts,
+    Shown, StepNumber, StepTally, Tally, ToolParts,
 };
 use super::boot::boot_lines;
 use super::command::shell_lines;
@@ -15,8 +15,9 @@ use super::segments::{
     reply_meta,
 };
 use super::text::Measure;
+use super::MoreRows;
 use crate::app::{CodeCopyHit, ImageHit, ToggleRow, ToggleTarget};
-use crate::components::{Activity, Message, MessageRole};
+use crate::components::{Activity, Message, MessageRole, MoreSection};
 use crate::events::{
     merge_timeline, ChannelPostAuthor, ChannelPostView, MessageData, TimelineItem,
 };
@@ -135,9 +136,10 @@ struct StepLines {
     version: (u64, u64),
     /// What the step adds to the group's summary line
     tally: StepTally,
-    /// The step's lines and the number they were drawn with, or `None`
-    /// while it runs, as its spinner and clock change every frame
-    lines: Option<(Option<StepNumber>, Vec<Line<'static>>)>,
+    /// The step's lines, its rows that show more and the number they were
+    /// drawn with, or `None` while it runs, as its spinner and clock
+    /// change every frame
+    lines: Option<(Option<StepNumber>, Vec<Line<'static>>, MoreRows)>,
     /// What a running tool step is drawn from besides its header, and the
     /// number it was drawn with
     running: Option<(Option<StepNumber>, ToolParts)>,
@@ -172,29 +174,29 @@ impl StepLines {
         number: Option<StepNumber>,
         keeping: bool,
         (width, theme, spinner): (usize, &Theme, &str),
-    ) -> Vec<Line<'static>> {
-        if let Some((drawn_as, lines)) = &self.lines {
+    ) -> (Vec<Line<'static>>, MoreRows) {
+        if let Some((drawn_as, lines, more)) = &self.lines {
             if *drawn_as == number {
-                return lines.clone();
+                return (lines.clone(), more.clone());
             }
         }
-        let expanded = member.is_expanded();
-        let lines = match step {
+        let shown = Shown::of(member);
+        let (lines, more) = match step {
             Activity::Tool(tool) if keeping && step.is_running() => {
                 let parts = match self.running.take() {
                     Some((drawn_as, parts)) if drawn_as == number => parts,
-                    _ => ToolParts::of(tool, expanded, number, width, theme),
+                    _ => ToolParts::of(tool, shown, number, width, theme),
                 };
-                let lines = running_tool_lines(tool, &parts, number, spinner, width, theme);
+                let drawn = running_tool_lines(tool, &parts, number, spinner, width, theme);
                 self.running = Some((number, parts));
-                lines
+                drawn
             }
-            _ => activity_lines(step, expanded, number, spinner, width, theme),
+            _ => activity_lines(step, shown, number, spinner, width, theme),
         };
         if keeping && !step.is_running() {
-            self.lines = Some((number, lines.clone()));
+            self.lines = Some((number, lines.clone(), more.clone()));
         }
-        lines
+        (lines, more)
     }
 }
 
@@ -435,11 +437,13 @@ impl Layout<'_> {
             }
             (None, None) if members.len() > 1 => {
                 let mut laid = Laid::default();
+                let mut toggles = Vec::new();
                 for member in members {
-                    let more = message_lines(member, (width, measure), theme, spinner);
+                    let (more, rows) = message_lines(member, (width, measure), theme, spinner);
+                    toggles.extend(more_toggles(member, rows, laid.0.len()));
                     stream::add((&mut laid.0, &mut laid.1, &mut laid.2), more);
                 }
-                (laid, Vec::new())
+                (laid, toggles)
             }
             (None, None) if self.streams(block) => {
                 let (mut lines, mut prose, mut codes, mut state) =
@@ -858,12 +862,14 @@ fn group_lines(
                 target: ToggleTarget::Step(member.version().0),
                 open: member.is_expanded(),
             });
-            lines.extend(kept.draw(
+            let (step_lines, more) = kept.draw(
                 (member, step),
                 Some(step_number),
                 keeping,
                 (width, theme, spinner),
-            ));
+            );
+            toggles.extend(more_toggles(member, more, lines.len()));
+            lines.extend(step_lines);
             push_records_link(
                 &mut lines,
                 &mut toggles,
@@ -920,7 +926,7 @@ fn single_lines(
     kept: Option<&mut KeptSteps>,
 ) -> (Laid, Vec<ToggleRow>) {
     let Some(step) = message.activity_step() else {
-        let laid = message_lines(message, (width, measure), theme, spinner);
+        let (laid, more) = message_lines(message, (width, measure), theme, spinner);
         // A boot console still going shows everything; once done it
         // folds and opens on its header.
         let toggles = message
@@ -932,30 +938,25 @@ fn single_lines(
                 open: message.is_expanded(),
             })
             .into_iter()
+            .chain(more_toggles(message, more, 0))
             .collect();
         return (laid, toggles);
     };
-    let mut lines: Vec<Line<'static>> = Vec::new();
     let mut toggles = vec![ToggleRow {
         line: 0,
         target: ToggleTarget::Step(message.version().0),
         open: message.is_expanded(),
     }];
-    match kept {
+    let (mut lines, more) = match kept {
         Some(kept) => {
             let mut drawn = StepLines::take(Some(kept), message, step);
-            lines.extend(drawn.draw((message, step), None, true, (width, theme, spinner)));
+            let lines = drawn.draw((message, step), None, true, (width, theme, spinner));
             kept.insert(message.version().0, drawn);
+            lines
         }
-        None => lines.extend(activity_lines(
-            step,
-            message.is_expanded(),
-            None,
-            spinner,
-            width,
-            theme,
-        )),
-    }
+        None => activity_lines(step, Shown::of(message), None, spinner, width, theme),
+    };
+    toggles.extend(more_toggles(message, more, 0));
     push_records_link(
         &mut lines,
         &mut toggles,
@@ -967,51 +968,74 @@ fn single_lines(
     ((lines, Vec::new(), Vec::new()), toggles)
 }
 
-/// The lines of one chat message, whether each is prose, and the copy
-/// buttons of its code blocks. What the user sent follows a `> ` prompt
-/// and system messages a `* `; the agent's replies stand on their own,
-/// like a program's output.
+/// The rows of `message` that show more of a part cut short, `offset`
+/// lines into its block.
+fn more_toggles(
+    message: &Message,
+    more: MoreRows,
+    offset: usize,
+) -> impl Iterator<Item = ToggleRow> {
+    let id = message.version().0;
+    more.into_iter().map(move |(line, section)| ToggleRow {
+        line: offset + line,
+        target: ToggleTarget::More(id, section),
+        open: false,
+    })
+}
+
+/// The lines of one chat message, whether each is prose, the copy
+/// buttons of its code blocks, and its rows that show more of a part cut
+/// short. What the user sent follows a `> ` prompt and system messages a
+/// `* `; the agent's replies stand on their own, like a program's output.
 fn message_lines(
     message: &Message,
     (width, measure): (usize, Measure),
     theme: &Theme,
     spinner: &str,
-) -> Laid {
+) -> (Laid, MoreRows) {
+    let alone = |lines| ((lines, Vec::new(), Vec::new()), MoreRows::new());
+    let with_more = |(lines, more)| ((lines, Vec::new(), Vec::new()), more);
     if let Some(activity) = message.activity_step() {
-        let lines = activity_lines(activity, message.is_expanded(), None, spinner, width, theme);
-        return (lines, Vec::new(), Vec::new());
+        return with_more(activity_lines(
+            activity,
+            Shown::of(message),
+            None,
+            spinner,
+            width,
+            theme,
+        ));
     }
     if let Some(run) = message.shell_run() {
-        let lines = shell_lines(run, &message.timestamp_local(), width, theme);
-        return (lines, Vec::new(), Vec::new());
+        return alone(shell_lines(run, &message.timestamp_local(), width, theme));
     }
     if let Some(block) = message.diff_block() {
-        return (
-            diff_message_lines(block, width, theme),
-            Vec::new(),
-            Vec::new(),
-        );
+        let more = message.more_lines(MoreSection::Diff);
+        return with_more(diff_message_lines(block, more, width, theme));
     }
     if let Some(console) = message.boot_console() {
-        return (
-            boot_lines(console, message.is_expanded(), spinner, width, theme),
-            Vec::new(),
-            Vec::new(),
-        );
+        return with_more(boot_lines(
+            console,
+            message.is_expanded(),
+            spinner,
+            width,
+            theme,
+        ));
     }
     let role = message.role();
     let (prompt, prompt_color, msg_color) = message_style(role, theme);
     if is_notice(message) {
-        let lines = prefixed_lines(
+        return alone(prefixed_lines(
             (prompt, prompt_color),
             message.content(),
             msg_color,
             width,
             Measure::GRID,
-        );
-        return (lines, Vec::new(), Vec::new());
+        ));
     }
-    content_lines(message.content(), role, (width, measure), theme)
+    (
+        content_lines(message.content(), role, (width, measure), theme),
+        MoreRows::new(),
+    )
 }
 
 /// The lines of the text a message of `role` says, whether each is prose,

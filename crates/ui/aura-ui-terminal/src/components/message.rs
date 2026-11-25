@@ -39,6 +39,8 @@ pub struct Message {
     activity: Option<Activity>,
     /// Whether an activity block shows its full detail
     expanded: bool,
+    /// Pages shown past the cut of each [`MoreSection`]
+    more: [usize; MoreSection::COUNT],
     /// Model that wrote an assistant reply
     model: Option<String>,
     /// Tokens and cost of the model call that wrote an assistant reply
@@ -69,6 +71,7 @@ impl Clone for Message {
             shell: self.shell.clone(),
             activity: self.activity.clone(),
             expanded: self.expanded,
+            more: self.more,
             model: self.model.clone(),
             usage: self.usage,
             sources: self.sources.clone(),
@@ -78,6 +81,33 @@ impl Clone for Message {
             author: self.author.clone(),
             id: next_message_id(),
             revision: 0,
+        }
+    }
+}
+
+/// Lines a click on a cut-short part of a message adds.
+pub const MORE_PAGE_LINES: usize = 200;
+
+/// A part of a message drawn cut short, that shows [`MORE_PAGE_LINES`]
+/// more each time its `… more lines` row is clicked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MoreSection {
+    /// A boot console's log, which opens backwards
+    BootLog,
+    /// What a tool call returned
+    Result,
+    /// A tool call's diff, or a diff message
+    Diff,
+}
+
+impl MoreSection {
+    const COUNT: usize = 3;
+
+    const fn index(self) -> usize {
+        match self {
+            Self::BootLog => 0,
+            Self::Result => 1,
+            Self::Diff => 2,
         }
     }
 }
@@ -116,6 +146,7 @@ impl Message {
             shell: None,
             activity: None,
             expanded: false,
+            more: [0; MoreSection::COUNT],
             model: None,
             usage: None,
             sources: Vec::new(),
@@ -257,6 +288,24 @@ impl Message {
             self.expanded = expanded;
             self.touch();
         }
+    }
+
+    /// Lines shown of `section` past where it is cut.
+    #[must_use]
+    pub const fn more_lines(&self, section: MoreSection) -> usize {
+        self.more[section.index()] * MORE_PAGE_LINES
+    }
+
+    /// Show another page of `section`: the next lines of a result or a
+    /// diff, or the earlier lines of a boot console's log.
+    pub fn show_more(&mut self, section: MoreSection) {
+        if section == MoreSection::BootLog {
+            if let Some(console) = &mut self.boot {
+                console.show_earlier(MORE_PAGE_LINES);
+            }
+        }
+        self.more[section.index()] += 1;
+        self.touch();
     }
 
     /// `(id, revision)`: differs from every other message's, and changes

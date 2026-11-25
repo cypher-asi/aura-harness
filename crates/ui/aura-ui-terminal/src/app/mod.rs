@@ -65,7 +65,7 @@ mod tests;
 
 use crate::{
     alerts::AlertSettings,
-    components::{quiet_for, Activity, Message, ShellRun, ToolStep},
+    components::{quiet_for, Activity, Message, MoreSection, ShellRun, ToolStep},
     events::{
         empty_projects, starts_project, AgentDefinitionSummary, AgentSummary, ChannelPostView,
         ModelOptionView, PlanView, ProcessSummary, ProjectSummary, RecordSummary, UiCommand,
@@ -756,6 +756,9 @@ pub(crate) enum ToggleTarget {
     TurnRecords(u64),
     /// The live to-do checklist under the conversation
     TodoChecklist,
+    /// The `… more lines` row of a part of a message cut short, by
+    /// message id
+    More(u64, MoreSection),
 }
 
 /// A thumbnail in the chat that opens its image when clicked.
@@ -1559,6 +1562,12 @@ impl App {
             }
             ToggleTarget::TurnRecords(started_ms) => self.show_turn_records(started_ms),
             ToggleTarget::TodoChecklist => self.todos_expanded = !self.todos_expanded,
+            ToggleTarget::More(id, section) => {
+                let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
+                    return false;
+                };
+                message.show_more(section);
+            }
         }
         true
     }

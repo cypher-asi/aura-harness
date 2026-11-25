@@ -7,8 +7,11 @@ use super::diff::diff_stat_spans;
 use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::panels::format_elapsed;
 use super::text::{display_width, wrap_words};
+use super::{more_label, MoreRows};
 use crate::app::format::{file_name, format_tool_label_of, parse_tool_args, ToolArgs};
-use crate::components::{Activity, CodeBlock, DiffView, ThinkingStep, ToolStatus, ToolStep};
+use crate::components::{
+    Activity, CodeBlock, DiffView, Message, MoreSection, ThinkingStep, ToolStatus, ToolStep,
+};
 use crate::Theme;
 use ratatui::{
     style::Style,
@@ -84,23 +87,57 @@ pub(super) enum GroupView {
     Full,
 }
 
-/// Lines for an activity block `width` columns wide. `spinner` is drawn
-/// in place of the marker while the step is in progress. A step with a
-/// `number` sits inside a group, numbered by its place in the turn.
+/// How much of a step is drawn: whether it is open, and how many lines
+/// of what it returned and of its diff past where they are cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct Shown {
+    pub expanded: bool,
+    pub result: usize,
+    pub diff: usize,
+}
+
+impl Shown {
+    /// As much of `message`'s step as the user opened.
+    pub(super) const fn of(message: &Message) -> Self {
+        Self {
+            expanded: message.is_expanded(),
+            result: message.more_lines(MoreSection::Result),
+            diff: message.more_lines(MoreSection::Diff),
+        }
+    }
+}
+
+impl From<bool> for Shown {
+    fn from(expanded: bool) -> Self {
+        Self {
+            expanded,
+            ..Self::default()
+        }
+    }
+}
+
+/// Lines for an activity block `width` columns wide, and its rows that
+/// show more of a part cut short. `spinner` is drawn in place of the
+/// marker while the step is in progress. A step with a `number` sits
+/// inside a group, numbered by its place in the turn.
 pub(super) fn activity_lines(
     activity: &Activity,
-    expanded: bool,
+    shown: Shown,
     number: Option<StepNumber>,
     spinner: &str,
     width: usize,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, MoreRows) {
+    let expanded = shown.expanded;
     let marker = step_marker(activity.is_running(), expanded, number, spinner, theme);
     let body = Body::new(body_indent(number), width);
     match activity {
-        Activity::Thinking(step) => thinking_lines(step, marker, expanded, &body, theme),
+        Activity::Thinking(step) => (
+            thinking_lines(step, marker, expanded, &body, theme),
+            MoreRows::new(),
+        ),
         Activity::Tool(step) => {
-            ToolParts::new(step, expanded, &body, theme).into_lines(step, marker, width, theme)
+            ToolParts::new(step, shown, &body, theme).into_lines(step, marker, width, theme)
         }
     }
 }
@@ -116,7 +153,7 @@ pub(super) fn running_tool_lines(
     spinner: &str,
     width: usize,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, MoreRows) {
     let marker = step_marker(
         step.status == ToolStatus::Running,
         parts.expanded,
@@ -552,6 +589,8 @@ pub(super) struct ToolParts {
     streaming_kb: Option<usize>,
     /// The lines under the header while the step is open
     body: Vec<Line<'static>>,
+    /// Rows of `body` that show more of a part cut short
+    more: MoreRows,
 }
 
 impl ToolParts {
@@ -559,16 +598,17 @@ impl ToolParts {
     /// inside a group.
     pub(super) fn of(
         step: &ToolStep,
-        expanded: bool,
+        shown: Shown,
         number: Option<StepNumber>,
         width: usize,
         theme: &Theme,
     ) -> Self {
         let body = Body::new(body_indent(number), width);
-        Self::new(step, expanded, &body, theme)
+        Self::new(step, shown, &body, theme)
     }
 
-    fn new(step: &ToolStep, expanded: bool, body: &Body, theme: &Theme) -> Self {
+    fn new(step: &ToolStep, shown: Shown, body: &Body, theme: &Theme) -> Self {
+        let expanded = shown.expanded;
         let args = ToolArgs::parse(&step.args);
         let diff = tool_diff(step, &args.value);
         let mut stat = Vec::new();
@@ -586,10 +626,10 @@ impl ToolParts {
             && step.args.len() >= STREAMING_SIZE_MIN_BYTES
             && !args.complete)
             .then_some(step.args.len() / 1024);
-        let body = if expanded {
-            tool_body(step, diff.as_ref(), body, theme)
+        let (body, more) = if expanded {
+            tool_body(step, diff.as_ref(), body, shown, theme)
         } else {
-            live_preview(step, body, theme)
+            (live_preview(step, body, theme), MoreRows::new())
         };
         Self {
             expanded,
@@ -597,7 +637,16 @@ impl ToolParts {
             stat,
             streaming_kb,
             body,
+            more,
         }
+    }
+
+    /// The rows that show more, counted from the header.
+    fn more_rows(&self) -> MoreRows {
+        self.more
+            .iter()
+            .map(|&(row, section)| (row + 1, section))
+            .collect()
     }
 
     /// The step's lines: its header after `marker`, then its body.
@@ -607,11 +656,11 @@ impl ToolParts {
         marker: Span<'static>,
         width: usize,
         theme: &Theme,
-    ) -> Vec<Line<'static>> {
+    ) -> (Vec<Line<'static>>, MoreRows) {
         let mut lines = Vec::with_capacity(1 + self.body.len());
         lines.push(tool_header(step, self, marker, width, theme));
         lines.extend(self.body.iter().cloned());
-        lines
+        (lines, self.more_rows())
     }
 
     /// [`Self::lines`], taking the body rather than copying it.
@@ -621,23 +670,26 @@ impl ToolParts {
         marker: Span<'static>,
         width: usize,
         theme: &Theme,
-    ) -> Vec<Line<'static>> {
+    ) -> (Vec<Line<'static>>, MoreRows) {
         let body = std::mem::take(&mut self.body);
         let mut lines = Vec::with_capacity(1 + body.len());
         lines.push(tool_header(step, &self, marker, width, theme));
         lines.extend(body);
-        lines
+        (lines, self.more_rows())
     }
 }
 
 /// What an open tool step shows under its header: the policy that let it
-/// run, its diff or arguments, then what it returned.
+/// run, its diff or arguments, then what it returned, each cut where
+/// `shown` says; and the rows that show more of them.
 fn tool_body(
     step: &ToolStep,
     diff: Option<&DiffView>,
     body: &Body,
+    shown: Shown,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> (Vec<Line<'static>>, MoreRows) {
+    let mut more = MoreRows::new();
     let mut lines = Vec::new();
     let muted = Style::default().fg(theme.colors.muted);
     if let Some(policy) = &step.policy {
@@ -657,15 +709,13 @@ fn tool_body(
         body.push_wrapped(&mut lines, view.path(), muted, theme);
         let diff_lines = view.styled_lines(theme, body.width);
         let total = diff_lines.len();
-        for line in diff_lines.into_iter().take(MAX_RESULT_LINES) {
+        let cap = MAX_RESULT_LINES + shown.diff;
+        for line in diff_lines.into_iter().take(cap) {
             lines.push(body.wrap_line(line, theme));
         }
-        if total > MAX_RESULT_LINES {
-            lines.push(body.line(
-                format!("… {} more lines", total - MAX_RESULT_LINES),
-                muted,
-                theme,
-            ));
+        if total > cap {
+            more.push((lines.len(), MoreSection::Diff));
+            lines.push(body.line(more_label(total - cap), muted, theme));
         }
     } else if let Some(command) = (step.name == "run_command")
         .then(|| command_lines(&step.args, body, theme))
@@ -687,12 +737,12 @@ fn tool_body(
     }
 
     let Some(result) = step.result.as_deref() else {
-        return lines;
+        return (lines, more);
     };
     let result = crate::ansi::strip_ansi(result);
     let result = result.trim_end();
     if result.is_empty() {
-        return lines;
+        return (lines, more);
     }
     if !lines.is_empty() {
         lines.push(body.line(String::new(), Style::default(), theme));
@@ -704,27 +754,29 @@ fn tool_body(
             theme.colors.error
         },
     );
+    let cap = MAX_RESULT_LINES + shown.result;
     let total = if step.name == "task" {
         let reply = markdown_lines(result, body.width, style, theme);
         let total = reply.len();
-        for line in reply.into_iter().take(MAX_RESULT_LINES) {
+        for line in reply.into_iter().take(cap) {
             lines.push(body.wrap_line(line, theme));
         }
         total
     } else {
-        for line in result.lines().take(MAX_RESULT_LINES) {
+        for line in result.lines().take(cap) {
             body.push_wrapped(&mut lines, line, style, theme);
         }
         result.lines().count()
     };
-    if total > MAX_RESULT_LINES {
+    if total > cap {
+        more.push((lines.len(), MoreSection::Result));
         lines.push(body.line(
-            format!("… {} more lines", total - MAX_RESULT_LINES),
+            more_label(total - cap),
             Style::default().fg(theme.colors.muted),
             theme,
         ));
     }
-    lines
+    (lines, more)
 }
 
 /// `args` as [`pretty_args`] lays them out, under the rule.
@@ -1019,8 +1071,19 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::LiveOutput;
+    use crate::components::{LiveOutput, MORE_PAGE_LINES};
     use crate::themes::Theme;
+
+    fn activity_lines(
+        activity: &Activity,
+        expanded: bool,
+        number: Option<StepNumber>,
+        spinner: &str,
+        width: usize,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
+        super::activity_lines(activity, expanded.into(), number, spinner, width, theme).0
+    }
 
     fn texts(lines: &[Line<'_>]) -> Vec<String> {
         lines
@@ -1265,7 +1328,42 @@ mod tests {
             80,
             &Theme::default(),
         );
-        assert_eq!(texts(&lines).last().unwrap(), "    │ … 50 more lines");
+        assert_eq!(
+            texts(&lines).last().unwrap(),
+            "    │ … 50 more lines · click to show 50 more"
+        );
+    }
+
+    #[test]
+    fn each_page_moves_the_cut_of_a_result_until_it_is_all_shown() {
+        let output: Vec<String> = (0..650).map(|i| format!("line {i}")).collect();
+        let step = tool(ToolStatus::Success, Some(&output.join("\n")));
+        let theme = Theme::default();
+        let draw = |result| {
+            let shown = Shown {
+                expanded: true,
+                result,
+                diff: 0,
+            };
+            super::activity_lines(&step, shown, None, "⠋", 80, &theme)
+        };
+        let (lines, more) = draw(0);
+        assert_eq!(more, [(lines.len() - 1, MoreSection::Result)]);
+        assert_eq!(
+            text(&lines[more[0].0]),
+            "    │ … 450 more lines · click to show 200 more"
+        );
+
+        let (lines, more) = draw(MORE_PAGE_LINES);
+        assert_eq!(
+            text(&lines[more[0].0]),
+            "    │ … 250 more lines · click to show 200 more"
+        );
+        assert_eq!(text(&lines[more[0].0 - 1]), "    │ line 399");
+
+        let (lines, more) = draw(3 * MORE_PAGE_LINES);
+        assert!(more.is_empty());
+        assert_eq!(texts(&lines).last().unwrap(), "    │ line 649");
     }
 
     #[test]
