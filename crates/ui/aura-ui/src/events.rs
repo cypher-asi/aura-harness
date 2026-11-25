@@ -657,6 +657,15 @@ pub enum UiCommand {
     /// [`Self::SetProcesses`]: the UI files it under its thread and shows
     /// it while either agent is in the run on screen.
     AddMail(MailView),
+    /// A better subject for thread `thread_id`, written by the title model
+    /// after its first message. Global like [`Self::AddMail`]; it replaces
+    /// the subject the thread's messages carry, whichever arrives first.
+    SetThreadSubject {
+        /// The thread named
+        thread_id: String,
+        /// Its subject, in place of the one its messages carry
+        subject: String,
+    },
 
     /// A command for the chat of one agent. Agents work in parallel, so
     /// anything an agent's turn sends is addressed to it; the UI applies it

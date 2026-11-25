@@ -31,8 +31,8 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use crate::error::{CloudError, CloudResult};
 use crate::proto::{self, boxd_api_client::BoxdApiClient};
 use crate::provider::{
-    Balance, ExecOutput, MachineInfo, MachineLimit, MachineOrigin, MachineStatus, NewMachine,
-    OrgUsage, SnapshotInfo, UsageReading, VmProvider, MACHINE_DISK_BYTES,
+    Balance, ExecOutput, HostSecret, MachineInfo, MachineLimit, MachineOrigin, MachineStatus,
+    NewMachine, OrgUsage, SnapshotInfo, UsageReading, VmProvider, MACHINE_DISK_BYTES,
 };
 use crate::token::{exchange_url_for, TokenSource};
 
@@ -69,6 +69,8 @@ pub struct BoxdProvider {
     base_url: String,
     region: Option<String>,
     org: String,
+    /// The org secrets are set in: `BOXD_ORG`, or the key's default org.
+    secret_org: tokio::sync::OnceCell<String>,
     channels: Mutex<HashMap<String, Channel>>,
     /// Region endpoint of each machine seen, by id and by name.
     machine_endpoints: Mutex<HashMap<String, String>>,
@@ -93,6 +95,7 @@ impl BoxdProvider {
             base_url: normalize_url(config.base_url()),
             region: config.region.clone(),
             org: config.org.clone().unwrap_or_default(),
+            secret_org: tokio::sync::OnceCell::new(),
             channels: Mutex::new(HashMap::new()),
             machine_endpoints: Mutex::new(HashMap::new()),
         }
@@ -120,6 +123,58 @@ impl BoxdProvider {
 
     fn home(&self) -> String {
         self.base_url.clone()
+    }
+
+    /// The organizations the key can act in, as `(id, slug, name)`, and
+    /// the caller's default org id.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails.
+    pub async fn orgs(&self) -> CloudResult<(Vec<(String, String, String)>, String)> {
+        let answer = self
+            .unary(
+                "ListOrgs",
+                &self.home(),
+                proto::ListOrgsRequest {},
+                CALL_TIMEOUT,
+                |mut c, r| async move { c.list_orgs(r).await },
+            )
+            .await?;
+        Ok((
+            answer
+                .orgs
+                .into_iter()
+                .map(|org| (org.id, org.slug, org.name))
+                .collect(),
+            answer.default_org_id,
+        ))
+    }
+
+    /// The org to keep secrets in: `BOXD_ORG`, or the org boxd names as
+    /// the caller's default (the one an org-fenced key creates in).
+    async fn secret_org(&self) -> CloudResult<String> {
+        self.secret_org
+            .get_or_try_init(|| async {
+                if !self.org.is_empty() {
+                    return Ok(self.org.clone());
+                }
+                let answer = self
+                    .unary(
+                        "ListOrgs",
+                        &self.home(),
+                        proto::ListOrgsRequest {},
+                        CALL_TIMEOUT,
+                        |mut c, r| async move { c.list_orgs(r).await },
+                    )
+                    .await?;
+                pick_org(&answer).ok_or(CloudError::InvalidResponse {
+                    op: "ListOrgs",
+                    message: "no organization to keep secrets in; set BOXD_ORG".into(),
+                })
+            })
+            .await
+            .cloned()
     }
 
     fn create_endpoint(&self) -> String {
@@ -239,15 +294,7 @@ impl BoxdProvider {
                 .machine
             }
             MachineOrigin::Snapshot(snapshot) => {
-                let request = proto::CreateVmFromSnapshotRequest {
-                    snapshot: snapshot.clone(),
-                    name: spec.name.clone(),
-                    org: self.org.clone(),
-                    isolated: spec.isolated,
-                    labels,
-                    delete_after_secs: spec.delete_after_secs,
-                    ..Default::default()
-                };
+                let request = restore_request(snapshot, spec, &self.org);
                 self.unary(
                     "CreateVmFromSnapshot",
                     &endpoint,
@@ -325,6 +372,7 @@ pub fn create_vm_request(
         isolated: spec.isolated,
         env: spec.env.clone().into_iter().collect(),
         packages: spec.packages.clone(),
+        secrets: spec.secrets.clone(),
         ..Default::default()
     };
     proto::CreateVmRequest {
@@ -336,13 +384,89 @@ pub fn create_vm_request(
     }
 }
 
+/// The `CreateVmFromSnapshot` request. Secrets go in a spec merged over
+/// the snapshot's, which then also carries the labels and isolation
+/// (boxd refuses them beside a spec).
+#[must_use]
+pub fn restore_request(
+    snapshot: &str,
+    spec: &NewMachine,
+    org: &str,
+) -> proto::CreateVmFromSnapshotRequest {
+    let mut request = proto::CreateVmFromSnapshotRequest {
+        snapshot: snapshot.to_string(),
+        name: spec.name.clone(),
+        org: org.to_string(),
+        delete_after_secs: spec.delete_after_secs,
+        ..Default::default()
+    };
+    if spec.secrets.is_empty() {
+        request.isolated = spec.isolated;
+        request.labels = spec.labels.clone().into_iter().collect();
+    } else {
+        request.spec = Some(proto::MachineSpec {
+            version: 1,
+            labels: spec.labels.clone().into_iter().collect(),
+            isolated: spec.isolated,
+            secrets: spec.secrets.clone(),
+            ..Default::default()
+        });
+    }
+    request
+}
+
+/// The org a key keeps secrets in: its default org, or its only one, by
+/// slug (`SetVar` refuses org ids: "org not found").
+#[must_use]
+pub fn pick_org(answer: &proto::ListOrgsResponse) -> Option<String> {
+    let slug = |org: &proto::OrgSummary| {
+        if org.slug.is_empty() {
+            org.name.clone()
+        } else {
+            org.slug.clone()
+        }
+    };
+    if let Some(org) = answer
+        .orgs
+        .iter()
+        .find(|org| org.id == answer.default_org_id)
+    {
+        return Some(slug(org));
+    }
+    match answer.orgs.as_slice() {
+        [only] => Some(slug(only)),
+        _ => None,
+    }
+}
+
+/// The `SetVar` request for an unattached, host-bound secret.
+#[must_use]
+pub fn set_secret_request(secret: &HostSecret, org: &str) -> proto::SetVarRequest {
+    proto::SetVarRequest {
+        org: org.to_string(),
+        kind: "secret".into(),
+        name: secret.name.clone(),
+        value: secret.value.as_str().to_string(),
+        scope: "private-unattached".into(),
+        domains: secret.domains.clone(),
+        replace_in: secret.replace_in.clone(),
+    }
+}
+
 /// Map boxd's machine answer.
 #[must_use]
 pub fn machine_info(vm: proto::GetVmResponse) -> MachineInfo {
-    let domain = if vm.access_domain.is_empty() {
-        format!("{}.boxd.sh", vm.name)
+    // `access_domain` is the cluster's domain (`boxd.sh`); the machine
+    // is served at `<name>.<access_domain>`.
+    let base = if vm.access_domain.is_empty() {
+        "boxd.sh"
     } else {
-        vm.access_domain.clone()
+        vm.access_domain.as_str()
+    };
+    let domain = if base.starts_with(&format!("{}.", vm.name)) {
+        base.to_string()
+    } else {
+        format!("{}.{base}", vm.name)
     };
     let source = vm.source_info.as_ref().and_then(|source| {
         match source.kind.to_ascii_lowercase().as_str() {
@@ -872,6 +996,44 @@ impl VmProvider for BoxdProvider {
         })
     }
 
+    async fn set_secret(&self, secret: &HostSecret) -> CloudResult<()> {
+        let org = self.secret_org().await?;
+        let request = set_secret_request(secret, &org);
+        self.unary(
+            "SetVar",
+            &self.home(),
+            request,
+            CALL_TIMEOUT,
+            |mut c, r| async move { c.set_var(r).await },
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn remove_secret(&self, name: &str) -> CloudResult<()> {
+        let org = self.secret_org().await?;
+        let request = proto::RemoveVarRequest {
+            org,
+            kind: "secret".into(),
+            name: name.to_string(),
+            scope: "private-unattached".into(),
+        };
+        match self
+            .unary(
+                "RemoveVar",
+                &self.home(),
+                request,
+                CALL_TIMEOUT,
+                |mut c, r| async move { c.remove_var(r).await },
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(err) if err.is_not_found() => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
     async fn balance(&self) -> CloudResult<Balance> {
         let request = proto::ListBillingActivityRequest {
             org: self.org.clone(),
@@ -975,9 +1137,23 @@ mod tests {
             }),
             ..Default::default()
         };
-        let info = machine_info(vm);
+        let info = machine_info(vm.clone());
         assert_eq!(info.status, MachineStatus::Standby);
         assert_eq!(info.domain, "aura-re36-3f9c.boxd.sh");
+        let live = machine_info(proto::GetVmResponse {
+            access_domain: "boxd.sh".into(),
+            ..vm.clone()
+        });
+        assert_eq!(
+            live.domain, "aura-re36-3f9c.boxd.sh",
+            "boxd sends the cluster domain"
+        );
+        assert_eq!(live.url(), "https://aura-re36-3f9c.boxd.sh");
+        let full = machine_info(proto::GetVmResponse {
+            access_domain: "aura-re36-3f9c.example.dev".into(),
+            ..vm
+        });
+        assert_eq!(full.domain, "aura-re36-3f9c.example.dev");
         assert_eq!(info.disk_bytes, MACHINE_DISK_BYTES);
         assert_eq!(info.created_ms, 1_700_000_000_000);
         assert_eq!(info.size(), Some(MachineSize::S4x16));
@@ -1013,5 +1189,76 @@ mod tests {
         assert!(refused.is_size_refused());
         let other = CloudError::rpc("CreateVm", &tonic::Status::invalid_argument("bad name"));
         assert!(!other.is_size_refused());
+    }
+
+    #[test]
+    fn secrets_map_to_unattached_host_bound_vars() {
+        let secret = HostSecret {
+            name: "AURA_3F9C0A1B_AB12CD_CLAUDE".into(),
+            value: zeroize::Zeroizing::new("sk-ant-oat-x".into()),
+            domains: vec!["api.anthropic.com".into()],
+            replace_in: vec!["headers".into()],
+        };
+        let request = set_secret_request(&secret, "org-1");
+        assert_eq!(request.kind, "secret");
+        assert_eq!(request.scope, "private-unattached");
+        assert_eq!(request.org, "org-1");
+        assert_eq!(request.domains, ["api.anthropic.com"]);
+        assert_eq!(request.replace_in, ["headers"]);
+        assert!(
+            !format!("{secret:?}").contains("sk-ant"),
+            "Debug hides the value"
+        );
+    }
+
+    #[test]
+    fn restores_with_secrets_put_labels_in_the_spec() {
+        let mut spec = NewMachine::named("aura-re36-3f9c");
+        spec.labels.insert("aura.owner".into(), "3f9c0a1b".into());
+        let plain = restore_request("aura-proj-x", &spec, "");
+        assert!(plain.spec.is_none());
+        assert_eq!(
+            plain.labels.get("aura.owner").map(String::as_str),
+            Some("3f9c0a1b")
+        );
+        spec.secrets = vec!["AURA_X_Y_CLAUDE".into()];
+        let with = restore_request("aura-proj-x", &spec, "");
+        assert!(
+            with.labels.is_empty() && !with.isolated,
+            "boxd refuses them beside a spec"
+        );
+        let inner = with.spec.expect("spec");
+        assert_eq!(inner.secrets, ["AURA_X_Y_CLAUDE"]);
+        assert!(inner.isolated);
+        assert_eq!(
+            inner.labels.get("aura.owner").map(String::as_str),
+            Some("3f9c0a1b")
+        );
+        let fresh = create_vm_request(&spec, MachineSize::S1x4, "");
+        assert_eq!(fresh.spec.expect("spec").secrets, ["AURA_X_Y_CLAUDE"]);
+    }
+
+    #[test]
+    fn the_secret_org_is_the_default_or_the_only_one() {
+        let org = |id: &str| proto::OrgSummary {
+            id: id.into(),
+            slug: format!("{id}-slug"),
+            ..Default::default()
+        };
+        let answer = proto::ListOrgsResponse {
+            orgs: vec![org("a"), org("b")],
+            default_org_id: "b".into(),
+        };
+        assert_eq!(pick_org(&answer).as_deref(), Some("b-slug"));
+        let one = proto::ListOrgsResponse {
+            orgs: vec![org("a")],
+            default_org_id: String::new(),
+        };
+        assert_eq!(pick_org(&one).as_deref(), Some("a-slug"));
+        let many = proto::ListOrgsResponse {
+            orgs: vec![org("a"), org("b")],
+            default_org_id: String::new(),
+        };
+        assert_eq!(pick_org(&many), None);
     }
 }

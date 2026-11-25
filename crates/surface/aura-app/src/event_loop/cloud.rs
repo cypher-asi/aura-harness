@@ -154,10 +154,68 @@ async fn ensure_hub(state: &mut LoopState<'_>) -> Result<Arc<CloudHub>, String> 
         .filter(|agent| !agent.archived && !agent.removed)
         .map(|agent| agent.agent_id().to_hex())
         .collect();
+    hub.set_current_owner(state.auth.owner());
+    hub.set_plan_credentials(Arc::new(crate::cloud::plans::VaultPlans(Arc::clone(
+        &state.auth,
+    ))));
     hub.start(&keep).await;
     *state.cloud.shared.hub.lock() = Some(Arc::clone(&hub));
     start_publisher(state);
     Ok(hub)
+}
+
+/// Why the user signed in here may not manage cloud agent `agent`: only
+/// the user who placed it can move, pull, sleep, wake, archive or talk
+/// to it.
+fn foreign_owner(state: &LoopState<'_>, hub: &CloudHub, agent: AgentId) -> Option<String> {
+    let owner = hub.owner_of(agent)?;
+    refusal_for(&owner, hub.owner_name_of(agent), &state.auth.owner())
+}
+
+/// The notice when `current` is not `owner` (named `owner_name`).
+fn refusal_for(
+    owner: &aura_core_auth::Owner,
+    owner_name: Option<String>,
+    current: &aura_core_auth::Owner,
+) -> Option<String> {
+    if owner == current {
+        return None;
+    }
+    let name = owner_name.unwrap_or_else(|| match owner {
+        aura_core_auth::Owner::Local => "this machine's local profile".to_string(),
+        aura_core_auth::Owner::Zos { .. } => "another user".to_string(),
+    });
+    Some(format!("Placed by {name}; sign in as {name} to manage it."))
+}
+
+/// Why `agents` may not be archived by the user signed in here: one of
+/// them is another user's cloud agent.
+pub(super) fn archive_refusal(state: &LoopState<'_>, agents: &[AgentId]) -> Option<String> {
+    let hub = state.cloud.hub()?;
+    agents
+        .iter()
+        .find_map(|agent| foreign_owner(state, &hub, *agent))
+}
+
+/// The plan a model id is served by (`claude/...`, `chatgpt/...`,
+/// `openrouter/...`), if any.
+fn plan_of_model(model: &str) -> Option<aura_core_auth::ProviderKind> {
+    let (prefix, _) = model.split_once('/')?;
+    prefix
+        .parse::<aura_core_auth::ProviderKind>()
+        .ok()
+        .filter(|kind| aura_engine_cloud::plans::plan_host(*kind).is_some())
+}
+
+/// The user signed in here or their plans changed: local agents act as
+/// them, and their plan tokens go to their machines now.
+pub(super) fn on_auth_change(state: &LoopState<'_>) {
+    let Some(hub) = state.cloud.hub() else {
+        return;
+    };
+    let owner = state.auth.owner();
+    hub.set_current_owner(owner.clone());
+    tokio::spawn(async move { hub.sync_plans(&owner).await });
 }
 
 /// Bring the hub up at start when a key is set, so placed agents keep
@@ -181,6 +239,7 @@ fn start_publisher(state: &mut LoopState<'_>) {
     let shared = Arc::clone(&state.cloud.shared);
     let hub = Arc::clone(&state.hub);
     let commands = state.commands.clone();
+    let auth = Arc::clone(&state.auth);
     state.cloud.publisher = Some(tokio::spawn(async move {
         let mut sampler: Option<aura_engine_cloud::host::HostSampler> = None;
         let mut interval = tokio::time::interval(PUBLISH_EVERY);
@@ -190,14 +249,32 @@ fn start_publisher(state: &mut LoopState<'_>) {
                 continue;
             };
             let cloud = shared.hub.lock().clone();
-            let view = build_view(&hub, cloud.as_ref(), &shared, agent, &mut sampler).await;
-            let placement = placement_state(cloud.as_ref(), &shared, agent);
-            let _ = commands
-                .send(UiCommand::SetPlacement {
-                    agent_id: agent.to_hex(),
-                    state: placement,
+            let current = auth.owner();
+            let view =
+                build_view(&hub, cloud.as_ref(), &shared, agent, &current, &mut sampler).await;
+            // Every placed agent, for the projects list's cloud marks, and
+            // the agent on screen, for its footer switch.
+            let mut agents: Vec<AgentId> = cloud
+                .as_ref()
+                .map(|c| {
+                    c.placed()
+                        .iter()
+                        .filter_map(|(hex, _)| AgentId::from_hex(hex).ok())
+                        .collect()
                 })
-                .await;
+                .unwrap_or_default();
+            if !agents.contains(&agent) {
+                agents.push(agent);
+            }
+            for id in agents {
+                let placement = placement_state(cloud.as_ref(), &shared, id, &current);
+                let _ = commands
+                    .send(UiCommand::SetPlacement {
+                        agent_id: id.to_hex(),
+                        state: placement,
+                    })
+                    .await;
+            }
             if let Some(view) = view {
                 let _ = commands.send(UiCommand::SetHost(Box::new(view))).await;
             }
@@ -205,10 +282,32 @@ fn start_publisher(state: &mut LoopState<'_>) {
     }));
 }
 
+/// How the user who placed `agent` is named here.
+fn owner_label(hub: &CloudHub, agent: AgentId) -> String {
+    hub.owner_name_of(agent)
+        .unwrap_or_else(|| match hub.owner_of(agent) {
+            Some(aura_core_auth::Owner::Zos { .. }) => "another user".to_string(),
+            _ => "local profile".to_string(),
+        })
+}
+
+/// The owner's name when `agent` was placed by someone other than
+/// `current`.
+fn foreign_label(
+    cloud: Option<&Arc<CloudHub>>,
+    agent: AgentId,
+    current: &aura_core_auth::Owner,
+) -> Option<String> {
+    let hub = cloud?;
+    let owner = hub.owner_of(agent)?;
+    (owner != *current).then(|| owner_label(hub, agent))
+}
+
 fn placement_state(
     cloud: Option<&Arc<CloudHub>>,
     shared: &Shared,
     agent: AgentId,
+    current: &aura_core_auth::Owner,
 ) -> PlacementState {
     let moving = shared.moving.lock().contains(&agent);
     let placement = cloud.map_or(Placement::Local, |hub| hub.placement_of(agent));
@@ -225,6 +324,7 @@ fn placement_state(
             .and_then(|hub| hub.fleet().view(&agent.to_hex()))
             .map(|view| view.state.label().to_string()),
         cloud_ready: cloud.is_some() || aura_config::cloud().is_configured(),
+        owner: foreign_label(cloud, agent, current),
     }
 }
 
@@ -233,6 +333,7 @@ async fn build_view(
     cloud: Option<&Arc<CloudHub>>,
     shared: &Shared,
     agent: AgentId,
+    current: &aura_core_auth::Owner,
     sampler: &mut Option<aura_engine_cloud::host::HostSampler>,
 ) -> Option<HostView> {
     let (project_agents, folder) = {
@@ -248,13 +349,26 @@ async fn build_view(
         (agents, folder)
     };
     let mut view = match cloud.and_then(|c| c.fleet().view(&agent.to_hex()).map(|v| (c, v))) {
-        Some((cloud, machine)) => host_info::cloud_view(
-            agent,
-            &machine,
-            cloud.host_stats(agent).as_ref(),
-            cloud.cost(agent).as_ref(),
-            &cloud.ledger_rows(agent, 20),
-        ),
+        Some((cloud, machine)) => {
+            let mut view = host_info::cloud_view(
+                agent,
+                &machine,
+                cloud.host_stats(agent).as_ref(),
+                cloud.cost(agent).as_ref(),
+                &cloud.ledger_rows(agent, 20),
+            );
+            let owner = cloud
+                .owner_of(agent)
+                .unwrap_or(aura_core_auth::Owner::Local);
+            let now = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
+            host_info::add_owner_and_models(
+                &mut view,
+                &owner_label(cloud, agent),
+                &cloud.plan_status(&owner),
+                now,
+            );
+            view
+        }
         None => {
             let disk = folder.unwrap_or_else(|| PathBuf::from("."));
             let mut taken = sampler
@@ -281,9 +395,15 @@ async fn build_view(
                 Some((cloud, machine)) => {
                     let cost = cloud.cost(*id);
                     if let Some(cost) = &cost {
-                        costs.push(cost.clone());
+                        costs.push((owner_label(cloud, *id), cost.clone()));
                     }
-                    host_info::cloud_row(*id, name, &machine, cost.as_ref())
+                    host_info::cloud_row(
+                        *id,
+                        name,
+                        &machine,
+                        cost.as_ref(),
+                        foreign_label(Some(cloud), *id, current),
+                    )
                 }
                 None => host_info::local_row(
                     *id,
@@ -293,7 +413,7 @@ async fn build_view(
             },
         )
         .collect::<Vec<HostRow>>();
-    view.project_total = host_info::project_total(&costs);
+    view.project_total = host_info::project_total_by_owner(&costs);
     Some(view)
 }
 
@@ -326,6 +446,10 @@ pub(super) async fn handle_set_placement(
     let project = lock(&state.hub.registry)
         .project_of(agent)
         .map(|p| p.id.clone());
+    if let Some(refusal) = foreign_owner(state, &hub, agent) {
+        system(state, agent, refusal).await;
+        return;
+    }
     match placement {
         PlacementView::Cloud => {
             if hub.is_placed(agent) {
@@ -430,6 +554,8 @@ fn place_request(state: &LoopState<'_>, hub: &CloudHub, agent: AgentId) -> Optio
         project_dir: folder,
         build_command: None,
         fork_from,
+        owner: state.auth.owner(),
+        owner_name: state.auth.identity().display_name().map(str::to_string),
     })
 }
 
@@ -459,6 +585,10 @@ pub(super) async fn handle_host_action(
         .await;
         return;
     };
+    if let Some(refusal) = foreign_owner(state, &hub, agent) {
+        system(state, agent, refusal).await;
+        return;
+    }
     let ui = AgentUi::new(state.commands.clone(), agent);
     tokio::spawn(async move {
         let note = match action {
@@ -532,6 +662,10 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
         return Some(work);
     }
     let hub = state.cloud.hub()?;
+    if let Some(refusal) = foreign_owner(state, &hub, agent) {
+        system(state, agent, refusal).await;
+        return None;
+    }
     match work {
         Work::Prompt { prompt, shown } => {
             if state.cloud.shared.running.lock().contains_key(&agent) {
@@ -560,6 +694,23 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
                 .await;
             }
             let current = state.models.current().to_string();
+            // A plan model runs on the owner's plan, through the boxd
+            // secret their machine holds.
+            if let Some(kind) = plan_of_model(&current) {
+                if !state.auth.linked_plans(&state.auth.owner()).contains(&kind) {
+                    system(
+                        state,
+                        agent,
+                        format!(
+                            "Sign in to {} (`/login {}`) to use it from cloud agents.",
+                            kind.label(),
+                            kind.id()
+                        ),
+                    )
+                    .await;
+                    return None;
+                }
+            }
             let model =
                 (!current.is_empty() && current != "gate" && !current.starts_with("local/"))
                     .then_some(current);
@@ -661,8 +812,17 @@ async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) 
             }
             RemoteEvent::Done { .. } => break,
             RemoteEvent::Failed(err) => {
-                ui.send(UiCommand::ShowError(format!("cloud turn failed: {err}")))
-                    .await;
+                let lower = err.to_ascii_lowercase();
+                let hint = if lower.contains("401") || lower.contains("unauthorized") {
+                    " The plan refused the machine's token: check the plan is linked here \
+                     (`/login <plan>`); the machine picks up a new sign-in within two minutes."
+                } else {
+                    ""
+                };
+                ui.send(UiCommand::ShowError(format!(
+                    "cloud turn failed: {err}{hint}"
+                )))
+                .await;
                 break;
             }
         }
@@ -684,5 +844,44 @@ impl Drop for CloudState {
         if let Some(hub) = self.shared.hub.lock().take() {
             hub.shutdown();
         }
+    }
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::*;
+    use aura_core_auth::{Owner, ProviderKind};
+
+    #[test]
+    fn only_the_placing_user_manages_a_cloud_agent() {
+        let alice = Owner::Zos {
+            user_id: "alice".into(),
+        };
+        let bob = Owner::Zos {
+            user_id: "bob".into(),
+        };
+        assert_eq!(refusal_for(&alice, Some("Alice".into()), &alice), None);
+        assert_eq!(
+            refusal_for(&alice, Some("Alice".into()), &bob).as_deref(),
+            Some("Placed by Alice; sign in as Alice to manage it.")
+        );
+        assert!(refusal_for(&Owner::Local, None, &bob)
+            .is_some_and(|note| note.contains("local profile")));
+    }
+
+    #[test]
+    fn plan_models_are_recognized() {
+        assert_eq!(
+            plan_of_model("claude/claude-sonnet-4"),
+            Some(ProviderKind::Claude)
+        );
+        assert_eq!(plan_of_model("chatgpt/gpt-5"), Some(ProviderKind::Chatgpt));
+        assert_eq!(
+            plan_of_model("openrouter/x/y"),
+            Some(ProviderKind::OpenRouter)
+        );
+        assert_eq!(plan_of_model("aura-claude-sonnet"), None);
+        assert_eq!(plan_of_model("local/qwen3:4b"), None);
+        assert_eq!(plan_of_model("zos/x"), None);
     }
 }

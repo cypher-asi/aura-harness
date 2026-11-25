@@ -36,6 +36,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use aura_config::{BoxdToken, CloudConfig};
+pub use aura_core_auth::Owner;
 use aura_core_protocol::cloud::{
     HostStats, MeshFrame, MeshMail, MeshMailKind, SyncImport, MESH_PROTOCOL,
 };
@@ -49,6 +50,7 @@ use aura_engine_cloud::cost::{latest_reading, CostEstimate, CostModel, CostSampl
 use aura_engine_cloud::fleet::{MachineView, ProvisionRequest, VmFleet};
 use aura_engine_cloud::machine_env::WORKSPACE_DIR;
 use aura_engine_cloud::mesh::{global_thread, Directory, Holder, MailBook, HUB_NODE};
+use aura_engine_cloud::plans::{PlanCredentials, PlanStatus, PlanSync, SYNC_EVERY};
 use aura_engine_cloud::snapshots::{AuraBinary, SnapshotBuilder};
 use aura_engine_cloud::{
     delta, names, replica, CloudError, CloudResult, MachineOrigin, VmProvider,
@@ -96,8 +98,13 @@ pub struct PlaceRequest {
     /// Build command for the project snapshot; detected when `None`.
     pub build_command: Option<String>,
     /// A cloud parent whose machine to fork instead of restoring the
-    /// project snapshot.
+    /// project snapshot. Only forked when the parent has the same owner.
     pub fork_from: Option<AgentId>,
+    /// The user placing it, who owns it from now on: its machine spends
+    /// this user's plans, and only this user can manage it.
+    pub owner: Owner,
+    /// That user's display name, for "placed by" notices here.
+    pub owner_name: Option<String>,
 }
 
 /// How pulling an agent's work back went.
@@ -195,6 +202,21 @@ pub struct PlacedAgent {
     pub project_dir: PathBuf,
     /// Machine name.
     pub machine: String,
+    /// The user who placed it (kept on this machine only; boxd sees the
+    /// owner tag). `None` in files from before owners: the local user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Owner>,
+    /// That user's display name, for notices here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_name: Option<String>,
+}
+
+impl PlacedAgent {
+    /// The user who placed it.
+    #[must_use]
+    pub fn owner(&self) -> Owner {
+        self.owner.clone().unwrap_or(Owner::Local)
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,6 +262,11 @@ pub struct CloudHub {
     links: Mutex<HashMap<String, Link>>,
     tracks: Mutex<HashMap<String, HostTrack>>,
     mirrors: Mutex<HashMap<AgentId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Users' plan tokens as boxd secrets; `None` until the app hands
+    /// the hub its credentials.
+    plans: Mutex<Option<Arc<PlanSync>>>,
+    /// The user signed in here: local agents act as this user.
+    current_owner: Mutex<Owner>,
     stop: CancellationToken,
 }
 
@@ -322,6 +349,8 @@ impl CloudHub {
             links: Mutex::new(HashMap::new()),
             tracks: Mutex::new(HashMap::new()),
             mirrors: Mutex::new(HashMap::new()),
+            plans: Mutex::new(None),
+            current_owner: Mutex::new(Owner::Local),
             stop: CancellationToken::new(),
         });
         hub.save_placements();
@@ -385,6 +414,8 @@ impl CloudHub {
                 url: None,
                 project: project.to_string(),
                 name: name.to_string(),
+                // Local agents act as the user signed in here.
+                owner: names::owner_tag(&self.current_owner()),
             },
         );
         self.send_directories(project);
@@ -437,6 +468,99 @@ impl CloudHub {
             .collect()
     }
 
+    /// Read users' plan credentials from `credentials`: from now on
+    /// placed machines can use their owner's Claude, ChatGPT and
+    /// OpenRouter plans.
+    pub fn set_plan_credentials(&self, credentials: Arc<dyn PlanCredentials>) {
+        let install = self.placements.lock().install.clone();
+        *self.plans.lock() = Some(Arc::new(PlanSync::new(
+            self.fleet.provider(),
+            credentials,
+            install,
+        )));
+    }
+
+    fn plan_sync(&self) -> Option<Arc<PlanSync>> {
+        self.plans.lock().clone()
+    }
+
+    /// The user signed in here changed; local agents act as `owner`.
+    pub fn set_current_owner(&self, owner: Owner) {
+        *self.current_owner.lock() = owner;
+    }
+
+    /// The user signed in here.
+    #[must_use]
+    pub fn current_owner(&self) -> Owner {
+        self.current_owner.lock().clone()
+    }
+
+    /// The user who placed `agent`, while it is placed.
+    #[must_use]
+    pub fn owner_of(&self, agent: AgentId) -> Option<Owner> {
+        self.placements
+            .lock()
+            .agents
+            .get(&agent.to_hex())
+            .map(PlacedAgent::owner)
+    }
+
+    /// The display name of the user who placed `agent`.
+    #[must_use]
+    pub fn owner_name_of(&self, agent: AgentId) -> Option<String> {
+        self.placements
+            .lock()
+            .agents
+            .get(&agent.to_hex())
+            .and_then(|placed| placed.owner_name.clone())
+    }
+
+    /// Every user with a placed agent.
+    #[must_use]
+    pub fn owners(&self) -> Vec<Owner> {
+        let mut owners: Vec<Owner> = Vec::new();
+        for placed in self.placements.lock().agents.values() {
+            let owner = placed.owner();
+            if !owners.contains(&owner) {
+                owners.push(owner);
+            }
+        }
+        owners
+    }
+
+    /// `owner`'s plans as their cloud machines see them.
+    #[must_use]
+    pub fn plan_status(&self, owner: &Owner) -> Vec<PlanStatus> {
+        self.plan_sync()
+            .map(|plans| plans.status(owner))
+            .unwrap_or_default()
+    }
+
+    /// Push `owner`'s current plan tokens to boxd now (they linked or
+    /// re-linked a plan).
+    pub async fn sync_plans(&self, owner: &Owner) {
+        if let Some(plans) = self.plan_sync() {
+            plans.tick(std::slice::from_ref(owner)).await;
+        }
+    }
+
+    /// Stop `owner`'s machines using their `kind` plan (they signed out
+    /// of it).
+    ///
+    /// # Errors
+    ///
+    /// When boxd refuses the update.
+    pub async fn revoke_plan(
+        &self,
+        owner: &Owner,
+        kind: aura_core_auth::ProviderKind,
+    ) -> CloudResult<()> {
+        match self.plan_sync() {
+            Some(plans) => plans.revoke(owner, kind).await,
+            None => Ok(()),
+        }
+    }
+
     /// Take back the machines placed agents had before this hub started,
     /// destroy machines no kept agent owns, and start the fleet's
     /// timers. `keep` are the agents that still exist (hex).
@@ -446,9 +570,13 @@ impl CloudHub {
             if !keep.contains(hex) {
                 continue;
             }
+            let templates = self
+                .plan_sync()
+                .map(|plans| plans.templates(&agent.owner()))
+                .unwrap_or_default();
             match self
                 .fleet
-                .adopt(hex, &agent.zns, &agent.project, &agent.machine)
+                .adopt(hex, &agent.zns, &agent.project, &agent.machine, templates)
                 .await
             {
                 Ok(view) => self.place_in_directory(hex, agent, &view),
@@ -496,6 +624,7 @@ impl CloudHub {
                 url: Some(view.machine.url()),
                 project: agent.project.clone(),
                 name: agent.name.clone(),
+                owner: names::owner_tag(&agent.owner()),
             },
         );
         self.send_directories(&agent.project);
@@ -541,10 +670,23 @@ impl CloudHub {
                 name: hex.clone(),
             });
         }
+        // A fork inherits its parent's plan secrets: only within one user.
         let parent = request
             .fork_from
+            .filter(|parent| self.owner_of(*parent).as_ref() == Some(&request.owner))
             .map(|parent| parent.to_hex())
             .filter(|parent| self.config.fork_on_spawn && self.fleet.has(parent));
+        let owner_tag = names::owner_tag(&request.owner);
+        let (secrets, plans) = match self.plan_sync() {
+            Some(sync) => match sync.ensure_owner(&request.owner).await {
+                Ok(secrets) => (secrets, sync.templates(&request.owner)),
+                Err(err) => {
+                    tracing::warn!(owner = %owner_tag, error = %err, "could not set the plan secrets; the machine gets no plans");
+                    (Vec::new(), Vec::new())
+                }
+            },
+            None => (Vec::new(), Vec::new()),
+        };
         let (origin, base_commit, seal) = match parent.as_deref().and_then(|p| self.fleet.view(p)) {
             Some(parent_view) => (
                 MachineOrigin::Fork(parent_view.machine.name.clone()),
@@ -552,7 +694,7 @@ impl CloudHub {
                 vec![parent_view.agent.clone()],
             ),
             None => {
-                let record = self
+                let mut record = self
                     .snapshots
                     .ensure_project(
                         &request.project_id,
@@ -561,6 +703,29 @@ impl CloudHub {
                         false,
                     )
                     .await?;
+                // The delta is taken against the snapshot's commit; when
+                // this repository no longer has it, rebuild from HEAD.
+                let missing = match record.commit.clone() {
+                    Some(commit) => {
+                        let dir = request.project_dir.clone();
+                        !tokio::task::spawn_blocking(move || delta::has_commit(&dir, &commit))
+                            .await
+                            .unwrap_or(false)
+                    }
+                    None => false,
+                };
+                if missing {
+                    tracing::info!(project = %request.project_id, "the project snapshot's commit is gone here; rebuilding it");
+                    record = self
+                        .snapshots
+                        .ensure_project(
+                            &request.project_id,
+                            &request.project_dir,
+                            request.build_command.as_deref(),
+                            true,
+                        )
+                        .await?;
+                }
                 (
                     MachineOrigin::Snapshot(record.name),
                     record.commit,
@@ -578,6 +743,9 @@ impl CloudHub {
                 name: names::machine_name(request.code.as_deref(), &request.agent),
                 origin,
                 seal,
+                owner: owner_tag.clone(),
+                secrets,
+                plans,
             })
             .await?;
         if let Err(err) = self.seed(&request, &view, base_commit.as_deref()).await {
@@ -591,6 +759,8 @@ impl CloudHub {
             project: request.project_id.clone(),
             project_dir: request.project_dir.clone(),
             machine: view.machine.name.clone(),
+            owner: Some(request.owner.clone()),
+            owner_name: request.owner_name.clone(),
         };
         record_placement(
             &self.ledger,
@@ -599,7 +769,8 @@ impl CloudHub {
                 Placement::Local,
                 Placement::Cloud,
                 Some(view.machine.name.clone()),
-            ),
+            )
+            .with_owner(Some(owner_tag)),
         )?;
         self.placements
             .lock()
@@ -822,9 +993,28 @@ impl CloudHub {
         };
         let node = self.awake_node(&hex).await?;
         let patch = node.patch().await?;
-        Ok(self
+        let outcome = self
             .apply_patch(&hex, &placed.project_dir, &patch.patch, patch.files)
-            .await)
+            .await;
+        if matches!(outcome, PatchOutcome::Applied { .. }) {
+            // The machine keeps working; the next pull starts from here.
+            if let Some(view) = self.fleet.view(&hex) {
+                let marked = self
+                    .fleet
+                    .provider()
+                    .exec(
+                        &view.machine.name,
+                        delta::MARK_PULLED,
+                        None,
+                        Duration::from_secs(60),
+                    )
+                    .await;
+                if let Err(err) = marked {
+                    tracing::warn!(agent = %hex, error = %err, "could not mark the pulled work on the machine; the next pull repeats it");
+                }
+            }
+        }
+        Ok(outcome)
     }
 
     async fn apply_patch(
@@ -1058,6 +1248,21 @@ impl CloudHub {
         if !self.mail.first_sight(&mail) {
             return ack(true, None);
         }
+        // Mail never crosses users: the sender's machine owner must own
+        // the recipient (a cloud agent) or be the user signed in here (a
+        // local agent).
+        let sender = self.directory.owner_of_node(&mail.from_node);
+        let recipient = self
+            .directory
+            .owner_of(&mail.to)
+            .unwrap_or_else(|| names::owner_tag(&self.current_owner()));
+        if sender.as_deref() != Some(recipient.as_str()) {
+            self.mail.forget(&mail);
+            return ack(
+                false,
+                Some(format!("agent {} belongs to another user", mail.to)),
+            );
+        }
         match self.directory.holder(&mail.to) {
             Some(holder) if holder.node != HUB_NODE => {
                 // For another node: forward it; that node drops it if
@@ -1173,12 +1378,32 @@ fn chat_request(agent: AgentId, model: Option<String>, auth_jwt: Option<String>)
             ..WorkspaceLocation::default()
         },
         project: None,
-        agent_permissions: AgentPermissionsWire::default(),
+        agent_permissions: cloud_agent_permissions(),
         tool_permissions: None,
         agent_capabilities: AgentCapabilities::default(),
         auth_jwt,
         user_id: "hub".to_string(),
         mode: None,
+    }
+}
+
+/// What a cloud agent may do on its machine. Sent explicitly: an empty
+/// bundle means full access on a node, which includes computer use, and
+/// a cloud machine has no screen (and OpenRouter refuses the computer
+/// tool's server-tool entry).
+fn cloud_agent_permissions() -> AgentPermissionsWire {
+    use aura_core_protocol::CapabilityWire;
+    AgentPermissionsWire {
+        capabilities: vec![
+            CapabilityWire::SpawnAgent,
+            CapabilityWire::ControlAgent,
+            CapabilityWire::ReadAgent,
+            CapabilityWire::ListAgents,
+            CapabilityWire::InvokeProcess,
+            CapabilityWire::ReadAllProjects,
+            CapabilityWire::WriteAllProjects,
+        ],
+        ..AgentPermissionsWire::default()
     }
 }
 
@@ -1339,6 +1564,7 @@ async fn maintain(hub: Weak<CloudHub>, stop: CancellationToken) {
     let mut tick = tokio::time::interval(TICK_EVERY);
     let mut poll = tokio::time::interval(POLL_EVERY);
     let mut usage = tokio::time::interval(USAGE_EVERY);
+    let mut plans = tokio::time::interval(SYNC_EVERY);
     loop {
         tokio::select! {
             () = stop.cancelled() => return,
@@ -1360,6 +1586,12 @@ async fn maintain(hub: Weak<CloudHub>, stop: CancellationToken) {
             _ = usage.tick() => {
                 let Some(hub) = hub.upgrade() else { return };
                 hub.fleet.record_usage().await;
+            }
+            _ = plans.tick() => {
+                let Some(hub) = hub.upgrade() else { return };
+                if let Some(sync) = hub.plan_sync() {
+                    sync.tick(&hub.owners()).await;
+                }
             }
         }
     }
@@ -1474,9 +1706,10 @@ struct HubRouter(Weak<CloudHub>);
 impl RemoteRouter for HubRouter {
     fn name_of(&self, agent: AgentId) -> Option<String> {
         let hub = self.0.upgrade()?;
+        let me = names::owner_tag(&hub.current_owner());
         hub.directory
             .holder(&agent.to_hex())
-            .filter(|holder| holder.node != HUB_NODE)
+            .filter(|holder| holder.node != HUB_NODE && holder.owner == me)
             .map(|holder| holder.name)
     }
 
@@ -1485,6 +1718,10 @@ impl RemoteRouter for HubRouter {
         let to = mail.to.to_hex();
         if !hub.directory.is_remote(&to) {
             return Err(format!("unknown agent {}", mail.to));
+        }
+        let me = names::owner_tag(&hub.current_owner());
+        if hub.directory.owner_of(&to).as_deref() != Some(me.as_str()) {
+            return Err(format!("agent {} belongs to another user", mail.to));
         }
         let frame = MeshMail {
             id: hub.mail.next_id(),
@@ -1510,8 +1747,10 @@ impl RemoteRouter for HubRouter {
         let Some(hub) = self.0.upgrade() else {
             return Vec::new();
         };
+        let me = hub.current_owner();
         hub.placed()
             .into_iter()
+            .filter(|(_, placed)| placed.owner() == me)
             .map(|(hex, placed)| {
                 serde_json::json!({
                     "agent_id": hex,
@@ -1633,6 +1872,7 @@ mod tests {
     #[test]
     fn mail_for_a_local_agent_without_a_host_is_refused_and_resends_are_retried() {
         let (hub, _fake, _dir) = hub();
+        place_cloud(&hub, AgentId::new([2; 32]), "aura-x", &Owner::Local);
         let mail = MeshMail {
             id: 1,
             from_node: "aura-x".into(),
@@ -1658,6 +1898,101 @@ mod tests {
         );
     }
 
+    fn place_cloud(hub: &CloudHub, agent: AgentId, node: &str, owner: &Owner) {
+        hub.directory.place(
+            &agent.to_hex(),
+            Holder {
+                node: node.into(),
+                url: Some(format!("https://{node}.boxd.sh")),
+                project: "p1".into(),
+                name: format!("agent on {node}"),
+                owner: names::owner_tag(owner),
+            },
+        );
+    }
+
+    fn alice() -> Owner {
+        Owner::Zos {
+            user_id: "alice".into(),
+        }
+    }
+
+    fn bob() -> Owner {
+        Owner::Zos {
+            user_id: "bob".into(),
+        }
+    }
+
+    fn mail_to(from: AgentId, from_node: &str, to: AgentId, id: u64) -> MeshMail {
+        MeshMail {
+            id,
+            from_node: from_node.into(),
+            thread: format!("{from_node}:t1"),
+            subject: "s".into(),
+            from: from.to_hex(),
+            from_name: "scout".into(),
+            to: to.to_hex(),
+            kind: MeshMailKind::Request,
+            text: "hi".into(),
+            sent_ms: 0,
+        }
+    }
+
+    fn ack_error(frame: MeshFrame) -> Option<String> {
+        let MeshFrame::MailAck {
+            delivered, error, ..
+        } = frame
+        else {
+            panic!("not an ack");
+        };
+        (!delivered).then(|| error.unwrap_or_default())
+    }
+
+    #[test]
+    fn mail_never_crosses_users() {
+        let (hub, _fake, _dir) = hub();
+        hub.set_current_owner(alice());
+        let local = AgentId::new([1; 32]);
+        hub.note_local(local, "local", "p1");
+        let alice_cloud = AgentId::new([2; 32]);
+        let bob_cloud = AgentId::new([3; 32]);
+        place_cloud(&hub, alice_cloud, "aura-alice", &alice());
+        place_cloud(&hub, bob_cloud, "aura-bob", &bob());
+
+        // Bob's machine can't mail Alice's local agent or her cloud agent.
+        let err = ack_error(hub.take_mail(mail_to(bob_cloud, "aura-bob", local, 1)));
+        assert!(err.is_some_and(|e| e.contains("another user")));
+        let err = ack_error(hub.take_mail(mail_to(bob_cloud, "aura-bob", alice_cloud, 2)));
+        assert!(err.is_some_and(|e| e.contains("another user")));
+        // Alice's machine reaches her local agent (no host here: refused
+        // for that reason, not for ownership).
+        let err = ack_error(hub.take_mail(mail_to(alice_cloud, "aura-alice", local, 3)));
+        assert!(err.is_some_and(|e| !e.contains("another user")));
+
+        // Local agents act as Alice: Bob's cloud agent is unknown to them.
+        let router = HubRouter(Arc::downgrade(&hub));
+        assert_eq!(router.name_of(bob_cloud), None);
+        assert!(router.name_of(alice_cloud).is_some());
+        let err = router
+            .route(RemoteMail {
+                from: local,
+                from_name: "local".into(),
+                to: bob_cloud,
+                kind: MessageKind::Request,
+                thread: ThreadId("t1".into()),
+                subject: "s".into(),
+                text: "hi".into(),
+            })
+            .expect_err("cross-user");
+        assert!(err.contains("another user"), "{err}");
+
+        // Each node's directory holds only its owner's agents.
+        let MeshFrame::Directory { peers } = hub.directory.frame_for("aura-bob", "p1") else {
+            panic!("not a directory");
+        };
+        assert!(peers.is_empty(), "{peers:?}");
+    }
+
     #[tokio::test]
     async fn an_agent_that_was_never_placed_recalls_to_nothing() {
         let (hub, _fake, _dir) = hub();
@@ -1679,6 +2014,18 @@ mod tests {
             }
             .describe(),
             "pulled 1 changed file(s)"
+        );
+    }
+
+    #[test]
+    fn cloud_turns_never_offer_computer_use() {
+        let request = chat_request(AgentId::new([1; 32]), None, None);
+        let json = serde_json::to_value(&request.agent_permissions).expect("json");
+        let text = json.to_string();
+        assert!(!text.contains("computer"), "{text}");
+        assert!(
+            text.contains("spawnAgent") || text.contains("spawn_agent"),
+            "{text}"
         );
     }
 }

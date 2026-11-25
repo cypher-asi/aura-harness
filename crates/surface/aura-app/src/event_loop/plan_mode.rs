@@ -1,4 +1,4 @@
-//! Plans in the terminal: the plan strip, and `/build`.
+//! Plans in the terminal: the plan strip, `/build`, and the open plan.
 //!
 //! `/plan` is the `plan` permission mode (see [`super::modes`]): the
 //! kernel holds the agent to reads and markdown notes, and its turns get
@@ -12,25 +12,40 @@
 //! The plan-ready note invites the user to say "implement", so a typed
 //! message that is only that (see [`asks_to_build`]) builds the agent's
 //! plan exactly as `/build` does, as long as it has one it is not already
-//! building. Anything longer is a prompt like any other.
+//! building.
 //!
-//! On the task board (see [`super::tasks`]), the request that starts the
-//! build is marked as the plan's, and every request while the agent
-//! builds the plan links to it.
+//! An agent's plan is its context, in plan mode or not, for as long as
+//! the plan is open ([`open_plan`]: a todo is still pending or in
+//! progress):
+//! - Any other message the user types as a new request, outside plan
+//!   mode, while the agent is not building yet, carries on with the plan
+//!   ([`continue_open_plan`]): the agent builds it again in the mode it
+//!   is in, its todo list is the plan's, and the model is told to keep to
+//!   those todos.
+//! - In plan mode, each request revises the open plan.
+//!
+//! Once every todo is closed, the plan no longer is: prompts don't carry
+//! on with it and plan-mode requests don't file under it.
+//!
+//! On the task board (see [`super::tasks`] and `turns::begin_task`),
+//! every request while the agent builds its plan is the plan's own
+//! ([`TaskView::builds`](aura_ui_terminal::events::TaskView::builds)),
+//! and a request in plan mode links to the open plan as a task of its
+//! own; a `create_plan` call re-links it to the plan it writes.
 
 use super::agent_events::AgentUi;
 use super::agents::AgentSession;
 use super::handlers::system_message;
 use super::hud::todo_views;
 use super::modes;
-use super::turns::Prompt;
+use super::turns::{Prompt, Request};
 use super::LoopState;
-use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
+use aura_context_prompts::model_messages::build_plan::{build_plan_prompt, continue_plan_note};
 use aura_core_types::AgentId;
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile, TodoStatus, PLANS_DIR};
 use aura_exec_tools::todo::TodoItem;
 use aura_ui_terminal::events::{PlanView, TodoState, TodoView};
-use aura_ui_terminal::UiCommand;
+use aura_ui_terminal::{PermissionMode, UiCommand};
 use std::path::Path;
 use std::time::SystemTime;
 use tracing::{info, warn};
@@ -108,14 +123,38 @@ pub(crate) fn is_plan_todo_list(workspace: &Path, path: &str, todos: &[TodoItem]
     if todos.is_empty() || !is_plan_path(path) {
         return false;
     }
-    let Ok(plan) = PlanFile::load(&workspace.join(path)) else {
+    PlanFile::load(&workspace.join(path)).is_ok_and(|plan| lists_plan_todos(&plan, todos))
+}
+
+/// Whether `todos` holds exactly `plan`'s todo ids, in any order.
+fn lists_plan_todos(plan: &PlanFile, todos: &[TodoItem]) -> bool {
+    if todos.is_empty() {
         return false;
-    };
+    }
     let mut plan_ids: Vec<&str> = plan.meta.todos.iter().map(|t| t.id.as_str()).collect();
     let mut list_ids: Vec<&str> = todos.iter().map(|t| t.id.as_str()).collect();
     plan_ids.sort_unstable();
     list_ids.sort_unstable();
     plan_ids == list_ids
+}
+
+/// The agent's open plan: `active_plan` (relative to `workspace`) when
+/// its file loads and at least one of its todos is pending or in
+/// progress.
+///
+/// An open plan is the agent's context whatever its mode: prompts outside
+/// plan mode continue it, and requests in plan mode revise it. Once every
+/// todo is closed the plan is done, so new work is no longer filed under
+/// it.
+pub(crate) fn open_plan(workspace: &Path, active_plan: Option<&str>) -> Option<PlanFile> {
+    let path = active_plan.filter(|path| is_plan_path(path))?;
+    let plan = PlanFile::load(&workspace.join(path)).ok()?;
+    let is_open = plan
+        .meta
+        .todos
+        .iter()
+        .any(|todo| matches!(todo.status, TodoStatus::Pending | TodoStatus::InProgress));
+    is_open.then_some(plan)
 }
 
 /// Show `agent_id` its plan, or hide its plan strip when it has none.
@@ -222,6 +261,64 @@ pub(super) async fn start_build(
     Some(build_plan_prompt(&path))
 }
 
+/// `prompt` as it runs for `session`: a message the user typed as a new
+/// request, outside plan mode, while the agent has an open plan it is not
+/// building yet, carries on with that plan (see [`continue_build`]). It
+/// keeps the user's text as its first line, which titles its task, and
+/// gets the [`continue_plan_note`] after a blank line; it becomes the
+/// plan's request ([`Request::Build`]). Any other prompt is returned as
+/// it is.
+pub(super) async fn continue_open_plan(
+    state: &LoopState<'_>,
+    session: &mut AgentSession,
+    prompt: Prompt,
+) -> Prompt {
+    let typed = prompt.mentions && prompt.request == Request::New;
+    let planning = state.hub.mode_of(session.agent_id()) == PermissionMode::Plan;
+    if !typed || planning || session.building_plan {
+        return prompt;
+    }
+    let Some(path) = session.active_plan.clone() else {
+        return prompt;
+    };
+    if !continue_build(state, session, &path).await {
+        return prompt;
+    }
+    info!(agent_id = %session.agent_id(), %path, "Message continues the open plan");
+    Prompt {
+        text: format!("{}\n\n{}", prompt.text, continue_plan_note(&path)),
+        request: Request::Build,
+        ..prompt
+    }
+}
+
+/// Have `session` build the plan at `path` again, if it is open: its todo
+/// list mirrors into the plan file from now on. Unlike [`start_build`]
+/// the agent stays in its mode, since the user chose it. A list that is
+/// already the plan's is kept, with whatever the agent did to it;
+/// otherwise the plan's todos become the list. Returns whether the plan
+/// is open.
+pub(super) async fn continue_build(
+    state: &LoopState<'_>,
+    session: &mut AgentSession,
+    path: &str,
+) -> bool {
+    let workspace = session.kernel.agent_workspace();
+    let Some(plan) = open_plan(&workspace, Some(path)) else {
+        return false;
+    };
+    let ui = AgentUi::new(state.commands.clone(), session.agent_id());
+    session.building_plan = true;
+    if !lists_plan_todos(&plan, &session.todos) {
+        session.todos = todo_items(&plan);
+        ui.send(UiCommand::SetTodos(todo_views(&session.todos)))
+            .await;
+    }
+    ui.send(UiCommand::SetPlan(Some(view_of(&workspace, path, plan))))
+        .await;
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +400,36 @@ mod tests {
             !asks_to_build(&Prompt::plain("implement".to_string()), plan, false),
             "written by the harness"
         );
+    }
+
+    #[test]
+    fn a_plan_is_open_while_a_todo_is_pending_or_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(PLANS_DIR)).unwrap();
+        let path = ".aura/plans/p_00000001.plan.md";
+        let write = |second: &str| {
+            let text = format!(
+                "---\nname: P\ntodos:\n  - id: a\n    content: A\n    status: completed\n  \
+                 - id: b\n    content: B\n    status: {second}\n---\n"
+            );
+            std::fs::write(dir.path().join(path), text).unwrap();
+        };
+
+        assert!(open_plan(dir.path(), None).is_none(), "no plan");
+        assert!(open_plan(dir.path(), Some(path)).is_none(), "no plan file");
+        assert!(
+            open_plan(dir.path(), Some("notes/p.plan.md")).is_none(),
+            "not a plan path"
+        );
+        for closed in ["completed", "cancelled"] {
+            write(closed);
+            assert!(open_plan(dir.path(), Some(path)).is_none(), "{closed}");
+        }
+        for open in ["pending", "in_progress"] {
+            write(open);
+            let plan = open_plan(dir.path(), Some(path));
+            assert_eq!(plan.map(|p| p.meta.todos.len()), Some(2), "{open}");
+        }
     }
 
     #[test]

@@ -300,8 +300,15 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             Some(notice) = notice_rx.recv() => {
                 notices::handle_notice(&mut state, notice).await;
             }
-            Some(view) = mail_rx.recv() => {
-                mail::forward(state.commands, view).await;
+            Some(item) = mail_rx.recv() => {
+                if let Some(sender) = item.title_from {
+                    state.hub.title_thread(
+                        sender,
+                        item.view.thread_id.clone(),
+                        item.view.text.clone(),
+                    );
+                }
+                mail::forward(state.commands, item.view).await;
             }
             Some(outcome) = link_rx.recv() => {
                 auth::handle_link_outcome(&mut state, outcome).await;
@@ -852,6 +859,10 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             build_work(state, &mut session, None, shown).await
         }
         Work::Build { path } => build_work(state, &mut session, path, false).await,
+        Work::Prompt { prompt, shown } => {
+            let prompt = plan_mode::continue_open_plan(state, &mut session, prompt).await;
+            Some(Work::Prompt { prompt, shown })
+        }
         other => Some(other),
     };
     let Some(work) = work else {
@@ -910,6 +921,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             }
             Task::Turn {
                 prompt,
+                planning: state.hub.mode_of(agent_id) == PermissionMode::Plan,
                 agent_loop: Box::new(agent_loop),
                 tools,
                 steering: turn_steering,

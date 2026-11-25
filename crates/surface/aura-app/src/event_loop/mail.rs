@@ -1,6 +1,6 @@
 //! Mail between agents for the INBOX tab.
 //!
-//! Two sources feed it, and both end as a [`MailView`] on one unbounded
+//! Two sources feed it, and both end as a [`MailItem`] on one unbounded
 //! channel that the event loop forwards to the UI as
 //! [`UiCommand::AddMail`]:
 //!
@@ -23,7 +23,16 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 /// Where mail for the UI is sent.
-pub type MailSender = mpsc::UnboundedSender<MailView>;
+pub type MailSender = mpsc::UnboundedSender<MailItem>;
+
+/// A message for the INBOX tab, and who to title its thread through.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MailItem {
+    pub view: MailView,
+    /// Sender whose kernel writes the thread a subject, when the message
+    /// opened a thread named after its first line.
+    pub title_from: Option<AgentId>,
+}
 
 /// The first id [`TaskMail`] gives a message. The host numbers its own
 /// messages from 1, so starting this high keeps the two apart.
@@ -54,7 +63,11 @@ impl MailObserver for Mailbox {
     fn on_mail(&self, message: &MailMessage) {
         // The event loop has ended (the terminal is shutting down), so
         // nobody is left to show the message.
-        if self.tx.send(mail_view(message)).is_err() {
+        let item = MailItem {
+            view: mail_view(message),
+            title_from: message.subject_from_text.then_some(message.from),
+        };
+        if self.tx.send(item).is_err() {
             debug!(id = message.id, "Mail after the event loop ended; dropped");
         }
     }
@@ -200,6 +213,7 @@ mod tests {
             kind,
             text: "Check the tokenizer".into(),
             sent_ms: 1_700_000_000_000,
+            subject_from_text: false,
         }
     }
 
@@ -231,10 +245,33 @@ mod tests {
         let mailbox = Mailbox::new(tx);
         let sent = message(MessageKind::Request);
         mailbox.on_mail(&sent);
-        assert_eq!(rx.try_recv().unwrap(), mail_view(&sent));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            MailItem {
+                view: mail_view(&sent),
+                title_from: None,
+            }
+        );
 
         drop(rx);
         mailbox.on_mail(&sent);
+    }
+
+    #[test]
+    fn only_a_thread_named_after_its_first_line_is_titled_by_its_sender() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mailbox = Mailbox::new(tx);
+        let opened = MailMessage {
+            subject_from_text: true,
+            ..message(MessageKind::Request)
+        };
+        let named = message(MessageKind::Request);
+
+        mailbox.on_mail(&opened);
+        mailbox.on_mail(&named);
+
+        assert_eq!(rx.try_recv().unwrap().title_from, Some(opened.from));
+        assert_eq!(rx.try_recv().unwrap().title_from, None);
     }
 
     #[tokio::test]

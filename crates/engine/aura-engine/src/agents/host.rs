@@ -32,7 +32,7 @@ use tracing::{info, warn};
 use super::factory::{ChildKernelFactory, ChildKernelRequest};
 use super::hooks::AgentHooks;
 use super::inbox::{InboxMessage, MessageKind, ParentInbox};
-use super::mail::{MailMessage, MailObserver, ThreadId, Threads};
+use super::mail::{MailMessage, MailObserver, Resolved, ThreadId, Threads};
 use super::observer::{HostedTurn, TurnObserver};
 use super::remote::{RemoteMail, RemoteRouter};
 use super::setup;
@@ -216,6 +216,9 @@ struct Envelope {
     thread: ThreadId,
     /// Subject of `thread`.
     subject: String,
+    /// Whether this message opened `thread` and its subject was made from
+    /// the message's text; see [`MailMessage::subject_from_text`].
+    subject_from_text: bool,
     /// Receives the turn's result instead of routing it as a reply.
     waiter: Option<oneshot::Sender<SubagentResult>>,
     /// Streams the turn's events to an observer.
@@ -414,6 +417,9 @@ impl AgentHost {
             text: mail.text,
             thread: mail.thread,
             subject: mail.subject,
+            // The sending node created the thread and marked its own mail;
+            // asking again here would title the same thread twice.
+            subject_from_text: false,
             waiter: None,
             events: None,
             cancel: None,
@@ -1031,8 +1037,12 @@ impl HostInner {
                 ("user".to_string(), root)
             })
         };
-        let (thread, subject) = match (choice, from) {
-            (ThreadChoice::Existing(thread, subject), _) => (thread, subject),
+        let resolved = match (choice, from) {
+            (ThreadChoice::Existing(thread, subject), _) => Resolved {
+                thread,
+                subject,
+                from_text: false,
+            },
             (ThreadChoice::Resolve(subject), Some(from)) => {
                 self.threads.lock().resolve(root, from, to, subject, &text)
             }
@@ -1045,8 +1055,9 @@ impl HostInner {
             from_name,
             kind,
             text,
-            thread,
-            subject,
+            thread: resolved.thread,
+            subject: resolved.subject,
+            subject_from_text: resolved.from_text,
             waiter: None,
             events: None,
             cancel: None,
@@ -1366,6 +1377,7 @@ impl HostInner {
                         kind: MessageKind::Reply,
                         text: reply_text(&result),
                         sent_ms: now_ms(),
+                        subject_from_text: false,
                     });
                 }
                 let _ = waiter.send(result);
@@ -1468,6 +1480,7 @@ impl HostInner {
                     kind: MessageKind::Reply,
                     text: reply_text(&result),
                     sent_ms: now_ms(),
+                    subject_from_text: false,
                 });
             }
             if let Some(waiter) = envelope.waiter {
@@ -1690,6 +1703,7 @@ fn unsent_mail(envelope: &Envelope, to: AgentId, to_name: &str) -> Option<MailMe
         kind: envelope.kind,
         text: envelope.text.clone(),
         sent_ms: now_ms(),
+        subject_from_text: envelope.subject_from_text,
     })
 }
 

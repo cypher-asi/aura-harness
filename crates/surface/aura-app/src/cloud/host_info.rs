@@ -12,6 +12,7 @@ use aura_core_protocol::cloud::HostStats;
 use aura_core_types::{AgentId, VmPayload};
 use aura_engine_cloud::cost::CostEstimate;
 use aura_engine_cloud::fleet::MachineView;
+use aura_engine_cloud::plans::PlanStatus;
 use aura_ui_terminal::host::{
     format_bytes, format_duration, format_money, HostAction, HostFact, HostRow, HostSection,
     HostView, PlacementView,
@@ -306,13 +307,62 @@ pub fn cloud_view(
     }
 }
 
-/// One project row for a cloud agent.
+/// Add who placed a cloud agent, and the state of their plans its
+/// machine can use, to its view.
+pub fn add_owner_and_models(view: &mut HostView, owner: &str, plans: &[PlanStatus], now_ms: u64) {
+    if let Some(machine) = view.sections.first_mut() {
+        machine
+            .facts
+            .insert(1, HostFact::new("Owner", owner.to_string()));
+    }
+    if plans.is_empty() {
+        return;
+    }
+    let facts = plans
+        .iter()
+        .map(|plan| {
+            let mut value = if plan.linked {
+                match plan.synced_ms {
+                    Some(at) => format!(
+                        "linked · token synced {} ago",
+                        format_duration(now_ms.saturating_sub(at) / 1000)
+                    ),
+                    None => "linked".to_string(),
+                }
+            } else {
+                format!("not linked · /login {}", plan.kind.id())
+            };
+            value.push_str(&format!(" · {}", plan.host));
+            let fact = HostFact::new(plan.kind.label(), value);
+            match &plan.error {
+                Some(error) if plan.linked => HostFact {
+                    value: format!("{} · {error}", fact.value),
+                    warn: true,
+                    ..fact
+                },
+                _ => fact,
+            }
+        })
+        .collect();
+    let at = view.sections.len().min(1);
+    view.sections.insert(
+        at,
+        HostSection {
+            title: "MODELS".into(),
+            facts,
+        },
+    );
+}
+
+/// One project row for a cloud agent; `owner` names the user it belongs
+/// to when the project has several.
 #[must_use]
 pub fn cloud_row(
     agent: AgentId,
     name: &str,
     view: &MachineView,
     cost: Option<&CostEstimate>,
+    owner: Option<String>,
 ) -> HostRow {
     HostRow {
         agent_id: agent.to_hex(),
@@ -325,6 +375,7 @@ pub fn cloud_row(
         total: cost
             .map(|c| format_money(c.total(), &c.currency))
             .unwrap_or_default(),
+        owner,
     }
 }
 
@@ -338,7 +389,38 @@ pub fn local_row(agent: AgentId, name: &str, running: bool) -> HostRow {
         state: if running { "busy" } else { "ready" }.into(),
         per_hour: String::new(),
         total: String::new(),
+        owner: None,
     }
+}
+
+/// The project footer line over `costs` by owner: the total, then each
+/// user's share when there are several.
+#[must_use]
+pub fn project_total_by_owner(costs: &[(String, CostEstimate)]) -> Option<String> {
+    let all: Vec<CostEstimate> = costs.iter().map(|(_, cost)| cost.clone()).collect();
+    let mut line = project_total(&all)?;
+    let mut owners: Vec<&str> = Vec::new();
+    for (owner, _) in costs {
+        if !owners.contains(&owner.as_str()) {
+            owners.push(owner);
+        }
+    }
+    if owners.len() > 1 {
+        for owner in owners {
+            let mine: Vec<&CostEstimate> = costs
+                .iter()
+                .filter(|(o, _)| o == owner)
+                .map(|(_, c)| c)
+                .collect();
+            let per_hour: f64 = mine.iter().map(|c| c.per_hour).sum();
+            let currency = mine.first().map_or("eur", |c| c.currency.as_str());
+            line.push_str(&format!(
+                " · {owner} {}/h",
+                format_money(per_hour, currency)
+            ));
+        }
+    }
+    Some(line)
 }
 
 /// The project footer line over `costs`.
@@ -390,6 +472,7 @@ mod tests {
     fn machine_view(state: VmState) -> MachineView {
         MachineView {
             agent: "aa".into(),
+            owner: "a11ce000".into(),
             project: "p1".into(),
             ledger: "0://cloud/vm/x".into(),
             machine: MachineInfo {
@@ -508,5 +591,54 @@ mod tests {
         let line = project_total(&[cost(), cost()]).expect("line");
         assert_eq!(line, "2 cloud machines · €0.10/h est. · €0.24 so far");
         assert!(project_total(&[]).is_none());
+        let one = project_total_by_owner(&[("Alice".into(), cost()), ("Alice".into(), cost())])
+            .expect("line");
+        assert_eq!(one, line, "one owner: no split");
+        let two = project_total_by_owner(&[("Alice".into(), cost()), ("Bob".into(), cost())])
+            .expect("line");
+        assert!(two.ends_with(" · Alice €0.0500/h · Bob €0.0500/h"), "{two}");
+    }
+
+    #[test]
+    fn cloud_views_name_their_owner_and_plans() {
+        use aura_core_auth::ProviderKind;
+        let mut view = cloud_view(
+            AgentId::new([1; 32]),
+            &machine_view(VmState::Ready),
+            None,
+            None,
+            &[],
+        );
+        let plans = [
+            PlanStatus {
+                kind: ProviderKind::Claude,
+                linked: true,
+                synced_ms: Some(1_000),
+                host: "api.anthropic.com",
+                error: None,
+            },
+            PlanStatus {
+                kind: ProviderKind::Chatgpt,
+                linked: false,
+                synced_ms: Some(1_000),
+                host: "api.openai.com",
+                error: None,
+            },
+        ];
+        add_owner_and_models(&mut view, "Alice", &plans, 181_000);
+        assert!(
+            facts(&view, "MACHINE").iter().any(|f| f == "Owner: Alice"),
+            "{:?}",
+            facts(&view, "MACHINE")
+        );
+        let models = facts(&view, "MODELS");
+        assert_eq!(
+            models,
+            vec![
+                "Claude: linked · token synced 3m ago · api.anthropic.com".to_string(),
+                "ChatGPT: not linked · /login chatgpt · api.openai.com".to_string(),
+            ]
+        );
+        assert_eq!(view.sections[1].title, "MODELS");
     }
 }

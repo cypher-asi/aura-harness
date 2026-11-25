@@ -10,7 +10,13 @@
 //! sent. A thread is unread while it has a message newer than the newest
 //! one it had when it was last opened.
 //!
+//! A thread's subject is its first message's, until the title model
+//! names it with [`UiCommand::SetThreadSubject`]. That name may come
+//! before the first message does, so it is kept until the cap drops the
+//! thread's messages.
+//!
 //! [`UiCommand::AddMail`]: crate::events::UiCommand::AddMail
+//! [`UiCommand::SetThreadSubject`]: crate::events::UiCommand::SetThreadSubject
 
 use std::collections::{HashMap, HashSet};
 
@@ -95,6 +101,9 @@ pub(crate) struct Inbox {
     expanded: HashSet<String>,
     /// Newest message id of each thread when it was last opened
     read: HashMap<String, u64>,
+    /// Subject the title model wrote for each thread, in place of its
+    /// first message's
+    subjects: HashMap<String, String>,
     /// Rows listed for the run on screen
     rows: Vec<InboxRow>,
     /// Highlighted row
@@ -135,8 +144,10 @@ fn thread_message_lines(mail: &MailView, unfolded: bool) -> usize {
 
 impl Inbox {
     /// Keep `mail`, in place of a message with its id already kept. When
-    /// the cap drops old messages, the fold and read state of threads
-    /// left with none is forgotten too.
+    /// the cap drops old messages, the fold, read and subject state of
+    /// threads left with none is forgotten too. Only those threads: a
+    /// subject can come before its thread's first message, so a thread
+    /// with no messages yet keeps it.
     fn add(&mut self, mail: MailView) {
         match self.messages.iter_mut().find(|kept| kept.id == mail.id) {
             Some(kept) => *kept = mail,
@@ -146,7 +157,11 @@ impl Inbox {
         if over == 0 {
             return;
         }
-        self.messages.drain(..over);
+        let dropped: HashSet<String> = self
+            .messages
+            .drain(..over)
+            .map(|mail| mail.thread_id)
+            .collect();
         let kept: HashSet<&str> = self
             .messages
             .iter()
@@ -155,6 +170,14 @@ impl Inbox {
         self.expanded
             .retain(|thread| kept.contains(thread.as_str()));
         self.read.retain(|thread, _| kept.contains(thread.as_str()));
+        self.subjects
+            .retain(|thread, _| !dropped.contains(thread) || kept.contains(thread.as_str()));
+    }
+
+    /// The subject of `thread_id`: the title model's when it wrote one,
+    /// else `first`'s, the subject of the thread's first message.
+    fn subject<'a>(&'a self, thread_id: &str, first: &'a str) -> &'a str {
+        self.subjects.get(thread_id).map_or(first, String::as_str)
     }
 
     /// Newest message id of `thread_id`, if any message of it is kept.
@@ -224,7 +247,7 @@ impl Inbox {
         let read = self.read.get(&first.thread_id).copied().unwrap_or(0);
         Some(InboxRow::Thread {
             thread_id: first.thread_id.clone(),
-            subject: first.subject.clone(),
+            subject: self.subject(&first.thread_id, &first.subject).to_string(),
             count: thread.len(),
             participants: participants(thread),
             last_ms: thread.iter().map(|mail| mail.sent_ms).max().unwrap_or(0),
@@ -374,6 +397,24 @@ impl App {
         self.refresh_inbox();
     }
 
+    /// Name `thread_id` with the subject the title model wrote, in the
+    /// INBOX tab and in its thread view when that is open. A blank one is
+    /// ignored, keeping whatever subject the thread showed.
+    pub(super) fn set_thread_subject(&mut self, thread_id: String, subject: &str) {
+        let subject = subject.trim();
+        if subject.is_empty() {
+            return;
+        }
+        if let Some(view) = self
+            .thread_view_mut()
+            .filter(|view| view.thread_id == thread_id)
+        {
+            view.subject = subject.to_string();
+        }
+        self.inbox.subjects.insert(thread_id, subject.to_string());
+        self.refresh_inbox();
+    }
+
     /// List the threads of the run on screen again, after the mail, the
     /// members or the agent on screen changed.
     pub(super) fn refresh_inbox(&mut self) {
@@ -476,10 +517,8 @@ impl App {
     /// highlighted or else the newest, and mark the thread read.
     pub(super) fn open_thread(&mut self, thread_id: String, focus_message: Option<u64>) {
         let messages = self.thread_messages(&thread_id);
-        let subject = messages
-            .first()
-            .map(|mail| mail.subject.clone())
-            .unwrap_or_default();
+        let first = messages.first().map_or("", |mail| mail.subject.as_str());
+        let subject = self.inbox.subject(&thread_id, first).to_string();
         let newest = messages.last().map(|mail| mail.id);
         let focus = focus_message.filter(|id| messages.iter().any(|mail| mail.id == *id));
         let view = ThreadView {
@@ -1039,5 +1078,106 @@ mod tests {
         assert!(app.click_thread(5, 1));
         assert_eq!(unfolded(&app), [2, 3]);
         assert!(!app.click_thread(5, 2), "a body line is not a header");
+    }
+
+    fn name_thread(app: &mut App, thread: &str, subject: &str) {
+        app.process_command(UiCommand::SetThreadSubject {
+            thread_id: thread.into(),
+            subject: subject.into(),
+        });
+    }
+
+    /// Subject of the row of `thread`, if it is listed.
+    fn row_subject(app: &App, thread: &str) -> Option<String> {
+        app.inbox_rows().iter().find_map(|row| match row {
+            InboxRow::Thread {
+                thread_id, subject, ..
+            } if thread_id == thread => Some(subject.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_subject_after_the_mail_replaces_the_row_subject() {
+        let mut app = app_with_lead();
+        send(&mut app, mail(1, "t1", LEAD, "bb", 100));
+        assert_eq!(row_subject(&app, "t1").as_deref(), Some("About t1"));
+        name_thread(&mut app, "t1", "  Review parser escapes \n");
+        assert_eq!(
+            row_subject(&app, "t1").as_deref(),
+            Some("Review parser escapes")
+        );
+    }
+
+    #[test]
+    fn a_subject_before_the_first_mail_is_used_when_it_arrives() {
+        let mut app = app_with_lead();
+        name_thread(&mut app, "t1", "Benchmark results for Gate");
+        assert!(threads(&app).is_empty());
+        send(&mut app, mail(1, "t1", LEAD, "bb", 100));
+        assert_eq!(
+            row_subject(&app, "t1").as_deref(),
+            Some("Benchmark results for Gate")
+        );
+    }
+
+    #[test]
+    fn later_mail_keeps_the_written_subject() {
+        let mut app = app_with_lead();
+        send(&mut app, mail(1, "t1", LEAD, "bb", 100));
+        name_thread(&mut app, "t1", "Inbox subject titles");
+        send(&mut app, mail(2, "t1", "bb", LEAD, 200));
+        assert_eq!(
+            row_subject(&app, "t1").as_deref(),
+            Some("Inbox subject titles")
+        );
+        app.open_thread("t1".into(), None);
+        let Some(DetailView::Thread(view)) = app.detail_view() else {
+            panic!("no thread view");
+        };
+        assert_eq!(view.subject, "Inbox subject titles");
+    }
+
+    #[test]
+    fn a_subject_renames_the_open_thread_view() {
+        let mut app = app_with_open_thread();
+        name_thread(&mut app, "t2", "Another thread");
+        name_thread(&mut app, "t1", "Review parser escapes");
+        let Some(DetailView::Thread(view)) = app.detail_view() else {
+            panic!("no thread view");
+        };
+        assert_eq!(view.subject, "Review parser escapes");
+    }
+
+    #[test]
+    fn a_blank_subject_is_ignored() {
+        let mut app = app_with_open_thread();
+        name_thread(&mut app, "t1", " \n ");
+        assert_eq!(row_subject(&app, "t1").as_deref(), Some("About t1"));
+        let Some(DetailView::Thread(view)) = app.detail_view() else {
+            panic!("no thread view");
+        };
+        assert_eq!(view.subject, "About t1");
+        assert!(!app.inbox.subjects.contains_key("t1"));
+    }
+
+    #[test]
+    fn capped_mail_forgets_subjects_of_dropped_threads_only() {
+        let mut app = App::new();
+        send(&mut app, mail(1, "old", "ff", "gg", 100));
+        send(&mut app, mail(2, "kept", "ff", "gg", 100));
+        name_thread(&mut app, "old", "Old thread");
+        name_thread(&mut app, "kept", "Kept thread");
+        name_thread(&mut app, "early", "Early thread");
+
+        for id in 3..=u64::try_from(MAX_MAIL).unwrap_or(u64::MAX) + 1 {
+            send(&mut app, mail(id, "new", "ff", "gg", 200 + id));
+        }
+        assert!(!app.inbox.subjects.contains_key("old"));
+        assert!(app.inbox.subjects.contains_key("kept"));
+        assert!(
+            app.inbox.subjects.contains_key("early"),
+            "a subject waiting for its first message is kept"
+        );
     }
 }
