@@ -16,6 +16,7 @@ mod attachments;
 pub mod auth;
 mod bench;
 mod bench_source;
+pub(crate) mod channels;
 mod cloud;
 mod compare;
 pub(crate) mod flow;

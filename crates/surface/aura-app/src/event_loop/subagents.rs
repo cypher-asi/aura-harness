@@ -73,6 +73,7 @@ use aura_gate::lead::lead_tools;
 use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision};
 use aura_model::{Message, ModelCallPurpose, ThinkingEffort, ToolDefinition};
+use aura_store_db::ChannelStore;
 use aura_ui_terminal::events::{
     AgentDefinitionSummary, AgentSummary, MailView, ProcessKind, ProcessStatus, ProcessSummary,
 };
@@ -363,6 +364,11 @@ pub struct AgentHub {
     writing: Mutex<HashSet<AgentId>>,
     /// When each agent was last active, for the agent lists
     last_active: Mutex<crate::record_loader::LastActive>,
+    /// Channels and their members; `None` where there is no database.
+    pub(crate) channels: Option<ChannelStore>,
+    /// Every agent in a channel, kept beside the channel store so the
+    /// Projects tree can leave them out without reading the store.
+    pub(crate) channel_members: Mutex<HashSet<AgentId>>,
 }
 
 /// Parts of an [`AgentHub`] other than the kernel factory.
@@ -391,6 +397,9 @@ pub struct AgentHubParts {
     /// Gate's table; the kernels' record observer must include it so it
     /// sees every outcome.
     pub gate: Arc<GateLive>,
+    /// Channels, in the same database as the registry's agent rows;
+    /// `None` leaves channels out.
+    pub channels: Option<ChannelStore>,
 }
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -448,6 +457,8 @@ impl AgentHub {
                 write_locks: Mutex::new(HashMap::new()),
                 writing: Mutex::new(HashSet::new()),
                 last_active: Mutex::default(),
+                channel_members: Mutex::new(super::channels::load_members(parts.channels.as_ref())),
+                channels: parts.channels,
             }
         })
     }
@@ -629,6 +640,12 @@ impl AgentHub {
                 .system_prompt
                 .push_str(&aura_context_prompts::system::sections::coordinator::render());
         }
+        if super::channels::is_coordinator(definition.as_deref()) {
+            if let Some(channel) = super::channels::channel_prompt(self, agent_id) {
+                config.system_prompt.push_str("\n\n");
+                config.system_prompt.push_str(&channel);
+            }
+        }
         (config, tools, lead)
     }
 
@@ -723,9 +740,11 @@ impl AgentHub {
     /// order (see [`AgentRegistry::reserve_prefixes`]); when that cannot
     /// be saved the roster still shows them, and the next save keeps them.
     pub fn definition_summaries(&self) -> Vec<AgentDefinitionSummary> {
+        // Only channels create coordinators, so the roster never offers one.
         let mut summaries: Vec<AgentDefinitionSummary> = lock(&self.definitions)
             .all()
             .iter()
+            .filter(|d| !d.is_coordinator())
             .map(|d| AgentDefinitionSummary {
                 name: d.name.clone(),
                 description: d.description.clone(),
@@ -752,7 +771,7 @@ impl AgentHub {
         summaries
     }
 
-    /// Rows for the Agents panel.
+    /// Rows for the Agents panel, without channel members.
     pub fn agent_summaries(&self) -> Vec<AgentSummary> {
         let registry = lock(&self.registry);
         let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
@@ -763,6 +782,9 @@ impl AgentHub {
             &running,
         );
         drop(registry);
+        let members = lock(&self.channel_members);
+        rows.retain(|row| AgentId::from_hex(&row.id).map_or(true, |id| !members.contains(&id)));
+        drop(members);
         for row in &mut rows {
             if let Ok(agent_id) = AgentId::from_hex(&row.id) {
                 self.mark_plan_mode(agent_id, row);
@@ -887,6 +909,7 @@ impl AgentHub {
             );
             crate::record_loader::ListRows::build(&registry, &running)
         };
+        rows.without_members(&lock(&self.channel_members));
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
         for (agent_id, row) in &mut rows.listed {
             self.mark_plan_mode(*agent_id, row);
@@ -1172,11 +1195,15 @@ impl AgentHub {
         self: &Arc<Self>,
         request: SubagentDispatchRequest,
     ) -> Result<SubagentResult, String> {
-        let definition = lock(&self.definitions).get(&request.subagent_type).cloned();
+        let definition = lock(&self.definitions)
+            .get(&request.subagent_type)
+            .filter(|d| !d.is_coordinator())
+            .cloned();
         let Some(definition) = definition else {
             let available: Vec<String> = lock(&self.definitions)
                 .all()
                 .iter()
+                .filter(|d| !d.is_coordinator())
                 .map(|d| d.name.clone())
                 .collect();
             return Ok(SubagentResult::rejected(format!(
@@ -1348,6 +1375,7 @@ impl AgentHub {
             let folder = registry.project_folder(instance.agent_id());
             (instance, folder)
         };
+        super::channels::join_or_warn(self, &instance);
         let session = self
             .factory
             .open(&instance, request.parent_chain.clone(), folder)
@@ -2235,14 +2263,20 @@ fn task_notice(
 }
 
 /// `task` tool schema listing the current permanent agents, or `None` when
-/// there are none to spawn.
+/// there are none to spawn. The channel coordinator is never listed: only
+/// channels create its instances.
 #[must_use]
 pub fn task_tool_definition(definitions: &AgentDefinitions) -> Option<ToolDefinition> {
-    if definitions.is_empty() {
+    let spawnable: Vec<&AgentDefinition> = definitions
+        .all()
+        .iter()
+        .filter(|d| !d.is_coordinator())
+        .collect();
+    if spawnable.is_empty() {
         return None;
     }
-    let names: Vec<&str> = definitions.all().iter().map(|d| d.name.as_str()).collect();
-    let catalog: Vec<String> = definitions.all().iter().map(catalog_entry).collect();
+    let names: Vec<&str> = spawnable.iter().map(|d| d.name.as_str()).collect();
+    let catalog: Vec<String> = spawnable.iter().map(|d| catalog_entry(d)).collect();
     Some(ToolDefinition::new(
         TASK_TOOL_NAME,
         format!(
@@ -2505,4 +2539,4 @@ impl SubagentDispatchHook for TerminalSubagentDispatcher {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

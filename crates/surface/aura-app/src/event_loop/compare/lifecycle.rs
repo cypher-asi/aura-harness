@@ -27,6 +27,7 @@ pub(crate) async fn start(state: &mut LoopState<'_>) -> Result<String, String> {
         .take()
         .ok_or("Nothing to start: /compare [prompt] prepares a comparison first")?;
     let host = register(state, &plan)?;
+    crate::event_loop::channels::join_or_warn(&state.hub, &host);
     state.hub.send_agent_list().await;
     info!(
         compare = %host.name,

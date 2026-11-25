@@ -735,6 +735,7 @@ async fn start_instance(
 ) -> Option<RegisteredAgent> {
     let definition = lock(&state.hub.definitions)
         .get(name)
+        .filter(|d| !d.is_coordinator())
         .map(|d| d.name.clone());
     let Some(definition) = definition else {
         show_error(state, format!("No permanent agent named {name}")).await;

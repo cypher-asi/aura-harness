@@ -19,6 +19,7 @@
 #![warn(clippy::all)]
 
 pub mod agents;
+pub mod channels;
 mod error;
 mod keys;
 pub mod migrate;
@@ -35,6 +36,10 @@ pub use agents::{
     RegistrySnapshot,
 };
 pub use aura_core_types::AgentStatus;
+pub use channels::{
+    valid_slug, ChannelError, ChannelPost, ChannelRecord, ChannelStore, ChannelUpdate,
+    MemberRecord, MemberRole, NewChannel, NewPost, PostAuthor, ProjectLink,
+};
 pub use error::StoreError;
 pub use keys::{AgentMetaKey, InboxKey, KeyCodec, MetaField, RecordKey};
 pub use migrate::{seal_db_copy, SealCopyStats, SEALED_VALUE_CFS};
@@ -117,4 +122,19 @@ pub mod cf {
     /// `last_numbers`; values are JSON, sealed at rest in sealed mode.
     /// See [`crate::agents::RegistryMeta`].
     pub const REGISTRY_META: &str = "registry_meta";
+    /// Channels of agents. Keys `c/{channel_id}` (a JSON
+    /// [`crate::channels::ChannelRecord`]), `s/{slug}` (the channel id
+    /// owning the slug) and `p/{channel_id}/{project_id}` (a JSON
+    /// [`crate::channels::ProjectLink`]); values sealed at rest in
+    /// sealed mode. See [`crate::channels`].
+    pub const CHANNELS: &str = "channels";
+    /// Channel membership. Keys `m/{channel_id}/` + the 32 raw agent id
+    /// bytes (a JSON [`crate::channels::MemberRecord`]) and `a/` + the 32
+    /// raw agent id bytes (the channel id the agent is in); values
+    /// sealed at rest in sealed mode.
+    pub const CHANNEL_MEMBERS: &str = "channel_members";
+    /// Channel posts. Keyed `{channel_id}/{at_ms:020}/{seq:010}`; value
+    /// is a JSON [`crate::channels::ChannelPost`], sealed at rest in
+    /// sealed mode.
+    pub const CHANNEL_POSTS: &str = "channel_posts";
 }

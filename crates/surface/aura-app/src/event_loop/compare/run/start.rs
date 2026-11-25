@@ -141,11 +141,17 @@ fn registered(
                 agent.folder = Some(folder);
                 agent
             }),
-        None => lock(&ctx.hub.registry).create_child(
-            &run.name,
-            &ctx.arms[run.arm.index()],
-            Some(folder),
-        ),
+        None => {
+            let created = lock(&ctx.hub.registry).create_child(
+                &run.name,
+                &ctx.arms[run.arm.index()],
+                Some(folder),
+            );
+            if let Ok(agent) = &created {
+                crate::event_loop::channels::join_or_warn(&ctx.hub, agent);
+            }
+            created
+        }
     }
 }
 

@@ -53,33 +53,59 @@ fn link_id(link: &str, by_zns: &HashMap<&str, AgentId>) -> AgentId {
         .unwrap_or_else(|| derive_agent_id(link))
 }
 
-/// `file` as rows, in its list order.
-pub(super) fn to_rows(file: &RegistryFile) -> Rows {
-    let by_zns: HashMap<&str, AgentId> = file
-        .agents
+/// The ids of `file`'s agents by ZNS id, for [`agent_row`].
+fn ids_by_zns(file: &RegistryFile) -> HashMap<&str, AgentId> {
+    file.agents
         .iter()
         .map(|agent| (agent.zns_id.as_str(), agent.agent_id()))
-        .collect();
+        .collect()
+}
+
+/// `agent`'s row when it is at `index` in a registry whose agents are
+/// `by_zns`.
+fn agent_row(
+    agent: &RegisteredAgent,
+    index: usize,
+    by_zns: &HashMap<&str, AgentId>,
+) -> AgentRecord {
+    AgentRecord {
+        agent_id: agent.agent_id(),
+        zns_id: agent.zns_id.clone(),
+        name: agent.name.clone(),
+        created_at: agent.created_at,
+        position: position(index),
+        definition: agent.definition.clone(),
+        parent: agent.parent.as_deref().map(|p| link_id(p, by_zns)),
+        project_id: agent.project_id.clone(),
+        folder: agent.folder.clone(),
+        archived: agent.archived,
+        removed: agent.removed,
+        title: agent.title.clone(),
+        code: agent.code.clone(),
+        subtitle: agent.subtitle.clone(),
+    }
+}
+
+/// The row `agent`, not yet in `file`, has once it is appended to it.
+pub(super) fn appended_row(file: &RegistryFile, agent: &RegisteredAgent) -> AgentRecord {
+    agent_row(agent, file.agents.len(), &ids_by_zns(file))
+}
+
+/// The row of the agent `agent_id` already in `file`, if it is there.
+pub(super) fn registered_row(file: &RegistryFile, agent_id: AgentId) -> Option<AgentRecord> {
+    let index = file.agents.iter().position(|a| a.agent_id() == agent_id)?;
+    let agent = file.agents.get(index)?;
+    Some(agent_row(agent, index, &ids_by_zns(file)))
+}
+
+/// `file` as rows, in its list order.
+pub(super) fn to_rows(file: &RegistryFile) -> Rows {
+    let by_zns = ids_by_zns(file);
     let agents = file
         .agents
         .iter()
         .enumerate()
-        .map(|(index, agent)| AgentRecord {
-            agent_id: agent.agent_id(),
-            zns_id: agent.zns_id.clone(),
-            name: agent.name.clone(),
-            created_at: agent.created_at,
-            position: position(index),
-            definition: agent.definition.clone(),
-            parent: agent.parent.as_deref().map(|p| link_id(p, &by_zns)),
-            project_id: agent.project_id.clone(),
-            folder: agent.folder.clone(),
-            archived: agent.archived,
-            removed: agent.removed,
-            title: agent.title.clone(),
-            code: agent.code.clone(),
-            subtitle: agent.subtitle.clone(),
-        })
+        .map(|(index, agent)| agent_row(agent, index, &by_zns))
         .collect();
     let projects = file
         .projects
@@ -271,6 +297,10 @@ mod tests {
         assert_eq!(rows.agents[1].parent, Some(derive_agent_id("0://a")));
         assert_eq!(rows.meta.active, Some(derive_agent_id("0://b")));
         assert_eq!(rows.agents[1].position, POSITION_STEP);
+        let appended = agent("0://c", Some("0://b"));
+        let row = appended_row(&file, &appended);
+        assert_eq!(row.position, 2 * POSITION_STEP);
+        assert_eq!(row.parent, Some(derive_agent_id("0://b")));
         let back = from_snapshot(snapshot(&rows));
         assert_eq!(back.agents[1].parent.as_deref(), Some("0://a"));
         assert_eq!(back.active.as_deref(), Some("0://b"));

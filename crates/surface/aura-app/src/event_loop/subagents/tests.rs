@@ -8,9 +8,9 @@ use aura_model::{MockProvider, MockResponse, ModelProvider};
 use aura_store_db::RocksStore;
 use tempfile::TempDir;
 
-struct Fixture {
-    hub: Arc<AgentHub>,
-    dispatcher: Arc<dyn SubagentDispatchHook>,
+pub(in crate::event_loop) struct Fixture {
+    pub(in crate::event_loop) hub: Arc<AgentHub>,
+    pub(in crate::event_loop) dispatcher: Arc<dyn SubagentDispatchHook>,
     commands: mpsc::Receiver<UiCommand>,
     trace_store: Arc<aura_store_db::TraceStore>,
     _data: TempDir,
@@ -19,7 +19,7 @@ struct Fixture {
 }
 
 /// A hub over seeded permanent agents whose kernels all answer `reply`.
-fn fixture(reply: &str) -> Fixture {
+pub(in crate::event_loop) fn fixture(reply: &str) -> Fixture {
     slow_fixture(reply, 0)
 }
 
@@ -51,7 +51,14 @@ fn fixture_with(reply: &str, latency_ms: u64, title_model: &str) -> Fixture {
         tx.clone(),
     );
     let parts = AgentHubParts {
-        registry: AgentRegistry::load_or_init_in(data.path(), workspace.path()).unwrap(),
+        // On the kernels' database, so channel rows and the registry's
+        // agent rows share it as they do in the app.
+        registry: AgentRegistry::open(
+            aura_store_db::AgentStore::for_store(&store),
+            data.path(),
+            workspace.path(),
+        )
+        .unwrap(),
         definitions: AgentDefinitions::load_or_seed(data.path()).unwrap(),
         skills: SkillManager::new(SkillLoader::with_defaults(
             Some(workspace.path().to_path_buf()),
@@ -80,6 +87,7 @@ fn fixture_with(reply: &str, latency_ms: u64, title_model: &str) -> Fixture {
         record_panel: Default::default(),
         gate: Default::default(),
         traces,
+        channels: Some(aura_store_db::ChannelStore::for_store(&store)),
     };
     let reply = reply.to_string();
     let answers_all = !title_model.is_empty();
@@ -122,7 +130,25 @@ fn fixture_with(reply: &str, latency_ms: u64, title_model: &str) -> Fixture {
     }
 }
 
-fn request(parent: AgentId, subagent_type: &str, prompt: &str) -> SubagentDispatchRequest {
+impl Fixture {
+    /// Take every UI command sent so far; returns how many there were.
+    /// Nothing else reads the command channel in these tests, so a test
+    /// that spawns many agents drains it to keep `send().await` from
+    /// waiting on a full channel.
+    pub(in crate::event_loop) fn drain_commands(&mut self) -> usize {
+        let mut count = 0;
+        while self.commands.try_recv().is_ok() {
+            count += 1;
+        }
+        count
+    }
+}
+
+pub(in crate::event_loop) fn request(
+    parent: AgentId,
+    subagent_type: &str,
+    prompt: &str,
+) -> SubagentDispatchRequest {
     serde_json::from_value(serde_json::json!({
         "parent_agent_id": parent,
         "subagent_type": subagent_type,
@@ -501,7 +527,7 @@ async fn in_bench_needs_a_bench_run_above_and_survives_a_parent_cycle() {
             })
             .unwrap();
         *registry =
-            AgentRegistry::load_or_init_in(fixture._data.path(), fixture.workspace.path()).unwrap();
+            AgentRegistry::open(store, fixture._data.path(), fixture.workspace.path()).unwrap();
     }
     assert!(!fixture.hub.in_bench(child.agent_id()));
     fixture

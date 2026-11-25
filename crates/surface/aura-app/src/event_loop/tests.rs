@@ -519,6 +519,7 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
         record_panel: RecordPanelAgent::default(),
         gate: Arc::clone(&gate),
         traces,
+        channels: Some(aura_store_db::ChannelStore::for_store(&store)),
     };
     let record_observer: Arc<dyn aura_agent_kernel::RecordObserver> =
         Arc::new(FanoutObserver(vec![

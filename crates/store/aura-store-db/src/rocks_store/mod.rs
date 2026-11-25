@@ -151,6 +151,9 @@ impl RocksStore {
             cf::AGENTS,
             cf::PROJECTS,
             cf::REGISTRY_META,
+            cf::CHANNELS,
+            cf::CHANNEL_MEMBERS,
+            cf::CHANNEL_POSTS,
         ];
         let mut cf_names = expected_cf_names
             .iter()
@@ -299,6 +302,9 @@ impl RocksStore {
                 | cf::AGENTS
                 | cf::PROJECTS
                 | cf::REGISTRY_META
+                | cf::CHANNELS
+                | cf::CHANNEL_MEMBERS
+                | cf::CHANNEL_POSTS
         )
     }
 

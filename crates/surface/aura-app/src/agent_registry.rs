@@ -1546,8 +1546,51 @@ impl AgentRegistry {
         Ok(())
     }
 
+    /// Data directory the registry belongs to.
+    #[must_use]
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
+    /// A fresh coordinator for the channel `slug`, working in `folder`,
+    /// not yet registered: an instance of
+    /// [`crate::agent_definitions::COORDINATOR_DEFINITION`] named
+    /// `#<slug> coordinator` in the launch directory's project. Its code is
+    /// given by [`Self::adopt`]. The launch project is made in memory when
+    /// missing, as for other new agents, and saved with the next write.
+    pub(crate) fn coordinator_draft(&mut self, slug: &str, folder: PathBuf) -> RegisteredAgent {
+        let project_id = self.launch_project();
+        RegisteredAgent {
+            definition: Some(crate::agent_definitions::COORDINATOR_DEFINITION.to_string()),
+            project_id: Some(project_id),
+            folder: Some(folder),
+            ..Self::new_agent(format!("#{slug} coordinator"))
+        }
+    }
+
+    /// The row `agent`, not yet registered, has once [`Self::adopt`]
+    /// appends it (before its code is assigned).
+    pub(crate) fn record_for(&self, agent: &RegisteredAgent) -> aura_store_db::AgentRecord {
+        persist::appended_row(&self.file, agent)
+    }
+
+    /// Register `agent`, whose row may already be stored (as a channel's
+    /// coordinator is), giving it its code, and save. The stored row is
+    /// rewritten with the code.
+    ///
+    /// # Errors
+    /// Returns an error if the registry cannot be written.
+    pub(crate) fn adopt(&mut self, agent: RegisteredAgent) -> anyhow::Result<RegisteredAgent> {
+        self.push(agent)
+    }
+
+    /// The stored row of the registered agent `agent_id`, as the registry
+    /// last saved it.
+    pub(crate) fn row_of(&self, agent_id: AgentId) -> Option<aura_store_db::AgentRecord> {
+        persist::registered_row(&self.file, agent_id)
+    }
+
     /// The store the registry is kept in.
-    #[cfg(test)]
     pub(crate) fn store(&self) -> &AgentStore {
         &self.store
     }

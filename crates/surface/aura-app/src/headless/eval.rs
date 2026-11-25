@@ -88,6 +88,7 @@ impl EvalTurns {
                 Some(turn.workspace.to_path_buf()),
             )?
         };
+        crate::event_loop::channels::join_or_warn(&hub, &agent);
         let mut session =
             hub.factory
                 .open(&agent, Vec::new(), Some(turn.workspace.to_path_buf()))?;

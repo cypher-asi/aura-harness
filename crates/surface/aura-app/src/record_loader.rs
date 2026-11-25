@@ -590,6 +590,32 @@ impl ListRows {
         }
     }
 
+    /// Leave the agents in `members` (channel members) out of the agents
+    /// column, and the projects that only they were listed in out of the
+    /// projects list. A project's archived count is left as it is.
+    pub(crate) fn without_members(&mut self, members: &HashSet<AgentId>) {
+        if members.is_empty() {
+            return;
+        }
+        let mut removed: HashMap<String, usize> = HashMap::new();
+        self.listed.retain(|(agent_id, row)| {
+            let is_member = members.contains(agent_id);
+            if is_member {
+                if let Some(project) = &row.project_id {
+                    *removed.entry(project.clone()).or_default() += 1;
+                }
+            }
+            !is_member
+        });
+        self.projects.retain_mut(|project| {
+            let Some(&gone) = removed.get(&project.id) else {
+                return true;
+            };
+            project.listed_agents = project.listed_agents.saturating_sub(gone);
+            project.listed_agents > 0
+        });
+    }
+
     /// Fill in each row's record count and last activity from `store`,
     /// reusing what `cache` saw for agents with no new entries.
     pub(crate) fn read_activity(&mut self, store: &dyn ReadStore, cache: &mut LastActive) {

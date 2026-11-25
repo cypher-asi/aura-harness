@@ -14,6 +14,7 @@ use crate::agent_registry::RegisteredAgent;
 use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::agents::AgentSession;
 use crate::event_loop::bench;
+use crate::event_loop::channels::join_or_warn;
 use crate::event_loop::compare::view::render;
 use crate::event_loop::handlers::system_message;
 use crate::event_loop::processes::now_ms;
@@ -186,8 +187,12 @@ fn started(plan: &ComparePlan, repo: Option<&Path>) -> ComparePayload {
 fn register_arms(hub: &AgentHub, plan: &ComparePlan, host: &RegisteredAgent) -> [String; 2] {
     CompareArm::BOTH.map(|arm| {
         let name = arm_name(arm, &plan.arms[arm.index()]);
-        match lock(&hub.registry).create_compare_arm(&name, &host.zns_id) {
-            Ok(agent) => agent.zns_id,
+        let created = lock(&hub.registry).create_compare_arm(&name, &host.zns_id);
+        match created {
+            Ok(agent) => {
+                join_or_warn(hub, &agent);
+                agent.zns_id
+            }
             Err(e) => {
                 warn!(arm = %arm, error = %e, "Could not register an arm; its runs go under the comparison");
                 host.zns_id.clone()
@@ -207,8 +212,10 @@ fn register_runs(
     for n in 1..=plan.runs_per_arm() {
         for arm in CompareArm::BOTH {
             let name = run_name(arm, n);
-            match lock(&hub.registry).create_child(&name, &arms[arm.index()], None) {
+            let created = lock(&hub.registry).create_child(&name, &arms[arm.index()], None);
+            match created {
                 Ok(agent) => {
+                    join_or_warn(hub, &agent);
                     agents.insert(name, agent);
                 }
                 Err(e) => warn!(run = %name, error = %e, "Could not register a run up front"),

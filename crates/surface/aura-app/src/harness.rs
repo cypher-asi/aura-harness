@@ -325,6 +325,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
             record_panel,
             gate,
             traces,
+            channels: Some(aura_store_db::ChannelStore::for_store(&store)),
         },
         move |dispatcher| {
             event_loop::KernelFactory::new(

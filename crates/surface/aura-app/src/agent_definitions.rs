@@ -23,6 +23,10 @@ const MAX_NAME_LEN: usize = 40;
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 const NEW_DEFINITION_NAME: &str = "new-agent";
 
+/// The definition channel coordinators run. Only channels create its
+/// instances: it is never offered to `task` or as a new agent's role.
+pub const COORDINATOR_DEFINITION: &str = "coordinator";
+
 /// Names of the seeded definitions already added once, one per line.
 const SEEDED_FILE: &str = ".seeded";
 
@@ -53,6 +57,10 @@ const SEED_DEFINITIONS: &[(&str, &str)] = &[
     (
         "product-manager",
         include_str!("agent_definitions/product-manager.md"),
+    ),
+    (
+        COORDINATOR_DEFINITION,
+        include_str!("agent_definitions/coordinator.md"),
     ),
 ];
 
@@ -93,6 +101,13 @@ pub struct AgentDefinition {
 }
 
 impl AgentDefinition {
+    /// Whether this is the channel coordinator, which only channels create
+    /// instances of (see [`COORDINATOR_DEFINITION`]).
+    #[must_use]
+    pub fn is_coordinator(&self) -> bool {
+        self.name == COORDINATOR_DEFINITION
+    }
+
     /// Parse a definition file's contents.
     ///
     /// # Errors
@@ -438,7 +453,8 @@ mod tests {
         assert!(validate_name(&"a".repeat(MAX_NAME_LEN + 1)).is_err());
     }
 
-    const SEEDED_NAMES: [&str; 10] = [
+    const SEEDED_NAMES: [&str; 11] = [
+        "coordinator",
         "engineer",
         "explorer",
         "frontend-engineer",
@@ -561,6 +577,31 @@ mod tests {
 
         def.tools = Some(vec!["read_file".into(), "task".into()]);
         assert_eq!(names(&def), ["read_file", "task"]);
+    }
+
+    #[test]
+    fn coordinator_can_delegate_but_not_edit() {
+        let content = SEED_DEFINITIONS
+            .iter()
+            .find(|(name, _)| *name == COORDINATOR_DEFINITION)
+            .map(|(_, content)| *content)
+            .unwrap();
+        let def = AgentDefinition::parse(content, Path::new("coordinator.md")).unwrap();
+        assert!(def.is_coordinator());
+        let tools = [
+            tool("read_file"),
+            tool("search_code"),
+            tool("write_file"),
+            tool("edit_file"),
+            tool("run_command"),
+            tool("task"),
+        ];
+        let names: Vec<String> = def
+            .filter_tools(&tools)
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, ["read_file", "search_code", "task"]);
     }
 
     #[test]
