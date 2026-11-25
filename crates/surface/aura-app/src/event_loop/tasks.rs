@@ -22,7 +22,7 @@
 //! with no task gets none.
 
 use super::record_ui::RecordPanelAgent;
-use super::subagents::lock;
+use super::subagents::{lock, AgentHub};
 use aura_core_types::AgentId;
 use aura_ui_terminal::events::{TaskState, TaskView, TodoState, TodoView};
 use aura_ui_terminal::UiCommand;
@@ -253,6 +253,89 @@ struct Board {
     recovered: HashSet<PathBuf>,
     /// Workspaces whose tasks are set aside ([`TaskBoard::set_aside`])
     aside: HashMap<PathBuf, Aside>,
+    /// The channel on screen, whose tasks are shown again as they change
+    channel: Option<OpenChannel>,
+}
+
+/// The channel on screen: its id and the workspace of each member.
+struct OpenChannel {
+    id: String,
+    members: HashMap<AgentId, PathBuf>,
+}
+
+impl OpenChannel {
+    fn has_member(&self, agent_hex: &str) -> bool {
+        self.members.keys().any(|agent| agent.to_hex() == agent_hex)
+    }
+}
+
+/// Every task of the agents in `members`, each a channel member with its
+/// workspace, newest first. A workspace several members share is read
+/// once; tasks of agents outside the channel are left out.
+fn channel_tasks(
+    aside: &HashMap<PathBuf, Aside>,
+    members: &HashMap<AgentId, PathBuf>,
+) -> Vec<TaskView> {
+    let agents: HashSet<String> = members.keys().map(AgentId::to_hex).collect();
+    let workspaces: HashSet<&PathBuf> = members.values().collect();
+    let mut seen: HashSet<(&PathBuf, String)> = HashSet::new();
+    let mut records: Vec<TaskRecord> = Vec::new();
+    for workspace in workspaces {
+        for record in load_from(&tasks_dir(aside, workspace)) {
+            if agents.contains(&record.view.agent_id)
+                && seen.insert((workspace, record.view.id.clone()))
+            {
+                records.push(record);
+            }
+        }
+    }
+    records.sort_by(|a, b| (b.created_ms, &b.view.id).cmp(&(a.created_ms, &a.view.id)));
+    records.into_iter().map(|record| record.view).collect()
+}
+
+/// The command that shows `open`'s tasks.
+fn channel_command(board: &Board, open: &OpenChannel) -> UiCommand {
+    UiCommand::SetChannelTasks {
+        channel_id: open.id.clone(),
+        tasks: channel_tasks(&board.aside, &open.members),
+    }
+}
+
+/// Show the CHANNEL tab the tasks of every member of channel
+/// `channel_id`, and keep showing them as they change until the channel
+/// is closed ([`TaskBoard::close_channel`]). A member works in its own
+/// folder, else the one of the agents that spawned it or its project's,
+/// else the workspace of its running kernel; a member with none has no
+/// tasks to show.
+///
+/// # Errors
+/// Returns an error if the channel's members cannot be read.
+pub(crate) async fn send_channel(hub: &AgentHub, channel_id: &str) -> anyhow::Result<()> {
+    let members = super::channels::member_ids(hub, channel_id).await?;
+    let (mut workspaces, missing): (HashMap<AgentId, PathBuf>, Vec<AgentId>) = {
+        let registry = lock(&hub.registry);
+        let mut found = HashMap::new();
+        let mut missing = Vec::new();
+        for agent in members {
+            match registry.project_folder(agent) {
+                Some(folder) => {
+                    found.insert(agent, folder);
+                }
+                None => missing.push(agent),
+            }
+        }
+        (found, missing)
+    };
+    for agent in missing {
+        if let Some(kernel) = hub.running_kernel(agent) {
+            workspaces.insert(agent, kernel.agent_workspace());
+        }
+    }
+    hub.factory
+        .tasks
+        .open_channel(channel_id.to_string(), workspaces)
+        .await;
+    Ok(())
 }
 
 /// A workspace's tasks while they are set aside.
@@ -672,9 +755,57 @@ impl TaskBoard {
         }
     }
 
+    /// Show the tasks of the channel `id`, whose members work in
+    /// `members`, and show them again whenever one of them changes.
+    pub(crate) async fn open_channel(&self, id: String, members: HashMap<AgentId, PathBuf>) {
+        let command = {
+            let mut board = lock(&self.board);
+            let open = OpenChannel { id, members };
+            let command = channel_command(&board, &open);
+            board.channel = Some(open);
+            command
+        };
+        self.send(command).await;
+    }
+
+    /// No channel is on screen any more.
+    pub(crate) fn close_channel(&self) {
+        lock(&self.board).channel = None;
+    }
+
+    /// `agent`, working in `workspace`, joined channel `channel_id`: when
+    /// that channel is on screen, its tasks count from now on.
+    pub(crate) fn join_channel(&self, channel_id: &str, agent: AgentId, workspace: PathBuf) {
+        if let Some(open) = lock(&self.board).channel.as_mut() {
+            if open.id == channel_id {
+                open.members.insert(agent, workspace);
+            }
+        }
+    }
+
+    /// Show the tasks of the channel on screen again when the agent with
+    /// hex id `agent_hex` is one of its members.
+    async fn refresh_channel(&self, agent_hex: &str) {
+        let command = {
+            let board = lock(&self.board);
+            match board.channel.as_ref() {
+                Some(open) if open.has_member(agent_hex) => channel_command(&board, open),
+                _ => return,
+            }
+        };
+        self.send(command).await;
+    }
+
+    async fn send(&self, command: UiCommand) {
+        if let Some((commands, _)) = &self.ui {
+            let _ = commands.send(command).await;
+        }
+    }
+
     /// Show `view`, kept in `workspace`, when the agent on screen works
-    /// there.
+    /// there, and in the channel on screen when its agent is a member.
     async fn show(&self, (workspace, view): (PathBuf, TaskView)) {
+        self.refresh_channel(&view.agent_id).await;
         let Some((commands, shown)) = &self.ui else {
             return;
         };

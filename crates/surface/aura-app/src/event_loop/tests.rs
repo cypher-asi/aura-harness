@@ -663,6 +663,7 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         ),
         flow: None,
         cloud: super::cloud::CloudState::default(),
+        open_channel: None,
     }
 }
 

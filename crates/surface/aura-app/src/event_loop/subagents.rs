@@ -402,6 +402,17 @@ pub struct AgentHubParts {
     pub channels: Option<ChannelStore>,
 }
 
+/// What [`AgentHub::send_agent_list`] sends, laid out in one walk of the
+/// registry.
+struct AgentLists {
+    /// The projects, the Agents panel rows and the Archive
+    commands: [UiCommand; 3],
+    /// The agent the rows mark active
+    active: AgentId,
+    /// Rows of the channel members, left out of the Agents panel
+    members: HashMap<AgentId, AgentSummary>,
+}
+
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -897,7 +908,7 @@ impl AgentHub {
     /// The registry is held only while the rows are laid out; the store is
     /// read after it is released, so the event loop and the spawns don't
     /// wait on the reads.
-    fn agent_lists_with_active(&self) -> ([UiCommand; 3], AgentId) {
+    fn agent_lists_with_active(&self) -> AgentLists {
         let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
         let mut rows = {
             let registry = lock(&self.registry);
@@ -909,13 +920,29 @@ impl AgentHub {
             );
             crate::record_loader::ListRows::build(&registry, &running)
         };
-        rows.without_members(&lock(&self.channel_members));
+        rows.split_members(&lock(&self.channel_members));
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
-        for (agent_id, row) in &mut rows.listed {
+        for (agent_id, row) in rows.listed.iter_mut().chain(rows.members.iter_mut()) {
             self.mark_plan_mode(*agent_id, row);
         }
         let active = rows.active;
-        (rows.into_commands(), active)
+        let members = std::mem::take(&mut rows.members).into_iter().collect();
+        AgentLists {
+            commands: rows.into_commands(),
+            active,
+            members,
+        }
+    }
+
+    /// The rows of every channel member that is not archived, built as the
+    /// Agents panel's rows are, for the channels list.
+    pub(crate) fn member_rows(&self) -> HashMap<AgentId, AgentSummary> {
+        self.agent_lists_with_active().members
+    }
+
+    /// Where the UI's commands go.
+    pub(crate) fn commands(&self) -> &mpsc::Sender<UiCommand> {
+        &self.commands
     }
 
     /// Mark `row`, the Agents panel row of `agent_id`, when the agent is
@@ -929,20 +956,22 @@ impl AgentHub {
     /// the UI takes them: the projects first, so one with every agent
     /// archived is known when the rows arrive.
     pub fn agent_lists(&self) -> [UiCommand; 3] {
-        self.agent_lists_with_active().0
+        self.agent_lists_with_active().commands
     }
 
     /// Send the projects, the Agents panel rows, the Archive and the
-    /// active agent to the UI.
+    /// active agent to the UI, then the channels, whose member rows show
+    /// the same names and activity.
     pub async fn send_agent_list(&self) {
-        let (lists, active) = self.agent_lists_with_active();
-        for list in lists {
+        let lists = self.agent_lists_with_active();
+        for list in lists.commands {
             let _ = self.commands.send(list).await;
         }
         let _ = self
             .commands
-            .send(UiCommand::SetActiveAgent(active.to_hex()))
+            .send(UiCommand::SetActiveAgent(lists.active.to_hex()))
             .await;
+        super::channels::send_channels_with(self, lists.members, false).await;
     }
 
     /// Let `agent`, about to run a turn on `config` in `folder`, spawn

@@ -1,5 +1,6 @@
 //! Channels on the event loop: making a channel together with its
-//! coordinator, and the `<channel>` block a coordinator's turns get.
+//! coordinator, the `<channel>` block a coordinator's turns get, the
+//! channels list the UI shows, and the UI's channel actions.
 //!
 //! # Invariants
 //!
@@ -10,16 +11,19 @@
 //! * The registry lock is never held across an `await`.
 
 use super::subagents::{lock, AgentHub};
+use super::LoopState;
 use crate::agent_definitions::COORDINATOR_DEFINITION;
 use crate::agent_registry::{AgentRegistry, RegisteredAgent};
 use anyhow::{bail, Context};
 use aura_core_types::AgentId;
 use aura_store_db::agents::derive_agent_id;
 use aura_store_db::{
-    valid_slug, ChannelRecord, ChannelStore, MemberRecord, MemberRole, NewChannel, ProjectLink,
-    RegistryDiff, WriteBatch,
+    valid_slug, ChannelRecord, ChannelStore, ChannelUpdate, MemberRecord, MemberRole, NewChannel,
+    ProjectLink, RegistryDiff, WriteBatch,
 };
-use std::collections::HashSet;
+use aura_ui_terminal::events::{nest_members, AgentSummary, ChannelProjectView, ChannelSummary};
+use aura_ui_terminal::UiCommand;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -34,8 +38,6 @@ const CHANNELS_DIR: &str = "channels";
 /// Returns an error if the slug is invalid or taken, the hub has no
 /// channel store, the folder cannot be made, or the channel or registry
 /// cannot be written. Nothing is added to the registry on error.
-// Called only by tests until the channel UI commands are wired to it.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn create_channel(
     hub: &AgentHub,
     new: NewChannel,
@@ -198,7 +200,7 @@ pub(crate) fn join_parent_channel(
         parent: Some(parent),
         joined_at: chrono::Utc::now(),
     };
-    {
+    let workspace = {
         let registry = lock(&hub.registry);
         let row = registry
             .row_of(child_id)
@@ -218,8 +220,14 @@ pub(crate) fn join_parent_channel(
         store
             .write(batch)
             .with_context(|| format!("adding {} to channel {channel_id}", child_id.to_hex()))?;
-    }
+        registry.project_folder(child_id)
+    };
     lock(&hub.channel_members).insert(child_id);
+    if let Some(workspace) = workspace {
+        hub.factory
+            .tasks
+            .join_channel(&channel_id, child_id, workspace);
+    }
     info!(
         channel_id = %channel_id,
         agent = %child_id.to_hex(),
@@ -348,6 +356,323 @@ fn render(
     }
     out.push_str("</channel>");
     out
+}
+
+/// A channel that is not archived, as read from the store.
+struct ChannelRead {
+    channel: ChannelRecord,
+    projects: Vec<ProjectLink>,
+    members: Vec<MemberRecord>,
+}
+
+/// Every channel that is not archived, with its projects and members.
+async fn read_channels(store: &ChannelStore) -> anyhow::Result<Vec<ChannelRead>> {
+    blocking(store, |store| {
+        let mut out = Vec::new();
+        for channel in store.list()? {
+            if channel.archived {
+                continue;
+            }
+            let projects = store.projects(&channel.id)?;
+            let members = store.members(&channel.id)?;
+            out.push(ChannelRead {
+                channel,
+                projects,
+                members,
+            });
+        }
+        Ok(out)
+    })
+    .await
+    .context("reading the channels")
+}
+
+/// The channels list: every channel that is not archived, in the order
+/// they were made, each with its linked projects and its members. Member
+/// rows are the Agents panel's rows of those agents, nested under the
+/// coordinator by who brought them in. Empty without a channel store.
+///
+/// # Errors
+/// Returns an error if the channel store cannot be read.
+pub(crate) async fn channel_summaries(hub: &AgentHub) -> anyhow::Result<Vec<ChannelSummary>> {
+    if hub.channels.is_none() {
+        return Ok(Vec::new());
+    }
+    summaries_with(hub, hub.member_rows()).await
+}
+
+/// [`channel_summaries`] with the member rows already laid out.
+async fn summaries_with(
+    hub: &AgentHub,
+    mut rows: HashMap<AgentId, AgentSummary>,
+) -> anyhow::Result<Vec<ChannelSummary>> {
+    let Some(store) = hub.channels.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let reads = read_channels(store).await?;
+    let registry = lock(&hub.registry);
+    Ok(reads
+        .into_iter()
+        .map(|read| summarize(&registry, read, &mut rows))
+        .collect())
+}
+
+/// The summary of one channel. Members without a row (archived agents)
+/// are left out; each row is used once, as an agent is in one channel.
+fn summarize(
+    registry: &AgentRegistry,
+    read: ChannelRead,
+    rows: &mut HashMap<AgentId, AgentSummary>,
+) -> ChannelSummary {
+    let ChannelRead {
+        channel,
+        projects,
+        members,
+    } = read;
+    let projects = projects
+        .into_iter()
+        .map(|link| match registry.project(&link.project_id) {
+            Some(project) => ChannelProjectView {
+                name: project.name(),
+                folder: project.folder.display().to_string(),
+                id: link.project_id,
+            },
+            // Still listed, so the user can see it and unlink it.
+            None => ChannelProjectView {
+                name: link.project_id.clone(),
+                folder: String::new(),
+                id: link.project_id,
+            },
+        })
+        .collect();
+    let members = members
+        .into_iter()
+        .filter_map(|member| {
+            let row = rows.remove(&member.agent_id)?;
+            Some((row, member.parent.map(|parent| parent.to_hex())))
+        })
+        .collect();
+    let coordinator_id = channel.coordinator.to_hex();
+    ChannelSummary {
+        members: nest_members(&coordinator_id, members),
+        id: channel.id,
+        slug: channel.slug,
+        title: channel.title,
+        description: channel.description,
+        coordinator_id,
+        projects,
+        archived: channel.archived,
+    }
+}
+
+/// Send the channels list to the UI. Nothing is sent without a channel
+/// store, or when it cannot be read (logged): the UI keeps the list it
+/// has rather than losing every channel.
+pub(crate) async fn send_channels(hub: &AgentHub) {
+    if hub.channels.is_some() {
+        send_channels_with(hub, hub.member_rows(), true).await;
+    }
+}
+
+/// [`send_channels`] with the member rows already laid out. Unless
+/// `even_empty`, an empty list is not sent: the agent list refreshes it
+/// on every change, and most sessions have no channels.
+pub(crate) async fn send_channels_with(
+    hub: &AgentHub,
+    rows: HashMap<AgentId, AgentSummary>,
+    even_empty: bool,
+) {
+    if hub.channels.is_none() {
+        return;
+    }
+    match summaries_with(hub, rows).await {
+        Ok(summaries) if summaries.is_empty() && !even_empty => {}
+        Ok(summaries) => {
+            let _ = hub.commands().send(UiCommand::SetChannels(summaries)).await;
+        }
+        Err(error) => warn!(error = %format!("{error:#}"), "Could not list the channels"),
+    }
+}
+
+/// The channel store, or why channels are unavailable.
+fn store_of(hub: &AgentHub) -> anyhow::Result<&ChannelStore> {
+    hub.channels
+        .as_ref()
+        .context("channels are not available without the agent database")
+}
+
+/// The channel `channel_id`, unless it is missing or archived.
+///
+/// # Errors
+/// Returns an error if there is no such open channel or the store cannot
+/// be read.
+pub(crate) async fn open_channel_record(
+    hub: &AgentHub,
+    channel_id: &str,
+) -> anyhow::Result<ChannelRecord> {
+    let store = store_of(hub)?;
+    let id = channel_id.to_string();
+    let channel = blocking(store, move |store| store.get(&id))
+        .await
+        .with_context(|| format!("reading channel {channel_id}"))?;
+    match channel {
+        Some(channel) if !channel.archived => Ok(channel),
+        Some(channel) => bail!("#{} is archived", channel.slug),
+        None => bail!("there is no channel {channel_id}"),
+    }
+}
+
+/// The agents in channel `channel_id`, in the order they joined.
+///
+/// # Errors
+/// Returns an error if the channel store cannot be read.
+pub(crate) async fn member_ids(hub: &AgentHub, channel_id: &str) -> anyhow::Result<Vec<AgentId>> {
+    let store = store_of(hub)?;
+    let id = channel_id.to_string();
+    let members = blocking(store, move |store| store.members(&id))
+        .await
+        .with_context(|| format!("reading the members of channel {channel_id}"))?;
+    Ok(members.into_iter().map(|member| member.agent_id).collect())
+}
+
+/// Give channel `channel_id` the title `title` (kept when blank) and the
+/// description `description`.
+///
+/// # Errors
+/// Returns an error if the channel is unknown or cannot be written.
+pub(crate) async fn update_channel(
+    hub: &AgentHub,
+    channel_id: &str,
+    title: &str,
+    description: &str,
+) -> anyhow::Result<()> {
+    let store = store_of(hub)?;
+    let title = title.trim();
+    let update = ChannelUpdate {
+        title: (!title.is_empty()).then(|| title.to_string()),
+        description: Some(description.trim().to_string()),
+    };
+    let id = channel_id.to_string();
+    blocking(store, move |store| {
+        store.update(&id, update, chrono::Utc::now())
+    })
+    .await
+    .with_context(|| format!("updating channel {channel_id}"))?;
+    Ok(())
+}
+
+/// Link the project `project_id`, which must be in the registry, to
+/// channel `channel_id`.
+///
+/// # Errors
+/// Returns an error if the project is unknown, or the channel is unknown
+/// or cannot be written.
+pub(crate) async fn link_project(
+    hub: &AgentHub,
+    channel_id: &str,
+    project_id: &str,
+) -> anyhow::Result<()> {
+    let store = store_of(hub)?;
+    if lock(&hub.registry).project(project_id).is_none() {
+        bail!("there is no project {project_id}");
+    }
+    let (channel, project) = (channel_id.to_string(), project_id.to_string());
+    blocking(store, move |store| {
+        store.link_project(&channel, &project, chrono::Utc::now())
+    })
+    .await
+    .with_context(|| format!("linking project {project_id} to channel {channel_id}"))?;
+    Ok(())
+}
+
+/// Unlink the project `project_id` from channel `channel_id`.
+///
+/// # Errors
+/// Returns an error if the link cannot be removed.
+pub(crate) async fn unlink_project(
+    hub: &AgentHub,
+    channel_id: &str,
+    project_id: &str,
+) -> anyhow::Result<()> {
+    let store = store_of(hub)?;
+    let (channel, project) = (channel_id.to_string(), project_id.to_string());
+    blocking(store, move |store| store.unlink_project(&channel, &project))
+        .await
+        .with_context(|| format!("unlinking project {project_id} from channel {channel_id}"))
+}
+
+/// Move channel `channel_id` to the Archive.
+///
+/// # Errors
+/// Returns an error if the channel is unknown or cannot be written.
+pub(crate) async fn archive_channel(hub: &AgentHub, channel_id: &str) -> anyhow::Result<()> {
+    let store = store_of(hub)?;
+    let id = channel_id.to_string();
+    let channel = blocking(store, move |store| store.archive(&id, chrono::Utc::now()))
+        .await
+        .with_context(|| format!("archiving channel {channel_id}"))?;
+    info!(channel_id = %channel.id, slug = %channel.slug, "Archived channel");
+    Ok(())
+}
+
+/// `UiEvent::CreateChannel`: make the channel, list it and open it.
+pub(super) async fn handle_create(state: &mut LoopState<'_>, new: NewChannel) {
+    match create_channel(&state.hub, new).await {
+        Ok(channel) => {
+            send_channels(&state.hub).await;
+            handle_open(state, &channel.id).await;
+        }
+        Err(error) => show_error(state, format!("Could not create the channel: {error:#}")).await,
+    }
+}
+
+/// `UiEvent::OpenChannel`: make the channel's coordinator the active
+/// agent, as selecting it would, and show the channel's tasks.
+pub(super) async fn handle_open(state: &mut LoopState<'_>, channel_id: &str) {
+    let channel = match open_channel_record(&state.hub, channel_id).await {
+        Ok(channel) => channel,
+        Err(error) => {
+            show_error(state, format!("Could not open the channel: {error:#}")).await;
+            return;
+        }
+    };
+    super::agents::handle_select_agent(state, &channel.coordinator.to_hex()).await;
+    state.open_channel = Some(channel.id.clone());
+    if let Err(error) = super::tasks::send_channel(&state.hub, &channel.id).await {
+        warn!(
+            channel_id = %channel.id,
+            error = %format!("{error:#}"),
+            "Could not show the channel's tasks"
+        );
+    }
+}
+
+/// `UiEvent::CloseChannel`: no channel is open any more.
+pub(super) fn handle_close(state: &mut LoopState<'_>) {
+    state.open_channel = None;
+    state.hub.factory.tasks.close_channel();
+}
+
+/// `UiEvent::ArchiveChannel`: archive it, closing it when it is open.
+pub(super) async fn handle_archive(state: &mut LoopState<'_>, channel_id: &str) {
+    let archived = archive_channel(&state.hub, channel_id).await;
+    if archived.is_ok() && state.open_channel.as_deref() == Some(channel_id) {
+        handle_close(state);
+    }
+    after_change(state, "archive the channel", archived).await;
+}
+
+/// After a channel action: list the channels again when it worked, else
+/// tell the user it could not `what`.
+pub(super) async fn after_change(state: &LoopState<'_>, what: &str, result: anyhow::Result<()>) {
+    match result {
+        Ok(()) => send_channels(&state.hub).await,
+        Err(error) => show_error(state, format!("Could not {what}: {error:#}")).await,
+    }
+}
+
+async fn show_error(state: &LoopState<'_>, message: String) {
+    let _ = state.commands.send(UiCommand::ShowError(message)).await;
 }
 
 #[cfg(test)]

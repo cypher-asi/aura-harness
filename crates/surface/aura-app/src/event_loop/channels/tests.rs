@@ -247,3 +247,191 @@ async fn channel_members_are_left_out_of_the_projects_tree() {
         assert!(summaries.iter().all(|row| row.id != member.to_hex()));
     }
 }
+
+fn summary_of(summaries: &[ChannelSummary], id: &str) -> Option<ChannelSummary> {
+    summaries.iter().find(|s| s.id == id).cloned()
+}
+
+#[tokio::test]
+async fn summaries_list_the_coordinator_first_and_nest_spawned_members() {
+    let mut fixture = fixture("Looks good.");
+    let channel = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    let agent = fixture
+        .dispatcher
+        .dispatch(request(channel.coordinator, "reviewer", "Review the diff"))
+        .await
+        .unwrap()
+        .child_agent_id
+        .unwrap();
+    // The spawn refreshed the agent list, and the channels with it.
+    let sent = fixture.take_commands();
+    assert!(
+        sent.iter().any(|c| matches!(
+            c,
+            UiCommand::SetChannels(list)
+                if list.iter().any(|s| s.members.iter().any(|m| m.id == agent.to_hex()))
+        )),
+        "no SetChannels with the spawned member"
+    );
+
+    let summaries = channel_summaries(&fixture.hub).await.unwrap();
+    assert_eq!(summaries.len(), 1);
+    let summary = &summaries[0];
+    assert_eq!(summary.id, channel.id);
+    assert_eq!(summary.slug, "site");
+    assert_eq!(summary.title, "Website relaunch");
+    assert_eq!(summary.coordinator_id, channel.coordinator.to_hex());
+    assert!(!summary.archived);
+    let members: Vec<(String, usize)> = summary
+        .members
+        .iter()
+        .map(|m| (m.id.clone(), m.depth))
+        .collect();
+    assert_eq!(
+        members,
+        [(channel.coordinator.to_hex(), 0), (agent.to_hex(), 1),]
+    );
+    // Member rows are the Agents panel's rows: named and coded the same.
+    let registry = lock(&fixture.hub.registry);
+    let child = registry.find(agent).unwrap();
+    assert_eq!(summary.members[1].name, child.display_name());
+    assert_eq!(summary.members[1].code, child.code);
+}
+
+#[tokio::test]
+async fn linked_and_unlinked_projects_show_in_the_summaries() {
+    let fixture = fixture("unused");
+    let channel = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    let (project_id, folder) = {
+        let registry = lock(&fixture.hub.registry);
+        let id = registry
+            .find(channel.coordinator)
+            .and_then(|a| a.project_id.clone())
+            .unwrap();
+        let folder = registry.project(&id).unwrap().folder.display().to_string();
+        (id, folder)
+    };
+
+    link_project(&fixture.hub, &channel.id, &project_id)
+        .await
+        .unwrap();
+    let summary = summary_of(&channel_summaries(&fixture.hub).await.unwrap(), &channel.id).unwrap();
+    assert_eq!(summary.projects.len(), 1);
+    assert_eq!(summary.projects[0].id, project_id);
+    assert_eq!(summary.projects[0].folder, folder);
+    assert!(!summary.projects[0].name.is_empty());
+
+    let error = link_project(&fixture.hub, &channel.id, "no-such-project")
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("no project"), "{error:#}");
+
+    unlink_project(&fixture.hub, &channel.id, &project_id)
+        .await
+        .unwrap();
+    let summary = summary_of(&channel_summaries(&fixture.hub).await.unwrap(), &channel.id).unwrap();
+    assert!(summary.projects.is_empty());
+}
+
+#[tokio::test]
+async fn updated_channels_show_their_new_title_and_archived_ones_leave_the_list() {
+    let fixture = fixture("unused");
+    let site = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    let docs = create_channel(&fixture.hub, new_channel("docs"))
+        .await
+        .unwrap();
+
+    update_channel(&fixture.hub, &site.id, "  ", "New plan.")
+        .await
+        .unwrap();
+    let summary = summary_of(&channel_summaries(&fixture.hub).await.unwrap(), &site.id).unwrap();
+    assert_eq!(summary.title, "Website relaunch", "a blank title is kept");
+    assert_eq!(summary.description, "New plan.");
+
+    archive_channel(&fixture.hub, &site.id).await.unwrap();
+    let ids: Vec<String> = channel_summaries(&fixture.hub)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids, [docs.id]);
+    let error = open_channel_record(&fixture.hub, &site.id)
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("archived"), "{error:#}");
+}
+
+/// Keep a task of `agent` in `workspace`, made at `created_ms`.
+fn write_task(workspace: &std::path::Path, id: &str, agent: AgentId, created_ms: u64) {
+    use crate::event_loop::tasks::{TaskRecord, TASKS_DIR};
+    let dir = workspace.join(TASKS_DIR);
+    std::fs::create_dir_all(&dir).unwrap();
+    let record = TaskRecord {
+        view: aura_ui_terminal::events::TaskView {
+            id: id.to_string(),
+            title: format!("task {id}"),
+            agent_id: agent.to_hex(),
+            agent_name: "someone".to_string(),
+            updated_ms: created_ms,
+            ..Default::default()
+        },
+        created_ms,
+        tool_use_id: None,
+    };
+    std::fs::write(
+        dir.join(format!("{id}.json")),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn channel_tasks_gather_every_member_across_workspaces() {
+    let mut fixture = fixture("Looks good.");
+    let channel = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    let agent = spawn_under(&mut fixture, channel.coordinator).await;
+    let elsewhere = tempfile::tempdir().unwrap();
+    let (coordinator_folder, outsider) = {
+        let mut registry = lock(&fixture.hub.registry);
+        registry
+            .set_folder(agent, elsewhere.path().to_path_buf())
+            .unwrap();
+        (
+            registry.project_folder(channel.coordinator).unwrap(),
+            registry.active().agent_id(),
+        )
+    };
+    write_task(&coordinator_folder, "c-old", channel.coordinator, 1);
+    write_task(&coordinator_folder, "o-mid", outsider, 2);
+    write_task(elsewhere.path(), "a-new", agent, 3);
+    fixture.drain_commands();
+
+    crate::event_loop::tasks::send_channel(&fixture.hub, &channel.id)
+        .await
+        .unwrap();
+    let tasks = fixture
+        .take_commands()
+        .into_iter()
+        .find_map(|c| match c {
+            UiCommand::SetChannelTasks { channel_id, tasks } if channel_id == channel.id => {
+                Some(tasks)
+            }
+            _ => None,
+        })
+        .expect("the channel's tasks are sent");
+    let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
+    // The spawn kept a task of its own too: the newest, so first.
+    assert!(!ids.contains(&"o-mid"), "outsiders are left out: {ids:?}");
+    assert_eq!(ids[ids.len() - 2..], ["a-new", "c-old"], "newest first");
+
+    fixture.hub.factory.tasks.close_channel();
+}

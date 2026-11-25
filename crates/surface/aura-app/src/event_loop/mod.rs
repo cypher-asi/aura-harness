@@ -151,6 +151,9 @@ pub(super) struct LoopState<'a> {
     pub(super) flow: Option<Arc<FlowFeed>>,
     /// Cloud agents: the hub, who is moving, cloud turns in flight.
     pub(super) cloud: cloud::CloudState,
+    /// Id of the channel on screen, between `UiEvent::OpenChannel` and
+    /// `UiEvent::CloseChannel`.
+    pub(super) open_channel: Option<String>,
 }
 
 impl LoopState<'_> {
@@ -263,6 +266,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         ),
         flow,
         cloud: cloud::CloudState::new(cloud_store),
+        open_channel: None,
     };
     let mut notice_rx = state.hub.take_notices();
     let mut mail_rx = state.hub.open_mail();
@@ -639,6 +643,44 @@ async fn handle_ui_event(
             cloud::handle_host_action(state, &agent_id, action).await;
         }
         UiEvent::CloudSetup => cloud::handle_setup(state).await,
+        UiEvent::CreateChannel {
+            slug,
+            title,
+            description,
+        } => {
+            let new = aura_store_db::NewChannel {
+                slug,
+                title,
+                description,
+            };
+            channels::handle_create(state, new).await;
+        }
+        UiEvent::OpenChannel(channel_id) => channels::handle_open(state, &channel_id).await,
+        UiEvent::CloseChannel => channels::handle_close(state),
+        UiEvent::UpdateChannel {
+            channel_id,
+            title,
+            description,
+        } => {
+            let updated =
+                channels::update_channel(&state.hub, &channel_id, &title, &description).await;
+            channels::after_change(state, "update the channel", updated).await;
+        }
+        UiEvent::LinkProject {
+            channel_id,
+            project_id,
+        } => {
+            let linked = channels::link_project(&state.hub, &channel_id, &project_id).await;
+            channels::after_change(state, "link the project", linked).await;
+        }
+        UiEvent::UnlinkProject {
+            channel_id,
+            project_id,
+        } => {
+            let unlinked = channels::unlink_project(&state.hub, &channel_id, &project_id).await;
+            channels::after_change(state, "unlink the project", unlinked).await;
+        }
+        UiEvent::ArchiveChannel(channel_id) => channels::handle_archive(state, &channel_id).await,
         UiEvent::RestoreAgent(agent) => agents::handle_restore_agent(state, &agent).await,
         UiEvent::RemoveProject(project) => agents::handle_remove_project(state, &project).await,
         UiEvent::RefreshAgents => agents::handle_refresh_agents(state).await,

@@ -370,6 +370,51 @@ pub enum UiEvent {
 
     /// `/cloud setup`: put a boxd API key in `AURA_HOME/.env`
     CloudSetup,
+
+    /// User made a channel
+    CreateChannel {
+        /// Short unique name it is addressed by, such as `release`
+        slug: String,
+        /// What it is called
+        title: String,
+        /// What it is for
+        description: String,
+    },
+
+    /// User opened a channel (channel id)
+    OpenChannel(String),
+
+    /// User left the channel that was open
+    CloseChannel,
+
+    /// User changed a channel's title or description
+    UpdateChannel {
+        /// Channel id
+        channel_id: String,
+        /// New title
+        title: String,
+        /// New description
+        description: String,
+    },
+
+    /// User linked a project to a channel
+    LinkProject {
+        /// Channel id
+        channel_id: String,
+        /// Project id
+        project_id: String,
+    },
+
+    /// User unlinked a project from a channel
+    UnlinkProject {
+        /// Channel id
+        channel_id: String,
+        /// Project id
+        project_id: String,
+    },
+
+    /// User archived a channel (channel id)
+    ArchiveChannel(String),
 }
 
 /// What `/rewind` puts back.
@@ -820,6 +865,183 @@ pub enum UiCommand {
 
     /// The HOST tab of the agent on screen
     SetHost(Box<crate::host::HostView>),
+
+    /// Every channel that is not archived, in list order
+    SetChannels(Vec<ChannelSummary>),
+
+    /// Every task of a channel's agents, newest first
+    SetChannelTasks {
+        /// Channel id
+        channel_id: String,
+        tasks: Vec<TaskView>,
+    },
+
+    /// A new post in a channel
+    ChannelPost {
+        /// Channel id
+        channel_id: String,
+        post: ChannelPostView,
+    },
+
+    /// Every post of a channel, oldest first
+    SetChannelPosts {
+        /// Channel id
+        channel_id: String,
+        posts: Vec<ChannelPostView>,
+    },
+}
+
+/// A channel: a shared conversation between the user and a coordinator
+/// agent, the agents it spawned, and the projects they work on.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelSummary {
+    /// Channel id
+    pub id: String,
+    /// Short unique name it is addressed by, such as `release`
+    pub slug: String,
+    /// What it is called
+    pub title: String,
+    /// What it is for
+    #[serde(default)]
+    pub description: String,
+    /// Agent that coordinates the channel (hex id)
+    pub coordinator_id: String,
+    /// Projects linked to it, in the order they were linked
+    #[serde(default)]
+    pub projects: Vec<ChannelProjectView>,
+    /// Coordinator first, then the agents it spawned, each followed by its
+    /// subagents (depth-first by parent); `depth` is set relative to the
+    /// coordinator (0). See [`nest_members`].
+    #[serde(default)]
+    pub members: Vec<AgentSummary>,
+    /// Whether it was archived
+    #[serde(default)]
+    pub archived: bool,
+}
+
+/// A project linked to a channel.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelProjectView {
+    /// Project id
+    pub id: String,
+    /// What it is called: its folder's name
+    pub name: String,
+    /// Full path of its folder
+    pub folder: String,
+}
+
+/// Who wrote a channel post.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelPostAuthor {
+    /// The user
+    #[default]
+    User,
+    /// An agent of the channel
+    Agent {
+        /// Agent (hex id)
+        id: String,
+        /// Its short code name, such as `RE36`, when it has one
+        #[serde(default)]
+        code: Option<String>,
+        /// Display name
+        name: String,
+    },
+}
+
+/// One post in a channel.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelPostView {
+    /// Position in the channel, counting from 1 with no gaps
+    pub seq: u64,
+    /// Who wrote it
+    pub author: ChannelPostAuthor,
+    /// What it says
+    pub text: String,
+    /// Agents it mentions (hex ids)
+    #[serde(default)]
+    pub mentions: Vec<String>,
+    /// `seq` of the post it answers
+    #[serde(default)]
+    pub reply_to: Option<u64>,
+    /// When it was posted, in Unix milliseconds
+    pub at_ms: u64,
+}
+
+/// Orders a channel's members for display: the coordinator first, then
+/// each agent followed by the agents it spawned, depth-first. Siblings keep
+/// their order in `members`. Each member comes with the hex id of the agent
+/// that spawned it; members whose parent is not among `members` go under
+/// the coordinator. `depth` is set relative to the coordinator (0).
+///
+/// A coordinator missing from `members` is left out; its children still
+/// start at depth 1. Members caught in a parent cycle, unreachable from the
+/// coordinator, are put under it too so none is dropped.
+#[must_use]
+pub fn nest_members(
+    coordinator_id: &str,
+    members: Vec<(AgentSummary, Option<String>)>,
+) -> Vec<AgentSummary> {
+    use std::collections::HashSet;
+
+    let ids: HashSet<String> = members.iter().map(|(a, _)| a.id.clone()).collect();
+    // Parent of each member as placed in the tree: the coordinator when its
+    // own parent is unknown. The coordinator itself has none.
+    let parents: Vec<Option<String>> = members
+        .iter()
+        .map(|(agent, parent)| {
+            if agent.id == coordinator_id {
+                None
+            } else {
+                match parent {
+                    Some(p) if p != &agent.id && ids.contains(p) => Some(p.clone()),
+                    _ => Some(coordinator_id.to_string()),
+                }
+            }
+        })
+        .collect();
+
+    let mut slots: Vec<Option<AgentSummary>> =
+        members.into_iter().map(|(agent, _)| Some(agent)).collect();
+    let mut out = Vec::with_capacity(slots.len());
+
+    // Depth-first walk with an explicit stack of (index, depth).
+    let mut visit = |root: usize, depth: usize, slots: &mut Vec<Option<AgentSummary>>| {
+        let mut stack = vec![(root, depth)];
+        while let Some((index, depth)) = stack.pop() {
+            let Some(mut agent) = slots[index].take() else {
+                continue;
+            };
+            let children: Vec<usize> = (0..slots.len())
+                .filter(|&i| slots[i].is_some() && parents[i].as_deref() == Some(&agent.id))
+                .collect();
+            // Reversed so the first sibling is popped first.
+            stack.extend(children.into_iter().rev().map(|i| (i, depth + 1)));
+            agent.depth = depth;
+            out.push(agent);
+        }
+    };
+
+    let coordinator = slots
+        .iter()
+        .position(|s| s.as_ref().is_some_and(|a| a.id == coordinator_id));
+    if let Some(index) = coordinator {
+        visit(index, 0, &mut slots);
+    } else {
+        let roots: Vec<usize> = (0..slots.len())
+            .filter(|&i| parents[i].as_deref() == Some(coordinator_id))
+            .collect();
+        for index in roots {
+            visit(index, 1, &mut slots);
+        }
+    }
+    // Members in a parent cycle never reached from the coordinator.
+    for index in 0..slots.len() {
+        if slots[index].is_some() {
+            visit(index, 1, &mut slots);
+        }
+    }
+    out
 }
 
 /// A plan the agent wrote, as the todo list above the input shows it.
@@ -1800,6 +2022,130 @@ mod tests {
     fn test_message_role_equality() {
         assert_eq!(MessageRole::User, MessageRole::User);
         assert_ne!(MessageRole::User, MessageRole::Assistant);
+    }
+
+    fn member(id: &str, parent: Option<&str>) -> (AgentSummary, Option<String>) {
+        (
+            AgentSummary {
+                id: id.into(),
+                depth: 9,
+                ..AgentSummary::default()
+            },
+            parent.map(Into::into),
+        )
+    }
+
+    fn order(nested: &[AgentSummary]) -> Vec<(&str, usize)> {
+        nested.iter().map(|a| (a.id.as_str(), a.depth)).collect()
+    }
+
+    #[test]
+    fn nest_members_puts_the_coordinator_first_then_children_depth_first() {
+        let nested = nest_members(
+            "co",
+            vec![
+                member("a", Some("co")),
+                member("a1", Some("a")),
+                member("b", Some("co")),
+                member("co", None),
+                member("a2", Some("a")),
+                member("b1", Some("b")),
+                member("a1x", Some("a1")),
+            ],
+        );
+        assert_eq!(
+            order(&nested),
+            vec![
+                ("co", 0),
+                ("a", 1),
+                ("a1", 2),
+                ("a1x", 3),
+                ("a2", 2),
+                ("b", 1),
+                ("b1", 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn nest_members_puts_orphans_under_the_coordinator() {
+        let nested = nest_members(
+            "co",
+            vec![
+                member("x", Some("gone")),
+                member("co", Some("someone")),
+                member("y", None),
+                member("x1", Some("x")),
+            ],
+        );
+        assert_eq!(
+            order(&nested),
+            vec![("co", 0), ("x", 1), ("x1", 2), ("y", 1)]
+        );
+    }
+
+    #[test]
+    fn nest_members_keeps_members_without_a_coordinator_or_in_a_cycle() {
+        let nested = nest_members(
+            "co",
+            vec![
+                member("p", Some("q")),
+                member("q", Some("p")),
+                member("a", Some("co")),
+                member("a1", Some("a")),
+            ],
+        );
+        assert_eq!(
+            order(&nested),
+            vec![("a", 1), ("a1", 2), ("p", 1), ("q", 2)]
+        );
+        assert!(nest_members("co", Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn channel_views_round_trip_through_json() {
+        let channel = ChannelSummary {
+            id: "ch1".into(),
+            slug: "release".into(),
+            title: "Release".into(),
+            description: "Ship 1.0".into(),
+            coordinator_id: "co".into(),
+            projects: vec![ChannelProjectView {
+                id: "p1".into(),
+                name: "aura".into(),
+                folder: "/code/aura".into(),
+            }],
+            members: nest_members("co", vec![member("co", None), member("a", Some("co"))]),
+            archived: false,
+        };
+        let json = serde_json::to_string(&channel).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ChannelSummary>(&json).unwrap(),
+            channel
+        );
+
+        for author in [
+            ChannelPostAuthor::User,
+            ChannelPostAuthor::Agent {
+                id: "a".into(),
+                code: Some("RE1".into()),
+                name: "RE1: Fix".into(),
+            },
+        ] {
+            let post = ChannelPostView {
+                seq: 3,
+                author,
+                text: "@RE1 look".into(),
+                mentions: vec!["a".into()],
+                reply_to: Some(2),
+                at_ms: 1_700_000_000_000,
+            };
+            let json = serde_json::to_string(&post).unwrap();
+            assert_eq!(
+                serde_json::from_str::<ChannelPostView>(&json).unwrap(),
+                post
+            );
+        }
     }
 }
 

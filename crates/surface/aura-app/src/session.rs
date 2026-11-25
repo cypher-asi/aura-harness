@@ -266,6 +266,13 @@ pub async fn start(
     for list in hub.agent_lists() {
         let _ = cmd_tx.try_send(list);
     }
+    match event_loop::channels::channel_summaries(&hub).await {
+        Ok(channels) if channels.is_empty() => {}
+        Ok(channels) => {
+            let _ = cmd_tx.try_send(UiCommand::SetChannels(channels));
+        }
+        Err(error) => tracing::warn!(error = %format!("{error:#}"), "Could not list the channels"),
+    }
     let _ = cmd_tx.try_send(UiCommand::SetActiveAgent(identity.agent_id.to_hex()));
     let _ = cmd_tx.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
     let session = hub.factory.open(&active_agent, Vec::new(), active_folder)?;

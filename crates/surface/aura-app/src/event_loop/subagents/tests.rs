@@ -142,6 +142,15 @@ impl Fixture {
         }
         count
     }
+
+    /// Take every UI command sent so far, in the order they were sent.
+    pub(in crate::event_loop) fn take_commands(&mut self) -> Vec<UiCommand> {
+        let mut out = Vec::new();
+        while let Ok(command) = self.commands.try_recv() {
+            out.push(command);
+        }
+        out
+    }
 }
 
 pub(in crate::event_loop) fn request(

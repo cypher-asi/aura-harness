@@ -546,6 +546,9 @@ pub(crate) struct ListRows {
     pub(crate) projects: Vec<ProjectSummary>,
     pub(crate) listed: Vec<(AgentId, AgentSummary)>,
     pub(crate) archived: Vec<(AgentId, AgentSummary)>,
+    /// Rows of channel members, taken out of `listed` by
+    /// [`ListRows::split_members`] for the channels list
+    pub(crate) members: Vec<(AgentId, AgentSummary)>,
     /// The agent the rows mark active
     pub(crate) active: AgentId,
 }
@@ -586,27 +589,30 @@ impl ListRows {
             projects,
             listed,
             archived,
+            members: Vec::new(),
             active,
         }
     }
 
-    /// Leave the agents in `members` (channel members) out of the agents
-    /// column, and the projects that only they were listed in out of the
-    /// projects list. A project's archived count is left as it is.
-    pub(crate) fn without_members(&mut self, members: &HashSet<AgentId>) {
+    /// Move the agents in `members` (channel members) out of the agents
+    /// column into [`ListRows::members`], and leave the projects that only
+    /// they were listed in out of the projects list. A project's archived
+    /// count is left as it is.
+    pub(crate) fn split_members(&mut self, members: &HashSet<AgentId>) {
         if members.is_empty() {
             return;
         }
         let mut removed: HashMap<String, usize> = HashMap::new();
-        self.listed.retain(|(agent_id, row)| {
-            let is_member = members.contains(agent_id);
-            if is_member {
-                if let Some(project) = &row.project_id {
-                    *removed.entry(project.clone()).or_default() += 1;
-                }
+        let (taken, kept) = std::mem::take(&mut self.listed)
+            .into_iter()
+            .partition(|(agent_id, _)| members.contains(agent_id));
+        self.listed = kept;
+        for (_, row) in &taken {
+            if let Some(project) = &row.project_id {
+                *removed.entry(project.clone()).or_default() += 1;
             }
-            !is_member
-        });
+        }
+        self.members = taken;
         self.projects.retain_mut(|project| {
             let Some(&gone) = removed.get(&project.id) else {
                 return true;
@@ -619,7 +625,12 @@ impl ListRows {
     /// Fill in each row's record count and last activity from `store`,
     /// reusing what `cache` saw for agents with no new entries.
     pub(crate) fn read_activity(&mut self, store: &dyn ReadStore, cache: &mut LastActive) {
-        for (agent_id, row) in self.listed.iter_mut().chain(self.archived.iter_mut()) {
+        for (agent_id, row) in self
+            .listed
+            .iter_mut()
+            .chain(self.archived.iter_mut())
+            .chain(self.members.iter_mut())
+        {
             set_activity(row, cache.of(store, *agent_id));
         }
     }
