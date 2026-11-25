@@ -1938,6 +1938,52 @@ fn first_run_without_a_file_seeds_one_agent() {
     assert!(!dir.path().join(REGISTRY_FILE).exists());
 }
 
+#[test]
+fn empty_store_beside_a_migrated_file_reimports_it_instead_of_seeding() {
+    let launch = tempfile::tempdir().unwrap();
+    let home = launch.path().canonicalize().unwrap();
+    let file = serde_json::json!({
+        "version": 3,
+        "active": "0://terminal/re1",
+        "projects": [
+            {"id": "p-home", "folder": home, "created_at": "2026-01-02T03:04:05Z"},
+        ],
+        "agents": [
+            {"zns_id": "0://terminal/main", "name": "Terminal Agent",
+             "created_at": "2026-01-02T03:04:05Z", "project_id": "p-home", "code": "AG1"},
+            {"zns_id": "0://terminal/re1", "name": "rust-engineer #1",
+             "created_at": "2026-01-02T04:00:00Z", "definition": "rust-engineer",
+             "parent": "0://terminal/main", "project_id": "p-home", "code": "RE1"},
+        ],
+        "prefixes": {"agent": "AG", "rust-engineer": "RE"},
+        "last_numbers": {"AG": 1, "RE": 1},
+    });
+    let bytes = serde_json::to_vec_pretty(&file).unwrap();
+    // What a power loss after the rename leaves: the file renamed, the
+    // store (a fresh data directory here) without the batch.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join(MIGRATED_REGISTRY_FILE), &bytes).unwrap();
+
+    let registry = open(dir.path(), launch.path());
+    assert_matches_file(&registry, &file);
+    assert!(
+        !dir.path().join(LEGACY_IDENTITY_FILE).exists(),
+        "not seeded"
+    );
+    assert!(!dir.path().join(REGISTRY_FILE).exists());
+    assert_eq!(
+        fs::read(dir.path().join(MIGRATED_REGISTRY_FILE)).unwrap(),
+        bytes,
+        "the renamed file is left as it was"
+    );
+    let snapshot = registry.store().load().unwrap();
+    drop(registry);
+
+    let reloaded = open(dir.path(), launch.path());
+    assert_matches_file(&reloaded, &file);
+    assert_eq!(reloaded.store().load().unwrap(), snapshot);
+}
+
 /// What a reload must keep: the list, the Archive, every project and
 /// agent, and the active agent.
 type State = (

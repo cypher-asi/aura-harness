@@ -404,7 +404,9 @@ impl AgentRegistry {
     }
 
     /// Load the registry from `store`, importing `<data_dir>/agents.json`
-    /// once when the store holds no registry yet, seeding it from the
+    /// once when the store holds no registry yet (or, when only
+    /// `agents.json.migrated` is left, re-importing that: the store lost
+    /// the earlier import), seeding it from the
     /// legacy identity file (or a fresh identity) when there is neither,
     /// and bringing an older registry up to date. Agents nothing places
     /// go in the project for `launch_dir`.
@@ -416,15 +418,16 @@ impl AgentRegistry {
         let imported = store
             .is_empty()
             .with_context(|| format!("reading agent registry in {}", data_dir.display()))?;
-        let (file, persisted) = if imported {
-            (read_registry_file(data_dir)?, persist::Persisted::default())
+        let (file, persisted, source) = if imported {
+            let (file, source) = read_registry_file(data_dir)?;
+            (file, persist::Persisted::default(), source)
         } else {
             let snapshot = store
                 .load()
                 .with_context(|| format!("loading agent registry in {}", data_dir.display()))?;
             let file = persist::from_snapshot(snapshot);
             let persisted = persist::Persisted::of(&persist::to_rows(&file));
-            (file, persisted)
+            (file, persisted, ImportSource::None)
         };
 
         let mut registry = Self {
@@ -467,9 +470,15 @@ impl AgentRegistry {
             .raise_to_codes(&registry.file.agents);
         let coded = registry.assign_missing_codes();
         if changed || imported {
-            registry.persist()?;
             if imported {
-                retire_registry_file(data_dir);
+                // The rename below must never outlive the import after a
+                // power loss, so the batch is fsynced first.
+                registry.persist_durable()?;
+                if source == ImportSource::File {
+                    retire_registry_file(data_dir);
+                }
+            } else {
+                registry.persist()?;
             }
         } else if migrated || coded || reserved || seeded {
             // Codes alone are no reason to refuse to start, say on a
@@ -1530,11 +1539,27 @@ impl AgentRegistry {
     /// What is remembered as stored moves on only once the batch landed,
     /// so a failed write is retried by the next one.
     fn persist(&mut self) -> anyhow::Result<()> {
+        self.persist_with(false)
+    }
+
+    /// [`Self::persist`], fsyncing the batch before returning whatever
+    /// the store's `sync_writes` setting, for a write another durable step
+    /// depends on.
+    fn persist_durable(&mut self) -> anyhow::Result<()> {
+        self.persist_with(true)
+    }
+
+    fn persist_with(&mut self, durable: bool) -> anyhow::Result<()> {
         let (diff, next) = self.persisted.diff(persist::to_rows(&self.file));
         if diff.is_empty() {
             return Ok(());
         }
-        self.store.apply(&diff).with_context(|| {
+        let written = if durable {
+            self.store.apply_durable(&diff)
+        } else {
+            self.store.apply(&diff)
+        };
+        written.with_context(|| {
             format!(
                 "saving agent registry in {} ({} agents, {} projects changed)",
                 self.data_dir.display(),
@@ -1596,21 +1621,48 @@ impl AgentRegistry {
     }
 }
 
-/// The registry in `<data_dir>/agents.json`, for the one-time import into
-/// the store; empty when there is no such file.
-fn read_registry_file(data_dir: &Path) -> anyhow::Result<RegistryFile> {
+/// Where [`read_registry_file`] found the registry to import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImportSource {
+    /// Nothing to import: the registry is seeded fresh.
+    None,
+    /// `agents.json`, imported for the first time.
+    File,
+    /// `agents.json.migrated`: an earlier import was renamed away but its
+    /// batch is not in the store, as after a power loss.
+    Migrated,
+}
+
+/// The registry to import into an empty store: `<data_dir>/agents.json`,
+/// or, when only `agents.json.migrated` is left, that file again, since an
+/// empty store next to it means the store lost the earlier import. Empty
+/// when there is neither.
+fn read_registry_file(data_dir: &Path) -> anyhow::Result<(RegistryFile, ImportSource)> {
     let path = data_dir.join(REGISTRY_FILE);
-    if !path.exists() {
-        return Ok(RegistryFile::default());
-    }
+    let migrated = data_dir.join(MIGRATED_REGISTRY_FILE);
+    let (path, source) = if path.exists() {
+        (path, ImportSource::File)
+    } else if migrated.exists() {
+        tracing::warn!(
+            path = %migrated.display(),
+            "the agent store is empty but agents.json was imported before; \
+             the store lost the import, importing the renamed file again"
+        );
+        (migrated, ImportSource::Migrated)
+    } else {
+        return Ok((RegistryFile::default(), ImportSource::None));
+    };
     let body = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))
+    let file =
+        serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))?;
+    Ok((file, source))
 }
 
 /// Rename `<data_dir>/agents.json` to `agents.json.migrated` once its
-/// contents are in the store, so it is never imported again and the
-/// original stays on disk. A failed rename is only logged: the store is
-/// not empty any more, so the file is not read again either way.
+/// contents are durably in the store, so it is never imported again and
+/// the original stays on disk, then fsync the directory so the rename
+/// itself is durable. A failed rename or sync is only logged: the store
+/// is not empty any more, so the file is not read again either way.
 fn retire_registry_file(data_dir: &Path) {
     let path = data_dir.join(REGISTRY_FILE);
     if !path.exists() {
@@ -1624,10 +1676,26 @@ fn retire_registry_file(data_dir: &Path) {
             %error,
             "could not rename the imported agent registry"
         );
-    } else {
-        tracing::info!(to = %target.display(), "imported agents.json into the store");
+        return;
+    }
+    tracing::info!(to = %target.display(), "imported agents.json into the store");
+    sync_dir(data_dir);
+}
+
+/// Fsync directory `dir` so a rename in it survives a power loss. Best
+/// effort: a failure is logged, as the data the rename guards is already
+/// durable in the store.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) {
+    if let Err(error) = fs::File::open(dir).and_then(|dir| dir.sync_all()) {
+        tracing::warn!(dir = %dir.display(), %error, "could not sync the data directory");
     }
 }
+
+/// `std::fs::File` cannot open a directory for syncing here, so the rename
+/// is left to the file system.
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) {}
 
 /// Lookups built in one pass over the registry's agents, so a walk of the
 /// lists finds parents and children without scanning every agent.

@@ -471,13 +471,32 @@ impl AgentStore {
     /// Rejects records that break the key invariants; surfaces sealing,
     /// encoding and store failures. Nothing is written on error.
     pub fn apply(&self, diff: &RegistryDiff) -> Result<(), AgentStoreError> {
+        self.write(diff, &self.write_opts())
+    }
+
+    /// [`Self::apply`], but the batch is fsynced before this returns,
+    /// whatever the store's `sync_writes` setting.
+    ///
+    /// For writes another durable step depends on, such as renaming the
+    /// file a batch was imported from: without the sync a power loss can
+    /// keep the rename and lose the batch.
+    ///
+    /// # Errors
+    /// As [`Self::apply`].
+    pub fn apply_durable(&self, diff: &RegistryDiff) -> Result<(), AgentStoreError> {
+        let mut opts = WriteOptions::default();
+        opts.set_sync(true);
+        self.write(diff, &opts)
+    }
+
+    fn write(&self, diff: &RegistryDiff, opts: &WriteOptions) -> Result<(), AgentStoreError> {
         let mut batch = WriteBatch::default();
         self.stage(diff, &mut batch)?;
         if batch.is_empty() {
             return Ok(());
         }
         self.db
-            .write_opt(batch, &self.write_opts())
+            .write_opt(batch, opts)
             .map_err(|source| AgentStoreError::Backend {
                 context: "writing registry batch".to_string(),
                 source,
