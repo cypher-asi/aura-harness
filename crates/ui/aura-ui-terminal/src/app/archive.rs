@@ -328,7 +328,7 @@ impl App {
             .get(self.selected_archived)
             .map(|a| a.id.clone())
         {
-            self.request_agent_switch(id);
+            self.switch_on_screen(&id);
         }
     }
 
@@ -353,11 +353,11 @@ impl App {
             return;
         }
         self.send_event(UiEvent::RestoreAgent(id));
-        self.show_agents_tab(super::AgentsTab::Projects);
+        self.switch_app(super::AgentsTab::Projects);
     }
 
     /// Agent under the projects-list highlight, if it is on an agent.
-    fn highlighted_agent(&self) -> Option<String> {
+    pub(super) fn highlighted_agent(&self) -> Option<String> {
         match self.project_rows().get(self.selected_agent)? {
             ProjectListRow::Agent { index } => self.agents.get(*index).map(|a| a.id.clone()),
             _ => None,
@@ -583,6 +583,10 @@ mod tests {
         app.show_agents_tab(AgentsTab::Archive);
         assert_eq!(app.agents_tab(), AgentsTab::Archive);
         assert_eq!(app.archived().len(), 2);
+        assert!(
+            matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "dd"),
+            "the highlighted agent opens on coming to the Archive"
+        );
 
         app.handle_key(key(KeyCode::Char(' ')));
         app.handle_key(key(KeyCode::Down));
@@ -591,9 +595,48 @@ mod tests {
         assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "ee"));
         assert!(rx.try_recv().is_err(), "nothing is restored");
         assert_eq!(app.agents_tab(), AgentsTab::Archive);
+        assert_eq!(app.active_agent_id(), "ee", "on screen at once");
+    }
 
-        app.handle_command("/archive");
-        assert!(matches!(rx.try_recv(), Ok(UiEvent::ArchiveAgent(id)) if id == "bb"));
+    #[test]
+    fn each_agent_app_shows_what_it_was_left_on() {
+        let (mut app, mut rx) = app();
+        app.process_command(UiCommand::SetArchivedAgents(vec![
+            agent("dd", 0),
+            agent("ee", 0),
+        ]));
+        app.show_agents_tab(AgentsTab::Archive);
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.active_agent_id(), "ee");
+
+        app.show_agents_tab(AgentsTab::Projects);
+        assert_eq!(app.active_agent_id(), "bb", "PROJECTS was left on bb");
+        app.show_agents_tab(AgentsTab::Archive);
+        assert_eq!(app.active_agent_id(), "ee", "ARCHIVE was left on ee");
+        app.show_agents_tab(AgentsTab::Projects);
+        assert_eq!(app.active_agent_id(), "bb");
+        let asked: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                UiEvent::SelectAgent(id) | UiEvent::FocusAgent(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, ["dd", "ee", "bb", "ee", "bb"]);
+    }
+
+    #[test]
+    fn a_listed_agent_put_on_screen_brings_projects_to_the_front() {
+        let (mut app, _rx) = app();
+        app.process_command(UiCommand::SetArchivedAgents(vec![agent("dd", 0)]));
+        app.show_agents_tab(AgentsTab::Archive);
+        app.process_command(UiCommand::SetActiveAgent("dd".into()));
+        assert_eq!(app.agents_tab(), AgentsTab::Archive);
+
+        // The session going to a listed agent, as a notification does.
+        app.process_command(UiCommand::SetActiveAgent("cc".into()));
+        assert_eq!(app.active_agent_id(), "cc");
+        assert_eq!(app.agents_tab(), AgentsTab::Projects);
     }
 
     fn click(app: &mut App, (column, row): (u16, u16)) {
@@ -625,6 +668,7 @@ mod tests {
             agent("ee", 1),
         ]));
         app.show_agents_tab(AgentsTab::Archive);
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "dd"));
         app.handle_key(key(KeyCode::Char(' ')));
         let rows = screen(&mut app, 100);
         click(&mut app, cell_of(&rows, "EE"));
@@ -765,9 +809,9 @@ mod tests {
     }
 
     /// An Archive of `dd` over `ee` over `ff`, then `gg` alone, then `hh`
-    /// over `ii`, shown in the Archive tab.
+    /// over `ii`, shown in the Archive tab with `dd` on screen.
     fn nested_archive() -> (App, mpsc::Receiver<UiEvent>) {
-        let (mut app, rx) = app();
+        let (mut app, mut rx) = app();
         app.process_command(UiCommand::SetArchivedAgents(vec![
             agent("dd", 0),
             agent("ee", 1),
@@ -778,6 +822,7 @@ mod tests {
         ]));
         app.show_agents_tab(AgentsTab::Archive);
         assert_eq!(app.agents_tab(), AgentsTab::Archive);
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "dd"));
         (app, rx)
     }
 
@@ -848,7 +893,9 @@ mod tests {
             agent("ee", 1),
             ff,
         ]));
+        app.process_command(UiCommand::SetActiveAgent("ff".into()));
         app.show_agents_tab(AgentsTab::Archive);
+        assert_eq!(app.active_agent_id(), "ff", "the Archive keeps it on screen");
         assert_eq!(app.shown_active_archived(), Some(0));
         assert_eq!(app.selected_archived(), 0);
         app.toggle_archived(0);

@@ -75,35 +75,6 @@ impl App {
         self.areas.agent_tabs = Some(area);
     }
 
-    /// Show `tab`. CHANNELS is an app of its own (see `channels`):
-    /// leaving it closes the open channel and gives back the agent there
-    /// was before, and coming back opens the channel it was left on.
-    pub(super) fn show_agents_tab(&mut self, tab: AgentsTab) {
-        let was = self.agents_tab;
-        if tab == AgentsTab::Archive && was != AgentsTab::Archive {
-            self.fold_all_archived();
-        }
-        self.set_agents_tab(tab);
-        let channels = AgentsTab::Channels;
-        if was == channels && tab != channels {
-            self.leave_channel_app();
-        } else if was != channels && tab == channels {
-            self.enter_channel_app();
-            if let Some(id) = self.channel_to_reopen() {
-                self.open_channel_by_id(&id);
-            }
-        }
-    }
-
-    /// Make `tab` the one shown, without entering or leaving the channel
-    /// app: for callers that do that part themselves.
-    pub(super) fn set_agents_tab(&mut self, tab: AgentsTab) {
-        self.agents_tab = tab;
-        self.pending_delete = None;
-        self.pending_remove_project = None;
-        self.pending_archive_channel = None;
-    }
-
     /// Left shows the tab before, Right the one after.
     pub(super) fn shift_agents_tab(&mut self, key: KeyCode) {
         self.show_agents_tab(self.agents_tab.shifted(key == KeyCode::Right));
@@ -208,7 +179,7 @@ impl App {
         self.selected_definition = row.min(self.definitions.len());
     }
 
-    fn selected_definition_name(&self) -> Option<String> {
+    pub(super) fn selected_definition_name(&self) -> Option<String> {
         self.definitions
             .get(self.selected_definition)
             .map(|d| d.name.clone())
@@ -227,7 +198,7 @@ impl App {
     pub(super) fn instantiate_definition(&mut self, name: &str) {
         self.send(UiEvent::InstantiateDefinition(name.to_string()));
         // The new instance becomes the active agent, listed under Projects.
-        self.show_agents_tab(AgentsTab::Projects);
+        self.switch_app(AgentsTab::Projects);
     }
 
     /// Add an instance of the permanent agent `name` to the active agent's
@@ -235,7 +206,7 @@ impl App {
     /// mid-turn too.
     pub(super) fn add_definition_to_project(&mut self, name: &str) {
         self.send(UiEvent::AddDefinitionToProject(name.to_string()));
-        self.show_agents_tab(AgentsTab::Projects);
+        self.switch_app(AgentsTab::Projects);
     }
 
     /// Open the permanent agent `name` in the editor, or a new one for `None`.
@@ -299,15 +270,16 @@ impl App {
         }
     }
 
-    /// Clicking a row highlights it; clicking "+ New agent"
-    /// creates one.
+    /// Clicking a row highlights it and shows its latest instance's chat;
+    /// clicking "+ New agent" creates one.
     pub(super) fn click_definition_row(&mut self, column: u16, row: u16) {
         let Some(index) = self.definition_row_at(column, row) else {
             return;
         };
         self.selected_definition = index;
-        if index == self.definitions.len() {
-            self.edit_definition(None);
+        match self.selected_definition_name() {
+            Some(name) => self.open_definition(&name),
+            None => self.edit_definition(None),
         }
     }
 

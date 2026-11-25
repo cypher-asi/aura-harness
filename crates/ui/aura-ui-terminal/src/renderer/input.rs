@@ -158,9 +158,9 @@ fn shape(area: Rect, app: &App) -> Shape<'_> {
     };
     let prompt_width = u16::try_from(display_width(prompt)).unwrap_or(u16::MAX);
     let placeholder = (input.is_empty() && prompt == CHAT_PROMPT).then(|| {
-        // The channel app says who a message goes to, or that a channel
-        // has to be picked first.
-        if let Some(text) = app.channel_placeholder() {
+        // The channel app says who a message goes to; an app showing
+        // nothing says what to pick first.
+        if let Some(text) = app.app_placeholder() {
             text
         } else if app.messages().is_empty() {
             FIRST_PLACEHOLDER.to_string()
@@ -199,9 +199,9 @@ fn shape(area: Rect, app: &App) -> Shape<'_> {
 /// right padding, while the agent on screen is busy and the box leaves
 /// [`MIN_TYPING_WITH_STOP`] columns to type in beside it.
 fn stop_button_x(app: &App, typing_x: u16, right: u16) -> Option<u16> {
-    // With no channel open the chat shows no agent, so there is no turn
-    // of its to stop.
-    if !app.is_busy() || app.channel_app_empty() {
+    // An app showing nothing shows no agent, so there is no turn of its
+    // to stop.
+    if !app.is_busy() || app.app_empty() {
         return None;
     }
     let label = u16::try_from(display_width(STOP_LABEL)).ok()?;

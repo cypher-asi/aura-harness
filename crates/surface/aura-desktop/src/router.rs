@@ -9,7 +9,9 @@
 //!
 //! - The agent list is cut down to each tab's projects, and commands
 //!   addressed to an agent go to the tab that holds it.
-//! - Lists that aren't about agents (models, definitions) go to every tab.
+//! - Lists that aren't about projects (models, definitions, the Archive,
+//!   channels) go to every tab. Archived agents and channel members are
+//!   in no tab's projects: they show in the tab that opened them.
 //! - Anything else goes to the tab holding the session's active agent.
 //! - Before a tab's events are sent, the session is asked to make that
 //!   tab's agent the active one, so the answers come back to it.
@@ -83,7 +85,7 @@ pub struct Tabs {
     /// Every process of the session, as last listed.
     processes: Vec<ProcessSummary>,
     /// The latest of each list all tabs show whole, for tabs opened later.
-    lists: [Option<UiCommand>; 4],
+    lists: [Option<UiCommand>; 5],
     /// The session's active agent, as it last reported.
     session_active: String,
     /// Agent the session was asked to make active and hasn't confirmed.
@@ -115,7 +117,7 @@ impl Tabs {
             agents: Vec::new(),
             projects: Vec::new(),
             processes: Vec::new(),
-            lists: [None, None, None, None],
+            lists: [None, None, None, None, None],
             session_active: String::new(),
             focus_sent: None,
             opening: false,
@@ -191,6 +193,18 @@ impl Tabs {
         matches!(
             &self.lists[3],
             Some(UiCommand::SetArchivedAgents(rows)) if rows.iter().any(|row| row.id == agent)
+        )
+    }
+
+    /// Whether `agent` coordinates a channel or is a member of one, as
+    /// last listed. The agent list leaves those out.
+    fn is_channel_member(&self, agent: &str) -> bool {
+        matches!(
+            &self.lists[4],
+            Some(UiCommand::SetChannels(channels)) if channels.iter().any(|channel| {
+                channel.coordinator_id == agent
+                    || channel.members.iter().any(|member| member.id == agent)
+            })
         )
     }
 
@@ -274,10 +288,14 @@ impl Tabs {
         }
         match command {
             UiCommand::SetActiveAgent(agent) => {
-                // An archived agent opened from the Archive is never in a
-                // list of `SetAgents`: waiting for one would hold back its
-                // chat until the next refresh.
-                if self.owner(&agent).is_some() || self.is_archived(&agent) {
+                // An archived agent opened from the Archive, or a channel's
+                // coordinator, is never in a list of `SetAgents`: waiting
+                // for one would hold back its chat for good, as the session
+                // follows each list with this agent again.
+                if self.owner(&agent).is_some()
+                    || self.is_archived(&agent)
+                    || self.is_channel_member(&agent)
+                {
                     self.session_switched(agent);
                 } else {
                     // A new agent: the list that names it follows.
@@ -317,6 +335,7 @@ impl Tabs {
             | UiCommand::EndLink
             | UiCommand::SetAgentDefinitions(_)
             | UiCommand::SetArchivedAgents(_)
+            | UiCommand::SetChannels(_)
             | UiCommand::SetModels { .. }
             | UiCommand::SetApiStatus { .. } => {
                 let slot = match command {
@@ -324,6 +343,7 @@ impl Tabs {
                     UiCommand::SetModels { .. } => Some(1),
                     UiCommand::SetApiStatus { .. } => Some(2),
                     UiCommand::SetArchivedAgents(_) => Some(3),
+                    UiCommand::SetChannels(_) => Some(4),
                     _ => None,
                 };
                 if let Some(slot) = slot {
@@ -1209,6 +1229,54 @@ mod tests {
         tabs.apply(message("reply"));
         assert_eq!(messages(&tabs), [before[0], before[1] + 1]);
         assert_eq!(shown(&tabs), ["a1", "z9"]);
+    }
+
+    #[test]
+    fn a_channel_opens_in_its_tab_and_its_chat_is_not_held_back() {
+        let (mut tabs, mut events) = two_tabs();
+        let channels = UiCommand::SetChannels(vec![aura_ui::events::ChannelSummary {
+            id: "ch".into(),
+            slug: "zode".into(),
+            coordinator_id: "c1".into(),
+            members: vec![AgentSummary {
+                id: "c1".into(),
+                name: "C1".into(),
+                ..AgentSummary::default()
+            }],
+            ..aura_ui::events::ChannelSummary::default()
+        }]);
+        tabs.apply(channels.clone());
+
+        // CHANNELS opens the channel there is, its coordinator on screen
+        // at once, waiting for its chat.
+        tabs.front_mut()
+            .tui
+            .select_pane_tab(aura_ui_terminal::PaneTab::Agents(
+                aura_ui_terminal::AgentsTab::Channels,
+            ));
+        tabs.forward_events();
+        let asked = sent(&mut events);
+        assert!(asked.contains(&r#"SelectAgent("c1")"#.to_string()), "{asked:?}");
+        assert!(asked.contains(&r#"OpenChannel("ch")"#.to_string()), "{asked:?}");
+        assert_eq!(shown(&tabs), ["a1", "c1"]);
+        assert!(tabs.front().tui.chat_loading());
+
+        // The session's answer: the coordinator, the lists (which leave it
+        // out) and the coordinator again, then its chat.
+        tabs.apply(UiCommand::SetActiveAgent("c1".into()));
+        tabs.apply(list(TWO, "c1"));
+        tabs.apply(channels);
+        tabs.apply(UiCommand::SetActiveAgent("c1".into()));
+        tabs.apply(UiCommand::ForAgent {
+            agent_id: "c1".into(),
+            command: Box::new(UiCommand::LoadConversation(vec![MessageData::new(
+                MessageRole::Assistant,
+                "hello from the coordinator",
+            )])),
+        });
+        assert_eq!(shown(&tabs), ["a1", "c1"]);
+        assert!(!tabs.front().tui.chat_loading(), "the chat is not held back");
+        assert_eq!(tabs.front().tui.messages().len(), 1);
     }
 
     #[test]

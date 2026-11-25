@@ -204,6 +204,16 @@ impl App {
         Some(tab)
     }
 
+    /// Leave `agent_id` on chat tab `tab`: at once while it is on screen,
+    /// else for when it comes back.
+    pub(super) fn give_chat_tab_back(&mut self, agent_id: &str, tab: ChatTab) {
+        if agent_id == self.active_agent_id {
+            self.restore_chat_tab(tab);
+        } else if let Some(view) = self.views.get_mut(agent_id) {
+            view.chat_tab = tab;
+        }
+    }
+
     /// Put the input's draft aside for `previous` and bring back the one
     /// `agent_id` was left with, an empty input for an agent with none.
     /// Runs after a queue edit gave the input back its draft, so that

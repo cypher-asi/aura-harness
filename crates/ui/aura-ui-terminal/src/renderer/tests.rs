@@ -6486,12 +6486,15 @@ fn test_channels_tab_lists_channels_over_new_channel() {
             .position(|row| row.contains(needle))
             .unwrap_or_else(|| panic!("no {needle:?} in:\n{}", rows.join("\n")))
     };
-    let channel = row_with("#zode");
+    // The channel opened, so the chat's bar names it too, with its title.
+    let bar = row_with("Zode release");
+    let channel = (0..rows.len())
+        .find(|&row| row != bar && rows[row].contains("#zode"))
+        .unwrap_or_else(|| panic!("no #zode row in:\n{}", rows.join("\n")));
     let new_channel = row_with("New channel");
     assert!(rows[new_channel].contains('+'), "{}", rows[new_channel]);
     assert!(channel < new_channel);
-    // The row is the slug and nothing else: no title, no description.
-    assert!(!rows[channel].contains("Zode release"), "{}", rows[channel]);
+    // The row is the slug and nothing else: no description.
     assert!(!rows[channel].contains("Ship it"), "{}", rows[channel]);
     // "+ New channel" is pinned to the panel's last row, above its border.
     assert!(
@@ -6596,11 +6599,39 @@ fn test_channel_info_tab_shows_what_the_channel_is() {
 }
 
 #[test]
-fn test_channels_with_nothing_open_ask_for_one_and_hide_the_right_column() {
-    let mut app = channels_app();
+fn test_channels_with_nothing_open_say_so_and_hide_the_right_column() {
+    use crate::app::{AgentsTab, PaneTab};
+    let mut app = crate::App::new();
+    app.select_pane_tab(PaneTab::Agents(AgentsTab::Channels));
     let screen = render_rows(&mut app, 140).join("\n");
-    assert!(screen.contains("Pick a channel on the left"), "{screen}");
+    assert!(screen.contains("Start one with + New channel"), "{screen}");
     for agent_feature in ["SANDBOX", "KERNEL", "TERMINAL", "GRAPH"] {
+        assert!(
+            !screen.contains(agent_feature),
+            "{agent_feature}:\n{screen}"
+        );
+    }
+}
+
+#[test]
+fn test_agents_app_without_an_instance_says_so_and_hides_the_right_column() {
+    use crate::app::{AgentsTab, PaneTab};
+    use crate::events::{AgentDefinitionSummary, UiCommand};
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetAgentDefinitions(vec![
+        AgentDefinitionSummary {
+            name: "explorer".to_string(),
+            description: "Reads code".to_string(),
+            abbreviation: None,
+        },
+    ]));
+    app.select_pane_tab(PaneTab::Agents(AgentsTab::Roster));
+    let screen = render_rows(&mut app, 140).join("\n");
+    assert!(
+        screen.contains("No explorer agent has run yet"),
+        "{screen}"
+    );
+    for agent_feature in ["SANDBOX", "KERNEL", "GRAPH"] {
         assert!(
             !screen.contains(agent_feature),
             "{agent_feature}:\n{screen}"

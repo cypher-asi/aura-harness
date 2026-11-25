@@ -26,11 +26,6 @@ use ratatui::{
 };
 use std::ops::Range;
 
-/// What the chat says in the channel app with no channel open.
-const PICK_A_CHANNEL: &str = "Pick a channel on the left to open its chat.";
-/// What it says when there are no channels to pick.
-const NO_CHANNEL_YET: &str = "No channels yet. Start one with + New channel on the left.";
-
 /// Render the Chat panel: a CHAT | TERMINAL | GRAPH header bar over the
 /// conversation, the shell commands run this session, or the flow between
 /// the agent and the agents it spawned. While a record, file, process or
@@ -106,15 +101,17 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
     }
 
-    if matches!(app.chat_tab(), ChatTab::Graph | ChatTab::Time) {
+    // An app showing nothing shows none of the agent's tabs either.
+    let empty = app.app_empty();
+    if !empty && matches!(app.chat_tab(), ChatTab::Graph | ChatTab::Time) {
         super::flow::render_flow(frame, area, app, theme, is_focused);
         return;
     }
-    if app.chat_tab() == ChatTab::Bench {
+    if !empty && app.chat_tab() == ChatTab::Bench {
         super::benchmarks::render_benchmarks(frame, area, app, theme, is_focused);
         return;
     }
-    if app.chat_tab() == ChatTab::Log {
+    if !empty && app.chat_tab() == ChatTab::Log {
         super::run_log::render_run_log(frame, area, app, theme, is_focused);
         return;
     }
@@ -123,22 +120,16 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
         return;
     };
 
-    let terminal = app.terminal_pane();
+    let terminal = app.terminal_pane() && !empty;
     let padded = terminal_text_area(body, terminal);
     app.set_chat_width(padded.width);
     app.set_chat_text_area(padded);
 
-    if app.channel_app_empty() {
-        // The channel app with nothing open: no agent's chat shows here.
+    if empty {
         app.set_chat_images(Vec::new());
         app.set_chat_code_copies(Vec::new());
         app.set_chat_rows(Some((padded, 0)));
-        let message = if app.channels().is_empty() {
-            NO_CHANNEL_YET
-        } else {
-            PICK_A_CHANNEL
-        };
-        render_empty(frame, padded, message, theme);
+        render_empty(frame, padded, &app.app_empty_message(), theme);
         return;
     }
 

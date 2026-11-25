@@ -216,10 +216,11 @@ impl App {
 
     /// The chat panel's tabs in a header bar `width` columns wide. The
     /// channel app has only CHAT, so there the bar has no tabs and shows
-    /// the channel's title instead ([`Self::channel_chat_title`]).
+    /// the channel's title instead ([`Self::channel_chat_title`]). An app
+    /// showing nothing ([`Self::app_empty`]) has no tabs either.
     #[must_use]
     pub(crate) fn chat_tab_layout(&self, width: u16) -> TabLayout<ChatTab> {
-        if self.channel_app() {
+        if self.channel_app() || self.app_empty() {
             TabLayout::new([], ChatTab::label, ChatTab::short_label, width)
         } else {
             ChatTab::layout(width)

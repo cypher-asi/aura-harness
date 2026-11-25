@@ -975,9 +975,9 @@ mod tests {
     }
 
     /// The app with two archived agents, showing the Archive tab with the
-    /// first opened over the second.
+    /// first opened over the second, and on screen.
     fn archive_app() -> (App, mpsc::Receiver<UiEvent>) {
-        let (mut app, rx) = app();
+        let (mut app, mut rx) = app();
         app.process_command(UiCommand::SetArchivedAgents(vec![
             agent("dd", 0),
             agent("ee", 1),
@@ -985,6 +985,8 @@ mod tests {
         app.focus = PanelFocus::Swarm;
         app.show_agents_tab(AgentsTab::Archive);
         assert_eq!(app.agents_tab(), AgentsTab::Archive);
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "dd"));
+        assert!(rx.try_recv().is_err());
         // The Archive opens folded; Space opens dd over ee.
         app.handle_key(key(KeyCode::Char(' ')));
         (app, rx)

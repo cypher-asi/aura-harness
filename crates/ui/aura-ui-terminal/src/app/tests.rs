@@ -1278,6 +1278,77 @@ fn test_arrows_edit_input_instead_of_toggling_tabs() {
     assert_eq!(app.cursor_pos(), 0);
 }
 
+/// An instance of permanent agent `definition`, last active at `ms`.
+fn instance(id: &str, definition: &str, ms: u64) -> crate::events::AgentSummary {
+    crate::events::AgentSummary {
+        definition: Some(definition.to_string()),
+        last_active_ms: Some(ms),
+        ..agent(id, &id.to_uppercase())
+    }
+}
+
+#[test]
+fn test_the_agents_app_shows_the_latest_instance_and_projects_gets_its_agent_back() {
+    let (mut app, mut rx) = app_with_agents();
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("aa", "Terminal Agent"),
+        instance("r1", "reviewer", 10),
+        instance("r2", "reviewer", 20),
+        instance("x1", "explorer", 5),
+    ]));
+    app.process_command(UiCommand::SetArchivedAgents(vec![instance(
+        "x0", "explorer", 50,
+    )]));
+    app.process_command(UiCommand::SetAgentDefinitions(vec![
+        crate::events::AgentDefinitionSummary {
+            name: "explorer".to_string(),
+            ..Default::default()
+        },
+        crate::events::AgentDefinitionSummary {
+            name: "reviewer".to_string(),
+            ..Default::default()
+        },
+    ]));
+    app.focus = PanelFocus::Swarm;
+
+    // Coming to AGENTS shows the highlighted one's latest instance, an
+    // archived one included.
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.agents_tab(), AgentsTab::Roster);
+    assert_eq!(app.active_agent_id(), "x0");
+    assert!(!app.app_empty());
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "x0"));
+
+    // Clicking another shows its latest.
+    app.open_definition("reviewer");
+    assert_eq!(app.active_agent_id(), "r2");
+
+    // PROJECTS gets back the agent it was left on, AGENTS the one it showed.
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.agents_tab(), AgentsTab::Projects);
+    assert_eq!(app.active_agent_id(), "aa");
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.active_agent_id(), "r2");
+}
+
+#[test]
+fn test_the_agents_app_with_no_instance_shows_nothing_and_refuses_to_send() {
+    let (mut app, mut rx) = app_with_definitions();
+    assert!(rx.try_recv().is_err(), "nothing to show");
+    assert_eq!(app.active_agent_id(), "aa");
+    assert!(app.app_empty());
+    assert!(!app.sandbox_panel_visible());
+    assert_eq!(
+        app.app_placeholder().as_deref(),
+        Some("Pick a permanent agent")
+    );
+    app.input = "hello".to_string();
+    app.cursor_pos = app.input.len();
+    app.submit_input();
+    assert_eq!(app.input(), "hello", "the draft is kept");
+    assert!(rx.try_recv().is_err(), "nothing is sent");
+}
+
 #[test]
 fn test_spawning_from_roster_shows_projects() {
     let (mut app, mut rx) = app_with_definitions();
@@ -5655,32 +5726,38 @@ fn test_agents_tabs_put_channels_first_and_open_on_projects() {
     assert_eq!(App::new().agents_tab(), AgentsTab::Projects);
 }
 
-/// The app with one channel, `#zode`, showing the CHANNELS tab with focus.
+/// The channel `#zode` (`c1`), coordinated by `coordinator`.
+fn zode(coordinator: &str) -> crate::events::ChannelSummary {
+    crate::events::ChannelSummary {
+        id: "c1".to_string(),
+        slug: "zode".to_string(),
+        title: "Zode release".to_string(),
+        coordinator_id: coordinator.to_string(),
+        members: vec![agent(coordinator, "Coordinator")],
+        ..crate::events::ChannelSummary::default()
+    }
+}
+
+/// The app with `#zode`, coordinated by `aa` (on screen), listed, and
+/// come to CHANNELS, which opened it.
 fn app_with_channel() -> (App, mpsc::Receiver<UiEvent>) {
-    let (mut app, rx) = app_with_agents();
-    app.process_command(UiCommand::SetChannels(vec![
-        crate::events::ChannelSummary {
-            id: "c1".to_string(),
-            slug: "zode".to_string(),
-            title: "Zode release".to_string(),
-            coordinator_id: "aa".to_string(),
-            members: vec![agent("aa", "Coordinator")],
-            ..crate::events::ChannelSummary::default()
-        },
-    ]));
+    let (mut app, mut rx) = app_with_agents();
+    app.process_command(UiCommand::SetChannels(vec![zode("aa")]));
     app.focus = PanelFocus::Swarm;
     app.handle_key(key(KeyCode::Left));
     assert_eq!(app.agents_tab(), AgentsTab::Channels);
+    assert!(app.channel_open(), "coming to CHANNELS opens it");
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(id)) if id == "c1"));
     (app, rx)
 }
 
 #[test]
-fn test_enter_opens_a_channel_and_leaving_the_tab_closes_it() {
+fn test_coming_to_channels_opens_one_and_leaving_the_tab_closes_it() {
     let (mut app, mut rx) = app_with_channel();
 
     app.handle_key(key(KeyCode::Enter));
     assert!(app.channel_open());
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(id)) if id == "c1"));
+    assert!(rx.try_recv().is_err(), "it is open already");
     assert_eq!(app.agents_tab(), AgentsTab::Channels, "the list stays");
 
     // Esc and Backspace leave the channel open: the tab is how to leave.
@@ -5704,27 +5781,20 @@ fn test_enter_opens_a_channel_and_leaving_the_tab_closes_it() {
     assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(id)) if id == "c1"));
 }
 
-/// [`app_with_channel`]'s app, but `#zode` is coordinated by `bb`, so
-/// `aa`, on screen, is not a member.
+/// The app with `#zode` listed, coordinated by `bb`, so `aa`, on screen,
+/// is not a member; the agents panel focused on PROJECTS, Left away from
+/// CHANNELS.
 fn app_with_others_channel() -> (App, mpsc::Receiver<UiEvent>) {
-    let (mut app, rx) = app_with_channel();
-    app.process_command(UiCommand::SetChannels(vec![
-        crate::events::ChannelSummary {
-            id: "c1".to_string(),
-            slug: "zode".to_string(),
-            title: "Zode release".to_string(),
-            coordinator_id: "bb".to_string(),
-            members: vec![agent("bb", "Coordinator")],
-            ..crate::events::ChannelSummary::default()
-        },
-    ]));
+    let (mut app, rx) = app_with_agents();
+    app.process_command(UiCommand::SetChannels(vec![zode("bb")]));
+    app.focus = PanelFocus::Swarm;
     (app, rx)
 }
 
 #[test]
 fn test_leaving_channels_gives_back_the_agent_there_was_before() {
     let (mut app, mut rx) = app_with_others_channel();
-    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Left));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(_))));
     // The session confirms the coordinator on screen.
@@ -5749,7 +5819,7 @@ fn test_opening_a_channel_shows_its_coordinator_at_once_not_the_agent_before() {
     load_chat_of(&mut app, "aa", "aa's history");
     assert!(app.messages().iter().any(|m| m.content() == "aa's history"));
 
-    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Left));
     // Asked for before the channel, so the session has it active by then
     // and does not load it twice.
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
@@ -5773,7 +5843,7 @@ fn test_opening_a_channel_shows_its_coordinator_at_once_not_the_agent_before() {
 #[test]
 fn test_reopening_a_channel_shows_the_coordinators_held_chat_at_once() {
     let (mut app, mut rx) = app_with_others_channel();
-    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Left));
     app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
     load_chat_of(&mut app, "bb", "coordinator history");
     app.handle_key(key(KeyCode::Right));
@@ -5790,7 +5860,7 @@ fn test_reopening_a_channel_shows_the_coordinators_held_chat_at_once() {
 #[test]
 fn test_a_non_member_on_screen_takes_the_user_back_to_projects() {
     let (mut app, mut rx) = app_with_others_channel();
-    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Left));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(_))));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(_))));
     app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
@@ -5807,7 +5877,7 @@ fn test_a_non_member_on_screen_takes_the_user_back_to_projects() {
 
 #[test]
 fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
-    let (mut app, _rx) = app_with_channel();
+    let (mut app, _rx) = app_with_others_channel();
     // A layout of the user's own: Record shown, the side panel hidden
     // and not maximized, on TRACE.
     app.record_panel_visible = true;
@@ -5815,7 +5885,7 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     app.sandbox_panel_visible = false;
     app.side_tab = SidePanelTab::Trace;
 
-    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Left));
     assert!(app.channel_open());
     assert!(!app.record_panel_visible(), "no Kernel panel in a channel");
     assert!(app.sandbox_panel_visible(), "shown though the user hid it");
@@ -5865,9 +5935,9 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
 
 #[test]
 fn test_a_channel_dropped_from_the_list_gives_back_the_side_tab() {
-    let (mut app, _rx) = app_with_channel();
+    let (mut app, _rx) = app_with_others_channel();
     app.side_tab = SidePanelTab::Tasks;
-    app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Left));
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
 
     app.process_command(UiCommand::SetChannels(Vec::new()));
@@ -5971,11 +6041,14 @@ fn test_opening_a_channel_puts_the_chat_on_chat() {
 
 #[test]
 fn test_channels_with_nothing_open_hide_the_right_column_and_refuse_to_send() {
-    let (mut app, mut rx) = app_with_channel();
-    assert!(app.channel_app_empty());
+    let (mut app, mut rx) = app_with_agents();
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.agents_tab(), AgentsTab::Channels);
+    assert!(app.app_empty(), "no channel to open");
     assert!(!app.record_panel_visible());
     assert!(!app.sandbox_panel_visible());
-    assert_eq!(app.channel_placeholder().as_deref(), Some("Pick a channel"));
+    assert_eq!(app.app_placeholder().as_deref(), Some("Pick a channel"));
 
     app.input = "hello".to_string();
     app.cursor_pos = app.input.len();
@@ -5987,11 +6060,18 @@ fn test_channels_with_nothing_open_hide_the_right_column_and_refuse_to_send() {
         .as_ref()
         .is_some_and(|(text, _)| text.contains("Pick a channel")));
 
-    app.input.clear();
-    app.cursor_pos = 0;
-    app.focus = PanelFocus::Swarm;
-    app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.channel_placeholder().as_deref(), Some("Message #zode"));
+    // The first channel listed opens as it comes.
+    app.process_command(UiCommand::SetChannels(vec![
+        crate::events::ChannelSummary {
+            id: "c1".to_string(),
+            slug: "zode".to_string(),
+            coordinator_id: "aa".to_string(),
+            members: vec![agent("aa", "Coordinator")],
+            ..crate::events::ChannelSummary::default()
+        },
+    ]));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(id)) if id == "c1"));
+    assert_eq!(app.app_placeholder().as_deref(), Some("Message #zode"));
     assert!(app.sandbox_panel_visible());
 }
 
@@ -6089,7 +6169,7 @@ fn test_at_outside_a_coordinator_chat_lists_only_files() {
         "{matches:?}"
     );
 
-    app.close_channel();
+    app.switch_app(AgentsTab::Projects);
     app.process_command(UiCommand::SetActiveAgent("co".to_string()));
     app.input.clear();
     app.cursor_pos = 0;
@@ -6286,6 +6366,12 @@ fn right_click_on(app: &mut App, text: &str) {
     right_click_on_where(app, text, |_| true);
 }
 
+/// Right-click `#zode`'s row of the list, which shows only its slug, not
+/// the chat bar's title row naming the open channel.
+fn right_click_on_channel_row(app: &mut App) {
+    right_click_on_where(app, "#zode", |row| !row.contains("Zode release"));
+}
+
 /// Draw the app and right-click the first cell showing `text` on a row
 /// `pick` accepts, e.g. to skip the chat bar's title.
 fn right_click_on_where(app: &mut App, text: &str, pick: impl Fn(&str) -> bool) {
@@ -6316,7 +6402,7 @@ fn menu_items(app: &App) -> Vec<super::context_menu::MenuItem> {
 fn test_a_channels_menu_offers_link_unlink_and_archive() {
     use super::context_menu::MenuItem;
     let (mut app, _rx) = app_with_linkable_channel();
-    right_click_on(&mut app, "#zode");
+    right_click_on_channel_row(&mut app);
     assert_eq!(
         menu_items(&app),
         [
@@ -6342,7 +6428,7 @@ fn test_a_channel_without_links_offers_no_unlink() {
             ..crate::events::ProjectSummary::default()
         },
     ]));
-    right_click_on(&mut app, "#zode");
+    right_click_on_channel_row(&mut app);
     assert_eq!(
         menu_items(&app),
         [MenuItem::LinkProject, MenuItem::ArchiveChannel]
@@ -6352,7 +6438,7 @@ fn test_a_channel_without_links_offers_no_unlink() {
 #[test]
 fn test_link_project_lists_unlinked_projects_and_sends_link_project() {
     let (mut app, mut rx) = app_with_linkable_channel();
-    right_click_on(&mut app, "#zode");
+    right_click_on_channel_row(&mut app);
     app.handle_key(key(KeyCode::Enter));
     let entries = app
         .context_menu()
@@ -6382,11 +6468,7 @@ fn test_link_project_lists_unlinked_projects_and_sends_link_project() {
 #[test]
 fn test_unlink_project_in_the_open_channel_sends_unlink_project() {
     let (mut app, mut rx) = app_with_linkable_channel();
-    app.handle_key(key(KeyCode::Enter));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::OpenChannel(_))));
-    // On the open channel's row of the list, which shows only its slug, not
-    // the chat bar's title row.
-    right_click_on_where(&mut app, "#zode", |row| !row.contains("Zode release"));
+    right_click_on_channel_row(&mut app);
     app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Right));
     app.handle_key(key(KeyCode::Enter));
@@ -6401,14 +6483,14 @@ fn test_unlink_project_in_the_open_channel_sends_unlink_project() {
 #[test]
 fn test_archive_channel_asks_first() {
     let (mut app, mut rx) = app_with_linkable_channel();
-    right_click_on(&mut app, "#zode");
+    right_click_on_channel_row(&mut app);
     app.handle_key(key(KeyCode::End));
     app.handle_key(key(KeyCode::Enter));
     assert!(rx.try_recv().is_err(), "not before y");
     app.handle_key(key(KeyCode::Char('n')));
     assert!(rx.try_recv().is_err(), "anything else cancels");
 
-    right_click_on(&mut app, "#zode");
+    right_click_on_channel_row(&mut app);
     app.handle_key(key(KeyCode::End));
     app.handle_key(key(KeyCode::Enter));
     app.handle_key(key(KeyCode::Char('y')));

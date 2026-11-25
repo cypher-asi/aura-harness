@@ -1569,7 +1569,7 @@ impl App {
         }
         self.agents_scroll_detached = false;
         self.select_visible_active();
-        self.follow_active_agent_out_of_channel();
+        self.follow_active_agent(switched);
     }
 }
 

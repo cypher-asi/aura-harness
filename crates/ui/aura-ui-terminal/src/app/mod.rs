@@ -4,6 +4,7 @@
 //! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
 mod agent_views;
+mod apps;
 mod archive;
 pub(crate) mod bench_progress;
 pub mod benchmarks;
@@ -439,6 +440,8 @@ pub struct App {
     pub(super) copy_requested: bool,
     /// Which list the agents panel shows
     pub(super) agents_tab: AgentsTab,
+    /// What each agent app showed, put back when it comes to the front
+    apps: apps::AppMemory,
     /// Channels, and the one open in the CHANNELS tab
     pub(super) channels: channels::ChannelState,
     /// Permanent agents
@@ -1197,6 +1200,7 @@ impl App {
             selection_scrolled: None,
             copy_requested: false,
             agents_tab: AgentsTab::default(),
+            apps: apps::AppMemory::default(),
             channels: channels::ChannelState::default(),
             definitions: Vec::new(),
             selected_definition: 0,
@@ -2893,10 +2897,13 @@ impl App {
     }
 
     /// Check if the Record panel is visible. It hides while the side
-    /// panel is maximized over it.
+    /// panel is maximized over it, and in an app showing nothing.
     #[must_use]
-    pub const fn record_panel_visible(&self) -> bool {
-        self.record_panel_visible && !self.chat_expanded && !self.side_maximized()
+    pub fn record_panel_visible(&self) -> bool {
+        self.record_panel_visible
+            && !self.chat_expanded
+            && !self.side_maximized()
+            && !self.app_empty()
     }
 
     /// Whether the side panel, shown, takes the Record panel's room too:
@@ -2913,13 +2920,13 @@ impl App {
     }
 
     /// Check if the Sandbox panel is visible. It shows while a channel is
-    /// open even when the user hid it, and hides in the channel app with
-    /// no channel open, which has nothing to show there.
+    /// open even when the user hid it, and hides in an app showing
+    /// nothing, which has nothing to show there.
     #[must_use]
-    pub const fn sandbox_panel_visible(&self) -> bool {
+    pub fn sandbox_panel_visible(&self) -> bool {
         (self.sandbox_panel_visible || self.channel_open())
             && !self.chat_expanded
-            && !self.channel_app_empty()
+            && !self.app_empty()
     }
 
     /// Whether the chat panel fills the screen, the other panels hidden.
@@ -2965,7 +2972,7 @@ impl App {
     /// Whether the right column, the Record panel above the side panel,
     /// is on screen.
     #[must_use]
-    pub const fn side_column_shown(&self) -> bool {
+    pub fn side_column_shown(&self) -> bool {
         self.record_panel_visible() || self.sandbox_panel_visible()
     }
 

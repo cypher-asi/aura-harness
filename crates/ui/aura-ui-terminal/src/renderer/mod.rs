@@ -173,7 +173,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
 }
 
 /// Whether the right column (Record above Sandbox) has anything to show.
-const fn right_column_visible(app: &App) -> bool {
+fn right_column_visible(app: &App) -> bool {
     app.record_panel_visible() || app.sandbox_panel_visible()
 }
 

@@ -686,7 +686,7 @@ impl App {
             .unwrap_or(PanelFocus::Chat)
     }
 
-    const fn panel_visible(&self, panel: PanelFocus) -> bool {
+    fn panel_visible(&self, panel: PanelFocus) -> bool {
         match panel {
             PanelFocus::Chat => true,
             PanelFocus::Records => self.record_panel_visible(),
@@ -871,13 +871,10 @@ impl App {
 
     /// Submit the current input.
     pub(super) fn submit_input(&mut self) -> KeyResult {
-        // The channel app with no channel open has nobody to send to; the
-        // draft stays for when one is picked. Commands still run.
-        if self.channel_app_empty() && !self.input.trim_start().starts_with('/') {
-            self.notification = Some((
-                "Pick a channel to send a message".to_string(),
-                NotificationType::Warning,
-            ));
+        // An app showing nothing has nobody to send to; the draft stays
+        // for when something is picked. Commands still run.
+        if self.app_empty() && !self.input.trim_start().starts_with('/') {
+            self.notification = Some((self.app_send_refusal(), NotificationType::Warning));
             return KeyResult::continue_running();
         }
         let text = std::mem::take(&mut self.input);

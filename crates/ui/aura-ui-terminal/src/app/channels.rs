@@ -3,17 +3,20 @@
 //! conversation and nothing else, and the right column is one panel with
 //! the channel's MEMBERS and INFO tabs.
 //!
-//! The agents panel's tab picks the app on screen. A channel is open only
-//! while CHANNELS shows:
+//! The agents panel's tab picks the app on screen (see `apps`). A channel
+//! is open only while CHANNELS shows:
 //!
 //! - Leaving CHANNELS closes the open channel (telling the session,
-//!   `CloseChannel`), and gives back the agent that was on screen when
-//!   the user came to CHANNELS, if it is still listed.
-//! - Coming back to CHANNELS opens the channel that was open on leaving,
-//!   if it is still listed.
+//!   `CloseChannel`); the app the user goes to puts back its own agent.
+//! - Coming to CHANNELS opens the channel that was open on leaving, if it
+//!   is still listed, else the highlighted or first channel. So does a
+//!   list arriving while CHANNELS shows with none open.
+//! - The session putting on screen the coordinator of another listed
+//!   channel (one just made, say) opens that channel.
 //! - The session putting on screen an agent that is not a member of the
 //!   open channel (a notification jumping to it, say) is the user going
-//!   to that agent: the panel moves to PROJECTS, with nothing given back.
+//!   to that agent: the panel moves to PROJECTS (ARCHIVE for an archived
+//!   agent) with it on screen.
 //!
 //! The list's rows are the channels, then "+ New channel" (index
 //! `channels.len()`), which the panel pins to its bottom row. Enter or a
@@ -62,11 +65,10 @@ pub(crate) struct ChannelState {
     /// The channel open when the user last left CHANNELS, opened again
     /// on coming back
     last_open: Option<String>,
-    /// The agent on screen when the user came to CHANNELS, given back on
-    /// leaving
-    agent_before: Option<String>,
-    /// The chat panel's tab that agent was on, given back with it
-    chat_tab_before: ChatTab,
+    /// The agent on screen when the user came to CHANNELS and the chat
+    /// panel's tab it was on, which CHANNELS turned to CHAT: given back
+    /// on leaving
+    chat_tab_before: Option<(String, ChatTab)>,
     /// Whether the session has yet to put a member of the open channel
     /// on screen. Opening a channel asks it for the coordinator, and
     /// until it comes the agent before it is still on screen; that agent
@@ -177,13 +179,6 @@ impl App {
         matches!(self.agents_tab, AgentsTab::Channels)
     }
 
-    /// Whether the channel app is on screen with no channel open: the
-    /// chat asks for one to be picked and the right column hides.
-    #[must_use]
-    pub(crate) const fn channel_app_empty(&self) -> bool {
-        self.channel_app() && !self.channel_open()
-    }
-
     /// Codes of the members `text`, typed in the coordinator's chat, goes
     /// to instead of the coordinator: `None` when it mentions no member
     /// or addresses the coordinator too (`@coordinator` or its code), so
@@ -264,34 +259,24 @@ impl App {
     }
 
     /// The user came to the channel app from another tab: remember the
-    /// agent on screen and its chat tab, to give back on leaving, and
-    /// show CHAT, the only view a channel has.
+    /// chat tab of the agent on screen, to give back on leaving, and show
+    /// CHAT, the only view a channel has.
     pub(super) fn enter_channel_app(&mut self) {
-        self.channels.agent_before = Some(self.active_agent_id.clone()).filter(|id| !id.is_empty());
-        self.channels.chat_tab_before = self.chat_tab();
+        self.channels.chat_tab_before = (!self.active_agent_id.is_empty())
+            .then(|| (self.active_agent_id.clone(), self.chat_tab()));
         self.show_channel_chat();
     }
 
     /// The user left the channel app for another tab: close the open
-    /// channel, remembering it for coming back, and give back the agent
-    /// that was on screen before, on the chat tab it was on.
+    /// channel, remembering it for coming back, and give the agent that
+    /// was on screen before back the chat tab it was on.
     pub(super) fn leave_channel_app(&mut self) {
         if let Some(open) = self.channels.open.clone() {
             self.channels.last_open = Some(open);
         }
         self.close_channel();
-        let tab = self.channels.chat_tab_before;
-        let Some(before) = self.channels.agent_before.take() else {
-            return;
-        };
-        if !self.agents.iter().any(|agent| agent.id == before) {
-            return;
-        }
-        self.request_agent_switch(before.clone());
-        // A chat held in memory comes on screen at once; one asked for
-        // opens on CHAT when it arrives.
-        if self.active_agent_id == before {
-            self.restore_chat_tab(tab);
+        if let Some((agent, tab)) = self.channels.chat_tab_before.take() {
+            self.give_chat_tab_back(&agent, tab);
         }
     }
 
@@ -302,6 +287,15 @@ impl App {
             .last_open
             .clone()
             .filter(|id| self.channels.find(id).is_some())
+    }
+
+    /// The channel CHANNELS opens on coming to it: the one it was left
+    /// on, else the highlighted one, else the first.
+    pub(super) fn channel_to_show(&self) -> Option<String> {
+        let list = &self.channels.list;
+        self.channel_to_reopen()
+            .or_else(|| list.get(self.channels.selected).map(|c| c.id.clone()))
+            .or_else(|| list.first().map(|c| c.id.clone()))
     }
 
     /// Put CHAT on the chat panel, with nothing covering it.
@@ -322,10 +316,7 @@ impl App {
         if self.channels.open.as_deref() == Some(id) {
             return;
         }
-        if self.agents_tab != AgentsTab::Channels {
-            self.enter_channel_app();
-            self.set_agents_tab(AgentsTab::Channels);
-        }
+        self.switch_app(AgentsTab::Channels);
         if self.channels.open.is_none() {
             self.channels.side_tab_before = Some(self.side_tab);
         }
@@ -369,11 +360,24 @@ impl App {
         self.show_side_tab(before);
     }
 
-    /// The session put the active agent on screen. While a channel is
-    /// open, a member coming ends the wait for the coordinator; any other
-    /// agent, once that wait is over, means the user went to it, so the
-    /// agent app comes back with it on screen.
+    /// The session put the active agent on screen. The coordinator of
+    /// another listed channel opens that channel. While a channel is open,
+    /// a member coming ends the wait for the coordinator; any other agent,
+    /// once that wait is over, means the user went to it, so the agent app
+    /// listing it comes to the front with it on screen.
     pub(super) fn follow_active_agent_out_of_channel(&mut self) {
+        let coordinated = self
+            .channels
+            .list
+            .iter()
+            .find(|channel| channel.coordinator_id == self.active_agent_id)
+            .map(|channel| channel.id.clone());
+        if let Some(id) = coordinated {
+            if self.channels.open.as_deref() != Some(id.as_str()) {
+                self.open_channel_by_id(&id);
+                return;
+            }
+        }
         if !self.channel_open() {
             return;
         }
@@ -384,9 +388,7 @@ impl App {
         if self.channels.awaiting_member {
             return;
         }
-        // The agent on screen is the one to keep: nothing is given back.
-        self.channels.agent_before = None;
-        self.show_agents_tab(AgentsTab::Projects);
+        self.follow_into_agent_app();
     }
 
     /// Say why the agent panels (`/kernel`, `/files`, `/inbox`, ...) are
@@ -450,6 +452,11 @@ impl App {
         let members = self.channels.open_members();
         self.channels.member_selected =
             self.channels.member_selected.min(members.saturating_sub(1));
+        if self.channel_app() && !self.channel_open() {
+            if let Some(id) = self.channel_to_show() {
+                self.open_channel_by_id(&id);
+            }
+        }
     }
 
     pub(super) fn set_channel_posts(&mut self, channel_id: String, posts: Vec<ChannelPostView>) {
