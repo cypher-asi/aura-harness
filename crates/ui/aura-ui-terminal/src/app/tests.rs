@@ -5617,6 +5617,40 @@ fn test_coordinator_chat_shows_the_channel_posts() {
     assert!(posts.is_empty(), "only the coordinator's chat shows them");
 }
 
+#[test]
+fn test_messages_to_members_route_past_the_coordinator() {
+    let (_dir, app) = app_in_channel("co");
+    assert_eq!(
+        app.routed_members("@re36, look and ask @SUB2 too @RE36"),
+        Some(vec!["RE36".to_string(), "SUB2".to_string()])
+    );
+    assert_eq!(app.routed_members("@RE36 and @coordinator"), None);
+    assert_eq!(app.routed_members("@RE36 and @CO1"), None);
+    assert_eq!(app.routed_members("look at @src/main.rs"), None);
+    let (_dir, app) = app_in_channel("re");
+    assert_eq!(
+        app.routed_members("@SUB2 hi"),
+        None,
+        "not a coordinator chat"
+    );
+}
+
+#[test]
+fn test_a_message_to_members_does_not_wait_on_the_coordinator() {
+    let (_dir, mut app) = app_in_channel("co");
+    type_keys(&mut app, "@RE36 look");
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_ne!(app.state, AppState::Processing);
+    assert!(app.just_queued.is_none());
+    assert!(
+        app.notification
+            .as_ref()
+            .is_some_and(|(text, _)| text == "Sent to RE36"),
+        "{:?}",
+        app.notification
+    );
+}
+
 // ========================================================================
 // New-channel form and the CHANNELS tab's menu
 // ========================================================================

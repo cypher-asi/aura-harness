@@ -909,6 +909,25 @@ impl App {
         }
         let (images, previews) = self.take_images(&text);
 
+        // A message to channel members, not the coordinator: the app posts
+        // it to the channel, which shows it here, and the members answer.
+        // Nothing waits for the coordinator, busy or not.
+        if let Some(codes) = self.routed_members(&text) {
+            self.notification = Some((
+                format!("Sent to {}", codes.join(", ")),
+                NotificationType::Success,
+            ));
+            if let Some(tx) = &self.event_tx {
+                let _ = tx.try_send(UiEvent::UserMessage {
+                    agent_id,
+                    text,
+                    shown: true,
+                    images,
+                });
+            }
+            return KeyResult::continue_running();
+        }
+
         // A busy agent reads the message before its next step, or once its
         // current work ends; the chat shows it at that point, so it lands
         // in order with the reply still streaming.

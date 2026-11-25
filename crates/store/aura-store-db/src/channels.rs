@@ -8,6 +8,8 @@
 //!   * `s/{slug}`: the JSON string of the id of the channel owning the
 //!     slug (unique slug index).
 //!   * `p/{channel_id}/{project_id}`: a JSON [`ProjectLink`].
+//!   * `l/{channel_id}`: when the channel's coordinator last read its
+//!     activity, JSON Unix milliseconds.
 //! * [`crate::cf::CHANNEL_MEMBERS`]:
 //!   * `m/{channel_id}/` followed by the 32 raw bytes of the agent id: a
 //!     JSON [`MemberRecord`].
@@ -73,6 +75,7 @@ type Row = (Box<[u8]>, Box<[u8]>);
 
 const CHANNEL_PREFIX: &[u8] = b"c/";
 const SLUG_PREFIX: &[u8] = b"s/";
+const SEEN_PREFIX: &[u8] = b"l/";
 const LINK_PREFIX: &str = "p/";
 const MEMBER_PREFIX: &str = "m/";
 const REVERSE_PREFIX: &[u8] = b"a/";
@@ -336,6 +339,10 @@ fn channel_key(id: &str) -> Vec<u8> {
 
 fn slug_key(slug: &str) -> Vec<u8> {
     [SLUG_PREFIX, slug.as_bytes()].concat()
+}
+
+fn seen_key(channel_id: &str) -> Vec<u8> {
+    [SEEN_PREFIX, channel_id.as_bytes()].concat()
 }
 
 fn link_prefix(channel_id: &str) -> Vec<u8> {
@@ -727,6 +734,37 @@ impl ChannelStore {
         let mut batch = WriteBatch::default();
         batch.delete_cf(&self.cf(cf::CHANNELS)?, link_key(channel_id, project_id));
         self.commit(batch, &format!("project link {channel_id}/{project_id}"))
+    }
+
+    /// When the coordinator of channel `channel_id` last read the
+    /// channel's activity, in Unix milliseconds; `None` when it never did.
+    ///
+    /// # Errors
+    /// [`ChannelError::InvalidId`]; store failures.
+    pub fn seen(&self, channel_id: &str) -> Result<Option<u64>, ChannelError> {
+        validate_id(channel_id)?;
+        self.read(
+            cf::CHANNELS,
+            &seen_key(channel_id),
+            &format!("last read of channel {channel_id}"),
+        )
+    }
+
+    /// Record that the coordinator of channel `channel_id` read its
+    /// activity up to `at_ms`.
+    ///
+    /// # Errors
+    /// [`ChannelError::InvalidId`]; sealing, encoding and store failures.
+    pub fn set_seen(&self, channel_id: &str, at_ms: u64) -> Result<(), ChannelError> {
+        validate_id(channel_id)?;
+        let what = format!("last read of channel {channel_id}");
+        let mut batch = WriteBatch::default();
+        batch.put_cf(
+            &self.cf(cf::CHANNELS)?,
+            seen_key(channel_id),
+            self.encode(&at_ms, &what)?,
+        );
+        self.commit(batch, &what)
     }
 
     /// Projects linked to channel `channel_id`, in key order (by project

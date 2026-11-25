@@ -740,3 +740,26 @@ fn channel_column_families_are_registered_and_sealed() {
         }
     }
 }
+
+#[test]
+fn last_read_is_kept_per_channel_and_left_out_of_the_list() {
+    for (mode, store, _dir) in stores() {
+        let channels = ChannelStore::for_store(&store);
+        let ch = channels
+            .create(new_channel("zode"), &agent("zns-coord", 0), ts(1))
+            .unwrap();
+        let other = channels
+            .create(new_channel("other"), &agent("zns-other", 1), ts(1))
+            .unwrap();
+        assert_eq!(channels.seen(&ch.id).unwrap(), None, "{mode}");
+        channels.set_seen(&ch.id, 1_234).unwrap();
+        channels.set_seen(&ch.id, 5_678).unwrap();
+        assert_eq!(channels.seen(&ch.id).unwrap(), Some(5_678), "{mode}");
+        assert_eq!(channels.seen(&other.id).unwrap(), None, "{mode}");
+        assert_eq!(channels.list().unwrap().len(), 2, "{mode}");
+        assert!(matches!(
+            channels.set_seen("a/b", 1),
+            Err(ChannelError::InvalidId(_))
+        ));
+    }
+}

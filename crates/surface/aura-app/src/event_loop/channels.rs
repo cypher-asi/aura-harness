@@ -89,9 +89,7 @@ pub(crate) async fn create_channel(
     };
     let coordinator = {
         let mut registry = lock(&hub.registry);
-        let coordinator = registry
-            .adopt(draft)
-            .with_context(|| format!("registering the coordinator of #{slug}"))?;
+        let coordinator = registry.adopt(draft);
         registry.mark_channel_members([channel.coordinator]);
         coordinator
     };

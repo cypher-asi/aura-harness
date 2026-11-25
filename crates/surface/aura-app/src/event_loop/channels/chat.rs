@@ -51,8 +51,9 @@ pub(crate) struct ChannelChat {
     /// entry: a member may be asked twice before its first answer.
     pending: Mutex<HashMap<AgentId, VecDeque<PendingReply>>>,
     /// When each coordinator last started a turn for the user, in Unix
-    /// milliseconds. Not persisted: after a restart the first digest
-    /// covers the channel's whole history, capped at [`DIGEST_BYTES`].
+    /// milliseconds; a cache of what the channel store keeps
+    /// ([`aura_store_db::ChannelStore::seen`]), so a restart doesn't
+    /// repeat what the coordinator already read.
     last_seen_ms: Mutex<HashMap<AgentId, u64>>,
 }
 
@@ -480,13 +481,45 @@ async fn read_posts(
     }
 }
 
+/// When the coordinator of `channel_id` last read its activity, as stored
+/// before this run of the app; `None` when never, or unreadable (logged).
+async fn stored_seen(hub: &AgentHub, channel_id: &str) -> Option<u64> {
+    let store = hub.channels.as_ref()?;
+    let id = channel_id.to_string();
+    match blocking(store, move |store| store.seen(&id)).await {
+        Ok(seen) => seen,
+        Err(error) => {
+            warn!(%channel_id, error = %format!("{error:#}"), "Could not read when the channel was last read");
+            None
+        }
+    }
+}
+
+/// Store that the coordinator of `channel_id` read its activity up to
+/// `at_ms`, so a restart doesn't repeat it. A failure is only logged: the
+/// next digest then repeats some lines.
+async fn save_seen(hub: &AgentHub, channel_id: &str, at_ms: u64) {
+    let Some(store) = hub.channels.as_ref() else {
+        return;
+    };
+    let id = channel_id.to_string();
+    if let Err(error) = blocking(store, move |store| store.set_seen(&id, at_ms)).await {
+        warn!(%channel_id, error = %format!("{error:#}"), "Could not store when the channel was read");
+    }
+}
+
 /// For a turn the coordinator `agent_id` starts for the user: the digest
 /// of the channel's posts since its last such turn, if there were any,
 /// and from now on nothing older. `None` for other agents.
 pub(crate) async fn take_digest(hub: &AgentHub, agent_id: AgentId) -> Option<String> {
     let (channel, _) = coordinated_channel(hub, agent_id).await?;
     let now = now_ms();
-    let since = lock(&hub.channel_chat.last_seen_ms).insert(agent_id, now);
+    let cached = lock(&hub.channel_chat.last_seen_ms).insert(agent_id, now);
+    let since = match cached {
+        Some(since) => Some(since),
+        None => stored_seen(hub, &channel.id).await,
+    };
+    save_seen(hub, &channel.id, now).await;
     let posts = read_posts(hub, &channel.id, since).await?;
     let posts: Vec<_> = posts.into_iter().filter(|p| p.at_ms <= now).collect();
     let lines: Vec<String> = {

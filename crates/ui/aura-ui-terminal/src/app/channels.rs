@@ -144,6 +144,46 @@ impl App {
         self.channels.coordinated_by(&self.active_agent_id)
     }
 
+    /// Codes of the members `text`, typed in the coordinator's chat, goes
+    /// to instead of the coordinator: `None` when it mentions no member
+    /// or addresses the coordinator too (`@coordinator` or its code), so
+    /// the coordinator takes it. Matches the app's routing: `@CODE`,
+    /// case-insensitive, trailing punctuation ignored.
+    #[must_use]
+    pub(crate) fn routed_members(&self, text: &str) -> Option<Vec<String>> {
+        const TRAILING: &[char] = &[',', '.', ':', ';', '!', '?', ')', '"', '\''];
+        let channel = self.coordinated_channel()?;
+        let mut codes: Vec<String> = Vec::new();
+        for word in text.split_whitespace() {
+            let Some(name) = word.strip_prefix('@') else {
+                continue;
+            };
+            let name = name.trim_end_matches(TRAILING);
+            if name.is_empty() {
+                continue;
+            }
+            if name.eq_ignore_ascii_case("coordinator") {
+                return None;
+            }
+            let Some(member) = channel.members.iter().find(|member| {
+                member
+                    .code
+                    .as_deref()
+                    .is_some_and(|code| code.eq_ignore_ascii_case(name))
+            }) else {
+                continue;
+            };
+            if member.id == channel.coordinator_id {
+                return None;
+            }
+            let code = member.code.clone().unwrap_or_default();
+            if !codes.contains(&code) {
+                codes.push(code);
+            }
+        }
+        (!codes.is_empty()).then_some(codes)
+    }
+
     /// The chat panel's title while it shows the open channel's
     /// coordinator, `#slug · coordinator`; `None` for every other agent.
     #[must_use]

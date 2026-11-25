@@ -1634,14 +1634,30 @@ impl AgentRegistry {
         persist::appended_row(&self.file, agent)
     }
 
-    /// Register `agent`, whose row may already be stored (as a channel's
-    /// coordinator is), giving it its code, and save. The stored row is
-    /// rewritten with the code.
-    ///
-    /// # Errors
-    /// Returns an error if the registry cannot be written.
-    pub(crate) fn adopt(&mut self, agent: RegisteredAgent) -> anyhow::Result<RegisteredAgent> {
-        self.push(agent)
+    /// Register `agent`, whose row is already stored (as a channel's
+    /// coordinator is), giving it its code, and save the code. A failed
+    /// save is only logged: the agent is registered, its row is in the
+    /// store already, and the code goes out with the next save. Failing
+    /// here would leave a stored channel whose coordinator the app does
+    /// not know until a restart.
+    pub(crate) fn adopt(&mut self, mut agent: RegisteredAgent) -> RegisteredAgent {
+        if agent.code.is_none() {
+            agent.code = Some(code::assign(
+                &agent,
+                &self.file.agents,
+                &mut self.file.prefixes,
+                &mut self.file.last_numbers,
+            ));
+        }
+        self.file.agents.push(agent.clone());
+        if let Err(error) = self.persist() {
+            tracing::warn!(
+                agent = %agent.agent_id().to_hex(),
+                error = %format!("{error:#}"),
+                "could not save the code of a new coordinator; saved with the next write"
+            );
+        }
+        agent
     }
 
     /// The stored row of the registered agent `agent_id`, as the registry
