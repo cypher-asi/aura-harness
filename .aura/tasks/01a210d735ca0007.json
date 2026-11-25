@@ -1,0 +1,13 @@
+{
+  "id": "01a210d735ca0007",
+  "title": "If i create a new agent and switch to cloud at bottom right, should it work correctly?",
+  "state": "completed",
+  "agent_id": "45fd8023a4d5f78ba21e1580c29ba9b0a2a5b0378a8178809c11ec6417c1adb0",
+  "agent_name": "Agent 1524",
+  "plan": ".aura/plans/cloud-agents-on-your-model-plans-claude-max-chat_637dd4bc.plan.md",
+  "builds": true,
+  "items": [],
+  "summary": "Not yet with the `aura` you have installed. After a rebuild it should mostly work, but the click-and-move path in the app itself has never been run against real boxd. Here's what to expect:",
+  "updated_ms": 1795578910640,
+  "created_ms": 1795578869194
+}

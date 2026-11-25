@@ -30,6 +30,18 @@ fn failed_run_command_shows_exit_code_and_stderr() {
 }
 
 #[test]
+fn background_start_shows_pid_job_and_log() {
+    let result = "Started in the background (pid 42): cargo test\necho done\n\
+                  Job id: 7697e889\nOutput: ./aura_data/processes/7697e889.log\n\
+                  You will get a message with the exit status when it ends. Check on it with \
+                  job_output and stop it with job_kill.";
+    assert_eq!(
+        format_tool_result("run_command", result),
+        "Started in the background · pid 42\njob 7697e889\nlog ./aura_data/processes/7697e889.log"
+    );
+}
+
+#[test]
 fn non_envelope_result_is_unchanged() {
     assert_eq!(
         format_tool_result("run_command", "Kernel error"),

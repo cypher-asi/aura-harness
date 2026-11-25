@@ -1,0 +1,12 @@
+{
+  "id": "01a210f7d90e000e",
+  "title": "commit all and merge",
+  "state": "running",
+  "agent_id": "4efea89ca948413e47fea770455d4e1e3e3522aaad72b1b5a66323a2ad110d07",
+  "agent_name": "Agent 1557",
+  "plan": ".aura/plans/channels-persistent-channels-with-a-coordinator_5fa9dc49.plan.md",
+  "builds": true,
+  "items": [],
+  "updated_ms": 1795581012731,
+  "created_ms": 1795581008142
+}
