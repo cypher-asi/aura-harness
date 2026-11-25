@@ -167,6 +167,35 @@ fn fuzzy_cache_hits_after_alternation_reorder() {
 }
 
 #[test]
+fn a_cache_over_its_budget_starts_over() {
+    let calls: Vec<ToolCallInfo> = (0..5)
+        .map(|i| ToolCallInfo {
+            id: format!("read_{i}"),
+            name: "read_file".to_string(),
+            input: serde_json::json!({"path": format!("src/big_{i}.rs")}),
+        })
+        .collect();
+    let results: Vec<ToolCallResult> = calls
+        .iter()
+        .map(|call| ToolCallResult {
+            tool_use_id: call.id.clone(),
+            content: "x".repeat(super::cache::MAX_CACHE_BYTES / 8),
+            is_error: false,
+            kind: aura_core_types::ToolResultKind::Ok,
+            stop_loop: false,
+            file_changes: Vec::new(),
+            image: None,
+        })
+        .collect();
+    let mut cache = ToolResultCache::default();
+    update_cache(&mut cache, &calls[..1], &results[..1]);
+    assert!(!cache.exact.is_empty(), "one big read fits");
+    update_cache(&mut cache, &calls, &results);
+    assert!(cache.exact.is_empty(), "five copies twice over don't");
+    assert!(cache.bytes() <= super::cache::MAX_CACHE_BYTES);
+}
+
+#[test]
 fn write_clears_both_caches() {
     // Seed both caches with a search_code result.
     let seed = ToolCallInfo {

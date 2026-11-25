@@ -65,19 +65,17 @@ impl RecentHashes {
         Some(self.hashes.range(start..end).copied().collect())
     }
 
-    /// Keep the hashes of `entries`, read from the store whose head is
-    /// `head`, when they run without a gap to the head.
-    fn refill(&mut self, entries: &[RecordEntry], head: u64) {
-        let runs = entries
-            .windows(2)
-            .all(|pair| pair[1].seq == pair[0].seq + 1);
-        if !runs || entries.last().map(|entry| entry.seq) != Some(head) {
+    /// Keep the hashes of `entries` (seq and hash), read from the store
+    /// whose head is `head`, when they run without a gap to the head.
+    fn refill(&mut self, entries: &[(u64, ContextHash)], head: u64) {
+        let runs = entries.windows(2).all(|pair| pair[1].0 == pair[0].0 + 1);
+        if !runs || entries.last().map(|entry| entry.0) != Some(head) {
             return;
         }
         self.hashes.clear();
         let skip = entries.len().saturating_sub(self.limit);
         self.hashes
-            .extend(entries[skip..].iter().map(|entry| entry.context_hash));
+            .extend(entries[skip..].iter().map(|entry| entry.1));
         self.newest = head;
     }
 
@@ -119,13 +117,13 @@ pub(crate) fn window_hashes(
         return Ok(hashes);
     }
     let entries = store
-        .scan_record(agent_id, from_seq, size)
-        .map_err(|e| crate::KernelError::Store(format!("scan_record: {e}")))?;
+        .scan_context_hashes(agent_id, from_seq, size)
+        .map_err(|e| crate::KernelError::Store(format!("scan_context_hashes: {e}")))?;
     recent
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .refill(&entries, head);
-    Ok(entries.iter().map(|entry| entry.context_hash).collect())
+    Ok(entries.iter().map(|entry| entry.1).collect())
 }
 
 /// Keep the hash of `entry`, just appended, in `recent`.
@@ -153,6 +151,10 @@ mod tests {
         let mut hash = [0u8; 32];
         hash[..8].copy_from_slice(&seq.to_be_bytes());
         RecordEntry::builder(seq, tx).context_hash(hash).build()
+    }
+
+    fn hashed(seq: u64) -> (u64, ContextHash) {
+        (seq, entry(seq).context_hash)
     }
 
     /// What the store's scan returns of `head` entries numbered from 1.
@@ -190,7 +192,7 @@ mod tests {
         }
         assert_eq!(recent.window(2, 5, 7), None, "the head moved past them");
 
-        let read: Vec<RecordEntry> = (3..=7).map(entry).collect();
+        let read: Vec<_> = (3..=7).map(hashed).collect();
         recent.refill(&read, 7);
         assert_eq!(recent.window(3, 5, 7), Some(scanned(7, 3, 5)));
 
@@ -202,10 +204,10 @@ mod tests {
     #[test]
     fn a_read_that_stops_short_of_the_head_is_not_kept() {
         let mut recent = RecentHashes::new(5);
-        let read: Vec<RecordEntry> = (1..=5).map(entry).collect();
+        let read: Vec<_> = (1..=5).map(hashed).collect();
         recent.refill(&read, 9);
         assert_eq!(recent.window(5, 5, 9), None);
-        let gapped: Vec<RecordEntry> = [1, 2, 4].into_iter().map(entry).collect();
+        let gapped: Vec<_> = [1, 2, 4].into_iter().map(hashed).collect();
         recent.refill(&gapped, 4);
         assert_eq!(recent.window(0, 5, 4), None);
     }

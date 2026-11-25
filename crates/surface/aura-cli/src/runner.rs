@@ -79,6 +79,24 @@ pub fn runtime_thread_start(cli: &Cli) -> Option<impl Fn() + Send + Sync + 'stat
     terminal.then(aura_app::priority::agent_thread_start)
 }
 
+/// The async runtime `cli` runs on, sized by [`aura_app::threads::Budget`],
+/// with the compute pool started beside it: below the UI when there is
+/// one, as the runtime's threads are ([`runtime_thread_start`]).
+#[must_use]
+pub fn runtime_builder(cli: &Cli) -> tokio::runtime::Builder {
+    let budget = aura_app::threads::Budget::of_machine();
+    let mut runtime = budget.runtime();
+    let nice = match runtime_thread_start(cli) {
+        Some(start) => {
+            runtime.on_thread_start(start);
+            aura_app::priority::agent_nice()
+        }
+        None => 0,
+    };
+    budget.start_compute_pool(nice);
+    runtime
+}
+
 /// Whether a window can open: always on macOS and Windows, and on other
 /// systems when an X11 or Wayland display is set.
 fn display_available() -> bool {

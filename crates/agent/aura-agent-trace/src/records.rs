@@ -9,7 +9,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-use aura_agent_kernel::RecordObserver;
+use aura_agent_kernel::{QueuedObserver, RecordObserver};
 use aura_core_types::trace::{Step, StepAction, TokenUsage};
 use aura_core_types::{AgentId, RecordEntry, TransactionType};
 use serde::{Deserialize, Serialize};
@@ -226,9 +226,27 @@ pub fn join(steps: &mut [Step], rows: &[RecordRow]) -> usize {
 
 /// Kernel record observer that forwards entries to the run recording
 /// the entry's agent.
-#[derive(Debug, Default)]
+///
+/// Rows are written on a thread of the router's own, so committing
+/// kernels don't wait on trace files.
+#[derive(Debug)]
 pub struct RecordRouter {
-    routes: Mutex<HashMap<AgentId, Weak<RunRecorder>>>,
+    routes: Arc<Routes>,
+    queue: Arc<QueuedObserver>,
+}
+
+#[derive(Debug, Default)]
+struct Routes(Mutex<HashMap<AgentId, Weak<RunRecorder>>>);
+
+impl Default for RecordRouter {
+    fn default() -> Self {
+        let routes = Arc::new(Routes::default());
+        let queue = QueuedObserver::new("aura-trace-records", Arc::clone(&routes) as _);
+        Self {
+            routes,
+            queue: Arc::new(queue),
+        }
+    }
 }
 
 impl RecordRouter {
@@ -241,25 +259,46 @@ impl RecordRouter {
     /// Send `agent`'s entries to `recorder` until it is dropped or
     /// replaced.
     pub fn attach(&self, agent: AgentId, recorder: &Arc<RunRecorder>) {
+        let queue = Arc::downgrade(&self.queue);
+        recorder.wait_for_records(move || {
+            if let Some(queue) = queue.upgrade() {
+                queue.flush();
+            }
+        });
         self.routes
+            .0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(agent, Arc::downgrade(recorder));
     }
 
-    /// Stop routing `agent`'s entries.
+    /// Stop routing `agent`'s entries, once those already committed have
+    /// reached its recorder.
     pub fn detach(&self, agent: AgentId) {
+        self.flush();
         self.routes
+            .0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&agent);
+    }
+
+    /// Wait until every entry committed so far has reached its recorder.
+    pub fn flush(&self) {
+        self.queue.flush();
     }
 }
 
 impl RecordObserver for RecordRouter {
     fn on_entry(&self, entry: &RecordEntry) {
+        self.queue.on_entry(entry);
+    }
+}
+
+impl RecordObserver for Routes {
+    fn on_entry(&self, entry: &RecordEntry) {
         let recorder = self
-            .routes
+            .0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&entry.tx.agent_id)

@@ -32,6 +32,7 @@ aura-core-protocol = { path = "../../core/aura-core-protocol" }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
+rayon = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

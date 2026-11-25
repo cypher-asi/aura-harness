@@ -29,6 +29,7 @@
 pub(crate) mod billing;
 mod context;
 mod kernel;
+mod observer_queue;
 mod policy;
 mod replay;
 pub(crate) mod spawn_hook;
@@ -46,6 +47,7 @@ pub use kernel::{
     ReasonStreamHandle, RecordObserver, ToolApprovalError, ToolApprovalPrompter,
     ToolApprovalRemember, ToolApprovalResponse, ToolDecision, ToolOutput, ToolRun,
 };
+pub use observer_queue::QueuedObserver;
 pub use policy::{
     gated_action, tool_mode_class, Policy, PolicyConfig, PolicyEvaluation, PolicyResult,
     PolicyVerdict, ToolModeClass,

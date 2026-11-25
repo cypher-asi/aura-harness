@@ -56,6 +56,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+mimalloc = { workspace = true }
 axum = { workspace = true }
 # Phase C / Commit 4 note: the HTTP `DomainApi` impl moved to
 # `aura-exec-domain-http` (which now owns the domain-call `reqwest`

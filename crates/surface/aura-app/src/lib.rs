@@ -45,6 +45,7 @@ pub mod repo_source;
 pub mod session;
 pub mod session_checkpoint;
 pub mod session_helpers;
+pub mod threads;
 mod turn_calls;
 
 pub use long_run::parse_duration;

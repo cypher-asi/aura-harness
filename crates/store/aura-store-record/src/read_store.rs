@@ -8,7 +8,8 @@
 
 use crate::error::StoreError;
 use aura_core_types::{
-    AgentId, AgentStatus, RecordEntry, RuntimeCapabilityInstall, Transaction, UserToolDefaults,
+    AgentId, AgentStatus, ContextHash, RecordEntry, RuntimeCapabilityInstall, Transaction,
+    UserToolDefaults,
 };
 
 /// Opaque token produced by [`ReadStore::dequeue_tx`] and consumed exactly once
@@ -86,6 +87,24 @@ pub trait ReadStore: Send + Sync {
         from_seq: u64,
         limit: usize,
     ) -> Result<Vec<RecordEntry>, StoreError>;
+
+    /// The seq and context hash of each entry [`Self::scan_record`]
+    /// returns. Implementations may skip decoding the rest of each entry.
+    ///
+    /// # Errors
+    /// Returns error if the scan fails.
+    fn scan_context_hashes(
+        &self,
+        agent_id: AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<(u64, ContextHash)>, StoreError> {
+        Ok(self
+            .scan_record(agent_id, from_seq, limit)?
+            .into_iter()
+            .map(|entry| (entry.seq, entry.context_hash))
+            .collect())
+    }
 
     /// Scan record entries for an agent in descending sequence order.
     ///

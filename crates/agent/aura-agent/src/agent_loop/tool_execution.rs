@@ -190,6 +190,15 @@ pub(super) fn update_cache(
             }
         }
     }
+
+    let bytes = cache.bytes();
+    if bytes > super::cache::MAX_CACHE_BYTES {
+        debug!(
+            bytes,
+            "Dropping cached tool results: over the cache's budget"
+        );
+        *cache = ToolResultCache::default();
+    }
 }
 
 // ---------------------------------------------------------------------------

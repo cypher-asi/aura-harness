@@ -8,6 +8,9 @@
 use clap::Parser;
 use std::process::ExitCode;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() -> anyhow::Result<ExitCode> {
     let _ = aura_config::env_file::load();
     let cli = aura_cli::cli::Cli::parse();
@@ -22,12 +25,9 @@ fn main() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let mut runtime = tokio::runtime::Builder::new_multi_thread();
-    runtime.enable_all();
-    if let Some(start) = aura_cli::runtime_thread_start(&cli) {
-        runtime.on_thread_start(start);
-    }
-    runtime.build()?.block_on(aura_cli::run_cli(cli))
+    aura_cli::runtime_builder(&cli)
+        .build()?
+        .block_on(aura_cli::run_cli(cli))
 }
 
 #[cfg(feature = "desktop")]

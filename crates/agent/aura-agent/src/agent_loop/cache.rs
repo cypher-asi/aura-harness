@@ -49,6 +49,27 @@ pub(crate) struct ToolResultCache {
     pub(crate) read_file_by_path: HashMap<String, Vec<ReadRangeEntry>>,
 }
 
+/// Most bytes of tool output one agent's cache holds. Past it the cache
+/// starts over; a miss only runs the tool again.
+pub(crate) const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
+
+impl ToolResultCache {
+    /// Bytes of keys and tool output held.
+    pub(crate) fn bytes(&self) -> usize {
+        let map = |m: &HashMap<String, String>| -> usize {
+            m.iter().map(|(k, v)| k.len() + v.len()).sum()
+        };
+        let ranges: usize = self
+            .read_file_by_path
+            .iter()
+            .map(|(path, entries)| {
+                path.len() + entries.iter().map(|e| e.rendered.len()).sum::<usize>()
+            })
+            .sum();
+        map(&self.exact) + map(&self.fuzzy) + ranges
+    }
+}
+
 /// One cached `read_file` result, indexed by path in
 /// [`ToolResultCache::read_file_by_path`].
 ///

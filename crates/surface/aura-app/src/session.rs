@@ -215,9 +215,12 @@ pub async fn start(
     let record_router = Arc::new(aura_agent_trace::RecordRouter::new());
     let (flow, flow_inbox) = event_loop::FlowFeed::new();
     let record_observer: Arc<dyn RecordObserver> = Arc::new(event_loop::FanoutObserver(vec![
-        Arc::new(event_loop::UiRecordObserver::new(
-            cmd_tx.clone(),
-            record_panel.clone(),
+        Arc::new(aura_agent_kernel::QueuedObserver::new(
+            "aura-record-ui",
+            Arc::new(event_loop::UiRecordObserver::new(
+                cmd_tx.clone(),
+                record_panel.clone(),
+            )),
         )),
         Arc::clone(&record_router) as Arc<dyn RecordObserver>,
         Arc::clone(&flow) as Arc<dyn RecordObserver>,

@@ -42,7 +42,7 @@ use crate::seal::SealCipher;
 use crate::store::ReadStore;
 use aura_core_types::AgentStatus;
 use aura_core_types::{
-    AgentId, RecordEntry, RuntimeCapabilityInstall, Transaction, UserToolDefaults,
+    AgentId, ContextHash, RecordEntry, RuntimeCapabilityInstall, Transaction, UserToolDefaults,
 };
 use rocksdb::{
     BlockBasedOptions, BoundColumnFamily, Cache, ColumnFamilyDescriptor, DBCompressionType,
@@ -97,6 +97,15 @@ pub struct RocksStore {
 
 impl RocksStore {
     const BLOCK_CACHE_BYTES: usize = 64 * 1024 * 1024;
+    const WRITE_BUFFERS_BYTES: usize = 128 * 1024 * 1024;
+    const BACKGROUND_JOBS: i32 = 4;
+
+    /// One block cache for every store this process opens, so each open
+    /// doesn't add its own.
+    fn shared_block_cache() -> &'static Cache {
+        static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+        CACHE.get_or_init(|| Cache::new_lru_cache(Self::BLOCK_CACHE_BYTES))
+    }
 
     /// Open or create a `RocksDB` store at the given path.
     ///
@@ -124,6 +133,12 @@ impl RocksStore {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
+        // Many agents append at once: let their writes overlap the WAL
+        // and flush and compact on more than the default two threads.
+        opts.set_enable_pipelined_write(true);
+        opts.set_max_background_jobs(Self::BACKGROUND_JOBS);
+        // Each column family has its own memtables; bound them together.
+        opts.set_db_write_buffer_size(Self::WRITE_BUFFERS_BYTES);
 
         // Define column families. If a newer harness version has already
         // created additional families, include them as opaque pass-through
@@ -178,11 +193,11 @@ impl RocksStore {
                 }
             }
         }
-        let block_cache = Cache::new_lru_cache(Self::BLOCK_CACHE_BYTES);
+        let block_cache = Self::shared_block_cache();
         let cf_descriptors: Vec<_> = cf_names
             .iter()
             .map(|name| {
-                let cf_opts = Self::column_family_options(name, &block_cache);
+                let cf_opts = Self::column_family_options(name, block_cache);
                 ColumnFamilyDescriptor::new(name.clone(), cf_opts)
             })
             .collect();
@@ -288,6 +303,51 @@ impl RocksStore {
                 | cf::TRACE_RUNS
                 | cf::TRACE_STEPS
         )
+    }
+
+    /// Up to `limit` of `agent_id`'s record entries from `from_seq`,
+    /// decoded as `T`.
+    fn scan_record_as<T: serde::de::DeserializeOwned>(
+        &self,
+        agent_id: AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<T>, StoreError> {
+        let cf = self.cf(cf::RECORD)?;
+
+        let start_key = RecordKey::scan_from(agent_id, from_seq);
+        let end_key = RecordKey::scan_end(agent_id);
+
+        let iter = self
+            .db
+            .iterator_cf(&cf, IteratorMode::From(&start_key, Direction::Forward));
+
+        let mut entries = Vec::with_capacity(limit);
+
+        for item in iter {
+            let (key, value) = item.map_err(backend)?;
+
+            if key.as_ref() >= end_key.as_slice() {
+                break;
+            }
+
+            let record_key = RecordKey::decode(&key)?;
+
+            if record_key.agent_id != agent_id {
+                break;
+            }
+
+            let value = self.open_value(&value)?;
+            let entry = serde_json::from_slice::<T>(&value).map_err(|e| {
+                StoreError::Deserialization(format!("record seq={}: {e}", record_key.seq))
+            })?;
+            entries.push(entry);
+
+            if entries.len() >= limit {
+                break;
+            }
+        }
+        Ok(entries)
     }
 
     /// Read a u64 value from agent metadata.
@@ -557,43 +617,30 @@ impl ReadStore for RocksStore {
         from_seq: u64,
         limit: usize,
     ) -> Result<Vec<RecordEntry>, StoreError> {
-        let cf = self.cf(cf::RECORD)?;
-
-        let start_key = RecordKey::scan_from(agent_id, from_seq);
-        let end_key = RecordKey::scan_end(agent_id);
-
-        let iter = self
-            .db
-            .iterator_cf(&cf, IteratorMode::From(&start_key, Direction::Forward));
-
-        let mut entries = Vec::with_capacity(limit);
-
-        for item in iter {
-            let (key, value) = item.map_err(backend)?;
-
-            if key.as_ref() >= end_key.as_slice() {
-                break;
-            }
-
-            let record_key = RecordKey::decode(&key)?;
-
-            if record_key.agent_id != agent_id {
-                break;
-            }
-
-            let value = self.open_value(&value)?;
-            let entry = serde_json::from_slice::<RecordEntry>(&value).map_err(|e| {
-                StoreError::Deserialization(format!("record seq={}: {e}", record_key.seq))
-            })?;
-            entries.push(entry);
-
-            if entries.len() >= limit {
-                break;
-            }
-        }
-
+        let entries = self.scan_record_as::<RecordEntry>(agent_id, from_seq, limit)?;
         debug!(count = entries.len(), "Record scan complete");
         Ok(entries)
+    }
+
+    #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id, from_seq, limit))]
+    fn scan_context_hashes(
+        &self,
+        agent_id: AgentId,
+        from_seq: u64,
+        limit: usize,
+    ) -> Result<Vec<(u64, ContextHash)>, StoreError> {
+        /// What the hash window needs of an entry; serde skips the rest
+        /// without building it.
+        #[derive(serde::Deserialize)]
+        struct Hashed {
+            seq: u64,
+            context_hash: ContextHash,
+        }
+        Ok(self
+            .scan_record_as::<Hashed>(agent_id, from_seq, limit)?
+            .into_iter()
+            .map(|entry| (entry.seq, entry.context_hash))
+            .collect())
     }
 
     #[instrument(level = "debug", skip(self), fields(agent_id = %agent_id, from_seq, limit))]

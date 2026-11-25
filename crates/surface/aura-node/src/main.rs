@@ -1,4 +1,8 @@
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = aura_config::env_file::load();
