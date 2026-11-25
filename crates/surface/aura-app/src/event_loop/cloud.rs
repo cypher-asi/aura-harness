@@ -24,7 +24,7 @@ use aura_core_types::{AgentId, Placement};
 use aura_engine_cloud::{BootEvent, BootReporter, StageState};
 use aura_store_db::Store;
 use aura_ui_terminal::events::{
-    BootLogLine, BootStageState, BootUpdate, MessageData, MessageRole, ToolData,
+    BootLogLine, BootPlanStep, BootStageState, BootUpdate, MessageData, MessageRole, ToolData,
 };
 use aura_ui_terminal::host::{HostAction, HostRow, HostView, PlacementState, PlacementView};
 use aura_ui_terminal::UiCommand;
@@ -210,6 +210,15 @@ fn boot_updates(events: Vec<BootEvent>) -> Vec<BootUpdate> {
     let mut updates = Vec::new();
     for event in events {
         let update = match event {
+            BootEvent::Plan(stages) => BootUpdate::Plan(
+                stages
+                    .into_iter()
+                    .map(|stage| BootPlanStep {
+                        key: stage.key().to_string(),
+                        label: stage.label().to_string(),
+                    })
+                    .collect(),
+            ),
             BootEvent::Stage { stage, state } => BootUpdate::Stage {
                 key: stage.key().to_string(),
                 label: stage.label().to_string(),

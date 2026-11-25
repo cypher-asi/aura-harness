@@ -935,7 +935,7 @@ mod tests {
                 BootEvent::Log { line, .. } => lines.push(line),
                 BootEvent::Fact { key, value } => facts.push((key, value)),
                 BootEvent::Progress { .. } => progressed = true,
-                BootEvent::Stage { .. } => {}
+                BootEvent::Stage { .. } | BootEvent::Plan(_) => {}
             }
         }
         assert!(progressed);

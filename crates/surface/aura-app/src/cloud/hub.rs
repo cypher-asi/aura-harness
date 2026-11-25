@@ -687,6 +687,16 @@ impl CloudHub {
             .filter(|parent| self.config.fork_on_spawn && self.fleet.has(parent));
         let owner_tag = names::owner_tag(&request.owner);
         boot.fact("agent", request.name.clone());
+        boot.plan(&[
+            BootStage::Plans,
+            BootStage::Snapshot,
+            BootStage::Quota,
+            BootStage::Create,
+            BootStage::Configure,
+            BootStage::Claim,
+            BootStage::SyncFiles,
+            BootStage::ImportRecord,
+        ]);
         let (secrets, plans) = match self.plan_sync() {
             Some(sync) => {
                 boot.run(BootStage::Plans, async {
@@ -1041,6 +1051,12 @@ impl CloudHub {
                 ),
             });
         }
+        boot.plan(&[
+            BootStage::Seal,
+            BootStage::CopyRecord,
+            BootStage::PullChanges,
+            BootStage::Destroy,
+        ]);
         let node = self.awake_node(&hex, boot).await?;
         let sealed = boot.run(BootStage::Seal, node.seal(agent)).await?;
         boot.fact("sealed at", format!("entry {}", sealed.head_seq));

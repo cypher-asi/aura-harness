@@ -112,6 +112,9 @@ pub enum StageState {
 /// One thing to show.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootEvent {
+    /// The stages a move runs, in order, before the first starts. Stages
+    /// that turn out to be needed besides go in before those not begun.
+    Plan(Vec<BootStage>),
     /// A stage changed.
     Stage {
         /// The stage.
@@ -178,6 +181,11 @@ impl BootReporter {
         if let Some(tx) = &self.tx {
             let _ = tx.send(event);
         }
+    }
+
+    /// Report the stages to come.
+    pub fn plan(&self, stages: &[BootStage]) {
+        self.send(BootEvent::Plan(stages.to_vec()));
     }
 
     /// Report a fact.

@@ -24,6 +24,15 @@ const LIVE_LOG_LINES: usize = 8;
 /// Widest a fact's key column gets.
 const MAX_KEY_WIDTH: usize = 14;
 
+/// Widest the progress bar gets.
+const MAX_BAR_CELLS: usize = 48;
+
+/// Milliseconds the band of light over a running step takes per cell.
+const SWEEP_MS: u128 = 80;
+
+/// Cells' worth of time the band waits off a step before passing again.
+const BAND_GAP: u128 = 6;
+
 /// `850 ms`, `12.4s` or `3m 05s`.
 fn duration(ms: u64) -> String {
     if ms < 1000 {
@@ -90,6 +99,9 @@ pub(super) fn boot_lines(
 ) -> Vec<Line<'static>> {
     let faint = Style::default().fg(theme.colors.faint);
     let mut lines = vec![clip(header(console, expanded, spinner, theme), width)];
+    if console.is_running() {
+        lines.push(bar_line(console, width, theme));
+    }
     if let Some(outcome) = &console.outcome {
         let color = if outcome.ok {
             theme.colors.secondary
@@ -164,6 +176,78 @@ fn header(console: &BootConsole, expanded: bool, spinner: &str, theme: &Theme) -
     Line::from(spans)
 }
 
+/// `██████▓▒▒░░░░░░░  36%`: as a benchmark's bar, a run of cells per
+/// step, those finished solid in the color of how they ended, the running
+/// ones filled as far as they've got and shaded beyond with a band of
+/// light passing, those to come faint.
+fn bar_line(console: &BootConsole, width: usize, theme: &Theme) -> Line<'static> {
+    let percent = (console.fraction() * 100.0).floor().min(99.0);
+    let label = format!("  {percent:>3}%");
+    let cells = width
+        .saturating_sub(BODY.len() + display_width(&label))
+        .clamp(4, MAX_BAR_CELLS);
+    let steps = console.steps.len();
+    // Each cell: its glyph and color, and the running step it shades.
+    let mut look: Vec<(char, ratatui::style::Color, Option<usize>)> = (0..cells)
+        .map(|i| {
+            if steps == 0 {
+                return ('▒', theme.colors.pending, Some(0));
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let at = (i as f64 + 0.5) / cells as f64 * steps as f64;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let index = (at as usize).min(steps - 1);
+            let step = &console.steps[index];
+            #[allow(clippy::cast_precision_loss)]
+            let within = at - index as f64;
+            match &step.state {
+                BootStageState::Pending => ('░', theme.colors.faint, None),
+                BootStageState::Running if within < step.fraction() => {
+                    ('█', theme.colors.success, None)
+                }
+                BootStageState::Running => ('▒', theme.colors.pending, Some(index)),
+                BootStageState::Done { .. } => ('█', theme.colors.success, None),
+                BootStageState::Skipped(_) => ('█', theme.colors.muted, None),
+                BootStageState::Failed(_) => ('█', theme.colors.error, None),
+            }
+        })
+        .collect();
+    let tick = console.started.elapsed().as_millis() / SWEEP_MS;
+    let mut i = 0;
+    while i < look.len() {
+        let Some(step) = look[i].2 else {
+            i += 1;
+            continue;
+        };
+        let len = look[i..].iter().take_while(|c| c.2 == Some(step)).count();
+        #[allow(clippy::cast_possible_truncation)]
+        let band = (tick % (len as u128 + BAND_GAP)) as usize;
+        if band < len {
+            look[i + band].0 = '▓';
+            look[i + band].1 = theme.colors.text;
+        }
+        i += len;
+    }
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(BODY)];
+    let mut run = String::new();
+    let mut color = None;
+    for (glyph, fg, _) in look {
+        if color.is_some_and(|c| c != fg) {
+            spans.push(Span::styled(
+                std::mem::take(&mut run),
+                Style::default().fg(color.unwrap_or(fg)),
+            ));
+        }
+        color = Some(fg);
+        run.push(glyph);
+    }
+    if let Some(color) = color {
+        spans.push(Span::styled(run, Style::default().fg(color)));
+    }
+    spans.push(Span::styled(label, Style::default().fg(theme.colors.text)));
+    clip(Line::from(spans), width)
+}
+
 fn step_lines(console: &BootConsole, spinner: &str, theme: &Theme) -> Vec<Line<'static>> {
     let faint = Style::default().fg(theme.colors.faint);
     console
@@ -171,6 +255,7 @@ fn step_lines(console: &BootConsole, spinner: &str, theme: &Theme) -> Vec<Line<'
         .iter()
         .map(|step| {
             let (mark, mark_style, note) = match &step.state {
+                BootStageState::Pending => ("·".to_string(), faint, None),
                 BootStageState::Running => (
                     spinner.to_string(),
                     Style::default().fg(theme.colors.success),
@@ -192,6 +277,7 @@ fn step_lines(console: &BootConsole, spinner: &str, theme: &Theme) -> Vec<Line<'
                 ),
             };
             let label_style = match step.state {
+                BootStageState::Pending => faint,
                 BootStageState::Running => Style::default().fg(theme.colors.text),
                 BootStageState::Failed(_) => Style::default().fg(theme.colors.error),
                 _ => Style::default().fg(theme.colors.secondary),
@@ -370,6 +456,31 @@ mod tests {
         let failed = text(&boot_lines(&failed, true, "⠋", 80, &theme));
         assert!(failed.starts_with("  ▾ ✗ "));
         assert!(failed.contains("✗ Step create  stopped"), "{failed}");
+    }
+
+    #[test]
+    fn a_running_console_shows_a_bar_of_its_steps_and_those_to_come() {
+        let theme = Theme::cyber();
+        let mut running = console();
+        running.apply(BootUpdate::Plan(vec![crate::events::BootPlanStep {
+            key: "claim".into(),
+            label: "Claiming aura node".into(),
+        }]));
+        let lines = boot_lines(&running, false, "⠋", 80, &theme);
+        let bar = text(&lines[1..2]);
+        assert!(bar.ends_with("   50%"), "2 of 4 steps done: {bar}");
+        assert!(bar.contains('█') && bar.contains('░'), "{bar}");
+        assert!(bar.contains('▒') || bar.contains('▓'), "{bar}");
+        let shown = text(&lines);
+        assert!(shown.contains("· Claiming aura node"), "{shown}");
+
+        running.apply(BootUpdate::End {
+            ok: true,
+            summary: "done".into(),
+        });
+        let done = text(&boot_lines(&running, true, "⠋", 80, &theme));
+        assert!(!done.contains('░') && !done.contains('%'), "{done}");
+        assert!(!done.contains("Claiming aura node"), "never begun");
     }
 
     #[test]

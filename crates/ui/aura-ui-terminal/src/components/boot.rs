@@ -23,6 +23,22 @@ pub struct BootStep {
     pub progress: Option<(u64, u64)>,
 }
 
+impl BootStep {
+    /// How much of it is done, from 0 to 1.
+    #[must_use]
+    pub fn fraction(&self) -> f64 {
+        match self.state {
+            BootStageState::Pending => 0.0,
+            BootStageState::Running => match self.progress {
+                #[allow(clippy::cast_precision_loss)]
+                Some((done, total)) if total > 0 => (done as f64 / total as f64).min(1.0),
+                _ => 0.0,
+            },
+            _ => 1.0,
+        }
+    }
+}
+
 /// How a console ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootOutcome {
@@ -95,18 +111,41 @@ impl BootConsole {
         )
     }
 
+    /// How far along it is, from 0 to 1: finished steps count whole, the
+    /// running ones by their progress.
+    #[must_use]
+    pub fn fraction(&self) -> f64 {
+        if self.steps.is_empty() {
+            return 0.0;
+        }
+        let done: f64 = self.steps.iter().map(BootStep::fraction).sum();
+        #[allow(clippy::cast_precision_loss)]
+        let total = self.steps.len() as f64;
+        (done / total).clamp(0.0, 1.0)
+    }
+
+    /// The step under `key`; one not heard of goes in before the steps
+    /// not begun, so the order stays the order they run in.
     fn step(&mut self, key: &str, label: Option<&str>) -> &mut BootStep {
         let at = match self.steps.iter().position(|s| s.key == key) {
             Some(at) => at,
             None => {
-                self.steps.push(BootStep {
-                    key: key.to_string(),
-                    label: label.unwrap_or(key).to_string(),
-                    state: BootStageState::Running,
-                    started: Some(Instant::now()),
-                    progress: None,
-                });
-                self.steps.len() - 1
+                let at = self
+                    .steps
+                    .iter()
+                    .position(|s| s.state == BootStageState::Pending)
+                    .unwrap_or(self.steps.len());
+                self.steps.insert(
+                    at,
+                    BootStep {
+                        key: key.to_string(),
+                        label: label.unwrap_or(key).to_string(),
+                        state: BootStageState::Running,
+                        started: Some(Instant::now()),
+                        progress: None,
+                    },
+                );
+                at
             }
         };
         &mut self.steps[at]
@@ -116,6 +155,19 @@ impl BootConsole {
     pub fn apply(&mut self, update: BootUpdate) {
         match update {
             BootUpdate::Begin { title } => self.title = title,
+            BootUpdate::Plan(planned) => {
+                for planned in planned {
+                    if self.steps.iter().all(|s| s.key != planned.key) {
+                        self.steps.push(BootStep {
+                            key: planned.key,
+                            label: planned.label,
+                            state: BootStageState::Pending,
+                            started: None,
+                            progress: None,
+                        });
+                    }
+                }
+            }
             BootUpdate::Stage { key, label, state } => {
                 let step = self.step(&key, Some(&label));
                 step.label = label;
@@ -148,6 +200,7 @@ impl BootConsole {
             }
             BootUpdate::End { ok, summary } => {
                 let elapsed_ms = self.elapsed_ms();
+                self.steps.retain(|s| s.state != BootStageState::Pending);
                 for step in &mut self.steps {
                     if step.state == BootStageState::Running {
                         step.state = if ok {
@@ -175,6 +228,7 @@ impl BootConsole {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::BootPlanStep;
 
     fn stage(key: &str, state: BootStageState) -> BootUpdate {
         BootUpdate::Stage {
@@ -218,6 +272,39 @@ mod tests {
             console.steps[1].state,
             BootStageState::Failed("stopped".into())
         );
+    }
+
+    #[test]
+    fn a_plan_lists_the_steps_to_come_and_unplanned_ones_go_before_them() {
+        let mut console = BootConsole::new("b1", "Bringing the agent back");
+        console.apply(BootUpdate::Plan(
+            ["seal", "copy_record"]
+                .into_iter()
+                .map(|key| BootPlanStep {
+                    key: key.into(),
+                    label: key.into(),
+                })
+                .collect(),
+        ));
+        console.apply(stage("wake", BootStageState::Running));
+        let keys = |c: &BootConsole| c.steps.iter().map(|s| s.key.clone()).collect::<Vec<_>>();
+        assert_eq!(keys(&console), ["wake", "seal", "copy_record"]);
+        assert!(console.fraction().abs() < f64::EPSILON);
+
+        console.apply(stage("wake", BootStageState::Done { ms: 900 }));
+        console.apply(stage("seal", BootStageState::Running));
+        console.apply(BootUpdate::Progress {
+            key: "seal".into(),
+            done: 1,
+            total: 2,
+        });
+        assert!((console.fraction() - 0.5).abs() < 1e-9, "1.5 of 3 steps");
+
+        console.apply(BootUpdate::End {
+            ok: false,
+            summary: "seal failed".into(),
+        });
+        assert_eq!(keys(&console), ["wake", "seal"], "steps never begun go");
     }
 
     #[test]

@@ -479,6 +479,8 @@ pub struct FileDiffData {
 /// Where a step of a boot console is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BootStageState {
+    /// Planned, not begun
+    Pending,
     /// Under way
     Running,
     /// Finished after `ms`
@@ -501,6 +503,15 @@ pub struct BootLogLine {
     pub text: String,
 }
 
+/// A step a boot console expects to run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootPlanStep {
+    /// Stable key of the step
+    pub key: String,
+    /// What the step does, e.g. `Creating machine`
+    pub label: String,
+}
+
 /// A change to a boot console ([`UiCommand::Boot`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BootUpdate {
@@ -509,6 +520,9 @@ pub enum BootUpdate {
         /// What is happening
         title: String,
     },
+    /// The steps to come, in order; a step that starts unplanned goes in
+    /// before those not begun
+    Plan(Vec<BootPlanStep>),
     /// A step started, finished, failed or was skipped
     Stage {
         /// Stable key of the step
