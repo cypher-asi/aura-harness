@@ -60,7 +60,7 @@ impl App {
                 KeyCode::Char('a' | 'A') => UiEvent::ApproveAlways(approval.id),
                 _ => UiEvent::Deny(approval.id),
             };
-            if let Some(tx) = &self.event_tx {
+            if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(event);
             }
             self.status = format!("{answer}, continuing...");
@@ -118,7 +118,7 @@ impl App {
                 let email = std::mem::take(&mut self.account.login_email);
                 self.state = AppState::Processing;
                 self.status = "Authenticating...".to_string();
-                if let Some(tx) = &self.event_tx {
+                if let Some(tx) = &self.link.event_tx {
                     let _ = tx.try_send(UiEvent::LoginCredentials {
                         email,
                         password: value,
@@ -128,7 +128,7 @@ impl App {
             AppState::LinkCode => {
                 self.state = AppState::Idle;
                 self.status = "Linking...".to_string();
-                if let Some(tx) = &self.event_tx {
+                if let Some(tx) = &self.link.event_tx {
                     let _ = tx.try_send(UiEvent::LinkCode(value.trim().to_string()));
                 }
             }

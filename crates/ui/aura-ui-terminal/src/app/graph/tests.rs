@@ -130,8 +130,12 @@ fn inspected_nodes_say_when_they_happened_to_the_millisecond() {
 #[test]
 fn r_jumps_to_the_linked_record_row() {
     let mut app = App::new();
-    app.records.push_back(crate::app::detail_tests::record(4));
-    app.records.push_back(crate::app::detail_tests::record(7));
+    app.records
+        .items
+        .push_back(crate::app::detail_tests::record(4));
+    app.records
+        .items
+        .push_back(crate::app::detail_tests::record(7));
     let mut step = node("tc:a", Some("run"), TraceNodeStatus::Ok);
     step.meta = vec![("record_seqs".into(), "[7,8]".into())];
     app.process_command(UiCommand::GraphLoad {

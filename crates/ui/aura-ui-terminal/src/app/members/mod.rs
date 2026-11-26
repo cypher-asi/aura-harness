@@ -116,12 +116,12 @@ impl App {
     /// Which list the Kernel panel shows.
     #[must_use]
     pub const fn records_tab(&self) -> RecordsTab {
-        self.records_tab
+        self.records.tab
     }
 
     pub(super) fn show_records_tab(&mut self, tab: RecordsTab) {
-        let opened = tab != self.records_tab;
-        self.records_tab = tab;
+        let opened = tab != self.records.tab;
+        self.records.tab = tab;
         if opened && tab == RecordsTab::Policies {
             self.request_policies();
         }
@@ -180,7 +180,7 @@ impl App {
 
     /// Take in the process table just sent, then list the members again.
     pub(super) fn absorb_members(&mut self) {
-        self.members.absorb(&self.all_processes);
+        self.members.absorb(&self.side.all_processes);
         self.refresh_members();
     }
 
@@ -211,7 +211,7 @@ impl App {
         }
         let id = &self.active_agent_id;
         let agent = self.agents.iter().find(|agent| agent.id == *id);
-        let turn = self.all_processes.iter().find(|process| {
+        let turn = self.side.all_processes.iter().find(|process| {
             process.kind == ProcessKind::Turn
                 && process.owner_agent_id == *id
                 && process.status.is_live()
@@ -260,7 +260,7 @@ impl App {
             }
             return;
         }
-        match self.records_tab {
+        match self.records.tab {
             RecordsTab::Kernel => self.click_record_row(column, row),
             RecordsTab::Members => {
                 if let Some(index) = self.member_row_at(column, row) {
@@ -298,20 +298,20 @@ impl App {
             && matches!(key.code, KeyCode::Left | KeyCode::Right)
         {
             let tab = if key.code == KeyCode::Right {
-                self.records_tab.next()
+                self.records.tab.next()
             } else {
-                self.records_tab.prev()
+                self.records.tab.prev()
             };
             self.show_records_tab(tab);
             return true;
         }
-        if self.records_tab == RecordsTab::Policies {
+        if self.records.tab == RecordsTab::Policies {
             return self.handle_policies_shortcut(key);
         }
-        if self.records_tab == RecordsTab::Inbox {
+        if self.records.tab == RecordsTab::Inbox {
             return self.handle_inbox_shortcut(key);
         }
-        if self.records_tab != RecordsTab::Members {
+        if self.records.tab != RecordsTab::Members {
             return false;
         }
         match key.code {

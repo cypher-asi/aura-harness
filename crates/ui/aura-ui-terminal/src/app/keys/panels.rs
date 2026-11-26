@@ -18,7 +18,7 @@ impl App {
     }
 
     fn records_tab_key(&mut self, key: KeyEvent) -> KeyResult {
-        match self.records_tab {
+        match self.records.tab {
             RecordsTab::Kernel => return self.handle_records_key(key),
             RecordsTab::Members => self.handle_members_key(key),
             RecordsTab::Policies => self.handle_policies_key(key),
@@ -28,7 +28,7 @@ impl App {
     }
 
     fn side_tab_key(&mut self, key: KeyEvent) -> KeyResult {
-        match self.side_tab {
+        match self.side.tab {
             SidePanelTab::Sandbox => return self.handle_sandbox_key(key),
             SidePanelTab::Processes => self.handle_processes_key(key),
             SidePanelTab::Host => {
@@ -46,35 +46,37 @@ impl App {
     fn handle_records_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
             KeyCode::Up => {
-                if self.selected_record > 0 {
-                    self.selected_record -= 1;
+                if self.records.selected > 0 {
+                    self.records.selected -= 1;
                 }
             }
             KeyCode::Down => {
-                if !self.records.is_empty() && self.selected_record < self.records.len() - 1 {
-                    self.selected_record += 1;
+                if !self.records.items.is_empty()
+                    && self.records.selected < self.records.items.len() - 1
+                {
+                    self.records.selected += 1;
                 }
             }
             KeyCode::Enter => {
-                if !self.records.is_empty() {
+                if !self.records.items.is_empty() {
                     self.open_detail(DetailView::Record);
                 }
             }
             KeyCode::PageUp => {
-                self.selected_record = self.selected_record.saturating_sub(5);
+                self.records.selected = self.records.selected.saturating_sub(5);
             }
             KeyCode::PageDown => {
-                if !self.records.is_empty() {
-                    self.selected_record =
-                        (self.selected_record + 5).min(self.records.len().saturating_sub(1));
+                if !self.records.items.is_empty() {
+                    self.records.selected =
+                        (self.records.selected + 5).min(self.records.items.len().saturating_sub(1));
                 }
             }
             KeyCode::Home => {
-                self.selected_record = 0;
+                self.records.selected = 0;
             }
             KeyCode::End => {
-                if !self.records.is_empty() {
-                    self.selected_record = self.records.len() - 1;
+                if !self.records.items.is_empty() {
+                    self.records.selected = self.records.items.len() - 1;
                 }
             }
             KeyCode::Char(c) => {

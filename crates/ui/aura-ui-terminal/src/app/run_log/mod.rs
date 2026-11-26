@@ -166,7 +166,7 @@ impl App {
         self.log.loading_since = Some(Instant::now());
         self.log.stale = false;
         self.log.requested = Some(Instant::now());
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::Log {
                 agent_id: self.active_agent_id.clone(),
                 request: LogRequest::Load,

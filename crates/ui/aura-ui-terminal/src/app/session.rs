@@ -167,18 +167,18 @@ impl App {
     /// Get the records list.
     #[must_use]
     pub const fn records(&self) -> &VecDeque<RecordSummary> {
-        &self.records
+        &self.records.items
     }
 
     /// Get the selected record index.
     #[must_use]
     pub const fn selected_record(&self) -> usize {
-        self.selected_record
+        self.records.selected
     }
 
     /// Get the records scroll offset.
     #[must_use]
     pub const fn records_scroll(&self) -> usize {
-        self.records_scroll
+        self.records.scroll
     }
 }

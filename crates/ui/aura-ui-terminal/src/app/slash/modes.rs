@@ -32,7 +32,7 @@ impl App {
     /// The event loop knows the mode from before plan mode, so the same
     /// command restores it.
     pub(in crate::app) fn request_plan_toggle(&mut self) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::TogglePlan(self.active_agent_id.clone()));
         }
     }
@@ -42,7 +42,7 @@ impl App {
     /// The event loop handles events in order, so the switch is recorded
     /// before the message starts a turn.
     pub(in crate::app) fn request_plan_mode(&mut self) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::SetMode {
                 agent_id: self.active_agent_id.clone(),
                 mode: PermissionMode::Plan,
@@ -59,7 +59,7 @@ impl App {
                 Some((format!("Already in {mode} mode"), NotificationType::Warning));
             return;
         }
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::SetMode {
                 agent_id: self.active_agent_id.clone(),
                 mode,
@@ -84,7 +84,7 @@ impl App {
             ));
             return;
         }
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::BuildPlan {
                 agent_id: self.active_agent_id.clone(),
                 path,
@@ -187,7 +187,7 @@ impl App {
             ));
             return;
         }
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::SetApproval {
                 agent_id: self.active_agent_id.clone(),
                 level,

@@ -162,7 +162,7 @@ impl App {
     }
 
     fn send_order(&self, event: UiEvent) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(event);
         }
     }
@@ -185,53 +185,39 @@ impl App {
             .project_press
             .as_ref()
             .filter(|press| press.moved)?;
-        let rows = self.project_rows();
-        let block_rows = |start: usize, end: usize, header: bool| {
-            let within = |row: &ProjectListRow| match *row {
-                ProjectListRow::Project { root, .. } => header && root == start,
-                ProjectListRow::Agent { index } => (start..end).contains(&index),
-                _ => false,
-            };
-            let first = rows.iter().position(within)?;
-            let len = rows[first..].iter().take_while(|row| within(row)).count();
-            Some(first..first + len)
-        };
-        let at = self.list_row_at(press.pointer);
-        let (dragged, target) = match &press.pressed {
-            Pressed::Project(key) => {
-                let from = self.project_root_of_key(key)?;
-                let dragged = block_rows(from, self.project_end(from), true)?;
-                let target = at
-                    .and_then(|at| self.project_at_row(&rows, at))
-                    .and_then(|root| block_rows(root, self.project_end(root), true));
-                (dragged, target)
-            }
-            Pressed::Agent(id) => {
-                let from = self.agents_position(id)?;
-                let dragged = block_rows(from, self.block_end(from), false)?;
-                let target = at
-                    .and_then(|at| self.agent_block_at_row(&rows, at))
-                    .filter(|&start| self.project_root(start) == self.project_root(from))
-                    .and_then(|start| block_rows(start, self.block_end(start), false));
-                (dragged, target)
-            }
-        };
-        let edge = target
-            .as_ref()
-            .and_then(|target| match target.start.cmp(&dragged.start) {
-                std::cmp::Ordering::Greater => Some(target.end),
-                std::cmp::Ordering::Less => Some(target.start),
-                std::cmp::Ordering::Equal => {
-                    press
-                        .swapped_down
-                        .map(|down| if down { dragged.start } else { dragged.end })
-                }
-            });
+        let (dragged, target) = self.drag_rows(press)?;
+        let edge = drop_edge(press, &dragged, target.as_ref());
         Some(ProjectDragHit {
             dragged,
             target,
             edge,
         })
+    }
+
+    /// The rows being dragged, and the rows of the block under the pointer
+    /// they may take the place of.
+    fn drag_rows(&self, press: &ProjectPress) -> Option<(Range<usize>, Option<Range<usize>>)> {
+        let rows = self.project_rows();
+        let at = self.list_row_at(press.pointer);
+        match &press.pressed {
+            Pressed::Project(key) => {
+                let from = self.project_root_of_key(key)?;
+                let dragged = block_rows(&rows, from, self.project_end(from), true)?;
+                let target = at
+                    .and_then(|at| self.project_at_row(&rows, at))
+                    .and_then(|root| block_rows(&rows, root, self.project_end(root), true));
+                Some((dragged, target))
+            }
+            Pressed::Agent(id) => {
+                let from = self.agents_position(id)?;
+                let dragged = block_rows(&rows, from, self.block_end(from), false)?;
+                let target = at
+                    .and_then(|at| self.agent_block_at_row(&rows, at))
+                    .filter(|&start| self.project_root(start) == self.project_root(from))
+                    .and_then(|start| block_rows(&rows, start, self.block_end(start), false));
+                Some((dragged, target))
+            }
+        }
     }
 
     /// Keys of the projects, in the order listed.
@@ -402,4 +388,41 @@ impl App {
             self.project_list.selected = row;
         }
     }
+}
+
+/// The list rows of the agents `start..end`, with the header of the
+/// project rooted at `start` when `header`.
+fn block_rows(
+    rows: &[ProjectListRow],
+    start: usize,
+    end: usize,
+    header: bool,
+) -> Option<Range<usize>> {
+    let within = |row: &ProjectListRow| match *row {
+        ProjectListRow::Project { root, .. } => header && root == start,
+        ProjectListRow::Agent { index } => (start..end).contains(&index),
+        _ => false,
+    };
+    let first = rows.iter().position(within)?;
+    let len = rows[first..].iter().take_while(|row| within(row)).count();
+    Some(first..first + len)
+}
+
+/// The edge the dragged rows go to: below a target below them, above one
+/// above; once they landed, the edge between them and the block they
+/// passed.
+fn drop_edge(
+    press: &ProjectPress,
+    dragged: &Range<usize>,
+    target: Option<&Range<usize>>,
+) -> Option<usize> {
+    target.and_then(|target| match target.start.cmp(&dragged.start) {
+        std::cmp::Ordering::Greater => Some(target.end),
+        std::cmp::Ordering::Less => Some(target.start),
+        std::cmp::Ordering::Equal => {
+            press
+                .swapped_down
+                .map(|down| if down { dragged.start } else { dragged.end })
+        }
+    })
 }

@@ -35,7 +35,7 @@ impl App {
                 .map(str::trim)
                 .filter(|n| !n.is_empty())
                 .map(str::to_string);
-            if let Some(tx) = &self.event_tx {
+            if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(UiEvent::CreateAgent(name));
             }
             return;

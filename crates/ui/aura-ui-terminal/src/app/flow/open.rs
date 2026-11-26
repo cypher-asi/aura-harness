@@ -40,11 +40,16 @@ impl App {
         };
         let (seq, agent_id) = (node.seq, node.agent_id.clone());
         let found = (agent_id == self.active_agent_id)
-            .then(|| self.records.iter().position(|record| record.seq == seq))
+            .then(|| {
+                self.records
+                    .items
+                    .iter()
+                    .position(|record| record.seq == seq)
+            })
             .flatten();
         if let Some(index) = found {
-            self.selected_record = index;
-            self.records_tab = RecordsTab::Kernel;
+            self.records.selected = index;
+            self.records.tab = RecordsTab::Kernel;
             self.focus = PanelFocus::Records;
             self.open_detail(DetailView::Record);
             return;

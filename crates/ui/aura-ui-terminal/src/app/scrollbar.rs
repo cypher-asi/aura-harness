@@ -226,8 +226,8 @@ impl App {
         match bar.target {
             ScrollTarget::Chat => self.scroll_chat_to_row(bar, first),
             ScrollTarget::Detail => {
-                if self.detail.as_ref().is_some_and(DetailView::scrolls) {
-                    self.detail_scroll = first;
+                if self.detail.view.as_ref().is_some_and(DetailView::scrolls) {
+                    self.detail.scroll = first;
                     self.detail_scrolled();
                 }
             }
@@ -239,7 +239,7 @@ impl App {
     fn scrollbar_first(&self, bar: ScrollbarArea) -> usize {
         match bar.target {
             ScrollTarget::Chat => bar.last - self.scroll_offset.min(bar.last),
-            ScrollTarget::Detail => self.detail_scroll.min(bar.last),
+            ScrollTarget::Detail => self.detail.scroll.min(bar.last),
         }
     }
 

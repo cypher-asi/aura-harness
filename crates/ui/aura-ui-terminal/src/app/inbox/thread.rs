@@ -39,7 +39,7 @@ impl App {
         self.mark_thread_read(&view.thread_id);
         self.inbox.thread_headers.clear();
         self.open_detail(DetailView::Thread(Box::new(view)));
-        self.detail_scroll = self.selected_thread_line().unwrap_or(0);
+        self.detail.scroll = self.selected_thread_line().unwrap_or(0);
         self.refresh_inbox();
     }
 
@@ -70,14 +70,14 @@ impl App {
     }
 
     pub(super) fn thread_view_mut(&mut self) -> Option<&mut ThreadView> {
-        match self.detail.as_mut() {
+        match self.detail.view.as_mut() {
             Some(DetailView::Thread(view)) => Some(view.as_mut()),
             _ => None,
         }
     }
 
     pub(super) fn thread_view(&self) -> Option<&ThreadView> {
-        match self.detail.as_ref() {
+        match self.detail.view.as_ref() {
             Some(DetailView::Thread(view)) => Some(view.as_ref()),
             _ => None,
         }
@@ -144,8 +144,8 @@ impl App {
         let Some(line) = self.selected_thread_line() else {
             return;
         };
-        if line < self.detail_scroll || line >= self.detail_scroll + self.detail_shown {
-            self.detail_scroll = line;
+        if line < self.detail.scroll || line >= self.detail.scroll + self.detail.shown {
+            self.detail.scroll = line;
         }
     }
 

@@ -55,7 +55,7 @@ fn with_no_model_list_the_default_arm_b_is_sent_as_the_strongest_opus() {
     app.open_bench_form();
     assert_eq!(app.bench.form.b, DEFAULT_AGAINST, "kept until models load");
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     app.submit_bench_form();
     let sent = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
         UiEvent::Bench {

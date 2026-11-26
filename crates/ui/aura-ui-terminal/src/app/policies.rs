@@ -26,7 +26,7 @@ impl App {
         if self.active_agent_id.is_empty() {
             return;
         }
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::RequestPolicies(self.active_agent_id.clone()));
         }
     }
@@ -41,7 +41,7 @@ impl App {
         }
         self.panels.record_visible = true;
         self.panels.side_expanded = false;
-        if self.records_tab == RecordsTab::Policies {
+        if self.records.tab == RecordsTab::Policies {
             // Already open: still bring the snapshot up to date.
             self.request_policies();
         }
@@ -52,24 +52,24 @@ impl App {
     /// Scroll the POLICIES tab by `delta` lines, as the wheel does. The
     /// renderer keeps the scroll inside the document.
     pub(super) fn scroll_policies(&mut self, delta: isize) {
-        self.policies_scroll.by(delta);
+        self.side.policies_scroll.by(delta);
     }
 
     /// Keep the POLICIES tab's scroll inside a document `total` lines long
     /// shown `visible` lines at a time, returning the first line to show.
     pub fn sync_policies_scroll(&mut self, total: usize, visible: usize) -> usize {
-        self.policies_scroll.sync(total, visible)
+        self.side.policies_scroll.sync(total, visible)
     }
 
     /// Navigation keys of the POLICIES tab.
     pub(super) fn handle_policies_key(&mut self, key: KeyEvent) {
-        self.policies_scroll.key(key.code);
+        self.side.policies_scroll.key(key.code);
     }
 
     /// Home/End of the POLICIES tab, which would otherwise go to the
     /// empty input.
     pub(super) fn handle_policies_shortcut(&mut self, key: KeyEvent) -> bool {
-        matches!(key.code, KeyCode::Home | KeyCode::End) && self.policies_scroll.key(key.code)
+        matches!(key.code, KeyCode::Home | KeyCode::End) && self.side.policies_scroll.key(key.code)
     }
 }
 

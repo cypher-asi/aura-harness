@@ -65,7 +65,7 @@ impl App {
             return true;
         }
         if key.code == KeyCode::BackTab {
-            if let Some(tx) = &self.event_tx {
+            if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(UiEvent::CycleApproval(self.active_agent_id.clone()));
             }
             return true;
@@ -164,7 +164,7 @@ impl App {
         }
         self.focus == PanelFocus::Chat
             && self.chat_tab() == ChatTab::Log
-            && self.detail.is_none()
+            && self.detail.view.is_none()
             && self.input.text.is_empty()
             && self.handle_log_key(key)
     }

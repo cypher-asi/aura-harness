@@ -72,7 +72,7 @@ fn default_submission_prepares_the_full_suite_against_opus_5_5() {
     ];
     app.cmd_bench_sessions(&id, Vec::new(), examples);
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
 
     app.submit_bench_form();
     let event = rx.try_recv().expect("prepare request");
@@ -232,7 +232,7 @@ fn each_suite_can_be_run_on_its_own() {
     assert_eq!(app.bench.form.tasks, 3, "stops at the suite's last task");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     app.submit_bench_form();
     let sent = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {
         UiEvent::Bench {

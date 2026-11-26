@@ -288,7 +288,7 @@ fn test_clicking_an_agents_archive_button_archives_it() {
 fn app_with_an_empty_project() -> (App, mpsc::Receiver<UiEvent>) {
     let (tx, rx) = mpsc::channel(16);
     let mut app = App::new();
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     let project = |id: &str| crate::events::ProjectSummary {
         id: id.to_string(),
         name: id.to_string(),
@@ -361,7 +361,7 @@ fn test_a_project_with_every_agent_archived_keeps_its_header() {
 fn test_an_empty_project_keeps_its_place_while_others_are_dragged() {
     let (tx, mut rx) = mpsc::channel(16);
     let mut app = App::new();
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     let project = |id: &str| crate::events::ProjectSummary {
         id: id.to_string(),
         name: id.to_string(),

@@ -249,13 +249,13 @@ impl App {
     /// Keep the highlighted feed row inside `visible` rows, returning the
     /// first row to draw.
     pub fn sync_trace_scroll(&mut self, visible: usize) -> usize {
-        self.trace_scroll = follow_selection(
-            self.trace_scroll,
+        self.side.trace_scroll = follow_selection(
+            self.side.trace_scroll,
             self.trace_feed.selected,
             visible,
             self.trace_feed.len(),
         );
-        self.trace_scroll
+        self.side.trace_scroll
     }
 
     /// Where the feed rows were drawn, for mouse clicks.
@@ -313,7 +313,7 @@ impl App {
             return;
         }
         self.pending.graph_node = Some(entry.node.id.clone());
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::OpenGraph(Some(entry.run_id)));
         }
     }

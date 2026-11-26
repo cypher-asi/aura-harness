@@ -68,7 +68,7 @@ impl App {
         self.chat.prose_measure = Some(measure);
         self.chat.chat_lines = ChatLineCache::default();
         // An open plan was laid out with the old widths too.
-        if let Some(super::DetailView::Plan(doc)) = self.detail.as_mut() {
+        if let Some(super::DetailView::Plan(doc)) = self.detail.view.as_mut() {
             doc.layout.key = None;
         }
     }

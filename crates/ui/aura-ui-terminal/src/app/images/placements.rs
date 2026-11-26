@@ -116,7 +116,7 @@ impl App {
     /// The full-size image of the detail view, when one is open.
     fn detail_image_placement(&self) -> Option<Placement> {
         if let (Some(rect), Some(DetailView::Image(view))) =
-            (self.chat.detail_image_rect, &self.detail)
+            (self.chat.detail_image_rect, &self.detail.view)
         {
             if !rect.is_empty() && view.preview.graphics_png().is_some() {
                 return Some((PlacementSlot::Detail, rect, Arc::clone(&view.preview)));

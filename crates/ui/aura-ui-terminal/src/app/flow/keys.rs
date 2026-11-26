@@ -38,8 +38,8 @@ impl App {
             KeyCode::Char('f') => self.follow_flow_link(),
             KeyCode::Char('r') => self.jump_to_flow_record(),
             KeyCode::Char('o') => self.open_flow_agent(),
-            KeyCode::Char('+' | '=') if self.host_canvas => self.zoom_flow(ZOOM_STEP, None),
-            KeyCode::Char('-') if self.host_canvas => self.zoom_flow(1.0 / ZOOM_STEP, None),
+            KeyCode::Char('+' | '=') if self.host.canvas => self.zoom_flow(ZOOM_STEP, None),
+            KeyCode::Char('-') if self.host.canvas => self.zoom_flow(1.0 / ZOOM_STEP, None),
             KeyCode::Char('0') => self.reset_flow_zoom(),
             _ => return false,
         }

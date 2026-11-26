@@ -32,9 +32,9 @@ impl App {
 
     fn cmd_set_todos(&mut self, todos: Vec<TodoView>) {
         if todos.is_empty() {
-            self.todos_open = false;
+            self.todos.open = false;
             // The next list starts short, whatever the last one did.
-            self.todos_expanded = false;
+            self.todos.expanded = false;
         }
         self.hud.todos = todos;
     }

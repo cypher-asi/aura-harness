@@ -31,7 +31,7 @@ impl App {
             }
             self.state = AppState::Idle;
             self.status = "Cancelled".to_string();
-            if let Some(tx) = &self.event_tx {
+            if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(UiEvent::Cancel(self.active_agent_id.clone()));
             }
         }
@@ -40,7 +40,7 @@ impl App {
     /// Stop the commands the agent on screen is running. Its turn goes on
     /// with what they printed.
     pub fn stop_command(&mut self) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::StopCommand(self.active_agent_id.clone()));
         }
     }
@@ -55,7 +55,8 @@ impl App {
 
     /// Send `event` to the session. Returns whether it went out.
     pub(super) fn try_send_event(&self, event: UiEvent) -> bool {
-        self.event_tx
+        self.link
+            .event_tx
             .as_ref()
             .is_some_and(|tx| tx.try_send(event).is_ok())
     }
@@ -157,6 +158,7 @@ impl App {
                 .iter()
                 .any(|task| task.state == crate::events::TaskState::Running)
             || self
+                .side
                 .processes
                 .items
                 .iter()
@@ -167,11 +169,11 @@ impl App {
     /// this keeps the channel from filling, which would hold up the agents
     /// and the event loop sending to it.
     pub fn receive_commands(&mut self) {
-        if let Some(mut rx) = self.command_rx.take() {
+        if let Some(mut rx) = self.link.command_rx.take() {
             while let Ok(cmd) = rx.try_recv() {
                 self.process_command(cmd);
             }
-            self.command_rx = Some(rx);
+            self.link.command_rx = Some(rx);
         }
     }
 }

@@ -50,7 +50,7 @@ impl App {
     /// selection in it. Only then is there a chat to scroll by pixels.
     #[must_use]
     pub fn chat_scroll(&self) -> Option<ChatScroll> {
-        let plain = self.detail.is_none()
+        let plain = self.detail.view.is_none()
             && !self.flow.is_open()
             && matches!(self.state, AppState::Idle | AppState::Processing);
         self.chat.smooth.view.filter(|_| plain)

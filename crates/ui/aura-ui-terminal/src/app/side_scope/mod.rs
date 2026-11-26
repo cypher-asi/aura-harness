@@ -68,13 +68,13 @@ impl App {
     /// Whose items the side panel's lists show.
     #[must_use]
     pub const fn side_scope(&self) -> SideScope {
-        self.side_scope
+        self.side.scope
     }
 
     /// Show the whole project's items in the side panel's lists, or only
     /// the active agent's again.
     pub fn toggle_side_scope(&mut self) {
-        self.side_scope = self.side_scope.toggled();
+        self.side.scope = self.side.scope.toggled();
         self.refresh_side_scope();
     }
 
@@ -99,13 +99,13 @@ impl App {
             .iter()
             .position(|a| a.id == self.active_agent_id)
         else {
-            return match self.side_scope {
+            return match self.side.scope {
                 SideScope::Agent => Some(HashSet::from([self.active_agent_id.clone()])),
                 SideScope::Project => None,
             };
         };
         let agents = &self.agents;
-        let range = match self.side_scope {
+        let range = match self.side.scope {
             SideScope::Agent => {
                 let depth = agents[index].depth;
                 let end = agents[index + 1..]
@@ -135,7 +135,7 @@ impl App {
         let agents = self.scope_agents();
         self.trace_feed.set_filter(agents.clone());
         self.task_list.set_filter(agents.clone());
-        self.process_filter = agents;
+        self.side.process_filter = agents;
         self.reshow_processes();
         self.refresh_members();
     }
@@ -144,11 +144,11 @@ impl App {
     pub(super) fn list_places(&self) -> ListPlaces {
         ListPlaces {
             process: self.selected_process_data().map(|p| p.id.clone()),
-            processes_scroll: self.processes.scroll,
+            processes_scroll: self.side.processes.scroll,
             step: self.trace_feed.place(),
-            trace_scroll: self.trace_scroll,
+            trace_scroll: self.side.trace_scroll,
             task: self.task_list.place(),
-            tasks_scroll: self.tasks_scroll,
+            tasks_scroll: self.side.tasks_scroll,
         }
     }
 
@@ -158,15 +158,15 @@ impl App {
     pub(super) fn put_back_list_places(&mut self, places: ListPlaces) {
         if let Some(at) = places
             .process
-            .and_then(|id| self.processes.items.iter().position(|p| p.id == id))
+            .and_then(|id| self.side.processes.items.iter().position(|p| p.id == id))
         {
-            self.processes.selected = at;
+            self.side.processes.selected = at;
         }
-        self.processes.scroll = places.processes_scroll;
+        self.side.processes.scroll = places.processes_scroll;
         self.trace_feed.put_back(&places.step);
-        self.trace_scroll = places.trace_scroll;
+        self.side.trace_scroll = places.trace_scroll;
         self.task_list.put_back(places.task.as_ref());
-        self.tasks_scroll = places.tasks_scroll;
+        self.side.tasks_scroll = places.tasks_scroll;
     }
 }
 

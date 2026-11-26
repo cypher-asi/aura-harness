@@ -206,7 +206,7 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     app.panels.record_visible = true;
     app.panels.side_expanded = false;
     app.panels.sandbox_visible = false;
-    app.side_tab = SidePanelTab::Trace;
+    app.side.tab = SidePanelTab::Trace;
 
     app.handle_key(key(KeyCode::Left));
     assert!(app.channel_open());
@@ -259,7 +259,7 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
 #[test]
 fn test_a_channel_dropped_from_the_list_gives_back_the_side_tab() {
     let (mut app, _rx) = app_with_others_channel();
-    app.side_tab = SidePanelTab::Tasks;
+    app.side.tab = SidePanelTab::Tasks;
     app.handle_key(key(KeyCode::Left));
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
 

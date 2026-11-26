@@ -143,11 +143,11 @@ impl App {
             &mut view.loading_since,
         );
         mem::swap(&mut self.switching.chat_revealed_at, &mut view.revealed_at);
-        mem::swap(&mut self.records, &mut view.records);
-        mem::swap(&mut self.selected_record, &mut view.selected_record);
-        mem::swap(&mut self.records_scroll, &mut view.records_scroll);
+        mem::swap(&mut self.records.items, &mut view.records);
+        mem::swap(&mut self.records.selected, &mut view.selected_record);
+        mem::swap(&mut self.records.scroll, &mut view.records_scroll);
         mem::swap(&mut self.sandbox, &mut view.sandbox);
-        mem::swap(&mut self.sandbox_scroll, &mut view.sandbox_scroll);
+        mem::swap(&mut self.side.sandbox_scroll, &mut view.sandbox_scroll);
     }
 
     /// Have the chat on screen wait for its history when it doesn't hold
@@ -364,7 +364,7 @@ impl App {
         let graphed = self.upsert_graph(run_id, nodes);
         // Any agent's step may be in the log on screen, as a subagent's.
         self.log.mark_stale();
-        let feed_shown = self.sandbox_panel_visible() && self.side_tab == SidePanelTab::Trace;
+        let feed_shown = self.sandbox_panel_visible() && self.side.tab == SidePanelTab::Trace;
         self.ticks.redraw |= graphed || feed_shown;
     }
 

@@ -55,13 +55,13 @@ impl App {
     /// `/todos`: show or hide the agent's todo list.
     fn todos_command(&mut self) {
         if self.hud.todos.is_empty() {
-            self.todos_open = false;
+            self.todos.open = false;
             self.notifications.current = Some((
                 "The agent has no todo list".to_string(),
                 NotificationType::Warning,
             ));
         } else {
-            self.todos_open = !self.todos_open;
+            self.todos.open = !self.todos.open;
         }
     }
 
@@ -88,7 +88,7 @@ impl App {
             instructions,
             ..Default::default()
         };
-        self.todos_open = false;
+        self.todos.open = false;
         // The new conversation is a new run, which no agent has
         // joined yet.
         self.start_members_run();
@@ -110,7 +110,7 @@ impl App {
             ));
             return;
         };
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::Resume {
                 agent_id: self.active_agent_id.clone(),
                 index,
@@ -139,7 +139,7 @@ impl App {
                 return;
             }
         };
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::Rewind {
                 agent_id: self.active_agent_id.clone(),
                 turn,
@@ -162,7 +162,7 @@ impl App {
                 return;
             }
         };
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::Diff {
                 agent_id: self.active_agent_id.clone(),
                 session,
@@ -173,7 +173,7 @@ impl App {
     /// `/compact [focus]`: summarize the agent's older history now. A busy
     /// agent does it once its current work ends.
     fn handle_compact_command(&mut self, focus: &str) {
-        let Some(tx) = &self.event_tx else {
+        let Some(tx) = &self.link.event_tx else {
             return;
         };
         let event = UiEvent::Compact {
@@ -198,7 +198,7 @@ impl App {
     /// `AGENTS.md`. The chat shows the request once the turn starts; a busy
     /// agent starts it when its current work ends.
     fn handle_init_command(&mut self) {
-        let Some(tx) = &self.event_tx else {
+        let Some(tx) = &self.link.event_tx else {
             return;
         };
         let event = UiEvent::InitProject {

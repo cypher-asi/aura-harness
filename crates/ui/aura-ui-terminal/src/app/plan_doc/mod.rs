@@ -227,7 +227,7 @@ impl App {
     /// Swap the open plan document for its source in the file view, with
     /// the cursor on the focused todo's checklist item.
     pub(super) fn show_plan_source(&mut self) {
-        let Some(DetailView::Plan(doc)) = self.detail.as_ref() else {
+        let Some(DetailView::Plan(doc)) = self.detail.view.as_ref() else {
             return;
         };
         let mut view = FileView::load(&doc.file, self.sandbox.root());
@@ -244,8 +244,8 @@ impl App {
 
     /// The open plan document and the view's scroll, for drawing it.
     pub(crate) fn plan_view_mut(&mut self) -> Option<(&mut PlanDoc, &mut usize)> {
-        match self.detail.as_mut() {
-            Some(DetailView::Plan(doc)) => Some((doc.as_mut(), &mut self.detail_scroll)),
+        match self.detail.view.as_mut() {
+            Some(DetailView::Plan(doc)) => Some((doc.as_mut(), &mut self.detail.scroll)),
             _ => None,
         }
     }

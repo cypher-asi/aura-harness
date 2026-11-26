@@ -297,7 +297,7 @@ impl App {
         }
         self.switch_app(AgentsTab::Channels);
         if self.channels.open.is_none() {
-            self.channels.side_tab_before = Some(self.side_tab);
+            self.channels.side_tab_before = Some(self.side.tab);
         }
         self.channels.open = Some(id.to_string());
         if self.apps.channel.as_deref() != Some(id) {

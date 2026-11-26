@@ -30,7 +30,7 @@ fn a_difficulty_row_cycles_models_and_enter_opens_the_model_selector() {
     let mut app = three_models();
     let session = app.account.current_model.clone();
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     app.bench.mode = Some(BenchMode::Form);
     app.bench.form.a = BY_DIFFICULTY.to_string();
     app.bench.form.field = FormField::AEasy;
@@ -120,7 +120,7 @@ fn a_by_difficulty_arm_needs_all_three_models_and_is_sent_as_one_string() {
     app.bench.form.b = BY_DIFFICULTY.to_string();
     app.bench.form.b_models = [DEEPSEEK.to_string(), String::new(), String::new()];
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     app.bench.form.field = FormField::Go;
     app.submit_bench_form();
     assert_eq!(app.bench.form.field, FormField::BMedium);

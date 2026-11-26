@@ -25,7 +25,7 @@ impl App {
             && self.input.text.is_empty()
             && self.state == AppState::Processing
             && self.context_menu.is_none()
-            && self.detail.is_none()
+            && self.detail.view.is_none()
         {
             self.send_queued_now();
             return KeyResult::continue_running();
@@ -41,7 +41,7 @@ impl App {
             self.toggle_chat_expanded();
             return KeyResult::continue_running();
         }
-        if self.detail.is_some() {
+        if self.detail.view.is_some() {
             self.handle_detail_key(key);
             return KeyResult::continue_running();
         }
@@ -88,13 +88,13 @@ impl App {
             }
             return;
         }
-        if self.detail == Some(super::DetailView::Graph) {
+        if self.detail.view == Some(super::DetailView::Graph) {
             if self.handle_graph_key(key) {
                 self.close_detail();
             }
             return;
         }
-        if matches!(self.detail, Some(super::DetailView::Image(_))) {
+        if matches!(self.detail.view, Some(super::DetailView::Image(_))) {
             match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.close_detail(),
                 KeyCode::Char('o') => self.open_image_externally(),
@@ -105,7 +105,8 @@ impl App {
         if self.handle_thread_key(key) {
             return;
         }
-        if matches!(self.detail, Some(super::DetailView::Plan(_))) && key.code == KeyCode::Char('s')
+        if matches!(self.detail.view, Some(super::DetailView::Plan(_)))
+            && key.code == KeyCode::Char('s')
         {
             self.show_plan_source();
             return;
@@ -160,7 +161,7 @@ impl App {
     /// Ask the event loop to run the oldest queued message of the agent on
     /// screen now, cancelling its running turn.
     fn send_queued_now(&mut self) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::SendQueuedNow(self.active_agent_id.clone()));
         }
         self.notifications.current = Some((

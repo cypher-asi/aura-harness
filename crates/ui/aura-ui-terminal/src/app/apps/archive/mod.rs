@@ -436,7 +436,7 @@ impl App {
     }
 
     fn send_event(&self, event: UiEvent) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(event);
         }
     }

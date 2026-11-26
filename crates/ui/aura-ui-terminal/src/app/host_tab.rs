@@ -85,12 +85,13 @@ impl App {
     /// Where the agent on screen runs, for the footer switch.
     #[must_use]
     pub fn placement(&self) -> PlacementState {
-        self.cloud
+        self.host
+            .cloud
             .placements
             .get(&self.active_agent_id)
             .cloned()
             .unwrap_or(PlacementState {
-                cloud_ready: self.cloud.cloud_ready,
+                cloud_ready: self.host.cloud.cloud_ready,
                 ..PlacementState::default()
             })
     }
@@ -99,7 +100,7 @@ impl App {
     /// ` ☁  alice` for another user's, with whether it is someone else's.
     #[must_use]
     pub fn cloud_badge(&self, agent_id: &str) -> Option<(String, bool)> {
-        let state = self.cloud.placements.get(agent_id)?;
+        let state = self.host.cloud.placements.get(agent_id)?;
         let mark = PlacementView::Cloud.mark();
         (state.placement == PlacementView::Cloud).then(|| match &state.owner {
             Some(owner) => (format!(" {mark} {owner}"), true),
@@ -110,7 +111,8 @@ impl App {
     /// Where `agent_id` runs.
     #[must_use]
     pub fn placement_of(&self, agent_id: &str) -> PlacementView {
-        self.cloud
+        self.host
+            .cloud
             .placements
             .get(agent_id)
             .map_or(PlacementView::Local, |state| state.placement)
@@ -119,7 +121,8 @@ impl App {
     /// The HOST tab of the agent on screen, when the app sent one.
     #[must_use]
     pub fn host_view(&self) -> Option<&HostView> {
-        self.cloud
+        self.host
+            .cloud
             .host
             .as_ref()
             .filter(|view| view.agent_id == self.active_agent_id)
@@ -128,29 +131,30 @@ impl App {
     /// Keep the HOST tab's scroll inside a document `total` lines long
     /// shown `visible` lines at a time, returning the first line to show.
     pub fn sync_host_scroll(&mut self, total: usize, visible: usize) -> usize {
-        self.cloud.host_scroll.sync(total, visible)
+        self.host.cloud.host_scroll.sync(total, visible)
     }
 
     /// Note the footer row drawn this frame, for clicks on the switch.
     pub fn set_footer_area(&mut self, area: Rect) {
-        self.cloud.footer = Some(Rect { height: 1, ..area });
+        self.host.cloud.footer = Some(Rect { height: 1, ..area });
     }
 
     pub(super) fn cmd_set_placement(&mut self, agent_id: String, state: PlacementState) {
-        self.cloud.cloud_ready = state.cloud_ready;
-        self.cloud.placements.insert(agent_id, state);
+        self.host.cloud.cloud_ready = state.cloud_ready;
+        self.host.cloud.placements.insert(agent_id, state);
     }
 
     pub(super) fn cmd_set_host(&mut self, view: HostView) {
         if self
+            .host
             .cloud
             .host
             .as_ref()
             .is_none_or(|old| old.agent_id != view.agent_id)
         {
-            self.cloud.host_scroll = InfoScroll::default();
+            self.host.cloud.host_scroll = InfoScroll::default();
         }
-        self.cloud.host = Some(view);
+        self.host.cloud.host = Some(view);
     }
 
     /// Ask for the agent on screen to run at `placement`.
@@ -187,7 +191,7 @@ impl App {
             );
             return;
         }
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::SetPlacement {
                 agent_id: self.active_agent_id.clone(),
                 placement,
@@ -201,7 +205,7 @@ impl App {
             self.request_placement(self.placement().placement.flipped());
             return;
         }
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::HostAction {
                 agent_id: self.active_agent_id.clone(),
                 action,
@@ -216,7 +220,7 @@ impl App {
             ("host", _) => self.show_side_tab(SidePanelTab::Host),
             ("cloud", "") => self.request_placement(PlacementView::Cloud),
             ("cloud", "setup") => {
-                if let Some(tx) = &self.event_tx {
+                if let Some(tx) = &self.link.event_tx {
                     let _ = tx.try_send(UiEvent::CloudSetup);
                 }
             }
@@ -237,7 +241,7 @@ impl App {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return false;
         }
-        let Some(row) = self.cloud.footer else {
+        let Some(row) = self.host.cloud.footer else {
             return false;
         };
         let state = self.placement();
@@ -253,7 +257,7 @@ impl App {
     /// Keys of the HOST tab: arrows scroll, a button's letter works it.
     /// Returns whether the key was the tab's.
     pub(super) fn host_key(&mut self, key: KeyEvent) -> bool {
-        if self.cloud.host_scroll.key(key.code) {
+        if self.host.cloud.host_scroll.key(key.code) {
             return true;
         }
         match key.code {
@@ -275,7 +279,7 @@ impl App {
 
     /// Scroll the HOST tab by `delta` rows.
     pub(super) fn scroll_host(&mut self, delta: isize) {
-        self.cloud.host_scroll.by(delta);
+        self.host.cloud.host_scroll.by(delta);
     }
 }
 
@@ -288,7 +292,7 @@ mod tests {
     fn app() -> (App, tokio::sync::mpsc::Receiver<UiEvent>) {
         let (tx, rx) = tokio::sync::mpsc::channel(16);
         let mut app = App::new();
-        app.event_tx = Some(tx);
+        app.link.event_tx = Some(tx);
         app.active_agent_id = "aa".into();
         (app, rx)
     }

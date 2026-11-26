@@ -24,14 +24,14 @@ impl App {
     /// Set the event sender for communication with kernel.
     #[must_use]
     pub fn with_event_sender(mut self, tx: mpsc::Sender<UiEvent>) -> Self {
-        self.event_tx = Some(tx);
+        self.link.event_tx = Some(tx);
         self
     }
 
     /// Set the command receiver for communication from kernel.
     #[must_use]
     pub fn with_command_receiver(mut self, rx: mpsc::Receiver<UiCommand>) -> Self {
-        self.command_rx = Some(rx);
+        self.link.command_rx = Some(rx);
         self
     }
 
@@ -159,14 +159,14 @@ impl App {
     /// Whether the full todo list is shown above the input.
     #[must_use]
     pub const fn todos_open(&self) -> bool {
-        self.todos_open
+        self.todos.open
     }
 
     /// Whether the chat's live to-do checklist lists every item in full,
     /// rather than the first few cut to one row each.
     #[must_use]
     pub const fn todos_expanded(&self) -> bool {
-        self.todos_expanded
+        self.todos.expanded
     }
 
     /// Get the messages.

@@ -14,7 +14,7 @@ impl App {
     /// cells from the top left of [`Self::flow_canvas`] (its middle for
     /// `None`). Only a front end that draws the canvas zooms it.
     pub fn zoom_flow(&mut self, factor: f32, anchor: Option<(f32, f32)>) {
-        if self.host_canvas {
+        if self.host.canvas {
             self.flow.zoom_at(factor, anchor);
         }
     }

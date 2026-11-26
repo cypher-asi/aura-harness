@@ -4,7 +4,7 @@ use super::*;
 fn the_from_row_starts_on_the_tree_on_screen_and_cycles_top_level_agents() {
     let mut app = app_with_trees();
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     app.open_bench_form();
     assert_eq!(app.bench.form.from.as_deref(), Some("a"), "kid's tree");
     assert_eq!(app.bench_from_label().as_deref(), Some("a · web"));
@@ -43,7 +43,7 @@ fn the_benchmark_is_prepared_and_started_from_the_agent_on_the_from_row() {
     app.bench.form.field = FormField::From;
     app.change_form_value(true);
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     app.bench.form.field = FormField::Go;
 
     app.submit_bench_form();

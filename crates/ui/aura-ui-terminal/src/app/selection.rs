@@ -207,7 +207,7 @@ impl App {
     pub(super) fn selectable_area(&self, panel: PanelFocus) -> Option<Rect> {
         let area = match panel {
             PanelFocus::Chat if self.areas.chat_rows.is_some() => return self.areas.chat_rows,
-            PanelFocus::Chat if self.detail.is_some() => self.areas.chat,
+            PanelFocus::Chat if self.detail.view.is_some() => self.areas.chat,
             PanelFocus::Chat => return self.areas.chat_text.or(self.areas.chat),
             PanelFocus::Swarm => return None,
             PanelFocus::Records => self.areas.records,
@@ -297,7 +297,7 @@ impl App {
         let Some((up, rows)) = self.selection_scroll() else {
             return;
         };
-        match (self.detail.is_some(), up) {
+        match (self.detail.view.is_some(), up) {
             (true, true) => self.scroll_detail_up(rows),
             (true, false) => self.scroll_detail_down(rows),
             (false, true) => self.scroll_panel_up(PanelFocus::Chat, rows),

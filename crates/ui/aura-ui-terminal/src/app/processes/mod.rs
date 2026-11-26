@@ -15,19 +15,19 @@ impl App {
     /// Which view the panel below the Record panel shows.
     #[must_use]
     pub const fn side_tab(&self) -> SidePanelTab {
-        self.side_tab
+        self.side.tab
     }
 
     /// Rows of the Processes tab, in display order.
     #[must_use]
     pub fn processes(&self) -> &[ProcessSummary] {
-        &self.processes.items
+        &self.side.processes.items
     }
 
     /// Highlighted row of the Processes tab.
     #[must_use]
     pub const fn selected_process(&self) -> usize {
-        self.processes.selected
+        self.side.processes.selected
     }
 
     /// Record where the side panel's header bar was drawn this frame.
@@ -45,8 +45,8 @@ impl App {
     /// Keep the highlighted process inside a list `visible_rows` tall,
     /// returning the first row to show.
     pub fn sync_processes_scroll(&mut self, visible_rows: usize) -> usize {
-        self.processes.follow_selection(visible_rows);
-        self.processes.scroll
+        self.side.processes.follow_selection(visible_rows);
+        self.side.processes.scroll
     }
 
     /// Show `tab`. A channel's tabs are only shown while a channel is
@@ -56,18 +56,18 @@ impl App {
         if tab.is_channel_tab() != self.channel_open() {
             return;
         }
-        self.side_tab = tab;
+        self.side.tab = tab;
         self.pending.kill = None;
     }
 
     /// Replace the list, keeping the highlight on the same process when it
     /// is still listed, and refreshing an open process detail view.
     pub(super) fn set_processes(&mut self, processes: Vec<ProcessSummary>) {
-        self.all_processes = processes;
+        self.side.all_processes = processes;
         self.reshow_processes();
         self.absorb_members();
-        if let Some(DetailView::Process(open)) = self.detail.as_mut() {
-            if let Some(fresh) = self.all_processes.iter().find(|p| p.id == open.id) {
+        if let Some(DetailView::Process(open)) = self.detail.view.as_mut() {
+            if let Some(fresh) = self.side.all_processes.iter().find(|p| p.id == open.id) {
                 **open = fresh.clone();
             }
         }
@@ -76,39 +76,41 @@ impl App {
     /// List the processes the side panel's scope lets through, keeping
     /// the highlight on the same process when it is still listed.
     pub(super) fn reshow_processes(&mut self) {
-        let selected_id = self.processes.selected_item().map(|p| p.id.clone());
-        self.processes.items = self
+        let selected_id = self.side.processes.selected_item().map(|p| p.id.clone());
+        self.side.processes.items = self
+            .side
             .all_processes
             .iter()
             .filter(|process| {
-                self.process_filter
+                self.side
+                    .process_filter
                     .as_ref()
                     .is_none_or(|agents| super::side_scope::process_in_scope(process, agents))
             })
             .cloned()
             .collect();
-        self.processes.selected = selected_id
-            .and_then(|id| self.processes.items.iter().position(|p| p.id == id))
-            .unwrap_or(self.processes.selected)
-            .min(self.processes.len().saturating_sub(1));
+        self.side.processes.selected = selected_id
+            .and_then(|id| self.side.processes.items.iter().position(|p| p.id == id))
+            .unwrap_or(self.side.processes.selected)
+            .min(self.side.processes.len().saturating_sub(1));
     }
 
     /// Processes of agents the side panel's scope leaves out.
     #[must_use]
     pub fn hidden_processes(&self) -> usize {
-        self.all_processes.len() - self.processes.len()
+        self.side.all_processes.len() - self.side.processes.len()
     }
 
     pub(crate) fn selected_process_data(&self) -> Option<&ProcessSummary> {
-        self.processes.selected_item()
+        self.side.processes.selected_item()
     }
 
     fn select_process(&mut self, index: usize) {
-        self.processes.selected = index.min(self.processes.len().saturating_sub(1));
+        self.side.processes.selected = index.min(self.side.processes.len().saturating_sub(1));
     }
 
     fn move_process_selection(&mut self, delta: isize) {
-        self.select_process(self.processes.selected.saturating_add_signed(delta));
+        self.select_process(self.side.processes.selected.saturating_add_signed(delta));
     }
 
     pub(super) fn scroll_processes(&mut self, delta: isize) {
@@ -135,8 +137,8 @@ impl App {
             return false;
         }
         match key.code {
-            KeyCode::Left => self.show_side_tab(self.side_tab.prev(self.channel_open())),
-            KeyCode::Right => self.show_side_tab(self.side_tab.next(self.channel_open())),
+            KeyCode::Left => self.show_side_tab(self.side.tab.prev(self.channel_open())),
+            KeyCode::Right => self.show_side_tab(self.side.tab.next(self.channel_open())),
             _ => return false,
         }
         true
@@ -153,14 +155,14 @@ impl App {
         {
             return false;
         }
-        match (self.side_tab, key.code) {
+        match (self.side.tab, key.code) {
             (_, KeyCode::Home | KeyCode::End) => {
                 let index = if key.code == KeyCode::End {
                     usize::MAX
                 } else {
                     0
                 };
-                match self.side_tab {
+                match self.side.tab {
                     SidePanelTab::Sandbox => self.sandbox.select(index),
                     SidePanelTab::Processes => self.select_process(index),
                     SidePanelTab::Host => {
@@ -269,7 +271,7 @@ impl App {
             return false;
         };
         if matches!(key.code, KeyCode::Char('y' | 'Y')) {
-            if let Some(tx) = &self.event_tx {
+            if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(UiEvent::KillProcess(id));
             }
         }
@@ -295,7 +297,7 @@ impl App {
             self.show_side_tab(tab);
             return;
         }
-        match self.side_tab {
+        match self.side.tab {
             SidePanelTab::Sandbox => {
                 if let Some(index) = self.sandbox_row_at(column, row) {
                     self.sandbox.select(index);
@@ -352,7 +354,7 @@ impl App {
             .process_rows
             .filter(|&rows| contains(Some(rows), column, row))?;
         let index = self.areas.processes_scroll + usize::from(row - rows.y);
-        (index < self.processes.len()).then_some(index)
+        (index < self.side.processes.len()).then_some(index)
     }
 
     /// Clickable item of the side panel at a screen cell: a tab label, or
@@ -367,7 +369,7 @@ impl App {
         if let Some(tab) = self.side_tab_at(column, row) {
             return Some(HoverTarget::SideTab(tab));
         }
-        match self.side_tab {
+        match self.side.tab {
             SidePanelTab::Sandbox => self
                 .sandbox_row_at(column, row)
                 .map(HoverTarget::SandboxRow),

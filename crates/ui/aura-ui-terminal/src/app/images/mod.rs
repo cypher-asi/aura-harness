@@ -259,7 +259,7 @@ impl App {
                 return true;
             }
         }
-        if self.detail.is_some() {
+        if self.detail.view.is_some() {
             return false;
         }
         let Some(hit) = self.chat_image_at(column, row) else {
@@ -290,7 +290,7 @@ impl App {
         {
             return Some(super::HoverTarget::PendingImage(label));
         }
-        if self.detail.is_some() {
+        if self.detail.view.is_some() {
             return None;
         }
         self.chat_image_at(column, row)
@@ -299,7 +299,7 @@ impl App {
 
     /// Open the image on screen in the system's image viewer.
     pub(super) fn open_image_externally(&mut self) {
-        let Some(super::DetailView::Image(view)) = &self.detail else {
+        let Some(super::DetailView::Image(view)) = &self.detail.view else {
             return;
         };
         self.notifications.current = Some(match view.open_externally() {
@@ -383,7 +383,7 @@ impl App {
     /// attaches the image; other text is inserted at the cursor, newlines
     /// included, instead of sending the message at the first one.
     pub fn handle_paste(&mut self, text: &str) {
-        if self.detail.is_some() {
+        if self.detail.view.is_some() {
             return;
         }
         self.notifications.current = None;

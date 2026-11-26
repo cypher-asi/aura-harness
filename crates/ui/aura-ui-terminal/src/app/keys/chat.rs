@@ -153,7 +153,7 @@ impl App {
         self.state = AppState::Processing;
         self.status = "Running...".to_string();
         let cols = self.command_columns();
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::RunCommand {
                 agent_id,
                 command,
@@ -176,7 +176,7 @@ impl App {
                 format!("Sent to {}", codes.join(", ")),
                 NotificationType::Success,
             ));
-            if let Some(tx) = &self.event_tx {
+            if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(UiEvent::UserMessage {
                     agent_id,
                     text,
@@ -208,7 +208,7 @@ impl App {
             self.status = "Thinking...".to_string();
         }
 
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::UserMessage {
                 agent_id: agent_id.clone(),
                 text,

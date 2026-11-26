@@ -33,7 +33,7 @@ impl App {
     /// The code block copy button at a screen cell, using the last frame.
     /// A view over the chat hides the buttons.
     pub(super) fn code_copy_at(&self, column: u16, row: u16) -> Option<&CodeCopyHit> {
-        if self.detail.is_some() {
+        if self.detail.view.is_some() {
             return None;
         }
         let area = self
@@ -121,7 +121,7 @@ impl App {
                 message.set_expanded(expanded);
             }
             ToggleTarget::TurnRecords(started_ms) => self.show_turn_records(started_ms),
-            ToggleTarget::TodoChecklist => self.todos_expanded = !self.todos_expanded,
+            ToggleTarget::TodoChecklist => self.todos.expanded = !self.todos.expanded,
             ToggleTarget::More(id, section) => {
                 let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
                     return false;

@@ -191,7 +191,7 @@ fn a_new_spawn_joins_its_parents_lists() {
 #[test]
 fn the_highlight_stays_on_its_row_across_the_switch() {
     let mut app = app();
-    app.processes.selected = 1;
+    app.side.processes.selected = 1;
     app.toggle_side_scope();
     assert_eq!(
         app.selected_process_data().map(|p| p.id.as_str()),
@@ -207,20 +207,20 @@ fn the_highlight_stays_on_its_row_across_the_switch() {
 #[test]
 fn an_agent_comes_back_with_its_lists_where_it_left_them() {
     let mut app = app();
-    app.processes.selected = 1;
-    app.processes.scroll = 1;
+    app.side.processes.selected = 1;
+    app.side.processes.scroll = 1;
     app.trace_feed.select(0);
-    app.trace_scroll = 1;
+    app.side.trace_scroll = 1;
     app.task_list.select(1);
-    app.tasks_scroll = 1;
+    app.side.tasks_scroll = 1;
     let task = highlighted(&app);
 
     app.process_command(UiCommand::SetActiveAgent("b".into()));
     assert_eq!(processes(&app), ["pb", "none"]);
-    app.processes.selected = 0;
-    app.processes.scroll = 0;
-    app.trace_scroll = 0;
-    app.tasks_scroll = 0;
+    app.side.processes.selected = 0;
+    app.side.processes.scroll = 0;
+    app.side.trace_scroll = 0;
+    app.side.tasks_scroll = 0;
 
     app.process_command(UiCommand::SetActiveAgent("a".into()));
     assert_eq!(
@@ -235,7 +235,11 @@ fn an_agent_comes_back_with_its_lists_where_it_left_them() {
     );
     assert_eq!(highlighted(&app), task);
     assert_eq!(
-        (app.processes.scroll, app.trace_scroll, app.tasks_scroll),
+        (
+            app.side.processes.scroll,
+            app.side.trace_scroll,
+            app.side.tasks_scroll
+        ),
         (1, 1, 1)
     );
 }

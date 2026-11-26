@@ -27,27 +27,27 @@ impl App {
     /// Record or file shown over the chat panel, if any.
     #[must_use]
     pub const fn detail_view(&self) -> Option<&DetailView> {
-        self.detail.as_ref()
+        self.detail.view.as_ref()
     }
 
     /// Show `view` over the chat panel, starting at its top.
     pub(crate) fn open_detail(&mut self, view: DetailView) {
-        self.detail = Some(view);
-        self.detail_scroll = 0;
+        self.detail.view = Some(view);
+        self.detail.scroll = 0;
         self.graph.behind = false;
         self.clear_selection();
     }
 
     /// Close the view over the chat panel.
     pub(crate) fn close_detail(&mut self) {
-        self.detail = None;
-        self.detail_scroll = 0;
+        self.detail.view = None;
+        self.detail.scroll = 0;
         self.graph.behind = false;
         self.clear_selection();
     }
 
     pub(super) fn detail_close_at(&self, column: u16, row: u16) -> bool {
-        self.detail.is_some() && contains(self.areas.detail_close, column, row)
+        self.detail.view.is_some() && contains(self.areas.detail_close, column, row)
     }
 
     /// Open the highlighted sandbox row: a file over the chat panel, a
@@ -87,12 +87,12 @@ impl App {
     }
 
     pub(crate) fn scroll_detail_up(&mut self, lines: usize) {
-        self.detail_scroll = self.detail_scroll.saturating_sub(lines);
+        self.detail.scroll = self.detail.scroll.saturating_sub(lines);
         self.detail_scrolled();
     }
 
     pub(crate) fn scroll_detail_down(&mut self, lines: usize) {
-        self.detail_scroll = self.detail_scroll.saturating_add(lines);
+        self.detail.scroll = self.detail.scroll.saturating_add(lines);
         self.detail_scrolled();
     }
 
@@ -100,7 +100,7 @@ impl App {
     /// an open plan stops scrolling to its focused todo, so a later frame
     /// does not snap back to it.
     pub(super) fn detail_scrolled(&mut self) {
-        match self.detail.as_mut() {
+        match self.detail.view.as_mut() {
             Some(DetailView::File(file)) => file.vim.scrolled(),
             Some(DetailView::Plan(doc)) => doc.scroll_to_focus = false,
             _ => {}
@@ -109,20 +109,20 @@ impl App {
 
     /// Lines a page key moves the detail view.
     pub(crate) fn detail_page_rows(&self) -> usize {
-        self.detail_shown.saturating_sub(1).max(1)
+        self.detail.shown.saturating_sub(1).max(1)
     }
 
     /// The open file and its scroll, for keys and drawing.
     pub(crate) fn file_view_mut(&mut self) -> Option<(&mut FileView, &mut usize)> {
-        match self.detail.as_mut() {
-            Some(DetailView::File(file)) => Some((file.as_mut(), &mut self.detail_scroll)),
+        match self.detail.view.as_mut() {
+            Some(DetailView::File(file)) => Some((file.as_mut(), &mut self.detail.scroll)),
             _ => None,
         }
     }
 
     /// The open image, to draw it.
     pub(crate) fn image_view_mut(&mut self) -> Option<&mut image_preview::ImageView> {
-        match self.detail.as_mut() {
+        match self.detail.view.as_mut() {
             Some(DetailView::Image(view)) => Some(view.as_mut()),
             _ => None,
         }
@@ -131,27 +131,27 @@ impl App {
     /// What the detail view showed in the last frame.
     pub(crate) const fn detail_screen(&self) -> vim::Screen {
         vim::Screen {
-            first: self.detail_scroll,
-            shown: self.detail_shown,
+            first: self.detail.scroll,
+            shown: self.detail.shown,
         }
     }
 
     /// First line of the detail view to show.
     #[must_use]
     pub const fn detail_scroll(&self) -> usize {
-        self.detail_scroll
+        self.detail.scroll
     }
 
     /// Clamp the detail view's scroll to `max_scroll` and record that
     /// `shown` source lines fit, as measured by the last frame.
     pub fn set_detail_bounds(&mut self, max_scroll: usize, shown: usize) {
-        self.detail_scroll = self.detail_scroll.min(max_scroll);
-        self.detail_shown = shown.max(1);
+        self.detail.scroll = self.detail.scroll.min(max_scroll);
+        self.detail.shown = shown.max(1);
     }
 
     /// Get the currently selected record (if any).
     #[must_use]
     pub fn selected_record_data(&self) -> Option<&RecordSummary> {
-        self.records.get(self.selected_record)
+        self.records.items.get(self.records.selected)
     }
 }

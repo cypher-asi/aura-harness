@@ -30,7 +30,7 @@ impl App {
             return;
         }
         self.sandbox.set_root(root);
-        self.sandbox_scroll = 0;
+        self.side.sandbox_scroll = 0;
     }
 
     /// Re-read the sandbox tree on the next tick, so files the agent

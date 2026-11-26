@@ -26,22 +26,22 @@ impl App {
         {
             return;
         }
-        let follow = self.detail != Some(DetailView::Record)
-            && self.selected_record + 1 >= self.records.len();
-        self.records.push_back(record);
-        while self.records.len() > MAX_RECORDS {
-            self.records.pop_front();
-            self.selected_record = self.selected_record.saturating_sub(1);
+        let follow = self.detail.view != Some(DetailView::Record)
+            && self.records.selected + 1 >= self.records.items.len();
+        self.records.items.push_back(record);
+        while self.records.items.len() > MAX_RECORDS {
+            self.records.items.pop_front();
+            self.records.selected = self.records.selected.saturating_sub(1);
         }
         if follow {
-            self.selected_record = self.records.len() - 1;
+            self.records.selected = self.records.items.len() - 1;
         }
     }
 
     fn cmd_clear_records(&mut self) {
-        self.records.clear();
-        self.selected_record = 0;
-        if self.detail == Some(DetailView::Record) {
+        self.records.items.clear();
+        self.records.selected = 0;
+        if self.detail.view == Some(DetailView::Record) {
             self.close_detail();
         }
     }
@@ -70,6 +70,7 @@ impl App {
         let read_up_to = kept.back().map_or(0, |record| record.seq);
         kept.extend(
             self.records
+                .items
                 .iter()
                 .filter(|record| {
                     !active.is_empty() && record.agent_id == *active && record.seq > read_up_to
@@ -80,21 +81,24 @@ impl App {
         kept.drain(..excess);
         let same =
             |a: &RecordSummary, b: &RecordSummary| a.seq == b.seq && a.full_hash == b.full_hash;
-        if kept.len() == self.records.len()
-            && kept.iter().zip(&self.records).all(|(a, b)| same(a, b))
+        if kept.len() == self.records.items.len()
+            && kept
+                .iter()
+                .zip(&self.records.items)
+                .all(|(a, b)| same(a, b))
         {
             return;
         }
-        if self.detail == Some(DetailView::Record) {
+        if self.detail.view == Some(DetailView::Record) {
             self.close_detail();
         }
-        let newest = self.selected_record + 1 >= self.records.len();
-        let on = self.records.get(self.selected_record).map(|r| r.seq);
-        self.records = kept;
-        let last = self.records.len().saturating_sub(1);
-        self.selected_record = on
+        let newest = self.records.selected + 1 >= self.records.items.len();
+        let on = self.records.items.get(self.records.selected).map(|r| r.seq);
+        self.records.items = kept;
+        let last = self.records.items.len().saturating_sub(1);
+        self.records.selected = on
             .filter(|_| !newest)
-            .and_then(|seq| self.records.iter().position(|r| r.seq == seq))
+            .and_then(|seq| self.records.items.iter().position(|r| r.seq == seq))
             .unwrap_or(last);
     }
 }

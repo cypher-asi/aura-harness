@@ -245,7 +245,7 @@ fn only_what_changes_the_screen_asks_for_a_frame() {
     };
     app.process_command(step("bb"));
     assert!(!app.take_redraw(), "the steps feed is not on screen");
-    app.side_tab = SidePanelTab::Trace;
+    app.side.tab = SidePanelTab::Trace;
     app.process_command(step("bb"));
     assert!(app.take_redraw(), "the steps feed is on screen");
 

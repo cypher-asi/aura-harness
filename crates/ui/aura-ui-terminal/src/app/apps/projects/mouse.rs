@@ -89,7 +89,7 @@ impl App {
     /// Unfold the project with key `key` and ask for a new agent in it.
     pub(in crate::app) fn add_agent_to_project(&mut self, key: &str) {
         self.project_list.collapsed_projects.remove(key);
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::AddAgentToProject(key.to_string()));
         }
     }

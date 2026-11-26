@@ -33,7 +33,7 @@ fn test_dragging_a_project_reorders_the_list_live() {
 fn test_dropping_a_dragged_project_sends_the_new_order() {
     let (tx, mut rx) = mpsc::channel(16);
     let mut app = app_with_three_projects();
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     left(&mut app, MouseEventKind::Down, 4);
     left(&mut app, MouseEventKind::Drag, 8);
     assert!(rx.try_recv().is_err(), "nothing is sent mid-drag");
@@ -55,7 +55,7 @@ fn test_dropping_a_dragged_project_sends_the_new_order() {
 fn app_with_agents_to_drag() -> (App, mpsc::Receiver<UiEvent>) {
     let (tx, rx) = mpsc::channel(16);
     let mut app = App::new();
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     let at = |project: &str, id: &str, depth: usize| crate::events::AgentSummary {
         project_id: Some(project.to_string()),
         depth,

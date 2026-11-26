@@ -46,7 +46,7 @@ impl App {
     }
 
     pub(in crate::app) fn request_graph(&self, arg: &str) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let id = (!arg.is_empty()).then(|| arg.to_string());
             let _ = tx.try_send(UiEvent::OpenGraph(id));
         }
@@ -145,7 +145,7 @@ impl App {
             ));
             return;
         }
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::LabelStep {
                 run_id: self.graph.run_id.clone(),
                 seq,
@@ -166,7 +166,7 @@ impl App {
             .unwrap_or_default();
         let found = seqs
             .iter()
-            .find_map(|seq| self.records.iter().position(|r| r.seq == *seq));
+            .find_map(|seq| self.records.items.iter().position(|r| r.seq == *seq));
         match (seqs.first(), found) {
             (None, _) => {
                 self.notifications.current = Some((
@@ -181,8 +181,8 @@ impl App {
                 ));
             }
             (Some(_), Some(index)) => {
-                self.selected_record = index;
-                self.records_tab = crate::app::RecordsTab::Kernel;
+                self.records.selected = index;
+                self.records.tab = crate::app::RecordsTab::Kernel;
                 self.focus = PanelFocus::Records;
                 self.open_detail(DetailView::Record);
             }

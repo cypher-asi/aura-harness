@@ -108,7 +108,7 @@ fn kill_asks_first_and_only_for_live_killable_processes() {
     assert!(app.input().is_empty());
 
     for index in [1, 2] {
-        app.processes.selected = index;
+        app.side.processes.selected = index;
         app.handle_key(key(KeyCode::Delete));
         assert!(app.pending.kill.is_none());
         assert!(app.notification().is_some());

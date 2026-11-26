@@ -72,7 +72,7 @@ impl App {
     fn start_link(&mut self, provider: &str, paste: bool) {
         self.state = AppState::Idle;
         self.status = format!("Linking {provider}...");
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::LinkSubscription {
                 provider: provider.to_string(),
                 paste,
@@ -129,7 +129,7 @@ impl App {
         }
         self.state = AppState::Idle;
         if id != self.account.current_model {
-            if let Some(tx) = &self.event_tx {
+            if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(UiEvent::SelectModel(id.to_string()));
             }
         }
@@ -168,7 +168,7 @@ impl App {
             ));
             return;
         }
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::SetThinking(level));
         }
     }
@@ -181,7 +181,7 @@ impl App {
             .position(|(level, _)| *level == current)
             .unwrap_or(0);
         let (next, _) = THINKING_LEVELS[(at + 1) % THINKING_LEVELS.len()];
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::SetThinking(
                 (next != "auto").then(|| next.to_string()),
             ));

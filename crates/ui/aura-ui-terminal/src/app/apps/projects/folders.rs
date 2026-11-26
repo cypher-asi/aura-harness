@@ -39,7 +39,7 @@ impl App {
         self.project_list.folder_picker = None;
         self.state = AppState::Idle;
         self.status = "Ready".to_string();
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::CreateProject { folder });
         }
     }
@@ -64,7 +64,7 @@ impl App {
             ));
             return false;
         }
-        let Some(tx) = &self.event_tx else {
+        let Some(tx) = &self.link.event_tx else {
             return false;
         };
         let event = UiEvent::CreateProject {

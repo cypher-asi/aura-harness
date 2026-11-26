@@ -67,7 +67,7 @@ impl App {
         match cmd {
             UiCommand::SetAgents(agents) => *agents == self.agents,
             UiCommand::SetProjects(projects) => *projects == self.project_list.projects,
-            UiCommand::SetProcesses(processes) => *processes == self.all_processes,
+            UiCommand::SetProcesses(processes) => *processes == self.side.all_processes,
             _ => false,
         }
     }

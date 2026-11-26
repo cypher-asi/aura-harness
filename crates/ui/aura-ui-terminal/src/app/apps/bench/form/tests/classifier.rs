@@ -33,7 +33,7 @@ fn the_classifier_row_starts_on_haiku_cycles_models_and_is_sent() {
     assert_eq!(app.bench.form.classifier, "chatgpt/gpt-5.4", "and wraps");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     app.bench.form.field = FormField::Go;
     app.submit_bench_form();
     let sent = std::iter::from_fn(|| rx.try_recv().ok()).find_map(|event| match event {

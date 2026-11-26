@@ -109,7 +109,7 @@ impl App {
                 app.project_list.project_moves,
                 app.project_drag_hit(),
                 app.queue_pointer_state(),
-                (app.scrollbar_held(), app.scroll_offset, app.detail_scroll),
+                (app.scrollbar_held(), app.scroll_offset, app.detail.scroll),
             )
         };
         let before = state(self);
@@ -261,7 +261,7 @@ impl App {
             self.select.copy_requested = true;
         } else {
             self.select.selection = None;
-            if self.detail.is_none() {
+            if self.detail.view.is_none() {
                 self.toggle_activity_at(column, row);
             }
         }
@@ -294,7 +294,7 @@ impl App {
         } else {
             3
         };
-        let over_detail = panel == PanelFocus::Chat && self.detail.is_some();
+        let over_detail = panel == PanelFocus::Chat && self.detail.view.is_some();
         if matches!(
             mouse.kind,
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
@@ -367,10 +367,10 @@ impl App {
             self.clear_selection();
         } else if self.click_chat_tabs(column, row) {
             self.clear_selection();
-        } else if self.detail == Some(DetailView::Graph) {
+        } else if self.detail.view == Some(DetailView::Graph) {
             self.click_graph(column, row);
         } else if self.click_thread(column, row)
-            || (self.detail.is_none()
+            || (self.detail.view.is_none()
                 && ((self.log.is_open() && self.click_log(column, row))
                     || (self.flow.is_open() && self.click_flow(column, row))
                     || (self.bench_draws_center() && self.click_bench(column, row))))
@@ -448,20 +448,20 @@ impl App {
             .areas
             .record_rows
             .filter(|&rows| contains(Some(rows), column, row))?;
-        let index = self.records_scroll + usize::from(row - rows.y);
-        (index < self.records.len()).then_some(index)
+        let index = self.records.scroll + usize::from(row - rows.y);
+        (index < self.records.items.len()).then_some(index)
     }
 
     /// Clicking a record highlights it and shows it over the chat panel.
     pub(super) fn click_record_row(&mut self, column: u16, row: u16) {
         if let Some(index) = self.record_row_at(column, row) {
-            self.selected_record = index;
+            self.records.selected = index;
             self.open_detail(DetailView::Record);
         }
     }
 
     pub(super) fn hovered_activity(&self, column: u16, row: u16) -> Option<HoverTarget> {
-        if self.detail.is_some() {
+        if self.detail.view.is_some() {
             return None;
         }
         self.toggle_row_at(column, row)

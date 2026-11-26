@@ -12,7 +12,7 @@ pub(super) fn agent(id: &str, depth: usize) -> AgentSummary {
 pub(super) fn app() -> (App, mpsc::Receiver<UiEvent>) {
     let (tx, rx) = mpsc::channel(16);
     let mut app = App::new();
-    app.event_tx = Some(tx);
+    app.link.event_tx = Some(tx);
     app.process_command(UiCommand::SetAgents(vec![
         agent("aa", 0),
         agent("bb", 1),

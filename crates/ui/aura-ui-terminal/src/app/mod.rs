@@ -19,6 +19,7 @@ mod context_menu;
 pub mod file_view;
 pub mod flow;
 pub mod folder_picker;
+mod host_chrome;
 mod host_tab;
 pub(crate) use aura_ui::format;
 pub mod graph;
@@ -28,6 +29,7 @@ pub mod images;
 mod inbox;
 mod input_editor;
 mod input_state;
+mod kernel_link;
 mod keys;
 mod line_edit;
 mod list_state;
@@ -47,12 +49,14 @@ mod project_drag;
 mod project_list;
 mod prose;
 pub(crate) mod queue_panel;
+mod record_list;
 pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
 mod chat_hits;
 mod chat_view;
 mod detail;
+mod detail_state;
 mod hit_targets;
 mod init;
 mod panel_areas;
@@ -64,6 +68,7 @@ mod selection_state;
 mod session;
 pub(crate) mod shell_input;
 mod shell_prompt;
+mod side_panel;
 mod side_scope;
 mod slash_menu;
 mod smooth;
@@ -71,6 +76,7 @@ mod status;
 mod switching;
 pub mod tab_bar;
 mod ticks;
+mod todo_view;
 mod tool_view;
 pub mod trace_feed;
 mod trace_json;
@@ -106,14 +112,17 @@ use chat_view::ChatView;
 pub(crate) use context_menu::{MenuTarget, SubmenuEntry};
 pub use context_menu::{WorkspaceMove, WorkspaceTarget};
 pub use detail::DetailView;
+use detail_state::DetailState;
 use file_view::FileView;
 pub(crate) use hit_targets::{
     CodeCopyHit, CopyText, HoverTarget, ImageHit, ProjectListRow, ToggleRow, ToggleTarget,
 };
+use host_chrome::HostChrome;
 pub use host_tab::{switch_label, switch_rect, SWITCH_GAP};
 use hud::Hud;
 pub use inbox::{InboxRow, ThreadView};
 use input_state::InputState;
+use kernel_link::KernelLink;
 use list_state::ListState;
 pub use members::{MemberRow, RecordsTab};
 pub use model_picker::{ModelPicker, ModelTab, PickerLayout, PickerTarget};
@@ -129,14 +138,17 @@ pub use processes::SidePanelTab;
 use project_list::ProjectList;
 pub use prose::{ProseMeasure, ProseRow};
 use ratatui::{buffer::Buffer, layout::Rect};
+use record_list::RecordList;
 use sandbox::{SandboxEntryKind, SandboxTree};
 pub use selection::Selection;
 use selection_state::SelectionState;
+use side_panel::SidePanel;
 pub use side_scope::SideScope;
 pub use smooth::ChatScroll;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use ticks::Ticks;
+use todo_view::TodoView;
 use tokio::sync::mpsc;
 
 /// Maximum number of messages to keep in history. Every tool call, thinking
@@ -223,10 +235,8 @@ pub struct App {
     pub(super) scroll_offset: usize,
     /// The chat as last drawn: rendered lines, rows, images and buttons
     pub(super) chat: ChatView,
-    /// Event sender (for sending events to kernel)
-    pub(super) event_tx: Option<mpsc::Sender<UiEvent>>,
-    /// Command receiver (for receiving commands from kernel)
-    pub(super) command_rx: Option<mpsc::Receiver<UiCommand>>,
+    /// The channels to and from the kernel
+    pub(super) link: KernelLink,
     /// The corner notification and its timer
     pub(super) notifications: Notifications,
     /// Which panel has focus
@@ -237,26 +247,14 @@ pub struct App {
     pub(super) sandbox: SandboxTree,
     /// Animation, redraw and alert bookkeeping kept from tick to tick
     pub(super) ticks: Ticks,
-    /// Kernel records list
-    pub(super) records: VecDeque<RecordSummary>,
-    /// Selected record index in the list
-    pub(super) selected_record: usize,
-    /// Scroll offset for records list
-    pub(super) records_scroll: usize,
-    /// Which list the Kernel panel shows
-    pub(super) records_tab: RecordsTab,
+    /// Kernel records list, its selection, scroll and tab
+    pub(super) records: RecordList,
     /// The agents of the run of the agent on screen, for the MEMBERS tab
     pub(super) members: members::Members,
     /// The threads of mail between agents, for the INBOX tab
     pub(super) inbox: inbox::Inbox,
-    /// How far the POLICIES tab is scrolled
-    pub(super) policies_scroll: scroll::InfoScroll,
-    /// Record or file shown over the chat panel
-    pub(super) detail: Option<DetailView>,
-    /// First line of the detail view shown
-    pub(super) detail_scroll: usize,
-    /// Source lines on screen in the detail view in the last frame
-    pub(super) detail_shown: usize,
+    /// Record or file shown over the chat panel, and its scroll
+    pub(super) detail: DetailState,
     /// List of agents in the swarm
     pub(super) agents: Vec<AgentSummary>,
     /// The projects list: projects, highlight, scroll, folds and drags
@@ -267,19 +265,10 @@ pub struct App {
     pub(super) switching: AgentSwitch,
     /// The signed-in user, plans and models
     pub(super) account: Account,
-    /// First visible row of the sandbox tree
-    pub(super) sandbox_scroll: usize,
     /// Screen areas from the last frame, for mouse hit-testing
     pub(super) areas: PanelAreas,
-    /// Whether the front end draws the panels' title bars itself
-    host_chrome: bool,
-    /// Whether the front end draws the GRAPH tab's canvas itself
-    host_canvas: bool,
-    /// What each panel's title bar showed in the last frame, for a front
-    /// end that draws them
-    pane_chrome: Vec<PaneChrome>,
-    /// Where the front end put the dividers between panels
-    pane_splits: PaneSplits,
+    /// What the front end draws or decides itself
+    pub(super) host: HostChrome,
     /// Clickable item under the mouse pointer
     hover: Option<HoverTarget>,
     /// `[user@host dir]$ ` shown before the input line at the terminal prompt
@@ -307,40 +296,22 @@ pub struct App {
     pub(super) channel_form: Option<channel_form::ChannelForm>,
     /// Menu a right click opened on the projects list
     pub(super) context_menu: Option<context_menu::ContextMenu>,
-    /// The host's workspaces, which the menu offers to move a project to
-    pub(super) workspaces: context_menu::Workspaces,
     /// Usage, todos and jobs of the agent on screen
     pub(super) hud: Hud,
-    /// Where each agent runs, and the HOST tab
-    pub(super) cloud: host_tab::CloudUi,
     /// The queued-messages panel above the input
     pub(super) queue_panel: queue_panel::QueuePanel,
     /// The benchmark progress panel above the input
     pub(super) bench_panel: bench_progress::BenchPanel,
-    /// Whether the full todo list is shown above the input
-    pub(super) todos_open: bool,
-    /// Whether the chat's live to-do checklist lists every item in full
-    pub(super) todos_expanded: bool,
-    /// Which view the panel below the Record panel shows
-    pub(super) side_tab: SidePanelTab,
-    /// Whose items the panel's lists show
-    pub(super) side_scope: SideScope,
-    /// Every process, of every agent
-    pub(super) all_processes: Vec<ProcessSummary>,
-    /// Agents whose processes the Processes tab lists
-    pub(super) process_filter: side_scope::AgentFilter,
-    /// Rows of the Processes tab: the processes `process_filter` lets
-    /// through; the highlighted row, and the first visible row
-    pub(super) processes: ListState<ProcessSummary>,
+    /// Whether the todo list is open and the checklist expanded
+    pub(super) todos: TodoView,
+    /// The panel below the Record panel: its tab, scope, processes and
+    /// scroll positions
+    pub(super) side: SidePanel,
     /// Run graph shown by `/graph`
     pub(super) graph: graph::GraphState,
     pub(super) trace_feed: trace_feed::TraceFeed,
-    /// First visible row of the TRACE tab
-    pub(super) trace_scroll: usize,
     /// Plans and tasks of the TASKS tab
     pub(super) task_list: tasks::TaskList,
-    /// First visible row of the TASKS tab
-    pub(super) tasks_scroll: usize,
     /// Flow between agents shown by the chat panel's GRAPH tab
     pub(super) flow: flow::FlowState,
     /// Benchmarks, and the one shown in the BENCH tab

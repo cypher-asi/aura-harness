@@ -418,7 +418,7 @@ impl App {
     }
 
     fn send_queue_event(&self, event: UiEvent) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             // A full or closed channel means the event loop is behind or
             // gone; its next `SetQueue` (or none) corrects the panel.
             let _ = tx.try_send(event);

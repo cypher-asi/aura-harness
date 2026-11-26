@@ -345,8 +345,8 @@ impl App {
     /// Bring the `@` picker in line with the input: open it on an `@word`
     /// at the cursor, re-rank when the word changed, close it otherwise.
     pub(super) fn sync_mentions(&mut self) {
-        let active =
-            matches!(self.state, AppState::Idle | AppState::Processing) && self.detail.is_none();
+        let active = matches!(self.state, AppState::Idle | AppState::Processing)
+            && self.detail.view.is_none();
         let word = active
             .then(|| mention_at(&self.input.text, self.input.cursor_pos))
             .flatten();

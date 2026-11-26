@@ -377,13 +377,13 @@ impl App {
     /// Keep the highlighted row inside `visible` rows, returning the first
     /// row to draw.
     pub fn sync_tasks_scroll(&mut self, visible: usize) -> usize {
-        self.tasks_scroll = follow_selection(
-            self.tasks_scroll,
+        self.side.tasks_scroll = follow_selection(
+            self.side.tasks_scroll,
             self.task_list.selected,
             visible,
             self.task_list.rows.len(),
         );
-        self.tasks_scroll
+        self.side.tasks_scroll
     }
 
     /// Where the task rows were drawn, for mouse clicks.

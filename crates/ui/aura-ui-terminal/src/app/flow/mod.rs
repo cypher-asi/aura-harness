@@ -262,13 +262,13 @@ impl App {
     /// The front end draws the canvas from [`Self::flow`], and pans and
     /// clicks it with [`Self::pan_flow`] and [`Self::click_flow_at`].
     pub fn set_host_canvas(&mut self, on: bool) {
-        self.host_canvas = on;
+        self.host.canvas = on;
     }
 
     /// Whether the front end draws the GRAPH tab's canvas.
     #[must_use]
     pub const fn host_canvas(&self) -> bool {
-        self.host_canvas
+        self.host.canvas
     }
 
     /// The screen cells of the GRAPH tab's canvas in the last frame, when
@@ -293,7 +293,7 @@ impl App {
             return;
         }
         self.flow.watch(&self.active_agent_id);
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::OpenFlow(self.active_agent_id.clone()));
         }
     }

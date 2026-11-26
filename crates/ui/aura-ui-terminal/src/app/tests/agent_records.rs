@@ -65,11 +65,11 @@ fn test_an_agent_comes_back_with_its_records_and_files_where_it_left_them() {
     let records_a: Vec<_> = (1..=5).map(|seq| record_of("aa", seq)).collect();
     app.process_command(UiCommand::SetRecords(records_a.clone()));
     app.process_command(UiCommand::SetSandboxRoot(dir_a.path().to_path_buf()));
-    app.selected_record = 1;
-    app.records_scroll = 1;
+    app.records.selected = 1;
+    app.records.scroll = 1;
     app.sandbox.toggle_selected();
     app.sandbox.select(1);
-    app.sandbox_scroll = 1;
+    app.side.sandbox_scroll = 1;
     let file = dir_a.path().join("src/main.rs");
     assert_eq!(app.sandbox.rows()[1].path, file);
 
@@ -80,7 +80,7 @@ fn test_an_agent_comes_back_with_its_records_and_files_where_it_left_them() {
     app.process_command(UiCommand::SetSandboxRoot(dir_b.path().to_path_buf()));
     assert_eq!(app.records().len(), 1);
     assert_eq!(app.sandbox.root(), Some(dir_b.path()));
-    assert_eq!((app.records_scroll, app.sandbox_scroll), (0, 0));
+    assert_eq!((app.records.scroll, app.side.sandbox_scroll), (0, 0));
 
     std::fs::write(dir_a.path().join("src/lib.rs"), "").unwrap();
     app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
@@ -91,9 +91,9 @@ fn test_an_agent_comes_back_with_its_records_and_files_where_it_left_them() {
     );
     app.process_command(UiCommand::SetRecords(records_a));
     app.process_command(UiCommand::SetSandboxRoot(dir_a.path().to_path_buf()));
-    assert_eq!((app.selected_record, app.records_scroll), (1, 1));
+    assert_eq!((app.records.selected, app.records.scroll), (1, 1));
     assert_eq!(app.sandbox.rows()[app.sandbox.selected()].path, file);
-    assert_eq!(app.sandbox_scroll, 1);
+    assert_eq!(app.side.sandbox_scroll, 1);
 
     // The tree is read again on the next tick, keeping its folds.
     app.tick();
@@ -121,16 +121,16 @@ fn test_new_records_keep_the_highlight_on_its_record() {
     app.process_command(UiCommand::SetRecords(
         (1..=3).map(|s| record_of("aa", s)).collect(),
     ));
-    assert_eq!(app.selected_record, 2, "on the newest");
+    assert_eq!(app.records.selected, 2, "on the newest");
     app.process_command(UiCommand::SetRecords(
         (1..=4).map(|s| record_of("aa", s)).collect(),
     ));
-    assert_eq!(app.selected_record, 3, "following the newest");
-    app.selected_record = 1;
+    assert_eq!(app.records.selected, 3, "following the newest");
+    app.records.selected = 1;
     app.process_command(UiCommand::SetRecords(
         (1..=5).map(|s| record_of("aa", s)).collect(),
     ));
-    assert_eq!(app.selected_record, 1, "left on its record");
+    assert_eq!(app.records.selected, 1, "left on its record");
 
     // Records sent for an agent the screen has left since change nothing.
     app.process_command(UiCommand::SetRecords(vec![record_of("bb", 1)]));

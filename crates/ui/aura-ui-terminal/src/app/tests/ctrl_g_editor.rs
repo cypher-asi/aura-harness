@@ -108,7 +108,7 @@ fn test_records_cap_drops_oldest_and_keeps_selection() {
     for seq in 0..cap {
         new_record(&mut app, seq);
     }
-    app.selected_record = 10;
+    app.records.selected = 10;
     new_record(&mut app, cap);
     assert_eq!(app.records().len(), MAX_RECORDS);
     assert_eq!(app.records().front().unwrap().seq, 1);

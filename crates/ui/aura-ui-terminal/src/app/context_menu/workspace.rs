@@ -13,10 +13,10 @@ impl App {
     /// the default, it doesn't.
     pub fn set_workspaces(&mut self, labels: Vec<String>, current: usize) {
         let workspaces = Workspaces { labels, current };
-        if workspaces == self.workspaces {
+        if workspaces == self.host.workspaces {
             return;
         }
-        self.workspaces = workspaces;
+        self.host.workspaces = workspaces;
         self.ticks.redraw = true;
         let targets = match self.context_menu.as_ref() {
             Some(menu) if menu.items.contains(&MenuItem::MoveToWorkspace) => {
@@ -46,14 +46,14 @@ impl App {
 
     /// The workspaces' titles, as the host last gave them.
     pub(crate) fn workspace_labels(&self) -> &[String] {
-        &self.workspaces.labels
+        &self.host.workspaces.labels
     }
 
     /// The workspaces as the host last told them with
     /// [`Self::set_workspaces`]: their titles, and the index of this UI's.
     #[must_use]
     pub fn workspaces(&self) -> (&[String], usize) {
-        (&self.workspaces.labels, self.workspaces.current)
+        (&self.host.workspaces.labels, self.host.workspaces.current)
     }
 
     /// Where "Move to workspace" can send what the menu was opened on.
@@ -61,9 +61,10 @@ impl App {
     /// a workspace of its own already. Nothing for an archived agent.
     fn workspace_targets(&self, target: &MenuTarget) -> Vec<WorkspaceTarget> {
         match target {
-            MenuTarget::Project(_) | MenuTarget::Agent(_) => {
-                self.workspaces.targets(self.listed_project_count() > 1)
-            }
+            MenuTarget::Project(_) | MenuTarget::Agent(_) => self
+                .host
+                .workspaces
+                .targets(self.listed_project_count() > 1),
             MenuTarget::Archived(_) | MenuTarget::Channel(_) => Vec::new(),
         }
     }
