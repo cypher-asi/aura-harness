@@ -7,7 +7,7 @@ use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use async_trait::async_trait;
 use aura_core_types::{
-    AgentMode, AgentPermissions, Capability, SubagentBudget, SubagentDispatchRequest,
+    AgentId, AgentMode, AgentPermissions, Capability, SubagentBudget, SubagentDispatchRequest,
     SubagentResult, ToolDefinition, ToolResult,
 };
 use bytes::Bytes;
@@ -92,70 +92,7 @@ impl TaskTool {
             TASK_TOOL_NAME,
             "Run a foreground subagent with isolated context and return its final summary. \
              Requires Capability::SpawnAgent.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "subagent_type": {
-                        "type": "string",
-                        "description": "Bundled subagent type, for example general_purpose, explore, implement, tests, shell, or code_reviewer."
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "Task prompt for the subagent."
-                    },
-                    "model_override": {
-                        "type": "string",
-                        "description": "Optional runtime-approved model override."
-                    },
-                    "system_prompt_addendum": {
-                        "type": "string",
-                        "description": "Optional additional instructions appended by runtime policy."
-                    },
-                    "mode": {
-                        "type": "string",
-                        "description": "Optional AgentMode override (Agent | Plan | Ask | Debug). Must narrow parent mode."
-                    },
-                    "permissions": {
-                        "type": "object",
-                        "description": "Optional AgentPermissions override. Must be a subset of parent."
-                    },
-                    "model": {
-                        "type": "string",
-                        "description": "Optional runtime-approved model identifier; equivalent to model_override."
-                    },
-                    "budget": {
-                        "type": "object",
-                        "description": "Optional SubagentBudget override (max_iterations, timeout_ms)."
-                    },
-                    "isolation": {
-                        "type": "string",
-                        "description": "Optional isolation environment identifier."
-                    },
-                    "tool_subset": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Optional explicit tool subset; must be a subset of parent's effective tools."
-                    },
-                    "tool_call_id": {
-                        "type": "string",
-                        "description": "Optional caller-stamped dedupe key. Idempotent re-dispatch returns the same SubagentResult."
-                    },
-                    "spawn_mode": {
-                        "type": "string",
-                        "enum": ["wait", "detached"],
-                        "description": "Optional spawn mode. 'wait' (default) blocks until the subagent finishes and returns its summary inline. 'detached' runs it in the background as an observable thread."
-                    },
-                    "check": {
-                        "type": "string",
-                        "description": "Optional command run in the workspace after the subagent finishes, such as `cargo test -p foo`. Exit status 0 means the subtask passed."
-                    },
-                    "todo_id": {
-                        "type": "string",
-                        "description": "Optional id of the caller's todo the subtask does; it is marked done when the subagent finishes."
-                    }
-                },
-                "required": ["subagent_type", "prompt"]
-            }),
+            input_schema(),
         )
     }
 
@@ -163,49 +100,9 @@ impl TaskTool {
         ctx: &ToolContext,
         input: &TaskInput,
     ) -> Result<SubagentDispatchRequest, ToolError> {
-        if input.subagent_type.trim().is_empty() {
-            return Err(ToolError::InvalidArguments(
-                "task: subagent_type must not be empty".into(),
-            ));
-        }
-        if input.prompt.trim().is_empty() {
-            return Err(ToolError::InvalidArguments(
-                "task: prompt must not be empty".into(),
-            ));
-        }
-        if ctx.parent_chain.len() >= MAX_SUBAGENT_DEPTH {
-            return Err(ToolError::InvalidArguments(format!(
-                "task: maximum subagent depth {MAX_SUBAGENT_DEPTH} exceeded"
-            )));
-        }
-
-        let caller_permissions = ctx.caller_permissions.clone().ok_or_else(|| {
-            ToolError::InvalidArguments(
-                "task requires caller_permissions on the tool context".into(),
-            )
-        })?;
-        if !caller_permissions
-            .capabilities
-            .iter()
-            .any(|cap| cap.satisfies(&Capability::SpawnAgent))
-        {
-            return Err(ToolError::InvalidArguments(
-                "permissions: task requires SpawnAgent capability".into(),
-            ));
-        }
-
-        let parent_agent_id = ctx.caller_agent_id.ok_or_else(|| {
-            ToolError::InvalidArguments("task requires caller_agent_id on the tool context".into())
-        })?;
-        if ctx.parent_chain.contains(&parent_agent_id) {
-            return Err(ToolError::InvalidArguments(
-                "permissions: ancestor cycle detected in parent_chain".into(),
-            ));
-        }
-
-        let mut parent_chain = Vec::with_capacity(ctx.parent_chain.len() + 1);
-        parent_chain.push(parent_agent_id);
-        parent_chain.extend(ctx.parent_chain.iter().copied());
+        validate_input(ctx, input)?;
+        let caller_permissions = spawn_permissions(ctx)?;
+        let (parent_agent_id, parent_chain) = parent_lineage(ctx)?;
 
         let model_override = input.model_override.clone().or_else(|| input.model.clone());
 
@@ -244,20 +141,164 @@ impl TaskTool {
             // Ordinary `task` spawns are never council members.
             council_index: None,
             council_parent_tool_use_id: None,
-            check: input
-                .check
-                .as_deref()
-                .map(str::trim)
-                .filter(|check| !check.is_empty())
-                .map(str::to_string),
-            todo_id: input
-                .todo_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(str::to_string),
+            check: trimmed_non_empty(input.check.as_deref()),
+            todo_id: trimmed_non_empty(input.todo_id.as_deref()),
         })
     }
+}
+
+/// Reject an empty `subagent_type` or `prompt`, and a call already at
+/// [`MAX_SUBAGENT_DEPTH`].
+fn validate_input(ctx: &ToolContext, input: &TaskInput) -> Result<(), ToolError> {
+    if input.subagent_type.trim().is_empty() {
+        return Err(ToolError::InvalidArguments(
+            "task: subagent_type must not be empty".into(),
+        ));
+    }
+    if input.prompt.trim().is_empty() {
+        return Err(ToolError::InvalidArguments(
+            "task: prompt must not be empty".into(),
+        ));
+    }
+    if ctx.parent_chain.len() >= MAX_SUBAGENT_DEPTH {
+        return Err(ToolError::InvalidArguments(format!(
+            "task: maximum subagent depth {MAX_SUBAGENT_DEPTH} exceeded"
+        )));
+    }
+    Ok(())
+}
+
+/// The caller's permissions, provided they include `SpawnAgent`.
+fn spawn_permissions(ctx: &ToolContext) -> Result<AgentPermissions, ToolError> {
+    let caller_permissions = ctx.caller_permissions.clone().ok_or_else(|| {
+        ToolError::InvalidArguments("task requires caller_permissions on the tool context".into())
+    })?;
+    if !caller_permissions
+        .capabilities
+        .iter()
+        .any(|cap| cap.satisfies(&Capability::SpawnAgent))
+    {
+        return Err(ToolError::InvalidArguments(
+            "permissions: task requires SpawnAgent capability".into(),
+        ));
+    }
+    Ok(caller_permissions)
+}
+
+/// The caller's id and the child's parent chain (the caller first, then
+/// the caller's own ancestors), rejecting an ancestor cycle.
+fn parent_lineage(ctx: &ToolContext) -> Result<(AgentId, Vec<AgentId>), ToolError> {
+    let parent_agent_id = ctx.caller_agent_id.ok_or_else(|| {
+        ToolError::InvalidArguments("task requires caller_agent_id on the tool context".into())
+    })?;
+    if ctx.parent_chain.contains(&parent_agent_id) {
+        return Err(ToolError::InvalidArguments(
+            "permissions: ancestor cycle detected in parent_chain".into(),
+        ));
+    }
+
+    let mut parent_chain = Vec::with_capacity(ctx.parent_chain.len() + 1);
+    parent_chain.push(parent_agent_id);
+    parent_chain.extend(ctx.parent_chain.iter().copied());
+    Ok((parent_agent_id, parent_chain))
+}
+
+/// `value` trimmed, or `None` when it is absent or blank.
+fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// JSON schema of [`TaskInput`].
+fn input_schema() -> serde_json::Value {
+    let mut properties = core_properties();
+    properties.extend(dispatch_properties());
+    serde_json::json!({
+        "type": "object",
+        "properties": properties,
+        "required": ["subagent_type", "prompt"]
+    })
+}
+
+/// The entries of a JSON object literal.
+fn object_entries(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    match value {
+        serde_json::Value::Object(entries) => entries,
+        _ => serde_json::Map::new(),
+    }
+}
+
+/// Schema properties for what the subagent runs and with which mode,
+/// permissions and model.
+fn core_properties() -> serde_json::Map<String, serde_json::Value> {
+    object_entries(serde_json::json!({
+        "subagent_type": {
+            "type": "string",
+            "description": "Bundled subagent type, for example general_purpose, explore, implement, tests, shell, or code_reviewer."
+        },
+        "prompt": {
+            "type": "string",
+            "description": "Task prompt for the subagent."
+        },
+        "model_override": {
+            "type": "string",
+            "description": "Optional runtime-approved model override."
+        },
+        "system_prompt_addendum": {
+            "type": "string",
+            "description": "Optional additional instructions appended by runtime policy."
+        },
+        "mode": {
+            "type": "string",
+            "description": "Optional AgentMode override (Agent | Plan | Ask | Debug). Must narrow parent mode."
+        },
+        "permissions": {
+            "type": "object",
+            "description": "Optional AgentPermissions override. Must be a subset of parent."
+        },
+        "model": {
+            "type": "string",
+            "description": "Optional runtime-approved model identifier; equivalent to model_override."
+        }
+    }))
+}
+
+/// Schema properties for how the subagent is dispatched and checked.
+fn dispatch_properties() -> serde_json::Map<String, serde_json::Value> {
+    object_entries(serde_json::json!({
+        "budget": {
+            "type": "object",
+            "description": "Optional SubagentBudget override (max_iterations, timeout_ms)."
+        },
+        "isolation": {
+            "type": "string",
+            "description": "Optional isolation environment identifier."
+        },
+        "tool_subset": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Optional explicit tool subset; must be a subset of parent's effective tools."
+        },
+        "tool_call_id": {
+            "type": "string",
+            "description": "Optional caller-stamped dedupe key. Idempotent re-dispatch returns the same SubagentResult."
+        },
+        "spawn_mode": {
+            "type": "string",
+            "enum": ["wait", "detached"],
+            "description": "Optional spawn mode. 'wait' (default) blocks until the subagent finishes and returns its summary inline. 'detached' runs it in the background as an observable thread."
+        },
+        "check": {
+            "type": "string",
+            "description": "Optional command run in the workspace after the subagent finishes, such as `cargo test -p foo`. Exit status 0 means the subtask passed."
+        },
+        "todo_id": {
+            "type": "string",
+            "description": "Optional id of the caller's todo the subtask does; it is marked done when the subagent finishes."
+        }
+    }))
 }
 
 #[async_trait]

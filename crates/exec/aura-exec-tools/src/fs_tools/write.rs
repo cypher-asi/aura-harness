@@ -125,28 +125,10 @@ pub fn fs_write(
     let resolved = sandbox.resolve_new(path)?;
     debug!(?resolved, "Writing file");
 
-    let file_existed = resolved.exists();
-    // Snapshot pre-content before the write so we can compute a real
-    // line-level diff rather than guessing from sizes alone. Only
-    // captured when the file already exists; for a fresh create the
-    // pre-content is the empty string (no allocation needed). We read
-    // it lazily into a String so a non-UTF-8 file silently falls back
-    // to "no pre-content" (lines_added counts the new content as a
-    // pure insert) rather than failing the write — line counting is a
-    // best-effort observability signal, not a correctness gate.
-    let pre_content = if file_existed {
-        fs::read_to_string(&resolved).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let existing_size = if file_existed {
-        usize::try_from(fs::metadata(&resolved).map_or(0, |m| m.len())).unwrap_or(usize::MAX)
-    } else {
-        0
-    };
+    let existing = ExistingFile::snapshot(&resolved);
 
     // Truncation heuristic: reject if new content < 10% of existing file
-    if file_existed && existing_size > 0 && content.len() < existing_size / 10 {
+    if existing.existed && existing.size > 0 && content.len() < existing.size / 10 {
         return Err(ToolError::InvalidArguments(
             "New content is less than 10% of existing file size. \
              This likely indicates truncated output."
@@ -154,7 +136,60 @@ pub fn fs_write(
         ));
     }
 
-    // Always create parent directories
+    create_parent_dirs(&resolved)?;
+
+    // Structural guard: refuse to land a busted `Cargo.toml` on disk.
+    // Running BEFORE `fs::write` keeps the previous on-disk content
+    // intact when the new content is malformed; the agent then sees
+    // the structural error and can retry with a corrected manifest.
+    if super::cargo_toml_guard::is_cargo_manifest(&resolved) {
+        super::cargo_toml_guard::validate_cargo_toml(content)?;
+    }
+
+    write_verified(&resolved, content)?;
+    Ok(write_result(sandbox, path, &resolved, content, &existing))
+}
+
+/// What was at the target path before the write.
+struct ExistingFile {
+    existed: bool,
+    /// Text before the write; empty for a new or non-UTF-8 file.
+    content: String,
+    /// Bytes on disk before the write; 0 for a new file.
+    size: usize,
+}
+
+impl ExistingFile {
+    fn snapshot(resolved: &Path) -> Self {
+        let existed = resolved.exists();
+        // Snapshot pre-content before the write so we can compute a real
+        // line-level diff rather than guessing from sizes alone. Only
+        // captured when the file already exists; for a fresh create the
+        // pre-content is the empty string (no allocation needed). We read
+        // it lazily into a String so a non-UTF-8 file silently falls back
+        // to "no pre-content" (lines_added counts the new content as a
+        // pure insert) rather than failing the write — line counting is a
+        // best-effort observability signal, not a correctness gate.
+        let content = if existed {
+            fs::read_to_string(resolved).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let size = if existed {
+            usize::try_from(fs::metadata(resolved).map_or(0, |m| m.len())).unwrap_or(usize::MAX)
+        } else {
+            0
+        };
+        Self {
+            existed,
+            content,
+            size,
+        }
+    }
+}
+
+/// Always create parent directories.
+fn create_parent_dirs(resolved: &Path) -> Result<(), ToolError> {
     if let Some(parent) = resolved.parent() {
         if !parent.exists() {
             fs::create_dir_all(parent).map_err(|e| {
@@ -165,16 +200,12 @@ pub fn fs_write(
             })?;
         }
     }
+    Ok(())
+}
 
-    // Structural guard: refuse to land a busted `Cargo.toml` on disk.
-    // Running BEFORE `fs::write` keeps the previous on-disk content
-    // intact when the new content is malformed; the agent then sees
-    // the structural error and can retry with a corrected manifest.
-    if super::cargo_toml_guard::is_cargo_manifest(&resolved) {
-        super::cargo_toml_guard::validate_cargo_toml(content)?;
-    }
-
-    fs::write(&resolved, content).map_err(|e| {
+/// Write `content`, then check the file on disk has exactly its length.
+fn write_verified(resolved: &Path, content: &str) -> Result<(), ToolError> {
+    fs::write(resolved, content).map_err(|e| {
         ToolError::Io(std::io::Error::new(
             e.kind(),
             format!("write({}): {e}", resolved.display()),
@@ -183,7 +214,7 @@ pub fn fs_write(
 
     // Post-write verification
     let on_disk_size =
-        usize::try_from(fs::metadata(&resolved).map_or(0, |m| m.len())).unwrap_or(usize::MAX);
+        usize::try_from(fs::metadata(resolved).map_or(0, |m| m.len())).unwrap_or(usize::MAX);
     if on_disk_size != content.len() {
         return Err(ToolError::InvalidArguments(format!(
             "Post-write verification failed: wrote {} bytes but file is {} bytes on disk",
@@ -191,26 +222,37 @@ pub fn fs_write(
             on_disk_size
         )));
     }
+    Ok(())
+}
 
+/// The success result for a write of `content` to `path`, with its line
+/// diff and any truncation, module-link and chunking hints.
+fn write_result(
+    sandbox: &Sandbox,
+    path: &str,
+    resolved: &Path,
+    content: &str,
+    existing: &ExistingFile,
+) -> ToolResult {
     let bytes_written = content.len();
-    let truncated_warning = looks_truncated(&resolved, content);
-    let module_link_warning = if file_existed {
+    let truncated_warning = looks_truncated(resolved, content);
+    let module_link_warning = if existing.existed {
         None
     } else {
-        super::module_link::check_module_link(sandbox, path, &resolved)
+        super::module_link::check_module_link(sandbox, path, resolved)
     };
 
     // Compute the actual line diff between pre-content and new content.
     // For a fresh create, pre_content is empty so this collapses to
     // "lines_added = new line count, lines_removed = 0".
-    let (lines_added, lines_removed) = super::diff::count_line_diff(&pre_content, content);
+    let (lines_added, lines_removed) = super::diff::count_line_diff(&existing.content, content);
 
     let mut result = ToolResult::success(
         "write_file",
         format!("Wrote {bytes_written} bytes to {path}"),
     )
     .with_metadata("bytes_written", bytes_written.to_string())
-    .with_metadata("file_existed", file_existed.to_string())
+    .with_metadata("file_existed", existing.existed.to_string())
     .with_line_diff(lines_added, lines_removed);
 
     if truncated_warning {
@@ -233,7 +275,7 @@ pub fn fs_write(
         result = result.with_metadata("chunk_suggestion", "true");
     }
 
-    Ok(result)
+    result
 }
 
 /// `fs_write` tool: write content to a file.

@@ -41,6 +41,16 @@ pub(super) async fn execute_run_command(
         }
     }
 
+    run_over_pipes(args, ctx, tags).await
+}
+
+/// Run the shell script or program on a blocking thread with piped
+/// output, confined when the context asks.
+async fn run_over_pipes(
+    args: RunArgs,
+    ctx: &ToolContext,
+    tags: ProcessTags,
+) -> Result<ToolResult, ToolError> {
     let RunArgs {
         cwd,
         timeout_ms,

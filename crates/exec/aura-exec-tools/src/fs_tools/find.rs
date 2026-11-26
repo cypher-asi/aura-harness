@@ -44,9 +44,21 @@ pub fn fs_find(
         .map_err(|e| ToolError::InvalidArguments(format!("Invalid glob pattern: {e}")))?;
 
     let max_results = max_results.min(MAX_RESULTS);
+    let mut matches = collect_matches(&search_root, &glob_pattern);
+    matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    Ok(find_result(matches, max_results))
+}
+
+/// Files under `search_root` whose relative path or name matches
+/// `glob_pattern`, with their modification times; at most
+/// [`MAX_SCANNED_MATCHES`].
+fn collect_matches(
+    search_root: &std::path::Path,
+    glob_pattern: &glob::Pattern,
+) -> Vec<(SystemTime, String)> {
     let mut matches: Vec<(SystemTime, String)> = Vec::new();
 
-    for entry in super::walk::walk(&search_root, should_skip_dir) {
+    for entry in super::walk::walk(search_root, should_skip_dir) {
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
@@ -58,7 +70,7 @@ pub fn fs_find(
             continue;
         }
         let path = entry.path();
-        let relative = path.strip_prefix(&search_root).unwrap_or(path);
+        let relative = path.strip_prefix(search_root).unwrap_or(path);
         let relative = relative.to_string_lossy();
         let name = entry.file_name().to_string_lossy();
         if !(glob_pattern.matches(&relative) || glob_pattern.matches(&name)) {
@@ -74,8 +86,12 @@ pub fn fs_find(
             break;
         }
     }
+    matches
+}
 
-    matches.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+/// The tool result listing the first `max_results` of the sorted
+/// `matches`, with a truncation note when there were more.
+fn find_result(matches: Vec<(SystemTime, String)>, max_results: usize) -> ToolResult {
     let total = matches.len();
     let truncated = total > max_results;
     let shown: Vec<String> = matches
@@ -106,7 +122,7 @@ pub fn fs_find(
     if truncated {
         result = result.with_metadata("truncated", "true");
     }
-    Ok(result)
+    result
 }
 
 /// `fs_find` tool: find files by glob pattern.

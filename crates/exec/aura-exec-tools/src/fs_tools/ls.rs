@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use aura_core_types::ToolDefinition;
 use aura_core_types::ToolResult;
 use std::fs;
+use std::path::Path;
 use tracing::{debug, instrument};
 
 /// Directories that are filtered from `fs_ls` output to reduce noise.
@@ -29,50 +30,69 @@ pub fn fs_ls(sandbox: &Sandbox, path: &str) -> Result<ToolResult, ToolError> {
         )));
     }
 
-    let mut dirs: Vec<(String, u64)> = Vec::new();
-    let mut files: Vec<(String, u64, &str)> = Vec::new();
+    let mut listing = Listing::read(&resolved)?;
+    listing.dirs.sort_by(|a, b| a.0.cmp(&b.0));
+    listing.files.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(listing_result(&listing.dirs, &listing.files))
+}
 
-    let read_dir = fs::read_dir(&resolved).map_err(|e| {
-        ToolError::Io(std::io::Error::new(
-            e.kind(),
-            format!("read_dir({}): {e}", resolved.display()),
-        ))
-    })?;
-    for entry in read_dir {
-        let entry = entry.map_err(|e| {
+/// The entries of one directory, noise directories left out.
+struct Listing {
+    /// Directories as (name, size).
+    dirs: Vec<(String, u64)>,
+    /// Everything else as (name, size, kind).
+    files: Vec<(String, u64, &'static str)>,
+}
+
+impl Listing {
+    fn read(dir: &Path) -> Result<Self, ToolError> {
+        let mut dirs: Vec<(String, u64)> = Vec::new();
+        let mut files: Vec<(String, u64, &'static str)> = Vec::new();
+
+        let read_dir = fs::read_dir(dir).map_err(|e| {
             ToolError::Io(std::io::Error::new(
                 e.kind(),
-                format!("read_dir entry in {}: {e}", resolved.display()),
+                format!("read_dir({}): {e}", dir.display()),
             ))
         })?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        let metadata = entry.metadata().map_err(|e| {
-            ToolError::Io(std::io::Error::new(
-                e.kind(),
-                format!("metadata({}): {e}", entry.path().display()),
-            ))
-        })?;
+        for entry in read_dir {
+            let entry = entry.map_err(|e| {
+                ToolError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("read_dir entry in {}: {e}", dir.display()),
+                ))
+            })?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let metadata = entry.metadata().map_err(|e| {
+                ToolError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!("metadata({}): {e}", entry.path().display()),
+                ))
+            })?;
 
-        if metadata.is_dir() {
-            if LS_NOISE_DIRS.contains(&name.as_str()) {
-                continue;
+            if metadata.is_dir() {
+                if LS_NOISE_DIRS.contains(&name.as_str()) {
+                    continue;
+                }
+                dirs.push((name, metadata.len()));
+            } else if metadata.is_file() {
+                files.push((name, metadata.len(), "file"));
+            } else {
+                files.push((name, metadata.len(), "other"));
             }
-            dirs.push((name, metadata.len()));
-        } else if metadata.is_file() {
-            files.push((name, metadata.len(), "file"));
-        } else {
-            files.push((name, metadata.len(), "other"));
         }
+        Ok(Self { dirs, files })
     }
+}
 
-    dirs.sort_by(|a, b| a.0.cmp(&b.0));
-    files.sort_by(|a, b| a.0.cmp(&b.0));
-
+/// One `kind\tsize\tname` line per entry, directories first, capped at
+/// [`MAX_LS_ENTRIES`].
+fn listing_result(dirs: &[(String, u64)], files: &[(String, u64, &str)]) -> ToolResult {
     let mut entries: Vec<String> = Vec::with_capacity(dirs.len() + files.len());
-    for (name, size) in &dirs {
+    for (name, size) in dirs {
         entries.push(format!("dir\t{size}\t{name}"));
     }
-    for (name, size, kind) in &files {
+    for (name, size, kind) in files {
         entries.push(format!("{kind}\t{size}\t{name}"));
     }
 
@@ -82,10 +102,10 @@ pub fn fs_ls(sandbox: &Sandbox, path: &str) -> Result<ToolResult, ToolError> {
         entries.push(format!(
             "... [truncated: showing {MAX_LS_ENTRIES} of {total} entries; use find_files with a pattern to locate specific files.]"
         ));
-        return Ok(ToolResult::success("list_files", entries.join("\n"))
-            .with_metadata("truncated", "true"));
+        return ToolResult::success("list_files", entries.join("\n"))
+            .with_metadata("truncated", "true");
     }
-    Ok(ToolResult::success("list_files", entries.join("\n")))
+    ToolResult::success("list_files", entries.join("\n"))
 }
 
 /// `fs_ls` tool: list directory contents.

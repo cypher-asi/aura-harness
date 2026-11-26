@@ -1,4 +1,6 @@
+use super::file_search::is_text_file;
 use super::*;
+use std::fs;
 use tempfile::TempDir;
 
 fn create_test_sandbox() -> (Sandbox, TempDir) {

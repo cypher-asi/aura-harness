@@ -62,17 +62,9 @@ pub(super) fn cmd_run_in_pty(
 
     let pair = open_pty(cols)?;
 
-    let builder = terminal_command(command, &working_dir, cols, tags);
-    let child = pair.slave.spawn_command(builder);
-    drop(pair.slave);
-    let mut child = match child {
+    let mut child = match spawn_in_terminal(pair.slave, command, &working_dir, cols, tags) {
         Ok(child) => child,
-        Err(e) => {
-            return Some(Err(ToolError::CommandFailed(format!(
-                "Failed to spawn command '{}': {e}",
-                command_label(command)
-            ))))
-        }
+        Err(e) => return Some(Err(e)),
     };
 
     // End-of-file on stdin, so programs that read it (`cat`, `wc`) finish
@@ -129,6 +121,26 @@ fn open_pty(cols: u16) -> Option<portable_pty::PtyPair> {
             None
         }
     }
+}
+
+/// Start `command` on the terminal's `slave` side, then let the slave go
+/// so the terminal closes once the program and its children exit.
+fn spawn_in_terminal(
+    slave: Box<dyn portable_pty::SlavePty + Send>,
+    command: &PtyCommand<'_>,
+    working_dir: &std::path::Path,
+    cols: u16,
+    tags: &super::ProcessTags,
+) -> Result<Box<dyn Child + Send + Sync>, ToolError> {
+    let builder = terminal_command(command, working_dir, cols, tags);
+    let child = slave.spawn_command(builder);
+    drop(slave);
+    child.map_err(|e| {
+        ToolError::CommandFailed(format!(
+            "Failed to spawn command '{}': {e}",
+            command_label(command)
+        ))
+    })
 }
 
 /// `command` set up to run in `working_dir` in a `cols`-wide terminal,
