@@ -81,20 +81,13 @@ impl std::fmt::Display for SessionId {
 /// new agent-runner-side instantiation path
 /// (`agent_runner::execute_task`), then hand it to
 /// [`crate::AgentLoop::run_with_session`]. The public surface stays
-/// shaped around [`AgentRunnerHandle`] — see
-/// [`Session::handle`] for the cheap clonable handle.
+/// shaped around [`AgentRunnerHandle`].
 pub(crate) struct Session {
     /// Stable session identifier (Rule 5.1).
     pub(crate) id: SessionId,
     /// Mid-task user steering buffer. Shared with
     /// [`AgentRunnerHandle`] clones.
     pub(crate) input_queue: Arc<InputQueue>,
-    /// Cancellation token shared with the [`InputQueue`] and the
-    /// agent loop. Cloned on construction so the caller's original
-    /// token stays usable.
-    #[allow(dead_code)]
-    // Held to keep the token alive for the session lifetime; consumed by future idle handler.
-    pub(crate) cancellation: CancellationToken,
 }
 
 impl Session {
@@ -103,12 +96,8 @@ impl Session {
     /// Codex parity: the loop no longer tracks continuation budgets,
     /// so this no longer takes a `max_continuation_turns` parameter.
     pub(crate) fn new(id: SessionId, cancellation: CancellationToken) -> Self {
-        let input_queue = InputQueue::new(id, cancellation.clone());
-        Self {
-            id,
-            input_queue,
-            cancellation,
-        }
+        let input_queue = InputQueue::new(id, cancellation);
+        Self { id, input_queue }
     }
 
     /// Construct a session that shares the [`InputQueue`] backing
@@ -117,25 +106,11 @@ impl Session {
     /// Used by [`crate::AgentLoop::run_with_session`] so a single
     /// session can be built from a caller-supplied handle without
     /// re-creating the underlying queue (which would split user
-    /// inputs across two FIFOs). The queue's own cancellation token
-    /// stays in place; the session-level `cancellation` parameter is
-    /// the agent-loop / external observer (cloned so the caller's
-    /// original token stays usable).
-    pub(crate) fn from_handle(handle: &AgentRunnerHandle, cancellation: CancellationToken) -> Self {
+    /// inputs across two FIFOs). The queue keeps its own cancellation
+    /// token.
+    pub(crate) fn from_handle(handle: &AgentRunnerHandle) -> Self {
         let input_queue = handle.queue();
         let id = input_queue.session_id();
-        Self {
-            id,
-            input_queue,
-            cancellation,
-        }
-    }
-
-    /// Cheap clonable handle for queueing user input from outside the
-    /// agent loop. The handle shares the underlying [`InputQueue`]
-    /// with the session.
-    #[allow(dead_code)] // Constructed for symmetry; surfaces via `Session::handle()` in follow-up.
-    pub(crate) fn handle(&self) -> AgentRunnerHandle {
-        AgentRunnerHandle::from_queue(Arc::clone(&self.input_queue))
+        Self { id, input_queue }
     }
 }

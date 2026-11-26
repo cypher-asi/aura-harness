@@ -84,12 +84,6 @@ pub enum ErrorCategory {
     RustBorrowCheck,
     RustStructFieldMismatch,
     RustMissingImport,
-    // Reserved for a planned classifier that detects systematic API
-    // hallucinations (multiple invented methods on the same type).
-    // The guidance arm below is intentionally kept so the classifier
-    // can be wired up later without re-deriving the prompt copy.
-    #[allow(dead_code)]
-    RustApiHallucination,
     NpmDependency,
     NpmTypeScript,
     GenericSyntax,
@@ -230,18 +224,6 @@ pub fn error_category_guidance(categories: &[ErrorCategory]) -> String {
                 "- If the item genuinely doesn't exist on the type (method not found), check whether tests ",
                 "are calling functions from the wrong module -- e.g. `Struct::func()` when `func` is a ",
                 "free function in `crate::other_module`.",
-            ),
-            ErrorCategory::RustApiHallucination => concat!(
-                "DIAGNOSIS: Systematic API hallucination detected -- your code assumes an API ",
-                "that does not exist.\n",
-                "ROOT CAUSE: You are calling multiple methods or using fields that are not part ",
-                "of the actual type's public API.\n",
-                "MANDATORY FIX:\n",
-                "- The actual API is shown in the \"Actual API Reference\" section below.\n",
-                "- Rewrite ALL calls to use ONLY the methods and fields listed there.\n",
-                "- Do NOT invent, guess, or assume method names -- use exactly what exists.\n",
-                "- If the functionality you need does not exist in the current API, implement it ",
-                "or find an alternative approach.",
             ),
             ErrorCategory::NpmDependency => concat!(
                 "DIAGNOSIS: Missing npm package or module.\n",

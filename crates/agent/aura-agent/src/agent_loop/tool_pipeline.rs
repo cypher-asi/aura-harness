@@ -36,11 +36,10 @@ use crate::dup_audit;
 use crate::events::AgentLoopEvent;
 use crate::helpers;
 use crate::types::{AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult};
-use aura_config::{TOOL_ERROR_PREVIEW_LIMIT, TOOL_RESULT_MAX_BYTES, WRITE_FILE_CHUNK_BYTES};
+use aura_config::{TOOL_ERROR_PREVIEW_LIMIT, TOOL_RESULT_MAX_BYTES};
 use aura_model::{ContentBlock, Message, ModelResponse, Role, ToolResultContent};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use super::event_sink::emit as emit_event;
@@ -182,21 +181,9 @@ impl ToolBatch {
 /// - `event_tx`: optional [`AgentLoopEvent`] sink for warnings,
 ///   per-tool start/completed/result events, and the post-write
 ///   build console block.
-/// - `cancellation_token`: optional [`CancellationToken`] honored by
-///   the [`execute_with_cancellation`] wrapper so a mid-batch Stop
-///   resolves to [`cancelled_results_for`] synthetics with
-///   `stop_loop = true`.
 pub(crate) struct ToolEffectCtx<'a> {
     pub(crate) executor: &'a dyn AgentToolExecutor,
     pub(crate) event_tx: Option<&'a Sender<AgentLoopEvent>>,
-    /// Cancellation token threaded through to
-    /// [`execute_with_cancellation`]. Phase 7 lost the only
-    /// production consumer when the buffered transport's
-    /// `prepare_live_batch` was deleted; kept on the struct for the
-    /// `pipeline_tests` / `stream_pump::tests` constructors and any
-    /// future transport that adds an inline executor call.
-    #[allow(dead_code)]
-    pub(crate) cancellation_token: Option<&'a CancellationToken>,
 }
 
 /// Result of running [`process_tool_results`].
@@ -755,78 +742,6 @@ pub(crate) async fn dispatch(
     }
 }
 
-/// Synthesise `[CANCELLED]` tool_result blocks for a batch of
-/// in-flight tool calls. Used by [`execute_with_cancellation`] when
-/// the user-supplied `CancellationToken` fires while the executor is
-/// awaiting tool completion.
-///
-/// Each synthesised result carries:
-///
-/// - `is_error = true` so cache invalidation skips it and the model
-///   sees the result as a failure.
-/// - `kind = AgentError` so the existing telemetry / dup-audit
-///   layers treat it as a harness-side rejection rather than a tool
-///   crash.
-/// - `stop_loop = true` so
-///   [`super::tool_execution::check_termination_conditions`] breaks
-///   the loop on the same iteration the cancellation arrived. This
-///   is the cancellation seam called out by
-///   `pipeline_cancellation_mid_tool_execution_aborts_loop`: without
-///   `stop_loop`, the loop would happily keep iterating and the
-///   model would never see the cancellation as a turn boundary.
-///
-/// The `[CANCELLED]` tag is the contract surface
-/// `pipeline_cancellation_mid_tool_execution_aborts_loop` asserts —
-/// it satisfies Anthropic's `tool_use ↔ tool_result` adjacency rule
-/// (every `tool_use` in the prior assistant message gets a paired
-/// `tool_result` block) so we can break cleanly without leaving the
-/// transcript in a structurally-invalid state.
-#[allow(dead_code)]
-pub(super) fn cancelled_results_for(to_execute: &[ToolCallInfo]) -> Vec<ToolCallResult> {
-    to_execute
-        .iter()
-        .map(|tc| ToolCallResult {
-            tool_use_id: tc.id.clone(),
-            content:
-                "[CANCELLED] Tool execution was cancelled by the user before the tool returned."
-                    .to_string(),
-            is_error: true,
-            kind: aura_core_types::ToolResultKind::AgentError,
-            stop_loop: true,
-            file_changes: Vec::new(),
-            image: None,
-        })
-        .collect()
-}
-
-/// Wrap a single batch of tool execution in a `tokio::select!` on
-/// the user-supplied cancellation token so a mid-tool Stop press
-/// terminates the loop on the same iteration instead of waiting for
-/// the executor to naturally return. When the token has not been
-/// supplied (headless / non-cancellable callers) this collapses to
-/// `executor.execute(...).await`.
-///
-/// Pre-fix, the executor call here was an un-`select!`-ed `.await`,
-/// so stop fired on the harness side but the loop kept the
-/// (potentially multi-minute) tool round-trip alive — see
-/// `pipeline_cancellation_mid_tool_execution_aborts_loop` for the
-/// regression contract.
-#[allow(dead_code)]
-async fn execute_with_cancellation(
-    executor: &dyn AgentToolExecutor,
-    to_execute: &[ToolCallInfo],
-    cancellation_token: Option<&CancellationToken>,
-) -> Vec<ToolCallResult> {
-    let Some(token) = cancellation_token else {
-        return executor.execute(to_execute).await;
-    };
-    tokio::select! {
-        biased;
-        () = token.cancelled() => cancelled_results_for(to_execute),
-        results = executor.execute(to_execute) => results,
-    }
-}
-
 /// Pre-dispatch exploration block (on by default).
 ///
 /// When `aura_config::agent().steering.implement_now_hard_block` is `true`
@@ -862,74 +777,6 @@ pub(super) fn partition_circling_duplicate_reads(
         }
     }
     (blocked, remaining)
-}
-
-/// Pre-dispatch chunk guard for `write_file`.
-///
-/// Short-circuits any `write_file` call whose `content` field exceeds
-/// [`WRITE_FILE_CHUNK_BYTES`]. The returned [`ToolCallResult`] is marked
-/// `is_error = true` so the existing `update_cache` / `any_write`
-/// detection treats it as NOT a successful write — nothing touches disk,
-/// nothing clears the read-only cache. The same message is also pushed
-/// as a side-message and emitted through the event stream as
-/// [`AgentLoopEvent::Warning`] so it is visible to humans watching the
-/// run.
-#[allow(dead_code)]
-fn partition_oversized_writes(
-    tool_calls: &[ToolCallInfo],
-    side_messages: &mut Vec<String>,
-    event_tx: Option<&Sender<AgentLoopEvent>>,
-) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
-    let mut oversized = Vec::new();
-    let mut remaining = Vec::with_capacity(tool_calls.len());
-
-    for tool in tool_calls {
-        if tool.name == "write_file" {
-            if let Some(content) = tool.input.get("content").and_then(|v| v.as_str()) {
-                if content.len() > WRITE_FILE_CHUNK_BYTES {
-                    let path_hint = tool
-                        .input
-                        .get("path")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let msg =
-                        aura_context_prompts::model_messages::chunk_guard::render_chunk_guard_body(
-                            content.len(),
-                            WRITE_FILE_CHUNK_BYTES,
-                        );
-                    let content_msg = format!(
-                        "{tag}{msg}",
-                        tag = aura_context_prompts::model_messages::chunk_guard::CHUNK_GUARD_TAG,
-                    );
-                    warn!(
-                        tool_use_id = %tool.id,
-                        tool_name = %tool.name,
-                        path = path_hint,
-                        content_bytes = content.len(),
-                        chunk_cap = WRITE_FILE_CHUNK_BYTES,
-                        "write_file content exceeds per-turn chunk cap; short-circuiting"
-                    );
-
-                    emit_event(event_tx, AgentLoopEvent::Warning(msg.clone()));
-
-                    side_messages.push(msg);
-                    oversized.push(ToolCallResult {
-                        tool_use_id: tool.id.clone(),
-                        content: content_msg,
-                        is_error: true,
-                        kind: aura_core_types::ToolResultKind::AgentError,
-                        stop_loop: false,
-                        file_changes: Vec::new(),
-                        image: None,
-                    });
-                    continue;
-                }
-            }
-        }
-        remaining.push(tool.clone());
-    }
-
-    (oversized, remaining)
 }
 
 // Phase 8: the previously-threaded seven `&mut` field borrows
@@ -1081,99 +928,6 @@ async fn run_auto_build(
         }
     }
     None
-}
-
-#[cfg(test)]
-mod chunk_guard_tests {
-    use super::*;
-    use serde_json::json;
-
-    fn mk_tool(id: &str, name: &str, input: serde_json::Value) -> ToolCallInfo {
-        ToolCallInfo {
-            id: id.to_string(),
-            name: name.to_string(),
-            input,
-        }
-    }
-
-    #[test]
-    fn write_file_over_chunk_bytes_is_rejected_without_disk_write() {
-        // Content size must exceed `WRITE_FILE_CHUNK_BYTES` (32_000
-        // after the harness-dev-loop-efficiency relaxation).
-        let huge = "x".repeat(33_000);
-        let call = mk_tool(
-            "toolu_1",
-            "write_file",
-            json!({"path": "src/big.rs", "content": huge}),
-        );
-        let mut side_messages: Vec<String> = Vec::new();
-        let (oversized, remaining) =
-            partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);
-
-        assert_eq!(
-            oversized.len(),
-            1,
-            "one oversized write should short-circuit"
-        );
-        assert_eq!(oversized[0].tool_use_id, "toolu_1");
-        assert!(
-            oversized[0].is_error,
-            "synthetic tool_result must be is_error=true so cache invalidation skips it"
-        );
-        assert!(
-            oversized[0].file_changes.is_empty(),
-            "chunk guard must NOT record any file changes (nothing hit disk)"
-        );
-        assert!(
-            oversized[0].content.contains("edit_file"),
-            "synthetic content should name edit_file in the recovery hint"
-        );
-        assert!(
-            oversized[0].content.contains("32000"),
-            "synthetic content should reference the byte cap"
-        );
-        assert!(
-            remaining.is_empty(),
-            "oversized write should NOT be forwarded to the executor"
-        );
-        assert_eq!(
-            side_messages.len(),
-            1,
-            "a warning side-message should be queued for the next user turn"
-        );
-    }
-
-    #[test]
-    fn write_file_under_chunk_bytes_proceeds() {
-        let small = "y".repeat(2_000);
-        let call = mk_tool(
-            "toolu_2",
-            "write_file",
-            json!({"path": "src/small.rs", "content": small}),
-        );
-        let mut side_messages: Vec<String> = Vec::new();
-        let (oversized, remaining) =
-            partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);
-
-        assert!(
-            oversized.is_empty(),
-            "under-threshold writes must pass through unchanged"
-        );
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].id, "toolu_2");
-        assert!(side_messages.is_empty());
-    }
-
-    #[test]
-    fn chunk_guard_ignores_non_write_tools() {
-        let big_arg = "z".repeat(10_000);
-        let call = mk_tool("toolu_3", "search_code", json!({"pattern": big_arg}));
-        let mut side_messages: Vec<String> = Vec::new();
-        let (oversized, remaining) =
-            partition_oversized_writes(std::slice::from_ref(&call), &mut side_messages, None);
-        assert!(oversized.is_empty());
-        assert_eq!(remaining.len(), 1);
-    }
 }
 
 #[cfg(test)]

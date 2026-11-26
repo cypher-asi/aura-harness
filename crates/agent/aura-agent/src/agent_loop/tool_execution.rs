@@ -7,7 +7,6 @@
 //! ([`split_cached`] / [`update_cache`] / per-path range index) and
 //! the small text-truncation helper used by error logging.
 
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 
 use aura_config::{tool_result_cache_key, CACHEABLE_TOOLS};
@@ -318,19 +317,6 @@ fn slice_line_numbered(rendered: &str, want_start: usize, want_end: usize) -> Op
         return None;
     }
     Some(kept.join("\n"))
-}
-
-/// Compute the same `content_hash` that `aura_exec_tools::fs_tools::read`
-/// stamps onto its `read_file` metadata. We re-derive it here because
-/// the agent-loop cache only receives the rendered `String` payload,
-/// not the upstream `ToolResult` metadata map. Keeping a private copy
-/// of the hash avoids plumbing metadata through `ToolCallResult`
-/// (which would touch every executor and test fixture in the tree).
-#[allow(dead_code)]
-pub(crate) fn content_hash_hex(bytes: &[u8]) -> String {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
 }
 
 /// Store a freshly-executed `read_file` result into the per-path

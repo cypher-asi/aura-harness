@@ -77,8 +77,6 @@ impl TaskRunAutomaton {
 struct TaskRunConfig {
     project_id: String,
     task_id: String,
-    #[allow(dead_code)]
-    agent_instance_id: String,
     /// Model identifier from the dispatch JSON. Mirrors the
     /// `dev_loop` / `spec_gen` policy: a missing or blank `model`
     /// field is a typed `InvalidConfig` failure rather than a silent
@@ -127,11 +125,6 @@ impl TaskRunConfig {
             .and_then(|v| v.as_str())
             .ok_or_else(|| AutomatonError::InvalidConfig("missing task_id".into()))?
             .to_string();
-        let agent_instance_id = config
-            .get("agent_instance_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string();
         // Phase 6: align with `dev_loop` / `spec_gen` — hard-fail on
         // a missing model identifier instead of silently propagating
         // `""` into the refinement call.
@@ -154,7 +147,6 @@ impl TaskRunConfig {
         Ok(Self {
             project_id,
             task_id,
-            agent_instance_id,
             model,
             agent_identity,
             early_test_oracle,
@@ -295,20 +287,7 @@ mod tests {
         .expect("parse minimal config");
         assert_eq!(cfg.project_id, "proj-1");
         assert_eq!(cfg.task_id, "task-1");
-        assert_eq!(cfg.agent_instance_id, "default");
         assert_eq!(cfg.model, "claude-opus-4-7");
-    }
-
-    #[test]
-    fn from_json_uses_provided_agent_instance_id() {
-        let cfg = TaskRunConfig::from_json(&json!({
-            "project_id": "proj-1",
-            "task_id": "task-1",
-            "agent_instance_id": "inst-7",
-            "model": "claude-opus-4-7",
-        }))
-        .expect("parse with explicit instance id");
-        assert_eq!(cfg.agent_instance_id, "inst-7");
     }
 
     #[test]

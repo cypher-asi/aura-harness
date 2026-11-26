@@ -213,13 +213,11 @@ pub(crate) async fn run_sampling_request(
         agent: run.agent,
         provider: run.provider,
         executor: run.executor,
-        tools,
         event_tx: run.event_tx,
         cancellation_token: run.cancellation_token,
         input_queue: ctx.input_queue,
         state,
         request,
-        iteration,
         on_response: Some(&emit_exchange),
     };
     let outcome = match transport_impl.sample(sampling_ctx).await {
@@ -285,7 +283,6 @@ pub(crate) async fn run_sampling_request(
     let tool_ctx = ToolEffectCtx {
         executor: run.executor,
         event_tx: run.event_tx,
-        cancellation_token: run.cancellation_token,
     };
     let dispatch_says_break =
         tool_pipeline::dispatch(run.agent, state, &response, batch, tool_ctx).await;

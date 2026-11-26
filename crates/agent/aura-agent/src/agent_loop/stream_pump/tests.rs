@@ -984,7 +984,6 @@ async fn pump_triggers_auto_build_on_write() {
     let ctx = super::super::tool_pipeline::ToolEffectCtx {
         executor: &executor,
         event_tx: None,
-        cancellation_token: None,
     };
     let _should_break = super::super::tool_pipeline::dispatch(
         &agent,

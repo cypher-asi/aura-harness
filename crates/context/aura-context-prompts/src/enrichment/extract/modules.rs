@@ -6,10 +6,10 @@
 //! and threads a missing-module note when the task talks about a
 //! module that does not exist yet (the `outbox` case).
 //!
-//! The lowercase extractor is intentionally a small subset of
-//! `aura-agent::file_ops::task_keywords::extract_task_keywords` —
-//! keeping a focused copy here means the prompts crate has no
-//! dependency on `aura-agent` (per the Phase 2 boundary contract).
+//! The lowercase extractor is intentionally small: it only looks for
+//! identifiers that are plausible module names, and the prompts crate
+//! keeps no dependency on `aura-agent` (per the Phase 2 boundary
+//! contract).
 
 use std::sync::OnceLock;
 
@@ -33,9 +33,8 @@ fn module_keyword_regex() -> &'static Regex {
 }
 
 /// Lowercase keywords that look like module names but are too
-/// common to surface. Subset of
-/// `aura-agent::file_ops::task_keywords::COMMON_MODULE_STOP_WORDS`,
-/// trimmed to the cases that show up in dev-loop task descriptions.
+/// common to surface, trimmed to the cases that show up in dev-loop
+/// task descriptions.
 const COMMON_MODULE_STOP_WORDS: &[&str] = &[
     "the",
     "this",

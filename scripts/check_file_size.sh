@@ -21,7 +21,13 @@ ALLOWLIST="$REPO_ROOT/scripts/file_size_allowlist.txt"
 cd "$REPO_ROOT"
 
 over_limit() {
-    git ls-files -z -- '*.rs' |
+    # Tracked and new (untracked, not ignored) files; skip ones deleted
+    # from the working tree but not yet from the index.
+    git ls-files -z --cached --others --exclude-standard -- '*.rs' |
+        while IFS= read -r -d '' file; do
+            [[ -f "$file" ]] && printf '%s\0' "$file"
+        done |
+        sort -zu |
         xargs -0 wc -l |
         awk -v max="$MAX_LINES" '$2 != "total" && $1 > max { print $2 }' |
         sort

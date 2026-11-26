@@ -549,7 +549,6 @@ impl WsClient {
 
     /// Open a WebSocket without an Authorization header. Only used by
     /// tests that deliberately verify the 401 rejection path.
-    #[allow(dead_code)]
     pub async fn connect_anonymous(ws_url: &str) -> Self {
         let (stream, _) = tokio_tungstenite::connect_async(ws_url)
             .await

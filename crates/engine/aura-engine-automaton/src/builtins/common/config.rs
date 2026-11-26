@@ -134,8 +134,6 @@ impl AgentIdentityEnvelope {
 #[derive(Debug)]
 pub(crate) struct DevLoopConfig {
     pub(crate) project_id: String,
-    #[allow(dead_code)]
-    pub(crate) agent_instance_id: String,
     pub(crate) model: String,
     /// Identity envelope reinstated on top of the Phase-1 simple loop.
     /// Parsed once from the `AutomatonStartRequest` JSON; the borrowed
@@ -154,7 +152,6 @@ pub(crate) struct DevLoopConfig {
 #[derive(Deserialize)]
 struct DevLoopConfigRaw {
     project_id: Option<String>,
-    agent_instance_id: Option<String>,
     model: Option<String>,
 }
 
@@ -178,10 +175,6 @@ impl DevLoopConfig {
             .project_id
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| AutomatonError::InvalidConfig("missing project_id".into()))?;
-        let agent_instance_id = raw
-            .agent_instance_id
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| "default".to_string());
         let model = raw
             .model
             .map(|s| s.trim().to_string())
@@ -194,7 +187,6 @@ impl DevLoopConfig {
         let agent_identity = AgentIdentityEnvelope::from_json(config);
         Ok(Self {
             project_id,
-            agent_instance_id,
             model,
             agent_identity,
         })

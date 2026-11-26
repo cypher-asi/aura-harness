@@ -241,17 +241,6 @@ impl AgentRunnerHandle {
         }
     }
 
-    /// Construct a handle that shares an existing [`InputQueue`].
-    ///
-    /// Used by [`crate::session::Session::handle`] (Layer E.4) so a
-    /// single session can hand out an arbitrary number of handles
-    /// pointed at the same backing queue without re-creating the
-    /// [`InputQueue`] / cancellation token from scratch.
-    #[must_use]
-    pub(crate) fn from_queue(queue: Arc<InputQueue>) -> Self {
-        Self { queue }
-    }
-
     /// Push a user input onto the running session's queue.
     ///
     /// # Errors

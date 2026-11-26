@@ -15,10 +15,6 @@ pub const MAX_OUTPUT_BYTES: usize = 12_000;
 /// Default build-runner subprocess timeout in seconds.
 pub const BUILD_TIMEOUT_SECS: u64 = 120;
 
-/// Per-fix-prompt codebase-snapshot byte cap. Consumed by
-/// `aura_agent::verify::utils::build_error_context_snapshot`.
-pub const BUILD_FIX_SNAPSHOT_BUDGET: usize = 30_000;
-
 /// Bytes available for the "Actual API Reference" section emitted by
 /// the build-fix error-context resolver.
 pub const RESOLVE_BUDGET: usize = 10_240;
@@ -26,10 +22,6 @@ pub const RESOLVE_BUDGET: usize = 10_240;
 /// Maximum source-file matches inspected when resolving a single type
 /// referenced in a compiler error.
 pub const MAX_TYPE_FILES: usize = 5;
-
-/// Bytes available for the "Error Source Files" section emitted by the
-/// build-fix error-context resolver.
-pub const ERROR_SOURCE_BUDGET: usize = 15_360;
 
 /// Read-only `git` helper subprocess timeout in seconds (used by
 /// `aura_agent::git::list_unpushed_commits` and friends).
@@ -47,14 +39,10 @@ pub struct VerifyConfig {
     pub max_output_bytes: usize,
     /// See [`BUILD_TIMEOUT_SECS`].
     pub build_timeout: Duration,
-    /// See [`BUILD_FIX_SNAPSHOT_BUDGET`].
-    pub build_fix_snapshot_budget: usize,
     /// See [`RESOLVE_BUDGET`].
     pub resolve_budget: usize,
     /// See [`MAX_TYPE_FILES`].
     pub max_type_files: usize,
-    /// See [`ERROR_SOURCE_BUDGET`].
-    pub error_source_budget: usize,
     /// See [`GIT_READ_TIMEOUT_SECS`].
     pub git_read_timeout: Duration,
     /// env: `AURA_DOD_TEST_COMMAND` (default: `None`)
@@ -73,10 +61,8 @@ impl VerifyConfig {
         Self {
             max_output_bytes: MAX_OUTPUT_BYTES,
             build_timeout: Duration::from_secs(BUILD_TIMEOUT_SECS),
-            build_fix_snapshot_budget: BUILD_FIX_SNAPSHOT_BUDGET,
             resolve_budget: RESOLVE_BUDGET,
             max_type_files: MAX_TYPE_FILES,
-            error_source_budget: ERROR_SOURCE_BUDGET,
             git_read_timeout: Duration::from_secs(GIT_READ_TIMEOUT_SECS),
             test_command_override: None,
         }

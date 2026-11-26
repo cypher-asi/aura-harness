@@ -36,9 +36,7 @@ pub(crate) enum FileOp {
 ///
 /// The fields are `pub(crate)` so other agent-loop modules and their
 /// tests can directly inspect the per-iteration accumulator without
-/// needing accessor methods (the previous `is_empty` / `paths` /
-/// `read_paths` getters were only ever consumed by tests in the
-/// same crate and were carrying `#[allow(dead_code)]`).
+/// needing accessor methods.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct TurnDiff {
     pub(crate) writes: HashMap<PathBuf, FileOp>,

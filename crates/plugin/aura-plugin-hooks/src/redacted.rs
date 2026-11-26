@@ -94,7 +94,6 @@ mod tests {
     #[test]
     fn nested_struct_with_redacted_field_redacts_in_debug() {
         #[derive(Debug)]
-        #[allow(dead_code)]
         struct Wrapper {
             visible: u32,
             hidden: Redacted<String>,
@@ -107,5 +106,7 @@ mod tests {
         assert!(!dbg.contains("password"));
         assert!(dbg.contains("<REDACTED>"));
         assert!(dbg.contains('7'));
+        assert_eq!(w.visible, 7);
+        assert_eq!(w.hidden.into_inner(), "password");
     }
 }

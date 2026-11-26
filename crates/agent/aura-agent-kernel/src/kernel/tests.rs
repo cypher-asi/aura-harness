@@ -12,19 +12,11 @@ use aura_core_types::{
     InstalledToolIntegrationRequirement, RuntimeCapabilityInstall, SystemKind, ToolProposal,
     Transaction, TransactionType,
 };
-use aura_exec_traits::ExecuteContext;
 use aura_model::{MockProvider, ModelProvider, ModelRequest};
 use aura_store_db::{RocksStore, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;
-
-// Keep `ExecuteContext` + `ExecutorRouter` imports visible even when the
-// tests below only exercise them transitively — they're part of the
-// kernel's public surface and the tests construct them directly when
-// building custom policies.
-#[allow(dead_code)]
-fn _keep_imports_alive(_: &ExecuteContext) {}
 
 fn create_new_kernel() -> (Kernel, TempDir, TempDir) {
     let db_dir = TempDir::new().unwrap();

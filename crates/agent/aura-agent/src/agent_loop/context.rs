@@ -317,44 +317,6 @@ pub(super) fn apply_summary_output(
     true
 }
 
-/// Apply a specific compaction tier after a provider rejects the request for
-/// being too large. Returns `true` when the prompt was actually reduced.
-///
-/// Phase 7 dropped the only production caller
-/// ([`super::AgentLoop::retry_after_context_overflow`], itself a
-/// `BufferedTransport`-only ladder). The helper is retained so a
-/// future caller — most likely an inline overflow-recovery path
-/// added to the pump driver — can reuse the tier mechanics without
-/// re-deriving the chars/tokens accounting.
-#[allow(dead_code)]
-pub(super) fn compact_for_overflow(
-    config: &AgentLoopConfig,
-    state: &mut LoopState,
-    tier: compaction::CompactionConfig,
-    tools: &[ToolDefinition],
-) -> bool {
-    if compaction_disabled_by_env() {
-        recompute_breakdown(config, state, tools);
-        return false;
-    }
-    sanitize::validate_and_repair(&mut state.messages);
-    let before_chars = state.messages.chars();
-    let before_tokens = current_context_tokens(state);
-
-    let report = compaction::recover_overflow(&mut state.messages, tier);
-    dup_audit::audit_tool_result_duplicates(&state.messages, "compact_for_overflow.post_splice");
-    sanitize::validate_and_repair(&mut state.messages);
-
-    let after_chars = report.after_chars;
-    let after_tokens = heuristic_context_tokens(&state.messages);
-    state.last_context_tokens_estimate = Some(after_tokens);
-    state.result.estimated_context_tokens = after_tokens;
-
-    recompute_breakdown(config, state, tools);
-
-    after_chars < before_chars || after_tokens < before_tokens
-}
-
 pub(super) const FIRST_WRITE_CHECKPOINT: &str =
     "NOTE: You've made your first file change. Before making more changes, \
      consider verifying your work (e.g., run the build or tests) to catch \
@@ -422,9 +384,8 @@ pub(super) fn should_stop_for_budget(
 #[cfg(test)]
 mod tests {
     use super::{
-        compact_for_overflow, compact_if_needed, compaction_pressure_tokens,
-        effective_compaction_request_kind, heuristic_context_tokens, reserved_output_tokens,
-        CompactionOutcome,
+        compact_if_needed, compaction_pressure_tokens, effective_compaction_request_kind,
+        heuristic_context_tokens, reserved_output_tokens, CompactionOutcome,
     };
     use crate::agent_loop::AgentLoopConfig;
     use crate::agent_loop::LoopState;
@@ -433,8 +394,8 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     /// Serialize tests that swap `aura_config` to flip the compaction
-    /// kill switch. Sibling tests that call `compact_if_needed` /
-    /// `compact_for_overflow` read the same config, so any toggle has
+    /// kill switch. Sibling tests that call `compact_if_needed`
+    /// read the same config, so any toggle has
     /// to be coordinated to keep parallel-test runs deterministic.
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -499,45 +460,6 @@ mod tests {
         assert_eq!(request(1_000), 64_000);
         assert_eq!(request(160_000), 40_000);
         assert_eq!(request(190_000), 64_000, "an overflow compacts instead");
-    }
-
-    #[test]
-    fn overflow_compaction_reports_progress_when_history_shrinks() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let config = AgentLoopConfig::for_agent("claude-test-model");
-        let mut state = LoopState::new(
-            &config,
-            vec![
-                Message::user("intro"),
-                Message::assistant("A".repeat(4_000)),
-                Message::user("B".repeat(4_000)),
-                Message::assistant("C".repeat(4_000)),
-                Message::user("latest"),
-            ],
-        );
-        state.last_context_tokens_estimate = Some(heuristic_context_tokens(&state.messages));
-
-        assert!(compact_for_overflow(
-            &config,
-            &mut state,
-            aura_context_compaction::CompactionConfig::emergency(),
-            &[],
-        ));
-    }
-
-    #[test]
-    fn overflow_compaction_reports_no_progress_when_nothing_can_change() {
-        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let config = AgentLoopConfig::for_agent("claude-test-model");
-        let mut state = LoopState::new(&config, vec![Message::user("hello")]);
-        state.last_context_tokens_estimate = Some(heuristic_context_tokens(&state.messages));
-
-        assert!(!compact_for_overflow(
-            &config,
-            &mut state,
-            aura_context_compaction::CompactionConfig::aggressive(),
-            &[],
-        ));
     }
 
     /// `compact_if_needed` is the single place that recomputes the

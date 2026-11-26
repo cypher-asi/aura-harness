@@ -59,7 +59,7 @@
 //! intact through `process_tool_results`. Returning `Cancelled`
 //! here is reserved for the "no tool_use blocks emitted yet" arms.
 
-use aura_model::{ModelProvider, ModelRequest, ModelResponse, ToolDefinition};
+use aura_model::{ModelProvider, ModelRequest, ModelResponse};
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
 
@@ -89,11 +89,6 @@ pub(crate) struct SamplingCtx<'a> {
     pub(crate) agent: &'a AgentLoop,
     pub(crate) provider: &'a dyn ModelProvider,
     pub(crate) executor: &'a dyn AgentToolExecutor,
-    /// Tool catalog handed to the model. Kept on the ctx for the
-    /// future `cassette` transport (the pump consumes the catalog
-    /// through the pre-built `request`).
-    #[allow(dead_code)]
-    pub(crate) tools: &'a [ToolDefinition],
     pub(crate) event_tx: Option<&'a Sender<AgentLoopEvent>>,
     pub(crate) cancellation_token: Option<&'a CancellationToken>,
     pub(crate) input_queue: Option<&'a InputQueue>,
@@ -101,11 +96,6 @@ pub(crate) struct SamplingCtx<'a> {
     pub(crate) request: ModelRequest,
     /// See [`StreamPumpCtx::on_response`].
     pub(crate) on_response: Option<&'a (dyn Fn(&ModelResponse) + Send + Sync)>,
-    /// 0-based sampling iteration index. Kept on the ctx for
-    /// transports that need to drive iteration-keyed telemetry; the
-    /// pump consumes the counter through `state.result.iterations`.
-    #[allow(dead_code)]
-    pub(crate) iteration: usize,
 }
 
 /// One sampling round-trip outcome.
@@ -189,7 +179,6 @@ impl ModelTransport for PumpTransport {
             state,
             request,
             on_response,
-            ..
         } = ctx;
 
         let outcome = run_stream_pump(

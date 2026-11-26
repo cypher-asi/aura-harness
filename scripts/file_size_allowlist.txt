@@ -52,7 +52,6 @@ crates/context/aura-context-memory/src/write_pipeline.rs
 crates/context/aura-context-memory/tests/turn_summary_roundtrip.rs
 crates/context/aura-context-prompts/src/bootstrap/mod.rs
 crates/context/aura-context-prompts/src/system/tests.rs
-crates/context/aura-context-skills/src/integration_tests.rs
 crates/context/aura-context-skills/src/manager.rs
 crates/core/aura-core-protocol/src/runtime_request.rs
 crates/core/aura-core-protocol/src/server.rs

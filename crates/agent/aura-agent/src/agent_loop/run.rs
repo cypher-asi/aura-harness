@@ -207,7 +207,7 @@ impl AgentLoop {
         // in-band cancel + external cancel still share a signal.
         let cancellation = cancellation_token.clone().unwrap_or_default();
         let session = match handle {
-            Some(h) => crate::session::Session::from_handle(h, cancellation.clone()),
+            Some(h) => crate::session::Session::from_handle(h),
             None => crate::session::Session::new(
                 crate::session::SessionId::new_v4(),
                 cancellation.clone(),

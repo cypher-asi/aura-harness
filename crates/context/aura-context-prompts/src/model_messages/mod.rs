@@ -6,7 +6,7 @@
 //! you" announcements; they are concrete error / warning / status
 //! messages tied to a specific tool result. Each submodule owns one
 //! conceptual string family. The submodule layout matches the plan's
-//! `model_messages/{chunk_guard, implement_now, max_tokens, task_done,
+//! `model_messages/{implement_now, max_tokens, task_done,
 //! auto_build, test_warning}` decomposition.
 //!
 //! Each callable here either returns a `&'static str` (when the body
@@ -17,7 +17,6 @@
 
 pub mod auto_build;
 pub mod build_plan;
-pub mod chunk_guard;
 pub mod implement_now;
 pub mod init_project;
 pub mod max_tokens;
