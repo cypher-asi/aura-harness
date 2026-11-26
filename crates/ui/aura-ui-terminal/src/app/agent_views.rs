@@ -31,7 +31,7 @@ use super::side_scope::ListPlaces;
 use super::{hud::Hud, App, AppState, ChatTab, NotificationType, PendingApproval, SidePanelTab};
 use crate::{
     components::Message,
-    events::{RecordSummary, UiCommand},
+    events::{QueuedItemView, RecordSummary, TraceNode, UiCommand},
     renderer::{format_elapsed, ChatLineCache},
     PermissionMode,
 };
@@ -324,12 +324,7 @@ impl App {
             self.set_agent_plan_mode(agent_id, *mode == PermissionMode::Plan);
         }
         if let UiCommand::GraphUpsert { run_id, nodes } = command {
-            self.trace_feed.push(agent_id, &run_id, &nodes);
-            let graphed = self.upsert_graph(&run_id, nodes);
-            // Any agent's step may be in the log on screen, as a subagent's.
-            self.log.mark_stale();
-            let feed_shown = self.sandbox_panel_visible() && self.side_tab == SidePanelTab::Trace;
-            self.redraw |= graphed || feed_shown;
+            self.agent_graph_upsert(agent_id, &run_id, nodes);
             return;
         }
         if agent_id == self.active_agent_id || self.active_agent_id.is_empty() {
@@ -337,35 +332,45 @@ impl App {
             return;
         }
         if let UiCommand::SetQueue(queue) = command {
-            // The queue panel's state is the agent on screen's; this one
-            // only stores the queue, and confirms its edits.
-            self.confirm_queued_renames(agent_id, &queue);
-            self.views
-                .entry(agent_id.to_string())
-                .or_default()
-                .hud
-                .queue = queue;
-            // A confirmed rename shows in the chat's queued previews.
-            self.redraw = true;
+            self.store_offscreen_queue(agent_id, queue);
             return;
         }
         let asks = matches!(command, UiCommand::RequestApproval { .. });
-        if matches!(
-            command,
-            UiCommand::NewRecord(_)
-                | UiCommand::ClearRecords
-                | UiCommand::SetRecords(_)
-                | UiCommand::SetSandboxRoot(_)
-                | UiCommand::SetPlan(_)
-                | UiCommand::SetPlans(_)
-                | UiCommand::SetTasks(_)
-                | UiCommand::UpsertTask(_)
-        ) {
+        if shows_active_agent_only(&command) {
             // The Record and Sandbox panels, the plan strip and the Plans
             // and Tasks tabs show the active agent only.
             return;
         }
+        self.process_offscreen_command(agent_id, command, asks);
+    }
 
+    /// A graph update of any agent: into the trace feed and the graph.
+    fn agent_graph_upsert(&mut self, agent_id: &str, run_id: &str, nodes: Vec<TraceNode>) {
+        self.trace_feed.push(agent_id, run_id, &nodes);
+        let graphed = self.upsert_graph(run_id, nodes);
+        // Any agent's step may be in the log on screen, as a subagent's.
+        self.log.mark_stale();
+        let feed_shown = self.sandbox_panel_visible() && self.side_tab == SidePanelTab::Trace;
+        self.redraw |= graphed || feed_shown;
+    }
+
+    /// The queue of an agent off screen.
+    fn store_offscreen_queue(&mut self, agent_id: &str, queue: Vec<QueuedItemView>) {
+        // The queue panel's state is the agent on screen's; this one
+        // only stores the queue, and confirms its edits.
+        self.confirm_queued_renames(agent_id, &queue);
+        self.views
+            .entry(agent_id.to_string())
+            .or_default()
+            .hud
+            .queue = queue;
+        // A confirmed rename shows in the chat's queued previews.
+        self.redraw = true;
+    }
+
+    /// Run `command` on the chat of `agent_id`, off screen, swapped in for
+    /// the time being, then tell what came of it.
+    fn process_offscreen_command(&mut self, agent_id: &str, command: UiCommand, asks: bool) {
         let mut view = self.views.remove(agent_id).unwrap_or_default();
         let state = self.state;
         let notification = self.notifications.current.take();
@@ -428,4 +433,19 @@ impl App {
             }
         }
     }
+}
+
+/// Whether `command` is for panels that show the active agent only.
+fn shows_active_agent_only(command: &UiCommand) -> bool {
+    matches!(
+        command,
+        UiCommand::NewRecord(_)
+            | UiCommand::ClearRecords
+            | UiCommand::SetRecords(_)
+            | UiCommand::SetSandboxRoot(_)
+            | UiCommand::SetPlan(_)
+            | UiCommand::SetPlans(_)
+            | UiCommand::SetTasks(_)
+            | UiCommand::UpsertTask(_)
+    )
 }

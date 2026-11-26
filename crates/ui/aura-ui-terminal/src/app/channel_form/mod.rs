@@ -40,69 +40,13 @@ use super::line_edit::edit_line;
 use super::{App, AppState};
 use crate::events::{ChannelProjectView, ChannelSummary, ProjectSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+pub(crate) use field::ChannelField;
 
 /// Longest slug, in characters.
 const MAX_SLUG: usize = 40;
 
 /// What the form says under a slug it refuses.
 pub(crate) const SLUG_HINT: &str = "lowercase letters, digits and -, up to 40";
-
-/// A field of the form, in the order Tab walks them.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum ChannelField {
-    /// Short unique name the channel is addressed by
-    #[default]
-    Slug,
-    /// What the channel is called
-    Title,
-    /// What the channel is for
-    Description,
-    /// The project the channel's agents work in
-    Project,
-}
-
-impl ChannelField {
-    /// Every field, top to bottom.
-    pub(crate) const ALL: [Self; 4] = [Self::Slug, Self::Title, Self::Description, Self::Project];
-
-    /// What the field's label reads.
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Slug => "Slug",
-            Self::Title => "Title",
-            Self::Description => "Description",
-            Self::Project => "Project",
-        }
-    }
-
-    /// Where the field's text is kept, for the fields that are text.
-    const fn text_index(self) -> Option<usize> {
-        match self {
-            Self::Slug => Some(0),
-            Self::Title => Some(1),
-            Self::Description => Some(2),
-            Self::Project => None,
-        }
-    }
-
-    const fn next(self) -> Self {
-        match self {
-            Self::Slug => Self::Title,
-            Self::Title => Self::Description,
-            Self::Description => Self::Project,
-            Self::Project => Self::Slug,
-        }
-    }
-
-    const fn previous(self) -> Self {
-        match self {
-            Self::Slug => Self::Project,
-            Self::Title => Self::Slug,
-            Self::Description => Self::Title,
-            Self::Project => Self::Description,
-        }
-    }
-}
 
 /// What the form does on submit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -509,5 +453,6 @@ impl App {
     }
 }
 
+mod field;
 #[cfg(test)]
 mod tests;

@@ -1,5 +1,7 @@
 use super::*;
-use crate::events::{LogRunView, LogStepView, LogTurnView, UiCommand};
+use crate::events::{
+    LogRunView, LogSection, LogStatus, LogStepView, LogTurnView, LogView, UiCommand,
+};
 use ratatui::{backend::TestBackend, Terminal};
 use std::time::Instant;
 

@@ -1,7 +1,7 @@
 use super::*;
-use crate::app::AgentsTab;
+use crate::app::{AgentsTab, App, AppState, PanelFocus, ProjectListRow};
 use crate::events::{AgentSummary, UiCommand, UiEvent};
-use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc;
 
 fn agent(id: &str, depth: usize) -> AgentSummary {

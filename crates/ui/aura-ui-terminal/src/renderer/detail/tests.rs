@@ -1,4 +1,9 @@
+use super::highlight::mark;
+use super::source::{fit, Highlighted};
+use super::wrap::{hard_wrap, sanitize};
 use super::*;
+use crate::app::vim::{Align, Vim};
+use ratatui::style::Modifier;
 
 fn text(line: &Line<'_>) -> String {
     line.spans.iter().map(|s| s.content.as_ref()).collect()

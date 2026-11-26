@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::DetailView;
 use crate::events::{AgentSummary, ProcessKind, ProcessStatus, ProcessSummary, UiCommand};
 use crossterm::event::KeyModifiers;
 

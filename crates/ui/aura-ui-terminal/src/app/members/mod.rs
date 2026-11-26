@@ -13,8 +13,6 @@
 //!
 //! [`UiCommand::SetProcesses`]: crate::events::UiCommand::SetProcesses
 
-use std::collections::{HashMap, HashSet};
-
 use super::{
     contains, follow_selection, processes::SIDE_PAGE, tab_at, tab_bar::TabLayout, App, DetailView,
     NotificationType, PanelFocus,
@@ -23,9 +21,7 @@ use crate::events::{ProcessKind, ProcessStatus, ProcessSummary};
 use aura_core_types::time::now_ms;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
-
-/// Members kept, across every agent's runs; the oldest go first.
-const MAX_SEEN: usize = 1000;
+pub(crate) use run::Members;
 
 /// Views of the Kernel panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -114,174 +110,6 @@ pub struct MemberRow {
     pub ended_ms: Option<u64>,
     /// Its row in the process table as last seen, which Enter opens
     pub process: Option<ProcessSummary>,
-}
-
-/// State of the MEMBERS tab.
-#[derive(Debug, Default)]
-pub(crate) struct Members {
-    /// The latest row of every `task` spawn and background agent seen,
-    /// oldest first
-    seen: Vec<ProcessSummary>,
-    /// When each agent's run began, in Unix milliseconds, for agents
-    /// that started another with `/new`
-    since: HashMap<String, u64>,
-    /// Rows listed for the agent on screen
-    rows: Vec<MemberRow>,
-    /// Highlighted row
-    selected: usize,
-    /// First row on screen
-    scroll: usize,
-}
-
-/// Hex id of the agent a process row of a `task` spawn or a background
-/// agent stands for: what follows `task:` or `agent:` in its id.
-fn member_id(process: &ProcessSummary) -> Option<&str> {
-    if !matches!(process.kind, ProcessKind::Task | ProcessKind::Agent) {
-        return None;
-    }
-    process
-        .id
-        .split_once(':')
-        .map(|(_, id)| id)
-        .filter(|id| !id.is_empty())
-}
-
-impl Members {
-    /// Keep the latest row of every member in `processes`.
-    fn absorb(&mut self, processes: &[ProcessSummary]) {
-        for process in processes {
-            let Some(id) = member_id(process) else {
-                continue;
-            };
-            match self
-                .seen
-                .iter_mut()
-                .find(|seen| member_id(seen) == Some(id))
-            {
-                Some(seen) => *seen = process.clone(),
-                None => self.seen.push(process.clone()),
-            }
-        }
-        let over = self.seen.len().saturating_sub(MAX_SEEN);
-        self.seen.drain(..over);
-    }
-
-    /// List `lead` and the members of its run, keeping the highlight on
-    /// the same agent when it is still listed.
-    fn rebuild(&mut self, lead: Option<MemberRow>) {
-        let kept = self.rows.get(self.selected).map(|row| row.agent_id.clone());
-        self.rows = lead.map_or_else(Vec::new, |lead| self.run_of(lead));
-        self.selected = kept
-            .and_then(|id| self.rows.iter().position(|row| row.agent_id == id))
-            .unwrap_or(self.selected)
-            .min(self.rows.len().saturating_sub(1));
-    }
-
-    /// `lead`, then every agent its run brought in: the ones it started
-    /// since its run began, and the ones they started, each under the
-    /// member that started it, oldest first.
-    fn run_of(&self, lead: MemberRow) -> Vec<MemberRow> {
-        let lead_id = lead.agent_id.clone();
-        let since = self.since.get(&lead_id).copied().unwrap_or(0);
-        let candidates: Vec<(&str, &ProcessSummary)> = self
-            .seen
-            .iter()
-            .filter(|process| process.started_ms >= since)
-            .filter_map(|process| Some((member_id(process)?, process)))
-            .filter(|(id, _)| *id != lead_id)
-            .collect();
-
-        // An agent joins when the one that started it, or one above
-        // that, is in the run. Agents a member started can come before
-        // it in the table, so look again until no one else joins.
-        let mut joined: HashSet<&str> = HashSet::from([lead_id.as_str()]);
-        let mut members: Vec<usize> = Vec::new();
-        loop {
-            let before = members.len();
-            for (i, &(id, process)) in candidates.iter().enumerate() {
-                if joined.contains(id) {
-                    continue;
-                }
-                let mut starters =
-                    std::iter::once(&process.owner_agent_id).chain(&process.parent_chain);
-                if starters.any(|id| joined.contains(id.as_str())) {
-                    joined.insert(id);
-                    members.push(i);
-                }
-            }
-            if members.len() == before {
-                break;
-            }
-        }
-
-        // Each member goes under the nearest agent above it in the run.
-        let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
-        for &i in &members {
-            let process = candidates[i].1;
-            let parent = std::iter::once(&process.owner_agent_id)
-                .chain(&process.parent_chain)
-                .map(String::as_str)
-                .find(|id| joined.contains(id) && *id != candidates[i].0)
-                .unwrap_or(lead_id.as_str());
-            children.entry(parent).or_default().push(i);
-        }
-        for list in children.values_mut() {
-            list.sort_by_key(|&i| (candidates[i].1.started_ms, i));
-        }
-
-        let mut rows = Vec::with_capacity(members.len() + 1);
-        rows.push(lead);
-        let mut placed: HashSet<usize> = HashSet::new();
-        let mut stack: Vec<(usize, usize)> = children
-            .get(lead_id.as_str())
-            .map(|list| list.iter().rev().map(|&i| (i, 1)).collect())
-            .unwrap_or_default();
-        loop {
-            while let Some((i, depth)) = stack.pop() {
-                if !placed.insert(i) {
-                    continue;
-                }
-                let (id, process) = candidates[i];
-                rows.push(member_row(id, process, depth));
-                if let Some(list) = children.get(id) {
-                    stack.extend(list.iter().rev().map(|&child| (child, depth + 1)));
-                }
-            }
-            // Members whose starters only start each other hang under the
-            // lead.
-            match members.iter().find(|&&i| !placed.contains(&i)) {
-                Some(&i) => stack.push((i, 1)),
-                None => break,
-            }
-        }
-        rows
-    }
-
-    /// Rows listed for the agent on screen.
-    pub(super) fn rows(&self) -> &[MemberRow] {
-        &self.rows
-    }
-
-    fn select(&mut self, index: usize) {
-        self.selected = index.min(self.rows.len().saturating_sub(1));
-    }
-
-    fn move_by(&mut self, delta: isize) {
-        self.select(self.selected.saturating_add_signed(delta));
-    }
-}
-
-fn member_row(id: &str, process: &ProcessSummary, depth: usize) -> MemberRow {
-    MemberRow {
-        agent_id: id.to_string(),
-        label: process.label.clone(),
-        depth,
-        status: process.status,
-        kind: Some(process.kind),
-        started_ms: process.started_ms,
-        ended_ms: process.ended_ms,
-        process: Some(process.clone()),
-    }
 }
 
 impl App {
@@ -556,5 +384,6 @@ impl App {
     }
 }
 
+mod run;
 #[cfg(test)]
 mod tests;

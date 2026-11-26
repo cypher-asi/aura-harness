@@ -1,5 +1,9 @@
+use super::actions::{meta, with_time};
 use super::*;
+use crate::app::{App, DetailView};
 use crate::events::UiCommand;
+use crate::events::UiEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 
 fn node(id: &str, parent: Option<&str>, status: TraceNodeStatus) -> TraceNode {
     TraceNode {

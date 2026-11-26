@@ -10,6 +10,7 @@ use super::{App, AppState};
 use crate::events::AgentSummary;
 use crate::terminal::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use gitignore::GitIgnore;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -247,56 +248,6 @@ fn subsequence_span(text: &str, query: &str) -> Option<usize> {
     best
 }
 
-/// The plain names and `*.ext` patterns of a root `.gitignore`. Anything
-/// more elaborate (negation, nested paths, character classes) is ignored:
-/// the skip list is a convenience, not a security boundary.
-#[derive(Debug, Default)]
-struct GitIgnore {
-    names: Vec<String>,
-    dir_names: Vec<String>,
-    suffixes: Vec<String>,
-}
-
-impl GitIgnore {
-    fn read(root: &Path) -> Self {
-        let Ok(text) = std::fs::read_to_string(root.join(".gitignore")) else {
-            return Self::default();
-        };
-        let mut ignore = Self::default();
-        for line in text.lines().map(str::trim) {
-            if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
-                continue;
-            }
-            let line = line.trim_start_matches('/');
-            let (pattern, dir_only) = match line.strip_suffix('/') {
-                Some(dir) => (dir, true),
-                None => (line, false),
-            };
-            if pattern.contains('/') {
-                continue;
-            }
-            if let Some(suffix) = pattern.strip_prefix('*') {
-                if !suffix.is_empty() && !suffix.contains(['*', '?', '[']) {
-                    ignore.suffixes.push(suffix.to_string());
-                }
-            } else if !pattern.contains(['*', '?', '[']) {
-                if dir_only {
-                    ignore.dir_names.push(pattern.to_string());
-                } else {
-                    ignore.names.push(pattern.to_string());
-                }
-            }
-        }
-        ignore
-    }
-
-    fn matches(&self, name: &str, is_dir: bool) -> bool {
-        self.names.iter().any(|n| n == name)
-            || (is_dir && self.dir_names.iter().any(|n| n == name))
-            || self.suffixes.iter().any(|s| name.ends_with(s.as_str()))
-    }
-}
-
 /// The `@word` around `cursor`: where its `@` is, where it ends, and the
 /// text typed between the `@` and the cursor. Only a word that starts at
 /// the beginning of the input or after a blank counts, so an email
@@ -329,6 +280,33 @@ pub(crate) struct MentionMenu {
     cursor: usize,
     /// `@` offset of the word whose picker Esc closed
     dismissed: Option<usize>,
+}
+
+impl MentionMenu {
+    /// Whether the matches are already ranked for `query` at `start`.
+    fn is_ranked(&self, start: usize, query: &str) -> bool {
+        self.query
+            .as_ref()
+            .is_some_and(|(s, q)| *s == start && q == query)
+    }
+
+    /// Files and folders under `root` matching `query`, best first.
+    fn file_matches(&mut self, root: &Path, query: &str) -> Vec<MentionCandidate> {
+        // A new `@` word walks the tree again so files created since
+        // show up; typing within one word reuses the walk.
+        let opening = self.query.is_none();
+        let stale = self
+            .index
+            .as_ref()
+            .is_none_or(|index| opening || !index.is_fresh_for(root));
+        if stale {
+            self.index = Some(MentionIndex::build(root));
+        }
+        self.index
+            .as_ref()
+            .map(|index| index.rank(query))
+            .unwrap_or_default()
+    }
 }
 
 impl App {
@@ -376,52 +354,28 @@ impl App {
         if word.map(|(start, _, _)| start) != self.input.mentions.dismissed {
             self.input.mentions.dismissed = None;
         }
-        let word = word.filter(|(start, _, _)| self.input.mentions.dismissed != Some(*start));
+        let menu = &mut self.input.mentions;
+        let word = word.filter(|(start, _, _)| menu.dismissed != Some(*start));
         let members = self
             .channels
             .coordinated_by(&self.active_agent_id)
             .map_or(&[][..], |channel| channel.members.as_slice());
         let root = self.sandbox.root();
         let Some((start, _, query)) = word.filter(|_| root.is_some() || !members.is_empty()) else {
-            self.input.mentions.query = None;
-            self.input.mentions.matches.clear();
+            menu.query = None;
+            menu.matches.clear();
             return;
         };
-        if self
-            .input
-            .mentions
-            .query
-            .as_ref()
-            .is_some_and(|(s, q)| *s == start && q == query)
-        {
+        if menu.is_ranked(start, query) {
             return;
         }
         let mut matches = member_matches(members, query);
         if let Some(root) = root {
-            // A new `@` word walks the tree again so files created since
-            // show up; typing within one word reuses the walk.
-            let opening = self.input.mentions.query.is_none();
-            let stale = self
-                .input
-                .mentions
-                .index
-                .as_ref()
-                .is_none_or(|index| opening || !index.is_fresh_for(root));
-            if stale {
-                self.input.mentions.index = Some(MentionIndex::build(root));
-            }
-            matches.extend(
-                self.input
-                    .mentions
-                    .index
-                    .as_ref()
-                    .map(|index| index.rank(query))
-                    .unwrap_or_default(),
-            );
+            matches.extend(menu.file_matches(root, query));
         }
-        self.input.mentions.matches = matches;
-        self.input.mentions.query = Some((start, query.to_string()));
-        self.input.mentions.cursor = 0;
+        menu.matches = matches;
+        menu.query = Some((start, query.to_string()));
+        menu.cursor = 0;
     }
 
     /// Handle a key while the `@` picker is open. `None` when it is closed
@@ -478,5 +432,6 @@ impl App {
     }
 }
 
+mod gitignore;
 #[cfg(test)]
 mod tests;
