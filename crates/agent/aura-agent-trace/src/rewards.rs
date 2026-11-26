@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 
 use aura_core_types::trace::{
-    Actor, DecisionSource, HarnessAction, Reward, RewardKind, RewardTarget, Step, StepAction,
-    ToolIntent,
+    Actor, DecisionSource, FileTouch, HarnessAction, Reward, RewardKind, RewardTarget, Step,
+    StepAction, ToolIntent,
 };
 use serde_json::json;
 
@@ -79,12 +79,10 @@ pub fn derive(steps: &[Step]) -> Vec<Reward> {
 /// Per-step progress signals from tool results and build checks.
 #[must_use]
 pub fn process_rewards(steps: &[Step]) -> Vec<Reward> {
-    let intents = intents_by_tool_use(steps);
-    let mut out = Vec::new();
-    // path → whether it has been read since its last write
-    let mut fresh_reads: HashMap<String, bool> = HashMap::new();
-    let mut last_verify_ok: Option<bool> = None;
-    let mut last_build_ok: Option<bool> = None;
+    let mut labeler = ProcessLabeler {
+        intents: intents_by_tool_use(steps),
+        ..ProcessLabeler::default()
+    };
     for step in steps {
         match &step.action {
             StepAction::ToolResult {
@@ -94,121 +92,123 @@ pub fn process_rewards(steps: &[Step]) -> Vec<Reward> {
                 source,
                 files,
                 ..
-            } => {
-                let target = step_target(step);
-                let at = step.at_ms;
-                if source == "blocked" {
-                    out.push(reward(
-                        target,
-                        RewardKind::Process,
-                        "blocked_call",
-                        -0.2,
-                        PROCESS_SOURCE,
-                        at,
-                    ));
-                    continue;
-                }
-                let intent = intents.get(tool_use_id).map_or_else(
-                    || ToolIntent::classify(tool, &serde_json::Value::Null),
-                    |(i, _)| *i,
-                );
-                match intent {
-                    ToolIntent::Edit => {
-                        if *is_error {
-                            out.push(reward(
-                                target,
-                                RewardKind::Process,
-                                "edit_failed",
-                                -0.2,
-                                PROCESS_SOURCE,
-                                at,
-                            ));
-                        } else {
-                            out.push(reward(
-                                target,
-                                RewardKind::Process,
-                                "edit_applied",
-                                0.2,
-                                PROCESS_SOURCE,
-                                at,
-                            ));
-                            for f in files {
-                                fresh_reads.insert(f.path.clone(), false);
-                            }
-                        }
-                    }
-                    ToolIntent::Verify => {
-                        let ok = !*is_error;
-                        let (name, value) = match (last_verify_ok, ok) {
-                            (Some(false), true) => ("verify_fixed", 0.5),
-                            (_, true) => ("verify_passed", 0.3),
-                            (Some(true), false) => ("verify_broke", -0.3),
-                            (_, false) => ("verify_failed", -0.1),
-                        };
-                        out.push(reward(
-                            target,
-                            RewardKind::Process,
-                            name,
-                            value,
-                            PROCESS_SOURCE,
-                            at,
-                        ));
-                        last_verify_ok = Some(ok);
-                    }
-                    ToolIntent::Explore if tool == "read_file" && !*is_error => {
-                        for f in files {
-                            let seen = fresh_reads.insert(f.path.clone(), true);
-                            if seen == Some(true) && source != "cache" {
-                                out.push(reward(
-                                    target,
-                                    RewardKind::Process,
-                                    "redundant_read",
-                                    -0.1,
-                                    PROCESS_SOURCE,
-                                    at,
-                                ));
-                            }
-                        }
-                    }
-                    _ if *is_error => {
-                        out.push(reward(
-                            target,
-                            RewardKind::Process,
-                            "tool_error",
-                            -0.05,
-                            PROCESS_SOURCE,
-                            at,
-                        ));
-                    }
-                    _ => {}
-                }
-            }
+            } => labeler.tool_result(
+                step,
+                &ToolResultView {
+                    tool_use_id,
+                    tool,
+                    is_error: *is_error,
+                    source,
+                    files,
+                },
+            ),
             StepAction::Harness {
                 action: HarnessAction::Build { success, .. },
                 name,
                 ..
-            } if name == "auto_build" => {
-                let (label, value) = match (last_build_ok, *success) {
-                    (Some(false), true) => ("build_fixed", 0.5),
-                    (Some(true), false) => ("build_broke", -0.5),
-                    _ => ("", 0.0),
-                };
-                if !label.is_empty() {
-                    out.push(reward(
-                        step_target(step),
-                        RewardKind::Process,
-                        label,
-                        value,
-                        PROCESS_SOURCE,
-                        step.at_ms,
-                    ));
-                }
-                last_build_ok = Some(*success);
-            }
+            } if name == "auto_build" => labeler.auto_build(step, *success),
             _ => {}
         }
     }
-    out
+    labeler.out
+}
+
+/// The fields of a `StepAction::ToolResult` that process rewards read.
+struct ToolResultView<'a> {
+    tool_use_id: &'a str,
+    tool: &'a str,
+    is_error: bool,
+    source: &'a str,
+    files: &'a [FileTouch],
+}
+
+/// Running state of [`process_rewards`] across the step log.
+#[derive(Default)]
+struct ProcessLabeler {
+    intents: HashMap<String, (ToolIntent, serde_json::Value)>,
+    out: Vec<Reward>,
+    /// path → whether it has been read since its last write
+    fresh_reads: HashMap<String, bool>,
+    last_verify_ok: Option<bool>,
+    last_build_ok: Option<bool>,
+}
+
+impl ProcessLabeler {
+    fn push(&mut self, target: RewardTarget, name: &str, value: f64, at: u64) {
+        self.out.push(reward(
+            target,
+            RewardKind::Process,
+            name,
+            value,
+            PROCESS_SOURCE,
+            at,
+        ));
+    }
+
+    fn tool_result(&mut self, step: &Step, result: &ToolResultView<'_>) {
+        let target = step_target(step);
+        let at = step.at_ms;
+        if result.source == "blocked" {
+            self.push(target, "blocked_call", -0.2, at);
+            return;
+        }
+        let intent = self.intents.get(result.tool_use_id).map_or_else(
+            || ToolIntent::classify(result.tool, &serde_json::Value::Null),
+            |(i, _)| *i,
+        );
+        match intent {
+            ToolIntent::Edit => self.edit(target, at, result),
+            ToolIntent::Verify => self.verify(target, at, !result.is_error),
+            ToolIntent::Explore if result.tool == "read_file" && !result.is_error => {
+                self.read(target, at, result);
+            }
+            _ if result.is_error => self.push(target, "tool_error", -0.05, at),
+            _ => {}
+        }
+    }
+
+    fn edit(&mut self, target: RewardTarget, at: u64, result: &ToolResultView<'_>) {
+        if result.is_error {
+            self.push(target, "edit_failed", -0.2, at);
+        } else {
+            self.push(target, "edit_applied", 0.2, at);
+            for f in result.files {
+                self.fresh_reads.insert(f.path.clone(), false);
+            }
+        }
+    }
+
+    fn verify(&mut self, target: RewardTarget, at: u64, ok: bool) {
+        let (name, value) = match (self.last_verify_ok, ok) {
+            (Some(false), true) => ("verify_fixed", 0.5),
+            (_, true) => ("verify_passed", 0.3),
+            (Some(true), false) => ("verify_broke", -0.3),
+            (_, false) => ("verify_failed", -0.1),
+        };
+        self.push(target, name, value, at);
+        self.last_verify_ok = Some(ok);
+    }
+
+    fn read(&mut self, target: RewardTarget, at: u64, result: &ToolResultView<'_>) {
+        for f in result.files {
+            let seen = self.fresh_reads.insert(f.path.clone(), true);
+            if seen == Some(true) && result.source != "cache" {
+                self.push(target, "redundant_read", -0.1, at);
+            }
+        }
+    }
+
+    fn auto_build(&mut self, step: &Step, success: bool) {
+        let (label, value) = match (self.last_build_ok, success) {
+            (Some(false), true) => ("build_fixed", 0.5),
+            (Some(true), false) => ("build_broke", -0.5),
+            _ => ("", 0.0),
+        };
+        if !label.is_empty() {
+            self.push(step_target(step), label, value, step.at_ms);
+        }
+        self.last_build_ok = Some(success);
+    }
 }
 
 /// Tokens and list price of each model call, and wall time for the
@@ -267,42 +267,8 @@ pub fn decision_effects(steps: &[Step]) -> Vec<Reward> {
         let StepAction::Harness { name, action, .. } = &step.action else {
             continue;
         };
-        let window: Vec<&Step> = steps[i + 1..]
-            .iter()
-            .filter(|s| {
-                matches!(s.action, StepAction::Model(_))
-                    && s.actor == Actor::Model
-                    && s.turn == step.turn
-            })
-            .take(EFFECT_WINDOW)
-            .collect();
-        let effective = match (source, name.as_str(), action) {
-            (_, "implement_now" | "implement_now_block", _) => {
-                Some(window.iter().any(|s| has_intent(s, ToolIntent::Edit)))
-            }
-            (_, "repeated_read", _) => window.first().map(|s| {
-                !model_calls(s).all(|i| i == ToolIntent::Explore) || model_calls(s).next().is_none()
-            }),
-            (_, "failed_edit_guard", HarnessAction::Warn { .. }) => Some(edit_succeeded_after(
-                steps,
-                i,
-                step.links.files.first().map(String::as_str),
-            )),
-            (_, "no_op_turn" | "unfinished_action" | "leaked_tool_markup", _) => {
-                window.first().map(|s| {
-                    let StepAction::Model(a) = &s.action else {
-                        return false;
-                    };
-                    !a.tool_calls.is_empty() || !a.text.trim().is_empty()
-                })
-            }
-            (DecisionSource::Budget, "iteration_budget_warning", _) => {
-                Some(window.iter().any(|s| {
-                    has_intent(s, ToolIntent::Edit) || has_intent(s, ToolIntent::Complete)
-                }))
-            }
-            _ => None,
-        };
+        let window = effect_window(&steps[i + 1..], step);
+        let effective = decision_effective(steps, i, (source, name.as_str(), action), &window);
         if let Some(effective) = effective {
             let mut r = reward(
                 step_target(step),
@@ -317,6 +283,56 @@ pub fn decision_effects(steps: &[Step]) -> Vec<Reward> {
         }
     }
     out
+}
+
+/// The first [`EFFECT_WINDOW`] model calls in `decision`'s turn among `later`.
+fn effect_window<'a>(later: &'a [Step], decision: &Step) -> Vec<&'a Step> {
+    later
+        .iter()
+        .filter(|s| {
+            matches!(s.action, StepAction::Model(_))
+                && s.actor == Actor::Model
+                && s.turn == decision.turn
+        })
+        .take(EFFECT_WINDOW)
+        .collect()
+}
+
+/// Whether the decision at `steps[i]` had its intended effect, or `None`
+/// when the decision has no effect check.
+fn decision_effective(
+    steps: &[Step],
+    i: usize,
+    decision: (DecisionSource, &str, &HarnessAction),
+    window: &[&Step],
+) -> Option<bool> {
+    match decision {
+        (_, "implement_now" | "implement_now_block", _) => {
+            Some(window.iter().any(|s| has_intent(s, ToolIntent::Edit)))
+        }
+        (_, "repeated_read", _) => window.first().map(|s| {
+            !model_calls(s).all(|i| i == ToolIntent::Explore) || model_calls(s).next().is_none()
+        }),
+        (_, "failed_edit_guard", HarnessAction::Warn { .. }) => Some(edit_succeeded_after(
+            steps,
+            i,
+            steps[i].links.files.first().map(String::as_str),
+        )),
+        (_, "no_op_turn" | "unfinished_action" | "leaked_tool_markup", _) => {
+            window.first().map(|s| {
+                let StepAction::Model(a) = &s.action else {
+                    return false;
+                };
+                !a.tool_calls.is_empty() || !a.text.trim().is_empty()
+            })
+        }
+        (DecisionSource::Budget, "iteration_budget_warning", _) => Some(
+            window
+                .iter()
+                .any(|s| has_intent(s, ToolIntent::Edit) || has_intent(s, ToolIntent::Complete)),
+        ),
+        _ => None,
+    }
 }
 
 fn model_calls(step: &Step) -> impl Iterator<Item = ToolIntent> + '_ {
@@ -428,199 +444,4 @@ pub fn returns(steps: &[Step], rewards: &[Reward], gamma: f64) -> Vec<(u64, f64,
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-    use aura_core_types::trace::{
-        FileTouch, HarnessAction, ModelAction, Observation, PolicyRef, StepLinks, TokenUsage,
-        ToolCallAction,
-    };
-    use serde_json::json;
-
-    pub(crate) fn base(seq: u64, actor: Actor, action: StepAction) -> Step {
-        Step {
-            run_id: "r".into(),
-            seq,
-            parent: None,
-            turn: 1,
-            iteration: None,
-            at_ms: seq * 1000,
-            actor,
-            observation: Observation::None,
-            action,
-            policy: PolicyRef::default(),
-            links: StepLinks::default(),
-            usage: None,
-            duration_ms: None,
-        }
-    }
-
-    pub(crate) fn model(seq: u64, calls: &[(&str, &str, serde_json::Value)]) -> Step {
-        let mut s = base(
-            seq,
-            Actor::Model,
-            StepAction::Model(ModelAction {
-                tool_calls: calls
-                    .iter()
-                    .map(|(id, n, i)| ToolCallAction {
-                        tool_use_id: (*id).into(),
-                        name: (*n).into(),
-                        input: i.clone(),
-                        intent: ToolIntent::classify(n, i),
-                    })
-                    .collect(),
-                ..ModelAction::default()
-            }),
-        );
-        s.usage = Some(TokenUsage {
-            input: 1000,
-            output: 100,
-            cache_write: 0,
-            cache_read: 0,
-        });
-        s
-    }
-
-    pub(crate) fn result(
-        seq: u64,
-        parent: u64,
-        id: &str,
-        tool: &str,
-        path: &str,
-        kind: &str,
-        err: bool,
-    ) -> Step {
-        let mut s = base(
-            seq,
-            Actor::Environment,
-            StepAction::ToolResult {
-                tool_use_id: id.into(),
-                tool: tool.into(),
-                is_error: err,
-                source: "executor".into(),
-                content_chars: 1,
-                excerpt: String::new(),
-                content: None,
-                files: vec![FileTouch {
-                    path: path.into(),
-                    kind: kind.into(),
-                    added: 1,
-                    removed: 0,
-                }],
-            },
-        );
-        s.parent = Some(parent);
-        s
-    }
-
-    pub(crate) fn nudge(seq: u64, name: &str) -> Step {
-        base(
-            seq,
-            Actor::Harness {
-                source: DecisionSource::Steering,
-            },
-            StepAction::Harness {
-                name: name.into(),
-                action: HarnessAction::Nudge { kind: name.into() },
-                alternatives: vec![],
-            },
-        )
-    }
-
-    #[test]
-    fn redundant_read_and_edit_rewards() {
-        let steps = vec![
-            model(1, &[("a", "read_file", json!({"path": "x"}))]),
-            result(2, 1, "a", "read_file", "x", "read", false),
-            model(3, &[("b", "read_file", json!({"path": "x"}))]),
-            result(4, 3, "b", "read_file", "x", "read", false),
-            model(5, &[("c", "edit_file", json!({"path": "x"}))]),
-            result(6, 5, "c", "edit_file", "x", "modify", false),
-            model(7, &[("d", "read_file", json!({"path": "x"}))]),
-            result(8, 7, "d", "read_file", "x", "read", false),
-        ];
-        let names: Vec<String> = process_rewards(&steps)
-            .into_iter()
-            .map(|r| r.name)
-            .collect();
-        assert_eq!(names, vec!["redundant_read", "edit_applied"]);
-    }
-
-    #[test]
-    fn implement_now_effect_is_positive_when_an_edit_follows() {
-        let steps = vec![
-            nudge(1, "implement_now"),
-            model(2, &[("a", "read_file", json!({"path": "x"}))]),
-            model(3, &[("b", "edit_file", json!({"path": "x"}))]),
-        ];
-        let effects = decision_effects(&steps);
-        assert_eq!(effects.len(), 1);
-        assert!((effects[0].value - 1.0).abs() < f64::EPSILON);
-        let ignored = decision_effects(&[nudge(1, "implement_now"), model(2, &[])]);
-        assert!((ignored[0].value + 1.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn cost_is_priced_per_call_and_tokens_counted_apart() {
-        let mut opus = model(1, &[]);
-        opus.policy.id = "claude-opus-5-5".into();
-        let mut local = model(2, &[]);
-        local.policy.id = "local/qwen3:4b".into();
-        let usd = step_cost_usd("claude-opus-5-5", opus.usage.unwrap()).unwrap();
-        let rewards = cost_rewards(&[opus, local]);
-        let values = |kind: RewardKind, name: &str| -> Vec<f64> {
-            rewards
-                .iter()
-                .filter(|r| r.kind == kind && r.name == name)
-                .map(|r| r.value)
-                .collect()
-        };
-        assert_eq!(values(RewardKind::Tokens, "tokens"), vec![-0.011, -0.011]);
-        assert_eq!(
-            values(RewardKind::Cost, "usd"),
-            vec![-usd],
-            "a model with no known price has no usd reward"
-        );
-        assert_eq!(values(RewardKind::Cost, "wall_minutes").len(), 1);
-    }
-
-    #[test]
-    fn returns_discount_backwards() {
-        let steps = vec![model(1, &[]), model(2, &[])];
-        let rewards = vec![reward(
-            RewardTarget::Run,
-            RewardKind::Outcome,
-            "pass",
-            1.0,
-            "t",
-            0,
-        )];
-        let r = returns(&steps, &rewards, 0.5);
-        assert!((r[1].2 - 1.0).abs() < 1e-9);
-        assert!((r[0].2 - 0.5).abs() < 1e-9);
-    }
-
-    #[test]
-    fn outcome_credit_goes_to_editing_model_steps() {
-        let mut end = base(
-            9,
-            Actor::Environment,
-            StepAction::TurnEnd {
-                stop_reason: "end_turn".into(),
-                iterations: 1,
-                input_tokens: 0,
-                output_tokens: 0,
-                files_changed: 1,
-                error: None,
-            },
-        );
-        end.links.files = vec!["x".into()];
-        let steps = vec![
-            model(1, &[("c", "edit_file", json!({"path": "x"}))]),
-            result(2, 1, "c", "edit_file", "x", "modify", false),
-            end,
-        ];
-        let credit = attribute_outcome(&steps, 1.0, 0);
-        assert_eq!(credit.len(), 1);
-        assert_eq!(credit[0].target, RewardTarget::Step { seq: 1 });
-    }
-}
+pub(crate) mod tests;

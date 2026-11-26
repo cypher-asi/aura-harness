@@ -16,21 +16,25 @@
 //! appears on both sides, deduplicates identical records, and writes a
 //! `dataset_card.json` describing what went in.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use aura_core_types::trace::{Actor, RewardKind, RewardTarget, StepAction, TRACE_SCHEMA_VERSION};
-use aura_store_snapshot::{FsSnapshotStore, SnapshotStore};
+use aura_core_types::trace::TRACE_SCHEMA_VERSION;
+use aura_store_snapshot::FsSnapshotStore;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::bundle::{blobs_dir, list_run_dirs, RunBundle, RunSource};
-use crate::normalize::{RunTrace, DEFAULT_GAMMA};
+use crate::normalize::RunTrace;
 use crate::TraceError;
+
+mod records;
+
+use records::{preference_pairs, records_for, task_key};
 
 /// Export format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,205 +241,6 @@ pub fn split_for(task_key: &str, eval_fraction: f64) -> &'static str {
     }
 }
 
-fn task_key(trace: &RunTrace) -> String {
-    trace
-        .meta
-        .task_id
-        .clone()
-        .or_else(|| trace.meta.parent_run.clone())
-        .unwrap_or_else(|| {
-            if trace.meta.title.is_empty() {
-                trace.meta.run_id.clone()
-            } else {
-                trace.meta.title.to_lowercase()
-            }
-        })
-}
-
-/// Chat transcript of a run. Tool outputs come from blobs when the run
-/// was recorded at `full`, otherwise from the stored excerpt.
-fn chat(trace: &RunTrace, blobs: Option<&FsSnapshotStore>) -> Vec<Value> {
-    let mut messages = Vec::new();
-    for step in &trace.steps {
-        match &step.action {
-            StepAction::UserPrompt { text } => {
-                messages.push(json!({"role": "user", "content": text}));
-            }
-            StepAction::Model(action) if step.actor == Actor::Model => {
-                let tool_calls: Vec<Value> = action
-                    .tool_calls
-                    .iter()
-                    .map(|c| json!({"id": c.tool_use_id, "name": c.name, "arguments": c.input}))
-                    .collect();
-                let mut msg = json!({"role": "assistant", "content": action.text});
-                if !tool_calls.is_empty() {
-                    msg["tool_calls"] = Value::Array(tool_calls);
-                }
-                messages.push(msg);
-            }
-            StepAction::ToolResult {
-                tool_use_id,
-                excerpt,
-                content,
-                is_error,
-                ..
-            } => {
-                let full = content
-                    .as_ref()
-                    .zip(blobs)
-                    .and_then(|(id, store)| store.get(id).ok().flatten())
-                    .and_then(|b| String::from_utf8(b.to_vec()).ok());
-                messages.push(json!({
-                    "role": "tool",
-                    "tool_call_id": tool_use_id,
-                    "content": full.unwrap_or_else(|| excerpt.clone()),
-                    "is_error": is_error,
-                }));
-            }
-            StepAction::Model(_) | StepAction::Harness { .. } | StepAction::TurnEnd { .. } => {}
-        }
-    }
-    messages
-}
-
-fn records_for(
-    format: ExportFormat,
-    trace: &RunTrace,
-    blobs: Option<&FsSnapshotStore>,
-) -> Vec<Value> {
-    let run_id = &trace.meta.run_id;
-    match format {
-        ExportFormat::Sft => vec![json!({
-            "run_id": run_id,
-            "model": trace.meta.model,
-            "outcome": trace.outcome(),
-            "messages": chat(trace, blobs),
-        })],
-        ExportFormat::Rl => {
-            let returns: HashMap<u64, (f64, f64)> = trace
-                .returns(DEFAULT_GAMMA)
-                .into_iter()
-                .map(|(seq, r, g)| (seq, (r, g)))
-                .collect();
-            let last = trace.steps.last().map(|s| s.seq);
-            trace
-                .steps
-                .iter()
-                .map(|s| {
-                    let (reward, ret) = returns.get(&s.seq).copied().unwrap_or_default();
-                    json!({
-                        "run_id": run_id,
-                        "seq": s.seq,
-                        "turn": s.turn,
-                        "actor": s.actor,
-                        "observation": s.observation,
-                        "action": s.action,
-                        "reward": reward,
-                        "return": ret,
-                        "done": Some(s.seq) == last,
-                        "policy": s.policy,
-                        "propensity": s.policy.propensity,
-                    })
-                })
-                .collect()
-        }
-        ExportFormat::HarnessBandit => {
-            let effects: HashMap<u64, f64> = trace
-                .derived_rewards
-                .iter()
-                .filter(|r| r.kind == RewardKind::DecisionEffect)
-                .filter_map(|r| match r.target {
-                    RewardTarget::Step { seq } => Some((seq, r.value)),
-                    RewardTarget::Run => None,
-                })
-                .collect();
-            trace
-                .steps
-                .iter()
-                .filter_map(|s| {
-                    let Actor::Harness { source } = s.actor else {
-                        return None;
-                    };
-                    let StepAction::Harness {
-                        name,
-                        action,
-                        alternatives,
-                    } = &s.action
-                    else {
-                        return None;
-                    };
-                    let (features, trigger) = match &s.observation {
-                        aura_core_types::trace::Observation::Harness { features, trigger } => {
-                            (features.clone(), trigger.clone())
-                        }
-                        _ => (Value::Null, Value::Null),
-                    };
-                    Some(json!({
-                        "run_id": run_id,
-                        "seq": s.seq,
-                        "source": source,
-                        "name": name,
-                        "version": s.policy.version,
-                        "features": features,
-                        "trigger": trigger,
-                        "action": action,
-                        "alternatives": alternatives,
-                        "params": s.policy.params,
-                        "propensity": s.policy.propensity,
-                        "effect": effects.get(&s.seq),
-                        "outcome": trace.outcome(),
-                    }))
-                })
-                .collect()
-        }
-        ExportFormat::Preference => Vec::new(),
-    }
-}
-
-fn preference_pairs(traces: &[&RunTrace], blobs: Option<&FsSnapshotStore>) -> Vec<(String, Value)> {
-    let mut by_task: BTreeMap<String, Vec<&RunTrace>> = BTreeMap::new();
-    for t in traces {
-        if t.outcome().is_some() {
-            by_task.entry(task_key(t)).or_default().push(t);
-        }
-    }
-    let mut out = Vec::new();
-    for (task, mut runs) in by_task {
-        runs.sort_by(|a, b| {
-            b.outcome()
-                .partial_cmp(&a.outcome())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let (Some(best), Some(worst)) = (runs.first(), runs.last()) else {
-            continue;
-        };
-        if best.outcome() <= worst.outcome() {
-            continue;
-        }
-        let shared_prefix = match (&worst.meta.parent_run, worst.meta.branch_step) {
-            (Some(p), Some(step)) if *p == best.meta.run_id => Some(step),
-            _ => match (&best.meta.parent_run, best.meta.branch_step) {
-                (Some(p), Some(step)) if *p == worst.meta.run_id => Some(step),
-                _ => None,
-            },
-        };
-        out.push((
-            task.clone(),
-            json!({
-                "task": task,
-                "chosen_run": best.meta.run_id,
-                "rejected_run": worst.meta.run_id,
-                "chosen_outcome": best.outcome(),
-                "rejected_outcome": worst.outcome(),
-                "shared_prefix_steps": shared_prefix,
-                "chosen": chat(best, blobs),
-                "rejected": chat(worst, blobs),
-            }),
-        ));
-    }
-    out
-}
-
 /// Load every run under `home`.
 #[must_use]
 pub fn load_all(home: &Path) -> Vec<RunTrace> {
@@ -464,7 +269,39 @@ pub fn export(
     if format == ExportFormat::Sft && filter.min_outcome.is_none() {
         filter.min_outcome = Some(f64::MIN_POSITIVE);
     }
-    let admitted: Vec<&RunTrace> = traces
+    let admitted = admitted_traces(traces, format, &filter);
+
+    let mut card = DatasetCard {
+        format: format.as_str().to_string(),
+        schema_version: TRACE_SCHEMA_VERSION,
+        exporter: crate::bundle::harness_version(),
+        filter: serde_json::to_value(&filter)?,
+        runs_seen: traces.len(),
+        runs_used: 0,
+        ..DatasetCard::default()
+    };
+    let rows = export_rows(format, &admitted, blobs.as_ref());
+    let used = write_rows(rows, filter.eval_fraction, out_dir, &mut card)?;
+    card.runs = used
+        .into_iter()
+        .map(|(k, v)| {
+            let mut ids: Vec<String> = v.into_iter().collect();
+            ids.sort();
+            (k, ids)
+        })
+        .collect();
+    card.runs_used = card.runs.values().map(Vec::len).sum();
+    crate::bundle::write_json_atomic(&out_dir.join(CARD_FILE), &card)?;
+    Ok(card)
+}
+
+/// The traces `filter` admits; preference pairs ignore `min_outcome`.
+fn admitted_traces<'a>(
+    traces: &'a [RunTrace],
+    format: ExportFormat,
+    filter: &ExportFilter,
+) -> Vec<&'a RunTrace> {
+    traces
         .iter()
         .filter(|t| {
             if format == ExportFormat::Preference {
@@ -477,30 +314,38 @@ pub fn export(
                 filter.admits(t)
             }
         })
-        .collect();
+        .collect()
+}
 
-    let mut card = DatasetCard {
-        format: format.as_str().to_string(),
-        schema_version: TRACE_SCHEMA_VERSION,
-        exporter: crate::bundle::harness_version(),
-        filter: serde_json::to_value(&filter)?,
-        runs_seen: traces.len(),
-        runs_used: 0,
-        ..DatasetCard::default()
-    };
+/// `(task, run, record)` rows to write, before redaction and dedup.
+fn export_rows(
+    format: ExportFormat,
+    admitted: &[&RunTrace],
+    blobs: Option<&FsSnapshotStore>,
+) -> Vec<(String, String, Value)> {
     let mut rows: Vec<(String, String, Value)> = Vec::new();
     if format == ExportFormat::Preference {
-        for (task, record) in preference_pairs(&admitted, blobs.as_ref()) {
+        for (task, record) in preference_pairs(admitted, blobs) {
             rows.push((task.clone(), task, record));
         }
     } else {
-        for trace in &admitted {
-            for record in records_for(format, trace, blobs.as_ref()) {
+        for trace in admitted {
+            for record in records_for(format, trace, blobs) {
                 rows.push((task_key(trace), trace.meta.run_id.clone(), record));
             }
         }
     }
+    rows
+}
 
+/// Redact, dedup and write `rows` to `<split>.jsonl` files, counting into
+/// `card`. Returns the run ids used per split.
+fn write_rows(
+    rows: Vec<(String, String, Value)>,
+    eval_fraction: f64,
+    out_dir: &Path,
+    card: &mut DatasetCard,
+) -> Result<BTreeMap<String, HashSet<String>>, TraceError> {
     let mut seen: HashSet<blake3::Hash> = HashSet::new();
     let mut writers: BTreeMap<&'static str, fs::File> = BTreeMap::new();
     let mut used: BTreeMap<String, HashSet<String>> = BTreeMap::new();
@@ -511,7 +356,7 @@ pub fn export(
             card.duplicates += 1;
             continue;
         }
-        let split = split_for(&task, filter.eval_fraction);
+        let split = split_for(&task, eval_fraction);
         let file = match writers.entry(split) {
             std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::btree_map::Entry::Vacant(e) => {
@@ -523,17 +368,7 @@ pub fn export(
         *card.records.entry(split.to_string()).or_default() += 1;
         used.entry(split.to_string()).or_default().insert(run);
     }
-    card.runs = used
-        .into_iter()
-        .map(|(k, v)| {
-            let mut ids: Vec<String> = v.into_iter().collect();
-            ids.sort();
-            (k, ids)
-        })
-        .collect();
-    card.runs_used = card.runs.values().map(Vec::len).sum();
-    crate::bundle::write_json_atomic(&out_dir.join(CARD_FILE), &card)?;
-    Ok(card)
+    Ok(used)
 }
 
 /// Default output directory for an export.

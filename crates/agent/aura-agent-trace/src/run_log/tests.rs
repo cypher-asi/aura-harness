@@ -1,7 +1,8 @@
 use super::*;
-use crate::bundle::RunSource;
+use crate::bundle::{RunMeta, RunSource, STEPS_FILE};
 use aura_core_types::trace::{
-    DecisionSource, ModelAction, PolicyKind, PolicyRef, StepLinks, ToolCallAction,
+    Actor, DecisionSource, HarnessAction, ModelAction, Observation, PolicyKind, PolicyRef, Step,
+    StepAction, StepLinks, ToolCallAction, ToolIntent,
 };
 use serde_json::json;
 
@@ -88,19 +89,12 @@ fn save(home: &Path, meta: &RunMeta, steps: &[Step]) -> RunBundle {
     bundle
 }
 
-#[test]
-fn groups_steps_by_turn_with_thinking_and_totals() {
-    let home = tempfile::tempdir().unwrap();
-    let meta = RunMeta::new("claude/claude-sonnet-5-5", RunSource::Test);
-    let run = meta.run_id.clone();
-    let mut old = call(&run, 5, 2, "t2", "read_file", json!({"path": "b.rs"}));
-    if let StepAction::Model(action) = &mut old.action {
-        action.thinking_text.clear();
-    }
+/// A nudge from steering, with what fired it.
+fn steering_nudge(run: &str, seq: u64, turn: u32) -> Step {
     let mut nudge = step(
-        &run,
-        6,
-        2,
+        run,
+        seq,
+        turn,
         Actor::Harness {
             source: DecisionSource::Steering,
         },
@@ -116,6 +110,19 @@ fn groups_steps_by_turn_with_thinking_and_totals() {
         features: json!({"reads": 9}),
         trigger: json!({"threshold": 8}),
     };
+    nudge
+}
+
+/// A stored two-turn run: the second turn's call kept no thinking text
+/// and was followed by a steering nudge.
+fn two_turn_run() -> (tempfile::TempDir, RunBundle, RunLog) {
+    let home = tempfile::tempdir().unwrap();
+    let meta = RunMeta::new("claude/claude-sonnet-5-5", RunSource::Test);
+    let run = meta.run_id.clone();
+    let mut old = call(&run, 5, 2, "t2", "read_file", json!({"path": "b.rs"}));
+    if let StepAction::Model(action) = &mut old.action {
+        action.thinking_text.clear();
+    }
     let bundle = save(
         home.path(),
         &meta,
@@ -125,18 +132,29 @@ fn groups_steps_by_turn_with_thinking_and_totals() {
             end(&run, 3, 1),
             prompt(&run, 4, 2, "and the other"),
             old,
-            nudge,
+            steering_nudge(&run, 6, 2),
             end(&run, 7, 2),
         ],
     );
     let log = of_bundle(home.path(), &bundle).unwrap();
+    (home, bundle, log)
+}
+
+#[test]
+fn groups_steps_by_turn() {
+    let (_home, _bundle, log) = two_turn_run();
     assert_eq!(log.schema, LOG_SCHEMA);
     assert_eq!(log.turns.len(), 2);
     let first = &log.turns[0];
     assert_eq!(first.prompt.as_deref(), Some("fix the bug"));
     assert_eq!(first.stop_reason.as_deref(), Some("end_turn"));
     assert_eq!((first.model_calls, first.tool_calls), (1, 1));
-    match &first.steps[1].event {
+}
+
+#[test]
+fn model_calls_carry_thinking_or_say_it_was_omitted() {
+    let (_home, _bundle, log) = two_turn_run();
+    match &log.turns[0].steps[1].event {
         LogEvent::ModelCall {
             thinking,
             thinking_omitted,
@@ -158,6 +176,11 @@ fn groups_steps_by_turn_with_thinking_and_totals() {
         }
         other => panic!("not a model call: {other:?}"),
     }
+}
+
+#[test]
+fn decisions_carry_their_source_and_trigger() {
+    let (_home, _bundle, log) = two_turn_run();
     match &log.turns[1].steps[2].event {
         LogEvent::Decision {
             source, trigger, ..
@@ -168,12 +191,21 @@ fn groups_steps_by_turn_with_thinking_and_totals() {
         other => panic!("not a decision: {other:?}"),
     }
     assert_eq!(log.turns[1].decisions, 1);
+}
+
+#[test]
+fn totals_and_files_cover_the_run() {
+    let (_home, bundle, log) = two_turn_run();
     assert_eq!(log.totals.model_calls, 2);
     assert_eq!(log.totals.usage.input, 200);
     assert!(log.totals.cost_usd.is_some_and(|c| c > 0.0));
     assert_eq!(log.files.bundle, bundle.dir().display().to_string());
     assert!(log.files.log.ends_with(LOG_FILE));
+}
 
+#[test]
+fn written_log_is_pretty_and_reads_back() {
+    let (_home, bundle, log) = two_turn_run();
     let path = write(bundle.dir(), &log).unwrap();
     let written = std::fs::read_to_string(path).unwrap();
     assert!(written.starts_with("{\n  \"schema\""), "pretty-printed");

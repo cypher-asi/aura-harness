@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use aura_core_types::trace::{Actor, HarnessAction, Step, StepAction};
+use aura_core_types::trace::{Actor, HarnessAction, ModelAction, Step, StepAction};
 
 use crate::bundle::RunMeta;
 use crate::health::{duration, RunHealth};
@@ -88,6 +88,20 @@ pub fn runs_table(runs: &[(RunMeta, Option<RunScorecard>)]) -> String {
 #[must_use]
 pub fn scorecard_text(card: &RunScorecard) -> String {
     let mut out = String::new();
+    write_work_section(&mut out, card);
+    write_coding_section(&mut out, card);
+    write_breakdown_section(&mut out, card);
+    let _ = writeln!(
+        out,
+        "outcome   {}",
+        card.outcome
+            .map_or_else(|| "unlabeled".into(), |o| format!("{o:+.2}"))
+    );
+    out
+}
+
+/// Run header, work counts and token usage.
+fn write_work_section(out: &mut String, card: &RunScorecard) {
     let _ = writeln!(out, "run       {}  ({})", card.run_id, card.model);
     let _ = writeln!(
         out,
@@ -108,6 +122,10 @@ pub fn scorecard_text(card: &RunScorecard) -> String {
         pct(card.cache_ratio()),
         tokens(card.cache_write_tokens)
     );
+}
+
+/// Coding, harness and approval lines.
+fn write_coding_section(out: &mut String, card: &RunScorecard) {
     let first_edit = match (card.ms_to_first_edit, card.tokens_to_first_edit) {
         (Some(ms), Some(t)) => format!("{} / {} tokens", secs(ms), tokens(t)),
         _ => "no edit".into(),
@@ -139,6 +157,10 @@ pub fn scorecard_text(card: &RunScorecard) -> String {
             card.open_tool_calls
         );
     }
+}
+
+/// Decisions, compactions, effects, stops and reward totals (each only when present).
+fn write_breakdown_section(out: &mut String, card: &RunScorecard) {
     if !card.decisions.is_empty() {
         let list: Vec<String> = card
             .decisions
@@ -177,13 +199,6 @@ pub fn scorecard_text(card: &RunScorecard) -> String {
             .collect();
         let _ = writeln!(out, "rewards   {}", list.join(", "));
     }
-    let _ = writeln!(
-        out,
-        "outcome   {}",
-        card.outcome
-            .map_or_else(|| "unlabeled".into(), |o| format!("{o:+.2}"))
-    );
-    out
 }
 
 /// `aura runs check` report: run state, then one line per problem.
@@ -214,62 +229,68 @@ pub fn step_line(step: &Step) -> String {
             step.actor.label(),
             text.lines().next().unwrap_or_default()
         ),
-        StepAction::Model(a) => {
-            let calls: Vec<&str> = a.tool_calls.iter().map(|c| c.name.as_str()).collect();
-            let text = a.text.lines().next().unwrap_or_default();
-            if let Some(purpose) = &a.purpose {
-                let failed = a.error.as_deref().map_or_else(String::new, |error| {
-                    format!(" failed: {}", error.chars().take(60).collect::<String>())
-                });
-                format!(
-                    "{} {purpose} ({}){failed}",
-                    step.actor.label(),
-                    step.policy.id
-                )
-            } else if calls.is_empty() {
-                format!("model: {}", text.chars().take(80).collect::<String>())
-            } else {
-                format!("model → {}", calls.join(", "))
-            }
-        }
-        StepAction::Harness { name, action, .. } => {
-            let source = match step.actor {
-                Actor::Harness { source } => source.as_str(),
-                _ => "harness",
-            };
-            let detail = match action {
-                HarnessAction::Block { reason, .. } | HarnessAction::Warn { message: reason } => {
-                    format!(": {}", reason.chars().take(60).collect::<String>())
-                }
-                _ => String::new(),
-            };
-            format!("{source}/{name} {}{detail}", action.label())
-        }
+        StepAction::Model(a) => model_summary(step, a),
+        StepAction::Harness { name, action, .. } => harness_summary(step, name, action),
         StepAction::ToolResult {
             tool,
             is_error,
             source,
             excerpt,
             ..
-        } => {
-            let mark = if *is_error { "✗" } else { "✓" };
-            let first = excerpt.lines().next().unwrap_or_default();
-            let via = if source == "executor" {
-                String::new()
-            } else {
-                format!(" [{source}]")
-            };
-            format!(
-                "{mark} {tool}{via}: {}",
-                first.chars().take(70).collect::<String>()
-            )
-        }
+        } => tool_result_summary(tool, *is_error, source, excerpt),
         StepAction::TurnEnd { stop_reason, .. } => format!("turn end ({stop_reason})"),
     };
     let iter = step
         .iteration
         .map_or_else(|| "  ".into(), |i| format!("{i:>2}"));
     format!("{:>4}  t{} i{iter}  {what}", step.seq, step.turn)
+}
+
+fn model_summary(step: &Step, a: &ModelAction) -> String {
+    let calls: Vec<&str> = a.tool_calls.iter().map(|c| c.name.as_str()).collect();
+    let text = a.text.lines().next().unwrap_or_default();
+    if let Some(purpose) = &a.purpose {
+        let failed = a.error.as_deref().map_or_else(String::new, |error| {
+            format!(" failed: {}", error.chars().take(60).collect::<String>())
+        });
+        format!(
+            "{} {purpose} ({}){failed}",
+            step.actor.label(),
+            step.policy.id
+        )
+    } else if calls.is_empty() {
+        format!("model: {}", text.chars().take(80).collect::<String>())
+    } else {
+        format!("model → {}", calls.join(", "))
+    }
+}
+
+fn harness_summary(step: &Step, name: &str, action: &HarnessAction) -> String {
+    let source = match step.actor {
+        Actor::Harness { source } => source.as_str(),
+        _ => "harness",
+    };
+    let detail = match action {
+        HarnessAction::Block { reason, .. } | HarnessAction::Warn { message: reason } => {
+            format!(": {}", reason.chars().take(60).collect::<String>())
+        }
+        _ => String::new(),
+    };
+    format!("{source}/{name} {}{detail}", action.label())
+}
+
+fn tool_result_summary(tool: &str, is_error: bool, source: &str, excerpt: &str) -> String {
+    let mark = if is_error { "✗" } else { "✓" };
+    let first = excerpt.lines().next().unwrap_or_default();
+    let via = if source == "executor" {
+        String::new()
+    } else {
+        format!(" [{source}]")
+    };
+    format!(
+        "{mark} {tool}{via}: {}",
+        first.chars().take(70).collect::<String>()
+    )
 }
 
 /// Metric deltas, regressions marked.

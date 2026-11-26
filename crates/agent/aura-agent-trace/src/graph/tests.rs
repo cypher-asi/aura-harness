@@ -1,7 +1,9 @@
 use super::*;
 use crate::bundle::RunSource;
+use crate::records::RecordRow;
 use crate::rewards::tests::{base, model, nudge, result};
 use crate::RunTrace;
+use aura_core_types::trace::{Actor, StepAction};
 use serde_json::json;
 
 fn trace() -> RunTrace {
