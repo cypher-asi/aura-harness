@@ -442,7 +442,7 @@ impl App {
         let project = self
             .agents
             .iter()
-            .chain(&self.archived)
+            .chain(&self.archived.items)
             .find(|agent| agent.id == agent_id)?
             .project_id
             .clone()?;

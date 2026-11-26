@@ -144,7 +144,7 @@ impl App {
     pub(super) fn list_places(&self) -> ListPlaces {
         ListPlaces {
             process: self.selected_process_data().map(|p| p.id.clone()),
-            processes_scroll: self.processes_scroll,
+            processes_scroll: self.processes.scroll,
             step: self.trace_feed.place(),
             trace_scroll: self.trace_scroll,
             task: self.task_list.place(),
@@ -158,11 +158,11 @@ impl App {
     pub(super) fn put_back_list_places(&mut self, places: ListPlaces) {
         if let Some(at) = places
             .process
-            .and_then(|id| self.processes.iter().position(|p| p.id == id))
+            .and_then(|id| self.processes.items.iter().position(|p| p.id == id))
         {
-            self.selected_process = at;
+            self.processes.selected = at;
         }
-        self.processes_scroll = places.processes_scroll;
+        self.processes.scroll = places.processes_scroll;
         self.trace_feed.put_back(&places.step);
         self.trace_scroll = places.trace_scroll;
         self.task_list.put_back(places.task.as_ref());
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn the_highlight_stays_on_its_row_across_the_switch() {
         let mut app = app();
-        app.selected_process = 1;
+        app.processes.selected = 1;
         app.toggle_side_scope();
         assert_eq!(
             app.selected_process_data().map(|p| p.id.as_str()),
@@ -381,8 +381,8 @@ mod tests {
     #[test]
     fn an_agent_comes_back_with_its_lists_where_it_left_them() {
         let mut app = app();
-        app.selected_process = 1;
-        app.processes_scroll = 1;
+        app.processes.selected = 1;
+        app.processes.scroll = 1;
         app.trace_feed.select(0);
         app.trace_scroll = 1;
         app.task_list.select(1);
@@ -391,8 +391,8 @@ mod tests {
 
         app.process_command(UiCommand::SetActiveAgent("b".into()));
         assert_eq!(processes(&app), ["pb", "none"]);
-        app.selected_process = 0;
-        app.processes_scroll = 0;
+        app.processes.selected = 0;
+        app.processes.scroll = 0;
         app.trace_scroll = 0;
         app.tasks_scroll = 0;
 
@@ -409,7 +409,7 @@ mod tests {
         );
         assert_eq!(highlighted(&app), task);
         assert_eq!(
-            (app.processes_scroll, app.trace_scroll, app.tasks_scroll),
+            (app.processes.scroll, app.trace_scroll, app.tasks_scroll),
             (1, 1, 1)
         );
     }

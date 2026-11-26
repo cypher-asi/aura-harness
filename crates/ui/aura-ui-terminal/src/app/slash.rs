@@ -575,14 +575,19 @@ impl App {
     fn handle_spawn_command(&mut self, arg: &str) {
         let name = self
             .definitions
+            .items
             .iter()
             .find(|d| d.name.eq_ignore_ascii_case(arg))
             .map(|d| d.name.clone());
         match name {
             Some(name) => self.instantiate_definition(&name),
             None => {
-                let available: Vec<&str> =
-                    self.definitions.iter().map(|d| d.name.as_str()).collect();
+                let available: Vec<&str> = self
+                    .definitions
+                    .items
+                    .iter()
+                    .map(|d| d.name.as_str())
+                    .collect();
                 self.notification = Some((
                     format!("Usage: /spawn <permanent agent> ({})", available.join(", ")),
                     NotificationType::Warning,

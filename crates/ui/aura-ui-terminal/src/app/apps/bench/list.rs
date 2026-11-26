@@ -120,7 +120,7 @@ impl App {
     #[must_use]
     pub(crate) fn bench_agent_list(&self, archived: bool) -> &[AgentSummary] {
         if archived {
-            &self.archived
+            &self.archived.items
         } else {
             &self.agents
         }

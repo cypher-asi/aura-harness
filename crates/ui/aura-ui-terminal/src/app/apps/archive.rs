@@ -6,8 +6,8 @@
 //! it, opens its chat and stays on the Archive; only the row's right-click
 //! "Unarchive" or `/unarchive` brings it back to the projects list.
 //!
-//! The highlight (`selected_archived`) is an index into the archived
-//! agents, never a header; the scroll (`archived_scroll`) counts drawn
+//! The highlight (`archived.selected`) is an index into the archived
+//! agents, never a header; the scroll (`archived.scroll`) counts drawn
 //! rows, headers included.
 //!
 //! An archived agent with agents under it starts folded over them each
@@ -65,7 +65,7 @@ impl App {
     /// Archived agents, each followed by the agents under it.
     #[must_use]
     pub fn archived(&self) -> &[AgentSummary] {
-        &self.archived
+        &self.archived.items
     }
 
     /// The Archive as drawn: each archived agent, after a header for its
@@ -82,7 +82,7 @@ impl App {
         let mut rows = Vec::with_capacity(self.archived.len() + 1);
         let mut last_day: Option<String> = None;
         for index in self.shown_archived() {
-            let agent = &self.archived[index];
+            let agent = &self.archived.items[index];
             if agent.depth == 0 {
                 let day = archive_day(agent.archived_at_ms, now);
                 if last_day.as_ref() != Some(&day) {
@@ -114,11 +114,11 @@ impl App {
     /// Index just past archived agent `index` and the agents under it,
     /// which run up to the next agent no deeper than it.
     fn archived_spawn_end(&self, index: usize) -> usize {
-        let Some(depth) = self.archived.get(index).map(|agent| agent.depth) else {
+        let Some(depth) = self.archived.items.get(index).map(|agent| agent.depth) else {
             return self.archived.len();
         };
         (index + 1..self.archived.len())
-            .find(|&i| self.archived[i].depth <= depth)
+            .find(|&i| self.archived.items[i].depth <= depth)
             .unwrap_or(self.archived.len())
     }
 
@@ -133,6 +133,7 @@ impl App {
     #[must_use]
     pub(crate) fn archived_folded(&self, index: usize) -> bool {
         self.archived
+            .items
             .get(index)
             .is_some_and(|agent| !self.opened_archived.contains(&agent.id))
             && self.archived_has_spawns(index)
@@ -141,8 +142,10 @@ impl App {
     /// The archived agent that archived agent `index` sits under: the
     /// nearest one above it with a smaller depth.
     fn archived_parent(&self, index: usize) -> Option<usize> {
-        let depth = self.archived.get(index)?.depth;
-        (0..index).rev().find(|&i| self.archived[i].depth < depth)
+        let depth = self.archived.items.get(index)?.depth;
+        (0..index)
+            .rev()
+            .find(|&i| self.archived.items[i].depth < depth)
     }
 
     /// The row standing for archived agent `index`: its own when drawn,
@@ -158,7 +161,11 @@ impl App {
     /// is archived: that agent, or the folded agent it is hidden under.
     #[must_use]
     pub(crate) fn shown_active_archived(&self) -> Option<usize> {
-        let index = self.archived.iter().position(|agent| agent.is_active)?;
+        let index = self
+            .archived
+            .items
+            .iter()
+            .position(|agent| agent.is_active)?;
         Some(self.shown_as(index))
     }
 
@@ -173,39 +180,39 @@ impl App {
         }) else {
             return;
         };
-        let id = self.archived[index].id.clone();
+        let id = self.archived.items[index].id.clone();
         if !self.opened_archived.remove(&id) {
             self.opened_archived.insert(id);
         }
-        self.select_archived_row(self.selected_archived);
+        self.select_archived_row(self.archived.selected);
     }
 
     /// Move the highlight `delta` drawn agent rows down (up when
     /// negative), stopping at either end.
     pub(in crate::app) fn move_archived_by(&mut self, delta: isize) {
         let shown = self.shown_archived();
-        let Some(at) = shown.iter().position(|&i| i == self.selected_archived) else {
-            self.select_archived_row(self.selected_archived);
+        let Some(at) = shown.iter().position(|&i| i == self.archived.selected) else {
+            self.select_archived_row(self.archived.selected);
             return;
         };
         let target = at
             .saturating_add_signed(delta)
             .min(shown.len().saturating_sub(1));
         if let Some(&index) = shown.get(target) {
-            self.selected_archived = index;
+            self.archived.selected = index;
         }
     }
 
     /// Highlighted archived agent: an index into [`Self::archived`].
     #[must_use]
     pub const fn selected_archived(&self) -> usize {
-        self.selected_archived
+        self.archived.selected
     }
 
     /// First visible row of the Archive, counting day headers.
     #[must_use]
     pub const fn archived_scroll(&self) -> usize {
-        self.archived_scroll
+        self.archived.scroll
     }
 
     /// Keep the highlighted agent inside a list `visible_rows` tall. When
@@ -215,17 +222,17 @@ impl App {
         let rows = self.archive_rows();
         let Some(selected) = rows.iter().position(|row| {
             *row == ArchiveRow::Agent {
-                index: self.selected_archived,
+                index: self.archived.selected,
             }
         }) else {
-            self.archived_scroll = 0;
+            self.archived.scroll = 0;
             return;
         };
-        let scroll = follow_selection(self.archived_scroll, selected, visible_rows, rows.len());
+        let scroll = follow_selection(self.archived.scroll, selected, visible_rows, rows.len());
         let header_above = selected
             .checked_sub(1)
             .filter(|&above| matches!(rows.get(above), Some(ArchiveRow::Day(_))));
-        self.archived_scroll = match header_above {
+        self.archived.scroll = match header_above {
             Some(header) if scroll == selected && visible_rows > 1 => header,
             _ => scroll,
         };
@@ -239,23 +246,20 @@ impl App {
     /// Take a new Archive. The highlight stays on the agent it was on;
     /// with none before, it goes to the agent on screen if archived.
     pub(in crate::app) fn set_archived(&mut self, archived: Vec<AgentSummary>) {
-        let highlighted = self
-            .archived
-            .get(self.selected_archived)
-            .map(|agent| agent.id.clone());
-        self.archived = archived;
+        let highlighted = self.archived.selected_item().map(|agent| agent.id.clone());
+        self.archived.items = archived;
         let index = match highlighted {
-            Some(id) => self.archived.iter().position(|agent| agent.id == id),
-            None => self.archived.iter().position(|agent| agent.is_active),
+            Some(id) => self.archived.items.iter().position(|agent| agent.id == id),
+            None => self.archived.items.iter().position(|agent| agent.is_active),
         };
-        self.select_archived_row(index.unwrap_or(self.selected_archived));
+        self.select_archived_row(index.unwrap_or(self.archived.selected));
     }
 
     /// Highlight archived agent `index`, clamped to the Archive; when it
     /// is folded away, the folded agent it is under.
     pub(in crate::app) fn select_archived_row(&mut self, index: usize) {
         let index = index.min(self.archived.len().saturating_sub(1));
-        self.selected_archived = self.shown_as(index);
+        self.archived.selected = self.shown_as(index);
     }
 
     /// Archived agent drawn at a screen cell; `None` on a day header.
@@ -264,7 +268,7 @@ impl App {
             .areas
             .archived_rows
             .filter(|&rows| contains(Some(rows), column, row))?;
-        let shown = self.archived_scroll + usize::from(row - rows.y);
+        let shown = self.archived.scroll + usize::from(row - rows.y);
         match self.archive_rows().get(shown)? {
             ArchiveRow::Agent { index } => Some(*index),
             ArchiveRow::Day(_) => None,
@@ -278,7 +282,7 @@ impl App {
         let Some(rows) = self.areas.archived_rows else {
             return false;
         };
-        let start = 1 + 2 * self.archived[index].depth;
+        let start = 1 + 2 * self.archived.items[index].depth;
         let offset = usize::from(column.saturating_sub(rows.x));
         self.archived_has_spawns(index) && (start..=start + AURA_WIDTH).contains(&offset)
     }
@@ -287,7 +291,7 @@ impl App {
     /// clicking the rest of its row opens its chat.
     pub(in crate::app) fn click_archived_row(&mut self, column: u16, row: u16) {
         if let Some(index) = self.archived_row_at(column, row) {
-            self.selected_archived = index;
+            self.archived.selected = index;
             if self.on_archived_marker(index, column) {
                 self.toggle_archived(index);
             } else {
@@ -306,7 +310,7 @@ impl App {
             KeyCode::Home => self.move_archived_by(isize::MIN),
             KeyCode::End => self.move_archived_by(isize::MAX),
             KeyCode::Enter => self.open_selected_archived(),
-            KeyCode::Char(' ') => self.toggle_archived(self.selected_archived),
+            KeyCode::Char(' ') => self.toggle_archived(self.archived.selected),
             KeyCode::Left | KeyCode::Right => self.shift_agents_tab(key.code),
             _ => return false,
         }
@@ -316,11 +320,7 @@ impl App {
     /// Show the highlighted archived agent's chat, staying on the Archive.
     /// It stays archived.
     fn open_selected_archived(&mut self) {
-        if let Some(id) = self
-            .archived
-            .get(self.selected_archived)
-            .map(|a| a.id.clone())
-        {
+        if let Some(id) = self.archived.selected_item().map(|a| a.id.clone()) {
             self.switch_on_screen(&id);
         }
     }
@@ -329,7 +329,7 @@ impl App {
     /// say it is not there.
     pub(in crate::app) fn unarchive_active_agent(&mut self) {
         let id = self.active_agent_id.clone();
-        if self.archived.iter().any(|agent| agent.id == id) {
+        if self.archived.items.iter().any(|agent| agent.id == id) {
             self.restore_agent(id);
         } else {
             self.notification = Some((

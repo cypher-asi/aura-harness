@@ -1,10 +1,7 @@
 //! The right-hand panel's tabs, and its Processes list: everything agents
 //! and the user have running, with the agent that started each one.
 
-use super::{
-    contains, follow_selection, tab_at, tab_bar::TabLayout, App, DetailView, HoverTarget,
-    NotificationType,
-};
+use super::{contains, tab_at, tab_bar::TabLayout, App, DetailView, HoverTarget, NotificationType};
 use crate::app::file_view::FileView;
 use crate::events::{ProcessSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -141,13 +138,13 @@ impl App {
     /// Rows of the Processes tab, in display order.
     #[must_use]
     pub fn processes(&self) -> &[ProcessSummary] {
-        &self.processes
+        &self.processes.items
     }
 
     /// Highlighted row of the Processes tab.
     #[must_use]
     pub const fn selected_process(&self) -> usize {
-        self.selected_process
+        self.processes.selected
     }
 
     /// Record where the side panel's header bar was drawn this frame.
@@ -165,13 +162,8 @@ impl App {
     /// Keep the highlighted process inside a list `visible_rows` tall,
     /// returning the first row to show.
     pub fn sync_processes_scroll(&mut self, visible_rows: usize) -> usize {
-        self.processes_scroll = follow_selection(
-            self.processes_scroll,
-            self.selected_process,
-            visible_rows,
-            self.processes.len(),
-        );
-        self.processes_scroll
+        self.processes.follow_selection(visible_rows);
+        self.processes.scroll
     }
 
     /// Show `tab`. A channel's tabs are only shown while a channel is
@@ -201,11 +193,8 @@ impl App {
     /// List the processes the side panel's scope lets through, keeping
     /// the highlight on the same process when it is still listed.
     pub(super) fn reshow_processes(&mut self) {
-        let selected_id = self
-            .processes
-            .get(self.selected_process)
-            .map(|p| p.id.clone());
-        self.processes = self
+        let selected_id = self.processes.selected_item().map(|p| p.id.clone());
+        self.processes.items = self
             .all_processes
             .iter()
             .filter(|process| {
@@ -215,9 +204,9 @@ impl App {
             })
             .cloned()
             .collect();
-        self.selected_process = selected_id
-            .and_then(|id| self.processes.iter().position(|p| p.id == id))
-            .unwrap_or(self.selected_process)
+        self.processes.selected = selected_id
+            .and_then(|id| self.processes.items.iter().position(|p| p.id == id))
+            .unwrap_or(self.processes.selected)
             .min(self.processes.len().saturating_sub(1));
     }
 
@@ -228,15 +217,15 @@ impl App {
     }
 
     pub(crate) fn selected_process_data(&self) -> Option<&ProcessSummary> {
-        self.processes.get(self.selected_process)
+        self.processes.selected_item()
     }
 
     fn select_process(&mut self, index: usize) {
-        self.selected_process = index.min(self.processes.len().saturating_sub(1));
+        self.processes.selected = index.min(self.processes.len().saturating_sub(1));
     }
 
     fn move_process_selection(&mut self, delta: isize) {
-        self.select_process(self.selected_process.saturating_add_signed(delta));
+        self.select_process(self.processes.selected.saturating_add_signed(delta));
     }
 
     pub(super) fn scroll_processes(&mut self, delta: isize) {
@@ -634,7 +623,7 @@ mod tests {
         assert!(app.input().is_empty());
 
         for index in [1, 2] {
-            app.selected_process = index;
+            app.processes.selected = index;
             app.handle_key(key(KeyCode::Delete));
             assert!(app.pending_kill.is_none());
             assert!(app.notification().is_some());

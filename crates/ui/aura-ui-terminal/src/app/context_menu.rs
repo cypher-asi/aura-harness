@@ -424,7 +424,7 @@ impl App {
         let Some(index) = self.archived_row_at(column, row) else {
             return false;
         };
-        let Some(id) = self.archived.get(index).map(|a| a.id.clone()) else {
+        let Some(id) = self.archived.items.get(index).map(|a| a.id.clone()) else {
             return false;
         };
         self.focus = PanelFocus::Swarm;

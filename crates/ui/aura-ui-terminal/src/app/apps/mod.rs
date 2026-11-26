@@ -215,7 +215,7 @@ impl App {
             AgentsTab::Channels => self.move_channel_highlight(delta),
             AgentsTab::Projects => self.scroll_project_rows(delta),
             AgentsTab::Roster => {
-                self.select_definition_row(self.selected_definition.saturating_add_signed(delta));
+                self.select_definition_row(self.definitions.selected.saturating_add_signed(delta));
             }
             AgentsTab::Bench => self.move_bench_highlight(delta),
             AgentsTab::Archive => self.move_archived_by(delta),
@@ -381,7 +381,7 @@ impl App {
     }
 
     fn is_archived_agent(&self, agent_id: &str) -> bool {
-        self.archived.iter().any(|agent| agent.id == agent_id)
+        self.archived.items.iter().any(|agent| agent.id == agent_id)
     }
 
     /// The agent PROJECTS shows on coming back.
@@ -406,11 +406,7 @@ impl App {
             .filter(archived)
             .or_else(|| Some(self.active_agent_id.as_str()).filter(archived))
             .map(str::to_string)
-            .or_else(|| {
-                self.archived
-                    .get(self.selected_archived)
-                    .map(|agent| agent.id.clone())
-            })
+            .or_else(|| self.archived.selected_item().map(|agent| agent.id.clone()))
     }
 
     /// The permanent agent AGENTS shows on coming back: the one picked
@@ -419,7 +415,7 @@ impl App {
         self.apps
             .roster
             .clone()
-            .filter(|name| self.definitions.iter().any(|d| d.name == *name))
+            .filter(|name| self.definitions.items.iter().any(|d| d.name == *name))
             .or_else(|| self.selected_definition_name())
     }
 
@@ -428,7 +424,7 @@ impl App {
     #[must_use]
     pub(crate) fn latest_instance(&self, name: &str) -> Option<&str> {
         let listed = self.agents.iter().map(|agent| (agent, true));
-        let archived = self.archived.iter().map(|agent| (agent, false));
+        let archived = self.archived.items.iter().map(|agent| (agent, false));
         listed
             .chain(archived)
             .filter(|(agent, _)| agent.definition.as_deref() == Some(name))
@@ -451,9 +447,12 @@ impl App {
         let Some(name) = self.apps.roster.as_deref() else {
             return false;
         };
-        self.agents.iter().chain(self.archived.iter()).any(|agent| {
-            agent.id == self.active_agent_id && agent.definition.as_deref() == Some(name)
-        })
+        self.agents
+            .iter()
+            .chain(self.archived.items.iter())
+            .any(|agent| {
+                agent.id == self.active_agent_id && agent.definition.as_deref() == Some(name)
+            })
     }
 
     /// Whether the app in front has nothing to show: no channel open, no

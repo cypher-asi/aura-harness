@@ -225,7 +225,7 @@ impl App {
         {
             return Vec::new();
         }
-        prefix_first(&self.definitions, query, |d| d.name.as_str())
+        prefix_first(&self.definitions.items, query, |d| d.name.as_str())
     }
 
     /// Rows in the open menu: matching commands, or else agents to add.

@@ -26,6 +26,7 @@ mod inbox;
 mod input_editor;
 mod keys;
 mod line_edit;
+mod list_state;
 mod members;
 pub mod mentions;
 mod model_picker;
@@ -86,6 +87,7 @@ use folder_picker::FolderPicker;
 pub use host_tab::{switch_label, switch_rect, SWITCH_GAP};
 use hud::Hud;
 pub use inbox::{InboxRow, ThreadView};
+use list_state::ListState;
 pub use members::{MemberRow, RecordsTab};
 pub use model_picker::{ModelPicker, ModelTab, PickerLayout, PickerTarget};
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
@@ -445,12 +447,9 @@ pub struct App {
     apps: apps::AppMemory,
     /// Channels, and the one open in the CHANNELS tab
     pub(super) channels: apps::ChannelState,
-    /// Permanent agents
-    pub(super) definitions: Vec<AgentDefinitionSummary>,
-    /// Highlighted row in the roster
-    pub(super) selected_definition: usize,
-    /// First visible row of the roster
-    pub(super) definitions_scroll: usize,
+    /// Permanent agents, the highlighted row in the roster (one past the
+    /// last agent is "+ New agent") and its first visible row
+    pub(super) definitions: ListState<AgentDefinitionSummary>,
     /// File to open in the editor before the next frame
     pub(super) editor_request: Option<PathBuf>,
     /// Temp file holding the input while Ctrl+G has it in the editor
@@ -459,15 +458,12 @@ pub struct App {
     pub(super) pending_delete: Option<String>,
     /// Agent whose project waits for `y` to confirm removing it
     pub(super) pending_remove_project: Option<String>,
-    /// Archived agents, each followed by the agents under it
-    pub(super) archived: Vec<AgentSummary>,
-    /// Highlighted row of the Archive
-    pub(super) selected_archived: usize,
+    /// Archived agents, each followed by the agents under it; the
+    /// highlighted one, and the first visible row of the Archive
+    pub(super) archived: ListState<AgentSummary>,
     /// Archived agents opened over the agents under them; every other one
     /// with agents under it is folded. Kept while another app is in front.
     pub(super) opened_archived: HashSet<String>,
-    /// First visible row of the Archive
-    pub(super) archived_scroll: usize,
     /// Folder browser for a new project, while it is open
     pub(super) folder_picker: Option<FolderPicker>,
     /// The new-channel form, while it is open
@@ -506,12 +502,8 @@ pub struct App {
     /// Agents whose processes the Processes tab lists
     pub(super) process_filter: side_scope::AgentFilter,
     /// Rows of the Processes tab: the processes `process_filter` lets
-    /// through
-    pub(super) processes: Vec<ProcessSummary>,
-    /// Highlighted row of the Processes tab
-    pub(super) selected_process: usize,
-    /// First visible row of the Processes tab
-    pub(super) processes_scroll: usize,
+    /// through; the highlighted row, and the first visible row
+    pub(super) processes: ListState<ProcessSummary>,
     /// Process waiting for `y` to confirm killing it
     pub(super) pending_kill: Option<String>,
     /// Run graph shown by `/graph`
@@ -1024,17 +1016,13 @@ impl App {
             agents_tab: AgentsTab::default(),
             apps: apps::AppMemory::default(),
             channels: apps::ChannelState::default(),
-            definitions: Vec::new(),
-            selected_definition: 0,
-            definitions_scroll: 0,
+            definitions: ListState::default(),
             editor_request: None,
             input_editor_file: None,
             pending_delete: None,
             pending_remove_project: None,
-            archived: Vec::new(),
-            selected_archived: 0,
+            archived: ListState::default(),
             opened_archived: HashSet::new(),
-            archived_scroll: 0,
             folder_picker: None,
             channel_form: None,
             pending_archive_channel: None,
@@ -1053,9 +1041,7 @@ impl App {
             side_scope: SideScope::default(),
             all_processes: Vec::new(),
             process_filter: None,
-            processes: Vec::new(),
-            selected_process: 0,
-            processes_scroll: 0,
+            processes: ListState::default(),
             pending_kill: None,
             graph: graph::GraphState::default(),
             trace_feed: trace_feed::TraceFeed::default(),
@@ -2147,6 +2133,7 @@ impl App {
                 .any(|task| task.state == crate::events::TaskState::Running)
             || self
                 .processes
+                .items
                 .iter()
                 .any(|process| process.status == crate::events::ProcessStatus::Running)
     }

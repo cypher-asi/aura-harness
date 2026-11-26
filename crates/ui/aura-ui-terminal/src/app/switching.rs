@@ -111,7 +111,7 @@ impl App {
     /// Mark the agent on screen as the active one in the agents list and
     /// the Archive.
     pub(in crate::app) fn mark_active_agent(&mut self) {
-        for agent in self.agents.iter_mut().chain(self.archived.iter_mut()) {
+        for agent in self.agents.iter_mut().chain(self.archived.items.iter_mut()) {
             agent.is_active = agent.id == self.active_agent_id;
         }
     }
