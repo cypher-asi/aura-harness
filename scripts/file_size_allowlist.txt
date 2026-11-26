@@ -2,8 +2,6 @@
 # This list may only shrink: remove a file when it is split under the limit.
 crates/agent/aura-agent/src/agent_loop/cutover_tests.rs
 crates/agent/aura-agent/src/agent_loop/pipeline_tests.rs
-crates/agent/aura-agent/src/agent_loop/state.rs
-crates/agent/aura-agent/src/agent_loop/stream_pump/driver.rs
 crates/agent/aura-agent/src/agent_loop/stream_pump/tests.rs
 crates/agent/aura-agent/src/agent_loop/streaming.rs
 crates/agent/aura-agent/src/agent_loop/streaming_tests.rs

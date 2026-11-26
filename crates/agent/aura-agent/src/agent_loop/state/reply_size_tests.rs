@@ -1,4 +1,5 @@
 use super::*;
+use aura_model::ModelRequest;
 
 fn next_request(state: &mut LoopState, config: &AgentLoopConfig) -> ModelRequest {
     state.begin_iteration(config, 1);

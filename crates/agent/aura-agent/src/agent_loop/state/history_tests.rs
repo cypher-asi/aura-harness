@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 #[test]
 fn a_request_keeps_the_messages_it_was_sent_with() {

@@ -166,48 +166,76 @@ fn detect_hollow_functions(path: &str, lines: &[&str], reports: &mut Vec<StubRep
         let body_trimmed = body.trim();
 
         if !body_trimmed.is_empty() {
-            if body_trimmed == "{}" || body_trimmed == "{ }" {
-                let has_meaningful_params = !params_str.is_empty()
-                    && params_str != "&self"
-                    && params_str != "&mut self"
-                    && params_str != "self";
-                if has_return || has_meaningful_params {
-                    reports.push(StubReport {
-                        path: path.to_string(),
-                        line: fn_line,
-                        pattern: StubPattern::EmptyFnBody,
-                        context: trimmed.to_string(),
-                    });
-                }
-            } else if is_trivial_return(body_trimmed, return_type.as_ref()) {
-                reports.push(StubReport {
-                    path: path.to_string(),
-                    line: fn_line,
-                    pattern: StubPattern::DefaultOnlyReturn,
-                    context: format!(
-                        "{} {{ {} }}",
-                        trimmed.trim_end_matches('{').trim(),
-                        body_trimmed.trim_matches(|c| c == '{' || c == '}').trim()
-                    ),
-                });
-            }
-
-            if !params_str.is_empty()
-                && params_str != "&self"
-                && params_str != "&mut self"
-                && params_str != "self"
-                && all_params_ignored(params_str)
-            {
-                reports.push(StubReport {
-                    path: path.to_string(),
-                    line: fn_line,
-                    pattern: StubPattern::IgnoredParams,
-                    context: trimmed.to_string(),
-                });
-            }
+            let candidate = HollowCandidate {
+                path,
+                fn_line,
+                trimmed,
+                params_str,
+                has_return,
+                return_type: return_type.as_ref(),
+                body_trimmed,
+            };
+            check_hollow_body(&candidate, reports);
         }
 
         i = if body_end > i { body_end + 1 } else { i + 1 };
+    }
+}
+
+/// One parsed function signature plus its body, as seen by
+/// [`detect_hollow_functions`].
+struct HollowCandidate<'a> {
+    path: &'a str,
+    fn_line: usize,
+    trimmed: &'a str,
+    params_str: &'a str,
+    has_return: bool,
+    return_type: Option<&'a String>,
+    body_trimmed: &'a str,
+}
+
+/// Pushes the stub reports for one non-empty function body.
+fn check_hollow_body(c: &HollowCandidate<'_>, reports: &mut Vec<StubReport>) {
+    let (path, fn_line, trimmed, params_str, body_trimmed) =
+        (c.path, c.fn_line, c.trimmed, c.params_str, c.body_trimmed);
+    if body_trimmed == "{}" || body_trimmed == "{ }" {
+        let has_meaningful_params = !params_str.is_empty()
+            && params_str != "&self"
+            && params_str != "&mut self"
+            && params_str != "self";
+        if c.has_return || has_meaningful_params {
+            reports.push(StubReport {
+                path: path.to_string(),
+                line: fn_line,
+                pattern: StubPattern::EmptyFnBody,
+                context: trimmed.to_string(),
+            });
+        }
+    } else if is_trivial_return(body_trimmed, c.return_type) {
+        reports.push(StubReport {
+            path: path.to_string(),
+            line: fn_line,
+            pattern: StubPattern::DefaultOnlyReturn,
+            context: format!(
+                "{} {{ {} }}",
+                trimmed.trim_end_matches('{').trim(),
+                body_trimmed.trim_matches(|c| c == '{' || c == '}').trim()
+            ),
+        });
+    }
+
+    if !params_str.is_empty()
+        && params_str != "&self"
+        && params_str != "&mut self"
+        && params_str != "self"
+        && all_params_ignored(params_str)
+    {
+        reports.push(StubReport {
+            path: path.to_string(),
+            line: fn_line,
+            pattern: StubPattern::IgnoredParams,
+            context: trimmed.to_string(),
+        });
     }
 }
 

@@ -38,18 +38,7 @@ pub fn infer_default_test_command(project_root: &Path) -> Option<String> {
     // looking at the lockfile, then fall back to npm. Only one JS runner
     // wins because they all execute the same `package.json` scripts.
     if project_root.join("package.json").is_file() {
-        return Some(if project_root.join("bun.lockb").is_file()
-            || project_root.join("bun.lock").is_file()
-        {
-            "bun test"
-        } else if project_root.join("pnpm-lock.yaml").is_file() {
-            "pnpm test --if-present --silent"
-        } else if project_root.join("yarn.lock").is_file() {
-            "yarn test --silent"
-        } else {
-            "npm test --silent --if-present"
-        }
-        .to_string());
+        return Some(js_test_command(project_root).to_string());
     }
 
     if project_root.join("deno.json").is_file() || project_root.join("deno.jsonc").is_file() {
@@ -82,8 +71,34 @@ pub fn infer_default_test_command(project_root: &Path) -> Option<String> {
         return Some(ruby_cmd.to_string());
     }
 
+    if let Some(cmd) = jvm_test_command(project_root) {
+        return Some(cmd);
+    }
+
+    if has_dotnet_project(project_root) {
+        return Some("dotnet test --nologo".to_string());
+    }
+
+    None
+}
+
+/// The JS/TS runner implied by the lockfile, falling back to npm.
+fn js_test_command(project_root: &Path) -> &'static str {
+    if project_root.join("bun.lockb").is_file() || project_root.join("bun.lock").is_file() {
+        "bun test"
+    } else if project_root.join("pnpm-lock.yaml").is_file() {
+        "pnpm test --if-present --silent"
+    } else if project_root.join("yarn.lock").is_file() {
+        "yarn test --silent"
+    } else {
+        "npm test --silent --if-present"
+    }
+}
+
+/// Maven, then Gradle (wrapper preferred).
+fn jvm_test_command(project_root: &Path) -> Option<String> {
     if project_root.join("pom.xml").is_file() {
-        return Some("mvn -B test".to_string());
+        Some("mvn -B test".to_string())
     } else if project_root.join("build.gradle").is_file()
         || project_root.join("build.gradle.kts").is_file()
         || project_root.join("settings.gradle").is_file()
@@ -96,14 +111,10 @@ pub fn infer_default_test_command(project_root: &Path) -> Option<String> {
         } else {
             "gradle"
         };
-        return Some(format!("{wrapper} test"));
+        Some(format!("{wrapper} test"))
+    } else {
+        None
     }
-
-    if has_dotnet_project(project_root) {
-        return Some("dotnet test --nologo".to_string());
-    }
-
-    None
 }
 
 /// Detect a .NET project by searching for `*.sln`, `*.csproj`, or `*.fsproj`

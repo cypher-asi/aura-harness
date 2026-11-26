@@ -64,43 +64,33 @@ pub fn parse_error_references(stderr: &str) -> ErrorReferences {
 
     for cap in TYPE_RE.captures_iter(stderr) {
         let name = cap[1].to_string();
-        if !refs.types_referenced.contains(&name) {
-            refs.types_referenced.push(name);
-        }
+        push_unique_type(&mut refs, name);
     }
 
     for cap in INIT_TYPE_RE.captures_iter(stderr) {
         let name = cap[1].to_string();
-        if !refs.types_referenced.contains(&name) {
-            refs.types_referenced.push(name);
-        }
+        push_unique_type(&mut refs, name);
     }
 
     for cap in METHOD_RE.captures_iter(stderr) {
         let method = cap[1].to_string();
         let type_name = cap[2].to_string();
         refs.methods_not_found.push((type_name.clone(), method));
-        if !refs.types_referenced.contains(&type_name) {
-            refs.types_referenced.push(type_name);
-        }
+        push_unique_type(&mut refs, type_name);
     }
 
     for cap in FIELD_RE.captures_iter(stderr) {
         let field = cap[1].to_string();
         let type_name = cap[2].to_string();
         refs.missing_fields.push((type_name.clone(), field));
-        if !refs.types_referenced.contains(&type_name) {
-            refs.types_referenced.push(type_name);
-        }
+        push_unique_type(&mut refs, type_name);
     }
 
     for cap in NO_FIELD_RE.captures_iter(stderr) {
         let type_name = cap[1].to_string();
         let field = cap[2].to_string();
         refs.missing_fields.push((type_name.clone(), field));
-        if !refs.types_referenced.contains(&type_name) {
-            refs.types_referenced.push(type_name);
-        }
+        push_unique_type(&mut refs, type_name);
     }
 
     for cap in LOC_RE.captures_iter(stderr) {
@@ -121,6 +111,12 @@ pub fn parse_error_references(stderr: &str) -> ErrorReferences {
     }
 
     refs
+}
+
+fn push_unique_type(refs: &mut ErrorReferences, name: String) {
+    if !refs.types_referenced.contains(&name) {
+        refs.types_referenced.push(name);
+    }
 }
 
 #[cfg(test)]

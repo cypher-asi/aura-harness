@@ -24,8 +24,8 @@
 
 use aura_context_compaction as compaction;
 use aura_model::{
-    ContentBlock, Message, ModelProvider, ModelRequest, ModelRequestKind, ThinkingEffort,
-    ToolChoice, ToolDefinition,
+    ContentBlock, Message, ModelProvider, ModelRequest, ModelRequestKind, ModelResponse,
+    ThinkingEffort, ToolChoice, ToolDefinition,
 };
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
@@ -80,28 +80,9 @@ impl AgentLoop {
             }
         };
 
-        let mut summary_text = response
-            .message
-            .content
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        if summary_text.trim().is_empty() {
-            warn!(
-                "compaction summary generation returned no text; continuing with local compaction"
-            );
+        let Some(summary_text) = summary_text_from_response(&response, state) else {
             return;
-        }
-        // The summary replaces the `todo_write` calls; without the list
-        // the model would lose its plan mid-task.
-        if !state.result.todos.is_empty() {
-            summary_text.push_str("\n\nCurrent todo list (keep it updated with todo_write):\n");
-            summary_text.push_str(&aura_exec_tools::todo::render_todos(&state.result.todos));
-        }
+        };
 
         let before = state.result.estimated_context_tokens;
         let applied = context::apply_summary_output(
@@ -115,19 +96,7 @@ impl AgentLoop {
             },
         );
         if applied {
-            state.result.summary_compactions = state.result.summary_compactions.saturating_add(1);
-            super::streaming::emit(
-                event_tx,
-                AgentLoopEvent::Progress {
-                    stage: crate::events::PROGRESS_CONTEXT_SUMMARIZED.to_string(),
-                    tool_name: None,
-                    elapsed_ms: None,
-                    message: Some(format!(
-                        "Summarized older history: ~{before} → ~{} tokens",
-                        state.result.estimated_context_tokens
-                    )),
-                },
-            );
+            record_summary_compaction(event_tx, state, before);
         }
     }
 
@@ -178,6 +147,52 @@ impl AgentLoop {
         .try_build()
         .map_err(crate::AgentError::from)
     }
+}
+
+/// Join the text blocks of the summary response, appending the current
+/// todo list. `None` (after a warning) when the model returned no text.
+fn summary_text_from_response(response: &ModelResponse, state: &LoopState) -> Option<String> {
+    let mut summary_text = response
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if summary_text.trim().is_empty() {
+        warn!("compaction summary generation returned no text; continuing with local compaction");
+        return None;
+    }
+    // The summary replaces the `todo_write` calls; without the list
+    // the model would lose its plan mid-task.
+    if !state.result.todos.is_empty() {
+        summary_text.push_str("\n\nCurrent todo list (keep it updated with todo_write):\n");
+        summary_text.push_str(&aura_exec_tools::todo::render_todos(&state.result.todos));
+    }
+    Some(summary_text)
+}
+
+fn record_summary_compaction(
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    state: &mut LoopState,
+    before: u64,
+) {
+    state.result.summary_compactions = state.result.summary_compactions.saturating_add(1);
+    super::streaming::emit(
+        event_tx,
+        AgentLoopEvent::Progress {
+            stage: crate::events::PROGRESS_CONTEXT_SUMMARIZED.to_string(),
+            tool_name: None,
+            elapsed_ms: None,
+            message: Some(format!(
+                "Summarized older history: ~{before} → ~{} tokens",
+                state.result.estimated_context_tokens
+            )),
+        },
+    );
 }
 
 fn summary_error_for_log(error: &iteration::LlmCallError) -> &'static str {

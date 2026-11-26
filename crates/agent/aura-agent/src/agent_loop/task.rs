@@ -139,19 +139,7 @@ pub(crate) async fn run_task(
     let mut state = LoopState::new(&ctx.agent.config, messages);
     state.build_baseline = ctx.executor.capture_build_baseline().await;
 
-    console::task_start_banner(
-        &task_id_str,
-        ctx.agent.config.max_turns_per_task,
-        ctx.agent.config.max_iterations_per_task,
-    );
-    tracing::debug!(
-        task_id = %task_id,
-        session_id = %ctx.session.id,
-        max_iterations = ctx.agent.config.max_iterations,
-        max_turns_per_task = ctx.agent.config.max_turns_per_task,
-        max_iterations_per_task = ctx.agent.config.max_iterations_per_task,
-        "Starting agent task"
-    );
+    log_task_start(ctx, task_id, &task_id_str);
 
     let input_queue_ref: &InputQueue = ctx.session.input_queue.as_ref();
 
@@ -171,18 +159,7 @@ pub(crate) async fn run_task(
         // split this into two sibling variants so callers can
         // distinguish which ceiling tripped without re-deriving from
         // `turn_index`.
-        if turn_index >= ctx.agent.config.max_turns_per_task {
-            return Err(AgentError::TurnBudgetExceeded {
-                task_id,
-                limit: ctx.agent.config.max_turns_per_task as usize,
-            });
-        }
-        if iteration_offset >= ctx.agent.config.max_iterations_per_task {
-            return Err(AgentError::IterationBudgetExceeded {
-                task_id,
-                limit: ctx.agent.config.max_iterations_per_task as usize,
-            });
-        }
+        check_task_budget(ctx, task_id, turn_index, iteration_offset)?;
 
         let turn_ctx = TurnCtx {
             run: ctx,
@@ -221,6 +198,47 @@ pub(crate) async fn run_task(
         break;
     }
 
+    Ok(finish_task(ctx, state).await)
+}
+
+fn log_task_start(ctx: &RunCtx<'_>, task_id: TaskId, task_id_str: &str) {
+    console::task_start_banner(
+        task_id_str,
+        ctx.agent.config.max_turns_per_task,
+        ctx.agent.config.max_iterations_per_task,
+    );
+    tracing::debug!(
+        task_id = %task_id,
+        session_id = %ctx.session.id,
+        max_iterations = ctx.agent.config.max_iterations,
+        max_turns_per_task = ctx.agent.config.max_turns_per_task,
+        max_iterations_per_task = ctx.agent.config.max_iterations_per_task,
+        "Starting agent task"
+    );
+}
+
+fn check_task_budget(
+    ctx: &RunCtx<'_>,
+    task_id: TaskId,
+    turn_index: u32,
+    iteration_offset: u32,
+) -> Result<(), AgentError> {
+    if turn_index >= ctx.agent.config.max_turns_per_task {
+        return Err(AgentError::TurnBudgetExceeded {
+            task_id,
+            limit: ctx.agent.config.max_turns_per_task as usize,
+        });
+    }
+    if iteration_offset >= ctx.agent.config.max_iterations_per_task {
+        return Err(AgentError::IterationBudgetExceeded {
+            task_id,
+            limit: ctx.agent.config.max_iterations_per_task as usize,
+        });
+    }
+    Ok(())
+}
+
+async fn finish_task(ctx: &RunCtx<'_>, mut state: LoopState) -> AgentLoopResult {
     state.result.task_done_completed = state.task_done_completed;
     state.result.messages = state.messages.into_vec();
 
@@ -228,5 +246,5 @@ pub(crate) async fn run_task(
         observer.on_turn_complete(&state.result).await;
     }
 
-    Ok(state.result)
+    state.result
 }

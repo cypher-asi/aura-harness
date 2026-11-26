@@ -1,5 +1,6 @@
 use super::*;
 use aura_exec_tools::IntentClassifier;
+use aura_model::ModelRequestKind;
 use aura_model::ToolDefinition;
 use serde_json::json;
 use std::sync::Arc;

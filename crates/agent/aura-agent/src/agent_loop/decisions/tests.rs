@@ -24,11 +24,11 @@ fn emit_sites(source: DecisionSource) -> &'static [&'static str] {
 }
 
 const LOOP_SOURCES: &[&str] = &[
-    include_str!("../state.rs"),
+    include_str!("../state/mod.rs"),
     include_str!("../context.rs"),
     include_str!("../tool_pipeline/mod.rs"),
     include_str!("../tool_pipeline/effects.rs"),
-    include_str!("../stream_pump/driver.rs"),
+    include_str!("../stream_pump/driver/tool_dispatch.rs"),
     include_str!("../turn/mod.rs"),
     include_str!("../turn/recovery.rs"),
     include_str!("../sampling.rs"),
