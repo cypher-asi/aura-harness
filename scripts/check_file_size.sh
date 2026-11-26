@@ -14,6 +14,7 @@
 # (use it only to shrink the list, never to add to it).
 
 set -euo pipefail
+export LC_ALL=C  # one sort order everywhere, so the allowlist diffs cleanly
 
 MAX_LINES=500
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -36,7 +37,11 @@ over_limit() {
 current="$(over_limit)"
 
 if [[ "${1:-}" == "--update" ]]; then
-    printf '%s\n' "$current" | sed '/^$/d' > "$ALLOWLIST"
+    {
+        grep "^#" "$ALLOWLIST" 2>/dev/null || true
+        printf "%s\n" "$current" | sed "/^$/d"
+    } > "$ALLOWLIST.tmp"
+    mv "$ALLOWLIST.tmp" "$ALLOWLIST"
     echo "wrote $(grep -c . "$ALLOWLIST" || true) entries to $ALLOWLIST"
     exit 0
 fi
