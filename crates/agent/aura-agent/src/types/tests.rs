@@ -1,4 +1,3 @@
-
 use super::{AgentLoopResult, FileChange, FileChangeKind};
 
 fn fc(path: &str, kind: FileChangeKind) -> FileChange {

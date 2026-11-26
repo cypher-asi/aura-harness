@@ -74,11 +74,8 @@ crates/model/aura-model/src/types/request.rs
 crates/model/aura-model/src/types/streaming.rs
 crates/model/aura-model/src/types/tests_streaming.rs
 crates/plugin/aura-plugin-hooks/src/engine.rs
-crates/store/aura-store-db/src/agents.rs
 crates/store/aura-store-db/src/agents/tests.rs
 crates/store/aura-store-db/src/channels/tests/mod.rs
-crates/store/aura-store-db/src/processes.rs
-crates/store/aura-store-db/src/rocks_store/mod.rs
 crates/store/aura-store-db/src/rocks_store/tests.rs
 crates/surface/aura-app/src/api_server.rs
 crates/surface/aura-app/src/cloud/host_info.rs

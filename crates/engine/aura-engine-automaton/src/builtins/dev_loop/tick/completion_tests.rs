@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn test_context() -> (TickContext, tokio::sync::mpsc::Receiver<AutomatonEvent>) {

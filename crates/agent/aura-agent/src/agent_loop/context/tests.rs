@@ -1,4 +1,3 @@
-
 use super::{
     compact_if_needed, compaction_pressure_tokens, effective_compaction_request_kind,
     heuristic_context_tokens, reserved_output_tokens, CompactionOutcome,

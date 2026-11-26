@@ -1,4 +1,3 @@
-
 use super::*;
 use aura_core_auth::LinkStatus;
 use chrono::Utc;

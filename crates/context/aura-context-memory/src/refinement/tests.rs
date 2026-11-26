@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::types::{CandidateType, MemoryCandidate};
 use aura_model::MockProvider;

@@ -1,4 +1,3 @@
-
 use super::*;
 use aura_core_types::{InstalledToolDefinition, ToolAuth};
 

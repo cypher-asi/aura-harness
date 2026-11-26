@@ -1,4 +1,3 @@
-
 use super::*;
 use aura_core_types::{AgentEventId, AgentId, FactId, ProcedureId};
 use chrono::Utc;

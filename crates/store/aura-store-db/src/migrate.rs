@@ -125,77 +125,101 @@ pub fn seal_db_copy(
     let src_db = Db::open_cf_for_read_only(&Options::default(), src, &src_cf_names, false)
         .map_err(backend)?;
 
-    // The destination gets the union of the canonical CF set and the
-    // source's CFs, so nothing is dropped and the sealed store finds
-    // every CF it expects on the next open.
+    let dst_cf_names = destination_cf_names(&src_cf_names);
+    let dst_db = open_destination(dst, &dst_cf_names)?;
+
+    let mut stats = SealCopyStats::default();
+    for cf_name in &src_cf_names {
+        copy_column_family(&src_db, &dst_db, cf_name, cipher, &mut stats)?;
+    }
+
+    flush_destination(&dst_db, &dst_cf_names)?;
+    Ok(stats)
+}
+
+/// The destination gets the union of the canonical CF set and the
+/// source's CFs, so nothing is dropped and the sealed store finds every
+/// CF it expects on the next open.
+fn destination_cf_names(src_cf_names: &[String]) -> Vec<String> {
     let mut dst_cf_names: Vec<String> = ALL_CFS.iter().map(ToString::to_string).collect();
-    for name in &src_cf_names {
+    for name in src_cf_names {
         if name != "default" && !dst_cf_names.iter().any(|n| n == name) {
             dst_cf_names.push(name.clone());
         }
     }
+    dst_cf_names
+}
 
+/// Create the destination database with every family in `cf_names`.
+fn open_destination(dst: &Path, cf_names: &[String]) -> Result<Db, StoreError> {
     let mut dst_opts = Options::default();
     dst_opts.create_if_missing(true);
     dst_opts.create_missing_column_families(true);
-    let dst_db = Db::open_cf_descriptors(
+    Db::open_cf_descriptors(
         &dst_opts,
         dst,
-        dst_cf_names
+        cf_names
             .iter()
             .map(|name| ColumnFamilyDescriptor::new(name, Options::default())),
     )
-    .map_err(backend)?;
+    .map_err(backend)
+}
 
-    let mut stats = SealCopyStats::default();
+/// Copy every row of `cf_name` from `src_db` into `dst_db` in batches of
+/// [`COPY_BATCH_SIZE`], sealing the values of [`SEALED_VALUE_CFS`].
+fn copy_column_family(
+    src_db: &Db,
+    dst_db: &Db,
+    cf_name: &str,
+    cipher: &SealCipher,
+    stats: &mut SealCopyStats,
+) -> Result<(), StoreError> {
+    let src_cf = src_db
+        .cf_handle(cf_name)
+        .ok_or_else(|| StoreError::ColumnFamilyNotFound(cf_name.to_string()))?;
+    let dst_cf = dst_db
+        .cf_handle(cf_name)
+        .ok_or_else(|| StoreError::ColumnFamilyNotFound(cf_name.to_string()))?;
 
-    for cf_name in &src_cf_names {
-        let src_cf = src_db
-            .cf_handle(cf_name)
-            .ok_or_else(|| StoreError::ColumnFamilyNotFound(cf_name.clone()))?;
-        let dst_cf = dst_db
-            .cf_handle(cf_name)
-            .ok_or_else(|| StoreError::ColumnFamilyNotFound(cf_name.clone()))?;
+    let seal_values = SEALED_VALUE_CFS.contains(&cf_name);
 
-        let seal_values = SEALED_VALUE_CFS.contains(&cf_name.as_str());
+    let mut batch = WriteBatch::default();
+    let mut batched = 0usize;
+    for item in src_db.iterator_cf(&src_cf, rocksdb::IteratorMode::Start) {
+        let (key, value) = item.map_err(backend)?;
 
-        let mut batch = WriteBatch::default();
-        let mut batched = 0usize;
-        for item in src_db.iterator_cf(&src_cf, rocksdb::IteratorMode::Start) {
-            let (key, value) = item.map_err(backend)?;
-
-            if seal_values && !SealCipher::is_sealed(&value) {
-                let sealed = cipher.seal(&value).map_err(|e| {
-                    StoreError::Serialization(format!("sealing value during migration: {e}"))
-                })?;
-                batch.put_cf(&dst_cf, key, sealed);
-                stats.values_sealed += 1;
-            } else {
-                batch.put_cf(&dst_cf, key, value);
-                stats.values_copied += 1;
-            }
-
-            batched += 1;
-            if batched >= COPY_BATCH_SIZE {
-                dst_db.write(std::mem::take(&mut batch)).map_err(backend)?;
-                batched = 0;
-            }
+        if seal_values && !SealCipher::is_sealed(&value) {
+            let sealed = cipher.seal(&value).map_err(|e| {
+                StoreError::Serialization(format!("sealing value during migration: {e}"))
+            })?;
+            batch.put_cf(&dst_cf, key, sealed);
+            stats.values_sealed += 1;
+        } else {
+            batch.put_cf(&dst_cf, key, value);
+            stats.values_copied += 1;
         }
-        if batched > 0 {
-            dst_db.write(batch).map_err(backend)?;
+
+        batched += 1;
+        if batched >= COPY_BATCH_SIZE {
+            dst_db.write(std::mem::take(&mut batch)).map_err(backend)?;
+            batched = 0;
         }
     }
+    if batched > 0 {
+        dst_db.write(batch).map_err(backend)?;
+    }
+    Ok(())
+}
 
-    // Persist everything to SSTs before returning: a clean return is the
-    // caller's signal that the copy is durable and safe to swap in.
-    for cf_name in &dst_cf_names {
+/// Persist everything to SSTs before returning: a clean return is the
+/// caller's signal that the copy is durable and safe to swap in.
+fn flush_destination(dst_db: &Db, cf_names: &[String]) -> Result<(), StoreError> {
+    for cf_name in cf_names {
         if let Some(handle) = dst_db.cf_handle(cf_name) {
             dst_db.flush_cf(&handle).map_err(backend)?;
         }
     }
-    dst_db.flush().map_err(backend)?;
-
-    Ok(stats)
+    dst_db.flush().map_err(backend)
 }
 
 #[cfg(test)]

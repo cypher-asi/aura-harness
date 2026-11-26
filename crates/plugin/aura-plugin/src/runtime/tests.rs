@@ -1,4 +1,3 @@
-
 use super::*;
 use aura_config::{PluginConfig, PluginsTable};
 use std::collections::BTreeMap as Map;

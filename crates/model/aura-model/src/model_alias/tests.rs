@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn candidate(id: &'static str, label: &'static str, tier: ModelTier) -> AliasCandidate<'static> {

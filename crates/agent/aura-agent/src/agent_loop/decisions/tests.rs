@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// Call sites that emit each source. The match is exhaustive, so a

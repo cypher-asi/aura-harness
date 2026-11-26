@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::domain_tools::api::{
     CreateSessionParams, MessageDescriptor, ProjectDescriptor, ProjectUpdate, SaveMessageParams,
