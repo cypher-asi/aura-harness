@@ -1,0 +1,11 @@
+{
+  "id": "01a21568f7d10008",
+  "title": "opening closing right panel should not move width / position of far left panel",
+  "state": "completed",
+  "agent_id": "d4be1a68a1a42baec1e697190b17089d3bd0b877122ae1fd95c022fce38675ce",
+  "agent_name": "Agent 1632",
+  "items": [],
+  "summary": "Now I'll rewrite `columns` so the left column's width is computed the same way whether the right column is shown or not.",
+  "updated_ms": 1795655796443,
+  "created_ms": 1795655530449
+}

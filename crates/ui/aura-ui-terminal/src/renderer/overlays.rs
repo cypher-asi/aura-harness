@@ -5,7 +5,7 @@ use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
 use super::text::{centered_rect, display_width, wrap_words};
 use crate::{
     app::{folder_picker::FolderRow, AppState},
-    components::{highlight_code_line, CodeBlock},
+    components::{highlight_code_line, CodeBlock, Info, Value},
     App, Theme,
 };
 use ratatui::{
@@ -434,33 +434,19 @@ fn truncate_start(text: &str, width: usize) -> String {
 fn render_project_info(frame: &mut Frame, project: &crate::events::ProjectSummary, theme: &Theme) {
     let area = frame.area();
     let modal_width = 64.min(area.width.saturating_sub(4));
-    let text_width = usize::from(modal_width.saturating_sub(2)).max(1);
-    let muted = Style::default().fg(theme.colors.muted);
-    let fg = Style::default().fg(theme.colors.foreground);
-    let field = |label: &str, value: String, style: Style| {
-        Line::from(vec![
-            Span::styled(format!("{label:<10}"), muted),
-            Span::styled(value, style),
-        ])
-    };
-    let mut lines = vec![Line::from(Span::styled("Folder", muted))];
-    lines.extend(
-        wrap_words(&project.folder, text_width)
-            .into_iter()
-            .map(|line| Line::from(Span::styled(line, fg))),
-    );
+    let mut info = Info::new(usize::from(modal_width.saturating_sub(2)).max(1), theme);
+    info.section("FOLDER", None);
+    info.text(&project.folder, Value::Plain);
     if !project.folder_exists {
-        lines.push(Line::from(Span::styled(
-            "The folder is missing",
-            Style::default().fg(theme.colors.warning),
-        )));
+        info.text("The folder is missing", Value::Flag);
     }
-    lines.push(Line::from(""));
-    lines.push(field("Created", project.created.clone(), fg));
-    lines.push(field("Agents", project.listed_agents.to_string(), fg));
-    lines.push(field("Archived", project.archived_agents.to_string(), fg));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Press any key to close", muted)));
+    info.section("PROJECT", None);
+    info.fact("Created", &project.created, Value::Plain);
+    info.fact("Agents", &project.listed_agents.to_string(), Value::Plain);
+    info.fact("Archived", &project.archived_agents.to_string(), Value::Plain);
+    info.blank();
+    info.note("Press any key to close");
+    let lines = info.into_lines();
 
     let modal_height = u16::try_from(lines.len())
         .unwrap_or(u16::MAX)
@@ -587,275 +573,111 @@ pub(super) const fn record_status(
     }
 }
 
-/// Every line of a record's details, with prose wrapped to `width`.
-pub(super) fn record_detail_lines<'a>(
-    record: &'a crate::events::RecordSummary,
-    width: u16,
+/// Columns of a label in the RECORD and PROCESS views, whose labels are
+/// longer than a panel's.
+pub(super) const DETAIL_LABEL_WIDTH: usize = 14;
+
+/// Every line of a record's details, laid out `width` columns wide.
+pub(super) fn record_detail_lines(
+    record: &crate::events::RecordSummary,
+    width: usize,
     theme: &Theme,
-) -> Vec<Line<'a>> {
-    let mut content = build_record_header(record, theme);
-    build_transaction_section(&mut content, record, theme);
-    build_processing_section(&mut content, record, theme);
+) -> Vec<Line<'static>> {
+    let mut info = Info::new(width, theme)
+        .label_width(DETAIL_LABEL_WIDTH)
+        .wrap_values();
+    info.section("RECORD", None);
+    info.fact("Sequence", &record.seq.to_string(), Value::Plain);
+    info.fact("Context hash", &record.full_hash, Value::Quiet);
+
+    info.section("TRANSACTION", None);
+    info.fact("Tx id", &record.tx_id, Value::Quiet);
+    info.fact("Agent id", &record.agent_id, Value::Quiet);
+    let time = format!("{} ({})", record.ts_ms, record.timestamp);
+    info.fact("Time", &time, Value::Plain);
+    info.fact("Kind", &record.tx_kind, Value::Plain);
+    if !record.info.is_empty() {
+        info.fact("Info", &record.info, Value::Plain);
+    }
+
+    info.section("PROCESSING", None);
+    info.fact("Sender", &record.sender, Value::Plain);
+    info.fact("Actions", &record.action_count.to_string(), Value::Plain);
+    info.fact("Effects", &record.effect_status, Value::Plain);
+
     if let Some(policy) = &record.policy {
-        build_policy_section(&mut content, policy, theme);
+        policy_facts(&mut info, policy);
     }
     if !record.error_details.is_empty() {
-        build_error_section(&mut content, record, width, theme);
+        info.section("ERROR", None);
+        info.text(&record.error_details, Value::Error);
     }
-    build_message_section(&mut content, record, width, theme);
-    content
+    info.section("MESSAGE", None);
+    let message = message_lines(&record.message, info.indented_width(), theme);
+    info.indented(message);
+    info.into_lines()
 }
 
-fn build_record_header<'a>(
-    record: &'a crate::events::RecordSummary,
-    theme: &Theme,
-) -> Vec<Line<'a>> {
-    vec![
-        Line::from(vec![
-            Span::styled("Sequence:    ", Style::default().fg(theme.colors.muted)),
-            Span::styled(
-                format!("{}", record.seq),
-                Style::default().fg(theme.colors.foreground),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Context Hash:", Style::default().fg(theme.colors.muted)),
-            Span::styled(
-                format!(" {}", &record.full_hash),
-                Style::default().fg(theme.colors.secondary),
-            ),
-        ]),
-    ]
-}
-
-fn build_transaction_section<'a>(
-    content: &mut Vec<Line<'a>>,
-    record: &'a crate::events::RecordSummary,
-    theme: &Theme,
-) {
-    content.push(Line::from(""));
-    content.push(Line::from(Span::styled(
-        "── Transaction ──",
-        Style::default().fg(theme.colors.muted),
-    )));
-    content.push(Line::from(vec![
-        Span::styled("tx_id:       ", Style::default().fg(theme.colors.muted)),
-        Span::styled(&record.tx_id, Style::default().fg(theme.colors.secondary)),
-    ]));
-    content.push(Line::from(vec![
-        Span::styled("agent_id:    ", Style::default().fg(theme.colors.muted)),
-        Span::styled(
-            &record.agent_id,
-            Style::default().fg(theme.colors.secondary),
-        ),
-    ]));
-    content.push(Line::from(vec![
-        Span::styled("ts_ms:       ", Style::default().fg(theme.colors.muted)),
-        Span::styled(
-            format!("{}", record.ts_ms),
-            Style::default().fg(theme.colors.foreground),
-        ),
-        Span::styled(
-            format!(" ({})", record.timestamp),
-            Style::default().fg(theme.colors.muted),
-        ),
-    ]));
-    content.push(Line::from(vec![
-        Span::styled("kind:        ", Style::default().fg(theme.colors.muted)),
-        Span::styled(
-            &record.tx_kind,
-            Style::default().fg(theme.colors.foreground),
-        ),
-    ]));
-
-    if !record.info.is_empty() {
-        content.push(Line::from(vec![
-            Span::styled("info:        ", Style::default().fg(theme.colors.muted)),
-            Span::styled(&record.info, Style::default().fg(theme.colors.primary)),
-        ]));
-    }
-}
-
-fn build_processing_section<'a>(
-    content: &mut Vec<Line<'a>>,
-    record: &'a crate::events::RecordSummary,
-    theme: &Theme,
-) {
-    content.push(Line::from(""));
-    content.push(Line::from(Span::styled(
-        "── Processing ──",
-        Style::default().fg(theme.colors.muted),
-    )));
-    content.push(Line::from(vec![
-        Span::styled("Sender:      ", Style::default().fg(theme.colors.muted)),
-        Span::styled(&record.sender, Style::default().fg(theme.colors.foreground)),
-    ]));
-    content.push(Line::from(vec![
-        Span::styled("Actions:     ", Style::default().fg(theme.colors.muted)),
-        Span::styled(
-            format!("{}", record.action_count),
-            Style::default().fg(theme.colors.secondary),
-        ),
-    ]));
-    content.push(Line::from(vec![
-        Span::styled("Effects:     ", Style::default().fg(theme.colors.muted)),
-        Span::styled(
-            &record.effect_status,
-            Style::default().fg(theme.colors.foreground),
-        ),
-    ]));
-}
-
-fn build_policy_section<'a>(
-    content: &mut Vec<Line<'a>>,
-    policy: &'a crate::events::PolicyDetail,
-    theme: &Theme,
-) {
-    let label = |text: &'static str| Span::styled(text, Style::default().fg(theme.colors.muted));
-    let verdict_color = match policy.verdict.as_str() {
-        "approved" => theme.colors.success,
-        "denied" => theme.colors.error,
-        _ => theme.colors.pending,
+/// What the kernel decided about a tool, by which rule, and the checks it
+/// went through to get there.
+fn policy_facts(info: &mut Info, policy: &crate::events::PolicyDetail) {
+    let verdict = match policy.verdict.as_str() {
+        "approved" => Value::Plain,
+        "denied" => Value::Error,
+        _ => Value::Flag,
     };
-
-    content.push(Line::from(""));
-    content.push(Line::from(Span::styled(
-        "── Policy decision ──",
-        Style::default().fg(theme.colors.muted),
-    )));
-    content.push(Line::from(vec![
-        label("Tool:        "),
-        Span::styled(&policy.tool, Style::default().fg(theme.colors.foreground)),
-    ]));
-    content.push(Line::from(vec![
-        label("Verdict:     "),
-        Span::styled(&policy.verdict, Style::default().fg(verdict_color)),
-    ]));
-    content.push(Line::from(vec![
-        label("Decided by:  "),
-        Span::styled(
-            &policy.decided_by,
-            Style::default().fg(theme.colors.primary),
-        ),
-    ]));
+    info.section("POLICY DECISION", None);
+    info.fact("Tool", &policy.tool, Value::Plain);
+    info.fact("Verdict", &policy.verdict, verdict);
+    info.fact("Decided by", &policy.decided_by, Value::Plain);
     if !policy.reason.is_empty() {
-        content.push(Line::from(vec![
-            label("Reason:      "),
-            Span::styled(&policy.reason, Style::default().fg(theme.colors.foreground)),
-        ]));
+        info.fact("Reason", &policy.reason, Value::Plain);
     }
     if !policy.approval.is_empty() {
-        content.push(Line::from(vec![
-            label("Approved by: "),
-            Span::styled(
-                &policy.approval,
-                Style::default().fg(theme.colors.foreground),
-            ),
-        ]));
+        info.fact("Approved by", &policy.approval, Value::Plain);
     }
-    content.push(Line::from(vec![
-        label("Mode:        "),
-        Span::styled(&policy.mode, Style::default().fg(theme.colors.foreground)),
-    ]));
-    content.push(Line::from(vec![
-        label("Proposal tx: "),
-        Span::styled(
-            &policy.proposal_tx,
-            Style::default().fg(theme.colors.secondary),
-        ),
-    ]));
-    content.push(Line::from(vec![
-        label("Policy hash: "),
-        Span::styled(
-            &policy.policy_hash,
-            Style::default().fg(theme.colors.secondary),
-        ),
-    ]));
-    if !policy.trace.is_empty() {
-        content.push(Line::from(label("Checks:")));
-        for check in &policy.trace {
-            content.push(Line::from(Span::styled(
-                format!("  {check}"),
-                Style::default().fg(theme.colors.foreground),
-            )));
-        }
+    info.fact("Mode", &policy.mode, Value::Plain);
+    info.fact("Proposal tx", &policy.proposal_tx, Value::Quiet);
+    info.fact("Policy hash", &policy.policy_hash, Value::Quiet);
+    for (index, check) in policy.trace.iter().enumerate() {
+        let label = if index == 0 { "Checks" } else { "" };
+        info.fact(label, check, Value::Plain);
     }
 }
 
-fn build_error_section<'a>(
-    content: &mut Vec<Line<'a>>,
-    record: &'a crate::events::RecordSummary,
-    modal_width: u16,
-    theme: &Theme,
-) {
-    content.push(Line::from(""));
-    content.push(Line::from(Span::styled(
-        "Error Details:",
-        Style::default().fg(theme.colors.error),
-    )));
-    for line in record.error_details.lines() {
-        if line.is_empty() {
-            content.push(Line::from(""));
-        } else {
-            let max_width = (modal_width as usize).saturating_sub(4);
-            for wrapped_line in wrap_words(line, max_width) {
-                content.push(Line::from(Span::styled(
-                    format!("  {wrapped_line}"),
-                    Style::default().fg(theme.colors.error),
-                )));
-            }
-        }
-    }
-}
-
-fn build_message_section(
-    content: &mut Vec<Line<'_>>,
-    record: &crate::events::RecordSummary,
-    modal_width: u16,
-    theme: &Theme,
-) {
-    content.push(Line::from(""));
-    content.push(Line::from(Span::styled(
-        "Message:",
-        Style::default().fg(theme.colors.muted),
-    )));
-
-    if record.message.starts_with(['{', '[']) {
+/// A record's message laid out `width` columns wide: JSON highlighted,
+/// anything else as markdown with its code blocks.
+fn message_lines(message: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    if message.starts_with(['{', '[']) {
         // Highlight the whole document in order so keys on later lines are
         // recognized as keys (inside their object), not stray strings.
-        let syntax = crate::components::syntax::syntax_for_token("json");
-        match syntax {
+        return match crate::components::syntax::syntax_for_token("json") {
             Some(syntax) => {
                 let mut highlighter = crate::components::syntax::LineHighlighter::new(syntax);
-                content.extend(
-                    record
-                        .message
-                        .lines()
-                        .map(|line| Line::from(highlighter.spans(line, theme))),
-                );
-            }
-            None => content.extend(
-                record
-                    .message
+                message
                     .lines()
-                    .map(|line| Line::from(highlight_code_line("json", line, theme))),
-            ),
-        }
-        return;
+                    .map(|line| Line::from(highlighter.spans(line, theme)))
+                    .collect()
+            }
+            None => message
+                .lines()
+                .map(|line| Line::from(highlight_code_line("json", line, theme)))
+                .collect(),
+        };
     }
-
     let base_style = Style::default().fg(theme.colors.foreground);
-    let width = usize::from(modal_width.saturating_sub(2));
-    for segment in parse_content_segments(&record.message) {
+    let mut lines = Vec::new();
+    for segment in parse_content_segments(message) {
         match segment {
             ContentSegment::Text(text) => {
-                content.extend(render_markdown(&text, width, base_style, theme));
+                lines.extend(render_markdown(&text, width, base_style, theme));
             }
             ContentSegment::CodeBlock { language, code } => {
-                content.extend(CodeBlock::new(language, code).render(theme, width));
+                lines.extend(CodeBlock::new(language, code).render(theme, width));
             }
         }
     }
+    lines
 }
 
 #[cfg(test)]

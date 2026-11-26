@@ -8,14 +8,14 @@
 //! agent's, then a ⤢ button that maximizes the panel over the Record
 //! panel, or restores it.
 
-use super::chrome::{render_body_block, render_scrollbar, ScrollView};
+use super::chrome::{render_body_block, Body, ScrollView};
 use super::header::{self, PanelHeader};
-use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, SANDBOX_HINT};
+use super::side_list::{name_style, render_empty, Tone, SANDBOX_HINT};
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
 use crate::app::{HoverTarget, Pane, PanelFocus, SidePanelTab, SideScope};
 use crate::components::{cell_style, list_row, CellState, StatusIcon};
 use crate::{App, Theme};
-use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
+use ratatui::{layout::Rect, text::Line, Frame};
 
 /// Render the panel: its header bar, then the open tab.
 pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
@@ -72,7 +72,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         SidePanelTab::Processes => {
             super::processes::render_processes(frame, area, body, app, theme);
         }
-        SidePanelTab::Host => super::host_tab::render_host(frame, body, app, theme),
+        SidePanelTab::Host => super::host_tab::render_host(frame, area, body, app, theme),
         SidePanelTab::Trace => {
             super::trace_feed::render_trace_feed(frame, area, body, app, theme);
         }
@@ -81,7 +81,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             super::channel_side::render_channel_members(frame, area, body, app, theme);
         }
         SidePanelTab::ChannelInfo => {
-            super::channel_side::render_channel_info(frame, body, app, theme);
+            super::channel_side::render_channel_info(frame, area, body, app, theme);
         }
     }
 }
@@ -100,8 +100,8 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
         return;
     }
 
-    let (rows_area, hint) = split_hint(inner, is_focused);
-    let visible = rows_area.height as usize;
+    let body = Body::new(area, inner, is_focused);
+    let visible = body.visible();
     let scroll = app.sync_sandbox_scroll(visible);
     let hovered = match app.hover() {
         Some(HoverTarget::SandboxRow(index)) => Some(index),
@@ -109,7 +109,7 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
     };
     let tree = app.sandbox();
     let selected = tree.selected();
-    let width = inner.width as usize;
+    let width = body.width();
 
     let lines: Vec<Line> = tree
         .rows()
@@ -127,12 +127,8 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
         visible,
         first: scroll,
     };
-    app.set_sandbox_rows_area(rows_area, scroll);
-    frame.render_widget(Paragraph::new(lines), rows_area);
-    render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-    if let Some(hint) = hint {
-        render_hint(frame, hint, SANDBOX_HINT, theme);
-    }
+    app.set_sandbox_rows_area(body.rows(), scroll);
+    body.draw(frame, lines, view, SANDBOX_HINT, theme);
 }
 
 /// A tree row: the fold glyph of a directory (none for files), then the

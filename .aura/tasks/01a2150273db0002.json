@@ -1,0 +1,38 @@
+{
+  "id": "01a2150273db0002",
+  "title": "We need to create a feature that maps channels to Projects. Currently there is no way of",
+  "state": "cancelled",
+  "agent_id": "e60170c715e9ce02418018d77585543bd03201cc00bcce74e26ba39958d37dec",
+  "agent_name": "Agent 1620",
+  "items": [
+    {
+      "content": "aura-store-db: one project per channel on ChannelRecord, set on create and update in one batch, migrate the old p/ links",
+      "state": "completed",
+      "assignee": "tests",
+      "task": "01a2151dc1840005"
+    },
+    {
+      "content": "aura-ui events + aura-ui-terminal: Project field in the new-channel form, Edit channel form (UpdateChannel), INFO shows the project, drop Link/Unlink menu",
+      "state": "completed",
+      "assignee": "rust-engineer",
+      "task": "01a2153042f60007"
+    },
+    {
+      "content": "aura-app: create/update with project, coordinator lives in the project, spawns pinned to it, members visible in PROJECTS, prompt block, project removal clears it",
+      "state": "pending",
+      "assignee": "rust-engineer",
+      "task": "01a215399c030008"
+    },
+    {
+      "content": "Review the whole branch for bugs, regressions and missing tests",
+      "state": "pending"
+    },
+    {
+      "content": "Run fmt, clippy -D warnings, tests and the aura-desktop check; commit on channel-projects",
+      "state": "pending"
+    }
+  ],
+  "summary": "I'll start by getting oriented in the codebase.",
+  "updated_ms": 1795653575352,
+  "created_ms": 1795648811995
+}

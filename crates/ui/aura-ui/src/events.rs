@@ -551,6 +551,17 @@ pub enum BootUpdate {
         /// Out of
         total: u64,
     },
+    /// What a running step waits on now and how long it may take;
+    /// `what: None` clears it. One replaced without being cleared first
+    /// keeps its clock. Never kept in history: it is about the moment.
+    Waiting {
+        /// Stable key of the step
+        key: String,
+        /// The call or command pending
+        what: Option<String>,
+        /// When it gives up, ms, if it does
+        limit_ms: Option<u64>,
+    },
     /// The console is done; `summary` says how it went
     End {
         /// Whether it went through

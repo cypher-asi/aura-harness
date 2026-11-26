@@ -7,7 +7,8 @@ use super::text::{display_width, wrap_words};
 use super::MoreRows;
 use crate::app::{CodeCopyHit, CopyText};
 use crate::components::{
-    boot_duration as duration, BootConsole, MoreSection, COPY_BUTTON, MORE_PAGE_LINES,
+    boot_duration as duration, wait_clock, BootConsole, BootStep, BootWait, MoreSection,
+    COPY_BUTTON, MORE_PAGE_LINES,
 };
 use crate::events::BootStageState;
 use crate::Theme;
@@ -36,6 +37,12 @@ const BAND_GAP: u128 = 6;
 
 /// Narrowest a console is drawn with its copy button.
 const MIN_COPY_WIDTH: usize = 40;
+
+/// Quiet this long, a running console's header says how long, ms.
+const QUIET_AFTER_MS: u64 = 15_000;
+
+/// Quiet this long, it says so in the warning color, ms.
+const QUIET_WARN_MS: u64 = 60_000;
 
 /// The copy button on `console`'s header, drawn `width` columns wide.
 pub(super) fn boot_copy(console: &BootConsole, width: usize) -> Option<CodeCopyHit> {
@@ -225,6 +232,19 @@ fn header(console: &BootConsole, expanded: bool, spinner: &str, theme: &Theme) -
         format!("  ·  {}", duration(console.elapsed_ms())),
         faint,
     ));
+    // A boot that hears nothing for a while says so, so a stall shows.
+    let quiet = console.quiet_ms();
+    if console.is_running() && quiet >= QUIET_AFTER_MS {
+        let style = if quiet >= QUIET_WARN_MS {
+            Style::default().fg(theme.colors.warning)
+        } else {
+            faint
+        };
+        spans.push(Span::styled(
+            format!("  ·  no news for {}", duration(quiet - quiet % 1000)),
+            style,
+        ));
+    }
     Line::from(spans)
 }
 
@@ -302,60 +322,92 @@ fn bar_line(console: &BootConsole, width: usize, theme: &Theme) -> Line<'static>
 
 fn step_lines(console: &BootConsole, spinner: &str, theme: &Theme) -> Vec<Line<'static>> {
     let faint = Style::default().fg(theme.colors.faint);
-    console
-        .steps
-        .iter()
-        .map(|step| {
-            let (mark, mark_style, note) = match &step.state {
-                BootStageState::Pending => ("·".to_string(), faint, None),
-                BootStageState::Running => (
-                    spinner.to_string(),
-                    Style::default().fg(theme.colors.success),
-                    step.started
-                        .map(|at| duration(u64::try_from(at.elapsed().as_millis()).unwrap_or(0))),
-                ),
-                BootStageState::Done { ms } => (
-                    "✓".to_string(),
-                    Style::default().fg(theme.colors.success),
-                    Some(duration(*ms)),
-                ),
-                BootStageState::Skipped(reason) => {
-                    ("–".to_string(), faint, Some(format!("skipped: {reason}")))
-                }
-                BootStageState::Failed(reason) => (
-                    "✗".to_string(),
-                    Style::default().fg(theme.colors.error),
-                    Some(reason.clone()),
-                ),
-            };
-            let label_style = match step.state {
-                BootStageState::Pending => faint,
-                BootStageState::Running => Style::default().fg(theme.colors.text),
-                BootStageState::Failed(_) => Style::default().fg(theme.colors.error),
-                _ => Style::default().fg(theme.colors.secondary),
-            };
-            let mut spans = vec![
-                Span::raw(BODY),
-                Span::styled(format!("{mark} "), mark_style),
-                Span::styled(step.label.clone(), label_style),
-            ];
-            if let Some((done, total)) = step.progress.filter(|(_, total)| *total > 0) {
-                spans.push(Span::styled(
-                    format!("  {done}/{total}"),
-                    Style::default().fg(theme.colors.muted),
-                ));
-            }
-            if let Some(note) = note {
-                let style = if matches!(step.state, BootStageState::Failed(_)) {
-                    Style::default().fg(theme.colors.error)
-                } else {
-                    faint
-                };
-                spans.push(Span::styled(format!("  {note}"), style));
-            }
-            Line::from(spans)
-        })
-        .collect()
+    let mut lines = Vec::new();
+    for step in &console.steps {
+        lines.push(step_line(step, spinner, theme));
+        if let Some(wait) = step
+            .waiting
+            .as_ref()
+            .filter(|_| step.state == BootStageState::Running)
+        {
+            lines.push(wait_line(wait, theme, faint));
+        }
+    }
+    lines
+}
+
+/// `↳ boxd is creating aura-1 · 42.0s of 3m 00s`: what a running step
+/// waits on, its clock turning to a warning near its limit and past it.
+fn wait_line(wait: &BootWait, theme: &Theme, faint: Style) -> Line<'static> {
+    let waited = wait.waited_ms();
+    let (clock, style) = match wait.limit_ms {
+        Some(limit) if waited >= limit => (
+            format!("{}, past its time limit", wait_clock(wait)),
+            Style::default().fg(theme.colors.error),
+        ),
+        Some(limit) if waited.saturating_mul(4) >= limit.saturating_mul(3) => {
+            (wait_clock(wait), Style::default().fg(theme.colors.warning))
+        }
+        _ => (wait_clock(wait), faint),
+    };
+    Line::from(vec![
+        Span::raw(format!("{BODY}  ")),
+        Span::styled("↳ ", faint),
+        Span::styled(wait.what.clone(), Style::default().fg(theme.colors.muted)),
+        Span::styled(format!("  ·  {clock}"), style),
+    ])
+}
+
+fn step_line(step: &BootStep, spinner: &str, theme: &Theme) -> Line<'static> {
+    let faint = Style::default().fg(theme.colors.faint);
+    let (mark, mark_style, note) = match &step.state {
+        BootStageState::Pending => ("·".to_string(), faint, None),
+        BootStageState::Running => (
+            spinner.to_string(),
+            Style::default().fg(theme.colors.success),
+            step.started
+                .map(|at| duration(u64::try_from(at.elapsed().as_millis()).unwrap_or(0))),
+        ),
+        BootStageState::Done { ms } => (
+            "✓".to_string(),
+            Style::default().fg(theme.colors.success),
+            Some(duration(*ms)),
+        ),
+        BootStageState::Skipped(reason) => {
+            ("–".to_string(), faint, Some(format!("skipped: {reason}")))
+        }
+        BootStageState::Failed(reason) => (
+            "✗".to_string(),
+            Style::default().fg(theme.colors.error),
+            Some(reason.clone()),
+        ),
+    };
+    let label_style = match step.state {
+        BootStageState::Pending => faint,
+        BootStageState::Running => Style::default().fg(theme.colors.text),
+        BootStageState::Failed(_) => Style::default().fg(theme.colors.error),
+        _ => Style::default().fg(theme.colors.secondary),
+    };
+    let mut spans = vec![
+        Span::raw(BODY),
+        Span::styled(format!("{mark} "), mark_style),
+        Span::styled(step.label.clone(), label_style),
+    ];
+    if let Some((done, total)) = step.progress.filter(|(_, total)| *total > 0) {
+        spans.push(Span::styled(
+            format!("  {done}/{total}"),
+            Style::default().fg(theme.colors.muted),
+        ));
+    }
+    if let Some(note) = note {
+        let style = if matches!(step.state, BootStageState::Failed(_)) {
+            Style::default().fg(theme.colors.error)
+        } else {
+            faint
+        };
+        spans.push(Span::styled(format!("  {note}"), style));
+    }
+    Line::from(spans)
 }
 
 fn fact_lines(console: &BootConsole, width: usize, theme: &Theme) -> Vec<Line<'static>> {
@@ -715,6 +767,62 @@ mod tests {
         assert_eq!(rows, 0..3, "header and summary");
         assert!(text(&open[1..3]).contains("`/local` brings it back."));
         assert!(!text(&open[rows]).contains("Step quota"));
+    }
+
+    #[test]
+    fn a_running_step_shows_what_it_waits_on_and_its_limit() {
+        let theme = Theme::cyber();
+        let mut console = console();
+        console.apply(BootUpdate::Waiting {
+            key: "create".into(),
+            what: Some("boxd is creating aura-re36-3f9c from snapshot proj-x".into()),
+            limit_ms: Some(180_000),
+        });
+        let shown = text(&boot_lines(&console, false, "⠋", 120, &theme));
+        assert!(
+            shown.contains("↳ boxd is creating aura-re36-3f9c from snapshot proj-x"),
+            "{shown}"
+        );
+        assert!(shown.contains(" of 3m 00s"), "{shown}");
+        assert!(!shown.contains("past its time limit"));
+
+        // Past its limit, it says so.
+        let step = &mut console.steps[2];
+        if let Some(wait) = step.waiting.as_mut() {
+            wait.since = std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(200))
+                .expect("an instant 200s ago");
+        }
+        let late = text(&boot_lines(&console, false, "⠋", 120, &theme));
+        assert!(late.contains("past its time limit"), "{late}");
+
+        console.apply(BootUpdate::Waiting {
+            key: "create".into(),
+            what: None,
+            limit_ms: None,
+        });
+        assert!(!text(&boot_lines(&console, false, "⠋", 120, &theme)).contains('↳'));
+    }
+
+    #[test]
+    fn a_quiet_console_says_how_long_it_has_heard_nothing() {
+        let theme = Theme::cyber();
+        let mut console = console();
+        assert!(!text(&boot_lines(&console, false, "⠋", 120, &theme)).contains("no news"));
+        console.last_update = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(47))
+            .expect("an instant 47s ago");
+        let header = text(&boot_lines(&console, false, "⠋", 120, &theme)[..1]);
+        assert!(header.contains("no news for 47.0s"), "{header}");
+
+        console.apply(BootUpdate::End {
+            ok: true,
+            summary: "done".into(),
+        });
+        console.last_update = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(47))
+            .expect("an instant 47s ago");
+        assert!(!text(&boot_lines(&console, false, "⠋", 120, &theme)).contains("no news"));
     }
 
     #[test]

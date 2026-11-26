@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::boot::{human_bytes, BootReporter, BootStage};
+use crate::boxd::{CALL_TIMEOUT, CREATE_TIMEOUT};
 use crate::delta;
 use crate::error::{CloudError, CloudResult};
 use crate::fleet::VmLedger;
@@ -368,13 +369,18 @@ impl SnapshotBuilder {
         &self,
         record: Option<&SnapshotRecord>,
         fingerprint: &str,
+        boot: &BootReporter,
     ) -> CloudResult<bool> {
         let Some(record) = record.filter(|r| r.fingerprint == fingerprint) else {
             return Ok(false);
         };
-        Ok(self
-            .provider
-            .snapshot(&record.name)
+        Ok(boot
+            .wait(
+                BootStage::Snapshot,
+                format!("boxd is looking up snapshot {}", record.name),
+                Some(CALL_TIMEOUT),
+                self.provider.snapshot(&record.name),
+            )
             .await?
             .is_some_and(|snapshot| snapshot.is_ready()))
     }
@@ -417,7 +423,7 @@ impl SnapshotBuilder {
         );
         let fingerprint = base_fingerprint(self.size, &version);
         let current = self.record(BASE_SNAPSHOT).await;
-        if self.usable(current.as_ref(), &fingerprint).await? {
+        if self.usable(current.as_ref(), &fingerprint, boot).await? {
             if let Some(record) = current {
                 boot.fact(
                     "base image",
@@ -528,7 +534,7 @@ impl SnapshotBuilder {
                 .map_err(|err| CloudError::io("fingerprint project", std::io::Error::other(err)))?
         };
         let current = self.record(project_id).await;
-        if !force && self.usable(current.as_ref(), &fingerprint).await? {
+        if !force && self.usable(current.as_ref(), &fingerprint, boot).await? {
             if let Some(record) = current {
                 boot.fact(
                     "snapshot",
@@ -548,11 +554,16 @@ impl SnapshotBuilder {
         boot.fact("build command", command.clone());
         let (commit, archive) = {
             let dir = dir.clone();
-            tokio::task::spawn_blocking(move || {
-                let commit = delta::head_commit(&dir)?;
-                let archive = delta::archive_commit(&dir, &commit)?;
-                Ok::<_, CloudError>((commit, archive))
-            })
+            boot.wait(
+                BootStage::Snapshot,
+                "archiving the project at HEAD",
+                None,
+                tokio::task::spawn_blocking(move || {
+                    let commit = delta::head_commit(&dir)?;
+                    let archive = delta::archive_commit(&dir, &commit)?;
+                    Ok::<_, CloudError>((commit, archive))
+                }),
+            )
             .await
             .map_err(|err| CloudError::io("archive project", std::io::Error::other(err)))??
         };
@@ -650,7 +661,19 @@ impl SnapshotBuilder {
             secrets: Vec::new(),
         };
         tracing::info!(snapshot, builder = %spec.name, "building cloud snapshot");
-        let machine = self.provider.create(&spec, &origin).await?;
+        boot.log(
+            BootStage::Snapshot,
+            false,
+            format!("creating builder machine {}", spec.name),
+        );
+        let machine = boot
+            .wait(
+                BootStage::Snapshot,
+                format!("boxd is creating builder machine {}", spec.name),
+                Some(CREATE_TIMEOUT),
+                self.provider.create(&spec, &origin),
+            )
+            .await?;
         boot.fact(
             "builder",
             format!(
@@ -754,47 +777,96 @@ impl SnapshotBuilder {
             false,
             format!("saving snapshot {snapshot}"),
         );
-        let saved = self.provider.save_snapshot(builder, snapshot).await?;
+        let saved = boot
+            .wait(
+                BootStage::Snapshot,
+                format!("boxd is saving {builder} as snapshot {snapshot}"),
+                Some(CREATE_TIMEOUT),
+                self.provider.save_snapshot(builder, snapshot),
+            )
+            .await?;
         let deadline = tokio::time::Instant::now() + READY_WAIT;
-        loop {
-            if self
-                .provider
-                .snapshot(snapshot)
-                .await?
-                .is_some_and(|s| s.is_ready() && s.version >= saved.version)
-            {
-                return Ok(saved.version);
+        let ready = format!(
+            "boxd is getting snapshot {snapshot} v{} ready",
+            saved.version
+        );
+        // One wait for the whole poll, its line updated with what boxd
+        // last said; an update that doesn't clear it keeps its clock.
+        let poll = async {
+            loop {
+                let found = self.provider.snapshot(snapshot).await?;
+                if found
+                    .as_ref()
+                    .is_some_and(|s| s.is_ready() && s.version >= saved.version)
+                {
+                    return Ok(saved.version);
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(CloudError::Timeout {
+                        op: "CreateSnapshot",
+                        after: READY_WAIT,
+                    });
+                }
+                let status = found.map_or_else(
+                    || "not listed yet".to_string(),
+                    |s| format!("{} at v{}", s.status, s.version),
+                );
+                boot.waiting(
+                    BootStage::Snapshot,
+                    format!("{ready} (boxd says {status})"),
+                    Some(READY_WAIT),
+                );
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(CloudError::Timeout {
-                    op: "CreateSnapshot",
-                    after: READY_WAIT,
-                });
-            }
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
+        };
+        boot.wait(BootStage::Snapshot, ready.clone(), Some(READY_WAIT), poll)
+            .await
     }
 
     async fn run_step(&self, builder: &str, step: Step, boot: &BootReporter) -> CloudResult<()> {
         match step {
             Step::Upload { path, bytes } => {
+                let size = human_bytes(bytes.len() as u64);
                 boot.log(
                     BootStage::Snapshot,
                     false,
-                    format!("upload {path} ({})", human_bytes(bytes.len() as u64)),
+                    format!("upload {path} ({size})"),
                 );
-                self.provider.upload(builder, &path, bytes).await?;
+                boot.wait(
+                    BootStage::Snapshot,
+                    format!("uploading {path} ({size}) to {builder}"),
+                    Some(CREATE_TIMEOUT),
+                    self.provider
+                        .upload_reported(builder, &path, bytes, &mut |sent, total| {
+                            boot.waiting(
+                                BootStage::Snapshot,
+                                uploading(&path, sent, total, builder),
+                                Some(CREATE_TIMEOUT),
+                            );
+                        }),
+                )
+                .await?;
                 Ok(())
             }
             Step::Run { command, timeout } => {
                 boot.log(BootStage::Snapshot, false, format!("$ {command}"));
                 let wrapped = format!("set -a; [ -f /etc/aura/machine.env ] && . /etc/aura/machine.env; set +a; {command}");
                 let mut lines = boot.output(BootStage::Snapshot);
-                let output = self
-                    .provider
-                    .exec_streaming(builder, &wrapped, None, timeout, &mut |stderr, bytes| {
-                        lines.chunk(stderr, bytes);
-                    })
+                let output = boot
+                    .wait(
+                        BootStage::Snapshot,
+                        step_waits_on(&command, builder),
+                        Some(timeout),
+                        self.provider.exec_streaming(
+                            builder,
+                            &wrapped,
+                            None,
+                            timeout,
+                            &mut |stderr, bytes| {
+                                lines.chunk(stderr, bytes);
+                            },
+                        ),
+                    )
                     .await?;
                 lines.finish();
                 if output.success() {
@@ -809,9 +881,14 @@ impl SnapshotBuilder {
                 }
             }
             Step::CheckBinary => {
-                let output = self
-                    .provider
-                    .exec(builder, CHECK_BINARY, None, SHORT_STEP_TIMEOUT)
+                let output = boot
+                    .wait(
+                        BootStage::Snapshot,
+                        format!("checking aura starts on {builder}"),
+                        Some(SHORT_STEP_TIMEOUT),
+                        self.provider
+                            .exec(builder, CHECK_BINARY, None, SHORT_STEP_TIMEOUT),
+                    )
                     .await?;
                 if output.success() {
                     Ok(())
@@ -825,6 +902,43 @@ impl SnapshotBuilder {
             }
         }
     }
+}
+
+/// Longest command shown on a waiting line, in characters.
+const MAX_WAIT_COMMAND_CHARS: usize = 80;
+
+/// An upload's waiting line: `uploading /tmp/aura (40 MiB of 140 MiB) to b1`.
+#[must_use]
+pub fn uploading(path: &str, sent: u64, total: u64, machine: &str) -> String {
+    if sent >= total {
+        return format!(
+            "uploading {path} ({}) to {machine}: sent, waiting for boxd to write it",
+            human_bytes(total)
+        );
+    }
+    format!(
+        "uploading {path} ({} of {}) to {machine}",
+        human_bytes(sent),
+        human_bytes(total)
+    )
+}
+
+/// What a build step waits on, as shown: the image's first boot by name
+/// (its output goes nowhere, so this line is all a boot shows of it),
+/// any other command cut short.
+fn step_waits_on(command: &str, builder: &str) -> String {
+    if command.contains("cloud-init status --wait") {
+        return format!("waiting for {builder}'s first boot (cloud-init)");
+    }
+    let one_line = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    let shown = if one_line.chars().count() > MAX_WAIT_COMMAND_CHARS {
+        let mut cut: String = one_line.chars().take(MAX_WAIT_COMMAND_CHARS - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        one_line
+    };
+    format!("`{shown}` on {builder}")
 }
 
 enum Step {
@@ -865,6 +979,32 @@ mod tests {
     use super::*;
     use crate::fake::FakeProvider;
     use crate::fleet::MemoryLedger;
+
+    #[test]
+    fn a_build_step_says_what_it_waits_on() {
+        assert_eq!(
+            step_waits_on(
+                "command -v cloud-init >/dev/null 2>&1 && cloud-init status --wait >/dev/null 2>&1; true",
+                "b1"
+            ),
+            "waiting for b1's first boot (cloud-init)"
+        );
+        assert_eq!(
+            step_waits_on("set -e;\n  cargo   fetch", "b1"),
+            "`set -e; cargo fetch` on b1"
+        );
+        let long = step_waits_on(&"x".repeat(200), "b1");
+        assert!(long.contains('…') && long.chars().count() < 100, "{long}");
+    }
+
+    #[test]
+    fn an_upload_says_how_far_it_has_got() {
+        assert_eq!(
+            uploading("/tmp/aura", 40 << 20, 140 << 20, "b1"),
+            "uploading /tmp/aura (40 MiB of 140 MiB) to b1"
+        );
+        assert!(uploading("/tmp/aura", 140 << 20, 140 << 20, "b1").contains("sent, waiting"));
+    }
     use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) {
@@ -1133,16 +1273,24 @@ mod tests {
             .expect("build");
         let mut lines = Vec::new();
         let mut facts = Vec::new();
+        let mut waits = Vec::new();
         let mut progressed = false;
         while let Ok(event) = rx.try_recv() {
             match event {
                 BootEvent::Log { line, .. } => lines.push(line),
                 BootEvent::Fact { key, value } => facts.push((key, value)),
                 BootEvent::Progress { .. } => progressed = true,
+                BootEvent::Waiting { what, .. } => waits.push(what),
                 BootEvent::Stage { .. } | BootEvent::Plan(_) => {}
             }
         }
         assert!(progressed);
+        let said = |text: &str| waits.iter().flatten().any(|what| what.contains(text));
+        assert!(said("first boot (cloud-init)"), "{waits:?}");
+        assert!(said("boxd is creating builder machine"), "{waits:?}");
+        assert!(said("cargo fetch"), "{waits:?}");
+        assert!(said("ready"), "{waits:?}");
+        assert_eq!(waits.last(), Some(&None), "the last wait is cleared");
         assert!(lines
             .iter()
             .any(|l| l.starts_with("$ ") && l.contains("cargo fetch")));

@@ -10,43 +10,35 @@
 //!      └─ Worker                WK
 //! ```
 //!
-//! INFO is what the channel is: its slug, title and description, who
-//! coordinates it, how many members it has, and the projects linked to
-//! it. A right click anywhere in it opens the channel's menu.
+//! INFO is what the channel is, as an info document: its slug, title and
+//! description, who coordinates it, how many members it has, and the
+//! projects linked to it. A right click anywhere in it opens the
+//! channel's menu.
 //!
 //! ```text
-//!  #zode
-//!  Zode release
-//!  Ship the zode crate and its docs.
+//! #zode
+//! Zode release
+//! Ship the zode crate and its docs.
 //!
-//!  COORDINATOR
-//!     Coordinator  CO
+//! COORDINATOR
+//!   Coordinator  CO
 //!
-//!  MEMBERS  2 agents
+//! MEMBERS  2 agents
 //!
-//!  LINKED PROJECTS
-//!     Zode  ~/code/zode
+//! LINKED PROJECTS
+//!   Zode  ~/code/zode
 //! ```
 
 use super::agents::projects::spawn_guides;
 use super::agents::working_icon;
-use super::chrome::{render_scrollbar, ScrollView};
-use super::policies::heading;
-use super::side_list::{empty_line, render_empty, render_hint, split_hint, CHANNEL_MEMBERS_HINT};
-use super::text::{display_width, wrap_words};
+use super::chrome::{Body, ScrollView};
+use super::side_list::{render_empty, CHANNEL_MEMBERS_HINT};
+use super::text::display_width;
 use crate::app::{AgentRowEnd, HoverTarget, PanelFocus};
-use crate::components::{
-    cell_style, list_row_with_detail, tree_row, truncate_record_info, CellState, StatusIcon,
-};
+use crate::components::{cell_style, tree_row, CellState, Info, StatusIcon, Value};
 use crate::events::{AgentSummary, ChannelSummary};
 use crate::{App, Theme};
-use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
-    Frame,
-};
+use ratatui::{layout::Rect, style::Style, text::Line, Frame};
 
 /// Draw the open channel's members into `inner`, the body below the tab
 /// bar of the panel bordered by `area`. Without an open channel there is
@@ -65,12 +57,11 @@ pub(super) fn render_channel_members(
         render_empty(frame, inner, "No members yet.", theme);
         return;
     }
-    let is_focused = app.focus() == PanelFocus::Sandbox;
-    let (rows_area, hint) = split_hint(inner, is_focused);
-    let visible = usize::from(rows_area.height);
-    app.set_channel_member_rows_area(rows_area);
+    let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
+    let visible = body.visible();
+    app.set_channel_member_rows_area(body.rows());
     let first = app.sync_channel_members_scroll(visible);
-    let width = usize::from(rows_area.width);
+    let width = body.width();
     let code_width = channel
         .members
         .iter()
@@ -87,11 +78,7 @@ pub(super) fn render_channel_members(
         visible,
         first,
     };
-    frame.render_widget(Paragraph::new(lines), rows_area);
-    render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-    if let Some(hint) = hint {
-        render_hint(frame, hint, CHANNEL_MEMBERS_HINT, theme);
-    }
+    body.draw(frame, lines, view, CHANNEL_MEMBERS_HINT, theme);
 }
 
 /// Member `index` of `members`: under the guides from the agent that
@@ -152,91 +139,61 @@ fn member_code<'a>(app: &'a App, member: &'a AgentSummary) -> Option<&'a str> {
         .and_then(|known| known.abbreviation.as_deref())
 }
 
-/// Draw what the open channel is into `inner`, cut to its rows. Without
-/// an open channel there is nothing to draw.
-pub(super) fn render_channel_info(frame: &mut Frame, inner: Rect, app: &App, theme: &Theme) {
+/// Draw what the open channel is into `inner`, the body below the tab bar
+/// of the panel bordered by `area`. Without an open channel there is
+/// nothing to draw.
+pub(super) fn render_channel_info(
+    frame: &mut Frame,
+    area: Rect,
+    inner: Rect,
+    app: &mut App,
+    theme: &Theme,
+) {
     let Some(channel) = app.open_channel() else {
         return;
     };
-    let lines = info_lines(app, channel, inner.width, theme);
-    frame.render_widget(Paragraph::new(lines), inner);
+    let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
+    let lines = info_lines(app, channel, body.width(), theme);
+    let first = app.sync_channel_info_scroll(lines.len(), body.visible());
+    body.draw_document(frame, lines, first, theme);
 }
 
 /// The INFO tab's lines, `width` columns wide.
 fn info_lines(
     app: &App,
     channel: &ChannelSummary,
-    width: u16,
+    width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let columns = usize::from(width);
-    let room = columns.saturating_sub(2);
-    let muted = Style::default().fg(theme.colors.muted);
-    let plain = cell_style(theme, CellState::Normal, Style::default());
-
-    let mut lines = vec![Line::from(vec![
-        Span::raw(" "),
-        Span::styled(
-            truncate_record_info(&format!("#{}", channel.slug), room),
-            muted,
-        ),
-    ])];
+    let mut info = Info::new(width, theme);
+    info.note(&format!("#{}", channel.slug));
     if !channel.title.trim().is_empty() {
-        lines.push(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                truncate_record_info(&channel.title, room),
-                Style::default()
-                    .fg(theme.colors.foreground)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        info.title(&channel.title);
     }
     if !channel.description.trim().is_empty() {
-        lines.extend(
-            wrap_words(&channel.description, room)
-                .into_iter()
-                .map(|line| Line::from(Span::styled(format!(" {line}"), muted))),
-        );
+        info.note(&channel.description);
     }
-    lines.push(Line::default());
 
-    lines.push(heading("COORDINATOR", None, theme));
+    info.section("COORDINATOR", None);
     match channel
         .members
         .iter()
         .find(|member| member.id == channel.coordinator_id)
     {
-        Some(coordinator) => lines.push(list_row_with_detail(
-            columns,
-            0,
-            StatusIcon::new("", theme.colors.muted),
-            (&coordinator.name, member_code(app, coordinator)),
-            plain,
-            None,
-        )),
-        None => lines.push(empty_line("Not listed", width, theme)),
+        Some(coordinator) => info.item(&coordinator.name, member_code(app, coordinator)),
+        None => info.text("Not listed", Value::Quiet),
     }
-    lines.push(Line::default());
 
     let count = channel.members.len();
     let unit = if count == 1 { "agent" } else { "agents" };
-    lines.push(heading("MEMBERS", Some(format!("{count} {unit}")), theme));
-    lines.push(Line::default());
+    info.section("MEMBERS", Some(&format!("{count} {unit}")));
 
-    lines.push(heading("LINKED PROJECTS", None, theme));
+    info.section("LINKED PROJECTS", None);
     if channel.projects.is_empty() {
-        lines.push(empty_line("No linked projects", width, theme));
+        info.text("No linked projects", Value::Quiet);
     }
-    lines.extend(channel.projects.iter().map(|project| {
-        list_row_with_detail(
-            columns,
-            0,
-            StatusIcon::new("", theme.colors.muted),
-            (&project.name, Some(&project.folder)),
-            plain,
-            None,
-        )
-    }));
-    lines
+    for project in &channel.projects {
+        info.item(&project.name, Some(&project.folder));
+    }
+    info.into_lines()
 }

@@ -1919,6 +1919,45 @@ fn test_hosted_panels_leave_their_title_bars_to_the_front_end() {
     assert!(app.pane_chrome()[1].area.width >= 30, "the chat keeps room");
 }
 
+#[test]
+fn test_showing_the_right_column_keeps_the_agents_column_in_place() {
+    use crate::app::{Pane, PaneSplits};
+
+    let agents_area = |app: &crate::App| {
+        app.pane_chrome()
+            .iter()
+            .find(|chrome| chrome.pane == Pane::Agents)
+            .map(|chrome| chrome.area)
+    };
+    for splits in [
+        PaneSplits::default(),
+        PaneSplits {
+            agents: Some(0.4),
+            ..PaneSplits::default()
+        },
+        PaneSplits {
+            agents: Some(0.9),
+            right: Some(0.5),
+            ..PaneSplits::default()
+        },
+    ] {
+        let mut app = crate::App::new();
+        app.set_host_chrome(true);
+        app.set_pane_splits(splits);
+        render_rows(&mut app, 150);
+        let shown = agents_area(&app);
+        assert!(shown.is_some());
+        assert_eq!(app.pane_chrome().len(), 4, "the right column is shown");
+
+        app.record_panel_visible = false;
+        app.sandbox_panel_visible = false;
+        render_rows(&mut app, 150);
+        assert_eq!(app.pane_chrome().len(), 2, "the right column is hidden");
+        assert_eq!(agents_area(&app), shown, "{splits:?}");
+        assert!(app.pane_chrome()[1].area.width >= 30, "the chat keeps room");
+    }
+}
+
 /// Rows from the bottom of the screen to a one-row input: below it are the
 /// input box's bottom border and the footer's two rows.
 const INPUT_FROM_BOTTOM: usize = 3;
@@ -4269,7 +4308,7 @@ fn test_a_selection_dragged_past_a_record_scrolls_it() {
     app.handle_key(KeyEvent::from(KeyCode::Enter));
     assert_eq!(app.detail_view(), Some(&crate::app::DetailView::Record));
 
-    let copied = select_past_the_bottom(&mut app, "Sequence:", "line 40");
+    let copied = select_past_the_bottom(&mut app, "Sequence", "line 40");
     assert_copied_lines_to_40(&copied);
 }
 

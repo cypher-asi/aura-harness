@@ -10,7 +10,7 @@
 //!
 //! [`UiCommand::SetPolicies`]: crate::events::UiCommand::SetPolicies
 
-use super::{processes::SIDE_PAGE, App, PanelFocus, RecordsTab};
+use super::{App, PanelFocus, RecordsTab};
 use crate::events::{PolicyView, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -52,36 +52,24 @@ impl App {
     /// Scroll the POLICIES tab by `delta` lines, as the wheel does. The
     /// renderer keeps the scroll inside the document.
     pub(super) fn scroll_policies(&mut self, delta: isize) {
-        self.policies_scroll = self.policies_scroll.saturating_add_signed(delta);
+        self.policies_scroll.by(delta);
     }
 
     /// Keep the POLICIES tab's scroll inside a document `total` lines long
     /// shown `visible` lines at a time, returning the first line to show.
     pub fn sync_policies_scroll(&mut self, total: usize, visible: usize) -> usize {
-        self.policies_scroll = self.policies_scroll.min(total.saturating_sub(visible));
-        self.policies_scroll
+        self.policies_scroll.sync(total, visible)
     }
 
     /// Navigation keys of the POLICIES tab.
     pub(super) fn handle_policies_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Up => self.scroll_policies(-1),
-            KeyCode::Down => self.scroll_policies(1),
-            KeyCode::PageUp => self.scroll_policies(-SIDE_PAGE),
-            KeyCode::PageDown => self.scroll_policies(SIDE_PAGE),
-            _ => {}
-        }
+        self.policies_scroll.key(key.code);
     }
 
     /// Home/End of the POLICIES tab, which would otherwise go to the
     /// empty input.
     pub(super) fn handle_policies_shortcut(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Home => self.policies_scroll = 0,
-            KeyCode::End => self.policies_scroll = usize::MAX,
-            _ => return false,
-        }
-        true
+        matches!(key.code, KeyCode::Home | KeyCode::End) && self.policies_scroll.key(key.code)
     }
 }
 

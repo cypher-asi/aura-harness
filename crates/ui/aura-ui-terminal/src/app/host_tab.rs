@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use super::scroll::InfoScroll;
 use super::{contains, App, NotificationType, SidePanelTab};
 use crate::events::UiEvent;
 use crate::host::{HostAction, HostView, PlacementState, PlacementView};
@@ -26,8 +27,8 @@ pub(crate) struct CloudUi {
     placements: HashMap<String, PlacementState>,
     /// The HOST tab of the agent on screen.
     host: Option<HostView>,
-    /// First row of the HOST tab shown.
-    pub(crate) host_scroll: usize,
+    /// How far the HOST tab is scrolled.
+    pub(crate) host_scroll: InfoScroll,
     /// The footer row of the last frame.
     footer: Option<Rect>,
     /// Whether cloud mode is set up, from the last placement update.
@@ -124,10 +125,10 @@ impl App {
             .filter(|view| view.agent_id == self.active_agent_id)
     }
 
-    /// First row of the HOST tab shown.
-    #[must_use]
-    pub const fn host_scroll(&self) -> usize {
-        self.cloud.host_scroll
+    /// Keep the HOST tab's scroll inside a document `total` lines long
+    /// shown `visible` lines at a time, returning the first line to show.
+    pub fn sync_host_scroll(&mut self, total: usize, visible: usize) -> usize {
+        self.cloud.host_scroll.sync(total, visible)
     }
 
     /// Note the footer row drawn this frame, for clicks on the switch.
@@ -147,7 +148,7 @@ impl App {
             .as_ref()
             .is_none_or(|old| old.agent_id != view.agent_id)
         {
-            self.cloud.host_scroll = 0;
+            self.cloud.host_scroll = InfoScroll::default();
         }
         self.cloud.host = Some(view);
     }
@@ -252,26 +253,10 @@ impl App {
     /// Keys of the HOST tab: arrows scroll, a button's letter works it.
     /// Returns whether the key was the tab's.
     pub(super) fn host_key(&mut self, key: KeyEvent) -> bool {
+        if self.cloud.host_scroll.key(key.code) {
+            return true;
+        }
         match key.code {
-            KeyCode::Up => {
-                self.cloud.host_scroll = self.cloud.host_scroll.saturating_sub(1);
-                true
-            }
-            KeyCode::Down => {
-                self.cloud.host_scroll += 1;
-                true
-            }
-            KeyCode::PageUp => {
-                self.cloud.host_scroll = self
-                    .cloud
-                    .host_scroll
-                    .saturating_sub(super::processes::SIDE_PAGE.unsigned_abs());
-                true
-            }
-            KeyCode::PageDown => {
-                self.cloud.host_scroll += super::processes::SIDE_PAGE.unsigned_abs();
-                true
-            }
             KeyCode::Char(ch) => {
                 let action = self
                     .host_view()
@@ -290,7 +275,7 @@ impl App {
 
     /// Scroll the HOST tab by `delta` rows.
     pub(super) fn scroll_host(&mut self, delta: isize) {
-        self.cloud.host_scroll = self.cloud.host_scroll.saturating_add_signed(delta);
+        self.cloud.host_scroll.by(delta);
     }
 }
 

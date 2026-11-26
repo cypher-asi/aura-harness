@@ -78,7 +78,7 @@ pub struct HostFact {
     /// A share 0-100 to draw as a bar, when the fact is a use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percent: Option<u8>,
-    /// Shown in the warning color.
+    /// Near its limit: the value and its bar are shown in the accent.
     #[serde(default)]
     pub warn: bool,
 }

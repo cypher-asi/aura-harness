@@ -1,11 +1,13 @@
-//! Pieces shared by the tabs of the side panel (SANDBOX, PROCESSES, TRACE,
-//! TASKS), so every tab draws its empty state, its rows area and its key
-//! hint the same way.
+//! Pieces shared by the tabs of the side and Kernel panels, so every tab
+//! draws its empty state, its key hint and its text tone the same way.
+//! Each tab draws into a [`super::chrome::Body`], which puts the hint on
+//! its last row while the panel has focus.
 //!
-//! Every tab follows the same rules: rows are drawn with
-//! [`crate::components::list_row`], a status color only ever sits on a row's
-//! icon, the name is `foreground` (or `muted` once the item is finished),
-//! and the hint at the bottom reads `⏎ open  <extras>  ⇧←→ tabs`.
+//! List tabs follow the same rules: rows are drawn with
+//! [`crate::components::list_row`], a status color only ever sits on a
+//! row's icon, the name is `foreground` (or `muted` once the item is
+//! finished), and the hint reads `⏎ open  <extras>  ⇧←→ tabs`. Info tabs
+//! are [`crate::components::Info`] documents with [`INFO_HINT`].
 
 use crate::components::truncate_record_info;
 use crate::{SideScope, Theme};
@@ -27,11 +29,13 @@ pub(super) const TRACE_HINT: &str = "⏎ open  g graph  ⇧←→ tabs";
 pub(super) const TASKS_HINT: &str = "⏎ open  p plan  t task  ←→ fold  ⇧←→ tabs";
 /// Hint of an open channel's MEMBERS tab, whose rows only show.
 pub(super) const CHANNEL_MEMBERS_HINT: &str = "↑↓ move  ⇧←→ tabs";
+/// Hint of the Kernel panel's KERNEL tab, its records.
+pub(super) const KERNEL_HINT: &str = "⏎ open  ⇧←→ tabs";
 /// Hint of the Kernel panel's MEMBERS tab.
 pub(super) const MEMBERS_HINT: &str = "⏎ open  o chat  ⇧←→ tabs";
-/// Hint of the Kernel panel's POLICIES tab, a document with nothing to
-/// open.
-pub(super) const POLICIES_HINT: &str = "↑↓ scroll  ⇧←→ tabs";
+/// Hint of every info tab (POLICIES, HOST, a channel's INFO): a document
+/// with nothing to open.
+pub(super) const INFO_HINT: &str = "↑↓ scroll  ⇧←→ tabs";
 /// Hint of the Kernel panel's INBOX tab, whose threads also fold.
 pub(super) const INBOX_HINT: &str = "↑↓ move  ←→ fold  ⏎ open  ⇧←→ tabs";
 
@@ -103,36 +107,6 @@ pub(super) fn render_hidden(
     render_empty(frame, inner, &message, theme);
 }
 
-/// Split a tab's body into its rows and, while the panel has focus and
-/// there is room, a hint row at the bottom.
-pub(super) fn split_hint(inner: Rect, focused: bool) -> (Rect, Option<Rect>) {
-    if !focused || inner.height < 4 {
-        return (inner, None);
-    }
-    let rows = Rect {
-        height: inner.height - 1,
-        ..inner
-    };
-    let hint = Rect {
-        y: inner.y + inner.height - 1,
-        height: 1,
-        ..inner
-    };
-    (rows, Some(hint))
-}
-
-/// Draw `text` as the muted hint in `area`, cut to fit.
-pub(super) fn render_hint(frame: &mut Frame, area: Rect, text: &str, theme: &Theme) {
-    let hint = truncate_record_info(text, usize::from(area.width).saturating_sub(1));
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(" {hint}"),
-            Style::default().fg(theme.colors.muted),
-        ))),
-        area,
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,9 +118,13 @@ mod tests {
             PROCESSES_HINT,
             TRACE_HINT,
             TASKS_HINT,
+            KERNEL_HINT,
             MEMBERS_HINT,
         ] {
             assert!(hint.starts_with("⏎ open  "), "{hint}");
+            assert!(hint.ends_with("  ⇧←→ tabs"), "{hint}");
+        }
+        for hint in [INFO_HINT, CHANNEL_MEMBERS_HINT, INBOX_HINT] {
             assert!(hint.ends_with("  ⇧←→ tabs"), "{hint}");
         }
     }

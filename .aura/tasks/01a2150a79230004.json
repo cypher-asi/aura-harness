@@ -1,0 +1,13 @@
+{
+  "id": "01a2150a79230004",
+  "title": "Work ONLY inside the git worktree /home/n3o/code/aura-harness/.worktrees/channel-projects (branch `channel-projects`). …",
+  "state": "open",
+  "agent_id": "7959d3197530099e3fa9cc5b6dc562dfac102171d39c900bbf7b4b8bcd4555cd",
+  "agent_name": "rust-engineer #144",
+  "assignee": "rust-engineer",
+  "parent": "01a2150273db0002",
+  "items": [],
+  "updated_ms": 1795649337635,
+  "created_ms": 1795649337635,
+  "tool_use_id": "toolu_01YPA53f9HNUQNzS9bPCFdih"
+}

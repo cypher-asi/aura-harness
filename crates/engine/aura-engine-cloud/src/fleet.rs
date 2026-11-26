@@ -37,6 +37,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::boot::{human_bytes, BootReporter, BootStage};
+use crate::boxd::{CALL_TIMEOUT, CREATE_TIMEOUT};
 use crate::error::{CloudError, CloudResult};
 use crate::machine_env::MachineEnv;
 use crate::names::{
@@ -322,6 +323,12 @@ fn claim_facts(boot: &BootReporter, claimed: &NodeClaimed) {
     }
 }
 
+/// What a claim waits on, as shown: the claim's own output carries
+/// tokens and is never streamed, so this is all a boot shows of it.
+fn claim_waits_on(machine: &str) -> String {
+    format!("`{CLAIM_COMMAND}` on {machine} (the node starts and takes its tokens)")
+}
+
 fn random_token() -> BoxdToken {
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
@@ -446,7 +453,14 @@ impl VmFleet {
     ) -> CloudResult<MachineView> {
         let limit = boot
             .run(BootStage::Quota, async {
-                let limit = self.provider.machine_limit().await?;
+                let limit = boot
+                    .wait(
+                        BootStage::Quota,
+                        "boxd is counting the org's machines",
+                        Some(CALL_TIMEOUT),
+                        self.provider.machine_limit(),
+                    )
+                    .await?;
                 if limit.has_room() {
                     Ok(limit)
                 } else {
@@ -510,10 +524,22 @@ impl VmFleet {
             delete_after_secs: None,
             secrets: request.secrets.clone(),
         };
+        let creating = match &request.origin {
+            MachineOrigin::Snapshot(snapshot) => {
+                format!("boxd is creating {} from snapshot {snapshot}", spec.name)
+            }
+            MachineOrigin::Fork(parent) => format!("boxd is forking {parent} as {}", spec.name),
+            MachineOrigin::Fresh => format!("boxd is creating {}", spec.name),
+        };
         let machine = boot
             .run(
                 BootStage::Create,
-                self.provider.create(&spec, &request.origin),
+                boot.wait(
+                    BootStage::Create,
+                    creating,
+                    Some(CREATE_TIMEOUT),
+                    self.provider.create(&spec, &request.origin),
+                ),
             )
             .await?;
         machine_facts(boot, &machine, &spec.networks);
@@ -557,15 +583,28 @@ impl VmFleet {
         );
         boot.run(BootStage::Configure, async {
             // boxd's bot check would answer API calls with a 503.
-            if let Err(err) = self.provider.set_bot_protection(&machine.name, false).await {
+            let bot = boot
+                .wait(
+                    BootStage::Configure,
+                    "boxd is turning bot protection off",
+                    Some(CALL_TIMEOUT),
+                    self.provider.set_bot_protection(&machine.name, false),
+                )
+                .await;
+            if let Err(err) = bot {
                 tracing::warn!(machine = %machine.name, error = %err, "could not turn bot protection off");
                 boot.log(BootStage::Configure, true, format!("bot protection stays on: {err}"));
             } else {
                 boot.log(BootStage::Configure, false, "bot protection off for the node API");
             }
-            match self
-                .provider
-                .set_auto_hibernate(&machine.name, AUTO_HIBERNATE_BACKSTOP_SECS)
+            match boot
+                .wait(
+                    BootStage::Configure,
+                    "boxd is setting the hibernation backstop",
+                    Some(CALL_TIMEOUT),
+                    self.provider
+                        .set_auto_hibernate(&machine.name, AUTO_HIBERNATE_BACKSTOP_SECS),
+                )
                 .await
             {
                 Ok(()) => boot.log(
@@ -589,7 +628,15 @@ impl VmFleet {
         })
         .await?;
         let claimed = boot
-            .run(BootStage::Claim, self.claim(&request.agent, &request.seal))
+            .run(
+                BootStage::Claim,
+                boot.wait(
+                    BootStage::Claim,
+                    claim_waits_on(&machine.name),
+                    Some(CLAIM_TIMEOUT),
+                    self.claim(&request.agent, &request.seal),
+                ),
+            )
             .await;
         if let Ok(claimed) = &claimed {
             claim_facts(boot, claimed);
@@ -780,8 +827,16 @@ impl VmFleet {
             boot.fact("woke from", state.label().to_string());
             self.set_state(agent, VmState::Waking);
             let started = Instant::now();
-            boot.run(BootStage::Wake, self.provider.wake(&machine.name))
-                .await?;
+            boot.run(
+                BootStage::Wake,
+                boot.wait(
+                    BootStage::Wake,
+                    format!("boxd is waking {} from {}", machine.name, state.label()),
+                    Some(CALL_TIMEOUT),
+                    self.provider.wake(&machine.name),
+                ),
+            )
+            .await?;
             let boot_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             boot.fact("wake time", format!("{boot_ms} ms"));
             let mut info = machine.clone();
@@ -803,7 +858,17 @@ impl VmFleet {
             }
         }
         if !claimed {
-            let claimed = boot.run(BootStage::Claim, self.claim(agent, &[])).await?;
+            let claimed = boot
+                .run(
+                    BootStage::Claim,
+                    boot.wait(
+                        BootStage::Claim,
+                        claim_waits_on(&machine.name),
+                        Some(CLAIM_TIMEOUT),
+                        self.claim(agent, &[]),
+                    ),
+                )
+                .await?;
             claim_facts(boot, &claimed);
         }
         self.view(agent).ok_or(CloudError::NotFound {
@@ -1400,6 +1465,51 @@ mod tests {
             !format!("{events:?}").contains(token.expose()),
             "the node token is never shown"
         );
+    }
+
+    #[tokio::test]
+    async fn provisioning_says_what_each_slow_call_waits_on() {
+        let (fleet, _, _) = fleet(Duration::from_secs(300));
+        let (boot, mut rx) = BootReporter::channel();
+        fleet
+            .provision_reported(request("aa", MachineOrigin::Fresh), &boot)
+            .await
+            .expect("provision");
+        let waits: Vec<(BootStage, Option<String>, Option<Duration>)> = drain(&mut rx)
+            .into_iter()
+            .filter_map(|event| match event {
+                BootEvent::Waiting { stage, what, limit } => Some((stage, what, limit)),
+                _ => None,
+            })
+            .collect();
+        let set = |stage: BootStage| {
+            waits
+                .iter()
+                .find(|(s, what, _)| *s == stage && what.is_some())
+                .cloned()
+        };
+        let create = set(BootStage::Create).expect("create waits");
+        assert!(create.1.is_some_and(|what| what.contains("aura-re36-aa")));
+        assert_eq!(create.2, Some(CREATE_TIMEOUT));
+        let claim = set(BootStage::Claim).expect("claim waits");
+        assert!(claim.1.is_some_and(|what| what.contains(CLAIM_COMMAND)));
+        assert_eq!(claim.2, Some(CLAIM_TIMEOUT));
+        assert!(set(BootStage::Quota).is_some());
+        assert!(set(BootStage::Configure).is_some());
+        // Every wait is cleared: as many clears as sets, and the last
+        // word on each stage is a clear.
+        let sets = waits.iter().filter(|(_, what, _)| what.is_some()).count();
+        let clears = waits.iter().filter(|(_, what, _)| what.is_none()).count();
+        assert_eq!(sets, clears);
+        for stage in [
+            BootStage::Quota,
+            BootStage::Create,
+            BootStage::Configure,
+            BootStage::Claim,
+        ] {
+            let last = waits.iter().rev().find(|(s, _, _)| *s == stage);
+            assert!(last.is_some_and(|(_, what, _)| what.is_none()), "{stage:?}");
+        }
     }
 
     #[tokio::test]

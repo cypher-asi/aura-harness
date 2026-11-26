@@ -1,15 +1,13 @@
 //! TRACE tab: live feed of recorded steps and harness decisions.
 
-use super::chrome::{render_scrollbar, ScrollView};
+use super::chrome::{Body, ScrollView};
 use super::graph::status_glyph;
-use super::side_list::{
-    name_style, render_empty, render_hidden, render_hint, split_hint, Tone, TRACE_HINT,
-};
+use super::side_list::{name_style, render_empty, render_hidden, Tone, TRACE_HINT};
 use crate::app::{HoverTarget, PanelFocus};
 use crate::components::{cell_style, list_row_with_detail, CellState, StatusIcon};
 use crate::events::TraceNodeStatus;
 use crate::{App, Theme};
-use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
+use ratatui::{layout::Rect, text::Line, Frame};
 
 /// Draw the feed into `inner`, the body below the tab bar of the panel
 /// bordered by `area`.
@@ -31,15 +29,15 @@ pub(super) fn render_trace_feed(
         return;
     }
 
-    let (rows_area, hint) = split_hint(inner, is_focused);
-    let visible = rows_area.height as usize;
+    let body = Body::new(area, inner, is_focused);
+    let visible = body.visible();
     let scroll = app.sync_trace_scroll(visible);
-    app.set_trace_rows_area(rows_area, scroll);
+    app.set_trace_rows_area(body.rows(), scroll);
     let hovered = match app.hover() {
         Some(HoverTarget::TraceRow(index)) => Some(index),
         _ => None,
     };
-    let width = inner.width as usize;
+    let width = body.width();
     let feed = app.trace_feed();
     let selected = feed.selected();
     let lines: Vec<Line> = feed
@@ -68,9 +66,5 @@ pub(super) fn render_trace_feed(
         visible,
         first: scroll,
     };
-    frame.render_widget(Paragraph::new(lines), rows_area);
-    render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-    if let Some(hint) = hint {
-        render_hint(frame, hint, TRACE_HINT, theme);
-    }
+    body.draw(frame, lines, view, TRACE_HINT, theme);
 }

@@ -885,7 +885,7 @@ pub(super) fn working_indicator_line<'a>(app: &App, theme: &Theme) -> Option<Lin
     if let Some(quiet) = quiet {
         spans.push(Span::styled(
             format!(" · no output {}", format_elapsed(quiet)),
-            Style::default().fg(theme.colors.warning),
+            Style::default().fg(theme.colors.success),
         ));
     }
     Some(Line::from(spans))

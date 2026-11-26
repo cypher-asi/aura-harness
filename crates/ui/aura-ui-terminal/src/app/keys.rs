@@ -563,7 +563,10 @@ impl App {
                     self.handle_channel_members_key(key);
                     KeyResult::continue_running()
                 }
-                SidePanelTab::ChannelInfo => KeyResult::continue_running(),
+                SidePanelTab::ChannelInfo => {
+                    self.handle_channel_info_key(key);
+                    KeyResult::continue_running()
+                }
             },
         }
     }

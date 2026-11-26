@@ -1,8 +1,48 @@
 //! Scrolling the chat and the panels: the wheel, the page keys, and
-//! keeping each list's scroll on its highlight.
+//! keeping each list's scroll on its highlight and each info tab's inside
+//! its document.
 
+use super::processes::SIDE_PAGE;
 use super::{follow_selection, App, PanelFocus, RecordsTab, SidePanelTab};
-use crossterm::event::{KeyModifiers, MouseEventKind};
+use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
+
+/// How far an info tab (POLICIES, HOST, a channel's INFO), a read-only
+/// document, is scrolled. The wheel and the navigation keys move it; the
+/// renderer keeps it inside the document with [`Self::sync`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InfoScroll {
+    /// First line on screen
+    first: usize,
+}
+
+impl InfoScroll {
+    /// Move `delta` lines, as the wheel does.
+    pub(crate) fn by(&mut self, delta: isize) {
+        self.first = self.first.saturating_add_signed(delta);
+    }
+
+    /// Move for a navigation key: ↑↓ a line, PgUp/PgDn a page, Home/End
+    /// to either end. Returns whether `code` is one.
+    pub(crate) fn key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Up => self.by(-1),
+            KeyCode::Down => self.by(1),
+            KeyCode::PageUp => self.by(-SIDE_PAGE),
+            KeyCode::PageDown => self.by(SIDE_PAGE),
+            KeyCode::Home => self.first = 0,
+            KeyCode::End => self.first = usize::MAX,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Keep the scroll inside a document `total` lines long shown
+    /// `visible` at a time, returning the first line to show.
+    pub(crate) fn sync(&mut self, total: usize, visible: usize) -> usize {
+        self.first = self.first.min(total.saturating_sub(visible));
+        self.first
+    }
+}
 
 impl App {
     /// Clamp the scroll offset to a maximum value.
@@ -103,7 +143,7 @@ impl App {
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
                     SidePanelTab::ChannelMembers => self.move_channel_member(delta),
-                    SidePanelTab::ChannelInfo => {}
+                    SidePanelTab::ChannelInfo => self.scroll_channel_info(delta),
                 }
             }
         }
@@ -152,7 +192,7 @@ impl App {
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
                     SidePanelTab::Tasks => self.task_list.move_by(delta),
                     SidePanelTab::ChannelMembers => self.move_channel_member(delta),
-                    SidePanelTab::ChannelInfo => {}
+                    SidePanelTab::ChannelInfo => self.scroll_channel_info(delta),
                 }
             }
         }
@@ -180,5 +220,31 @@ impl App {
             self.sandbox.rows().len(),
         );
         self.sandbox_scroll
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_info_scroll_moves_by_key_and_stays_inside_its_document() {
+        let mut scroll = InfoScroll::default();
+        assert!(scroll.key(KeyCode::Down));
+        assert!(scroll.key(KeyCode::PageDown));
+        assert_eq!(scroll.sync(30, 10), 1 + 10);
+        assert!(scroll.key(KeyCode::End));
+        assert_eq!(scroll.sync(30, 10), 20, "End stops at the last page");
+        assert!(scroll.key(KeyCode::Up));
+        assert_eq!(scroll.sync(30, 10), 19);
+        assert!(scroll.key(KeyCode::PageUp));
+        assert_eq!(scroll.sync(30, 10), 9);
+        assert!(scroll.key(KeyCode::Home));
+        assert_eq!(scroll.sync(30, 10), 0);
+        assert!(!scroll.key(KeyCode::Char('p')), "other keys are the tab's");
+        scroll.by(-3);
+        assert_eq!(scroll.sync(30, 10), 0, "never above the top");
+        scroll.by(50);
+        assert_eq!(scroll.sync(5, 10), 0, "a document that fits");
     }
 }

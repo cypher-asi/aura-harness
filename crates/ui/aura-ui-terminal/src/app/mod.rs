@@ -289,8 +289,8 @@ pub struct App {
     pub(super) members: members::Members,
     /// The threads of mail between agents, for the INBOX tab
     pub(super) inbox: inbox::Inbox,
-    /// First line of the POLICIES tab on screen
-    pub(super) policies_scroll: usize,
+    /// How far the POLICIES tab is scrolled
+    pub(super) policies_scroll: scroll::InfoScroll,
     /// Record or file shown over the chat panel
     pub(super) detail: Option<DetailView>,
     /// First line of the detail view shown
@@ -1153,7 +1153,7 @@ impl App {
             records_tab: RecordsTab::default(),
             members: members::Members::default(),
             inbox: inbox::Inbox::default(),
-            policies_scroll: 0,
+            policies_scroll: scroll::InfoScroll::default(),
             detail: None,
             detail_scroll: 0,
             detail_shown: 1,

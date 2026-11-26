@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_core_types::{AgentId, Placement};
-use aura_engine_cloud::{BootEvent, BootReporter, StageState};
+use aura_engine_cloud::{BootEvent, BootReporter, BootStage, StageState};
 use aura_store_db::Store;
 use aura_ui_terminal::events::{
     BootLogLine, BootPlanStep, BootStageState, BootUpdate, MessageData, MessageRole, ToolData,
@@ -159,16 +159,6 @@ impl BootConsoleUi {
             .await;
     }
 
-    async fn stage(&self, key: &str, label: &str, state: BootStageState) {
-        self.begin().await;
-        self.send(BootUpdate::Stage {
-            key: key.to_string(),
-            label: label.to_string(),
-            state,
-        })
-        .await;
-    }
-
     /// Show the console now.
     async fn begin(&self) {
         if !self.begun.swap(true, Ordering::Relaxed) {
@@ -249,6 +239,11 @@ fn boot_updates(events: Vec<BootEvent>) -> Vec<BootUpdate> {
                 done,
                 total,
             },
+            BootEvent::Waiting { stage, what, limit } => BootUpdate::Waiting {
+                key: stage.key().to_string(),
+                what,
+                limit_ms: limit.map(|limit| u64::try_from(limit.as_millis()).unwrap_or(u64::MAX)),
+            },
         };
         updates.push(update);
     }
@@ -265,12 +260,21 @@ async fn system(state: &LoopState<'_>, agent: AgentId, text: impl Into<String>) 
 }
 
 /// Build the hub if a boxd key is set now, attach it to the agent host
-/// and start the HOST publisher.
-async fn ensure_hub(state: &mut LoopState<'_>) -> Result<Arc<CloudHub>, String> {
+/// and start the HOST publisher, showing on `boot` what it waits on.
+async fn ensure_hub(
+    state: &mut LoopState<'_>,
+    boot: &BootReporter,
+) -> Result<Arc<CloudHub>, String> {
     if let Some(hub) = state.cloud.hub() {
         return Ok(hub);
     }
-    let config = tokio::task::spawn_blocking(aura_config::CloudConfig::reload)
+    let config = boot
+        .wait(
+            BootStage::Connect,
+            "reading the cloud settings",
+            None,
+            tokio::task::spawn_blocking(aura_config::CloudConfig::reload),
+        )
         .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())?;
@@ -296,36 +300,30 @@ async fn ensure_hub(state: &mut LoopState<'_>) -> Result<Arc<CloudHub>, String> 
     hub.set_plan_credentials(Arc::new(crate::cloud::plans::VaultPlans(Arc::clone(
         &state.auth,
     ))));
-    hub.start(&keep).await;
+    hub.start_reported(&keep, boot).await;
     *state.cloud.shared.hub.lock() = Some(Arc::clone(&hub));
     start_publisher(state);
     Ok(hub)
 }
 
 /// The hub, started if need be. With a `console`, it shows at once, the
-/// start as its first stage.
+/// start as its first stage with each machine taken back.
 async fn connect(
     state: &mut LoopState<'_>,
     console: Option<&BootConsoleUi>,
 ) -> Result<Arc<CloudHub>, String> {
     let Some(console) = console else {
-        return ensure_hub(state).await;
+        return ensure_hub(state, &BootReporter::none()).await;
     };
     console.begin().await;
     if let Some(hub) = state.cloud.hub() {
         return Ok(hub);
     }
-    let (key, label) = ("connect", "Connecting to boxd");
-    console.stage(key, label, BootStageState::Running).await;
-    let started = std::time::Instant::now();
-    let hub = ensure_hub(state).await;
-    let done = match &hub {
-        Ok(_) => BootStageState::Done {
-            ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        },
-        Err(err) => BootStageState::Failed(err.clone()),
-    };
-    console.stage(key, label, done).await;
+    let (boot, events) = BootReporter::channel();
+    let shown = console.pump(events);
+    let hub = boot.run(BootStage::Connect, ensure_hub(state, &boot)).await;
+    drop(boot);
+    let _ = shown.await;
     hub
 }
 
@@ -403,7 +401,7 @@ pub(super) fn on_auth_change(state: &LoopState<'_>) {
 pub(super) async fn start(state: &mut LoopState<'_>) {
     let configured = aura_config::cloud().is_configured();
     if configured {
-        if let Err(err) = ensure_hub(state).await {
+        if let Err(err) = ensure_hub(state, &BootReporter::none()).await {
             warn!(error = %err, "cloud agents unavailable");
         }
     }
@@ -1234,7 +1232,6 @@ mod forward_tests {
 #[cfg(test)]
 mod boot_tests {
     use super::*;
-    use aura_engine_cloud::BootStage;
 
     #[tokio::test]
     async fn boot_events_become_console_updates_with_log_runs_joined() {
@@ -1284,5 +1281,35 @@ mod boot_tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn a_wait_becomes_a_waiting_line_then_its_clear() {
+        let (boot, mut events) = BootReporter::channel();
+        boot.wait(
+            BootStage::Create,
+            "boxd is creating aura-1",
+            Some(Duration::from_secs(180)),
+            async {},
+        )
+        .await;
+        drop(boot);
+        let mut batch = Vec::new();
+        while events.recv_many(&mut batch, 64).await > 0 {}
+        assert_eq!(
+            boot_updates(batch),
+            vec![
+                BootUpdate::Waiting {
+                    key: "create".into(),
+                    what: Some("boxd is creating aura-1".into()),
+                    limit_ms: Some(180_000),
+                },
+                BootUpdate::Waiting {
+                    key: "create".into(),
+                    what: None,
+                    limit_ms: None,
+                },
+            ]
+        );
     }
 }

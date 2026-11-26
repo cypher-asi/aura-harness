@@ -22,17 +22,15 @@
 //! ```
 
 use super::agents::aura_icon;
-use super::chrome::{render_scrollbar, ScrollView};
+use super::chrome::{Body, ScrollView};
 use super::plans::{marker, marker_color, todo_style};
-use super::side_list::{
-    name_style, render_empty, render_hidden, render_hint, split_hint, Tone, TASKS_HINT,
-};
+use super::side_list::{name_style, render_empty, render_hidden, Tone, TASKS_HINT};
 use crate::app::tasks::{TaskList, TaskRow};
 use crate::app::{HoverTarget, PanelFocus};
 use crate::components::{cell_style, list_row, list_row_with_detail, CellState, StatusIcon};
 use crate::events::{PlanView, TaskState, TaskView, TodoView};
 use crate::{App, Theme};
-use ratatui::{layout::Rect, style::Modifier, text::Line, widgets::Paragraph, Frame};
+use ratatui::{layout::Rect, style::Modifier, text::Line, Frame};
 
 /// Label of the header of the tasks that work on no listed plan.
 const NO_PLAN: &str = "No Plan";
@@ -73,10 +71,9 @@ pub(super) fn render_tasks(
         return;
     }
 
-    let (rows_area, hint) = split_hint(inner, is_focused);
-    let visible = rows_area.height as usize;
-    let scroll = app.sync_tasks_scroll(visible);
-    app.set_task_rows_area(rows_area, scroll);
+    let body = Body::new(area, inner, is_focused);
+    let scroll = app.sync_tasks_scroll(body.visible());
+    app.set_task_rows_area(body.rows(), scroll);
     let hovered = match app.hover() {
         Some(HoverTarget::TaskRow(index)) => Some(index),
         _ => None,
@@ -86,37 +83,33 @@ pub(super) fn render_tasks(
         focused: is_focused,
         hovered,
     };
-    render_task_tree(frame, (area, rows_area), app.task_list(), view, app, theme);
-    if let Some(hint) = hint {
-        render_hint(frame, hint, TASKS_HINT, theme);
-    }
+    let (lines, scroll) = task_tree_lines(app.task_list(), view, &body, app, theme);
+    body.draw(frame, lines, scroll, TASKS_HINT, theme);
 }
 
 /// How a task tree is drawn: where it starts and which row is lit.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct TreeView {
+struct TreeView {
     /// First row drawn
-    pub(super) first: usize,
+    first: usize,
     /// Whether the panel has focus, so the highlighted row is lit
-    pub(super) focused: bool,
+    focused: bool,
     /// Row under the mouse
-    pub(super) hovered: Option<usize>,
+    hovered: Option<usize>,
 }
 
-/// Draw `list`'s rows from `view.first` into `rows_area`, inside the
-/// panel bordered by `area`, with the scrollbar on its border. The TASKS
-/// tab and the channel's PROJECTS tab both draw their tasks with this.
-pub(super) fn render_task_tree(
-    frame: &mut Frame,
-    (area, rows_area): (Rect, Rect),
+/// The rows of `list` from `view.first` that fit in `body`, and how much
+/// of the list they show.
+fn task_tree_lines(
     list: &TaskList,
     view: TreeView,
+    body: &Body,
     app: &App,
     theme: &Theme,
-) {
-    let visible = usize::from(rows_area.height);
-    let width = usize::from(rows_area.width);
-    let lines: Vec<Line> = list
+) -> (Vec<Line<'static>>, ScrollView) {
+    let visible = body.visible();
+    let width = body.width();
+    let lines = list
         .rows()
         .iter()
         .enumerate()
@@ -133,8 +126,7 @@ pub(super) fn render_task_tree(
         visible,
         first: view.first,
     };
-    frame.render_widget(Paragraph::new(lines), rows_area);
-    render_scrollbar(frame, area, rows_area, scroll, view.focused, theme);
+    (lines, scroll)
 }
 
 /// The line of one row, `width` columns wide.

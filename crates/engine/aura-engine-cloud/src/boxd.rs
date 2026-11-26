@@ -23,7 +23,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use aura_config::{CloudConfig, MachineSize};
 use aura_core_types::{VmSource, VmUsage};
-use futures_util::stream;
+use futures_util::{stream, StreamExt as _};
 use parking_lot::Mutex;
 use tonic::metadata::MetadataValue;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -45,6 +45,8 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Largest chunk sent in one upload message (boxd caps a message at
 /// 4 MiB).
 const UPLOAD_CHUNK: usize = 1024 * 1024;
+/// How often an upload says how far it has got.
+const UPLOAD_REPORT_EVERY: Duration = Duration::from_millis(500);
 
 /// Endpoint URL for `region` given the home endpoint `base`.
 #[must_use]
@@ -776,8 +778,22 @@ impl VmProvider for BoxdProvider {
     }
 
     async fn upload(&self, machine: &str, path: &str, bytes: Vec<u8>) -> CloudResult<u64> {
+        self.upload_reported(machine, path, bytes, &mut |_, _| {})
+            .await
+    }
+
+    async fn upload_reported(
+        &self,
+        machine: &str,
+        path: &str,
+        bytes: Vec<u8>,
+        on_sent: &mut (dyn FnMut(u64, u64) + Send),
+    ) -> CloudResult<u64> {
         const OP: &str = "UploadFileStream";
         let total = bytes.len() as u64;
+        // Counted as tonic takes each chunk off the stream to send it:
+        // with HTTP/2 flow control that tracks what went out closely.
+        let sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let mut chunks = vec![proto::UploadFileChunk {
             vm_id: machine.to_string(),
             path: path.to_string(),
@@ -792,26 +808,42 @@ impl VmProvider for BoxdProvider {
                     ..Default::default()
                 }),
         );
+        let counter = Arc::clone(&sent);
+        let chunks = stream::iter(chunks).inspect(move |chunk| {
+            counter.fetch_add(
+                chunk.data.len() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        });
         let channel = self.channel(&self.endpoint_of(machine))?;
-        let request = self.request(stream::iter(chunks), CREATE_TIMEOUT).await?;
-        let written = tokio::time::timeout(
-            CREATE_TIMEOUT,
-            BoxdApiClient::new(channel).upload_file_stream(request),
-        )
-        .await
-        .map_err(|_| CloudError::Timeout {
-            op: OP,
-            after: CREATE_TIMEOUT,
-        })?
-        .map_err(|status| CloudError::rpc(OP, &status))?
-        .into_inner()
-        .bytes_written;
+        let request = self.request(chunks, CREATE_TIMEOUT).await?;
+        let mut client = BoxdApiClient::new(channel);
+        let call = tokio::time::timeout(CREATE_TIMEOUT, client.upload_file_stream(request));
+        tokio::pin!(call);
+        let mut every = tokio::time::interval(UPLOAD_REPORT_EVERY);
+        let answer = loop {
+            tokio::select! {
+                answer = &mut call => break answer,
+                _ = every.tick() => {
+                    on_sent(sent.load(std::sync::atomic::Ordering::Relaxed).min(total), total);
+                }
+            }
+        };
+        let written = answer
+            .map_err(|_| CloudError::Timeout {
+                op: OP,
+                after: CREATE_TIMEOUT,
+            })?
+            .map_err(|status| CloudError::rpc(OP, &status))?
+            .into_inner()
+            .bytes_written;
         if written != total {
             return Err(CloudError::InvalidResponse {
                 op: OP,
                 message: format!("wrote {written} of {total} bytes to {path}"),
             });
         }
+        on_sent(total, total);
         Ok(written)
     }
 

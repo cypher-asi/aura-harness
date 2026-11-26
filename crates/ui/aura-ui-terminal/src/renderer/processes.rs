@@ -2,22 +2,14 @@
 //! and the detail view of one of them.
 
 use super::agents::aura_icon;
-use super::chrome::{render_scrollbar, ScrollView};
-use super::side_list::{
-    name_style, render_empty, render_hidden, render_hint, split_hint, Tone, PROCESSES_HINT,
-};
-use super::text::wrap_words;
+use super::chrome::{Body, ScrollView};
+use super::overlays::DETAIL_LABEL_WIDTH;
+use super::side_list::{name_style, render_empty, render_hidden, Tone, PROCESSES_HINT};
 use crate::app::{HoverTarget, PanelFocus};
-use crate::components::{cell_style, list_row, now_ms, CellState, StatusIcon};
-use crate::events::{ProcessStatus, ProcessSummary};
+use crate::components::{cell_style, list_row, now_ms, CellState, Info, StatusIcon, Value};
+use crate::events::{ProcessKind, ProcessStatus, ProcessSummary};
 use crate::{App, Theme};
-use ratatui::{
-    layout::Rect,
-    style::{Color, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
-    Frame,
-};
+use ratatui::{layout::Rect, style::Color, text::Line, Frame};
 
 /// Draw the Processes list into `inner`, the body below the tab bar of the
 /// panel bordered by `area`.
@@ -38,8 +30,8 @@ pub(super) fn render_processes(
         return;
     }
 
-    let (rows_area, hint) = split_hint(inner, is_focused);
-    let visible = rows_area.height as usize;
+    let body = Body::new(area, inner, is_focused);
+    let visible = body.visible();
     let scroll = app.sync_processes_scroll(visible);
     let hovered = match app.hover() {
         Some(HoverTarget::ProcessRow(index)) => Some(index),
@@ -47,7 +39,7 @@ pub(super) fn render_processes(
     };
     let selected = app.selected_process();
     let now = now_ms();
-    let width = inner.width as usize;
+    let width = body.width();
     let lines: Vec<Line> = app
         .processes()
         .iter()
@@ -82,12 +74,8 @@ pub(super) fn render_processes(
         visible,
         first: scroll,
     };
-    app.set_process_rows_area(rows_area, scroll);
-    frame.render_widget(Paragraph::new(lines), rows_area);
-    render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-    if let Some(hint) = hint {
-        render_hint(frame, hint, PROCESSES_HINT, theme);
-    }
+    app.set_process_rows_area(body.rows(), scroll);
+    body.draw(frame, lines, view, PROCESSES_HINT, theme);
 }
 
 /// Spinning ring while running; a glyph for every other state.
@@ -145,114 +133,80 @@ fn format_timestamp(ms: u64) -> String {
     format!("{ms} ({local})")
 }
 
-/// Every line of a process's details, in the layout of a record's: plain
-/// fields, then sections, then the full command or prompt wrapped to
-/// `width`.
-pub(super) fn process_detail_lines<'a>(
+/// Every line of a process's details, laid out `width` columns wide like
+/// a record's: what it is, who started it, when, where it came from, how
+/// it runs, then its whole command or prompt.
+pub(super) fn process_detail_lines(
     process: &ProcessSummary,
-    width: u16,
+    width: usize,
     theme: &Theme,
-) -> Vec<Line<'a>> {
-    let muted = Style::default().fg(theme.colors.muted);
-    let field = |name: &str, value: String, color: Color| {
-        Line::from(vec![
-            Span::styled(format!("{name:<13}"), muted),
-            Span::styled(value, Style::default().fg(color)),
-        ])
-    };
-    let section = |title: &str| Line::from(Span::styled(format!("── {title} ──"), muted));
-    let (_, status_color) = status_glyph(process.status, theme);
-    let fg = theme.colors.foreground;
-    let id_color = theme.colors.secondary;
+) -> Vec<Line<'static>> {
+    let mut info = Info::new(width, theme)
+        .label_width(DETAIL_LABEL_WIDTH)
+        .wrap_values();
+    info.section("PROCESS", None);
+    info.fact("Process id", &process.id, Value::Quiet);
+    info.fact("Kind", process.kind.label(), Value::Plain);
+    let failed = process.status == ProcessStatus::Failed;
+    let status = if failed { Value::Error } else { Value::Plain };
+    info.fact("Status", process.status.label(), status);
 
-    let mut lines = vec![
-        field("process_id:", process.id.clone(), id_color),
-        field("kind:", process.kind.label().to_string(), fg),
-        field("status:", process.status.label().to_string(), status_color),
-    ];
-
-    lines.push(Line::from(""));
-    lines.push(section("Owner"));
-    lines.push(field("agent:", process.owner_name.clone(), fg));
-    lines.push(field("agent_id:", process.owner_agent_id.clone(), id_color));
+    info.section("OWNER", None);
+    info.fact("Agent", &process.owner_name, Value::Plain);
+    info.fact("Agent id", &process.owner_agent_id, Value::Quiet);
     for (depth, ancestor) in process.parent_chain.iter().enumerate() {
-        let name = if depth == 0 { "spawned by:" } else { "" };
-        lines.push(field(name, ancestor.clone(), id_color));
+        let label = if depth == 0 { "Spawned by" } else { "" };
+        info.fact(label, ancestor, Value::Quiet);
     }
 
-    lines.push(Line::from(""));
-    lines.push(section("Timing"));
-    lines.push(field("started:", format_timestamp(process.started_ms), fg));
+    info.section("TIMING", None);
+    info.fact("Started", &format_timestamp(process.started_ms), Value::Plain);
     if let Some(ended) = process.ended_ms {
-        lines.push(field("ended:", format_timestamp(ended), fg));
+        info.fact("Ended", &format_timestamp(ended), Value::Plain);
     }
     let elapsed = process_elapsed_ms(process, now_ms());
-    lines.push(field("duration:", format_elapsed(elapsed), fg));
+    info.fact("Duration", &format_elapsed(elapsed), Value::Plain);
 
     let origin = [
-        ("tool_use_id:", process.tool_use_id.clone()),
-        ("spawn_tx:", process.spawn_tx.clone()),
+        ("Tool use id", process.tool_use_id.as_deref()),
+        ("Spawn tx", process.spawn_tx.as_deref()),
     ];
     if origin.iter().any(|(_, value)| value.is_some()) {
-        lines.push(Line::from(""));
-        lines.push(section("Origin"));
-        for (name, value) in origin {
+        info.section("ORIGIN", None);
+        for (label, value) in origin {
             if let Some(value) = value {
-                lines.push(field(name, value, id_color));
+                info.fact(label, value, Value::Quiet);
             }
         }
     }
 
     let runtime = [
-        ("pid:", process.pid.map(|pid| pid.to_string())),
-        ("cwd:", process.cwd.clone()),
-        ("model:", process.model.clone()),
-        ("turns:", process.turns.map(|n| n.to_string())),
-        ("queued:", process.queued.map(|n| n.to_string())),
-        ("exit_code:", process.exit_code.map(|code| code.to_string())),
+        ("PID", process.pid.map(|pid| pid.to_string())),
+        ("Folder", process.cwd.clone()),
+        ("Model", process.model.clone()),
+        ("Turns", process.turns.map(|n| n.to_string())),
+        ("Queued", process.queued.map(|n| n.to_string())),
+        ("Exit code", process.exit_code.map(|code| code.to_string())),
         (
-            "log:",
+            "Log",
             process.log_path.as_ref().map(|p| p.display().to_string()),
         ),
     ];
     if runtime.iter().any(|(_, value)| value.is_some()) {
-        lines.push(Line::from(""));
-        lines.push(section("Process"));
-        for (name, value) in runtime {
+        info.section("RUNTIME", None);
+        for (label, value) in runtime {
             if let Some(value) = value {
-                lines.push(field(name, value, fg));
+                info.fact(label, &value, Value::Plain);
             }
         }
     }
 
     if !process.detail.is_empty() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            if matches!(
-                process.kind,
-                crate::events::ProcessKind::Shell | crate::events::ProcessKind::Command
-            ) {
-                "Command:"
-            } else {
-                "Prompt:"
-            },
-            muted,
-        )));
-        let max = usize::from(width.saturating_sub(4)).max(1);
-        for line in process.detail.lines() {
-            if line.is_empty() {
-                lines.push(Line::from(""));
-                continue;
-            }
-            for wrapped in wrap_words(line, max) {
-                lines.push(Line::from(Span::styled(
-                    format!("  {wrapped}"),
-                    Style::default().fg(fg),
-                )));
-            }
-        }
+        let command = matches!(process.kind, ProcessKind::Shell | ProcessKind::Command);
+        info.section(if command { "COMMAND" } else { "PROMPT" }, None);
+        info.text(&process.detail, Value::Plain);
     }
-    lines
+    info.into_lines()
 }
 
 #[cfg(test)]
@@ -287,19 +241,19 @@ mod tests {
             .iter()
             .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
             .collect();
-        assert!(text
-            .iter()
-            .any(|l| l.contains("agent_id:") && l.contains("abcd")));
-        assert!(text
-            .iter()
-            .any(|l| l.contains("spawned by:") && l.contains("root")));
-        assert!(text
-            .iter()
-            .any(|l| l.contains("duration:") && l.contains("42s")));
-        assert!(text
-            .iter()
-            .any(|l| l.contains("pid:") && l.contains("4242")));
-        assert!(text.iter().any(|l| l == "Command:"));
-        assert!(text.iter().any(|l| l.contains("cargo build --release")));
+        for fact in [
+            "  Agent id      abcd",
+            "  Spawned by    root",
+            "  Duration      42s",
+            "  PID           4242",
+            "COMMAND",
+            "  cargo build --release",
+        ] {
+            assert!(text.iter().any(|l| l == fact), "{fact:?} in {text:#?}");
+        }
+        assert!(
+            !text.iter().any(|l| l.contains('─')),
+            "sections are titled, not ruled"
+        );
     }
 }

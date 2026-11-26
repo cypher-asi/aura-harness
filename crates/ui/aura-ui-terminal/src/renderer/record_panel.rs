@@ -1,9 +1,9 @@
 //! The Kernel panel: the kernel's records, the run's members, the policy
 //! and the inbox, under a KERNEL | MEMBERS | POLICIES | INBOX header bar.
 
-use super::chrome::{render_body_block, render_scrollbar, ScrollView};
+use super::chrome::{render_body_block, Body, ScrollView};
 use super::header::{self, HeaderInfo, PanelHeader};
-use super::side_list::render_empty;
+use super::side_list::{render_empty, KERNEL_HINT};
 use super::text::display_width;
 use crate::components::truncate_record_info;
 use crate::{
@@ -14,7 +14,6 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
     Frame,
 };
 
@@ -92,27 +91,28 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         return;
     }
 
-    let visible = inner.height as usize;
+    let body = Body::new(area, inner, is_focused);
+    let visible = body.visible();
     let scroll = app.sync_records_scroll(visible);
-    app.set_record_rows_area(inner);
-    let lines = build_record_lines(app, inner, scroll, visible, theme);
-    frame.render_widget(Paragraph::new(lines), inner);
+    app.set_record_rows_area(body.rows());
+    let lines = build_record_lines(app, body.width(), scroll, visible, theme);
     let view = ScrollView {
         total: app.records().len(),
         visible,
         first: scroll,
     };
-    render_scrollbar(frame, area, inner, view, is_focused, theme);
+    body.draw(frame, lines, view, KERNEL_HINT, theme);
 }
 
 fn render_empty_records(frame: &mut Frame, inner: Rect, theme: &Theme) {
     render_empty(frame, inner, "No records yet.", theme);
 }
 
-/// Lines for the `rows` records starting at index `first`.
+/// Lines `width` columns wide for the `rows` records starting at index
+/// `first`.
 fn build_record_lines<'a>(
     app: &App,
-    inner: Rect,
+    width: usize,
     first: usize,
     rows: usize,
     theme: &Theme,
@@ -125,7 +125,6 @@ fn build_record_lines<'a>(
         Some(HoverTarget::RecordRow(index)) => Some(index),
         _ => None,
     };
-    let width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
 
     for (i, record) in app.records().iter().enumerate().skip(first).take(rows) {

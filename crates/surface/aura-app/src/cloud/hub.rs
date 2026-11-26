@@ -52,9 +52,9 @@ use aura_engine_cloud::fleet::{MachineView, ProvisionRequest, VmFleet};
 use aura_engine_cloud::machine_env::{MachineEnv, WORKSPACE_DIR};
 use aura_engine_cloud::mesh::{global_thread, Directory, Holder, MailBook, HUB_NODE};
 use aura_engine_cloud::plans::{PlanCredentials, PlanStatus, PlanSync, SYNC_EVERY};
-use aura_engine_cloud::snapshots::{AuraBinary, SnapshotBuilder, SnapshotRecord};
+use aura_engine_cloud::snapshots::{self, AuraBinary, SnapshotBuilder, SnapshotRecord};
 use aura_engine_cloud::{
-    delta, names, replica, BootEvent, BootReporter, BootStage, CloudError, CloudResult,
+    boxd, delta, names, replica, BootEvent, BootReporter, BootStage, CloudError, CloudResult,
     MachineOrigin, VmProvider,
 };
 use aura_store_db::Store;
@@ -64,7 +64,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::node_client::NodeClient;
+use super::node_client::{NodeClient, NODE_TIMEOUT};
 use super::store::{agent_id_of, record_placement, StoreLedger, StoreSink};
 
 /// How often idle machines are checked for sleep.
@@ -81,6 +81,13 @@ const MAX_SAMPLES: usize = 720;
 const TURN_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 /// Where an uploaded delta goes (see [`delta::APPLY_DELTA`]).
 const DELTA_PATH: &str = "/tmp/aura-delta.tgz";
+/// Limit on applying the project's changes on a new machine.
+const APPLY_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// `commit` as shown: its first 12 characters.
+fn short_commit(commit: &str) -> String {
+    commit.chars().take(12).collect()
+}
 
 /// What the hub needs to move an agent to a cloud machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -595,7 +602,21 @@ impl CloudHub {
     /// destroy machines no kept agent owns, and start the fleet's
     /// timers. `keep` are the agents that still exist (hex).
     pub async fn start(self: &Arc<Self>, keep: &HashSet<String>) {
+        self.start_reported(keep, &BootReporter::none()).await;
+    }
+
+    /// [`Self::start`], showing on `boot` each machine it takes back and
+    /// the sweep, as the [`BootStage::Connect`] stage's waits.
+    pub async fn start_reported(self: &Arc<Self>, keep: &HashSet<String>, boot: &BootReporter) {
         let placed = self.placed();
+        let kept = placed.iter().filter(|(hex, _)| keep.contains(hex)).count();
+        if kept > 0 {
+            boot.log(
+                BootStage::Connect,
+                false,
+                format!("taking back {kept} cloud machine(s)"),
+            );
+        }
         for (hex, agent) in &placed {
             if !keep.contains(hex) {
                 continue;
@@ -604,14 +625,31 @@ impl CloudHub {
                 .plan_sync()
                 .map(|plans| plans.templates(&agent.owner()))
                 .unwrap_or_default();
-            match self
-                .fleet
-                .adopt(hex, &agent.zns, &agent.project, &agent.machine, templates)
-                .await
-            {
-                Ok(view) => self.place_in_directory(hex, agent, &view),
+            let adopted = boot
+                .wait(
+                    BootStage::Connect,
+                    format!("boxd is looking up {} ({})", agent.machine, agent.name),
+                    Some(boxd::CALL_TIMEOUT),
+                    self.fleet
+                        .adopt(hex, &agent.zns, &agent.project, &agent.machine, templates),
+                )
+                .await;
+            match adopted {
+                Ok(view) => {
+                    boot.log(
+                        BootStage::Connect,
+                        false,
+                        format!("{} is {}", agent.machine, view.state.label()),
+                    );
+                    self.place_in_directory(hex, agent, &view);
+                }
                 Err(err) => {
                     tracing::warn!(agent = %hex, machine = %agent.machine, error = %err, "cloud machine is gone; the agent runs here again");
+                    boot.log(
+                        BootStage::Connect,
+                        true,
+                        format!("{} is gone; {} runs here again", agent.machine, agent.name),
+                    );
                     self.placements.lock().agents.remove(hex);
                 }
             }
@@ -622,12 +660,32 @@ impl CloudHub {
             .filter(|(hex, _)| keep.contains(hex))
             .map(|(hex, _)| hex.clone())
             .collect();
-        match self.fleet.sweep_orphans(&owned).await {
+        let swept = boot
+            .wait(
+                BootStage::Connect,
+                "boxd is listing this install's machines, to destroy those no agent owns",
+                Some(boxd::CALL_TIMEOUT),
+                self.fleet.sweep_orphans(&owned),
+            )
+            .await;
+        match swept {
             Ok(swept) if !swept.is_empty() => {
                 tracing::info!(machines = ?swept, "destroyed cloud machines no agent owns");
+                boot.log(
+                    BootStage::Connect,
+                    false,
+                    format!("destroyed {} machine(s) no agent owns", swept.len()),
+                );
             }
             Ok(_) => {}
-            Err(err) => tracing::warn!(error = %err, "could not list cloud machines"),
+            Err(err) => {
+                tracing::warn!(error = %err, "could not list cloud machines");
+                boot.log(
+                    BootStage::Connect,
+                    true,
+                    format!("could not list cloud machines: {err}"),
+                );
+            }
         }
         for (hex, _) in self.placed() {
             self.open_link(&hex);
@@ -726,7 +784,15 @@ impl CloudHub {
         let (secrets, plans) = match self.plan_sync() {
             Some(sync) => {
                 boot.run(BootStage::Plans, async {
-                    Ok::<_, CloudError>(match sync.ensure_owner(&request.owner).await {
+                    let ensured = boot
+                        .wait(
+                            BootStage::Plans,
+                            "boxd is storing the plan sign-ins as machine secrets",
+                            None,
+                            sync.ensure_owner(&request.owner),
+                        )
+                        .await;
+                    Ok::<_, CloudError>(match ensured {
                         Ok(secrets) => {
                             let plans = sync.templates(&request.owner);
                             boot.fact("plans", format!("{} plan sign-in(s) shared", plans.len()));
@@ -906,18 +972,23 @@ impl CloudHub {
         base: &str,
         boot: &BootReporter,
     ) -> CloudResult<()> {
-        boot.fact("base commit", base.chars().take(12).collect::<String>());
+        boot.fact("base commit", short_commit(base));
         let dir = request.project_dir.clone();
         let commit = base.to_string();
-        let packed =
-            tokio::task::spawn_blocking(move || -> CloudResult<Option<(usize, Vec<u8>)>> {
-                let changes = delta::collect(&dir, &commit)?;
-                if changes.is_empty() {
-                    return Ok(None);
-                }
-                let count = changes.files.len() + changes.deleted.len();
-                delta::pack(&dir, &changes).map(|bytes| Some((count, bytes)))
-            })
+        let packed = boot
+            .wait(
+                BootStage::SyncFiles,
+                format!("packing the project's changes since {}", short_commit(base)),
+                None,
+                tokio::task::spawn_blocking(move || -> CloudResult<Option<(usize, Vec<u8>)>> {
+                    let changes = delta::collect(&dir, &commit)?;
+                    if changes.is_empty() {
+                        return Ok(None);
+                    }
+                    let count = changes.files.len() + changes.deleted.len();
+                    delta::pack(&dir, &changes).map(|bytes| Some((count, bytes)))
+                }),
+            )
             .await
             .map_err(|err| {
                 CloudError::io("pack changes", std::io::Error::other(err.to_string()))
@@ -939,18 +1010,35 @@ impl CloudHub {
             false,
             format!("upload {DELTA_PATH} ({})", human_bytes(bytes.len() as u64)),
         );
-        provider
-            .upload(&view.machine.name, DELTA_PATH, bytes)
-            .await?;
+        let machine = &view.machine.name;
+        let size = human_bytes(bytes.len() as u64);
+        boot.wait(
+            BootStage::SyncFiles,
+            format!("uploading {DELTA_PATH} ({size}) to {machine}"),
+            Some(boxd::CREATE_TIMEOUT),
+            provider.upload_reported(machine, DELTA_PATH, bytes, &mut |sent, total| {
+                boot.waiting(
+                    BootStage::SyncFiles,
+                    snapshots::uploading(DELTA_PATH, sent, total, machine),
+                    Some(boxd::CREATE_TIMEOUT),
+                );
+            }),
+        )
+        .await?;
         boot.log(BootStage::SyncFiles, false, "$ apply changes");
         let mut lines = boot.output(BootStage::SyncFiles);
-        let out = provider
-            .exec_streaming(
-                &view.machine.name,
-                delta::APPLY_DELTA,
-                None,
-                Duration::from_secs(120),
-                &mut |stderr, chunk| lines.chunk(stderr, chunk),
+        let out = boot
+            .wait(
+                BootStage::SyncFiles,
+                format!("applying the changes on {machine}"),
+                Some(APPLY_TIMEOUT),
+                provider.exec_streaming(
+                    machine,
+                    delta::APPLY_DELTA,
+                    None,
+                    APPLY_TIMEOUT,
+                    &mut |stderr, chunk| lines.chunk(stderr, chunk),
+                ),
             )
             .await?;
         lines.finish();
@@ -978,7 +1066,15 @@ impl CloudHub {
             .store
             .get_head_seq(request.agent)
             .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))?;
-        let remote = node.head(request.agent).await.unwrap_or(0);
+        let remote = boot
+            .wait(
+                BootStage::ImportRecord,
+                format!("asking {} how much of the record it has", view.machine.name),
+                Some(NODE_TIMEOUT),
+                node.head(request.agent),
+            )
+            .await
+            .unwrap_or(0);
         boot.fact("record", format!("{head} entries"));
         let mut from = remote + 1;
         loop {
@@ -998,12 +1094,21 @@ impl CloudHub {
             };
             let count = entries.len() as u64;
             let done = from + count > head;
-            node.import(&SyncImport {
-                agent_id: request.agent.to_hex(),
-                name: request.name.clone(),
-                entries,
-                done,
-            })
+            let last = (from + count).saturating_sub(1);
+            boot.wait(
+                BootStage::ImportRecord,
+                format!(
+                    "{} is importing entries {from}..={last} of {head}",
+                    view.machine.name
+                ),
+                Some(NODE_TIMEOUT),
+                node.import(&SyncImport {
+                    agent_id: request.agent.to_hex(),
+                    name: request.name.clone(),
+                    entries,
+                    done,
+                }),
+            )
             .await?;
             if done {
                 boot.progress(BootStage::ImportRecord, head, head);
