@@ -1065,7 +1065,10 @@ async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) 
     if streaming {
         ui.send(UiCommand::FinishStreaming).await;
     }
-    ui.send(UiCommand::SetStatus("Ready".to_string())).await;
+    // The chat entered Processing when the prompt was sent. Status text
+    // alone leaves it there, so the working line keeps saying Thinking
+    // after the turn is over.
+    ui.send(UiCommand::Complete).await;
 }
 
 impl Drop for CloudState {
@@ -1115,6 +1118,116 @@ mod owner_tests {
         assert_eq!(plan_of_model("aura-claude-sonnet"), None);
         assert_eq!(plan_of_model("local/qwen3:4b"), None);
         assert_eq!(plan_of_model("zos/x"), None);
+    }
+}
+
+#[cfg(test)]
+mod forward_tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    fn chat() -> (AgentUi, mpsc::Receiver<UiCommand>) {
+        let (tx, rx) = mpsc::channel(32);
+        (AgentUi::new(tx, AgentId::new([7; 32])), rx)
+    }
+
+    fn commands(rx: &mut mpsc::Receiver<UiCommand>) -> Vec<UiCommand> {
+        let mut out = Vec::new();
+        while let Ok(command) = rx.try_recv() {
+            match command {
+                UiCommand::ForAgent { command, .. } => out.push(*command),
+                other => out.push(other),
+            }
+        }
+        out
+    }
+
+    /// The working line clears only when the chat leaves Processing, which
+    /// `Complete` does. A status of Ready does not.
+    fn ends_the_turn(commands: &[UiCommand]) {
+        assert!(
+            matches!(commands.last(), Some(UiCommand::Complete)),
+            "{commands:?}"
+        );
+        assert!(
+            !commands.iter().any(
+                |command| matches!(command, UiCommand::SetStatus(status) if status == "Ready")
+            ),
+            "{commands:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finished_cloud_turn_completes_the_chat() {
+        let (ui, mut rx) = chat();
+        let (tx, events) = mpsc::channel(8);
+        tx.send(RemoteEvent::Text("hello".into())).await.unwrap();
+        tx.send(RemoteEvent::ToolStart {
+            id: "t1".into(),
+            name: "run_command".into(),
+        })
+        .await
+        .unwrap();
+        tx.send(RemoteEvent::ToolResult {
+            id: "t1".into(),
+            result: "ok".into(),
+            is_error: false,
+        })
+        .await
+        .unwrap();
+        tx.send(RemoteEvent::Text("done".into())).await.unwrap();
+        tx.send(RemoteEvent::Done {
+            model: "m".into(),
+            input_tokens: 1,
+            output_tokens: 2,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        forward(ui, events).await;
+
+        let sent = commands(&mut rx);
+        ends_the_turn(&sent);
+        assert!(sent
+            .iter()
+            .any(|command| matches!(command, UiCommand::FinishStreaming)));
+        assert!(sent
+            .iter()
+            .any(|command| matches!(command, UiCommand::CompleteTool { success: true, .. })));
+    }
+
+    #[tokio::test]
+    async fn a_failed_cloud_turn_completes_the_chat() {
+        let (ui, mut rx) = chat();
+        let (tx, events) = mpsc::channel(8);
+        tx.send(RemoteEvent::Failed("boom".into())).await.unwrap();
+        drop(tx);
+
+        forward(ui, events).await;
+
+        let sent = commands(&mut rx);
+        ends_the_turn(&sent);
+        assert!(sent.iter().any(|command| matches!(
+            command,
+            UiCommand::ShowError(message) if message.contains("boom")
+        )));
+    }
+
+    #[tokio::test]
+    async fn a_dropped_cloud_turn_completes_the_chat() {
+        let (ui, mut rx) = chat();
+        let (tx, events) = mpsc::channel(8);
+        tx.send(RemoteEvent::Thinking("hmm".into())).await.unwrap();
+        drop(tx);
+
+        forward(ui, events).await;
+
+        let sent = commands(&mut rx);
+        ends_the_turn(&sent);
+        assert!(sent
+            .iter()
+            .any(|command| matches!(command, UiCommand::FinishThinking)));
     }
 }
 
