@@ -125,6 +125,13 @@ fn json_time(value: &serde_json::Value) -> DateTime<Utc> {
 /// Assert, field by field, that `registry` holds what the version 3
 /// registry file `file` does, in its order.
 fn assert_matches_file(registry: &AgentRegistry, file: &serde_json::Value) {
+    assert_agents_match(registry, file);
+    assert_projects_match(registry, file);
+    assert_meta_matches(registry, file);
+}
+
+/// The agents of `registry` are those of `file`, field by field, in order.
+fn assert_agents_match(registry: &AgentRegistry, file: &serde_json::Value) {
     let agents = file["agents"].as_array().unwrap();
     let zns: Vec<&str> = registry
         .agents()
@@ -154,7 +161,10 @@ fn assert_matches_file(registry: &AgentRegistry, file: &serde_json::Value) {
         assert_eq!(agent.code, json_str(want, "code"), "{id}");
         assert_eq!(agent.subtitle, json_str(want, "subtitle"), "{id}");
     }
+}
 
+/// The projects of `registry` are those of `file`, in order.
+fn assert_projects_match(registry: &AgentRegistry, file: &serde_json::Value) {
     let projects = file["projects"].as_array().unwrap();
     assert_eq!(registry.projects().len(), projects.len());
     for (project, want) in registry.projects().iter().zip(projects) {
@@ -168,7 +178,11 @@ fn assert_matches_file(registry: &AgentRegistry, file: &serde_json::Value) {
         assert_eq!(project.created_at, json_time(want), "{id}");
         assert_eq!(project.removed, json_flag(want, "removed"), "{id}");
     }
+}
 
+/// The version, active agent, prefixes and highest numbers of `registry`
+/// are those of `file`.
+fn assert_meta_matches(registry: &AgentRegistry, file: &serde_json::Value) {
     assert_eq!(
         u64::from(registry.file.version),
         file["version"].as_u64().unwrap()

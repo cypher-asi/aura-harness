@@ -83,18 +83,18 @@ fn backfilling_keeps_the_codes_a_registry_has() {
     assert_codes_consistent(&registry);
 }
 
-#[test]
-fn older_codes_and_prefixes_are_migrated_on_load_and_kept() {
-    let launch = tempfile::tempdir().unwrap();
+/// A version 3 registry file in `launch` whose codes and prefixes are in
+/// the older formats.
+fn older_codes_file(launch: &Path) -> String {
     let agent = |zns: &str, name: &str, definition: Option<&str>, code: &str| {
         serde_json::json!({
             "zns_id": zns, "name": name, "created_at": "2026-10-31T01:48:50Z",
             "definition": definition, "project_id": "p", "code": code,
         })
     };
-    let file = serde_json::json!({
+    serde_json::json!({
         "version": REGISTRY_VERSION,
-        "projects": [{"id": "p", "folder": launch.path(), "created_at": "2026-10-31T01:48:50Z"}],
+        "projects": [{"id": "p", "folder": launch, "created_at": "2026-10-31T01:48:50Z"}],
         "agents": [
             agent("0://terminal/agent", "Agent", None, "AG-1"),
             agent("0://terminal/re36", "rust-engineer #36", Some("rust-engineer"), "RE-36"),
@@ -108,7 +108,13 @@ fn older_codes_and_prefixes_are_migrated_on_load_and_kept() {
             "agent": "AG", "rust-engineer": "RE", "reviewer": "REVI", "research-engineer": "RE2",
         },
     })
-    .to_string();
+    .to_string()
+}
+
+#[test]
+fn older_codes_and_prefixes_are_migrated_on_load_and_kept() {
+    let launch = tempfile::tempdir().unwrap();
+    let file = older_codes_file(launch.path());
 
     let load = || {
         let dir = tempfile::tempdir().unwrap();

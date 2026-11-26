@@ -256,8 +256,26 @@ fn unarchiving_an_agent_brings_back_only_that_agent() {
     );
 }
 
-#[test]
-fn restoring_an_agent_whose_project_was_removed_puts_back_just_that_agent() {
+/// A project in its own folder with two agents besides its first, an
+/// instance under each, the first added agent archived at 1 and the
+/// second's instance at 2.
+struct ArchivedInProject {
+    dir: tempfile::TempDir,
+    launch: tempfile::TempDir,
+    folder: tempfile::TempDir,
+    registry: AgentRegistry,
+    /// The launch project's agent, active.
+    legacy: RegisteredAgent,
+    /// The project's first agent.
+    site: RegisteredAgent,
+    project: String,
+    added: RegisteredAgent,
+    other: RegisteredAgent,
+    spawned: RegisteredAgent,
+    nested: RegisteredAgent,
+}
+
+fn archived_in_project() -> ArchivedInProject {
     let dir = tempfile::tempdir().unwrap();
     let launch = tempfile::tempdir().unwrap();
     let folder = tempfile::tempdir().unwrap();
@@ -276,51 +294,76 @@ fn restoring_an_agent_whose_project_was_removed_puts_back_just_that_agent() {
         .unwrap();
     registry.archive_at(added.agent_id(), at(1)).unwrap();
     registry.archive_at(nested.agent_id(), at(2)).unwrap();
+    ArchivedInProject {
+        dir,
+        launch,
+        folder,
+        registry,
+        legacy,
+        site,
+        project,
+        added,
+        other,
+        spawned,
+        nested,
+    }
+}
 
-    let gone = registry.remove_project(&project).unwrap();
-    assert_eq!(gone, [site.agent_id(), other.agent_id()]);
-    assert!(registry.find(site.agent_id()).is_none());
-    assert!(registry.find(other.agent_id()).unwrap().removed);
-    assert_eq!(names(registry.tree()), [(legacy.name.clone(), 0)]);
+#[test]
+fn restoring_an_agent_whose_project_was_removed_puts_back_just_that_agent() {
+    let f = archived_in_project();
+    let mut registry = f.registry;
+
+    let gone = registry.remove_project(&f.project).unwrap();
+    assert_eq!(gone, [f.site.agent_id(), f.other.agent_id()]);
+    assert!(registry.find(f.site.agent_id()).is_none());
+    assert!(registry.find(f.other.agent_id()).unwrap().removed);
+    assert_eq!(names(registry.tree()), [(f.legacy.name.clone(), 0)]);
     // Newest archived first; what an agent spawned stays under it.
     assert_eq!(
         names(registry.archived_tree()),
         [
-            (nested.name.clone(), 0),
-            (added.name.clone(), 0),
-            (spawned.name.clone(), 1)
+            (f.nested.name.clone(), 0),
+            (f.added.name.clone(), 0),
+            (f.spawned.name.clone(), 1)
         ]
     );
 
     // Survives a reload, then comes back in the same project, alone.
-    let mut registry = open(dir.path(), launch.path());
-    assert_eq!(registry.active(), &legacy);
-    registry.restore(added.agent_id()).unwrap();
+    let mut registry = open(f.dir.path(), f.launch.path());
+    assert_eq!(registry.active(), &f.legacy);
+    registry.restore(f.added.agent_id()).unwrap();
     assert_eq!(
         names(registry.tree()),
         [
-            (legacy.name.clone(), 0),
-            (added.name.clone(), 0),
-            (spawned.name.clone(), 1)
+            (f.legacy.name.clone(), 0),
+            (f.added.name.clone(), 0),
+            (f.spawned.name.clone(), 1)
         ]
     );
-    assert_eq!(registry.project_of(added.agent_id()).unwrap().id, project);
     assert_eq!(
-        registry.project_folder(spawned.agent_id()),
-        Some(folder.path().canonicalize().unwrap())
+        registry.project_of(f.added.agent_id()).unwrap().id,
+        f.project
     );
-    assert_eq!(names(registry.archived_tree()), [(nested.name.clone(), 0)]);
+    assert_eq!(
+        registry.project_folder(f.spawned.agent_id()),
+        Some(f.folder.path().canonicalize().unwrap())
+    );
+    assert_eq!(
+        names(registry.archived_tree()),
+        [(f.nested.name.clone(), 0)]
+    );
 
     // A nested agent brings back the agent that spawned it.
-    registry.restore(nested.agent_id()).unwrap();
+    registry.restore(f.nested.agent_id()).unwrap();
     assert_eq!(
         names(registry.tree()),
         [
-            (legacy.name.clone(), 0),
-            (added.name.clone(), 0),
-            (spawned.name.clone(), 1),
-            (other.name.clone(), 0),
-            (nested.name.clone(), 1)
+            (f.legacy.name.clone(), 0),
+            (f.added.name.clone(), 0),
+            (f.spawned.name.clone(), 1),
+            (f.other.name.clone(), 0),
+            (f.nested.name.clone(), 1)
         ]
     );
     assert!(registry.archived_tree().is_empty());

@@ -19,92 +19,11 @@ impl AgentRegistry {
     /// them, then as the registry listed them.
     pub(super) fn migrate(&mut self, data_dir: &Path) {
         let agents = &mut self.file.agents;
-        // Registries written before `member_of` existed linked agents added
-        // to a project to its root through `parent`. Only those agents have
-        // a parent and no definition: spawned agents are always instances.
-        for agent in agents.iter_mut() {
-            if agent.definition.is_none() && agent.legacy_member_of.is_none() {
-                if let Some(root) = agent.parent.take() {
-                    agent.legacy_member_of = Some(root);
-                }
-            }
-        }
-        let up = |agents: &[RegisteredAgent], index: usize| {
-            let agent = &agents[index];
-            let above = agent
-                .parent
-                .as_deref()
-                .or(agent.legacy_member_of.as_deref())?;
-            agents.iter().position(|a| a.zns_id == above)
-        };
-        let root_of = |agents: &[RegisteredAgent], mut index: usize| {
-            for _ in 0..agents.len() {
-                match up(agents, index) {
-                    Some(above) => index = above,
-                    None => break,
-                }
-            }
-            index
-        };
-        let mut roots: Vec<usize> = (0..agents.len())
-            .filter(|&i| up(agents, i).is_none())
-            .collect();
-        let tabs = fs::read_to_string(data_dir.join(DESKTOP_TABS_FILE)).unwrap_or_default();
-        let saved: Vec<&str> = tabs.split_whitespace().collect();
-        roots.sort_by_key(|&i| {
-            let hex = agents[i].agent_id().to_hex();
-            saved
-                .iter()
-                .position(|id| *id == hex)
-                .unwrap_or(saved.len())
-        });
-
+        relink_legacy_members(agents);
+        let roots = ordered_roots(agents, data_dir);
         let mut projects: Vec<Project> = self.file.projects.drain(..).collect();
-        let mut project_of_root: Vec<(usize, String)> = Vec::with_capacity(roots.len());
-        for &root in &roots {
-            let agent = &agents[root];
-            let folder = agent
-                .folder
-                .as_deref()
-                .map_or_else(|| self.launch_dir.clone(), canonical);
-            let id = match projects.iter_mut().find(|p| p.folder == folder) {
-                Some(project) => {
-                    project.removed &= agent.removed;
-                    project.id.clone()
-                }
-                None => {
-                    let id = agent.agent_id().to_hex();
-                    projects.push(Project {
-                        id: id.clone(),
-                        folder,
-                        created_at: agent.created_at,
-                        removed: agent.removed,
-                    });
-                    id
-                }
-            };
-            project_of_root.push((root, id));
-        }
-        let assigned: Vec<Option<String>> = (0..agents.len())
-            .map(|i| {
-                let root = root_of(agents, i);
-                project_of_root
-                    .iter()
-                    .find(|(r, _)| *r == root)
-                    .map(|(_, id)| id.clone())
-            })
-            .collect();
-        for (index, project_id) in assigned.into_iter().enumerate() {
-            let agent = &mut agents[index];
-            if agent.project_id.is_none() {
-                agent.project_id = project_id;
-            }
-            if roots.contains(&index) {
-                // The folder is the project's now.
-                agent.folder = None;
-            }
-            agent.legacy_member_of = None;
-        }
+        let project_of_root = project_per_root(agents, &roots, &mut projects, &self.launch_dir);
+        assign_projects(agents, &roots, &project_of_root);
         self.file.projects = projects;
     }
 
@@ -122,6 +41,124 @@ impl AgentRegistry {
                 project.removed = true;
             }
         }
+    }
+}
+
+/// Registries written before `member_of` existed linked agents added to a
+/// project to its root through `parent`. Only those agents have a parent
+/// and no definition: spawned agents are always instances.
+fn relink_legacy_members(agents: &mut [RegisteredAgent]) {
+    for agent in agents.iter_mut() {
+        if agent.definition.is_none() && agent.legacy_member_of.is_none() {
+            if let Some(root) = agent.parent.take() {
+                agent.legacy_member_of = Some(root);
+            }
+        }
+    }
+}
+
+/// Position of the agent above `index`: its parent, else the agent it was
+/// added to.
+fn up(agents: &[RegisteredAgent], index: usize) -> Option<usize> {
+    let agent = &agents[index];
+    let above = agent
+        .parent
+        .as_deref()
+        .or(agent.legacy_member_of.as_deref())?;
+    agents.iter().position(|a| a.zns_id == above)
+}
+
+/// Position of the root above `index`, giving up after as many steps as
+/// there are agents, in case of a cycle.
+fn root_of(agents: &[RegisteredAgent], mut index: usize) -> usize {
+    for _ in 0..agents.len() {
+        match up(agents, index) {
+            Some(above) => index = above,
+            None => break,
+        }
+    }
+    index
+}
+
+/// Positions of the agents with nothing above them, in the order of the
+/// desktop app's saved tabs, then in registry order.
+fn ordered_roots(agents: &[RegisteredAgent], data_dir: &Path) -> Vec<usize> {
+    let mut roots: Vec<usize> = (0..agents.len())
+        .filter(|&i| up(agents, i).is_none())
+        .collect();
+    let tabs = fs::read_to_string(data_dir.join(DESKTOP_TABS_FILE)).unwrap_or_default();
+    let saved: Vec<&str> = tabs.split_whitespace().collect();
+    roots.sort_by_key(|&i| {
+        let hex = agents[i].agent_id().to_hex();
+        saved
+            .iter()
+            .position(|id| *id == hex)
+            .unwrap_or(saved.len())
+    });
+    roots
+}
+
+/// The project each root heads: the one already in its folder, else a
+/// new one in `projects` with the root's hex id.
+fn project_per_root(
+    agents: &[RegisteredAgent],
+    roots: &[usize],
+    projects: &mut Vec<Project>,
+    launch_dir: &Path,
+) -> Vec<(usize, String)> {
+    let mut project_of_root: Vec<(usize, String)> = Vec::with_capacity(roots.len());
+    for &root in roots {
+        let agent = &agents[root];
+        let folder = agent
+            .folder
+            .as_deref()
+            .map_or_else(|| launch_dir.to_path_buf(), canonical);
+        let id = match projects.iter_mut().find(|p| p.folder == folder) {
+            Some(project) => {
+                project.removed &= agent.removed;
+                project.id.clone()
+            }
+            None => {
+                let id = agent.agent_id().to_hex();
+                projects.push(Project {
+                    id: id.clone(),
+                    folder,
+                    created_at: agent.created_at,
+                    removed: agent.removed,
+                });
+                id
+            }
+        };
+        project_of_root.push((root, id));
+    }
+    project_of_root
+}
+
+/// Put every agent in its root's project; roots hand their folder over.
+fn assign_projects(
+    agents: &mut [RegisteredAgent],
+    roots: &[usize],
+    project_of_root: &[(usize, String)],
+) {
+    let assigned: Vec<Option<String>> = (0..agents.len())
+        .map(|i| {
+            let root = root_of(agents, i);
+            project_of_root
+                .iter()
+                .find(|(r, _)| *r == root)
+                .map(|(_, id)| id.clone())
+        })
+        .collect();
+    for (index, project_id) in assigned.into_iter().enumerate() {
+        let agent = &mut agents[index];
+        if agent.project_id.is_none() {
+            agent.project_id = project_id;
+        }
+        if roots.contains(&index) {
+            // The folder is the project's now.
+            agent.folder = None;
+        }
+        agent.legacy_member_of = None;
     }
 }
 

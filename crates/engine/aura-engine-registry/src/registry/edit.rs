@@ -166,40 +166,10 @@ impl AgentRegistry {
         if self.project(project_id).is_none() {
             anyhow::bail!("no such project");
         }
+        let gone = self.leaving_agents(project_id)?;
+        let (archived, hiding) = self.archived_of_project(project_id);
         let members = &self.channel_members;
-        // Channel members are not the project's to remove: they stay, and
-        // the project's own agents decide whether it is the last one.
-        let in_project = |a: &RegisteredAgent| {
-            a.project_id.as_deref() == Some(project_id) && !members.contains(&a.agent_id())
-        };
-        let tree = self.tree();
-        if tree
-            .iter()
-            .filter(|(agent, _)| !members.contains(&agent.agent_id()))
-            .all(|(agent, _)| in_project(agent))
-        {
-            anyhow::bail!("it is the last project in the list; create another one first");
-        }
-        let gone: Vec<AgentId> = tree
-            .iter()
-            .filter(|(agent, _)| in_project(agent))
-            .map(|(agent, _)| agent.agent_id())
-            .collect();
-        let heads: Vec<&RegisteredAgent> = self
-            .archived_tree()
-            .into_iter()
-            .filter(|(agent, depth)| *depth == 0 && in_project(agent))
-            .map(|(agent, _)| agent)
-            .collect();
-        let archived: Vec<AgentId> = heads
-            .iter()
-            .flat_map(|head| self.subtree(head.agent_id()))
-            .collect();
-        let hiding: Vec<AgentId> = heads
-            .iter()
-            .flat_map(|head| self.spawners(head))
-            .map(RegisteredAgent::agent_id)
-            .collect();
+        let in_project = |a: &RegisteredAgent| owned_by_project(a, project_id, members);
         for agent in &mut self.file.agents {
             if hiding.contains(&agent.agent_id()) {
                 agent.removed = true;
@@ -212,6 +182,59 @@ impl AgentRegistry {
         if let Some(project) = self.file.projects.iter_mut().find(|p| p.id == project_id) {
             project.removed = true;
         }
+        self.clear_dangling_active();
+        self.persist()?;
+        Ok(gone)
+    }
+
+    /// The listed agents removing project `project_id` takes off the list.
+    ///
+    /// # Errors
+    /// Returns an error if the project holds every listed agent.
+    fn leaving_agents(&self, project_id: &str) -> anyhow::Result<Vec<AgentId>> {
+        let members = &self.channel_members;
+        // Channel members are not the project's to remove: they stay, and
+        // the project's own agents decide whether it is the last one.
+        let in_project = |a: &RegisteredAgent| owned_by_project(a, project_id, members);
+        let tree = self.tree();
+        if tree
+            .iter()
+            .filter(|(agent, _)| !members.contains(&agent.agent_id()))
+            .all(|(agent, _)| in_project(agent))
+        {
+            anyhow::bail!("it is the last project in the list; create another one first");
+        }
+        Ok(tree
+            .iter()
+            .filter(|(agent, _)| in_project(agent))
+            .map(|(agent, _)| agent.agent_id())
+            .collect())
+    }
+
+    /// The archived agents of project `project_id` with everything below
+    /// them, and the agents that spawned them, to keep hidden.
+    fn archived_of_project(&self, project_id: &str) -> (Vec<AgentId>, Vec<AgentId>) {
+        let members = &self.channel_members;
+        let heads: Vec<&RegisteredAgent> = self
+            .archived_tree()
+            .into_iter()
+            .filter(|(agent, depth)| *depth == 0 && owned_by_project(agent, project_id, members))
+            .map(|(agent, _)| agent)
+            .collect();
+        let archived: Vec<AgentId> = heads
+            .iter()
+            .flat_map(|head| self.subtree(head.agent_id()))
+            .collect();
+        let hiding: Vec<AgentId> = heads
+            .iter()
+            .flat_map(|head| self.spawners(head))
+            .map(RegisteredAgent::agent_id)
+            .collect();
+        (archived, hiding)
+    }
+
+    /// Forget the active agent when it is no longer registered.
+    fn clear_dangling_active(&mut self) {
         if self
             .file
             .active
@@ -220,8 +243,6 @@ impl AgentRegistry {
         {
             self.file.active = None;
         }
-        self.persist()?;
-        Ok(gone)
     }
 
     /// List the projects `order` names in that order, in the places they
@@ -295,4 +316,10 @@ fn reorder_slots<T: Clone>(
         }
     }
     true
+}
+
+/// Whether `agent` is project `project_id`'s own: in it and not a channel
+/// member, which lives with its channel.
+fn owned_by_project(agent: &RegisteredAgent, project_id: &str, members: &HashSet<AgentId>) -> bool {
+    agent.project_id.as_deref() == Some(project_id) && !members.contains(&agent.agent_id())
 }

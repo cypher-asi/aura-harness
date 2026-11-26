@@ -18,6 +18,7 @@
 //! `aura_app::agent_definitions`.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 pub mod definitions;
 pub mod registry;

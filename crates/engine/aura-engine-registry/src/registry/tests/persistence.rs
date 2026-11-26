@@ -158,31 +158,7 @@ fn changes_survive_a_reload() {
         reloaded
     };
 
-    registry
-        .reorder_agents(
-            &home,
-            &[
-                third.agent_id().to_hex(),
-                first.agent_id().to_hex(),
-                second.agent_id().to_hex(),
-            ],
-        )
-        .unwrap();
-    let mut registry = reload(registry, "reorder_agents");
-    let order: Vec<String> = registry
-        .tree()
-        .iter()
-        .filter(|(a, _)| a.project_id.as_deref() == Some(home.as_str()))
-        .map(|(a, _)| a.zns_id.clone())
-        .collect();
-    assert!(order.starts_with(&[third.zns_id.clone(), first.zns_id.clone()]));
-
-    registry
-        .reorder_projects(&[away.clone(), home.clone()])
-        .unwrap();
-    let mut registry = reload(registry, "reorder_projects");
-    let ids: Vec<&str> = registry.projects().iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(ids, [away.as_str(), home.as_str()]);
+    let mut registry = reorders_survive(registry, &reload, &home, &away, [&first, &second, &third]);
 
     registry.archive(second.agent_id()).unwrap();
     let mut registry = reload(registry, "archive");
@@ -202,6 +178,43 @@ fn changes_survive_a_reload() {
     assert!(registry.project(&away).unwrap().removed);
     assert!(registry.find(away_agent.agent_id()).is_none());
     assert_eq!(registry.file.active, None);
+}
+
+/// Reorder `home`'s agents to third, first, second and the projects to
+/// `away`, `home`, checking each survives `reload`.
+fn reorders_survive(
+    mut registry: AgentRegistry,
+    reload: &dyn Fn(AgentRegistry, &str) -> AgentRegistry,
+    home: &str,
+    away: &str,
+    [first, second, third]: [&RegisteredAgent; 3],
+) -> AgentRegistry {
+    registry
+        .reorder_agents(
+            home,
+            &[
+                third.agent_id().to_hex(),
+                first.agent_id().to_hex(),
+                second.agent_id().to_hex(),
+            ],
+        )
+        .unwrap();
+    let mut registry = reload(registry, "reorder_agents");
+    let order: Vec<String> = registry
+        .tree()
+        .iter()
+        .filter(|(a, _)| a.project_id.as_deref() == Some(home))
+        .map(|(a, _)| a.zns_id.clone())
+        .collect();
+    assert!(order.starts_with(&[third.zns_id.clone(), first.zns_id.clone()]));
+
+    registry
+        .reorder_projects(&[away.to_string(), home.to_string()])
+        .unwrap();
+    let registry = reload(registry, "reorder_projects");
+    let ids: Vec<&str> = registry.projects().iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, [away, home]);
+    registry
 }
 
 #[test]

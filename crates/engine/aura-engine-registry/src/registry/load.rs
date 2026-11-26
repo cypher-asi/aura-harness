@@ -75,65 +75,93 @@ impl AgentRegistry {
             channel_members: HashSet::new(),
             _keep_open: None,
         };
+        let changed = registry.upgrade(data_dir)?;
+        let codes_changed = registry.refresh_codes();
+        registry.save_opened(
+            data_dir,
+            changed || imported,
+            imported,
+            source,
+            codes_changed,
+        )?;
+        Ok(registry)
+    }
+
+    /// Bring an older registry's version up to date and seed an empty one
+    /// with its first agent. Returns whether anything changed.
+    fn upgrade(&mut self, data_dir: &Path) -> anyhow::Result<bool> {
         let mut changed = false;
-        if registry.file.version < 2 {
-            registry.migrate(data_dir);
+        if self.file.version < 2 {
+            self.migrate(data_dir);
         }
-        if registry.file.version < 3 {
-            registry.hide_empty_projects();
+        if self.file.version < 3 {
+            self.hide_empty_projects();
         }
-        if registry.file.version < REGISTRY_VERSION {
-            registry.file.version = REGISTRY_VERSION;
+        if self.file.version < REGISTRY_VERSION {
+            self.file.version = REGISTRY_VERSION;
             changed = true;
         }
-        if registry.file.agents.is_empty() {
+        if self.file.agents.is_empty() {
             let zns_id = legacy_or_new_zns_id(data_dir)?;
-            let project_id = registry.launch_project();
-            registry.file.agents.push(RegisteredAgent {
+            let project_id = self.launch_project();
+            self.file.agents.push(RegisteredAgent {
                 zns_id,
                 project_id: Some(project_id),
                 ..Self::new_agent(DEFAULT_AGENT_NAME.to_string())
             });
             changed = true;
         }
+        Ok(changed)
+    }
+
+    /// Bring the codes, prefixes and highest numbers up to date. Returns
+    /// whether any of them changed.
+    fn refresh_codes(&mut self) -> bool {
         let migrated = code::migrate(
-            &mut registry.file.agents,
-            &mut registry.file.prefixes,
-            &mut registry.file.last_numbers,
+            &mut self.file.agents,
+            &mut self.file.prefixes,
+            &mut self.file.last_numbers,
         );
-        let reserved = registry
-            .file
-            .prefixes
-            .fill_from_codes(&registry.file.agents);
-        let seeded = registry
-            .file
-            .last_numbers
-            .raise_to_codes(&registry.file.agents);
-        let coded = registry.assign_missing_codes();
-        if changed || imported {
+        let reserved = self.file.prefixes.fill_from_codes(&self.file.agents);
+        let seeded = self.file.last_numbers.raise_to_codes(&self.file.agents);
+        let coded = self.assign_missing_codes();
+        migrated || coded || reserved || seeded
+    }
+
+    /// Write what [`Self::open`] changed: durably, retiring `agents.json`
+    /// afterwards, after an import; best effort when only codes changed.
+    fn save_opened(
+        &mut self,
+        data_dir: &Path,
+        changed: bool,
+        imported: bool,
+        source: ImportSource,
+        codes_changed: bool,
+    ) -> anyhow::Result<()> {
+        if changed {
             if imported {
                 // The rename below must never outlive the import after a
                 // power loss, so the batch is fsynced first.
-                registry.persist_durable()?;
+                self.persist_durable()?;
                 if source == ImportSource::File {
                     retire_registry_file(data_dir);
                 }
             } else {
-                registry.persist()?;
+                self.persist()?;
             }
-        } else if migrated || coded || reserved || seeded {
+        } else if codes_changed {
             // Codes alone are no reason to refuse to start, say on a
             // read-only data directory: the next load assigns the same
             // ones again, as backfilling is deterministic.
-            if let Err(error) = registry.persist() {
+            if let Err(error) = self.persist() {
                 tracing::warn!(
-                    data_dir = %registry.data_dir.display(),
+                    data_dir = %self.data_dir.display(),
                     error = %format!("{error:#}"),
                     "could not save the agents' new codes"
                 );
             }
         }
-        Ok(registry)
+        Ok(())
     }
 
     /// Give every agent without a code one, in registry order, so the same

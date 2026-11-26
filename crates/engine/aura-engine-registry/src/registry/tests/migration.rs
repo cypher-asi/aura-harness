@@ -6,31 +6,7 @@ fn a_version_0_registry_becomes_one_project_per_folder() {
     let launch = tempfile::tempdir().unwrap();
     let site = tempfile::tempdir().unwrap();
     let docs = tempfile::tempdir().unwrap();
-    let site_path = site.path().display().to_string();
-    let docs_path = docs.path().display().to_string();
-    let body = format!(
-        r#"{{"agents":[
-            {{"zns_id":"0://terminal/term","name":"Terminal Agent","created_at":"2026-11-01T00:00:00Z"}},
-            {{"zns_id":"0://terminal/site","name":"Agent","created_at":"2026-11-01T00:00:00Z","project":"Site","folder":{site_path:?}}},
-            {{"zns_id":"0://terminal/added","name":"Agent 2","created_at":"2026-11-01T00:00:00Z","member_of":"0://terminal/site"}},
-            {{"zns_id":"0://terminal/old","name":"Agent 3","created_at":"2026-11-01T00:00:00Z","parent":"0://terminal/site"}},
-            {{"zns_id":"0://terminal/spawned","name":"reviewer #1","created_at":"2026-11-01T00:00:00Z","definition":"reviewer","parent":"0://terminal/added"}},
-            {{"zns_id":"0://terminal/dup","name":"Agent","created_at":"2026-11-01T00:00:00Z","project":"Copy","folder":{site_path:?}}},
-            {{"zns_id":"0://terminal/docs","name":"Agent","created_at":"2026-11-01T00:00:00Z","project":"Docs","folder":{docs_path:?},"removed":true}},
-            {{"zns_id":"0://terminal/kept","name":"Agent 2","created_at":"2026-11-01T00:00:00Z","member_of":"0://terminal/docs","archived":true}}
-        ]}}"#
-    );
-    fs::write(dir.path().join(REGISTRY_FILE), body).unwrap();
-    // The desktop app had the site project before the terminal's.
-    fs::write(
-        dir.path().join(DESKTOP_TABS_FILE),
-        format!(
-            "{}\n{}\n",
-            hex("0://terminal/site"),
-            hex("0://terminal/term")
-        ),
-    )
-    .unwrap();
+    write_version_0_registry(dir.path(), site.path(), docs.path());
 
     let registry = open(dir.path(), launch.path());
     let ids: Vec<&str> = registry.projects().iter().map(|p| p.id.as_str()).collect();
@@ -65,6 +41,46 @@ fn a_version_0_registry_becomes_one_project_per_folder() {
     );
     assert!(registry.project(&docs_id).unwrap().removed);
     assert!(registry.agents().iter().all(|a| a.folder.is_none()));
+    assert_version_0_lists(&registry);
+
+    let body = stored_body(dir.path());
+    assert!(!body.contains("member_of"), "{body}");
+    assert!(body.contains("\"version\": 3"), "{body}");
+}
+
+/// Write a version 0 registry, with projects in `site` and `docs`, and the
+/// desktop app's tabs, into `dir`.
+fn write_version_0_registry(dir: &Path, site: &Path, docs: &Path) {
+    let site_path = site.display().to_string();
+    let docs_path = docs.display().to_string();
+    let body = format!(
+        r#"{{"agents":[
+            {{"zns_id":"0://terminal/term","name":"Terminal Agent","created_at":"2026-11-01T00:00:00Z"}},
+            {{"zns_id":"0://terminal/site","name":"Agent","created_at":"2026-11-01T00:00:00Z","project":"Site","folder":{site_path:?}}},
+            {{"zns_id":"0://terminal/added","name":"Agent 2","created_at":"2026-11-01T00:00:00Z","member_of":"0://terminal/site"}},
+            {{"zns_id":"0://terminal/old","name":"Agent 3","created_at":"2026-11-01T00:00:00Z","parent":"0://terminal/site"}},
+            {{"zns_id":"0://terminal/spawned","name":"reviewer #1","created_at":"2026-11-01T00:00:00Z","definition":"reviewer","parent":"0://terminal/added"}},
+            {{"zns_id":"0://terminal/dup","name":"Agent","created_at":"2026-11-01T00:00:00Z","project":"Copy","folder":{site_path:?}}},
+            {{"zns_id":"0://terminal/docs","name":"Agent","created_at":"2026-11-01T00:00:00Z","project":"Docs","folder":{docs_path:?},"removed":true}},
+            {{"zns_id":"0://terminal/kept","name":"Agent 2","created_at":"2026-11-01T00:00:00Z","member_of":"0://terminal/docs","archived":true}}
+        ]}}"#
+    );
+    fs::write(dir.join(REGISTRY_FILE), body).unwrap();
+    // The desktop app had the site project before the terminal's.
+    fs::write(
+        dir.join(DESKTOP_TABS_FILE),
+        format!(
+            "{}\n{}\n",
+            hex("0://terminal/site"),
+            hex("0://terminal/term")
+        ),
+    )
+    .unwrap();
+}
+
+/// What the version 0 registry of [`write_version_0_registry`] lists after
+/// its migration, and what it keeps in the Archive.
+fn assert_version_0_lists(registry: &AgentRegistry) {
     // The agent that headed the removed project stays off the list when
     // the archived one is restored.
     assert!(
@@ -90,10 +106,6 @@ fn a_version_0_registry_becomes_one_project_per_folder() {
         names(registry.archived_tree()),
         [("Agent 2".to_string(), 0)]
     );
-
-    let body = stored_body(dir.path());
-    assert!(!body.contains("member_of"), "{body}");
-    assert!(body.contains("\"version\": 3"), "{body}");
 }
 
 #[test]
