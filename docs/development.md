@@ -10,6 +10,9 @@ cargo test --workspace --all-features
 # Invariant grep gate
 bash scripts/check_invariants.sh
 
+# No .rs file over 500 lines
+bash scripts/check_file_size.sh
+
 # Layer rule (no crate may depend on a higher layer)
 cargo test -p aura --test layer_boundary
 
@@ -65,8 +68,14 @@ The desktop snapshot tests run the terminal UI in the window's shell, without a 
 - `cargo deny check` (hard fail) and `cargo audit` (soft fail).
 - `cargo machete` for unused dependencies.
 - [`scripts/check_invariants.sh`](../scripts/check_invariants.sh), the invariant grep gate.
+- [`scripts/check_file_size.sh`](../scripts/check_file_size.sh), the 500-line file limit.
 
 Each invariant's enforcement (grep band or Rust test) is listed in [invariants.md](invariants.md#enforcement-map).
+
+## Size limits
+
+- No `.rs` file is over 500 lines, tests included; only the benchmark files under `evals/` are exempt. Split a long file into a module directory: `foo/mod.rs` plus one file per concern, with its tests in `tests.rs` or `tests/`, re-exporting what callers use so their paths stay the same.
+- No function is over 50 lines. The workspace lints set `clippy::too_many_lines` for every crate and target, with the threshold in [`clippy.toml`](../clippy.toml), and CI denies the warning. Split a long function into named steps, and pass a struct rather than allowing `clippy::too_many_arguments`.
 
 ## Where to change things
 

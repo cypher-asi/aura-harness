@@ -144,6 +144,11 @@ Avoid:
 - Document invariants, assumptions, and failure modes.
 - Delete stale comments; do not let them rot.
 
+### 2.5 Size limits
+
+- No `.rs` file over 500 lines, tests included (`bash scripts/check_file_size.sh`). Split a long file into a module directory: `foo/mod.rs` plus one file per concern, with its tests in `tests.rs` or `tests/`.
+- No function over 50 lines (`clippy::too_many_lines`, threshold in `clippy.toml`). Split a long function into named steps; pass a struct instead of allowing `clippy::too_many_arguments`.
+
 ---
 
 ## 3) Public API discipline

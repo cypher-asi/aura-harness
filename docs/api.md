@@ -2,11 +2,11 @@
 
 The wire API is Aura's external contract: clients such as `aura-os` talk to the `aura-node` server over HTTP and WebSocket, never by linking workspace crates.
 
-All routes are defined in [`gateway/middleware.rs`](../crates/surface/aura-node/src/gateway/middleware.rs) (`create_router`), with handlers grouped under [`gateway/handlers/`](../crates/surface/aura-node/src/gateway/handlers). The shared `RouterState` lives in [`gateway/state.rs`](../crates/surface/aura-node/src/gateway/state.rs). Paths below use Axum path-parameter syntax. Authentication is described in [configuration.md](configuration.md#authentication).
+All routes are defined in [`gateway/middleware/`](../crates/surface/aura-node/src/gateway/middleware/) (`create_router`), with handlers grouped under [`gateway/handlers/`](../crates/surface/aura-node/src/gateway/handlers). The shared `RouterState` lives in [`gateway/state.rs`](../crates/surface/aura-node/src/gateway/state.rs). Paths below use Axum path-parameter syntax. Authentication is described in [configuration.md](configuration.md#authentication).
 
 ## Runs
 
-A run is the entry point for all work. Start a chat session, dev-loop automaton, or single-task automaton by posting an [`aura_core_protocol::RuntimeRequest`](../crates/core/aura-core-protocol/src/runtime_request.rs) to `/v1/run`. The [`RuntimeRunResponse`](../crates/core/aura-core-protocol/src/runtime_request.rs) carries a `run_id` and the WebSocket path the client opens to receive events (and, on chat runs, to send user messages).
+A run is the entry point for all work. Start a chat session, dev-loop automaton, or single-task automaton by posting an [`aura_core_protocol::RuntimeRequest`](../crates/core/aura-core-protocol/src/runtime_request/) to `/v1/run`. The [`RuntimeRunResponse`](../crates/core/aura-core-protocol/src/runtime_request/) carries a `run_id` and the WebSocket path the client opens to receive events (and, on chat runs, to send user messages).
 
 `RuntimeRequest.mode` (`agent` / `plan` / `ask` / `debug`, optional) sets the session mode. When omitted it falls back to `AURA_DEFAULT_MODE`, then `agent`. Dev-loop and task-run requests are rejected with `400` unless the resolved mode is `agent`.
 

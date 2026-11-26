@@ -53,11 +53,11 @@ docker build -t aura . && docker run -p 8080:8080 aura
 ```text
 aura-harness/
   src/             aura binary entry point
-  crates/          40 library crates in 10 layers (see docs/architecture.md)
+  crates/          50 library crates in 13 layers (see docs/architecture.md)
   tests/           workspace-level integration and boundary tests
   evals/           agent evaluation scenarios
   docs/            the pages listed under Resources
-  scripts/         check_invariants.sh (CI invariant gate)
+  scripts/         check_invariants.sh and check_file_size.sh (CI gates)
   .github/         CI workflows
   Cargo.toml       workspace root
   Dockerfile       container image (headless, port 8080)

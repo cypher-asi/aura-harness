@@ -9,7 +9,7 @@
 
 ## Commands
 
-Defined in [`crates/surface/aura-cli/src/cli.rs`](../crates/surface/aura-cli/src/cli.rs).
+Defined in [`crates/surface/aura-cli/src/cli/`](../crates/surface/aura-cli/src/cli/).
 
 | Command | Description |
 |---------|-------------|
