@@ -70,7 +70,7 @@ todos:
   assignee: rust-engineer
 - id: p4-auth-engine
   content: 'Files and functions pass: auth and engine crates'
-  status: pending
+  status: completed
   assignee: rust-engineer
 - id: p5-app-state
   content: Group App's 158 fields into ListState and sub-state structs
@@ -80,13 +80,13 @@ todos:
   status: completed
 - id: p4-surface
   content: 'Files and functions pass: app, node, cli, desktop, root tests'
-  status: in_progress
+  status: completed
 - id: p5-errors
   content: Replace remaining anyhow in library crates with thiserror enums
-  status: pending
+  status: completed
 - id: p6-lock-in
   content: Workspace too_many_lines lint, delete size allowlist, machete, update docs
-  status: pending
+  status: completed
 ---
 
 # Codebase simplification: 500-line files, 50-line functions, cleaner crates
@@ -113,12 +113,12 @@ Bring all 1,376 Rust files (471k lines) under 500 lines and all functions under 
 - [x] Files and functions pass: core, config, store (@rust-engineer)
 - [x] Files and functions pass: model, context, plugin (@rust-engineer)
 - [x] Files and functions pass: exec and agent crates; DomainError (@rust-engineer)
-- [ ] Files and functions pass: auth and engine crates (@rust-engineer)
+- [x] Files and functions pass: auth and engine crates (@rust-engineer)
 - [x] Group App's 158 fields into ListState and sub-state structs
 - [x] Files and functions pass: aura-ui and aura-ui-terminal
-- [~] Files and functions pass: app, node, cli, desktop, root tests
-- [ ] Replace remaining anyhow in library crates with thiserror enums
-- [ ] Workspace too_many_lines lint, delete size allowlist, machete, update docs
+- [x] Files and functions pass: app, node, cli, desktop, root tests
+- [x] Replace remaining anyhow in library crates with thiserror enums
+- [x] Workspace too_many_lines lint, delete size allowlist, machete, update docs
 
 <!-- end of generated header: edit below -->
 
