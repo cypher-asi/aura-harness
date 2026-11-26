@@ -11,7 +11,7 @@ fn arb_meta_field() -> impl Strategy<Value = MetaField> {
         Just(MetaField::InboxHead),
         Just(MetaField::InboxTail),
         Just(MetaField::Status),
-        Just(MetaField::SchemaVersion),
+        Just(MetaField::ProcessingClaim),
     ]
 }
 
@@ -165,7 +165,7 @@ fn agent_meta_key_all_zero_agent() {
         MetaField::InboxHead,
         MetaField::InboxTail,
         MetaField::Status,
-        MetaField::SchemaVersion,
+        MetaField::ProcessingClaim,
     ] {
         let key = AgentMetaKey::new(agent, field);
         let encoded = key.encode();
@@ -182,7 +182,7 @@ fn agent_meta_key_all_ff_agent() {
         MetaField::InboxHead,
         MetaField::InboxTail,
         MetaField::Status,
-        MetaField::SchemaVersion,
+        MetaField::ProcessingClaim,
     ] {
         let key = AgentMetaKey::new(agent, field);
         let encoded = key.encode();
@@ -236,13 +236,11 @@ fn agent_meta_key_decode_invalid_field() {
 
 #[test]
 fn meta_field_byte_roundtrip() {
-    #[allow(deprecated)]
     let fields = [
         MetaField::HeadSeq,
         MetaField::InboxHead,
         MetaField::InboxTail,
         MetaField::Status,
-        MetaField::SchemaVersion,
         // Added in d762e84 (store-backed agent processing claims) —
         // the byte 5 slot is now occupied, so `meta_field_from_invalid_byte`
         // below probes byte 6 instead.
@@ -257,8 +255,10 @@ fn meta_field_byte_roundtrip() {
 
 #[test]
 fn meta_field_from_invalid_byte() {
+    // Byte 4 is unassigned (a schema-version field that was never written).
     // Byte 5 is `MetaField::ProcessingClaim` (added in d762e84).
-    // The first invalid byte is now 6.
+    // The first invalid byte after it is 6.
+    assert!(MetaField::from_byte(4).is_none());
     assert!(MetaField::from_byte(6).is_none());
     assert!(MetaField::from_byte(255).is_none());
 }

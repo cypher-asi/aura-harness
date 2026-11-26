@@ -17,8 +17,13 @@
 //! never log or trace bodies; non-reveal responses are built from
 //! [`aura_store_db::SecretMetadata`], which cannot carry a value.
 
-use super::super::*;
+use crate::gateway::RouterState;
 use aura_store_db::{SecretMetadata, VaultError};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::Json;
+use serde::Deserialize;
 
 /// Map a [`VaultError`] to an HTTP status + JSON failure body, keeping
 /// the policy in one place for all four handlers.

@@ -8,9 +8,8 @@
 //! The canonical constant-time bearer check lives in
 //! [`crate::auth::check_bearer`] and is shared with the embedded
 //! TUI API server (`src/api_server.rs`). This file owns only the
-//! axum-flavoured middleware wrapper plus the `BearerToken`
-//! extension newtype; the parsing, constant-time compare, and
-//! rejection contract are inherited unchanged.
+//! axum-flavoured middleware wrapper; the parsing, constant-time
+//! compare, and rejection contract are inherited unchanged.
 
 use axum::{
     extract::{Request, State},
@@ -20,17 +19,6 @@ use axum::{
 
 use super::RouterState;
 use crate::auth::check_bearer_any;
-
-/// Strongly-typed Bearer token extracted by the auth middleware.
-///
-/// Inserted into request extensions by [`require_bearer_mw`] so downstream
-/// handlers can read the validated token without having to re-parse the
-/// `Authorization` header. Wrapped in a newtype so it can't be confused
-/// with any other `String` extension.
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // read by future handlers that want to surface the
-                    // authenticated principal
-pub(crate) struct BearerToken(pub String);
 
 /// Axum middleware enforcing that every request presents the expected
 /// Bearer token in its `Authorization` header.
@@ -46,11 +34,10 @@ pub(crate) struct BearerToken(pub String);
 /// [`crate::auth::check_bearer_any`].
 ///
 /// Returns `401 UNAUTHORIZED` when neither secret matches. On success
-/// the validated token is cloned into the request extensions as a
-/// [`BearerToken`] before the request is forwarded to `next`.
+/// the request is forwarded to `next` unchanged.
 pub(crate) async fn require_bearer_mw(
     State(state): State<RouterState>,
-    mut request: Request,
+    request: Request,
     next: Next,
 ) -> Response {
     if state.cloud.enabled() {
@@ -63,15 +50,13 @@ pub(crate) async fn require_bearer_mw(
         }
         return next.run(request).await;
     }
-    let token = match check_bearer_any(
+    if let Err(status) = check_bearer_any(
         request.headers(),
         &state.config.auth_token,
         state.config.swarm_internal_token.as_deref(),
     ) {
-        Ok(t) => t,
-        Err(status) => return status.into_response(),
-    };
-    request.extensions_mut().insert(BearerToken(token));
+        return status.into_response();
+    }
     next.run(request).await
 }
 

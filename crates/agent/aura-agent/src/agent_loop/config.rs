@@ -244,8 +244,8 @@ pub struct AgentLoopConfig {
     ///
     /// `None` keeps the oracle off; `Some(EarlyTestOracleConfig {
     /// enabled: true, test_command: Some(_) })` installs the
-    /// [`crate::agent_loop::steering::EarlyTestOracle`] source into
-    /// the per-run [`crate::agent_loop::steering::SteeringRegistry`].
+    /// [`aura_agent_steering::EarlyTestOracle`] source into
+    /// the per-run [`aura_agent_steering::SteeringRegistry`].
     ///
     /// `TaskRun` automatons populate this from their dispatch JSON's
     /// `early_test_oracle: bool` field via

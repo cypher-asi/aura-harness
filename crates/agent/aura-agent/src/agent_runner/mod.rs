@@ -174,7 +174,7 @@ pub struct AgentRunnerConfig {
     ///
     /// `TaskRunAutomaton` (and any future task-shaped automaton) sets
     /// this `true` to install
-    /// [`crate::agent_loop::steering::EarlyTestOracle`] into the
+    /// [`aura_agent_steering::EarlyTestOracle`] into the
     /// per-run `SteeringRegistry` for every task this runner
     /// executes; chat / shell / generic callers leave it `false` and
     /// the oracle never fires.

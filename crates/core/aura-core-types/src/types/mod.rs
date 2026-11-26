@@ -42,8 +42,6 @@ pub use subagent::{
     SubagentBudget, SubagentDispatchRequest, SubagentExit, SubagentKindSpec, SubagentResult,
     DEFAULT_SUBAGENT_TIMEOUT_MS, MAX_TURNS,
 };
-#[allow(deprecated)]
-pub use tool::ToolDecision;
 pub use tool::{
     installed_integrations_satisfy, integration_match, InstalledIntegrationDefinition,
     InstalledToolCapability, InstalledToolDefinition, InstalledToolIntegrationRequirement,

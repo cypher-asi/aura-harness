@@ -5,8 +5,7 @@
 //! continue to import them via `aura_core_types::types::tool::Item` exactly
 //! as before the Phase 2a split.
 //!
-//! - [`proposal`] — `ToolProposal`, `ToolGateVerdict` (audit-log enum;
-//!   exported with a deprecated `ToolDecision` alias for back-compat).
+//! - [`proposal`] — `ToolProposal`, `ToolGateVerdict` (audit-log enum).
 //! - [`execution`] — `ToolExecution`, `ToolCallContext`.
 //! - [`policy_decision`] — `PolicyDecision` and the rule / trace types
 //!   recorded between a proposal and its execution.
@@ -36,8 +35,6 @@ pub use policy_decision::{
     PolicyApproval, PolicyApprover, PolicyCheck, PolicyCheckOutcome, PolicyDecision, PolicyRule,
     PolicySource,
 };
-#[allow(deprecated)]
-pub use proposal::ToolDecision;
 pub use proposal::{ToolGateVerdict, ToolProposal};
 pub use result::{LineDiff, ToolResult, ToolResultImage, ToolResultKind};
 pub use runtime_capability::{

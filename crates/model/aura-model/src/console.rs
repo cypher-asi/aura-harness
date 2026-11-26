@@ -711,11 +711,3 @@ mod tests {
         assert_eq!(collapsed.chars().count(), 51);
     }
 }
-
-#[cfg(test)]
-#[allow(dead_code)]
-mod additional_tests {
-    // Placeholder: future tests for emit_response_block can live here
-    // once `crate::types::ModelResponse` becomes easily constructible
-    // outside of integration paths.
-}

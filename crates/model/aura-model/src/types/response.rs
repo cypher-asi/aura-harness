@@ -137,17 +137,6 @@ impl ProviderTrace {
         self
     }
 
-    /// Legacy setter: stores the value under [`message_id`](Self::message_id)
-    /// because older call sites passed the provider's message id.
-    /// Prefer [`with_message_id`](Self::with_message_id) or
-    /// [`with_provider_request_id`](Self::with_provider_request_id).
-    #[must_use]
-    #[deprecated(note = "Ambiguous: old call sites stored a message id here. Prefer \
-                with_message_id or with_provider_request_id.")]
-    pub fn with_request_id(self, id: impl Into<String>) -> Self {
-        self.with_message_id(id)
-    }
-
     /// Best-effort legacy accessor.
     ///
     /// Returns the HTTP request id if known, falling back to the

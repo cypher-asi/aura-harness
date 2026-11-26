@@ -32,12 +32,8 @@
 //! - [`util`] — shared parsing helpers (`parse_agent_id` for the
 //!   bare/partitioned UUID + hex grammars).
 //!
-//! Each handler module pulls common dependencies via `use super::*;`
-//! which re-globs the broad `use` block at [`super`] (the
-//! `gateway` module root). Items there are private to the gateway
-//! and visible to children via name resolution; the
-//! [`pub(in crate::gateway) use`] re-export below keeps the same shape working
-//! from the new `handlers/` subtree.
+//! Each handler module imports exactly what it uses; there is no
+//! shared glob-import block.
 
 pub(crate) mod cloud;
 pub(crate) mod files;

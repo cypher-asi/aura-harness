@@ -1,7 +1,6 @@
 //! Storage error types.
 
-#[allow(deprecated)]
-use aura_core_types::{AgentId, TxId};
+use aura_core_types::AgentId;
 use thiserror::Error;
 
 /// Storage-specific error type.
@@ -23,25 +22,9 @@ pub enum StoreError {
     #[error("deserialization error: {0}")]
     Deserialization(String),
 
-    /// No metadata exists for the requested agent.
-    #[deprecated(note = "reserved for future use — not currently produced by RocksStore")]
-    #[error("agent not found: {0}")]
-    AgentNotFound(AgentId),
-
     /// The requested record entry does not exist at the given sequence number.
     #[error("record entry not found: agent={0}, seq={1}")]
     RecordEntryNotFound(AgentId, u64),
-
-    /// The requested transaction hash was not found in the store.
-    #[deprecated(note = "reserved for future use — not currently produced by RocksStore")]
-    #[allow(deprecated)]
-    #[error("transaction not found: {0}")]
-    TransactionNotFound(TxId),
-
-    /// The agent's inbox contains no pending transactions.
-    #[deprecated(note = "reserved for future use — not currently produced by RocksStore")]
-    #[error("inbox empty for agent: {0}")]
-    InboxEmpty(AgentId),
 
     /// Attempted to append a record entry at a non-contiguous sequence number.
     #[error("sequence mismatch: expected {expected}, got {actual}")]
@@ -70,16 +53,12 @@ impl From<serde_json::Error> for StoreError {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_store_error_display() {
         let agent_id = AgentId::generate();
-
-        let err = StoreError::AgentNotFound(agent_id);
-        assert!(err.to_string().contains("agent not found"));
 
         let err = StoreError::RecordEntryNotFound(agent_id, 42);
         let display = err.to_string();
@@ -111,13 +90,6 @@ mod tests {
     }
 
     #[test]
-    fn test_store_error_inbox_empty() {
-        let agent_id = AgentId::generate();
-        let err = StoreError::InboxEmpty(agent_id);
-        assert!(err.to_string().contains("inbox empty"));
-    }
-
-    #[test]
     fn test_store_error_column_family_not_found() {
         let err = StoreError::ColumnFamilyNotFound("records".to_string());
         assert!(err.to_string().contains("column family not found"));
@@ -138,13 +110,6 @@ mod tests {
         let store_err: StoreError = json_err.into();
 
         assert!(matches!(store_err, StoreError::Serialization(_)));
-    }
-
-    #[test]
-    fn test_transaction_not_found() {
-        let tx_id = TxId::from_content(b"test");
-        let err = StoreError::TransactionNotFound(tx_id);
-        assert!(err.to_string().contains("transaction not found"));
     }
 
     #[test]

@@ -64,7 +64,6 @@ fn create_test_tx(agent_id: AgentId) -> Transaction {
     )
 }
 
-#[allow(deprecated)]
 #[test]
 fn test_enqueue_dequeue() {
     let (store, _dir) = create_test_store();
@@ -78,7 +77,7 @@ fn test_enqueue_dequeue() {
 
     let (token, dequeued_tx) = result.unwrap();
     assert_eq!(token.inbox_seq(), 0);
-    assert_eq!(dequeued_tx.tx_id(), tx.tx_id());
+    assert_eq!(dequeued_tx.hash, tx.hash);
 }
 
 #[test]

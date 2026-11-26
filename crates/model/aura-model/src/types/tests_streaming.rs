@@ -549,19 +549,14 @@ fn test_stream_accumulator_into_response_error_without_message_start() {
 
 #[test]
 fn test_provider_trace() {
-    // Legacy `with_request_id` now writes to `message_id` (the
-    // deprecation doc-comment explains the split). New code should
-    // prefer `with_message_id` / `with_provider_request_id`.
-    #[allow(deprecated)]
-    let trace = ProviderTrace::new("claude", 500).with_request_id("req123");
+    let trace = ProviderTrace::new("claude", 500).with_message_id("req123");
 
     assert_eq!(trace.model, "claude");
     assert_eq!(trace.latency_ms, 500);
     assert_eq!(trace.message_id.as_deref(), Some("req123"));
     assert_eq!(trace.provider_request_id, None);
-    // Legacy accessor falls back to `message_id` when no HTTP id is
-    // populated, preserving behaviour for callers still reading
-    // `trace.request_id()`.
+    // `request_id()` falls back to `message_id` when no HTTP id is
+    // populated.
     assert_eq!(trace.request_id().as_deref(), Some("req123"));
 }
 

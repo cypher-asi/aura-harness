@@ -62,9 +62,9 @@ pub enum MetaField {
     InboxTail = 2,
     /// Agent status
     Status = 3,
-    /// Schema version
-    #[deprecated(note = "reserved for future use")]
-    SchemaVersion = 4,
+    // Byte 4 was reserved for a schema-version field that was never
+    // written; it stays unassigned so existing discriminants keep their
+    // on-disk values.
     /// Store-backed single-processing claim
     ProcessingClaim = 5,
 }
@@ -78,14 +78,12 @@ impl MetaField {
 
     /// Try to parse from byte.
     #[must_use]
-    #[allow(deprecated)]
     pub const fn from_byte(b: u8) -> Option<Self> {
         match b {
             0 => Some(Self::HeadSeq),
             1 => Some(Self::InboxHead),
             2 => Some(Self::InboxTail),
             3 => Some(Self::Status),
-            4 => Some(Self::SchemaVersion),
             5 => Some(Self::ProcessingClaim),
             _ => None,
         }
@@ -312,5 +310,4 @@ impl KeyCodec for InboxKey {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests;

@@ -1,12 +1,18 @@
 use super::super::errors::ApiError;
-use super::super::*;
 use super::util::parse_agent_id;
+use crate::gateway::RouterState;
 use crate::tool_permissions::{
     append_agent_tool_permissions_entry, effective_tool_infos, enforce_monotonic_update,
     load_agent_tool_context, validate_agent_tool_permissions, validate_user_defaults,
     EffectiveToolInfo,
 };
 use aura_core_types::{AgentToolPermissions, UserToolDefaults};
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::Json;
+use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 
 #[derive(Debug, Deserialize)]
 pub(in crate::gateway) struct AgentToolsQuery {

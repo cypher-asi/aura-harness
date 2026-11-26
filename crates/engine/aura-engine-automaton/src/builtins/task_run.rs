@@ -97,7 +97,7 @@ struct TaskRunConfig {
     /// Phase 3a (reread-efficiency plan): opt-in switch for the early
     /// "is the test gate already green?" oracle. The state machine
     /// and steering kind live in
-    /// `aura_agent::agent_loop::steering::EarlyTestOracle`; the field
+    /// `aura_agent_steering::EarlyTestOracle`; the field
     /// here lets the dispatch JSON flip the oracle on/off per task.
     ///
     /// Defaults to `true` for `TaskRun` automatons because every

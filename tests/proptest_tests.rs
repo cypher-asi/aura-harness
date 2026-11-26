@@ -11,10 +11,9 @@ use proptest::prelude::*;
 // ID Roundtrip Tests
 // ============================================================================
 
-#[allow(deprecated)]
 mod id_tests {
     use super::*;
-    use aura_core_types::{ActionId, AgentId, TxId};
+    use aura_core_types::{ActionId, AgentId, Hash};
 
     proptest! {
         /// AgentId roundtrips through hex encoding.
@@ -35,20 +34,20 @@ mod id_tests {
             prop_assert_eq!(id, parsed);
         }
 
-        /// TxId from same content produces same ID.
+        /// Hash from same content produces same hash.
         #[test]
-        fn tx_id_deterministic(content: Vec<u8>) {
-            let id1 = TxId::from_content(&content);
-            let id2 = TxId::from_content(&content);
+        fn hash_from_content_deterministic(content: Vec<u8>) {
+            let id1 = Hash::from_content(&content);
+            let id2 = Hash::from_content(&content);
             prop_assert_eq!(id1, id2);
         }
 
-        /// TxId from different content produces different IDs (with high probability).
+        /// Hash from different content produces different hashes (with high probability).
         #[test]
-        fn tx_id_different_content(content1: Vec<u8>, content2: Vec<u8>) {
+        fn hash_from_content_different_content(content1: Vec<u8>, content2: Vec<u8>) {
             prop_assume!(content1 != content2);
-            let id1 = TxId::from_content(&content1);
-            let id2 = TxId::from_content(&content2);
+            let id1 = Hash::from_content(&content1);
+            let id2 = Hash::from_content(&content2);
             prop_assert_ne!(id1, id2);
         }
 
@@ -179,7 +178,6 @@ mod key_tests {
         }
     }
 
-    #[allow(deprecated)]
     #[test]
     fn agent_meta_key_roundtrip_all_fields() {
         let agent_id = AgentId::generate();
@@ -189,7 +187,7 @@ mod key_tests {
             MetaField::InboxHead,
             MetaField::InboxTail,
             MetaField::Status,
-            MetaField::SchemaVersion,
+            MetaField::ProcessingClaim,
         ] {
             let key = AgentMetaKey::new(agent_id, field);
             let encoded = key.encode();

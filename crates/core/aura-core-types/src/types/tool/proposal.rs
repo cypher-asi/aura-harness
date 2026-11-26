@@ -61,11 +61,3 @@ pub enum ToolGateVerdict {
     /// Requires user approval (pending)
     PendingApproval,
 }
-
-/// Deprecated alias for [`ToolGateVerdict`].
-///
-/// Kept so external test code and downstream crates that referenced
-/// the old kernel-decision name keep compiling during Phase 4. Prefer
-/// `ToolGateVerdict` for new code.
-#[deprecated(since = "0.1.4", note = "use ToolGateVerdict")]
-pub type ToolDecision = ToolGateVerdict;

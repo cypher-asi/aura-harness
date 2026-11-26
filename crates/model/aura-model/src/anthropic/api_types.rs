@@ -250,10 +250,9 @@ pub(super) struct ApiOutputConfig {
 /// SSE event types from Anthropic.
 ///
 /// These types are used for deserializing SSE events from the Anthropic API.
-/// Some fields are parsed but not directly used (they're used for proper deserialization).
+/// Fields the stream does not use are left out; serde skips them.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(super) enum SseEvent {
     MessageStart {
         message: SseMessageStart,
@@ -263,7 +262,6 @@ pub(super) enum SseEvent {
         content_block: SseContentBlock,
     },
     ContentBlockDelta {
-        index: u32,
         delta: SseDelta,
     },
     ContentBlockStop {
@@ -281,7 +279,6 @@ pub(super) enum SseEvent {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(super) struct SseMessageStart {
     pub id: String,
     pub model: String,
@@ -290,7 +287,7 @@ pub(super) struct SseMessageStart {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code, clippy::struct_field_names)]
+#[allow(clippy::struct_field_names)]
 pub(super) struct SseUsageStart {
     /// Optional because OpenRouter's Anthropic-compatible endpoint sends
     /// `null` (or omits it) for non-Anthropic upstreams; the real total
@@ -305,21 +302,11 @@ pub(super) struct SseUsageStart {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[allow(dead_code)]
 pub(super) enum SseContentBlock {
-    Text {
-        #[serde(default)]
-        text: String,
-    },
-    Thinking {
-        #[serde(default)]
-        thinking: String,
-    },
+    Text {},
+    Thinking {},
     /// Encrypted reasoning; see [`ApiContent::RedactedThinking`].
-    RedactedThinking {
-        #[serde(default)]
-        data: String,
-    },
+    RedactedThinking {},
     ToolUse {
         id: String,
         name: String,

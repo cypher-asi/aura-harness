@@ -1,8 +1,7 @@
 //! Transaction types: the immutable input to the Aura system.
 
 use crate::error::AuraError;
-#[allow(deprecated)]
-use crate::ids::{AgentId, Hash, TxId};
+use crate::ids::{AgentId, Hash};
 use aura_core_modes::AgentMode;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -430,13 +429,5 @@ impl Transaction {
             payload: payload_bytes.into(),
             reference_tx_hash: Some(reference_tx_hash),
         })
-    }
-
-    /// Get the transaction hash (legacy compatibility with `tx_id`).
-    #[deprecated(note = "use Transaction.hash — tx_id() is a legacy compat accessor")]
-    #[allow(deprecated)]
-    #[must_use]
-    pub const fn tx_id(&self) -> TxId {
-        TxId::new(*self.hash.as_bytes())
     }
 }

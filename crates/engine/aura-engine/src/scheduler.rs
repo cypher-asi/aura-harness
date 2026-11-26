@@ -614,21 +614,6 @@ impl Scheduler {
             }
         }
     }
-
-    /// Check if an agent is currently being processed.
-    ///
-    /// Returns `true` if the agent's store-backed processing claim is present.
-    /// Retained for use by future status/health endpoints.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn is_agent_busy(&self, agent_id: AgentId) -> bool {
-        self.store
-            .is_agent_processing(agent_id)
-            .unwrap_or_else(|e| {
-                error!(error = %e, "Failed to read agent processing claim");
-                false
-            })
-    }
 }
 
 #[cfg(test)]
@@ -639,6 +624,11 @@ mod tests {
     use aura_store_db::RocksStore;
     use bytes::Bytes;
     use std::time::Duration;
+
+    /// Whether the agent's store-backed processing claim is present.
+    fn is_agent_busy(scheduler: &Scheduler, agent_id: AgentId) -> bool {
+        scheduler.store.is_agent_processing(agent_id).unwrap()
+    }
 
     /// Build a [`AgentIdentity`] suitable for unit tests.
     ///
@@ -754,7 +744,7 @@ mod tests {
     fn test_is_agent_busy_false_by_default() {
         let (scheduler, _dir) = create_test_scheduler();
         let agent_id = AgentId::generate();
-        assert!(!scheduler.is_agent_busy(agent_id));
+        assert!(!is_agent_busy(&scheduler, agent_id));
     }
 
     #[test]
@@ -781,7 +771,7 @@ mod tests {
         };
 
         tokio::time::timeout(Duration::from_secs(1), async {
-            while !scheduler.is_agent_busy(agent_id) {
+            while !is_agent_busy(&scheduler, agent_id) {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
@@ -797,7 +787,7 @@ mod tests {
             "one caller should process and one should skip"
         );
         assert_eq!(provider_for_assert.call_count(), 1);
-        assert!(!scheduler.is_agent_busy(agent_id));
+        assert!(!is_agent_busy(&scheduler, agent_id));
     }
 
     #[tokio::test]
@@ -817,7 +807,7 @@ mod tests {
         };
 
         tokio::time::timeout(Duration::from_secs(1), async {
-            while !scheduler.is_agent_busy(agent_id) {
+            while !is_agent_busy(&scheduler, agent_id) {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
@@ -825,7 +815,7 @@ mod tests {
         .expect("scheduler should expose busy claim");
 
         let busy = tokio::time::timeout(Duration::from_millis(50), async {
-            scheduler.is_agent_busy(agent_id)
+            is_agent_busy(&scheduler, agent_id)
         })
         .await
         .expect("busy check should not wait for processing");
@@ -860,7 +850,7 @@ mod tests {
         let result = scheduler.schedule_agent(agent_id).await;
 
         assert!(result.is_err());
-        assert!(!scheduler.is_agent_busy(agent_id));
+        assert!(!is_agent_busy(&scheduler, agent_id));
         assert!(
             scheduler.try_processing_claim(agent_id).unwrap().is_some(),
             "claim should be reusable after an error"

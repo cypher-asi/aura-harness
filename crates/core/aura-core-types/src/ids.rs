@@ -201,7 +201,6 @@ macro_rules! define_id {
         #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
         pub struct $name(#[serde(with = $serde_mod)] pub [u8; $len]);
 
-        #[allow(deprecated)]
         impl $name {
             #[must_use]
             pub const fn new(bytes: [u8; $len]) -> Self {
@@ -229,7 +228,6 @@ macro_rules! define_id {
             }
         }
 
-        #[allow(deprecated)]
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let hex = self.to_hex();
@@ -242,7 +240,6 @@ macro_rules! define_id {
             }
         }
 
-        #[allow(deprecated)]
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let hex = self.to_hex();
@@ -309,29 +306,6 @@ impl AgentId {
     #[must_use]
     pub fn generate() -> Self {
         Self::from_uuid(uuid::Uuid::new_v4())
-    }
-}
-
-// ============================================================================
-// Transaction ID (32 bytes)
-// ============================================================================
-
-define_id!(
-    #[deprecated(note = "use Hash — TxId is a legacy alias")]
-    /// Transaction identifier - 32 bytes, typically a hash of tx content.
-    TxId,
-    32,
-    "crate::serde_helpers::hex_bytes_32",
-    truncate = 16
-);
-
-#[allow(deprecated)]
-impl TxId {
-    /// Generate a `TxId` by hashing content.
-    #[must_use]
-    pub fn from_content(content: &[u8]) -> Self {
-        let hash = blake3::hash(content);
-        Self(*hash.as_bytes())
     }
 }
 
@@ -426,7 +400,6 @@ impl ProcedureId {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod legacy_id_tests {
     use super::*;
     use proptest::prelude::*;
@@ -449,12 +422,12 @@ mod legacy_id_tests {
         }
 
         #[test]
-        fn proptest_tx_id_different_content_produces_different_ids(
+        fn proptest_hash_different_content_produces_different_hashes(
             a in proptest::collection::vec(any::<u8>(), 1..256),
             b in proptest::collection::vec(any::<u8>(), 1..256),
         ) {
-            let id_a = TxId::from_content(&a);
-            let id_b = TxId::from_content(&b);
+            let id_a = Hash::from_content(&a);
+            let id_b = Hash::from_content(&b);
             if a == b {
                 prop_assert_eq!(id_a, id_b);
             } else {
@@ -627,13 +600,13 @@ mod legacy_id_tests {
     }
 
     #[test]
-    fn tx_id_from_content() {
+    fn hash_from_content_distinguishes_content() {
         let content = b"test transaction content";
-        let id1 = TxId::from_content(content);
-        let id2 = TxId::from_content(content);
+        let id1 = Hash::from_content(content);
+        let id2 = Hash::from_content(content);
         assert_eq!(id1, id2);
 
-        let id3 = TxId::from_content(b"different content");
+        let id3 = Hash::from_content(b"different content");
         assert_ne!(id1, id3);
     }
 

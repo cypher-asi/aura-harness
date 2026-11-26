@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::NodeConfig;
 use aura_agent::KernelModelGateway;
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_context_memory::{
@@ -7,11 +8,22 @@ use aura_context_memory::{
 };
 use aura_context_skills::{SkillInstallStore, SkillLoader, SkillManager};
 use aura_core_types::AgentId;
+use aura_engine::scheduler::Scheduler;
+use aura_exec_tools::{ToolCatalog, ToolConfig};
 use aura_model::MockProvider;
+use aura_model::ModelProvider;
 use aura_store_db::RocksStore;
+use aura_store_db::Store;
 use axum::body::Body;
 use axum::http::{request::Builder as RequestBuilder, Request};
+use axum::{
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    Router,
+};
 use base64::Engine as _;
+use std::sync::Arc;
+use std::time::Duration;
 use tower::util::ServiceExt;
 
 /// Test bearer token injected by [`authed_request`].

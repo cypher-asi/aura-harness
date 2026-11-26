@@ -48,8 +48,8 @@ use serde_json::Value;
 
 use aura_context_prompts::SteeringKind;
 
-use super::steering::RepeatedReadTracker;
 use crate::types::{ToolCallInfo, ToolCallResult};
+use aura_agent_steering::RepeatedReadTracker;
 
 use super::tool_execution::{split_cached, update_cache};
 use super::ToolResultCache;

@@ -13,11 +13,15 @@
 //! to the automaton bridge and exposed via the same `/stream/:run_id`
 //! route in event-only mode.
 
-use super::super::*;
 use crate::gateway::session::{prepare_chat_session, start_council_run, ChatRequestError};
+use crate::gateway::RouterState;
 use aura_core_protocol::{
     AgentPermissionsWire, RuntimeRequest, RuntimeRequestType, RuntimeRunResponse,
 };
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
+use axum::Json;
 use uuid::Uuid;
 
 /// `POST /v1/run` — start a chat, dev-loop, or task-run.

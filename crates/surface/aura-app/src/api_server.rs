@@ -62,30 +62,13 @@ struct ApiState {
     sandbox: Arc<Sandbox>,
 }
 
-/// Information returned from [`start_api_server`].
-///
-/// `url` is the URL the server is listening on; `token` is the
-/// per-launch bearer token. External callers (browsers, curl) must
-/// include `Authorization: Bearer <token>` on every non-`/health`
-/// request.
-#[derive(Debug, Clone)]
-#[allow(dead_code)] // fields are part of the public handle shape;
-                    // consumers outside this crate (e.g. future IPC wiring) may read them.
-pub struct ApiServerHandle {
-    pub url: String,
-    pub token: String,
-}
-
 /// Start the embedded API server.
 ///
 /// `workspace_root` is the directory beyond which file-access handlers
 /// may not read. When it does not exist the caller is expected to have
 /// created it already — otherwise [`Sandbox::new`] will attempt to
 /// create it on our behalf.
-pub async fn start_api_server(
-    cmd_tx: mpsc::Sender<UiCommand>,
-    workspace_root: PathBuf,
-) -> Option<ApiServerHandle> {
+pub async fn start_api_server(cmd_tx: mpsc::Sender<UiCommand>, workspace_root: PathBuf) {
     let sandbox = match Sandbox::new(&workspace_root) {
         Ok(s) => Arc::new(s),
         Err(e) => {
@@ -97,7 +80,7 @@ pub async fn start_api_server(
             let _ = cmd_tx.try_send(UiCommand::ShowError(format!(
                 "API server failed to initialise sandbox: {e}"
             )));
-            return None;
+            return;
         }
     };
 
@@ -186,7 +169,7 @@ pub async fn start_api_server(
                     }
                 });
 
-                return Some(ApiServerHandle { url, token });
+                return;
             }
             Err(e) => {
                 debug!(port = port, error = %e, "Port unavailable, trying next");
@@ -202,7 +185,6 @@ pub async fn start_api_server(
     let _ = cmd_tx.try_send(UiCommand::ShowError(
         "API server failed to start - all ports busy".to_string(),
     ));
-    None
 }
 
 /// Whether the embedded API server should enforce bearer-token auth.

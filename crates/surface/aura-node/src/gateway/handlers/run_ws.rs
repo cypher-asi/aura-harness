@@ -8,9 +8,16 @@
 //! automaton runs are tracked by the
 //! [`aura_engine::automaton::AutomatonBridge`].
 
-use super::super::*;
+use crate::gateway::RouterState;
+use aura_engine::automaton::AutomatonBridge;
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
 use axum::response::Response;
+use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tracing::{info, warn};
 
 /// Maximum number of concurrent WebSocket connections this node will
 /// serve at once. Each live socket holds a tokio task plus terminal /

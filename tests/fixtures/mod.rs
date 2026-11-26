@@ -1,11 +1,10 @@
 //! Shared test fixtures for AURA OS.
 //!
 //! Provides common test data and helpers used across all crates.
-#![allow(deprecated)]
 
 use aura_core_types::{
-    Action, ActionId, ActionKind, AgentId, Decision, Effect, EffectKind, EffectStatus,
-    ProposalSet, RecordEntry, ToolCall, ToolResult, Transaction, TransactionType, TxId,
+    Action, ActionId, ActionKind, AgentId, Decision, Effect, EffectKind, EffectStatus, Hash,
+    ProposalSet, RecordEntry, ToolCall, ToolResult, Transaction, TransactionType,
 };
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -36,7 +35,7 @@ pub fn user_prompt_tx(agent_id: AgentId, message: &str) -> Transaction {
 /// Create a transaction with specific kind.
 pub fn transaction_with_kind(agent_id: AgentId, kind: TransactionType, payload: &str) -> Transaction {
     let payload_bytes = Bytes::from(payload.to_string());
-    let tx_id = TxId::from_content(&payload_bytes);
+    let tx_id = Hash::from_content(&payload_bytes);
     let ts_ms = 1_700_000_000_000; // Fixed timestamp for determinism
     
     Transaction::new(tx_id, agent_id, ts_ms, kind, payload_bytes)

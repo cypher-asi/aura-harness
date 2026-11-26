@@ -45,12 +45,9 @@ mod types;
 pub use ids::{RunId, SessionId, ToolCallId, TransactionId, TurnId, UserId};
 
 pub use error::{AuraError, Result};
-#[allow(deprecated)]
-pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, ProcessId, TxId};
+pub use ids::{ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, ProcessId};
 pub use registry::{Registry, RegistryError};
 pub use types::trace;
-#[allow(deprecated)]
-pub use types::ToolDecision;
 pub use types::{
     installed_integrations_satisfy, integration_match, Action, ActionKind, ActionResultPayload,
     AgentStatus, ArmSpec, Assessment, BenchSource, CacheControl, CompareArm, CompareCopy,

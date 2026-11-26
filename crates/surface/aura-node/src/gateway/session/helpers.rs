@@ -1558,11 +1558,10 @@ mod tests {
             .await
             .expect("fill outbound channel");
 
-        let panic_handle = tokio::spawn(async {
-            panic!("turn panic");
-            #[allow(unreachable_code)]
-            anyhow::Ok(AgentLoopResult::default())
-        });
+        async fn panicking_turn() -> anyhow::Result<AgentLoopResult> {
+            panic!("turn panic")
+        }
+        let panic_handle = tokio::spawn(panicking_turn());
         let join_result = panic_handle.await;
 
         let mut session = Session::new(PathBuf::from("/tmp/aura"));

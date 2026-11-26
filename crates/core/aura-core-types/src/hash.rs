@@ -2,9 +2,6 @@
 //!
 //! Uses BLAKE3 for all hashing operations.
 
-#[allow(deprecated)]
-use crate::ids::TxId;
-
 /// Hash arbitrary bytes using BLAKE3.
 #[must_use]
 pub fn hash_bytes(data: &[u8]) -> [u8; 32] {
@@ -28,14 +25,6 @@ pub fn hash_many(parts: &[&[u8]]) -> [u8; 32] {
 #[must_use]
 pub fn compute_context_hash(tx_bytes: &[u8], record_window_bytes: &[u8]) -> [u8; 32] {
     hash_many(&[tx_bytes, record_window_bytes])
-}
-
-/// Generate a transaction ID from its content.
-#[deprecated(note = "use Hash::from_content — tx_id_from_content is a legacy alias")]
-#[allow(deprecated)]
-#[must_use]
-pub fn tx_id_from_content(content: &[u8]) -> TxId {
-    TxId::new(hash_bytes(content))
 }
 
 /// Incremental hasher for building hashes from multiple parts.
@@ -198,15 +187,6 @@ mod tests {
         assert_ne!(h1, h2);
         assert_ne!(h1, h3);
         assert_ne!(h2, h3);
-    }
-
-    #[allow(deprecated)]
-    #[test]
-    fn tx_id_from_content_matches_hash() {
-        let content = b"test content";
-        let tx_id = tx_id_from_content(content);
-        let hash = hash_bytes(content);
-        assert_eq!(*tx_id.as_bytes(), hash);
     }
 
     #[test]

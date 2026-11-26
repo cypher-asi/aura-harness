@@ -13,9 +13,8 @@
 //! composition (here) chains the credential store as a fallback so
 //! existing `aura login` flows continue to feed the agent loop.
 
-#[allow(unused_imports)]
 pub use aura_agent::session_bootstrap::{
-    build_executor_router_with_config, default_agent_config_with_auth, load_auth_token, open_store,
+    build_executor_router_with_config, default_agent_config_with_auth, open_store,
     resolve_store_path,
 };
 
