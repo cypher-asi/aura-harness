@@ -279,6 +279,37 @@ impl ToolExecutor {
     ) -> Result<ToolResult, ToolError> {
         let tool_name = &tool_call.tool;
 
+        let sandbox = self.build_sandbox(ctx).await?;
+        let tool_ctx = self.tool_context(sandbox, ctx);
+
+        let Some(tool) = self.tools.get(tool_name.as_str()) else {
+            return Err(ToolError::UnknownTool(tool_name.clone()));
+        };
+        let changed = match tool.changed_path(&tool_call.args) {
+            Some(path) => resolve_changed_path(&tool_ctx.sandbox, path).await,
+            None => None,
+        };
+        // Held until the change (and its hook notifications) are done.
+        let _path_lock = match &changed {
+            Some(path) => Some(crate::path_locks::lock_path(path).await),
+            None => None,
+        };
+        let change = self.file_change_hook.as_ref().zip(changed.as_ref());
+        let tool_use_id = ctx.tool_use_id.as_deref();
+        if let Some((hook, path)) = change {
+            hook.before_change(path, tool_use_id).await;
+        }
+        let result = tool.execute(&tool_ctx, tool_call.args.clone()).await;
+        if let Some((hook, path)) = change {
+            let succeeded = result.as_ref().is_ok_and(|r| r.ok);
+            hook.after_change(path, tool_use_id, succeeded).await;
+        }
+        result
+    }
+
+    /// The sandbox a call runs in: the workspace root plus the
+    /// configured extra paths, or OS-wide for a privileged session.
+    async fn build_sandbox(&self, ctx: &ExecuteContext) -> Result<Sandbox, ToolError> {
         let workspace_root = ctx.workspace_root.clone();
         let extra_paths = self.config.extra_allowed_paths.clone();
         // Privileged dev environment: an effectively-full-access session
@@ -308,6 +339,12 @@ impl ToolExecutor {
         })
         .await
         .map_err(|e| ToolError::CommandFailed(format!("sandbox init task panicked: {e}")))??;
+        Ok(sandbox)
+    }
+
+    /// The [`ToolContext`] a call runs with: `sandbox` plus the caller
+    /// identity, policy and hooks this executor carries.
+    fn tool_context(&self, sandbox: Sandbox, ctx: &ExecuteContext) -> ToolContext {
         let mut tool_ctx = ToolContext::new(sandbox, self.config.clone());
         tool_ctx.caller_agent_id = Some(ctx.agent_id);
         tool_ctx.caller_external_agent_id = self.caller_external_agent_id.clone();
@@ -328,30 +365,7 @@ impl ToolExecutor {
         tool_ctx.command_output = self.command_output.clone();
         tool_ctx.confine_writes = ctx.confine_writes;
         tool_ctx.run_scratch = ctx.run_scratch.clone();
-
-        let Some(tool) = self.tools.get(tool_name.as_str()) else {
-            return Err(ToolError::UnknownTool(tool_name.clone()));
-        };
-        let changed = match tool.changed_path(&tool_call.args) {
-            Some(path) => resolve_changed_path(&tool_ctx.sandbox, path).await,
-            None => None,
-        };
-        // Held until the change (and its hook notifications) are done.
-        let _path_lock = match &changed {
-            Some(path) => Some(crate::path_locks::lock_path(path).await),
-            None => None,
-        };
-        let change = self.file_change_hook.as_ref().zip(changed.as_ref());
-        let tool_use_id = ctx.tool_use_id.as_deref();
-        if let Some((hook, path)) = change {
-            hook.before_change(path, tool_use_id).await;
-        }
-        let result = tool.execute(&tool_ctx, tool_call.args.clone()).await;
-        if let Some((hook, path)) = change {
-            let succeeded = result.as_ref().is_ok_and(|r| r.ok);
-            hook.after_change(path, tool_use_id, succeeded).await;
-        }
-        result
+        tool_ctx
     }
 }
 

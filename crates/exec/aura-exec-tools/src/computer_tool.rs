@@ -336,12 +336,23 @@ impl Tool for ComputerTool {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        let (status, bytes) = self.post_action(&body).await?;
+        Ok(executor_result(&action, status, &bytes))
+    }
+}
+
+impl ComputerTool {
+    /// POST `body` to the executor and read its (size-capped) response.
+    async fn post_action(
+        &self,
+        body: &Value,
+    ) -> Result<(reqwest::StatusCode, bytes::Bytes), ToolError> {
         let url = format!("{}{ACTION_PATH}", self.executor_url);
 
         let resp = self
             .client
             .post(&url)
-            .json(&body)
+            .json(body)
             .send()
             .await
             .map_err(|e| {
@@ -358,52 +369,57 @@ impl Tool for ComputerTool {
             });
         }
 
-        if !status.is_success() {
-            let preview: String = String::from_utf8_lossy(&bytes).chars().take(512).collect();
-            warn!(action = %action, status = status.as_u16(), "computer executor non-2xx");
-            return Ok(ToolResult::failure(
-                COMPUTER_TOOL_NAME,
-                format!(
-                    "computer executor returned HTTP {}: {preview}",
-                    status.as_u16()
-                ),
-            ));
-        }
-
-        let parsed: ExecutorResponse = match serde_json::from_slice(&bytes) {
-            Ok(p) => p,
-            Err(e) => {
-                return Ok(ToolResult::failure(
-                    COMPUTER_TOOL_NAME,
-                    format!("could not parse computer executor response: {e}"),
-                ));
-            }
-        };
-
-        if !parsed.ok {
-            let reason = parsed
-                .error
-                .unwrap_or_else(|| "computer executor reported failure".to_string());
-            warn!(action = %action, "computer action failed: {reason}");
-            return Ok(ToolResult::failure(COMPUTER_TOOL_NAME, reason));
-        }
-
-        let dims = dims_label(parsed.width, parsed.height);
-        // NEVER log the base64 payload — only the action + dims.
-        debug!(
-            action = %action,
-            screen = %dims,
-            has_image = parsed.image_base64.is_some(),
-            "computer action executed"
-        );
-
-        let content = format!("computer action '{action}' ok (screen {dims})");
-        let mut result = ToolResult::success(COMPUTER_TOOL_NAME, content.into_bytes());
-        if let Some(base64) = parsed.image_base64 {
-            result = result.with_image(base64, SCREENSHOT_MEDIA_TYPE);
-        }
-        Ok(result)
+        Ok((status, bytes))
     }
+}
+
+/// The tool result for the executor's reply to `action`.
+fn executor_result(action: &str, status: reqwest::StatusCode, bytes: &[u8]) -> ToolResult {
+    if !status.is_success() {
+        let preview: String = String::from_utf8_lossy(bytes).chars().take(512).collect();
+        warn!(action = %action, status = status.as_u16(), "computer executor non-2xx");
+        return ToolResult::failure(
+            COMPUTER_TOOL_NAME,
+            format!(
+                "computer executor returned HTTP {}: {preview}",
+                status.as_u16()
+            ),
+        );
+    }
+
+    let parsed: ExecutorResponse = match serde_json::from_slice(bytes) {
+        Ok(p) => p,
+        Err(e) => {
+            return ToolResult::failure(
+                COMPUTER_TOOL_NAME,
+                format!("could not parse computer executor response: {e}"),
+            );
+        }
+    };
+
+    if !parsed.ok {
+        let reason = parsed
+            .error
+            .unwrap_or_else(|| "computer executor reported failure".to_string());
+        warn!(action = %action, "computer action failed: {reason}");
+        return ToolResult::failure(COMPUTER_TOOL_NAME, reason);
+    }
+
+    let dims = dims_label(parsed.width, parsed.height);
+    // NEVER log the base64 payload — only the action + dims.
+    debug!(
+        action = %action,
+        screen = %dims,
+        has_image = parsed.image_base64.is_some(),
+        "computer action executed"
+    );
+
+    let content = format!("computer action '{action}' ok (screen {dims})");
+    let mut result = ToolResult::success(COMPUTER_TOOL_NAME, content.into_bytes());
+    if let Some(base64) = parsed.image_base64 {
+        result = result.with_image(base64, SCREENSHOT_MEDIA_TYPE);
+    }
+    result
 }
 
 #[cfg(test)]

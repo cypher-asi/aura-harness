@@ -344,7 +344,31 @@ impl Tool for HttpToolDefinition {
     }
 
     async fn execute(&self, _ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
-        let (url, consumed) = self.build_url(&args)?;
+        let req = self.build_request(&args)?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| ToolError::CommandFailed(format!("http request failed: {e}")))?;
+        let status = resp.status();
+        let body = read_bounded_body(resp, HTTP_TOOL_MAX_RESPONSE_BYTES).await?;
+
+        if status.is_success() {
+            Ok(ToolResult::success(self.name.clone(), body))
+        } else {
+            let mut fail = ToolResult::failure(self.name.clone(), body);
+            fail.exit_code = Some(i32::from(status.as_u16()));
+            fail.metadata
+                .insert("http_status".to_string(), status.as_u16().to_string());
+            Ok(fail)
+        }
+    }
+}
+
+impl HttpToolDefinition {
+    /// The request for `args`: URL with placeholders filled, static and
+    /// auth headers, and the remaining args as JSON body or query.
+    fn build_request(&self, args: &Value) -> Result<reqwest::RequestBuilder, ToolError> {
+        let (url, consumed) = self.build_url(args)?;
 
         // Remove placeholder-consumed keys from the body.
         let mut body = args.clone();
@@ -377,38 +401,29 @@ impl Tool for HttpToolDefinition {
             req = req.json(&body);
         } else if let Some(obj) = args.as_object() {
             // For GET/DELETE, promote remaining scalar args to query params.
-            let params: Vec<(&str, String)> = obj
-                .iter()
-                .filter(|(k, _)| !consumed.contains(k))
-                .filter_map(|(k, v)| match v {
-                    Value::String(s) => Some((k.as_str(), s.clone())),
-                    Value::Number(n) => Some((k.as_str(), n.to_string())),
-                    Value::Bool(b) => Some((k.as_str(), b.to_string())),
-                    _ => None,
-                })
-                .collect();
+            let params = scalar_query_params(obj, &consumed);
             if !params.is_empty() {
                 req = req.query(&params);
             }
         }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ToolError::CommandFailed(format!("http request failed: {e}")))?;
-        let status = resp.status();
-        let body = read_bounded_body(resp, HTTP_TOOL_MAX_RESPONSE_BYTES).await?;
-
-        if status.is_success() {
-            Ok(ToolResult::success(self.name.clone(), body))
-        } else {
-            let mut fail = ToolResult::failure(self.name.clone(), body);
-            fail.exit_code = Some(i32::from(status.as_u16()));
-            fail.metadata
-                .insert("http_status".to_string(), status.as_u16().to_string());
-            Ok(fail)
-        }
+        Ok(req)
     }
+}
+
+/// The scalar args not consumed by a path placeholder, as query pairs.
+fn scalar_query_params<'a>(
+    obj: &'a serde_json::Map<String, Value>,
+    consumed: &[String],
+) -> Vec<(&'a str, String)> {
+    obj.iter()
+        .filter(|(k, _)| !consumed.contains(k))
+        .filter_map(|(k, v)| match v {
+            Value::String(s) => Some((k.as_str(), s.clone())),
+            Value::Number(n) => Some((k.as_str(), n.to_string())),
+            Value::Bool(b) => Some((k.as_str(), b.to_string())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Stream a response body into memory, enforcing a byte cap.

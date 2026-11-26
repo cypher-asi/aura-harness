@@ -7,7 +7,10 @@
 //! for `BraveSearch`).
 
 use super::super::json_paths::required_string;
-use super::{TrustedIntegrationResultField, TrustedIntegrationResultTransform};
+use super::spec::{
+    TrustedIntegrationResultExtraField, TrustedIntegrationResultField,
+    TrustedIntegrationResultTransform,
+};
 use crate::error::ToolError;
 use serde_json::{json, Value};
 
@@ -29,28 +32,13 @@ pub(super) fn apply_result_transform(
             pointer,
             fields,
             extras,
-        } => {
-            let source = pointer
-                .as_deref()
-                .map_or(Some(response), |path| response.pointer(path));
-            let items = source
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|item| project_fields(&item, fields))
-                .collect::<Vec<_>>();
-            let mut result = object_with_entry(key, Value::Array(items));
-            for extra in extras {
-                let value = response
-                    .pointer(&extra.pointer)
-                    .cloned()
-                    .or_else(|| extra.default_value.clone())
-                    .unwrap_or(Value::Null);
-                result[&extra.output] = value;
-            }
-            Ok(result)
-        }
+        } => Ok(project_array(
+            response,
+            key,
+            pointer.as_deref(),
+            fields,
+            extras,
+        )),
         TrustedIntegrationResultTransform::ProjectObject {
             key,
             pointer,
@@ -67,6 +55,36 @@ pub(super) fn apply_result_transform(
             brave_search_results(response, vertical, args)
         }
     }
+}
+
+/// The `ProjectArray` transform: project each item of the array at
+/// `pointer` (or the response itself) to `fields`, under `key`, plus the
+/// `extras` read from the response.
+fn project_array(
+    response: &Value,
+    key: &str,
+    pointer: Option<&str>,
+    fields: &[TrustedIntegrationResultField],
+    extras: &[TrustedIntegrationResultExtraField],
+) -> Value {
+    let source = pointer.map_or(Some(response), |path| response.pointer(path));
+    let items = source
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| project_fields(&item, fields))
+        .collect::<Vec<_>>();
+    let mut result = object_with_entry(key, Value::Array(items));
+    for extra in extras {
+        let value = response
+            .pointer(&extra.pointer)
+            .cloned()
+            .or_else(|| extra.default_value.clone())
+            .unwrap_or(Value::Null);
+        result[&extra.output] = value;
+    }
+    result
 }
 
 /// Shape Brave Search responses into the canonical

@@ -50,6 +50,50 @@ pub struct CatalogEntry {
     pub required_capabilities: Vec<Capability>,
 }
 
+/// Collects catalog entries while tracking which names are taken.
+#[derive(Default)]
+struct CatalogBuilder {
+    entries: Vec<CatalogEntry>,
+    seen: HashSet<String>,
+}
+
+impl CatalogBuilder {
+    /// Add an internal tool, recording its name.
+    fn add(
+        &mut self,
+        definition: ToolDefinition,
+        profiles: Vec<ToolProfile>,
+        required_capabilities: Vec<Capability>,
+    ) {
+        self.seen.insert(definition.name.clone());
+        self.entries.push(CatalogEntry {
+            definition,
+            owner: ToolOwner::Internal,
+            profiles,
+            required_capabilities,
+        });
+    }
+
+    /// Add the internal tool `entry` builds unless `name` is already in
+    /// the catalog.
+    fn add_unless_seen(
+        &mut self,
+        name: String,
+        profiles: Vec<ToolProfile>,
+        entry: impl FnOnce() -> (ToolDefinition, Vec<Capability>),
+    ) {
+        if self.seen.insert(name) {
+            let (definition, required_capabilities) = entry();
+            self.entries.push(CatalogEntry {
+                definition,
+                owner: ToolOwner::Internal,
+                profiles,
+                required_capabilities,
+            });
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ToolCatalog
 // ---------------------------------------------------------------------------
@@ -66,33 +110,19 @@ impl ToolCatalog {
     /// Build the default catalog from all static tool definitions.
     #[must_use]
     pub fn new() -> Self {
-        let mut entries = Vec::new();
-        let mut seen = HashSet::new();
-
         let all_profiles = vec![ToolProfile::Core, ToolProfile::Agent, ToolProfile::Engine];
+        let mut catalog = CatalogBuilder::default();
 
         // Core tools from curated definitions (model-facing schemas).
         for def in definitions::core_tool_definitions() {
-            seen.insert(def.name.clone());
-            entries.push(CatalogEntry {
-                definition: def,
-                owner: ToolOwner::Internal,
-                profiles: all_profiles.clone(),
-                required_capabilities: Vec::new(),
-            });
+            catalog.add(def, all_profiles.clone(), Vec::new());
         }
 
         // Built-in tool impls not covered by definitions.rs (e.g. stat_file).
         for tool in builtin_tools() {
-            let name = tool.name().to_string();
-            if seen.insert(name) {
-                entries.push(CatalogEntry {
-                    definition: tool.definition(),
-                    owner: ToolOwner::Internal,
-                    profiles: all_profiles.clone(),
-                    required_capabilities: tool.required_capabilities(),
-                });
-            }
+            catalog.add_unless_seen(tool.name().to_string(), all_profiles.clone(), || {
+                (tool.definition(), tool.required_capabilities())
+            });
         }
 
         // Cross-agent tools. Always compiled + registered, but
@@ -100,18 +130,10 @@ impl ToolCatalog {
         // capabilities, so low-privilege agents never see these tool names in
         // their prompt. The kernel's policy gate is always on and enforces
         // the same capabilities at proposal time regardless of visibility.
-        for (tool, definition, required) in crate::agents::cross_agent_catalog_entries() {
-            if seen.insert(definition.name.clone()) {
-                // Suppress unused warning when the tool impl itself isn't
-                // otherwise referenced in this function.
-                let _ = tool;
-                entries.push(CatalogEntry {
-                    definition,
-                    owner: ToolOwner::Internal,
-                    profiles: vec![ToolProfile::Agent],
-                    required_capabilities: required,
-                });
-            }
+        for (_tool, definition, required) in crate::agents::cross_agent_catalog_entries() {
+            catalog.add_unless_seen(definition.name.clone(), vec![ToolProfile::Agent], || {
+                (definition, required)
+            });
         }
 
         // Computer-use tool. Always compiled into the catalog but gated
@@ -119,38 +141,29 @@ impl ToolCatalog {
         // from runs that did not opt into computer-use. The executable
         // `ComputerTool` impl (which needs the per-session executor URL)
         // is registered separately on the session's tool resolver.
-        if seen.insert(crate::computer_tool::COMPUTER_TOOL_NAME.to_string()) {
-            entries.push(CatalogEntry {
-                definition: crate::computer_tool::computer_tool_definition(),
-                owner: ToolOwner::Internal,
-                profiles: all_profiles.clone(),
-                required_capabilities: vec![Capability::ComputerUse],
-            });
-        }
+        catalog.add_unless_seen(
+            crate::computer_tool::COMPUTER_TOOL_NAME.to_string(),
+            all_profiles,
+            || {
+                (
+                    crate::computer_tool::computer_tool_definition(),
+                    vec![Capability::ComputerUse],
+                )
+            },
+        );
 
         // Agent-only management tools (spec, task, project, dev-loop).
         for def in definitions::chat_management_tools() {
             let required_capabilities = domain_tool_required_capabilities(&def.name);
-            seen.insert(def.name.clone());
-            entries.push(CatalogEntry {
-                definition: def,
-                owner: ToolOwner::Internal,
-                profiles: vec![ToolProfile::Agent],
-                required_capabilities,
-            });
+            catalog.add(def, vec![ToolProfile::Agent], required_capabilities);
         }
 
         // Engine-only tools (task_done, get_task_context, submit_plan).
         for def in definitions::engine_specific_tools() {
-            seen.insert(def.name.clone());
-            entries.push(CatalogEntry {
-                definition: def,
-                owner: ToolOwner::Internal,
-                profiles: vec![ToolProfile::Engine],
-                required_capabilities: Vec::new(),
-            });
+            catalog.add(def, vec![ToolProfile::Engine], Vec::new());
         }
 
+        let entries = catalog.entries;
         debug!(entry_count = entries.len(), "Built tool catalog");
         Self { entries }
     }

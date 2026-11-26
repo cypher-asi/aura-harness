@@ -74,48 +74,7 @@ impl ToolResolver {
                 .await;
         }
 
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        match &tool.auth {
-            ToolAuth::None => {}
-            ToolAuth::Bearer { token } => {
-                let value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
-                    ToolError::ExternalToolError(format!("invalid bearer auth header: {e}"))
-                })?;
-                headers.insert(AUTHORIZATION, value);
-            }
-            ToolAuth::ApiKey { header, key } => {
-                let name = HeaderName::from_bytes(header.as_bytes()).map_err(|e| {
-                    ToolError::ExternalToolError(format!("invalid auth header name: {e}"))
-                })?;
-                let value = HeaderValue::from_str(key).map_err(|e| {
-                    ToolError::ExternalToolError(format!("invalid api key header value: {e}"))
-                })?;
-                headers.insert(name, value);
-            }
-            ToolAuth::Headers { headers: extra } => {
-                for (name, value) in extra {
-                    let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
-                        ToolError::ExternalToolError(format!(
-                            "invalid auth header name `{name}`: {e}"
-                        ))
-                    })?;
-                    let header_value = HeaderValue::from_str(value).map_err(|e| {
-                        ToolError::ExternalToolError(format!(
-                            "invalid auth header value for `{name}`: {e}"
-                        ))
-                    })?;
-                    headers.insert(header_name, header_value);
-                }
-            }
-        }
-
-        headers.insert(
-            HeaderName::from_static("x-aura-agent-id"),
-            HeaderValue::from_str(&ctx.agent_id.to_string()).map_err(|e| {
-                ToolError::ExternalToolError(format!("invalid x-aura-agent-id header: {e}"))
-            })?,
-        );
+        let headers = installed_tool_headers(ctx, &tool.auth)?;
 
         let request = self
             .http_client
@@ -171,4 +130,55 @@ impl ToolResolver {
         };
         Ok(ToolResult::success(&tool.name, result.to_string()))
     }
+}
+
+/// The headers of a plain installed-tool POST: JSON content type, the
+/// tool's auth and the calling agent's id.
+fn installed_tool_headers(ctx: &ExecuteContext, auth: &ToolAuth) -> Result<HeaderMap, ToolError> {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    insert_auth_headers(&mut headers, auth)?;
+
+    headers.insert(
+        HeaderName::from_static("x-aura-agent-id"),
+        HeaderValue::from_str(&ctx.agent_id.to_string()).map_err(|e| {
+            ToolError::ExternalToolError(format!("invalid x-aura-agent-id header: {e}"))
+        })?,
+    );
+    Ok(headers)
+}
+
+fn insert_auth_headers(headers: &mut HeaderMap, auth: &ToolAuth) -> Result<(), ToolError> {
+    match auth {
+        ToolAuth::None => {}
+        ToolAuth::Bearer { token } => {
+            let value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
+                ToolError::ExternalToolError(format!("invalid bearer auth header: {e}"))
+            })?;
+            headers.insert(AUTHORIZATION, value);
+        }
+        ToolAuth::ApiKey { header, key } => {
+            let name = HeaderName::from_bytes(header.as_bytes()).map_err(|e| {
+                ToolError::ExternalToolError(format!("invalid auth header name: {e}"))
+            })?;
+            let value = HeaderValue::from_str(key).map_err(|e| {
+                ToolError::ExternalToolError(format!("invalid api key header value: {e}"))
+            })?;
+            headers.insert(name, value);
+        }
+        ToolAuth::Headers { headers: extra } => {
+            for (name, value) in extra {
+                let header_name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| {
+                    ToolError::ExternalToolError(format!("invalid auth header name `{name}`: {e}"))
+                })?;
+                let header_value = HeaderValue::from_str(value).map_err(|e| {
+                    ToolError::ExternalToolError(format!(
+                        "invalid auth header value for `{name}`: {e}"
+                    ))
+                })?;
+                headers.insert(header_name, header_value);
+            }
+        }
+    }
+    Ok(())
 }

@@ -102,7 +102,7 @@ pub async fn walk_directory(
     // record its ordered children (dirs before files, alphabetical
     // within each group) in a flat map keyed by the directory's own
     // absolute path.
-    let mut contents: HashMap<PathBuf, Vec<(String, bool, PathBuf)>> = HashMap::new();
+    let mut contents: DirContents = HashMap::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut stack: Vec<(PathBuf, usize)> = vec![(start.to_path_buf(), 0)];
 
@@ -110,68 +110,12 @@ pub async fn walk_directory(
         if depth >= max_depth {
             continue;
         }
-        // Canonicalize per-step so intermediate symlinks collapse to
-        // their real target. Failed canonicalize (broken symlink,
-        // permission denied, missing) => skip rather than abort the
-        // whole walk.
-        let canonical = match std::fs::canonicalize(&path) {
-            Ok(c) => strip_unc_prefix(&c),
-            Err(_) => {
-                warn!(path = %path.display(), "failed to canonicalize during walk");
-                continue;
-            }
-        };
-        if let Some(root) = workspace_root {
-            if !canonical.starts_with(root) {
-                debug!(
-                    path = %path.display(),
-                    canonical = %canonical.display(),
-                    "walk_directory skipping path that canonicalises outside workspace"
-                );
-                continue;
-            }
-        }
-        if !visited.insert(canonical) {
-            // Already walked via some other name (symlink, junction) —
-            // skip so we don't inflate the contents map on cycles.
+        if !claim_directory(&path, workspace_root, &mut visited) {
             continue;
         }
-
-        let Ok(mut read_dir) = tokio::fs::read_dir(&path).await else {
-            warn!(path = %path.display(), "failed to read directory during walk");
+        let Some((dirs, files)) = read_sorted_children(&path).await else {
             continue;
         };
-
-        let mut dirs: Vec<(String, PathBuf)> = Vec::new();
-        let mut files: Vec<(String, PathBuf)> = Vec::new();
-
-        loop {
-            match read_dir.next_entry().await {
-                Ok(Some(entry)) => {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if name.starts_with('.') {
-                        continue;
-                    }
-                    let entry_path = entry.path();
-                    let is_dir = match entry.file_type().await {
-                        Ok(ft) => ft.is_dir(),
-                        Err(_) => false,
-                    };
-                    if is_dir {
-                        if !IGNORED_DIRS.contains(&name.as_str()) {
-                            dirs.push((name, entry_path));
-                        }
-                    } else {
-                        files.push((name, entry_path));
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => break,
-            }
-        }
-
-        dirs.sort_by(|a, b| a.0.cmp(&b.0));
-        files.sort_by(|a, b| a.0.cmp(&b.0));
 
         let mut rel_contents: Vec<(String, bool, PathBuf)> =
             Vec::with_capacity(dirs.len() + files.len());
@@ -191,32 +135,110 @@ pub async fn walk_directory(
     // Phase 2: pure in-memory tree assembly bounded by `max_depth`
     // (<= MAX_WALK_DEPTH), so sync recursion is safe and keeps the
     // shape simple.
-    fn assemble(
-        path: &Path,
-        contents: &HashMap<PathBuf, Vec<(String, bool, PathBuf)>>,
-    ) -> Vec<WalkedEntry> {
-        let Some(children) = contents.get(path) else {
-            return Vec::new();
-        };
-        children
-            .iter()
-            .map(|(name, is_dir, entry_path)| {
-                let kids = if *is_dir {
-                    Some(assemble(entry_path, contents))
-                } else {
-                    None
-                };
-                WalkedEntry {
-                    name: name.clone(),
-                    abs_path: entry_path.clone(),
-                    is_dir: *is_dir,
-                    children: kids,
+    assemble(start, &contents)
+}
+
+/// Each walked directory's ordered children: `(name, is_dir, abs_path)`.
+type DirContents = HashMap<PathBuf, Vec<(String, bool, PathBuf)>>;
+
+/// Whether the walk should read `path`: it canonicalises, stays inside
+/// `workspace_root` (when given) and was not walked under another name.
+/// Records it in `visited` when it should.
+fn claim_directory(
+    path: &Path,
+    workspace_root: Option<&Path>,
+    visited: &mut HashSet<PathBuf>,
+) -> bool {
+    // Canonicalize per-step so intermediate symlinks collapse to
+    // their real target. Failed canonicalize (broken symlink,
+    // permission denied, missing) => skip rather than abort the
+    // whole walk.
+    let canonical = match std::fs::canonicalize(path) {
+        Ok(c) => strip_unc_prefix(&c),
+        Err(_) => {
+            warn!(path = %path.display(), "failed to canonicalize during walk");
+            return false;
+        }
+    };
+    if let Some(root) = workspace_root {
+        if !canonical.starts_with(root) {
+            debug!(
+                path = %path.display(),
+                canonical = %canonical.display(),
+                "walk_directory skipping path that canonicalises outside workspace"
+            );
+            return false;
+        }
+    }
+    // Already walked via some other name (symlink, junction) — skip so
+    // we don't inflate the contents map on cycles.
+    visited.insert(canonical)
+}
+
+/// The non-hidden subdirectories (minus [`IGNORED_DIRS`]) and files of
+/// `path`, each sorted by name; `None` when it can't be read.
+async fn read_sorted_children(
+    path: &Path,
+) -> Option<(Vec<(String, PathBuf)>, Vec<(String, PathBuf)>)> {
+    let Ok(mut read_dir) = tokio::fs::read_dir(path).await else {
+        warn!(path = %path.display(), "failed to read directory during walk");
+        return None;
+    };
+
+    let mut dirs: Vec<(String, PathBuf)> = Vec::new();
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+
+    loop {
+        match read_dir.next_entry().await {
+            Ok(Some(entry)) => {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') {
+                    continue;
                 }
-            })
-            .collect()
+                let entry_path = entry.path();
+                let is_dir = match entry.file_type().await {
+                    Ok(ft) => ft.is_dir(),
+                    Err(_) => false,
+                };
+                if is_dir {
+                    if !IGNORED_DIRS.contains(&name.as_str()) {
+                        dirs.push((name, entry_path));
+                    }
+                } else {
+                    files.push((name, entry_path));
+                }
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
     }
 
-    assemble(start, &contents)
+    dirs.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Some((dirs, files))
+}
+
+/// Build the tree under `path` from the walked `contents`.
+fn assemble(path: &Path, contents: &DirContents) -> Vec<WalkedEntry> {
+    let Some(children) = contents.get(path) else {
+        return Vec::new();
+    };
+    children
+        .iter()
+        .map(|(name, is_dir, entry_path)| {
+            let kids = if *is_dir {
+                Some(assemble(entry_path, contents))
+            } else {
+                None
+            };
+            WalkedEntry {
+                name: name.clone(),
+                abs_path: entry_path.clone(),
+                is_dir: *is_dir,
+                children: kids,
+            }
+        })
+        .collect()
 }
 
 /// Outcome of a capped-read.

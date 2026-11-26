@@ -44,9 +44,7 @@ crates/engine/aura-engine/src/scheduler.rs
 crates/exec/aura-exec-tools/src/agents/send_to_agent/tests.rs
 crates/exec/aura-exec-tools/src/fs_tools/cmd/tests.rs
 crates/exec/aura-exec-tools/src/fs_tools/search/tests.rs
-crates/exec/aura-exec-tools/src/git_tool/mod.rs
 crates/exec/aura-exec-tools/src/git_tool/tests.rs
-crates/exec/aura-exec-tools/src/resolver/trusted/mod.rs
 crates/exec/aura-exec-tools/src/resolver_tests.rs
 crates/surface/aura-app/src/api_server.rs
 crates/surface/aura-app/src/cloud/host_info.rs

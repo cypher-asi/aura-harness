@@ -218,81 +218,96 @@ pub fn engine_specific_tools() -> Vec<ToolDefinition> {
     // re-added here — doing so trips the no-duplicate-per-profile
     // invariant in `catalog::tests::no_duplicate_names_in_any_profile`.
     vec![
-        tool(
-            "task_done",
-            "Signal that the current task is complete. Call this when you have finished all changes and verified they compile. Provide notes summarizing what you did, optionally follow-up task suggestions, and a reasoning array with key decisions.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "notes": { "type": "string", "description": "Summary of what was done" },
-                    "no_changes_needed": {
-                        "type": "boolean",
-                        "description": "Set true only when the task is already satisfied and no write_file/edit_file/delete_file changes are required; explain why in notes."
-                    },
-                    "follow_ups": {
-                        "type": "array",
-                        "description": "Optional follow-up task suggestions",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "title": { "type": "string" },
-                                "description": { "type": "string" }
-                            },
-                            "required": ["title", "description"]
-                        }
-                    },
-                    "reasoning": {
-                        "type": "array",
-                        "description": "Key decisions and their rationale (optional but encouraged)",
-                        "items": { "type": "string" }
-                    }
-                },
-                "required": ["notes"]
-            }),
-        ),
-        tool(
-            "get_task_context",
-            "Retrieve the full context for the current task including the spec, task description, and any prior execution notes.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-        ),
-        tool(
-            "submit_plan",
-            "Optional: record your implementation plan for the transcript. \
-             The plan is surfaced to the operator. Calling submit_plan resets \
-             the agent loop's exploration tracking, so it's most useful after \
-             you finish exploring and before you start editing. It is never \
-             required — you can edit files at any time.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "approach": {
-                        "type": "string",
-                        "description": "Your implementation strategy (2-4 sentences)"
-                    },
-                    "files_to_modify": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Existing files you will edit"
-                    },
-                    "files_to_create": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "New files you will create"
-                    },
-                    "key_decisions": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Key design decisions and why"
-                    }
-                },
-                "required": ["approach", "files_to_modify", "files_to_create"]
-            }),
-        ),
+        task_done_tool(),
+        get_task_context_tool(),
+        submit_plan_tool(),
     ]
+}
+
+/// `task_done`: the engine agent signals the task is complete.
+fn task_done_tool() -> ToolDefinition {
+    tool(
+        "task_done",
+        "Signal that the current task is complete. Call this when you have finished all changes and verified they compile. Provide notes summarizing what you did, optionally follow-up task suggestions, and a reasoning array with key decisions.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "notes": { "type": "string", "description": "Summary of what was done" },
+                "no_changes_needed": {
+                    "type": "boolean",
+                    "description": "Set true only when the task is already satisfied and no write_file/edit_file/delete_file changes are required; explain why in notes."
+                },
+                "follow_ups": {
+                    "type": "array",
+                    "description": "Optional follow-up task suggestions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": { "type": "string" },
+                            "description": { "type": "string" }
+                        },
+                        "required": ["title", "description"]
+                    }
+                },
+                "reasoning": {
+                    "type": "array",
+                    "description": "Key decisions and their rationale (optional but encouraged)",
+                    "items": { "type": "string" }
+                }
+            },
+            "required": ["notes"]
+        }),
+    )
+}
+
+/// `get_task_context`: the engine agent reads its task's context.
+fn get_task_context_tool() -> ToolDefinition {
+    tool(
+        "get_task_context",
+        "Retrieve the full context for the current task including the spec, task description, and any prior execution notes.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+    )
+}
+
+/// `submit_plan`: the engine agent records its plan.
+fn submit_plan_tool() -> ToolDefinition {
+    tool(
+        "submit_plan",
+        "Optional: record your implementation plan for the transcript. \
+         The plan is surfaced to the operator. Calling submit_plan resets \
+         the agent loop's exploration tracking, so it's most useful after \
+         you finish exploring and before you start editing. It is never \
+         required — you can edit files at any time.",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "approach": {
+                    "type": "string",
+                    "description": "Your implementation strategy (2-4 sentences)"
+                },
+                "files_to_modify": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Existing files you will edit"
+                },
+                "files_to_create": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "New files you will create"
+                },
+                "key_decisions": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Key design decisions and why"
+                }
+            },
+            "required": ["approach", "files_to_modify", "files_to_create"]
+        }),
+    )
 }
 
 // ============================================================================

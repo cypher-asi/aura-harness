@@ -23,7 +23,7 @@ use tracing::{info, instrument, warn};
 
 use super::executor::{list_unpushed_commits, run_git_expect_ok};
 use super::redact::redact_url;
-use super::{GitToolError, PushPolicy, PushTarget, Pushed};
+use super::{CommitInfo, GitToolError, PushPolicy, PushTarget, Pushed};
 
 /// The remote every push goes to.
 pub(super) const REMOTE: &str = "origin";
@@ -230,8 +230,96 @@ pub async fn git_push_impl(
     let per_attempt_timeout = policy.per_attempt_timeout;
     let attempts = policy.attempts.max(1);
 
+    let PushPlan {
+        branch,
+        remote,
+        commits,
+        set_upstream,
+    } = plan_push(workspace, target).await?;
+    let refspec = format!("HEAD:refs/heads/{branch}");
+    let args = push_args(set_upstream, target.force, &refspec);
+
+    let mut last_err: Option<GitToolError> = None;
+    for attempt in 0..attempts {
+        let Err(err) =
+            run_git_expect_ok(workspace, "push", &args, per_attempt_timeout, "push").await
+        else {
+            info!(
+                %remote,
+                %branch,
+                commit_count = commits.len(),
+                attempt = attempt + 1,
+                "git push succeeded"
+            );
+            return Ok(Pushed {
+                remote,
+                branch,
+                commits,
+            });
+        };
+        let failed = FailedAttempt {
+            remote: &remote,
+            branch: &branch,
+            attempt,
+            attempts,
+            cloud: target.only_branch.is_some(),
+        };
+        match failed.next_step(err) {
+            NextStep::GiveUp(err) => {
+                last_err = Some(err);
+                break;
+            }
+            NextStep::Retry { err, backoff } => {
+                last_err = Some(err);
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
+    // Infallible in practice — the loop always records an error before
+    // breaking — but guard against the empty-loop case where
+    // `attempts == 0` was passed (coerced to 1 above, so unreachable).
+    Err(last_err.unwrap_or(GitToolError::Timeout("push", per_attempt_timeout)))
+}
+
+/// What the local reads before a push found out.
+struct PushPlan {
+    branch: String,
+    /// `origin`'s URL, user-info masked.
+    remote: String,
+    commits: Vec<CommitInfo>,
+    /// The push updates the current branch's own name.
+    set_upstream: bool,
+}
+
+/// Resolve and check the branch, read `origin`'s URL and list the
+/// commits it lacks.
+async fn plan_push(
+    workspace: &std::path::Path,
+    target: PushTarget<'_>,
+) -> Result<PushPlan, GitToolError> {
     let current = current_branch(workspace, INSPECT_TIMEOUT).await?;
-    let branch = match (target.branch, current.as_deref()) {
+    let branch = resolve_branch(target, current.as_deref())?;
+    let remote = remote_url(workspace, INSPECT_TIMEOUT).await?;
+
+    // Best-effort unpushed commit listing: a repository that never
+    // fetched from `origin` lists its recent history instead.
+    let commits = list_unpushed_commits(workspace, REMOTE, INSPECT_TIMEOUT)
+        .await
+        .unwrap_or_default();
+
+    let set_upstream = current.as_deref() == Some(branch.as_str());
+    Ok(PushPlan {
+        branch,
+        remote,
+        commits,
+        set_upstream,
+    })
+}
+
+/// The branch to push: `target.branch`, else the current one; checked
+/// against the branch-name rules and the pinned branch.
+fn resolve_branch(target: PushTarget<'_>, current: Option<&str>) -> Result<String, GitToolError> {
+    let branch = match (target.branch, current) {
         (Some(branch), _) => branch.to_string(),
         (None, Some(current)) => current.to_string(),
         (None, None) => return Err(GitToolError::DetachedHead),
@@ -245,122 +333,142 @@ pub async fn git_push_impl(
             });
         }
     }
-    let remote = remote_url(workspace, INSPECT_TIMEOUT).await?;
+    Ok(branch)
+}
 
-    // Best-effort unpushed commit listing: a repository that never
-    // fetched from `origin` lists its recent history instead.
-    let commits = list_unpushed_commits(workspace, REMOTE, INSPECT_TIMEOUT)
-        .await
-        .unwrap_or_default();
-
-    let refspec = format!("HEAD:refs/heads/{branch}");
+/// The `git push` arguments after the subcommand.
+fn push_args(set_upstream: bool, force: bool, refspec: &str) -> Vec<&str> {
     let mut args: Vec<&str> = Vec::new();
-    if current.as_deref() == Some(branch.as_str()) {
+    if set_upstream {
         args.push("--set-upstream");
     }
-    if target.force {
+    if force {
         args.push("--force");
     }
     args.push(REMOTE);
-    args.push(refspec.as_str());
+    args.push(refspec);
+    args
+}
 
-    let mut last_err: Option<GitToolError> = None;
-    for attempt in 0..attempts {
-        match run_git_expect_ok(workspace, "push", &args, per_attempt_timeout, "push").await {
-            Ok(_) => {
-                info!(
-                    %remote,
-                    %branch,
-                    commit_count = commits.len(),
-                    attempt = attempt + 1,
-                    "git push succeeded"
-                );
-                return Ok(Pushed {
-                    remote,
-                    branch,
-                    commits,
-                });
-            }
-            Err(err) => {
-                if let GitToolError::NonZeroExit { stderr, .. } = &err {
-                    // Remote storage exhaustion: short-circuit with a
-                    // dedicated variant so the dev-loop renders an
-                    // actionable recovery hint. Retrying cannot heal
-                    // remote disk within our backoff window.
-                    if stderr_looks_remote_exhausted(stderr) {
-                        warn!(
-                            %remote,
-                            %branch,
-                            attempt = attempt + 1,
-                            error = %err,
-                            "git push failed: remote storage exhausted; not retrying"
-                        );
-                        return Err(GitToolError::RemoteStorageExhausted {
-                            op: "push",
-                            stderr: stderr.clone(),
-                        });
-                    }
-                    if stderr_looks_unauthorized(stderr) {
-                        warn!(
-                            %remote,
-                            %branch,
-                            attempt = attempt + 1,
-                            error = %err,
-                            "git push failed: credentials refused; not retrying"
-                        );
-                        return Err(GitToolError::Unauthorized {
-                            remote,
-                            cloud: target.only_branch.is_some(),
-                            stderr: stderr.clone(),
-                        });
-                    }
-                }
-                let transient = match &err {
-                    GitToolError::Timeout(_, _) => true,
-                    GitToolError::NonZeroExit { stderr, .. } => stderr_looks_transient(stderr),
-                    // Spawn / arg errors never retry — they are
-                    // deterministic misconfigurations.
-                    _ => false,
-                };
-                let attempts_left = attempts - (attempt + 1);
-                if !transient || attempts_left == 0 {
-                    if transient {
-                        warn!(
-                            %remote,
-                            %branch,
-                            attempt = attempt + 1,
-                            error = %err,
-                            "git push failed after exhausting retry budget"
-                        );
-                    } else {
-                        warn!(
-                            %remote,
-                            %branch,
-                            attempt = attempt + 1,
-                            error = %err,
-                            "git push failed (non-retryable)"
-                        );
-                    }
-                    last_err = Some(err);
-                    break;
-                }
-                let backoff = push_backoff_for_attempt(attempt);
+/// What the retry loop does after a failed attempt.
+enum NextStep {
+    /// Stop; this error is the push's result.
+    GiveUp(GitToolError),
+    /// Wait `backoff`, then try again.
+    Retry {
+        err: GitToolError,
+        backoff: Duration,
+    },
+}
+
+/// One failed push attempt, with what the classifiers and log lines
+/// need to know about it.
+struct FailedAttempt<'a> {
+    remote: &'a str,
+    branch: &'a str,
+    /// Zero-based index of this attempt.
+    attempt: u32,
+    attempts: u32,
+    /// Pushed from a cloud machine (the branch is pinned).
+    cloud: bool,
+}
+
+impl FailedAttempt<'_> {
+    /// Classify `err` and log the decision.
+    fn next_step(&self, err: GitToolError) -> NextStep {
+        if let Some(permanent) = self.permanent_failure(&err) {
+            return NextStep::GiveUp(permanent);
+        }
+        let Self {
+            remote,
+            branch,
+            attempt,
+            attempts,
+            ..
+        } = *self;
+        let transient = match &err {
+            GitToolError::Timeout(_, _) => true,
+            GitToolError::NonZeroExit { stderr, .. } => stderr_looks_transient(stderr),
+            // Spawn / arg errors never retry — they are
+            // deterministic misconfigurations.
+            _ => false,
+        };
+        let attempts_left = attempts - (attempt + 1);
+        if !transient || attempts_left == 0 {
+            if transient {
                 warn!(
                     %remote,
                     %branch,
                     attempt = attempt + 1,
-                    attempts_left,
-                    backoff_ms = duration_millis_u64(backoff),
                     error = %err,
-                    "git push failed transiently; retrying"
+                    "git push failed after exhausting retry budget"
                 );
-                last_err = Some(err);
-                tokio::time::sleep(backoff).await;
+            } else {
+                warn!(
+                    %remote,
+                    %branch,
+                    attempt = attempt + 1,
+                    error = %err,
+                    "git push failed (non-retryable)"
+                );
             }
+            return NextStep::GiveUp(err);
         }
+        let backoff = push_backoff_for_attempt(attempt);
+        warn!(
+            %remote,
+            %branch,
+            attempt = attempt + 1,
+            attempts_left,
+            backoff_ms = duration_millis_u64(backoff),
+            error = %err,
+            "git push failed transiently; retrying"
+        );
+        NextStep::Retry { err, backoff }
     }
-    // Infallible in practice — the loop always records an error before
-    // breaking — but guard against the empty-loop case where
-    // `attempts == 0` was passed (coerced to 1 above, so unreachable).
-    Err(last_err.unwrap_or(GitToolError::Timeout("push", per_attempt_timeout)))
+
+    /// The dedicated error for a failure no retry can fix (remote
+    /// storage exhausted, credentials refused), or `None`.
+    fn permanent_failure(&self, err: &GitToolError) -> Option<GitToolError> {
+        let GitToolError::NonZeroExit { stderr, .. } = err else {
+            return None;
+        };
+        let Self {
+            remote,
+            branch,
+            attempt,
+            ..
+        } = *self;
+        // Remote storage exhaustion: short-circuit with a dedicated
+        // variant so the dev-loop renders an actionable recovery hint.
+        // Retrying cannot heal remote disk within our backoff window.
+        if stderr_looks_remote_exhausted(stderr) {
+            warn!(
+                %remote,
+                %branch,
+                attempt = attempt + 1,
+                error = %err,
+                "git push failed: remote storage exhausted; not retrying"
+            );
+            return Some(GitToolError::RemoteStorageExhausted {
+                op: "push",
+                stderr: stderr.clone(),
+            });
+        }
+        if stderr_looks_unauthorized(stderr) {
+            warn!(
+                %remote,
+                %branch,
+                attempt = attempt + 1,
+                error = %err,
+                "git push failed: credentials refused; not retrying"
+            );
+            return Some(GitToolError::Unauthorized {
+                remote: remote.to_string(),
+                cloud: self.cloud,
+                stderr: stderr.clone(),
+            });
+        }
+        None
+    }
 }

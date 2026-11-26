@@ -303,8 +303,26 @@ fn build_google_calendar_event_resource(
     tool_name: &str,
 ) -> Result<Value, ToolError> {
     let mut event = json!({});
-    let mut inserted = false;
+    let mut inserted = insert_event_summary_and_times(&mut event, args, require_summary_and_time)?;
+    apply_event_time_zone(&mut event, args);
+    inserted |= insert_event_detail_fields(&mut event, args);
 
+    if !inserted {
+        return Err(ToolError::ExternalToolError(format!(
+            "{tool_name} requires at least one event field"
+        )));
+    }
+    Ok(event)
+}
+
+/// Set `summary`, `start` and `end` (all required, or each when given);
+/// returns whether any was set.
+fn insert_event_summary_and_times(
+    event: &mut Value,
+    args: &Value,
+    require_summary_and_time: bool,
+) -> Result<bool, ToolError> {
+    let mut inserted = false;
     if require_summary_and_time {
         event["summary"] = Value::String(required_string(args, &["summary"])?);
         event["start"] = json!({ "dateTime": required_string(args, &["start"])? });
@@ -324,7 +342,10 @@ fn build_google_calendar_event_resource(
             inserted = true;
         }
     }
+    Ok(inserted)
+}
 
+fn apply_event_time_zone(event: &mut Value, args: &Value) {
     if let Some(time_zone) = optional_string(args, &["time_zone", "timeZone"]) {
         if event.get("start").is_some() {
             event["start"]["timeZone"] = Value::String(time_zone.clone());
@@ -333,6 +354,12 @@ fn build_google_calendar_event_resource(
             event["end"]["timeZone"] = Value::String(time_zone);
         }
     }
+}
+
+/// Set the optional string fields, attendees and the Google Meet
+/// request; returns whether any was set.
+fn insert_event_detail_fields(event: &mut Value, args: &Value) -> bool {
+    let mut inserted = false;
     for (arg, field) in [
         ("description", "description"),
         ("location", "location"),
@@ -363,13 +390,7 @@ fn build_google_calendar_event_resource(
         });
         inserted = true;
     }
-
-    if !inserted {
-        return Err(ToolError::ExternalToolError(format!(
-            "{tool_name} requires at least one event field"
-        )));
-    }
-    Ok(event)
+    inserted
 }
 
 fn google_calendar_event_result(response: &Value) -> Value {
