@@ -1105,6 +1105,19 @@ fn test_an_agent_comes_back_with_its_records_and_files_where_it_left_them() {
 }
 
 #[test]
+fn test_alt_digits_bring_each_app_to_the_front() {
+    let (mut app, _rx) = app_with_agents();
+    app.focus = PanelFocus::Chat;
+    for (digit, tab) in ['1', '2', '3', '4'].into_iter().zip(AgentsTab::ALL) {
+        app.handle_key(KeyEvent::new(KeyCode::Char(digit), KeyModifiers::ALT));
+        assert_eq!(app.agents_tab(), tab);
+    }
+    assert!(app.input().is_empty(), "the digits are not typed");
+    app.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT));
+    assert_eq!(app.agents_tab(), AgentsTab::Archive);
+}
+
+#[test]
 fn test_new_records_keep_the_highlight_on_its_record() {
     let (mut app, _rx) = app_with_agents();
     app.process_command(UiCommand::SetRecords(

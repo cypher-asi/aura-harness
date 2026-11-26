@@ -440,6 +440,12 @@ impl App {
                     self.cycle_thinking();
                     return KeyResult::continue_running();
                 }
+                KeyCode::Char(digit) => {
+                    if let Some(tab) = super::AgentsTab::numbered(digit) {
+                        self.show_agents_tab(tab);
+                        return KeyResult::continue_running();
+                    }
+                }
                 _ => {}
             }
         }

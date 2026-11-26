@@ -83,6 +83,13 @@ impl AgentsTab {
         }
     }
 
+    /// The tab Alt+`digit` brings to the front: 1 to 4, in header order.
+    #[must_use]
+    pub fn numbered(digit: char) -> Option<Self> {
+        let index = digit.to_digit(10)?.checked_sub(1)?;
+        Self::ALL.get(usize::try_from(index).ok()?).copied()
+    }
+
     /// The tabs' cells in a header bar `width` columns wide. The renderer
     /// draws the bar with this layout and clicks are mapped back through it.
     #[must_use]
