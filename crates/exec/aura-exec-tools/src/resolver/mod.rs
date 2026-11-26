@@ -312,5 +312,4 @@ impl Executor for ToolResolver {
 }
 
 #[cfg(test)]
-#[path = "../resolver_tests.rs"]
 mod tests;

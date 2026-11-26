@@ -4,7 +4,7 @@
 //! Split out of `resolver.rs` in Wave 6 / T4 so the trusted-runtime
 //! submodule can stay focused on spec execution. Keep the canonical
 //! `Accept: application/json` + `User-Agent: aura-harness` defaults in
-//! sync with the tests in `resolver_tests.rs`.
+//! sync with the tests in `resolver/tests`.
 
 use crate::error::ToolError;
 use aura_core_types::{InstalledToolRuntimeAuth, InstalledToolRuntimeIntegration};
