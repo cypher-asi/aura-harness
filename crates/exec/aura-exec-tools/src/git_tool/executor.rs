@@ -12,12 +12,14 @@
 //! - [`list_unpushed_commits`] — read-only `git log` helper used by
 //!   [`crate::git_tool::push`] to surface SHAs in the success payload.
 
+use std::path::Path;
 use std::time::Duration;
 
 use tokio::process::Command;
 use tracing::{debug, instrument};
 
 use super::{CommitInfo, GitToolError};
+use crate::sandbox::strip_unc_prefix;
 
 /// Subcommands the executor is permitted to invoke. Any other value is
 /// rejected with [`GitToolError::DisallowedSubcommand`].
@@ -30,6 +32,25 @@ fn ensure_allowed(subcmd: &str) -> Result<(), GitToolError> {
     } else {
         Err(GitToolError::DisallowedSubcommand(subcmd.to_string()))
     }
+}
+
+/// A `git` command run in `workspace` that never looks above it for a
+/// repository. A workspace that isn't the top of its own repository
+/// fails as "not a git repository" instead of committing, or pushing
+/// from, a checkout that happens to contain it.
+fn git_in(workspace: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(workspace)
+        // Never prompt for credentials: a push authenticates through
+        // git's configured helper or fails.
+        .env("GIT_TERMINAL_PROMPT", "0");
+    // Git compares the ceiling with the real path of its cwd, so a
+    // workspace reached through a symlink is resolved first.
+    let root = std::fs::canonicalize(workspace).map(|root| strip_unc_prefix(&root));
+    if let Some(parent) = root.as_deref().ok().and_then(Path::parent) {
+        cmd.env("GIT_CEILING_DIRECTORIES", parent);
+    }
+    cmd
 }
 
 /// Spawn `git <subcmd> <args>` under `workspace`, with a hard timeout.
@@ -47,13 +68,8 @@ pub(crate) async fn spawn_git(
 ) -> Result<std::process::Output, GitToolError> {
     ensure_allowed(subcmd)?;
 
-    let mut cmd = Command::new("git");
-    cmd.arg(subcmd)
-        .args(args)
-        .current_dir(workspace)
-        // Never prompt for credentials: a push authenticates through
-        // git's configured helper or fails.
-        .env("GIT_TERMINAL_PROMPT", "0");
+    let mut cmd = git_in(workspace);
+    cmd.arg(subcmd).args(args);
 
     debug!(?workspace, "spawning git");
 
@@ -96,15 +112,13 @@ pub(super) async fn list_unpushed_commits(
     // `log` is a read-only subcommand. The allow-list keeps it close
     // to `rev-parse` — both are inspection helpers for the mutating
     // flow and never take caller-controlled args.
-    let mut cmd = Command::new("git");
+    let mut cmd = git_in(workspace);
     cmd.arg("log")
         .arg("HEAD")
         .arg("--not")
         .arg(format!("--remotes={remote}"))
         .arg("--pretty=format:%H %s")
-        .arg("-50")
-        .current_dir(workspace)
-        .env("GIT_TERMINAL_PROMPT", "0");
+        .arg("-50");
 
     let output = match tokio::time::timeout(timeout, cmd.output()).await {
         Ok(Ok(o)) => o,
