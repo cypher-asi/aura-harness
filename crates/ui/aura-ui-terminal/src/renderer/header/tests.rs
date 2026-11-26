@@ -87,7 +87,7 @@ fn hosted_bars_keep_only_their_frame_for_the_front_end() {
 }
 
 #[test]
-fn hosted_bars_tell_the_front_end_what_they_show() {
+fn hosted_tabbed_bars_tell_the_front_end_their_tabs() {
     let area = Rect::new(4, 1, 30, 12);
     let bar = Rect::new(4, 1, 30, 2);
     let tabs = PanelHeader {
@@ -116,7 +116,12 @@ fn hosted_bars_tell_the_front_end_what_they_show() {
     assert_eq!(chrome.active, Some(PaneTab::Chat(ChatTab::Terminal)));
     assert_eq!((chrome.area, chrome.bar), (area, bar));
     assert!(chrome.focused);
+}
 
+#[test]
+fn hosted_titled_bars_tell_the_front_end_their_title_and_info() {
+    let area = Rect::new(4, 1, 30, 12);
+    let bar = Rect::new(4, 1, 30, 2);
     let titled = PanelHeader::<()> {
         layout: TabLayout::untabbed(30),
         active: None,

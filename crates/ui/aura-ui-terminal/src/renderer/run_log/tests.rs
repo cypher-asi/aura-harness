@@ -5,6 +5,56 @@ use crate::events::{
 use ratatui::{backend::TestBackend, Terminal};
 use std::time::Instant;
 
+/// The steps of the first run's only turn.
+fn steps() -> Vec<LogStepView> {
+    vec![
+        LogStepView {
+            seq: 2,
+            kind: "model".into(),
+            label: "task @explore find the token bug".into(),
+            fields: vec![("model".into(), "m".into())],
+            sections: vec![LogSection {
+                title: "Thinking".into(),
+                body: "the parser drops the last token".into(),
+                code: false,
+            }],
+            spawned: vec![1],
+            tokens: "7k tok".into(),
+            cost: "$0.04".into(),
+            took: "6s".into(),
+            ..LogStepView::default()
+        },
+        LogStepView {
+            seq: 3,
+            kind: "model".into(),
+            label: "read_file src/parser.rs · run_command cargo test".into(),
+            tokens: "14k tok".into(),
+            cost: "$0.0091".into(),
+            took: "3s".into(),
+            ..LogStepView::default()
+        },
+        LogStepView {
+            seq: 4,
+            kind: "tool".into(),
+            label: "read_file src/parser.rs".into(),
+            summary: "340 lines".into(),
+            parent: Some(3),
+            took: "19ms".into(),
+            ..LogStepView::default()
+        },
+        LogStepView {
+            seq: 5,
+            kind: "tool".into(),
+            label: "run_command cargo test".into(),
+            summary: "exit 101 · 40 lines".into(),
+            parent: Some(3),
+            status: LogStatus::Error,
+            took: "2m 10s".into(),
+            ..LogStepView::default()
+        },
+    ]
+}
+
 fn view() -> LogView {
     LogView {
         agent_id: String::new(),
@@ -23,52 +73,7 @@ fn view() -> LogView {
                     tokens: "2.2M tok".into(),
                     cost: "$1.45".into(),
                     took: "4m 02s".into(),
-                    steps: vec![
-                        LogStepView {
-                            seq: 2,
-                            kind: "model".into(),
-                            label: "task @explore find the token bug".into(),
-                            fields: vec![("model".into(), "m".into())],
-                            sections: vec![LogSection {
-                                title: "Thinking".into(),
-                                body: "the parser drops the last token".into(),
-                                code: false,
-                            }],
-                            spawned: vec![1],
-                            tokens: "7k tok".into(),
-                            cost: "$0.04".into(),
-                            took: "6s".into(),
-                            ..LogStepView::default()
-                        },
-                        LogStepView {
-                            seq: 3,
-                            kind: "model".into(),
-                            label: "read_file src/parser.rs · run_command cargo test".into(),
-                            tokens: "14k tok".into(),
-                            cost: "$0.0091".into(),
-                            took: "3s".into(),
-                            ..LogStepView::default()
-                        },
-                        LogStepView {
-                            seq: 4,
-                            kind: "tool".into(),
-                            label: "read_file src/parser.rs".into(),
-                            summary: "340 lines".into(),
-                            parent: Some(3),
-                            took: "19ms".into(),
-                            ..LogStepView::default()
-                        },
-                        LogStepView {
-                            seq: 5,
-                            kind: "tool".into(),
-                            label: "run_command cargo test".into(),
-                            summary: "exit 101 · 40 lines".into(),
-                            parent: Some(3),
-                            status: LogStatus::Error,
-                            took: "2m 10s".into(),
-                            ..LogStepView::default()
-                        },
-                    ],
+                    steps: steps(),
                     ..LogTurnView::default()
                 }],
                 ..LogRunView::default()

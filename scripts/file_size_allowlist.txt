@@ -187,15 +187,6 @@ crates/surface/aura-node/src/gateway/session/tests.rs
 crates/surface/aura-node/src/gateway/tests.rs
 crates/surface/aura-node/src/node.rs
 crates/surface/aura-node/src/sealing.rs
-crates/ui/aura-ui-terminal/src/app/apps/bench/form/tests.rs
-crates/ui/aura-ui-terminal/src/app/context_menu/tests.rs
-crates/ui/aura-ui-terminal/src/app/flow/tests.rs
-crates/ui/aura-ui-terminal/src/app/queue_panel_tests.rs
-crates/ui/aura-ui-terminal/src/app/tasks/tests.rs
-crates/ui/aura-ui-terminal/src/app/tests.rs
-crates/ui/aura-ui-terminal/src/renderer/activity/tests.rs
-crates/ui/aura-ui-terminal/src/renderer/benchmarks/tests.rs
-crates/ui/aura-ui-terminal/src/renderer/tests.rs
 evals/polyglot/rust-xorcism/checks/.gate_checks/xorcism.rs
 tests/async_process_tests.rs
 tests/common/mod.rs

@@ -73,10 +73,9 @@ fn chat_corners(rows: &[Vec<String>]) -> ((usize, usize), (usize, usize)) {
     ((top, left), (bottom, right))
 }
 
-#[test]
-fn record_view_covers_exactly_the_chat_body() {
+/// An app with one Policy record (#60) in the records panel.
+fn app_with_record() -> App {
     use crate::events::{RecordStatus, RecordSummary, UiCommand};
-    use crossterm::event::{KeyCode, KeyEvent};
 
     let mut app = App::new();
     app.process_command(UiCommand::NewRecord(RecordSummary {
@@ -100,12 +99,60 @@ fn record_view_covers_exactly_the_chat_body() {
         ts_ms: 0,
         policy: None,
     }));
-    let chat = chat_corners(&screen(&mut app));
+    app
+}
+
+/// Focuses the records panel and opens the selected record.
+fn open_record(app: &mut App) {
+    use crossterm::event::{KeyCode, KeyEvent};
 
     while app.focus() != crate::app::PanelFocus::Records {
         app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
     app.handle_key(KeyEvent::from(KeyCode::Enter));
+}
+
+/// The top-left and bottom-right `(row, column)` corners of a box.
+type Corners = ((usize, usize), (usize, usize));
+
+/// The app with record #60 open (after an open/close round trip), drawn,
+/// and the corners of the chat body before it was opened.
+fn reopened_record() -> (App, Corners) {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let mut app = app_with_record();
+    let chat = chat_corners(&screen(&mut app));
+    open_record(&mut app);
+    screen(&mut app);
+    app.handle_key(KeyEvent::from(KeyCode::Esc));
+    screen(&mut app);
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    screen(&mut app);
+    (app, chat)
+}
+
+/// A mouse event of `kind` on header row `row`, column `column`.
+fn header_mouse(
+    row: usize,
+    column: usize,
+    kind: crossterm::event::MouseEventKind,
+) -> crossterm::event::MouseEvent {
+    crossterm::event::MouseEvent {
+        kind,
+        column: u16::try_from(column).unwrap(),
+        row: u16::try_from(row).unwrap(),
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    }
+}
+
+#[test]
+fn record_view_covers_exactly_the_chat_body() {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let mut app = app_with_record();
+    let chat = chat_corners(&screen(&mut app));
+
+    open_record(&mut app);
     let rows = screen(&mut app);
     let text = rows
         .iter()
@@ -128,23 +175,21 @@ fn record_view_covers_exactly_the_chat_body() {
     app.handle_key(KeyEvent::from(KeyCode::Esc));
     let rows = screen(&mut app);
     assert_eq!(chat_corners(&rows), chat, "closing brings the tabs back");
+}
 
-    app.handle_key(KeyEvent::from(KeyCode::Enter));
-    screen(&mut app);
-    let at = |column: usize| {
-        move |kind| crossterm::event::MouseEvent {
-            kind,
-            column: u16::try_from(column).unwrap(),
-            row: u16::try_from(top - 2).unwrap(),
-            modifiers: crossterm::event::KeyModifiers::empty(),
-        }
-    };
-    let expand = at(right - 4);
-    app.handle_mouse(expand(crossterm::event::MouseEventKind::Moved));
+#[test]
+fn the_record_expand_button_widens_the_chat_and_restores_it() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let (mut app, chat) = reopened_record();
+    let ((top, left), (_, right)) = chat;
+    app.handle_mouse(header_mouse(top - 2, right - 4, MouseEventKind::Moved));
     assert_eq!(app.hover(), Some(crate::app::HoverTarget::ExpandChat));
-    app.handle_mouse(expand(crossterm::event::MouseEventKind::Down(
-        crossterm::event::MouseButton::Left,
-    )));
+    app.handle_mouse(header_mouse(
+        top - 2,
+        right - 4,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
     assert!(app.chat_expanded(), "the ⤢ expands the chat");
     assert!(app.detail_view().is_some(), "with the record still on it");
     let rows = screen(&mut app);
@@ -155,18 +200,42 @@ fn record_view_covers_exactly_the_chat_body() {
     let header: String = header[wide_left..=wide_right].concat();
     assert!(header.starts_with("│ RECORD #60 "), "{header}");
     assert!(header.ends_with(" ✓ POLICY ⤡ ✕ │"), "{header}");
-    app.handle_mouse(at(wide_right - 4)(crossterm::event::MouseEventKind::Down(
-        crossterm::event::MouseButton::Left,
-    )));
+    app.handle_mouse(header_mouse(
+        top - 2,
+        wide_right - 4,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
     assert!(!app.chat_expanded(), "the ⤡ restores it");
+}
+
+#[test]
+fn the_record_close_button_closes_the_record() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let (mut app, chat) = reopened_record();
+    let ((top, _), (_, right)) = chat;
+    app.handle_mouse(header_mouse(top - 2, right - 4, MouseEventKind::Moved));
+    app.handle_mouse(header_mouse(
+        top - 2,
+        right - 4,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
+    let rows = screen(&mut app);
+    let wide_right = rows[top - 2].iter().rposition(|cell| cell == "│").unwrap();
+    app.handle_mouse(header_mouse(
+        top - 2,
+        wide_right - 4,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
     screen(&mut app);
 
-    let close = at(right - 2);
-    app.handle_mouse(close(crossterm::event::MouseEventKind::Moved));
+    app.handle_mouse(header_mouse(top - 2, right - 2, MouseEventKind::Moved));
     assert_eq!(app.hover(), Some(crate::app::HoverTarget::CloseDetail));
-    app.handle_mouse(close(crossterm::event::MouseEventKind::Down(
-        crossterm::event::MouseButton::Left,
-    )));
+    app.handle_mouse(header_mouse(
+        top - 2,
+        right - 2,
+        MouseEventKind::Down(MouseButton::Left),
+    ));
     assert!(app.detail_view().is_none(), "the ✕ closes the record");
     let rows = screen(&mut app);
     assert_eq!(chat_corners(&rows), chat);
