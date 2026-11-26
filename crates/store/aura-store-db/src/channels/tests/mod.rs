@@ -1,6 +1,11 @@
 use super::*;
-use crate::agents::derive_agent_id;
+use crate::agents::{derive_agent_id, AgentRecord, RegistryDiff};
+use crate::cf;
+use crate::channels::keys::*;
 use crate::{FaultAt, RocksStore};
+use aura_core_types::AgentId;
+use chrono::{DateTime, Utc};
+use rocksdb::{IteratorMode, WriteBatch};
 use std::path::Path;
 use tempfile::TempDir;
 
