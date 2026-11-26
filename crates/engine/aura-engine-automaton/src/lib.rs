@@ -8,6 +8,7 @@
 //! `AutomatonEvent` event surface. `aura-node` depends on it
 //! directly.
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 mod context;
 mod error;

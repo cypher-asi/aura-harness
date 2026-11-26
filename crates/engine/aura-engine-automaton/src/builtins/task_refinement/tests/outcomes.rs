@@ -100,24 +100,7 @@ async fn persists_refined_description() {
         .await
         .expect("happy path must succeed");
 
-    assert!(
-        out.description.starts_with(REFINED_MARKER),
-        "returned description must carry the marker, got: {}",
-        out.description
-    );
-    assert!(
-        out.description.contains("## Original Task"),
-        "returned description must preserve the original task block"
-    );
-    assert!(
-        out.description.contains("> Rotate tokens."),
-        "original description must be quoted line-by-line"
-    );
-    assert!(
-        out.description
-            .contains("Rotate refresh tokens every 15 minutes"),
-        "refined model output must be embedded in the body"
-    );
+    assert_refined_description(&out.description);
 
     let updates = domain.updates();
     assert_eq!(updates.len(), 1, "update_task must be called exactly once");
@@ -130,10 +113,37 @@ async fn persists_refined_description() {
     assert!(persisted.starts_with(REFINED_MARKER));
     assert!(persisted.contains("## Original Task"));
 
-    let events = drain(&mut rx);
+    assert_happy_path_events(&drain(&mut rx));
+}
+
+/// The returned description carries the marker, the quoted original and
+/// the model output.
+fn assert_refined_description(description: &str) {
+    assert!(
+        description.starts_with(REFINED_MARKER),
+        "returned description must carry the marker, got: {}",
+        description
+    );
+    assert!(
+        description.contains("## Original Task"),
+        "returned description must preserve the original task block"
+    );
+    assert!(
+        description.contains("> Rotate tokens."),
+        "original description must be quoted line-by-line"
+    );
+    assert!(
+        description.contains("Rotate refresh tokens every 15 minutes"),
+        "refined model output must be embedded in the body"
+    );
+}
+
+/// The happy path emits `TaskDescriptionRefining` then
+/// `TaskDescriptionRefined` for `task-1`, and nothing else.
+fn assert_happy_path_events(events: &[AutomatonEvent]) {
     let mut saw_refining = false;
     let mut saw_refined = false;
-    for e in &events {
+    for e in events {
         match e {
             AutomatonEvent::TaskDescriptionRefining { task_id } => {
                 assert_eq!(task_id, "task-1");

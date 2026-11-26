@@ -91,38 +91,14 @@ pub(crate) struct TaskExecutionRequest<'a> {
 pub(crate) async fn run_tracked_task(
     request: TaskExecutionRequest<'_>,
 ) -> Result<TaskExecutionResult, AutomatonError> {
-    let TaskExecutionRequest {
-        ctx,
-        runner,
-        provider,
-        catalog,
-        task,
-        spec,
-        project,
-        identity,
-        tool_executor,
-        early_test_oracle,
-        build_retry_note,
-    } = request;
-
-    let effective_path = ctx
+    let (task, spec, project) = (request.task, request.spec, request.project);
+    let effective_path = request
+        .ctx
         .workspace_root_str()
         .unwrap_or_else(|| project.path.clone());
+    let task_description = describe_task(task, request.build_retry_note.as_deref());
 
-    let mut task_description = task.description.clone();
-    if let Some(note) = build_retry_note.as_deref() {
-        task_description.push_str("\n\n---\n\nBuild still failing after your last pass:\n\n");
-        task_description.push_str(note);
-    }
-
-    let project_info = ProjectInfo {
-        project_id: None,
-        name: &project.name,
-        description: project.description.as_deref().unwrap_or(""),
-        folder_path: &effective_path,
-        build_command: project.build_command.as_deref(),
-        test_command: project.test_command.as_deref(),
-    };
+    let project_info = project_info(project, &effective_path);
     let spec_info = SpecInfo {
         title: &spec.title,
         markdown_contents: &spec.content,
@@ -137,14 +113,14 @@ pub(crate) async fn run_tracked_task(
         summary_of_previous_context: "",
     };
 
-    let tools = catalog.tools_for_profile(ToolProfile::Engine);
+    let tools = request.catalog.tools_for_profile(ToolProfile::Engine);
 
     // Borrow the parsed identity envelope (if any) as a transient
     // `AgentInfo<'_>` so `SystemPromptBuilder` renders the
     // `<agent_identity>` / `<agent_skills>` / `<agent_system_prompt>`
     // sections. Empty envelopes leave the prompt byte-identical to
     // the no-identity baseline.
-    let agent_info = identity.as_agent_info();
+    let agent_info = request.identity.as_agent_info();
 
     let params = AgenticTaskParams {
         project: &project_info,
@@ -163,6 +139,50 @@ pub(crate) async fn run_tracked_task(
         agent: agent_info.as_ref(),
     };
 
+    execute_traced(request, &params, &effective_path, &task_description).await
+}
+
+/// The prompt's project view, rooted at `folder_path`.
+fn project_info<'a>(project: &'a ProjectDescriptor, folder_path: &'a str) -> ProjectInfo<'a> {
+    ProjectInfo {
+        project_id: None,
+        name: &project.name,
+        description: project.description.as_deref().unwrap_or(""),
+        folder_path,
+        build_command: project.build_command.as_deref(),
+        test_command: project.test_command.as_deref(),
+    }
+}
+
+/// The task description, with the dev-loop's build-retry note appended.
+fn describe_task(task: &TaskDescriptor, build_retry_note: Option<&str>) -> String {
+    let mut task_description = task.description.clone();
+    if let Some(note) = build_retry_note {
+        task_description.push_str("\n\n---\n\nBuild still failing after your last pass:\n\n");
+        task_description.push_str(note);
+    }
+    task_description
+}
+
+/// Spawns the advisory forwarder (and trace recorder, when enabled) and
+/// hands `params` to `AgentRunner::execute_task_tracked`.
+async fn execute_traced(
+    request: TaskExecutionRequest<'_>,
+    params: &AgenticTaskParams<'_>,
+    effective_path: &str,
+    task_description: &str,
+) -> Result<TaskExecutionResult, AutomatonError> {
+    let TaskExecutionRequest {
+        ctx,
+        runner,
+        provider,
+        task,
+        project,
+        tool_executor,
+        early_test_oracle,
+        ..
+    } = request;
+
     // Inner channel: the agent loop emits advisory events
     // (`TextDelta` / `ThinkingDelta` / `ToolStart` /
     // `ToolInputSnapshot` / `ToolCallCompleted` / `ToolResult`) here
@@ -176,7 +196,7 @@ pub(crate) async fn run_tracked_task(
         &runner.config.default_model,
         &task.id,
         &task.title,
-        &effective_path,
+        effective_path,
     );
     if let Some(rec) = &recorder {
         rec.begin_turn(&format!("{}\n\n{}", task.title, task_description));
@@ -194,7 +214,7 @@ pub(crate) async fn run_tracked_task(
 
     let tracking = TaskTrackingConfig {
         inner_executor,
-        project_folder: effective_path.clone(),
+        project_folder: effective_path.to_string(),
         build_command: project.build_command.clone(),
         test_command: project.test_command.clone(),
         early_test_oracle,
@@ -202,24 +222,34 @@ pub(crate) async fn run_tracked_task(
 
     let cancel = ctx.cancellation_token().clone();
     let result = runner
-        .execute_task_tracked(provider, tracking, &params, Some(event_tx), Some(cancel))
+        .execute_task_tracked(provider, tracking, params, Some(event_tx), Some(cancel))
         .await;
     if let Some(rec) = recorder {
-        let _ = tokio::time::timeout(RECORDER_DRAIN, forwarder).await;
-        rec.end_turn(&match &result {
-            Ok(done) => aura_agent::AgentLoopResult {
-                total_input_tokens: done.input_tokens,
-                total_output_tokens: done.output_tokens,
-                ..aura_agent::AgentLoopResult::default()
-            },
-            Err(e) => aura_agent::AgentLoopResult {
-                llm_error: Some(e.to_string()),
-                ..aura_agent::AgentLoopResult::default()
-            },
-        });
-        rec.finish();
+        finish_recording(&rec, forwarder, &result).await;
     }
     result.map_err(|e| AutomatonError::agent_execution(Some(task.id.clone()), e))
+}
+
+/// Waits briefly for the forwarder to drain into the recorder, then
+/// records the turn end and closes the trace.
+async fn finish_recording<E: std::fmt::Display>(
+    rec: &aura_agent_trace::RunRecorder,
+    forwarder: tokio::task::JoinHandle<()>,
+    result: &Result<TaskExecutionResult, E>,
+) {
+    let _ = tokio::time::timeout(RECORDER_DRAIN, forwarder).await;
+    rec.end_turn(&match result {
+        Ok(done) => aura_agent::AgentLoopResult {
+            total_input_tokens: done.input_tokens,
+            total_output_tokens: done.output_tokens,
+            ..aura_agent::AgentLoopResult::default()
+        },
+        Err(e) => aura_agent::AgentLoopResult {
+            llm_error: Some(e.to_string()),
+            ..aura_agent::AgentLoopResult::default()
+        },
+    });
+    rec.finish();
 }
 
 /// How long a task waits for its forwarder to hand the last events to

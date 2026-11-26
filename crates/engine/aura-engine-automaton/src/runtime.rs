@@ -101,69 +101,82 @@ impl AutomatonRuntime {
 
         self.instances.insert(id.as_str().to_string(), running);
 
-        let instances = self.instances.clone();
-        let id_clone = id.clone();
-        let cancel_clone = cancel.clone();
+        let run_loop = RunLoop {
+            id: id.clone(),
+            automaton,
+            cancel: cancel.clone(),
+            status_tx,
+            pause_rx,
+            event_tx,
+            instances: self.instances.clone(),
+        };
         tokio::spawn(async move {
-            Self::run_automaton(
-                id_clone,
-                automaton,
-                config,
-                workspace_root,
-                cancel_clone,
-                status_tx,
-                pause_rx,
-                event_tx,
-                instances,
-            )
-            .await;
+            run_loop.run(config, workspace_root).await;
         });
 
         let handle = AutomatonHandle::new(id, cancel, status_rx, pause_tx);
         Ok((handle, event_rx))
     }
+}
 
-    #[allow(clippy::too_many_arguments)]
-    async fn run_automaton(
-        id: AutomatonId,
-        automaton: Box<dyn Automaton>,
-        config: serde_json::Value,
-        workspace_root: Option<std::path::PathBuf>,
-        cancel: CancellationToken,
-        status_tx: watch::Sender<AutomatonStatus>,
-        mut pause_rx: watch::Receiver<bool>,
-        event_tx: mpsc::Sender<AutomatonEvent>,
-        instances: Arc<DashMap<String, RunningAutomaton>>,
-    ) {
+/// State owned by the spawned worker task that drives one automaton.
+struct RunLoop {
+    id: AutomatonId,
+    automaton: Box<dyn Automaton>,
+    cancel: CancellationToken,
+    status_tx: watch::Sender<AutomatonStatus>,
+    pause_rx: watch::Receiver<bool>,
+    event_tx: mpsc::Sender<AutomatonEvent>,
+    instances: Arc<DashMap<String, RunningAutomaton>>,
+}
+
+impl RunLoop {
+    async fn run(mut self, config: serde_json::Value, workspace_root: Option<std::path::PathBuf>) {
         let state = AutomatonState::new();
         let mut ctx = TickContext::new(
-            id.clone(),
+            self.id.clone(),
             state,
-            event_tx.clone(),
+            self.event_tx.clone(),
             config,
             workspace_root,
-            cancel.clone(),
+            self.cancel.clone(),
         );
 
-        if let Err(e) = automaton.on_install(&ctx).await {
-            error!(automaton_id = %id, error = %e, "on_install failed");
-            let _ = status_tx.send(AutomatonStatus::Failed);
-            let _ = event_tx.try_send(AutomatonEvent::Error {
-                automaton_id: id.to_string(),
-                message: e.to_string(),
-            });
-            let _ = event_tx.try_send(AutomatonEvent::Done);
-            instances.remove(id.as_str());
+        if !self.install(&ctx).await {
             return;
         }
 
-        let _ = status_tx.send(AutomatonStatus::Running);
-        let _ = event_tx.try_send(AutomatonEvent::Started {
-            automaton_id: id.to_string(),
+        let _ = self.status_tx.send(AutomatonStatus::Running);
+        let _ = self.event_tx.try_send(AutomatonEvent::Started {
+            automaton_id: self.id.to_string(),
         });
 
-        let final_status = loop {
-            if cancel.is_cancelled() {
+        let final_status = self.drive(&mut ctx).await;
+        self.finish(&ctx, final_status).await;
+    }
+
+    /// Runs `on_install`; on failure reports it, cleans up and returns `false`.
+    async fn install(&self, ctx: &TickContext) -> bool {
+        let id = &self.id;
+        if let Err(e) = self.automaton.on_install(ctx).await {
+            error!(automaton_id = %id, error = %e, "on_install failed");
+            let _ = self.status_tx.send(AutomatonStatus::Failed);
+            let _ = self.event_tx.try_send(AutomatonEvent::Error {
+                automaton_id: id.to_string(),
+                message: e.to_string(),
+            });
+            let _ = self.event_tx.try_send(AutomatonEvent::Done);
+            self.instances.remove(id.as_str());
+            return false;
+        }
+        true
+    }
+
+    /// Ticks until the automaton finishes, fails or is cancelled.
+    async fn drive(&mut self, ctx: &mut TickContext) -> AutomatonStatus {
+        let id = self.id.clone();
+        loop {
+            if self.cancel.is_cancelled() {
                 // Distinguishes a clean user-driven stop from the
                 // generic `Stopped` final-status fan-out below. The
                 // operator-facing log previously only carried a
@@ -176,69 +189,79 @@ impl AutomatonRuntime {
                     automaton_id = %id,
                     "Automaton run loop observed cancellation; stopping"
                 );
-                break AutomatonStatus::Stopped;
+                return AutomatonStatus::Stopped;
             }
 
-            if *pause_rx.borrow() {
-                let _ = status_tx.send(AutomatonStatus::Paused);
-                let _ = event_tx.try_send(AutomatonEvent::Paused {
-                    automaton_id: id.to_string(),
-                });
-                loop {
-                    if cancel.is_cancelled() {
-                        break;
-                    }
-                    if pause_rx.changed().await.is_err() {
-                        break;
-                    }
-                    if !*pause_rx.borrow() {
-                        let _ = status_tx.send(AutomatonStatus::Running);
-                        let _ = event_tx.try_send(AutomatonEvent::Resumed {
-                            automaton_id: id.to_string(),
-                        });
-                        break;
-                    }
-                }
-                if cancel.is_cancelled() {
-                    info!(
-                        automaton_id = %id,
-                        "Automaton stopped while paused"
-                    );
-                    break AutomatonStatus::Stopped;
-                }
+            if *self.pause_rx.borrow() && self.wait_while_paused().await {
+                info!(
+                    automaton_id = %id,
+                    "Automaton stopped while paused"
+                );
+                return AutomatonStatus::Stopped;
             }
 
-            match automaton.tick(&mut ctx).await {
+            match self.automaton.tick(ctx).await {
                 Ok(TickOutcome::Continue) => {}
-                Ok(TickOutcome::Done) => break AutomatonStatus::Completed,
+                Ok(TickOutcome::Done) => return AutomatonStatus::Completed,
                 Ok(TickOutcome::Yield { reason }) => {
                     info!(automaton_id = %id, %reason, "automaton yielded");
-                    break AutomatonStatus::Completed;
+                    return AutomatonStatus::Completed;
                 }
                 Err(e) => {
                     error!(automaton_id = %id, error = %e, "tick failed");
-                    let _ = event_tx.try_send(AutomatonEvent::Error {
+                    let _ = self.event_tx.try_send(AutomatonEvent::Error {
                         automaton_id: id.to_string(),
                         message: e.to_string(),
                     });
-                    break AutomatonStatus::Failed;
+                    return AutomatonStatus::Failed;
                 }
             }
-        };
+        }
+    }
 
-        if let Err(e) = automaton.on_stop(&ctx).await {
+    /// Reports the pause and blocks until resumed or cancelled. Returns
+    /// `true` when cancellation was observed.
+    async fn wait_while_paused(&mut self) -> bool {
+        let _ = self.status_tx.send(AutomatonStatus::Paused);
+        let _ = self.event_tx.try_send(AutomatonEvent::Paused {
+            automaton_id: self.id.to_string(),
+        });
+        loop {
+            if self.cancel.is_cancelled() {
+                break;
+            }
+            if self.pause_rx.changed().await.is_err() {
+                break;
+            }
+            if !*self.pause_rx.borrow() {
+                let _ = self.status_tx.send(AutomatonStatus::Running);
+                let _ = self.event_tx.try_send(AutomatonEvent::Resumed {
+                    automaton_id: self.id.to_string(),
+                });
+                break;
+            }
+        }
+        self.cancel.is_cancelled()
+    }
+
+    /// Runs `on_stop`, publishes the final status and deregisters the instance.
+    async fn finish(&self, ctx: &TickContext, final_status: AutomatonStatus) {
+        let id = &self.id;
+        if let Err(e) = self.automaton.on_stop(ctx).await {
             warn!(automaton_id = %id, error = %e, "on_stop error (non-fatal)");
         }
 
-        let _ = status_tx.send(final_status);
-        let _ = event_tx.try_send(AutomatonEvent::Stopped {
+        let _ = self.status_tx.send(final_status);
+        let _ = self.event_tx.try_send(AutomatonEvent::Stopped {
             automaton_id: id.to_string(),
             reason: format!("{final_status:?}"),
         });
-        let _ = event_tx.try_send(AutomatonEvent::Done);
-        instances.remove(id.as_str());
+        let _ = self.event_tx.try_send(AutomatonEvent::Done);
+        self.instances.remove(id.as_str());
     }
+}
 
+impl AutomatonRuntime {
     /// Returns metadata for all currently registered automaton instances.
     pub fn list(&self) -> Vec<AutomatonInfo> {
         self.instances

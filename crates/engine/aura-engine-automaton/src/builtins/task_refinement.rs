@@ -102,6 +102,34 @@ pub(crate) async fn refine_task_description(
         },
     );
 
+    let Some(refined) = request_refinement(provider, model, spec, task, event_tx).await else {
+        return Ok(task.clone());
+    };
+    let refined_body = assemble_refined_body(&refined, task);
+
+    let Some(updated) = persist_refinement(domain, task, refined_body, event_tx).await else {
+        return Ok(task.clone());
+    };
+
+    emit_best_effort(
+        event_tx,
+        AutomatonEvent::TaskDescriptionRefined {
+            task_id: task.id.clone(),
+        },
+    );
+
+    Ok(updated)
+}
+
+/// Asks the model for a refined description. Returns its trimmed text,
+/// or `None` (after logging) when the call fails or the text is empty.
+async fn request_refinement(
+    provider: &dyn ModelProvider,
+    model: &str,
+    spec: &SpecDescriptor,
+    task: &TaskDescriptor,
+    event_tx: Option<&mpsc::Sender<AutomatonEvent>>,
+) -> Option<String> {
     let call = AuxiliaryModelCall {
         model,
         system_prompt: REFINEMENT_SYSTEM_PROMPT,
@@ -112,13 +140,8 @@ pub(crate) async fn refine_task_description(
         Ok(r) => r,
         Err(e) => {
             warn!(task_id = %task.id, error = %e, "auxiliary model call rejected refinement");
-            emit_best_effort(
-                event_tx,
-                AutomatonEvent::LogLine {
-                    message: format!("task description refinement failed for {}: {e}", task.id),
-                },
-            );
-            return Ok(task.clone());
+            emit_refinement_failed(event_tx, task, &e);
+            return None;
         }
     };
 
@@ -138,43 +161,48 @@ pub(crate) async fn refine_task_description(
                 ),
             },
         );
-        return Ok(task.clone());
+        return None;
     }
+    Some(refined_trimmed.to_string())
+}
 
-    let refined_body = assemble_refined_body(refined_trimmed, task);
-
-    let updated = match domain
-        .update_task(
-            &task.id,
-            TaskUpdate {
-                description: Some(refined_body),
-                ..Default::default()
-            },
-            None,
-        )
-        .await
-    {
-        Ok(t) => t,
+/// Persists the refined body. Returns the updated descriptor, or `None`
+/// (after logging) when `update_task` fails.
+async fn persist_refinement(
+    domain: &dyn DomainApi,
+    task: &TaskDescriptor,
+    refined_body: String,
+    event_tx: Option<&mpsc::Sender<AutomatonEvent>>,
+) -> Option<TaskDescriptor> {
+    let update = TaskUpdate {
+        description: Some(refined_body),
+        ..Default::default()
+    };
+    match domain.update_task(&task.id, update, None).await {
+        Ok(t) => Some(t),
         Err(e) => {
             warn!(task_id = %task.id, error = %e, "update_task rejected refined description");
-            emit_best_effort(
-                event_tx,
-                AutomatonEvent::LogLine {
-                    message: format!("task description refinement failed for {}: {e}", task.id),
-                },
-            );
-            return Ok(task.clone());
+            emit_refinement_failed(event_tx, task, &e);
+            None
         }
-    };
+    }
+}
 
+/// Reports a failed refinement step on the event channel.
+fn emit_refinement_failed(
+    event_tx: Option<&mpsc::Sender<AutomatonEvent>>,
+    task: &TaskDescriptor,
+    error: &dyn std::fmt::Display,
+) {
     emit_best_effort(
         event_tx,
-        AutomatonEvent::TaskDescriptionRefined {
-            task_id: task.id.clone(),
+        AutomatonEvent::LogLine {
+            message: format!(
+                "task description refinement failed for {}: {error}",
+                task.id
+            ),
         },
     );
-
-    Ok(updated)
 }
 
 /// Build the user-message body for the refinement call. Mirrors the

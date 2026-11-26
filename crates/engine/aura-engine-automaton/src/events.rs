@@ -361,98 +361,36 @@ impl AutomatonEvent {
     }
 }
 
+/// Expands to one exhaustive `match` that moves each `DebugEvent` variant
+/// into the `AutomatonEvent` variant with the same field names. Every
+/// source field is listed (dropped ones after `drop`), so a new upstream
+/// field or variant is a compile error here.
+macro_rules! mirror_debug_events {
+    ($ev:expr; $($src:ident { $($field:ident),+ $(; drop $($skip:ident),+)? } => $dst:ident;)+) => {
+        match $ev {
+            $(
+                aura_agent::DebugEvent::$src { $($field,)+ $($($skip: _,)+)? } => {
+                    Self::$dst { $($field),+ }
+                }
+            )+
+        }
+    };
+}
+
 impl From<aura_agent::DebugEvent> for AutomatonEvent {
     fn from(ev: aura_agent::DebugEvent) -> Self {
-        match ev {
-            aura_agent::DebugEvent::LlmCall {
-                timestamp,
-                provider,
-                model,
-                route: _,
-                input_tokens,
-                output_tokens,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                duration_ms,
-                task_id,
-                agent_instance_id,
-                provider_request_id,
-                message_id,
-            } => Self::DebugLlmCall {
-                timestamp,
-                provider,
-                model,
-                input_tokens,
-                output_tokens,
-                cache_creation_input_tokens,
-                cache_read_input_tokens,
-                duration_ms,
-                task_id,
-                agent_instance_id,
-                provider_request_id,
-                message_id,
-            },
-            aura_agent::DebugEvent::Iteration {
-                timestamp,
-                index,
-                tool_calls,
-                duration_ms,
-                task_id,
-            } => Self::DebugIteration {
-                timestamp,
-                index,
-                tool_calls,
-                duration_ms,
-                task_id,
-            },
-            aura_agent::DebugEvent::Blocker {
-                timestamp,
-                kind,
-                path,
-                message,
-                task_id,
-            } => Self::DebugBlocker {
-                timestamp,
-                kind,
-                path,
-                message,
-                task_id,
-            },
-            aura_agent::DebugEvent::Retry {
-                timestamp,
-                reason,
-                attempt,
-                wait_ms,
-                provider,
-                model,
-                task_id,
-            } => Self::DebugRetry {
-                timestamp,
-                reason,
-                attempt,
-                wait_ms,
-                provider,
-                model,
-                task_id,
-            },
-            aura_agent::DebugEvent::Decision {
-                timestamp,
-                decision,
-                task_id,
-            } => Self::DebugDecision {
-                timestamp,
-                decision,
-                task_id,
-            },
-            aura_agent::DebugEvent::ModelExchange {
-                timestamp,
-                exchange,
-                task_id,
-            } => Self::DebugModelExchange {
-                timestamp,
-                exchange,
-                task_id,
-            },
+        mirror_debug_events! { ev;
+            LlmCall {
+                timestamp, provider, model, input_tokens, output_tokens,
+                cache_creation_input_tokens, cache_read_input_tokens, duration_ms,
+                task_id, agent_instance_id, provider_request_id, message_id;
+                drop route
+            } => DebugLlmCall;
+            Iteration { timestamp, index, tool_calls, duration_ms, task_id } => DebugIteration;
+            Blocker { timestamp, kind, path, message, task_id } => DebugBlocker;
+            Retry { timestamp, reason, attempt, wait_ms, provider, model, task_id } => DebugRetry;
+            Decision { timestamp, decision, task_id } => DebugDecision;
+            ModelExchange { timestamp, exchange, task_id } => DebugModelExchange;
         }
     }
 }

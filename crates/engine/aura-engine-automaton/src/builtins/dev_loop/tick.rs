@@ -238,7 +238,17 @@ impl DevLoopAutomaton {
             .await;
 
         let outcome = finalize_task_outcome(ctx, self.domain.as_ref(), &task, result).await?;
+        self.record_outcome(ctx, state, outcome)
+    }
 
+    /// Updates the loop counters for a finished task and decides whether
+    /// the loop continues.
+    fn record_outcome(
+        &self,
+        ctx: &mut TickContext,
+        state: &mut DevLoopState,
+        outcome: TaskOutcome,
+    ) -> Result<TickOutcome, AutomatonError> {
         match outcome {
             TaskOutcome::Cancelled => {
                 // User-initiated stop — the finalizer rolled the task

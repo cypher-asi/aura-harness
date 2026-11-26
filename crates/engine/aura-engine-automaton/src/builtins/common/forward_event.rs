@@ -84,6 +84,22 @@ pub fn forward_agent_event(
     evt: aura_agent::AgentLoopEvent,
     task_id: Option<&str>,
 ) -> ForwardOutcome {
+    let Some(automaton_event) = project_agent_event(evt, task_id) else {
+        return ForwardOutcome::Ignored;
+    };
+    match tx.try_send(automaton_event) {
+        Ok(()) => ForwardOutcome::Sent,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => ForwardOutcome::DroppedFull,
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => ForwardOutcome::DroppedClosed,
+    }
+}
+
+/// Projects the streaming text and tool-call events; everything else goes
+/// to [`project_status_event`]. `None` means the variant is not forwarded.
+fn project_agent_event(
+    evt: aura_agent::AgentLoopEvent,
+    task_id: Option<&str>,
+) -> Option<AutomatonEvent> {
     use aura_agent::AgentLoopEvent;
     let task_id_value = || task_id.map(str::to_owned);
     let automaton_event = match evt {
@@ -101,30 +117,7 @@ pub fn forward_agent_event(
             name,
         },
         AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
-            // Partial JSON is expected while a `tool_use` block is
-            // still streaming -- forward it with
-            // `snapshot_partial: true` so the UI can render an
-            // "in flight…" card instead of dropping the event
-            // entirely and leaving the card empty. When the JSON
-            // parses cleanly we still emit `snapshot_partial: false`
-            // so downstream consumers that only care about finished
-            // blocks can filter.
-            match serde_json::from_str::<serde_json::Value>(&input) {
-                Ok(parsed) => AutomatonEvent::ToolCallSnapshot {
-                    task_id: task_id_value(),
-                    id,
-                    name,
-                    input: parsed,
-                    snapshot_partial: false,
-                },
-                Err(_) => AutomatonEvent::ToolCallSnapshot {
-                    task_id: task_id_value(),
-                    id,
-                    name,
-                    input: serde_json::Value::String(input),
-                    snapshot_partial: true,
-                },
-            }
+            tool_snapshot_event(task_id_value(), id, name, input)
         }
         AgentLoopEvent::ToolResult {
             tool_use_id,
@@ -159,6 +152,52 @@ pub fn forward_agent_event(
             input,
             is_error,
         },
+        other => return project_status_event(other, task_id),
+    };
+    Some(automaton_event)
+}
+
+/// Projects a `ToolInputSnapshot`, keeping partial JSON as a string.
+fn tool_snapshot_event(
+    task_id: Option<String>,
+    id: String,
+    name: String,
+    input: String,
+) -> AutomatonEvent {
+    // Partial JSON is expected while a `tool_use` block is
+    // still streaming -- forward it with
+    // `snapshot_partial: true` so the UI can render an
+    // "in flight…" card instead of dropping the event
+    // entirely and leaving the card empty. When the JSON
+    // parses cleanly we still emit `snapshot_partial: false`
+    // so downstream consumers that only care about finished
+    // blocks can filter.
+    match serde_json::from_str::<serde_json::Value>(&input) {
+        Ok(parsed) => AutomatonEvent::ToolCallSnapshot {
+            task_id,
+            id,
+            name,
+            input: parsed,
+            snapshot_partial: false,
+        },
+        Err(_) => AutomatonEvent::ToolCallSnapshot {
+            task_id,
+            id,
+            name,
+            input: serde_json::Value::String(input),
+            snapshot_partial: true,
+        },
+    }
+}
+
+/// Projects usage, log, error, retry and debug events.
+fn project_status_event(
+    evt: aura_agent::AgentLoopEvent,
+    task_id: Option<&str>,
+) -> Option<AutomatonEvent> {
+    use aura_agent::AgentLoopEvent;
+    let task_id_value = || task_id.map(str::to_owned);
+    let automaton_event = match evt {
         AgentLoopEvent::IterationComplete {
             input_tokens,
             output_tokens,
@@ -205,13 +244,9 @@ pub fn forward_agent_event(
         // `From<DebugEvent>` impl preserves the exact JSON shape the
         // aura-os forwarder routes on (`type: "debug.<kind>"`).
         AgentLoopEvent::Debug(ev) => AutomatonEvent::from(ev),
-        _ => return ForwardOutcome::Ignored,
+        _ => return None,
     };
-    match tx.try_send(automaton_event) {
-        Ok(()) => ForwardOutcome::Sent,
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => ForwardOutcome::DroppedFull,
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => ForwardOutcome::DroppedClosed,
-    }
+    Some(automaton_event)
 }
 
 /// Spawn a background task that drains agent-loop events from
