@@ -30,8 +30,10 @@ crates/engine/aura-engine-automaton/src/builtins/task_refinement/tests.rs
 crates/engine/aura-engine-cloud/src/boxd.rs
 crates/engine/aura-engine-cloud/src/fake.rs
 crates/engine/aura-engine-cloud/src/fleet.rs
+crates/engine/aura-engine-cloud/src/fleet/tests.rs
 crates/engine/aura-engine-cloud/src/github.rs
 crates/engine/aura-engine-cloud/src/hub/mod.rs
+crates/engine/aura-engine-cloud/src/hub/tests.rs
 crates/engine/aura-engine-cloud/src/snapshots.rs
 crates/engine/aura-engine-registry/src/registry/code.rs
 crates/engine/aura-engine-registry/src/registry/mod.rs
