@@ -246,3 +246,50 @@ async fn members_always_keep_task_and_their_inbox_but_subagents_get_what_they_li
         assert!(below.iter().all(|name| name != tool), "{tool}: {below:?}");
     }
 }
+
+#[tokio::test]
+async fn a_members_cloud_turns_bring_its_prompt_and_turn_off_what_its_agent_leaves_out() {
+    use crate::event_loop::modes::Permissions;
+    use aura_ui::{ApprovalLevel, PermissionMode};
+    let fixture = fixture("Looks good.");
+    let channel = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    let member = add_member(&fixture, channel.coordinator, "reviewer");
+
+    let turn = fixture.hub.cloud_turn(member);
+    let prompt = turn.system_prompt.unwrap_or_default();
+    assert!(
+        prompt.contains("<agent_definition name=\"reviewer\">"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("#site"), "its channel's block: {prompt}");
+    assert!(
+        prompt.ends_with("shows for each, not its code."),
+        "how its machine reaches its peers: {prompt}"
+    );
+    assert!(!prompt.contains("plan mode"), "{prompt}");
+    assert!(turn.tools_off.iter().any(|tool| tool == "write_file"));
+    for kept in ["task", "send_to_agent", "list_agents", "read_file"] {
+        assert!(
+            turn.tools_off.iter().all(|tool| tool != kept),
+            "{kept}: {:?}",
+            turn.tools_off
+        );
+    }
+    assert_eq!(turn.prompt, "", "the rest is the turn's own");
+
+    fixture.hub.set_permissions(
+        member,
+        Permissions::new(PermissionMode::Plan, ApprovalLevel::Strict),
+    );
+    let planning = fixture.hub.cloud_turn(member).system_prompt;
+    let plan_section = aura_context_prompts::system::sections::plan_mode::render();
+    assert!(planning.is_some_and(|prompt| prompt.contains(plan_section.trim())));
+
+    // An agent of the user's own with none of it leaves the node be.
+    let own = lock(&fixture.hub.registry).active().agent_id();
+    let plain = fixture.hub.cloud_turn(own);
+    assert_eq!(plain.system_prompt, None);
+    assert!(plain.tools_off.is_empty(), "{:?}", plain.tools_off);
+}

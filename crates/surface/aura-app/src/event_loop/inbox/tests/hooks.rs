@@ -113,3 +113,63 @@ async fn peer_hooks_list_the_agent_and_its_peers_and_show_a_peer() {
         .unwrap();
     assert_eq!(state["relation"], "coordinator");
 }
+
+#[tokio::test]
+async fn a_cloud_members_requests_from_its_machine_are_filed_as_its_own_sends() {
+    use crate::cloud::hub::MailDesk;
+    use aura_engine::{MessageKind, RemoteMail, ThreadId};
+    let mut hooked = member_hooks().await;
+    let (coordinator, member) = (hooked.coordinator, hooked.member);
+    let hub = Arc::clone(&hooked.fixture.hub);
+    let other = start(&mut hooked.fixture, coordinator, "reviewer").await;
+    take_all(&mut hooked.notices);
+
+    // Its machine lists its peers by the names they go by here.
+    let reach = reach_of(&hub, member).await.unwrap();
+    let named = |agent: AgentId| {
+        let found = reach.iter().find(|peer| peer.agent_id == agent);
+        found.map(|peer| peer.name.clone())
+    };
+    let other_code = code_of(&hooked.fixture, other);
+    assert!(named(other).is_some_and(|name| name.starts_with(&format!("{other_code} ("))));
+    assert!(named(coordinator).is_some());
+    assert_eq!(named(member), None, "not itself");
+    assert_eq!(
+        reach_of(&hub, lock(&hub.registry).active().agent_id()).await,
+        None,
+        "an agent in no channel mails its machine's project as before"
+    );
+
+    let desk = MachineMail(Arc::downgrade(&hub));
+    let request = |to: AgentId, text: &str| RemoteMail {
+        from: member,
+        from_name: "its name on the machine".into(),
+        to,
+        kind: MessageKind::Request,
+        thread: ThreadId("aura-a:t1".into()),
+        subject: "Footer".into(),
+        text: text.into(),
+    };
+    let owed = hub.inbox.owed_by(other);
+    desk.file(request(other, "Which footer links are broken?"))
+        .await
+        .unwrap();
+    let [told] = take_all(&mut hooked.notices).try_into().unwrap();
+    assert_eq!(told.to, other);
+    let member_code = code_of(&hooked.fixture, member);
+    assert!(
+        told.prompt.starts_with(&format!("{member_code}: Footer\n")),
+        "{}",
+        told.prompt
+    );
+    assert!(told.prompt.contains("Which footer links are broken?"));
+    assert_eq!(
+        hub.inbox.owed_by(other),
+        owed + 1,
+        "it owes the member an answer"
+    );
+
+    let stranger = AgentId::generate();
+    let refused = desk.file(request(stranger, "Hello")).await.unwrap_err();
+    assert!(refused.contains("unknown agent"), "{refused}");
+}

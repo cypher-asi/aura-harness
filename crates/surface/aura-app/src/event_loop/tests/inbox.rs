@@ -174,6 +174,59 @@ async fn a_new_member_of_a_cloud_channel_without_a_project_works_here_and_says_w
     );
 }
 
+#[tokio::test]
+async fn a_cloud_members_turn_answers_its_assignment_when_the_loop_hears_it_ended() {
+    let report_of = |failure: Option<&str>, said: &str| {
+        let failure = failure.map(str::to_string);
+        let said = said.to_string();
+        async move {
+            let (fixture, _commands) = fixture();
+            let coordinator = channel_with_member(&fixture).await;
+            let member = fixture.second;
+            let mut notices = fixture.hub.take_notices();
+            let mut b = borrowed(&fixture);
+            let mut state = loop_state(&fixture, &mut b);
+            assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
+            let assignment = notices.try_recv().unwrap();
+            assert_eq!(state.hub.inbox.owed_by(member), 1);
+
+            // Its machine ran the assignment; the hub copied the
+            // conversation back as the turn ended.
+            subagents::lock(&state.hub.cloud_turns).insert(member);
+            assert!(state.hub.is_working(member), "working, on its machine");
+            let messages = vec![
+                aura_model::Message::user(&assignment.prompt),
+                aura_model::Message::assistant(&said),
+            ];
+            let outcome = cloud::TurnOutcome {
+                failure,
+                messages: Some(messages),
+            };
+            cloud::handle_ended(&mut state, cloud::Ended::Turn(member, Some(outcome))).await;
+            assert!(!state.hub.is_working(member));
+            assert_eq!(state.hub.inbox.owed_by(member), 0);
+            let report = notices.try_recv().unwrap();
+            assert_eq!(report.to, coordinator);
+            report.prompt
+        }
+    };
+
+    let done = report_of(None, "Footer links fixed.").await;
+    assert!(
+        done.ends_with(&format!(
+            "\n\nFooter links fixed.\n{}",
+            task_report_line("3", true)
+        )),
+        "{done}"
+    );
+    let failed = report_of(Some("the model refused"), "Half way.").await;
+    assert!(
+        failed.contains("Stopped before finishing: the model refused"),
+        "{failed}"
+    );
+    assert!(failed.ends_with(&task_report_line("3", false)), "{failed}");
+}
+
 /// The one text in `texts`.
 fn only_text(texts: Vec<String>) -> String {
     assert_eq!(texts.len(), 1, "{texts:?}");

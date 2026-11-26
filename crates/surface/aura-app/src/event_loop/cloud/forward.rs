@@ -58,22 +58,25 @@ pub(super) struct TurnExtras {
 }
 
 /// How a cloud turn's stream ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TurnEnd {
     /// The reply ended.
     Done,
-    /// The turn failed, or its stream closed first.
-    Failed,
+    /// The turn failed, or its stream closed first, and why.
+    Failed(String),
 }
+
+/// Why a turn whose stream closed before the reply ended stopped.
+pub(super) const CLOSED_EARLY: &str = "its machine stopped answering before the turn ended";
 
 impl TurnEnd {
     /// The PROCESSES status of a turn that ended so, when the user
     /// `stopped` it or not.
-    pub(super) fn status(self, stopped: bool) -> ProcessStatus {
+    pub(super) const fn status(&self, stopped: bool) -> ProcessStatus {
         match (self, stopped) {
             (_, true) => ProcessStatus::Killed,
             (Self::Done, false) => ProcessStatus::Exited,
-            (Self::Failed, false) => ProcessStatus::Failed,
+            (Self::Failed(_), false) => ProcessStatus::Failed,
         }
     }
 }
@@ -93,7 +96,7 @@ pub(super) async fn forward(
         thinking: false,
         waking: None,
     };
-    let mut end = TurnEnd::Failed;
+    let mut end = TurnEnd::Failed(CLOSED_EARLY.to_string());
     while let Some(event) = rx.recv().await {
         if let RemoteEvent::Boot(event) = event {
             chat.show_boot(event).await;
@@ -198,7 +201,7 @@ impl TurnChat<'_> {
                 info!(error = %err, "Cancelled cloud turn ended with an error");
                 ui.send(UiCommand::ShowWarning("Turn cancelled".to_string()))
                     .await;
-                return Some(TurnEnd::Failed);
+                return Some(TurnEnd::Failed(err));
             }
             RemoteEvent::Failed(err) => {
                 ui.send(UiCommand::ShowError(format!(
@@ -206,7 +209,7 @@ impl TurnChat<'_> {
                     failure_hint(&err)
                 )))
                 .await;
-                return Some(TurnEnd::Failed);
+                return Some(TurnEnd::Failed(err));
             }
         }
         None

@@ -45,7 +45,7 @@ impl AgentHub {
     /// have no project.
     pub fn agent_summaries(&self) -> Vec<AgentSummary> {
         let registry = lock(&self.registry);
-        let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
+        let running = self.working();
         let mut rows = agent_summaries(
             &registry,
             self.factory.store.as_ref(),
@@ -196,7 +196,7 @@ impl AgentHub {
     /// [`Self::agent_lists_with_active`] with `active` marked as the open
     /// agent, or the registry's when `None`.
     pub(super) fn agent_lists_marking(&self, active: Option<AgentId>) -> AgentLists {
-        let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
+        let running = self.working();
         let mut rows = {
             let registry = lock(&self.registry);
             self.processes.name_agents(

@@ -59,7 +59,9 @@ mod persist;
 mod place;
 pub mod plans;
 mod pull;
+mod reach;
 mod recall;
+mod request;
 mod seed;
 mod session;
 pub mod setup;
@@ -71,7 +73,9 @@ mod turn;
 
 pub use self::outcomes::{CommitsOutcome, PatchOutcome, PullOutcome};
 pub use self::persist::SyncStatus;
-pub use self::turn::{cloud_policy, map_outbound, RemoteEvent};
+pub use self::reach::{MailDesk, Reach};
+pub use self::request::{cloud_policy, TurnAsk};
+pub use self::turn::{map_outbound, RemoteEvent};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -269,6 +273,10 @@ pub struct CloudHub {
     home: PathBuf,
     placements: Mutex<PlacementFile>,
     host: Mutex<Option<AgentHost>>,
+    /// Where requests to the agents placed agents reach are filed.
+    desk: Mutex<Option<Arc<dyn MailDesk>>>,
+    /// The agents each placed agent (hex) reaches through the hub.
+    reach: Mutex<HashMap<String, Vec<Reach>>>,
     links: Mutex<HashMap<String, Link>>,
     tracks: Mutex<HashMap<String, HostTrack>>,
     /// One copy per agent at a time: its record, session or runs.

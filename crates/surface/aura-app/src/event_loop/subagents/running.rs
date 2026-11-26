@@ -270,6 +270,19 @@ impl AgentHub {
         lock(&self.running).contains_key(&agent_id)
     }
 
+    /// Whether `agent_id` is working, here ([`Self::is_running`]) or on
+    /// its cloud machine: what its peers and the agent lists are told.
+    pub(crate) fn is_working(&self, agent_id: AgentId) -> bool {
+        self.is_running(agent_id) || lock(&self.cloud_turns).contains(&agent_id)
+    }
+
+    /// Every agent [`Self::is_working`].
+    pub(super) fn working(&self) -> HashSet<AgentId> {
+        let mut working: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
+        working.extend(lock(&self.cloud_turns).iter().copied());
+        working
+    }
+
     /// Kernel of `agent_id` while it has work in flight.
     pub(in crate::event_loop) fn running_kernel(&self, agent_id: AgentId) -> Option<Arc<Kernel>> {
         lock(&self.running)

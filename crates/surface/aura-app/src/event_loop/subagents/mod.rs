@@ -393,6 +393,11 @@ pub struct AgentHub {
     /// New members of channels whose agents run in the cloud, until the
     /// loop moves each to a machine of its own before its first work.
     pub(crate) cloud_starts: Mutex<HashSet<AgentId>>,
+    /// Agents with a turn running on their cloud machine, which
+    /// `running` (this computer's work) doesn't hold. The loop writes it,
+    /// as it starts each turn and hears it end; the agent lists and
+    /// peers read it as working.
+    pub(crate) cloud_turns: Mutex<HashSet<AgentId>>,
     /// Replies the channels wait for and what each coordinator has seen.
     pub(crate) channel_chat: super::channels::ChannelChat,
     /// What agents owe each other through their inboxes.

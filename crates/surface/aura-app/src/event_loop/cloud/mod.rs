@@ -20,6 +20,10 @@
 //!   a turn or a move says so on [`Shared::ended`] and leaves the agent
 //!   busy, so no work the loop starts before it hears overlaps; only with
 //!   no loop listening does the task free the agent itself.
+//! - **A cloud turn settles what it was asked as a turn here does.** When
+//!   the loop hears it ended ([`TurnOutcome`]), the channel questions and
+//!   inbox requests it saw are answered from the conversation the hub
+//!   copied back, or their senders told none is coming.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -53,6 +57,9 @@ use crate::cloud::hub::zns_agent;
 use crate::cloud::{CloudHub, PlaceRequest, RemoteEvent};
 
 mod boot;
+mod ended;
+#[cfg(test)]
+mod ended_tests;
 mod forward;
 mod machine;
 mod placement;
@@ -63,6 +70,7 @@ mod tests;
 mod view;
 
 use boot::BootConsoleUi;
+pub(super) use ended::handle_ended;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
 pub(super) use placement::{
@@ -74,12 +82,24 @@ pub(super) use submit::{new_session, start_queued, submit};
 use view::{build_view, placement_state};
 
 /// What a cloud task tells the loop it is done with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub(super) enum Ended {
-    /// The agent's cloud turn, or `/new`
-    Turn(AgentId),
+    /// The agent's cloud turn, and how it went; `/new` has no outcome
+    Turn(AgentId, Option<TurnOutcome>),
     /// The agent's move between machines, whichever way it went
     Move(AgentId),
+}
+
+/// How a cloud turn went, for what its agent was asked: the channel
+/// questions and inbox requests the turn saw are answered from its
+/// conversation, or dropped, as a turn here settles them.
+#[derive(Debug)]
+pub(super) struct TurnOutcome {
+    /// Why it stopped before finishing; `None` when it finished.
+    pub(super) failure: Option<String>,
+    /// Its conversation as its machine left it, copied here; `None`
+    /// when the copy failed.
+    pub(super) messages: Option<Vec<aura_model::Message>>,
 }
 
 /// Shared between the loop and its tasks.
@@ -101,11 +121,12 @@ struct Shared {
 }
 
 impl Shared {
-    /// `agent`'s cloud turn (or `/new`) is over. The loop frees it and
-    /// starts what it queued meanwhile, so nothing sent while the turn
-    /// ended overtakes that; with no loop listening it is freed here.
-    fn end_turn(&self, agent: AgentId) {
-        if !self.tell_loop(Ended::Turn(agent)) {
+    /// `agent`'s cloud turn (or `/new`) is over, as `outcome` says. The
+    /// loop frees it, settles what the turn was asked and starts what it
+    /// queued meanwhile, so nothing sent while the turn ended overtakes
+    /// that; with no loop listening it is freed here.
+    fn end_turn(&self, agent: AgentId, outcome: Option<TurnOutcome>) {
+        if !self.tell_loop(Ended::Turn(agent, outcome)) {
             self.running.lock().remove(&agent);
         }
     }
@@ -195,16 +216,16 @@ impl CloudState {
     }
 
     /// Let the agent whose turn or move `ended` take work again. Returns
-    /// the agent.
-    pub(super) fn free(&self, ended: Ended) -> AgentId {
+    /// the agent, and how its turn went if it was one.
+    pub(super) fn free(&self, ended: Ended) -> (AgentId, Option<TurnOutcome>) {
         match ended {
-            Ended::Turn(agent) => {
+            Ended::Turn(agent, outcome) => {
                 self.shared.running.lock().remove(&agent);
-                agent
+                (agent, outcome)
             }
             Ended::Move(agent) => {
                 self.shared.moving.lock().remove(&agent);
-                agent
+                (agent, None)
             }
         }
     }
@@ -280,12 +301,16 @@ async fn ensure_hub(
 }
 
 /// Give a new `hub` what it shares with the app: the agent host, the
-/// session checkpoints, the record observer, the trace store, the
-/// current owner and the users' plan credentials.
+/// inbox members' requests from their machines are filed in, the session
+/// checkpoints, the record observer, the trace store, the current owner
+/// and the users' plan credentials.
 fn attach_app(state: &LoopState<'_>, hub: &Arc<CloudHub>) {
     if let Some(agents) = &state.hub.agents {
         hub.attach_host(agents.host());
     }
+    hub.attach_desk(Arc::new(crate::event_loop::inbox::MachineMail(
+        Arc::downgrade(&state.hub),
+    )));
     if let Some(checkpoints) = &state.hub.factory.checkpoints {
         hub.attach_sessions(checkpoints.clone());
     }

@@ -346,12 +346,7 @@ async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
                 handle_work_done(state, done).await;
             }
             Some(ended) = cloud_ended.recv() => {
-                let agent_id = state.cloud.free(ended);
-                // The turn may have written or worked through a plan.
-                if agent_id == state.active {
-                    cloud::refresh_machine_plans(state, agent_id);
-                }
-                start_next(state, agent_id).await;
+                cloud::handle_ended(state, ended).await;
             }
             () = hub.spawn_finished.notified() => {
                 state.park_finished_spawns().await;

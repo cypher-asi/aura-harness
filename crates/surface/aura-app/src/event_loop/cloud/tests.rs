@@ -1,5 +1,5 @@
 use super::boot::boot_updates;
-use super::forward::{forward, TitleSink, Titles, TurnEnd, TurnExtras};
+use super::forward::{forward, TitleSink, Titles, TurnEnd, TurnExtras, CLOSED_EARLY};
 use super::machine::machine_rows;
 use super::submit::runs_on_machine;
 use super::*;
@@ -141,7 +141,7 @@ mod forward_tests {
         )
         .await;
 
-        assert_eq!(end, TurnEnd::Failed);
+        assert_eq!(end, TurnEnd::Failed("boom".into()));
         let sent = commands(&mut rx);
         ends_the_turn(&sent);
         assert!(sent.iter().any(|command| matches!(
@@ -188,7 +188,10 @@ mod forward_tests {
     #[test]
     fn a_cloud_turn_s_row_ends_as_the_turn_did() {
         assert_eq!(TurnEnd::Done.status(false), ProcessStatus::Exited);
-        assert_eq!(TurnEnd::Failed.status(false), ProcessStatus::Failed);
+        assert_eq!(
+            TurnEnd::Failed("boom".into()).status(false),
+            ProcessStatus::Failed
+        );
         assert_eq!(TurnEnd::Done.status(true), ProcessStatus::Killed);
     }
 
@@ -207,7 +210,11 @@ mod forward_tests {
         )
         .await;
 
-        assert_eq!(end, TurnEnd::Failed, "closed before the reply ended");
+        assert_eq!(
+            end,
+            TurnEnd::Failed(CLOSED_EARLY.into()),
+            "closed before the reply ended"
+        );
         let sent = commands(&mut rx);
         ends_the_turn(&sent);
         assert!(sent
@@ -347,65 +354,6 @@ mod machine_tests {
 
         assert!(rows.iter().all(|row| row.jump_agent_id == "aa"));
         assert!(rows.iter().all(|row| !row.killable));
-    }
-
-    #[test]
-    fn an_ended_cloud_turn_frees_its_agent_through_the_loop() {
-        let cloud = CloudState::default();
-        let agent = AgentId::generate();
-        cloud
-            .shared
-            .running
-            .lock()
-            .insert(agent, CancellationToken::new());
-        cloud.shared.end_turn(agent);
-        assert!(!cloud.is_running(agent), "no loop listens: freed at once");
-
-        let mut ended = cloud.take_ended();
-        cloud
-            .shared
-            .running
-            .lock()
-            .insert(agent, CancellationToken::new());
-        cloud.shared.end_turn(agent);
-        assert!(
-            cloud.is_running(agent),
-            "what is sent until the loop frees it still queues"
-        );
-        let turn = ended.try_recv().unwrap();
-        assert_eq!(turn, Ended::Turn(agent));
-        assert_eq!(cloud.free(turn), agent);
-        assert!(!cloud.is_running(agent));
-    }
-
-    #[test]
-    fn an_ended_move_lets_its_agent_take_work_only_through_the_loop() {
-        let cloud = CloudState::default();
-        let agent = AgentId::generate();
-        cloud.shared.moving.lock().insert(agent);
-        cloud.shared.end_move(agent);
-        assert!(!cloud.is_moving(agent), "no loop listens: let go at once");
-
-        let mut ended = cloud.take_ended();
-        cloud.shared.moving.lock().insert(agent);
-        cloud
-            .shared
-            .running
-            .lock()
-            .insert(agent, CancellationToken::new());
-        cloud.shared.end_move(agent);
-        assert!(
-            cloud.is_moving(agent),
-            "work still queues until the loop hears"
-        );
-        let moved = ended.try_recv().unwrap();
-        assert_eq!(moved, Ended::Move(agent));
-        assert_eq!(cloud.free(moved), agent);
-        assert!(!cloud.is_moving(agent));
-        assert!(
-            cloud.is_running(agent),
-            "a move's end leaves a turn the loop started alone"
-        );
     }
 }
 

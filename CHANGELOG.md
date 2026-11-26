@@ -56,6 +56,34 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cloud machine waits in its queue and starts where the agent ends up,
   instead of being refused.
 
+### Cloud members work like members on this computer
+
+##### Changed
+
+- Each turn of a member on a cloud machine brings what a turn here
+  has: the project's instruction files, its permanent agent's prompt,
+  the plan-mode section in plan mode and its channel block. The tools
+  its agent leaves out are off on the machine. Members still keep
+  `task`, `send_to_agent` and `list_agents`.
+- When a cloud member's turn ends, what it was asked is settled from
+  the conversation copied back. Assignments and requests get its last
+  words as their answer, and questions put to it on the channel get
+  their reply posted. A turn that fails or is stopped gives up on them
+  instead, saying `Stopped before finishing: …`.
+- A cloud member with a turn running shows as working, on MEMBERS, in
+  the agent lists, in the coordinator's channel block and to
+  `list_agents`.
+
+##### Added
+
+- A cloud member reaches the agents a member here does: its channel's
+  and its project's. `list_agents` on its machine lists them and
+  `get_agent_state` shows one. On the machine it names them by the
+  `agent_id` that `list_agents` gives, and its turns tell it so. Its
+  requests to them come back through this computer's inbox: they show
+  on INBOX, are answered when the agent asked ends its turn, and count
+  toward their thread's cap.
+
 ### ARCHIVE headers spell out the date
 
 ##### Changed

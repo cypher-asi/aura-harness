@@ -1,8 +1,11 @@
 //! Prompts, commands and `/new` for cloud agents.
 
-use super::forward::{forward, title_sink, Titles, TurnExtras};
+use super::forward::{forward, title_sink, Titles, TurnEnd, TurnExtras};
 use super::*;
+use crate::cloud::hub::TurnAsk;
 use crate::event_loop::turns::Prompt;
+use aura_agent::checkpoint::{Checkpoints, SessionCheckpoint};
+use tokio::sync::mpsc;
 
 /// Prompts and commands for a cloud agent, or for one being moved.
 /// Returns the work when it is for the local kernel after all. Work for
@@ -103,46 +106,35 @@ async fn run_prompt(
     let model = (!current.is_empty() && current != "gate" && !current.starts_with("local/"))
         .then_some(current);
     let (title_model, titles) = turn_titles(state, &hub, agent, &prompt, &linked).await;
-    let turn = CloudTurn {
-        text: prompt.text,
-        jwt: zos_token(state),
-        title_model,
-        extras: TurnExtras {
-            titles,
-            context_limit: model.as_deref().map(aura_engine::context_window_for_model),
-        },
-        model,
+    if let Some(peers) = crate::event_loop::inbox::reach_of(&state.hub, agent).await {
+        hub.set_reach(agent, peers);
+    }
+    let extras = TurnExtras {
+        titles,
+        context_limit: model.as_deref().map(aura_engine::context_window_for_model),
     };
-    start_turn(state, &hub, agent, ui, turn);
+    let ask = TurnAsk {
+        prompt: prompt.text,
+        model,
+        title_model,
+        auth_jwt: zos_token(state),
+        ..state.hub.cloud_turn(agent)
+    };
+    start_turn(state, &hub, agent, ui, ask, extras).await;
 }
 
-/// What a cloud turn asks its machine for, and what it shows besides its
-/// chat's stream.
-struct CloudTurn {
-    text: String,
-    model: Option<String>,
-    title_model: Option<String>,
-    jwt: Option<String>,
-    extras: TurnExtras,
-}
-
-/// Start `turn` on cloud agent `agent`'s machine and show it in `ui`'s
-/// chat. The agent counts as working until the hub has copied the
-/// turn's session here.
-fn start_turn(
+/// Start `ask` on cloud agent `agent`'s machine and show it in `ui`'s
+/// chat, with `extras`. The agent counts as working until the hub has
+/// copied the turn's session here; the loop then settles what the turn
+/// was asked from that copy.
+async fn start_turn(
     state: &LoopState<'_>,
     hub: &Arc<CloudHub>,
     agent: AgentId,
     ui: AgentUi,
-    turn: CloudTurn,
+    ask: TurnAsk,
+    mut extras: TurnExtras,
 ) {
-    let CloudTurn {
-        text,
-        model,
-        title_model,
-        jwt,
-        mut extras,
-    } = turn;
     // Stopped from the chat or its PROCESSES row alike.
     let cancel = CancellationToken::new();
     state
@@ -151,37 +143,56 @@ fn start_turn(
         .running
         .lock()
         .insert(agent, cancel.clone());
+    lock(&state.hub.cloud_turns).insert(agent);
+    crate::event_loop::agents::send_agent_list(state).await;
     let mut row = crate::event_loop::handlers::turn_summary(
         agent,
-        &text,
-        model.as_deref().unwrap_or_default(),
+        &ask.prompt,
+        ask.model.as_deref().unwrap_or_default(),
     );
-    row.model.clone_from(&model);
+    row.model.clone_from(&ask.model);
     state.processes.start(row, Some(cancel.clone()));
-    let mut rx = hub.run_turn(agent, text, model, title_model, jwt, cancel.clone());
+    let mut rx = hub.run_turn(agent, ask, cancel.clone());
     let shared = Arc::clone(&state.cloud.shared);
     let processes = Arc::clone(&state.processes);
     let sessions = state.hub.factory.checkpoints.clone();
     tokio::spawn(async move {
         let end = forward(&ui, &mut rx, &mut extras, &cancel).await;
+        let stopped = cancel.is_cancelled();
         processes.finish(
             &crate::event_loop::processes::turn_id(agent),
-            end.status(cancel.is_cancelled()),
+            end.status(stopped),
         );
-        // The hub copies the turn's session here before it lets go
-        // of the channel; the totals come from that copy.
-        while rx.recv().await.is_some() {}
-        if let Some(sessions) = sessions {
-            let copied = tokio::task::spawn_blocking(move || sessions.load_current(agent)).await;
-            if let Ok(Some(checkpoint)) = copied {
-                ui.send(UiCommand::SetSessionTotals(
-                    crate::event_loop::hud::session_totals(&checkpoint.usage),
-                ))
-                .await;
-            }
-        }
-        shared.end_turn(agent);
+        let copied = copied_session(&ui, &mut rx, sessions, agent).await;
+        let failure = match end {
+            _ if stopped => Some("it was stopped".to_string()),
+            TurnEnd::Done => None,
+            TurnEnd::Failed(why) => Some(why),
+        };
+        let messages = copied.map(|checkpoint| checkpoint.messages);
+        shared.end_turn(agent, Some(TurnOutcome { failure, messages }));
     });
+}
+
+/// The session of `agent`'s turn as copied here, with its totals shown
+/// in `ui`. The hub copies it before it lets go of `rx`.
+async fn copied_session(
+    ui: &AgentUi,
+    rx: &mut mpsc::Receiver<RemoteEvent>,
+    sessions: Option<Checkpoints>,
+    agent: AgentId,
+) -> Option<SessionCheckpoint> {
+    while rx.recv().await.is_some() {}
+    let sessions = sessions?;
+    let copied = tokio::task::spawn_blocking(move || sessions.load_current(agent))
+        .await
+        .ok()
+        .flatten()?;
+    ui.send(UiCommand::SetSessionTotals(
+        crate::event_loop::hud::session_totals(&copied.usage),
+    ))
+    .await;
+    Some(copied)
 }
 
 /// The model `agent`'s machine titles its chat with on this turn, if any,
@@ -260,7 +271,7 @@ fn start_new_session(state: &LoopState<'_>, hub: Arc<CloudHub>, agent: AgentId) 
     let ui = AgentUi::new(state.commands.clone(), agent);
     tokio::spawn(async move {
         let result = hub.new_session(agent).await;
-        shared.end_turn(agent);
+        shared.end_turn(agent, None);
         if let Err(err) = result {
             warn!(%agent, error = %err, "the cloud node did not start a new session");
             ui.send(UiCommand::ShowMessage(MessageData::new(

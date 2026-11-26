@@ -1,7 +1,10 @@
 //! An agent's `send_to_agent`, `list_agents` and `get_agent_state`
-//! ([`PeerHooks`]).
+//! ([`PeerHooks`]), and the requests a channel member sends from its
+//! cloud machine ([`MachineMail`]).
 
 use super::*;
+use crate::cloud::hub::{MailDesk, Reach};
+use aura_engine::RemoteMail;
 
 /// What `list_agents` and `get_agent_state` say about `peer`.
 pub(super) fn peer_row(hub: &AgentHub, peer: &Peer) -> serde_json::Value {
@@ -18,7 +21,7 @@ pub(super) fn peer_row(hub: &AgentHub, peer: &Peer) -> serde_json::Value {
         "name": peer.agent.name,
         "definition": peer.agent.definition,
         "relation": peer.relation.as_str(),
-        "working": hub.is_running(peer.agent.agent_id),
+        "working": hub.is_working(peer.agent.agent_id),
         "messages_to_answer": owes,
     });
     if let Some((finished, text)) = report {
@@ -137,6 +140,57 @@ impl AgentControlHook for PeerHooks {
                 model,
             )
             .await
+    }
+}
+
+/// Whom `agent`, a channel member, reaches from its cloud machine: its
+/// peers here, by the names they go by here. `None` for an agent in no
+/// channel, which mails its machine's project as before.
+pub(crate) async fn reach_of(hub: &Arc<AgentHub>, agent: AgentId) -> Option<Vec<Reach>> {
+    if !lock(&hub.channel_members).contains(&agent) {
+        return None;
+    }
+    let circle = circle(hub, agent).await?;
+    let reach = circle.peers.iter().map(|peer| Reach {
+        agent_id: peer.agent.agent_id,
+        name: peer.agent.full(),
+    });
+    Some(reach.collect())
+}
+
+/// The requests a channel member sends from its cloud machine to the
+/// agents it reaches ([`reach_of`]), filed as its `send_to_agent` here
+/// files them.
+pub(crate) struct MachineMail(pub(crate) Weak<AgentHub>);
+
+#[async_trait]
+impl MailDesk for MachineMail {
+    async fn file(&self, mail: RemoteMail) -> Result<(), String> {
+        let hub = self.0.upgrade().ok_or("the terminal is shutting down")?;
+        let to = mail.to.to_hex();
+        let circle = circle(&hub, mail.from).await;
+        let peer = circle
+            .as_ref()
+            .and_then(|circle| Some((circle, circle.find(&to)?)));
+        let Some((circle, peer)) = peer else {
+            warn!(from = %mail.from.to_hex(), %to, "A cloud member mailed an agent it doesn't reach");
+            return Err(unknown_agent(&to));
+        };
+        let subject = Some(mail.subject.as_str()).filter(|subject| !subject.is_empty());
+        let sent = send(
+            &hub,
+            circle,
+            InboxKind::Request,
+            peer,
+            subject,
+            &mail.text,
+            None,
+        );
+        if let Err(error) = &sent {
+            // Its machine drops the refusal: the log is all that is left.
+            warn!(from = %mail.from.to_hex(), %to, %error, "A cloud member's request was refused");
+        }
+        sent.map(|_| ())
     }
 }
 

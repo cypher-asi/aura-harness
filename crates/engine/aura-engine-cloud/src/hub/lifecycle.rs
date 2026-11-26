@@ -56,6 +56,8 @@ impl CloudHub {
             home,
             placements: Mutex::new(placements),
             host: Mutex::new(None),
+            desk: Mutex::new(None),
+            reach: Mutex::new(HashMap::new()),
             links: Mutex::new(HashMap::new()),
             tracks: Mutex::new(HashMap::new()),
             mirrors: Mutex::new(HashMap::new()),

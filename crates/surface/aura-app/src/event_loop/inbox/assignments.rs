@@ -161,7 +161,7 @@ fn named(field: Option<&str>) -> Option<String> {
 fn status_of(hub: &AgentHub, peer: &Peer, new: bool) -> &'static str {
     if new {
         "new member"
-    } else if hub.is_running(peer.agent.agent_id) {
+    } else if hub.is_working(peer.agent.agent_id) {
         "busy: it starts when free"
     } else {
         "starting now"

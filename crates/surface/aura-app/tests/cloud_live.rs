@@ -324,14 +324,12 @@ async fn plan_turn(
     agent: AgentId,
     kind: aura_core_auth::ProviderKind,
 ) -> (String, Option<String>) {
-    let mut rx = hub.run_turn(
-        agent,
-        "Reply with the single word: pong".into(),
-        Some(plan_model(kind).into()),
-        None,
-        None,
-        tokio_util::sync::CancellationToken::new(),
-    );
+    let ask = aura_app::cloud::hub::TurnAsk {
+        prompt: "Reply with the single word: pong".into(),
+        model: Some(plan_model(kind).into()),
+        ..Default::default()
+    };
+    let mut rx = hub.run_turn(agent, ask, tokio_util::sync::CancellationToken::new());
     let mut reply = String::new();
     let mut failed = None;
     while let Some(event) = rx.recv().await {

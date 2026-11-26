@@ -12,6 +12,10 @@
 //! Subagents have no peers: like any target that isn't a peer, theirs
 //! are reached through the background agents' hooks when those run.
 //!
+//! A channel member on a cloud machine has the same peers: before each of
+//! its turns the machine is told them ([`reach_of`]), and the requests it
+//! sends them come back here to be filed ([`MachineMail`]).
+//!
 //! A message reaches its agent like a harness notice: into its running
 //! turn, else as the prompt of a turn that carries on with its latest
 //! task. An assignment is a task of its own instead, and waits while the
@@ -29,7 +33,8 @@
 //! - `peers`: who an agent is and the peers it can reach
 //! - `messages`: a message sent, and given to its agent
 //! - `answers`: what an agent was asked, answered when its turn ends
-//! - `hooks`: `send_to_agent`, `list_agents` and `get_agent_state`
+//! - `hooks`: `send_to_agent`, `list_agents` and `get_agent_state`, and
+//!   the requests of members on cloud machines
 //! - `assignments`: `assign`
 //!
 //! # Invariants
@@ -79,11 +84,12 @@ mod peers;
 #[cfg(test)]
 mod tests;
 
-pub(super) use answers::{answer, give_up};
+pub(super) use answers::{answer, answer_seen, give_up, give_up_seen};
 pub use assignments::AssignTool;
 #[cfg(test)]
 pub(crate) use assignments::{assign, AssignArgs};
 pub use hooks::PeerHooks;
+pub(super) use hooks::{reach_of, MachineMail};
 pub(super) use messages::deliver;
 use messages::{mail_view, new_id, send, shown};
 use peers::{circle, Circle, Named, Peer, Relation};

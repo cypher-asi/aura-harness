@@ -47,7 +47,7 @@ pub(crate) fn channel_prompt(hub: &AgentHub, agent_id: AgentId) -> Option<String
             let working: HashSet<AgentId> = members
                 .iter()
                 .map(|member| member.agent_id)
-                .filter(|agent| hub.is_running(*agent))
+                .filter(|agent| hub.is_working(*agent))
                 .collect();
             let registry = lock(&hub.registry);
             if channel.coordinator == agent_id {
