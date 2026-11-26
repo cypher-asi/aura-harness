@@ -146,7 +146,7 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     `config`) and `bundle create` its commits for a machine, and
 #     `delta.rs` fetches an agent's branch from the bundle its machine
 #     made into the project's branch of the same name, fast-forward only;
-#     `crates/engine/aura-engine-cloud/src/hub/mod.rs` runs `git apply --3way`
+#     `crates/engine/aura-engine-cloud/src/hub/pull.rs` runs `git apply --3way`
 #     of a cloud agent's patch into its own project;
 #     `crates/surface/aura-node/src/gateway/handlers/cloud.rs` diffs the
 #     machine's workspace for that patch, staging it in a scratch
@@ -155,7 +155,7 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #   * Test files.
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \
-    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace\.rs|crates/engine/aura-engine-cloud/src/(delta|snapshots)\.rs|crates/engine/aura-engine-cloud/src/hub/mod\.rs|crates/surface/aura-node/src/gateway/handlers/cloud\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace\.rs|crates/engine/aura-engine-cloud/src/(delta|snapshots)\.rs|crates/engine/aura-engine-cloud/src/hub/pull\.rs|crates/surface/aura-node/src/gateway/handlers/cloud\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — the git subcommands `changes.rs` runs outside its tests (the first
 # literal of each `.arg(` / `.args([`) stay in the local-only set its row in
@@ -202,7 +202,7 @@ done <<<"$changes_subcommands"
 #   - crates/engine/aura-engine/src/scheduler.rs        — Scheduler builds per-agent kernels (§12.a claim seam)
 #   - crates/engine/aura-engine/src/automaton/          — AutomatonBridge builds per-agent automaton kernels
 #                                                  (mod.rs + build.rs + dispatch.rs + event_channel.rs)
-#   - crates/engine/aura-engine/src/agents/host.rs      — AgentHost runs spawned agents through the
+#   - crates/engine/aura-engine/src/agents/host/mod.rs  — AgentHost runs spawned agents through the
 #                                                  scheduler and writes inbox fallback records
 #   - crates/surface/aura-node/src/node.rs            — boots the process-wide store and wires runtime surfaces
 #   - crates/surface/aura-node/src/tool_permissions.rs — HTTP-driven tool-permissions
@@ -222,7 +222,7 @@ done <<<"$changes_subcommands"
 #   - crates/engine/aura-engine/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store(_db)?::)?Store>' \
-    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/gateway/state\.rs|crates/surface/aura-node/src/gateway/session/mod\.rs|crates/surface/aura-node/src/gateway/session/cross_agent_hook\.rs|crates/surface/aura-node/src/gateway/session/child_kernel\.rs|crates/engine/aura-engine/src/scheduler\.rs|crates/engine/aura-engine/src/automaton/|crates/engine/aura-engine/src/agents/host\.rs|crates/engine/aura-engine/src/worker\.rs|crates/surface/aura-node/src/node\.rs|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/harness\.rs|crates/surface/aura-app/src/session\.rs|crates/surface/aura-app/src/event_loop/(mod|cloud)\.rs|crates/engine/aura-engine-cloud/src/hub/|crates/surface/aura-node/src/gateway/handlers/cloud\.rs|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/kernel_domain_gateway/|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/gateway/state\.rs|crates/surface/aura-node/src/gateway/session/mod\.rs|crates/surface/aura-node/src/gateway/session/cross_agent_hook\.rs|crates/surface/aura-node/src/gateway/session/child_kernel\.rs|crates/engine/aura-engine/src/scheduler\.rs|crates/engine/aura-engine/src/automaton/|crates/engine/aura-engine/src/agents/host/mod\.rs|crates/engine/aura-engine/src/worker\.rs|crates/surface/aura-node/src/node\.rs|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/harness\.rs|crates/surface/aura-app/src/session\.rs|crates/surface/aura-app/src/event_loop/(mod|cloud)\.rs|crates/engine/aura-engine-cloud/src/hub/|crates/surface/aura-node/src/gateway/handlers/cloud\.rs|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/kernel_domain_gateway/|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into the store crates directly. Any
 # code that needs persistence goes through the per-agent kernel. Test files

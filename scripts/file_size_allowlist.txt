@@ -31,7 +31,6 @@ crates/engine/aura-engine-cloud/src/hub/mod.rs
 crates/engine/aura-engine-cloud/src/snapshots.rs
 crates/engine/aura-engine-registry/src/registry/code.rs
 crates/engine/aura-engine-registry/src/registry/mod.rs
-crates/engine/aura-engine/src/agents/host.rs
 crates/engine/aura-engine/src/automaton/mod.rs
 crates/engine/aura-engine/src/scheduler.rs
 crates/surface/aura-app/src/api_server.rs
