@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::bundle::RunSource;
 use crate::rewards::tests::{base, model, nudge, result};

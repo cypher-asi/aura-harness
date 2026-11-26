@@ -51,6 +51,7 @@
 //!   Every variant is tested.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 pub mod adapters;
 mod derivation;

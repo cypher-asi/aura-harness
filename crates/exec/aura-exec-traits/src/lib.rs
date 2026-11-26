@@ -12,6 +12,7 @@
 //! without depending on each other.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 pub mod domain;
 mod executor;

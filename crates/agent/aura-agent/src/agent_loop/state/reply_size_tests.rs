@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn next_request(state: &mut LoopState, config: &AgentLoopConfig) -> ModelRequest {

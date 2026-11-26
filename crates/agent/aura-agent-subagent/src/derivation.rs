@@ -82,14 +82,38 @@ impl Default for DefaultDerivation {
     }
 }
 
+/// Override-resolved fields of a [`SubagentSpec`], gathered before the
+/// spec is assembled.
+struct ResolvedFields {
+    mode: AgentMode,
+    permissions: aura_core_permissions::Permissions,
+    kernel_mode: KernelMode,
+    model_id: String,
+    kind: String,
+    spawn_mode: SpawnMode,
+    replay_mode: ReplayMode,
+    budget: SubagentBudget,
+}
+
 impl SubagentDerivation for DefaultDerivation {
     fn derive(
         &self,
         parent: &ParentContext,
-        overrides: SubagentOverrides,
+        mut overrides: SubagentOverrides,
     ) -> Result<(SubagentSpec, OverrideManifest), DerivationError> {
-        // 1. Depth cap — checked first so deep recursion never holds
-        //    spawn resources.
+        let new_depth = self.checked_child_depth(parent)?;
+        let mut manifest = OverrideManifest::default();
+        let resolved = self.resolve_fields(parent, &mut overrides, &mut manifest)?;
+        record_passthrough_overrides(&overrides, &mut manifest);
+        let spec = build_spec(parent, new_depth, resolved, overrides, &manifest);
+        Ok((spec, manifest))
+    }
+}
+
+impl DefaultDerivation {
+    /// 1. Depth cap — checked first so deep recursion never holds
+    ///    spawn resources.
+    fn checked_child_depth(&self, parent: &ParentContext) -> Result<u32, DerivationError> {
         let new_depth = parent.depth.saturating_add(1);
         if new_depth > self.config.max_depth {
             return Err(DerivationError::DepthExceeded {
@@ -97,31 +121,19 @@ impl SubagentDerivation for DefaultDerivation {
                 max_depth: self.config.max_depth,
             });
         }
+        Ok(new_depth)
+    }
 
-        let mut manifest = OverrideManifest::default();
-
-        // 2. Mode override (narrowing-only). Checked BEFORE
-        //    `allows_spawn` so a malformed widening request gets a
-        //    precise `ModeWidens` rejection rather than the broader
-        //    `SpawnNotAllowed` mask when the parent's own mode also
-        //    fails the spawn-allowed gate.
-        let mode = if let Some(requested) = overrides.mode {
-            if !narrowing_allowed(parent.mode, requested) {
-                return Err(DerivationError::ModeWidens {
-                    parent: parent.mode,
-                    requested,
-                });
-            }
-            if requested != parent.mode {
-                manifest.applied.push(OverriddenField::Mode {
-                    from: parent.mode,
-                    to: requested,
-                });
-            }
-            requested
-        } else {
-            parent.mode
-        };
+    /// Steps 2–7: resolve every override that replaces a parent or
+    /// config default, recording each applied one in `manifest`.
+    /// Takes the consumed fields out of `overrides`.
+    fn resolve_fields(
+        &self,
+        parent: &ParentContext,
+        overrides: &mut SubagentOverrides,
+        manifest: &mut OverrideManifest,
+    ) -> Result<ResolvedFields, DerivationError> {
+        let mode = resolve_mode(parent, overrides.mode.take(), manifest)?;
 
         // 3. Spawn-allowed mode gate. Per the mode table only
         //    `AgentMode::Agent` currently permits spawning; the rule
@@ -131,171 +143,258 @@ impl SubagentDerivation for DefaultDerivation {
             return Err(DerivationError::SpawnNotAllowed(parent.mode));
         }
 
-        // 4. Permissions override (intersection-only — any
-        //    capability present in the request but not in the parent
-        //    is a widen).
-        let permissions = if let Some(requested) = overrides.permissions {
-            if let Some(cap) = first_widening_capability(&parent.permissions, &requested) {
-                return Err(DerivationError::PermissionsWiden {
-                    capability: cap.clone(),
-                });
-            }
-            let narrowed = aura_core_permissions::narrow(&parent.permissions, &requested);
-            manifest.applied.push(OverriddenField::Permissions {
-                capability_count: narrowed.capabilities.len(),
-            });
-            narrowed
-        } else {
-            parent.permissions.clone()
-        };
-
-        // 5. Kernel-mode override — only legal direction is to
-        //    upgrade audit (AuditedLite → Audited). Downgrading is
-        //    forbidden so the kernel always sees at least
-        //    AuditedLite per the rules.md §13 invariant.
-        let kernel_mode_default = self.config.default_kernel_mode_for_subagents;
-        let parent_kernel = parent.kernel_mode();
-        let kernel_mode = if let Some(requested) = overrides.kernel_mode {
-            if downgrades_kernel(parent_kernel, requested) {
-                return Err(DerivationError::KernelModeDowngradeForbidden {
-                    parent: parent_kernel,
-                    requested,
-                });
-            }
-            if requested != kernel_mode_default {
-                manifest.applied.push(OverriddenField::KernelMode {
-                    from: kernel_mode_default,
-                    to: requested,
-                });
-            }
-            requested
-        } else {
-            kernel_mode_default
-        };
-
-        // 6. Model id (free-form string in Phase 6a; richer
-        //    permission gating lands in Phase 7+).
-        let model_id = if let Some(requested) = overrides.model_id {
-            if requested != parent.model_id {
-                manifest.applied.push(OverriddenField::ModelId {
-                    from: parent.model_id.clone(),
-                    to: requested.clone(),
-                });
-            }
-            requested
-        } else {
-            parent.model_id.clone()
-        };
+        let permissions = resolve_permissions(parent, overrides.permissions.take(), manifest)?;
+        let kernel_mode =
+            self.resolve_kernel_mode(parent, overrides.kernel_mode.take(), manifest)?;
+        let model_id = resolve_model_id(parent, overrides.model_id.take(), manifest);
 
         // 7. Remaining purely-additive overrides.
-        let kind = if let Some(kind) = overrides.kind {
-            manifest.applied.push(OverriddenField::Kind(kind.clone()));
-            kind
-        } else {
-            "task".to_string()
-        };
+        let kind = apply_override(
+            overrides.kind.take(),
+            manifest,
+            |kind| OverriddenField::Kind(kind.clone()),
+            || "task".to_string(),
+        );
+        let spawn_mode = apply_override(
+            overrides.spawn_mode.take(),
+            manifest,
+            |sm| OverriddenField::SpawnMode(*sm),
+            || SpawnMode::Wait,
+        );
+        let replay_mode = apply_override(
+            overrides.replay_mode.take(),
+            manifest,
+            |rm| OverriddenField::ReplayMode(*rm),
+            || ReplayMode::Live,
+        );
+        let budget = apply_override(
+            overrides.budget.take(),
+            manifest,
+            |_| OverriddenField::Budget,
+            || self.config.default_budget.clone(),
+        );
 
-        let spawn_mode = if let Some(sm) = overrides.spawn_mode {
-            manifest.applied.push(OverriddenField::SpawnMode(sm));
-            sm
-        } else {
-            SpawnMode::Wait
-        };
-
-        let replay_mode = if let Some(rm) = overrides.replay_mode {
-            manifest.applied.push(OverriddenField::ReplayMode(rm));
-            rm
-        } else {
-            ReplayMode::Live
-        };
-
-        let budget = if let Some(b) = overrides.budget {
-            manifest.applied.push(OverriddenField::Budget);
-            b
-        } else {
-            self.config.default_budget.clone()
-        };
-
-        if let Some(subset) = &overrides.tool_subset {
-            manifest.applied.push(OverriddenField::ToolSubset {
-                count: subset.len(),
-            });
-        }
-        if let Some(iso) = &overrides.isolation_id {
-            manifest
-                .applied
-                .push(OverriddenField::IsolationId(iso.clone()));
-        }
-        if let Some(ty) = &overrides.subagent_type {
-            manifest
-                .applied
-                .push(OverriddenField::SubagentType(ty.clone()));
-        }
-        if let Some(addendum) = &overrides.system_prompt_addendum {
-            manifest
-                .applied
-                .push(OverriddenField::SystemPromptAddendum {
-                    chars: addendum.chars().count(),
-                });
-        }
-        if let Some(perms) = &overrides.parent_tool_permissions {
-            manifest
-                .applied
-                .push(OverriddenField::ParentToolPermissions {
-                    entries: perms.per_tool.len(),
-                });
-        }
-        if overrides.user_tool_defaults.is_some() {
-            manifest.applied.push(OverriddenField::UserToolDefaults);
-        }
-
-        // 8. Compose the resolved ModeProfile from the parent's
-        //    profile, swapping in the (possibly overridden) kernel
-        //    mode and the (possibly overridden) AgentMode.
-        let mode_profile = ModeProfile {
-            agent: mode,
-            kernel: kernel_mode,
-            sandbox: parent.mode_profile.sandbox,
-            replay: parent.mode_profile.replay,
-        };
-
-        // 9. Extend the lineage chain to include the parent agent.
-        let mut chain = parent.lineage.chain.clone();
-        if chain.last().copied() != Some(parent.agent_id) {
-            chain.push(parent.agent_id);
-        }
-        let lineage = SubagentLineage {
-            root_agent_id: parent.lineage.root_agent_id,
-            chain,
-        };
-
-        let spec = SubagentSpec {
-            parent: parent.agent_id,
-            depth: new_depth,
+        Ok(ResolvedFields {
             mode,
-            mode_profile,
             permissions,
             kernel_mode,
             model_id,
-            reasoning_effort: overrides.reasoning_effort,
             kind,
             spawn_mode,
             replay_mode,
             budget,
-            tool_subset: overrides.tool_subset,
-            isolation_id: overrides.isolation_id,
-            lineage,
-            audit_attribution: AuditAttribution {
-                parent_agent_id: parent.agent_id,
-            },
-            overridden_fields: manifest.clone(),
-            subagent_type: overrides.subagent_type,
-            system_prompt_addendum: overrides.system_prompt_addendum,
-            parent_tool_permissions: overrides.parent_tool_permissions,
-            user_tool_defaults: overrides.user_tool_defaults,
-        };
+        })
+    }
 
-        Ok((spec, manifest))
+    /// 5. Kernel-mode override — only legal direction is to
+    ///    upgrade audit (AuditedLite → Audited). Downgrading is
+    ///    forbidden so the kernel always sees at least
+    ///    AuditedLite per the rules.md §13 invariant.
+    fn resolve_kernel_mode(
+        &self,
+        parent: &ParentContext,
+        requested: Option<KernelMode>,
+        manifest: &mut OverrideManifest,
+    ) -> Result<KernelMode, DerivationError> {
+        let kernel_mode_default = self.config.default_kernel_mode_for_subagents;
+        let parent_kernel = parent.kernel_mode();
+        let Some(requested) = requested else {
+            return Ok(kernel_mode_default);
+        };
+        if downgrades_kernel(parent_kernel, requested) {
+            return Err(DerivationError::KernelModeDowngradeForbidden {
+                parent: parent_kernel,
+                requested,
+            });
+        }
+        if requested != kernel_mode_default {
+            manifest.applied.push(OverriddenField::KernelMode {
+                from: kernel_mode_default,
+                to: requested,
+            });
+        }
+        Ok(requested)
+    }
+}
+
+/// 2. Mode override (narrowing-only). Checked BEFORE
+///    `allows_spawn` so a malformed widening request gets a
+///    precise `ModeWidens` rejection rather than the broader
+///    `SpawnNotAllowed` mask when the parent's own mode also
+///    fails the spawn-allowed gate.
+fn resolve_mode(
+    parent: &ParentContext,
+    requested: Option<AgentMode>,
+    manifest: &mut OverrideManifest,
+) -> Result<AgentMode, DerivationError> {
+    let Some(requested) = requested else {
+        return Ok(parent.mode);
+    };
+    if !narrowing_allowed(parent.mode, requested) {
+        return Err(DerivationError::ModeWidens {
+            parent: parent.mode,
+            requested,
+        });
+    }
+    if requested != parent.mode {
+        manifest.applied.push(OverriddenField::Mode {
+            from: parent.mode,
+            to: requested,
+        });
+    }
+    Ok(requested)
+}
+
+/// 4. Permissions override (intersection-only — any
+///    capability present in the request but not in the parent
+///    is a widen).
+fn resolve_permissions(
+    parent: &ParentContext,
+    requested: Option<aura_core_permissions::Permissions>,
+    manifest: &mut OverrideManifest,
+) -> Result<aura_core_permissions::Permissions, DerivationError> {
+    let Some(requested) = requested else {
+        return Ok(parent.permissions.clone());
+    };
+    if let Some(cap) = first_widening_capability(&parent.permissions, &requested) {
+        return Err(DerivationError::PermissionsWiden {
+            capability: cap.clone(),
+        });
+    }
+    let narrowed = aura_core_permissions::narrow(&parent.permissions, &requested);
+    manifest.applied.push(OverriddenField::Permissions {
+        capability_count: narrowed.capabilities.len(),
+    });
+    Ok(narrowed)
+}
+
+/// 6. Model id (free-form string in Phase 6a; richer
+///    permission gating lands in Phase 7+).
+fn resolve_model_id(
+    parent: &ParentContext,
+    requested: Option<String>,
+    manifest: &mut OverrideManifest,
+) -> String {
+    let Some(requested) = requested else {
+        return parent.model_id.clone();
+    };
+    if requested != parent.model_id {
+        manifest.applied.push(OverriddenField::ModelId {
+            from: parent.model_id.clone(),
+            to: requested.clone(),
+        });
+    }
+    requested
+}
+
+/// Use `requested` when present (recording `field(&value)` in the
+/// manifest), otherwise `default()`.
+fn apply_override<T>(
+    requested: Option<T>,
+    manifest: &mut OverrideManifest,
+    field: impl FnOnce(&T) -> OverriddenField,
+    default: impl FnOnce() -> T,
+) -> T {
+    match requested {
+        Some(value) => {
+            manifest.applied.push(field(&value));
+            value
+        }
+        None => default(),
+    }
+}
+
+/// Record the overrides that pass straight through to the spec.
+fn record_passthrough_overrides(overrides: &SubagentOverrides, manifest: &mut OverrideManifest) {
+    if let Some(subset) = &overrides.tool_subset {
+        manifest.applied.push(OverriddenField::ToolSubset {
+            count: subset.len(),
+        });
+    }
+    if let Some(iso) = &overrides.isolation_id {
+        manifest
+            .applied
+            .push(OverriddenField::IsolationId(iso.clone()));
+    }
+    if let Some(ty) = &overrides.subagent_type {
+        manifest
+            .applied
+            .push(OverriddenField::SubagentType(ty.clone()));
+    }
+    if let Some(addendum) = &overrides.system_prompt_addendum {
+        manifest
+            .applied
+            .push(OverriddenField::SystemPromptAddendum {
+                chars: addendum.chars().count(),
+            });
+    }
+    if let Some(perms) = &overrides.parent_tool_permissions {
+        manifest
+            .applied
+            .push(OverriddenField::ParentToolPermissions {
+                entries: perms.per_tool.len(),
+            });
+    }
+    if overrides.user_tool_defaults.is_some() {
+        manifest.applied.push(OverriddenField::UserToolDefaults);
+    }
+}
+
+/// 9. Extend the lineage chain to include the parent agent.
+fn extend_lineage(parent: &ParentContext) -> SubagentLineage {
+    let mut chain = parent.lineage.chain.clone();
+    if chain.last().copied() != Some(parent.agent_id) {
+        chain.push(parent.agent_id);
+    }
+    SubagentLineage {
+        root_agent_id: parent.lineage.root_agent_id,
+        chain,
+    }
+}
+
+/// Assemble the child spec from the resolved fields and the
+/// remaining pass-through overrides.
+fn build_spec(
+    parent: &ParentContext,
+    depth: u32,
+    resolved: ResolvedFields,
+    overrides: SubagentOverrides,
+    manifest: &OverrideManifest,
+) -> SubagentSpec {
+    // 8. Compose the resolved ModeProfile from the parent's
+    //    profile, swapping in the (possibly overridden) kernel
+    //    mode and the (possibly overridden) AgentMode.
+    let mode_profile = ModeProfile {
+        agent: resolved.mode,
+        kernel: resolved.kernel_mode,
+        sandbox: parent.mode_profile.sandbox,
+        replay: parent.mode_profile.replay,
+    };
+
+    SubagentSpec {
+        parent: parent.agent_id,
+        depth,
+        mode: resolved.mode,
+        mode_profile,
+        permissions: resolved.permissions,
+        kernel_mode: resolved.kernel_mode,
+        model_id: resolved.model_id,
+        reasoning_effort: overrides.reasoning_effort,
+        kind: resolved.kind,
+        spawn_mode: resolved.spawn_mode,
+        replay_mode: resolved.replay_mode,
+        budget: resolved.budget,
+        tool_subset: overrides.tool_subset,
+        isolation_id: overrides.isolation_id,
+        lineage: extend_lineage(parent),
+        audit_attribution: AuditAttribution {
+            parent_agent_id: parent.agent_id,
+        },
+        overridden_fields: manifest.clone(),
+        subagent_type: overrides.subagent_type,
+        system_prompt_addendum: overrides.system_prompt_addendum,
+        parent_tool_permissions: overrides.parent_tool_permissions,
+        user_tool_defaults: overrides.user_tool_defaults,
     }
 }
 

@@ -57,46 +57,11 @@ impl ExecutorRouter {
             .collect();
 
         if matches.len() > 1 {
-            let names: Vec<&str> = matches.iter().map(|e| e.name()).collect();
-            // Always loud — operators must notice this.
-            error!(
-                matched = matches.len(),
-                executors = ?names,
-                "Multiple executors can handle action; routing is ambiguous"
-            );
-            debug_assert!(
-                matches.len() <= 1,
-                "ambiguous executor routing: {names:?} all match action {:?}",
-                action.action_id
-            );
-            return Effect::new(
-                action.action_id,
-                EffectKind::Agreement,
-                EffectStatus::Failed,
-                format!(
-                    "ambiguous executor routing: {} executors match",
-                    matches.len()
-                ),
-            );
+            return ambiguous_routing_effect(action, &matches);
         }
 
         if let Some(executor) = matches.first() {
-            debug!(executor = executor.name(), "Dispatching action to executor");
-            match executor.execute(ctx, action).await {
-                Ok(effect) => {
-                    debug!(?effect.status, "Action executed successfully");
-                    return effect;
-                }
-                Err(e) => {
-                    error!(error = %e, "Executor failed");
-                    return Effect::new(
-                        action.action_id,
-                        EffectKind::Agreement,
-                        EffectStatus::Failed,
-                        format!("Executor error: {e}"),
-                    );
-                }
-            }
+            return dispatch(executor, ctx, action).await;
         }
 
         debug!("No executor found for action");
@@ -106,6 +71,53 @@ impl ExecutorRouter {
             EffectStatus::Failed,
             "No executor available for action",
         )
+    }
+}
+
+/// Report a mis-configured registry where several executors match one action.
+///
+/// Panics in `debug_assertions` builds; returns a failed effect otherwise.
+fn ambiguous_routing_effect(action: &Action, matches: &[&Arc<dyn Executor>]) -> Effect {
+    let names: Vec<&str> = matches.iter().map(|e| e.name()).collect();
+    // Always loud — operators must notice this.
+    error!(
+        matched = matches.len(),
+        executors = ?names,
+        "Multiple executors can handle action; routing is ambiguous"
+    );
+    debug_assert!(
+        matches.len() <= 1,
+        "ambiguous executor routing: {names:?} all match action {:?}",
+        action.action_id
+    );
+    Effect::new(
+        action.action_id,
+        EffectKind::Agreement,
+        EffectStatus::Failed,
+        format!(
+            "ambiguous executor routing: {} executors match",
+            matches.len()
+        ),
+    )
+}
+
+/// Run the single matching executor, turning its error into a failed effect.
+async fn dispatch(executor: &Arc<dyn Executor>, ctx: &ExecuteContext, action: &Action) -> Effect {
+    debug!(executor = executor.name(), "Dispatching action to executor");
+    match executor.execute(ctx, action).await {
+        Ok(effect) => {
+            debug!(?effect.status, "Action executed successfully");
+            effect
+        }
+        Err(e) => {
+            error!(error = %e, "Executor failed");
+            Effect::new(
+                action.action_id,
+                EffectKind::Agreement,
+                EffectStatus::Failed,
+                format!("Executor error: {e}"),
+            )
+        }
     }
 }
 

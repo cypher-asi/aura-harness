@@ -1,4 +1,3 @@
-
 use super::*;
 use aura_exec_tools::IntentClassifier;
 use aura_model::ToolDefinition;

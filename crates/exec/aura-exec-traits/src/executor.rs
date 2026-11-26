@@ -251,58 +251,66 @@ fn decode_committed_content(tool_result: &ToolResult) -> String {
 #[must_use]
 pub fn decode_tool_effect(effect: &Effect) -> DecodedToolResult {
     if effect.status == EffectStatus::Committed {
-        match serde_json::from_slice::<ToolResult>(&effect.payload) {
-            Ok(tool_result) => {
-                let content = decode_committed_content(&tool_result);
-                DecodedToolResult {
-                    content,
-                    is_error: !tool_result.ok,
-                    kind: tool_result.kind,
-                    metadata: tool_result.metadata,
-                    line_diff: tool_result.line_diff,
-                    image: tool_result.image,
-                }
-            }
-            Err(e) => {
-                let raw = String::from_utf8_lossy(&effect.payload);
-                warn!(
-                    error = %e,
-                    payload_len = effect.payload.len(),
-                    "Failed to parse Committed tool effect payload as ToolResult"
-                );
-                DecodedToolResult {
-                    content: format!("Tool result could not be parsed: {e}. Raw: {raw}"),
-                    is_error: true,
-                    kind: aura_core_types::ToolResultKind::AgentError,
-                    metadata: HashMap::new(),
-                    line_diff: None,
-                    image: None,
-                }
-            }
-        }
+        decode_committed_effect(effect)
     } else {
-        let (content, kind) =
-            if let Ok(tool_result) = serde_json::from_slice::<ToolResult>(&effect.payload) {
-                (
-                    String::from_utf8_lossy(&tool_result.stderr).to_string(),
-                    tool_result.kind,
-                )
-            } else {
-                let raw = String::from_utf8_lossy(&effect.payload);
-                let content = if raw.is_empty() {
-                    "Tool execution failed".to_string()
-                } else {
-                    raw.to_string()
-                };
-                (content, aura_core_types::ToolResultKind::AgentError)
-            };
-        DecodedToolResult {
-            content,
-            is_error: true,
-            kind,
-            metadata: HashMap::new(),
-            line_diff: None,
-            image: None,
+        decode_failed_effect(effect)
+    }
+}
+
+fn decode_committed_effect(effect: &Effect) -> DecodedToolResult {
+    match serde_json::from_slice::<ToolResult>(&effect.payload) {
+        Ok(tool_result) => {
+            let content = decode_committed_content(&tool_result);
+            DecodedToolResult {
+                content,
+                is_error: !tool_result.ok,
+                kind: tool_result.kind,
+                metadata: tool_result.metadata,
+                line_diff: tool_result.line_diff,
+                image: tool_result.image,
+            }
         }
+        Err(e) => {
+            let raw = String::from_utf8_lossy(&effect.payload);
+            warn!(
+                error = %e,
+                payload_len = effect.payload.len(),
+                "Failed to parse Committed tool effect payload as ToolResult"
+            );
+            DecodedToolResult {
+                content: format!("Tool result could not be parsed: {e}. Raw: {raw}"),
+                is_error: true,
+                kind: aura_core_types::ToolResultKind::AgentError,
+                metadata: HashMap::new(),
+                line_diff: None,
+                image: None,
+            }
+        }
+    }
+}
+
+fn decode_failed_effect(effect: &Effect) -> DecodedToolResult {
+    let (content, kind) =
+        if let Ok(tool_result) = serde_json::from_slice::<ToolResult>(&effect.payload) {
+            (
+                String::from_utf8_lossy(&tool_result.stderr).to_string(),
+                tool_result.kind,
+            )
+        } else {
+            let raw = String::from_utf8_lossy(&effect.payload);
+            let content = if raw.is_empty() {
+                "Tool execution failed".to_string()
+            } else {
+                raw.to_string()
+            };
+            (content, aura_core_types::ToolResultKind::AgentError)
+        };
+    DecodedToolResult {
+        content,
+        is_error: true,
+        kind,
+        metadata: HashMap::new(),
+        line_diff: None,
+        image: None,
     }
 }

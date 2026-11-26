@@ -1,4 +1,3 @@
-
 use super::*;
 use aura_core_types::trace::{ModelAction, TokenUsage, ToolCallAction, ToolIntent};
 

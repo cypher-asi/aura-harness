@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::bundle::RunMeta;
 use crate::rewards::tests::{base, model, nudge, result};

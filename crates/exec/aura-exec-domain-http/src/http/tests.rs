@@ -1,5 +1,5 @@
-
 use super::*;
+use aura_exec_traits::domain::DomainApi;
 
 #[tokio::test]
 async fn project_connection_failure_preserves_reason_in_display() {
