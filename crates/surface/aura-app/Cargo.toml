@@ -28,6 +28,7 @@ aura-auth = { path = "../../auth/aura-auth" }
 aura-auth-kit = { path = "../../auth/aura-auth-kit" }
 aura-engine = { path = "../../engine/aura-engine" }
 aura-engine-cloud = { path = "../../engine/aura-engine-cloud" }
+aura-engine-registry = { path = "../../engine/aura-engine-registry" }
 aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }
 thiserror = { workspace = true }
@@ -41,7 +42,6 @@ chrono = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 tokio-util = { workspace = true }
@@ -74,6 +74,8 @@ walkdir = { workspace = true }
 [dev-dependencies]
 # `test-support` lets the app's tests fill Gate's table by hand.
 aura-gate = { path = "../../gate/aura-gate", features = ["test-support"] }
+# `test-support` lets the app's tests read the registry's store.
+aura-engine-registry = { path = "../../engine/aura-engine-registry", features = ["test-support"] }
 tower = { workspace = true }
 # `test-util` enables tokio's paused-clock test helpers
 # (`#[tokio::test(start_paused = true)]`), so the shutdown-grace tests of

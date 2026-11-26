@@ -57,7 +57,7 @@ const COMPARE_ARM_ZNS_PREFIX: &str = "0://terminal/compare-arm/";
 
 /// Where a channel's coordinator lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CoordinatorHome {
+pub enum CoordinatorHome {
     /// At the top of the project with this id, working in its folder.
     Project(String),
     /// In the launch directory's project, working in this folder (the
@@ -70,10 +70,10 @@ pub(crate) enum CoordinatorHome {
 /// agents that spawned it, or else its project, do (see
 /// [`AgentRegistry::project_folder`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AgentPlacement {
-    pub(crate) agent_id: AgentId,
-    pub(crate) project_id: Option<String>,
-    pub(crate) folder: Option<PathBuf>,
+pub struct AgentPlacement {
+    pub agent_id: AgentId,
+    pub project_id: Option<String>,
+    pub folder: Option<PathBuf>,
 }
 
 /// A folder the agents of the terminal UI work in.
@@ -1674,26 +1674,22 @@ impl AgentRegistry {
 
     /// Tell the registry these agents are channel members: removing their
     /// project keeps them, and they stay listed (see `is_listed`).
-    pub(crate) fn mark_channel_members(&mut self, members: impl IntoIterator<Item = AgentId>) {
+    pub fn mark_channel_members(&mut self, members: impl IntoIterator<Item = AgentId>) {
         self.channel_members.extend(members);
     }
 
     /// A fresh coordinator for the channel `slug`, working in `home`, not
     /// yet registered: an instance of
-    /// [`crate::agent_definitions::COORDINATOR_DEFINITION`] named
+    /// [`crate::definitions::COORDINATOR_DEFINITION`] named
     /// `#<slug> coordinator`. Its code is given by [`Self::adopt`]. For a
     /// [`CoordinatorHome::Folder`] the launch project is made in memory
     /// when missing, as for other new agents, and saved with the next
     /// write. A [`CoordinatorHome::Project`] is not checked here: the
     /// caller makes sure the project is listed.
-    pub(crate) fn coordinator_draft(
-        &mut self,
-        slug: &str,
-        home: CoordinatorHome,
-    ) -> RegisteredAgent {
+    pub fn coordinator_draft(&mut self, slug: &str, home: CoordinatorHome) -> RegisteredAgent {
         let placed = self.home_of(home);
         RegisteredAgent {
-            definition: Some(crate::agent_definitions::COORDINATOR_DEFINITION.to_string()),
+            definition: Some(crate::definitions::COORDINATOR_DEFINITION.to_string()),
             project_id: placed.0,
             folder: placed.1,
             ..Self::new_agent(format!("#{slug} coordinator"))
@@ -1703,7 +1699,7 @@ impl AgentRegistry {
     /// Where the coordinator `agent_id` goes to live in `home`, for
     /// [`Self::place_agents`]. As in [`Self::coordinator_draft`], a
     /// [`CoordinatorHome::Folder`] may make the launch project in memory.
-    pub(crate) fn coordinator_placement(
+    pub fn coordinator_placement(
         &mut self,
         agent_id: AgentId,
         home: CoordinatorHome,
@@ -1739,7 +1735,7 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if an agent is not registered (nothing is
     /// written), or `write`'s error (nothing changes in memory).
-    pub(crate) fn place_agents<T>(
+    pub fn place_agents<T>(
         &mut self,
         placements: &[AgentPlacement],
         write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> anyhow::Result<T>,
@@ -1777,7 +1773,7 @@ impl AgentRegistry {
 
     /// The row `agent`, not yet registered, has once [`Self::adopt`]
     /// appends it (before its code is assigned).
-    pub(crate) fn record_for(&self, agent: &RegisteredAgent) -> aura_store_db::AgentRecord {
+    pub fn record_for(&self, agent: &RegisteredAgent) -> aura_store_db::AgentRecord {
         persist::appended_row(&self.file, agent)
     }
 
@@ -1787,7 +1783,7 @@ impl AgentRegistry {
     /// store already, and the code goes out with the next save. Failing
     /// here would leave a stored channel whose coordinator the app does
     /// not know until a restart.
-    pub(crate) fn adopt(&mut self, mut agent: RegisteredAgent) -> RegisteredAgent {
+    pub fn adopt(&mut self, mut agent: RegisteredAgent) -> RegisteredAgent {
         if agent.code.is_none() {
             agent.code = Some(code::assign(
                 &agent,
@@ -1809,8 +1805,8 @@ impl AgentRegistry {
 
     /// The store the registry is kept in. Writers outside the registry
     /// get it through [`Self::place_agents`].
-    #[cfg(test)]
-    pub(crate) fn store(&self) -> &AgentStore {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn store(&self) -> &AgentStore {
         &self.store
     }
 }

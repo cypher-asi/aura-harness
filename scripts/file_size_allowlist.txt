@@ -69,6 +69,10 @@ crates/engine/aura-engine-cloud/src/fleet.rs
 crates/engine/aura-engine-cloud/src/github.rs
 crates/engine/aura-engine-cloud/src/plans.rs
 crates/engine/aura-engine-cloud/src/snapshots.rs
+crates/engine/aura-engine-registry/src/definitions.rs
+crates/engine/aura-engine-registry/src/registry/code.rs
+crates/engine/aura-engine-registry/src/registry/mod.rs
+crates/engine/aura-engine-registry/src/registry/tests.rs
 crates/engine/aura-engine/src/agents/host.rs
 crates/engine/aura-engine/src/agents/mail.rs
 crates/engine/aura-engine/src/agents/tests.rs
@@ -117,10 +121,6 @@ crates/store/aura-store-db/src/processes.rs
 crates/store/aura-store-db/src/rocks_store/mod.rs
 crates/store/aura-store-db/src/rocks_store/tests.rs
 crates/store/aura-store-db/src/traces.rs
-crates/surface/aura-app/src/agent_definitions.rs
-crates/surface/aura-app/src/agent_registry/code.rs
-crates/surface/aura-app/src/agent_registry.rs
-crates/surface/aura-app/src/agent_registry/tests.rs
 crates/surface/aura-app/src/api_server.rs
 crates/surface/aura-app/src/cloud/host_info.rs
 crates/surface/aura-app/src/cloud/hub.rs

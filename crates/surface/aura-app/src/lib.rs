@@ -16,8 +16,11 @@
 
 #![forbid(unsafe_code)]
 
-pub mod agent_definitions;
-pub mod agent_registry;
+/// The agent definitions, moved to `aura-engine-registry`.
+pub use aura_engine_registry::definitions as agent_definitions;
+/// The agent registry, moved to `aura-engine-registry`.
+pub use aura_engine_registry::registry as agent_registry;
+
 pub mod api_server;
 pub mod bench_pack;
 pub mod chat_notes;

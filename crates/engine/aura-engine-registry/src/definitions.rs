@@ -33,34 +33,28 @@ const SEEDED_FILE: &str = ".seeded";
 /// Built-in definitions, each added once to a roster; deleting one never
 /// re-adds it. The specialists match AURA's default agent roster.
 const SEED_DEFINITIONS: &[(&str, &str)] = &[
-    ("explorer", include_str!("agent_definitions/explorer.md")),
-    ("reviewer", include_str!("agent_definitions/reviewer.md")),
-    ("implement", include_str!("agent_definitions/implement.md")),
-    ("tests", include_str!("agent_definitions/tests.md")),
-    ("engineer", include_str!("agent_definitions/engineer.md")),
+    ("explorer", include_str!("definitions/explorer.md")),
+    ("reviewer", include_str!("definitions/reviewer.md")),
+    ("implement", include_str!("definitions/implement.md")),
+    ("tests", include_str!("definitions/tests.md")),
+    ("engineer", include_str!("definitions/engineer.md")),
     (
         "rust-engineer",
-        include_str!("agent_definitions/rust-engineer.md"),
+        include_str!("definitions/rust-engineer.md"),
     ),
     (
         "frontend-engineer",
-        include_str!("agent_definitions/frontend-engineer.md"),
+        include_str!("definitions/frontend-engineer.md"),
     ),
-    (
-        "ui-designer",
-        include_str!("agent_definitions/ui-designer.md"),
-    ),
-    (
-        "web-designer",
-        include_str!("agent_definitions/web-designer.md"),
-    ),
+    ("ui-designer", include_str!("definitions/ui-designer.md")),
+    ("web-designer", include_str!("definitions/web-designer.md")),
     (
         "product-manager",
-        include_str!("agent_definitions/product-manager.md"),
+        include_str!("definitions/product-manager.md"),
     ),
     (
         COORDINATOR_DEFINITION,
-        include_str!("agent_definitions/coordinator.md"),
+        include_str!("definitions/coordinator.md"),
     ),
 ];
 

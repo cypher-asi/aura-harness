@@ -1,0 +1,33 @@
+[package]
+name = "aura-engine-registry"
+description = "The persistent registry of projects and agents, and the permanent agent definitions they are spawned from"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aura-core-types = { path = "../../core/aura-core-types" }
+aura-store-db = { path = "../../store/aura-store-db" }
+aura-model = { path = "../../model/aura-model" }
+aura-exec-tools = { path = "../../exec/aura-exec-tools" }
+aura-context-skills = { path = "../../context/aura-context-skills" }
+anyhow = { workspace = true }
+blake3 = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[features]
+# Exposes `AgentRegistry::store` so dependents' tests can read the rows.
+test-support = []
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -450,6 +450,7 @@ dependencies = [
  "aura-core-types",
  "aura-engine",
  "aura-engine-cloud",
+ "aura-engine-registry",
  "aura-exec-tools",
  "aura-gate",
  "aura-model",
@@ -471,7 +472,6 @@ dependencies = [
  "rustix 1.1.3",
  "serde",
  "serde_json",
- "serde_yaml",
  "similar",
  "sysinfo",
  "tar",
@@ -888,6 +888,26 @@ dependencies = [
  "tracing",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "aura-engine-registry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aura-context-skills",
+ "aura-core-types",
+ "aura-exec-tools",
+ "aura-model",
+ "aura-store-db",
+ "blake3",
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

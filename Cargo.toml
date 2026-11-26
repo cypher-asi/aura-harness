@@ -69,6 +69,7 @@ members = [
     "crates/auth/aura-auth",
     "crates/engine/aura-engine-automaton",
     "crates/engine/aura-engine-cloud",
+    "crates/engine/aura-engine-registry",
     "crates/engine/aura-engine",
     "crates/ui/aura-ui",
     "crates/ui/aura-ui-terminal",
