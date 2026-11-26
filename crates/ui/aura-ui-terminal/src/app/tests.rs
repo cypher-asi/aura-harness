@@ -6219,9 +6219,9 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     let (mut app, _rx) = app_with_others_channel();
     // A layout of the user's own: Record shown, the side panel hidden
     // and not maximized, on TRACE.
-    app.record_panel_visible = true;
-    app.side_expanded = false;
-    app.sandbox_panel_visible = false;
+    app.panels.record_visible = true;
+    app.panels.side_expanded = false;
+    app.panels.sandbox_visible = false;
     app.side_tab = SidePanelTab::Trace;
 
     app.handle_key(key(KeyCode::Left));
@@ -6255,9 +6255,9 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
     assert!(
         (
-            app.record_panel_visible,
-            app.sandbox_panel_visible,
-            app.side_expanded
+            app.panels.record_visible,
+            app.panels.sandbox_visible,
+            app.panels.side_expanded
         ) == (true, false, false),
         "the user's flags are untouched"
     );
@@ -7045,18 +7045,18 @@ fn test_right_click_on_the_channel_side_panel_opens_its_menu() {
 fn test_kernel_panel_commands_leave_the_layout_alone_while_a_channel_is_open() {
     let (_dir, mut app) = app_in_channel("co");
     let before = (
-        app.record_panel_visible,
-        app.side_expanded,
-        app.sandbox_panel_visible,
+        app.panels.record_visible,
+        app.panels.side_expanded,
+        app.panels.sandbox_visible,
     );
     app.show_members();
     app.show_policies();
     app.show_inbox();
     assert_eq!(
         (
-            app.record_panel_visible,
-            app.side_expanded,
-            app.sandbox_panel_visible,
+            app.panels.record_visible,
+            app.panels.side_expanded,
+            app.panels.sandbox_visible,
         ),
         before
     );

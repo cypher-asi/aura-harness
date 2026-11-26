@@ -1958,8 +1958,8 @@ fn test_showing_the_right_column_keeps_the_agents_column_in_place() {
         assert!(shown.is_some());
         assert_eq!(app.pane_chrome().len(), 4, "the right column is shown");
 
-        app.record_panel_visible = false;
-        app.sandbox_panel_visible = false;
+        app.panels.record_visible = false;
+        app.panels.sandbox_visible = false;
         render_rows(&mut app, 150);
         assert_eq!(app.pane_chrome().len(), 2, "the right column is hidden");
         assert_eq!(agents_area(&app), shown, "{splits:?}");
@@ -2801,7 +2801,7 @@ fn test_header_hamburger_hides_and_restores_the_right_column() {
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     let mut app = app_with_model(None);
-    app.sandbox_panel_visible = false;
+    app.panels.sandbox_visible = false;
     app.focus = PanelFocus::Records;
     let rows = render_rows(&mut app, 120);
     assert!(rows[0].trim_end().ends_with('☰'), "{:?}", rows[0]);
@@ -3184,8 +3184,8 @@ fn test_wrapped_notification_scrolls_up_to_its_end_and_stays_until_read() {
 #[test]
 fn test_long_notification_scrolls_along_the_footer_without_a_right_column() {
     let mut app = app_with_model(None);
-    app.record_panel_visible = false;
-    app.sandbox_panel_visible = false;
+    app.panels.record_visible = false;
+    app.panels.sandbox_visible = false;
     long_warning(&mut app);
     let rows = render_rows(&mut app, 120);
     let last = rows.last().unwrap();
@@ -3214,8 +3214,8 @@ fn test_long_notification_scrolls_along_the_footer_without_a_right_column() {
 #[test]
 fn test_notification_uses_the_footer_gap_without_a_right_column() {
     let mut app = app_with_model(None);
-    app.record_panel_visible = false;
-    app.sandbox_panel_visible = false;
+    app.panels.record_visible = false;
+    app.panels.sandbox_visible = false;
     app.notify_copied(4, &Ok(()));
     let rows = render_rows(&mut app, 120);
 

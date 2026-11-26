@@ -33,6 +33,7 @@ pub mod mentions;
 mod model_picker;
 mod mouse;
 mod notifications;
+mod panel_layout;
 mod panes;
 mod plan_doc;
 pub mod plans;
@@ -94,6 +95,7 @@ use list_state::ListState;
 pub use members::{MemberRow, RecordsTab};
 pub use model_picker::{ModelPicker, ModelTab, PickerLayout, PickerTarget};
 use notifications::Notifications;
+use panel_layout::PanelLayout;
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 pub(crate) use plan_doc::PlanDoc;
 pub use processes::SidePanelTab;
@@ -189,7 +191,6 @@ pub struct PendingApproval {
 }
 
 /// Main application struct managing UI state.
-#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     /// Current application state
     pub(super) state: AppState,
@@ -238,20 +239,8 @@ pub struct App {
     pub(super) notifications: Notifications,
     /// Which panel has focus
     pub(super) focus: PanelFocus,
-    /// Whether the Record panel is visible
-    pub(super) record_panel_visible: bool,
-    /// Whether the Swarm panel is visible
-    pub(super) swarm_panel_visible: bool,
-    /// Whether the Sandbox panel is visible
-    pub(super) sandbox_panel_visible: bool,
-    /// Whether the chat panel fills the screen, the other panels hidden
-    pub(super) chat_expanded: bool,
-    /// Whether the side panel fills the right column, over the Record
-    /// panel, while it is shown
-    pub(super) side_expanded: bool,
-    /// Which of the Record and side panels were shown when the hamburger
-    /// button hid the right column, to show again when it comes back
-    pub(super) side_column_hidden: Option<(bool, bool)>,
+    /// Which panels are shown, and which fill the room of the others
+    pub(super) panels: PanelLayout,
     /// File tree of the active agent's sandbox
     pub(super) sandbox: SandboxTree,
     /// Whether a tool may have changed files since the tree was read; the
@@ -877,12 +866,7 @@ impl App {
             streaming_content: String::new(),
             notifications: Notifications::default(),
             focus: PanelFocus::default(),
-            record_panel_visible: true,
-            swarm_panel_visible: true,
-            sandbox_panel_visible: true,
-            chat_expanded: false,
-            side_expanded: false,
-            side_column_hidden: None,
+            panels: PanelLayout::default(),
             sandbox: SandboxTree::default(),
             sandbox_stale: false,
             animation_frame: 0,
@@ -1471,8 +1455,8 @@ impl App {
     /// panel is maximized over it, and with no agent on screen.
     #[must_use]
     pub fn record_panel_visible(&self) -> bool {
-        self.record_panel_visible
-            && !self.chat_expanded
+        self.panels.record_visible
+            && !self.panels.chat_expanded
             && !self.side_maximized()
             && !self.no_agent_on_screen()
     }
@@ -1481,13 +1465,13 @@ impl App {
     /// the user maximized it, or the channel app is on screen, which has
     /// no Record panel and whose own panel fills the right column.
     const fn side_maximized(&self) -> bool {
-        self.channel_app() || (self.side_expanded && self.sandbox_panel_visible)
+        self.channel_app() || (self.panels.side_expanded && self.panels.sandbox_visible)
     }
 
     /// Check if the Swarm panel is visible.
     #[must_use]
     pub const fn swarm_panel_visible(&self) -> bool {
-        self.swarm_panel_visible && !self.chat_expanded
+        self.panels.swarm_visible && !self.panels.chat_expanded
     }
 
     /// Check if the Sandbox panel is visible. It shows while a channel is
@@ -1495,22 +1479,22 @@ impl App {
     /// which leaves it nothing to show.
     #[must_use]
     pub fn sandbox_panel_visible(&self) -> bool {
-        (self.sandbox_panel_visible || self.channel_open())
-            && !self.chat_expanded
+        (self.panels.sandbox_visible || self.channel_open())
+            && !self.panels.chat_expanded
             && !self.no_agent_on_screen()
     }
 
     /// Whether the chat panel fills the screen, the other panels hidden.
     #[must_use]
     pub const fn chat_expanded(&self) -> bool {
-        self.chat_expanded
+        self.panels.chat_expanded
     }
 
     /// Expand the chat panel to fill the screen, or give the other panels
     /// their room back. The chat keeps whichever tab or view it shows.
     pub fn toggle_chat_expanded(&mut self) {
-        self.chat_expanded = !self.chat_expanded;
-        if self.chat_expanded {
+        self.panels.chat_expanded = !self.panels.chat_expanded;
+        if self.panels.chat_expanded {
             self.focus = PanelFocus::Chat;
         }
     }
@@ -1519,7 +1503,7 @@ impl App {
     /// above it hidden.
     #[must_use]
     pub const fn side_expanded(&self) -> bool {
-        self.side_expanded
+        self.panels.side_expanded
     }
 
     /// Maximize the side panel over the Record panel, focused, or put it
@@ -1529,8 +1513,8 @@ impl App {
         if self.channel_app() {
             return;
         }
-        self.side_expanded = !self.side_expanded;
-        if self.side_expanded {
+        self.panels.side_expanded = !self.panels.side_expanded;
+        if self.panels.side_expanded {
             self.focus = PanelFocus::Sandbox;
         }
     }
@@ -1552,25 +1536,26 @@ impl App {
     /// tabs that open the Record panel show the column again as usual.
     pub fn toggle_side_column(&mut self) {
         if self.side_column_shown() {
-            self.side_column_hidden = Some((self.record_panel_visible, self.sandbox_panel_visible));
-            self.record_panel_visible = false;
-            self.sandbox_panel_visible = false;
+            self.panels.side_column_hidden =
+                Some((self.panels.record_visible, self.panels.sandbox_visible));
+            self.panels.record_visible = false;
+            self.panels.sandbox_visible = false;
             if matches!(self.focus, PanelFocus::Records | PanelFocus::Sandbox) {
                 self.focus = PanelFocus::Chat;
             }
             return;
         }
-        self.chat_expanded = false;
-        let remembered = self.side_column_hidden.take();
-        if self.record_panel_visible || self.sandbox_panel_visible {
+        self.panels.chat_expanded = false;
+        let remembered = self.panels.side_column_hidden.take();
+        if self.panels.record_visible || self.panels.sandbox_visible {
             // It was only under the expanded chat.
             return;
         }
         let (records, side) = remembered
             .filter(|&shown| shown != (false, false))
             .unwrap_or((true, true));
-        self.record_panel_visible = records;
-        self.sandbox_panel_visible = side;
+        self.panels.record_visible = records;
+        self.panels.sandbox_visible = side;
         if side {
             self.sandbox.refresh();
         }
@@ -1957,7 +1942,7 @@ impl App {
         }
 
         self.receive_commands();
-        if self.sandbox_stale && self.sandbox_panel_visible {
+        if self.sandbox_stale && self.panels.sandbox_visible {
             self.sandbox_stale = false;
             self.sandbox.refresh();
             self.redraw = true;

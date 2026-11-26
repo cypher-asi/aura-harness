@@ -108,12 +108,12 @@ impl App {
             "kernel" | "record" | "k" | "r" => {
                 if self.side_maximized() {
                     // Hidden under the side panel, it comes back.
-                    self.side_expanded = false;
-                    self.record_panel_visible = true;
+                    self.panels.side_expanded = false;
+                    self.panels.record_visible = true;
                 } else {
-                    self.record_panel_visible = !self.record_panel_visible;
+                    self.panels.record_visible = !self.panels.record_visible;
                 }
-                if !self.record_panel_visible && self.focus == PanelFocus::Records {
+                if !self.panels.record_visible && self.focus == PanelFocus::Records {
                     self.focus = PanelFocus::Chat;
                 }
             }
@@ -122,11 +122,11 @@ impl App {
             "policies" | "policy" | "perms" | "permissions" => self.show_policies(),
             "inbox" | "mail" => self.show_inbox(),
             "agents" | "swarm" | "sw" => {
-                self.swarm_panel_visible = !self.swarm_panel_visible;
-                if !self.swarm_panel_visible && self.focus == PanelFocus::Swarm {
+                self.panels.swarm_visible = !self.panels.swarm_visible;
+                if !self.panels.swarm_visible && self.focus == PanelFocus::Swarm {
                     self.focus = PanelFocus::Chat;
                 }
-                if self.swarm_panel_visible {
+                if self.panels.swarm_visible {
                     if let Some(tx) = &self.event_tx {
                         let _ = tx.try_send(UiEvent::RefreshAgents);
                     }
@@ -136,13 +136,13 @@ impl App {
                 self.notify_no_agent_panels();
             }
             "files" | "sandbox" | "f" => {
-                self.sandbox_panel_visible = !self.sandbox_panel_visible;
-                if self.sandbox_panel_visible {
+                self.panels.sandbox_visible = !self.panels.sandbox_visible;
+                if self.panels.sandbox_visible {
                     self.sandbox.refresh();
                 } else {
                     // The Record panel gets the column back, and the
                     // panel comes back to its own slot next time.
-                    self.side_expanded = false;
+                    self.panels.side_expanded = false;
                     if self.focus == PanelFocus::Sandbox {
                         self.focus = PanelFocus::Chat;
                     }

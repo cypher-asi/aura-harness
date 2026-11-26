@@ -39,8 +39,8 @@ impl App {
             self.notify_no_agent_panels();
             return;
         }
-        self.record_panel_visible = true;
-        self.side_expanded = false;
+        self.panels.record_visible = true;
+        self.panels.side_expanded = false;
         if self.records_tab == RecordsTab::Policies {
             // Already open: still bring the snapshot up to date.
             self.request_policies();
