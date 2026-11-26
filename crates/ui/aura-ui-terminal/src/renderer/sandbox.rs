@@ -1,12 +1,12 @@
-//! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE | TASKS
-//! header bar over the file tree of the active agent's workspace, the
-//! Processes list, the trace feed, or its tasks grouped under their plans.
-//! While a channel is open the bar lists only the channel's MEMBERS and
-//! INFO (see `channel_side`), and the panel fills the right column.
-//! Outside a channel the bar ends in a `*` button that lists the whole
-//! project's processes, steps, plans and tasks instead of the active
-//! agent's, then a ⤢ button that maximizes the panel over the Record
-//! panel, or restores it.
+//! The panel below the Record panel: a SANDBOX | REPO | PROCESSES | TRACE |
+//! TASKS header bar over the file tree of the active agent's workspace,
+//! its repo's timeline, the Processes list, the trace feed, or its tasks
+//! grouped under their plans. While a channel is open the bar lists only
+//! the channel's MEMBERS and INFO (see `channel_side`), and the panel
+//! fills the right column. Outside a channel the bar ends in HOST's 🖥
+//! tab, a `*` button that lists the whole project's processes, steps,
+//! plans and tasks instead of the active agent's, then a ⤢ button that
+//! maximizes the panel over the Record panel, or restores it.
 
 use super::chrome::{render_body_block, Body, ScrollView};
 use super::header::{self, PanelHeader};
@@ -28,12 +28,15 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     // features, are left out.
     let channel_open = app.channel_open();
     let layout = |width| SidePanelTab::layout(width, channel_open);
-    let end = header::bar_end(bar, (!channel_open, !channel_open), layout);
+    let icon_tab = SidePanelTab::icon_tab(channel_open);
+    let icon = icon_tab.and_then(SidePanelTab::icon);
+    let end = header::bar_end(bar, (icon, !channel_open, !channel_open), layout);
     if !hosted {
         app.set_side_tabs_area(Rect {
             width: end.tabs,
             ..bar
         });
+        app.set_side_icon_tab_area(end.icon);
         app.set_side_scope_area(end.scope);
         app.set_side_expand_area(end.expand);
     }
@@ -58,6 +61,11 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             hovered: app.hover() == Some(HoverTarget::SideScope),
             cell: end.scope,
         }),
+        icon_tab: icon_tab.zip(icon).map(|(tab, icon)| header::IconTab {
+            tab,
+            icon,
+            cell: end.icon,
+        }),
         focused: is_focused,
         hosted,
     };
@@ -69,6 +77,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
 
     match app.side_tab() {
         SidePanelTab::Sandbox => render_tree(frame, area, body, app, theme),
+        SidePanelTab::Repo => super::repo_tab::render_repo(frame, area, body, app, theme),
         SidePanelTab::Processes => {
             super::processes::render_processes(frame, area, body, app, theme);
         }

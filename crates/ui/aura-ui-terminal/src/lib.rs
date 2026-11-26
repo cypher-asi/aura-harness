@@ -41,6 +41,7 @@ pub mod components;
 pub use aura_ui::events;
 pub use aura_ui::host;
 pub mod input;
+pub use aura_ui::repo;
 pub mod layout;
 pub use aura_ui::mode_command;
 pub mod themes;

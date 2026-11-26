@@ -118,6 +118,7 @@ impl App {
                 }
             }
             "cloud" | "local" | "host" => self.handle_cloud_command(&cmd, arg),
+            "repo" => self.show_repo(arg),
             "members" | "team" => self.show_members(),
             "policies" | "policy" | "perms" | "permissions" => self.show_policies(),
             "inbox" | "mail" => self.show_inbox(),

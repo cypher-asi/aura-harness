@@ -545,6 +545,10 @@ impl App {
             PanelFocus::Swarm => self.handle_agents_panel_key(key),
             PanelFocus::Sandbox => match self.side_tab {
                 SidePanelTab::Sandbox => self.handle_sandbox_key(key),
+                SidePanelTab::Repo => {
+                    self.handle_repo_key(key);
+                    KeyResult::continue_running()
+                }
                 SidePanelTab::Processes => {
                     self.handle_processes_key(key);
                     KeyResult::continue_running()

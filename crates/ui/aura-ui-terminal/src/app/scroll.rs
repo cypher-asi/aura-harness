@@ -138,6 +138,7 @@ impl App {
                 let delta = -isize::try_from(lines).unwrap_or(isize::MAX);
                 match self.side_tab {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
+                    SidePanelTab::Repo => self.scroll_repo(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Host => self.scroll_host(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),
@@ -187,6 +188,7 @@ impl App {
                 let delta = isize::try_from(lines).unwrap_or(isize::MAX);
                 match self.side_tab {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
+                    SidePanelTab::Repo => self.scroll_repo(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Host => self.scroll_host(delta),
                     SidePanelTab::Trace => self.trace_feed.move_by(delta),

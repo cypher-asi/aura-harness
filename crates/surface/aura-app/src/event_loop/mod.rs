@@ -37,6 +37,7 @@ pub(crate) mod policies;
 pub(crate) mod processes;
 mod queue;
 pub(crate) mod record_ui;
+pub(crate) mod repo;
 mod rewind;
 pub(crate) mod run_command;
 mod side_panels;
@@ -746,6 +747,10 @@ async fn handle_ui_event(
         UiEvent::Log { agent_id, request } => {
             let agent_id = state.agent_or_active(&agent_id);
             log_view::handle(state, agent_id, request).await;
+        }
+        UiEvent::Repo { agent_id, request } => {
+            let agent_id = state.agent_or_active(&agent_id);
+            repo::handle(state, agent_id, request);
         }
         UiEvent::KillProcess(id) => handlers::handle_kill_process(state, &id).await,
         UiEvent::BuildPlan { agent_id, path } => {

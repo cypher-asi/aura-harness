@@ -7,6 +7,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A REPO tab shows the agent's repo, and HOST is an icon
+
+##### Added
+
+- The side panel has a REPO tab after SANDBOX for the git repo the
+  agent on screen works in: how its branch stands with its upstream,
+  the uncommitted changes, and a timeline, newest first, of its
+  commits, merges and rebases, pushes, pulls and fetches, resets,
+  checkouts and stashes, with the repo's GitHub pull requests among
+  them. A strip of filters along its top narrows the timeline to one
+  kind, or lists the branches, tags or worktrees instead. Enter or a
+  click shows a row's diff in the chat, `o` opens a PR's page, and
+  `/repo [filter]` shows the tab.
+- PRs are read with `gh` when it is installed and signed in, else with
+  GitHub's REST API and `GH_TOKEN` or `GITHUB_TOKEN`, at most once a
+  minute. The token stays in the app and is sent to `api.github.com`
+  alone.
+
+##### Changed
+
+- HOST is no longer a labelled tab but a computer icon at the right end
+  of the side panel's tab bar, left of `ALL`, centered in its cell; the
+  desktop draws it as a screen on a stand. Shift+←/→ reaches it after
+  TASKS.
+
 ### Cloud agents commit, push and open pull requests on GitHub
 
 ##### Added

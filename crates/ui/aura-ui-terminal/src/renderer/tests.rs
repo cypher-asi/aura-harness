@@ -1257,16 +1257,16 @@ fn test_side_panel_header_matches_the_agents_header() {
     let rows = render_rows(&mut app, 150);
     let (tabs, widths) = header_bar(&rows, "SBX");
     assert!(
-        rows[tabs].contains("PRC") && rows[tabs].contains("│ * │ ⤢ │"),
-        "the tabs, then the * and ⤢ buttons: {}",
+        rows[tabs].contains("PRC") && rows[tabs].contains("│ 🖥  │ * │ ⤢ │"),
+        "the tabs, then HOST's icon and the * and ⤢ buttons: {}",
         rows[tabs]
     );
     assert_eq!(
         widths.len(),
-        7,
-        "the tabs and the two buttons fill the bar: {widths:?}"
+        8,
+        "the tabs, the icon and the two buttons fill the bar: {widths:?}"
     );
-    assert_eq!(widths[5..], [3, 3]);
+    assert_eq!(widths[5..], [4, 3, 3]);
     assert!(
         widths[..5].iter().all(|w| w.abs_diff(widths[0]) <= 1),
         "{widths:?}"
@@ -1282,11 +1282,12 @@ fn test_side_panel_header_matches_the_agents_header() {
         "top bars line up"
     );
 
-    let rows = render_rows(&mut app, 260);
+    let rows = render_rows(&mut app, 300);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
+    assert!(rows[tabs].contains("REPO"), "{}", rows[tabs]);
     assert!(rows[tabs].contains("PROCESSES"), "{}", rows[tabs]);
-    assert!(rows[tabs].contains("HOST"), "{}", rows[tabs]);
-    assert_eq!(widths.len(), 7, "{widths:?}");
+    assert!(!rows[tabs].contains("HOST"), "an icon: {}", rows[tabs]);
+    assert_eq!(widths.len(), 8, "{widths:?}");
 }
 
 #[test]
@@ -1416,13 +1417,13 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
     ]));
 
     let theme = test_theme();
-    let buffer = render_buffer(&mut app, 260);
+    let buffer = render_buffer(&mut app, 300);
     let row = row_of(&buffer, "PROCESSES");
     let (label, label_style) = find_cell(&buffer, row, "SANDBOX").unwrap();
     assert!(label_style.add_modifier.contains(Modifier::BOLD));
     assert_eq!(label_style.bg, Some(Color::Reset), "active, unfocused");
     assert_eq!(label_style.fg, Some(theme.colors.foreground));
-    let screen = render_rows(&mut app, 260).join("\n");
+    let screen = render_rows(&mut app, 300).join("\n");
     assert!(!screen.contains("FILES"), "{screen}");
 
     let (processes, process_style) = find_cell(&buffer, row, "PROCESSES").unwrap();
@@ -1440,7 +1441,7 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
         });
     }
     assert_eq!(app.side_tab(), SidePanelTab::Processes);
-    let screen = render_rows(&mut app, 260).join("\n");
+    let screen = render_rows(&mut app, 300).join("\n");
     assert!(!screen.contains("LIVE"), "{screen}");
 }
 
@@ -1471,7 +1472,10 @@ fn test_processes_tab_lists_processes() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    let _ = app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    // Sandbox, then on past REPO to PROCESSES.
+    for _ in 0..2 {
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    }
     let screen = render_rows(&mut app, 175).join("\n");
     let row = screen.lines().find(|r| r.contains("cargo build")).unwrap();
     assert!(row.contains("command"), "{row}");
@@ -1511,8 +1515,8 @@ fn test_trace_tab_lists_live_steps() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    // Sandbox, then back past TASKS to TRACE.
-    for _ in 0..2 {
+    // Sandbox, then back past HOST and TASKS to TRACE.
+    for _ in 0..3 {
         let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     }
     let screen = render_rows(&mut app, 160).join("\n");
@@ -1597,7 +1601,10 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    // Sandbox, then back past HOST to TASKS.
+    for _ in 0..2 {
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    }
     let rows = render_rows(&mut app, 160);
     let row_with = |text: &str| {
         rows.iter()
@@ -5501,7 +5508,10 @@ fn test_tasks_tab_lists_requests_items_not_what_was_asked() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    // Sandbox, then back past HOST to TASKS.
+    for _ in 0..2 {
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    }
     let rows = render_rows(&mut app, 200);
     let row_with = |text: &str| {
         rows.iter()

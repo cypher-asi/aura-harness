@@ -218,6 +218,7 @@ impl App {
             }
             UiCommand::SetPlacement { agent_id, state } => self.cmd_set_placement(agent_id, state),
             UiCommand::SetHost(view) => self.cmd_set_host(*view),
+            UiCommand::SetRepo(view) => self.cmd_set_repo(*view),
             UiCommand::SetChannels(channels) => self.set_channels(channels),
             UiCommand::SetChannelTasks { .. } => {
                 // The channel app shows only its chat, members and info;

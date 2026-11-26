@@ -58,6 +58,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             close: Some(app.hover() == Some(HoverTarget::CloseDetail)),
             expand,
             scope: None,
+            icon_tab: None,
             focused: true,
             hosted,
         };
@@ -96,6 +97,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             close: None,
             expand,
             scope: None,
+            icon_tab: None,
             focused: is_focused,
             hosted,
         };

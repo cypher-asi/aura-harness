@@ -46,14 +46,14 @@ const EXPAND_COLUMNS: u16 = 4;
 const EXPAND_GLYPH: &str = "⤢";
 const RESTORE_GLYPH: &str = "⤡";
 
-/// Narrowest bar with room for a scope button beside its tabs.
+/// Narrowest bar with room for a scope button or an icon tab beside its
+/// tabs.
 const SCOPE_MIN_WIDTH: u16 = 20;
 
-/// Columns of a button's cell at the end of a tabbed bar from
-/// [`bar_end`]: its one-column label with a space on each side, or the
-/// label alone when the tabs need the room.
-const PADDED_BUTTON: u16 = 3;
-const TIGHT_BUTTON: u16 = 1;
+/// Columns a button's cell at the end of a tabbed bar from [`bar_end`]
+/// adds to its label: a space on each side, or none when the tabs need
+/// the room.
+const BUTTON_PADDING: u16 = 2;
 
 /// Split a panel's area into its header bar and the body below it.
 /// `hosted` bars are the front end's to draw.
@@ -119,61 +119,71 @@ pub(super) struct BarEnd {
     /// Width to lay the tabs out in: their last divider is the one before
     /// the first button
     pub tabs: u16,
+    pub icon: Option<Rect>,
     pub scope: Option<Rect>,
     pub expand: Option<Rect>,
 }
 
-/// The buttons at the right end of a tabbed bar that asks for a scope
-/// button, an expand button or both, each a cell after a divider of its
-/// own: the expand button against the border, the scope button left of
-/// it.
+/// The buttons at the right end of a tabbed bar that asks for an icon
+/// tab, a scope button, an expand button or any of them, each a cell
+/// after a divider of its own: the expand button against the border, the
+/// scope button left of it and the icon left of that.
 ///
 /// ```text
-/// │ SBX │ PRC │TRACE│TASKS│ * │ ⤢ │
-/// │SBX │PRC │TRC │TSK│*│⤢│
+/// │ SBX │REPO │ PRC │TRACE│TASKS│ 🖥  │ * │ ⤢ │
+/// │SBX │REPO│PRC │TRC │TSK │🖥 │*│⤢│
 /// ```
 ///
 /// The cells are padded unless the tabs, laid out by `layout` for the
 /// width left to them, would not fit beside them; then they shrink to
 /// their labels, and on a bar too narrow even for that the expand button
-/// goes. A bar too narrow for the scope button alone keeps it padded and
-/// clips its tabs; under [`SCOPE_MIN_WIDTH`] it has no buttons.
+/// goes. A bar too narrow for the others alone keeps them padded and clips
+/// its tabs; under [`SCOPE_MIN_WIDTH`] it has no buttons.
 pub(super) fn bar_end<T: Copy + PartialEq>(
     bar: Rect,
-    (scope, expand): (bool, bool),
+    (icon, scope, expand): (Option<&str>, bool, bool),
     layout: impl Fn(u16) -> TabLayout<T>,
 ) -> BarEnd {
-    let scope = scope && bar.width >= SCOPE_MIN_WIDTH && bar.height > 0;
+    let room = bar.width >= SCOPE_MIN_WIDTH && bar.height > 0;
+    let icon = icon
+        .filter(|_| room)
+        .map(|icon| u16::try_from(display_width(icon)).unwrap_or(u16::MAX));
+    let scope = scope && room;
     let expand = expand && bar.width >= EXPAND_MIN_WIDTH && bar.height > 0;
-    // A padded scope button alone leaves the tabs the room of two tight
-    // buttons, so the expand button goes only once those fail too.
-    [
-        (expand, PADDED_BUTTON),
-        (expand, TIGHT_BUTTON),
-        (false, TIGHT_BUTTON),
-    ]
-    .into_iter()
-    .map(|(expand, cell)| lay_out_end(bar, (scope, expand), cell))
-    .find(|end| layout(end.tabs).fits(end.tabs))
-    .unwrap_or_else(|| lay_out_end(bar, (scope, false), PADDED_BUTTON))
+    // Padded buttons without the expand button leave the tabs about the
+    // room of tight ones with it, so the expand button goes only once
+    // those fail too.
+    [(expand, BUTTON_PADDING), (expand, 0), (false, 0)]
+        .into_iter()
+        .map(|(expand, padding)| lay_out_end(bar, (icon, scope, expand), padding))
+        .find(|end| layout(end.tabs).fits(end.tabs))
+        .unwrap_or_else(|| lay_out_end(bar, (icon, scope, false), BUTTON_PADDING))
 }
 
-/// [`BarEnd`] for the buttons asked for, in cells `cell` columns wide.
-fn lay_out_end(bar: Rect, (scope, expand): (bool, bool), cell: u16) -> BarEnd {
+/// [`BarEnd`] for the buttons asked for, the icon by its width, each
+/// `padding` columns wider than its label.
+fn lay_out_end(
+    bar: Rect,
+    (icon, scope, expand): (Option<u16>, bool, bool),
+    padding: u16,
+) -> BarEnd {
     let row = label_row(bar);
     // The column right of the next button's cell, from the right border.
     let mut right = bar.right().saturating_sub(1);
-    let mut place = |wanted: bool| {
-        wanted.then(|| {
+    let mut place = |label: Option<u16>| {
+        label.map(|label| {
+            let cell = label + padding;
             let x = right.saturating_sub(cell);
             right = x.saturating_sub(1);
             Rect::new(x, row, cell, 1)
         })
     };
-    let expand = place(expand);
-    let scope = place(scope);
+    let expand = place(expand.then_some(1));
+    let scope = place(scope.then_some(1));
+    let icon = place(icon);
     BarEnd {
         tabs: (right + 1).saturating_sub(bar.x).min(bar.width),
+        icon,
         scope,
         expand,
     }
@@ -206,6 +216,18 @@ pub(super) struct ExpandButton {
 pub(super) struct ScopeButton {
     pub on: bool,
     pub hovered: bool,
+    /// Where it is drawn, from [`bar_end`]; `None` on a bar too narrow
+    /// for it
+    pub cell: Option<Rect>,
+}
+
+/// A tab a bar draws as its icon, after its other tabs: lit as they are
+/// when shown or under the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct IconTab<T> {
+    pub tab: T,
+    /// Two columns, the second blank (see [`SidePanelTab::icon`])
+    pub icon: &'static str,
     /// Where it is drawn, from [`bar_end`]; `None` on a bar too narrow
     /// for it
     pub cell: Option<Rect>,
@@ -248,6 +270,8 @@ pub(super) struct PanelHeader<'a, T> {
     /// A scope button at the right end of a tabbed bar, left of any
     /// expand button; the bar lays out its tabs in [`bar_end`]'s columns.
     pub scope: Option<ScopeButton>,
+    /// A tab drawn as its icon, left of any scope button
+    pub icon_tab: Option<IconTab<T>>,
     pub focused: bool,
     /// Whether the front end draws the bar: the grid keeps only its frame
     pub hosted: bool,
@@ -301,6 +325,7 @@ impl<T: HostTab> PanelHeader<'_, T> {
                 .iter()
                 .filter_map(|cell| cell.tab.pane_tab())
                 .collect(),
+            icon_tab: self.icon_tab.and_then(|icon| icon.tab.pane_tab()),
             active: self.active.and_then(HostTab::pane_tab),
             title: self.title.map(str::to_string),
             info: self.info.as_ref().map(|info| info.text.clone()),
@@ -355,17 +380,22 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
     let expand = header
         .expand
         .and_then(|button| Some((button, button.cell?)));
+    let icon_tab = header.icon_tab.and_then(|icon| Some((icon, icon.cell?)));
     // A tabbed bar's buttons each sit after a divider of their own, and
     // its tabs stop at the first of those.
     let button_dividers: Vec<u16> = if header.layout.cells.is_empty() {
         Vec::new()
     } else {
-        [scope.map(|(_, cell)| cell), expand.map(|(_, cell)| cell)]
-            .into_iter()
-            .flatten()
-            .map(|cell| cell.x.saturating_sub(bar.x).saturating_sub(1))
-            .filter(|&column| column > 0 && column < last)
-            .collect()
+        [
+            icon_tab.map(|(_, cell)| cell),
+            scope.map(|(_, cell)| cell),
+            expand.map(|(_, cell)| cell),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|cell| cell.x.saturating_sub(bar.x).saturating_sub(1))
+        .filter(|&column| column > 0 && column < last)
+        .collect()
     };
     let limit = button_dividers.iter().copied().min().unwrap_or(last);
     let dividers: Vec<u16> = header
@@ -408,6 +438,19 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
         let area = Rect::new(bar.x + cell.start, middle, width, 1);
         draw_centered(buf, area, cell.label, style);
     }
+    if let Some((icon, cell)) = icon_tab {
+        let style = tab_style(
+            header.active == Some(icon.tab),
+            header.hovered == Some(icon.tab),
+            header.focused,
+            theme,
+        );
+        buf.set_style(cell, style);
+        // Both of the icon's columns centered, the blank one included.
+        let width = u16::try_from(display_width(icon.icon)).unwrap_or(u16::MAX);
+        let x = cell.x + cell.width.saturating_sub(width) / 2;
+        buf.set_string(x, cell.y, icon.icon, style);
+    }
     if let Some((button, cell)) = scope {
         let style = tab_style(button.on, button.hovered, header.focused, theme);
         draw_centered(buf, cell, SideScope::BUTTON, style);
@@ -446,7 +489,7 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
 
 /// A tab cell's style: the shown tab is bold, filled with the selection
 /// color while its panel has focus; a tab under the pointer is shaded.
-fn tab_style(active: bool, hovered: bool, focused: bool, theme: &Theme) -> Style {
+pub(super) fn tab_style(active: bool, hovered: bool, focused: bool, theme: &Theme) -> Style {
     let colors = &theme.colors;
     if active {
         let style = Style::default()
@@ -583,6 +626,7 @@ mod tests {
             close: None,
             expand: None,
             scope: None,
+            icon_tab: None,
             focused,
             hosted: false,
         }
@@ -652,6 +696,7 @@ mod tests {
             close: None,
             expand: None,
             scope: None,
+            icon_tab: None,
             focused: true,
             hosted: true,
         };
@@ -679,6 +724,7 @@ mod tests {
             close: None,
             expand: None,
             scope: None,
+            icon_tab: None,
             focused: false,
             hosted: true,
         };
@@ -710,6 +756,7 @@ mod tests {
             close: None,
             expand: None,
             scope: None,
+            icon_tab: None,
             focused: false,
             hosted: false,
         };
@@ -735,6 +782,7 @@ mod tests {
             close: None,
             expand: None,
             scope: None,
+            icon_tab: None,
             focused: false,
             hosted: false,
         };
@@ -763,6 +811,7 @@ mod tests {
             close: Some(hovered),
             expand: None,
             scope: None,
+            icon_tab: None,
             focused: true,
             hosted: false,
         };
@@ -807,18 +856,26 @@ mod tests {
         assert_eq!(expand_cell(Rect::new(0, 0, 16, 3), false), None);
     }
 
-    /// The side panel's header bar `width` columns wide, ending in the
-    /// buttons asked for.
+    /// Where the side panel's bar `width` columns wide puts its buttons,
+    /// HOST's icon among them.
+    fn side_end(width: u16, (scope, expand): (bool, bool)) -> BarEnd {
+        let icon = SidePanelTab::Host.icon();
+        bar_end(Rect::new(0, 0, width, 3), (icon, scope, expand), |width| {
+            SidePanelTab::layout(width, false)
+        })
+    }
+
+    /// The side panel's header bar `width` columns wide, ending in HOST's
+    /// icon and the buttons asked for.
     fn side_header(
         width: u16,
         buttons: (bool, bool),
-        on: bool,
+        (on, active): (bool, SidePanelTab),
     ) -> PanelHeader<'static, SidePanelTab> {
-        let bar = Rect::new(0, 0, width, 3);
-        let end = bar_end(bar, buttons, |width| SidePanelTab::layout(width, false));
+        let end = side_end(width, buttons);
         PanelHeader {
             layout: SidePanelTab::layout(end.tabs, false),
-            active: Some(SidePanelTab::Sandbox),
+            active: Some(active),
             hovered: None,
             title: None,
             info: None,
@@ -833,94 +890,123 @@ mod tests {
                 hovered: false,
                 cell: end.scope,
             }),
+            icon_tab: Some(IconTab {
+                tab: SidePanelTab::Host,
+                icon: SidePanelTab::Host.icon().unwrap(),
+                cell: end.icon,
+            }),
             focused: false,
             hosted: false,
         }
     }
 
+    /// [`side_header`] drawn on a screen ten rows tall.
+    fn draw_side(width: u16, buttons: (bool, bool), state: (bool, SidePanelTab)) -> Buffer {
+        draw(width, 10, &side_header(width, buttons, state))
+    }
+
     #[test]
     fn scoped_bars_end_in_a_star_button_lit_while_on() {
-        let bar = Rect::new(0, 0, 35, 3);
-        let end = bar_end(bar, (true, false), |width| {
-            SidePanelTab::layout(width, false)
-        });
-        assert_eq!(end.tabs, 31);
+        let end = side_end(35, (true, false));
+        assert_eq!(end.tabs, 26);
+        assert_eq!(end.icon, Some(Rect::new(26, 1, 4, 1)));
         assert_eq!(end.scope, Some(Rect::new(31, 1, 3, 1)));
         assert_eq!(end.expand, None);
-        let off = draw(35, 10, &side_header(35, (true, false), false));
-        assert_eq!(row(&off, 0), "┌─────┬─────┬─────┬─────┬─────┬───┐");
-        assert_eq!(row(&off, 1), "│ SBX │ PRC │HOST │TRACE│TASKS│ * │");
-        assert_eq!(row(&off, 2), "└─────┴─────┴─────┴─────┴─────┴───┘");
+        let off = draw_side(35, (true, false), (false, SidePanelTab::Sandbox));
+        assert_eq!(row(&off, 0), "┌────┬────┬────┬────┬────┬────┬───┐");
+        assert_eq!(row(&off, 1), "│SBX │REPO│PRC │TRC │TSK │ 🖥  │ * │");
+        assert_eq!(row(&off, 2), "└────┴────┴────┴────┴────┴────┴───┘");
         let colors = Theme::cyber().colors;
         assert_eq!(off[(32, 1)].style().fg, Some(colors.muted));
 
-        let on = draw(35, 10, &side_header(35, (true, false), true));
+        let on = draw_side(35, (true, false), (true, SidePanelTab::Sandbox));
         assert_eq!(on[(32, 1)].style().fg, Some(colors.foreground));
         assert!(on[(32, 1)].style().add_modifier.contains(Modifier::BOLD));
 
-        let narrow = bar_end(Rect::new(0, 0, 16, 3), (true, false), |width| {
-            SidePanelTab::layout(width, false)
-        });
-        assert_eq!((narrow.tabs, narrow.scope), (16, None));
+        let narrow = side_end(16, (true, false));
+        assert_eq!((narrow.tabs, narrow.icon, narrow.scope), (16, None, None));
+    }
+
+    #[test]
+    fn hosts_icon_is_a_tab_lit_while_shown_and_centered() {
+        let colors = Theme::cyber().colors;
+        let off = draw_side(35, (true, false), (false, SidePanelTab::Sandbox));
+        assert_eq!(off[(27, 1)].symbol(), "🖥");
+        assert_eq!(off[(27, 1)].style().fg, Some(colors.muted));
+        let shown = draw_side(35, (true, false), (false, SidePanelTab::Host));
+        for x in 26..30 {
+            let fg = shown[(x, 1)].style().fg;
+            assert_eq!(fg, Some(colors.foreground), "column {x}");
+        }
+        assert!(shown[(27, 1)].style().add_modifier.contains(Modifier::BOLD));
+        assert_eq!(
+            shown[(6, 1)].style().fg,
+            Some(colors.muted),
+            "the REPO label is not lit"
+        );
     }
 
     #[test]
     fn the_expand_button_sits_right_of_the_star_button() {
-        let bar = Rect::new(0, 0, 39, 3);
-        let end = bar_end(bar, (true, true), |width| {
-            SidePanelTab::layout(width, false)
-        });
+        let end = side_end(44, (true, true));
         assert_eq!(end.tabs, 31);
-        assert_eq!(end.scope, Some(Rect::new(31, 1, 3, 1)));
-        assert_eq!(end.expand, Some(Rect::new(35, 1, 3, 1)));
-        let buffer = draw(39, 10, &side_header(39, (true, true), false));
-        assert_eq!(row(&buffer, 0), "┌─────┬─────┬─────┬─────┬─────┬───┬───┐");
-        assert_eq!(row(&buffer, 1), "│ SBX │ PRC │HOST │TRACE│TASKS│ * │ ⤢ │");
-        assert_eq!(row(&buffer, 2), "└─────┴─────┴─────┴─────┴─────┴───┴───┘");
+        assert_eq!(end.icon, Some(Rect::new(31, 1, 4, 1)));
+        assert_eq!(end.scope, Some(Rect::new(36, 1, 3, 1)));
+        assert_eq!(end.expand, Some(Rect::new(40, 1, 3, 1)));
+        let buffer = draw_side(44, (true, true), (false, SidePanelTab::Sandbox));
+        assert_eq!(
+            row(&buffer, 0),
+            "┌─────┬─────┬─────┬─────┬─────┬────┬───┬───┐"
+        );
+        assert_eq!(
+            row(&buffer, 1),
+            "│ SBX │REPO │ PRC │TRACE│TASKS│ 🖥  │ * │ ⤢ │"
+        );
+        assert_eq!(
+            row(&buffer, 2),
+            "└─────┴─────┴─────┴─────┴─────┴────┴───┴───┘"
+        );
     }
 
     #[test]
     fn narrow_bars_tighten_their_buttons_then_drop_the_expand_button() {
-        // Five short labels and their dividers need 21 columns: 29 leaves
-        // them that beside two padded buttons, 28 does not. Tight buttons
-        // leave them room down to 25; at 24 the expand button goes, and
-        // under 20 there are no buttons.
-        let end = bar_end(Rect::new(0, 0, 29, 3), (true, true), |width| {
-            SidePanelTab::layout(width, false)
-        });
+        // Five short labels and their dividers need 21 columns: 34 leaves
+        // them that beside HOST's icon and two buttons, padded, 33 does
+        // not. Tight ones leave them room down to 28; at 27 the expand
+        // button goes, and under 20 there are no buttons.
+        let end = side_end(34, (true, true));
         assert_eq!(end.tabs, 21);
-        assert_eq!(end.scope, Some(Rect::new(21, 1, 3, 1)));
-        assert_eq!(end.expand, Some(Rect::new(25, 1, 3, 1)));
-        let buffer = draw(29, 10, &side_header(29, (true, true), false));
-        assert_eq!(row(&buffer, 1), "│SBX│PRC│HST│TRC│TSK│ * │ ⤢ │");
+        assert_eq!(end.icon, Some(Rect::new(21, 1, 4, 1)));
+        assert_eq!(end.scope, Some(Rect::new(26, 1, 3, 1)));
+        assert_eq!(end.expand, Some(Rect::new(30, 1, 3, 1)));
+        let header = |width| side_header(width, (true, true), (false, SidePanelTab::Sandbox));
+        let buffer = draw(34, 10, &header(34));
+        assert_eq!(row(&buffer, 1), "│SBX│RPO│PRC│TRC│TSK│ 🖥  │ * │ ⤢ │");
 
-        let end = bar_end(Rect::new(0, 0, 28, 3), (true, true), |width| {
-            SidePanelTab::layout(width, false)
-        });
-        assert_eq!(end.tabs, 24);
-        assert_eq!(end.scope, Some(Rect::new(24, 1, 1, 1)));
+        let end = side_end(33, (true, true));
+        assert_eq!(end.tabs, 26);
+        assert_eq!(end.icon, Some(Rect::new(26, 1, 2, 1)));
+        assert_eq!(end.scope, Some(Rect::new(29, 1, 1, 1)));
+        assert_eq!(end.expand, Some(Rect::new(31, 1, 1, 1)));
+        let buffer = draw(33, 10, &header(33));
+        assert_eq!(row(&buffer, 0), "┌────┬────┬────┬────┬────┬──┬─┬─┐");
+        assert_eq!(row(&buffer, 1), "│SBX │REPO│PRC │TRC │TSK │🖥 │*│⤢│");
+        assert_eq!(row(&buffer, 2), "└────┴────┴────┴────┴────┴──┴─┴─┘");
+
+        let end = side_end(28, (true, true));
+        assert_eq!(end.tabs, 21);
         assert_eq!(end.expand, Some(Rect::new(26, 1, 1, 1)));
-        let buffer = draw(28, 10, &side_header(28, (true, true), false));
-        assert_eq!(row(&buffer, 0), "┌────┬────┬────┬───┬───┬─┬─┐");
-        assert_eq!(row(&buffer, 1), "│SBX │PRC │HOST│TRC│TSK│*│⤢│");
-        assert_eq!(row(&buffer, 2), "└────┴────┴────┴───┴───┴─┴─┘");
 
-        let end = bar_end(Rect::new(0, 0, 25, 3), (true, true), |width| {
-            SidePanelTab::layout(width, false)
-        });
-        assert_eq!(end.tabs, 21);
-        assert_eq!(end.expand, Some(Rect::new(23, 1, 1, 1)));
-
-        let end = bar_end(Rect::new(0, 0, 24, 3), (true, true), |width| {
-            SidePanelTab::layout(width, false)
-        });
+        let end = side_end(27, (true, true));
         assert_eq!(end.expand, None, "the expand button goes first");
-        assert_eq!((end.tabs, end.scope), (22, Some(Rect::new(22, 1, 1, 1))));
+        assert_eq!((end.tabs, end.scope), (22, Some(Rect::new(25, 1, 1, 1))));
+        assert_eq!(end.icon, Some(Rect::new(22, 1, 2, 1)));
 
-        let bare = bar_end(Rect::new(0, 0, 19, 3), (true, true), |width| {
-            SidePanelTab::layout(width, false)
-        });
-        assert_eq!((bare.tabs, bare.scope, bare.expand), (19, None, None));
+        let bare = side_end(19, (true, true));
+        assert_eq!(
+            (bare.tabs, bare.icon, bare.scope, bare.expand),
+            (19, None, None, None)
+        );
     }
 
     #[test]
@@ -929,7 +1015,7 @@ mod tests {
         // a 21-column bar leaves beside even one tight button.
         const SHORT: [&str; 5] = ["ONE", "TWO", "SIX", "TEN", "ART"];
         let five = |width| TabLayout::new([0, 1, 2, 3, 4], |i| SHORT[i], |i| SHORT[i], width);
-        let clipped = bar_end(Rect::new(0, 0, 21, 3), (true, true), five);
+        let clipped = bar_end(Rect::new(0, 0, 21, 3), (None, true, true), five);
         assert_eq!(clipped.expand, None);
         assert_eq!(
             (clipped.tabs, clipped.scope),
@@ -953,6 +1039,7 @@ mod tests {
                 cell: expand_cell(Rect::new(0, 0, 30, 3), true),
             }),
             scope: None,
+            icon_tab: None,
             focused: true,
             hosted: false,
         };

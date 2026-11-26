@@ -23,5 +23,5 @@ pub(super) use estimate::EstimateView;
 pub(super) use format::{arm_label, plural};
 pub(crate) use format::{cost, duration, headline, money, tokens};
 pub(super) use list::list;
-pub(super) use patch::split_patch;
+pub(crate) use patch::split_patch;
 pub(crate) use summary::render;

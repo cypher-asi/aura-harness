@@ -164,6 +164,17 @@ Narrow bars drop the tab padding, then switch to three-letter labels
 (`short_label`), and give the info cell's room to the tabs when it would be
 under three columns.
 
+The side panel's bar ends in buttons, each a cell after a divider of its
+own: `⤢` against the border, `*` (`ALL`) left of it, and left of that
+HOST, drawn as its icon `🖥` rather than a label. The icon is a tab like
+the others, lit, hovered and clicked the same way, and centered in its
+cell. The cells are padded while the tabs fit beside them, then shrink to
+their glyphs, and on a bar narrower still `⤢` goes.
+
+```text
+│ SBX │REPO │ PRC │TRACE│TASKS│ 🖥  │ * │ ⤢ │
+```
+
 ### Panel Bodies
 
 Below its header bar every panel draws its tab in the same body
@@ -172,7 +183,7 @@ they overflow and, while the panel has focus and is four rows tall or
 more, a `muted` key hint on its last row. Every hint ends in `⇧←→ tabs`.
 What the rows are depends on what the tab shows:
 
-- **Lists** (SANDBOX, PROCESSES, TRACE, TASKS, KERNEL, MEMBERS, INBOX,
+- **Lists** (SANDBOX, REPO, PROCESSES, TRACE, TASKS, KERNEL, MEMBERS, INBOX,
   a channel's MEMBERS) draw one `components::list_row` row per thing: its
   status glyph, its name and its details on the right. ↑↓ move the
   selection and ⏎ opens it.
@@ -205,6 +216,37 @@ RESOURCES  1 near full             section   secondary, then a muted note
   failed is `error`. Only a value that needs attention takes the accent
   (`yolo`, a disk 90% full, a verdict still pending). Section titles,
   labels and the header's info cell never do.
+
+The REPO tab is a list under a one-row strip of filters: `All`, the kinds
+of event the repo has, and past a `faint` `│` its branches, tags and
+worktrees. Filters are drawn like tabs, and a strip too wide for the
+panel is cut around the one picked, with `‹` and `›` where it is cut.
+Under `All` the branch's sync comes first, then the uncommitted changes
+under a fold arrow, then the timeline, newest first.
+
+```text
+ All  Changes  Commits  Pushes │ Branches  Tags
+ ↑  main  2 ahead of origin/main         a1b2c3d4
+ ▾  Uncommitted changes                   2 files
+   M  src/lib.rs                           staged
+   ?  notes.txt
+ ○  Add the REPO tab  a1b2c3d4 · main          now
+ ↑  Pushed 2 commits to origin/main             5m
+ ●  Fix the parser  e5f6a7b8                    2h
+```
+
+- **Sync**: `↑` `↓` `↕` in `warning` while the branch and its upstream
+  are apart, `✓` in the accent when they aren't, `○` with no upstream.
+- **Changes**: the status letter in `warning` while any of the change is
+  unstaged, in the accent once all of it is staged, `error` for a
+  conflict and `muted` for untracked files.
+- **Events**: glyphs are `muted` but for what is live: a commit not
+  pushed yet (`○`, `warning`), a push or pull (`↑`, `↓`), an open PR
+  (`↪`) and a merged one (`✓`) take the accent, a reset (`↩`) `warning`.
+  Merged and closed PRs, gone branches and notes such as how to sign in
+  to GitHub read as settled. The age is on the right in `muted`.
+- **Hint**: `⏎ open  [] filter  r refresh  ⇧←→ tabs`, with `o web` for
+  `r refresh` on a PR.
 
 ### The Chat Column
 
@@ -347,4 +389,5 @@ own title bars and window tabs take their colors from `grid::Palette`:
 the focused active box is filled with `selection`, boxes at rest are
 outlined in `faint`, hovered ones in `muted`, and the busy bar under a
 window tab is the status accent. It draws `⬢ ☐ ☒ ▣` itself, since Geist
-Mono has no glyphs for them.
+Mono has no glyphs for them, and HOST's `🖥` as a square box left of the
+`*` box with a screen on a stand centered in it, across and down.

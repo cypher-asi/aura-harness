@@ -354,6 +354,13 @@ pub enum UiEvent {
         request: LogRequest,
     },
 
+    /// The REPO tab asked for something
+    Repo {
+        /// Agent whose repo the tab shows (hex id)
+        agent_id: String,
+        request: crate::repo::RepoRequest,
+    },
+
     /// Move an agent between this machine and its own cloud machine (the
     /// footer switch, `/cloud`, `/local`)
     SetPlacement {
@@ -981,6 +988,9 @@ pub enum UiCommand {
 
     /// The HOST tab of the agent on screen
     SetHost(Box<crate::host::HostView>),
+
+    /// The REPO tab of an agent; dropped unless it is the one on screen
+    SetRepo(Box<crate::repo::RepoView>),
 
     /// Every channel that is not archived, in list order
     SetChannels(Vec<ChannelSummary>),

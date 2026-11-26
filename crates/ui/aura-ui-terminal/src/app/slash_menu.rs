@@ -98,6 +98,12 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     command("inbox", "Show the messages this run's agents sent each other"),
     command("files", "Toggle Sandbox panel"),
     SlashCommand {
+        name: "repo",
+        args: "[commits|pushes|pulls|prs|…]",
+        description: "Show the repo's changes, commits, pushes, pulls and PRs",
+        needs_args: false,
+    },
+    SlashCommand {
         name: "cloud",
         args: "[setup|pull|sleep|wake]",
         description: "Run this agent on its own cloud machine, or manage it",

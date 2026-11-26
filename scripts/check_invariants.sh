@@ -121,7 +121,9 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     helpers (`git_commit_impl`, `git_push_impl`, `git_commit_push_impl`).
 #     Every mutating `git` subprocess in the tree must funnel through here.
 #   * `crates/agent/aura-agent/src/git.rs` — read-only helpers (`git log` for
-#     unpushed-commit telemetry). Declared exception in docs/invariants.md.
+#     unpushed-commit telemetry, and `read_only`, which runs only the
+#     subcommands in its `READ_ONLY` list, for the REPO tab). Declared
+#     exception in docs/invariants.md.
 #   * `crates/surface/aura-app/src/isolation/mod.rs` — `git worktree add` /
 #     `worktree remove` for the workspace copies `/compare` runs in.
 #     Isolation infrastructure, not a mutating commit/push. Declared
@@ -173,6 +175,26 @@ while IFS= read -r subcommand; do
         report "§1" "git ${subcommand} is not in the changes.rs subcommand allowlist" "$changes_file"
     fi
 done <<<"$changes_subcommands"
+
+# §1 — the `gh` CLI runs only for the REPO tab's PR reads, in
+# `crates/surface/aura-app/src/event_loop/repo/github.rs`, and only as
+# `gh pr list` and `gh pr diff` (the first two literals of each `gh(&[`
+# call there outside its tests). Declared exception in docs/invariants.md.
+run_band "§1" "Command::new(\"gh\") outside the REPO tab's PR reads" \
+    'Command::new\("gh"\)' \
+    '^(crates/surface/aura-app/src/event_loop/repo/github\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+github_file='crates/surface/aura-app/src/event_loop/repo/github.rs'
+gh_subcommands=$(sed '/^#\[cfg(test)\]/,$d' "$github_file" \
+    | rg -U -o -r '$1 $2' '\bgh\(&\[\s*"([^"]+)",\s*"([^"]+)"' || true)
+if [[ -z "$gh_subcommands" ]]; then
+    report "§1" "no gh subcommands found to check in ${github_file}" "$github_file"
+fi
+while IFS= read -r subcommand; do
+    [[ -z "$subcommand" ]] && continue
+    if [[ ! "$subcommand" =~ ^pr\ (list|diff)$ ]]; then
+        report "§1" "gh ${subcommand} is not a read-only PR subcommand" "$github_file"
+    fi
+done <<<"$gh_subcommands"
 
 # §10 — non-kernel, non-store crates must bind to `Arc<dyn ReadStore>`.
 #

@@ -38,6 +38,7 @@ mod processes;
 mod project_drag;
 mod prose;
 pub(crate) mod queue_panel;
+pub(crate) mod repo_tab;
 pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
@@ -523,6 +524,8 @@ pub struct App {
     pub(super) task_list: tasks::TaskList,
     /// First visible row of the TASKS tab
     pub(super) tasks_scroll: usize,
+    /// The REPO tab's view, filter and rows
+    pub(super) repo: repo_tab::RepoTab,
     /// Where the side panel's lists were when the agent just put on
     /// screen was last shown, put back once they are filtered for it
     list_places_due: Option<side_scope::ListPlaces>,
@@ -638,9 +641,11 @@ pub struct PanelAreas {
     pub sandbox_rows: Option<Rect>,
     /// Tree row shown at the top of `sandbox_rows`
     pub sandbox_scroll: usize,
-    /// Header bar of the panel below the Record panel, up to its `*`
-    /// button
+    /// Header bar of the panel below the Record panel, up to its HOST
+    /// icon
     pub side_tabs: Option<Rect>,
+    /// HOST's icon, left of the bar's `*` button
+    pub side_icon_tab: Option<Rect>,
     /// Button at the right end of that bar that shows the whole
     /// project's items in its lists, or the active agent's
     pub side_scope: Option<Rect>,
@@ -662,6 +667,10 @@ pub struct PanelAreas {
     pub task_rows: Option<Rect>,
     /// Tasks row shown at the top of `task_rows`
     pub tasks_scroll: usize,
+    /// Rows of the REPO tab inside the panel, below its filters
+    pub repo_rows: Option<Rect>,
+    /// REPO row shown at the top of `repo_rows`
+    pub repo_scroll: usize,
     /// Scrollbar on the chat panel's right border, when its list
     /// overflows
     pub(crate) scrollbar: Option<scrollbar::ScrollbarArea>,
@@ -729,7 +738,7 @@ pub(crate) enum HoverTarget {
     MemberRow(usize),
     /// A row in the Record panel's INBOX tab.
     InboxRow(usize),
-    /// A label in the side panel's tab bar.
+    /// A label or icon in the side panel's tab bar.
     SideTab(SidePanelTab),
     /// The `*` button at the right end of the side panel's tab bar.
     SideScope,
@@ -745,6 +754,10 @@ pub(crate) enum HoverTarget {
     TraceRow(usize),
     /// A row in the Tasks tab.
     TaskRow(usize),
+    /// A filter at the top of the REPO tab.
+    RepoFilter(repo_tab::RepoFilter),
+    /// A row in the REPO tab.
+    RepoRow(usize),
     /// A chat row that expands or collapses agent activity.
     Activity(ToggleTarget),
     /// An image thumbnail in the chat: message id, which of its images.
@@ -1264,6 +1277,7 @@ impl App {
             trace_scroll: 0,
             task_list: tasks::TaskList::default(),
             tasks_scroll: 0,
+            repo: repo_tab::RepoTab::default(),
             list_places_due: None,
             pending_graph_node: None,
             flow: flow::FlowState::default(),
@@ -2274,6 +2288,7 @@ impl App {
             self.redraw = true;
         }
         self.refresh_live_log();
+        self.refresh_repo_tab();
 
         if matches!(
             self.state,

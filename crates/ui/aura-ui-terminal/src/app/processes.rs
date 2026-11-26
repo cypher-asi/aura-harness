@@ -25,10 +25,15 @@ pub enum SidePanelTab {
     /// File tree of the active agent's workspace.
     #[default]
     Sandbox,
+    /// The git repo the active agent works in: its uncommitted changes, a
+    /// timeline of its commits, pushes, pulls and PRs, and its branches,
+    /// tags and worktrees.
+    Repo,
     /// Live agent turns, spawned agents and background commands.
     Processes,
     /// The host the agent on screen runs on, this machine or its cloud
-    /// machine: resources, addresses, status and cost.
+    /// machine: resources, addresses, status and cost. Its tab is an
+    /// icon at the bar's end.
     Host,
     /// Live feed of recorded steps and harness decisions.
     Trace,
@@ -39,11 +44,23 @@ pub enum SidePanelTab {
 }
 
 impl SidePanelTab {
-    /// The tabs listed while no channel is open: the agent app's.
-    const OUTSIDE_CHANNEL: [Self; 5] = [
+    /// The tabs listed while no channel is open: the agent app's, HOST's
+    /// icon last.
+    const OUTSIDE_CHANNEL: [Self; 6] = [
         Self::Sandbox,
+        Self::Repo,
         Self::Processes,
+        Self::Trace,
+        Self::Tasks,
         Self::Host,
+    ];
+
+    /// The tabs of [`Self::OUTSIDE_CHANNEL`] the bar labels; HOST is an
+    /// icon after them.
+    const LABELLED: [Self; 5] = [
+        Self::Sandbox,
+        Self::Repo,
+        Self::Processes,
         Self::Trace,
         Self::Tasks,
     ];
@@ -76,10 +93,33 @@ impl SidePanelTab {
             Self::ChannelMembers => "MEMBERS",
             Self::ChannelInfo => "INFO",
             Self::Sandbox => "SANDBOX",
+            Self::Repo => "REPO",
             Self::Processes => "PROCESSES",
             Self::Host => "HOST",
             Self::Trace => "TRACE",
             Self::Tasks => "TASKS",
+        }
+    }
+
+    /// What a tab drawn as an icon shows instead of its label: HOST's
+    /// computer. Its second column is blank: one column is too narrow to
+    /// make a computer out, so the desktop window draws it across both.
+    #[must_use]
+    pub const fn icon(self) -> Option<&'static str> {
+        match self {
+            Self::Host => Some("🖥 "),
+            _ => None,
+        }
+    }
+
+    /// The tab the bar draws as an icon at its end, with a channel open
+    /// or not.
+    #[must_use]
+    pub const fn icon_tab(channel_open: bool) -> Option<Self> {
+        if channel_open {
+            None
+        } else {
+            Some(Self::Host)
         }
     }
 
@@ -90,6 +130,7 @@ impl SidePanelTab {
             Self::ChannelMembers => "MBR",
             Self::ChannelInfo => "INF",
             Self::Sandbox => "SBX",
+            Self::Repo => "RPO",
             Self::Processes => "PRC",
             Self::Host => "HST",
             Self::Trace => "TRC",
@@ -97,14 +138,14 @@ impl SidePanelTab {
         }
     }
 
-    /// The tabs' cells in a header bar `width` columns wide, as drawn and
-    /// as clicks are mapped back, with a channel open or not.
+    /// The labelled tabs' cells in a header bar `width` columns wide, as
+    /// drawn and as clicks are mapped back, with a channel open or not.
     #[must_use]
     pub fn layout(width: u16, channel_open: bool) -> TabLayout<Self> {
         if channel_open {
             TabLayout::new(Self::IN_CHANNEL, Self::label, Self::short_label, width)
         } else {
-            TabLayout::new(Self::OUTSIDE_CHANNEL, Self::label, Self::short_label, width)
+            TabLayout::new(Self::LABELLED, Self::label, Self::short_label, width)
         }
     }
 
@@ -153,6 +194,11 @@ impl App {
     /// Record where the side panel's header bar was drawn this frame.
     pub fn set_side_tabs_area(&mut self, area: Rect) {
         self.areas.side_tabs = Some(area);
+    }
+
+    /// Record where that bar drew HOST's icon this frame, if it did.
+    pub fn set_side_icon_tab_area(&mut self, area: Option<Rect>) {
+        self.areas.side_icon_tab = area;
     }
 
     /// Record where the process rows were drawn this frame and which row
@@ -272,8 +318,8 @@ impl App {
 
     /// Keys of the side panel's lists that would otherwise go to the input,
     /// used while it is empty: Home/End jump, Space folds in the trees, and
-    /// each tab's letters (`o`/`k`/`l` on Processes, `g` on Trace, `p`/`t`
-    /// on Tasks).
+    /// each tab's letters (`[`/`]`/`o`/`r` on Repo, `o`/`k`/`l` on
+    /// Processes, `g` on Trace, `p`/`t` on Tasks).
     pub(super) fn handle_side_list_shortcut(&mut self, key: KeyEvent) -> bool {
         if key
             .modifiers
@@ -290,6 +336,7 @@ impl App {
                 };
                 match self.side_tab {
                     SidePanelTab::Sandbox => self.sandbox.select(index),
+                    SidePanelTab::Repo => self.select_repo_row(index),
                     SidePanelTab::Processes => self.select_process(index),
                     SidePanelTab::Host => {
                         self.host_key(key);
@@ -301,6 +348,11 @@ impl App {
                 }
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
+            (SidePanelTab::Repo, KeyCode::Char(' ')) => self.toggle_repo_changes(),
+            (SidePanelTab::Repo, KeyCode::Char('[')) => self.step_repo_filter(false),
+            (SidePanelTab::Repo, KeyCode::Char(']')) => self.step_repo_filter(true),
+            (SidePanelTab::Repo, KeyCode::Char('o')) => self.open_selected_repo_page(),
+            (SidePanelTab::Repo, KeyCode::Char('r')) => self.request_repo(true),
             (SidePanelTab::Tasks, KeyCode::Char(' ')) => self.task_list.toggle_selected(),
             (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_row_plan(),
             (SidePanelTab::Tasks, KeyCode::Char('t')) => self.jump_to_todo_task(),
@@ -407,8 +459,9 @@ impl App {
     /// Clicking a tab shows it. Clicking a row highlights it and opens it
     /// over the chat panel at once, the same in every tab: a file, a
     /// process's details, a trace step, a plan (at the clicked todo), a
-    /// task's agent. Directories have nothing to open, so a click folds
-    /// them; plans and tasks fold when their fold glyph is clicked.
+    /// task's agent; a REPO row's diff goes in the chat. Directories have
+    /// nothing to open, so a click folds them; plans and tasks fold when
+    /// their fold glyph is clicked.
     pub(super) fn click_side_panel(&mut self, column: u16, row: u16) {
         if self.side_scope_at(column, row) {
             self.toggle_side_scope();
@@ -430,6 +483,7 @@ impl App {
                     self.activate_selected_sandbox_row();
                 }
             }
+            SidePanelTab::Repo => self.click_repo(column, row),
             SidePanelTab::Processes => {
                 if let Some(index) = self.process_row_at(column, row) {
                     self.select_process(index);
@@ -449,8 +503,12 @@ impl App {
         }
     }
 
+    /// The tab whose label or icon is at a screen cell.
     fn side_tab_at(&self, column: u16, row: u16) -> Option<SidePanelTab> {
         let channel_open = self.channel_open();
+        if contains(self.areas.side_icon_tab, column, row) {
+            return SidePanelTab::icon_tab(channel_open);
+        }
         tab_at(self.areas.side_tabs, column, row, |width| {
             SidePanelTab::layout(width, channel_open)
         })
@@ -499,6 +557,7 @@ impl App {
             SidePanelTab::Sandbox => self
                 .sandbox_row_at(column, row)
                 .map(HoverTarget::SandboxRow),
+            SidePanelTab::Repo => self.hovered_repo(column, row),
             SidePanelTab::Processes => self
                 .process_row_at(column, row)
                 .map(HoverTarget::ProcessRow),
@@ -566,17 +625,21 @@ mod tests {
         let mut app = App::new();
         app.focus = PanelFocus::Sandbox;
         app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-        assert_eq!(app.side_tab(), SidePanelTab::Processes);
+        assert_eq!(app.side_tab(), SidePanelTab::Repo);
         app.handle_key(key(KeyCode::Left));
-        assert_eq!(app.side_tab(), SidePanelTab::Processes);
+        assert_eq!(app.side_tab(), SidePanelTab::Repo);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        assert_eq!(
+            app.side_tab(),
+            SidePanelTab::Host,
+            "HOST's icon is the bar's last tab"
+        );
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Tasks);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Trace);
-        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-        assert_eq!(app.side_tab(), SidePanelTab::Host);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
         assert_eq!(app.side_tab(), SidePanelTab::Processes);
         app.handle_key(key(KeyCode::Right));
@@ -676,6 +739,15 @@ mod tests {
         app.close_detail();
         app.handle_mouse(click(82, 11));
         assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
+
+        app.areas.side_icon_tab = Some(Rect::new(104, 11, 4, 1));
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            ..click(105, 11)
+        });
+        assert_eq!(app.hover(), Some(HoverTarget::SideTab(SidePanelTab::Host)));
+        app.handle_mouse(click(105, 11));
+        assert_eq!(app.side_tab(), SidePanelTab::Host, "HOST's icon is its tab");
     }
 
     #[test]
