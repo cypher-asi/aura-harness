@@ -18,7 +18,7 @@ use aura_core_types::{
 use crate::common::ToolStateWire;
 use crate::installed::{
     InstalledIntegration, InstalledTool, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
-    ToolAuth,
+    InstalledToolRuntimeIntegration, ToolAuth,
 };
 use crate::permissions::AgentToolPermissionsWire;
 use crate::server::{PolicyCheckWire, PolicyRuleWire, ToolPolicyDecision};
@@ -67,12 +67,7 @@ pub fn installed_tool_to_core(t: InstalledTool) -> InstalledToolDefinition {
         description: t.description,
         input_schema: t.input_schema,
         endpoint: t.endpoint,
-        auth: match t.auth {
-            ToolAuth::None => aura_core_types::ToolAuth::None,
-            ToolAuth::Bearer { token } => aura_core_types::ToolAuth::Bearer { token },
-            ToolAuth::ApiKey { header, key } => aura_core_types::ToolAuth::ApiKey { header, key },
-            ToolAuth::Headers { headers } => aura_core_types::ToolAuth::Headers { headers },
-        },
+        auth: tool_auth_to_core(t.auth),
         timeout_ms: t.timeout_ms,
         namespace: t.namespace,
         required_integration: t.required_integration.map(|requirement| {
@@ -82,57 +77,67 @@ pub fn installed_tool_to_core(t: InstalledTool) -> InstalledToolDefinition {
                 kind: requirement.kind,
             }
         }),
-        runtime_execution: t.runtime_execution.map(|execution| match execution {
-            InstalledToolRuntimeExecution::AppProvider(provider) => {
-                aura_core_types::InstalledToolRuntimeExecution::AppProvider(
-                    aura_core_types::InstalledToolRuntimeProviderExecution {
-                        provider: provider.provider,
-                        base_url: provider.base_url,
-                        static_headers: provider.static_headers,
-                        integrations: provider
-                            .integrations
-                            .into_iter()
-                            .map(|integration| aura_core_types::InstalledToolRuntimeIntegration {
-                                integration_id: integration.integration_id,
-                                base_url: integration.base_url,
-                                auth: match integration.auth {
-                                    InstalledToolRuntimeAuth::None => {
-                                        aura_core_types::InstalledToolRuntimeAuth::None
-                                    }
-                                    InstalledToolRuntimeAuth::AuthorizationBearer { token } => {
-                                        aura_core_types::InstalledToolRuntimeAuth::AuthorizationBearer {
-                                            token,
-                                        }
-                                    }
-                                    InstalledToolRuntimeAuth::AuthorizationRaw { value } => {
-                                        aura_core_types::InstalledToolRuntimeAuth::AuthorizationRaw {
-                                            value,
-                                        }
-                                    }
-                                    InstalledToolRuntimeAuth::Header { name, value } => {
-                                        aura_core_types::InstalledToolRuntimeAuth::Header { name, value }
-                                    }
-                                    InstalledToolRuntimeAuth::QueryParam { name, value } => {
-                                        aura_core_types::InstalledToolRuntimeAuth::QueryParam {
-                                            name,
-                                            value,
-                                        }
-                                    }
-                                    InstalledToolRuntimeAuth::Basic { username, password } => {
-                                        aura_core_types::InstalledToolRuntimeAuth::Basic {
-                                            username,
-                                            password,
-                                        }
-                                    }
-                                },
-                                provider_config: integration.provider_config,
-                            })
-                            .collect(),
-                    },
-                )
-            }
-        }),
+        runtime_execution: t.runtime_execution.map(runtime_execution_to_core),
         metadata: t.metadata,
+    }
+}
+
+fn tool_auth_to_core(auth: ToolAuth) -> aura_core_types::ToolAuth {
+    match auth {
+        ToolAuth::None => aura_core_types::ToolAuth::None,
+        ToolAuth::Bearer { token } => aura_core_types::ToolAuth::Bearer { token },
+        ToolAuth::ApiKey { header, key } => aura_core_types::ToolAuth::ApiKey { header, key },
+        ToolAuth::Headers { headers } => aura_core_types::ToolAuth::Headers { headers },
+    }
+}
+
+fn runtime_execution_to_core(
+    execution: InstalledToolRuntimeExecution,
+) -> aura_core_types::InstalledToolRuntimeExecution {
+    match execution {
+        InstalledToolRuntimeExecution::AppProvider(provider) => {
+            aura_core_types::InstalledToolRuntimeExecution::AppProvider(
+                aura_core_types::InstalledToolRuntimeProviderExecution {
+                    provider: provider.provider,
+                    base_url: provider.base_url,
+                    static_headers: provider.static_headers,
+                    integrations: provider
+                        .integrations
+                        .into_iter()
+                        .map(runtime_integration_to_core)
+                        .collect(),
+                },
+            )
+        }
+    }
+}
+
+fn runtime_integration_to_core(
+    integration: InstalledToolRuntimeIntegration,
+) -> aura_core_types::InstalledToolRuntimeIntegration {
+    aura_core_types::InstalledToolRuntimeIntegration {
+        integration_id: integration.integration_id,
+        base_url: integration.base_url,
+        auth: runtime_auth_to_core(integration.auth),
+        provider_config: integration.provider_config,
+    }
+}
+
+fn runtime_auth_to_core(
+    auth: InstalledToolRuntimeAuth,
+) -> aura_core_types::InstalledToolRuntimeAuth {
+    use aura_core_types::InstalledToolRuntimeAuth as Core;
+    match auth {
+        InstalledToolRuntimeAuth::None => Core::None,
+        InstalledToolRuntimeAuth::AuthorizationBearer { token } => {
+            Core::AuthorizationBearer { token }
+        }
+        InstalledToolRuntimeAuth::AuthorizationRaw { value } => Core::AuthorizationRaw { value },
+        InstalledToolRuntimeAuth::Header { name, value } => Core::Header { name, value },
+        InstalledToolRuntimeAuth::QueryParam { name, value } => Core::QueryParam { name, value },
+        InstalledToolRuntimeAuth::Basic { username, password } => {
+            Core::Basic { username, password }
+        }
     }
 }
 

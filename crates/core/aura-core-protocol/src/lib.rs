@@ -43,6 +43,8 @@
 //! send an explicit [`AgentPermissionsWire`] value describing the
 //! scope + capability bundle the run is allowed to exercise.
 
+#![deny(clippy::too_many_lines)]
+
 pub mod agent_identity;
 pub mod chat_project_info;
 pub mod client;

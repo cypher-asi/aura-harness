@@ -35,9 +35,6 @@ crates/auth/aura-auth-openrouter/src/provider.rs
 crates/auth/aura-auth/src/manager.rs
 crates/auth/aura-auth/src/manager/tests.rs
 crates/auth/aura-auth/src/vault/mod.rs
-crates/config/aura-config/src/cloud.rs
-crates/config/aura-config/src/env_file.rs
-crates/config/aura-config/src/lib.rs
 crates/context/aura-context-compaction/src/messages.rs
 crates/context/aura-context-memory/examples/continuity_eval.rs
 crates/context/aura-context-memory/src/consolidation.rs
@@ -52,11 +49,6 @@ crates/context/aura-context-memory/tests/turn_summary_roundtrip.rs
 crates/context/aura-context-prompts/src/bootstrap/mod.rs
 crates/context/aura-context-prompts/src/system/tests.rs
 crates/context/aura-context-skills/src/manager.rs
-crates/core/aura-core-protocol/src/runtime_request.rs
-crates/core/aura-core-protocol/src/server.rs
-crates/core/aura-core-types/src/ids.rs
-crates/core/aura-core-types/src/types/compare.rs
-crates/core/aura-core-types/src/types/trace.rs
 crates/engine/aura-engine-automaton/src/builtins/dev_loop/tests.rs
 crates/engine/aura-engine-automaton/src/builtins/dev_loop/tick.rs
 crates/engine/aura-engine-automaton/src/builtins/task_refinement.rs

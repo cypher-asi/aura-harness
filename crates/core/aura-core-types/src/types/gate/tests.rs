@@ -41,6 +41,10 @@ fn prompt_payload_round_trips_with_string_forms() {
         })
     );
     assert_eq!(PromptPayload::from_bytes(&bytes).unwrap(), payload);
+}
+
+#[test]
+fn prompts_from_older_or_unrouted_records_load_without_labels() {
     let older = br#"{"text":"fix it","category":"debugging","classifier":"","route":{"level":"turn","model":"m","reason":"default","explored":false,"propensity":1.0}}"#;
     let older = PromptPayload::from_bytes(older).unwrap();
     assert_eq!(
