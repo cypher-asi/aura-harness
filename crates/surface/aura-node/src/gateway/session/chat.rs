@@ -21,10 +21,11 @@ use super::generation::{self, GenerationTurn};
 use super::helpers;
 use super::{Session, ToolApprovalBroker, WsContext};
 use crate::protocol::{
-    AssistantMessageStart, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
+    AssistantMessageStart, ChatTitle, ErrorMsg, InboundMessage, OutboundMessage, UserMessage,
 };
 use aura_agent::{
-    AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway,
+    AgentLoop, AgentLoopConfig, AgentLoopEvent, AgentLoopResult, KernelModelGateway,
+    KernelToolGateway,
 };
 use aura_agent_kernel::Kernel;
 use aura_model::{ContentBlock, ImageSource, Message, Role};
@@ -50,6 +51,48 @@ struct AgentTurn {
     message_id: String,
     /// The turn's kernel, which records its reply when it ends.
     kernel: Arc<Kernel>,
+    /// The chat's title being written beside the turn, when the request
+    /// asked for one.
+    title: Option<TitleTask>,
+}
+
+/// A chat title being written through the turn's kernel and sent as soon
+/// as the model gives one. Stopped when the turn is dropped unfinished, so
+/// nothing is written for a run that was closed (an agent being sealed
+/// must not gain entries afterwards).
+struct TitleTask(JoinHandle<()>);
+
+impl TitleTask {
+    fn spawn(
+        gateway: KernelModelGateway,
+        config: AgentLoopConfig,
+        model: String,
+        prompt: String,
+        outbound_tx: mpsc::Sender<OutboundMessage>,
+    ) -> Self {
+        Self(tokio::spawn(async move {
+            if let Some(title) =
+                aura_agent::titles::chat_title(&gateway, &config, &model, &prompt).await
+            {
+                helpers::send_outbound_with_backpressure(
+                    &outbound_tx,
+                    OutboundMessage::ChatTitle(ChatTitle { title }),
+                    "chat_title",
+                )
+                .await;
+            }
+        }))
+    }
+
+    async fn finish(mut self) {
+        let _ = (&mut self.0).await;
+    }
+}
+
+impl Drop for TitleTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Drive a chat run's full turn lifecycle, decoupled from any WS.
@@ -219,6 +262,13 @@ async fn complete_agent_turn(
             error = %e,
             "Stream forward task failed"
         );
+    }
+    // The title goes out before the turn's end, which is where a client
+    // stops reading. A cancelled turn ends without waiting for it.
+    if let Some(title) = agent.title.take() {
+        if !agent.cancel_token.is_cancelled() {
+            title.finish().await;
+        }
     }
     helpers::finalize_turn(
         session,
@@ -474,6 +524,7 @@ struct PreparedTurn {
     messages: Vec<Message>,
     tools: Vec<aura_model::ToolDefinition>,
     recorder: Option<Arc<aura_agent_trace::RunRecorder>>,
+    title: Option<TitleTask>,
 }
 
 /// Prepare and spawn an agent-loop turn as a background task.
@@ -714,6 +765,18 @@ async fn prepare_turn_context(
         config.system_prompt.push_str(&cloud_git_note(branch));
     }
 
+    // Through the turn's own kernel: a second kernel for the agent would
+    // claim the same sequence numbers as this one while the turn writes.
+    let title = session.title_model.take().map(|model| {
+        TitleTask::spawn(
+            KernelModelGateway::new(kernel.clone()),
+            config.clone(),
+            model,
+            msg.content.clone(),
+            outbound_tx.clone(),
+        )
+    });
+
     // Subagent surface is constant for the bundled registry today. The
     // dispatch tool re-emits the registry's name + description per
     // entry on every turn, so the per-turn breakdown attributes those
@@ -811,6 +874,7 @@ async fn prepare_turn_context(
         messages,
         tools,
         recorder,
+        title,
     })
 }
 
@@ -836,6 +900,7 @@ fn dispatch_turn_to_agent(
         messages,
         tools,
         recorder,
+        title,
     } = prepared;
     let agent_loop = AgentLoop::new(config);
 
@@ -878,6 +943,7 @@ fn dispatch_turn_to_agent(
         stream_forward_handle,
         message_id,
         kernel,
+        title,
     }
 }
 

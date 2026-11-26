@@ -18,12 +18,12 @@ use aura_context_prompts::{
     default_system_prompt, AgentIdentity as PromptAgentIdentity, ProjectInfo, SystemPromptBuilder,
 };
 use aura_core_protocol::{
-    AgentPermissionsWire, AgentPersona, CapabilityWire, ChatProjectInfoWire, IntentClassifierSpec,
-    ReasoningEffort, RuntimeRequest, RuntimeRequestType, SessionModelOverrides,
+    AgentPersona, ChatProjectInfoWire, IntentClassifierSpec, ReasoningEffort, RuntimeRequest,
+    RuntimeRequestType, SessionModelOverrides,
 };
 use aura_core_types::{
-    AgentId, AgentPermissions, AgentScope, AgentToolPermissions, Capability,
-    InstalledIntegrationDefinition, InstalledToolDefinition,
+    AgentId, AgentPermissions, AgentToolPermissions, InstalledIntegrationDefinition,
+    InstalledToolDefinition,
 };
 use aura_engine::scheduler::AgentIdentity as RuntimeAgentIdentity;
 use aura_exec_tools::IntentClassifier;
@@ -73,6 +73,9 @@ pub struct Session {
     /// hard-pins the agent loop's thinking effort (see
     /// `AgentLoopConfig::user_thinking_effort`).
     pub(crate) user_thinking_effort: Option<aura_model::ThinkingEffort>,
+    /// Model that titles the chat from the next turn's prompt, from
+    /// `ModelSelection::title_model`; taken by that turn.
+    pub(crate) title_model: Option<String>,
     /// Maximum agentic steps per turn.
     pub(crate) max_turns: u32,
     /// Installed tools registered for this session.
@@ -184,6 +187,7 @@ impl Session {
             provider_override: None,
             temperature: None,
             user_thinking_effort: None,
+            title_model: None,
             max_turns: aura_core_types::MAX_TURNS,
             installed_tools: Vec::new(),
             installed_integrations: Vec::new(),
@@ -301,6 +305,7 @@ impl Session {
         if let Some(max_turns) = model.max_turns {
             self.max_turns = max_turns;
         }
+        self.title_model = model.title_model.filter(|m| !m.trim().is_empty());
         self.installed_tools = agent_capabilities
             .installed_tools
             .into_iter()
@@ -666,43 +671,7 @@ fn thinking_effort_from_wire(effort: ReasoningEffort) -> ThinkingEffort {
     }
 }
 
-/// Translate the wire `AgentPermissionsWire` into the harness-core
-/// `AgentPermissions` used by tools + the kernel policy.
-pub(crate) fn agent_permissions_from_wire(wire: AgentPermissionsWire) -> AgentPermissions {
-    let capabilities = wire
-        .capabilities
-        .into_iter()
-        .filter_map(|c| match c {
-            CapabilityWire::SpawnAgent => Some(Capability::SpawnAgent),
-            CapabilityWire::ControlAgent => Some(Capability::ControlAgent),
-            CapabilityWire::ReadAgent => Some(Capability::ReadAgent),
-            CapabilityWire::ListAgents => Some(Capability::ListAgents),
-            CapabilityWire::ManageOrgMembers => Some(Capability::ManageOrgMembers),
-            CapabilityWire::ManageBilling => Some(Capability::ManageBilling),
-            CapabilityWire::InvokeProcess => Some(Capability::InvokeProcess),
-            CapabilityWire::PostToFeed => Some(Capability::PostToFeed),
-            CapabilityWire::GenerateMedia => Some(Capability::GenerateMedia),
-            CapabilityWire::ReadProject { id } => Some(Capability::ReadProject { id }),
-            CapabilityWire::WriteProject { id } => Some(Capability::WriteProject { id }),
-            CapabilityWire::ReadAllProjects => Some(Capability::ReadAllProjects),
-            CapabilityWire::WriteAllProjects => Some(Capability::WriteAllProjects),
-            CapabilityWire::Unknown => None,
-        })
-        .collect();
-    let permissions = AgentPermissions {
-        scope: AgentScope {
-            orgs: wire.scope.orgs,
-            projects: wire.scope.projects,
-            agent_ids: wire.scope.agent_ids,
-        },
-        capabilities,
-    };
-    if permissions.capabilities.is_empty() && permissions.scope.is_universe() {
-        AgentPermissions::full_access()
-    } else {
-        permissions
-    }
-}
+pub(crate) use aura_core_protocol::agent_permissions_from_wire;
 
 /// Return whether a project path points into the harness-owned Safe Workspace
 /// tree beside `workspaces/` under the node data directory.

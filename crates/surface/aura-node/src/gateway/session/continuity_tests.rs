@@ -14,8 +14,8 @@ use aura_core_types::{AgentId, RecordEntry, Transaction, TransactionType};
 use aura_engine::scheduler::Scheduler;
 use aura_exec_tools::{ToolCatalog, ToolConfig};
 use aura_model::{
-    ContentBlock, MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse,
-    ReasonerError,
+    ContentBlock, MockProvider, MockResponse, ModelCallPurpose, ModelProvider, ModelRequest,
+    ModelRequestKind, ModelResponse, ReasonerError,
 };
 use aura_store_db::{ReadStore, RocksStore, Store, WriteStore};
 use dashmap::DashMap;
@@ -72,7 +72,11 @@ impl ModelProvider for Recording {
 
 /// A node over `store` keeping checkpoints under `data_dir`: a fresh one
 /// per run stands for a node process that restarted in between.
-fn node(data_dir: &Path, store: &Arc<RocksStore>, provider: &Arc<Recording>) -> WsContext {
+fn node<P: ModelProvider + Send + Sync + 'static>(
+    data_dir: &Path,
+    store: &Arc<RocksStore>,
+    provider: &Arc<P>,
+) -> WsContext {
     let store: Arc<dyn Store> = store.clone();
     let provider: Arc<dyn ModelProvider + Send + Sync> = provider.clone();
     let workspace_base = data_dir.join("workspaces");
@@ -340,5 +344,89 @@ async fn without_a_checkpoint_the_record_carries_the_conversation() {
         count(&record(&store, agent), TransactionType::SessionStart),
         1,
         "the imported session goes on"
+    );
+}
+
+/// Answers title calls with a title and every other call with a reply,
+/// and keeps the title calls it was sent. The two run side by side, so
+/// a script in call order would not do.
+#[derive(Default)]
+struct Titling {
+    title_calls: Mutex<Vec<ModelRequest>>,
+}
+
+#[async_trait::async_trait]
+impl ModelProvider for Titling {
+    fn name(&self) -> &'static str {
+        "mock"
+    }
+
+    async fn complete(&self, request: ModelRequest) -> Result<ModelResponse, ReasonerError> {
+        let answer = if request.metadata.purpose == Some(ModelCallPurpose::Title) {
+            self.title_calls.lock().push(request.clone());
+            "\"Build fix.\""
+        } else {
+            "Fixed it."
+        };
+        MockProvider::simple_response(answer)
+            .complete(request)
+            .await
+    }
+
+    async fn health_check(&self) -> bool {
+        true
+    }
+}
+
+#[tokio::test]
+async fn a_turn_asked_for_a_title_titles_the_chat_through_the_agent_s_kernel() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Arc::new(RocksStore::open(dir.path().join("db"), false).expect("store"));
+    let provider = Arc::new(Titling::default());
+    let agent = AgentId::new([9; 32]);
+    let ctx = node(dir.path(), &store, &provider);
+    let workspace = ctx.workspace_base.join("agent");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let mut request = hub_request(agent, &workspace);
+    request.model.title_model = Some("title-model".into());
+    let session = prepare_chat_session(request, &ctx).await.expect("prepare");
+    let registry: ChatRunRegistry = Arc::new(DashMap::new());
+    let handle = spawn_chat_run(session, ctx, "run-1".to_string(), registry);
+    handle
+        .commands
+        .send(InboundMessage::UserMessage(UserMessage {
+            content: "the build fails".into(),
+            tool_hints: None,
+            attachments: None,
+        }))
+        .await
+        .expect("send");
+    wait_for_turn_end(&handle).await;
+    let history = handle.events.subscribe().history;
+    handle.shutdown.cancel();
+
+    let titled = history
+        .iter()
+        .position(|m| matches!(m, OutboundMessage::ChatTitle(t) if t.title == "Build fix"));
+    let ended = history
+        .iter()
+        .position(|m| matches!(m, OutboundMessage::AssistantMessageEnd(_)));
+    assert!(
+        titled.is_some() && titled < ended,
+        "the cleaned title goes out before the turn's end: {history:?}"
+    );
+    let asked = provider.title_calls.lock().clone();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].model.as_str(), "title-model");
+    assert_eq!(asked[0].metadata.kind, Some(ModelRequestKind::Auxiliary));
+    assert!(says(&asked[0], "the build fails"));
+    let calls: Vec<serde_json::Value> = record(&store, agent)
+        .iter()
+        .filter(|e| e.tx.tx_type == TransactionType::Reasoning)
+        .map(|e| serde_json::from_slice(&e.tx.payload).expect("reasoning payload"))
+        .collect();
+    assert!(
+        calls.iter().any(|call| call["purpose"] == "title"),
+        "the title call is in the agent's record: {calls:?}"
     );
 }

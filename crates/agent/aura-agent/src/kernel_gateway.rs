@@ -14,6 +14,7 @@ use aura_model::{ModelProvider, ModelRequest, ModelResponse, ReasonerError, Stre
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 use tracing::warn;
 
 /// Translate a [`KernelError`] returned by `Kernel::reason*` back into
@@ -211,6 +212,24 @@ impl KernelModelGateway {
     #[must_use]
     pub const fn new(kernel: Arc<Kernel>) -> Self {
         Self { kernel }
+    }
+
+    /// One call outside the agent loop, such as a chat title: recorded like
+    /// every call, and given up after `limit`. `None` when it fails or
+    /// times out, since such a call is never worth holding up its caller.
+    pub async fn answer(&self, request: ModelRequest, limit: Duration) -> Option<ModelResponse> {
+        let model = request.model.to_string();
+        match tokio::time::timeout(limit, self.complete(request)).await {
+            Ok(Ok(response)) => Some(response),
+            Ok(Err(e)) => {
+                warn!(%model, error = %e, "Model call failed");
+                None
+            }
+            Err(_) => {
+                warn!(%model, timeout_secs = limit.as_secs(), "Model call timed out");
+                None
+            }
+        }
     }
 }
 

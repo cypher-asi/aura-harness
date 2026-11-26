@@ -573,6 +573,7 @@ async fn a_turn_s_run_is_copied_into_the_main_trace_store() {
         "hello".into(),
         Some("mock-model".into()),
         None,
+        None,
         CancellationToken::new(),
     );
     while let Some(event) = events.recv().await {
@@ -654,4 +655,75 @@ async fn a_pull_drops_the_changes_saved_at_sleep() {
     assert!(p.hub.saved_patch(&hex).is_none(), "in the project now");
     let sync = p.hub.sync_status(p.agent).expect("placed");
     assert!(sync.patch_ms.is_none(), "the next sleep saves a new one");
+}
+
+#[tokio::test]
+async fn the_machine_titles_the_chat_during_the_turn_and_records_the_call() {
+    let p = placed(CloudConfig::defaults()).await;
+    p.import().await;
+
+    let mut events = p.hub.run_turn(
+        p.agent,
+        "fix the build".into(),
+        Some("mock-model".into()),
+        Some("mock-model".into()),
+        None,
+        CancellationToken::new(),
+    );
+    let (mut title, mut done) = (None, false);
+    while let Some(event) = events.recv().await {
+        match event {
+            RemoteEvent::Title(written) => {
+                assert!(!done, "the title comes while the turn runs");
+                title = Some(written);
+            }
+            RemoteEvent::Done(_) => done = true,
+            RemoteEvent::Failed(err) => panic!("the turn failed: {err}"),
+            _ => {}
+        }
+    }
+
+    assert!(done);
+    assert_eq!(title.as_deref(), Some("done"), "the node model's answer");
+    let copied = p.hub.store.scan_record(p.agent, 1, 1_000).expect("scan");
+    assert!(
+        copied.iter().any(|entry| {
+            entry.tx.tx_type == TransactionType::Reasoning
+                && serde_json::from_slice::<serde_json::Value>(&entry.tx.payload)
+                    .is_ok_and(|call| call["purpose"] == "title")
+        }),
+        "the title call is in the record copied here"
+    );
+}
+
+#[tokio::test]
+async fn a_renamed_cloud_agent_is_named_so_in_its_placement_and_the_directory() {
+    let p = placed(CloudConfig::defaults()).await;
+    let hex = p.agent.to_hex();
+    p.hub.directory.place(
+        &hex,
+        Holder {
+            node: MACHINE.into(),
+            url: None,
+            project: "p1".into(),
+            name: "re36".into(),
+            owner: "local".into(),
+        },
+    );
+
+    p.hub.rename(p.agent, "Build fix");
+
+    assert_eq!(p.hub.placements.lock().agents[&hex].name, "Build fix");
+    let saved = std::fs::read_to_string(p.hub_dir.path().join("cloud/placements.json"))
+        .expect("placements saved");
+    assert!(saved.contains("Build fix"), "{saved}");
+    assert_eq!(
+        p.hub.directory.holder(&hex).map(|holder| holder.name),
+        Some("Build fix".to_string())
+    );
+    p.hub.rename(AgentId::new([1; 32]), "Nobody");
+    assert!(
+        !p.hub.is_placed(AgentId::new([1; 32])),
+        "only placed agents"
+    );
 }

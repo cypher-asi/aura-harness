@@ -64,6 +64,7 @@ pub(crate) mod prompt_resolve;
 mod recording_stream;
 mod sanitize;
 pub(crate) mod self_review;
+pub mod titles;
 pub(crate) mod turn_config;
 pub mod types;
 pub(crate) mod verify;

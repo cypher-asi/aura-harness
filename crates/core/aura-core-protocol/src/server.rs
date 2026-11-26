@@ -79,6 +79,18 @@ pub enum OutboundMessage {
     /// announced subagent child run. Emitted on the parent stream so
     /// the thread card reflects running/completed/failed/etc.
     SubagentStatus(SubagentStatus),
+    /// A title for the chat, written from the turn's prompt by the
+    /// model the request named as
+    /// [`crate::ModelSelection::title_model`]. Sent before the turn's
+    /// `assistant_message_end`, and only when the model gave one.
+    ChatTitle(ChatTitle),
+}
+
+/// Payload for `chat_title`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ChatTitle {
+    pub title: String,
 }
 
 /// Payload for `session_ready`.
@@ -316,7 +328,7 @@ pub struct AssistantMessageEnd {
 }
 
 /// Token usage information for a session.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct SessionUsage {
     pub input_tokens: u64,
@@ -582,6 +594,17 @@ pub struct GenerationErrorMsg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chat_title_is_its_own_message_on_the_turn_s_stream() {
+        let json = serde_json::to_string(&OutboundMessage::ChatTitle(ChatTitle {
+            title: "Build fix".to_string(),
+        }))
+        .expect("serialize");
+        assert_eq!(json, r#"{"type":"chat_title","title":"Build fix"}"#);
+        let back: OutboundMessage = serde_json::from_str(&json).expect("deserialize");
+        assert!(matches!(back, OutboundMessage::ChatTitle(t) if t.title == "Build fix"));
+    }
 
     #[test]
     fn tool_result_without_image_omits_image_fields() {

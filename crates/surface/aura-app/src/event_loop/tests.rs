@@ -1,6 +1,6 @@
 use super::*;
 use crate::agent_definitions::AgentDefinitions;
-use crate::agent_registry::AgentRegistry;
+use crate::agent_registry::{AgentRegistry, RegisteredAgent};
 use crate::record_loader::json_payload;
 use crate::session_helpers::{build_executor_router_with_config, default_agent_config_with_auth};
 use async_trait::async_trait;

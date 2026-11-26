@@ -29,6 +29,7 @@ use aura_ui_terminal::events::{
 };
 use aura_ui_terminal::host::{HostAction, HostRow, HostView, PlacementState, PlacementView};
 use aura_ui_terminal::UiCommand;
+use futures_util::future::BoxFuture;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -97,6 +98,11 @@ impl CloudState {
     /// Forget `agent`'s local session if it is older than its record.
     pub(super) fn take_stale(&self, agent: AgentId) -> bool {
         self.shared.stale.lock().remove(&agent)
+    }
+
+    /// Whether `agent` has a cloud turn (or `/new`) under way.
+    pub(super) fn is_running(&self, agent: AgentId) -> bool {
+        self.shared.running.lock().contains_key(&agent)
     }
 
     /// Stop `agent`'s cloud turn. Returns whether one was running.
@@ -937,10 +943,11 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
                 .await;
             }
             let current = state.models.current().to_string();
+            let linked = state.auth.linked_plans(&state.auth.owner());
             // A plan model runs on the owner's plan, through the boxd
             // secret their machine holds.
             if let Some(kind) = plan_of_model(&current) {
-                if !state.auth.linked_plans(&state.auth.owner()).contains(&kind) {
+                if !linked.contains(&kind) {
                     system(
                         state,
                         agent,
@@ -961,6 +968,28 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
                 aura_auth::Identity::Zos(session) => Some(session.access_token),
                 aura_auth::Identity::Local => None,
             };
+            // Titled like a local agent: on a typed prompt, while it still
+            // has a placeholder name. Its machine makes the call, since only
+            // the machine writes the agent's record while it is placed.
+            let wants_title = state.hub.titles_turn(agent, prompt.mentions);
+            let title_model = wants_title
+                .then(|| super::titles::title_model(state.models.classifier_model()))
+                .filter(|model| runs_on_machine(model, &linked));
+            let mut titles = wants_title.then(|| {
+                Titles::new(
+                    title_sink(Arc::clone(&state.hub), Arc::clone(&hub), agent),
+                    &prompt.text,
+                )
+            });
+            if title_model.is_none() {
+                if let Some(titles) = titles.as_mut() {
+                    titles.finish().await;
+                }
+            }
+            let mut extras = TurnExtras {
+                titles,
+                context_limit: model.as_deref().map(aura_engine::context_window_for_model),
+            };
             let cancel = CancellationToken::new();
             state
                 .cloud
@@ -968,11 +997,25 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
                 .running
                 .lock()
                 .insert(agent, cancel.clone());
-            let rx = hub.run_turn(agent, prompt.text, model, jwt, cancel);
+            let mut rx = hub.run_turn(agent, prompt.text, model, title_model, jwt, cancel);
             let shared = Arc::clone(&state.cloud.shared);
+            let sessions = state.hub.factory.checkpoints.clone();
             tokio::spawn(async move {
-                forward(ui, rx).await;
+                forward(&ui, &mut rx, &mut extras).await;
                 shared.running.lock().remove(&agent);
+                // The hub copies the turn's session here before it lets go
+                // of the channel; the totals come from that copy.
+                while rx.recv().await.is_some() {}
+                if let Some(sessions) = sessions {
+                    let copied =
+                        tokio::task::spawn_blocking(move || sessions.load_current(agent)).await;
+                    if let Ok(Some(checkpoint)) = copied {
+                        ui.send(UiCommand::SetSessionTotals(super::hud::session_totals(
+                            &checkpoint.usage,
+                        )))
+                        .await;
+                    }
+                }
             });
         }
         Work::Command { command, .. } => {
@@ -1055,8 +1098,75 @@ pub(super) async fn new_session(state: &mut LoopState<'_>, agent: AgentId) -> bo
     true
 }
 
-/// Show a cloud turn's events in its agent's chat.
-async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) {
+/// Whether `model` can run on a cloud machine: not Gate or a model on
+/// this computer, and a plan model only when its plan is `linked`.
+fn runs_on_machine(model: &str, linked: &[aura_core_auth::ProviderKind]) -> bool {
+    !model.is_empty()
+        && model != "gate"
+        && !model.starts_with("local/")
+        && plan_of_model(model).is_none_or(|kind| linked.contains(&kind))
+}
+
+/// Applies a cloud chat's title.
+type TitleSink = Box<dyn Fn(String) -> BoxFuture<'static, ()> + Send + Sync>;
+
+/// Titles `agent` in the agents list and, when that took, on its placement,
+/// which names it in mail.
+fn title_sink(agents: Arc<AgentHub>, hub: Arc<CloudHub>, agent: AgentId) -> TitleSink {
+    Box::new(move |title| {
+        let agents = Arc::clone(&agents);
+        let hub = Arc::clone(&hub);
+        Box::pin(async move {
+            if agents.apply_title(agent, &title).await {
+                hub.rename(agent, &title);
+            }
+        })
+    })
+}
+
+/// Where a cloud chat's title goes, with the title made from its prompt
+/// for when the machine sends none.
+struct Titles {
+    sink: TitleSink,
+    fallback: Option<String>,
+}
+
+impl Titles {
+    fn new(sink: TitleSink, prompt: &str) -> Self {
+        Self {
+            sink,
+            fallback: Some(aura_agent::titles::fallback_title(prompt)),
+        }
+    }
+
+    async fn apply(&mut self, title: String) {
+        self.fallback = None;
+        (self.sink)(title).await;
+    }
+
+    /// Apply the title made from the prompt, unless one was applied.
+    async fn finish(&mut self) {
+        if let Some(title) = self.fallback.take() {
+            (self.sink)(title).await;
+        }
+    }
+}
+
+/// What a cloud turn shows outside its chat's stream.
+#[derive(Default)]
+struct TurnExtras {
+    /// Where the chat's title goes; `None` when it needs none.
+    titles: Option<Titles>,
+    /// The context window of the model the turn asked for.
+    context_limit: Option<u64>,
+}
+
+/// Show a cloud turn's events in its agent's chat, until the turn ends.
+async fn forward(
+    ui: &AgentUi,
+    rx: &mut tokio::sync::mpsc::Receiver<RemoteEvent>,
+    extras: &mut TurnExtras,
+) {
     let mut streaming = false;
     let mut thinking = false;
     // A sleeping machine's wake, shown until the turn's first event.
@@ -1067,6 +1177,13 @@ async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) 
                 .get_or_insert_with(|| BootConsoleUi::new(ui.clone(), "Waking cloud machine"))
                 .show(vec![event])
                 .await;
+            continue;
+        }
+        // Arrives mid-reply; the reply streams on around it.
+        if let RemoteEvent::Title(title) = event {
+            if let Some(titles) = extras.titles.as_mut() {
+                titles.apply(title).await;
+            }
             continue;
         }
         if let Some(console) = waking.take() {
@@ -1093,7 +1210,7 @@ async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) 
         }
         match event {
             RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
-            RemoteEvent::Boot(_) => {}
+            RemoteEvent::Boot(_) | RemoteEvent::Title(_) => {}
             RemoteEvent::Text(text) => {
                 if !streaming {
                     ui.send(UiCommand::StartStreaming).await;
@@ -1131,7 +1248,17 @@ async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) 
                 })
                 .await;
             }
-            RemoteEvent::Done { .. } => break,
+            RemoteEvent::Done(usage) => {
+                let limit = extras.context_limit.or_else(|| {
+                    (!usage.model.is_empty())
+                        .then(|| aura_engine::context_window_for_model(&usage.model))
+                });
+                ui.send(UiCommand::SetContext(super::hud::remote_context_view(
+                    &usage, limit,
+                )))
+                .await;
+                break;
+            }
             RemoteEvent::Failed(err) => {
                 let lower = err.to_ascii_lowercase();
                 let hint = if lower.contains("401") || lower.contains("unauthorized") {
@@ -1152,6 +1279,9 @@ async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) 
         console
             .end(false, "The turn ended while the machine woke.".to_string())
             .await;
+    }
+    if let Some(titles) = extras.titles.as_mut() {
+        titles.finish().await;
     }
     if thinking {
         ui.send(UiCommand::FinishThinking).await;
@@ -1254,7 +1384,7 @@ mod forward_tests {
     #[tokio::test]
     async fn a_finished_cloud_turn_completes_the_chat() {
         let (ui, mut rx) = chat();
-        let (tx, events) = mpsc::channel(8);
+        let (tx, mut events) = mpsc::channel(8);
         tx.send(RemoteEvent::Text("hello".into())).await.unwrap();
         tx.send(RemoteEvent::ToolStart {
             id: "t1".into(),
@@ -1270,16 +1400,14 @@ mod forward_tests {
         .await
         .unwrap();
         tx.send(RemoteEvent::Text("done".into())).await.unwrap();
-        tx.send(RemoteEvent::Done {
-            model: "m".into(),
-            input_tokens: 1,
-            output_tokens: 2,
-        })
-        .await
-        .unwrap();
+        tx.send(done(100)).await.unwrap();
         drop(tx);
 
-        forward(ui, events).await;
+        let mut extras = TurnExtras {
+            context_limit: Some(1_000),
+            ..TurnExtras::default()
+        };
+        forward(&ui, &mut events, &mut extras).await;
 
         let sent = commands(&mut rx);
         ends_the_turn(&sent);
@@ -1289,16 +1417,24 @@ mod forward_tests {
         assert!(sent
             .iter()
             .any(|command| matches!(command, UiCommand::CompleteTool { success: true, .. })));
+        assert!(
+            sent.iter().any(|command| matches!(
+                command,
+                UiCommand::SetContext(view)
+                    if view.total_tokens == 100 && view.limit_tokens == Some(1_000)
+            )),
+            "the status bar shows the turn's context: {sent:?}"
+        );
     }
 
     #[tokio::test]
     async fn a_failed_cloud_turn_completes_the_chat() {
         let (ui, mut rx) = chat();
-        let (tx, events) = mpsc::channel(8);
+        let (tx, mut events) = mpsc::channel(8);
         tx.send(RemoteEvent::Failed("boom".into())).await.unwrap();
         drop(tx);
 
-        forward(ui, events).await;
+        forward(&ui, &mut events, &mut TurnExtras::default()).await;
 
         let sent = commands(&mut rx);
         ends_the_turn(&sent);
@@ -1311,17 +1447,101 @@ mod forward_tests {
     #[tokio::test]
     async fn a_dropped_cloud_turn_completes_the_chat() {
         let (ui, mut rx) = chat();
-        let (tx, events) = mpsc::channel(8);
+        let (tx, mut events) = mpsc::channel(8);
         tx.send(RemoteEvent::Thinking("hmm".into())).await.unwrap();
         drop(tx);
 
-        forward(ui, events).await;
+        forward(&ui, &mut events, &mut TurnExtras::default()).await;
 
         let sent = commands(&mut rx);
         ends_the_turn(&sent);
         assert!(sent
             .iter()
             .any(|command| matches!(command, UiCommand::FinishThinking)));
+    }
+
+    fn done(context_tokens: u64) -> RemoteEvent {
+        RemoteEvent::Done(Box::new(aura_core_protocol::SessionUsage {
+            model: "m".into(),
+            input_tokens: 1,
+            output_tokens: 2,
+            estimated_context_tokens: context_tokens,
+            ..Default::default()
+        }))
+    }
+
+    /// Titles that remember what they were given.
+    fn titles(prompt: &str) -> (Titles, Arc<Mutex<Vec<String>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&seen);
+        let sink: TitleSink = Box::new(move |title| {
+            let kept = Arc::clone(&kept);
+            Box::pin(async move { kept.lock().push(title) })
+        });
+        (Titles::new(sink, prompt), seen)
+    }
+
+    #[tokio::test]
+    async fn the_machine_s_title_names_the_chat_without_breaking_the_reply() {
+        let (ui, mut rx) = chat();
+        let (tx, mut events) = mpsc::channel(8);
+        tx.send(RemoteEvent::Text("hel".into())).await.unwrap();
+        tx.send(RemoteEvent::Title("Build fix".into()))
+            .await
+            .unwrap();
+        tx.send(RemoteEvent::Text("lo".into())).await.unwrap();
+        tx.send(done(10)).await.unwrap();
+        drop(tx);
+        let (titles, seen) = titles("fix the build please");
+        let mut extras = TurnExtras {
+            titles: Some(titles),
+            ..TurnExtras::default()
+        };
+
+        forward(&ui, &mut events, &mut extras).await;
+
+        assert_eq!(*seen.lock(), ["Build fix"], "and no title from the prompt");
+        let sent = commands(&mut rx);
+        let starts = sent
+            .iter()
+            .filter(|command| matches!(command, UiCommand::StartStreaming))
+            .count();
+        assert_eq!(starts, 1, "one reply: {sent:?}");
+    }
+
+    #[tokio::test]
+    async fn without_a_title_from_the_machine_the_prompt_names_the_chat() {
+        for last in [done(10), RemoteEvent::Failed("boom".into())] {
+            let (ui, _rx) = chat();
+            let (tx, mut events) = mpsc::channel(8);
+            tx.send(RemoteEvent::Text("ok".into())).await.unwrap();
+            tx.send(last).await.unwrap();
+            drop(tx);
+            let (titles, seen) = titles("\n  fix   the build\nthen run tests");
+            let mut extras = TurnExtras {
+                titles: Some(titles),
+                ..TurnExtras::default()
+            };
+
+            forward(&ui, &mut events, &mut extras).await;
+
+            assert_eq!(*seen.lock(), ["fix the build"]);
+        }
+    }
+
+    #[test]
+    fn titles_are_written_on_the_machine_only_by_models_it_can_run() {
+        use aura_core_auth::ProviderKind;
+        let linked = [ProviderKind::Claude];
+        assert!(runs_on_machine("aura-claude-haiku-4-5", &linked));
+        assert!(runs_on_machine("claude/claude-haiku-4-5", &linked));
+        assert!(
+            !runs_on_machine("chatgpt/gpt-5-mini", &linked),
+            "plan not linked"
+        );
+        assert!(!runs_on_machine("local/qwen3:4b", &linked));
+        assert!(!runs_on_machine("gate", &linked));
+        assert!(!runs_on_machine("", &linked));
     }
 }
 

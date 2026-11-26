@@ -29,4 +29,10 @@ reasoning_effort: ReasoningEffort | null,
  * Optional per-session model overrides applied on top of the
  * harness's env-default router config.
  */
-provider_overrides: SessionModelOverrides | null, };
+provider_overrides: SessionModelOverrides | null, 
+/**
+ * Model that titles the chat from the next turn's prompt, beside the
+ * turn and through the agent's kernel. The title comes back as
+ * `chat_title`. Absent when the chat needs no title.
+ */
+title_model: string | null, };

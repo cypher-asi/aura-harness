@@ -52,7 +52,8 @@ use aura_core_protocol::cloud::{
 };
 use aura_core_protocol::{
     AgentCapabilities, AgentIdentity, AgentPermissionsWire, InboundMessage, ModelSelection,
-    OutboundMessage, RuntimeRequest, RuntimeRequestType, UserMessage, WorkspaceLocation,
+    OutboundMessage, RuntimeRequest, RuntimeRequestType, SessionUsage, UserMessage,
+    WorkspaceLocation,
 };
 use aura_core_types::{AgentId, Placement, PlacementPayload, VmPayload};
 use aura_engine::{AgentHost, MessageKind, RemoteMail, RemoteRouter, ThreadId};
@@ -303,15 +304,10 @@ pub enum RemoteEvent {
         /// Whether it failed.
         is_error: bool,
     },
-    /// The turn ended.
-    Done {
-        /// Model used.
-        model: String,
-        /// Input tokens of the turn.
-        input_tokens: u64,
-        /// Output tokens of the turn.
-        output_tokens: u64,
-    },
+    /// The chat's title, written on the machine from the turn's prompt.
+    Title(String),
+    /// The turn ended, with the session's usage and context so far.
+    Done(Box<SessionUsage>),
     /// The turn failed.
     Failed(String),
 }
@@ -655,6 +651,29 @@ impl CloudHub {
             },
         );
         self.send_directories(project);
+    }
+
+    /// Call placed `agent` `name` from now on: in its placement, and in the
+    /// directory its machine and other agents' mail name it by.
+    pub fn rename(&self, agent: AgentId, name: &str) {
+        let hex = agent.to_hex();
+        let project = {
+            let mut placements = self.placements.lock();
+            let Some(placed) = placements.agents.get_mut(&hex) else {
+                return;
+            };
+            if placed.name == name {
+                return;
+            }
+            name.clone_into(&mut placed.name);
+            placed.project.clone()
+        };
+        self.save_placements();
+        if let Some(mut holder) = self.directory.holder(&hex) {
+            name.clone_into(&mut holder.name);
+            self.directory.place(&hex, holder);
+        }
+        self.send_directories(&project);
     }
 
     /// Whether `agent` runs on a cloud machine.
@@ -2249,13 +2268,15 @@ impl CloudHub {
 
     /// Run one prompt on `agent`'s node and stream what it shows. The
     /// node writes the turn; the hub mirrors it as it runs and when it
-    /// ends.
+    /// ends. With `title_model`, the node also titles the chat from
+    /// `prompt`, sent as [`RemoteEvent::Title`].
     #[must_use]
     pub fn run_turn(
         self: &Arc<Self>,
         agent: AgentId,
         prompt: String,
         model: Option<String>,
+        title_model: Option<String>,
         auth_jwt: Option<String>,
         cancel: CancellationToken,
     ) -> mpsc::Receiver<RemoteEvent> {
@@ -2290,7 +2311,15 @@ impl CloudHub {
             let guard = hub.fleet.begin_work(&hex);
             let turn = tokio::time::timeout(
                 TURN_TIMEOUT,
-                stream_turn(&hub, &node, agent, prompt, model, auth_jwt, &tx, cancel),
+                stream_turn(
+                    &hub,
+                    &node,
+                    agent,
+                    prompt,
+                    chat_request(agent, model, title_model, auth_jwt),
+                    &tx,
+                    cancel,
+                ),
             )
             .await
             .unwrap_or(Err(CloudError::Timeout {
@@ -2564,7 +2593,12 @@ fn remote_mail(mail: &MeshMail) -> Result<RemoteMail, String> {
 }
 
 /// The chat run request for a cloud agent's turn.
-fn chat_request(agent: AgentId, model: Option<String>, auth_jwt: Option<String>) -> RuntimeRequest {
+fn chat_request(
+    agent: AgentId,
+    model: Option<String>,
+    title_model: Option<String>,
+    auth_jwt: Option<String>,
+) -> RuntimeRequest {
     RuntimeRequest {
         r#type: RuntimeRequestType::Chat {
             conversation_messages: Vec::new(),
@@ -2575,6 +2609,7 @@ fn chat_request(agent: AgentId, model: Option<String>, auth_jwt: Option<String>)
         },
         model: ModelSelection {
             id: model,
+            title_model,
             ..ModelSelection::default()
         },
         workspace: WorkspaceLocation {
@@ -2611,6 +2646,22 @@ fn cloud_agent_permissions() -> AgentPermissionsWire {
     }
 }
 
+/// The policy a cloud agent's node enforces on its turns: the permissions
+/// [`chat_request`] sends, over the node's defaults (the `Agent` mode, no
+/// per-tool settings), as the node builds it for a chat run.
+#[must_use]
+pub fn cloud_policy() -> aura_agent_kernel::PolicyConfig {
+    aura_agent_kernel::PolicyConfig {
+        agent_permissions: aura_core_protocol::agent_permissions_from_wire(
+            cloud_agent_permissions(),
+        ),
+        ..aura_agent_kernel::PolicyConfig::default()
+    }
+    .with_user_default(aura_core_types::UserToolDefaults::default())
+    .with_agent_override(None)
+    .with_mode(aura_core_types::AgentMode::Agent)
+}
+
 /// `https://x` → `wss://x`.
 fn ws_url(base: &str, path: &str) -> String {
     let base = base
@@ -2642,22 +2693,19 @@ fn ws_request(
     Ok(request)
 }
 
-/// One turn: start the chat run, send the prompt, map the stream.
-#[allow(clippy::too_many_arguments)]
+/// One turn: start the chat run `request` asks for, send the prompt, map
+/// the stream.
 async fn stream_turn(
     hub: &CloudHub,
     node: &NodeClient,
     agent: AgentId,
     prompt: String,
-    model: Option<String>,
-    auth_jwt: Option<String>,
+    request: RuntimeRequest,
     tx: &mpsc::Sender<RemoteEvent>,
     cancel: CancellationToken,
 ) -> CloudResult<()> {
     use tokio_tungstenite::tungstenite::Message;
-    let started = node
-        .start_run(&chat_request(agent, model, auth_jwt))
-        .await?;
+    let started = node.start_run(&request).await?;
     let path = started
         .get("event_stream_url")
         .and_then(serde_json::Value::as_str)
@@ -2753,11 +2801,8 @@ pub fn map_outbound(message: OutboundMessage) -> Option<RemoteEvent> {
             result: result.result,
             is_error: result.is_error,
         },
-        OutboundMessage::AssistantMessageEnd(end) => RemoteEvent::Done {
-            model: end.usage.model.clone(),
-            input_tokens: end.usage.input_tokens,
-            output_tokens: end.usage.output_tokens,
-        },
+        OutboundMessage::AssistantMessageEnd(end) => RemoteEvent::Done(Box::new(end.usage)),
+        OutboundMessage::ChatTitle(title) => RemoteEvent::Title(title.title),
         OutboundMessage::Error(err) if !err.recoverable => RemoteEvent::Failed(err.message),
         _ => return None,
     })
@@ -3095,11 +3140,12 @@ mod tests {
             ws_url("http://127.0.0.1:8080", "/stream/1"),
             "ws://127.0.0.1:8080/stream/1"
         );
-        let request = chat_request(AgentId::new([1; 32]), Some("gate".into()), None);
+        let request = chat_request(AgentId::new([1; 32]), Some("gate".into()), None, None);
         assert_eq!(
             request.agent_identity.partition_id,
             Some(AgentId::new([1; 32]).to_hex())
         );
+        assert_eq!(request.model.title_model, None);
         assert_eq!(
             request.workspace.project_path.as_deref(),
             Some(WORKSPACE_DIR)
@@ -3588,7 +3634,7 @@ mod tests {
 
     #[test]
     fn cloud_turns_never_offer_computer_use() {
-        let request = chat_request(AgentId::new([1; 32]), None, None);
+        let request = chat_request(AgentId::new([1; 32]), None, None, None);
         let json = serde_json::to_value(&request.agent_permissions).expect("json");
         let text = json.to_string();
         assert!(!text.contains("computer"), "{text}");

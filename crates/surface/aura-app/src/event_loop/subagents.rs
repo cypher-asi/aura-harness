@@ -843,9 +843,20 @@ impl AgentHub {
         )
     }
 
+    /// Whether a turn on `agent` titles its chat: one whose prompt someone
+    /// `typed` (not a notice or a plan build), while the agent still has a
+    /// placeholder name.
+    pub(super) fn titles_turn(&self, agent: AgentId, typed: bool) -> bool {
+        typed
+            && lock(&self.registry)
+                .find(agent)
+                .is_some_and(crate::agent_registry::RegisteredAgent::needs_title)
+    }
+
     /// Give `agent` the chat title `title` and show it in the Agents panel
     /// right away, unless the agent got a name or title in the meantime.
-    pub(super) async fn apply_title(&self, agent: AgentId, title: &str) {
+    /// Returns whether the title was saved.
+    pub(super) async fn apply_title(&self, agent: AgentId, title: &str) -> bool {
         let applied = {
             let mut registry = lock(&self.registry);
             let wanted = registry
@@ -863,6 +874,7 @@ impl AgentHub {
         if applied {
             self.send_agent_list().await;
         }
+        applied
     }
 
     /// Name `agent` after its subtask, `subtitle`, and show it in the

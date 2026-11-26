@@ -11,8 +11,9 @@
 //! this is a same-layer dependency edge.
 
 use aura_core_types::{
-    AgentToolPermissions, InstalledIntegrationDefinition, InstalledToolDefinition, PolicyApprover,
-    PolicyDecision, RecordEntry, ToolState, TransactionType,
+    AgentPermissions, AgentScope, AgentToolPermissions, Capability, InstalledIntegrationDefinition,
+    InstalledToolDefinition, PolicyApprover, PolicyDecision, RecordEntry, ToolState,
+    TransactionType,
 };
 
 use crate::common::ToolStateWire;
@@ -20,7 +21,7 @@ use crate::installed::{
     InstalledIntegration, InstalledTool, InstalledToolRuntimeAuth, InstalledToolRuntimeExecution,
     ToolAuth,
 };
-use crate::permissions::AgentToolPermissionsWire;
+use crate::permissions::{AgentPermissionsWire, AgentToolPermissionsWire, CapabilityWire};
 use crate::server::{PolicyCheckWire, PolicyRuleWire, ToolPolicyDecision};
 
 /// Convert a tri-state tool permission wire value into the
@@ -55,6 +56,46 @@ pub fn agent_tool_permissions_from_wire(wire: AgentToolPermissionsWire) -> Agent
             .into_iter()
             .map(|(name, state)| (name, tool_state_from_wire(state)))
             .collect(),
+    }
+}
+
+/// Translate the wire [`AgentPermissionsWire`] into the harness-core
+/// [`AgentPermissions`] used by tools and the kernel policy. An empty
+/// bundle means full access.
+#[must_use]
+pub fn agent_permissions_from_wire(wire: AgentPermissionsWire) -> AgentPermissions {
+    let capabilities = wire
+        .capabilities
+        .into_iter()
+        .filter_map(|c| match c {
+            CapabilityWire::SpawnAgent => Some(Capability::SpawnAgent),
+            CapabilityWire::ControlAgent => Some(Capability::ControlAgent),
+            CapabilityWire::ReadAgent => Some(Capability::ReadAgent),
+            CapabilityWire::ListAgents => Some(Capability::ListAgents),
+            CapabilityWire::ManageOrgMembers => Some(Capability::ManageOrgMembers),
+            CapabilityWire::ManageBilling => Some(Capability::ManageBilling),
+            CapabilityWire::InvokeProcess => Some(Capability::InvokeProcess),
+            CapabilityWire::PostToFeed => Some(Capability::PostToFeed),
+            CapabilityWire::GenerateMedia => Some(Capability::GenerateMedia),
+            CapabilityWire::ReadProject { id } => Some(Capability::ReadProject { id }),
+            CapabilityWire::WriteProject { id } => Some(Capability::WriteProject { id }),
+            CapabilityWire::ReadAllProjects => Some(Capability::ReadAllProjects),
+            CapabilityWire::WriteAllProjects => Some(Capability::WriteAllProjects),
+            CapabilityWire::Unknown => None,
+        })
+        .collect();
+    let permissions = AgentPermissions {
+        scope: AgentScope {
+            orgs: wire.scope.orgs,
+            projects: wire.scope.projects,
+            agent_ids: wire.scope.agent_ids,
+        },
+        capabilities,
+    };
+    if permissions.capabilities.is_empty() && permissions.scope.is_universe() {
+        AgentPermissions::full_access()
+    } else {
+        permissions
     }
 }
 

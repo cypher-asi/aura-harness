@@ -73,6 +73,23 @@ pub(super) fn context_view(result: &AgentLoopResult, limit: Option<u64>) -> Cont
     }
 }
 
+/// The make-up of the context a cloud turn ended with, as its machine
+/// reported it, measured against `limit`.
+pub(super) fn remote_context_view(
+    usage: &aura_core_protocol::SessionUsage,
+    limit: Option<u64>,
+) -> ContextView {
+    let breakdown = &usage.context_breakdown;
+    ContextView {
+        system_tokens: breakdown.system_prompt_tokens,
+        tools_tokens: breakdown.tools_tokens + breakdown.mcp_tokens + breakdown.subagents_tokens,
+        skills_tokens: breakdown.skills_tokens,
+        conversation_tokens: breakdown.conversation_tokens,
+        total_tokens: usage.estimated_context_tokens,
+        limit_tokens: limit,
+    }
+}
+
 /// `usage` as the UI shows it.
 pub(super) fn session_totals(usage: &SessionUsage) -> SessionTotals {
     SessionTotals {
@@ -96,10 +113,25 @@ pub(super) async fn send_session(ui: &AgentUi, session: &AgentSession) {
         .await;
 }
 
-/// Show `agent_id` its todo list and usage, when its session is idle here.
+/// Show `agent_id` its todo list and usage, when its session is idle here
+/// or, for a cloud agent, from the copy of its machine's session.
 pub(super) async fn send_session_of(state: &LoopState<'_>, agent_id: AgentId) {
+    let ui = AgentUi::new(state.commands.clone(), agent_id);
     if let Some(session) = state.idle.get(&agent_id) {
-        send_session(&AgentUi::new(state.commands.clone(), agent_id), session).await;
+        send_session(&ui, session).await;
+    } else if state.cloud.is_cloud(agent_id) {
+        let Some(sessions) = state.hub.factory.checkpoints.clone() else {
+            return;
+        };
+        let copied = tokio::task::spawn_blocking(move || sessions.load_current(agent_id)).await;
+        if let Ok(Some(checkpoint)) = copied {
+            ui.send(UiCommand::SetTodos(todo_views(&checkpoint.todos)))
+                .await;
+            ui.send(UiCommand::SetSessionTotals(session_totals(
+                &checkpoint.usage,
+            )))
+            .await;
+        }
     }
 }
 
@@ -204,5 +236,32 @@ mod tests {
         let views = todo_views(&[item(TodoStatus::InProgress), item(TodoStatus::Cancelled)]);
         assert_eq!(views[0].state, TodoState::InProgress);
         assert_eq!(views[1].state, TodoState::Cancelled);
+    }
+
+    #[test]
+    fn a_cloud_turn_s_context_is_shown_as_its_machine_reported_it() {
+        let usage = aura_core_protocol::SessionUsage {
+            estimated_context_tokens: 9_000,
+            context_breakdown: aura_core_protocol::ContextBreakdown {
+                system_prompt_tokens: 2_000,
+                tools_tokens: 1_000,
+                mcp_tokens: 300,
+                subagents_tokens: 200,
+                skills_tokens: 500,
+                conversation_tokens: 5_000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let view = remote_context_view(&usage, Some(200_000));
+        assert_eq!(view.system_tokens, 2_000);
+        assert_eq!(
+            view.tools_tokens, 1_500,
+            "tools, MCP and subagents together"
+        );
+        assert_eq!(view.skills_tokens, 500);
+        assert_eq!(view.conversation_tokens, 5_000);
+        assert_eq!(view.total_tokens, 9_000);
+        assert_eq!(view.limit_tokens, Some(200_000));
     }
 }

@@ -61,7 +61,6 @@ pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 pub use trace::Traces;
 
-use crate::agent_registry::RegisteredAgent;
 use crate::model_selection::ModelSelection;
 use agent_events::AgentUi;
 use approvals::Answer;
@@ -905,11 +904,7 @@ async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, work: Work) {
             ));
             let turn_steering = Steering::new(&cancel);
             steering = Some(turn_steering.clone());
-            if prompt.mentions
-                && subagents::lock(&state.hub.registry)
-                    .find(agent_id)
-                    .is_some_and(RegisteredAgent::needs_title)
-            {
+            if state.hub.titles_turn(agent_id, prompt.mentions) {
                 titles::spawn(
                     Arc::clone(&state.hub),
                     agent_id,

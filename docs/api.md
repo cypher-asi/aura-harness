@@ -22,7 +22,7 @@ A run is the entry point for all work. Start a chat session, dev-loop automaton,
 
 | Path | Purpose |
 |------|---------|
-| `/stream/:run_id` | Per-run event stream. Bidirectional on `Chat` runs (user messages in; deltas, tool calls and approvals out); event-only on `DevLoop` / `TaskRun` runs. The `run_id` is the value returned by `POST /v1/run`. |
+| `/stream/:run_id` | Per-run event stream. Bidirectional on `Chat` runs (user messages in; deltas, tool calls and approvals out); event-only on `DevLoop` / `TaskRun` runs. The `run_id` is the value returned by `POST /v1/run`. A chat run whose request names `model.title_model` titles the chat from its next turn's prompt through that turn's kernel, and sends `chat_title` (`{"type":"chat_title","title":"..."}`) before the turn's `assistant_message_end`, only when the model gave a title. |
 | `/ws/terminal` | Terminal bridge used by the TUI. |
 | `/ws/preview/tcp/:port` | WebSocket-to-TCP bridge for previewing a port served from the workspace. |
 

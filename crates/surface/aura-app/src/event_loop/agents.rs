@@ -1030,7 +1030,8 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId, chat: Chat
     let started = Instant::now();
     let running = state.hub.is_running(agent_id);
     let open = !running && !state.idle.contains_key(&agent_id);
-    let load_chat = chat == Chat::Reload && !running;
+    // A cloud turn's chat is live in the UI as a local turn's is.
+    let load_chat = chat == Chat::Reload && !running && !state.cloud.is_running(agent_id);
     let hub = Arc::clone(&state.hub);
     let (read, lists) = tokio::join!(
         tokio::task::spawn_blocking(move || {
@@ -1079,6 +1080,8 @@ async fn show_active_agent(
     lists: Option<AgentLists>,
 ) {
     let agent_id = state.active;
+    // A cloud turn streams into the chat the way a local one does.
+    let running = state.hub.is_running(agent_id) || state.cloud.is_running(agent_id);
 
     state.hub.record_panel.set(agent_id);
     let _ = state
@@ -1112,7 +1115,7 @@ async fn show_active_agent(
     super::policies::send_policies_of(state, agent_id).await;
     super::hud::send_instructions_of(state, agent_id).await;
     send_sandbox_root(state).await;
-    if state.hub.is_running(agent_id) {
+    if running {
         // Its turn shows its plan again when it next changes.
         let _ = state.commands.send(UiCommand::SetPlan(None)).await;
     }

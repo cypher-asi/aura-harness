@@ -551,6 +551,16 @@ who pays, may change between turns and between subtasks. Each choice is
 shown in the chat (`gate → <model> (<route>) · <category>, <reason>`) and
 recorded as the prompt's `route`, so it is never silent.
 
+A chat title is an `Auxiliary` `Reasoning` record in the titled agent's
+log, made through the same kernel instance as the agent's turn so their
+entries take sequence numbers in turn. A cloud agent's title cannot be
+written here, since its machine is the only writer of its log while it
+is placed: the turn's request names the title model
+(`ModelSelection::title_model`), the node makes the call through the
+turn's kernel (`KernelModelGateway::answer`) and sends the title on the
+turn's stream (`chat_title`), and the hub only applies it to the agents
+list and the placement.
+
 ---
 
 ## 8. Gateway Transparency

@@ -312,6 +312,7 @@ async fn a_cloud_agent_answers_on_each_linked_plan() {
                 "Reply with the single word: pong".into(),
                 Some(plan_model(*kind).into()),
                 None,
+                None,
                 tokio_util::sync::CancellationToken::new(),
             );
             let mut reply = String::new();

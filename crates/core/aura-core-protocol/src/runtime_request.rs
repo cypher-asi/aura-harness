@@ -357,6 +357,11 @@ pub struct ModelSelection {
     /// harness's env-default router config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_overrides: Option<SessionModelOverrides>,
+    /// Model that titles the chat from the next turn's prompt, beside the
+    /// turn and through the agent's kernel. The title comes back as
+    /// `chat_title`. Absent when the chat needs no title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_model: Option<String>,
 }
 
 /// "Where the agent runs."
@@ -552,6 +557,31 @@ mod reasoning_effort_tests {
         );
         let back: CouncilMember = serde_json::from_str(&json).expect("deserialize role");
         assert_eq!(back.role, Some(CouncilMemberRole::Reference));
+    }
+
+    #[test]
+    fn a_title_model_is_sent_only_when_the_chat_needs_a_title() {
+        let untitled = ModelSelection {
+            id: Some("claude/claude-sonnet".to_string()),
+            ..ModelSelection::default()
+        };
+        let json = serde_json::to_string(&untitled).expect("serialize");
+        assert!(!json.contains("title_model"), "{json}");
+        let older: ModelSelection =
+            serde_json::from_str(r#"{"id":"claude/claude-sonnet"}"#).expect("deserialize");
+        assert_eq!(older.title_model, None);
+
+        let titled = ModelSelection {
+            title_model: Some("claude/claude-haiku".to_string()),
+            ..untitled
+        };
+        let json = serde_json::to_string(&titled).expect("serialize");
+        assert!(
+            json.contains(r#""title_model":"claude/claude-haiku""#),
+            "{json}"
+        );
+        let back: ModelSelection = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.title_model.as_deref(), Some("claude/claude-haiku"));
     }
 
     #[test]

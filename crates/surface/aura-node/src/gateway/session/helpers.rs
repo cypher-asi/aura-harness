@@ -813,7 +813,7 @@ enum StreamDeltaKind {
     Thinking,
 }
 
-async fn send_outbound_with_backpressure(
+pub(super) async fn send_outbound_with_backpressure(
     outbound: &mpsc::Sender<OutboundMessage>,
     msg: OutboundMessage,
     context: &'static str,
