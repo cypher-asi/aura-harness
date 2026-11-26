@@ -32,6 +32,7 @@
 
 mod archive;
 mod bench;
+mod channel_member_chat;
 mod channels;
 mod empty;
 mod projects;

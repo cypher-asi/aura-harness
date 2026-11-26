@@ -46,8 +46,11 @@ impl App {
         self.clear_selection();
     }
 
+    /// Whether a screen cell is on the chat panel's close button, drawn
+    /// while a view covers the chat or a member's chat is on screen.
     pub(super) fn detail_close_at(&self, column: u16, row: u16) -> bool {
-        self.detail.view.is_some() && contains(self.areas.detail_close, column, row)
+        (self.detail.view.is_some() || self.member_chat().is_some())
+            && contains(self.areas.detail_close, column, row)
     }
 
     /// Open the highlighted sandbox row: a file over the chat panel, a

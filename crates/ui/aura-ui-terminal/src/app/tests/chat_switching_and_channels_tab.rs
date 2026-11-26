@@ -399,19 +399,3 @@ fn test_channels_with_nothing_open_hide_the_right_column_and_refuse_to_send() {
     assert_eq!(app.app_placeholder().as_deref(), Some("Message #zode"));
     assert!(app.sandbox_panel_visible());
 }
-
-#[test]
-fn test_members_side_tab_moves_its_highlight_and_switches_nothing() {
-    let (_dir, mut app) = app_in_channel("co");
-    app.focus = PanelFocus::Sandbox;
-    assert_eq!(app.selected_channel_member(), 0);
-    for _ in 0..3 {
-        app.handle_key(key(KeyCode::Down));
-    }
-    assert_eq!(app.selected_channel_member(), 2, "clamped to the members");
-    app.handle_key(key(KeyCode::Home));
-    assert_eq!(app.selected_channel_member(), 0);
-    app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.active_agent_id(), "co", "rows only show");
-    assert!(app.channel_open());
-}

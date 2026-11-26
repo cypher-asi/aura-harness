@@ -17,6 +17,7 @@ mod approvals_and_mentions;
 mod basics;
 mod channel_chat;
 mod channel_form;
+mod channel_member_chat;
 mod channel_side_panel;
 mod chat_scrollbar;
 mod chat_switching_and_channels_tab;

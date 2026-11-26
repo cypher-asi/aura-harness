@@ -82,6 +82,7 @@ impl App {
     }
 
     pub(in crate::app) fn set_channels(&mut self, list: Vec<ChannelSummary>) {
+        let member_chat_was_open = self.member_chat().is_some();
         self.channels.list = list;
         let gone = self
             .channels
@@ -102,6 +103,7 @@ impl App {
         let members = self.channels.open_members();
         self.channels.member_selected =
             self.channels.member_selected.min(members.saturating_sub(1));
+        self.leave_dropped_member_chat(member_chat_was_open);
         if self.channel_app() && !self.channel_open() {
             if let Some(id) = self.channel_to_show() {
                 self.open_channel_by_id(&id);

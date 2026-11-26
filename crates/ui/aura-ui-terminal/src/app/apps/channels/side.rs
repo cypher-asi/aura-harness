@@ -47,8 +47,8 @@ impl App {
         (index < state.open_members()).then_some(index)
     }
 
-    /// Highlight member row `index` (clamped). Members only show; going
-    /// to a member's own chat would leave the channel app.
+    /// Highlight member row `index` (clamped). Opening a member's chat
+    /// is [`Self::open_channel_member`]'s.
     pub(in crate::app) fn select_channel_member(&mut self, index: usize) {
         self.channels.set_member_selected(index);
     }
@@ -59,14 +59,16 @@ impl App {
         self.channels.set_member_selected(row);
     }
 
-    /// Clicking a member row highlights it.
+    /// Clicking a member row highlights it and opens the member's chat,
+    /// or the channel's on the coordinator's row.
     pub(in crate::app) fn click_channel_member(&mut self, column: u16, row: u16) {
         if let Some(index) = self.channel_member_row_at(column, row) {
-            self.select_channel_member(index);
+            self.open_channel_member(index);
         }
     }
 
-    /// Keys of the MEMBERS side tab, which move its highlight.
+    /// Keys of the MEMBERS side tab, which move its highlight; Enter
+    /// opens the highlighted member's chat, as a click does.
     pub(in crate::app) fn handle_channel_members_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Up => self.move_channel_member(-1),
@@ -75,6 +77,7 @@ impl App {
             KeyCode::PageDown => self.move_channel_member(SIDE_PAGE),
             KeyCode::Home => self.select_channel_member(0),
             KeyCode::End => self.select_channel_member(usize::MAX),
+            KeyCode::Enter => self.open_channel_member(self.channels.member_selected),
             _ => {}
         }
     }

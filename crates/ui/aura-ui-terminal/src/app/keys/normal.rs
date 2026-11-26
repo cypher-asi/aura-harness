@@ -51,6 +51,9 @@ impl App {
         if let Some(result) = self.handle_queue_key(key) {
             return Some(result);
         }
+        if self.esc_closes_member_chat(key) {
+            return Some(KeyResult::continue_running());
+        }
         if self.toggle_terminal_mode(key) {
             return Some(KeyResult::continue_running());
         }

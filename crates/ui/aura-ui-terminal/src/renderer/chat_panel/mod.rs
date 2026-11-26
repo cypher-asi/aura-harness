@@ -45,7 +45,9 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
-    if let Some((title, info)) = detail_header(app, theme) {
+    if let Some((title, info)) =
+        detail_header(app, theme).or_else(|| member_chat_header(app, theme))
+    {
         render_detail_bar(frame, app, (panel, bar), (&title, info), theme);
     } else {
         render_tab_bar(frame, app, (panel, bar), is_focused, theme);
@@ -94,7 +96,29 @@ fn expand_button(app: &App, cell: Option<Rect>) -> header::ExpandButton {
     }
 }
 
-/// The bar naming the record, file, process or graph covering the body.
+/// The chat panel's header over a channel member's own chat: the
+/// member's name, its code, role and the channel's `#slug`, and the close
+/// button that goes back to the channel's chat. `None` elsewhere.
+///
+/// ```text
+/// │ Reviewer           RE36 · agent · #zode ✕ │
+/// ```
+fn member_chat_header(app: &App, theme: &Theme) -> Option<(String, Option<HeaderInfo>)> {
+    let (name, about) = app.member_chat_title()?;
+    let short = app
+        .member_chat()
+        .and_then(|member| member.code.clone())
+        .unwrap_or_default();
+    let info = HeaderInfo {
+        text: about,
+        short,
+        color: theme.colors.muted,
+    };
+    Some((name, Some(info)))
+}
+
+/// The bar naming the record, file, process or graph covering the body,
+/// or the member whose own chat is on screen.
 fn render_detail_bar(
     frame: &mut Frame,
     app: &mut App,

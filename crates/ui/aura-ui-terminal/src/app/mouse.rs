@@ -364,7 +364,7 @@ impl App {
     /// the graph, a thread, the log, the flow view or the bench.
     fn click_chat_panel(&mut self, column: u16, row: u16) {
         if self.detail_close_at(column, row) {
-            self.close_detail();
+            self.close_chat_view();
             self.clear_selection();
         } else if contains(self.areas.chat_expand, column, row) {
             self.toggle_chat_expanded();

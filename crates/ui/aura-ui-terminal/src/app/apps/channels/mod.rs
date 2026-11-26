@@ -16,7 +16,8 @@
 //! - The session putting on screen an agent that is not a member of the
 //!   open channel (a notification jumping to it, say) is the user going
 //!   to that agent: the panel moves to PROJECTS (ARCHIVE for an archived
-//!   agent) with it on screen.
+//!   agent) with it on screen. A member on screen keeps the channel open
+//!   and shows its own chat (see `channel_member_chat`).
 //!
 //! The list's rows are the channels, then "+ New channel" (index
 //! `channels.len()`), which the panel pins to its bottom row. Enter or a
@@ -214,9 +215,14 @@ impl App {
     }
 
     /// The chat panel's title in the channel app: `#slug`, with the
-    /// channel's title as its info. `None` with no channel open.
+    /// channel's title as its info, or a member's name over its own
+    /// chat (see [`Self::member_chat_title`]). `None` with no channel
+    /// open.
     #[must_use]
     pub(crate) fn channel_chat_title(&self) -> Option<(String, String)> {
+        if let Some(title) = self.member_chat_title() {
+            return Some(title);
+        }
         self.open_channel()
             .map(|channel| (format!("#{}", channel.slug), channel.title.clone()))
     }
@@ -227,6 +233,9 @@ impl App {
     pub(crate) fn channel_placeholder(&self) -> Option<String> {
         if !self.channel_app() {
             return None;
+        }
+        if let Some(member) = self.member_chat() {
+            return Some(format!("Message {}", member.name));
         }
         Some(self.open_channel().map_or_else(
             || "Pick a channel".to_string(),
@@ -278,7 +287,7 @@ impl App {
     }
 
     /// Put CHAT on the chat panel, with nothing covering it.
-    fn show_channel_chat(&mut self) {
+    pub(in crate::app) fn show_channel_chat(&mut self) {
         self.close_detail();
         if self.chat_tab() != ChatTab::Chat {
             self.show_chat_tab(ChatTab::Chat);

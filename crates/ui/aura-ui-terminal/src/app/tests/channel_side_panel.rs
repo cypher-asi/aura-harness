@@ -1,7 +1,7 @@
 use super::*;
 
 /// [`app_in_channel`] on `co`, with `#docs` (`c2`) listed after `#zode`.
-fn app_in_two_channels() -> (tempfile::TempDir, App) {
+pub(super) fn app_in_two_channels() -> (tempfile::TempDir, App) {
     let (dir, mut app) = app_in_channel("co");
     let mut channels = app.channels().to_vec();
     channels.push(crate::events::ChannelSummary {
