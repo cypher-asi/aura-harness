@@ -187,7 +187,6 @@ crates/surface/aura-node/src/gateway/session/tests.rs
 crates/surface/aura-node/src/gateway/tests.rs
 crates/surface/aura-node/src/node.rs
 crates/surface/aura-node/src/sealing.rs
-crates/ui/aura-ui/src/benchmarks.rs
 crates/ui/aura-ui-terminal/src/app/apps/archive.rs
 crates/ui/aura-ui-terminal/src/app/apps/bench/form.rs
 crates/ui/aura-ui-terminal/src/app/apps/bench/list.rs
