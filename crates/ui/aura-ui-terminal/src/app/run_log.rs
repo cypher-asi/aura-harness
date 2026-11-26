@@ -1154,6 +1154,7 @@ mod tests {
 
     #[test]
     fn l_in_a_benchmark_shows_the_log_of_the_picked_run() {
+        use crate::app::{AgentsTab, PanelFocus};
         use crate::events::{BenchArm, BenchRun, BenchView, UiCommand};
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         let mut app = App::new().with_event_sender(tx);
@@ -1171,11 +1172,12 @@ mod tests {
                 ..BenchView::default()
             }],
         });
-        app.show_chat_tab(ChatTab::Bench);
-        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        app.show_agents_tab(AgentsTab::Bench);
+        app.focus = PanelFocus::Chat;
         app.handle_key(KeyEvent::from(KeyCode::Right));
         while rx.try_recv().is_ok() {}
         app.handle_key(KeyEvent::new(KeyCode::Char('L'), KeyModifiers::SHIFT));
         assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "run"));
+        assert_eq!(app.agents_tab(), AgentsTab::Projects, "where its log is");
     }
 }

@@ -65,10 +65,6 @@ pub(crate) struct ChannelState {
     rows_area: Option<Rect>,
     /// Where "+ New channel" was drawn this frame
     new_channel_area: Option<Rect>,
-    /// The agent on screen when the user came to CHANNELS and the chat
-    /// panel's tab it was on, which CHANNELS turned to CHAT: given back
-    /// on leaving
-    chat_tab_before: Option<(String, ChatTab)>,
     /// Whether the session has yet to put a member of the open channel
     /// on screen. Opening a channel asks it for the coordinator, and
     /// until it comes the agent before it is still on screen; that agent
@@ -260,23 +256,11 @@ impl App {
         self.channels.posts.get(id).map_or(&[], Vec::as_slice)
     }
 
-    /// The user came to the channel app from another tab: remember the
-    /// chat tab of the agent on screen, to give back on leaving, and show
-    /// CHAT, the only view a channel has.
-    pub(in crate::app) fn enter_channel_app(&mut self) {
-        self.channels.chat_tab_before = (!self.active_agent_id.is_empty())
-            .then(|| (self.active_agent_id.clone(), self.chat_tab()));
-        self.show_channel_chat();
-    }
-
     /// The user left the channel app for another tab, which remembered
-    /// the open channel: close it, and give the agent that was on screen
-    /// before back the chat tab it was on.
+    /// the open channel: close it. The agent that was on screen before
+    /// gets its chat tab back from `switch_app`.
     pub(in crate::app) fn leave_channel_app(&mut self) {
         self.close_channel();
-        if let Some((agent, tab)) = self.channels.chat_tab_before.take() {
-            self.give_chat_tab_back(&agent, tab);
-        }
     }
 
     /// The channel open when the user last left CHANNELS, if it is still
@@ -524,10 +508,10 @@ impl App {
         Some(id)
     }
 
-    /// The agent on screen when the user came to CHANNELS, else the one
-    /// on screen now (empty when none is).
+    /// The agent on screen when the user left the agents for CHANNELS,
+    /// else the one on screen now (empty when none is).
     pub(in crate::app) fn agent_before_channels(&self) -> &str {
-        self.channels
+        self.apps
             .chat_tab_before
             .as_ref()
             .map_or(self.active_agent_id.as_str(), |(agent, _)| agent.as_str())

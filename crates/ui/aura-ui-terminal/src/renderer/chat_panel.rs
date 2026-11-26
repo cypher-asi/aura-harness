@@ -29,7 +29,8 @@ use std::ops::Range;
 /// Render the Chat panel: a CHAT | TERMINAL | GRAPH header bar over the
 /// conversation, the shell commands run this session, or the flow between
 /// the agent and the agents it spawned. While a record, file, process or
-/// the run graph covers the body, the bar names it.
+/// the run graph covers the body, the bar names it. BENCH shows a
+/// benchmark, or the form that sets one up, under a bar with no tabs.
 pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Chat;
     let hosted = app.host_chrome();
@@ -72,14 +73,14 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             Some(HoverTarget::ChatTab(tab)) => Some(tab),
             _ => None,
         };
-        let channel_title = app.channel_chat_title();
-        let (title, info) = match &channel_title {
-            Some((slug, title)) => (
-                Some(slug.as_str()),
-                Some(title)
-                    .filter(|title| !title.trim().is_empty())
-                    .map(|title| HeaderInfo {
-                        text: title.clone(),
+        let app_title = app.app_chat_title();
+        let (title, info) = match &app_title {
+            Some((name, about)) => (
+                Some(name.as_str()),
+                Some(about)
+                    .filter(|about| !about.trim().is_empty())
+                    .map(|about| HeaderInfo {
+                        text: about.clone(),
                         short: String::new(),
                         color: theme.colors.muted,
                     }),
@@ -103,12 +104,12 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
 
     // An app showing nothing shows none of the agent's tabs either.
     let empty = app.app_empty();
-    if !empty && matches!(app.chat_tab(), ChatTab::Graph | ChatTab::Time) {
-        super::flow::render_flow(frame, area, app, theme, is_focused);
+    if !empty && app.bench_app() {
+        super::benchmarks::render_benchmarks(frame, area, app, theme, is_focused);
         return;
     }
-    if !empty && app.chat_tab() == ChatTab::Bench {
-        super::benchmarks::render_benchmarks(frame, area, app, theme, is_focused);
+    if !empty && matches!(app.chat_tab(), ChatTab::Graph | ChatTab::Time) {
+        super::flow::render_flow(frame, area, app, theme, is_focused);
         return;
     }
     if !empty && app.chat_tab() == ChatTab::Log {

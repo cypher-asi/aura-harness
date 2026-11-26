@@ -102,8 +102,8 @@ impl App {
                     let _ = tx.try_send(UiEvent::ShowHistory(None));
                 }
             }
-            "kernel" | "record" | "k" | "r" if self.channel_app() => {
-                self.notify_channel_owns_column();
+            "kernel" | "record" | "k" | "r" if self.agent_panels_hidden() => {
+                self.notify_no_agent_panels();
             }
             "kernel" | "record" | "k" | "r" => {
                 if self.side_maximized() {
@@ -132,8 +132,8 @@ impl App {
                     }
                 }
             }
-            "files" | "sandbox" | "f" if self.channel_app() => {
-                self.notify_channel_owns_column();
+            "files" | "sandbox" | "f" if self.agent_panels_hidden() => {
+                self.notify_no_agent_panels();
             }
             "files" | "sandbox" | "f" => {
                 self.sandbox_panel_visible = !self.sandbox_panel_visible;
@@ -248,9 +248,10 @@ impl App {
             }
             "log" | "logs" => self.show_chat_tab(super::ChatTab::Log),
             "bench" | "benchmarks" => {
-                self.show_chat_tab(super::ChatTab::Bench);
+                self.show_agents_tab(super::AgentsTab::Bench);
                 if arg.trim() == "new" {
-                    self.open_bench_form();
+                    self.show_bench(super::BenchMode::Form);
+                    self.focus = PanelFocus::Chat;
                 }
             }
             "new" | "n" => {

@@ -22,7 +22,8 @@ use aura_ui_terminal::events::{
 };
 use aura_ui_terminal::UiCommand;
 
-/// A request from the BENCH tab shown for `agent_id`'s chat.
+/// A request from the BENCH tab for `agent_id`, the agent a new benchmark
+/// starts from or whose chat shows a run's diff.
 pub(super) async fn handle(state: &mut LoopState<'_>, agent_id: AgentId, request: BenchRequest) {
     state.park_finished_spawns().await;
     if let Some(reply) = reply(state, agent_id, request).await {

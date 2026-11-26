@@ -1,7 +1,8 @@
-//! The agents panel: a CHANNELS | PROJECTS | AGENTS | ARCHIVE header bar
-//! over the list of the app in front, one module per app.
+//! The agents panel: a CHANNELS | PROJECTS | AGENTS | BENCH | ARCHIVE
+//! header bar over the list of the app in front, one module per app.
 
 mod archive;
+mod bench;
 pub(super) mod channels;
 pub(super) mod projects;
 pub(super) mod roster;
@@ -15,9 +16,9 @@ use crate::{
 };
 use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 
-/// Render the agents panel: a CHANNELS | PROJECTS | AGENTS | ARCHIVE header
-/// bar over the channels, the live agents, the roster of permanent agents
-/// or the archived agents.
+/// Render the agents panel: a CHANNELS | PROJECTS | AGENTS | BENCH |
+/// ARCHIVE header bar over the channels, the live agents, the roster of
+/// permanent agents, the benchmarks or the archived agents.
 pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Swarm;
     let hosted = app.host_chrome();
@@ -51,6 +52,7 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         AgentsTab::Channels => channels::render_channels(frame, area, body, app, theme),
         AgentsTab::Projects => projects::render_projects(frame, area, body, app, theme),
         AgentsTab::Roster => roster::render_roster(frame, area, body, app, theme),
+        AgentsTab::Bench => bench::render_bench(frame, area, body, app, theme),
         AgentsTab::Archive => archive::render_archive(frame, area, body, app, theme),
     }
 }

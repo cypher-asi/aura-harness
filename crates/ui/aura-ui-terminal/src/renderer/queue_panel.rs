@@ -59,8 +59,8 @@ const MIN_TEXT_WIDTH: u16 = 8;
 #[must_use]
 pub(super) fn height(app: &App) -> u16 {
     let len = app.queue().len();
-    // An app showing nothing shows no agent's queue.
-    if len == 0 || app.app_empty() {
+    // With no agent on screen there is no agent's queue to show.
+    if len == 0 || app.no_agent_on_screen() {
         return 0;
     }
     if app.queue_collapsed() {
@@ -86,7 +86,7 @@ struct RowLook {
 /// its parts went.
 pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let len = app.queue().len();
-    if len == 0 || app.app_empty() || area.height < BORDER_ROWS + 1 || area.width < 6 {
+    if len == 0 || app.no_agent_on_screen() || area.height < BORDER_ROWS + 1 || area.width < 6 {
         app.set_queue_areas(QueueAreas::default());
         return;
     }

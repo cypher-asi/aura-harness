@@ -527,14 +527,14 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_the_body_opens_the_benchmark_in_the_bench_tab() {
+    fn a_click_on_the_body_opens_the_benchmark_in_bench() {
         let mut app = App::new();
         app.process_command(UiCommand::BenchUpsert(Box::new(bench("1", "Compare #1"))));
         let shown = rows(&mut app);
         let (row, _) = find(&shown, "├ Work").expect("work");
         let panel = app.bench_panel_areas().panel.expect("panel");
         click(&mut app, panel.x + 4, u16::try_from(row).unwrap());
-        assert_eq!(app.chat_tab(), crate::app::ChatTab::Bench);
+        assert_eq!(app.agents_tab(), crate::app::AgentsTab::Bench);
         assert_eq!(
             app.bench().shown().map(|b| b.name.as_str()),
             Some("Compare #1")

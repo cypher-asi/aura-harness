@@ -1,13 +1,15 @@
 //! The agents panel's tabs are apps of their own. CHANNELS, PROJECTS,
-//! AGENTS and ARCHIVE each put their own thing on screen, and remember it
-//! while another app is in front, so coming back to one shows what it
-//! was left on, with its panels:
+//! AGENTS, BENCH and ARCHIVE each put their own thing on screen, and
+//! remember it while another app is in front, so coming back to one shows
+//! what it was left on, with its panels:
 //!
 //! - PROJECTS shows the listed agent it was left on; failing that the
 //!   agent on screen if listed, the one under its highlight, or the first.
 //! - AGENTS shows the latest instance of the permanent agent picked in it
 //!   (a click; Enter still starts a new one), or the highlighted one when
 //!   none was picked, or says it has none.
+//! - BENCH shows the benchmark or the new-benchmark form it was left on,
+//!   else the highlighted benchmark, else the newest (see `bench`).
 //! - ARCHIVE shows the archived agent it was left on, else the one under
 //!   its highlight.
 //! - CHANNELS opens the channel it was left on, else the highlighted or
@@ -18,6 +20,10 @@
 //! app in front does not show (a notification jumping to it, say) is the
 //! user going to that agent: PROJECTS comes to the front with it, or
 //! ARCHIVE for an archived one.
+//!
+//! CHANNELS and BENCH show none of the agent's chat tabs: coming to one
+//! of them turns the chat panel to CHAT, and going back to an app with
+//! the tabs gives the agent that was on screen the tab it was on.
 //!
 //! Each app lives in its own module; what the agents panel does with a
 //! key, a click, a hover or the wheel is handed to the app in front here.
@@ -35,7 +41,7 @@ pub use bench::{
 };
 pub(super) use channels::ChannelState;
 
-use super::{contains, tab_at, tab_bar::TabLayout, App, HoverTarget};
+use super::{contains, tab_at, tab_bar::TabLayout, App, ChatTab, HoverTarget, NotificationType};
 use crate::terminal::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -50,12 +56,21 @@ pub enum AgentsTab {
     Projects,
     /// The roster of permanent agents that can be spawned by name.
     Roster,
+    /// Benchmarks: the same work on two arms (Gate or a model), their
+    /// cost and how well they did.
+    Bench,
     /// Agents moved out of the projects list, until restored.
     Archive,
 }
 
 impl AgentsTab {
-    pub const ALL: [Self; 4] = [Self::Channels, Self::Projects, Self::Roster, Self::Archive];
+    pub const ALL: [Self; 5] = [
+        Self::Channels,
+        Self::Projects,
+        Self::Roster,
+        Self::Bench,
+        Self::Archive,
+    ];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -63,6 +78,7 @@ impl AgentsTab {
             Self::Channels => "CHANNELS",
             Self::Projects => "PROJECTS",
             Self::Roster => "AGENTS",
+            Self::Bench => "BENCH",
             Self::Archive => "ARCHIVE",
         }
     }
@@ -74,6 +90,7 @@ impl AgentsTab {
             Self::Channels => "CHN",
             Self::Projects => "PRJ",
             Self::Roster => "AGT",
+            Self::Bench => "BEN",
             Self::Archive => "ARC",
         }
     }
@@ -82,13 +99,20 @@ impl AgentsTab {
     const fn shifted(self, forward: bool) -> Self {
         match (self, forward) {
             (Self::Channels, true) | (Self::Roster, false) => Self::Projects,
-            (Self::Projects, true) | (Self::Archive, false) => Self::Roster,
-            (Self::Roster, true) | (Self::Channels, false) => Self::Archive,
+            (Self::Projects, true) | (Self::Bench, false) => Self::Roster,
+            (Self::Roster, true) | (Self::Archive, false) => Self::Bench,
+            (Self::Bench, true) | (Self::Channels, false) => Self::Archive,
             (Self::Archive, true) | (Self::Projects, false) => Self::Channels,
         }
     }
 
-    /// The tab Alt+`digit` brings to the front: 1 to 4, in header order.
+    /// Whether the app shows an agent with all its chat tabs. CHANNELS
+    /// has only a chat, and BENCH shows benchmarks rather than an agent.
+    const fn has_agent_tabs(self) -> bool {
+        !matches!(self, Self::Channels | Self::Bench)
+    }
+
+    /// The tab Alt+`digit` brings to the front: 1 to 5, in header order.
     #[must_use]
     pub fn numbered(digit: char) -> Option<Self> {
         let index = digit.to_digit(10)?.checked_sub(1)?;
@@ -114,6 +138,10 @@ pub(super) struct AppMemory {
     roster: Option<String>,
     /// The channel CHANNELS has open, or had when it was left
     channel: Option<String>,
+    /// The agent on screen when the user went from an app with the
+    /// agent's chat tabs to one without, and the tab it was on, which
+    /// that app turned to CHAT: given back on going to one with them
+    chat_tab_before: Option<(String, ChatTab)>,
 }
 
 impl App {
@@ -145,6 +173,7 @@ impl App {
             AgentsTab::Channels => self.click_channel_row(column, row),
             AgentsTab::Projects => self.click_agent_row(column, row),
             AgentsTab::Roster => self.click_definition_row(column, row),
+            AgentsTab::Bench => self.click_bench_row(column, row),
             AgentsTab::Archive => self.click_archived_row(column, row),
         }
     }
@@ -159,6 +188,7 @@ impl App {
             _ if word_motion => false,
             AgentsTab::Channels => self.handle_channels_key(key),
             AgentsTab::Roster => self.handle_definitions_shortcut(key),
+            AgentsTab::Bench => self.handle_bench_list_key(key),
             AgentsTab::Archive => self.handle_archive_key(key),
         }
     }
@@ -171,6 +201,9 @@ impl App {
                 self.handle_channels_key(key);
             }
             AgentsTab::Roster => self.handle_definitions_key(key),
+            AgentsTab::Bench => {
+                self.handle_bench_list_key(key);
+            }
             AgentsTab::Archive => {
                 self.handle_archive_key(key);
             }
@@ -187,6 +220,7 @@ impl App {
             AgentsTab::Roster => {
                 self.select_definition_row(self.selected_definition.saturating_add_signed(delta));
             }
+            AgentsTab::Bench => self.move_bench_highlight(delta),
             AgentsTab::Archive => self.move_archived_by(delta),
         }
     }
@@ -210,6 +244,7 @@ impl App {
             AgentsTab::Roster => self
                 .definition_row_at(column, row)
                 .map(HoverTarget::DefinitionRow),
+            AgentsTab::Bench => self.bench_row_at(column, row).map(HoverTarget::BenchRow),
             AgentsTab::Archive => self
                 .archived_row_at(column, row)
                 .map(HoverTarget::ArchivedRow),
@@ -225,7 +260,7 @@ impl App {
             AgentsTab::Projects => self.open_project_menu(column, row),
             AgentsTab::Archive => self.open_archive_menu(column, row),
             AgentsTab::Channels => self.open_channel_menu(column, row),
-            AgentsTab::Roster => false,
+            AgentsTab::Roster | AgentsTab::Bench => false,
         }
     }
 
@@ -251,6 +286,11 @@ impl App {
                     self.open_definition(&name);
                 }
             }
+            AgentsTab::Bench => {
+                if let Some(mode) = self.bench_to_show() {
+                    self.show_bench(mode);
+                }
+            }
             AgentsTab::Archive => {
                 if let Some(id) = self.archive_app_agent() {
                     self.switch_on_screen(&id);
@@ -270,11 +310,25 @@ impl App {
             return false;
         }
         self.remember_app(was);
-        if was == AgentsTab::Channels {
-            self.leave_channel_app();
+        match was {
+            AgentsTab::Channels => self.leave_channel_app(),
+            AgentsTab::Bench => self.leave_bench_app(),
+            _ => {}
         }
-        if tab == AgentsTab::Channels {
-            self.enter_channel_app();
+        if was.has_agent_tabs() && !tab.has_agent_tabs() {
+            self.apps.chat_tab_before = (!self.active_agent_id.is_empty())
+                .then(|| (self.active_agent_id.clone(), self.chat_tab()));
+            self.close_detail();
+            if self.chat_tab() != ChatTab::Chat {
+                self.show_chat_tab(ChatTab::Chat);
+            }
+        } else if !was.has_agent_tabs() && tab.has_agent_tabs() {
+            if let Some((agent, chat_tab)) = self.apps.chat_tab_before.take() {
+                self.give_chat_tab_back(&agent, chat_tab);
+            }
+        }
+        if tab == AgentsTab::Bench {
+            self.enter_bench_app();
         }
         true
     }
@@ -388,15 +442,63 @@ impl App {
     }
 
     /// Whether the app in front has nothing to show: no channel open, no
-    /// instance of the permanent agent picked, no archived agent opened.
-    /// The chat says so, and the right column hides.
+    /// instance of the permanent agent picked, no benchmark or form, no
+    /// archived agent opened. The chat says so, and the right column
+    /// hides.
     #[must_use]
     pub(crate) fn app_empty(&self) -> bool {
         match self.agents_tab {
             AgentsTab::Channels => !self.channel_open(),
             AgentsTab::Projects => false,
             AgentsTab::Roster => !self.roster_shows_instance(),
+            AgentsTab::Bench => !self.bench.showing(),
             AgentsTab::Archive => !self.is_archived_agent(&self.active_agent_id),
+        }
+    }
+
+    /// Whether no agent is on screen: BENCH shows benchmarks, and an app
+    /// showing nothing shows no agent either. The agent's side column,
+    /// queue, stop button, todos and benchmark progress stay away.
+    #[must_use]
+    pub(crate) fn no_agent_on_screen(&self) -> bool {
+        self.bench_app() || self.app_empty()
+    }
+
+    /// Whether the app in front shows only CHAT of the chat panel's tabs:
+    /// CHANNELS and BENCH.
+    #[must_use]
+    pub(crate) const fn chat_only(&self) -> bool {
+        !self.agents_tab.has_agent_tabs()
+    }
+
+    /// Whether the agent panels (`/kernel`, `/files`, `/inbox`, ...) stay
+    /// off screen: CHANNELS has its own, BENCH shows no agent.
+    pub(super) fn agent_panels_hidden(&self) -> bool {
+        self.channel_app() || self.bench_app()
+    }
+
+    /// Say why the agent panels are not shown ([`Self::agent_panels_hidden`]).
+    pub(super) fn notify_no_agent_panels(&mut self) {
+        if self.bench_app() {
+            self.notification = Some((
+                "BENCH shows no agent; switch to PROJECTS for agent panels".to_string(),
+                NotificationType::Warning,
+            ));
+        } else {
+            self.notify_channel_owns_column();
+        }
+    }
+
+    /// The chat panel's title in an app without the agent's tabs, and
+    /// what it says beside it: the open channel's `#slug` and title, or
+    /// the benchmark BENCH shows and its title. `None` elsewhere, or with
+    /// nothing open.
+    #[must_use]
+    pub(crate) fn app_chat_title(&self) -> Option<(String, String)> {
+        match self.agents_tab {
+            AgentsTab::Channels => self.channel_chat_title(),
+            AgentsTab::Bench => self.bench_chat_title(),
+            _ => None,
         }
     }
 
@@ -417,6 +519,7 @@ impl App {
                 }
                 _ => "Pick a permanent agent on the left to open its latest chat.".to_string(),
             },
+            AgentsTab::Bench => self.bench_empty_message().to_string(),
             AgentsTab::Archive if self.archived.is_empty() => "Nothing is archived.".to_string(),
             AgentsTab::Archive => {
                 "Pick an archived agent on the left to open its chat.".to_string()
@@ -430,25 +533,33 @@ impl App {
         match self.agents_tab {
             AgentsTab::Channels => "a channel",
             AgentsTab::Roster => "a permanent agent",
+            AgentsTab::Bench => "a benchmark",
             AgentsTab::Archive => "an archived agent",
             AgentsTab::Projects => "an agent",
         }
     }
 
     /// What the empty input says: who a message goes to in the channel
-    /// app, or what to pick while the app in front shows nothing. `None`
-    /// otherwise.
+    /// app, what BENCH takes, or what to pick while the app in front
+    /// shows nothing. `None` otherwise.
     #[must_use]
     pub(crate) fn app_placeholder(&self) -> Option<String> {
         if self.channel_app() {
             return self.channel_placeholder();
         }
+        if self.bench_app() {
+            return Some(self.bench_placeholder());
+        }
         self.app_empty()
             .then(|| format!("Pick {}", self.app_pick()))
     }
 
-    /// Why a message cannot be sent while the app shows nothing.
+    /// Why a message cannot be sent: BENCH has no chat, and an app
+    /// showing nothing has nobody to send it to.
     pub(super) fn app_send_refusal(&self) -> String {
+        if self.bench_app() {
+            return "BENCH has no chat; messages go to agents in PROJECTS".to_string();
+        }
         format!("Pick {} to send a message", self.app_pick())
     }
 
@@ -460,7 +571,9 @@ impl App {
                 self.follow_active_agent_out_of_channel();
                 return;
             }
-            AgentsTab::Projects => return,
+            // BENCH shows no agent, and gave way to one that came on
+            // screen before its tab came back (`apply_active_agent`).
+            AgentsTab::Projects | AgentsTab::Bench => return,
             AgentsTab::Roster => self.roster_shows_instance(),
             AgentsTab::Archive => self.is_archived_agent(&self.active_agent_id),
         };

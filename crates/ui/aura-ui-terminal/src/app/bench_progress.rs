@@ -2,15 +2,15 @@
 //! of the tree on screen have got, one tab each, from any chat tab.
 //!
 //! It keeps every benchmark it has heard running, as last heard, whether
-//! or not the BENCH tab ever listed them: a benchmark's runs report every
-//! few seconds whatever is on screen. A finished one stays, its tab saying
+//! or not BENCH ever listed them: a benchmark's runs report every few
+//! seconds whatever is on screen. A finished one stays, its tab saying
 //! so, until the user closes it; a closed one stays hidden.
 //!
 //! Mouse only, so typing still goes to the input: a press on a tab picks
 //! it, on its `×` closes it, on the toggle folds or opens the panel, and
-//! anywhere else on it opens the benchmark in the BENCH tab.
+//! anywhere else on it opens the benchmark in BENCH.
 
-use super::{App, BenchMode, ChatTab};
+use super::{AgentsTab, App, BenchMode};
 use crate::events::BenchView;
 use crossterm::event::{MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
@@ -66,7 +66,7 @@ impl BenchPanel {
 impl App {
     /// Hex id of the agent at the top of the tree on screen; `None` until
     /// the agents are listed.
-    fn bench_tree_root(&self) -> Option<&str> {
+    pub(super) fn bench_tree_root(&self) -> Option<&str> {
         let index = self
             .agents
             .iter()
@@ -92,10 +92,11 @@ impl App {
     }
 
     /// The benchmark of the picked tab, or of the newest when none is.
-    /// None in the channel app: benchmarks are an agent feature.
+    /// None in the channel app, where benchmarks are an agent feature,
+    /// and with no agent on screen, BENCH's own included.
     #[must_use]
     pub(crate) fn bench_panel_shown(&self) -> Option<&BenchView> {
-        if self.channel_app() {
+        if self.channel_app() || self.no_agent_on_screen() {
             return None;
         }
         let views = self.bench_panel_views();
@@ -133,18 +134,16 @@ impl App {
         }
     }
 
-    /// Show benchmark `view` in the BENCH tab's detail view.
+    /// Bring BENCH to the front showing benchmark `view`.
     fn open_bench_detail(&mut self, view: BenchView) {
         let id = view.id.clone();
-        self.show_chat_tab(ChatTab::Bench);
-        // Until the list asked for arrives, the detail shows what the
-        // panel last heard.
+        // Until the list asked for arrives, BENCH shows what the panel
+        // last heard.
         if !self.bench.benches.iter().any(|b| b.id == id) {
             self.bench.benches.insert(0, view);
         }
-        self.bench.mode = BenchMode::Detail(id);
-        self.bench.scroll = 0;
-        self.bench.run = None;
+        self.switch_app(AgentsTab::Bench);
+        self.show_bench(BenchMode::Detail(id));
     }
 
     /// Take a mouse event aimed at the panel. Returns whether the panel

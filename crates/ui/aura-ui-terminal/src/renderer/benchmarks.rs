@@ -1,10 +1,11 @@
-//! Draw the chat panel's BENCH tab: the list of benchmarks, one
-//! benchmark's numbers side by side, or the form that sets one up.
+//! Draw what BENCH shows in the chat panel: one benchmark's numbers side
+//! by side, or the form that sets one up. Its list is in the agents panel
+//! (`agents::bench`).
 
 use super::chrome::body_block;
 use super::text::display_width;
 use crate::app::{
-    BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST,
+    BenchMode, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST,
 };
 use crate::events::{
     arm_letter, cost_per_fix, run_order, unpriced_note, BenchArm, BenchBaseline, BenchCost,
@@ -442,7 +443,7 @@ fn headline(text: &str, max: usize) -> String {
     format!("{cut}…")
 }
 
-/// Draw the BENCH tab in `area`, the chat panel below its header bar.
+/// Draw what BENCH shows in `area`, the chat panel below its header bar.
 pub(super) fn render_benchmarks(
     frame: &mut Frame,
     area: Rect,
@@ -470,30 +471,22 @@ pub(super) fn render_benchmarks(
     let width = usize::from(padded.width);
     let frame_no = theme.animate_spinners.then(|| app.animation_frame());
     let state = app.bench();
-    // The detail's tables fit the width; wrapping would only break them.
-    let wrap = !matches!(state.mode, BenchMode::Detail(_));
+    // The form wraps; the detail's tables fit the width, and wrapping
+    // would only break them.
+    let wrap = state.mode == Some(BenchMode::Form);
     let mut form_rows = None;
-    let (lines, scroll) = match &state.mode {
-        BenchMode::List => {
-            let lines = list_lines(state, theme, width, frame_no);
-            // Keep the selected row (two lines below the header) on screen.
-            let row = state.selected + 2;
-            let height = usize::from(padded.height);
-            let scroll = row.saturating_sub(height.saturating_sub(1));
-            (lines, u16::try_from(scroll).unwrap_or(u16::MAX))
-        }
-        BenchMode::Detail(_) => match state.shown() {
+    let (lines, scroll) = if wrap {
+        let (lines, rows) = form_layout(app, theme, width);
+        form_rows = Some(rows);
+        (lines, 0)
+    } else {
+        match state.shown() {
             Some(view) => {
                 let lines = detail_lines(view, state.run, theme, width, frame_no);
                 let last = u16::try_from(lines.len().saturating_sub(1)).unwrap_or(u16::MAX);
                 (lines, state.scroll.min(last))
             }
             None => (vec![muted_line("That benchmark is gone.", theme)], 0),
-        },
-        BenchMode::Form => {
-            let (lines, rows) = form_layout(app, theme, width);
-            form_rows = Some(rows);
-            (lines, 0)
         }
     };
     // The form is drawn from its top, so a row's line is its screen row.
@@ -519,102 +512,6 @@ fn muted_line<'a>(text: impl Into<String>, theme: &Theme) -> Line<'a> {
         text.into(),
         Style::default().fg(theme.colors.muted),
     ))
-}
-
-/// One benchmark arm in a list row: `gate $0.06 2/3 pass`.
-fn arm_brief(arm: &BenchArm) -> String {
-    let mut text = format!(
-        "{} {}",
-        headline(short_model(&arm.label), 28),
-        cost_text(arm.median_cost())
-    );
-    if arm.checks_run > 0 {
-        text.push_str(&format!(" {}/{} pass", arm.checks_passed, arm.checks_run));
-    }
-    text
-}
-
-/// The list of benchmarks; `frame` lights the status of those running.
-fn list_lines<'a>(
-    state: &BenchState,
-    theme: &Theme,
-    width: usize,
-    frame: Option<usize>,
-) -> Vec<Line<'a>> {
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(
-                "Benchmarks",
-                Style::default()
-                    .fg(theme.colors.text)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                "   n new · Enter open · r refresh · c stop the running one · Esc chat",
-                Style::default().fg(theme.colors.muted),
-            ),
-        ]),
-        Line::default(),
-    ];
-    if state.benches.is_empty() {
-        let text = if state.loaded() {
-            "No benchmarks yet. Press n to run the same work (your last prompt, a new one, \
-             or a whole earlier session) on two arms, Gate or a model each, and compare \
-             what they cost and how well they did."
-        } else {
-            "Loading the benchmarks…"
-        };
-        lines.push(muted_line(text, theme));
-        return lines;
-    }
-    for (i, view) in state.benches.iter().enumerate() {
-        let selected = i == state.selected;
-        let marker = if selected { "› " } else { "  " };
-        let status_color = match view.status {
-            BenchStatus::Running => theme.colors.pending,
-            BenchStatus::Cancelled => theme.colors.warning,
-            _ => theme.colors.success,
-        };
-        let text = format!(
-            "\"{}\" · A {} · B {}",
-            headline(&view.title, 40),
-            arm_brief(&view.arms[0]),
-            arm_brief(&view.arms[1]),
-        );
-        let mut style = Style::default().fg(theme.colors.text);
-        if selected {
-            style = style
-                .bg(theme.colors.selection)
-                .fg(theme.colors.on_selection);
-        }
-        let room = width.saturating_sub(view.name.chars().count() + 16);
-        let status = view.status.label();
-        let (status_style, light) = if selected {
-            (style, theme.colors.on_selection)
-        } else {
-            (Style::default().fg(status_color), theme.colors.foreground)
-        };
-        let mut spans = vec![
-            Span::styled(marker, style),
-            Span::styled(
-                format!("{} ", view.name),
-                style.add_modifier(Modifier::BOLD),
-            ),
-        ];
-        spans.extend(under_way(
-            &status,
-            status_style,
-            frame.filter(|_| view.status == BenchStatus::Running),
-            (theme.colors.muted, light),
-        ));
-        spans.push(Span::styled(
-            " ".repeat(10usize.saturating_sub(display_width(&status))),
-            status_style,
-        ));
-        spans.push(Span::styled(headline(&text, room.max(10)), style));
-        lines.push(Line::from(spans));
-    }
-    lines
 }
 
 /// What an arm's runs of one example task did and their mean cost:
@@ -1340,13 +1237,13 @@ fn detail_lines(
     lines.push(rule(width, theme));
     let running = view.status == BenchStatus::Running;
     let keys = if view.status.has_copies() && !running && !view.tasks.is_empty() {
-        "←/→ run · L log · d diff · x remove copies · Esc back"
+        "←/→ run · L log · d diff · x remove copies · Esc list"
     } else if view.status.has_copies() && !running {
-        "←/→ run · L log · d diff · y apply · x remove copies · Esc back"
+        "←/→ run · L log · d diff · y apply · x remove copies · Esc list"
     } else if running {
-        "↑/↓ scroll · L log · c stop · Esc back"
+        "↑/↓ scroll · L log · c stop · Esc list"
     } else {
-        "↑/↓ scroll · L log · Esc back"
+        "↑/↓ scroll · L log · Esc list"
     };
     lines.push(muted_line(fit(keys, width), theme));
     lines
@@ -1456,7 +1353,7 @@ fn form_layout<'a>(
     const TITLE: &str = "New benchmark";
     let hint = fit(
         "   ↑/↓ row · ←/→ change · click or Enter a model row to pick it · text rows take what \
-         you type below, then Enter · Esc back",
+         you type below, then Enter · Esc drops it",
         width.saturating_sub(TITLE.len()),
     );
     let mut lines = vec![
@@ -1472,6 +1369,14 @@ fn form_layout<'a>(
         }
         let focused = field == form.field;
         let (value, faint) = match field {
+            FormField::From => match app.bench_from_label() {
+                Some(label) => (label, false),
+                None if app.bench_from_choices().is_empty() => (
+                    "none yet: make an agent in PROJECTS first".to_string(),
+                    true,
+                ),
+                None => ("←/→ picks the agent it runs from".to_string(), true),
+            },
             FormField::AEasy
             | FormField::AMedium
             | FormField::AHard
@@ -1569,7 +1474,7 @@ fn form_layout<'a>(
         };
         let cycles = matches!(
             field,
-            FormField::Work | FormField::A | FormField::B | FormField::Repeats
+            FormField::From | FormField::Work | FormField::A | FormField::B | FormField::Repeats
         ) || field.difficulty().is_some()
             || (field == FormField::Tasks && examples);
         // One screen line per row, so a click finds the row it is on:
@@ -2055,19 +1960,50 @@ mod tests {
     }
 
     #[test]
-    fn the_tab_draws_its_list_and_opens_a_benchmark() {
+    fn bench_draws_the_benchmark_it_shows() {
         let mut app = App::new();
         app.process_command(UiCommand::BenchList {
             benches: vec![view()],
         });
+        app.bench_mut().mode = Some(BenchMode::Detail("ab".to_string()));
         let theme = Theme::default();
-        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 80)).unwrap();
         terminal
             .draw(|frame| render_benchmarks(frame, frame.area(), &mut app, &theme, true))
             .unwrap();
         let screen = format!("{:?}", terminal.backend().buffer());
         assert!(screen.contains("Compare #1"), "{screen}");
-        assert!(screen.contains("A gate $0.06 1/2 pass"), "{screen}");
+        assert!(screen.contains("cost/run"), "{screen}");
+        assert!(screen.contains("Esc list"), "{screen}");
+    }
+
+    #[test]
+    fn the_from_row_names_the_agent_and_its_project() {
+        use crate::events::AgentSummary;
+        let theme = Theme::default();
+        let mut app = App::new();
+        let shown = text(&form_lines(&app, &theme, 120));
+        assert!(
+            shown.contains("From          none yet: make an agent in PROJECTS first"),
+            "{shown}"
+        );
+
+        app.process_command(UiCommand::SetAgents(vec![AgentSummary {
+            id: "a".to_string(),
+            name: "fixer".to_string(),
+            project: Some("web".to_string()),
+            ..AgentSummary::default()
+        }]));
+        let shown = text(&form_lines(&app, &theme, 120));
+        assert!(
+            shown.contains("←/→ picks the agent it runs from"),
+            "{shown}"
+        );
+        let form = &mut app.bench_mut().form;
+        form.from = Some("a".to_string());
+        form.field = FormField::From;
+        let shown = text(&form_lines(&app, &theme, 120));
+        assert!(shown.contains("‹ fixer · web ›"), "{shown}");
     }
 
     #[test]

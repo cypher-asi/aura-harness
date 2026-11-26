@@ -1,16 +1,23 @@
 //! The BENCH form that sets a new benchmark up: its rows, what each
 //! cycles through, and what Enter on its last row sends. Enter on a
 //! difficulty's row opens the `/model` selector to pick its model.
+//!
+//! Its first row picks the top-level agent the benchmark is run from: the
+//! runs work on copies of its workspace, and can replay its last prompt or
+//! one of its sessions. It starts on the agent at the top of the tree last
+//! on screen.
 
 use super::{BenchMode, BenchState};
 use crate::app::{App, AppState, NotificationType, PickerTarget};
-use crate::events::{BenchExample, BenchRequest, BenchSession, BenchSpec, BenchWork};
+use crate::events::{AgentSummary, BenchExample, BenchRequest, BenchSession, BenchSpec, BenchWork};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
 /// Rows of the new-benchmark form, top to bottom.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FormField {
+    /// The top-level agent the benchmark is run from
+    From,
     #[default]
     Work,
     Prompt,
@@ -35,7 +42,8 @@ pub enum FormField {
 }
 
 impl FormField {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
+        Self::From,
         Self::Work,
         Self::Prompt,
         Self::Tasks,
@@ -57,6 +65,7 @@ impl FormField {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::From => "From",
             Self::Work => "Work",
             Self::Prompt => "Prompt",
             Self::Tasks => "Tasks",
@@ -216,6 +225,9 @@ const DEFAULT_WORK: usize = usize::MAX;
 #[derive(Debug, Clone, PartialEq)]
 pub struct BenchForm {
     pub field: FormField,
+    /// Hex id of the agent it is run from; `None` until the form opens
+    /// with a top-level agent to offer
+    pub from: Option<String>,
     /// Index into [`BenchState::work_choices`], or [`DEFAULT_WORK`] while
     /// the examples that determine the default suite are loading
     pub work: usize,
@@ -250,6 +262,7 @@ impl Default for BenchForm {
     fn default() -> Self {
         Self {
             field: FormField::Work,
+            from: None,
             work: DEFAULT_WORK,
             prompt: String::new(),
             tasks: 0,
@@ -364,7 +377,7 @@ impl BenchForm {
 
 impl BenchState {
     /// Where the form was drawn this frame (`area`) and the screen row of
-    /// each of its rows; `None` when the tab shows something else.
+    /// each of its rows; `None` when it is not shown.
     fn set_form_rows(&mut self, area: Option<Rect>, rows: Vec<(u16, FormField)>) {
         self.form_area = area;
         self.form_rows = rows;
@@ -579,6 +592,80 @@ impl App {
         }
     }
 
+    /// What the form's From row cycles through: the listed top-level
+    /// agents, but a benchmark's own runs.
+    #[must_use]
+    pub fn bench_from_choices(&self) -> Vec<&AgentSummary> {
+        self.agents
+            .iter()
+            .filter(|a| a.depth == 0 && !a.bench_run && a.archived_at_ms.is_none())
+            .collect()
+    }
+
+    /// The agent the From row starts on: the one at the top of the tree
+    /// last on screen, else the first it offers.
+    fn default_bench_from(&self) -> Option<String> {
+        let choices = self.bench_from_choices();
+        let root = self.bench_tree_root();
+        choices
+            .iter()
+            .find(|a| Some(a.id.as_str()) == root)
+            .or_else(|| choices.first())
+            .map(|a| a.id.clone())
+    }
+
+    /// Keep the From row on an agent it still offers, else put it on its
+    /// default.
+    fn settle_bench_from(&mut self) {
+        let offered = |id: &str| self.bench_from_choices().iter().any(|a| a.id == id);
+        if self.bench.form.from.as_deref().is_some_and(offered) {
+            return;
+        }
+        let from = self.default_bench_from();
+        if from != self.bench.form.from {
+            self.set_bench_from(from);
+        }
+    }
+
+    /// Run the benchmark from `from`. The sessions offered were another
+    /// agent's, so a session picked as the work gives way to the default.
+    fn set_bench_from(&mut self, from: Option<String>) {
+        let session = matches!(self.bench.work(), WorkChoice::Session(_));
+        self.bench.sessions.clear();
+        let form = &mut self.bench.form;
+        form.from = from;
+        if session {
+            form.work = DEFAULT_WORK;
+        }
+        form.estimate = None;
+        form.waiting = false;
+    }
+
+    /// The agent the form's requests name: the one it is run from, else
+    /// the one on screen.
+    fn bench_form_agent(&self) -> &str {
+        self.bench
+            .form
+            .from
+            .as_deref()
+            .unwrap_or(&self.active_agent_id)
+    }
+
+    fn send_form_bench(&self, request: BenchRequest) {
+        self.send_bench_for(self.bench_form_agent(), request);
+    }
+
+    /// What the From row shows: the agent's name, and its project's.
+    #[must_use]
+    pub fn bench_from_label(&self) -> Option<String> {
+        let from = self.bench.form.from.as_deref()?;
+        let agent = self.agents.iter().find(|a| a.id == from)?;
+        Some(match &agent.project {
+            Some(project) => format!("{} · {project}", agent.name),
+            None => agent.name.clone(),
+        })
+    }
+
     /// Open the model selector, as `/model` does, to pick the model of the
     /// form's row `field` (a difficulty's, or the classifier's), filtered
     /// by `filter` and on the row's model when it has one.
@@ -652,7 +739,7 @@ impl App {
         sessions: Vec<BenchSession>,
         examples: Vec<BenchExample>,
     ) {
-        if agent_id == self.active_agent_id {
+        if agent_id == self.bench_form_agent() {
             self.bench.sessions = sessions;
             self.bench.examples = examples;
             if self.bench.form.work == DEFAULT_WORK && !self.bench.examples.is_empty() {
@@ -671,7 +758,7 @@ impl App {
         agent_id: &str,
         estimate: Result<String, String>,
     ) {
-        if agent_id == self.active_agent_id {
+        if agent_id == self.bench_form_agent() {
             self.bench.form.waiting = false;
             if estimate.is_ok() {
                 self.bench.form.field = FormField::Go;
@@ -684,7 +771,7 @@ impl App {
     /// typed: the text becomes its value. Returns whether it did.
     pub(in crate::app) fn bench_fill_field(&mut self) -> bool {
         let field = self.bench.form.field;
-        if self.bench.mode != BenchMode::Form || !field.is_text() || self.input.is_empty() {
+        if self.bench.mode != Some(BenchMode::Form) || !field.is_text() || self.input.is_empty() {
             return false;
         }
         let text = std::mem::take(&mut self.input);
@@ -707,9 +794,12 @@ impl App {
         true
     }
 
-    /// Open the form, asking for the sessions it offers.
+    /// Open the form, asking for the sessions it offers. Dropping it shows
+    /// the benchmark shown now again.
     pub(in crate::app) fn open_bench_form(&mut self) {
-        self.bench.mode = BenchMode::Form;
+        self.bench.before_form = self.bench.shown().map(|view| view.id.clone());
+        self.bench.mode = Some(BenchMode::Form);
+        self.settle_bench_from();
         if self.bench.form.classifier == DEFAULT_CLASSIFIER {
             // Name the Haiku the user runs, now the model list is likely
             // in; a classifier the user chose is left alone.
@@ -718,15 +808,15 @@ impl App {
         self.settle_bench_against();
         self.bench.form.estimate = None;
         self.bench.form.waiting = false;
-        self.send_bench(BenchRequest::Sessions);
+        self.send_form_bench(BenchRequest::Sessions);
     }
 
-    /// A left click in the BENCH tab: on a row of the form it goes to the
-    /// row, opens the model selector on a difficulty's row, and on the
+    /// A left click on BENCH's chat panel: on a row of the form it goes to
+    /// the row, opens the model selector on a difficulty's row, and on the
     /// last row asks for the estimate or starts the benchmark, as Enter
     /// does there. Returns whether it hit a row.
     pub(crate) fn click_bench(&mut self, column: u16, row: u16) -> bool {
-        if self.bench.mode != BenchMode::Form {
+        if self.bench.mode != Some(BenchMode::Form) {
             return false;
         }
         let Some(field) = self.bench.form_field_at(column, row) else {
@@ -746,10 +836,10 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 if self.bench.form.ready() {
-                    self.send_bench(BenchRequest::Cancel);
+                    self.send_form_bench(BenchRequest::Cancel);
                 }
                 self.bench.form.estimate = None;
-                self.bench.mode = BenchMode::List;
+                self.drop_bench_form();
             }
             KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => self.move_form_field(false),
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => self.move_form_field(true),
@@ -814,6 +904,20 @@ impl App {
             return;
         }
         match field {
+            FormField::From => {
+                let choices: Vec<String> = self
+                    .bench_from_choices()
+                    .iter()
+                    .map(|a| a.id.clone())
+                    .collect();
+                let current = self.bench.form.from.clone().unwrap_or_default();
+                let next = cycle(&choices, &current, forward);
+                if next == current {
+                    return;
+                }
+                self.set_bench_from(Some(next));
+                self.send_form_bench(BenchRequest::Sessions);
+            }
             FormField::Work => {
                 let count = self.bench.work_choices().len();
                 let current = self.bench.work_index();
@@ -870,8 +974,14 @@ impl App {
         if self.bench.form.waiting {
             return;
         }
+        if self.bench.form.from.is_none() {
+            // The agents were listed after the form opened.
+            self.settle_bench_from();
+        }
         if self.bench.form.ready() {
-            self.send_bench(BenchRequest::Start);
+            self.bench.start_unanswered = true;
+            self.bench.show_started = true;
+            self.send_form_bench(BenchRequest::Start);
             return;
         }
         if self.bench.form.b == DEFAULT_AGAINST {
@@ -944,7 +1054,7 @@ impl App {
             classifier: form.classifier_model(),
         };
         self.bench.form.waiting = true;
-        self.send_bench(BenchRequest::Prepare(spec));
+        self.send_form_bench(BenchRequest::Prepare(spec));
     }
 }
 
@@ -989,6 +1099,117 @@ mod tests {
             suite: suite.to_string(),
             title: title.to_string(),
         }
+    }
+
+    fn session(started_ms: u64) -> BenchSession {
+        BenchSession {
+            started_ms,
+            title: "fix it".to_string(),
+            prompts: 1,
+            cost_usd: None,
+            unpriced_calls: 0,
+            models: Vec::new(),
+            current: false,
+        }
+    }
+
+    /// The benchmark requests sent since the last call, as
+    /// `<agent> <request>`.
+    fn requests(rx: &mut tokio::sync::mpsc::Receiver<UiEvent>) -> Vec<String> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                UiEvent::Bench { agent_id, request } => Some(format!("{agent_id} {request:?}")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Top-level agents `a`, in project `web`, and `b`, with `kid` under
+    /// `a` on screen, a benchmark's run and an archived agent between.
+    fn app_with_trees() -> App {
+        let mut app = App::new();
+        let agent = |id: &str, depth| AgentSummary {
+            id: id.to_string(),
+            name: id.to_string(),
+            depth,
+            ..AgentSummary::default()
+        };
+        app.agents = vec![
+            AgentSummary {
+                project: Some("web".to_string()),
+                ..agent("a", 0)
+            },
+            agent("kid", 1),
+            AgentSummary {
+                bench_run: true,
+                ..agent("run", 0)
+            },
+            AgentSummary {
+                archived_at_ms: Some(1),
+                ..agent("old", 0)
+            },
+            agent("b", 0),
+        ];
+        app.active_agent_id = "kid".to_string();
+        app
+    }
+
+    #[test]
+    fn the_from_row_starts_on_the_tree_on_screen_and_cycles_top_level_agents() {
+        let mut app = app_with_trees();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        app.event_tx = Some(tx);
+        app.open_bench_form();
+        assert_eq!(app.bench.form.from.as_deref(), Some("a"), "kid's tree");
+        assert_eq!(app.bench_from_label().as_deref(), Some("a · web"));
+        let offered: Vec<&str> = app
+            .bench_from_choices()
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect();
+        assert_eq!(offered, ["a", "b"], "no child, run or archived agent");
+
+        app.bench.sessions = vec![session(5)];
+        app.bench.form.work = 3;
+        assert!(matches!(app.bench.work(), WorkChoice::Session(_)));
+        app.bench.form.field = FormField::From;
+        app.change_form_value(true);
+        assert_eq!(app.bench.form.from.as_deref(), Some("b"));
+        assert!(app.bench.sessions.is_empty(), "a's sessions go");
+        assert_eq!(app.bench.form.work, DEFAULT_WORK, "and so does the pick");
+        app.change_form_value(true);
+        assert_eq!(app.bench.form.from.as_deref(), Some("a"), "and wraps");
+        assert_eq!(
+            requests(&mut rx),
+            ["a Sessions", "b Sessions", "a Sessions"]
+        );
+
+        app.cmd_bench_sessions("b", vec![session(7)], Vec::new());
+        assert!(app.bench.sessions.is_empty(), "another agent's sessions");
+        app.cmd_bench_sessions("a", vec![session(7)], Vec::new());
+        assert_eq!(app.bench.sessions.len(), 1);
+    }
+
+    #[test]
+    fn the_benchmark_is_prepared_and_started_from_the_agent_on_the_from_row() {
+        let mut app = app_with_trees();
+        app.open_bench_form();
+        app.bench.form.field = FormField::From;
+        app.change_form_value(true);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        app.event_tx = Some(tx);
+        app.bench.form.field = FormField::Go;
+
+        app.submit_bench_form();
+        app.cmd_bench_estimate("a", Ok("about $1".to_string()));
+        assert!(app.bench.form.waiting, "another agent's estimate");
+        app.cmd_bench_estimate("b", Ok("about $2".to_string()));
+        assert!(app.bench.form.ready());
+        app.submit_bench_form();
+        let sent = requests(&mut rx);
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(sent[0].starts_with("b Prepare("), "{sent:?}");
+        assert_eq!(sent[1], "b Start");
     }
 
     #[test]
@@ -1193,10 +1414,14 @@ mod tests {
                 example(DEFAULT_SUITE, "hard 2"),
             ],
         );
-        app.bench.mode = BenchMode::Form;
+        app.bench.mode = Some(BenchMode::Form);
         app.bench.form.work = 1;
         app.bench.form.repeats = 3;
+        app.cmd_bench_notice(Ok("applied".to_string()));
+        assert_eq!(app.bench.form.repeats, 3, "a notice answering no start");
 
+        app.bench.form.estimate = Some(Ok("about $1".to_string()));
+        app.submit_bench_form();
         app.cmd_bench_notice(Ok("started".to_string()));
         assert_eq!(app.bench.work(), WorkChoice::Examples(Some(DEFAULT_SUITE)));
         assert_eq!(app.bench.form.tasks, 2);
@@ -1338,7 +1563,7 @@ mod tests {
         let session = app.current_model.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         app.event_tx = Some(tx);
-        app.bench.mode = BenchMode::Form;
+        app.bench.mode = Some(BenchMode::Form);
         app.bench.form.a = BY_DIFFICULTY.to_string();
         app.bench.form.field = FormField::AEasy;
         app.change_form_value(true);
@@ -1381,7 +1606,7 @@ mod tests {
     #[test]
     fn typing_on_a_difficulty_row_opens_the_selector_filtered() {
         let mut app = three_models();
-        app.bench.mode = BenchMode::Form;
+        app.bench.mode = Some(BenchMode::Form);
         app.bench.form.b = BY_DIFFICULTY.to_string();
         app.bench.form.field = FormField::BHard;
         app.input = "gpt".to_string();
@@ -1406,7 +1631,7 @@ mod tests {
             available: false,
             context_window: None,
         });
-        app.bench.mode = BenchMode::Form;
+        app.bench.mode = Some(BenchMode::Form);
         app.bench.form.a = BY_DIFFICULTY.to_string();
         app.open_bench_model_picker(FormField::AMedium, "");
         app.pick_bench_model(FormField::AMedium, "openrouter/qwen/qwen3-coder");
@@ -1459,7 +1684,7 @@ mod tests {
     fn the_classifier_row_starts_on_haiku_cycles_models_and_is_sent() {
         let mut app = three_models();
         app.bench.form.b.clear();
-        app.bench.mode = BenchMode::Form;
+        app.bench.mode = Some(BenchMode::Form);
         app.bench.form.field = FormField::B;
         app.move_form_field(true);
         assert_eq!(
@@ -1504,7 +1729,7 @@ mod tests {
     #[test]
     fn enter_on_the_classifier_row_picks_it_in_the_selector_and_backspace_resets_it() {
         let mut app = three_models();
-        app.bench.mode = BenchMode::Form;
+        app.bench.mode = Some(BenchMode::Form);
         app.bench.form.field = FormField::Classifier;
         assert!(app.bench_form_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
         assert_eq!(app.state, AppState::SelectingModel);

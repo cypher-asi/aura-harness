@@ -1,8 +1,8 @@
 //! The chat panel's tabs: the conversation, the terminal that runs the
 //! session's shell commands, the graph of what the agent and the agents
-//! it spawned did, the same work over time, the benchmarks that compare
-//! two arms on the same work, or the run log of the agent and the agents
-//! below it. Each agent keeps the tab it was left on (see `agent_views`).
+//! it spawned did, the same work over time, or the run log of the agent
+//! and the agents below it. Each agent keeps the tab it was left on (see
+//! `agent_views`).
 
 use super::flow::FlowMode;
 use super::{tab_at, tab_bar::TabLayout, App, HoverTarget};
@@ -21,21 +21,17 @@ pub enum ChatTab {
     Graph,
     /// The same flow as a timeline: an agent a row, its turns as bars.
     Time,
-    /// Benchmarks: the same work on two arms (Gate or a model), their
-    /// cost and how well they did.
-    Bench,
     /// The run log of the agent on screen and of every agent below it,
     /// and where it is stored.
     Log,
 }
 
 impl ChatTab {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::Chat,
         Self::Terminal,
         Self::Graph,
         Self::Time,
-        Self::Bench,
         Self::Log,
     ];
 
@@ -46,7 +42,6 @@ impl ChatTab {
             Self::Terminal => "TERMINAL",
             Self::Graph => "GRAPH",
             Self::Time => "TIME",
-            Self::Bench => "BENCH",
             Self::Log => "LOG",
         }
     }
@@ -59,7 +54,6 @@ impl ChatTab {
             Self::Terminal => "TRM",
             Self::Graph => "GRP",
             Self::Time => "TIM",
-            Self::Bench => "BEN",
             Self::Log => "LOG",
         }
     }
@@ -69,8 +63,7 @@ impl ChatTab {
             Self::Chat => Self::Terminal,
             Self::Terminal => Self::Graph,
             Self::Graph => Self::Time,
-            Self::Time => Self::Bench,
-            Self::Bench => Self::Log,
+            Self::Time => Self::Log,
             Self::Log => Self::Chat,
         }
     }
@@ -81,8 +74,7 @@ impl ChatTab {
             Self::Terminal => Self::Chat,
             Self::Graph => Self::Terminal,
             Self::Time => Self::Graph,
-            Self::Bench => Self::Time,
-            Self::Log => Self::Bench,
+            Self::Log => Self::Time,
         }
     }
 
@@ -103,8 +95,6 @@ impl App {
                 FlowMode::Canvas => ChatTab::Graph,
                 FlowMode::Timeline => ChatTab::Time,
             }
-        } else if self.bench.is_open() {
-            ChatTab::Bench
         } else if self.log.is_open() {
             ChatTab::Log
         } else if self.terminal_mode {
@@ -127,19 +117,18 @@ impl App {
         self.terminal_mode = tab == ChatTab::Terminal;
         self.flow
             .set_open(matches!(tab, ChatTab::Graph | ChatTab::Time));
-        self.bench.set_open(tab == ChatTab::Bench);
         self.log.set_open(tab == ChatTab::Log);
         self.history().reset();
     }
 
     /// Show `tab`. The conversation and the terminal open at their bottom
     /// with their own input history; the graph and the timeline ask for
-    /// the flow of the agent on screen, unless the other has it, the
-    /// benchmarks for the latest of them, and the log for the agent's.
-    /// The channel app has only CHAT: any other tab asked for there,
-    /// by key, click or command, is not shown.
+    /// the flow of the agent on screen, unless the other has it, and the
+    /// log for the agent's. CHANNELS and BENCH have only CHAT
+    /// ([`Self::chat_only`]): any other tab asked for there, by key,
+    /// click or command, is not shown.
     pub(super) fn show_chat_tab(&mut self, tab: ChatTab) {
-        if self.channel_app() && tab != ChatTab::Chat {
+        if self.chat_only() && tab != ChatTab::Chat {
             return;
         }
         let flow_was_open = self.flow.is_open();
@@ -164,7 +153,6 @@ impl App {
                     self.request_flow();
                 }
             }
-            ChatTab::Bench => self.request_benchmarks(),
             ChatTab::Log => self.request_log(),
             ChatTab::Chat | ChatTab::Terminal => {}
         }
@@ -176,16 +164,17 @@ impl App {
     /// and it asks for nothing: the switch asks for what the tab shows of
     /// the new agent. The input holds the draft the agent was left with,
     /// typed under this tab, so Enter does with it what it did then. In
-    /// the channel app, which has only CHAT, any other tab stays put away.
+    /// CHANNELS and BENCH, which have only CHAT, any other tab stays put
+    /// away.
     pub(super) fn restore_chat_tab(&mut self, tab: ChatTab) {
-        if tab == self.chat_tab() || (self.channel_app() && tab != ChatTab::Chat) {
+        if tab == self.chat_tab() || (self.chat_only() && tab != ChatTab::Chat) {
             return;
         }
         self.set_chat_tab(tab);
         match tab {
             ChatTab::Graph => self.flow.restore_mode(FlowMode::Canvas),
             ChatTab::Time => self.flow.restore_mode(FlowMode::Timeline),
-            ChatTab::Chat | ChatTab::Terminal | ChatTab::Bench | ChatTab::Log => {}
+            ChatTab::Chat | ChatTab::Terminal | ChatTab::Log => {}
         }
     }
 
@@ -214,13 +203,13 @@ impl App {
         })
     }
 
-    /// The chat panel's tabs in a header bar `width` columns wide. The
-    /// channel app has only CHAT, so there the bar has no tabs and shows
-    /// the channel's title instead ([`Self::channel_chat_title`]). An app
-    /// showing nothing ([`Self::app_empty`]) has no tabs either.
+    /// The chat panel's tabs in a header bar `width` columns wide.
+    /// CHANNELS and BENCH have only CHAT, so there the bar has no tabs and
+    /// shows a title instead ([`Self::app_chat_title`]). An app showing
+    /// nothing ([`Self::app_empty`]) has no tabs either.
     #[must_use]
     pub(crate) fn chat_tab_layout(&self, width: u16) -> TabLayout<ChatTab> {
-        if self.channel_app() || self.app_empty() {
+        if self.chat_only() || self.app_empty() {
             TabLayout::new([], ChatTab::label, ChatTab::short_label, width)
         } else {
             ChatTab::layout(width)
@@ -262,15 +251,12 @@ mod tests {
         app.process_command(UiCommand::SetActiveAgent(agent_id.to_string()));
     }
 
-    /// What the tabs asked the session for since the last call: a flow,
-    /// the benchmarks or a log, and of which agent.
+    /// What the tabs asked the session for since the last call: a flow
+    /// or a log, and of which agent.
     fn requests(rx: &mut mpsc::Receiver<UiEvent>) -> Vec<String> {
         std::iter::from_fn(|| rx.try_recv().ok())
             .filter_map(|event| match event {
                 UiEvent::OpenFlow(agent_id) => Some(format!("flow {agent_id}")),
-                UiEvent::Bench { agent_id, request } => {
-                    Some(format!("bench {agent_id} {request:?}"))
-                }
                 UiEvent::Log { agent_id, .. } => Some(format!("log {agent_id}")),
                 _ => None,
             })
@@ -312,10 +298,9 @@ mod tests {
 
     #[test]
     fn an_agent_coming_back_asks_once_for_what_its_tab_shows() {
-        let cases: [(ChatTab, &[&str]); 6] = [
+        let cases: [(ChatTab, &[&str]); 5] = [
             (ChatTab::Graph, &["flow aa"]),
             (ChatTab::Time, &["flow aa"]),
-            (ChatTab::Bench, &["bench aa List", "bench aa Sessions"]),
             (ChatTab::Log, &["log aa"]),
             (ChatTab::Terminal, &[]),
             (ChatTab::Chat, &[]),
@@ -508,7 +493,7 @@ mod tests {
         assert_eq!(app.input(), "hi");
 
         // A message typed on a tab where Enter sends it keeps that tab.
-        for saved in [ChatTab::Graph, ChatTab::Bench, ChatTab::Log] {
+        for saved in [ChatTab::Graph, ChatTab::Log] {
             let (mut app, _rx) = two_agents();
             switch_to(&mut app, "bb");
             app.show_chat_tab(saved);

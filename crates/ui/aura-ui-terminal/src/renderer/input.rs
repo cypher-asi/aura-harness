@@ -199,9 +199,8 @@ fn shape(area: Rect, app: &App) -> Shape<'_> {
 /// right padding, while the agent on screen is busy and the box leaves
 /// [`MIN_TYPING_WITH_STOP`] columns to type in beside it.
 fn stop_button_x(app: &App, typing_x: u16, right: u16) -> Option<u16> {
-    // An app showing nothing shows no agent, so there is no turn of its
-    // to stop.
-    if !app.is_busy() || app.app_empty() {
+    // With no agent on screen there is no turn of its to stop.
+    if !app.is_busy() || app.no_agent_on_screen() {
         return None;
     }
     let label = u16::try_from(display_width(STOP_LABEL)).ok()?;

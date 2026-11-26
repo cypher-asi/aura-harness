@@ -1,9 +1,9 @@
-//! The chat panel's BENCH tab: comparisons of two arms (each Gate or a
+//! The agents panel's BENCH tab: comparisons of two arms (each Gate or a
 //! pinned model) on the same work, what they cost, and how well they did.
 //!
 //! The work is one prompt, the user's last prompt, or an earlier session
-//! replayed prompt by prompt. Benchmarks are `/compare` comparisons; the
-//! tab lists them, sets new ones up and shows each one's numbers.
+//! replayed prompt by prompt. Benchmarks are `/compare` comparisons; BENCH
+//! lists them, sets new ones up and shows each one's numbers.
 
 /// Where a benchmark stands.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -707,7 +707,7 @@ pub struct BenchSpec {
 pub enum BenchRequest {
     /// Every benchmark, of every tree ([`crate::UiCommand::BenchList`])
     List,
-    /// The sessions of the agent on screen and the example tasks
+    /// The sessions of the agent it asks for and the example tasks
     /// ([`crate::UiCommand::BenchSessions`])
     Sessions,
     /// Set up `spec` and say what it should cost

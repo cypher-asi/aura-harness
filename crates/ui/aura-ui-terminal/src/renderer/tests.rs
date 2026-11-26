@@ -623,7 +623,11 @@ fn test_agents_header_is_a_bar_of_equal_tabs() {
             "{}",
             rows[tabs]
         );
-        assert_eq!(widths.len(), 4, "the tabs fill the bar: {widths:?}");
+        assert_eq!(
+            widths.len(),
+            AgentsTab::ALL.len(),
+            "the tabs fill the bar: {widths:?}"
+        );
         let (min, max) = (widths.iter().min(), widths.iter().max());
         assert!(max.zip(min).is_some_and(|(a, b)| a - b <= 1), "{widths:?}");
     }
@@ -1267,8 +1271,13 @@ fn test_side_panel_header_matches_the_agents_header() {
         widths[..5].iter().all(|w| w.abs_diff(widths[0]) <= 1),
         "{widths:?}"
     );
+    let projects = if rows.iter().any(|row| row.contains("PROJECTS")) {
+        "PROJECTS"
+    } else {
+        "PRJ"
+    };
     assert_eq!(
-        header_bar(&rows, "PROJECTS").0,
+        header_bar(&rows, projects).0,
         header_bar(&rows, "KRN").0,
         "top bars line up"
     );
@@ -4245,6 +4254,7 @@ fn test_a_selection_dragged_past_a_benchmark_scrolls_it() {
         benches: vec![BenchView {
             id: "ab".to_string(),
             name: "Compare #1".to_string(),
+            source: "the source".to_string(),
             arms: [BenchArm::default(), BenchArm::default()],
             runs: (0..60)
                 .map(|n| BenchRun {
@@ -4255,12 +4265,12 @@ fn test_a_selection_dragged_past_a_benchmark_scrolls_it() {
             ..BenchView::default()
         }],
     });
-    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-    assert_eq!(app.chat_tab(), crate::app::ChatTab::Bench);
-    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT));
+    assert_eq!(app.agents_tab(), crate::app::AgentsTab::Bench);
 
-    let copied = select_past_the_bottom(&mut app, "Compare #1", "line 40");
+    // The name is in the header and the list too; the source line is
+    // the benchmark's own.
+    let copied = select_past_the_bottom(&mut app, "the source", "line 40");
     assert_copied_lines_to_40(&copied);
 
     let buffer = render_buffer(&mut app, 120);
@@ -4351,10 +4361,12 @@ fn test_clicking_a_difficulty_row_then_a_model_picks_it_from_the_selector() {
         plans: Vec::new(),
         thinking: None,
     });
-    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-    assert_eq!(app.chat_tab(), crate::app::ChatTab::Bench);
+    app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT));
+    while app.focus() != crate::app::PanelFocus::Swarm {
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+    }
     app.handle_key(KeyEvent::from(KeyCode::Char('n')));
+    assert_eq!(app.bench().mode, Some(crate::app::BenchMode::Form));
     app.bench_mut().form.b = BY_DIFFICULTY.to_string();
     app.bench_mut().form.b_models = Default::default();
     let click = |app: &mut crate::App, column: u16, row: u16| {
@@ -6596,7 +6608,7 @@ fn test_an_open_channel_keeps_the_list_and_lists_its_members_on_the_right() {
             "{agent_feature}:\n{screen}"
         );
     }
-    for chat_tab in ["TERMINAL", "GRAPH", "BENCH"] {
+    for chat_tab in ["TERMINAL", "GRAPH"] {
         assert!(!screen.contains(chat_tab), "{chat_tab}:\n{screen}");
     }
 }

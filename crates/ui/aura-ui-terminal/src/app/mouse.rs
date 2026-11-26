@@ -3,8 +3,8 @@
 
 use super::selection::Selection;
 use super::{
-    contains, tab_at, AgentsTab, App, AppState, ChatTab, DetailView, HoverTarget, InputView,
-    PanelFocus, RecordsTab,
+    contains, tab_at, AgentsTab, App, AppState, DetailView, HoverTarget, InputView, PanelFocus,
+    RecordsTab,
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
@@ -310,7 +310,7 @@ impl App {
                                     && self.click_log(mouse.column, mouse.row))
                                     || (self.flow.is_open()
                                         && self.click_flow(mouse.column, mouse.row))
-                                    || (self.chat_tab() == ChatTab::Bench
+                                    || (self.bench_app()
                                         && self.click_bench(mouse.column, mouse.row))))
                         {
                             self.clear_selection();

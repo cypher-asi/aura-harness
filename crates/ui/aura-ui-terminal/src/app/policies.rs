@@ -32,11 +32,11 @@ impl App {
     }
 
     /// Show the Kernel panel's POLICIES tab, focused, as `/policies` does.
-    /// In the channel app this only says so (see
+    /// In CHANNELS and BENCH this only says so (see
     /// [`Self::show_inbox`]).
     pub(super) fn show_policies(&mut self) {
-        if self.channel_app() {
-            self.notify_channel_owns_column();
+        if self.agent_panels_hidden() {
+            self.notify_no_agent_panels();
             return;
         }
         self.record_panel_visible = true;

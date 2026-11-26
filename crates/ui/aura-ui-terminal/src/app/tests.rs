@@ -5763,7 +5763,7 @@ fn a_slash_command_name_ends_at_any_whitespace() {
 
 #[test]
 fn newline_keys_on_an_empty_line_are_left_to_the_other_chat_tabs() {
-    for tab in [ChatTab::Graph, ChatTab::Time, ChatTab::Bench, ChatTab::Log] {
+    for tab in [ChatTab::Graph, ChatTab::Time, ChatTab::Log] {
         let mut app = App::new();
         app.show_chat_tab(tab);
         for (code, modifiers) in NEWLINE_KEYS {
@@ -6021,7 +6021,10 @@ fn a_loading_chat_draws_no_welcome_and_says_it_loads_after_a_moment() {
 #[test]
 fn test_agents_tabs_put_channels_first_and_open_on_projects() {
     let labels = AgentsTab::ALL.map(AgentsTab::label);
-    assert_eq!(labels, ["CHANNELS", "PROJECTS", "AGENTS", "ARCHIVE"]);
+    assert_eq!(
+        labels,
+        ["CHANNELS", "PROJECTS", "AGENTS", "BENCH", "ARCHIVE"]
+    );
     assert_eq!(App::new().agents_tab(), AgentsTab::Projects);
 }
 
@@ -6298,9 +6301,7 @@ fn test_a_channel_has_only_the_chat_tab() {
     }
     app.focus = PanelFocus::Chat;
     app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-    for command in ["/log", "/bench"] {
-        app.handle_command(command);
-    }
+    app.handle_command("/log");
     assert_eq!(app.chat_tab(), ChatTab::Chat);
     assert!(
         app.chat_tab_layout(80).cells.is_empty(),

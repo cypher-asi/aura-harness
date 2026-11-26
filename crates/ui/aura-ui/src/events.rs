@@ -341,7 +341,8 @@ pub enum UiEvent {
 
     /// The BENCH tab asked for something
     Bench {
-        /// Agent the chat showed (hex id)
+        /// Agent it asks for (hex id): the one a new benchmark starts
+        /// from, or whose chat shows a run's diff
         agent_id: String,
         request: BenchRequest,
     },
@@ -896,7 +897,8 @@ pub enum UiCommand {
 
     /// The sessions of `agent_id` the BENCH tab can replay, newest first,
     /// and the built-in example tasks it can run, in the order a
-    /// benchmark takes them. Ignored by a UI showing another agent.
+    /// benchmark takes them. Ignored by a form starting from another
+    /// agent.
     BenchSessions {
         agent_id: String,
         sessions: Vec<BenchSession>,

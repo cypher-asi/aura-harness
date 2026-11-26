@@ -7,6 +7,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Benchmarks have their own app
+
+##### Changed
+
+- BENCH is an app of the agents panel, after AGENTS (Alt+4), instead of
+  a tab of the chat panel. Its list shows every benchmark of every
+  project, newest first, with what each is about and how long ago it
+  started, and `+ New bench` at the bottom. The chat panel shows the
+  benchmark picked in the list, or the form for a new one, with no
+  agent on screen: the agent's side column, queue and todos are hidden,
+  and the input line runs commands but sends no message. Esc goes from
+  a benchmark or the form back to the list, and an agent coming on
+  screen brings PROJECTS back. `/bench` and `/bench new` work as before.
+- The new-benchmark form has a From row at the top that picks, with
+  ←/→, the top-level agent the benchmark starts from, named with its
+  project. It starts on the tree last on screen. The benchmark copies
+  that agent's workspace and offers its last prompt and sessions.
+- `L` on a benchmark's run brings PROJECTS back with the run's log in
+  the LOG tab, and `d` brings it back with the run's diff in the chat of
+  the agent the benchmark started from.
+
 ### Plans read like a document
 
 ##### Changed

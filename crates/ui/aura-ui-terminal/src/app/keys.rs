@@ -474,11 +474,13 @@ impl App {
         {
             return KeyResult::continue_running();
         }
-        if self.focus == PanelFocus::Chat && self.chat_tab() == ChatTab::Bench {
+        if self.bench_app() {
+            // Typed with the list's keys too, text still fills the form.
             if key.code == KeyCode::Enter && key.modifiers.is_empty() && self.bench_fill_field() {
                 return KeyResult::continue_running();
             }
-            if self.input.is_empty() && self.handle_bench_key(key) {
+            if self.focus == PanelFocus::Chat && self.input.is_empty() && self.handle_bench_key(key)
+            {
                 return KeyResult::continue_running();
             }
         }
@@ -793,9 +795,9 @@ impl App {
 
     /// Submit the current input.
     pub(super) fn submit_input(&mut self) -> KeyResult {
-        // An app showing nothing has nobody to send to; the draft stays
-        // for when something is picked. Commands still run.
-        if self.app_empty() && !self.input.trim_start().starts_with('/') {
+        // With no agent on screen there is nobody to send to; the draft
+        // stays for when one is. Commands still run.
+        if self.no_agent_on_screen() && !self.input.trim_start().starts_with('/') {
             self.notification = Some((self.app_send_refusal(), NotificationType::Warning));
             return KeyResult::continue_running();
         }

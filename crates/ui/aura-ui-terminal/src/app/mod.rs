@@ -530,7 +530,7 @@ pub struct App {
     pub(super) pending_graph_node: Option<String>,
     /// Flow between agents shown by the chat panel's GRAPH tab
     pub(super) flow: flow::FlowState,
-    /// Benchmarks shown by the chat panel's BENCH tab
+    /// Benchmarks, and the one shown in the BENCH tab
     pub(super) bench: BenchState,
     /// Run log shown by the chat panel's LOG tab
     pub(super) log: run_log::LogState,
@@ -712,6 +712,8 @@ pub(crate) enum HoverTarget {
     DefinitionRow(usize),
     /// A selectable row of the CHANNELS tab: a channel or "+ New channel".
     ChannelRow(usize),
+    /// A row of BENCH's list: a benchmark or "+ New bench".
+    BenchRow(usize),
     /// A member row of an open channel's MEMBERS side tab.
     ChannelMemberRow(usize),
     /// A row in the Archive.
@@ -1744,13 +1746,13 @@ impl App {
     }
 
     /// Check if the Record panel is visible. It hides while the side
-    /// panel is maximized over it, and in an app showing nothing.
+    /// panel is maximized over it, and with no agent on screen.
     #[must_use]
     pub fn record_panel_visible(&self) -> bool {
         self.record_panel_visible
             && !self.chat_expanded
             && !self.side_maximized()
-            && !self.app_empty()
+            && !self.no_agent_on_screen()
     }
 
     /// Whether the side panel, shown, takes the Record panel's room too:
@@ -1767,13 +1769,13 @@ impl App {
     }
 
     /// Check if the Sandbox panel is visible. It shows while a channel is
-    /// open even when the user hid it, and hides in an app showing
-    /// nothing, which has nothing to show there.
+    /// open even when the user hid it, and hides with no agent on screen,
+    /// which leaves it nothing to show.
     #[must_use]
     pub fn sandbox_panel_visible(&self) -> bool {
         (self.sandbox_panel_visible || self.channel_open())
             && !self.chat_expanded
-            && !self.app_empty()
+            && !self.no_agent_on_screen()
     }
 
     /// Whether the chat panel fills the screen, the other panels hidden.
@@ -2317,8 +2319,8 @@ impl App {
 
     /// Whether the screen changes from tick to tick: a spinner turns for
     /// an agent, task or process at work, a notification scrolls, a
-    /// selection held past the chat's edge scrolls it, or the chat, LOG
-    /// or BENCH tab animates.
+    /// selection held past the chat's edge scrolls it, or the chat, the
+    /// LOG tab or BENCH animates.
     #[must_use]
     pub fn animating(&self) -> bool {
         self.animates_every_tick() || self.spinners_turning()
@@ -2326,7 +2328,7 @@ impl App {
 
     /// Whether what changes from tick to tick is more than spinner glyphs:
     /// the agent on screen at work, a notification, a selection scrolling
-    /// the chat, or the chat, LOG or BENCH tab animating.
+    /// the chat, or the chat, the LOG tab or BENCH animating.
     fn animates_every_tick(&self) -> bool {
         self.is_busy()
             || self.notification.is_some()

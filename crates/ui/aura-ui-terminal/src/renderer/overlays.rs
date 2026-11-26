@@ -538,7 +538,7 @@ fn build_help_lines(theme: &Theme) -> Vec<Line<'static>> {
         "Shift+←/→  Panel tabs (chat: TERMINAL, GRAPH)",
         "Ctrl+X /expand  Chat panel full screen",
         "o / k / l  Process: open agent, kill, log",
-        "Alt+↑/↓/1..4 Alt+T  Agent, app, thinking level",
+        "Alt+↑/↓/1..5 Alt+T  Agent, app, thinking level",
         "Mouse      Wheel/click agents to switch",
         "PgUp/PgDn Ctrl+Home/End  Scroll chat, to end",
         "Ctrl+O     Expand/collapse thinking & tools",
