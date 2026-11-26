@@ -245,20 +245,9 @@ mod running {
         }
     }
 
-    #[tokio::test]
-    async fn a_step_with_several_edits_runs_the_check_once_and_feeds_back_failures() {
-        use aura_model::{
-            ContentBlock, Message, MockProvider, MockResponse, StopReason, ToolDefinition, Usage,
-        };
-
-        let dir = tempfile::tempdir().unwrap();
-        let runs = dir.path().join("runs");
-        let command = format!(
-            "echo run >> {} ; echo 'error: bad edit' ; exit 1",
-            runs.display()
-        );
-        let (check, _) = check_in(dir.path(), &command);
-
+    /// One model step writing `a.rs`, `b.rs` and `c.rs`, then a final text reply.
+    fn three_writes_then_done() -> aura_model::MockProvider {
+        use aura_model::{ContentBlock, MockProvider, MockResponse, StopReason, Usage};
         let write = |id: &str, path: &str| {
             ContentBlock::tool_use(
                 id,
@@ -266,7 +255,7 @@ mod running {
                 serde_json::json!({"path": path, "content": "x"}),
             )
         };
-        let provider = MockProvider::new()
+        MockProvider::new()
             .with_response(MockResponse {
                 stop_reason: StopReason::ToolUse,
                 content: vec![
@@ -276,14 +265,29 @@ mod running {
                 ],
                 usage: Usage::new(100, 50),
             })
-            .with_response(MockResponse::text("done"));
+            .with_response(MockResponse::text("done"))
+    }
+
+    #[tokio::test]
+    async fn a_step_with_several_edits_runs_the_check_once_and_feeds_back_failures() {
+        use aura_model::{ContentBlock, Message};
+
+        let dir = tempfile::tempdir().unwrap();
+        let runs = dir.path().join("runs");
+        let command = format!(
+            "echo run >> {} ; echo 'error: bad edit' ; exit 1",
+            runs.display()
+        );
+        let (check, _) = check_in(dir.path(), &command);
+
+        let provider = three_writes_then_done();
         let inner = Writes(AtomicUsize::new(0));
         let executor = WithPostEditCheck::new(&inner, Some(&check));
         let agent = crate::AgentLoop::new(crate::AgentLoopConfig {
             system_prompt: "test".into(),
             ..crate::AgentLoopConfig::for_agent("claude-test-model")
         });
-        let tools = vec![ToolDefinition::new(
+        let tools = vec![aura_model::ToolDefinition::new(
             "write_file",
             "Write a file",
             serde_json::json!({"type": "object"}),

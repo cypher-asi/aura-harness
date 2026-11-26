@@ -245,6 +245,23 @@ async fn contract_streaming_events_ordered() {
     );
 }
 
+/// Text payloads of the given `tool_result` blocks, in order.
+fn tool_result_texts<'a>(tool_results: &[&'a ContentBlock]) -> Vec<&'a str> {
+    tool_results
+        .iter()
+        .filter_map(|block| {
+            if let ContentBlock::ToolResult { content, .. } = block {
+                match content {
+                    aura_model::ToolResultContent::Text(t) => Some(t.as_str()),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn contract_tool_cache_hit_matches_original() {
     let executor = MockExecutor {
@@ -291,19 +308,7 @@ async fn contract_tool_cache_hit_matches_original() {
         tool_results.len()
     );
 
-    let contents: Vec<&str> = tool_results
-        .iter()
-        .filter_map(|block| {
-            if let ContentBlock::ToolResult { content, .. } = block {
-                match content {
-                    aura_model::ToolResultContent::Text(t) => Some(t.as_str()),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
+    let contents = tool_result_texts(&tool_results);
 
     assert!(
         contents.len() >= 2,

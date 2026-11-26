@@ -1,12 +1,5 @@
 # Rust files over the 500-line limit when scripts/check_file_size.sh landed.
 # This list may only shrink: remove a file when it is split under the limit.
-crates/agent/aura-agent/src/agent_loop/cutover_tests.rs
-crates/agent/aura-agent/src/agent_loop/pipeline_tests.rs
-crates/agent/aura-agent/src/agent_loop/stream_pump/tests.rs
-crates/agent/aura-agent/src/agent_loop/streaming_tests.rs
-crates/agent/aura-agent/src/agent_loop/tests.rs
-crates/agent/aura-agent/src/agent_loop/tool_execution_tests.rs
-crates/agent/aura-agent/src/task_executor/tests.rs
 crates/auth/aura-auth/src/manager.rs
 crates/auth/aura-auth/src/manager/tests.rs
 crates/engine/aura-engine-automaton/src/builtins/dev_loop/tests.rs
