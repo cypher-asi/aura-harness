@@ -307,8 +307,8 @@ impl App {
     }
 
     /// Show the Kernel panel's MEMBERS tab, focused, as `/members` does.
-    /// In CHANNELS and BENCH this only says so (see
-    /// [`Self::show_inbox`]).
+    /// In CHANNELS, and in BENCH but on an agent of a benchmark, this only
+    /// says so (see [`Self::show_inbox`]).
     pub(super) fn show_members(&mut self) {
         if self.agent_panels_hidden() {
             self.notify_no_agent_panels();

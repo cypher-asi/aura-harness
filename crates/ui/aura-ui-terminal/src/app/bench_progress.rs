@@ -92,11 +92,11 @@ impl App {
     }
 
     /// The benchmark of the picked tab, or of the newest when none is.
-    /// None in the channel app, where benchmarks are an agent feature,
-    /// and with no agent on screen, BENCH's own included.
+    /// None in the channel app, where benchmarks are an agent feature, in
+    /// BENCH, whose list has them, and with no agent on screen.
     #[must_use]
     pub(crate) fn bench_panel_shown(&self) -> Option<&BenchView> {
-        if self.channel_app() || self.no_agent_on_screen() {
+        if self.channel_app() || self.bench_app() || self.no_agent_on_screen() {
             return None;
         }
         let views = self.bench_panel_views();

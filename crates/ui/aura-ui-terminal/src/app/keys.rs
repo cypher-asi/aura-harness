@@ -576,9 +576,9 @@ impl App {
     /// Shift+Enter, or Alt+Enter or Ctrl+J, breaks the line at the cursor
     /// in the chat or terminal prompt. Typing goes to the input from any
     /// panel, so the break does too, empty line or not. The one exception
-    /// is an empty line while the focused chat panel shows GRAPH, TIME,
-    /// LOG or BENCH: those tabs keep the key for their rows (Shift+Enter
-    /// opens agent cards on GRAPH). Returns whether the key was used.
+    /// is an empty line while the focused chat panel shows GRAPH, TIME or
+    /// LOG: those tabs keep the key for their rows (Shift+Enter opens
+    /// agent cards on GRAPH). Returns whether the key was used.
     fn insert_newline_key(&mut self, key: KeyEvent) -> bool {
         let tab_owns_keys = self.focus == PanelFocus::Chat
             && !matches!(self.chat_tab(), ChatTab::Chat | ChatTab::Terminal);

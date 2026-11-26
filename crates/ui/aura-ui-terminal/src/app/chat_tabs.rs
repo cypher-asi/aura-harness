@@ -124,9 +124,9 @@ impl App {
     /// Show `tab`. The conversation and the terminal open at their bottom
     /// with their own input history; the graph and the timeline ask for
     /// the flow of the agent on screen, unless the other has it, and the
-    /// log for the agent's. CHANNELS and BENCH have only CHAT
-    /// ([`Self::chat_only`]): any other tab asked for there, by key,
-    /// click or command, is not shown.
+    /// log for the agent's. CHANNELS has only CHAT, as does BENCH but on
+    /// an agent of a benchmark ([`Self::chat_only`]): any other tab asked
+    /// for there, by key, click or command, is not shown.
     pub(super) fn show_chat_tab(&mut self, tab: ChatTab) {
         if self.chat_only() && tab != ChatTab::Chat {
             return;
@@ -163,8 +163,8 @@ impl App {
     /// scrolls the chat to its bottom nor moves the timeline's selection,
     /// and it asks for nothing: the switch asks for what the tab shows of
     /// the new agent. The input holds the draft the agent was left with,
-    /// typed under this tab, so Enter does with it what it did then. In
-    /// CHANNELS and BENCH, which have only CHAT, any other tab stays put
+    /// typed under this tab, so Enter does with it what it did then. Where
+    /// there is only CHAT ([`Self::chat_only`]), any other tab stays put
     /// away.
     pub(super) fn restore_chat_tab(&mut self, tab: ChatTab) {
         if tab == self.chat_tab() || (self.chat_only() && tab != ChatTab::Chat) {
@@ -204,9 +204,9 @@ impl App {
     }
 
     /// The chat panel's tabs in a header bar `width` columns wide.
-    /// CHANNELS and BENCH have only CHAT, so there the bar has no tabs and
-    /// shows a title instead ([`Self::app_chat_title`]). An app showing
-    /// nothing ([`Self::app_empty`]) has no tabs either.
+    /// Where there is only CHAT ([`Self::chat_only`]), the bar has no tabs
+    /// and shows a title instead ([`Self::app_chat_title`]). An app
+    /// showing nothing ([`Self::app_empty`]) has no tabs either.
     #[must_use]
     pub(crate) fn chat_tab_layout(&self, width: u16) -> TabLayout<ChatTab> {
         if self.chat_only() || self.app_empty() {

@@ -8,8 +8,9 @@
 //! - AGENTS shows the latest instance of the permanent agent picked in it
 //!   (a click; Enter still starts a new one), or the highlighted one when
 //!   none was picked, or says it has none.
-//! - BENCH shows the benchmark or the new-benchmark form it was left on,
-//!   else the highlighted benchmark, else the newest (see `bench`).
+//! - BENCH shows the benchmark, the new-benchmark form or the agent of a
+//!   benchmark it was left on, else the highlighted benchmark, else the
+//!   newest (see `bench`).
 //! - ARCHIVE shows the archived agent it was left on, else the one under
 //!   its highlight.
 //! - CHANNELS opens the channel it was left on, else the highlighted or
@@ -21,9 +22,10 @@
 //! user going to that agent: PROJECTS comes to the front with it, or
 //! ARCHIVE for an archived one.
 //!
-//! CHANNELS and BENCH show none of the agent's chat tabs: coming to one
-//! of them turns the chat panel to CHAT, and going back to an app with
-//! the tabs gives the agent that was on screen the tab it was on.
+//! CHANNELS shows none of the agent's chat tabs, nor does BENCH but for
+//! an agent of a benchmark: coming to one of them turns the chat panel to
+//! CHAT, and going back to an app with the tabs, or to an agent in BENCH,
+//! gives the agent that was on screen the tab it was on.
 //!
 //! Each app lives in its own module; what the agents panel does with a
 //! key, a click, a hover or the wheel is handed to the app in front here.
@@ -36,8 +38,8 @@ mod roster;
 
 pub use archive::ArchiveRow;
 pub use bench::{
-    BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST,
-    DIFFICULTIES,
+    BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER,
+    BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
 pub(super) use channels::ChannelState;
 
@@ -106,12 +108,6 @@ impl AgentsTab {
         }
     }
 
-    /// Whether the app shows an agent with all its chat tabs. CHANNELS
-    /// has only a chat, and BENCH shows benchmarks rather than an agent.
-    const fn has_agent_tabs(self) -> bool {
-        !matches!(self, Self::Channels | Self::Bench)
-    }
-
     /// The tab Alt+`digit` brings to the front: 1 to 5, in header order.
     #[must_use]
     pub fn numbered(digit: char) -> Option<Self> {
@@ -139,8 +135,9 @@ pub(super) struct AppMemory {
     /// The channel CHANNELS has open, or had when it was left
     channel: Option<String>,
     /// The agent on screen when the user went from an app with the
-    /// agent's chat tabs to one without, and the tab it was on, which
-    /// that app turned to CHAT: given back on going to one with them
+    /// agent's chat tabs to one without, or in BENCH from an agent to a
+    /// benchmark, and the tab it was on, which turned to CHAT: given back
+    /// on going to an app or an agent with them
     chat_tab_before: Option<(String, ChatTab)>,
 }
 
@@ -286,11 +283,7 @@ impl App {
                     self.open_definition(&name);
                 }
             }
-            AgentsTab::Bench => {
-                if let Some(mode) = self.bench_to_show() {
-                    self.show_bench(mode);
-                }
-            }
+            AgentsTab::Bench => self.show_bench_app(),
             AgentsTab::Archive => {
                 if let Some(id) = self.archive_app_agent() {
                     self.switch_on_screen(&id);
@@ -315,22 +308,44 @@ impl App {
             AgentsTab::Bench => self.leave_bench_app(),
             _ => {}
         }
-        if was.has_agent_tabs() && !tab.has_agent_tabs() {
-            self.apps.chat_tab_before = (!self.active_agent_id.is_empty())
-                .then(|| (self.active_agent_id.clone(), self.chat_tab()));
-            self.close_detail();
-            if self.chat_tab() != ChatTab::Chat {
-                self.show_chat_tab(ChatTab::Chat);
-            }
-        } else if !was.has_agent_tabs() && tab.has_agent_tabs() {
-            if let Some((agent, chat_tab)) = self.apps.chat_tab_before.take() {
-                self.give_chat_tab_back(&agent, chat_tab);
-            }
+        match (self.has_agent_tabs(was), self.has_agent_tabs(tab)) {
+            (true, false) => self.put_chat_tabs_away(),
+            (false, true) => self.give_chat_tabs_back(),
+            _ => {}
         }
         if tab == AgentsTab::Bench {
             self.enter_bench_app();
         }
         true
+    }
+
+    /// Whether `tab` shows an agent with all its chat tabs. CHANNELS has
+    /// only a chat, and BENCH shows benchmarks, but for an agent of one.
+    fn has_agent_tabs(&self, tab: AgentsTab) -> bool {
+        match tab {
+            AgentsTab::Channels => false,
+            AgentsTab::Bench => self.bench.shown_agent().is_some(),
+            AgentsTab::Projects | AgentsTab::Roster | AgentsTab::Archive => true,
+        }
+    }
+
+    /// Put the agent's chat tabs away for an app, or a view of BENCH,
+    /// with none: the chat panel turns to CHAT, and the agent on screen
+    /// and the tab it was on are kept to give back.
+    pub(super) fn put_chat_tabs_away(&mut self) {
+        self.apps.chat_tab_before = (!self.active_agent_id.is_empty())
+            .then(|| (self.active_agent_id.clone(), self.chat_tab()));
+        self.close_detail();
+        if self.chat_tab() != ChatTab::Chat {
+            self.show_chat_tab(ChatTab::Chat);
+        }
+    }
+
+    /// Give the tab [`Self::put_chat_tabs_away`] kept back to its agent.
+    pub(super) fn give_chat_tabs_back(&mut self) {
+        if let Some((agent, chat_tab)) = self.apps.chat_tab_before.take() {
+            self.give_chat_tab_back(&agent, chat_tab);
+        }
     }
 
     /// Make `tab` the one shown, without entering or leaving any app: for
@@ -456,32 +471,33 @@ impl App {
         }
     }
 
-    /// Whether no agent is on screen: BENCH shows benchmarks, and an app
-    /// showing nothing shows no agent either. The agent's side column,
-    /// queue, stop button, todos and benchmark progress stay away.
+    /// Whether no agent is on screen: BENCH shows a benchmark or the form,
+    /// and an app showing nothing shows no agent either. The agent's side
+    /// column, queue, stop button, todos and benchmark progress stay away.
     #[must_use]
     pub(crate) fn no_agent_on_screen(&self) -> bool {
-        self.bench_app() || self.app_empty()
+        self.bench_draws_center() || self.app_empty()
     }
 
     /// Whether the app in front shows only CHAT of the chat panel's tabs:
-    /// CHANNELS and BENCH.
+    /// CHANNELS, and BENCH but for an agent of a benchmark.
     #[must_use]
-    pub(crate) const fn chat_only(&self) -> bool {
-        !self.agents_tab.has_agent_tabs()
+    pub(crate) fn chat_only(&self) -> bool {
+        !self.has_agent_tabs(self.agents_tab)
     }
 
     /// Whether the agent panels (`/kernel`, `/files`, `/inbox`, ...) stay
-    /// off screen: CHANNELS has its own, BENCH shows no agent.
+    /// off screen: CHANNELS has its own, and BENCH shows no agent but for
+    /// one of a benchmark's.
     pub(super) fn agent_panels_hidden(&self) -> bool {
-        self.channel_app() || self.bench_app()
+        self.channel_app() || self.bench_draws_center()
     }
 
     /// Say why the agent panels are not shown ([`Self::agent_panels_hidden`]).
     pub(super) fn notify_no_agent_panels(&mut self) {
         if self.bench_app() {
             self.notification = Some((
-                "BENCH shows no agent; switch to PROJECTS for agent panels".to_string(),
+                "BENCH shows no agent here; pick one of a benchmark's for agent panels".to_string(),
                 NotificationType::Warning,
             ));
         } else {
@@ -540,25 +556,26 @@ impl App {
     }
 
     /// What the empty input says: who a message goes to in the channel
-    /// app, what BENCH takes, or what to pick while the app in front
-    /// shows nothing. `None` otherwise.
+    /// app, what BENCH takes while it shows no agent, or what to pick
+    /// while the app in front shows nothing. `None` otherwise.
     #[must_use]
     pub(crate) fn app_placeholder(&self) -> Option<String> {
         if self.channel_app() {
             return self.channel_placeholder();
         }
-        if self.bench_app() {
+        if self.bench_draws_center() {
             return Some(self.bench_placeholder());
         }
         self.app_empty()
             .then(|| format!("Pick {}", self.app_pick()))
     }
 
-    /// Why a message cannot be sent: BENCH has no chat, and an app
+    /// Why a message cannot be sent: a benchmark has no chat, and an app
     /// showing nothing has nobody to send it to.
     pub(super) fn app_send_refusal(&self) -> String {
-        if self.bench_app() {
-            return "BENCH has no chat; messages go to agents in PROJECTS".to_string();
+        if self.bench_draws_center() {
+            return "BENCH has no chat here; pick one of a benchmark's agents to message it"
+                .to_string();
         }
         format!("Pick {} to send a message", self.app_pick())
     }
@@ -571,8 +588,8 @@ impl App {
                 self.follow_active_agent_out_of_channel();
                 return;
             }
-            // BENCH shows no agent, and gave way to one that came on
-            // screen before its tab came back (`apply_active_agent`).
+            // BENCH gave way to an agent it does not show before its tab
+            // came back (`apply_active_agent`).
             AgentsTab::Projects | AgentsTab::Bench => return,
             AgentsTab::Roster => self.roster_shows_instance(),
             AgentsTab::Archive => self.is_archived_agent(&self.active_agent_id),

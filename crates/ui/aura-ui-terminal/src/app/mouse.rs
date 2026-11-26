@@ -310,7 +310,7 @@ impl App {
                                     && self.click_log(mouse.column, mouse.row))
                                     || (self.flow.is_open()
                                         && self.click_flow(mouse.column, mouse.row))
-                                    || (self.bench_app()
+                                    || (self.bench_draws_center()
                                         && self.click_bench(mouse.column, mouse.row))))
                         {
                             self.clear_selection();

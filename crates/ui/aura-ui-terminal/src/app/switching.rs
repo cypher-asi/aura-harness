@@ -118,14 +118,15 @@ impl App {
 
     /// Put `agent_id` on screen: its chat, the tab it was left on, and
     /// fresh LOG and GRAPH content for it when those are open. BENCH,
-    /// which shows no agent, gives way to the app that lists it.
+    /// unless it shows the agent for a benchmark, gives way to the app
+    /// that lists it.
     pub(super) fn apply_active_agent(&mut self, agent_id: &str) {
         let switched = agent_id != self.active_agent_id;
         // The LOG tab shows the agent coming on screen, never the one
         // leaving: its last log comes back at once, or none.
         self.log.show_agent(agent_id);
         let left_on = self.show_agent_chat(agent_id);
-        if switched && self.bench_app() {
+        if switched && self.bench_app() && self.bench.shown_agent() != Some(agent_id) {
             // Before its tab comes back, which BENCH would refuse; the
             // agent that left gets its own back as BENCH goes.
             self.follow_into_agent_app();

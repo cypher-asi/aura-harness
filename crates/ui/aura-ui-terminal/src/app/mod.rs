@@ -75,8 +75,8 @@ use crate::{
     renderer::{ChatLineCache, GroupState},
 };
 pub use apps::{
-    AgentsTab, ArchiveRow, BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER,
-    BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
+    AgentsTab, ArchiveRow, BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice,
+    AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
 pub use chat_tabs::ChatTab;
 pub(crate) use context_menu::{MenuTarget, SubmenuEntry};
@@ -712,7 +712,8 @@ pub(crate) enum HoverTarget {
     DefinitionRow(usize),
     /// A selectable row of the CHANNELS tab: a channel or "+ New channel".
     ChannelRow(usize),
-    /// A row of BENCH's list: a benchmark or "+ New bench".
+    /// A row of BENCH's list, by its index in `App::bench_rows`: a
+    /// benchmark, one of its agents, or "+ New bench".
     BenchRow(usize),
     /// A member row of an open channel's MEMBERS side tab.
     ChannelMemberRow(usize),

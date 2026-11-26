@@ -19,14 +19,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   agent on screen: the agent's side column, queue and todos are hidden,
   and the input line runs commands but sends no message. Esc goes from
   a benchmark or the form back to the list, and an agent coming on
-  screen brings PROJECTS back. `/bench` and `/bench new` work as before.
+  screen that BENCH does not show brings PROJECTS back. `/bench` and
+  `/bench new` work as before.
+- A benchmark in BENCH's list unfolds, with Space or a click on its
+  arrow, over the agents that work for it: each arm's agent over its
+  runs, and the subagents each run spawned, with a spinner on those at
+  work. Enter or a click on one shows its chat in BENCH with all its
+  tabs and its side column, and what you type goes to it; Esc on CHAT
+  goes back to the list. A benchmark the form starts unfolds as its
+  agents come.
 - The new-benchmark form has a From row at the top that picks, with
   ←/→, the top-level agent the benchmark starts from, named with its
   project. It starts on the tree last on screen. The benchmark copies
   that agent's workspace and offers its last prompt and sessions.
-- `L` on a benchmark's run brings PROJECTS back with the run's log in
-  the LOG tab, and `d` brings it back with the run's diff in the chat of
-  the agent the benchmark started from.
+- `L` on a benchmark's run shows the run's agent on its LOG tab in
+  BENCH, under the benchmark, and `d` brings PROJECTS back with the
+  run's diff in the chat of the agent the benchmark started from.
 
 ### Plans read like a document
 

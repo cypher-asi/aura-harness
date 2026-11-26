@@ -104,7 +104,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
 
     // An app showing nothing shows none of the agent's tabs either.
     let empty = app.app_empty();
-    if !empty && app.bench_app() {
+    if !empty && app.bench_draws_center() {
         super::benchmarks::render_benchmarks(frame, area, app, theme, is_focused);
         return;
     }

@@ -795,10 +795,13 @@ impl App {
     }
 
     /// Open the form, asking for the sessions it offers. Dropping it shows
-    /// the benchmark shown now again.
+    /// what is shown now again.
     pub(in crate::app) fn open_bench_form(&mut self) {
-        self.bench.before_form = self.bench.shown().map(|view| view.id.clone());
-        self.bench.mode = Some(BenchMode::Form);
+        self.bench.before_form = self
+            .bench
+            .mode
+            .replace(BenchMode::Form)
+            .filter(|was| *was != BenchMode::Form);
         self.settle_bench_from();
         if self.bench.form.classifier == DEFAULT_CLASSIFIER {
             // Name the Haiku the user runs, now the model list is likely

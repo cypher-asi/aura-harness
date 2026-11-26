@@ -653,8 +653,13 @@ impl App {
             self.show_chat_tab(ChatTab::Log);
             return;
         }
-        self.log.pending_agent = Some(agent_id.clone());
+        self.open_log_on_switch(agent_id.clone());
         self.request_agent_switch(agent_id);
+    }
+
+    /// Show the LOG tab once the switch to `agent_id` lands.
+    pub(super) fn open_log_on_switch(&mut self, agent_id: String) {
+        self.log.pending_agent = Some(agent_id);
     }
 
     /// Whether the switch to `agent_id` was asked for to show its log.

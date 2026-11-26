@@ -353,6 +353,16 @@ pub(in crate::renderer) fn spawn_guides(
     agents: &[crate::events::AgentSummary],
     index: usize,
 ) -> String {
+    spawn_guides_below(agents, index, 0)
+}
+
+/// [`spawn_guides`] for a tree drawn from an agent at depth `top`, which
+/// has none: the agents under it get the first level's.
+pub(in crate::renderer) fn spawn_guides_below(
+    agents: &[crate::events::AgentSummary],
+    index: usize,
+    top: usize,
+) -> String {
     let depth = agents[index].depth;
     let continues = |level: usize| {
         agents[index + 1..]
@@ -362,8 +372,8 @@ pub(in crate::renderer) fn spawn_guides(
             .any(|depth| depth == level)
     };
     let lead = " ".repeat(AURA_WIDTH + 1);
-    let mut guides = String::with_capacity(depth * (lead.len() + 3));
-    for level in 1..=depth {
+    let mut guides = String::with_capacity(depth.saturating_sub(top) * (lead.len() + 3));
+    for level in top + 1..=depth {
         let more = continues(level);
         guides.push_str(&lead);
         guides.push_str(match (level == depth, more) {

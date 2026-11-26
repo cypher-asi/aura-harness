@@ -108,7 +108,7 @@ impl App {
             PanelFocus::Chat if self.flow.is_open() => {
                 self.scroll_flow(MouseEventKind::ScrollUp, KeyModifiers::NONE, lines);
             }
-            PanelFocus::Chat if self.bench_app() => {
+            PanelFocus::Chat if self.bench_draws_center() => {
                 self.bench
                     .scroll_by(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
@@ -154,7 +154,7 @@ impl App {
             PanelFocus::Chat if self.flow.is_open() => {
                 self.scroll_flow(MouseEventKind::ScrollDown, KeyModifiers::NONE, lines);
             }
-            PanelFocus::Chat if self.bench_app() => {
+            PanelFocus::Chat if self.bench_draws_center() => {
                 self.bench
                     .scroll_by(isize::try_from(lines).unwrap_or(isize::MAX));
             }

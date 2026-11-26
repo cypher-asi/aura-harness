@@ -368,9 +368,10 @@ impl App {
     }
 
     /// Show the Kernel panel's INBOX tab, focused, as `/inbox` does.
-    /// CHANNELS and BENCH have no Kernel panel, so there this only says
-    /// so: changing the layout flags here would leave a different layout
-    /// behind when the user goes back to the agents.
+    /// CHANNELS has no Kernel panel, nor does BENCH but on an agent of a
+    /// benchmark, so there this only says so: changing the layout flags
+    /// here would leave a different layout behind when the user goes back
+    /// to the agents.
     pub(super) fn show_inbox(&mut self) {
         if self.agent_panels_hidden() {
             self.notify_no_agent_panels();

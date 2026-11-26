@@ -4,40 +4,41 @@
 //! event loop runs them as `/compare` comparisons.
 //!
 //! The agents panel's BENCH tab lists every benchmark, of every tree,
-//! newest first, then "+ New bench" (index `benches.len()`), which the
-//! panel pins to its bottom row. The chat panel shows the benchmark
-//! picked there, or the form that sets a new one up (see `form`), under
-//! a header with no tabs. No agent is on screen: the right column, the
-//! queue and the progress panel stay away, and the input runs commands
-//! and fills the form's text rows but sends no message.
+//! newest first, each unfolding over the agents that work for it, then
+//! "+ New bench" (see `list`). The chat panel shows what is picked there.
+//! A benchmark, or the form that sets a new one up (see `form`), shows
+//! under a header with no tabs, and no agent is on screen: the right
+//! column, the queue and the progress panel stay away, and the input runs
+//! commands and fills the form's text rows but sends no message. One of a
+//! benchmark's agents shows as PROJECTS would show it: its chat with all
+//! its tabs, its panels, and an input that sends to it.
 //!
-//! - Enter or a click on a row shows its benchmark, or the form. Enter
-//!   also hands the keys to it, and Esc hands them back to the list.
 //! - Coming to BENCH shows what it was left on, else the highlighted
 //!   benchmark, else the newest. So does a list arriving while it shows
 //!   nothing.
-//! - Esc on the form drops it for the benchmark shown before it. The
+//! - Esc on the form drops it for what was shown before it. The
 //!   benchmark the form starts shows once the session first reports it.
-//! - What needs an agent's chat brings PROJECTS to the front: `L` with a
-//!   run's log, `d` with the diff in the chat of the agent the benchmark
-//!   was run from. So does the session putting an agent on screen.
+//! - `L` on a benchmark shows the LOG of one of its runs here. `d` brings
+//!   PROJECTS to the front with the diff in the chat of the agent the
+//!   benchmark was run from, as does the session putting on screen an
+//!   agent BENCH does not show.
+//! - A benchmark or the form puts the agent's chat tabs away, and the
+//!   agent coming back gets them back, as going between apps does.
 
 mod form;
+mod list;
 
 use form::BenchForm;
 pub use form::{
     FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
+pub use list::{BenchAgent, BenchRow};
 
-use crate::app::{
-    contains, follow_selection, AgentsTab, App, ChatTab, NotificationType, PanelFocus,
-};
+use crate::app::{AgentsTab, App, ChatTab, NotificationType, PanelFocus};
 use crate::events::{BenchExample, BenchRequest, BenchSession, BenchStatus, BenchView, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
-
-/// Rows a PageUp or PageDown moves the highlight by.
-const PAGE_STEP: usize = 5;
+use std::collections::HashSet;
 
 /// What BENCH shows in the chat panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +47,13 @@ pub enum BenchMode {
     Detail(String),
     /// The form that sets a new one up
     Form,
+    /// An agent that works for a benchmark, with its chat and tabs
+    Agent {
+        /// Id of the benchmark
+        bench: String,
+        /// Hex id of the agent
+        agent: String,
+    },
 }
 
 /// What BENCH knows about benchmarks, and where it is in them.
@@ -62,17 +70,20 @@ pub struct BenchState {
     /// What the chat panel shows in BENCH, kept while another app is in
     /// front; `None` for nothing
     pub mode: Option<BenchMode>,
-    /// Highlighted row of the list; `benches.len()` is "+ New bench"
-    selected: usize,
+    /// The list's highlighted row, by what Enter on it shows; `None` for
+    /// the first row
+    highlight: Option<BenchMode>,
+    /// Benchmarks unfolded over their agents in the list, by id
+    unfolded: HashSet<String>,
     /// First visible row of the list
     list_scroll: usize,
     /// Where the list's rows were drawn this frame
     rows_area: Option<Rect>,
     /// Where "+ New bench" was drawn this frame
     new_bench_area: Option<Rect>,
-    /// The benchmark shown when the form opened, shown again when the
-    /// form is dropped
-    before_form: Option<String>,
+    /// What was shown when the form opened, shown again when the form is
+    /// dropped
+    before_form: Option<BenchMode>,
     /// Whether the form asked to start its benchmark and the session has
     /// not answered yet
     start_unanswered: bool,
@@ -109,19 +120,20 @@ impl BenchState {
         }
     }
 
-    /// Whether the chat panel has something to show: the form, or a
-    /// listed benchmark.
+    /// The agent shown with its chat, which works for a benchmark.
+    #[must_use]
+    pub(in crate::app) fn shown_agent(&self) -> Option<&str> {
+        match &self.mode {
+            Some(BenchMode::Agent { agent, .. }) => Some(agent),
+            _ => None,
+        }
+    }
+
+    /// Whether the chat panel has something to show: the form, a listed
+    /// benchmark, or an agent's chat.
     pub(super) fn showing(&self) -> bool {
-        self.mode == Some(BenchMode::Form) || self.shown().is_some()
-    }
-
-    /// The highlighted benchmark; `None` on "+ New bench".
-    fn highlighted(&self) -> Option<&BenchView> {
-        self.benches.get(self.selected)
-    }
-
-    fn set_selected(&mut self, row: usize) {
-        self.selected = row.min(self.benches.len());
+        matches!(self.mode, Some(BenchMode::Form | BenchMode::Agent { .. }))
+            || self.shown().is_some()
     }
 
     fn forget_areas(&mut self) {
@@ -142,19 +154,8 @@ impl BenchState {
                 }
             }
         }
-        let highlighted = self.highlighted().map(|view| view.id.clone());
         self.benches = benches;
         self.loaded = true;
-        // The highlight stays on its benchmark, or on "+ New bench".
-        let row = match highlighted {
-            Some(id) => self
-                .benches
-                .iter()
-                .position(|b| b.id == id)
-                .unwrap_or(self.selected),
-            None => usize::MAX,
-        };
-        self.set_selected(row);
         if let Some(BenchMode::Detail(id)) = &self.mode {
             if self.find(id).is_none() {
                 self.mode = None;
@@ -163,15 +164,13 @@ impl BenchState {
     }
 
     /// Put `view` in place of the benchmark with its id, else first, as
-    /// the newest; the highlight stays on its row. Returns whether it is
-    /// new.
+    /// the newest. Returns whether it is new.
     fn upsert(&mut self, view: BenchView) -> bool {
         if let Some(known) = self.benches.iter_mut().find(|b| b.id == view.id) {
             *known = view;
             return false;
         }
         self.benches.insert(0, view);
-        self.selected += 1;
         true
     }
 
@@ -209,6 +208,14 @@ impl App {
     #[must_use]
     pub(crate) const fn bench_app(&self) -> bool {
         matches!(self.agents_tab, AgentsTab::Bench)
+    }
+
+    /// Whether BENCH is in front and draws the chat panel itself: a
+    /// benchmark, the form, or what it says with neither. Not while it
+    /// shows an agent's chat.
+    #[must_use]
+    pub(crate) fn bench_draws_center(&self) -> bool {
+        self.bench_app() && self.bench.shown_agent().is_none()
     }
 
     /// Keep the detail view's scroll at most `top`, the line the last
@@ -251,37 +258,83 @@ impl App {
 
     /// What BENCH shows on coming to it: what it was left on, else the
     /// highlighted benchmark, else the newest; `None` with none listed.
+    /// An agent left on that is neither listed nor archived any more
+    /// gives way to its benchmark.
     pub(in crate::app) fn bench_to_show(&self) -> Option<BenchMode> {
-        if self.bench.showing() {
-            return self.bench.mode.clone();
+        match &self.bench.mode {
+            Some(BenchMode::Agent { agent, .. })
+                if self.is_listed(agent) || self.is_archived_agent(agent) =>
+            {
+                return self.bench.mode.clone();
+            }
+            Some(BenchMode::Agent { bench, .. }) if self.bench.find(bench).is_some() => {
+                return Some(BenchMode::Detail(bench.clone()));
+            }
+            Some(BenchMode::Agent { .. }) => {}
+            _ if self.bench.showing() => return self.bench.mode.clone(),
+            _ => {}
         }
-        self.bench
-            .highlighted()
-            .or_else(|| self.bench.benches.first())
-            .map(|view| BenchMode::Detail(view.id.clone()))
+        self.highlighted_bench()
+            .or_else(|| self.bench.benches.first().map(|view| view.id.as_str()))
+            .map(|id| BenchMode::Detail(id.to_string()))
+    }
+
+    /// Coming to BENCH: show [`Self::bench_to_show`], or nothing.
+    pub(in crate::app) fn show_bench_app(&mut self) {
+        match self.bench_to_show() {
+            Some(mode) => self.show_bench(mode),
+            None if self.bench.shown_agent().is_some() => {
+                self.bench.mode = None;
+                self.put_chat_tabs_away();
+            }
+            None => {}
+        }
     }
 
     /// Show `mode` in the chat panel and highlight its row: a listed
     /// benchmark, from its top with no run picked unless it was shown
-    /// already, or the form.
+    /// already; the form; or an agent of a benchmark, which unfolds it.
     pub(in crate::app) fn show_bench(&mut self, mode: BenchMode) {
-        let row = match &mode {
-            BenchMode::Detail(id) => match self.bench.benches.iter().position(|b| &b.id == id) {
-                Some(row) => row,
-                None => return,
-            },
-            BenchMode::Form => self.bench.benches.len(),
-        };
+        match &mode {
+            BenchMode::Detail(id) if self.bench.find(id).is_none() => return,
+            BenchMode::Agent { bench, .. } => {
+                self.bench.unfolded.insert(bench.clone());
+            }
+            _ => {}
+        }
+        self.bench.highlight = Some(mode.clone());
+        let agent_was_shown = self.bench.shown_agent().is_some();
         if self.bench.mode.as_ref() != Some(&mode) {
-            if mode == BenchMode::Form {
-                self.open_bench_form();
-            } else {
-                self.bench.scroll = 0;
-                self.bench.run = None;
-                self.bench.mode = Some(mode);
+            match mode {
+                BenchMode::Form => self.open_bench_form(),
+                BenchMode::Detail(_) => {
+                    self.bench.scroll = 0;
+                    self.bench.run = None;
+                    self.bench.mode = Some(mode);
+                }
+                BenchMode::Agent { .. } => self.bench.mode = Some(mode),
             }
         }
-        self.bench.set_selected(row);
+        if self.bench_app() {
+            self.settle_bench_chat(agent_was_shown);
+        }
+    }
+
+    /// Bring the chat panel in line with what BENCH shows, which showed
+    /// an agent before if `agent_was_shown`. An agent comes on screen
+    /// with its tabs, given back as it had them when they were put away;
+    /// a benchmark or the form puts them away.
+    fn settle_bench_chat(&mut self, agent_was_shown: bool) {
+        match self.bench.shown_agent().map(str::to_string) {
+            Some(agent) => {
+                self.switch_on_screen(&agent);
+                if !agent_was_shown {
+                    self.give_chat_tabs_back();
+                }
+            }
+            None if agent_was_shown => self.put_chat_tabs_away(),
+            None => {}
+        }
     }
 
     /// While BENCH is in front showing nothing, show the highlighted
@@ -294,12 +347,12 @@ impl App {
         }
     }
 
-    /// Drop the form for the benchmark shown before it, if it is still
-    /// listed, and hand the keys back to the list.
+    /// Drop the form for what was shown before it, a benchmark if it is
+    /// still listed or an agent, and hand the keys back to the list.
     fn drop_bench_form(&mut self) {
         self.bench.mode = None;
-        if let Some(id) = self.bench.before_form.take() {
-            self.show_bench(BenchMode::Detail(id));
+        if let Some(mode) = self.bench.before_form.take() {
+            self.show_bench(mode);
         }
         self.focus_bench_list();
     }
@@ -311,123 +364,9 @@ impl App {
         }
     }
 
-    /// Row of the list for what the chat panel shows: its benchmark's,
-    /// or "+ New bench" for the form.
-    #[must_use]
-    pub(crate) fn shown_bench_row(&self) -> Option<usize> {
-        match &self.bench.mode {
-            Some(BenchMode::Form) => Some(self.bench.benches.len()),
-            Some(BenchMode::Detail(id)) => self.bench.benches.iter().position(|b| &b.id == id),
-            None => None,
-        }
-    }
-
-    /// Highlighted row of the list, where `bench().benches.len()` is
-    /// "+ New bench".
-    #[must_use]
-    pub(crate) const fn selected_bench(&self) -> usize {
-        self.bench.selected
-    }
-
-    /// First visible row of the list.
-    #[must_use]
-    pub(crate) const fn bench_list_scroll(&self) -> usize {
-        self.bench.list_scroll
-    }
-
-    /// Keep the list's highlight inside rows `visible_rows` tall.
-    /// "+ New bench" is pinned below them, so it never scrolls.
-    pub(crate) fn sync_bench_list_scroll(&mut self, visible_rows: usize) {
-        let state = &mut self.bench;
-        state.list_scroll = follow_selection(
-            state.list_scroll,
-            state.selected,
-            visible_rows,
-            state.benches.len(),
-        );
-    }
-
-    /// Record where the list's rows were drawn this frame.
-    pub(crate) fn set_bench_rows_area(&mut self, area: Rect) {
-        self.bench.rows_area = Some(area);
-    }
-
-    /// Record where "+ New bench" was drawn this frame.
-    pub(crate) fn set_new_bench_area(&mut self, area: Rect) {
-        self.bench.new_bench_area = Some(area);
-    }
-
-    /// Row of the list drawn at a screen cell: a benchmark, or
-    /// "+ New bench" (`bench().benches.len()`).
-    pub(in crate::app) fn bench_row_at(&self, column: u16, row: u16) -> Option<usize> {
-        let state = &self.bench;
-        if contains(state.new_bench_area, column, row) {
-            return Some(state.benches.len());
-        }
-        let rows = state
-            .rows_area
-            .filter(|&rows| contains(Some(rows), column, row))?;
-        let index = state.list_scroll + usize::from(row - rows.y);
-        (index < state.benches.len()).then_some(index)
-    }
-
-    /// Clicking a row highlights it and shows it, as Enter does; only the
-    /// form takes the keys from the list.
-    pub(in crate::app) fn click_bench_row(&mut self, column: u16, row: u16) {
-        let Some(index) = self.bench_row_at(column, row) else {
-            return;
-        };
-        self.bench.set_selected(index);
-        self.activate_bench_row();
-    }
-
-    /// Move the highlight `delta` rows, as the wheel does.
-    pub(in crate::app) fn move_bench_highlight(&mut self, delta: isize) {
-        let row = self.bench.selected.saturating_add_signed(delta);
-        self.bench.set_selected(row);
-    }
-
-    /// Keys of the BENCH list. Returns whether the key was used.
-    pub(in crate::app) fn handle_bench_list_key(&mut self, key: KeyEvent) -> bool {
-        let current = self.bench.selected;
-        match key.code {
-            KeyCode::Up => self.bench.set_selected(current.saturating_sub(1)),
-            KeyCode::Down => self.bench.set_selected(current + 1),
-            KeyCode::PageUp => self.bench.set_selected(current.saturating_sub(PAGE_STEP)),
-            KeyCode::PageDown => self.bench.set_selected(current + PAGE_STEP),
-            KeyCode::Home => self.bench.set_selected(0),
-            KeyCode::End => self.bench.set_selected(usize::MAX),
-            KeyCode::Enter => {
-                self.activate_bench_row();
-                self.focus = PanelFocus::Chat;
-            }
-            KeyCode::Char('n') => {
-                self.bench.set_selected(usize::MAX);
-                self.activate_bench_row();
-            }
-            KeyCode::Char('r') => self.send_bench(BenchRequest::List),
-            KeyCode::Char('c') => self.send_bench(BenchRequest::Cancel),
-            KeyCode::Left | KeyCode::Right => self.shift_agents_tab(key.code),
-            _ => return false,
-        }
-        true
-    }
-
-    /// Show the highlighted row: its benchmark, or the form for
-    /// "+ New bench", which takes the keys.
-    fn activate_bench_row(&mut self) {
-        match self.bench.highlighted().map(|view| view.id.clone()) {
-            Some(id) => self.show_bench(BenchMode::Detail(id)),
-            None => {
-                self.show_bench(BenchMode::Form);
-                self.focus = PanelFocus::Chat;
-            }
-        }
-    }
-
     /// The chat panel's title in BENCH, and what it says beside it: the
     /// benchmark shown and what it is about, or the form's. `None` with
-    /// nothing shown.
+    /// nothing shown, and for an agent, whose chat has its tabs.
     #[must_use]
     pub(in crate::app) fn bench_chat_title(&self) -> Option<(String, String)> {
         match &self.bench.mode {
@@ -436,7 +375,7 @@ impl App {
                 .bench
                 .shown()
                 .map(|view| (view.name.clone(), first_line(&view.title))),
-            None => None,
+            Some(BenchMode::Agent { .. }) | None => None,
         }
     }
 
@@ -495,6 +434,7 @@ impl App {
             && std::mem::take(&mut self.bench.show_started)
             && self.bench.mode == Some(BenchMode::Form)
         {
+            self.bench.unfolded.insert(id.clone());
             self.show_bench(BenchMode::Detail(id));
         }
         self.show_bench_if_blank();
@@ -516,7 +456,8 @@ impl App {
     }
 
     /// A key in BENCH's chat panel with nothing typed: the benchmark's,
-    /// or the form's. Returns whether it used the key.
+    /// or the form's. An agent's chat keeps its keys but Esc on CHAT,
+    /// which hands them back to the list. Returns whether it used the key.
     pub(in crate::app) fn handle_bench_key(&mut self, key: KeyEvent) -> bool {
         if key
             .modifiers
@@ -527,11 +468,13 @@ impl App {
         match self.bench.mode.clone() {
             Some(BenchMode::Detail(id)) => self.bench_detail_key(key, &id),
             Some(BenchMode::Form) => self.bench_form_key(key),
-            None if key.code == KeyCode::Esc => {
+            Some(BenchMode::Agent { .. }) | None
+                if key.code == KeyCode::Esc && self.chat_tab() == ChatTab::Chat =>
+            {
                 self.focus_bench_list();
                 true
             }
-            None => false,
+            Some(BenchMode::Agent { .. }) | None => false,
         }
     }
 
@@ -587,10 +530,7 @@ impl App {
             KeyCode::Char('x') if has_copies => self.send_bench(BenchRequest::Dismiss { id }),
             KeyCode::Char('c') => self.send_bench(BenchRequest::Cancel),
             KeyCode::Char('L') => match log_of {
-                Some(agent) => {
-                    self.switch_app(AgentsTab::Projects);
-                    self.open_log_of(agent);
-                }
+                Some(agent) => self.show_bench_log(id, agent),
                 None => {
                     self.notification = Some((
                         "This run has no log; pick a run with ←/→ first".to_string(),
@@ -615,6 +555,25 @@ impl App {
             self.request_agent_switch(root.to_string());
         }
         self.send_bench_for(root, BenchRequest::Diff { id, run });
+    }
+
+    /// Show the LOG tab of `agent`, a run of benchmark `bench`, here under
+    /// the benchmark; in PROJECTS when it is neither listed nor archived,
+    /// for BENCH to show it under.
+    fn show_bench_log(&mut self, bench: String, agent: String) {
+        if !self.is_listed(&agent) && !self.is_archived_agent(&agent) {
+            self.switch_app(AgentsTab::Projects);
+            self.open_log_of(agent);
+            return;
+        }
+        let on_screen = agent == self.active_agent_id;
+        if !on_screen {
+            self.open_log_on_switch(agent.clone());
+        }
+        self.show_bench(BenchMode::Agent { bench, agent });
+        if on_screen {
+            self.show_chat_tab(ChatTab::Log);
+        }
     }
 }
 
@@ -909,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_s_log_and_a_diff_go_to_projects() {
+    fn a_diff_goes_to_projects_and_a_run_s_log_shows_here() {
         let (mut app, mut rx) = app_with_benches();
         let mut done = view("2");
         done.status = BenchStatus::Done;
@@ -939,14 +898,22 @@ mod tests {
         app.process_command(UiCommand::SetActiveAgent("kid".to_string()));
         assert_eq!(app.chat_tab(), ChatTab::Graph, "kid was left on GRAPH");
 
-        // The log of the run picked, on the agent that ran it.
+        // The log of the run picked, on the agent that ran it, under the
+        // benchmark.
         app.process_command(UiCommand::SetActiveAgent("root".to_string()));
         app.show_agents_tab(AgentsTab::Bench);
         app.focus = PanelFocus::Chat;
         app.handle_key(key(KeyCode::Right));
         app.handle_key(KeyEvent::new(KeyCode::Char('L'), KeyModifiers::SHIFT));
-        assert_eq!(app.agents_tab(), AgentsTab::Projects);
+        assert_eq!(app.agents_tab(), AgentsTab::Bench);
         assert_eq!(app.active_agent_id(), "kid");
         assert_eq!(app.chat_tab(), ChatTab::Log);
+        assert_eq!(
+            app.bench().mode,
+            Some(BenchMode::Agent {
+                bench: "2".to_string(),
+                agent: "kid".to_string(),
+            })
+        );
     }
 }
