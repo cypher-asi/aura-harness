@@ -12,6 +12,8 @@
 //! draws in one call (`gpu`), or the CPU where there is none (`raster`).
 //! `shell` holds what the window shows and decides when a frame is due.
 
+#![deny(clippy::too_many_lines)]
+
 mod canvas;
 mod chrome;
 mod demo;

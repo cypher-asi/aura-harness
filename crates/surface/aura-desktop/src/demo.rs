@@ -227,6 +227,20 @@ impl Demo {
         self.send(self.models()).await;
         self.send(self.agent_list()).await;
         self.send(UiCommand::SetActiveAgent(AGENT_ID.into())).await;
+        self.seed_definitions().await;
+        self.send(UiCommand::SetApiStatus {
+            url: Some("http://127.0.0.1:8787".into()),
+            active: true,
+        })
+        .await;
+        if let Ok(dir) = std::env::current_dir() {
+            self.send(UiCommand::SetSandboxRoot(dir)).await;
+        }
+        self.seed_history().await;
+        self.seed_processes().await;
+    }
+
+    async fn seed_definitions(&mut self) {
         self.send(UiCommand::SetAgentDefinitions(vec![
             AgentDefinitionSummary {
                 name: "reviewer".into(),
@@ -240,14 +254,9 @@ impl Demo {
             },
         ]))
         .await;
-        self.send(UiCommand::SetApiStatus {
-            url: Some("http://127.0.0.1:8787".into()),
-            active: true,
-        })
-        .await;
-        if let Ok(dir) = std::env::current_dir() {
-            self.send(UiCommand::SetSandboxRoot(dir)).await;
-        }
+    }
+
+    async fn seed_history(&mut self) {
         let mut history = vec![
             MessageData::new(MessageRole::User, "What does this project do?"),
             MessageData::new(
@@ -259,6 +268,9 @@ impl Demo {
         ];
         history[1].model = Some(self.model.clone());
         self.send(UiCommand::LoadConversation(history)).await;
+    }
+
+    async fn seed_processes(&mut self) {
         self.track(
             "Agent01 turn",
             ProcessKind::Turn,
@@ -348,7 +360,14 @@ impl Demo {
             .await;
         self.chat(UiCommand::TurnStarted { prompt: None }).await;
         self.record("UserPrompt", "", prompt).await;
+        self.think().await;
+        self.run_tools().await;
+        self.reply(prompt).await;
+        self.finish(process, ProcessStatus::Exited).await;
+        self.chat(UiCommand::Complete).await;
+    }
 
+    async fn think(&mut self) {
         self.chat(UiCommand::StartThinking).await;
         for word in "The user wants an overview. I'll list the crates, read the \
                      manifest, then summarise."
@@ -358,7 +377,9 @@ impl Demo {
             sleep(Duration::from_millis(25)).await;
         }
         self.chat(UiCommand::FinishThinking).await;
+    }
 
+    async fn run_tools(&mut self) {
         self.tool("t1", "list_files", r#"{"path":"crates"}"#, LISTING, 300)
             .await;
         self.tool(
@@ -377,7 +398,9 @@ impl Demo {
             600,
         )
         .await;
+    }
 
+    async fn reply(&mut self, prompt: &str) {
         self.chat(UiCommand::SetStatus("Writing...".into())).await;
         self.chat(UiCommand::StartStreaming).await;
         let reply = REPLY.replace("{prompt}", prompt.trim());
@@ -401,8 +424,6 @@ impl Demo {
             }],
         })
         .await;
-        self.finish(process, ProcessStatus::Exited).await;
-        self.chat(UiCommand::Complete).await;
     }
 
     async fn tool(&mut self, id: &str, name: &str, args: &str, result: &str, ms: u64) {
