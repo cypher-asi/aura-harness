@@ -3,7 +3,7 @@
 use super::markdown::{render_markdown_flow, wrap_spans};
 use super::text::{display_width, wrap_words, Measure};
 use crate::app::format::{format_partial_cost, format_tokens};
-use crate::app::CodeCopyHit;
+use crate::app::{CodeCopyHit, CopyText};
 use crate::components::{CodeBlock, MessageRole};
 use crate::events::{CallUsage, SourceUsage};
 use crate::Theme;
@@ -269,6 +269,6 @@ pub(super) fn render_code_segment(
         line: top,
         x: u16::try_from(button.start).ok()?,
         width: u16::try_from(button.len()).ok()?,
-        code: Arc::from(code),
+        text: CopyText::Code(Arc::from(code)),
     })
 }

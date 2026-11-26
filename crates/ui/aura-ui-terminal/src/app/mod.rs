@@ -778,19 +778,29 @@ pub(crate) struct ImageHit {
     pub index: usize,
 }
 
-/// The copy button in the top border of a code block in the chat, which
-/// copies the block's code when clicked.
+/// A copy button in the chat: in the top border of a code block, or on a
+/// boot console's header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CodeCopyHit {
-    /// Chat line of the block's top border
+    /// Chat line of the button
     pub line: usize,
     /// First column of the button, counted from the chat text's left edge
     pub x: u16,
     /// Columns the button takes
     pub width: u16,
+    /// What a click copies
+    pub text: CopyText,
+}
+
+/// What a chat copy button copies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CopyText {
     /// The code as written in the message, shared with the line cache so
     /// handing hits out each frame does not copy it
-    pub code: std::sync::Arc<str>,
+    Code(std::sync::Arc<str>),
+    /// The boot console with this id, its whole log read when clicked, as
+    /// a live one is drawn every frame
+    BootLog(String),
 }
 
 /// A chat row that expands or collapses `target` when clicked.
@@ -1525,17 +1535,29 @@ impl App {
         });
     }
 
-    /// Copy the code of the block whose copy button is at a screen cell
-    /// after the next frame. Returns whether there was one.
+    /// Copy what the copy button at a screen cell copies after the next
+    /// frame. Returns whether there was a button there.
     fn copy_code_at(&mut self, column: u16, row: u16) -> bool {
-        let Some(code) = self
-            .code_copy_at(column, row)
-            .map(|hit| hit.code.to_string())
-        else {
+        let Some(text) = self.code_copy_at(column, row).map(|hit| hit.text.clone()) else {
             return false;
         };
-        self.copy_pending_text = Some(code);
-        self.copy_label = Some("the code".to_string());
+        let (text, what) = match text {
+            CopyText::Code(code) => (code.to_string(), "the code"),
+            CopyText::BootLog(id) => {
+                let Some(console) = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .filter_map(|m| m.boot_console())
+                    .find(|console| console.id == id)
+                else {
+                    return true;
+                };
+                (console.transcript(), "the boot log")
+            }
+        };
+        self.copy_pending_text = Some(text);
+        self.copy_label = Some(what.to_string());
         true
     }
 

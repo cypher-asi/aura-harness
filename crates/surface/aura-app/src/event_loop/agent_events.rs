@@ -95,7 +95,10 @@ impl AgentUi {
         let _ = self.commands.try_send(self.for_agent(command));
     }
 
+    /// `command` addressed to this agent's chat, kept in its notes when it
+    /// is one, so a chat rebuilt from the record still shows it.
     fn for_agent(&self, command: UiCommand) -> UiCommand {
+        crate::chat_notes::record(self.agent_id, &command);
         UiCommand::ForAgent {
             agent_id: self.agent_id.to_hex(),
             command: Box::new(command),

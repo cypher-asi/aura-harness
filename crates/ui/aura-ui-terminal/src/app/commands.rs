@@ -5,7 +5,10 @@ use super::{
 };
 use crate::{
     components::{elapsed_ms, Activity, BootConsole, Message, MessageRole, ToolStatus, ToolStep},
-    events::{BootUpdate, CallUsage, RewindScope, UiCommand, UiEvent},
+    events::{
+        BootUpdate, CallUsage, RewindScope, UiCommand, UiEvent, ERROR_PREFIX, SUCCESS_PREFIX,
+        WARNING_PREFIX,
+    },
     mode_command::{parse_approval_command, ApprovalLevel, PermissionMode, SlashModeCommand},
     terminal::KeyResult,
 };
@@ -955,13 +958,13 @@ impl App {
             UiCommand::SetMode(mode) => self.hud.mode = Some(mode),
             UiCommand::SetApproval(level) => self.hud.approval = Some(level),
             UiCommand::ShowError(msg) => {
-                self.cmd_notification(&msg, "error: ", NotificationType::Error);
+                self.cmd_notification(&msg, ERROR_PREFIX, NotificationType::Error);
             }
             UiCommand::ShowSuccess(msg) => {
-                self.cmd_notification(&msg, "✓ ", NotificationType::Success);
+                self.cmd_notification(&msg, SUCCESS_PREFIX, NotificationType::Success);
             }
             UiCommand::ShowWarning(msg) => {
-                self.cmd_notification(&msg, "warning: ", NotificationType::Warning);
+                self.cmd_notification(&msg, WARNING_PREFIX, NotificationType::Warning);
             }
             UiCommand::Complete => {
                 self.cmd_complete();
@@ -1385,7 +1388,9 @@ impl App {
         self.cmd_clear_conversation();
         self.streaming_content.clear();
         for data in history {
-            let mut msg = if let Some(activity) = &data.activity {
+            let mut msg = if let Some(boot) = &data.boot {
+                Message::boot(BootConsole::replay(boot, data.timestamp_ms))
+            } else if let Some(activity) = &data.activity {
                 Message::activity(Activity::from(activity), self.activity_expanded)
             } else if let Some(command) = data.command.as_deref() {
                 let mut msg = Message::shell(command);

@@ -5,7 +5,10 @@
 
 use super::text::{display_width, wrap_words};
 use super::MoreRows;
-use crate::components::{BootConsole, MoreSection, MORE_PAGE_LINES};
+use crate::app::{CodeCopyHit, CopyText};
+use crate::components::{
+    boot_duration as duration, BootConsole, MoreSection, COPY_BUTTON, MORE_PAGE_LINES,
+};
 use crate::events::BootStageState;
 use crate::Theme;
 use ratatui::{
@@ -31,16 +34,41 @@ const SWEEP_MS: u128 = 80;
 /// Cells' worth of time the band waits off a step before passing again.
 const BAND_GAP: u128 = 6;
 
-/// `850 ms`, `12.4s` or `3m 05s`.
-fn duration(ms: u64) -> String {
-    if ms < 1000 {
-        format!("{ms} ms")
-    } else if ms < 60_000 {
-        format!("{}.{}s", ms / 1000, (ms % 1000) / 100)
-    } else {
-        let secs = ms / 1000;
-        format!("{}m {:02}s", secs / 60, secs % 60)
+/// Narrowest a console is drawn with its copy button.
+const MIN_COPY_WIDTH: usize = 40;
+
+/// The copy button on `console`'s header, drawn `width` columns wide.
+pub(super) fn boot_copy(console: &BootConsole, width: usize) -> Option<CodeCopyHit> {
+    let button = display_width(COPY_BUTTON);
+    (width >= MIN_COPY_WIDTH).then(|| CodeCopyHit {
+        line: 0,
+        x: u16::try_from(width - button).unwrap_or(0),
+        width: u16::try_from(button).unwrap_or(0),
+        text: CopyText::BootLog(console.id.clone()),
+    })
+}
+
+/// The header, with the copy button at its right end when there is room.
+fn header_line(
+    console: &BootConsole,
+    expanded: bool,
+    spinner: &str,
+    width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let header = header(console, expanded, spinner, theme);
+    if width < MIN_COPY_WIDTH {
+        return clip(header, width);
     }
+    let room = width - display_width(COPY_BUTTON);
+    let mut header = clip(header, room - 1);
+    let pad = room - header.width();
+    header.spans.push(Span::raw(" ".repeat(pad)));
+    header.spans.push(Span::styled(
+        COPY_BUTTON,
+        Style::default().fg(theme.colors.muted),
+    ));
+    header
 }
 
 /// `text` cut to `width` columns, with `…` where it was cut.
@@ -97,7 +125,7 @@ pub(super) fn boot_lines(
     theme: &Theme,
 ) -> (Vec<Line<'static>>, MoreRows) {
     let faint = Style::default().fg(theme.colors.faint);
-    let mut lines = vec![clip(header(console, expanded, spinner, theme), width)];
+    let mut lines = vec![header_line(console, expanded, spinner, width, theme)];
     if console.is_running() {
         lines.push(bar_line(console, width, theme));
     }
@@ -487,6 +515,24 @@ mod tests {
                 .collect(),
         ));
         console
+    }
+
+    #[test]
+    fn the_copy_button_is_drawn_where_its_click_lands() {
+        let theme = Theme::cyber();
+        let console = console();
+        for width in [40, 80, 120] {
+            let (lines, _) = super::boot_lines(&console, false, "⠋", width, &theme);
+            let header: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(header.ends_with(COPY_BUTTON), "{header}");
+            assert_eq!(display_width(&header), width);
+            let hit = boot_copy(&console, width).expect("room for it");
+            assert_eq!(usize::from(hit.x), width - display_width(COPY_BUTTON));
+            assert_eq!(hit.text, CopyText::BootLog("b1".into()));
+        }
+        assert!(boot_copy(&console, 30).is_none());
+        let (narrow, _) = super::boot_lines(&console, false, "⠋", 30, &theme);
+        assert!(narrow[0].width() <= 30);
     }
 
     #[test]
