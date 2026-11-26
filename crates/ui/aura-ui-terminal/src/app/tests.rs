@@ -5063,6 +5063,48 @@ fn clicking_the_earlier_lines_row_of_a_boot_console_loads_them() {
 }
 
 #[test]
+fn clicking_a_finished_boot_consoles_fold_opens_and_closes_it() {
+    use crate::components::BootConsole;
+    use crate::events::{BootLogLine, BootStageState, BootUpdate};
+
+    let mut console = BootConsole::new("boot-1", "Moving to the cloud");
+    console.apply(BootUpdate::Stage {
+        key: "create".into(),
+        label: "Creating machine".into(),
+        state: BootStageState::Done { ms: 1200 },
+    });
+    console.apply(BootUpdate::Log(vec![BootLogLine {
+        stderr: false,
+        text: "booted line".into(),
+    }]));
+    console.apply(BootUpdate::End {
+        ok: true,
+        summary: "Now running in the cloud.".into(),
+    });
+    let mut app = App::new();
+    app.add_message(Message::boot(console));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    draw(&mut app, &mut terminal);
+    assert!(cell_of(&terminal, "booted line").is_none(), "folded");
+
+    let hint = cell_of(&terminal, "click to show the boot log").expect("the hint is on screen");
+    click_at(&mut app, hint);
+    assert!(app.messages()[0].is_expanded(), "the hint opens it");
+    draw(&mut app, &mut terminal);
+    assert!(cell_of(&terminal, "booted line").is_some());
+    assert!(cell_of(&terminal, "Creating machine").is_some());
+
+    let summary = cell_of(&terminal, "Now running in the cloud.").expect("summary on screen");
+    click_at(&mut app, summary);
+    assert!(!app.messages()[0].is_expanded(), "the outcome closes it");
+    draw(&mut app, &mut terminal);
+
+    let header = cell_of(&terminal, "Moving to the cloud").expect("header on screen");
+    click_at(&mut app, header);
+    assert!(app.messages()[0].is_expanded(), "the header opens it");
+}
+
+#[test]
 fn clicking_the_more_lines_row_of_a_tool_result_shows_the_rest() {
     let output: Vec<String> = (0..250).map(|i| format!("result line {i}")).collect();
     let mut app = App::new();
