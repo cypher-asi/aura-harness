@@ -6,7 +6,7 @@ use super::super::format::{cost, headline, plural};
 use super::Summary;
 use aura_core_types::CompareArm;
 use aura_gate::compare::{task_cells, turn_cells, TaskCell, TurnCell};
-use aura_ui_terminal::events::cost_shares;
+use aura_ui::events::cost_shares;
 use std::fmt::Write;
 
 /// Characters the task column takes; a task's id is cut two short of it.

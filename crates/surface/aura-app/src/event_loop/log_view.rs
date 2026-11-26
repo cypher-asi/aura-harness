@@ -12,10 +12,10 @@ use aura_agent_trace::run_log::{LogEvent, LogStep, LogToolCall, LogTurn};
 use aura_agent_trace::RunLog;
 use aura_core_types::trace::HarnessAction;
 use aura_core_types::AgentId;
-use aura_ui_terminal::events::{
+use aura_ui::events::{
     LogField, LogRequest, LogRunView, LogSection, LogStatus, LogStepView, LogTurnView, LogView,
 };
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use serde::Serialize;
 
 use super::compare::view::{duration, headline, money, tokens};

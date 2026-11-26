@@ -5,7 +5,7 @@ use super::agent_events::AgentUi;
 use super::run_command::is_user_tool_use;
 use aura_core_types::AgentId;
 use aura_exec_tools::CommandOutputHook;
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use tokio::sync::mpsc;
 
 /// Sends the output of one agent's commands to its chat.

@@ -11,8 +11,8 @@ use aura_agent::AgentLoopResult;
 use aura_core_types::AgentId;
 use aura_exec_tools::todo::TodoItem;
 use aura_gate::compare::ModelCall;
-use aura_ui_terminal::events::{CallStats, ContextView, SessionTotals, TodoView};
-use aura_ui_terminal::UiCommand;
+use aura_ui::events::{CallStats, ContextView, SessionTotals, TodoView};
+use aura_ui::UiCommand;
 
 /// `todos` as the UI shows them.
 pub(super) fn todo_views(todos: &[TodoItem]) -> Vec<TodoView> {
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn todo_states_map_one_to_one() {
         use aura_exec_tools::todo::TodoStatus;
-        use aura_ui_terminal::events::TodoState;
+        use aura_ui::events::TodoState;
         let item = |status| TodoItem {
             id: "1".to_string(),
             content: "x".to_string(),

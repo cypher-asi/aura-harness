@@ -3,7 +3,7 @@
 
 use super::{examples, payload, replay, routed, unpriced};
 use aura_core_types::{AgentId, ComparePayload, CompareStatus};
-use aura_ui_terminal::events::{BenchBaseline, BenchStatus, BenchView};
+use aura_ui::events::{BenchBaseline, BenchStatus, BenchView};
 
 /// The BENCH tab's view of `payload`, held by an agent of its own in
 /// another agent's tree.

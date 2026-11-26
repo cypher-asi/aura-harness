@@ -21,8 +21,8 @@ use aura_agent_kernel::{Policy, PolicyVerdict};
 use aura_core_types::{
     AgentId, AgentPermissions, AgentScope, InstalledIntegrationDefinition, ToolState,
 };
-use aura_ui_terminal::events::{PolicyView, ToolPolicyState, ToolPolicyView};
-use aura_ui_terminal::UiCommand;
+use aura_ui::events::{PolicyView, ToolPolicyState, ToolPolicyView};
+use aura_ui::UiCommand;
 use tracing::debug;
 
 /// How the terminal answers an agent's `ask` calls, which the policy
@@ -193,7 +193,7 @@ fn integration_label(integration: &InstalledIntegrationDefinition) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_ui_terminal::{ApprovalLevel, PermissionMode};
+    use aura_ui::{ApprovalLevel, PermissionMode};
     use std::collections::HashMap;
 
     fn tools() -> Vec<String> {

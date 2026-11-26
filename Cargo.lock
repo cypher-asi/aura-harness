@@ -456,7 +456,7 @@ dependencies = [
  "aura-store-db",
  "aura-store-record",
  "aura-store-snapshot",
- "aura-ui-terminal",
+ "aura-ui",
  "axum",
  "blake3",
  "bytes",

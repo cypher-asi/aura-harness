@@ -4,7 +4,7 @@
 
 use super::context::Context;
 use crate::bench_pack::ExampleTask;
-use aura_ui_terminal::events::BenchTaskSetup;
+use aura_ui::events::BenchTaskSetup;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

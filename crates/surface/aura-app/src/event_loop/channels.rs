@@ -41,8 +41,8 @@ use aura_store_db::{
     valid_slug, ChannelRecord, ChannelStore, ChannelUpdate, MemberRecord, MemberRole, NewChannel,
     RegistryDiff, WriteBatch,
 };
-use aura_ui_terminal::events::{nest_members, AgentSummary, ChannelProjectView, ChannelSummary};
-use aura_ui_terminal::UiCommand;
+use aura_ui::events::{nest_members, AgentSummary, ChannelProjectView, ChannelSummary};
+use aura_ui::UiCommand;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

@@ -20,7 +20,7 @@ use aura_exec_tools::plan_tools::{plan_path_from_output, sync_todo_list, CREATE_
 use aura_exec_tools::todo::TodoItem;
 use aura_gate::compare::ModelCall;
 use aura_model::{model_catalog, Usage};
-use aura_ui_terminal::{
+use aura_ui::{
     events::{CallUsage, MessageData, MessageRole, ToolData},
     UiCommand,
 };

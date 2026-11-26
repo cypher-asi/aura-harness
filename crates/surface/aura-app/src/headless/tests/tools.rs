@@ -9,7 +9,7 @@ use crate::headless::tools::ToolFilter;
 use crate::headless::OutputFormat;
 use aura_core_modes::AgentMode;
 use aura_model::{MockProvider, MockResponse};
-use aura_ui_terminal::{ApprovalLevel, PermissionMode};
+use aura_ui::{ApprovalLevel, PermissionMode};
 use serde_json::json;
 
 #[tokio::test]

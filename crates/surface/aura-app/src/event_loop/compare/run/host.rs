@@ -27,8 +27,8 @@ use aura_core_types::{
 use aura_gate::compare::{plan_shares, run_name, PlanReading};
 use aura_gate::live::{self, GateLive, RunOf};
 use aura_model::ModelCallPurpose;
-use aura_ui_terminal::events::BenchTaskSetup;
-use aura_ui_terminal::UiCommand;
+use aura_ui::events::BenchTaskSetup;
+use aura_ui::UiCommand;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

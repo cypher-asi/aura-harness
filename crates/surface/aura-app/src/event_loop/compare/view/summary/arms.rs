@@ -5,9 +5,7 @@
 use super::super::format::{duration, money, plural};
 use super::Summary;
 use aura_gate::compare::{too_close, ArmSummary};
-use aura_ui_terminal::events::{
-    cost_per_fix, cost_shares, per_fix_cells, unpriced_note, BenchCost,
-};
+use aura_ui::events::{cost_per_fix, cost_shares, per_fix_cells, unpriced_note, BenchCost};
 use std::fmt::Write;
 
 /// Characters a row's label takes, arm A's column after it.

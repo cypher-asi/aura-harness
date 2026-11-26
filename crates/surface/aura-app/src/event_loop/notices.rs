@@ -12,7 +12,7 @@ use super::steering::SteerSource;
 use super::{deliver, LoopState};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{ActionResultPayload, AgentId, Transaction};
-use aura_ui_terminal::events::ProcessSummary;
+use aura_ui::events::ProcessSummary;
 use std::path::Path;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -85,7 +85,7 @@ pub(crate) async fn record_completion(kernel: &Kernel, tx: &Transaction) -> bool
 #[must_use]
 pub fn command_notice(to: AgentId, row: &ProcessSummary) -> Notice {
     let how = match (row.status, row.exit_code) {
-        (aura_ui_terminal::events::ProcessStatus::Killed, _) => {
+        (aura_ui::events::ProcessStatus::Killed, _) => {
             "was stopped from the Processes tab".to_string()
         }
         (_, Some(code)) => format!("exited with code {code}"),
@@ -127,7 +127,7 @@ fn log_tail(path: &Path, max_lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_ui_terminal::events::{ProcessKind, ProcessStatus};
+    use aura_ui::events::{ProcessKind, ProcessStatus};
 
     fn row(status: ProcessStatus, exit_code: Option<i32>, log: Option<&Path>) -> ProcessSummary {
         ProcessSummary {

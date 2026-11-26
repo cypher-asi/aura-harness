@@ -15,7 +15,7 @@ use super::subagents::AgentHub;
 use super::LoopState;
 use crate::record_loader::{recent_record_summaries, ByHead};
 use aura_core_types::AgentId;
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;

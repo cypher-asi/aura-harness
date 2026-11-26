@@ -22,8 +22,8 @@ use aura_core_types::{
 use aura_exec_tools::plan_tools::{is_plan_path, todo_items, PlanFile};
 use aura_gate::live::GateLive;
 use aura_gate::route::Decision;
-use aura_ui_terminal::events::ProcessStatus;
-use aura_ui_terminal::{ApprovalLevel, PermissionMode};
+use aura_ui::events::ProcessStatus;
+use aura_ui::{ApprovalLevel, PermissionMode};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;

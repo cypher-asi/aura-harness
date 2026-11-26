@@ -2,7 +2,7 @@ use super::*;
 use crate::event_loop::subagents::task_tool_definition;
 use crate::event_loop::subagents::tests::{fixture, request, Fixture};
 use crate::event_loop::tests::support::open_project;
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 
 fn new_channel(slug: &str) -> NewChannel {
     NewChannel {
@@ -36,7 +36,7 @@ fn stored_placement(fixture: &Fixture, agent: AgentId) -> (Option<String>, Optio
 }
 
 /// The ids in the Agents panel rows and the ids of the projects listed.
-fn projects_tree(fixture: &Fixture) -> (Vec<aura_ui_terminal::events::AgentSummary>, Vec<String>) {
+fn projects_tree(fixture: &Fixture) -> (Vec<aura_ui::events::AgentSummary>, Vec<String>) {
     let [UiCommand::SetProjects(projects), UiCommand::SetAgents(rows), _] =
         fixture.hub.agent_lists()
     else {
@@ -45,7 +45,7 @@ fn projects_tree(fixture: &Fixture) -> (Vec<aura_ui_terminal::events::AgentSumma
     (rows, projects.into_iter().map(|p| p.id).collect())
 }
 
-fn is_listed(rows: &[aura_ui_terminal::events::AgentSummary], agent: AgentId) -> bool {
+fn is_listed(rows: &[aura_ui::events::AgentSummary], agent: AgentId) -> bool {
     rows.iter().any(|row| row.id == agent.to_hex())
 }
 
@@ -842,7 +842,7 @@ fn write_task(workspace: &std::path::Path, id: &str, agent: AgentId, created_ms:
     let dir = workspace.join(TASKS_DIR);
     std::fs::create_dir_all(&dir).unwrap();
     let record = TaskRecord {
-        view: aura_ui_terminal::events::TaskView {
+        view: aura_ui::events::TaskView {
             id: id.to_string(),
             title: format!("task {id}"),
             agent_id: agent.to_hex(),

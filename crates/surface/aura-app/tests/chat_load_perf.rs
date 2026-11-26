@@ -320,7 +320,7 @@ fn main_bench(entries: usize) {
 
     // `shown_chats` is a `ByHead`, public: this is exactly what a switch
     // back to an agent already read costs.
-    let mut shown: ByHead<Vec<aura_ui_terminal::events::MessageData>> = ByHead::default();
+    let mut shown: ByHead<Vec<aura_ui::events::MessageData>> = ByHead::default();
     print_row("shown_chats.get_or_read, cold (reads + decodes)", {
         let start = Instant::now();
         shown

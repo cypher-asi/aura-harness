@@ -10,7 +10,7 @@ use crate::agent_registry::RegisteredAgent;
 use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::subagents::{lock, AgentHub};
 use crate::event_loop::{bench, titles, LoopState};
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

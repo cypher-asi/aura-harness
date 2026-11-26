@@ -11,7 +11,7 @@ use crate::event_loop::handlers::system_message;
 use crate::event_loop::LoopState;
 use aura_core_types::{AgentId, ComparePayload};
 use aura_gate::compare::{parse, CompareCommand};
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::fmt::Write;
 
 /// `/compare <args>` from the chat of `agent_id`.

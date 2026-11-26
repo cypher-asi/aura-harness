@@ -15,7 +15,7 @@
 use aura_context_prompts::system::sections::project_instructions::{
     render, InstructionFile, OnRequestRule, ProjectInstructionsView,
 };
-use aura_ui_terminal::events::{InstructionFileView, InstructionStatus};
+use aura_ui::events::{InstructionFileView, InstructionStatus};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

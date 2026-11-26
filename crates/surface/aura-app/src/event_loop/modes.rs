@@ -29,7 +29,7 @@ use super::LoopState;
 use aura_agent_kernel::{tool_mode_class, Kernel, ToolModeClass};
 use aura_core_types::{AgentId, ToolState, UserToolDefaults};
 use aura_exec_tools::jobs::JOB_KILL_TOOL_NAME;
-use aura_ui_terminal::{ApprovalLevel, PermissionMode, UiCommand};
+use aura_ui::{ApprovalLevel, PermissionMode, UiCommand};
 use std::collections::BTreeMap;
 use tracing::{info, warn};
 

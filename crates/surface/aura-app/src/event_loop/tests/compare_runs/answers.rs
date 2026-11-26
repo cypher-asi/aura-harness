@@ -4,7 +4,7 @@
 use super::pins::{pinned, Pinned};
 use super::*;
 use crate::event_loop::compare::view::render;
-use aura_ui_terminal::events::MessageRole;
+use aura_ui::events::MessageRole;
 
 /// What `/compare <args>` showed in the first agent's chat: `Ok` for a
 /// system line, `Err` for a warning.

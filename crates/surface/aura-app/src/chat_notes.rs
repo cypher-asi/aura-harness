@@ -16,8 +16,8 @@
 
 use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
-use aura_ui_terminal::events::{BootHistory, BootLogLine, BootUpdate, MessageData, MessageRole};
-use aura_ui_terminal::UiCommand;
+use aura_ui::events::{BootHistory, BootLogLine, BootUpdate, MessageData, MessageRole};
+use aura_ui::UiCommand;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};

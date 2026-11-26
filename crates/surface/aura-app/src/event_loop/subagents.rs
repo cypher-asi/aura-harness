@@ -75,11 +75,11 @@ use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision};
 use aura_model::{Message, ModelCallPurpose, ThinkingEffort, ToolDefinition};
 use aura_store_db::ChannelStore;
-use aura_ui_terminal::events::{
+use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, MailView, MessageData, ProcessKind, ProcessStatus,
     ProcessSummary, RecordSummary,
 };
-use aura_ui_terminal::{PermissionMode, UiCommand};
+use aura_ui::{PermissionMode, UiCommand};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -394,7 +394,7 @@ pub struct AgentHubParts {
     /// Mode agents start in
     pub mode: PermissionMode,
     /// Approval level agents start at
-    pub approval: aura_ui_terminal::ApprovalLevel,
+    pub approval: aura_ui::ApprovalLevel,
     /// The prompter the agents' kernels ask, if any
     pub approvals: Option<Arc<TerminalApprovals>>,
     pub instructions: ProjectInstructions,

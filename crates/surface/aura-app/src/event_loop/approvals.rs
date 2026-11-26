@@ -22,7 +22,7 @@ use aura_agent_kernel::{
 };
 use aura_core_types::text::truncate_with_ellipsis;
 use aura_core_types::{AgentId, ToolState};
-use aura_ui_terminal::{ApprovalLevel, UiCommand};
+use aura_ui::{ApprovalLevel, UiCommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};

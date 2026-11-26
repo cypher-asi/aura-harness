@@ -4,7 +4,7 @@
 use super::*;
 use aura_agent_kernel::RecordObserver;
 use aura_core_types::SubagentDispatchRequest;
-use aura_ui_terminal::events::{FlowKind, FlowLane, FlowNode};
+use aura_ui::events::{FlowKind, FlowLane, FlowNode};
 
 fn task(parent: AgentId, prompt: &str) -> SubagentDispatchRequest {
     serde_json::from_value(serde_json::json!({

@@ -4,7 +4,7 @@ use crate::session_helpers::default_agent_config_with_auth;
 use aura_agent_kernel::{ChildAgentSpec, SpawnHook};
 use aura_model::MockProvider;
 use aura_store_db::{RocksStore, Store};
-use aura_ui_terminal::events::ProcessKind;
+use aura_ui::events::ProcessKind;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::mpsc;

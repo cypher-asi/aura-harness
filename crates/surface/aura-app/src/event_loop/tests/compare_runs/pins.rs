@@ -6,7 +6,7 @@
 use super::*;
 use crate::event_loop::compare::view::{duration, money, render};
 use aura_core_types::{BenchSource, CompareCopy, Difficulty, RunTurn};
-use aura_ui_terminal::events::MessageRole;
+use aura_ui::events::MessageRole;
 
 /// The check of [`pinned`]'s comparison, which only Opus's answer passes.
 const OPUS_CHECK: &str = "sh -c 'grep -q opus answer.txt'";
@@ -343,7 +343,7 @@ async fn the_bench_tab_follows_a_comparison_run_by_run() {
     let links = b.links.clone();
     let mut state = loop_state(&fixture, &mut b);
     let pinned = pinned(&fixture, &mut state, &links, &mut commands).await;
-    let views: Vec<&aura_ui_terminal::events::BenchView> = (pinned.shown.iter())
+    let views: Vec<&aura_ui::events::BenchView> = (pinned.shown.iter())
         .filter_map(|(_, command)| match command {
             UiCommand::BenchUpsert(view) => Some(view.as_ref()),
             _ => None,

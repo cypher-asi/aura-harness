@@ -8,8 +8,8 @@ use crate::event_loop::subagents::{lock, AgentHub};
 use aura_agent_trace::{Activity, Doing};
 use aura_core_types::time::now_ms;
 use aura_core_types::{AgentId, CompareArm, ComparePayload, Difficulty, PromptCategory};
-use aura_ui_terminal::events::{run_order, BenchDoing, BenchLiveRun};
-use aura_ui_terminal::UiCommand;
+use aura_ui::events::{run_order, BenchDoing, BenchLiveRun};
+use aura_ui::UiCommand;
 use std::time::Instant;
 
 /// A run under way.

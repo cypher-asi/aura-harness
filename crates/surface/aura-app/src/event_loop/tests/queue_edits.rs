@@ -2,7 +2,7 @@
 //! queue from the UI.
 
 use super::*;
-use aura_ui_terminal::events::QueuedItemView;
+use aura_ui::events::QueuedItemView;
 
 /// Queue `texts` behind a slow first turn of the first agent.
 async fn busy_with_queue(

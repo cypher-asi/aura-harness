@@ -22,7 +22,7 @@ use aura_model::model_catalog::{
     ModelBackend, ModelOption, ModelTier, GATE_MODEL_ID, OPENROUTER_PREFIX,
 };
 use aura_model::ThinkingEffort;
-use aura_ui_terminal::events::ModelOptionView;
+use aura_ui::events::ModelOptionView;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use tracing::warn;
@@ -421,8 +421,8 @@ impl ModelSelection {
     }
 
     /// `UiCommand::SetModels` payload for the current state.
-    pub fn ui_command(&self) -> aura_ui_terminal::UiCommand {
-        aura_ui_terminal::UiCommand::SetModels {
+    pub fn ui_command(&self) -> aura_ui::UiCommand {
+        aura_ui::UiCommand::SetModels {
             options: self.options(),
             current: self.current.clone(),
             route: self
@@ -1222,7 +1222,7 @@ mod tests {
             .select(&mut config, "aura-claude-sonnet-4-6")
             .expect("signed-in cloud model");
         assert_eq!(config.user_thinking_effort, Some(ThinkingEffort::High));
-        let aura_ui_terminal::UiCommand::SetModels { thinking, .. } = selection.ui_command() else {
+        let aura_ui::UiCommand::SetModels { thinking, .. } = selection.ui_command() else {
             panic!("expected SetModels");
         };
         assert_eq!(thinking.as_deref(), Some("high"));
@@ -1398,15 +1398,14 @@ mod tests {
     fn the_status_line_gets_gates_pick() {
         let claude = signed_in(None, &[ProviderKind::Claude]);
         let (gate, _) = selection_on(claude, GATE_MODEL_ID);
-        let aura_ui_terminal::UiCommand::SetModels { current, route, .. } = gate.ui_command()
-        else {
+        let aura_ui::UiCommand::SetModels { current, route, .. } = gate.ui_command() else {
             panic!("expected SetModels");
         };
         assert_eq!(current, GATE_MODEL_ID);
         assert_eq!(route.as_deref(), Some("claude-sonnet-4-6 (claude plan)"));
 
         let (pinned, _) = selection(None);
-        let aura_ui_terminal::UiCommand::SetModels { route, .. } = pinned.ui_command() else {
+        let aura_ui::UiCommand::SetModels { route, .. } = pinned.ui_command() else {
             panic!("expected SetModels");
         };
         assert_eq!(route, None);

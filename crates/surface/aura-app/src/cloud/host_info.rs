@@ -15,7 +15,7 @@ use aura_engine_cloud::fleet::MachineView;
 use aura_engine_cloud::github::RepoRef;
 use aura_engine_cloud::plans::PlanStatus;
 use aura_engine_cloud::repos::RepoStatus;
-use aura_ui_terminal::host::{
+use aura_ui::host::{
     format_bytes, format_duration, format_money, HostAction, HostFact, HostRow, HostSection,
     HostView, PlacementView,
 };

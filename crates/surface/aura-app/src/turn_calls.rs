@@ -30,7 +30,7 @@ use crate::record_loader::{json_payload, model_call};
 use aura_core_types::{Route, RouteReason, Transaction, TransactionType};
 use aura_model::model_catalog::{backend_for, upstream_model_name};
 use aura_model::{ModelCallPurpose, ThinkingEffort};
-use aura_ui_terminal::events::{CallUsage, SourceUsage};
+use aura_ui::events::{CallUsage, SourceUsage};
 use serde_json::Value;
 
 /// A turn's footer: its models, what all its calls used, and that split

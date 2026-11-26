@@ -31,7 +31,7 @@
 //!
 //! On the task board (see [`super::tasks`] and `turns::begin_task`),
 //! every request while the agent builds its plan is the plan's own
-//! ([`TaskView::builds`](aura_ui_terminal::events::TaskView::builds)),
+//! ([`TaskView::builds`](aura_ui::events::TaskView::builds)),
 //! and a request in plan mode links to the open plan as a task of its
 //! own; a `create_plan` call re-links it to the plan it writes.
 
@@ -49,8 +49,8 @@ use aura_exec_tools::plan_tools::{
     is_plan_path, sync_todo_list, todo_items, PlanFile, TodoStatus, PLANS_DIR,
 };
 use aura_exec_tools::todo::TodoItem;
-use aura_ui_terminal::events::{PlanView, TodoState, TodoView};
-use aura_ui_terminal::{PermissionMode, UiCommand};
+use aura_ui::events::{PlanView, TodoState, TodoView};
+use aura_ui::{PermissionMode, UiCommand};
 use std::path::Path;
 use std::time::SystemTime;
 use tracing::{info, warn};
@@ -444,7 +444,7 @@ mod tests {
     #[ignore = "load test; run with --ignored --nocapture"]
     fn plan_views_perf() {
         use super::super::tasks::{TaskRecord, TASKS_DIR};
-        use aura_ui_terminal::events::TaskView;
+        use aura_ui::events::TaskView;
 
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(PLANS_DIR)).unwrap();

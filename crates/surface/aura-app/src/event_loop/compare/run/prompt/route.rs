@@ -24,7 +24,7 @@ use aura_gate::live;
 use aura_gate::route::{Decision, Work};
 use aura_model::model_catalog::route_label;
 use aura_model::ToolDefinition;
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::warn;

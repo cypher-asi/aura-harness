@@ -14,7 +14,7 @@ use aura_exec_tools::todo::TODO_WRITE_TOOL_NAME;
 use aura_gate::compare::ModelCall;
 use aura_model::{Message, ModelCallPurpose, Usage};
 use aura_store_record::{ReadStore, StoreError};
-use aura_ui_terminal::{
+use aura_ui::{
     events::{
         ActivityData, AgentSummary, MessageData, MessageRole, PolicyDetail, ProjectSummary,
         RecordStatus, RecordSummary, MAX_RECORDS,

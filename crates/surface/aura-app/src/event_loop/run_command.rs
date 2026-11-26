@@ -15,7 +15,7 @@ use super::turns::drain_stale_inbox;
 use aura_agent_kernel::{Kernel, KernelError, ProcessResult};
 use aura_core_types::{ToolProposal, Transaction};
 use aura_model::{ContentBlock, Message, Role, ToolResultContent};
-use aura_ui_terminal::{ansi::strip_ansi, UiCommand};
+use aura_ui::{ansi::strip_ansi, UiCommand};
 use serde_json::{json, Value};
 use tracing::{error, info};
 

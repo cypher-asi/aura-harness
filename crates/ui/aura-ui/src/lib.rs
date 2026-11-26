@@ -23,4 +23,4 @@ pub mod sandbox;
 
 pub use events::{UiCommand, UiEvent};
 pub use history::InputHistory;
-pub use mode_command::{ApprovalLevel, ModeCommandError, SlashModeCommand};
+pub use mode_command::{ApprovalLevel, ModeCommandError, PermissionMode, SlashModeCommand};

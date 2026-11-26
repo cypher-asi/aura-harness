@@ -1,7 +1,7 @@
 //! What stops a comparison: its budget, or Aura quitting while it runs.
 
 use super::*;
-use aura_ui_terminal::events::BenchStatus;
+use aura_ui::events::BenchStatus;
 
 #[tokio::test]
 async fn the_budget_stops_new_runs_once_spent() {

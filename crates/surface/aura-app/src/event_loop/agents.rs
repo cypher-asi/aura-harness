@@ -33,8 +33,8 @@ use aura_exec_tools::todo::{
 use aura_exec_tools::RunScratch;
 use aura_model::{ContentBlock, Message, Role};
 use aura_store_record::ReadStore;
-use aura_ui_terminal::events::MessageData;
-use aura_ui_terminal::UiCommand;
+use aura_ui::events::MessageData;
+use aura_ui::UiCommand;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

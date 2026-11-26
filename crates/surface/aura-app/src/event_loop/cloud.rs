@@ -23,11 +23,11 @@ use std::time::Duration;
 use aura_core_types::{AgentId, Placement};
 use aura_engine_cloud::{BootEvent, BootReporter, BootStage, StageState};
 use aura_store_db::Store;
-use aura_ui_terminal::events::{
+use aura_ui::events::{
     BootLogLine, BootPlanStep, BootStageState, BootUpdate, MessageData, MessageRole, ToolData,
 };
-use aura_ui_terminal::host::{HostAction, HostRow, HostView, PlacementState, PlacementView};
-use aura_ui_terminal::UiCommand;
+use aura_ui::host::{HostAction, HostRow, HostView, PlacementState, PlacementView};
+use aura_ui::UiCommand;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};

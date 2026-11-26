@@ -16,7 +16,7 @@ use aura_engine::{
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::{BackgroundProcessHook, ToolCatalog, ToolConfig};
 use aura_model::{ModelRequestKind, ToolDefinition};
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;

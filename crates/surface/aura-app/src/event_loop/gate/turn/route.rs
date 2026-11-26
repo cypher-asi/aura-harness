@@ -15,7 +15,7 @@ use aura_core_types::{AgentId, Difficulty, PromptCategory, RouteLevel};
 use aura_gate::judge::criteria::Criteria;
 use aura_gate::live::{self, GateLive};
 use aura_gate::route::{Candidate, Decision, Work};
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::sync::Arc;
 use tracing::info;
 

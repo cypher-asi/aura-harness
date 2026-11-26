@@ -27,7 +27,7 @@ use aura_model::{
     Message, ModelCallPurpose, ModelProvider, ModelRequest, ModelRequestKind, Role, ThinkingEffort,
     ToolChoice,
 };
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;

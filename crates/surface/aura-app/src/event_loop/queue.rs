@@ -10,7 +10,7 @@
 
 use super::turns::Work;
 use aura_core_types::AgentId;
-use aura_ui_terminal::events::QueuedItemView;
+use aura_ui::events::QueuedItemView;
 use std::collections::{HashMap, VecDeque};
 
 /// One piece of queued work and its id.
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn edit_replaces_a_message_and_keeps_its_images() {
         let mut queues = WorkQueues::default();
-        let image = aura_ui_terminal::events::ImageAttachment {
+        let image = aura_ui::events::ImageAttachment {
             media_type: "image/png".to_string(),
             data: "AAAA".to_string(),
             bytes: 3,

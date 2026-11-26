@@ -28,7 +28,7 @@
 use aura_exec_tools::Sandbox;
 use aura_node::auth::check_bearer;
 use aura_node::files_api::{self, ReadOutcome, WalkedEntry, MAX_READ_BYTES, MAX_WALK_DEPTH};
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use axum::{
     extract::{Query, Request, State},
     http::StatusCode,
@@ -136,20 +136,18 @@ pub async fn start_api_server(cmd_tx: mpsc::Sender<UiCommand>, workspace_root: P
                 // it. Do NOT write it to a file: the token is only as
                 // strong as its handling.
                 if require_auth {
-                    let _ = cmd_tx.try_send(UiCommand::ShowMessage(
-                        aura_ui_terminal::events::MessageData {
-                            role: aura_ui_terminal::events::MessageRole::System,
-                            content: format!("API server bearer token: {token}"),
-                            is_streaming: false,
-                            timestamp_ms: None,
-                            command: None,
-                            activity: None,
-                            model: None,
-                            usage: None,
-                            sources: Vec::new(),
-                            boot: None,
-                        },
-                    ));
+                    let _ = cmd_tx.try_send(UiCommand::ShowMessage(aura_ui::events::MessageData {
+                        role: aura_ui::events::MessageRole::System,
+                        content: format!("API server bearer token: {token}"),
+                        is_streaming: false,
+                        timestamp_ms: None,
+                        command: None,
+                        activity: None,
+                        model: None,
+                        usage: None,
+                        sources: Vec::new(),
+                        boot: None,
+                    }));
                 }
 
                 if port != API_PORT {

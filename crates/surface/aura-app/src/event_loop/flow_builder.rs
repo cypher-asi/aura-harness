@@ -23,9 +23,7 @@ use aura_core_types::{
 use aura_exec_tools::agents::send_to_agent::SEND_TO_AGENT_TOOL_NAME;
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_model::ModelCallPurpose;
-use aura_ui_terminal::events::{
-    FlowBench, FlowKind, FlowLane, FlowNode, FlowUsage, TraceNodeStatus,
-};
+use aura_ui::events::{FlowBench, FlowKind, FlowLane, FlowNode, FlowUsage, TraceNodeStatus};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 

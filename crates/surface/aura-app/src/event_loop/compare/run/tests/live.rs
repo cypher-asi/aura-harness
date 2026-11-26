@@ -2,7 +2,7 @@
 
 use super::super::live::bench_doing;
 use aura_agent_trace::{Activity, Doing};
-use aura_ui_terminal::events::BenchDoing;
+use aura_ui::events::BenchDoing;
 
 #[test]
 fn a_run_under_way_says_what_its_model_is_doing() {

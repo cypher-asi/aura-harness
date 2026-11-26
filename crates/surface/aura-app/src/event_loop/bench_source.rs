@@ -11,7 +11,7 @@ use aura_core_types::{AgentId, BenchSource, Reference, SessionBaseline};
 use aura_gate::compare::{relative, title, SessionPick};
 use aura_gate::judge::blind::MAX_DIFF;
 use aura_model::{Message, Role};
-use aura_ui_terminal::events::BenchSession;
+use aura_ui::events::BenchSession;
 use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

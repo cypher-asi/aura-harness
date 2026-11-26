@@ -27,7 +27,7 @@ use aura_gate::judge::criteria::Criteria;
 use aura_gate::live;
 use aura_gate::route::Decision;
 use aura_model::{Message, ToolDefinition};
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;

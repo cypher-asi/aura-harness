@@ -12,8 +12,8 @@ use crate::file_checkpoints::{FileCheckpoints, RestoreReport, Turn, TurnManifest
 use crate::record_loader::chat_from_messages;
 use aura_core_types::{AgentId, Hash, SystemKind, Transaction, TransactionType};
 use aura_model::{Message, Role};
-use aura_ui_terminal::events::RewindScope;
-use aura_ui_terminal::UiCommand;
+use aura_ui::events::RewindScope;
+use aura_ui::UiCommand;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -182,7 +182,7 @@ fn session_diff(
     started_ms: u64,
     whole_session: bool,
     workspace: Option<&Path>,
-) -> Option<(String, Vec<aura_ui_terminal::events::FileDiffData>)> {
+) -> Option<(String, Vec<aura_ui::events::FileDiffData>)> {
     if whole_session {
         let manifests = files.session_manifests(agent_id, started_ms);
         if manifests.is_empty() {

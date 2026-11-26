@@ -38,7 +38,7 @@ use crate::model_selection::{may_be_alias, ModelSelection};
 use crate::session_helpers;
 use anyhow::Context;
 use aura_core_modes::AgentMode;
-use aura_ui_terminal::{ApprovalLevel, PermissionMode};
+use aura_ui::{ApprovalLevel, PermissionMode};
 use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;

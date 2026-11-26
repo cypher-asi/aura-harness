@@ -16,7 +16,7 @@ use super::agents::AgentSession;
 use super::run_command::{process_user_proposal, terminal_output, RUN_COMMAND_TOOL};
 use super::turns::drain_stale_inbox;
 use aura_core_types::{OutcomeSignal, ToolProposal};
-use aura_ui_terminal::ansi::strip_ansi;
+use aura_ui::ansi::strip_ansi;
 use std::fmt::Write;
 
 /// `ToolProposal::source` of check commands.

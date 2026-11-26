@@ -11,7 +11,7 @@ use crate::event_loop::handlers::system_message;
 use crate::event_loop::LoopState;
 use crate::isolation::changes;
 use aura_core_types::{AgentId, CompareArm, ComparePayload, CompareStatus};
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 
 /// The comparison `host` holds, else the latest recorded, once it has
 /// ended, for apply, diff and dismiss.

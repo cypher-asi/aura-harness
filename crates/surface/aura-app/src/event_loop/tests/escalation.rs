@@ -6,7 +6,7 @@
 
 use super::*;
 use aura_core_types::{CompareStatus, Difficulty};
-use aura_ui_terminal::events::MessageRole;
+use aura_ui::events::MessageRole;
 
 const HAIKU: &str = "aura-claude-haiku-4-5";
 const SONNET: &str = "aura-claude-sonnet-4-6";

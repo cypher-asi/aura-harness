@@ -18,8 +18,8 @@ use aura_model::{
     MockProvider, MockResponse, ModelProvider, ModelRequest, ModelResponse, ReasonerError,
 };
 use aura_store_db::RocksStore;
-use aura_ui_terminal::events::{PolicyView, RewindScope, ToolPolicyState};
-use aura_ui_terminal::{ApprovalLevel, PermissionMode};
+use aura_ui::events::{PolicyView, RewindScope, ToolPolicyState};
+use aura_ui::{ApprovalLevel, PermissionMode};
 use tempfile::TempDir;
 use tokio::sync::{Barrier, Semaphore};
 
@@ -532,7 +532,7 @@ fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCommand>) {
         commands: commands_tx.clone(),
         long_run: crate::long_run::LongRunSettings::default(),
         mode: PermissionMode::Agent,
-        approval: aura_ui_terminal::ApprovalLevel::Ask,
+        approval: aura_ui::ApprovalLevel::Ask,
         approvals: Some(Arc::clone(&approvals)),
         instructions: crate::project_instructions::ProjectInstructions::only_in(workspace.path()),
         processes: ProcessTable::without_os_scan(None, None),
@@ -708,8 +708,8 @@ fn message(agent_id: AgentId, text: &str, shown: bool) -> UiEvent {
     }
 }
 
-fn png(data: &str) -> aura_ui_terminal::events::ImageAttachment {
-    aura_ui_terminal::events::ImageAttachment {
+fn png(data: &str) -> aura_ui::events::ImageAttachment {
+    aura_ui::events::ImageAttachment {
         media_type: "image/png".to_string(),
         data: data.to_string(),
         bytes: 3,
@@ -1893,7 +1893,7 @@ async fn a_mode_switch_is_recorded_before_it_takes_effect() {
 /// Whether the Agents panel rows say each agent is in plan mode, by hex
 /// id: from the lists sent to the UI, then from the hub's summaries.
 fn plan_marks(hub: &subagents::AgentHub) -> [HashMap<String, bool>; 2] {
-    let marks = |rows: Vec<aura_ui_terminal::events::AgentSummary>| {
+    let marks = |rows: Vec<aura_ui::events::AgentSummary>| {
         rows.into_iter()
             .map(|row| (row.id, row.plan_mode))
             .collect::<HashMap<_, _>>()

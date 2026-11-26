@@ -13,7 +13,7 @@ use crate::record_loader::scan_tail;
 use aura_agent_kernel::RecordObserver;
 use aura_core_types::{AgentId, RecordEntry};
 use aura_store_record::ReadStore;
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};

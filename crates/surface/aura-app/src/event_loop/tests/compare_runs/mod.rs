@@ -45,9 +45,7 @@ mod stopping;
 
 use super::*;
 use aura_core_types::{ArmSpec, CompareArm, ComparePayload, CompareRun, CompareStatus};
-use aura_ui_terminal::events::{
-    BenchExample, BenchRequest, BenchSession, BenchSpec, BenchView, BenchWork,
-};
+use aura_ui::events::{BenchExample, BenchRequest, BenchSession, BenchSpec, BenchView, BenchWork};
 
 const SONNET: &str = "aura-claude-sonnet-4-6";
 const OPUS: &str = "aura-claude-opus-4-7";

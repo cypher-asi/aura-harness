@@ -1,6 +1,6 @@
 //! A run's diff split per file for the diff view.
 
-use aura_ui_terminal::events::FileDiffData;
+use aura_ui::events::FileDiffData;
 
 /// `patch` (a `git diff`) as one entry per file, each with its hunks.
 pub(crate) fn split_patch(patch: &str) -> Vec<FileDiffData> {

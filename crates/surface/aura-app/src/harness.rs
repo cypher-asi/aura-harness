@@ -18,7 +18,7 @@ use aura_core_types::{AgentPermissions, Transaction};
 use aura_exec_tools::todo::TodoWriteTool;
 use aura_exec_tools::{BackgroundProcessHook, ToolConfig, ToolExecutor};
 use aura_model::ModelProvider;
-use aura_ui_terminal::{ApprovalLevel, PermissionMode, UiCommand};
+use aura_ui::{ApprovalLevel, PermissionMode, UiCommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;

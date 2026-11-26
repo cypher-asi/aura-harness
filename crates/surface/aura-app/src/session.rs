@@ -20,7 +20,7 @@ use anyhow::Context;
 use aura_agent::AgentLoop;
 use aura_agent_kernel::RecordObserver;
 use aura_exec_tools::BackgroundProcessHook;
-use aura_ui_terminal::{UiCommand, UiEvent};
+use aura_ui::{UiCommand, UiEvent};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -44,7 +44,7 @@ pub struct SessionOptions {
     pub allow_unrestricted_full_access: bool,
     /// Approval level agents start at (`--approval`); `None` reads
     /// `AURA_TUI_APPROVAL`, else `yolo`
-    pub approval: Option<aura_ui_terminal::ApprovalLevel>,
+    pub approval: Option<aura_ui::ApprovalLevel>,
 }
 
 impl Default for SessionOptions {

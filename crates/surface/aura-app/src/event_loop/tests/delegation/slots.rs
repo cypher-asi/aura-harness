@@ -2,7 +2,7 @@
 
 use super::*;
 use aura_core_types::SubagentExit;
-use aura_ui_terminal::events::{ProcessKind, ProcessStatus};
+use aura_ui::events::{ProcessKind, ProcessStatus};
 
 /// Task rows of the Processes tab that are running.
 fn count_running(fixture: &Fixture) -> usize {

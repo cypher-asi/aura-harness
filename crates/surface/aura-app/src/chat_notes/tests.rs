@@ -1,5 +1,5 @@
 use super::*;
-use aura_ui_terminal::events::BootStageState;
+use aura_ui::events::BootStageState;
 
 fn boot(id: &str, update: BootUpdate) -> UiCommand {
     UiCommand::Boot {

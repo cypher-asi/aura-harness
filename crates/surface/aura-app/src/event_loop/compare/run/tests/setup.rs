@@ -3,7 +3,7 @@
 use super::super::setup::{fixture, set_up, FIXTURES};
 use crate::bench_pack::{self, ExampleTask};
 use crate::repo_source::{ImageSource, Source};
-use aura_ui_terminal::events::BenchTaskSetup;
+use aura_ui::events::BenchTaskSetup;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 

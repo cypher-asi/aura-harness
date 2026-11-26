@@ -6,7 +6,7 @@
 use super::support::open_project;
 use super::*;
 use crate::event_loop::subagents::tests::request;
-use aura_ui_terminal::events::{AgentSummary, ChannelSummary, ProjectSummary};
+use aura_ui::events::{AgentSummary, ChannelSummary, ProjectSummary};
 use std::path::PathBuf;
 
 /// Channel `#site` in project A, made and opened through the UI, with a

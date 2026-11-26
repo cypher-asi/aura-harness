@@ -4,7 +4,7 @@
 use aura_core_types::{ArmSpec, CompareStatus};
 use aura_gate::compare::NO_DELEGATE;
 use aura_model::model_catalog::route_label;
-use aura_ui_terminal::events::BenchCost;
+use aura_ui::events::BenchCost;
 use std::borrow::Cow;
 
 /// `$0.004`, `$1.25`, or `free` for nothing.

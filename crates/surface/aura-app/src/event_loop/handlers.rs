@@ -18,10 +18,8 @@ use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use aura_core_types::{RecordEntry, Transaction};
 use aura_gate::lead::LeadExecutor;
-use aura_ui_terminal::events::{
-    MessageData, MessageRole, ProcessKind, ProcessStatus, ProcessSummary,
-};
-use aura_ui_terminal::UiCommand;
+use aura_ui::events::{MessageData, MessageRole, ProcessKind, ProcessStatus, ProcessSummary};
+use aura_ui::UiCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 

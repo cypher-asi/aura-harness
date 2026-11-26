@@ -15,12 +15,12 @@ use aura_gate::compare::{
     judge_cost_usd, judge_unpriced_calls, summarize, task_cells, turn_cells, CompareRequest,
     SessionPick,
 };
-use aura_ui_terminal::events::{
+use aura_ui::events::{
     run_order, BenchArm, BenchBaseline, BenchExample, BenchJudge, BenchRequest, BenchRun,
     BenchSpec, BenchStatus, BenchTaskCell, BenchTaskRow, BenchTaskSetup, BenchTokens, BenchTurn,
     BenchVerdict, BenchView, BenchWork,
 };
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 
 /// A request from the BENCH tab for `agent_id`, the agent a new benchmark
 /// starts from or whose chat shows a run's diff.

@@ -13,7 +13,7 @@ use aura_agent_kernel::Kernel;
 use aura_core_types::time::now_ms;
 use aura_core_types::trace::{Reward, RewardKind, RewardTarget};
 use aura_core_types::{CompareCopy, OutcomePayload};
-use aura_ui_terminal::UiCommand;
+use aura_ui::UiCommand;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::warn;
