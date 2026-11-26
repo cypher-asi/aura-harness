@@ -99,6 +99,16 @@ opt-level = 1
 [profile.dev.package.aura-ui]
 opt-level = 1
 
+# Opening an agent decodes up to a thousand of its newest record entries
+# in code compiled into these two crates: the store's reads are generic,
+# so they are built in aura-store-db. Unoptimized, reading a thousand
+# entries takes ~30 ms; optimized, ~8 ms.
+[profile.dev.package.aura-store-db]
+opt-level = 2
+
+[profile.dev.package.aura-core-types]
+opt-level = 2
+
 [profile.test]
 debug = 0
 

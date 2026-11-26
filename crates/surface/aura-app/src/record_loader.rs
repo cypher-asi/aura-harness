@@ -96,6 +96,52 @@ pub fn load_existing_records(
     }
 }
 
+/// The newest entries of an agent's record: as many as rebuilding its
+/// chat, its model conversation and its plan path reads. Opening an agent
+/// needs all three, so it reads them once.
+#[derive(Debug, Default)]
+pub struct RecordTail {
+    /// The record's head when it was read
+    head: u64,
+    /// Oldest first
+    entries: Vec<RecordEntry>,
+}
+
+impl RecordTail {
+    /// The newest entries of `agent_id`'s record.
+    ///
+    /// # Errors
+    /// Returns the store error if the head sequence or scan fails.
+    pub fn read(store: &dyn ReadStore, agent_id: AgentId) -> Result<Self, StoreError> {
+        let head = store.get_head_seq(agent_id)?;
+        let entries = scan_below(store, agent_id, head, HISTORY_SCAN_LIMIT)?;
+        Ok(Self { head, entries })
+    }
+
+    /// The record's head when it was read.
+    #[must_use]
+    pub const fn head(&self) -> u64 {
+        self.head
+    }
+
+    /// The entries, oldest first.
+    #[must_use]
+    pub fn entries(&self) -> &[RecordEntry] {
+        &self.entries
+    }
+
+    /// [`model_history_since`], from these entries.
+    #[must_use]
+    pub fn model_history_since(&self, after_seq: u64) -> Option<Vec<Message>> {
+        entries_past(self.head, after_seq)?;
+        messages_after(
+            self.entries
+                .iter()
+                .filter(|entry| entry.seq > after_seq && entry.seq <= self.head),
+        )
+    }
+}
+
 /// Rebuild the conversation the model sees from an agent's record: its
 /// prompts and replies since the last session start, oldest first. Tool
 /// calls are left out; their `tool_use`/`tool_result` pairs can't be
@@ -104,11 +150,22 @@ pub fn load_existing_records(
 /// # Errors
 /// Returns the store error if the head sequence or scan fails.
 pub fn model_history(store: &dyn ReadStore, agent_id: AgentId) -> Result<Vec<Message>, StoreError> {
+    Ok(model_history_from(&scan_tail(
+        store,
+        agent_id,
+        HISTORY_SCAN_LIMIT,
+    )?))
+}
+
+/// [`model_history`] from `entries`, the newest of the record, oldest
+/// first.
+#[must_use]
+pub fn model_history_from(entries: &[RecordEntry]) -> Vec<Message> {
     let mut messages = Vec::new();
-    for entry in scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)? {
+    for entry in entries {
         push_model_message(&mut messages, &entry.tx);
     }
-    Ok(messages)
+    messages
 }
 
 /// The prompts and replies recorded after `after_seq`, for replaying on
@@ -124,24 +181,38 @@ pub fn model_history_since(
     after_seq: u64,
 ) -> Result<Option<Vec<Message>>, StoreError> {
     let head_seq = store.get_head_seq(agent_id)?;
-    if head_seq < after_seq {
+    let Some(newer) = entries_past(head_seq, after_seq) else {
         return Ok(None);
-    }
-    let newer = usize::try_from(head_seq - after_seq).unwrap_or(usize::MAX);
-    if newer > HISTORY_SCAN_LIMIT {
-        return Ok(None);
-    }
-    let mut messages = Vec::new();
+    };
     if newer == 0 {
-        return Ok(Some(messages));
+        return Ok(Some(Vec::new()));
     }
-    for entry in store.scan_record(agent_id, after_seq + 1, newer)? {
+    Ok(messages_after(&store.scan_record(
+        agent_id,
+        after_seq + 1,
+        newer,
+    )?))
+}
+
+/// How many entries a record with head `head_seq` holds past a checkpoint
+/// taken at `after_seq`, while the checkpoint applies: it is not ahead of
+/// the record, and what came after it is few enough to scan.
+fn entries_past(head_seq: u64, after_seq: u64) -> Option<usize> {
+    let newer = usize::try_from(head_seq.checked_sub(after_seq)?).unwrap_or(usize::MAX);
+    (newer <= HISTORY_SCAN_LIMIT).then_some(newer)
+}
+
+/// The prompts and replies in `entries`, recorded after a checkpoint;
+/// `None` when a session started among them.
+fn messages_after<'a>(entries: impl IntoIterator<Item = &'a RecordEntry>) -> Option<Vec<Message>> {
+    let mut messages = Vec::new();
+    for entry in entries {
         if entry.tx.tx_type == TransactionType::SessionStart {
-            return Ok(None);
+            return None;
         }
         push_model_message(&mut messages, &entry.tx);
     }
-    Ok(Some(messages))
+    Some(messages)
 }
 
 /// Add what `tx` contributes to the model's view of the conversation.
@@ -235,13 +306,24 @@ pub fn conversation_history(
     store: &dyn ReadStore,
     agent_id: AgentId,
 ) -> Result<Vec<MessageData>, StoreError> {
+    Ok(conversation_from(&scan_tail(
+        store,
+        agent_id,
+        HISTORY_SCAN_LIMIT,
+    )?))
+}
+
+/// [`conversation_history`] from `entries`, the newest of the record,
+/// oldest first.
+#[must_use]
+pub fn conversation_from(entries: &[RecordEntry]) -> Vec<MessageData> {
     let mut history: Vec<MessageData> = Vec::new();
     // Tool use id -> (index in `history`, proposal time)
     let mut tool_calls: HashMap<String, (usize, u64)> = HashMap::new();
     // The models of the current turn, and where its replies are in `history`
     let mut calls = TurnCalls::default();
     let mut replies: Vec<usize> = Vec::new();
-    for entry in scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)? {
+    for entry in entries {
         let tx = &entry.tx;
         match calls.see(tx) {
             Seen::NewTurn => replies.clear(),
@@ -289,7 +371,7 @@ pub fn conversation_history(
                 }
             }
             TransactionType::ToolExecution => {
-                let Some(execution) = tool_execution(&entry) else {
+                let Some(execution) = tool_execution(entry) else {
                     continue;
                 };
                 if let Some(&(index, proposed_at)) = tool_calls.get(&execution.tool_use_id) {
@@ -304,7 +386,7 @@ pub fn conversation_history(
         }
     }
     let skip = history.len().saturating_sub(HISTORY_MESSAGE_LIMIT);
-    Ok(history.into_iter().skip(skip).collect())
+    history.into_iter().skip(skip).collect()
 }
 
 /// Put the footer of a reply's turn, its models and their usage, on `reply`.
@@ -479,6 +561,13 @@ pub fn latest_plan_path(store: &dyn ReadStore, agent_id: AgentId) -> Option<Stri
     let entries = scan_tail(store, agent_id, HISTORY_SCAN_LIMIT)
         .inspect_err(|e| warn!(error = %e, "Failed to scan record for plans"))
         .ok()?;
+    latest_plan_path_in(&entries)
+}
+
+/// [`latest_plan_path`] from `entries`, the newest of the record, oldest
+/// first.
+#[must_use]
+pub fn latest_plan_path_in(entries: &[RecordEntry]) -> Option<String> {
     entries
         .iter()
         .rev()
@@ -556,11 +645,14 @@ pub(crate) struct ListRows {
 
 impl ListRows {
     /// The rows of every list, in one walk of each. `running` holds the
-    /// agents currently working on a task for their parent. The open
-    /// agent is marked active in whichever list it is in, since an
+    /// agents currently working on a task for their parent. `active`, the
+    /// open agent, is marked active in whichever list it is in, since an
     /// archived agent can be opened without leaving the Archive.
-    pub(crate) fn build(registry: &AgentRegistry, running: &HashSet<AgentId>) -> Self {
-        let active = registry.current().agent_id();
+    pub(crate) fn build(
+        registry: &AgentRegistry,
+        running: &HashSet<AgentId>,
+        active: AgentId,
+    ) -> Self {
         let mut names = ProjectNames::default();
         let listed = rows(registry, registry.tree(), active, running, &mut names);
         let archived = rows(
@@ -938,6 +1030,17 @@ pub(crate) fn scan_tail(
     limit: usize,
 ) -> Result<Vec<RecordEntry>, StoreError> {
     let head_seq = store.get_head_seq(agent_id)?;
+    scan_below(store, agent_id, head_seq, limit)
+}
+
+/// The newest `limit` entries of `agent_id`'s record up to `head_seq`,
+/// oldest first.
+fn scan_below(
+    store: &dyn ReadStore,
+    agent_id: AgentId,
+    head_seq: u64,
+    limit: usize,
+) -> Result<Vec<RecordEntry>, StoreError> {
     if head_seq == 0 {
         return Ok(Vec::new());
     }

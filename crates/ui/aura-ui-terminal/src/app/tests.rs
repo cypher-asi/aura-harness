@@ -1139,6 +1139,24 @@ fn test_new_records_keep_the_highlight_on_its_record() {
     assert_eq!(app.records().len(), 5);
 }
 
+/// The session reads an agent's records for the panel after it shows the
+/// agent's chat; records the agent writes meanwhile come on their own,
+/// before the ones read.
+#[test]
+fn test_records_written_after_the_panel_was_read_stay_after_them() {
+    let (mut app, _rx) = app_with_agents();
+    app.process_command(UiCommand::NewRecord(record_of("aa", 1)));
+    app.process_command(UiCommand::SetRecords(Vec::new()));
+    assert_eq!(app.records().len(), 1, "read before its first record");
+
+    app.process_command(UiCommand::NewRecord(record_of("aa", 7)));
+    app.process_command(UiCommand::SetRecords(
+        (1..=6).map(|seq| record_of("aa", seq)).collect(),
+    ));
+    let seqs: Vec<u64> = app.records().iter().map(|r| r.seq).collect();
+    assert_eq!(seqs, [1, 2, 3, 4, 5, 6, 7]);
+}
+
 #[test]
 fn test_agent_command_selects_by_number_and_name() {
     let (mut app, mut rx) = app_with_agents();
@@ -5901,7 +5919,7 @@ fn load_chat_of(app: &mut App, id: &str, text: &str) {
 }
 
 #[test]
-fn switching_to_an_agent_not_in_memory_is_immediate_and_fades_in_once_loaded() {
+fn switching_to_an_agent_not_in_memory_is_immediate_and_shows_a_quick_load_at_once() {
     let (mut app, mut rx) = app_with_agents();
     app.handle_command("/agent 2");
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
@@ -5909,6 +5927,20 @@ fn switching_to_an_agent_not_in_memory_is_immediate_and_fades_in_once_loaded() {
     assert!(app.chat_loading());
     assert!(app.chat_animating());
     assert!(app.chat_fading().is_none());
+
+    load_chat_of(&mut app, "bb", "bb's history");
+    assert!(!app.chat_loading());
+    assert!(app.chat_fading().is_none(), "a quick load does not fade in");
+    assert!(app.messages().iter().any(|m| m.content() == "bb's history"));
+}
+
+#[test]
+fn a_chat_that_was_said_to_be_loading_fades_in_once_loaded() {
+    let (mut app, mut rx) = app_with_agents();
+    app.handle_command("/agent 2");
+    let _ = rx.try_recv();
+    app.chat_loading_since = Instant::now().checked_sub(super::run_log::LOADING_DELAY);
+    assert!(app.chat_loading_shown());
 
     load_chat_of(&mut app, "bb", "bb's history");
     assert!(!app.chat_loading());
@@ -5987,7 +6019,10 @@ fn chat_ready_ends_the_wait_for_a_live_chat() {
         command: Box::new(UiCommand::ChatReady),
     });
     assert!(!app.chat_loading());
-    assert!(app.chat_fading().is_some());
+    assert!(
+        app.chat_fading().is_none(),
+        "a quick answer shows it at once"
+    );
 }
 
 #[test]

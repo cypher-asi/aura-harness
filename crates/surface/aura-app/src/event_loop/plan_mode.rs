@@ -40,6 +40,7 @@ use super::agents::AgentSession;
 use super::handlers::system_message;
 use super::hud::todo_views;
 use super::modes;
+use super::tasks::PlanTasks;
 use super::turns::{Prompt, Request};
 use super::LoopState;
 use aura_context_prompts::model_messages::build_plan::{build_plan_prompt, continue_plan_note};
@@ -57,16 +58,19 @@ use tracing::{info, warn};
 /// The plan at `path` (relative to `workspace`) as the UI shows it, or
 /// `None` when it can't be read.
 pub(crate) fn plan_view(workspace: &Path, path: &str) -> Option<PlanView> {
+    let plan = plan_file(workspace, path)?;
+    Some(view_of(path, plan, &PlanTasks::load(workspace)))
+}
+
+/// The plan file at `path` (relative to `workspace`), when `path` names a
+/// plan and the file reads.
+fn plan_file(workspace: &Path, path: &str) -> Option<PlanFile> {
     if !is_plan_path(path) {
         return None;
     }
-    match PlanFile::load(&workspace.join(path)) {
-        Ok(plan) => Some(view_of(workspace, path, plan)),
-        Err(e) => {
-            warn!(%path, error = %e, "Could not read plan");
-            None
-        }
-    }
+    PlanFile::load(&workspace.join(path))
+        .inspect_err(|e| warn!(%path, error = %e, "Could not read plan"))
+        .ok()
 }
 
 /// Every readable plan in `workspace`, most recently changed first.
@@ -74,7 +78,7 @@ pub(crate) fn plan_views(workspace: &Path) -> Vec<PlanView> {
     let Ok(entries) = std::fs::read_dir(workspace.join(PLANS_DIR)) else {
         return Vec::new();
     };
-    let mut plans: Vec<(SystemTime, PlanView)> = entries
+    let plans: Vec<(SystemTime, String, PlanFile)> = entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = format!("{PLANS_DIR}/{}", entry.file_name().to_str()?);
@@ -82,15 +86,39 @@ pub(crate) fn plan_views(workspace: &Path) -> Vec<PlanView> {
                 .metadata()
                 .and_then(|meta| meta.modified())
                 .unwrap_or(SystemTime::UNIX_EPOCH);
-            Some((changed, plan_view(workspace, &path)?))
+            let plan = plan_file(workspace, &path)?;
+            Some((changed, path, plan))
         })
         .collect();
-    plans.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
-    plans.into_iter().map(|(_, view)| view).collect()
+    if plans.is_empty() {
+        return Vec::new();
+    }
+    // Each plan links its todos to the tasks doing them; the task folder
+    // can hold hundreds, so it is read once for all of them.
+    let tasks = PlanTasks::load(workspace);
+    let mut views: Vec<(SystemTime, PlanView)> = plans
+        .into_iter()
+        .map(|(changed, path, plan)| (changed, view_of(&path, plan, &tasks)))
+        .collect();
+    views.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
+    views.into_iter().map(|(_, view)| view).collect()
 }
 
-fn view_of(workspace: &Path, path: &str, plan: PlanFile) -> PlanView {
-    let tasks = super::tasks::plan_tasks(workspace, path);
+/// The plan at `path` in `workspace`: its view among `plans`, read from
+/// the workspace already, else read now ([`plan_view`]).
+pub(crate) fn plan_view_among(
+    plans: &[PlanView],
+    workspace: &Path,
+    path: &str,
+) -> Option<PlanView> {
+    plans
+        .iter()
+        .find(|plan| plan.path == path)
+        .cloned()
+        .or_else(|| plan_view(workspace, path))
+}
+
+fn view_of(path: &str, plan: PlanFile, tasks: &PlanTasks) -> PlanView {
     PlanView {
         path: path.to_string(),
         name: plan.meta.name,
@@ -102,7 +130,7 @@ fn view_of(workspace: &Path, path: &str, plan: PlanFile) -> PlanView {
                 content: todo.content,
                 state: todo_state(todo.status),
                 assignee: todo.assignee,
-                task: tasks.get(&todo.id).cloned(),
+                task: tasks.task(path, &todo.id).map(str::to_string),
             })
             .collect(),
     }
@@ -176,19 +204,6 @@ pub(super) async fn send_plan_of(state: &LoopState<'_>, agent_id: AgentId) {
         .await;
 }
 
-/// Show the Plans and Tasks tabs every plan and task in `agent_id`'s
-/// workspace.
-pub(super) async fn send_plans_of(state: &LoopState<'_>, agent_id: AgentId) {
-    let Some(kernel) = state.kernel_for(agent_id) else {
-        return;
-    };
-    let workspace = kernel.agent_workspace();
-    AgentUi::new(state.commands.clone(), agent_id)
-        .send(UiCommand::SetPlans(plan_views(&workspace)))
-        .await;
-    state.hub.factory.tasks.send_all(agent_id, &workspace).await;
-}
-
 /// What the user may type to build the plan, once trimmed, lowercased
 /// and without a trailing `.` or `!`.
 const BUILD_PHRASES: [&str; 8] = [
@@ -256,7 +271,7 @@ pub(super) async fn start_build(
     session.todos = todo_items(&plan);
     session.active_plan = Some(path.clone());
     session.building_plan = true;
-    let view = view_of(&workspace, &path, plan);
+    let view = view_of(&path, plan, &PlanTasks::load(&workspace));
     ui.send(system_message(format!("Building {}", view.name)))
         .await;
     ui.send(UiCommand::SetTodos(todo_views(&session.todos)))
@@ -318,8 +333,8 @@ pub(super) async fn continue_build(
         ui.send(UiCommand::SetTodos(todo_views(&session.todos)))
             .await;
     }
-    ui.send(UiCommand::SetPlan(Some(view_of(&workspace, path, plan))))
-        .await;
+    let view = view_of(path, plan, &PlanTasks::load(&workspace));
+    ui.send(UiCommand::SetPlan(Some(view))).await;
     true
 }
 
@@ -419,6 +434,74 @@ mod tests {
         assert_eq!(names, ["New", "Old"]);
         assert_eq!(plans[0].path, ".aura/plans/new_00000002.plan.md");
         assert_eq!(plans[0].todos[0].state, TodoState::Completed);
+    }
+
+    /// How long the Plans tab takes to read in a workspace whose agents
+    /// built plans for a while: 20 plans of 8 todos, and 600 tasks of
+    /// about 4 KB each on disk, as `.aura` holds after weeks of use.
+    ///
+    /// ```text
+    /// cargo test -p aura-app --lib plan_views_perf -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "load test; run with --ignored --nocapture"]
+    fn plan_views_perf() {
+        use super::super::tasks::{TaskRecord, TASKS_DIR};
+        use aura_ui_terminal::events::TaskView;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(PLANS_DIR)).unwrap();
+        std::fs::create_dir_all(dir.path().join(TASKS_DIR)).unwrap();
+        let todo_ids: Vec<String> = (0..8).map(|t| format!("todo-{t}")).collect();
+        for plan in 0..20 {
+            let todos: String = todo_ids
+                .iter()
+                .map(|id| format!("  - id: {id}\n    content: Do {id}\n    status: pending\n"))
+                .collect();
+            let text = format!("---\nname: Plan {plan}\ntodos:\n{todos}---\n\nBody.\n");
+            let file = format!("plan-{plan}_{plan:08x}.plan.md");
+            std::fs::write(dir.path().join(PLANS_DIR).join(file), text).unwrap();
+        }
+        let words = "Read the record once and derive the rest from it. ".repeat(8);
+        for task in 0..600u64 {
+            let plan = task % 20;
+            let record = TaskRecord {
+                view: TaskView {
+                    id: format!("{task:016x}"),
+                    title: format!("Task {task}"),
+                    plan: Some(format!("{PLANS_DIR}/plan-{plan}_{plan:08x}.plan.md")),
+                    plan_todo: Some(todo_ids[usize::try_from(task / 20 % 8).unwrap()].clone()),
+                    items: todo_ids
+                        .iter()
+                        .map(|id| TodoView {
+                            content: format!("{id}: {words}"),
+                            state: TodoState::Completed,
+                            assignee: None,
+                            task: None,
+                        })
+                        .collect(),
+                    summary: Some(words.clone()),
+                    ..TaskView::default()
+                },
+                created_ms: task,
+                tool_use_id: None,
+            };
+            let json = serde_json::to_vec_pretty(&record).unwrap();
+            let path = dir.path().join(TASKS_DIR).join(format!("{task:016x}.json"));
+            std::fs::write(path, json).unwrap();
+        }
+
+        let start = std::time::Instant::now();
+        let plans = plan_views(dir.path());
+        let took = start.elapsed();
+        println!(
+            "plan_views over 20 plans and 600 tasks: {:.1} ms",
+            took.as_secs_f64() * 1000.0
+        );
+        assert_eq!(plans.len(), 20);
+        assert!(plans
+            .iter()
+            .all(|plan| plan.todos.iter().all(|todo| todo.task.is_some())));
     }
 
     #[test]

@@ -39,6 +39,7 @@ mod queue;
 pub(crate) mod record_ui;
 mod rewind;
 pub(crate) mod run_command;
+mod side_panels;
 pub(crate) mod steering;
 pub(crate) mod subagents;
 pub(crate) mod task_check;
@@ -156,6 +157,9 @@ pub(super) struct LoopState<'a> {
     /// Id of the channel on screen, between `UiEvent::OpenChannel` and
     /// `UiEvent::CloseChannel`.
     pub(super) open_channel: Option<String>,
+    /// The job filling the panels beside the chat of the agent on screen
+    /// (see [`side_panels`])
+    side_panels: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl LoopState<'_> {
@@ -269,6 +273,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         flow,
         cloud: cloud::CloudState::new(cloud_store),
         open_channel: None,
+        side_panels: None,
     };
     let mut notice_rx = state.hub.take_notices();
     let mut mail_rx = state.hub.open_mail();
@@ -324,6 +329,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             }
         }
     }
+    state.stop_side_panels();
     shut_down(&mut state, &mut done_rx).await;
     publisher.abort();
     state.processes.save();

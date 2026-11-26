@@ -128,7 +128,7 @@ const LIVE_EVERY: Duration = Duration::from_secs(1);
 const RELOAD_GIVE_UP: Duration = Duration::from_secs(10);
 
 /// How long the chat stays blank waiting for its records before it says
-/// it is loading, so a quick load shows no message at all.
+/// it is loading, so a quick load shows no message and no fade at all.
 pub const LOADING_DELAY: Duration = Duration::from_millis(150);
 
 /// How long a log takes to fade in once it arrives.

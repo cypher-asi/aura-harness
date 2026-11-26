@@ -415,7 +415,7 @@ pub struct AgentHubParts {
 
 /// What [`AgentHub::send_agent_list`] sends, laid out in one walk of the
 /// registry.
-struct AgentLists {
+pub(super) struct AgentLists {
     /// The projects, the Agents panel rows and the Archive
     commands: [UiCommand; 3],
     /// The agent the rows mark active
@@ -941,6 +941,12 @@ impl AgentHub {
     /// read after it is released, so the event loop and the spawns don't
     /// wait on the reads.
     fn agent_lists_with_active(&self) -> AgentLists {
+        self.agent_lists_marking(None)
+    }
+
+    /// [`Self::agent_lists_with_active`] with `active` marked as the open
+    /// agent, or the registry's when `None`.
+    fn agent_lists_marking(&self, active: Option<AgentId>) -> AgentLists {
         let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
         let mut rows = {
             let registry = lock(&self.registry);
@@ -950,7 +956,8 @@ impl AgentHub {
                     .iter()
                     .map(|agent| (agent.agent_id(), agent.display_name())),
             );
-            crate::record_loader::ListRows::build(&registry, &running)
+            let active = active.unwrap_or_else(|| registry.current().agent_id());
+            crate::record_loader::ListRows::build(&registry, &running, active)
         };
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
         for (agent_id, row) in rows.listed.iter_mut().chain(rows.archived.iter_mut()) {
@@ -999,18 +1006,30 @@ impl AgentHub {
     /// active agent to the UI, then the channels, whose member rows show
     /// the same names and activity.
     pub async fn send_agent_list(&self) {
-        self.send_lists(true).await;
+        self.send_lists(self.agent_lists_with_active(), true).await;
     }
 
-    /// [`Self::send_agent_list`] for a switch, which has just sent the
-    /// active agent: sent again, the UI would put it on screen a second
-    /// time, asking again for the LOG, GRAPH and BENCH it shows.
-    pub(crate) async fn send_agent_list_after_switch(&self) {
-        self.send_lists(false).await;
+    /// The lists for a switch to `active`, which they mark open, built on
+    /// a blocking thread: with hundreds of agents they take a while, and
+    /// the switch reads the agent's record meanwhile. `None` if building
+    /// them failed.
+    pub(super) async fn lists_for_switch(self: &Arc<Self>, active: AgentId) -> Option<AgentLists> {
+        let hub = Arc::clone(self);
+        tokio::task::spawn_blocking(move || hub.agent_lists_marking(Some(active)))
+            .await
+            .inspect_err(|e| warn!(error = %e, "Could not build the agent lists"))
+            .ok()
     }
 
-    async fn send_lists(&self, with_active: bool) {
-        let lists = self.agent_lists_with_active();
+    /// Send `lists`, built for a switch, and the channels. Not the active
+    /// agent: the switch sends it, and sent again, the UI would put it on
+    /// screen a second time, asking again for the LOG, GRAPH and BENCH it
+    /// shows.
+    pub(super) async fn send_switch_lists(&self, lists: AgentLists) {
+        self.send_lists(lists, false).await;
+    }
+
+    async fn send_lists(&self, lists: AgentLists, with_active: bool) {
         for list in lists.commands {
             let _ = self.commands.send(list).await;
         }

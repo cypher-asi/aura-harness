@@ -658,7 +658,9 @@ impl App {
     /// Record detail view included. Otherwise the detail view closes, and
     /// the highlight stays on its record, or follows the newest when it
     /// was on it. Records all of another agent, sent for an agent the
-    /// screen has left since, are dropped.
+    /// screen has left since, are dropped. The agent's records newer than
+    /// all of `records` stay after them: written after `records` were read,
+    /// they came on their own before them.
     fn cmd_set_records(&mut self, records: Vec<crate::events::RecordSummary>) {
         let sent = records.len();
         let active = &self.active_agent_id;
@@ -671,6 +673,15 @@ impl App {
         if sent > 0 && kept.is_empty() {
             return;
         }
+        let read_up_to = kept.back().map_or(0, |record| record.seq);
+        kept.extend(
+            self.records
+                .iter()
+                .filter(|record| {
+                    !active.is_empty() && record.agent_id == *active && record.seq > read_up_to
+                })
+                .cloned(),
+        );
         let excess = kept.len().saturating_sub(super::MAX_RECORDS);
         kept.drain(..excess);
         let same = |a: &crate::events::RecordSummary, b: &crate::events::RecordSummary| {

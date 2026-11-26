@@ -129,19 +129,32 @@ fn load_from(dir: &Path) -> Vec<TaskRecord> {
     records
 }
 
-/// For each todo of the plan at workspace-relative `plan`, the newest
-/// task doing it.
-pub(crate) fn plan_tasks(workspace: &Path, plan: &str) -> HashMap<String, String> {
-    let mut tasks = HashMap::new();
-    for record in load_all(workspace) {
-        let view = record.view;
-        if let (Some(path), Some(todo)) = (view.plan, view.plan_todo) {
-            if path == plan {
-                tasks.entry(todo).or_insert(view.id);
+/// For each plan, by workspace-relative path, the newest task doing each
+/// of its todos.
+#[derive(Debug, Default)]
+pub(crate) struct PlanTasks(HashMap<String, HashMap<String, String>>);
+
+impl PlanTasks {
+    /// The tasks kept in `workspace`.
+    pub(crate) fn load(workspace: &Path) -> Self {
+        let mut plans: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for record in load_all(workspace) {
+            let view = record.view;
+            if let (Some(plan), Some(todo)) = (view.plan, view.plan_todo) {
+                plans
+                    .entry(plan)
+                    .or_default()
+                    .entry(todo)
+                    .or_insert(view.id);
             }
         }
+        Self(plans)
     }
-    tasks
+
+    /// The newest task doing todo `todo` of the plan at `plan`.
+    pub(crate) fn task(&self, plan: &str, todo: &str) -> Option<&str> {
+        self.0.get(plan)?.get(todo).map(String::as_str)
+    }
 }
 
 /// How a request ended, given whether it was cancelled or failed and
@@ -670,31 +683,41 @@ impl TaskBoard {
         self.show(shown).await;
     }
 
-    /// Every task in `workspace`, for the TASKS tab of `agent`, which
-    /// works there. Tasks an earlier run left running are open now.
+    /// [`Self::all_in`], shown in `agent`'s TASKS tab.
+    #[cfg(test)]
     pub(crate) async fn send_all(&self, agent: AgentId, workspace: &Path) {
-        let views = {
-            let mut board = lock(&self.board);
-            board.workspaces.insert(agent, workspace.to_path_buf());
-            let dir = tasks_dir(&board.aside, workspace);
-            let mut records = load_from(&dir);
-            if board.recovered.insert(workspace.to_path_buf()) {
-                let live: HashSet<&str> = board
-                    .current
-                    .values()
-                    .map(|current| current.record.view.id.as_str())
-                    .collect();
-                for record in &mut records {
-                    if record.view.state == TaskState::Running
-                        && !live.contains(record.view.id.as_str())
-                    {
-                        record.view.state = TaskState::Open;
-                        keep(&dir, record);
-                    }
+        let views = self.all_in(agent, workspace);
+        self.send_tasks(agent, views).await;
+    }
+
+    /// Every task in `workspace`, for the TASKS tab of `agent`, which
+    /// works there. Tasks an earlier run left running are open now. Reads
+    /// every task file, so it is called off the event loop.
+    pub(crate) fn all_in(&self, agent: AgentId, workspace: &Path) -> Vec<TaskView> {
+        let mut board = lock(&self.board);
+        board.workspaces.insert(agent, workspace.to_path_buf());
+        let dir = tasks_dir(&board.aside, workspace);
+        let mut records = load_from(&dir);
+        if board.recovered.insert(workspace.to_path_buf()) {
+            let live: HashSet<&str> = board
+                .current
+                .values()
+                .map(|current| current.record.view.id.as_str())
+                .collect();
+            for record in &mut records {
+                if record.view.state == TaskState::Running
+                    && !live.contains(record.view.id.as_str())
+                {
+                    record.view.state = TaskState::Open;
+                    keep(&dir, record);
                 }
             }
-            records.into_iter().map(|record| record.view).collect()
-        };
+        }
+        records.into_iter().map(|record| record.view).collect()
+    }
+
+    /// Show `agent` the tasks `views` in its TASKS tab.
+    pub(crate) async fn send_tasks(&self, agent: AgentId, views: Vec<TaskView>) {
         if let Some((commands, _)) = &self.ui {
             let _ = commands
                 .send(UiCommand::ForAgent {
@@ -1047,8 +1070,8 @@ mod tests {
         assert!(request.view.builds, "the request that builds the plan");
         assert!(!spawned.view.builds);
         assert_eq!(
-            plan_tasks(dir.path(), ".aura/plans/p.plan.md").get("parser"),
-            Some(&id)
+            PlanTasks::load(dir.path()).task(".aura/plans/p.plan.md", "parser"),
+            Some(id.as_str())
         );
     }
 

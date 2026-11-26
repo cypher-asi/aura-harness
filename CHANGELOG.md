@@ -7,6 +7,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### An agent's chat opens quickly
+
+##### Fixed
+
+- Opening an agent whose chat isn't held yet puts its chat on screen
+  much sooner. The session reads the agent's newest record entries
+  once for its chat, its plan and its model conversation, where it
+  read them three times, and rebuilds the chat while the agent's
+  session opens and the agents list is laid out, all away from the
+  loop that handles the UI. In a development build the record work of
+  a first open went from about 110 ms to about 25 ms for a thousand
+  entries.
+- The Record panel, the Plans and TASKS tabs, the plan strip and the
+  TRACE tab fill in after the chat, side by side. Clicking through
+  agents no longer waits on each one's long record or full task folder,
+  and switching away stops filling the panels of the agent left.
+- The Plans tab reads the task folder once for all plans instead of
+  once per plan: with 20 plans and 600 tasks it takes about 40 ms
+  instead of 380 ms in a development build.
+- A chat that arrives before it would say it is loading (150 ms) shows
+  at once instead of fading in; only a slower load fades in.
+- A record the agent writes while its Record panel is being read stays
+  in the panel.
+
+##### Changed
+
+- Development builds optimize `aura-store-db` and `aura-core-types`
+  (`opt-level = 2`), where record entries are decoded: reading a
+  thousand of them takes about 8 ms instead of 30 ms.
+
 ### Benchmarks have their own app
 
 ##### Changed

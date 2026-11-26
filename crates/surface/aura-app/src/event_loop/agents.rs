@@ -8,13 +8,14 @@
 //! changes which agent the UI shows; agents keep working meanwhile.
 
 use super::agent_events::AgentUi;
-use super::subagents::lock;
+use super::side_panels::ms_since;
+use super::subagents::{lock, AgentHub, AgentLists};
 use super::tasks::TaskBoard;
 use super::LoopState;
 use crate::agent_registry::{Opened, RegisteredAgent};
 use crate::file_checkpoints::FileCheckpoints;
 use crate::record_loader::{
-    conversation_history, latest_plan_path, recent_record_summaries, ByHead,
+    conversation_from, latest_plan_path_in, model_history_from, RecordTail,
 };
 use crate::session_checkpoint::{
     is_resumable, now_ms, Checkpoints, SessionCheckpoint, SessionUsage,
@@ -33,13 +34,15 @@ use aura_exec_tools::todo::{
 use aura_exec_tools::RunScratch;
 use aura_model::{ContentBlock, Message, Role};
 use aura_store_record::ReadStore;
+use aura_ui_terminal::events::MessageData;
 use aura_ui_terminal::UiCommand;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Live state for one agent.
 pub struct AgentSession {
@@ -299,18 +302,11 @@ impl KernelFactory {
     }
 
     /// The agent's current checkpoint with what the record holds beyond
-    /// it, when the checkpoint still applies.
-    fn restore(&self, agent_id: AgentId) -> Option<SessionCheckpoint> {
+    /// it (in `tail`, its newest entries), when the checkpoint still
+    /// applies.
+    fn restore(&self, agent_id: AgentId, tail: &RecordTail) -> Option<SessionCheckpoint> {
         let mut checkpoint = self.checkpoints.as_ref()?.load_current(agent_id)?;
-        let newer = crate::record_loader::model_history_since(
-            self.store.as_ref(),
-            agent_id,
-            checkpoint.record_seq,
-        )
-        .unwrap_or_else(|e| {
-            warn!(error = %e, "Failed to read the record past the checkpoint");
-            None
-        })?;
+        let newer = tail.model_history_since(checkpoint.record_seq)?;
         if !is_resumable(&checkpoint.messages) {
             checkpoint.messages.pop();
         }
@@ -330,6 +326,22 @@ impl KernelFactory {
         agent: &RegisteredAgent,
         parent_chain: Vec<AgentId>,
         folder: Option<PathBuf>,
+    ) -> anyhow::Result<AgentSession> {
+        let tail = read_tail(self.store.as_ref(), agent.agent_id());
+        self.open_from(agent, parent_chain, folder, &tail)
+    }
+
+    /// [`Self::open`] with `tail`, the newest entries of the agent's
+    /// record, read already.
+    ///
+    /// # Errors
+    /// Returns an error if the kernel cannot be constructed.
+    pub fn open_from(
+        &self,
+        agent: &RegisteredAgent,
+        parent_chain: Vec<AgentId>,
+        folder: Option<PathBuf>,
+        tail: &RecordTail,
     ) -> anyhow::Result<AgentSession> {
         let identity = agent.identity();
         let salt = inherited(&self.cache_salts, identity.agent_id, &parent_chain);
@@ -354,7 +366,7 @@ impl KernelFactory {
         });
         // A finished plan is not picked back up; the next `/plan` writes
         // a new one.
-        let active_plan = latest_plan_path(self.store.as_ref(), identity.agent_id)
+        let active_plan = latest_plan_path_in(tail.entries())
             .filter(|path| !super::plan_mode::is_finished_plan(&kernel.agent_workspace(), path));
         let mut session = AgentSession {
             identity,
@@ -374,22 +386,26 @@ impl KernelFactory {
             lead: false,
             tasks: Arc::clone(&self.tasks),
         };
-        if let Some(checkpoint) = self.restore(session.agent_id()) {
+        if let Some(checkpoint) = self.restore(session.agent_id(), tail) {
             info!(agent = %session.agent_id(), "Resuming session from checkpoint");
             session.restore(checkpoint);
         } else {
-            let messages =
-                crate::record_loader::model_history(self.store.as_ref(), session.agent_id())
-                    .unwrap_or_else(|e| {
-                        warn!(error = %e, "Failed to rebuild model history from record");
-                        Vec::new()
-                    });
+            let messages = model_history_from(tail.entries());
             session.todos = super::plan_mode::unfinished_todos(todos_from_history(&messages));
             session.messages = messages;
             session.resume_plan_build();
         }
         Ok(session)
     }
+}
+
+/// The newest entries of `agent_id`'s record, or none when they can't be
+/// read: the agent then opens with an empty conversation.
+fn read_tail(store: &dyn ReadStore, agent_id: AgentId) -> RecordTail {
+    RecordTail::read(store, agent_id).unwrap_or_else(|e| {
+        warn!(%agent_id, error = %e, "Failed to read the record");
+        RecordTail::default()
+    })
 }
 
 /// Shows post-edit check results in the agent's chat. The model gets the
@@ -873,8 +889,32 @@ pub(super) fn open_session(
     state: &LoopState<'_>,
     agent_id: AgentId,
 ) -> Result<AgentSession, String> {
+    open_registered(&state.hub, agent_id, |registered, folder| {
+        state.hub.factory.open(registered, Vec::new(), folder)
+    })
+}
+
+/// [`open_session`] from `tail`, the newest entries of the agent's
+/// record, read already.
+fn open_session_from(
+    hub: &AgentHub,
+    agent_id: AgentId,
+    tail: &RecordTail,
+) -> Result<AgentSession, String> {
+    open_registered(hub, agent_id, |registered, folder| {
+        hub.factory.open_from(registered, Vec::new(), folder, tail)
+    })
+}
+
+/// Open the registered agent `agent_id` in its project's folder with
+/// `open`.
+fn open_registered(
+    hub: &AgentHub,
+    agent_id: AgentId,
+    open: impl FnOnce(&RegisteredAgent, Option<PathBuf>) -> anyhow::Result<AgentSession>,
+) -> Result<AgentSession, String> {
     let (registered, folder) = {
-        let registry = lock(&state.hub.registry);
+        let registry = lock(&hub.registry);
         (
             registry.find(agent_id).cloned(),
             registry.project_folder(agent_id),
@@ -883,14 +923,74 @@ pub(super) fn open_session(
     let Some(registered) = registered else {
         return Err("Unknown agent".to_string());
     };
-    state
-        .hub
-        .factory
-        .open(&registered, Vec::new(), folder)
-        .map_err(|e| {
-            warn!(error = %e, "Failed to open agent kernel");
-            format!("Could not open agent {}: {e}", registered.name)
-        })
+    open(&registered, folder).map_err(|e| {
+        warn!(error = %e, "Failed to open agent kernel");
+        format!("Could not open agent {}: {e}", registered.name)
+    })
+}
+
+/// What a switch reads of the agent coming on screen.
+struct SwitchReads {
+    /// The session opened for it, when it had none
+    session: Option<Result<AgentSession, String>>,
+    /// Its chat, when one is to be sent
+    chat: Option<Vec<MessageData>>,
+}
+
+/// Read what a switch to `agent_id` needs, on a blocking thread: with
+/// `open` a session opened from its record, and with `chat` its chat.
+/// Both come from one read of the record's newest entries, and the chat
+/// is rebuilt while the session opens. With `activate` the agent, once
+/// open, is saved as the active one.
+fn read_for_switch(
+    hub: &AgentHub,
+    agent_id: AgentId,
+    open: bool,
+    chat: bool,
+    activate: bool,
+) -> SwitchReads {
+    let store = hub.factory.store.as_ref();
+    let kept = if chat {
+        let head = store.get_head_seq(agent_id).ok();
+        head.and_then(|head| lock(&hub.shown_chats).kept(agent_id, head))
+    } else {
+        None
+    };
+    let rebuild = chat && kept.is_none();
+    let tail = if open || rebuild {
+        RecordTail::read(store, agent_id)
+            .inspect_err(|e| warn!(%agent_id, error = %e, "Failed to read the record"))
+            .ok()
+    } else {
+        None
+    };
+    // An unreadable record opens the agent with an empty conversation and
+    // shows an empty chat.
+    let unread = RecordTail::default();
+    let entries = tail.as_ref().unwrap_or(&unread);
+    let (session, rebuilt) = std::thread::scope(|scope| {
+        let rebuilt = rebuild.then(|| scope.spawn(|| conversation_from(entries.entries())));
+        // Here, not on the scoped thread: building a kernel needs the
+        // runtime this blocking thread belongs to.
+        let session = open.then(|| open_session_from(hub, agent_id, entries));
+        let rebuilt =
+            rebuilt.map(|job| job.join().unwrap_or_else(|e| std::panic::resume_unwind(e)));
+        (session, rebuilt)
+    });
+    if let (Some(chat), Some(tail)) = (&rebuilt, &tail) {
+        lock(&hub.shown_chats).keep(agent_id, tail.head(), chat.clone());
+    }
+    if activate && session.as_ref().is_none_or(Result::is_ok) {
+        if let Err(e) = lock(&hub.registry).set_active(agent_id) {
+            warn!(error = %e, "Failed to persist active agent");
+        }
+    }
+    SwitchReads {
+        session,
+        chat: kept
+            .or(rebuilt)
+            .map(|chat| crate::chat_notes::with_notes(agent_id, chat)),
+    }
 }
 
 /// Show `agent_id`. Agents keep working while another one is shown.
@@ -900,51 +1000,76 @@ pub(super) fn open_session(
 /// for a live one, or [`UiCommand::SwitchFailed`].
 async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId, chat: Chat) {
     state.park_finished_spawns().await;
-    if agent_id == state.active {
-        if chat == Chat::Reload {
-            // A UI that showed another agent in the meantime asks for this
-            // one's chat again.
-            show_active_agent(state, chat).await;
-        } else {
-            // Confirm it all the same: a UI that switched on screen ahead
-            // waits for this answer before taking the session's next one.
-            let _ = state
-                .commands
-                .send(UiCommand::SetActiveAgent(agent_id.to_hex()))
-                .await;
-            state.hub.send_agent_list_after_switch().await;
+    let switching = agent_id != state.active;
+    if !switching && chat == Chat::Keep {
+        // Confirm it all the same: a UI that switched on screen ahead
+        // waits for this answer before taking the session's next one.
+        let _ = state
+            .commands
+            .send(UiCommand::SetActiveAgent(agent_id.to_hex()))
+            .await;
+        if let Some(lists) = state.hub.lists_for_switch(agent_id).await {
+            state.hub.send_switch_lists(lists).await;
         }
         return;
     }
-    if !state.idle.contains_key(&agent_id) && !state.hub.is_running(agent_id) {
-        match open_session(state, agent_id) {
-            Ok(session) => {
-                state.idle.insert(agent_id, session);
-            }
-            Err(problem) => {
-                show_error(state, problem).await;
-                let _ = state
-                    .commands
-                    .send(UiCommand::SwitchFailed(agent_id.to_hex()))
-                    .await;
-                return;
-            }
+    if switching {
+        // What it would still send is for the agent going off screen.
+        state.stop_side_panels();
+    }
+    // A UI that showed another agent in the meantime asks for the active
+    // one's chat again; it gets it as any other switch does.
+    let started = Instant::now();
+    let running = state.hub.is_running(agent_id);
+    let open = !running && !state.idle.contains_key(&agent_id);
+    let load_chat = chat == Chat::Reload && !running;
+    let hub = Arc::clone(&state.hub);
+    let (read, lists) = tokio::join!(
+        tokio::task::spawn_blocking(move || {
+            read_for_switch(&hub, agent_id, open, load_chat, switching)
+        }),
+        state.hub.lists_for_switch(agent_id),
+    );
+    let read = read.unwrap_or_else(|e| SwitchReads {
+        session: Some(Err(format!("Could not open the agent: {e}"))),
+        chat: None,
+    });
+    let read_ms = ms_since(started);
+    match read.session {
+        Some(Ok(session)) => {
+            state.idle.insert(agent_id, session);
         }
+        Some(Err(problem)) => {
+            show_error(state, problem).await;
+            let _ = state
+                .commands
+                .send(UiCommand::SwitchFailed(agent_id.to_hex()))
+                .await;
+            return;
+        }
+        None => {}
     }
     state.active = agent_id;
-
-    if let Err(e) = lock(&state.hub.registry).set_active(agent_id) {
-        warn!(error = %e, "Failed to persist active agent");
-    }
-
-    show_active_agent(state, chat).await;
+    show_active_agent(state, chat, read.chat, lists).await;
+    debug!(
+        %agent_id,
+        opened = open,
+        read_ms,
+        total_ms = ms_since(started),
+        "Switched to an agent"
+    );
 }
 
-/// Switch the UI to the active agent and fill the Record panel and, with
-/// [`Chat::Reload`], the chat with its history. A busy agent's chat is
-/// already live in the UI.
-pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
-    let store = state.hub.factory.store.as_ref();
+/// Switch the UI to the active agent: its lists, with [`Chat::Reload`] its
+/// chat (`history`, or [`UiCommand::ChatReady`] for a busy agent, whose
+/// chat is live in the UI already), then its panels. The panels beside
+/// the chat fill in after the switch, in a job of their own.
+async fn show_active_agent(
+    state: &mut LoopState<'_>,
+    chat: Chat,
+    history: Option<Vec<MessageData>>,
+    lists: Option<AgentLists>,
+) {
     let agent_id = state.active;
 
     state.hub.record_panel.set(agent_id);
@@ -953,82 +1078,37 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
         .send(UiCommand::SetActiveAgent(agent_id.to_hex()))
         .await;
     // The lists go first: a new or restored agent shows up in them, and an
-    // archived one leaves them, before its history has been read.
-    state.hub.send_agent_list_after_switch().await;
-    // The chat next: it is what the UI waits on, blank, while the rest
-    // (records, traces) can fill in after it.
+    // archived one leaves them, before its history is sent.
+    if let Some(lists) = lists {
+        state.hub.send_switch_lists(lists).await;
+    }
+    // The chat next: it is what the UI waits on, blank.
     if chat == Chat::Reload {
         // A coordinator's chat shows its channel's posts among its
-        // messages. They go first, so the chat that fades in has them
-        // already instead of reflowing a moment later when they come.
+        // messages. They go first, so the chat shows with them instead of
+        // reflowing a moment later when they come.
         super::channels::send_posts_of(state.commands, &state.hub, agent_id).await;
-        if state.hub.is_running(agent_id) {
-            // Its chat is live in the UI already; say so, so a UI that
-            // switched to it ahead of this answer stops waiting.
-            AgentUi::new(state.commands.clone(), agent_id)
-                .send(UiCommand::ChatReady)
-                .await;
-        } else {
-            let history = ByHead::get_or_read_off_loop(
-                &state.hub.shown_chats,
-                &state.hub.factory.store,
-                agent_id,
-                conversation_history,
-            )
-            .await
-            .unwrap_or_else(|e| {
-                warn!(error = %e, "Failed to rebuild conversation from record");
-                Vec::new()
-            });
-            let history = crate::chat_notes::with_notes(agent_id, history);
-            AgentUi::new(state.commands.clone(), agent_id)
-                .send(UiCommand::LoadConversation(history))
-                .await;
-            super::hud::send_session_of(state, agent_id).await;
+        let ui = AgentUi::new(state.commands.clone(), agent_id);
+        match history {
+            Some(history) => {
+                ui.send(UiCommand::LoadConversation(history)).await;
+                super::hud::send_session_of(state, agent_id).await;
+            }
+            // Say so, so a UI that switched to it ahead of this answer
+            // stops waiting.
+            None => ui.send(UiCommand::ChatReady).await,
         }
-    }
-    // One replace-all command: clears the previous agent's records even
-    // when this agent's history can't be read.
-    let read = ByHead::get_or_read_off_loop(
-        &state.hub.shown_records,
-        &state.hub.factory.store,
-        agent_id,
-        recent_record_summaries,
-    )
-    .await;
-    let (records, problem) = match read {
-        Ok(summaries) => (summaries, None),
-        Err(e) => (Vec::new(), Some(e)),
-    };
-    let has_records = store.get_head_seq(agent_id).map_or(true, |head| head > 0);
-    let _ = state.commands.send(UiCommand::SetRecords(records)).await;
-    if let Some(e) = problem {
-        let _ = state
-            .commands
-            .send(UiCommand::ShowWarning(format!(
-                "Could not load record history: {e}"
-            )))
-            .await;
-    }
-    // An agent with nothing recorded has never run, so it has no stored
-    // run to look for, and looking finds none only after reading every
-    // run's metadata.
-    if has_records || state.hub.is_running(agent_id) {
-        state.hub.traces.send_history(agent_id).await;
     }
 
     super::modes::send_mode(state, agent_id).await;
     super::policies::send_policies_of(state, agent_id).await;
     super::hud::send_instructions_of(state, agent_id).await;
-    super::plan_mode::send_plans_of(state, agent_id).await;
+    send_sandbox_root(state).await;
     if state.hub.is_running(agent_id) {
         // Its turn shows its plan again when it next changes.
         let _ = state.commands.send(UiCommand::SetPlan(None)).await;
-    } else {
-        super::plan_mode::send_plan_of(state, agent_id).await;
     }
-
-    send_sandbox_root(state).await;
+    state.fill_side_panels(agent_id);
 }
 
 /// Point the Sandbox panel at the active agent's workspace, creating it

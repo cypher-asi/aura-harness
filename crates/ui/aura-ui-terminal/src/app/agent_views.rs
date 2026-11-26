@@ -17,13 +17,13 @@
 //! them up to date.
 //!
 //! A chat that holds its agent's history (`loaded`) comes back on screen
-//! at once. One that doesn't waits for it blank, says it is loading after
-//! [`LOADING_DELAY`], and fades in over [`FADE_IN`](super::run_log::FADE_IN)
-//! once the history (a
+//! at once. One that doesn't waits for it blank until the history (a
 //! `LoadConversation`) or word that the live chat is current
-//! (`ChatReady`) arrives. The loading state is swapped with the rest of
-//! the chat, so an answer for an agent no longer on screen still ends its
-//! wait.
+//! (`ChatReady`) arrives, and is shown then. A wait longer than
+//! [`LOADING_DELAY`] says it is loading, and the chat that ends it fades
+//! in over [`FADE_IN`](super::run_log::FADE_IN). The loading state is
+//! swapped with the rest of the chat, so an answer for an agent no longer
+//! on screen still ends its wait.
 
 use super::run_log::{fade_progress, LOADING_DELAY};
 use super::sandbox::SandboxTree;
@@ -154,11 +154,17 @@ impl App {
         }
     }
 
-    /// The chat on screen holds its agent's history now. One that was
-    /// waiting for it fades in; one shown all along stays as it is.
+    /// The chat on screen holds its agent's history now. One that waited
+    /// long enough to say it was loading fades in; one that waited less,
+    /// or was shown all along, is shown as it is: fading in after a wait
+    /// too short to see only holds it back.
     pub(super) fn reveal_chat(&mut self) {
         self.chat_loaded = true;
-        if self.chat_loading_since.take().is_some() {
+        if self
+            .chat_loading_since
+            .take()
+            .is_some_and(|at| at.elapsed() >= LOADING_DELAY)
+        {
             self.chat_revealed_at = Some(Instant::now());
         }
     }

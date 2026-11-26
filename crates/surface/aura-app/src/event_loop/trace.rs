@@ -211,26 +211,26 @@ impl Traces {
     /// Show `agent`'s latest stored run in its TRACE tab, once, when it
     /// has no live run.
     pub(crate) async fn send_history(&self, agent: AgentId) {
+        if let Some(history) = self.history_of(agent) {
+            let _ = self.commands.send(history).await;
+        }
+    }
+
+    /// What [`Self::send_history`] sends, if anything. Reads the stored
+    /// run, so it is called off the event loop.
+    pub(crate) fn history_of(&self, agent: AgentId) -> Option<UiCommand> {
         if lock(&self.live).contains_key(&agent) || !lock(&self.shown).insert(agent) {
-            return;
+            return None;
         }
-        let Some(trace) = self.latest(agent) else {
-            return;
-        };
+        let trace = self.latest(agent)?;
         let nodes = full_view(&self.graph_of(&trace));
-        if nodes.is_empty() {
-            return;
-        }
-        let _ = self
-            .commands
-            .send(UiCommand::ForAgent {
-                agent_id: agent.to_hex(),
-                command: Box::new(UiCommand::GraphUpsert {
-                    run_id: trace.meta.run_id.clone(),
-                    nodes,
-                }),
-            })
-            .await;
+        (!nodes.is_empty()).then(|| UiCommand::ForAgent {
+            agent_id: agent.to_hex(),
+            command: Box::new(UiCommand::GraphUpsert {
+                run_id: trace.meta.run_id.clone(),
+                nodes,
+            }),
+        })
     }
 
     /// Store `reward` on run `run_id`, open or not.

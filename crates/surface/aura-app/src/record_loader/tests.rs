@@ -1140,9 +1140,9 @@ fn list_rows_match_the_registry_for_compares_and_the_archive() {
     );
 
     let running = HashSet::from([run_b.agent_id()]);
-    let mut rows = ListRows::build(&registry, &running);
-    rows.read_activity(&store, &mut LastActive::default());
     let active = registry.active().agent_id();
+    let mut rows = ListRows::build(&registry, &running, active);
+    rows.read_activity(&store, &mut LastActive::default());
     assert_eq!(rows.active, active);
     let check = |rows: &[(AgentId, AgentSummary)],
                  tree: Vec<(&crate::agent_registry::RegisteredAgent, usize)>,

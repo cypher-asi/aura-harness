@@ -1,7 +1,8 @@
 //! Where the time goes when the session loads an agent's chat, measured on
 //! a temp `RocksDB` store holding an agent with a realistic large record:
 //! the scan, the chat rebuild, the Record panel summaries, the plan path,
-//! the model history and the agent/channel list rows.
+//! the model history, the single read a first open makes for the chat,
+//! plan path and model history together, and the agent/channel list rows.
 //!
 //! Ignored by default:
 //!
@@ -17,8 +18,9 @@
 
 use aura_app::agent_registry::AgentRegistry;
 use aura_app::record_loader::{
-    agent_summaries, archived_summaries, conversation_history, latest_plan_path, model_history,
-    recent_record_summaries, ByHead,
+    agent_summaries, archived_summaries, conversation_from, conversation_history, latest_plan_path,
+    latest_plan_path_in, model_history, model_history_from, recent_record_summaries, ByHead,
+    RecordTail,
 };
 use aura_core_types::{
     ActionId, AgentId, Effect, EffectKind, EffectStatus, PolicyDecision, PolicyRule, PolicySource,
@@ -355,6 +357,22 @@ fn main_bench(entries: usize) {
         model_history(store_read, active).expect("model history")
     });
     println!("    {} model messages", model.len());
+
+    // A first open reads the newest entries once, then rebuilds the chat
+    // from them while the session opens with the plan path and the model
+    // history from the same entries.
+    let tail = time("RecordTail::read (the one read of a first open)", 5, || {
+        RecordTail::read(store_read, active).expect("tail")
+    });
+    time("conversation_from (chat, from the tail)", 3, || {
+        conversation_from(tail.entries()).len()
+    });
+    time("latest_plan_path_in + model_history_from (open)", 3, || {
+        (
+            latest_plan_path_in(tail.entries()),
+            model_history_from(tail.entries()).len(),
+        )
+    });
 
     // The list the session sends on every switch.
     time("registry.tree() (rows to build)", 5, || {

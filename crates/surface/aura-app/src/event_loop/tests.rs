@@ -685,6 +685,7 @@ fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopState<'a> {
         flow: None,
         cloud: super::cloud::CloudState::default(),
         open_channel: None,
+        side_panels: None,
     }
 }
 
@@ -746,6 +747,14 @@ async fn next_done(done: &mut mpsc::Receiver<WorkDone>) -> WorkDone {
         .await
         .expect("agent work did not finish")
         .expect("work channel closed")
+}
+
+/// Wait for the job filling the side panels of the agent on screen, so
+/// [`drain`] gets what it sends too.
+async fn settle(state: &mut LoopState<'_>) {
+    if let Some(job) = state.side_panels.take() {
+        job.await.unwrap();
+    }
 }
 
 /// Commands sent so far, with the agent each was addressed to.
@@ -1360,6 +1369,7 @@ async fn a_created_agent_is_listed_before_its_history_is_sent() {
         &links,
     )
     .await;
+    settle(&mut state).await;
     let created = state.active.to_hex();
     let sent = drain(&mut commands);
     let listed = position_of(
@@ -3489,6 +3499,7 @@ async fn focusing_an_agent_makes_it_active_without_reloading_its_chat() {
 
     handle_ui_event(&mut state, UiEvent::FocusAgent(first.to_hex()), &links).await;
     assert_eq!(state.active, first);
+    settle(&mut state).await;
     let focused = drain(&mut commands);
     assert!(matches!(
         focused.first(),
@@ -3521,6 +3532,7 @@ async fn a_selected_agent_gets_its_chat_before_its_records() {
         &links,
     )
     .await;
+    settle(&mut state).await;
     let sent = drain(&mut commands);
     let at = |wanted: fn(&UiCommand) -> bool| sent.iter().position(|(_, c)| wanted(c));
     let chat = at(|c| matches!(c, UiCommand::LoadConversation(_))).expect("chat sent");
