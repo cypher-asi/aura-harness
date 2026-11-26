@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::app::{DetailView, PanelFocus, SidePanelTab};
 use crate::events::{TaskState, TodoState, TodoView, UiCommand, UiEvent};

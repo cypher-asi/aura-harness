@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn text(line: &Line<'_>) -> String {

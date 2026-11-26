@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::app::AppState;
 use crate::events::{AgentSummary, UiCommand, UiEvent};

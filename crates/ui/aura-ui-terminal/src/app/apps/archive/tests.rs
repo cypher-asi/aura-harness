@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::app::{AgentsTab, PanelFocus};
 use crate::events::UiCommand;

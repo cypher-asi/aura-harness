@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::components::{LiveOutput, MORE_PAGE_LINES};
 use crate::themes::Theme;

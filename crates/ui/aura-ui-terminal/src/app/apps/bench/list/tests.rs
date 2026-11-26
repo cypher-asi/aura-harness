@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::app::{AgentsTab, ChatTab};
 use crate::events::{BenchArm, BenchRun, BenchView, UiCommand, UiEvent};

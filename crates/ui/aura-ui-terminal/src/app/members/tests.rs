@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::events::{AgentSummary, UiCommand, UiEvent};
 use tokio::sync::mpsc;

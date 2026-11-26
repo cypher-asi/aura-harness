@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn project(id: &str, name: &str) -> ProjectSummary {

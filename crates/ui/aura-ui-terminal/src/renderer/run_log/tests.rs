@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::events::{LogRunView, LogStepView, LogTurnView, UiCommand};
 use ratatui::{backend::TestBackend, Terminal};

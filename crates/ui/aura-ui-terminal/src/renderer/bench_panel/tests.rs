@@ -1,4 +1,3 @@
-
 use crate::events::{
     BenchArm, BenchLiveRun, BenchRun, BenchStatus, BenchTaskRow, BenchTaskSetup, BenchView,
     UiCommand,

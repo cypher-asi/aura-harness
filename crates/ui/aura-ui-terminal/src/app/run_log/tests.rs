@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::events::{LogRunView, LogStatus, LogStepView, LogTurnView};
 

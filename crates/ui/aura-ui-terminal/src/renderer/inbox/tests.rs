@@ -1,4 +1,3 @@
-
 use crate::events::{AgentSummary, MailView, UiCommand};
 use crate::{App, Theme};
 use crate::{PaneTab, RecordsTab};

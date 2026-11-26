@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::app::ChatTab;
 use crate::events::{FlowLane, FlowNode, TraceNodeStatus, UiCommand};

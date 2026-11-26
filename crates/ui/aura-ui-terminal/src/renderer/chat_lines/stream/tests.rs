@@ -1,4 +1,3 @@
-
 use super::super::{content_lines, ChatLineCache, GroupState};
 use super::*;
 use crate::renderer::text::Measure;

@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn call(input: u64, read: u64, write: u64, cost: Option<f64>) -> CallStats {

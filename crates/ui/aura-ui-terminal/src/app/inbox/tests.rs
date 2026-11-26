@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::events::{AgentSummary, ProcessKind, ProcessStatus, ProcessSummary, UiCommand};
 use crossterm::event::KeyModifiers;

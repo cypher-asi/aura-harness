@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::events::{AgentSummary, BenchArm, BenchRun, UiCommand};
 use tokio::sync::mpsc;

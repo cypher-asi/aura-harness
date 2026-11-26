@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::app::PanelFocus;
 use crate::events::{ProcessKind, ProcessStatus, UiCommand};

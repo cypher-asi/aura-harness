@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn model(id: &str, label: &str, available: bool) -> ModelOptionView {

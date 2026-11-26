@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::events::{BenchBaseline, BenchJudge, BenchRun, UiCommand};
 use ratatui::{backend::TestBackend, Terminal};
