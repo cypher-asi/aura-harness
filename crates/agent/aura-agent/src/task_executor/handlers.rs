@@ -122,16 +122,24 @@ impl TaskToolExecutor {
     }
 
     pub(super) async fn extract_notes_and_follow_ups(&self, tc: &ToolCallInfo) {
+        self.store_notes(tc).await;
+        self.push_follow_ups(tc).await;
+        self.append_reasoning(tc).await;
+        self.record_no_changes_needed(tc).await;
+    }
+
+    async fn store_notes(&self, tc: &ToolCallInfo) {
         let task_notes = tc
             .input
             .get("notes")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        {
-            let mut n = self.notes.lock().await;
-            *n = task_notes;
-        }
+        let mut n = self.notes.lock().await;
+        *n = task_notes;
+    }
+
+    async fn push_follow_ups(&self, tc: &ToolCallInfo) {
         if let Some(arr) = tc.input.get("follow_ups").and_then(|v| v.as_array()) {
             let mut fu_lock = self.follow_ups.lock().await;
             for fu in arr {
@@ -151,6 +159,9 @@ impl TaskToolExecutor {
                 });
             }
         }
+    }
+
+    async fn append_reasoning(&self, tc: &ToolCallInfo) {
         if let Some(reasoning) = tc.input.get("reasoning").and_then(|v| v.as_array()) {
             let reasoning_text: Vec<String> = reasoning
                 .iter()
@@ -164,6 +175,9 @@ impl TaskToolExecutor {
                 }
             }
         }
+    }
+
+    async fn record_no_changes_needed(&self, tc: &ToolCallInfo) {
         if tc
             .input
             .get("no_changes_needed")
