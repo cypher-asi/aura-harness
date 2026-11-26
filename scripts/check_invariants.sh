@@ -199,7 +199,7 @@ done <<<"$changes_subcommands"
 #                                                  factory captures the same store handle as
 #                                                  WsContext so nested child runs route through
 #                                                  AgentHost / Scheduler.
-#   - crates/engine/aura-engine/src/scheduler.rs        — Scheduler builds per-agent kernels (§12.a claim seam)
+#   - crates/engine/aura-engine/src/scheduler/mod.rs    — Scheduler builds per-agent kernels (§12.a claim seam)
 #   - crates/engine/aura-engine/src/automaton/          — AutomatonBridge builds per-agent automaton kernels
 #                                                  (mod.rs + build.rs + dispatch.rs + event_channel.rs)
 #   - crates/engine/aura-engine/src/agents/host/mod.rs  — AgentHost runs spawned agents through the
@@ -222,7 +222,7 @@ done <<<"$changes_subcommands"
 #   - crates/engine/aura-engine/src/worker.rs
 run_band "§10" "Arc<dyn Store> outside the kernel / store crates" \
     'Arc<dyn (aura_store(_db)?::)?Store>' \
-    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/gateway/state\.rs|crates/surface/aura-node/src/gateway/session/mod\.rs|crates/surface/aura-node/src/gateway/session/cross_agent_hook\.rs|crates/surface/aura-node/src/gateway/session/child_kernel\.rs|crates/engine/aura-engine/src/scheduler\.rs|crates/engine/aura-engine/src/automaton/|crates/engine/aura-engine/src/agents/host/mod\.rs|crates/engine/aura-engine/src/worker\.rs|crates/surface/aura-node/src/node\.rs|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/harness\.rs|crates/surface/aura-app/src/session\.rs|crates/surface/aura-app/src/event_loop/(mod|cloud)\.rs|crates/engine/aura-engine-cloud/src/hub/|crates/surface/aura-node/src/gateway/handlers/cloud\.rs|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/kernel_domain_gateway/|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/agent/aura-agent-kernel/|crates/store/aura-store-db/|crates/store/aura-store-record/|crates/surface/aura-node/src/gateway/state\.rs|crates/surface/aura-node/src/gateway/session/mod\.rs|crates/surface/aura-node/src/gateway/session/cross_agent_hook\.rs|crates/surface/aura-node/src/gateway/session/child_kernel\.rs|crates/engine/aura-engine/src/scheduler/mod\.rs|crates/engine/aura-engine/src/automaton/|crates/engine/aura-engine/src/agents/host/mod\.rs|crates/engine/aura-engine/src/worker\.rs|crates/surface/aura-node/src/node\.rs|crates/surface/aura-node/src/tool_permissions\.rs|crates/surface/aura-app/src/harness\.rs|crates/surface/aura-app/src/session\.rs|crates/surface/aura-app/src/event_loop/(mod|cloud)\.rs|crates/engine/aura-engine-cloud/src/hub/|crates/surface/aura-node/src/gateway/handlers/cloud\.rs|crates/agent/aura-agent/src/kernel_gateway\.rs|crates/agent/aura-agent/src/kernel_domain_gateway/|crates/agent/aura-agent/src/recording_stream\.rs|crates/agent/aura-agent/src/agent_loop/|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §9 — the agent loop must not reach into the store crates directly. Any
 # code that needs persistence goes through the per-agent kernel. Test files

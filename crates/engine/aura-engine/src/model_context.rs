@@ -27,85 +27,121 @@ pub fn context_window_for_model(model: &str) -> u64 {
             return window;
         }
     }
+    if model.starts_with(aura_model::model_catalog::LOCAL_PREFIX) {
+        return aura_model::model_catalog::local_context_tokens();
+    }
+    // Families are tried in this order and, within one, the first
+    // matching arm wins, so more specific names come first.
+    anthropic_window(model)
+        .or_else(|| openai_window(model))
+        .or_else(|| xai_window(model))
+        .or_else(|| open_weight_window(model))
+        .or_else(|| google_window(model))
+        .unwrap_or_else(|| live().unwrap_or(DEFAULT_CONTEXT_WINDOW))
+}
+
+/// Context window of an Anthropic model, if `model` names one.
+fn anthropic_window(model: &str) -> Option<u64> {
     match model {
-        m if m.starts_with(aura_model::model_catalog::LOCAL_PREFIX) => {
-            aura_model::model_catalog::local_context_tokens()
-        }
+        m if m.contains("fable-5") => Some(1_000_000),
+        m if m.contains("mythos-5") => Some(1_000_000),
+        m if m.contains("opus-5") => Some(1_000_000),
+        m if m.contains("opus-4") => Some(1_000_000),
+        m if m.contains("sonnet-4") => Some(1_000_000),
+        m if m.contains("sonnet-5") => Some(1_000_000),
+        m if m.contains("haiku-4") => Some(200_000),
+        m if m.starts_with("claude") => Some(200_000),
+        _ => None,
+    }
+}
 
-        // Anthropic
-        m if m.contains("fable-5") => 1_000_000,
-        m if m.contains("mythos-5") => 1_000_000,
-        m if m.contains("opus-5") => 1_000_000,
-        m if m.contains("opus-4") => 1_000_000,
-        m if m.contains("sonnet-4") => 1_000_000,
-        m if m.contains("sonnet-5") => 1_000_000,
-        m if m.contains("haiku-4") => 200_000,
-        m if m.starts_with("claude") => 200_000,
-
-        // OpenAI
-        m if m.contains("gpt-6") => 1_050_000,
-        m if m.contains("gpt-5.6") || m.contains("gpt-5-6") => 1_050_000,
-        m if m.contains("gpt-5.5") || m.contains("gpt-5-5") => 1_050_000,
+/// Context window of an OpenAI model, if `model` names one.
+fn openai_window(model: &str) -> Option<u64> {
+    match model {
+        m if m.contains("gpt-6") => Some(1_050_000),
+        m if m.contains("gpt-5.6") || m.contains("gpt-5-6") => Some(1_050_000),
+        m if m.contains("gpt-5.5") || m.contains("gpt-5-5") => Some(1_050_000),
         m if m.contains("gpt-5.4-mini")
             || m.contains("gpt-5-4-mini")
             || m.contains("gpt-5.4-nano")
             || m.contains("gpt-5-4-nano") =>
         {
-            400_000
+            Some(400_000)
         }
-        m if m.contains("gpt-5.4") || m.contains("gpt-5-4") => 1_050_000,
-        m if m.contains("gpt-4.1") => 1_047_576,
-        m if m.contains("gpt-4o") || m.contains("gpt-4-turbo") => 128_000,
-        m if m.ends_with("-o1") || m.starts_with("o1") => 200_000,
-        m if m.contains("-o3") || m.starts_with("o3") => 200_000,
-        m if m.contains("-o4") || m.starts_with("o4") => 200_000,
+        m if m.contains("gpt-5.4") || m.contains("gpt-5-4") => Some(1_050_000),
+        m if m.contains("gpt-4.1") => Some(1_047_576),
+        m if m.contains("gpt-4o") || m.contains("gpt-4-turbo") => Some(128_000),
+        m if m.ends_with("-o1") || m.starts_with("o1") => Some(200_000),
+        m if m.contains("-o3") || m.starts_with("o3") => Some(200_000),
+        m if m.contains("-o4") || m.starts_with("o4") => Some(200_000),
+        _ => None,
+    }
+}
 
+/// Context window of an xAI model, if `model` names one.
+fn xai_window(model: &str) -> Option<u64> {
+    match model {
         // xAI. Aura aliases use hyphenated version separators while the
         // upstream API names use dotted versions, so cover both spellings.
-        m if m.contains("grok-4.7") || m.contains("grok-4-7") => 500_000,
-        m if m.contains("grok-4.6") || m.contains("grok-4-6") => 500_000,
-        m if m.contains("grok-4.5") || m.contains("grok-4-5") => 500_000,
-        m if m.contains("grok-4.3") || m.contains("grok-4-3") => 1_000_000,
+        m if m.contains("grok-4.7") || m.contains("grok-4-7") => Some(500_000),
+        m if m.contains("grok-4.6") || m.contains("grok-4-6") => Some(500_000),
+        m if m.contains("grok-4.5") || m.contains("grok-4-5") => Some(500_000),
+        m if m.contains("grok-4.3") || m.contains("grok-4-3") => Some(1_000_000),
         m if m.contains("grok-build-0.1")
             || m.contains("grok-build-0-1")
             || m.contains("grok-code-fast") =>
         {
-            256_000
+            Some(256_000)
         }
+        _ => None,
+    }
+}
 
+/// Context window of a managed open-weight model, if `model` names one.
+fn open_weight_window(model: &str) -> Option<u64> {
+    match model {
         // Managed open-weight aliases route through Fireworks. Keep their
         // binary-sized windows aligned with the router instead of rounding
         // them to the first-party API limits.
-        m if m.contains("gpt-oss-120b") || m.contains("oss-120b") => 131_072,
-        m if m.contains("qwen2p5-coder-7b") || m.contains("qwen2-5-coder-7b") => 32_768,
+        m if m.contains("gpt-oss-120b") || m.contains("oss-120b") => Some(131_072),
+        m if m.contains("qwen2p5-coder-7b") || m.contains("qwen2-5-coder-7b") => Some(32_768),
         m if m.contains("aura-deepseek-v4")
             || m.contains("accounts/fireworks/models/deepseek-v4") =>
         {
-            1_048_576
+            Some(1_048_576)
         }
-        m if m.contains("deepseek") => 1_000_000,
-        m if m.contains("kimi-k3") => 1_048_576,
-        m if m.contains("kimi") => 262_144,
-        m if m.contains("minimax-m3") => 512_000,
+        m if m.contains("deepseek") => Some(1_000_000),
+        m if m.contains("kimi-k3") => Some(1_048_576),
+        m if m.contains("kimi") => Some(262_144),
+        m if m.contains("minimax-m3") => Some(512_000),
         m if m.contains("minimax-m2.7")
             || m.contains("minimax-m2-7")
             || m.contains("minimax-m2p7") =>
         {
-            196_608
+            Some(196_608)
         }
-        m if m.contains("glm-5.2") || m.contains("glm-5p2") || m.contains("glm-5-2") => 1_048_576,
-        m if m.contains("glm-5.1") || m.contains("glm-5p1") || m.contains("glm-5-1") => 202_752,
+        m if m.contains("glm-5.2") || m.contains("glm-5p2") || m.contains("glm-5-2") => {
+            Some(1_048_576)
+        }
+        m if m.contains("glm-5.1") || m.contains("glm-5p1") || m.contains("glm-5-1") => {
+            Some(202_752)
+        }
         m if m.contains("qwen3p6-plus")
             || m.contains("qwen3-6-plus")
             || m.contains("qwen3p7-plus")
             || m.contains("qwen3-7-plus") =>
         {
-            262_144
+            Some(262_144)
         }
+        _ => None,
+    }
+}
 
-        // Google
-        m if m.contains("gemini") => 1_048_576,
-        _ => live().unwrap_or(DEFAULT_CONTEXT_WINDOW),
+/// Context window of a Google model, if `model` names one.
+fn google_window(model: &str) -> Option<u64> {
+    match model {
+        m if m.contains("gemini") => Some(1_048_576),
+        _ => None,
     }
 }
 

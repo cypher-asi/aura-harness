@@ -144,7 +144,7 @@ sync with the `Enforcement:` lines under each section.
 
 | # | Invariant | Enforcement |
 |---|---|---|
-| §12 | Single writer per agent | [`crates/engine/aura-engine/src/scheduler.rs`](../crates/engine/aura-engine/src/scheduler.rs) (`test_processing_claim_released_after_error`, `scheduler must construct at most one Kernel per agent claim`), [`crates/store/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/store/aura-store-db/src/rocks_store/tests_concurrent.rs), and [`crates/engine/aura-engine/src/agents/tests.rs`](../crates/engine/aura-engine/src/agents/tests.rs). |
+| §12 | Single writer per agent | [`crates/engine/aura-engine/src/scheduler/tests.rs`](../crates/engine/aura-engine/src/scheduler/tests.rs) (`test_processing_claim_released_after_error`, `scheduler must construct at most one Kernel per agent claim`), [`crates/store/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/store/aura-store-db/src/rocks_store/tests_concurrent.rs), and [`crates/engine/aura-engine/src/agents/tests.rs`](../crates/engine/aura-engine/src/agents/tests.rs). |
 | §15 | Cross-agent parallelism | [`crates/engine/aura-engine/src/agents/tests.rs`](../crates/engine/aura-engine/src/agents/tests.rs) (`task_child_is_visible_while_it_runs`), [`crates/store/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/store/aura-store-db/src/rocks_store/tests_concurrent.rs), [`crates/agent/aura-agent-kernel/tests/replay_round_trip.rs`](../crates/agent/aura-agent-kernel/tests/replay_round_trip.rs). |
 
 ### Principle 4 — The wire API is the contract
@@ -338,8 +338,8 @@ band. Production holders:
 - [`crates/engine/aura-engine/src/automaton/`](../crates/engine/aura-engine/src/automaton/)
   (`mod.rs` + `build.rs` + `dispatch.rs` + `event_channel.rs`) —
   `AutomatonBridge` builds per-agent automaton kernels.
-- [`crates/engine/aura-engine/src/scheduler.rs`](../crates/engine/aura-engine/src/scheduler.rs)
-  — `Scheduler` builds per-agent kernels.
+- [`crates/engine/aura-engine/src/scheduler/mod.rs`](../crates/engine/aura-engine/src/scheduler/mod.rs)
+  — `Scheduler` builds per-agent kernels (`Kernel::new` in `scheduler/schedule.rs`).
 - [`crates/surface/aura-node/src/gateway/session/mod.rs`](../crates/surface/aura-node/src/gateway/session/mod.rs)
   — `WsContext` handed to `Kernel::new`.
 - [`crates/surface/aura-node/src/gateway/session/child_kernel.rs`](../crates/surface/aura-node/src/gateway/session/child_kernel.rs)
@@ -931,8 +931,8 @@ cross-agent parallelism contract in §15 safe.
 
 Enforced by the `Scheduler` via a **store-backed compare-and-set** on a
 persisted per-agent processing marker — not an in-memory `Mutex`. See
-[`crates/engine/aura-engine/src/scheduler.rs`](../crates/engine/aura-engine/src/scheduler.rs)
-(`try_processing_claim` ~line 309, `processing_claim` ~line 318) and the
+[`crates/engine/aura-engine/src/scheduler/mod.rs`](../crates/engine/aura-engine/src/scheduler/mod.rs)
+(`try_processing_claim` ~line 263, `processing_claim` ~line 272) and the
 header doc comment "Concurrency Model" / "Store-Backed Processing Claims"
 (lines 1–33).
 
@@ -968,7 +968,7 @@ per-agent claim and record pipeline as ordinary scheduled work. That holds
 at every depth, since children use the same host to spawn their own
 children.
 
-**Enforcement:** [`crates/engine/aura-engine/src/scheduler.rs`](../crates/engine/aura-engine/src/scheduler.rs)
+**Enforcement:** [`crates/engine/aura-engine/src/scheduler/tests.rs`](../crates/engine/aura-engine/src/scheduler/tests.rs)
 (`test_processing_claim_released_after_error`, "scheduler must construct at
 most one Kernel per agent claim"),
 [`crates/store/aura-store-db/src/rocks_store/tests_concurrent.rs`](../crates/store/aura-store-db/src/rocks_store/tests_concurrent.rs),
@@ -989,7 +989,7 @@ fast parallel execution without weakening §6/§7/§10 replay determinism.
 
 | Boundary | Scope | Effect |
 |---|---|---|
-| Per-agent processing claim ([`scheduler.rs`](../crates/engine/aura-engine/src/scheduler.rs)) | One agent | Same agent serializes; different agents parallel. |
+| Per-agent processing claim ([`scheduler/mod.rs`](../crates/engine/aura-engine/src/scheduler/mod.rs)) | One agent | Same agent serializes; different agents parallel. |
 | Per-parent spawn lock (`AgentHost::parent_lock` in [`host/mod.rs`](../crates/engine/aura-engine/src/agents/host/mod.rs)) | One parent's spawn audit chain | Same parent's spawns serialize; different parents parallel. |
 | Running-children cap (`AURA_SUBAGENT_MAX_RUNNING`) | Admission only | Rejects spawns past the limit; does **not** create cross-agent record ordering. |
 | No global writer mutex | — | Intentional absence: there is no global lock across agent kernels. |

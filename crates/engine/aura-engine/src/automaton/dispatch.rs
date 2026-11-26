@@ -30,6 +30,8 @@ use tracing::{info, warn};
 use crate::capabilities;
 use aura_core_protocol::installed_integration_to_core;
 
+use super::build::KernelParams;
+use super::kickoff::{require_model, Kickoff, KickoffTools, TaskSpec};
 use super::{AutomatonBridge, ProjectHandle};
 
 /// Bootstrapping artefacts shared by every automaton kickoff path
@@ -51,14 +53,14 @@ struct AutomatonRunContext {
     effective_workspace: Option<PathBuf>,
 }
 
-/// Operator-facing labels embedded in the bootstrap error messages.
+/// What differs between the dev-loop and task-run kickoffs beyond
+/// their automaton type.
 ///
-/// Held as a small struct so we can pass two string slices through one
-/// argument without growing [`AutomatonBridge::prepare_automaton_run`]
-/// past the existing `too_many_arguments` allow. The labels are spliced
-/// into the same error templates the original two functions used,
-/// preserving log/observability strings character-for-character.
-struct AutomatonKindLabels {
+/// The labels are spliced into the same error templates the original
+/// two functions used, preserving log/observability strings
+/// character-for-character.
+#[derive(Clone, Copy)]
+struct AutomatonKind {
     /// Inserted into `failed to build {} kernel`. Uses different wording
     /// per kind: `"dev loop"` (so the message ends `... dev loop kernel`)
     /// vs `"task runtime"` (`... task runtime kernel`).
@@ -67,65 +69,77 @@ struct AutomatonKindLabels {
     /// `"dev loop"` for the long-running dev loop, plain `"task"` for
     /// one-shot task runs.
     capabilities: &'static str,
+    /// Inserted into `failed to install {} automaton`.
+    install: &'static str,
+    /// Request kind registered with the agent's identity. The
+    /// dev-loop's first model call advertises `DevLoopBootstrap`; the
+    /// loop self-promotes to `DevLoopContinuation` on subsequent
+    /// iterations via the automaton-side runner config, so the registry
+    /// only needs to seed the bootstrap kind for any pre-loop scheduling
+    /// wakeups. Task runs use the chat request-kind on the worker
+    /// fan-out path because they don't enter the dev-loop
+    /// self-promotion cycle.
+    request_kind: aura_model::ModelRequestKind,
 }
+
+const DEV_LOOP: AutomatonKind = AutomatonKind {
+    kernel: "dev loop",
+    capabilities: "dev loop",
+    install: "dev-loop",
+    request_kind: aura_model::ModelRequestKind::DevLoopBootstrap,
+};
+
+const TASK_RUN: AutomatonKind = AutomatonKind {
+    kernel: "task runtime",
+    capabilities: "task",
+    install: "task-run",
+    request_kind: aura_model::ModelRequestKind::Chat,
+};
 
 impl AutomatonBridge {
     /// Run the bootstrap pipeline shared by every automaton kickoff
     /// path: build the per-project kernel, record its runtime
     /// capabilities, then assemble the model/tool/domain gateways and
-    /// per-run config the automaton constructors require.
+    /// per-run config the automaton constructors require, with the
+    /// kickoff's execution profile applied.
     ///
-    /// `labels` controls only the operator-facing error strings so the
+    /// `kind` controls only the operator-facing error strings so the
     /// original `failed to build dev loop kernel` /
     /// `failed to build task runtime kernel` (and the matching
     /// capabilities error) messages remain identical to the pre-refactor
     /// implementation.
-    #[allow(clippy::too_many_arguments)]
     async fn prepare_automaton_run(
         &self,
-        project_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<&str>,
-        // No silent fallback — every dev-loop / task-run kickoff must
-        // pin the user-selected model. The two public entry points
-        // (`start_dev_loop_with_capabilities`,
-        // `run_task_with_capabilities`) reject the start request with
-        // `"missing model"` before reaching this helper when the
-        // operator forgot to set one.
-        model: &str,
-        installed_tools: Option<Vec<aura_core_protocol::InstalledTool>>,
-        installed_integrations: Option<Vec<aura_core_protocol::InstalledIntegration>>,
-        agent_permissions: AgentPermissions,
-        aura_org_id: Option<&str>,
-        aura_session_id: Option<&str>,
-        aura_agent_id: Option<&str>,
-        labels: AutomatonKindLabels,
+        kickoff: &Kickoff<'_>,
+        tools: KickoffTools,
+        kind: AutomatonKind,
     ) -> Result<AutomatonRunContext, String> {
+        let auth_token = kickoff.auth_token.as_deref();
         let domain = self.domain_with_jwt(auth_token);
-        let effective_workspace = workspace_root.clone();
-        let ws_path = effective_workspace
-            .as_deref()
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let installed_integrations = installed_integrations
+        let effective_workspace = tools.workspace_root.clone();
+        let installed_integrations = tools
+            .installed_integrations
             .unwrap_or_default()
             .into_iter()
             .map(installed_integration_to_core)
             .collect::<Vec<_>>();
         let installed_tools =
-            Self::prepare_installed_tools(installed_tools, &installed_integrations);
+            Self::prepare_installed_tools(tools.installed_tools, &installed_integrations);
 
         let kernel = self
-            .build_kernel(
-                domain.clone(),
+            .build_kernel(KernelParams {
+                domain: domain.clone(),
                 auth_token,
-                Some(project_id),
-                ws_path,
-                effective_workspace.is_some(),
-                &installed_tools,
-                &installed_integrations,
-                agent_permissions,
-            )
-            .map_err(|e| format!("failed to build {} kernel: {e}", labels.kernel))?;
+                project_id: Some(kickoff.project_id),
+                workspace: effective_workspace
+                    .as_deref()
+                    .unwrap_or_else(|| std::path::Path::new(".")),
+                use_workspace_base_as_root: effective_workspace.is_some(),
+                installed_tools: &installed_tools,
+                installed_integrations: &installed_integrations,
+                agent_permissions: tools.agent_permissions,
+            })
+            .map_err(|e| format!("failed to build {} kernel: {e}", kind.kernel))?;
         if let Err(e) = capabilities::record_runtime_capabilities(
             &kernel,
             "automaton",
@@ -137,9 +151,30 @@ impl AutomatonBridge {
         {
             return Err(format!(
                 "failed to record {} runtime capabilities: {e}",
-                labels.capabilities
+                kind.capabilities
             ));
         }
+        let mut ctx = self.run_context(
+            kickoff,
+            kernel,
+            domain,
+            &installed_tools,
+            effective_workspace,
+        );
+        apply_execution_profile(&mut ctx.runner_config, kickoff.execution_profile.as_ref())?;
+        Ok(ctx)
+    }
+
+    /// The gateways, runner config and catalog an automaton runs with
+    /// on `kernel`.
+    fn run_context(
+        &self,
+        kickoff: &Kickoff<'_>,
+        kernel: Arc<Kernel>,
+        domain: Arc<dyn DomainApi>,
+        installed_tools: &[aura_core_types::InstalledToolDefinition],
+        effective_workspace: Option<PathBuf>,
+    ) -> AutomatonRunContext {
         let model_gw: Arc<KernelModelGateway> = Arc::new(KernelModelGateway::new(kernel.clone()));
         let tool_gw: Arc<dyn aura_agent::AgentToolExecutor> =
             Arc::new(KernelToolGateway::new(kernel.clone()));
@@ -150,27 +185,13 @@ impl AutomatonBridge {
         // `DomainToolExecutor`, whose mutations are captured via
         // `ToolExecution` entries by the kernel itself.
         let gateway_domain: Arc<dyn DomainApi> =
-            Arc::new(KernelDomainGateway::new(domain.clone(), kernel.clone()));
-
-        // `project_id` doubles as `aura_project_id` on the chat /
-        // task-extract paths (see `SessionState::wire_request_ctx`
-        // -> `aura_project_id: self.project_id.clone()`), so feed
-        // the same value here to keep the dev-loop / task-run wire
-        // shape symmetric with chat.
-        let runner_config = self.build_runner_config(
-            model,
-            auth_token,
-            aura_org_id,
-            aura_session_id,
-            aura_agent_id,
-            Some(project_id),
-        );
+            Arc::new(KernelDomainGateway::new(domain, kernel.clone()));
+        let runner_config = self.build_runner_config(kickoff.identity());
         let catalog = Arc::new(self.catalog.with_installed_tools(
             aura_exec_tools::catalog::ToolProfile::Engine,
-            &installed_tools,
+            installed_tools,
         ));
-
-        Ok(AutomatonRunContext {
+        AutomatonRunContext {
             kernel,
             model_gw,
             tool_gw,
@@ -178,7 +199,75 @@ impl AutomatonBridge {
             runner_config,
             catalog,
             effective_workspace,
-        })
+        }
+    }
+
+    /// Install `automaton` and wire up its agent: register its identity
+    /// (before the lifecycle-event nudge, so the scheduler tick that runs
+    /// as part of it picks the identity up), forward its events and
+    /// apply the execution profile. Returns its id and handle.
+    async fn install_automaton(
+        &self,
+        kickoff: &Kickoff<'_>,
+        kind: AutomatonKind,
+        automaton: Box<dyn aura_engine_automaton::Automaton>,
+        config: serde_json::Value,
+        workspace: Option<PathBuf>,
+        agent_id: aura_core_types::AgentId,
+    ) -> Result<(String, aura_engine_automaton::AutomatonHandle), String> {
+        let (handle, event_rx) = self
+            .runtime
+            .install(automaton, config, workspace)
+            .await
+            .map_err(|e| format!("failed to install {} automaton: {e}", kind.install))?;
+
+        let automaton_id = handle.id().as_str().to_string();
+        self.register_automaton_identity(agent_id, kickoff.identity(), kind.request_kind);
+        self.spawn_event_forwarder(automaton_id.clone(), event_rx);
+        self.register_execution_profile(agent_id, kickoff.execution_profile.as_ref());
+        Ok((automaton_id, handle))
+    }
+
+    /// Drop a finished or orphaned dev-loop handle for `project_id`, or
+    /// refuse when a dev loop is still running there.
+    fn clear_stale_dev_loop(&self, project_id: &str) -> Result<(), String> {
+        let Some(entry) = self.project_handles.get(project_id) else {
+            return Ok(());
+        };
+        let tracked = entry.value();
+        if !tracked.handle.is_finished() && self.runtime.get_info(&tracked.automaton_id).is_some() {
+            return Err(format!(
+                "A dev loop is already running for project {project_id} (automaton_id: {})",
+                tracked.automaton_id
+            ));
+        }
+        if !tracked.handle.is_finished() {
+            warn!(
+                project_id,
+                automaton_id = %tracked.automaton_id,
+                "dropping stale dev-loop project handle with no matching runtime automaton"
+            );
+        }
+        drop(entry);
+        self.project_handles.remove(project_id);
+        Ok(())
+    }
+
+    /// Commit the start's lifecycle event and run the first tick in the
+    /// background, so the caller gets the run id at once.
+    fn spawn_lifecycle_commit(
+        &self,
+        agent_id: aura_core_types::AgentId,
+        automaton_id: &str,
+        event: &str,
+    ) {
+        tokio::spawn(Self::commit_lifecycle_event(
+            self.store.clone(),
+            self.scheduler.clone(),
+            agent_id,
+            automaton_id.to_string(),
+            event.to_string(),
+        ));
     }
 
     #[allow(clippy::too_many_arguments)] // TODO(W4): collapse dev-loop kickoff args.
@@ -208,58 +297,42 @@ impl AutomatonBridge {
         // the gap loudly so the caller (typically aura-os's
         // `POST /v1/run`) sees the configuration mismatch instead of
         // routing eval traffic to an unintended model.
-        let model = model
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                "missing model — dev loop start request must include an explicit model identifier"
-                    .to_string()
-            })?
-            .to_string();
+        let model = require_model(model.as_deref(), "dev loop start request")?;
+        self.clear_stale_dev_loop(project_id)?;
+        let kickoff = Kickoff {
+            project_id,
+            model,
+            auth_token,
+            git_repo_url,
+            git_branch,
+            aura_org_id,
+            aura_session_id,
+            aura_agent_id,
+            agent_persona,
+            agent_skills,
+            agent_system_prompt,
+            execution_profile,
+        };
+        let tools = KickoffTools {
+            workspace_root,
+            installed_tools,
+            installed_integrations,
+            agent_permissions,
+        };
+        self.launch_dev_loop(kickoff, tools).await
+    }
 
-        if let Some(entry) = self.project_handles.get(project_id) {
-            let tracked = entry.value();
-            if !tracked.handle.is_finished()
-                && self.runtime.get_info(&tracked.automaton_id).is_some()
-            {
-                return Err(format!(
-                    "A dev loop is already running for project {project_id} (automaton_id: {})",
-                    tracked.automaton_id
-                ));
-            }
-            if !tracked.handle.is_finished() {
-                warn!(
-                    project_id,
-                    automaton_id = %tracked.automaton_id,
-                    "dropping stale dev-loop project handle with no matching runtime automaton"
-                );
-            }
-            drop(entry);
-            self.project_handles.remove(project_id);
-        }
-
-        let mut ctx = self
-            .prepare_automaton_run(
-                project_id,
-                workspace_root,
-                auth_token.as_deref(),
-                &model,
-                installed_tools,
-                installed_integrations,
-                agent_permissions,
-                aura_org_id.as_deref(),
-                aura_session_id.as_deref(),
-                aura_agent_id.as_deref(),
-                AutomatonKindLabels {
-                    kernel: "dev loop",
-                    capabilities: "dev loop",
-                },
-            )
+    /// Install a dev loop for a validated `kickoff` and hand it to the
+    /// scheduler.
+    async fn launch_dev_loop(
+        &self,
+        kickoff: Kickoff<'_>,
+        tools: KickoffTools,
+    ) -> Result<String, String> {
+        let project_id = kickoff.project_id;
+        let ctx = self
+            .prepare_automaton_run(&kickoff, tools, DEV_LOOP)
             .await?;
-
-        apply_execution_profile(&mut ctx.runner_config, execution_profile.as_ref())?;
-
         let automaton = DevLoopAutomaton::new(
             ctx.gateway_domain,
             ctx.model_gw,
@@ -267,53 +340,17 @@ impl AutomatonBridge {
             ctx.catalog,
         )
         .with_tool_executor(ctx.tool_gw);
-
-        let config = serde_json::json!({
-            "project_id": project_id,
-            "model": model,
-            "git_repo_url": git_repo_url,
-            "git_branch": git_branch,
-            "auth_token": auth_token.as_deref(),
-            // PR B: typed identity wire fields surface to the
-            // automaton via the same JSON config blob the rest of the
-            // dev-loop kickoff already uses. `DevLoopConfig::from_json`
-            // parses them back out and threads them into
-            // `AgenticTaskParams::agent`. `null` / `[]` defaults keep
-            // the assembled prompt byte-identical with PR A until
-            // aura-os populates these fields in PR C.
-            "agent_identity": agent_persona,
-            "agent_skills": agent_skills,
-            "agent_system_prompt": agent_system_prompt,
-        });
-
-        let (handle, event_rx) = self
-            .runtime
-            .install(Box::new(automaton), config, ctx.effective_workspace)
-            .await
-            .map_err(|e| format!("failed to install dev-loop automaton: {e}"))?;
-
-        let automaton_id = handle.id().as_str().to_string();
-        // Register the dev-loop agent's identity BEFORE the
-        // lifecycle-event nudge so the scheduler tick that runs as
-        // part of `record_lifecycle_event` picks it up. The
-        // dev-loop's first model call advertises
-        // `DevLoopBootstrap`; the loop self-promotes to
-        // `DevLoopContinuation` on subsequent iterations via the
-        // automaton-side runner config, so the registry only needs
-        // to seed the bootstrap kind for any pre-loop scheduling
-        // wakeups.
-        self.register_automaton_identity(
-            ctx.kernel.agent_id,
-            &model,
-            auth_token.as_deref(),
-            aura_org_id.as_deref(),
-            aura_session_id.as_deref(),
-            aura_agent_id.as_deref(),
-            Some(project_id),
-            aura_model::ModelRequestKind::DevLoopBootstrap,
-        );
-        self.spawn_event_forwarder(automaton_id.clone(), event_rx);
-        self.register_execution_profile(ctx.kernel.agent_id, execution_profile.as_ref());
+        let agent_id = ctx.kernel.agent_id;
+        let (automaton_id, handle) = self
+            .install_automaton(
+                &kickoff,
+                DEV_LOOP,
+                Box::new(automaton),
+                kickoff.dev_loop_config(),
+                ctx.effective_workspace,
+                agent_id,
+            )
+            .await?;
 
         info!(project_id, automaton_id = %automaton_id, "Dev loop started");
         // Record the handle BEFORE the (now background) bootstrap tick so
@@ -324,7 +361,7 @@ impl AutomatonBridge {
             project_id.to_string(),
             ProjectHandle {
                 automaton_id: automaton_id.clone(),
-                agent_id: ctx.kernel.agent_id,
+                agent_id,
                 handle,
             },
         );
@@ -334,13 +371,7 @@ impl AutomatonBridge {
         // timeout; awaiting it here turned every successful start into a
         // 408. Returning the run id now hands the loop to the scheduler,
         // matching the non-blocking contract POST /v1/run advertises.
-        tokio::spawn(Self::commit_lifecycle_event(
-            self.store.clone(),
-            self.scheduler.clone(),
-            ctx.kernel.agent_id,
-            automaton_id.clone(),
-            "start_dev_loop".to_string(),
-        ));
+        self.spawn_lifecycle_commit(agent_id, &automaton_id, "start_dev_loop");
         Ok(automaton_id)
     }
 
@@ -369,36 +400,46 @@ impl AutomatonBridge {
     ) -> Result<String, String> {
         // Mirror the dev-loop entry-point: refuse to start without an
         // explicit model. Same regression rationale.
-        let model = model
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                "missing model — task run request must include an explicit model identifier"
-                    .to_string()
-            })?
-            .to_string();
-        let mut ctx = self
-            .prepare_automaton_run(
-                project_id,
-                workspace_root,
-                auth_token.as_deref(),
-                &model,
-                installed_tools,
-                installed_integrations,
-                agent_permissions,
-                aura_org_id.as_deref(),
-                aura_session_id.as_deref(),
-                aura_agent_id.as_deref(),
-                AutomatonKindLabels {
-                    kernel: "task runtime",
-                    capabilities: "task",
-                },
-            )
+        let model = require_model(model.as_deref(), "task run request")?;
+        let kickoff = Kickoff {
+            project_id,
+            model,
+            auth_token,
+            git_repo_url,
+            git_branch,
+            aura_org_id,
+            aura_session_id,
+            aura_agent_id,
+            agent_persona,
+            agent_skills,
+            agent_system_prompt,
+            execution_profile,
+        };
+        let tools = KickoffTools {
+            workspace_root,
+            installed_tools,
+            installed_integrations,
+            agent_permissions,
+        };
+        let task = TaskSpec {
+            task_id,
+            prior_failure,
+            work_log,
+        };
+        self.launch_task_run(kickoff, tools, task).await
+    }
+
+    /// Install a task run for a validated `kickoff` and hand it to the
+    /// scheduler.
+    async fn launch_task_run(
+        &self,
+        kickoff: Kickoff<'_>,
+        tools: KickoffTools,
+        task: TaskSpec<'_>,
+    ) -> Result<String, String> {
+        let ctx = self
+            .prepare_automaton_run(&kickoff, tools, TASK_RUN)
             .await?;
-
-        apply_execution_profile(&mut ctx.runner_config, execution_profile.as_ref())?;
-
         let automaton = TaskRunAutomaton::new(
             ctx.gateway_domain,
             ctx.model_gw,
@@ -406,60 +447,24 @@ impl AutomatonBridge {
             ctx.catalog,
         )
         .with_tool_executor(ctx.tool_gw);
+        let agent_id = ctx.kernel.agent_id;
+        let (automaton_id, _handle) = self
+            .install_automaton(
+                &kickoff,
+                TASK_RUN,
+                Box::new(automaton),
+                kickoff.task_config(&task),
+                ctx.effective_workspace,
+                agent_id,
+            )
+            .await?;
 
-        let config = serde_json::json!({
-            "project_id": project_id,
-            "task_id": task_id,
-            "model": model,
-            "git_repo_url": git_repo_url,
-            "git_branch": git_branch,
-            "auth_token": auth_token.as_deref(),
-            "prior_failure": prior_failure,
-            "work_log": work_log,
-            // PR B: same wire-field threading as `start_dev_loop_with_capabilities`.
-            // Single-task kickoffs go through the same prompt assembly,
-            // so they pick up identity / skills / operator system
-            // prompt the same way once PR C populates them upstream.
-            "agent_identity": agent_persona,
-            "agent_skills": agent_skills,
-            "agent_system_prompt": agent_system_prompt,
-        });
-
-        let (handle, event_rx) = self
-            .runtime
-            .install(Box::new(automaton), config, ctx.effective_workspace)
-            .await
-            .map_err(|e| format!("failed to install task-run automaton: {e}"))?;
-
-        let automaton_id = handle.id().as_str().to_string();
-        // Register the task-run agent's identity BEFORE the
-        // lifecycle-event nudge. Task runs use the chat
-        // request-kind on the worker fan-out path because they
-        // don't enter the dev-loop self-promotion cycle.
-        self.register_automaton_identity(
-            ctx.kernel.agent_id,
-            &model,
-            auth_token.as_deref(),
-            aura_org_id.as_deref(),
-            aura_session_id.as_deref(),
-            aura_agent_id.as_deref(),
-            Some(project_id),
-            aura_model::ModelRequestKind::Chat,
-        );
-        self.spawn_event_forwarder(automaton_id.clone(), event_rx);
-        self.register_execution_profile(ctx.kernel.agent_id, execution_profile.as_ref());
-
+        let (project_id, task_id) = (kickoff.project_id, task.task_id);
         info!(project_id, task_id, automaton_id = %automaton_id, "Task execution started (non-blocking)");
         // Background the lifecycle commit + first tick so POST /v1/run
         // returns immediately instead of blocking on the task's first
         // full agent iteration past the gateway's 30s request timeout.
-        tokio::spawn(Self::commit_lifecycle_event(
-            self.store.clone(),
-            self.scheduler.clone(),
-            ctx.kernel.agent_id,
-            automaton_id.clone(),
-            "start_task_run".to_string(),
-        ));
+        self.spawn_lifecycle_commit(agent_id, &automaton_id, "start_task_run");
         Ok(automaton_id)
     }
 }

@@ -21,31 +21,30 @@
 //! - [`dispatch`] — `start_dev_loop_with_capabilities` and
 //!   `run_task_with_capabilities`, the public entry-points
 //!   `AutomatonController::start_dev_loop` / `run_task` delegate to.
-//! - `mod.rs` (this file) — `AutomatonBridge` struct, simple
+//! - [`controller`] — the `AutomatonController` trait impl that fans
+//!   out to `dispatch::*`.
+//! - `mod.rs` (this file) — `AutomatonBridge` struct and simple
 //!   bookkeeping (`new`, `with_scheduler`, `subscribe_events`,
-//!   `pause_by_id`, `stop_by_id`, `record_lifecycle_event`, …) plus
-//!   the `AutomatonController` trait impl that fans out to
-//!   `dispatch::*`.
+//!   `pause_by_id`, `stop_by_id`, `record_lifecycle_event`, …).
 
 mod build;
+mod controller;
 mod dispatch;
 mod event_channel;
+mod kickoff;
 
 #[cfg(test)]
 mod tests;
 
-use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use dashmap::DashMap;
 use tracing::{info, warn};
 
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_core_types::{AgentId, SystemKind, Transaction, TransactionType};
 use aura_engine_automaton::{AutomatonHandle, AutomatonRuntime};
-use aura_exec_tools::automaton_tools::AutomatonController;
 use aura_exec_tools::catalog::ToolCatalog;
 use aura_exec_tools::domain_tools::DomainApi;
 use aura_exec_tools::ToolConfig;
@@ -67,7 +66,21 @@ pub(super) struct ProjectHandle {
     pub(super) handle: AutomatonHandle,
 }
 
-/// Concrete [`AutomatonController`] wired to the real runtime.
+/// The model and router/billing identity one dev-loop or task run
+/// carries end to end: into its runner config and its registered
+/// [`crate::scheduler::AgentIdentity`].
+#[derive(Clone, Copy)]
+pub(super) struct RunIdentity<'a> {
+    pub(super) model: &'a str,
+    pub(super) auth_token: Option<&'a str>,
+    pub(super) aura_org_id: Option<&'a str>,
+    pub(super) aura_session_id: Option<&'a str>,
+    pub(super) aura_agent_id: Option<&'a str>,
+    pub(super) aura_project_id: Option<&'a str>,
+}
+
+/// Concrete [`AutomatonController`](aura_exec_tools::automaton_tools::AutomatonController)
+/// wired to the real runtime.
 pub struct AutomatonBridge {
     runtime: Arc<AutomatonRuntime>,
     // TODO(phase2-followup): Invariant §10 — bind to `Arc<dyn ReadStore>`
@@ -172,21 +185,23 @@ impl AutomatonBridge {
     /// `X-Aura-*` envelope. Without this registration the worker
     /// path strips identity and `aura-router` returns
     /// `429 RATE_LIMITED`.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn register_automaton_identity(
         &self,
         agent_id: AgentId,
-        model: &str,
-        auth_token: Option<&str>,
-        aura_org_id: Option<&str>,
-        aura_session_id: Option<&str>,
-        aura_agent_id: Option<&str>,
-        aura_project_id: Option<&str>,
+        run: RunIdentity<'_>,
         request_kind: aura_model::ModelRequestKind,
     ) {
         let Some(scheduler) = self.scheduler.as_ref() else {
             return;
         };
+        let RunIdentity {
+            model,
+            auth_token,
+            aura_org_id,
+            aura_session_id,
+            aura_agent_id,
+            aura_project_id,
+        } = run;
         let identity = crate::scheduler::AgentIdentity {
             reasoning_effort: None,
             upstream_provider_family: None,
@@ -304,15 +319,15 @@ impl AutomatonBridge {
         }
     }
 
-    pub(super) fn build_runner_config(
-        &self,
-        model: &str,
-        auth_token: Option<&str>,
-        aura_org_id: Option<&str>,
-        aura_session_id: Option<&str>,
-        aura_agent_id: Option<&str>,
-        aura_project_id: Option<&str>,
-    ) -> AgentRunnerConfig {
+    pub(super) fn build_runner_config(&self, run: RunIdentity<'_>) -> AgentRunnerConfig {
+        let RunIdentity {
+            model,
+            auth_token,
+            aura_org_id,
+            aura_session_id,
+            aura_agent_id,
+            aura_project_id,
+        } = run;
         // Dev-loop / task-run paths must carry an explicit model end
         // to end. The pre-fix code took `Option<&str>` and silently
         // fell back to `aura_agent::DEFAULT_MODEL` (`claude-opus-4-6`)
@@ -425,116 +440,5 @@ impl AutomatonBridge {
     /// List all running automatons.
     pub fn list_automatons(&self) -> Vec<aura_engine_automaton::AutomatonInfo> {
         self.runtime.list()
-    }
-}
-
-#[async_trait]
-impl AutomatonController for AutomatonBridge {
-    async fn start_dev_loop(
-        &self,
-        project_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-    ) -> Result<String, String> {
-        self.start_dev_loop_with_capabilities(
-            project_id,
-            workspace_root,
-            auth_token,
-            model,
-            git_repo_url,
-            git_branch,
-            None,
-            None,
-            aura_core_types::AgentPermissions::full_access(),
-            None,
-            None,
-            None,
-            None,
-            Vec::new(),
-            None,
-            None,
-        )
-        .await
-    }
-
-    async fn pause_dev_loop(&self, project_id: &str) -> Result<(), String> {
-        let (automaton_id, agent_id) = {
-            let entry = self
-                .project_handles
-                .get(project_id)
-                .ok_or_else(|| format!("No running dev loop for project {project_id}"))?;
-            let tracked = entry.value();
-            if tracked.handle.is_finished() {
-                return Err("Dev loop has already finished".into());
-            }
-            tracked.handle.pause();
-            (tracked.automaton_id.clone(), tracked.agent_id)
-        };
-        // Mirror `stop_dev_loop`'s audit trail. See `pause_by_id` for
-        // why the `System::AutomatonLifecycle` write matters.
-        self.record_lifecycle_event(agent_id, &automaton_id, "pause_dev_loop")
-            .await;
-        info!(project_id, automaton_id = %automaton_id, "Dev loop paused");
-        Ok(())
-    }
-
-    async fn stop_dev_loop(&self, project_id: &str) -> Result<(), String> {
-        let (automaton_id, agent_id) = {
-            let entry = self
-                .project_handles
-                .get(project_id)
-                .ok_or_else(|| format!("No running dev loop for project {project_id}"))?;
-            let tracked = entry.value();
-            if tracked.handle.is_finished() {
-                let project_id_owned = project_id.to_string();
-                drop(entry);
-                self.project_handles.remove(&project_id_owned);
-                return Err("Dev loop has already finished".into());
-            }
-            tracked.handle.stop();
-            (tracked.automaton_id.clone(), tracked.agent_id)
-        };
-        self.project_handles.remove(project_id);
-        self.record_lifecycle_event(agent_id, &automaton_id, "stop_dev_loop")
-            .await;
-        info!(project_id, automaton_id = %automaton_id, "Dev loop stopped");
-        Ok(())
-    }
-
-    async fn run_task(
-        &self,
-        project_id: &str,
-        task_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-    ) -> Result<String, String> {
-        self.run_task_with_capabilities(
-            project_id,
-            task_id,
-            workspace_root,
-            auth_token,
-            model,
-            git_repo_url,
-            git_branch,
-            None,
-            None,
-            aura_core_types::AgentPermissions::full_access(),
-            None,
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            Vec::new(),
-            None,
-            None,
-        )
-        .await
     }
 }

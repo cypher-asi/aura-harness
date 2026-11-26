@@ -91,14 +91,7 @@ pub(crate) async fn process_agent_with_timeout(
             .await
             .map_err(|e| anyhow::anyhow!("kernel process_dequeued failed: {e}"))?;
 
-        let prompt = if tx.tx_type == TransactionType::UserPrompt {
-            PromptPayload::from_bytes(&tx.payload)
-                .map_err(|e| anyhow::anyhow!("Prompt payload is not a prompt record: {e}"))?
-                .text
-        } else {
-            String::from_utf8(tx.payload.to_vec())
-                .map_err(|e| anyhow::anyhow!("Transaction payload is not valid UTF-8: {e}"))?
-        };
+        let prompt = prompt_text(&tx)?;
         let mut messages = std::mem::take(&mut history);
         messages.push(Message::user(prompt));
 
@@ -117,25 +110,7 @@ pub(crate) async fn process_agent_with_timeout(
             None => run.await?,
         };
 
-        let response_tx = aura_core_types::Transaction::new_chained(
-            agent_id,
-            aura_core_types::TransactionType::AgentMsg,
-            result.total_text.as_bytes().to_vec(),
-            None,
-        );
-        let _response_result = kernel
-            .process_direct(response_tx)
-            .await
-            .map_err(|e| anyhow::anyhow!("kernel process_direct (response) failed: {e}"))?;
-
-        if result.llm_error.is_some() {
-            warn!("Transaction processed with LLM error");
-        } else {
-            info!(
-                iterations = result.iterations,
-                "Transaction committed via kernel-mediated AgentLoop"
-            );
-        }
+        commit_response(&kernel, agent_id, &result).await?;
 
         processed += 1;
         last_result = Some(result);
@@ -145,6 +120,47 @@ pub(crate) async fn process_agent_with_timeout(
         processed,
         last_result,
     })
+}
+
+/// The prompt text a dequeued transaction carries: a prompt record for
+/// `UserPrompt`, raw UTF-8 otherwise.
+fn prompt_text(tx: &aura_core_types::Transaction) -> anyhow::Result<String> {
+    if tx.tx_type == TransactionType::UserPrompt {
+        Ok(PromptPayload::from_bytes(&tx.payload)
+            .map_err(|e| anyhow::anyhow!("Prompt payload is not a prompt record: {e}"))?
+            .text)
+    } else {
+        String::from_utf8(tx.payload.to_vec())
+            .map_err(|e| anyhow::anyhow!("Transaction payload is not valid UTF-8: {e}"))
+    }
+}
+
+/// Commit the loop's response text as an `AgentMsg` through the kernel.
+async fn commit_response(
+    kernel: &Kernel,
+    agent_id: AgentId,
+    result: &AgentLoopResult,
+) -> anyhow::Result<()> {
+    let response_tx = aura_core_types::Transaction::new_chained(
+        agent_id,
+        aura_core_types::TransactionType::AgentMsg,
+        result.total_text.as_bytes().to_vec(),
+        None,
+    );
+    let _response_result = kernel
+        .process_direct(response_tx)
+        .await
+        .map_err(|e| anyhow::anyhow!("kernel process_direct (response) failed: {e}"))?;
+
+    if result.llm_error.is_some() {
+        warn!("Transaction processed with LLM error");
+    } else {
+        info!(
+            iterations = result.iterations,
+            "Transaction committed via kernel-mediated AgentLoop"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

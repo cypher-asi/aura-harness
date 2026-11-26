@@ -50,22 +50,12 @@ impl AutomatonBridge {
     /// previous implementation panicked via `unreachable!` on exhaustion; a
     /// panic here would take down the node process, so we surface the final
     /// error instead and let the caller convert it into an `Err` response.
-    #[allow(clippy::too_many_arguments)] // TODO(W4): group inputs into a `BuildKernelParams` struct.
-    pub(super) fn build_kernel(
-        &self,
-        domain: Arc<dyn DomainApi>,
-        auth_token: Option<&str>,
-        project_id: Option<&str>,
-        workspace: &std::path::Path,
-        use_workspace_base_as_root: bool,
-        installed_tools: &[InstalledToolDefinition],
-        installed_integrations: &[InstalledIntegrationDefinition],
-        agent_permissions: AgentPermissions,
-    ) -> Result<Arc<Kernel>, String> {
+    pub(super) fn build_kernel(&self, params: KernelParams<'_>) -> Result<Arc<Kernel>, String> {
+        let installed_tools = params.installed_tools;
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
-            domain,
-            auth_token.map(String::from),
-            project_id.map(String::from),
+            params.domain,
+            params.auth_token.map(String::from),
+            params.project_id.map(String::from),
         ));
         let resolver = executor::build_tool_resolver(
             &self.catalog,
@@ -77,12 +67,12 @@ impl AutomatonBridge {
         let agent_id = AgentId::generate();
         let policy = automaton_policy_config(
             installed_tools,
-            installed_integrations,
-            agent_permissions.clone(),
+            params.installed_integrations,
+            params.agent_permissions.clone(),
         );
         let config = KernelConfig {
-            workspace_base: workspace.to_path_buf(),
-            use_workspace_base_as_root,
+            workspace_base: params.workspace.to_path_buf(),
+            use_workspace_base_as_root: params.use_workspace_base_as_root,
             policy,
             ..KernelConfig::default()
         };
@@ -97,59 +87,98 @@ impl AutomatonBridge {
             Ok(k) => Ok(Arc::new(k)),
             Err(e) => {
                 warn!(error = %e, "Kernel::new failed, falling back to fresh agent id");
-                let fallback_router = executor::build_executor_router(
-                    executor::build_tool_resolver(&self.catalog, &self.tool_config, None)
-                        .with_installed_tools(installed_tools.to_vec()),
-                );
-                // Retry with a fresh `AgentId` and the same config; the only
-                // failure mode left for `Kernel::new` is store corruption, in
-                // which case we log and fall through to a second attempt.
-                match Kernel::new(
-                    self.store.clone(),
-                    self.provider.clone(),
-                    fallback_router,
-                    KernelConfig {
-                        workspace_base: workspace.to_path_buf(),
-                        use_workspace_base_as_root,
-                        policy: automaton_policy_config(
-                            installed_tools,
-                            installed_integrations,
-                            agent_permissions,
-                        ),
-                        ..KernelConfig::default()
-                    },
-                    AgentId::generate(),
-                ) {
-                    Ok(k) => Ok(Arc::new(k)),
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            "fallback Kernel::new failed; dev-loop will be unavailable for this project"
-                        );
-                        // Final-resort path: re-run `Kernel::new` with the
-                        // already-validated router and the minimum viable
-                        // config. If this also fails we surface the error to
-                        // the caller instead of panicking the node process.
-                        let last_resort = executor::build_executor_router(
-                            executor::build_tool_resolver(&self.catalog, &self.tool_config, None),
-                        );
-                        match Kernel::new(
-                            self.store.clone(),
-                            self.provider.clone(),
-                            last_resort,
-                            KernelConfig::default(),
-                            AgentId::generate(),
-                        ) {
-                            Ok(k) => Ok(Arc::new(k)),
-                            Err(final_err) => Err(format!(
-                                "Kernel::new failed on default config after two retries: {final_err}"
-                            )),
-                        }
-                    }
-                }
+                self.retry_kernel(KernelRetry {
+                    workspace: params.workspace,
+                    use_workspace_base_as_root: params.use_workspace_base_as_root,
+                    installed_tools,
+                    installed_integrations: params.installed_integrations,
+                    agent_permissions: params.agent_permissions,
+                })
             }
         }
     }
+
+    /// Second attempt after the first `Kernel::new` failed: a fresh
+    /// `AgentId`, no domain executor, the same workspace and policy.
+    fn retry_kernel(&self, retry: KernelRetry<'_>) -> Result<Arc<Kernel>, String> {
+        let fallback_router = executor::build_executor_router(
+            executor::build_tool_resolver(&self.catalog, &self.tool_config, None)
+                .with_installed_tools(retry.installed_tools.to_vec()),
+        );
+        // Retry with a fresh `AgentId` and the same config; the only
+        // failure mode left for `Kernel::new` is store corruption, in
+        // which case we log and fall through to a second attempt.
+        match Kernel::new(
+            self.store.clone(),
+            self.provider.clone(),
+            fallback_router,
+            KernelConfig {
+                workspace_base: retry.workspace.to_path_buf(),
+                use_workspace_base_as_root: retry.use_workspace_base_as_root,
+                policy: automaton_policy_config(
+                    retry.installed_tools,
+                    retry.installed_integrations,
+                    retry.agent_permissions,
+                ),
+                ..KernelConfig::default()
+            },
+            AgentId::generate(),
+        ) {
+            Ok(k) => Ok(Arc::new(k)),
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "fallback Kernel::new failed; dev-loop will be unavailable for this project"
+                );
+                self.last_resort_kernel()
+            }
+        }
+    }
+
+    /// Final-resort path: re-run `Kernel::new` with the
+    /// already-validated router and the minimum viable
+    /// config. If this also fails we surface the error to
+    /// the caller instead of panicking the node process.
+    fn last_resort_kernel(&self) -> Result<Arc<Kernel>, String> {
+        let last_resort = executor::build_executor_router(executor::build_tool_resolver(
+            &self.catalog,
+            &self.tool_config,
+            None,
+        ));
+        match Kernel::new(
+            self.store.clone(),
+            self.provider.clone(),
+            last_resort,
+            KernelConfig::default(),
+            AgentId::generate(),
+        ) {
+            Ok(k) => Ok(Arc::new(k)),
+            Err(final_err) => Err(format!(
+                "Kernel::new failed on default config after two retries: {final_err}"
+            )),
+        }
+    }
+}
+
+/// Inputs to [`AutomatonBridge::build_kernel`].
+pub(super) struct KernelParams<'a> {
+    pub(super) domain: Arc<dyn DomainApi>,
+    pub(super) auth_token: Option<&'a str>,
+    pub(super) project_id: Option<&'a str>,
+    pub(super) workspace: &'a std::path::Path,
+    pub(super) use_workspace_base_as_root: bool,
+    pub(super) installed_tools: &'a [InstalledToolDefinition],
+    pub(super) installed_integrations: &'a [InstalledIntegrationDefinition],
+    pub(super) agent_permissions: AgentPermissions,
+}
+
+/// What [`AutomatonBridge::retry_kernel`] rebuilds the kernel from.
+struct KernelRetry<'a> {
+    workspace: &'a std::path::Path,
+    use_workspace_base_as_root: bool,
+    installed_tools: &'a [InstalledToolDefinition],
+    installed_integrations: &'a [InstalledIntegrationDefinition],
+    agent_permissions: AgentPermissions,
 }
 
 /// Build automaton kernel policy.

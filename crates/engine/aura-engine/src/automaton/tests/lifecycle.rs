@@ -49,12 +49,14 @@ async fn start_then_stop_records_two_automaton_lifecycle_entries() {
     // dev loop.
     bridge.register_automaton_identity(
         agent_id,
-        "claude-test-model",
-        None,
-        None,
-        None,
-        None,
-        None,
+        super::super::RunIdentity {
+            model: "claude-test-model",
+            auth_token: None,
+            aura_org_id: None,
+            aura_session_id: None,
+            aura_agent_id: None,
+            aura_project_id: None,
+        },
         aura_model::ModelRequestKind::DevLoopBootstrap,
     );
 
@@ -120,12 +122,14 @@ async fn pause_then_stop_records_distinct_lifecycle_entries_in_order() {
     let agent_id = AgentId::generate();
     bridge.register_automaton_identity(
         agent_id,
-        "claude-test-model",
-        None,
-        None,
-        None,
-        None,
-        None,
+        super::super::RunIdentity {
+            model: "claude-test-model",
+            auth_token: None,
+            aura_org_id: None,
+            aura_session_id: None,
+            aura_agent_id: None,
+            aura_project_id: None,
+        },
         aura_model::ModelRequestKind::DevLoopBootstrap,
     );
 

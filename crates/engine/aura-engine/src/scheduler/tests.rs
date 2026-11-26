@@ -1,6 +1,6 @@
 use super::*;
-use aura_core_types::{Transaction, TransactionType};
-use aura_model::MockProvider;
+use aura_core_types::{AgentStatus, Transaction, TransactionType};
+use aura_model::{MockProvider, ModelRequestKind};
 use aura_store_db::RocksStore;
 use bytes::Bytes;
 use std::time::Duration;
