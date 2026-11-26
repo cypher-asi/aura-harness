@@ -46,6 +46,7 @@ pub use aura_ui::sandbox;
 mod scroll;
 pub(crate) mod scrollbar;
 mod selection;
+mod selection_state;
 pub(crate) mod shell_input;
 mod shell_prompt;
 mod side_scope;
@@ -95,12 +96,10 @@ pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 pub(crate) use plan_doc::PlanDoc;
 pub use processes::SidePanelTab;
 pub use prose::{ProseMeasure, ProseRow};
-use ratatui::{
-    buffer::Buffer,
-    layout::{Position, Rect},
-};
+use ratatui::{buffer::Buffer, layout::Rect};
 use sandbox::{SandboxEntryKind, SandboxTree};
 pub use selection::Selection;
+use selection_state::SelectionState;
 pub use side_scope::SideScope;
 pub use smooth::ChatScroll;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -409,23 +408,9 @@ pub struct App {
     /// Absolute cell rect where the detail-view image was drawn in the last
     /// frame; `None` when no image detail view is open or nothing was drawn.
     pub(super) detail_image_rect: Option<Rect>,
-    /// Text selected with the mouse
-    pub(super) selection: Option<Selection>,
-    /// Where the pointer is while the left button is still held for
-    /// `selection`
-    pub(super) selecting: Option<Position>,
-    /// The chat panel's scrollbar while the left button holds it
-    pub(super) scrollbar_grab: Option<scrollbar::ScrollbarGrab>,
-    /// The cells of the chat panel's scrollbar track as it was drawn this
-    /// frame, to tell what was drawn over it after
-    pub(super) scrollbar_cells: Vec<ratatui::buffer::Cell>,
-    /// Whether `selection` is in the chat panel's body, whose rows scroll
-    pub(super) selection_scrolls: bool,
-    /// When the chat last scrolled for a selection dragged past its edge
-    pub(super) selection_scrolled: Option<Instant>,
-    /// Whether the selection should be copied after the next frame.
-    /// Dropping the selection drops this, not `copy_pending_text`.
-    pub(super) copy_requested: bool,
+    /// Text selected with the mouse, the chat scrollbar's grab and what
+    /// waits to be copied
+    pub(super) select: SelectionState,
     /// Which list the agents panel shows
     pub(super) agents_tab: AgentsTab,
     /// What each agent app showed, put back when it comes to the front
@@ -511,10 +496,6 @@ pub struct App {
     pub(super) bench: BenchState,
     /// Run log shown by the chat panel's LOG tab
     pub(super) log: run_log::LogState,
-    /// Text to copy after the next frame instead of the selection
-    pub(super) copy_pending_text: Option<String>,
-    /// What that text is, for the notice once it is copied
-    pub(super) copy_label: Option<String>,
 }
 
 /// Rows of the input box's wrapped text in the last frame.
@@ -981,13 +962,7 @@ impl App {
             code_copy_hits: Vec::new(),
             pending_image_areas: Vec::new(),
             detail_image_rect: None,
-            selection: None,
-            selecting: None,
-            scrollbar_grab: None,
-            scrollbar_cells: Vec::new(),
-            selection_scrolls: false,
-            selection_scrolled: None,
-            copy_requested: false,
+            select: SelectionState::default(),
             agents_tab: AgentsTab::default(),
             apps: apps::AppMemory::default(),
             channels: apps::ChannelState::default(),
@@ -1028,8 +1003,6 @@ impl App {
             flow: flow::FlowState::default(),
             bench: BenchState::default(),
             log: run_log::LogState::default(),
-            copy_pending_text: None,
-            copy_label: None,
         }
     }
 
@@ -1328,8 +1301,8 @@ impl App {
                 (console.transcript(), "the boot log")
             }
         };
-        self.copy_pending_text = Some(text);
-        self.copy_label = Some(what.to_string());
+        self.select.copy_pending_text = Some(text);
+        self.select.copy_label = Some(what.to_string());
         true
     }
 
@@ -1434,28 +1407,32 @@ impl App {
     /// Whether a copy is waiting for the next frame to be drawn.
     #[must_use]
     pub const fn copy_pending(&self) -> bool {
-        self.copy_requested || self.copy_pending_text.is_some()
+        self.select.copy_requested || self.select.copy_pending_text.is_some()
     }
 
     /// Ask for the current selection to be copied after the next frame.
     /// Returns `false` when nothing is selected.
     pub fn request_copy(&mut self) -> bool {
-        self.copy_requested = self.selection.as_ref().is_some_and(|s| !s.is_empty());
-        self.copy_requested
+        self.select.copy_requested = self
+            .select
+            .selection
+            .as_ref()
+            .is_some_and(|s| !s.is_empty());
+        self.select.copy_requested
     }
 
     /// The text to copy once per copy request: text asked for outright,
     /// else the selected text in `buffer` (the frame just drawn).
     pub fn take_copy_text(&mut self, buffer: &Buffer) -> Option<String> {
-        let selection = std::mem::take(&mut self.copy_requested);
-        if let Some(text) = self.copy_pending_text.take() {
+        let selection = std::mem::take(&mut self.select.copy_requested);
+        if let Some(text) = self.select.copy_pending_text.take() {
             return Some(text);
         }
         if !selection {
             return None;
         }
-        self.copy_label = None;
-        let text = self.selection.as_ref()?.text(buffer);
+        self.select.copy_label = None;
+        let text = self.select.selection.as_ref()?.text(buffer);
         (!text.is_empty()).then_some(text)
     }
 
@@ -1463,7 +1440,7 @@ impl App {
     ///
     pub fn notify_copied(&mut self, chars: usize, result: &std::io::Result<()>) {
         self.redraw = true;
-        let what = self.copy_label.take();
+        let what = self.select.copy_label.take();
         self.log.copy_finished(result.is_ok());
         self.notification = Some(match result {
             Ok(()) => (
@@ -2016,13 +1993,14 @@ impl App {
         let shown = self.notification.is_some();
         self.expire_notification();
         if !self.selection_scrolling() {
-            self.selection_scrolled = None;
+            self.select.selection_scrolled = None;
         } else if self
+            .select
             .selection_scrolled
             .is_none_or(|at| at.elapsed() >= SELECTION_SCROLL_EVERY)
         {
             self.scroll_selection();
-            self.selection_scrolled = Some(Instant::now());
+            self.select.selection_scrolled = Some(Instant::now());
         }
 
         self.receive_commands();

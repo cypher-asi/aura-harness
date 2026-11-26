@@ -696,8 +696,8 @@ impl App {
     fn copy_text(&mut self, text: Option<String>, what: &str) {
         match text.filter(|t| !t.is_empty()) {
             Some(text) => {
-                self.copy_pending_text = Some(text);
-                self.copy_label = Some(what.to_string());
+                self.select.copy_pending_text = Some(text);
+                self.select.copy_label = Some(what.to_string());
                 self.log.copying = true;
             }
             None => {

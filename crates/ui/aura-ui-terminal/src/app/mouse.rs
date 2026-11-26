@@ -100,7 +100,7 @@ impl App {
                 (menu.selected, submenu)
             })
         };
-        let ends = |app: &Self| app.selection.as_ref().map(Selection::ends);
+        let ends = |app: &Self| app.select.selection.as_ref().map(Selection::ends);
         let state = |app: &Self| {
             (
                 app.hover,
@@ -136,7 +136,7 @@ impl App {
             self.hover = None;
             self.context_menu = None;
             self.project_press = None;
-            self.scrollbar_grab = None;
+            self.select.scrollbar_grab = None;
             self.drop_queue_press();
             return;
         }
@@ -197,11 +197,14 @@ impl App {
                 if self.drag_flow(mouse.column, mouse.row) {
                     return;
                 }
-                if let Some(selection) =
-                    self.selection.as_mut().filter(|_| self.selecting.is_some())
+                if let Some(selection) = self
+                    .select
+                    .selection
+                    .as_mut()
+                    .filter(|_| self.select.selecting.is_some())
                 {
                     selection.extend_to(at);
-                    self.selecting = Some(at);
+                    self.select.selecting = Some(at);
                 }
                 return;
             }
@@ -213,14 +216,19 @@ impl App {
                 if self.release_flow() {
                     return;
                 }
-                if self.selecting.take().is_some() {
-                    if let Some(selection) = self.selection.as_mut() {
+                if self.select.selecting.take().is_some() {
+                    if let Some(selection) = self.select.selection.as_mut() {
                         selection.extend_to(at);
                     }
-                    if self.selection.as_ref().is_some_and(|s| !s.is_empty()) {
-                        self.copy_requested = true;
+                    if self
+                        .select
+                        .selection
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty())
+                    {
+                        self.select.copy_requested = true;
                     } else {
-                        self.selection = None;
+                        self.select.selection = None;
                         if self.detail.is_none() {
                             self.toggle_activity_at(mouse.column, mouse.row);
                         }
@@ -279,17 +287,17 @@ impl App {
                     self.hover = None;
                     return;
                 }
-                self.selection_scrolls =
+                self.select.selection_scrolls =
                     panel == PanelFocus::Chat && self.areas.chat_rows.is_some();
-                let top = if self.selection_scrolls {
+                let top = if self.select.selection_scrolls {
                     self.areas.chat_rows_top
                 } else {
                     0
                 };
-                self.selection = self
+                self.select.selection = self
                     .selectable_area(panel)
                     .map(|bounds| Selection::new(bounds, top, at));
-                self.selecting = self.selection.is_some().then_some(at);
+                self.select.selecting = self.select.selection.is_some().then_some(at);
                 match panel {
                     PanelFocus::Swarm => {
                         if !self.press_project(mouse.column, mouse.row) {

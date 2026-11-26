@@ -224,22 +224,20 @@ impl App {
     /// Text selected with the mouse, if any.
     #[must_use]
     pub const fn selection(&self) -> Option<&Selection> {
-        self.selection.as_ref()
+        self.select.selection.as_ref()
     }
 
     /// Drop the mouse selection.
     pub fn clear_selection(&mut self) {
-        self.selection = None;
-        self.selecting = None;
-        self.selection_scrolled = None;
-        self.copy_requested = false;
+        self.select.clear();
     }
 
     /// Whether the selection is in the rows the chat panel's body scrolls
     /// through, as drawn in the last frame.
     fn selection_in_chat_rows(&self) -> bool {
-        self.selection_scrolls
+        self.select.selection_scrolls
             && self
+                .select
                 .selection
                 .as_ref()
                 .is_some_and(|s| self.areas.chat_rows == Some(s.bounds()))
@@ -258,11 +256,11 @@ impl App {
         if !self.selection_in_chat_rows() {
             return;
         }
-        let Some(selection) = self.selection.as_mut() else {
+        let Some(selection) = self.select.selection.as_mut() else {
             return;
         };
         selection.scroll_to(self.areas.chat_rows_top);
-        if let Some(at) = self.selecting {
+        if let Some(at) = self.select.selecting {
             selection.extend_to(at);
         }
         selection.keep(buffer);
@@ -271,8 +269,8 @@ impl App {
     /// How the chat should scroll for a selection being dragged past its
     /// top (`true`) or bottom, and by how many rows.
     fn selection_scroll(&self) -> Option<(bool, usize)> {
-        let at = self.selecting?;
-        let bounds = self.selection.as_ref()?.bounds();
+        let at = self.select.selecting?;
+        let bounds = self.select.selection.as_ref()?.bounds();
         if !self.selection_in_chat_rows() {
             return None;
         }

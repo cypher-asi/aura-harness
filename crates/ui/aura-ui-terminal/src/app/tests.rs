@@ -5282,7 +5282,7 @@ fn test_dragging_the_chat_scrollbar_scrolls_without_selecting() {
         bottom,
     ));
     assert!(app.selection().is_none(), "no text selection starts");
-    assert!(app.selecting.is_none());
+    assert!(app.select.selecting.is_none());
     assert_eq!(app.scroll_offset(), 0, "pressing the thumb leaves it");
 
     let moved = app.handle_mouse(mouse(
