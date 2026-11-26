@@ -3,7 +3,9 @@ use super::*;
 
 /// [`app_in_channel`] with a live event channel, `rx`, to watch what the
 /// app asks of the session from here on.
-fn app_in_channel_with_events(active: &str) -> (tempfile::TempDir, App, mpsc::Receiver<UiEvent>) {
+pub(super) fn app_in_channel_with_events(
+    active: &str,
+) -> (tempfile::TempDir, App, mpsc::Receiver<UiEvent>) {
     let (dir, mut app) = app_in_channel(active);
     let (tx, rx) = mpsc::channel(64);
     app.link.event_tx = Some(tx);
@@ -12,7 +14,7 @@ fn app_in_channel_with_events(active: &str) -> (tempfile::TempDir, App, mpsc::Re
 
 /// The agent the last of the events waiting in `rx` asked to put on
 /// screen (`FocusAgent` or `SelectAgent`), reading them all.
-fn switch_request(rx: &mut mpsc::Receiver<UiEvent>) -> Option<String> {
+pub(super) fn switch_request(rx: &mut mpsc::Receiver<UiEvent>) -> Option<String> {
     let mut last = None;
     while let Ok(event) = rx.try_recv() {
         if let UiEvent::FocusAgent(id) | UiEvent::SelectAgent(id) = event {
@@ -158,7 +160,12 @@ fn test_a_member_chat_sends_to_the_member_and_names_it() {
     switch_request(&mut rx);
     assert_eq!(app.app_placeholder().as_deref(), Some("Message Reviewer"));
     assert_eq!(
-        app.channel_chat_title(),
+        app.channel_chat_title().map(|(slug, _)| slug).as_deref(),
+        Some("#zode"),
+        "the channel's own title, which the member's covers"
+    );
+    assert_eq!(
+        app.member_chat_title(),
         Some(("Reviewer".to_string(), "RE36 · agent · #zode".to_string()))
     );
 
@@ -181,12 +188,12 @@ fn test_a_member_chat_sends_to_the_member_and_names_it() {
     channels[0].members[1].definition = Some("reviewer".to_string());
     app.process_command(UiCommand::SetChannels(channels));
     assert_eq!(
-        app.channel_chat_title().map(|(_, info)| info),
+        app.member_chat_title().map(|(_, info)| info),
         Some("RE36 · reviewer · #zode".to_string())
     );
     app.open_channel_member(2);
     assert_eq!(
-        app.channel_chat_title(),
+        app.member_chat_title(),
         Some(("Scout".to_string(), "SUB2 · subagent · #zode".to_string()))
     );
 }

@@ -15,6 +15,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Wednesday, September 16 2026`, instead of `2026-09-16`. `Today`,
   `Yesterday` and `Earlier` are unchanged.
 
+### A channel member's own chat
+
+##### Added
+
+- In CHANNELS, clicking a member on the MEMBERS tab, or Enter on it,
+  opens that member's own chat in the middle column, with the channel
+  still open. Its bar names the member, with its code, role and
+  `#slug`, and a `✕`; the `✕` or Esc on an empty input goes back to the
+  channel's chat. A view over the chat closes before the member chat
+  does, and a menu or a selected queue item takes Esc first.
+
+##### Fixed
+
+- A member dropped from the channel while its chat is open gives way
+  to the coordinator even when the session can't be told at once, so
+  it never stays on screen under the channel's name.
+
 ### To-dos move to a drawer above the input
 
 ##### Changed

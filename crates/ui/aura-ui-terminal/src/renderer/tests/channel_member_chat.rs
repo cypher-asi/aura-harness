@@ -105,3 +105,75 @@ fn test_a_hosted_member_chat_bar_is_closable() {
     assert!(!bar.closable);
     assert_eq!(bar.title.as_deref(), Some("#zode"));
 }
+
+/// [`channels_app_with_events`] with the worker's chat opened from the
+/// focused MEMBERS tab, and the receiver that keeps the session's end
+/// open.
+fn worker_chat_app() -> (
+    crate::App,
+    tokio::sync::mpsc::Receiver<crate::events::UiEvent>,
+) {
+    use crate::app::{PaneTab, SidePanelTab};
+    use crossterm::event::{KeyCode, KeyEvent};
+    let (mut app, rx) = channels_app_with_events();
+    app.select_pane_tab(PaneTab::Side(SidePanelTab::ChannelMembers));
+    app.handle_key(KeyEvent::from(KeyCode::Down));
+    app.handle_key(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(app.active_agent_id(), "wk");
+    (app, rx)
+}
+
+/// Draw `app`, check the chat bar names the worker and ends in its close
+/// button, and click that button.
+fn click_the_member_chat_close_button(app: &mut crate::App) {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let rows = render_rows(app, 140);
+    let bar = rows
+        .iter()
+        .find(|text| text.contains("WK7 · subagent · #zode"))
+        .unwrap_or_else(|| panic!("no member bar in:\n{}", rows.join("\n")));
+    assert!(bar.contains('✕'), "{bar:?}");
+    let close = app.areas.detail_close.expect("the close button");
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: close.x,
+        row: close.y,
+        modifiers: KeyModifiers::empty(),
+    });
+}
+
+#[test]
+fn test_a_member_chat_with_the_channel_panel_hidden_keeps_its_close_button() {
+    use crate::app::PanelFocus;
+    let (mut app, _rx) = worker_chat_app();
+    assert_eq!(app.focus(), PanelFocus::Sandbox, "opened from MEMBERS");
+    app.toggle_side_column();
+    assert_eq!(app.focus(), PanelFocus::Chat, "off the hidden panel");
+
+    click_the_member_chat_close_button(&mut app);
+    assert_eq!(app.active_agent_id(), "co");
+    assert!(app.channel_open());
+    assert_eq!(app.focus(), PanelFocus::Chat);
+    assert!(!app.sandbox_panel_visible(), "the panel stays hidden");
+    let rows = render_rows(&mut app, 140);
+    assert_eq!(app.areas.sandbox, None, "{}", rows.join("\n"));
+}
+
+#[test]
+fn test_an_expanded_member_chat_keeps_its_close_button_and_stays_expanded() {
+    let (mut app, _rx) = worker_chat_app();
+    app.toggle_chat_expanded();
+    click_the_member_chat_close_button(&mut app);
+    assert_eq!(app.active_agent_id(), "co");
+    assert!(app.channel_open());
+    assert!(
+        app.chat_expanded(),
+        "the channel's chat comes back expanded"
+    );
+    let rows = render_rows(&mut app, 140);
+    assert!(
+        rows.iter().any(|row| row.contains("Zode release")),
+        "{}",
+        rows.join("\n")
+    );
+}
