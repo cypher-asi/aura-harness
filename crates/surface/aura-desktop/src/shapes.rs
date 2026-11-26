@@ -667,6 +667,7 @@ fn is_sketched(c: char) -> bool {
             ..='\u{28FF}'
                 | '🗀'
                 | '🗁'
+                | '☁'
                 | '✓'
                 | '✔'
                 | '✗'
@@ -709,7 +710,7 @@ fn is_sketched(c: char) -> bool {
 fn stamp_char(out: &mut Vec<Quad>, atlas: &mut Atlas, c: char, cell: Rectangle, color: [u8; 4]) {
     let (left, top) = (cell.x.floor(), cell.y.floor());
     // Room around the cell: strokes are centered on its edges, and the
-    // folders are two cells wide.
+    // folders and the cloud are two cells wide.
     let margin = (cell.width / 2.0).ceil().max(4.0);
     let local = Rectangle {
         x: margin + (cell.x - left),
@@ -737,6 +738,7 @@ fn sketch(pen: &mut Pen, c: char, cell: Rectangle) {
         '╭' | '╮' | '╯' | '╰' => rounded_corner(pen, c, cell),
         '\u{2800}'..='\u{28FF}' => braille(pen, c, cell),
         '🗀' | '🗁' => folder(pen, c == '🗁', cell),
+        '☁' => cloud(pen, cell),
         _ => symbol(pen, c, cell),
     }
 }
@@ -817,6 +819,27 @@ fn folder(pen: &mut Pen, open: bool, cell: Rectangle) {
         b.close();
     }
     pen.stroke(b, (1.8 * s).max(1.0), LineCap::Round, LineJoin::Round);
+}
+
+/// A filled cloud on a 24-unit grid: a dome between two lower bumps, on a
+/// flat base. One cell wide it is a speck, so like the folders it spans
+/// this cell and the next, which must be blank: the terminal UI's cloud
+/// mark leaves it so.
+fn cloud(pen: &mut Pen, cell: Rectangle) {
+    let s = (cell.width * 1.8 / 24.0).min(cell.height * 0.62 / 16.0);
+    let (cx, cy) = (cell.x + cell.width, cell.y + cell.height / 2.0);
+    let q = |x: f32, y: f32| Point::new(cx + (x - 12.0) * s, cy + (y - 12.0) * s);
+    // The bumps and the base wind the same way, so they fill as one.
+    let mut cloud = Outline::new();
+    for (x, y, r) in [(6.0, 14.0, 6.0), (12.0, 11.5, 7.5), (19.0, 15.0, 5.0)] {
+        cloud.arc(q(x, y), r * s, 0.0, 2.0 * PI);
+    }
+    cloud.move_to(q(6.0, 15.0));
+    cloud.line_to(q(19.0, 15.0));
+    cloud.line_to(q(19.0, 20.0));
+    cloud.line_to(q(6.0, 20.0));
+    cloud.close();
+    pen.fill(cloud);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1047,7 +1070,7 @@ mod tests {
     fn every_shape_the_ui_uses_is_drawn_and_letters_are_left_to_the_font() {
         let mut text = TextSystem::new();
         let mut quads = Vec::new();
-        let shapes = "─━│┃┌┐└┘┏┓┗┛├┤┬┴┼╭╮╯╰═║╔╗╚╝▀▄█▌▐░▒▓▖▟⠿⣿🗀🗁\
+        let shapes = "─━│┃┌┐└┘┏┓┗┛├┤┬┴┼╭╮╯╰═║╔╗╚╝▀▄█▌▐░▒▓▖▟⠿⣿🗀🗁☁\
                       ✓✔✗✘✕✖▸►▶◂◄◀▾▼▴▲◦◐◑◒◓◇◆◈■□▪▫▰▱⊘‖⏱⬢☐☒▣";
         for c in shapes.chars() {
             quads.clear();

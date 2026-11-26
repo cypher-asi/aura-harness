@@ -28,12 +28,14 @@ impl PlacementView {
         }
     }
 
-    /// The footer's mark before the label.
+    /// The mark before the footer's label and after a cloud agent's name.
+    /// The cloud's second column is blank: one column is too narrow to
+    /// make a cloud out, so the desktop window draws it across both.
     #[must_use]
     pub const fn mark(self) -> &'static str {
         match self {
             Self::Local => "⌂",
-            Self::Cloud => "☁",
+            Self::Cloud => "☁ ",
         }
     }
 

@@ -25,6 +25,7 @@ use aura_ui::events::{
     MessageData, MessageRole, ModelOptionView, ProcessKind, ProcessStatus, ProcessSummary,
     SourceUsage, TodoState, TodoView, ToolData, TraceNodeStatus, UiCommand,
 };
+use aura_ui::host::{PlacementState, PlacementView};
 use aura_ui_terminal::{AgentsTab, ChatTab, Pane, PaneTab, RecordsTab};
 use winit::event::MouseButton;
 use winit::keyboard::{ModifiersState, NamedKey};
@@ -538,6 +539,37 @@ fn an_empty_archive_says_how_agents_get_there() {
     let screen = h.screen();
     assert!(screen.contains("  No archived agents."), "{screen}");
     snapshot("archive", &mut h);
+}
+
+#[test]
+fn cloud_agents_are_marked_in_the_list_and_the_footer() {
+    let mut h = stage();
+    seed(&mut h);
+    let cloud = |owner: Option<&str>| PlacementState {
+        placement: PlacementView::Cloud,
+        owner: owner.map(Into::into),
+        ..PlacementState::default()
+    };
+    h.apply([
+        UiCommand::SetAgents(vec![
+            agent("a1", "Agent01", 0, Some("aura-harness")),
+            agent("a2", "Reviewer", 1, None),
+            agent("a3", "Planner", 0, Some("aura-harness")),
+        ]),
+        UiCommand::SetPlacement {
+            agent_id: "a1".into(),
+            state: cloud(None),
+        },
+        UiCommand::SetPlacement {
+            agent_id: "a3".into(),
+            state: cloud(Some("Alice")),
+        },
+    ]);
+    let screen = h.screen();
+    assert!(screen.contains("Agent01 ☁  "), "{screen}");
+    assert!(screen.contains("Planner ☁  Alice"), "{screen}");
+    assert!(screen.contains("● Ready  ☁  cloud"), "{screen}");
+    snapshot("cloud", &mut h);
 }
 
 #[test]
