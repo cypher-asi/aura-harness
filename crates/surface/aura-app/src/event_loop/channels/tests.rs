@@ -1,6 +1,7 @@
 use super::*;
 use crate::event_loop::subagents::task_tool_definition;
 use crate::event_loop::subagents::tests::{fixture, request, Fixture};
+use crate::event_loop::tests::support::open_project;
 use aura_ui_terminal::UiCommand;
 
 fn new_channel(slug: &str) -> NewChannel {
@@ -18,15 +19,6 @@ fn new_channel_in(slug: &str, project_id: &str) -> NewChannel {
         project_id: Some(project_id.to_string()),
         ..new_channel(slug)
     }
-}
-
-/// A new project in `dir`; returns its id and (canonical) folder.
-fn open_project(fixture: &Fixture, dir: &tempfile::TempDir) -> (String, PathBuf) {
-    let mut registry = lock(&fixture.hub.registry);
-    let (agent, _) = registry.open_project(dir.path()).unwrap();
-    let project_id = agent.project_id.unwrap();
-    let folder = registry.project(&project_id).unwrap().folder.clone();
-    (project_id, folder)
 }
 
 /// The project and own folder `agent` has in the registry.
@@ -323,7 +315,7 @@ async fn channel_members_are_left_out_of_the_projects_tree() {
 async fn a_channel_with_a_project_puts_its_coordinator_there_without_a_channel_folder() {
     let fixture = fixture("unused");
     let dir = tempfile::TempDir::new().unwrap();
-    let (project_id, project_folder) = open_project(&fixture, &dir);
+    let (project_id, project_folder) = open_project(&fixture.hub, dir.path());
     let channel = create_channel(&fixture.hub, new_channel_in("site", &project_id))
         .await
         .unwrap();
@@ -368,7 +360,7 @@ async fn a_channel_with_an_unknown_project_is_refused_without_registering_anyone
 async fn spawns_of_a_projected_channel_work_in_its_project_and_are_listed_under_it() {
     let mut fixture = fixture("Looks good.");
     let dir = tempfile::TempDir::new().unwrap();
-    let (project_id, project_folder) = open_project(&fixture, &dir);
+    let (project_id, project_folder) = open_project(&fixture.hub, dir.path());
     let channel = create_channel(&fixture.hub, new_channel_in("site", &project_id))
         .await
         .unwrap();
@@ -426,7 +418,7 @@ async fn spawns_of_a_projected_channel_work_in_its_project_and_are_listed_under_
 async fn setting_and_clearing_a_project_moves_the_coordinator_and_keeps_earlier_work_in_place() {
     let mut fixture = fixture("Looks good.");
     let dir = tempfile::TempDir::new().unwrap();
-    let (project_id, project_folder) = open_project(&fixture, &dir);
+    let (project_id, project_folder) = open_project(&fixture.hub, dir.path());
     let channel = create_channel(&fixture.hub, new_channel("site"))
         .await
         .unwrap();
@@ -494,7 +486,7 @@ async fn setting_and_clearing_a_project_moves_the_coordinator_and_keeps_earlier_
 async fn an_unknown_project_is_refused_and_a_title_change_keeps_the_project() {
     let fixture = fixture("unused");
     let dir = tempfile::TempDir::new().unwrap();
-    let (project_id, _) = open_project(&fixture, &dir);
+    let (project_id, _) = open_project(&fixture.hub, dir.path());
     let channel = create_channel(&fixture.hub, new_channel_in("site", &project_id))
         .await
         .unwrap();
@@ -562,7 +554,7 @@ async fn a_failed_project_change_leaves_the_registry_as_it_was() {
 async fn start_up_places_coordinators_of_channels_that_got_a_project_from_legacy_links() {
     let mut fixture = fixture("Looks good.");
     let dir = tempfile::TempDir::new().unwrap();
-    let (project_id, _) = open_project(&fixture, &dir);
+    let (project_id, _) = open_project(&fixture.hub, dir.path());
     let channel = create_channel(&fixture.hub, new_channel("site"))
         .await
         .unwrap();
@@ -603,7 +595,7 @@ async fn start_up_places_coordinators_of_channels_that_got_a_project_from_legacy
 async fn start_up_treats_a_channel_whose_project_is_gone_as_having_none() {
     let mut fixture = fixture("Looks good.");
     let dir = tempfile::TempDir::new().unwrap();
-    let (project_id, _) = open_project(&fixture, &dir);
+    let (project_id, _) = open_project(&fixture.hub, dir.path());
     let channel = create_channel(&fixture.hub, new_channel_in("site", &project_id))
         .await
         .unwrap();
@@ -645,9 +637,9 @@ async fn start_up_treats_a_channel_whose_project_is_gone_as_having_none() {
 async fn start_up_migrates_only_links_to_projects_the_registry_lists() {
     let fixture = fixture("unused");
     let dir = tempfile::TempDir::new().unwrap();
-    let (project_id, _) = open_project(&fixture, &dir);
+    let (project_id, _) = open_project(&fixture.hub, dir.path());
     let removed = tempfile::TempDir::new().unwrap();
-    let (removed_id, _) = open_project(&fixture, &removed);
+    let (removed_id, _) = open_project(&fixture.hub, removed.path());
     lock(&fixture.hub.registry)
         .remove_project(&removed_id)
         .unwrap();
@@ -776,7 +768,7 @@ async fn removing_the_launch_project_keeps_channel_members() {
 async fn summaries_and_the_coordinator_prompt_name_the_channel_project() {
     let fixture = fixture("unused");
     let dir = tempfile::TempDir::new().unwrap();
-    let (project_id, folder) = open_project(&fixture, &dir);
+    let (project_id, folder) = open_project(&fixture.hub, dir.path());
     let name = lock(&fixture.hub.registry)
         .project(&project_id)
         .unwrap()
@@ -981,8 +973,8 @@ async fn switching_projects_moves_every_member_and_frees_the_old_project() {
         tempfile::TempDir::new().unwrap(),
         tempfile::TempDir::new().unwrap(),
     );
-    let (a, a_folder) = open_project(&fixture, &dir_a);
-    let (b, _) = open_project(&fixture, &dir_b);
+    let (a, a_folder) = open_project(&fixture.hub, dir_a.path());
+    let (b, _) = open_project(&fixture.hub, dir_b.path());
     let channel = create_channel(&fixture.hub, new_channel_in("site", &a))
         .await
         .unwrap();
@@ -1040,8 +1032,8 @@ async fn a_project_a_member_is_in_counts_as_used_by_its_channel() {
         tempfile::TempDir::new().unwrap(),
         tempfile::TempDir::new().unwrap(),
     );
-    let (a, _) = open_project(&fixture, &dir_a);
-    let (b, _) = open_project(&fixture, &dir_b);
+    let (a, _) = open_project(&fixture.hub, dir_a.path());
+    let (b, _) = open_project(&fixture.hub, dir_b.path());
     let channel = create_channel(&fixture.hub, new_channel_in("site", &a))
         .await
         .unwrap();
