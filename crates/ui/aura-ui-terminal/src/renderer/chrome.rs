@@ -238,7 +238,9 @@ mod tests {
                 let panel = frame.area();
                 let inner = render_body_block(frame, panel, (true, false), &theme).unwrap();
                 let body = Body::new(panel, inner, true);
-                let lines = (0..lines).map(|n| Line::from(format!("line {n}"))).collect();
+                let lines = (0..lines)
+                    .map(|n| Line::from(format!("line {n}")))
+                    .collect();
                 body.draw_document(frame, lines, first, &theme);
             })
             .expect("draw");

@@ -22,11 +22,14 @@ use crate::tab_bar::Hit;
 use crate::{raster, text};
 use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, FlowKind, FlowLane, FlowNode, FlowUsage,
-    MessageData, MessageRole, ModelOptionView, ProcessKind, ProcessStatus, ProcessSummary,
-    SourceUsage, TodoState, TodoView, ToolData, TraceNodeStatus, UiCommand,
+    MessageData, MessageRole, ModelOptionView, PolicyView, ProcessKind, ProcessStatus,
+    ProcessSummary, SourceUsage, TodoState, TodoView, ToolData, ToolPolicyState, ToolPolicyView,
+    TraceNodeStatus, UiCommand,
 };
-use aura_ui::host::{PlacementState, PlacementView};
-use aura_ui_terminal::{AgentsTab, ChatTab, Pane, PaneTab, RecordsTab};
+use aura_ui::host::{HostAction, HostFact, HostSection, HostView, PlacementState, PlacementView};
+use aura_ui::mode_command::PermissionMode;
+use aura_ui::ApprovalLevel;
+use aura_ui_terminal::{AgentsTab, ChatTab, Pane, PaneTab, RecordsTab, SidePanelTab};
 use winit::event::MouseButton;
 use winit::keyboard::{ModifiersState, NamedKey};
 
@@ -600,6 +603,74 @@ fn the_kernel_bar_opens_the_members_of_the_run() {
         "{screen}"
     );
     snapshot("members", &mut h);
+}
+
+#[test]
+fn policies_read_like_the_host_tab_below_them() {
+    let mut h = stage();
+    session(&mut h);
+    let tool = |name: &str, state, rule: &str| ToolPolicyView {
+        name: name.into(),
+        state,
+        decided_by: rule.into(),
+    };
+    h.apply([
+        UiCommand::SetPolicies(PolicyView {
+            mode: PermissionMode::Agent,
+            approval: ApprovalLevel::Yolo,
+            policy_hash: "3f9c0a7e5b2d4c18".into(),
+            action_kinds: vec!["delegate".into(), "reason".into()],
+            max_proposals: 8,
+            capabilities: vec!["SpawnAgent".into(), "InvokeProcess".into()],
+            capability_total: 12,
+            scope: "all orgs, projects and agents".into(),
+            tools: vec![
+                tool("read_file", ToolPolicyState::On, "user_default.per_tool"),
+                tool("write_file", ToolPolicyState::Ask, "user_default.fallback"),
+                tool("git_push", ToolPolicyState::Off, "mode.plan"),
+            ],
+            commands_confined: true,
+            live_prompts: true,
+            prompt_timeout_secs: 600,
+            ..PolicyView::default()
+        }),
+        UiCommand::SetHost(Box::new(HostView {
+            agent_id: "a1".into(),
+            placement: PlacementView::Cloud,
+            title: "boxd · aura-re36-3f9c".into(),
+            status: "● ready · up 2h 14m".into(),
+            sections: vec![
+                HostSection {
+                    title: "MACHINE".into(),
+                    facts: vec![
+                        HostFact::new("Region", "fra"),
+                        HostFact::new("Size", "4 vCPU · 16 GiB"),
+                    ],
+                },
+                HostSection {
+                    title: "RESOURCES".into(),
+                    facts: vec![
+                        HostFact::new("Memory", "6.0 GiB of 16.0 GiB").with_percent(37.5),
+                        HostFact::new("Disk", "91 GiB of 100 GiB").with_percent(91.0),
+                    ],
+                },
+            ],
+            actions: vec![HostAction::Pull, HostAction::Sleep],
+            ..HostView::default()
+        })),
+    ]);
+    for tab in [
+        PaneTab::Records(RecordsTab::Policies),
+        PaneTab::Side(SidePanelTab::Host),
+    ] {
+        let spot = h.shell.chrome.spot(tab).expect("the tab is drawn");
+        h.drag(spot, spot);
+    }
+    let screen = h.screen();
+    for text in ["STATUS", "  Approval  yolo", "RESOURCES", "  Region    fra"] {
+        assert!(screen.contains(text), "{text:?} in {screen}");
+    }
+    snapshot("policies_over_host", &mut h);
 }
 
 #[test]

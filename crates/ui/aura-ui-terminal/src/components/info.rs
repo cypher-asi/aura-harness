@@ -247,8 +247,10 @@ impl<'t> Info<'t> {
                 continue;
             }
             for line in wrap(paragraph, room) {
-                self.lines
-                    .push(Line::from(vec![Span::raw(INDENT), Span::styled(line, style)]));
+                self.lines.push(Line::from(vec![
+                    Span::raw(INDENT),
+                    Span::styled(line, style),
+                ]));
             }
         }
     }
@@ -409,7 +411,10 @@ mod tests {
     use super::*;
 
     fn text(line: &Line<'_>) -> String {
-        line.spans.iter().map(|span| span.content.as_ref()).collect()
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     fn span<'a>(line: &'a Line<'_>, content: &str) -> &'a Span<'a> {
@@ -514,7 +519,10 @@ mod tests {
         info.bar("Disk", 91, "91 GiB of 100 GiB", Value::Flag);
         let lines = info.into_lines();
         assert_eq!(text(&lines[0]), "  Disk      ██████████ 91 GiB of 100 GiB");
-        assert_eq!(span(&lines[0], "██████████").style.fg, Some(theme.colors.success));
+        assert_eq!(
+            span(&lines[0], "██████████").style.fg,
+            Some(theme.colors.success)
+        );
         let mut info = Info::new(60, &theme);
         info.bar("CPU", 37, "37%", Value::Plain);
         let lines = info.into_lines();
@@ -530,8 +538,14 @@ mod tests {
         let lines = info.into_lines();
         assert_eq!(text(&lines[0]), "  ✓ read    on   rule");
         assert_eq!(span(&lines[0], "✓").style.fg, Some(theme.colors.success));
-        assert_eq!(span(&lines[0], "read").style.fg, Some(theme.colors.foreground));
-        assert_eq!(span(&lines[0], "on   rule").style.fg, Some(theme.colors.muted));
+        assert_eq!(
+            span(&lines[0], "read").style.fg,
+            Some(theme.colors.foreground)
+        );
+        assert_eq!(
+            span(&lines[0], "on   rule").style.fg,
+            Some(theme.colors.muted)
+        );
     }
 
     #[test]
@@ -564,7 +578,10 @@ mod tests {
         assert_eq!(text(&lines[2]), "[p] pull changes  [s] sleep");
         assert_eq!(span(&lines[2], "[p]").style.fg, Some(theme.colors.primary));
         assert_eq!(span(&lines[2], "sleep").style.fg, Some(theme.colors.muted));
-        assert_eq!(span(&lines[0], "● ready").style.fg, Some(theme.colors.success));
+        assert_eq!(
+            span(&lines[0], "● ready").style.fg,
+            Some(theme.colors.success)
+        );
     }
 
     #[test]

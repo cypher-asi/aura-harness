@@ -63,7 +63,11 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
     } else {
         "can't be confined here"
     };
-    info.fact("Commands", commands, Value::flag_if(!view.commands_confined));
+    info.fact(
+        "Commands",
+        commands,
+        Value::flag_if(!view.commands_confined),
+    );
     let prompts = if view.live_prompts {
         format!(
             "live, denied after {}",

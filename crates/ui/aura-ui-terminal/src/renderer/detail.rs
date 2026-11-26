@@ -929,7 +929,7 @@ mod tests {
         assert!(!text.contains("TERMINAL"), "the tabs give way: {text}");
         let border: String = rows[top][left..=right].concat();
         assert!(border.trim_matches(['┌', '─', '┐']).is_empty(), "{border}");
-        assert!(text.contains("│  Sequence      60"), "{text}");
+        assert!(text.contains("  Sequence      60"), "{text}");
         assert!(text.contains("Esc close"), "{text}");
 
         app.handle_key(KeyEvent::from(KeyCode::Esc));

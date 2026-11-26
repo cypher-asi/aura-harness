@@ -443,7 +443,11 @@ fn render_project_info(frame: &mut Frame, project: &crate::events::ProjectSummar
     info.section("PROJECT", None);
     info.fact("Created", &project.created, Value::Plain);
     info.fact("Agents", &project.listed_agents.to_string(), Value::Plain);
-    info.fact("Archived", &project.archived_agents.to_string(), Value::Plain);
+    info.fact(
+        "Archived",
+        &project.archived_agents.to_string(),
+        Value::Plain,
+    );
     info.blank();
     info.note("Press any key to close");
     let lines = info.into_lines();

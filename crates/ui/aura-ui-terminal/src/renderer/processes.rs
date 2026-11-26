@@ -160,7 +160,11 @@ pub(super) fn process_detail_lines(
     }
 
     info.section("TIMING", None);
-    info.fact("Started", &format_timestamp(process.started_ms), Value::Plain);
+    info.fact(
+        "Started",
+        &format_timestamp(process.started_ms),
+        Value::Plain,
+    );
     if let Some(ended) = process.ended_ms {
         info.fact("Ended", &format_timestamp(ended), Value::Plain);
     }
