@@ -109,33 +109,11 @@ impl Kernel {
             )
         });
 
-        let decision = PolicyDecision {
-            tool_use_id: proposal.tool_use_id.clone(),
-            tool: proposal.tool.clone(),
-            verdict: gate_verdict(&evaluation.verdict),
-            reason: evaluation.verdict.reason().map(str::to_string),
-            decided_by: evaluation.decided_by.clone(),
-            trace: evaluation.trace.clone(),
-            approval: evaluation.approval.clone(),
-            mode,
-            policy_hash,
-            action_id: action.as_ref().map(|a| a.action_id.to_hex()),
-        };
+        let decision = policy_decision(&proposal, &evaluation, action.as_ref(), mode, policy_hash);
         let tx = Transaction::policy_decision(self.agent_id, &decision, proposal_entry.tx.hash)
             .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
-
-        let mut proposals = ProposalSet::new();
-        proposals.proposals.push(kernel_proposal);
-        let mut kernel_decision = Decision::new();
-        match &action {
-            Some(action) => kernel_decision.accept(action.action_id),
-            None => kernel_decision.reject(0, denial_reason(&evaluation.verdict)),
-        }
-        let decision_entry = self.append_tool_entry(
-            tx,
-            |builder| builder.proposals(proposals).decision(kernel_decision),
-            None,
-        )?;
+        let decision_entry =
+            self.append_policy_decision(tx, kernel_proposal, action.as_ref(), &evaluation)?;
 
         let decision_ref = PolicyDecisionRef {
             proposal_seq: proposal_entry.seq,
@@ -151,6 +129,29 @@ impl Kernel {
             decision_entry,
             decision_ref,
         })
+    }
+
+    /// Append the `PolicyDecision` entry carrying the kernel proposal and
+    /// its accept/reject decision.
+    fn append_policy_decision(
+        &self,
+        tx: Transaction,
+        kernel_proposal: aura_core_types::Proposal,
+        action: Option<&Action>,
+        evaluation: &PolicyEvaluation,
+    ) -> Result<RecordEntry, crate::KernelError> {
+        let mut proposals = ProposalSet::new();
+        proposals.proposals.push(kernel_proposal);
+        let mut kernel_decision = Decision::new();
+        match action {
+            Some(action) => kernel_decision.accept(action.action_id),
+            None => kernel_decision.reject(0, denial_reason(&evaluation.verdict)),
+        }
+        self.append_tool_entry(
+            tx,
+            |builder| builder.proposals(proposals).decision(kernel_decision),
+            None,
+        )
     }
 
     /// Step 3: append the `ToolExecution` entry for an approved call.
@@ -208,35 +209,43 @@ pub(super) fn finish_tool_call(
     authorized: Authorized,
     executed: Option<Executed>,
 ) -> ProcessResult {
+    match executed {
+        Some(executed) => executed_result(authorized, executed),
+        None => denied_result(authorized),
+    }
+}
+
+fn executed_result(authorized: Authorized, executed: Executed) -> ProcessResult {
     let tool_use_id = authorized.proposal.tool_use_id.clone();
-    if let Some(Executed {
+    let Executed {
         entry,
         decoded,
         had_failures,
-    }) = executed
-    {
-        // Drop any image on a failed effect: the screenshot is only
-        // meaningful for a successful computer-use action.
-        let image = if had_failures { None } else { decoded.image };
-        return ProcessResult {
-            entry,
-            tool_output: Some(ToolOutput {
-                tool_use_id,
-                content: decoded.content,
-                is_error: had_failures,
-                kind: decoded.kind,
-                approval_required: None,
-                line_diff: decoded.line_diff,
-                image,
-            }),
-            had_failures,
-            runtime_capability_update: None,
-            clear_runtime_capabilities: false,
-            tool_decision: Some(ToolDecision::Allowed),
-            policy_decision: Some(authorized.decision_ref),
-        };
+    } = executed;
+    // Drop any image on a failed effect: the screenshot is only
+    // meaningful for a successful computer-use action.
+    let image = if had_failures { None } else { decoded.image };
+    ProcessResult {
+        entry,
+        tool_output: Some(ToolOutput {
+            tool_use_id,
+            content: decoded.content,
+            is_error: had_failures,
+            kind: decoded.kind,
+            approval_required: None,
+            line_diff: decoded.line_diff,
+            image,
+        }),
+        had_failures,
+        runtime_capability_update: None,
+        clear_runtime_capabilities: false,
+        tool_decision: Some(ToolDecision::Allowed),
+        policy_decision: Some(authorized.decision_ref),
     }
+}
 
+fn denied_result(authorized: Authorized) -> ProcessResult {
+    let tool_use_id = authorized.proposal.tool_use_id.clone();
     let verdict = &authorized.evaluation.verdict;
     let reason = denial_reason(verdict);
     let (approval_required, tool_decision) = match verdict {
@@ -274,6 +283,28 @@ pub(super) fn finish_tool_call(
         clear_runtime_capabilities: false,
         tool_decision: Some(tool_decision),
         policy_decision: Some(authorized.decision_ref),
+    }
+}
+
+/// Build the `PolicyDecision` record for an evaluated proposal.
+fn policy_decision(
+    proposal: &ToolProposal,
+    evaluation: &PolicyEvaluation,
+    action: Option<&Action>,
+    mode: String,
+    policy_hash: String,
+) -> PolicyDecision {
+    PolicyDecision {
+        tool_use_id: proposal.tool_use_id.clone(),
+        tool: proposal.tool.clone(),
+        verdict: gate_verdict(&evaluation.verdict),
+        reason: evaluation.verdict.reason().map(str::to_string),
+        decided_by: evaluation.decided_by.clone(),
+        trace: evaluation.trace.clone(),
+        approval: evaluation.approval.clone(),
+        mode,
+        policy_hash,
+        action_id: action.map(|a| a.action_id.to_hex()),
     }
 }
 

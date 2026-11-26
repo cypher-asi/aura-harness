@@ -180,6 +180,42 @@ fn content_hash_hex(bytes: &[u8]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+/// Asserts a single call resolved to exactly one hit or one miss;
+/// returns `true` for a hit.
+fn is_single_cache_hit<C, U>(idx: usize, cached: &[C], uncached: &[U]) -> bool {
+    if uncached.is_empty() {
+        assert_eq!(
+            cached.len(),
+            1,
+            "entry {idx} should resolve to exactly one cached hit"
+        );
+        return true;
+    }
+    assert_eq!(
+        uncached.len(),
+        1,
+        "entry {idx} should resolve to exactly one cache miss"
+    );
+    assert!(
+        cached.is_empty(),
+        "entry {idx} cannot be both cached and uncached"
+    );
+    false
+}
+
+/// Successful, non-terminal tool result carrying `body`.
+fn ok_result(tool_use_id: &str, body: String) -> ToolCallResult {
+    ToolCallResult {
+        tool_use_id: tool_use_id.to_owned(),
+        content: body,
+        is_error: false,
+        kind: aura_core_types::ToolResultKind::Ok,
+        stop_loop: false,
+        file_changes: Vec::new(),
+        image: None,
+    }
+}
+
 /// Phase 1 floor: replay the Shamir transcript through the
 /// range-aware [`ToolResultCache`] and assert the distinct-execution
 /// count stays under [`SHAMIR_REPLAY_MAX_DISTINCT_EXECUTIONS`].
@@ -196,35 +232,12 @@ fn shamir_replay_meets_eight_distinct_read_target() {
             input: entry.input.clone(),
         };
         let (cached, uncached) = split_cached(std::slice::from_ref(&call), &cache);
-        if uncached.is_empty() {
-            assert_eq!(
-                cached.len(),
-                1,
-                "entry {idx} should resolve to exactly one cached hit"
-            );
+        if is_single_cache_hit(idx, &cached, &uncached) {
             continue;
         }
-        assert_eq!(
-            uncached.len(),
-            1,
-            "entry {idx} should resolve to exactly one cache miss"
-        );
-        assert!(
-            cached.is_empty(),
-            "entry {idx} cannot be both cached and uncached"
-        );
 
         distinct_executions += 1;
-        let body = synthesize_result_bytes(entry, &line_counts);
-        let result = ToolCallResult {
-            tool_use_id: call.id.clone(),
-            content: body,
-            is_error: false,
-            kind: aura_core_types::ToolResultKind::Ok,
-            stop_loop: false,
-            file_changes: Vec::new(),
-            image: None,
-        };
+        let result = ok_result(&call.id, synthesize_result_bytes(entry, &line_counts));
         update_cache(
             &mut cache,
             std::slice::from_ref(&call),
@@ -257,22 +270,25 @@ fn shamir_replay_meets_eight_distinct_read_target() {
     );
 }
 
-/// Phase 2 floor: feed the same transcript through
-/// [`dedup_read_results_by_content_hash`] and assert (a) the number
-/// of folds matches the count of *redundant* identical-text
-/// occurrences and (b) the resulting prompt-bytes footprint shrinks
-/// below the no-dedup baseline.
-#[test]
-fn shamir_replay_compaction_reduces_prompt_bytes() {
-    let (line_counts, transcript) = load_transcript();
+/// Tool-use / tool-result message pairs for every transcript entry,
+/// plus the no-dedup byte baseline and per-body occurrence counts.
+struct ReplayMessages {
+    messages: Vec<Message>,
+    baseline_bytes: usize,
+    occurrences: HashMap<String, usize>,
+}
 
+fn build_replay_messages(
+    line_counts: &HashMap<String, usize>,
+    transcript: &[TranscriptEntry],
+) -> ReplayMessages {
     let mut messages: Vec<Message> = Vec::with_capacity(transcript.len() * 2);
     let mut baseline_bytes = 0usize;
     let mut occurrences: HashMap<String, usize> = HashMap::new();
 
     for (idx, entry) in transcript.iter().enumerate() {
         let id = format!("tu_{idx:04}");
-        let body = synthesize_result_bytes(entry, &line_counts);
+        let body = synthesize_result_bytes(entry, line_counts);
         baseline_bytes += body.len();
         *occurrences.entry(body.clone()).or_insert(0) += 1;
 
@@ -293,6 +309,42 @@ fn shamir_replay_compaction_reduces_prompt_bytes() {
             )],
         });
     }
+    ReplayMessages {
+        messages,
+        baseline_bytes,
+        occurrences,
+    }
+}
+
+/// Total bytes of every text `tool_result` block in `messages`.
+fn tool_result_text_bytes(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .map(|b| match b {
+            ContentBlock::ToolResult {
+                content: ToolResultContent::Text(t),
+                ..
+            } => t.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Phase 2 floor: feed the same transcript through
+/// [`dedup_read_results_by_content_hash`] and assert (a) the number
+/// of folds matches the count of *redundant* identical-text
+/// occurrences and (b) the resulting prompt-bytes footprint shrinks
+/// below the no-dedup baseline.
+#[test]
+fn shamir_replay_compaction_reduces_prompt_bytes() {
+    let (line_counts, transcript) = load_transcript();
+
+    let ReplayMessages {
+        mut messages,
+        baseline_bytes,
+        occurrences,
+    } = build_replay_messages(&line_counts, &transcript);
 
     // Phase 2 keeps the NEWEST verbatim and folds every older
     // identical copy, so the expected fold count is `n-1` for every
@@ -311,17 +363,7 @@ fn shamir_replay_compaction_reduces_prompt_bytes() {
         occurrences.len(),
     );
 
-    let after_bytes: usize = messages
-        .iter()
-        .flat_map(|m| &m.content)
-        .map(|b| match b {
-            ContentBlock::ToolResult {
-                content: ToolResultContent::Text(t),
-                ..
-            } => t.len(),
-            _ => 0,
-        })
-        .sum();
+    let after_bytes = tool_result_text_bytes(&messages);
     assert!(
         after_bytes < baseline_bytes,
         "compaction dedup must reduce prompt bytes ({after_bytes} bytes after vs {baseline_bytes} baseline)"

@@ -121,16 +121,9 @@ fn fix_unpaired_tool_uses(messages: &mut Vec<Message>) {
             continue;
         }
 
-        let tool_use_ids: Vec<String> = messages[i]
-            .content
-            .iter()
-            .filter_map(|b| {
-                if let ContentBlock::ToolUse { id, .. } = b {
-                    Some(id.clone())
-                } else {
-                    None
-                }
-            })
+        let tool_use_ids: Vec<String> = tool_use_ids(&messages[i])
+            .into_iter()
+            .map(str::to_string)
             .collect();
 
         if tool_use_ids.is_empty() {
@@ -138,22 +131,10 @@ fn fix_unpaired_tool_uses(messages: &mut Vec<Message>) {
             continue;
         }
 
-        let existing_result_ids: HashSet<String> = messages
-            .get(i + 1)
-            .filter(|m| m.role == Role::User)
-            .map(|m| {
-                m.content
-                    .iter()
-                    .filter_map(|b| {
-                        if let ContentBlock::ToolResult { tool_use_id, .. } = b {
-                            Some(tool_use_id.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let existing_result_ids: HashSet<String> = next_user_result_ids(messages, i)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
 
         let missing: Vec<String> = tool_use_ids
             .into_iter()
@@ -224,38 +205,13 @@ fn debug_assert_tool_pairing(messages: &[Message]) {
             continue;
         }
 
-        let tool_use_ids: Vec<&str> = msg
-            .content
-            .iter()
-            .filter_map(|b| {
-                if let ContentBlock::ToolUse { id, .. } = b {
-                    Some(id.as_str())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let tool_use_ids: Vec<&str> = tool_use_ids(msg);
 
         if tool_use_ids.is_empty() {
             continue;
         }
 
-        let next_result_ids: HashSet<&str> = messages
-            .get(i + 1)
-            .filter(|m| m.role == Role::User)
-            .map(|m| {
-                m.content
-                    .iter()
-                    .filter_map(|b| {
-                        if let ContentBlock::ToolResult { tool_use_id, .. } = b {
-                            Some(tool_use_id.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let next_result_ids: HashSet<&str> = next_user_result_ids(messages, i);
 
         for id in &tool_use_ids {
             if !next_result_ids.contains(id) {
@@ -267,6 +223,41 @@ fn debug_assert_tool_pairing(messages: &[Message]) {
             }
         }
     }
+}
+
+/// Ids of the `tool_use` blocks in `msg`, in order.
+fn tool_use_ids(msg: &Message) -> Vec<&str> {
+    msg.content
+        .iter()
+        .filter_map(|b| {
+            if let ContentBlock::ToolUse { id, .. } = b {
+                Some(id.as_str())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// `tool_use_id`s answered by the message after index `i`, when that message
+/// is a user message; empty otherwise.
+fn next_user_result_ids(messages: &[Message], i: usize) -> HashSet<&str> {
+    messages
+        .get(i + 1)
+        .filter(|m| m.role == Role::User)
+        .map(|m| {
+            m.content
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::ToolResult { tool_use_id, .. } = b {
+                        Some(tool_use_id.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

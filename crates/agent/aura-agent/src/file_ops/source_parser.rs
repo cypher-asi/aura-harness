@@ -39,29 +39,13 @@ pub fn extract_pub_signatures(content: &str, type_name: &str) -> Vec<String> {
         if !in_impl {
             if is_impl_for_type(trimmed, type_name) {
                 in_impl = true;
-                impl_depth = 0;
-                body_entered = false;
-                for ch in trimmed.chars() {
-                    match ch {
-                        '{' => impl_depth += 1,
-                        '}' => impl_depth -= 1,
-                        _ => {}
-                    }
-                }
-                if impl_depth > 0 {
-                    body_entered = true;
-                }
+                impl_depth = brace_delta(trimmed);
+                body_entered = impl_depth > 0;
             }
             continue;
         }
 
-        for ch in trimmed.chars() {
-            match ch {
-                '{' => impl_depth += 1,
-                '}' => impl_depth -= 1,
-                _ => {}
-            }
-        }
+        impl_depth += brace_delta(trimmed);
 
         if !body_entered {
             if impl_depth > 0 {
@@ -87,6 +71,15 @@ pub fn extract_pub_signatures(content: &str, type_name: &str) -> Vec<String> {
     }
 
     signatures
+}
+
+/// Net change in brace depth across `line` (`{` counts +1, `}` counts -1).
+fn brace_delta(line: &str) -> i32 {
+    line.chars().fold(0, |depth, ch| match ch {
+        '{' => depth + 1,
+        '}' => depth - 1,
+        _ => depth,
+    })
 }
 
 /// Shared helper: extract a brace-delimited block starting at `start_idx`.

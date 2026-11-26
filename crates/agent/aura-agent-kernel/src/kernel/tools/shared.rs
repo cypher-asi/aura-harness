@@ -169,26 +169,7 @@ impl Kernel {
         // any other outcome (Continue / TimedOut / Block / Replace)
         // falls through to the interactive prompt path below.
         if let Some(host) = self.config.plugin_hooks.as_ref() {
-            use aura_plugin_hooks::HookOutcome;
-            let args_text = serde_json::to_string(&prompt.args).unwrap_or_default();
-            let outcome =
-                host.fire_permission_request(&prompt.tool_name, &args_text, "ask", &reason);
-            let hook_verdict = match outcome.decision {
-                HookOutcome::Approve => Some((PolicyVerdict::Allow, "approve")),
-                HookOutcome::Deny {
-                    reason: hook_reason,
-                } => Some((
-                    PolicyVerdict::Deny {
-                        reason: hook_reason,
-                    },
-                    "deny",
-                )),
-                HookOutcome::Continue
-                | HookOutcome::TimedOut
-                | HookOutcome::Block { .. }
-                | HookOutcome::Replace { .. } => None,
-            };
-            if let Some((verdict, rule)) = hook_verdict {
+            if let Some((verdict, rule)) = permission_hook_verdict(host, &prompt, &reason) {
                 evaluation.decide(verdict, PolicyRule::new(PolicySource::PermissionHook, rule));
                 evaluation.approval = Some(PolicyApproval {
                     approver: PolicyApprover::Hook,
@@ -215,7 +196,17 @@ impl Kernel {
         })?;
 
         self.apply_live_approval_response(&prompt, response)?;
+        Ok(self.decide_from_user_response(evaluation, prompt, reason, response))
+    }
 
+    /// Record the user's live answer to an approval prompt on `evaluation`.
+    fn decide_from_user_response(
+        &self,
+        mut evaluation: PolicyEvaluation,
+        prompt: PendingToolPrompt,
+        reason: String,
+        response: ToolApprovalResponse,
+    ) -> PolicyEvaluation {
         evaluation.approval = Some(PolicyApproval {
             approver: PolicyApprover::User {
                 user_id: self.config.originating_user_id.clone(),
@@ -238,7 +229,7 @@ impl Kernel {
             },
         };
         evaluation.decide(verdict, user_rule);
-        Ok(evaluation)
+        evaluation
     }
 
     fn apply_live_approval_response(
@@ -281,6 +272,35 @@ impl Kernel {
             options.push(ToolApprovalRemember::Forever);
         }
         options
+    }
+}
+
+/// Phase 10 carve-out 5b: map a `PermissionRequest` hook outcome to a
+/// verdict. Approve allows and Deny denies; any other outcome (Continue /
+/// TimedOut / Block / Replace) yields `None` so the caller falls through to
+/// the interactive prompt.
+fn permission_hook_verdict(
+    host: &aura_plugin_hooks::PluginHookHost,
+    prompt: &PendingToolPrompt,
+    reason: &str,
+) -> Option<(PolicyVerdict, &'static str)> {
+    use aura_plugin_hooks::HookOutcome;
+    let args_text = serde_json::to_string(&prompt.args).unwrap_or_default();
+    let outcome = host.fire_permission_request(&prompt.tool_name, &args_text, "ask", reason);
+    match outcome.decision {
+        HookOutcome::Approve => Some((PolicyVerdict::Allow, "approve")),
+        HookOutcome::Deny {
+            reason: hook_reason,
+        } => Some((
+            PolicyVerdict::Deny {
+                reason: hook_reason,
+            },
+            "deny",
+        )),
+        HookOutcome::Continue
+        | HookOutcome::TimedOut
+        | HookOutcome::Block { .. }
+        | HookOutcome::Replace { .. } => None,
     }
 }
 

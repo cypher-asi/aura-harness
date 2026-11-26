@@ -23,7 +23,7 @@ use crate::self_review::SelfReviewGuard;
 use crate::types::{
     AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo, ToolCallResult,
 };
-use crate::verify::{infer_default_build_command, infer_default_test_command, TestSuiteOutcome};
+use crate::verify::{infer_default_test_command, TestSuiteOutcome};
 
 pub(crate) use aura_config::MAX_STUB_FIX_ATTEMPTS;
 
@@ -74,7 +74,15 @@ impl TaskTestRunner for RealTaskTestRunner {
     }
 }
 
+mod arg_hint;
+mod build_check;
+mod dispatch;
 mod handlers;
+mod outcomes;
+
+pub(crate) use arg_hint::format_tool_arg_hint;
+pub(crate) use build_check::looks_like_compiler_errors;
+pub use build_check::run_project_build_check;
 
 #[cfg(test)]
 mod tests;
@@ -153,222 +161,18 @@ pub(crate) struct TaskToolExecutor {
 /// turn veto a `task_done` that the agent has clearly recovered from.
 pub(crate) use aura_config::RECENT_OUTCOMES_WINDOW;
 
-/// One slot in the [`RecentToolOutcomes`] ring buffer.
-#[derive(Debug, Clone, Copy)]
-struct OutcomeEntry {
-    is_error: bool,
-    /// True when the error was a policy denial (e.g. `run_command` not
-    /// in the allow-list) rather than a tool that actually executed
-    /// and returned a non-zero exit. Policy denials are not counted as
-    /// "real" failures against the pervasive-error guard because the
-    /// agent has nothing to fix — it just needs to stop calling the
-    /// blocked tool.
-    policy_denied: bool,
-}
-
-/// Rolling window of recent tool-call outcomes used by the pervasive-
-/// error guard on `task_done`.
-///
-/// Earlier revisions kept monotonic `total` / `errors` counters for the
-/// lifetime of the `TaskToolExecutor`, which meant a noisy exploration
-/// phase (e.g. a handful of `read_file` calls against directories,
-/// plus policy-denied `run_command` attempts) could push the error
-/// ratio over the 70% threshold and reject a `task_done` that
-/// otherwise represented successful work.
-///
-/// The ring buffer keeps only the last [`RECENT_OUTCOMES_WINDOW`]
-/// outcomes, and `reset()` is called when the executor transitions to
-/// the implementing phase (after `submit_plan`) so prior exploration
-/// noise never influences the completion check.
-#[derive(Debug, Default)]
-pub(crate) struct RecentToolOutcomes {
-    entries: std::collections::VecDeque<OutcomeEntry>,
-    /// True when the most recent `run_command` actually executed and
-    /// returned a non-zero exit. Policy-denied commands *do not* set
-    /// this flag because nothing ran.
-    pub(crate) last_command_failed: bool,
-    /// Set after `task_done` is rejected only because no writes landed and
-    /// `no_changes_needed` was omitted. While set, exploratory detours are
-    /// blocked so the next useful action is a write or corrected task_done.
-    pub(crate) task_done_no_writes_rejected: bool,
-}
-
-impl RecentToolOutcomes {
-    /// Record one tool-call outcome.
-    pub fn record(&mut self, tool_name: &str, is_error: bool, content: &str) {
-        let policy_denied = is_error && is_policy_denial(content);
-        while self.entries.len() >= RECENT_OUTCOMES_WINDOW {
-            self.entries.pop_front();
-        }
-        self.entries.push_back(OutcomeEntry {
-            is_error,
-            policy_denied,
-        });
-        if tool_name == "run_command" {
-            // Policy denial means the command never ran — the agent
-            // isn't staring at a broken build, it just hit an
-            // allow-list. Treat it as a non-event for the "last
-            // command failed" signal the completion guard reads.
-            self.last_command_failed = is_error && !policy_denied;
-        }
-    }
-
-    /// Total outcomes currently in the window.
-    #[must_use]
-    pub fn total(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Errors in the window that were *not* policy denials.
-    #[must_use]
-    pub fn real_errors(&self) -> usize {
-        self.entries
-            .iter()
-            .filter(|e| e.is_error && !e.policy_denied)
-            .count()
-    }
-
-    /// Clear the window. Called on plan acceptance so the noisy
-    /// exploration phase never votes against a clean implementation
-    /// phase.
-    pub fn reset(&mut self) {
-        self.entries.clear();
-        self.last_command_failed = false;
-        self.task_done_no_writes_rejected = false;
-    }
-}
-
-fn allowed_after_no_write_task_done_reject(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "task_done" | "write_file" | "edit_file" | "delete_file"
-    )
-}
-
-/// Heuristic: does this tool-result content look like a policy denial
-/// rather than an actual tool failure?
-///
-/// `aura-kernel`'s `PolicyVerdict::Deny` stamps one of a small set of
-/// reasons into the tool result. We match on those prefixes so the
-/// completion guard can distinguish "you tried to run a blocked tool"
-/// from "the command you ran exited non-zero". The matching is
-/// deliberately conservative — if a downstream tool happens to emit
-/// one of these strings in its stderr, treating it as a policy denial
-/// is safe (it just means we don't count it against the error ratio),
-/// and the `last_command_failed` short-circuit is still protected by
-/// the tool-name check on `run_command`.
-pub(crate) fn is_policy_denial(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    trimmed.starts_with("Tool '") && trimmed.contains("is not allowed")
-        || trimmed.starts_with("Tool '") && trimmed.contains("requires approval")
-        || trimmed.starts_with("Policy denied")
-        || trimmed.starts_with("permissions: requires capability")
-        || trimmed.starts_with("permissions: target out of scope")
-}
+pub(crate) use outcomes::{is_policy_denial, RecentToolOutcomes};
 
 #[async_trait]
 impl AgentToolExecutor for TaskToolExecutor {
     async fn execute(&self, tool_calls: &[ToolCallInfo]) -> Vec<ToolCallResult> {
-        let mut delegated_indices: Vec<usize> = Vec::new();
-        let mut blocked_results: std::collections::HashMap<usize, ToolCallResult> =
-            std::collections::HashMap::new();
-        let block_exploration_after_no_write_reject = self
-            .recent_tool_outcomes
-            .lock()
-            .await
-            .task_done_no_writes_rejected;
-
-        for (i, tc) in tool_calls.iter().enumerate() {
-            if block_exploration_after_no_write_reject
-                && !allowed_after_no_write_task_done_reject(&tc.name)
-            {
-                blocked_results.insert(
-                    i,
-                    ToolCallResult {
-                        tool_use_id: tc.id.clone(),
-                        content:
-                            aura_context_prompts::model_messages::task_done::NO_WRITES_AFTER_REJECT_BODY
-                                .to_string(),
-                        is_error: true,
-                        kind: aura_core_types::ToolResultKind::AgentError,
-                        stop_loop: false,
-                        file_changes: Vec::new(),
-                        image: None,
-                    },
-                );
-                continue;
-            }
-            match tc.name.as_str() {
-                "task_done" | "get_task_context" | "submit_plan" => {}
-                "write_file" | "edit_file" | "delete_file" => {
-                    self.recent_tool_outcomes
-                        .lock()
-                        .await
-                        .task_done_no_writes_rejected = false;
-                    self.track_file_op(&tc.name, &tc.input).await;
-                    if let Some(path) = tc.input.get("path").and_then(|v| v.as_str()) {
-                        self.self_review.lock().await.record_write(path);
-                    }
-                    delegated_indices.push(i);
-                }
-                _ => {
-                    self.track_file_op(&tc.name, &tc.input).await;
-                    if tc.name == "read_file" {
-                        if let Some(path) = tc.input.get("path").and_then(|v| v.as_str()) {
-                            self.self_review.lock().await.record_read(path);
-                        }
-                    }
-                    delegated_indices.push(i);
-                }
-            }
-        }
-
-        // Delegate non-special tools to inner executor
-        let delegated_calls: Vec<ToolCallInfo> = delegated_indices
-            .iter()
-            .map(|&i| tool_calls[i].clone())
-            .collect();
-        let delegated_results = if delegated_calls.is_empty() {
-            Vec::new()
-        } else {
-            self.inner.execute(&delegated_calls).await
-        };
-
-        let mut delegated_iter = delegated_results.into_iter();
-        let mut results = Vec::with_capacity(tool_calls.len());
-        let mut stop = false;
-
-        for (i, tc) in tool_calls.iter().enumerate() {
-            if let Some(result) = blocked_results.remove(&i) {
-                results.push(
-                    self.inner
-                        .spawn_preset(tc.clone(), "task_guard", result)
-                        .await,
-                );
-                continue;
-            }
-            match tc.name.as_str() {
-                "task_done" | "get_task_context" | "submit_plan" => {
-                    let run = Box::pin(self.handle_engine_tool(tc));
-                    let result = self
-                        .inner
-                        .spawn_local(tc.clone(), "task_executor", run)
-                        .await;
-                    stop |= tc.name == "task_done" && result.stop_loop;
-                    results.push(result);
-                }
-                _ => {
-                    if let Some(result) = delegated_iter.next() {
-                        self.emit_tool_status(tc, &result);
-                        {
-                            let mut outcomes = self.recent_tool_outcomes.lock().await;
-                            outcomes.record(&tc.name, result.is_error, &result.content);
-                        }
-                        results.push(result);
-                    }
-                }
-            }
-        }
+        let plan = self.plan_dispatch(tool_calls).await;
+        let delegated_results = self
+            .run_delegated(tool_calls, &plan.delegated_indices)
+            .await;
+        let (mut results, stop) = self
+            .collect_results(tool_calls, plan.blocked_results, delegated_results)
+            .await;
 
         if stop {
             for r in &mut results {
@@ -398,59 +202,7 @@ impl AgentToolExecutor for TaskToolExecutor {
     }
 
     async fn auto_build_check(&self) -> Option<AutoBuildResult> {
-        let project_root = Path::new(&self.project_folder);
-        let cmd = self
-            .build_command
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-            .map(String::from)
-            .or_else(|| infer_default_build_command(project_root))?;
-
-        self.emit_text(
-            aura_context_prompts::model_messages::auto_build::auto_build_status_line(&cmd),
-        );
-
-        match crate::verify::run_build_command(project_root, &cmd, None, None).await {
-            Ok(result) => {
-                let mut output = String::new();
-                if !result.stdout.is_empty() {
-                    output.push_str(&result.stdout);
-                }
-                if !result.stderr.is_empty() {
-                    if !output.is_empty() {
-                        output.push('\n');
-                    }
-                    output.push_str(&result.stderr);
-                }
-                let output = if result.success {
-                    output
-                } else {
-                    let pf = self.project_folder.clone();
-                    tokio::task::spawn_blocking(move || {
-                        handlers::enrich_compiler_output_sync(&pf, &output)
-                    })
-                    .await
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("spawn_blocking panicked in enrich_compiler_output: {e}");
-                        String::new()
-                    })
-                };
-                let error_count = if result.success {
-                    0
-                } else {
-                    count_build_errors(&output)
-                };
-                Some(AutoBuildResult {
-                    success: result.success,
-                    output,
-                    error_count,
-                })
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "auto-build check failed to execute");
-                None
-            }
-        }
+        self.run_auto_build_check().await
     }
 
     async fn capture_build_baseline(&self) -> Option<BuildBaseline> {
@@ -460,78 +212,6 @@ impl AgentToolExecutor for TaskToolExecutor {
         // whole-tree compile-fix work.
         None
     }
-}
-
-/// Merge build stdout/stderr into one diagnostic blob.
-#[must_use]
-pub fn combine_build_streams(stdout: &str, stderr: &str) -> String {
-    let mut output = String::new();
-    if !stdout.is_empty() {
-        output.push_str(stdout);
-    }
-    if !stderr.is_empty() {
-        if !output.is_empty() {
-            output.push('\n');
-        }
-        output.push_str(stderr);
-    }
-    output
-}
-
-/// Count compiler error blocks in build output for auto-build messages.
-#[must_use]
-pub fn count_build_errors(output: &str) -> usize {
-    let sigs = BuildBaseline::extract_signatures(output);
-    if !sigs.is_empty() {
-        return sigs.len();
-    }
-    if looks_like_compiler_errors(output) {
-        1
-    } else {
-        0
-    }
-}
-
-/// Run the project build command once. Returns `Ok(())` when there is no
-/// configured command or the build succeeds; `Err` carries enriched stderr
-/// for operator/agent consumption.
-pub async fn run_project_build_check(
-    project_folder: &str,
-    build_command: Option<&str>,
-) -> Result<(), String> {
-    let project_root = Path::new(project_folder);
-    let cmd = build_command
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .or_else(|| infer_default_build_command(project_root));
-    let Some(cmd) = cmd else {
-        return Ok(());
-    };
-
-    let result = match crate::verify::run_build_command(project_root, &cmd, None, None).await {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(format!("failed to run build command `{cmd}`: {e}"));
-        }
-    };
-    if result.success {
-        return Ok(());
-    }
-
-    let raw = combine_build_streams(&result.stdout, &result.stderr);
-    let pf = project_folder.to_string();
-    let raw_for_fallback = raw.clone();
-    let enriched =
-        tokio::task::spawn_blocking(move || handlers::enrich_compiler_output_sync(&pf, &raw))
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!("spawn_blocking panicked in enrich_compiler_output: {e}");
-                raw_for_fallback
-            });
-    Err(format!(
-        "Build check failed (`{cmd}`). Fix all errors before completing the task.\n\n{enriched}"
-    ))
 }
 
 impl TaskToolExecutor {
@@ -551,71 +231,4 @@ impl TaskToolExecutor {
             .await
             .err()
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Format a concise hint for a tool call's arguments (for status logging).
-pub(crate) fn format_tool_arg_hint(tc: &ToolCallInfo) -> String {
-    match tc.name.as_str() {
-        "read_file" => {
-            let path = tc.input.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            let start = tc
-                .input
-                .get("start_line")
-                .and_then(serde_json::Value::as_u64);
-            let end = tc.input.get("end_line").and_then(serde_json::Value::as_u64);
-            match (start, end) {
-                (Some(s), Some(e)) => format!("{path}:{s}-{e}"),
-                (Some(s), None) => format!("{path}:{s}-end"),
-                (None, Some(e)) => format!("{path}:1-{e}"),
-                (None, None) => path.to_string(),
-            }
-        }
-        "write_file" | "edit_file" | "delete_file" => tc
-            .input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "list_files" => tc
-            .input
-            .get("directory")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "search_code" => {
-            let pattern = tc
-                .input
-                .get("pattern")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let ctx = tc
-                .input
-                .get("context_lines")
-                .and_then(serde_json::Value::as_u64);
-            if let Some(c) = ctx {
-                format!("{pattern}, context={c}")
-            } else {
-                pattern.to_string()
-            }
-        }
-        "run_command" => tc
-            .input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        _ => String::new(),
-    }
-}
-
-/// Check if build output looks like compiler errors (Rust or TypeScript).
-pub(crate) fn looks_like_compiler_errors(output: &str) -> bool {
-    let has_rust_errors = output.contains("error[E") && output.contains("-->");
-    let has_generic_errors = output.contains("error:") && output.contains("-->");
-    let has_ts_errors = output.contains("TS2") && output.contains("error TS");
-    has_rust_errors || has_generic_errors || has_ts_errors
 }

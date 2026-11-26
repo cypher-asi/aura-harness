@@ -6,6 +6,56 @@ fn fixed_ts() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 4, 21, 12, 34, 56).unwrap()
 }
 
+fn sample_llm_call(ts: DateTime<Utc>) -> DebugEvent {
+    DebugEvent::LlmCall {
+        timestamp: ts,
+        provider: "p".into(),
+        model: "m".into(),
+        route: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+        duration_ms: 0,
+        task_id: None,
+        agent_instance_id: None,
+        provider_request_id: None,
+        message_id: None,
+    }
+}
+
+fn sample_iteration(ts: DateTime<Utc>) -> DebugEvent {
+    DebugEvent::Iteration {
+        timestamp: ts,
+        index: 0,
+        tool_calls: 0,
+        duration_ms: 0,
+        task_id: None,
+    }
+}
+
+fn sample_blocker(ts: DateTime<Utc>) -> DebugEvent {
+    DebugEvent::Blocker {
+        timestamp: ts,
+        kind: "k".into(),
+        path: None,
+        message: "m".into(),
+        task_id: None,
+    }
+}
+
+fn sample_retry(ts: DateTime<Utc>) -> DebugEvent {
+    DebugEvent::Retry {
+        timestamp: ts,
+        reason: "r".into(),
+        attempt: 2,
+        wait_ms: 1,
+        provider: None,
+        model: None,
+        task_id: None,
+    }
+}
+
 #[test]
 fn llm_call_serializes_with_debug_llm_call_type_and_counter_fields() {
     let ev = DebugEvent::LlmCall {
@@ -184,56 +234,10 @@ fn serialized_type_strings_match_aura_os_counter_constants() {
     // "uncategorized events" on disk, so assert it explicitly.
     let ts = fixed_ts();
     let samples = [
-        (
-            DebugEvent::LlmCall {
-                timestamp: ts,
-                provider: "p".into(),
-                model: "m".into(),
-                route: None,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: None,
-                duration_ms: 0,
-                task_id: None,
-                agent_instance_id: None,
-                provider_request_id: None,
-                message_id: None,
-            },
-            "debug.llm_call",
-        ),
-        (
-            DebugEvent::Iteration {
-                timestamp: ts,
-                index: 0,
-                tool_calls: 0,
-                duration_ms: 0,
-                task_id: None,
-            },
-            "debug.iteration",
-        ),
-        (
-            DebugEvent::Blocker {
-                timestamp: ts,
-                kind: "k".into(),
-                path: None,
-                message: "m".into(),
-                task_id: None,
-            },
-            "debug.blocker",
-        ),
-        (
-            DebugEvent::Retry {
-                timestamp: ts,
-                reason: "r".into(),
-                attempt: 2,
-                wait_ms: 1,
-                provider: None,
-                model: None,
-                task_id: None,
-            },
-            "debug.retry",
-        ),
+        (sample_llm_call(ts), "debug.llm_call"),
+        (sample_iteration(ts), "debug.iteration"),
+        (sample_blocker(ts), "debug.blocker"),
+        (sample_retry(ts), "debug.retry"),
     ];
     for (ev, expected) in samples {
         assert_eq!(ev.kind(), expected);

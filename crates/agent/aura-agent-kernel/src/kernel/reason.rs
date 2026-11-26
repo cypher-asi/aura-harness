@@ -13,9 +13,18 @@
 use super::seq::Claim;
 use super::{Kernel, ReasonResult, ReasonStreamHandle};
 use crate::context::hash_tx_with_hashes;
-use aura_core_types::{RecordEntry, Transaction, TransactionType};
-use aura_model::{ModelCallPurpose, ModelName, ModelRequest, StreamEventStream};
+use aura_core_types::{ContextHash, RecordEntry, Transaction, TransactionType};
+use aura_model::{
+    ModelCallPurpose, ModelName, ModelRequest, ModelResponse, StreamEventStream, ThinkingEffort,
+};
 use tracing::error;
+
+/// How a failed provider call is recorded and, if recording fails, logged.
+struct CallFailure {
+    kind: &'static str,
+    stage: &'static str,
+    log_message: &'static str,
+}
 
 impl Kernel {
     /// Call the model provider and record the result.
@@ -46,18 +55,12 @@ impl Kernel {
                 // `KernelError::Reasoner` so callers can branch on the
                 // variant (rate limit, transient, bad request, …)
                 // instead of string-matching.
-                let reason_str = e.to_string();
-                let claim = self.claim_seq()?;
-                if let Err(record_err) =
-                    self.record_reasoning_failure(claim, "complete", &reason_str, (&model, purpose))
-                {
-                    error!(
-                        kind = "reason_sync",
-                        error = %reason_str,
-                        record_error = %record_err,
-                        "failed to record reasoning failure entry"
-                    );
-                }
+                let failure = CallFailure {
+                    kind: "reason_sync",
+                    stage: "complete",
+                    log_message: "failed to record reasoning failure entry",
+                };
+                self.record_call_failure(&failure, &e.to_string(), (&model, purpose))?;
                 return Err(crate::KernelError::Reasoner(e));
             }
             Err(_) => {
@@ -65,24 +68,30 @@ impl Kernel {
                     "model provider did not respond within {}ms",
                     self.config.proposal_timeout_ms
                 );
-                let claim = self.claim_seq()?;
-                if let Err(record_err) = self.record_reasoning_failure(
-                    claim,
-                    "complete_timeout",
-                    &reason_str,
-                    (&model, purpose),
-                ) {
-                    error!(
-                        kind = "reason_sync",
-                        error = %reason_str,
-                        record_error = %record_err,
-                        "failed to record reasoning timeout entry"
-                    );
-                }
+                let failure = CallFailure {
+                    kind: "reason_sync",
+                    stage: "complete_timeout",
+                    log_message: "failed to record reasoning timeout entry",
+                };
+                self.record_call_failure(&failure, &reason_str, (&model, purpose))?;
                 return Err(crate::KernelError::Timeout(reason_str));
             }
         };
 
+        let payload_bytes =
+            Self::reasoning_payload(&response, &model, purpose, thinking_effort, started)?;
+        let entry = self.append_reasoning_entry(payload_bytes)?;
+        Ok(ReasonResult { entry, response })
+    }
+
+    /// Serialize the `Reasoning` record payload for a successful call.
+    fn reasoning_payload(
+        response: &ModelResponse,
+        model: &ModelName,
+        purpose: Option<ModelCallPurpose>,
+        thinking_effort: Option<ThinkingEffort>,
+        started: std::time::Instant,
+    ) -> Result<Vec<u8>, crate::KernelError> {
         let mut reasoning_payload = serde_json::json!({
             "model": response.trace.model,
             "route": model,
@@ -107,9 +116,16 @@ impl Kernel {
             })
             .collect();
         super::stream::add_thinking(&mut reasoning_payload, &thinking, None);
-        let payload_bytes = serde_json::to_vec(&reasoning_payload)
-            .map_err(|e| crate::KernelError::Serialization(e.to_string()))?;
+        serde_json::to_vec(&reasoning_payload)
+            .map_err(|e| crate::KernelError::Serialization(e.to_string()))
+    }
 
+    /// Claim the next number and append a `Reasoning` entry carrying
+    /// `payload_bytes`.
+    fn append_reasoning_entry(
+        &self,
+        payload_bytes: Vec<u8>,
+    ) -> Result<RecordEntry, crate::KernelError> {
         let tx = Transaction::new_chained(
             self.agent_id,
             TransactionType::Reasoning,
@@ -130,8 +146,7 @@ impl Kernel {
             .append_entry_direct(self.agent_id, seq, &entry)
             .map_err(|e| crate::KernelError::Store(format!("append_entry_direct: {e}")))?;
         self.notify_entry(claim, &entry);
-
-        Ok(ReasonResult { entry, response })
+        Ok(entry)
     }
 
     /// Start a streaming reasoning call.
@@ -151,14 +166,7 @@ impl Kernel {
         // (Invariant §6). The sequence number itself is only reserved
         // atomically at `append` time so streaming reasoning interleaves
         // linearly with other kernel paths.
-        let projected_seq = {
-            let guard = self
-                .seq
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *guard
-        };
-        let window = self.window_hashes(projected_seq)?;
+        let window = self.projected_window()?;
 
         // The streaming provider call only has to return the stream
         // handle inside the timeout — individual chunks are then governed
@@ -173,7 +181,6 @@ impl Kernel {
             match tokio::time::timeout(timeout, self.provider.complete_streaming(request)).await {
                 Ok(Ok(s)) => s,
                 Ok(Err(e)) => {
-                    let reason_str = e.to_string();
                     // A stream never materialized, so there is no
                     // `ReasonStreamHandle::finalize` seam to catch this.
                     // Invariant §3 strict: record the handshake failure
@@ -181,20 +188,12 @@ impl Kernel {
                     // the typed `ReasonerError` is preserved through
                     // `KernelError::Reasoner` so the agent loop can keep
                     // its variant-based retry classification.
-                    let claim = self.claim_seq()?;
-                    if let Err(record_err) = self.record_reasoning_failure(
-                        claim,
-                        "streaming_handshake",
-                        &reason_str,
-                        (&model, purpose),
-                    ) {
-                        error!(
-                            kind = "reason_streaming",
-                            error = %reason_str,
-                            record_error = %record_err,
-                            "failed to record streaming handshake failure entry"
-                        );
-                    }
+                    let failure = CallFailure {
+                        kind: "reason_streaming",
+                        stage: "streaming_handshake",
+                        log_message: "failed to record streaming handshake failure entry",
+                    };
+                    self.record_call_failure(&failure, &e.to_string(), (&model, purpose))?;
                     return Err(crate::KernelError::Reasoner(e));
                 }
                 Err(_) => {
@@ -202,20 +201,12 @@ impl Kernel {
                         "streaming model provider did not respond within {}ms",
                         self.config.proposal_timeout_ms
                     );
-                    let claim = self.claim_seq()?;
-                    if let Err(record_err) = self.record_reasoning_failure(
-                        claim,
-                        "streaming_handshake_timeout",
-                        &reason_str,
-                        (&model, purpose),
-                    ) {
-                        error!(
-                            kind = "reason_streaming",
-                            error = %reason_str,
-                            record_error = %record_err,
-                            "failed to record streaming handshake timeout entry"
-                        );
-                    }
+                    let failure = CallFailure {
+                        kind: "reason_streaming",
+                        stage: "streaming_handshake_timeout",
+                        log_message: "failed to record streaming handshake timeout entry",
+                    };
+                    self.record_call_failure(&failure, &reason_str, (&model, purpose))?;
                     return Err(crate::KernelError::Timeout(reason_str));
                 }
             };
@@ -234,6 +225,42 @@ impl Kernel {
         };
 
         Ok((handle, stream))
+    }
+
+    /// The record window as of the next unclaimed number, without
+    /// claiming it.
+    fn projected_window(&self) -> Result<Vec<ContextHash>, crate::KernelError> {
+        let projected_seq = {
+            let guard = self
+                .seq
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard
+        };
+        self.window_hashes(projected_seq)
+    }
+
+    /// Claim a number and record a failed provider call; a failure to
+    /// record is logged, not returned (only the claim can fail the call).
+    fn record_call_failure(
+        &self,
+        failure: &CallFailure,
+        reason_str: &str,
+        call: (&ModelName, Option<ModelCallPurpose>),
+    ) -> Result<(), crate::KernelError> {
+        let claim = self.claim_seq()?;
+        if let Err(record_err) =
+            self.record_reasoning_failure(claim, failure.stage, reason_str, call)
+        {
+            error!(
+                kind = failure.kind,
+                error = %reason_str,
+                record_error = %record_err,
+                "{}",
+                failure.log_message
+            );
+        }
+        Ok(())
     }
 
     /// Append a `Reasoning` record entry describing a failed provider

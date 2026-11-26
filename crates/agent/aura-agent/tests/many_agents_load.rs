@@ -116,6 +116,68 @@ fn percentile(sorted: &[Duration], p: f64) -> Duration {
     sorted[index]
 }
 
+/// Builds a kernel for one agent and spawns its turn; the task yields
+/// the turn's duration and iteration count.
+fn spawn_turn(
+    store: &Arc<dyn Store>,
+    workspace: &std::path::Path,
+    tools: Vec<ToolDefinition>,
+    steps: usize,
+    bytes: usize,
+) -> tokio::task::JoinHandle<(Duration, usize)> {
+    let router = ExecutorRouter::with_executors(vec![Arc::new(FixedExecutor { bytes })]);
+    let config = KernelConfig {
+        workspace_base: workspace.to_path_buf(),
+        ..KernelConfig::default()
+    };
+    let kernel = Arc::new(
+        Kernel::new(
+            Arc::clone(store),
+            Arc::new(provider(steps)),
+            router,
+            config,
+            AgentId::generate(),
+        )
+        .unwrap(),
+    );
+    tokio::spawn(async move {
+        let model = KernelModelGateway::new(Arc::clone(&kernel));
+        let executor = KernelToolGateway::new(kernel);
+        let agent = AgentLoop::new(AgentLoopConfig {
+            system_prompt: "You are a coding agent.".repeat(200),
+            max_iterations: steps + 5,
+            ..AgentLoopConfig::for_agent("claude-test-model")
+        });
+        let start = Instant::now();
+        let result = agent
+            .run(&model, &executor, vec![Message::user("go")], tools)
+            .await
+            .unwrap();
+        (start.elapsed(), result.iterations)
+    })
+}
+
+/// Prints one row of the results table; `times` must be sorted.
+fn print_row(
+    agents: usize,
+    wall: Duration,
+    times: &[Duration],
+    iterations: usize,
+    cpu: Option<Duration>,
+) {
+    #[allow(clippy::cast_precision_loss)]
+    let per_second = iterations as f64 / wall.as_secs_f64();
+    println!(
+        "{agents:>6} {:>10.1} {:>10.1} {:>10.1} {:>12.0} {:>10} {:>10}",
+        wall.as_secs_f64() * 1000.0,
+        percentile(times, 0.5).as_secs_f64() * 1000.0,
+        percentile(times, 0.99).as_secs_f64() * 1000.0,
+        per_second,
+        cpu.map_or_else(|| "-".to_string(), |c| format!("{}", c.as_millis())),
+        rss_mib().map_or_else(|| "-".to_string(), |r| format!("{r:.0}")),
+    );
+}
+
 async fn run_agents(store: &Arc<dyn Store>, agents: usize, steps: usize, bytes: usize) {
     let workspace = tempfile::tempdir().unwrap();
     let tools = vec![ToolDefinition::new(
@@ -127,37 +189,13 @@ async fn run_agents(store: &Arc<dyn Store>, agents: usize, steps: usize, bytes: 
     let started = Instant::now();
     let mut turns = Vec::with_capacity(agents);
     for _ in 0..agents {
-        let router = ExecutorRouter::with_executors(vec![Arc::new(FixedExecutor { bytes })]);
-        let config = KernelConfig {
-            workspace_base: workspace.path().to_path_buf(),
-            ..KernelConfig::default()
-        };
-        let kernel = Arc::new(
-            Kernel::new(
-                Arc::clone(store),
-                Arc::new(provider(steps)),
-                router,
-                config,
-                AgentId::generate(),
-            )
-            .unwrap(),
-        );
-        let tools = tools.clone();
-        turns.push(tokio::spawn(async move {
-            let model = KernelModelGateway::new(Arc::clone(&kernel));
-            let executor = KernelToolGateway::new(kernel);
-            let agent = AgentLoop::new(AgentLoopConfig {
-                system_prompt: "You are a coding agent.".repeat(200),
-                max_iterations: steps + 5,
-                ..AgentLoopConfig::for_agent("claude-test-model")
-            });
-            let start = Instant::now();
-            let result = agent
-                .run(&model, &executor, vec![Message::user("go")], tools)
-                .await
-                .unwrap();
-            (start.elapsed(), result.iterations)
-        }));
+        turns.push(spawn_turn(
+            store,
+            workspace.path(),
+            tools.clone(),
+            steps,
+            bytes,
+        ));
     }
     let mut times = Vec::with_capacity(agents);
     let mut iterations = 0;
@@ -169,17 +207,7 @@ async fn run_agents(store: &Arc<dyn Store>, agents: usize, steps: usize, bytes: 
     let wall = started.elapsed();
     times.sort();
     let cpu = cpu_before.zip(cpu_time()).map(|(a, b)| b.saturating_sub(a));
-    #[allow(clippy::cast_precision_loss)]
-    let per_second = iterations as f64 / wall.as_secs_f64();
-    println!(
-        "{agents:>6} {:>10.1} {:>10.1} {:>10.1} {:>12.0} {:>10} {:>10}",
-        wall.as_secs_f64() * 1000.0,
-        percentile(&times, 0.5).as_secs_f64() * 1000.0,
-        percentile(&times, 0.99).as_secs_f64() * 1000.0,
-        per_second,
-        cpu.map_or_else(|| "-".to_string(), |c| format!("{}", c.as_millis())),
-        rss_mib().map_or_else(|| "-".to_string(), |r| format!("{r:.0}")),
-    );
+    print_row(agents, wall, &times, iterations, cpu);
 }
 
 #[tokio::test(flavor = "multi_thread")]

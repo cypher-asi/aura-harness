@@ -1,4 +1,5 @@
 use super::*;
+use crate::turn_config::TaskComplexity;
 
 #[test]
 fn configure_loop_config_simple_caps_iterations() {

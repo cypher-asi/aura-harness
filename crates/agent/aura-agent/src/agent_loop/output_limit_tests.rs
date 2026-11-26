@@ -196,38 +196,42 @@ async fn max_tokens_preserves_completed_tools_without_replaying() {
     assert!(result.llm_error.is_none());
 }
 
-#[tokio::test]
-async fn tracked_task_rejects_text_without_accepted_task_done() {
-    use crate::agent_runner::{AgentRunner, AgenticTaskParams, TaskTrackingConfig};
-    use aura_context_prompts::{ProjectInfo, SessionInfo, SpecInfo, TaskInfo};
-    let directory = tempfile::tempdir().unwrap();
-    let folder = directory.path().to_string_lossy().into_owned();
-    let project = ProjectInfo {
+const PROBE_SPEC: aura_context_prompts::SpecInfo<'static> = aura_context_prompts::SpecInfo {
+    title: "probe",
+    markdown_contents: "Write the requested file",
+};
+
+const PROBE_TASK: aura_context_prompts::TaskInfo<'static> = aura_context_prompts::TaskInfo {
+    title: "Create implementation",
+    description: "Implement the requested file",
+    execution_notes: "",
+    files_changed: &[],
+};
+
+const PROBE_SESSION: aura_context_prompts::SessionInfo<'static> =
+    aura_context_prompts::SessionInfo {
+        summary_of_previous_context: "",
+    };
+
+fn probe_project(folder: &str) -> aura_context_prompts::ProjectInfo<'_> {
+    aura_context_prompts::ProjectInfo {
         project_id: None,
         name: "probe",
         description: "",
-        folder_path: &folder,
+        folder_path: folder,
         build_command: None,
         test_command: None,
-    };
-    let spec = SpecInfo {
-        title: "probe",
-        markdown_contents: "Write the requested file",
-    };
-    let task = TaskInfo {
-        title: "Create implementation",
-        description: "Implement the requested file",
-        execution_notes: "",
-        files_changed: &[],
-    };
-    let session = SessionInfo {
-        summary_of_previous_context: "",
-    };
-    let params = AgenticTaskParams {
-        project: &project,
-        spec: &spec,
-        task: &task,
-        session: &session,
+    }
+}
+
+fn probe_task_params<'a>(
+    project: &'a aura_context_prompts::ProjectInfo<'a>,
+) -> crate::agent_runner::AgenticTaskParams<'a> {
+    crate::agent_runner::AgenticTaskParams {
+        project,
+        spec: &PROBE_SPEC,
+        task: &PROBE_TASK,
+        session: &PROBE_SESSION,
         work_log: &[],
         completed_deps: &[],
         workspace_map: "",
@@ -238,15 +242,31 @@ async fn tracked_task_rejects_text_without_accepted_task_done() {
         tools: vec![],
         attempt: 0,
         agent: None,
-    };
-    let executor = std::sync::Arc::new(CountingExecutor::default());
-    let tracking = TaskTrackingConfig {
-        inner_executor: executor.clone(),
-        project_folder: folder.clone(),
+    }
+}
+
+fn probe_tracking(
+    executor: std::sync::Arc<CountingExecutor>,
+    folder: &str,
+) -> crate::agent_runner::TaskTrackingConfig {
+    crate::agent_runner::TaskTrackingConfig {
+        inner_executor: executor,
+        project_folder: folder.to_owned(),
         build_command: None,
         test_command: None,
         early_test_oracle: None,
-    };
+    }
+}
+
+#[tokio::test]
+async fn tracked_task_rejects_text_without_accepted_task_done() {
+    use crate::agent_runner::AgentRunner;
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().to_string_lossy().into_owned();
+    let project = probe_project(&folder);
+    let params = probe_task_params(&project);
+    let executor = std::sync::Arc::new(CountingExecutor::default());
+    let tracking = probe_tracking(executor.clone(), &folder);
     let provider = CapturingProvider {
         requests: Mutex::new(vec![]),
         with_tool: false,
@@ -265,13 +285,7 @@ async fn tracked_task_rejects_text_without_accepted_task_done() {
             "task_done",
             serde_json::json!({"no_changes_needed":true, "notes":"Already correct"}),
         ));
-    let tracking = TaskTrackingConfig {
-        inner_executor: executor,
-        project_folder: folder.clone(),
-        build_command: None,
-        test_command: None,
-        early_test_oracle: None,
-    };
+    let tracking = probe_tracking(executor, &folder);
     let completed = AgentRunner::new(AgentRunnerConfig::for_agent("test-model"))
         .execute_task_tracked(&provider, tracking, &params, None, None)
         .await;

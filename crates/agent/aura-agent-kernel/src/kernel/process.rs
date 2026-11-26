@@ -188,18 +188,7 @@ impl Kernel {
         match tx.tx_type {
             TransactionType::SessionStart => {
                 self.policy.clear_session_approvals();
-                let entry = RecordEntry::builder(seq, tx.clone())
-                    .context_hash(context_hash)
-                    .build();
-                Ok(ProcessResult {
-                    entry,
-                    tool_output: None,
-                    had_failures: false,
-                    runtime_capability_update: None,
-                    clear_runtime_capabilities: true,
-                    tool_decision: None,
-                    policy_decision: None,
-                })
+                Ok(Self::plain_result(seq, tx, context_hash, None, true))
             }
             TransactionType::System => {
                 let runtime_capability_update = Self::runtime_capability_update_from_tx(tx)
@@ -208,53 +197,46 @@ impl Kernel {
                             "deserialize capability install: {e}"
                         ))
                     })?;
-                let entry = RecordEntry::builder(seq, tx.clone())
-                    .context_hash(context_hash)
-                    .build();
-                Ok(ProcessResult {
-                    entry,
-                    tool_output: None,
-                    had_failures: false,
+                Ok(Self::plain_result(
+                    seq,
+                    tx,
+                    context_hash,
                     runtime_capability_update,
-                    clear_runtime_capabilities: false,
-                    tool_decision: None,
-                    policy_decision: None,
-                })
+                    false,
+                ))
             }
+            // Phase 10 schema-v2: the SubagentSpawn audit row is
+            // a typed transaction-header variant. The kernel
+            // path is identical to the generic catch-all (build
+            // a context-hashed record entry); we surface an
+            // explicit arm so the closed-enum match remains
+            // exhaustive for documentation.
             TransactionType::SubagentSpawn => {
-                // Phase 10 schema-v2: the SubagentSpawn audit row is
-                // a typed transaction-header variant. The kernel
-                // path is identical to the generic catch-all (build
-                // a context-hashed record entry); we surface an
-                // explicit arm so the closed-enum match remains
-                // exhaustive for documentation.
-                let entry = RecordEntry::builder(seq, tx.clone())
-                    .context_hash(context_hash)
-                    .build();
-                Ok(ProcessResult {
-                    entry,
-                    tool_output: None,
-                    had_failures: false,
-                    runtime_capability_update: None,
-                    clear_runtime_capabilities: false,
-                    tool_decision: None,
-                    policy_decision: None,
-                })
+                Ok(Self::plain_result(seq, tx, context_hash, None, false))
             }
-            _ => {
-                let entry = RecordEntry::builder(seq, tx.clone())
-                    .context_hash(context_hash)
-                    .build();
-                Ok(ProcessResult {
-                    entry,
-                    tool_output: None,
-                    had_failures: false,
-                    runtime_capability_update: None,
-                    clear_runtime_capabilities: false,
-                    tool_decision: None,
-                    policy_decision: None,
-                })
-            }
+            _ => Ok(Self::plain_result(seq, tx, context_hash, None, false)),
+        }
+    }
+
+    /// A context-hashed record entry for `tx` with no tool side effects.
+    fn plain_result(
+        seq: u64,
+        tx: &Transaction,
+        context_hash: aura_core_types::ContextHash,
+        runtime_capability_update: Option<RuntimeCapabilityInstall>,
+        clear_runtime_capabilities: bool,
+    ) -> ProcessResult {
+        let entry = RecordEntry::builder(seq, tx.clone())
+            .context_hash(context_hash)
+            .build();
+        ProcessResult {
+            entry,
+            tool_output: None,
+            had_failures: false,
+            runtime_capability_update,
+            clear_runtime_capabilities,
+            tool_decision: None,
+            policy_decision: None,
         }
     }
 

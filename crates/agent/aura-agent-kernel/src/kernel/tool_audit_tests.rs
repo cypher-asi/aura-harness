@@ -4,11 +4,12 @@
 
 use super::*;
 use crate::{ExecuteContext, Executor, ExecutorError, ExecutorRouter, ReplayConsumer};
+use async_trait::async_trait;
 use aura_core_modes::AgentMode;
 use aura_core_types::{
     Action, AgentToolPermissions, Effect, EffectKind, EffectStatus, PolicyApprover,
-    PolicyCheckOutcome, PolicySource, ToolExecution, ToolGateVerdict, ToolProposal, Transaction,
-    TransactionType, UserToolDefaults,
+    PolicyCheckOutcome, PolicySource, ToolExecution, ToolGateVerdict, ToolProposal, ToolState,
+    Transaction, TransactionType, UserToolDefaults,
 };
 use aura_model::{MockProvider, ModelProvider};
 use aura_store_db::{RocksStore, Store};
@@ -126,32 +127,19 @@ fn decision_of(entry: &RecordEntry) -> PolicyDecision {
     serde_json::from_slice(&entry.tx.payload).unwrap()
 }
 
-#[tokio::test]
-async fn allowed_call_records_proposal_then_decision_then_execution() {
-    let h = harness(|_| {});
-    let result = h
-        .kernel
-        .process_direct(proposal_tx(&h.kernel, "tu-1", "read_file"))
-        .await
-        .unwrap();
+const PROPOSE_DECIDE_EXECUTE: [TransactionType; 3] = [
+    TransactionType::ToolProposal,
+    TransactionType::PolicyDecision,
+    TransactionType::ToolExecution,
+];
 
-    let entries = all_entries(&h);
+fn assert_tx_types(entries: &[RecordEntry], expected: &[TransactionType]) {
     let types: Vec<_> = entries.iter().map(|e| e.tx.tx_type).collect();
-    assert_eq!(
-        types,
-        vec![
-            TransactionType::ToolProposal,
-            TransactionType::PolicyDecision,
-            TransactionType::ToolExecution,
-        ]
-    );
-    let (proposal, decision_entry, execution) = (&entries[0], &entries[1], &entries[2]);
+    assert_eq!(types, expected);
+}
 
-    assert!(proposal.effects.is_empty() && proposal.actions.is_empty());
-    assert_eq!(decision_entry.tx.reference_tx_hash, Some(proposal.tx.hash));
-    assert_eq!(execution.tx.reference_tx_hash, Some(decision_entry.tx.hash));
-
-    let decision = decision_of(decision_entry);
+/// The default `full_access` approval walks every rule source in order.
+fn assert_full_access_approval(h: &Harness, decision: &PolicyDecision) {
     assert_eq!(decision.verdict, ToolGateVerdict::Approved);
     assert_eq!(decision.decided_by.source, PolicySource::UserDefault);
     assert_eq!(decision.decided_by.rule, "full_access");
@@ -168,6 +156,27 @@ async fn allowed_call_records_proposal_then_decision_then_execution() {
             PolicySource::UserDefault,
         ]
     );
+}
+
+#[tokio::test]
+async fn allowed_call_records_proposal_then_decision_then_execution() {
+    let h = harness(|_| {});
+    let result = h
+        .kernel
+        .process_direct(proposal_tx(&h.kernel, "tu-1", "read_file"))
+        .await
+        .unwrap();
+
+    let entries = all_entries(&h);
+    assert_tx_types(&entries, &PROPOSE_DECIDE_EXECUTE);
+    let (proposal, decision_entry, execution) = (&entries[0], &entries[1], &entries[2]);
+
+    assert!(proposal.effects.is_empty() && proposal.actions.is_empty());
+    assert_eq!(decision_entry.tx.reference_tx_hash, Some(proposal.tx.hash));
+    assert_eq!(execution.tx.reference_tx_hash, Some(decision_entry.tx.hash));
+
+    let decision = decision_of(decision_entry);
+    assert_full_access_approval(&h, &decision);
 
     let action_id = execution.actions[0].action_id;
     assert_eq!(decision_entry.decision.accepted_action_ids, vec![action_id]);
@@ -178,12 +187,10 @@ async fn allowed_call_records_proposal_then_decision_then_execution() {
     assert!(!exec.is_error);
     assert!(exec.duration_ms.is_some());
     assert!(entries.iter().all(|e| e.tx.ts_ms > 0));
-
     assert_eq!(result.entry.seq, execution.seq);
     let decision_ref = result.policy_decision.unwrap();
     assert_eq!(decision_ref.seq, decision_entry.seq);
     assert_eq!(decision_ref.proposal_tx_hash, proposal.tx.hash);
-
     assert_eq!(h.observer.seqs(), vec![1, 2, 3]);
 }
 
@@ -211,15 +218,7 @@ async fn preset_call_is_gated_and_recorded_without_running_the_executor() {
     assert!(!output.is_error);
 
     let entries = all_entries(&h);
-    let types: Vec<_> = entries.iter().map(|e| e.tx.tx_type).collect();
-    assert_eq!(
-        types,
-        vec![
-            TransactionType::ToolProposal,
-            TransactionType::PolicyDecision,
-            TransactionType::ToolExecution,
-        ]
-    );
+    assert_tx_types(&entries, &PROPOSE_DECIDE_EXECUTE);
     let recorded: ToolProposal = serde_json::from_slice(&entries[0].tx.payload).unwrap();
     assert_eq!(recorded.source.as_deref(), Some("cache"));
     let exec: ToolExecution = serde_json::from_slice(&entries[2].tx.payload).unwrap();

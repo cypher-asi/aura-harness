@@ -1,31 +1,7 @@
 # Rust files over the 500-line limit when scripts/check_file_size.sh landed.
 # This list may only shrink: remove a file when it is split under the limit.
-crates/agent/aura-agent-kernel/src/kernel/mod.rs
-crates/agent/aura-agent-kernel/src/kernel/tests.rs
-crates/agent/aura-agent-kernel/src/kernel/tool_audit_tests.rs
-crates/agent/aura-agent-trace/src/dataset.rs
-crates/agent/aura-agent-trace/src/graph.rs
-crates/agent/aura-agent-trace/src/recorder.rs
-crates/agent/aura-agent-trace/src/rewards.rs
-crates/agent/aura-agent-trace/src/run_log.rs
-crates/agent/aura-agent/src/agent_loop/cutover_tests.rs
-crates/agent/aura-agent/src/agent_loop/pipeline_tests.rs
-crates/agent/aura-agent/src/agent_loop/state.rs
-crates/agent/aura-agent/src/agent_loop/stream_pump/driver.rs
-crates/agent/aura-agent/src/agent_loop/stream_pump/tests.rs
-crates/agent/aura-agent/src/agent_loop/streaming.rs
-crates/agent/aura-agent/src/agent_loop/streaming_tests.rs
-crates/agent/aura-agent/src/agent_loop/tests.rs
-crates/agent/aura-agent/src/agent_loop/tool_execution_tests.rs
-crates/agent/aura-agent/src/agent_loop/tool_pipeline.rs
-crates/agent/aura-agent/src/agent_loop/turn.rs
-crates/agent/aura-agent/src/agent_runner/mod.rs
-crates/agent/aura-agent/src/task_executor/mod.rs
-crates/agent/aura-agent/src/task_executor/tests.rs
-crates/agent/aura-agent/src/verify/runner.rs
 crates/engine/aura-engine-cloud/src/boxd.rs
 crates/engine/aura-engine-cloud/src/fake.rs
-crates/engine/aura-engine-cloud/src/fleet.rs
 crates/engine/aura-engine-cloud/src/github.rs
 crates/engine/aura-engine-cloud/src/snapshots.rs
 crates/surface/aura-app/src/api_server.rs

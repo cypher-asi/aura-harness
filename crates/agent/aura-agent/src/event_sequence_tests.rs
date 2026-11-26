@@ -80,39 +80,7 @@ impl ModelProvider for StreamingMockProvider {
 
         for (idx, block) in response.message.content.iter().enumerate() {
             let index = u32::try_from(idx).expect("content block index fits in u32");
-            match block {
-                ContentBlock::Text { text } => {
-                    events.push(Ok(StreamEvent::ContentBlockStart {
-                        index,
-                        content_type: StreamContentType::Text,
-                    }));
-                    events.push(Ok(StreamEvent::TextDelta { text: text.clone() }));
-                    events.push(Ok(StreamEvent::ContentBlockStop { index }));
-                }
-                ContentBlock::ToolUse { id, name, input } => {
-                    events.push(Ok(StreamEvent::ContentBlockStart {
-                        index,
-                        content_type: StreamContentType::ToolUse {
-                            id: id.clone(),
-                            name: name.clone(),
-                        },
-                    }));
-                    let json = serde_json::to_string(input).unwrap_or_default();
-                    events.push(Ok(StreamEvent::InputJsonDelta { partial_json: json }));
-                    events.push(Ok(StreamEvent::ContentBlockStop { index }));
-                }
-                ContentBlock::Thinking { thinking, .. } => {
-                    events.push(Ok(StreamEvent::ContentBlockStart {
-                        index,
-                        content_type: StreamContentType::Thinking,
-                    }));
-                    events.push(Ok(StreamEvent::ThinkingDelta {
-                        thinking: thinking.clone(),
-                    }));
-                    events.push(Ok(StreamEvent::ContentBlockStop { index }));
-                }
-                _ => {}
-            }
+            push_block_events(&mut events, index, block);
         }
 
         events.push(Ok(StreamEvent::MessageDelta {
@@ -129,6 +97,47 @@ impl ModelProvider for StreamingMockProvider {
 
     async fn health_check(&self) -> bool {
         true
+    }
+}
+
+/// Stream events for one accumulated content block.
+fn push_block_events(
+    events: &mut Vec<Result<StreamEvent, ReasonerError>>,
+    index: u32,
+    block: &ContentBlock,
+) {
+    match block {
+        ContentBlock::Text { text } => {
+            events.push(Ok(StreamEvent::ContentBlockStart {
+                index,
+                content_type: StreamContentType::Text,
+            }));
+            events.push(Ok(StreamEvent::TextDelta { text: text.clone() }));
+            events.push(Ok(StreamEvent::ContentBlockStop { index }));
+        }
+        ContentBlock::ToolUse { id, name, input } => {
+            events.push(Ok(StreamEvent::ContentBlockStart {
+                index,
+                content_type: StreamContentType::ToolUse {
+                    id: id.clone(),
+                    name: name.clone(),
+                },
+            }));
+            let json = serde_json::to_string(input).unwrap_or_default();
+            events.push(Ok(StreamEvent::InputJsonDelta { partial_json: json }));
+            events.push(Ok(StreamEvent::ContentBlockStop { index }));
+        }
+        ContentBlock::Thinking { thinking, .. } => {
+            events.push(Ok(StreamEvent::ContentBlockStart {
+                index,
+                content_type: StreamContentType::Thinking,
+            }));
+            events.push(Ok(StreamEvent::ThinkingDelta {
+                thinking: thinking.clone(),
+            }));
+            events.push(Ok(StreamEvent::ContentBlockStop { index }));
+        }
+        _ => {}
     }
 }
 
@@ -199,8 +208,9 @@ async fn text_response_emits_text_delta_then_iteration_complete() {
     }
 }
 
-#[tokio::test]
-async fn tool_use_emits_tool_start_input_snapshot_then_result() {
+/// Runs one `read_file` tool turn followed by a text reply and returns
+/// the emitted events.
+async fn run_read_file_tool_turn() -> Vec<AgentLoopEvent> {
     let inner = MockProvider::new()
         .with_response(MockResponse::tool_use(
             "tool_1",
@@ -235,6 +245,12 @@ async fn tool_use_emits_tool_start_input_snapshot_then_result() {
     assert_eq!(result.iterations, 2);
 
     let events = collect_events(rx).await;
+    events
+}
+
+#[tokio::test]
+async fn tool_use_emits_tool_start_input_snapshot_then_result() {
+    let events = run_read_file_tool_turn().await;
 
     let tool_start_pos = events
         .iter()

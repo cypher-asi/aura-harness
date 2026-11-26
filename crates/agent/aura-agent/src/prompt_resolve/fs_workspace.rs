@@ -140,25 +140,38 @@ fn grep_one(root: &Path, symbol: &str, max_hits: usize) -> Vec<SymbolHit> {
         let Ok(content) = std::fs::read_to_string(p) else {
             continue;
         };
-        for (idx, line) in content.lines().enumerate() {
-            if re.is_match(line) {
-                let rel = p
-                    .strip_prefix(root)
-                    .unwrap_or(p)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                hits.push(SymbolHit {
-                    path: rel,
-                    line: idx + 1,
-                    text: line.trim().to_string(),
-                });
-                if hits.len() >= max_hits {
-                    break;
-                }
+        push_matching_lines(root, p, &content, &re, max_hits, &mut hits);
+    }
+    hits
+}
+
+/// Appends a hit for each line of `content` (the file at `p`) matching `re`,
+/// stopping once `hits` holds `max_hits` entries.
+fn push_matching_lines(
+    root: &Path,
+    p: &Path,
+    content: &str,
+    re: &Regex,
+    max_hits: usize,
+    hits: &mut Vec<SymbolHit>,
+) {
+    for (idx, line) in content.lines().enumerate() {
+        if re.is_match(line) {
+            let rel = p
+                .strip_prefix(root)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .replace('\\', "/");
+            hits.push(SymbolHit {
+                path: rel,
+                line: idx + 1,
+                text: line.trim().to_string(),
+            });
+            if hits.len() >= max_hits {
+                break;
             }
         }
     }
-    hits
 }
 
 fn discover_module_paths_blocking(root: &Path, module: &str, max_hits: usize) -> Vec<String> {

@@ -51,59 +51,59 @@ impl LlmCallError {
                 | Self::RateLimited(_)
                 | Self::Unavailable(_)
         );
-        match self {
+        let llm_error = match self {
             Self::InsufficientCredits(msg) => {
                 result.insufficient_credits = true;
                 warn!("Insufficient credits (402), stopping loop");
-                streaming::emit(
+                emit_error(
                     event_tx,
-                    AgentLoopEvent::Error {
-                        code: crate::events::ERROR_INSUFFICIENT_CREDITS.to_string(),
-                        message: msg,
-                        recoverable: false,
-                    },
+                    crate::events::ERROR_INSUFFICIENT_CREDITS.to_string(),
+                    msg,
+                    false,
                 );
+                return;
             }
             Self::RateLimited(msg) => {
                 warn!(message = %msg, "LLM rate limited after retries, stopping loop");
-                streaming::emit(
-                    event_tx,
-                    AgentLoopEvent::Error {
-                        code: "rate_limit".to_string(),
-                        message: msg.clone(),
-                        // Retries already happened at the provider layer; the
-                        // loop cannot recover this turn, but the next user
-                        // turn (or a client-side retry) can succeed.
-                        recoverable: true,
-                    },
-                );
-                result.llm_error = Some(msg);
+                // Retries already happened at the provider layer; the
+                // loop cannot recover this turn, but the next user
+                // turn (or a client-side retry) can succeed.
+                emit_error(event_tx, "rate_limit".to_string(), msg.clone(), true);
+                msg
             }
             Self::Unauthorized(msg) => {
                 warn!(message = %msg, "Model route refused the credentials, stopping loop");
-                streaming::emit(
+                emit_error(
                     event_tx,
-                    AgentLoopEvent::Error {
-                        code: crate::events::ERROR_UNAUTHORIZED.to_string(),
-                        message: msg.clone(),
-                        recoverable: false,
-                    },
+                    crate::events::ERROR_UNAUTHORIZED.to_string(),
+                    msg.clone(),
+                    false,
                 );
-                result.llm_error = Some(msg);
+                msg
             }
             Self::PromptTooLong(msg) | Self::Unavailable(msg) | Self::Fatal(msg) => {
-                streaming::emit(
-                    event_tx,
-                    AgentLoopEvent::Error {
-                        code: "llm_error".to_string(),
-                        message: msg.clone(),
-                        recoverable: false,
-                    },
-                );
-                result.llm_error = Some(msg);
+                emit_error(event_tx, "llm_error".to_string(), msg.clone(), false);
+                msg
             }
-        }
+        };
+        result.llm_error = Some(llm_error);
     }
+}
+
+fn emit_error(
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    code: String,
+    message: String,
+    recoverable: bool,
+) {
+    streaming::emit(
+        event_tx,
+        AgentLoopEvent::Error {
+            code,
+            message,
+            recoverable,
+        },
+    );
 }
 
 impl LlmCallError {
@@ -222,24 +222,7 @@ pub(super) fn accumulate_response(
     response: &ModelResponse,
     _iteration: usize,
 ) -> bool {
-    state.result.total_input_tokens += response.usage.input_tokens;
-    state.result.total_output_tokens += response.usage.output_tokens;
-    state.result.total_cache_creation_input_tokens += response
-        .usage
-        .cache_creation_input_tokens
-        .unwrap_or_default();
-    state.result.total_cache_read_input_tokens +=
-        response.usage.cache_read_input_tokens.unwrap_or_default();
-
-    // Record the *latest* iteration's cache hit/miss counts on the
-    // per-turn breakdown. The wire `ContextBreakdown` surfaces this
-    // so the UI can render a "Cached this turn" row. If the agent
-    // loop runs multiple iterations, the last one wins -- that's the
-    // freshest view of "what did the model just see from cache?".
-    state.result.context_breakdown.cache_read_tokens =
-        response.usage.cache_read_input_tokens.unwrap_or(0);
-    state.result.context_breakdown.cache_creation_tokens =
-        response.usage.cache_creation_input_tokens.unwrap_or(0);
+    add_usage(&mut state.result, &response.usage);
 
     // Defensively strip any tool-call markup the model leaked into a
     // text block (Anthropic `<invoke>` / `<function_calls>` XML or the
@@ -254,44 +237,60 @@ pub(super) fn accumulate_response(
         warn!("Scrubbed leaked tool-call markup from assistant text before adding to history");
     }
 
+    accumulate_text(&mut state.result, &sanitized_message);
+    state.messages.push(sanitized_message);
+    update_context_estimate(state, &response.usage);
+
+    scrubbed_markup
+}
+
+fn add_usage(result: &mut AgentLoopResult, usage: &aura_model::Usage) {
+    result.total_input_tokens += usage.input_tokens;
+    result.total_output_tokens += usage.output_tokens;
+    result.total_cache_creation_input_tokens +=
+        usage.cache_creation_input_tokens.unwrap_or_default();
+    result.total_cache_read_input_tokens += usage.cache_read_input_tokens.unwrap_or_default();
+
+    // Record the *latest* iteration's cache hit/miss counts on the
+    // per-turn breakdown. The wire `ContextBreakdown` surfaces this
+    // so the UI can render a "Cached this turn" row. If the agent
+    // loop runs multiple iterations, the last one wins -- that's the
+    // freshest view of "what did the model just see from cache?".
+    result.context_breakdown.cache_read_tokens = usage.cache_read_input_tokens.unwrap_or(0);
+    result.context_breakdown.cache_creation_tokens = usage.cache_creation_input_tokens.unwrap_or(0);
+}
+
+fn accumulate_text(result: &mut AgentLoopResult, message: &aura_model::Message) {
     let mut response_text = String::new();
-    for block in &sanitized_message.content {
+    for block in &message.content {
         match block {
             ContentBlock::Text { text } => {
-                append_paragraph(&mut state.result.total_text, text);
+                append_paragraph(&mut result.total_text, text);
                 append_paragraph(&mut response_text, text);
             }
             ContentBlock::Thinking { thinking, .. } => {
-                state.result.total_thinking.push_str(thinking);
+                result.total_thinking.push_str(thinking);
             }
             _ => {}
         }
     }
     if !response_text.is_empty() {
-        state.result.final_text = response_text;
+        result.final_text = response_text;
     }
+}
 
-    state.messages.push(sanitized_message);
-
+fn update_context_estimate(state: &mut LoopState, usage: &aura_model::Usage) {
     let raw_message_bytes = state.messages.chars();
     #[allow(clippy::cast_possible_truncation)]
     let message_tokens = (raw_message_bytes / CHARS_PER_TOKEN) as u64;
-    let provider_tokens = response
-        .usage
+    let provider_tokens = usage
         .input_tokens
-        .saturating_add(response.usage.output_tokens)
-        .saturating_add(
-            response
-                .usage
-                .cache_creation_input_tokens
-                .unwrap_or_default(),
-        )
-        .saturating_add(response.usage.cache_read_input_tokens.unwrap_or_default());
+        .saturating_add(usage.output_tokens)
+        .saturating_add(usage.cache_creation_input_tokens.unwrap_or_default())
+        .saturating_add(usage.cache_read_input_tokens.unwrap_or_default());
     let estimated_context_tokens = provider_tokens.max(message_tokens);
     state.last_context_tokens_estimate = Some(estimated_context_tokens);
     state.result.estimated_context_tokens = estimated_context_tokens;
-
-    scrubbed_markup
 }
 
 /// Append one complete assistant text block to the turn's accumulated text.

@@ -61,6 +61,24 @@ pub async fn resolve_hints<R: WorkspaceReader + ?Sized>(
     workspace: &R,
     caps: ResolveCaps,
 ) -> ResolvedContext {
+    let path_candidates = collect_path_candidates(hints, workspace, &caps).await;
+    let resolved_paths = resolve_paths(&path_candidates, workspace, &caps).await;
+    let resolved_symbols = resolve_symbols(hints, workspace, &caps).await;
+
+    ResolvedContext {
+        paths: resolved_paths,
+        symbols: resolved_symbols,
+        module_note: hints.module_note.clone(),
+        max_block_chars: caps.max_block_chars,
+    }
+}
+
+/// Explicit hint paths followed by module-keyword discoveries, deduplicated.
+async fn collect_path_candidates<R: WorkspaceReader + ?Sized>(
+    hints: &ContextHints,
+    workspace: &R,
+    caps: &ResolveCaps,
+) -> Vec<String> {
     let mut path_candidates = hints.paths.clone();
     for kw in &hints.module_keywords {
         let discovered = tokio::time::timeout(
@@ -75,7 +93,14 @@ pub async fn resolve_hints<R: WorkspaceReader + ?Sized>(
             }
         }
     }
+    path_candidates
+}
 
+async fn resolve_paths<R: WorkspaceReader + ?Sized>(
+    path_candidates: &[String],
+    workspace: &R,
+    caps: &ResolveCaps,
+) -> Vec<ResolvedPath> {
     let mut resolved_paths = Vec::new();
     for path in path_candidates.iter().take(caps.max_paths) {
         let exists = tokio::time::timeout(caps.per_call_timeout, workspace.exists(path))
@@ -100,7 +125,14 @@ pub async fn resolve_hints<R: WorkspaceReader + ?Sized>(
             head_line_count,
         });
     }
+    resolved_paths
+}
 
+async fn resolve_symbols<R: WorkspaceReader + ?Sized>(
+    hints: &ContextHints,
+    workspace: &R,
+    caps: &ResolveCaps,
+) -> Vec<ResolvedSymbol> {
     let mut resolved_symbols = Vec::new();
     for symbol in hints.symbols.iter().take(caps.max_symbols) {
         let hits =
@@ -115,13 +147,7 @@ pub async fn resolve_hints<R: WorkspaceReader + ?Sized>(
             });
         }
     }
-
-    ResolvedContext {
-        paths: resolved_paths,
-        symbols: resolved_symbols,
-        module_note: hints.module_note.clone(),
-        max_block_chars: caps.max_block_chars,
-    }
+    resolved_symbols
 }
 
 #[cfg(test)]

@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use aura_core_types::trace::{
-    Actor, HarnessAction, Reward, RewardKind, RewardTarget, Step, StepAction, TokenUsage,
-    ToolIntent,
+    Actor, FileTouch, HarnessAction, Reward, RewardKind, RewardTarget, Step, StepAction,
+    TokenUsage, ToolIntent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -143,111 +143,29 @@ impl RunScorecard {
     /// rewards together.
     #[must_use]
     pub fn compute(meta: &RunMeta, steps: &[Step], rewards: &[Reward]) -> Self {
-        let mut card = Self {
+        let card = Self {
             run_id: meta.run_id.clone(),
             model: meta.model.clone(),
             ..Self::default()
         };
-        let start = steps.first().map_or(0, |s| s.at_ms);
-        card.wall_ms = steps.last().map_or(0, |s| s.at_ms.saturating_sub(start));
-        let mut changed: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut tokens_so_far = 0u64;
-        let mut prompted = None;
+        let mut tally = StepTally::new(card, steps);
         for step in steps {
-            match &step.action {
-                StepAction::UserPrompt { .. } => {
-                    if prompted.replace(step.turn) != Some(step.turn) {
-                        card.turns += 1;
-                    }
-                }
-                StepAction::Model(_) => {
-                    card.model_calls += 1;
-                    card.model_ms += step.duration_ms.unwrap_or_default();
-                    if let Some(u) = step.usage {
-                        card.input_tokens += u.input;
-                        card.output_tokens += u.output;
-                        card.cache_read_tokens += u.cache_read;
-                        card.cache_write_tokens += u.cache_write;
-                        tokens_so_far += u.input + u.output + u.cache_read + u.cache_write;
-                        match step_cost_usd(&step.policy.id, u) {
-                            Some(cost) => card.cost_usd += cost,
-                            None => card.unpriced_calls += 1,
-                        }
-                    }
-                }
-                StepAction::ToolResult {
-                    tool,
-                    is_error,
-                    source,
-                    files,
-                    ..
-                } => {
-                    card.tool_calls += 1;
-                    if *is_error {
-                        card.tool_errors += 1;
-                    }
-                    match source.as_str() {
-                        "blocked" => card.blocked_calls += 1,
-                        "cache" => card.cache_hits += 1,
-                        _ => {}
-                    }
-                    let intent = ToolIntent::classify(tool, &serde_json::Value::Null);
-                    if intent == ToolIntent::Edit && *is_error {
-                        card.failed_edits += 1;
-                    }
-                    if !is_error {
-                        for f in files {
-                            if f.kind == "read" {
-                                card.reads += 1;
-                            } else {
-                                card.writes += 1;
-                                changed.insert(f.path.as_str());
-                                if card.ms_to_first_edit.is_none() {
-                                    card.ms_to_first_edit = Some(step.at_ms.saturating_sub(start));
-                                    card.tokens_to_first_edit = Some(tokens_so_far);
-                                }
-                            }
-                        }
-                    }
-                }
-                StepAction::Harness { name, action, .. } => {
-                    let source = match step.actor {
-                        Actor::Harness { source } => source.as_str(),
-                        _ => "harness",
-                    };
-                    *card
-                        .decisions
-                        .entry(format!("{source}/{name}"))
-                        .or_default() += 1;
-                    match action {
-                        HarnessAction::Compact { tier, .. } => {
-                            *card.compactions.entry(tier.clone()).or_default() += 1;
-                        }
-                        HarnessAction::Retry { .. } => card.retries += 1,
-                        HarnessAction::Block { .. } if step.parent.is_none() => {
-                            card.blocked_calls += 1;
-                        }
-                        _ => {}
-                    }
-                }
-                StepAction::TurnEnd { stop_reason, .. } => {
-                    card.stop_reasons.push(stop_reason.clone());
-                    for f in &step.links.files {
-                        changed.insert(f.as_str());
-                    }
-                }
-            }
+            tally.observe(step);
         }
-        card.files_changed = changed.len();
+        let mut card = tally.finish();
+        card.apply_rewards(steps, rewards);
+        card
+    }
 
+    fn apply_rewards(&mut self, steps: &[Step], rewards: &[Reward]) {
         let steps_by_seq: HashMap<u64, &Step> = steps.iter().map(|s| (s.seq, s)).collect();
         for r in rewards {
-            *card
+            *self
                 .reward_totals
                 .entry(r.kind.as_str().to_string())
                 .or_default() += r.value;
             match (r.kind, r.target) {
-                (RewardKind::Process, _) if r.name == "redundant_read" => card.redundant_reads += 1,
+                (RewardKind::Process, _) if r.name == "redundant_read" => self.redundant_reads += 1,
                 (RewardKind::DecisionEffect, RewardTarget::Step { seq }) => {
                     let name = steps_by_seq
                         .get(&seq)
@@ -256,19 +174,18 @@ impl RunScorecard {
                             _ => None,
                         })
                         .unwrap_or_else(|| r.name.trim_start_matches("effect:").to_string());
-                    let stat = card.effects.entry(name).or_default();
+                    let stat = self.effects.entry(name).or_default();
                     stat.measured += 1;
                     if r.value > 0.0 {
                         stat.effective += 1;
                     }
                 }
                 (RewardKind::Outcome | RewardKind::HumanExplicit, RewardTarget::Run) => {
-                    card.outcome = Some(r.value);
+                    self.outcome = Some(r.value);
                 }
                 _ => {}
             }
         }
-        card
     }
 
     /// Fill the approval and open-call counts from the kernel record log.
@@ -401,67 +318,135 @@ pub fn mean(cards: &[RunScorecard]) -> BTreeMap<String, f64> {
     sums.into_iter().map(|(k, v)| (k, v / n)).collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::bundle::RunSource;
-    use crate::rewards::tests::{model, nudge, result};
-    use serde_json::json;
+/// Running state while [`RunScorecard::compute`] walks the steps.
+struct StepTally<'a> {
+    card: RunScorecard,
+    changed: std::collections::HashSet<&'a str>,
+    tokens_so_far: u64,
+    prompted: Option<u32>,
+    start: u64,
+}
 
-    #[test]
-    fn counts_waste_and_first_edit() {
-        let steps = vec![
-            model(1, &[("a", "read_file", json!({"path": "x"}))]),
-            result(2, 1, "a", "read_file", "x", "read", false),
-            nudge(3, "implement_now"),
-            model(4, &[("b", "edit_file", json!({"path": "x"}))]),
-            result(5, 4, "b", "edit_file", "x", "modify", true),
-            model(6, &[("c", "edit_file", json!({"path": "x"}))]),
-            result(7, 6, "c", "edit_file", "x", "modify", false),
-        ];
-        let rewards = crate::rewards::derive(&steps);
-        let meta = RunMeta::new("m", RunSource::Test);
-        let card = RunScorecard::compute(&meta, &steps, &rewards);
-        assert_eq!(card.model_calls, 3);
-        assert_eq!(card.failed_edits, 1);
-        assert_eq!(card.writes, 1);
-        assert_eq!(card.ms_to_first_edit, Some(6000));
-        assert_eq!(card.tokens_to_first_edit, Some(3300));
-        assert_eq!(card.decisions.get("steering/implement_now"), Some(&1));
-        assert_eq!(card.effects["implement_now"].rate(), Some(1.0));
+impl<'a> StepTally<'a> {
+    fn new(mut card: RunScorecard, steps: &[Step]) -> Self {
+        let start = steps.first().map_or(0, |s| s.at_ms);
+        card.wall_ms = steps.last().map_or(0, |s| s.at_ms.saturating_sub(start));
+        Self {
+            card,
+            changed: std::collections::HashSet::new(),
+            tokens_so_far: 0,
+            prompted: None,
+            start,
+        }
     }
 
-    #[test]
-    fn prices_each_call_by_its_model() {
-        let mut opus = model(1, &[]);
-        opus.policy.id = "claude-opus-5-5".into();
-        let mut haiku = model(2, &[]);
-        haiku.policy.id = "claude-haiku-5-5".into();
-        let mut local = model(3, &[]);
-        local.policy.id = "local/qwen3:4b".into();
-        let steps = vec![opus, haiku, local];
-        let card = RunScorecard::compute(&RunMeta::new("m", RunSource::Test), &steps, &[]);
-        // 1000 in + 100 out: opus $0.006, haiku $0.00015.
-        assert!((card.cost_usd - 0.006_15).abs() < 1e-9, "{}", card.cost_usd);
-        assert_eq!(card.unpriced_calls, 1);
-        assert!(mean(&[card])["cost_usd"] > 0.006);
+    fn finish(mut self) -> RunScorecard {
+        self.card.files_changed = self.changed.len();
+        self.card
     }
 
-    #[test]
-    fn diff_flags_regressions_past_tolerance() {
-        let base = RunScorecard {
-            model_calls: 10,
-            outcome: Some(1.0),
-            ..RunScorecard::default()
+    fn observe(&mut self, step: &'a Step) {
+        match &step.action {
+            StepAction::UserPrompt { .. } => {
+                if self.prompted.replace(step.turn) != Some(step.turn) {
+                    self.card.turns += 1;
+                }
+            }
+            StepAction::Model(_) => self.observe_model(step),
+            StepAction::ToolResult {
+                tool,
+                is_error,
+                source,
+                files,
+                ..
+            } => self.observe_tool_result(step, tool, *is_error, source, files),
+            StepAction::Harness { name, action, .. } => self.observe_harness(step, name, action),
+            StepAction::TurnEnd { stop_reason, .. } => {
+                self.card.stop_reasons.push(stop_reason.clone());
+                for f in &step.links.files {
+                    self.changed.insert(f.as_str());
+                }
+            }
+        }
+    }
+
+    fn observe_model(&mut self, step: &Step) {
+        let card = &mut self.card;
+        card.model_calls += 1;
+        card.model_ms += step.duration_ms.unwrap_or_default();
+        if let Some(u) = step.usage {
+            card.input_tokens += u.input;
+            card.output_tokens += u.output;
+            card.cache_read_tokens += u.cache_read;
+            card.cache_write_tokens += u.cache_write;
+            self.tokens_so_far += u.input + u.output + u.cache_read + u.cache_write;
+            match step_cost_usd(&step.policy.id, u) {
+                Some(cost) => card.cost_usd += cost,
+                None => card.unpriced_calls += 1,
+            }
+        }
+    }
+
+    fn observe_tool_result(
+        &mut self,
+        step: &Step,
+        tool: &str,
+        is_error: bool,
+        source: &str,
+        files: &'a [FileTouch],
+    ) {
+        let card = &mut self.card;
+        card.tool_calls += 1;
+        if is_error {
+            card.tool_errors += 1;
+        }
+        match source {
+            "blocked" => card.blocked_calls += 1,
+            "cache" => card.cache_hits += 1,
+            _ => {}
+        }
+        let intent = ToolIntent::classify(tool, &serde_json::Value::Null);
+        if intent == ToolIntent::Edit && is_error {
+            card.failed_edits += 1;
+        }
+        if !is_error {
+            for f in files {
+                if f.kind == "read" {
+                    card.reads += 1;
+                } else {
+                    card.writes += 1;
+                    self.changed.insert(f.path.as_str());
+                    if card.ms_to_first_edit.is_none() {
+                        card.ms_to_first_edit = Some(step.at_ms.saturating_sub(self.start));
+                        card.tokens_to_first_edit = Some(self.tokens_so_far);
+                    }
+                }
+            }
+        }
+    }
+
+    fn observe_harness(&mut self, step: &Step, name: &str, action: &HarnessAction) {
+        let card = &mut self.card;
+        let source = match step.actor {
+            Actor::Harness { source } => source.as_str(),
+            _ => "harness",
         };
-        let cand = RunScorecard {
-            model_calls: 12,
-            outcome: Some(1.0),
-            ..RunScorecard::default()
-        };
-        let d = diff(&base, &cand, 0.1);
-        assert_eq!(d.len(), 1);
-        assert!(d[0].regression);
-        assert!(!diff(&base, &cand, 0.5)[0].regression);
+        *card
+            .decisions
+            .entry(format!("{source}/{name}"))
+            .or_default() += 1;
+        match action {
+            HarnessAction::Compact { tier, .. } => {
+                *card.compactions.entry(tier.clone()).or_default() += 1;
+            }
+            HarnessAction::Retry { .. } => card.retries += 1,
+            HarnessAction::Block { .. } if step.parent.is_none() => {
+                card.blocked_calls += 1;
+            }
+            _ => {}
+        }
     }
 }
+
+#[cfg(test)]
+mod tests;

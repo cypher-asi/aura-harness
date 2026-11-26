@@ -224,6 +224,12 @@ impl ReplayConsumer {
             });
         }
 
+        let entries = self.scan_from_start(head_seq)?;
+        self.replay_entries(&entries)
+    }
+
+    /// Load every entry from `from_seq` (at least 1) through `head_seq`.
+    fn scan_from_start(&self, head_seq: u64) -> Result<Vec<RecordEntry>, ReplayError> {
         let start = self.from_seq.max(1);
         // The expected count fits in `usize` for any realistic agent
         // log; saturate to `usize::MAX` if a pathological head_seq
@@ -246,12 +252,16 @@ impl ReplayConsumer {
             entries = entries.len(),
             "replay sweep started"
         );
+        Ok(entries)
+    }
 
+    /// Validate each entry in order and collect the report.
+    fn replay_entries(&self, entries: &[RecordEntry]) -> Result<ReplayReport, ReplayError> {
         let mut replayed_seqs = Vec::with_capacity(entries.len());
         let mut decisions = Vec::with_capacity(entries.len());
         let mut final_state_hash = ContextHash::zero();
 
-        for entry in &entries {
+        for entry in entries {
             self.validate_entry(entry)?;
             self.resolve_snapshots(entry)?;
 

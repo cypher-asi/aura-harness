@@ -3,7 +3,7 @@
 
 use aura_context_compaction as compaction;
 use aura_exec_tools::todo::{render_todos, TodoItem};
-use aura_model::{ContentBlock, Message, ModelProvider};
+use aura_model::{ContentBlock, Message, ModelProvider, ModelResponse};
 use tokio_util::sync::CancellationToken;
 
 use super::config::AgentLoopConfig;
@@ -73,52 +73,74 @@ impl AgentLoop {
         let response = self
             .call_model(provider, request, None, cancellation_token)
             .await
-            .map_err(|e| match e {
-                _ if cancellation_token.is_some_and(CancellationToken::is_cancelled) => {
-                    CompactHistoryError::Cancelled
-                }
-                LlmCallError::InsufficientCredits(m)
-                | LlmCallError::Unauthorized(m)
-                | LlmCallError::PromptTooLong(m)
-                | LlmCallError::RateLimited(m)
-                | LlmCallError::Unavailable(m)
-                | LlmCallError::Fatal(m) => CompactHistoryError::Model(m),
-            })?;
+            .map_err(|e| compact_error_from_llm(e, cancellation_token))?;
 
-        let mut text = response
-            .message
-            .content
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        if text.trim().is_empty() {
-            return Err(CompactHistoryError::EmptySummary);
-        }
-        if !todos.is_empty() {
-            text.push_str("\n\nCurrent todo list (keep it updated with todo_write):\n");
-            text.push_str(&render_todos(todos));
-        }
-
-        let mut compacted = messages.to_vec();
-        let report = compaction::apply_message_summary(
-            &mut compacted,
-            compaction::SummaryOutput::Messages {
-                text,
-                compact_start: input.compact_start,
-                compact_end: input.compact_end,
-            },
-        );
-        if matches!(report.action, compaction::CompactionAction::None) {
-            return Err(CompactHistoryError::NotApplied);
-        }
-        Ok(CompactedHistory {
-            messages: compacted,
-            before_tokens: compaction::message_chars_to_tokens(report.before_chars),
-            after_tokens: compaction::message_chars_to_tokens(report.after_chars),
-        })
+        let text = summary_text_with_todos(&response, todos)?;
+        apply_compacted_summary(messages, &input, text)
     }
+}
+
+fn compact_error_from_llm(
+    e: LlmCallError,
+    cancellation_token: Option<&CancellationToken>,
+) -> CompactHistoryError {
+    match e {
+        _ if cancellation_token.is_some_and(CancellationToken::is_cancelled) => {
+            CompactHistoryError::Cancelled
+        }
+        LlmCallError::InsufficientCredits(m)
+        | LlmCallError::Unauthorized(m)
+        | LlmCallError::PromptTooLong(m)
+        | LlmCallError::RateLimited(m)
+        | LlmCallError::Unavailable(m)
+        | LlmCallError::Fatal(m) => CompactHistoryError::Model(m),
+    }
+}
+
+fn summary_text_with_todos(
+    response: &ModelResponse,
+    todos: &[TodoItem],
+) -> Result<String, CompactHistoryError> {
+    let mut text = response
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if text.trim().is_empty() {
+        return Err(CompactHistoryError::EmptySummary);
+    }
+    if !todos.is_empty() {
+        text.push_str("\n\nCurrent todo list (keep it updated with todo_write):\n");
+        text.push_str(&render_todos(todos));
+    }
+    Ok(text)
+}
+
+fn apply_compacted_summary(
+    messages: &[Message],
+    input: &compaction::SummaryInput,
+    text: String,
+) -> Result<CompactedHistory, CompactHistoryError> {
+    let mut compacted = messages.to_vec();
+    let report = compaction::apply_message_summary(
+        &mut compacted,
+        compaction::SummaryOutput::Messages {
+            text,
+            compact_start: input.compact_start,
+            compact_end: input.compact_end,
+        },
+    );
+    if matches!(report.action, compaction::CompactionAction::None) {
+        return Err(CompactHistoryError::NotApplied);
+    }
+    Ok(CompactedHistory {
+        messages: compacted,
+        before_tokens: compaction::message_chars_to_tokens(report.before_chars),
+        after_tokens: compaction::message_chars_to_tokens(report.after_chars),
+    })
 }

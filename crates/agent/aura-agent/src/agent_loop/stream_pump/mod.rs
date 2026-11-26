@@ -74,10 +74,9 @@
 //!   `expect()` calls that remain inside `#[cfg(test)]` are
 //!   intentional — test fixtures are exempt per Rule 4.1.
 
-use aura_model::{ModelProvider, ModelRequest, ModelResponse, PartialToolUse, ReasonerError};
+use aura_model::{ModelProvider, ModelRequest, ModelResponse, PartialToolUse};
 use tokio::sync::mpsc::Sender;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, warn};
 
 use crate::events::AgentLoopEvent;
 use crate::session::input_queue::InputQueue;
@@ -86,6 +85,7 @@ use crate::AgentError;
 
 use super::AgentLoopConfig;
 
+mod attempts;
 mod driver;
 mod retry;
 mod synthesize;
@@ -96,8 +96,8 @@ mod tests;
 pub(in crate::agent_loop) use driver::TOOL_INPUT_SNAPSHOT_INTERVAL;
 pub(in crate::agent_loop) use retry::stream_retry_params;
 
+use attempts::{Attempts, Opened};
 use driver::drive_stream;
-use retry::{effort_after_cut, reset_reason, update_partial_retry_state, PartialRetryState};
 
 /// Phase 8 context wrapper bundling the long-lived borrows that the
 /// streaming pump driver and its inner event-loop helpers all carry.
@@ -188,220 +188,40 @@ pub(super) async fn run_stream_pump(
     mut request: ModelRequest,
     state: &mut super::LoopState,
 ) -> StreamPumpOutcome {
-    let StreamPumpCtx {
-        cancellation_token,
-        event_tx,
-        ..
-    } = ctx;
     let model_name = request.model.as_ref().to_string();
-    let (max_retries, backoff_initial_ms, backoff_cap_ms) = stream_retry_params();
-    let mut retry_state: Option<PartialRetryState> = None;
-    let mut transport_error: Option<AgentError> = None;
-    let mut reset_bytes = (0, 0);
-    // How long the last failed attempt ran, and what ended it.
-    let mut last_cut = (std::time::Duration::ZERO, String::new());
+    let mut attempts = Attempts::new();
 
-    for attempt in 0..=max_retries {
-        if cancellation_token.is_some_and(CancellationToken::is_cancelled) {
+    for attempt in 0..=attempts.max_retries {
+        if ctx
+            .cancellation_token
+            .is_some_and(CancellationToken::is_cancelled)
+        {
             return StreamPumpOutcome::Cancelled;
         }
         if attempt > 0 {
-            if retry_state.is_none() && transport_error.is_none() {
-                // Every retry must carry the preceding failure.
-                // Reaching this arm without one is a partition
-                // contract violation; surface it as a fatal
-                // `LlmCallError` rather than panicking (Rule 4.1).
-                return StreamPumpOutcome::Error(AgentError::Reason(ReasonerError::Internal(
-                    "stream retry requested without an interrupted request".to_string(),
-                )));
+            if let Err(outcome) = attempts.prepare_retry(ctx, attempt, &mut request).await {
+                return outcome;
             }
-            let delay = aura_model::anthropic::exp_backoff_with_jitter(
-                attempt - 1,
-                backoff_initial_ms,
-                backoff_cap_ms,
-            );
-            // Saturating conversion: backoff is bounded by `backoff_cap_ms`
-            // (default 30s), so `delay.as_millis()` always fits in `u64`.
-            // The `unwrap_or(u64::MAX)` is purely defensive against a
-            // future cap raise.
-            let delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
-            if let Some(state) = retry_state.as_ref() {
-                warn!(
-                    attempt,
-                    max_attempts = max_retries,
-                    delay_ms,
-                    tool_use_id = %state.tool_use_id,
-                    tool_name = %state.tool_name,
-                    reason = %state.reason,
-                    "Per-tool-call streaming retry scheduled after pump stream abort"
-                );
-                emit_event(
-                    event_tx,
-                    AgentLoopEvent::ToolCallRetrying {
-                        tool_use_id: state.tool_use_id.clone(),
-                        tool_name: state.tool_name.clone(),
-                        attempt,
-                        max_attempts: max_retries,
-                        delay_ms,
-                        reason: state.reason.clone(),
-                    },
-                );
-            } else if let Some(err) = transport_error.as_ref() {
-                warn!(attempt, max_retries, delay_ms, error = %err, "Retrying interrupted model stream");
-                emit_event(
-                    event_tx,
-                    AgentLoopEvent::Progress {
-                        stage: "model_retrying".to_string(),
-                        tool_name: None,
-                        elapsed_ms: None,
-                        message: Some(format!(
-                            "Connection interrupted; retrying ({attempt}/{max_retries})"
-                        )),
-                    },
-                );
-            }
-            if let Some(token) = cancellation_token {
-                tokio::select! {
-                    biased;
-                    () = token.cancelled() => return StreamPumpOutcome::Cancelled,
-                    () = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {}
-                }
-            } else {
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            }
-            let (cut_after, error) = std::mem::take(&mut last_cut);
-            let lowered = effort_after_cut(request.thinking_effort, cut_after);
-            if lowered.is_some() {
-                request.thinking_effort = lowered;
-            }
-            let reason = reset_reason(cut_after, &error, lowered);
-            warn!(attempt, %reason, "Restarting the model response");
-            // Discard deltas from the failed attempt before displaying the
-            // fresh response. Never splice two independent generations.
-            emit_event(
-                event_tx,
-                AgentLoopEvent::StreamReset {
-                    reason,
-                    text_bytes: reset_bytes.0,
-                    thinking_bytes: reset_bytes.1,
-                },
-            );
         }
 
         let attempt_started = std::time::Instant::now();
-        let opened = if let Some(token) = cancellation_token {
-            tokio::select! {
-                biased;
-                () = token.cancelled() => return StreamPumpOutcome::Cancelled,
-                opened = provider.complete_response_stream(request.clone()) => opened,
-            }
-        } else {
-            provider.complete_response_stream(request.clone()).await
+        let stream = match attempts
+            .open(ctx, provider, &request, attempt_started)
+            .await
+        {
+            Opened::Stream(stream) => stream,
+            Opened::Retry => continue,
+            Opened::Cancelled => return StreamPumpOutcome::Cancelled,
+            Opened::Failed(err) => return StreamPumpOutcome::Error(AgentError::Reason(err)),
         };
-        let stream = match opened {
-            Ok(s) => s,
-            Err(ReasonerError::StreamAbortedWithPartial {
-                reason,
-                partial_tool_use,
-            }) => {
-                reset_bytes = (0, 0);
-                transport_error = None;
-                last_cut = (attempt_started.elapsed(), reason.clone());
-                retry_state = Some(update_partial_retry_state(
-                    retry_state,
-                    reason,
-                    partial_tool_use,
-                ));
-                continue;
-            }
-            Err(err @ (ReasonerError::Request(_) | ReasonerError::Timeout)) => {
-                reset_bytes = (0, 0);
-                retry_state = None;
-                last_cut = (attempt_started.elapsed(), err.to_string());
-                transport_error = Some(AgentError::Reason(err));
-                continue;
-            }
-            Err(err) => return StreamPumpOutcome::Error(AgentError::Reason(err)),
-        };
-
-        match drive_stream(ctx, stream, state, &model_name).await {
-            StreamPumpOutcome::AbortedWithPartial {
-                reason,
-                partial_tool_use,
-                text_bytes,
-                thinking_bytes,
-            } => {
-                reset_bytes = (text_bytes, thinking_bytes);
-                transport_error = None;
-                last_cut = (attempt_started.elapsed(), reason.clone());
-                retry_state = Some(update_partial_retry_state(
-                    retry_state,
-                    reason,
-                    partial_tool_use,
-                ));
-            }
-            StreamPumpOutcome::RetryableTransport {
-                error: err,
-                text_bytes,
-                thinking_bytes,
-            } => {
-                reset_bytes = (text_bytes, thinking_bytes);
-                retry_state = None;
-                last_cut = (attempt_started.elapsed(), err.to_string());
-                transport_error = Some(err);
-            }
-            StreamPumpOutcome::Completed {
-                response,
-                tool_results,
-            } => {
-                let duration_ms =
-                    u64::try_from(attempt_started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                super::streaming::emit_debug_llm_call(
-                    event_tx,
-                    provider.name(),
-                    &model_name,
-                    &response,
-                    duration_ms,
-                );
-                return StreamPumpOutcome::Completed {
-                    response,
-                    tool_results,
-                };
-            }
-            other => return other,
+        let outcome = drive_stream(ctx, stream, state, &model_name).await;
+        if let Some(outcome) = attempts.settle(ctx, provider, &model_name, attempt_started, outcome)
+        {
+            return outcome;
         }
     }
 
-    if let Some(err) = transport_error {
-        return StreamPumpOutcome::Error(err);
-    }
-
-    let state = retry_state.unwrap_or_else(|| PartialRetryState {
-        tool_use_id: "<unknown>".to_string(),
-        tool_name: "<unknown>".to_string(),
-        reason: "stream aborted while tool_use was in flight".to_string(),
-    });
-    error!(
-        attempts = max_retries,
-        tool_use_id = %state.tool_use_id,
-        tool_name = %state.tool_name,
-        reason = %state.reason,
-        "Per-tool-call streaming retry budget exhausted in pump; giving up"
-    );
-    emit_event(
-        event_tx,
-        AgentLoopEvent::ToolCallFailed {
-            tool_use_id: state.tool_use_id,
-            tool_name: state.tool_name,
-            reason: state.reason.clone(),
-        },
-    );
-    StreamPumpOutcome::Error(AgentError::Reason(
-        ReasonerError::StreamAbortedWithPartial {
-            reason: state.reason,
-            partial_tool_use: None,
-        },
-    ))
+    attempts.exhausted(ctx)
 }
 
 /// Drop an advisory event onto the inner agent-event channel.

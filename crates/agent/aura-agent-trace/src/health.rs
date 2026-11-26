@@ -200,7 +200,20 @@ pub fn check(trace: &RunTrace, now_ms: u64, slow_ms: u64) -> RunHealth {
         ended: ended_at.is_some(),
         ..RunHealth::default()
     };
-    let results: HashMap<&str, bool> = trace
+    let results = result_cancellations(trace);
+    for call in &timings {
+        record_call(&mut health, call, &results, until, slow_ms);
+    }
+    if !health.ended {
+        health.idle_ms = Some(now_ms.saturating_sub(last_activity_ms(trace)));
+    }
+    health.problems = problems(&health);
+    health
+}
+
+/// Whether each recorded tool result reports a cancellation, by call id.
+fn result_cancellations(trace: &RunTrace) -> HashMap<&str, bool> {
+    trace
         .steps
         .iter()
         .filter_map(|s| match &s.action {
@@ -211,56 +224,58 @@ pub fn check(trace: &RunTrace, now_ms: u64, slow_ms: u64) -> RunHealth {
             } => Some((tool_use_id.as_str(), excerpt.starts_with(CANCELLED))),
             _ => None,
         })
-        .collect();
+        .collect()
+}
 
-    for call in &timings {
-        if call.asked_for_approval() {
-            let wait_ms = call.decision_ms().unwrap_or_default();
-            if wait_ms >= slow_ms {
-                health.slow_approvals.push(ApprovalWait {
-                    tool_use_id: call.tool_use_id.clone(),
-                    tool: call.tool.clone(),
-                    wait_ms,
-                    verdict: call.verdict.clone(),
-                });
-            }
-        }
-        if call.is_open() {
-            let waiting_ms = until.saturating_sub(call.proposed_at_ms);
-            if health.ended || waiting_ms >= slow_ms {
-                health.open_calls.push(OpenCall {
-                    tool_use_id: call.tool_use_id.clone(),
-                    tool: call.tool.clone(),
-                    stage: call.stage().to_string(),
-                    waiting_ms,
-                    cancelled: results.get(call.tool_use_id.as_str()) == Some(&true),
-                });
-            }
-        }
-        if call.executed_at_ms.is_some() {
-            match results.get(call.tool_use_id.as_str()) {
-                None => health.unrecorded_results.push(call.tool_use_id.clone()),
-                Some(true) => health
-                    .ran_but_reported_cancelled
-                    .push(call.tool_use_id.clone()),
-                Some(false) => {}
-            }
+fn record_call(
+    health: &mut RunHealth,
+    call: &ToolCallTiming,
+    results: &HashMap<&str, bool>,
+    until: u64,
+    slow_ms: u64,
+) {
+    if call.asked_for_approval() {
+        let wait_ms = call.decision_ms().unwrap_or_default();
+        if wait_ms >= slow_ms {
+            health.slow_approvals.push(ApprovalWait {
+                tool_use_id: call.tool_use_id.clone(),
+                tool: call.tool.clone(),
+                wait_ms,
+                verdict: call.verdict.clone(),
+            });
         }
     }
-
-    if !health.ended {
-        let last = trace
-            .steps
-            .iter()
-            .map(|s| s.at_ms)
-            .chain(trace.records.iter().map(|r| r.at_ms))
-            .max()
-            .unwrap_or(trace.meta.started_at_ms);
-        health.idle_ms = Some(now_ms.saturating_sub(last));
+    if call.is_open() {
+        let waiting_ms = until.saturating_sub(call.proposed_at_ms);
+        if health.ended || waiting_ms >= slow_ms {
+            health.open_calls.push(OpenCall {
+                tool_use_id: call.tool_use_id.clone(),
+                tool: call.tool.clone(),
+                stage: call.stage().to_string(),
+                waiting_ms,
+                cancelled: results.get(call.tool_use_id.as_str()) == Some(&true),
+            });
+        }
     }
+    if call.executed_at_ms.is_some() {
+        match results.get(call.tool_use_id.as_str()) {
+            None => health.unrecorded_results.push(call.tool_use_id.clone()),
+            Some(true) => health
+                .ran_but_reported_cancelled
+                .push(call.tool_use_id.clone()),
+            Some(false) => {}
+        }
+    }
+}
 
-    health.problems = problems(&health);
-    health
+fn last_activity_ms(trace: &RunTrace) -> u64 {
+    trace
+        .steps
+        .iter()
+        .map(|s| s.at_ms)
+        .chain(trace.records.iter().map(|r| r.at_ms))
+        .max()
+        .unwrap_or(trace.meta.started_at_ms)
 }
 
 fn problems(health: &RunHealth) -> Vec<String> {

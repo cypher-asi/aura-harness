@@ -21,6 +21,7 @@ use crate::types::{
     AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo, ToolCallResult,
 };
 use crate::verify::run_build_command_with_timeout;
+use crate::verify::runner::{BuildResult, BuildRunnerError};
 use async_trait::async_trait;
 use aura_exec_tools::RunScratch;
 use std::collections::hash_map::DefaultHasher;
@@ -313,43 +314,8 @@ impl PostEditCheck {
                 let recovered = self.remember_failure(None).is_some();
                 (CheckOutcome::Passed { recovered }, String::new())
             }
-            Ok(build) => {
-                let combined = join_output(&build.stdout, &build.stderr);
-                let tail = tail(&combined);
-                let how = if build.timed_out {
-                    format!("timed out after {}s", self.config.timeout.as_secs())
-                } else {
-                    match build.exit_code {
-                        Some(code) => format!("failed with exit code {code}"),
-                        None => "was killed".to_string(),
-                    }
-                };
-                let outcome = CheckOutcome::Failed {
-                    exit_code: build.exit_code,
-                    timed_out: build.timed_out,
-                };
-                let message = format!(
-                    "Post-edit check `{}` ({}) {how}. Fix what your changes broke before moving \
-                     on. End of its output:\n\n```\n{tail}\n```",
-                    command.command,
-                    command.source.describe(),
-                );
-                self.failure(outcome, message, &tail, &command)
-            }
-            Err(e) => {
-                warn!(command = %command.command, error = %e, "Post-edit check could not run");
-                let message = format!(
-                    "Post-edit check `{}` ({}) could not be started: {e}",
-                    command.command,
-                    command.source.describe(),
-                );
-                self.failure(
-                    CheckOutcome::CouldNotRun(e.to_string()),
-                    message.clone(),
-                    &message,
-                    &command,
-                )
-            }
+            Ok(build) => self.failed_build(&build, &command),
+            Err(e) => self.could_not_run(&e, &command),
         };
 
         let passed = matches!(outcome, CheckOutcome::Passed { .. });
@@ -361,6 +327,51 @@ impl PostEditCheck {
             error_count: if passed { 0 } else { count_errors(&output) },
             output,
         })
+    }
+
+    /// Outcome and message for a check that ran and failed or timed out.
+    fn failed_build(&self, build: &BuildResult, command: &CheckCommand) -> (CheckOutcome, String) {
+        let combined = join_output(&build.stdout, &build.stderr);
+        let tail = tail(&combined);
+        let how = if build.timed_out {
+            format!("timed out after {}s", self.config.timeout.as_secs())
+        } else {
+            match build.exit_code {
+                Some(code) => format!("failed with exit code {code}"),
+                None => "was killed".to_string(),
+            }
+        };
+        let outcome = CheckOutcome::Failed {
+            exit_code: build.exit_code,
+            timed_out: build.timed_out,
+        };
+        let message = format!(
+            "Post-edit check `{}` ({}) {how}. Fix what your changes broke before moving \
+             on. End of its output:\n\n```\n{tail}\n```",
+            command.command,
+            command.source.describe(),
+        );
+        self.failure(outcome, message, &tail, command)
+    }
+
+    /// Outcome and message for a check whose command could not be started.
+    fn could_not_run(
+        &self,
+        e: &BuildRunnerError,
+        command: &CheckCommand,
+    ) -> (CheckOutcome, String) {
+        warn!(command = %command.command, error = %e, "Post-edit check could not run");
+        let message = format!(
+            "Post-edit check `{}` ({}) could not be started: {e}",
+            command.command,
+            command.source.describe(),
+        );
+        self.failure(
+            CheckOutcome::CouldNotRun(e.to_string()),
+            message.clone(),
+            &message,
+            command,
+        )
     }
 
     /// A failure's outcome and message, shortened when it repeats the

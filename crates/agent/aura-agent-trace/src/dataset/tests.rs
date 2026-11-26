@@ -1,7 +1,7 @@
 use super::*;
 use crate::bundle::RunMeta;
 use crate::rewards::tests::{base, model, nudge, result};
-use aura_core_types::trace::Reward;
+use aura_core_types::trace::{Actor, Reward, RewardKind, RewardTarget, StepAction};
 
 fn run(title: &str, outcome: Option<f64>, source: RunSource) -> RunTrace {
     let mut meta = RunMeta::new("m", source);
