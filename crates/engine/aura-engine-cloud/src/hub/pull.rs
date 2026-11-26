@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::delta::BranchFetch;
 use crate::fleet::MachineView;
 use crate::workspace::{self, Bundled};
-use crate::{delta, BootReporter, CloudError, CloudResult};
+use crate::{delta, BootReporter, CloudError, CloudResult, VmProvider};
 use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 
@@ -110,44 +110,28 @@ impl CloudHub {
         let machine = &view.machine.name;
         // The bundle leaves out what the hub last took; only while it
         // still has it.
-        let fetched = match placed.fetched_tip.clone() {
-            Some(tip) => {
-                let project = placed.project_dir.clone();
-                let check = tip.clone();
-                tokio::task::spawn_blocking(move || delta::has_commit(&project, &check))
-                    .await
-                    .unwrap_or(false)
-                    .then_some(tip)
-            }
-            None => None,
-        };
-        let script = workspace::bundle_branch(branch, fetched.as_deref())?;
-        let out = provider
-            .exec(machine, &script, None, GIT_SCRIPT_TIMEOUT)
-            .await?;
-        if !out.success() {
-            return Err(CloudError::ExecFailed {
-                machine: machine.clone(),
-                command: "bundle the agent's branch".into(),
-                exit_code: out.exit_code,
-                stderr: out.stderr_tail(400),
-            });
-        }
-        let commits = match workspace::parse_bundled(&out.stdout_text()) {
-            Some(Bundled::Nothing) => return Ok(CommitsOutcome::None),
-            Some(Bundled::Commits { commits, .. }) => commits,
-            None => {
-                return Err(CloudError::ExecFailed {
-                    machine: machine.clone(),
-                    command: "bundle the agent's branch".into(),
-                    exit_code: out.exit_code,
-                    stderr: "it did not say what it bundled".into(),
-                })
-            }
+        let fetched = still_here(placed).await;
+        let Some(commits) =
+            bundle_branch(provider.as_ref(), machine, branch, fetched.as_deref()).await?
+        else {
+            return Ok(CommitsOutcome::None);
         };
         let bytes = provider
             .download(machine, workspace::OUT_BUNDLE, delta::MAX_DELTA_BYTES)
             .await?;
+        let fetched = self.fetch_bundle(hex, placed, branch, bytes).await?;
+        Ok(self.branch_outcome(hex, branch.to_string(), commits, fetched))
+    }
+
+    /// Save the machine's bundle under `hex`'s folder and fetch `branch`
+    /// from it into the project.
+    async fn fetch_bundle(
+        &self,
+        hex: &str,
+        placed: &PlacedAgent,
+        branch: &str,
+        bytes: Vec<u8>,
+    ) -> CloudResult<BranchFetch> {
         let dir = self.home.join(hex);
         tokio::fs::create_dir_all(&dir)
             .await
@@ -165,23 +149,28 @@ impl CloudHub {
         )
         .await;
         let _ = tokio::fs::remove_file(&path).await;
-        let fetched = match fetched {
-            Ok(Ok(fetched)) => fetched?,
-            Ok(Err(err)) => {
-                return Err(CloudError::io(
-                    "fetch the agent's commits",
-                    std::io::Error::other(err.to_string()),
-                ))
-            }
-            Err(_) => {
-                return Err(CloudError::io(
-                    "fetch the agent's commits",
-                    std::io::Error::new(std::io::ErrorKind::TimedOut, "git fetch took too long"),
-                ))
-            }
-        };
-        let branch = branch.to_string();
-        Ok(match fetched {
+        match fetched {
+            Ok(Ok(fetched)) => fetched,
+            Ok(Err(err)) => Err(CloudError::io(
+                "fetch the agent's commits",
+                std::io::Error::other(err.to_string()),
+            )),
+            Err(_) => Err(CloudError::io(
+                "fetch the agent's commits",
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "git fetch took too long"),
+            )),
+        }
+    }
+
+    /// What fetching `branch` did; keeps the new tip when it moved.
+    fn branch_outcome(
+        &self,
+        hex: &str,
+        branch: String,
+        commits: u64,
+        fetched: BranchFetch,
+    ) -> CommitsOutcome {
+        match fetched {
             BranchFetch::Updated { tip } => {
                 if let Some(placed) = self.placements.lock().agents.get_mut(hex) {
                     placed.fetched_tip = Some(tip);
@@ -201,7 +190,7 @@ impl CloudHub {
                 ),
                 branch,
             },
-        })
+        }
     }
 
     pub(super) async fn apply_patch(
@@ -228,18 +217,7 @@ impl CloudHub {
                 reason: format!("could not save it: {err}"),
             };
         }
-        let applied = tokio::time::timeout(
-            LOCAL_GIT_TIMEOUT,
-            tokio::process::Command::new("git")
-                .arg("-C")
-                .arg(project)
-                .args(["apply", "--3way", "--whitespace=nowarn"])
-                .arg(&path)
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await;
-        match applied {
+        match git_apply(project, &path).await {
             Ok(Ok(out)) if out.status.success() => {
                 let _ = tokio::fs::remove_file(&path).await;
                 PatchOutcome::Applied { files }
@@ -262,4 +240,65 @@ impl CloudHub {
             },
         }
     }
+}
+
+/// `placed`'s last fetched tip, while the project here still has it.
+async fn still_here(placed: &PlacedAgent) -> Option<String> {
+    let tip = placed.fetched_tip.clone()?;
+    let project = placed.project_dir.clone();
+    let check = tip.clone();
+    tokio::task::spawn_blocking(move || delta::has_commit(&project, &check))
+        .await
+        .unwrap_or(false)
+        .then_some(tip)
+}
+
+/// Bundle `branch` on `machine`, leaving out `fetched`. Returns how many
+/// commits it bundled; `None` when there were none.
+async fn bundle_branch(
+    provider: &dyn VmProvider,
+    machine: &str,
+    branch: &str,
+    fetched: Option<&str>,
+) -> CloudResult<Option<u64>> {
+    let script = workspace::bundle_branch(branch, fetched)?;
+    let out = provider
+        .exec(machine, &script, None, GIT_SCRIPT_TIMEOUT)
+        .await?;
+    if !out.success() {
+        return Err(CloudError::ExecFailed {
+            machine: machine.to_string(),
+            command: "bundle the agent's branch".into(),
+            exit_code: out.exit_code,
+            stderr: out.stderr_tail(400),
+        });
+    }
+    match workspace::parse_bundled(&out.stdout_text()) {
+        Some(Bundled::Nothing) => Ok(None),
+        Some(Bundled::Commits { commits, .. }) => Ok(Some(commits)),
+        None => Err(CloudError::ExecFailed {
+            machine: machine.to_string(),
+            command: "bundle the agent's branch".into(),
+            exit_code: out.exit_code,
+            stderr: "it did not say what it bundled".into(),
+        }),
+    }
+}
+
+/// `git apply --3way` of the patch at `path` into `project`.
+async fn git_apply(
+    project: &Path,
+    path: &Path,
+) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(
+        LOCAL_GIT_TIMEOUT,
+        tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(project)
+            .args(["apply", "--3way", "--whitespace=nowarn"])
+            .arg(path)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
 }

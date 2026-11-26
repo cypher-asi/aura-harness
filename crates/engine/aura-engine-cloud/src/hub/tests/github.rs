@@ -2,15 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn a_project_on_github_gives_its_machine_a_repository_secret_and_the_bot() {
-    let (hub, fake, dir) = hub();
-    let tokens = Arc::new(crate::github::FakeRepoTokens::new("aura-agents"));
-    let repo = RepoRef {
-        owner: "acme".into(),
-        name: "proj".into(),
-    };
-    tokens.install(&repo, "ghs_secret", now_ms() + 3_600_000);
-    hub.set_repo_tokens(Some(tokens));
-
+    let (hub, fake, dir, repo) = github_hub();
     let project = dir.path().join("project");
     project_repo(&project, Some("git@github.com:acme/proj.git"));
     let share = hub
@@ -21,25 +13,7 @@ async fn a_project_on_github_gives_its_machine_a_repository_secret_and_the_bot()
     let secret = share.secret.clone().expect("secret");
     assert!(names::is_repo_secret(&secret), "{secret}");
     assert_eq!(fake.secret_value(&secret).as_deref(), Some("ghs_secret"));
-    let claim = CloudHub::git_claim(
-        Some("aura/scout-sc01"),
-        share.repo.as_ref(),
-        share.secret.clone(),
-        share.identity.as_ref(),
-    )
-    .expect("claim");
-    assert_eq!(claim.branch, "aura/scout-sc01");
-    assert_eq!(
-        claim.remote_url.as_deref(),
-        Some("https://github.com/acme/proj.git")
-    );
-    assert_eq!(claim.env.as_deref(), Some(secret.as_str()));
-    assert_eq!(claim.placeholder, None);
-    assert_eq!(claim.author_name.as_deref(), Some("aura-agents[bot]"));
-    assert_eq!(
-        claim.author_email.as_deref(),
-        Some("41000000+aura-agents[bot]@users.noreply.github.com")
-    );
+    assert_bot_claim(&share, &secret);
     assert!(hub.repo_status(&repo).is_some_and(|status| status.linked));
 
     // Not installed: the secret holds no token, and placing goes on.
@@ -81,8 +55,56 @@ async fn a_project_on_github_gives_its_machine_a_repository_secret_and_the_bot()
     assert_eq!(CloudHub::git_claim(None, Some(&repo), None, None), None);
 }
 
-#[tokio::test]
-async fn the_agents_commits_come_back_on_its_branch_once_each() {
+/// A hub whose GitHub App is installed on `acme/proj`.
+fn github_hub() -> (Arc<CloudHub>, FakeProvider, tempfile::TempDir, RepoRef) {
+    let (hub, fake, dir) = hub();
+    let tokens = Arc::new(crate::github::FakeRepoTokens::new("aura-agents"));
+    let repo = RepoRef {
+        owner: "acme".into(),
+        name: "proj".into(),
+    };
+    tokens.install(&repo, "ghs_secret", now_ms() + 3_600_000);
+    hub.set_repo_tokens(Some(tokens));
+    (hub, fake, dir, repo)
+}
+
+/// The node is told the branch, the repository and the bot it commits as.
+fn assert_bot_claim(share: &RepoShare, secret: &str) {
+    let claim = CloudHub::git_claim(
+        Some("aura/scout-sc01"),
+        share.repo.as_ref(),
+        share.secret.clone(),
+        share.identity.as_ref(),
+    )
+    .expect("claim");
+    assert_eq!(claim.branch, "aura/scout-sc01");
+    assert_eq!(
+        claim.remote_url.as_deref(),
+        Some("https://github.com/acme/proj.git")
+    );
+    assert_eq!(claim.env.as_deref(), Some(secret));
+    assert_eq!(claim.placeholder, None);
+    assert_eq!(claim.author_name.as_deref(), Some("aura-agents[bot]"));
+    assert_eq!(
+        claim.author_email.as_deref(),
+        Some("41000000+aura-agents[bot]@users.noreply.github.com")
+    );
+}
+
+/// A project and its agent's machine, whose branch has two commits the
+/// project lacks.
+struct BranchFixture {
+    hub: Arc<CloudHub>,
+    _dir: tempfile::TempDir,
+    project: PathBuf,
+    machine: PathBuf,
+    branch: &'static str,
+    tip: String,
+    agent: AgentId,
+    placed: PlacedAgent,
+}
+
+async fn branch_fixture() -> BranchFixture {
     let (hub, fake, dir) = hub();
     let project = dir.path().join("project");
     project_repo(&project, None);
@@ -105,8 +127,32 @@ async fn the_agents_commits_come_back_on_its_branch_once_each() {
     let tip = test_commit(&machine, "c.txt", "more agent work");
     run_scripts_in(&fake, &root, &machine);
     let agent = AgentId::new([1; 32]);
-    let hex = agent.to_hex();
     let placed = adopt_machine(&hub, &fake, agent, &project, Some(branch)).await;
+    BranchFixture {
+        hub,
+        _dir: dir,
+        project,
+        machine,
+        branch,
+        tip,
+        agent,
+        placed,
+    }
+}
+
+#[tokio::test]
+async fn the_agents_commits_come_back_on_its_branch_once_each() {
+    let BranchFixture {
+        hub,
+        _dir,
+        project,
+        machine,
+        branch,
+        tip,
+        agent,
+        placed,
+    } = branch_fixture().await;
+    let hex = agent.to_hex();
 
     assert_eq!(
         hub.fetch_commits(&hex, &placed).await,

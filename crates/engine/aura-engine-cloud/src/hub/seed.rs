@@ -7,6 +7,8 @@ use crate::snapshots::{self};
 use crate::workspace::{self, BranchStart};
 use crate::{boxd, delta, BootReporter, BootStage, CloudError, CloudResult};
 use aura_core_protocol::cloud::SyncImport;
+use aura_core_types::{AgentId, RecordEntry};
+use std::path::Path;
 
 use super::node_client::NODE_TIMEOUT;
 
@@ -72,64 +74,17 @@ impl CloudHub {
                     short_commit(snapshot_commit)
                 ),
                 None,
-                tokio::task::spawn_blocking(move || -> CloudResult<PackedProject> {
-                    let head = delta::head_commit(&dir)?;
-                    let bundle = if head == base {
-                        None
-                    } else {
-                        delta::bundle_since(&dir, &base)?
-                    };
-                    let changes = delta::collect(&dir, &head)?;
-                    let changed = changes.files.len() + changes.deleted.len();
-                    let archive = if changes.is_empty() {
-                        None
-                    } else {
-                        Some(delta::pack(&dir, &changes)?)
-                    };
-                    Ok(PackedProject {
-                        head,
-                        bundle,
-                        changed,
-                        archive,
-                    })
-                }),
+                tokio::task::spawn_blocking(move || pack_project(&dir, &base)),
             )
             .await
             .map_err(|err| {
                 CloudError::io("pack changes", std::io::Error::other(err.to_string()))
             })??;
         boot.fact("head", short_commit(&packed.head));
-        let has_bundle = packed.bundle.is_some();
-        match packed.bundle {
-            Some(bytes) => {
-                boot.fact(
-                    "commits",
-                    format!(
-                        "made since the snapshot, {} bundled",
-                        human_bytes(bytes.len() as u64)
-                    ),
-                );
-                self.upload_file(view, workspace::HEAD_BUNDLE, bytes, boot)
-                    .await?;
-            }
-            None => boot.fact("commits", "none since the snapshot"),
-        }
-        let has_delta = packed.archive.is_some();
-        match packed.archive {
-            Some(bytes) => {
-                boot.fact(
-                    "changes",
-                    format!(
-                        "{} uncommitted file(s), {} packed",
-                        packed.changed,
-                        human_bytes(bytes.len() as u64)
-                    ),
-                );
-                self.upload_file(view, workspace::DELTA_ARCHIVE, bytes, boot)
-                    .await?;
-            }
-            None => boot.fact("changes", "none uncommitted"),
-        }
+        let has_bundle = self.upload_commits(view, packed.bundle, boot).await?;
+        let has_delta = self
+            .upload_changes(view, packed.archive, packed.changed, boot)
+            .await?;
         let script = workspace::start_branch(&BranchStart {
             branch,
             head: &packed.head,
@@ -145,6 +100,56 @@ impl CloudHub {
             boot,
         )
         .await
+    }
+
+    /// Upload the bundle of commits made since the snapshot, if any.
+    /// Returns whether there was one.
+    async fn upload_commits(
+        &self,
+        view: &MachineView,
+        bundle: Option<Vec<u8>>,
+        boot: &BootReporter,
+    ) -> CloudResult<bool> {
+        let Some(bytes) = bundle else {
+            boot.fact("commits", "none since the snapshot");
+            return Ok(false);
+        };
+        boot.fact(
+            "commits",
+            format!(
+                "made since the snapshot, {} bundled",
+                human_bytes(bytes.len() as u64)
+            ),
+        );
+        self.upload_file(view, workspace::HEAD_BUNDLE, bytes, boot)
+            .await?;
+        Ok(true)
+    }
+
+    /// Upload the archive of `changed` uncommitted files, if any.
+    /// Returns whether there was one.
+    async fn upload_changes(
+        &self,
+        view: &MachineView,
+        archive: Option<Vec<u8>>,
+        changed: usize,
+        boot: &BootReporter,
+    ) -> CloudResult<bool> {
+        let Some(bytes) = archive else {
+            boot.fact("changes", "none uncommitted");
+            return Ok(false);
+        };
+        boot.fact(
+            "changes",
+            format!(
+                "{} uncommitted file(s), {} packed",
+                changed,
+                human_bytes(bytes.len() as u64)
+            ),
+        );
+        self.upload_file(view, workspace::DELTA_ARCHIVE, bytes, boot)
+            .await?;
+        Ok(true)
     }
 
     /// Upload `bytes` to `path` on the machine, showing progress.
@@ -227,10 +232,7 @@ impl CloudHub {
         boot: &BootReporter,
     ) -> CloudResult<()> {
         let node = self.node(&view.agent)?;
-        let head = self
-            .store
-            .get_head_seq(request.agent)
-            .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))?;
+        let head = self.local_head(request.agent)?;
         let remote = boot
             .wait(
                 BootStage::ImportRecord,
@@ -248,15 +250,7 @@ impl CloudHub {
                 from.saturating_sub(1).min(head),
                 head,
             );
-            let entries = if from > head {
-                Vec::new()
-            } else {
-                self.store
-                    .scan_record(request.agent, from, super::node_client::PAGE)
-                    .map_err(|e| {
-                        CloudError::io("read record", std::io::Error::other(e.to_string()))
-                    })?
-            };
+            let entries = self.record_page(request.agent, from, head)?;
             let count = entries.len() as u64;
             let done = from + count > head;
             let last = (from + count).saturating_sub(1);
@@ -282,4 +276,43 @@ impl CloudHub {
             from += count;
         }
     }
+
+    fn local_head(&self, agent: AgentId) -> CloudResult<u64> {
+        self.store
+            .get_head_seq(agent)
+            .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))
+    }
+
+    /// The page of `agent`'s record from `from`; empty past `head`.
+    fn record_page(&self, agent: AgentId, from: u64, head: u64) -> CloudResult<Vec<RecordEntry>> {
+        if from > head {
+            return Ok(Vec::new());
+        }
+        self.store
+            .scan_record(agent, from, super::node_client::PAGE)
+            .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))
+    }
+}
+
+/// The project in `dir` packed for a machine whose snapshot is at `base`.
+fn pack_project(dir: &Path, base: &str) -> CloudResult<PackedProject> {
+    let head = delta::head_commit(dir)?;
+    let bundle = if head == base {
+        None
+    } else {
+        delta::bundle_since(dir, base)?
+    };
+    let changes = delta::collect(dir, &head)?;
+    let changed = changes.files.len() + changes.deleted.len();
+    let archive = if changes.is_empty() {
+        None
+    } else {
+        Some(delta::pack(dir, &changes)?)
+    };
+    Ok(PackedProject {
+        head,
+        bundle,
+        changed,
+        archive,
+    })
 }

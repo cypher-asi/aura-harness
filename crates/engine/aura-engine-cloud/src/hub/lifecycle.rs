@@ -2,12 +2,12 @@
 //! and the fleet's timers.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use crate::cost::CostModel;
 use crate::fleet::VmFleet;
-use crate::github::{GithubApp, RepoTokens};
+use crate::github::{BotIdentity, GithubApp, RepoTokens};
 use crate::mesh::{Directory, MailBook};
 use crate::plans::SYNC_EVERY;
 use crate::repos::RepoSync;
@@ -21,7 +21,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::store::StoreLedger;
 
-use super::{choose_binary, io, load_placements, CloudHub, POLL_EVERY, TICK_EVERY, USAGE_EVERY};
+use super::{
+    choose_binary, io, load_placements, CloudHub, PlacedAgent, PlacementFile, POLL_EVERY,
+    TICK_EVERY, USAGE_EVERY,
+};
 
 impl CloudHub {
     /// A hub over `provider`, keeping its files in `home`
@@ -37,12 +40,7 @@ impl CloudHub {
         provider: Arc<dyn VmProvider>,
         binary: AuraBinary,
     ) -> CloudResult<Arc<Self>> {
-        std::fs::create_dir_all(&home).map_err(io(format!("create {}", home.display())))?;
-        let placements_path = home.join("placements.json");
-        let mut placements = load_placements(&placements_path);
-        if placements.install.is_empty() {
-            placements.install = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
-        }
+        let placements = open_placements(&home)?;
         let ledger = Arc::new(StoreLedger::new(Arc::clone(&store)));
         let settings =
             crate::fleet::FleetSettings::from_config(&config, placements.install.clone());
@@ -51,16 +49,9 @@ impl CloudHub {
             Arc::clone(&ledger) as Arc<dyn crate::fleet::VmLedger>,
             settings,
         ));
-        let tokens = config.github_app.clone().and_then(|app| match GithubApp::new(app) {
-            Ok(app) => Some(Arc::new(app) as Arc<dyn RepoTokens>),
-            Err(err) => {
-                tracing::warn!(error = %err, "the GitHub App can't be used; cloud agents get no GitHub access");
-                None
-            }
-        });
         let repos = Arc::new(RepoSync::new(
             Arc::clone(&provider),
-            tokens,
+            github_tokens(&config),
             placements.install.clone(),
         ));
         let snapshots = SnapshotBuilder::new(
@@ -150,50 +141,8 @@ impl CloudHub {
             if !keep.contains(hex) {
                 continue;
             }
-            let templates = self
-                .plan_sync()
-                .map(|plans| plans.templates(&agent.owner()))
-                .unwrap_or_default();
-            let git = Self::git_claim(
-                agent.branch.as_deref(),
-                agent.repo.as_ref(),
-                agent.repo.as_ref().map(|repo| repos.secret_name(repo)),
-                identity.as_ref(),
-            );
-            let adopted = boot
-                .wait(
-                    BootStage::Connect,
-                    format!("boxd is looking up {} ({})", agent.machine, agent.name),
-                    Some(boxd::CALL_TIMEOUT),
-                    self.fleet.adopt(
-                        hex,
-                        &agent.zns,
-                        &agent.project,
-                        &agent.machine,
-                        templates,
-                        git,
-                    ),
-                )
+            self.adopt_placed(hex, agent, &repos, identity.as_ref(), boot)
                 .await;
-            match adopted {
-                Ok(view) => {
-                    boot.log(
-                        BootStage::Connect,
-                        false,
-                        format!("{} is {}", agent.machine, view.state.label()),
-                    );
-                    self.place_in_directory(hex, agent, &view);
-                }
-                Err(err) => {
-                    tracing::warn!(agent = %hex, machine = %agent.machine, error = %err, "cloud machine is gone; the agent runs here again");
-                    boot.log(
-                        BootStage::Connect,
-                        true,
-                        format!("{} is gone; {} runs here again", agent.machine, agent.name),
-                    );
-                    self.placements.lock().agents.remove(hex);
-                }
-            }
         }
         self.save_placements();
         let owned: HashSet<String> = placed
@@ -201,12 +150,79 @@ impl CloudHub {
             .filter(|(hex, _)| keep.contains(hex))
             .map(|(hex, _)| hex.clone())
             .collect();
+        self.sweep_unowned(&owned, boot).await;
+        for (hex, _) in self.placed() {
+            self.open_link(&hex);
+        }
+        let hub = Arc::downgrade(self);
+        let stop = self.stop.clone();
+        tokio::spawn(async move { maintain(hub, stop).await });
+    }
+
+    /// Take back `hex`'s machine, or run it here again when the machine
+    /// is gone.
+    async fn adopt_placed(
+        &self,
+        hex: &str,
+        agent: &PlacedAgent,
+        repos: &RepoSync,
+        identity: Option<&BotIdentity>,
+        boot: &BootReporter,
+    ) {
+        let templates = self
+            .plan_sync()
+            .map(|plans| plans.templates(&agent.owner()))
+            .unwrap_or_default();
+        let git = Self::git_claim(
+            agent.branch.as_deref(),
+            agent.repo.as_ref(),
+            agent.repo.as_ref().map(|repo| repos.secret_name(repo)),
+            identity,
+        );
+        let adopted = boot
+            .wait(
+                BootStage::Connect,
+                format!("boxd is looking up {} ({})", agent.machine, agent.name),
+                Some(boxd::CALL_TIMEOUT),
+                self.fleet.adopt(
+                    hex,
+                    &agent.zns,
+                    &agent.project,
+                    &agent.machine,
+                    templates,
+                    git,
+                ),
+            )
+            .await;
+        match adopted {
+            Ok(view) => {
+                boot.log(
+                    BootStage::Connect,
+                    false,
+                    format!("{} is {}", agent.machine, view.state.label()),
+                );
+                self.place_in_directory(hex, agent, &view);
+            }
+            Err(err) => {
+                tracing::warn!(agent = %hex, machine = %agent.machine, error = %err, "cloud machine is gone; the agent runs here again");
+                boot.log(
+                    BootStage::Connect,
+                    true,
+                    format!("{} is gone; {} runs here again", agent.machine, agent.name),
+                );
+                self.placements.lock().agents.remove(hex);
+            }
+        }
+    }
+
+    /// Destroy this install's machines that no agent in `owned` owns.
+    async fn sweep_unowned(&self, owned: &HashSet<String>, boot: &BootReporter) {
         let swept = boot
             .wait(
                 BootStage::Connect,
                 "boxd is listing this install's machines, to destroy those no agent owns",
                 Some(boxd::CALL_TIMEOUT),
-                self.fleet.sweep_orphans(&owned),
+                self.fleet.sweep_orphans(owned),
             )
             .await;
         match swept {
@@ -228,12 +244,6 @@ impl CloudHub {
                 );
             }
         }
-        for (hex, _) in self.placed() {
-            self.open_link(&hex);
-        }
-        let hub = Arc::downgrade(self);
-        let stop = self.stop.clone();
-        tokio::spawn(async move { maintain(hub, stop).await });
     }
 
     /// Stop the timers and close every socket. Machines keep running and
@@ -244,6 +254,29 @@ impl CloudHub {
             link.stop.cancel();
         }
     }
+}
+
+/// The placements file in `home`, created with this install's id when
+/// there is none.
+fn open_placements(home: &Path) -> CloudResult<PlacementFile> {
+    std::fs::create_dir_all(home).map_err(io(format!("create {}", home.display())))?;
+    let placements_path = home.join("placements.json");
+    let mut placements = load_placements(&placements_path);
+    if placements.install.is_empty() {
+        placements.install = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
+    }
+    Ok(placements)
+}
+
+/// The GitHub App's tokens, when one is configured and usable.
+fn github_tokens(config: &CloudConfig) -> Option<Arc<dyn RepoTokens>> {
+    config.github_app.clone().and_then(|app| match GithubApp::new(app) {
+        Ok(app) => Some(Arc::new(app) as Arc<dyn RepoTokens>),
+        Err(err) => {
+            tracing::warn!(error = %err, "the GitHub App can't be used; cloud agents get no GitHub access");
+            None
+        }
+    })
 }
 
 /// The fleet's timers.

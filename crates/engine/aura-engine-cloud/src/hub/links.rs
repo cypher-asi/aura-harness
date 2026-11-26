@@ -12,11 +12,12 @@ use aura_core_types::AgentId;
 use aura_engine::{AgentHost, MessageKind, RemoteMail, RemoteRouter, ThreadId};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
 use super::node_client::NodeClient;
 
-use super::turn::{ws_request, ws_url};
+use super::turn::{ws_request, ws_url, NodeSink, NodeSocket, NodeStream};
 use super::{CloudHub, Link};
 
 impl CloudHub {
@@ -189,28 +190,15 @@ async fn run_link_socket(
     outbox: &mut mpsc::UnboundedReceiver<MeshFrame>,
     stop: &CancellationToken,
 ) {
-    use tokio_tungstenite::tungstenite::Message;
     let mut backoff = Duration::from_secs(1);
     loop {
         if stop.is_cancelled() {
             return;
         }
-        let Some(strong) = hub.upgrade() else { return };
-        let asleep = strong.fleet.view(hex).is_none_or(|v| v.state.is_asleep());
-        let node = strong.node(hex);
-        let project = strong.directory.holder(hex).map(|h| h.project);
-        drop(strong);
-        let node = match node {
-            Ok(node) if !asleep => node,
-            // Asleep or not claimed yet: a wake reopens the link.
-            _ => return,
+        let Some((node, project)) = link_target(hub, hex) else {
+            return;
         };
-        let url = ws_url(node.base(), "/v1/mesh");
-        let connected = match ws_request(&url, node.token()) {
-            Ok(request) => tokio_tungstenite::connect_async(request).await.ok(),
-            Err(_) => None,
-        };
-        let Some((socket, _)) = connected else {
+        let Some(socket) = connect_link(&node).await else {
             tokio::select! {
                 () = stop.cancelled() => return,
                 () = tokio::time::sleep(backoff) => {}
@@ -220,48 +208,126 @@ async fn run_link_socket(
         };
         backoff = Duration::from_secs(1);
         let (mut sink, mut stream) = socket.split();
-        let hello = MeshFrame::Hello {
-            node_id: HUB_NODE.into(),
-            protocol: MESH_PROTOCOL,
+        greet(&mut sink, hub, &node, project.as_deref()).await;
+        let link = LinkSocket {
+            hub,
+            hex,
+            sink: &mut sink,
+            stream: &mut stream,
         };
-        let _ = sink.send(Message::Text(hello.to_text().into())).await;
-        if let (Some(hub), Some(project)) = (hub.upgrade(), project.as_deref()) {
-            let frame = hub.directory.frame_for(node.node(), project);
-            let _ = sink.send(Message::Text(frame.to_text().into())).await;
+        if link.serve(outbox, stop).await == LinkEnd::Stop {
+            return;
         }
+    }
+}
+
+/// `hex`'s node and project, when its machine is awake and claimed.
+fn link_target(hub: &Weak<CloudHub>, hex: &str) -> Option<(NodeClient, Option<String>)> {
+    let strong = hub.upgrade()?;
+    let asleep = strong.fleet.view(hex).is_none_or(|v| v.state.is_asleep());
+    let node = strong.node(hex);
+    let project = strong.directory.holder(hex).map(|h| h.project);
+    drop(strong);
+    match node {
+        Ok(node) if !asleep => Some((node, project)),
+        // Asleep or not claimed yet: a wake reopens the link.
+        _ => None,
+    }
+}
+
+async fn connect_link(node: &NodeClient) -> Option<NodeSocket> {
+    let url = ws_url(node.base(), "/v1/mesh");
+    let connected = match ws_request(&url, node.token()) {
+        Ok(request) => tokio_tungstenite::connect_async(request).await.ok(),
+        Err(_) => None,
+    };
+    connected.map(|(socket, _)| socket)
+}
+
+/// Say hello and send the project's directory.
+async fn greet(
+    sink: &mut NodeSink,
+    hub: &Weak<CloudHub>,
+    node: &NodeClient,
+    project: Option<&str>,
+) {
+    let hello = MeshFrame::Hello {
+        node_id: HUB_NODE.into(),
+        protocol: MESH_PROTOCOL,
+    };
+    let _ = sink.send(Message::Text(hello.to_text().into())).await;
+    if let (Some(hub), Some(project)) = (hub.upgrade(), project) {
+        let frame = hub.directory.frame_for(node.node(), project);
+        let _ = sink.send(Message::Text(frame.to_text().into())).await;
+    }
+}
+
+/// How a socket's session ended.
+#[derive(Debug, PartialEq, Eq)]
+enum LinkEnd {
+    /// The link is done.
+    Stop,
+    /// The socket broke; connect again.
+    Reconnect,
+}
+
+/// One connected socket to `hex`'s node.
+struct LinkSocket<'a> {
+    hub: &'a Weak<CloudHub>,
+    hex: &'a str,
+    sink: &'a mut NodeSink,
+    stream: &'a mut NodeStream,
+}
+
+impl LinkSocket<'_> {
+    /// Carry frames both ways until the socket breaks or the link stops.
+    async fn serve(
+        mut self,
+        outbox: &mut mpsc::UnboundedReceiver<MeshFrame>,
+        stop: &CancellationToken,
+    ) -> LinkEnd {
         loop {
             tokio::select! {
-                () = stop.cancelled() => return,
+                () = stop.cancelled() => return LinkEnd::Stop,
                 frame = outbox.recv() => {
-                    let Some(frame) = frame else { return };
-                    if sink.send(Message::Text(frame.to_text().into())).await.is_err() {
-                        break;
+                    let Some(frame) = frame else { return LinkEnd::Stop };
+                    if self.sink.send(Message::Text(frame.to_text().into())).await.is_err() {
+                        return LinkEnd::Reconnect;
                     }
                 }
-                message = stream.next() => {
-                    let Some(Ok(message)) = message else { break };
+                message = self.stream.next() => {
+                    let Some(Ok(message)) = message else { return LinkEnd::Reconnect };
                     let Message::Text(text) = message else { continue };
                     let Ok(frame) = MeshFrame::from_text(&text) else { continue };
-                    let Some(hub) = hub.upgrade() else { return };
-                    match frame {
-                        MeshFrame::Mail(mail) => {
-                            hub.fleet.touch(hex);
-                            let ack = hub.take_mail(&mail);
-                            let _ = sink.send(Message::Text(ack.to_text().into())).await;
-                        }
-                        MeshFrame::HostStats(stats) => hub.track(hex, stats),
-                        MeshFrame::RecordCommitted { .. } => {
-                            if let Ok(agent) = AgentId::from_hex(hex) {
-                                let _ = hub.mirror(agent).await;
-                            }
-                        }
-                        MeshFrame::Ping { ms } => {
-                            let _ = sink.send(Message::Text(MeshFrame::Pong { ms }.to_text().into())).await;
-                        }
-                        _ => {}
-                    }
+                    let Some(hub) = self.hub.upgrade() else { return LinkEnd::Stop };
+                    self.take_frame(&hub, frame).await;
                 }
             }
+        }
+    }
+
+    /// Act on one frame from the node.
+    async fn take_frame(&mut self, hub: &CloudHub, frame: MeshFrame) {
+        let hex = self.hex;
+        match frame {
+            MeshFrame::Mail(mail) => {
+                hub.fleet.touch(hex);
+                let ack = hub.take_mail(&mail);
+                let _ = self.sink.send(Message::Text(ack.to_text().into())).await;
+            }
+            MeshFrame::HostStats(stats) => hub.track(hex, stats),
+            MeshFrame::RecordCommitted { .. } => {
+                if let Ok(agent) = AgentId::from_hex(hex) {
+                    let _ = hub.mirror(agent).await;
+                }
+            }
+            MeshFrame::Ping { ms } => {
+                let _ = self
+                    .sink
+                    .send(Message::Text(MeshFrame::Pong { ms }.to_text().into()))
+                    .await;
+            }
+            _ => {}
         }
     }
 }

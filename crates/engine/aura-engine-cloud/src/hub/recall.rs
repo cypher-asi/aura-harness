@@ -9,7 +9,7 @@ use aura_core_types::{AgentId, Placement, PlacementPayload};
 use super::node_client::NodeClient;
 use super::store::{record_placement, StoreSink};
 
-use super::{CloudHub, CommitsOutcome, PatchOutcome, PullOutcome};
+use super::{CloudHub, CommitsOutcome, PatchOutcome, PlacedAgent, PullOutcome};
 
 impl CloudHub {
     /// Copy what `agent`'s node committed since the local head. Returns
@@ -89,53 +89,14 @@ impl CloudHub {
         let node = self.awake_node(&hex, boot).await?;
         let sealed = boot.run(BootStage::Seal, node.seal(agent)).await?;
         boot.fact("sealed at", format!("entry {}", sealed.head_seq));
-        boot.run(BootStage::CopyRecord, async {
-            let copied = self.mirror_from(&node, agent).await?;
-            boot.fact("copied", format!("{copied} new entries"));
-            let local = self
-                .store
-                .get_head_seq(agent)
-                .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))?;
-            boot.progress(
-                BootStage::CopyRecord,
-                local.min(sealed.head_seq),
-                sealed.head_seq,
-            );
-            if local < sealed.head_seq {
-                return Err(CloudError::Node {
-                    node: node.node().to_string(),
-                    op: "recall",
-                    message: format!("copied up to {local} of {} entries", sealed.head_seq),
-                });
-            }
-            Ok(())
-        })
+        boot.run(
+            BootStage::CopyRecord,
+            self.copy_rest(&node, agent, sealed.head_seq, boot),
+        )
         .await?;
         let outcome = boot
             .run(BootStage::PullChanges, async {
-                let patch = match node.patch().await {
-                    Ok(patch) => {
-                        self.apply_patch(&hex, &placed.project_dir, &patch.patch, patch.files)
-                            .await
-                    }
-                    Err(err) => PatchOutcome::Saved {
-                        path: self.home.join(&hex),
-                        reason: format!("could not read the machine's changes: {err}"),
-                    },
-                };
-                if let PatchOutcome::Applied { files } = &patch {
-                    for file in files {
-                        boot.log(BootStage::PullChanges, false, format!("M {file}"));
-                    }
-                }
-                boot.fact("changes", patch.describe());
-                let commits = self.fetch_commits(&hex, &placed).await;
-                if let Some(report) = commits.describe() {
-                    let kept = matches!(commits, CommitsOutcome::Kept { .. });
-                    boot.log(BootStage::PullChanges, kept, report.clone());
-                    boot.fact("commits", report);
-                }
-                Ok::<_, CloudError>(PullOutcome { patch, commits })
+                Ok::<_, CloudError>(self.pull_back(&node, &hex, &placed, boot).await)
             })
             .await?;
         record_placement(
@@ -148,9 +109,80 @@ impl CloudHub {
             ),
         )?;
         self.forget_placement(&hex, &placed.project);
+        self.destroy_recalled(&hex, &placed, reason, boot).await?;
+        Ok(outcome)
+    }
+
+    /// Copy the rest of `agent`'s record from its sealed node, up to
+    /// `sealed_head`.
+    async fn copy_rest(
+        &self,
+        node: &NodeClient,
+        agent: AgentId,
+        sealed_head: u64,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
+        let copied = self.mirror_from(node, agent).await?;
+        boot.fact("copied", format!("{copied} new entries"));
+        let local = self
+            .store
+            .get_head_seq(agent)
+            .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))?;
+        boot.progress(BootStage::CopyRecord, local.min(sealed_head), sealed_head);
+        if local < sealed_head {
+            return Err(CloudError::Node {
+                node: node.node().to_string(),
+                op: "recall",
+                message: format!("copied up to {local} of {sealed_head} entries"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Pull the recalled agent's changes and commits into the project.
+    async fn pull_back(
+        &self,
+        node: &NodeClient,
+        hex: &str,
+        placed: &PlacedAgent,
+        boot: &BootReporter,
+    ) -> PullOutcome {
+        let patch = match node.patch().await {
+            Ok(patch) => {
+                self.apply_patch(hex, &placed.project_dir, &patch.patch, patch.files)
+                    .await
+            }
+            Err(err) => PatchOutcome::Saved {
+                path: self.home.join(hex),
+                reason: format!("could not read the machine's changes: {err}"),
+            },
+        };
+        if let PatchOutcome::Applied { files } = &patch {
+            for file in files {
+                boot.log(BootStage::PullChanges, false, format!("M {file}"));
+            }
+        }
+        boot.fact("changes", patch.describe());
+        let commits = self.fetch_commits(hex, placed).await;
+        if let Some(report) = commits.describe() {
+            let kept = matches!(commits, CommitsOutcome::Kept { .. });
+            boot.log(BootStage::PullChanges, kept, report.clone());
+            boot.fact("commits", report);
+        }
+        PullOutcome { patch, commits }
+    }
+
+    /// Destroy the recalled agent's machine and settle its usage.
+    async fn destroy_recalled(
+        &self,
+        hex: &str,
+        placed: &PlacedAgent,
+        reason: &str,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
         let destroyed = boot
             .run(BootStage::Destroy, async {
-                Ok::<_, CloudError>(self.fleet.destroy(&hex, reason).await)
+                Ok::<_, CloudError>(self.fleet.destroy(hex, reason).await)
             })
             .await?;
         match destroyed {
@@ -174,7 +206,7 @@ impl CloudHub {
                 );
             }
         }
-        Ok(outcome)
+        Ok(())
     }
 
     fn forget_placement(&self, hex: &str, project: &str) {
