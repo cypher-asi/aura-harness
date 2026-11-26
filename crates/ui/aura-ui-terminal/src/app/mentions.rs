@@ -82,7 +82,7 @@ fn member_matches(
 
 /// What `member` is in a channel coordinated by `coordinator_id`: its
 /// agents sit beside the coordinator at depth 0, subagents below them.
-fn member_role(member: &AgentSummary, coordinator_id: &str) -> &'static str {
+pub(in crate::app) fn member_role(member: &AgentSummary, coordinator_id: &str) -> &'static str {
     if member.id == coordinator_id {
         "coordinator"
     } else if member.depth == 0 {

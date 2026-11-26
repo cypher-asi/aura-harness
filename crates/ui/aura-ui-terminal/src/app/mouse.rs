@@ -298,7 +298,7 @@ impl App {
                     PanelFocus::Records => self.click_records_panel(mouse.column, mouse.row),
                     PanelFocus::Chat => {
                         if self.detail_close_at(mouse.column, mouse.row) {
-                            self.close_detail();
+                            self.close_chat_view();
                             self.clear_selection();
                         } else if contains(self.areas.chat_expand, mouse.column, mouse.row) {
                             self.toggle_chat_expanded();

@@ -16,7 +16,8 @@
 //! - The session putting on screen an agent that is not a member of the
 //!   open channel (a notification jumping to it, say) is the user going
 //!   to that agent: the panel moves to PROJECTS (ARCHIVE for an archived
-//!   agent) with it on screen.
+//!   agent) with it on screen. A member on screen keeps the channel open
+//!   and shows its own chat (see `channel_member_chat`).
 //!
 //! The list's rows are the channels, then "+ New channel" (index
 //! `channels.len()`), which the panel pins to its bottom row. Enter or a
@@ -218,9 +219,14 @@ impl App {
     }
 
     /// The chat panel's title in the channel app: `#slug`, with the
-    /// channel's title as its info. `None` with no channel open.
+    /// channel's title as its info, or a member's name over its own
+    /// chat (see [`Self::member_chat_title`]). `None` with no channel
+    /// open.
     #[must_use]
     pub(crate) fn channel_chat_title(&self) -> Option<(String, String)> {
+        if let Some(title) = self.member_chat_title() {
+            return Some(title);
+        }
         self.open_channel()
             .map(|channel| (format!("#{}", channel.slug), channel.title.clone()))
     }
@@ -231,6 +237,9 @@ impl App {
     pub(crate) fn channel_placeholder(&self) -> Option<String> {
         if !self.channel_app() {
             return None;
+        }
+        if let Some(member) = self.member_chat() {
+            return Some(format!("Message {}", member.name));
         }
         Some(self.open_channel().map_or_else(
             || "Pick a channel".to_string(),
@@ -282,7 +291,7 @@ impl App {
     }
 
     /// Put CHAT on the chat panel, with nothing covering it.
-    fn show_channel_chat(&mut self) {
+    pub(in crate::app) fn show_channel_chat(&mut self) {
         self.close_detail();
         if self.chat_tab() != ChatTab::Chat {
             self.show_chat_tab(ChatTab::Chat);
@@ -419,6 +428,7 @@ impl App {
     }
 
     pub(in crate::app) fn set_channels(&mut self, list: Vec<ChannelSummary>) {
+        let member_chat_was_open = self.member_chat().is_some();
         self.channels.list = list;
         let gone = self
             .channels
@@ -439,6 +449,7 @@ impl App {
         let members = self.channels.open_members();
         self.channels.member_selected =
             self.channels.member_selected.min(members.saturating_sub(1));
+        self.leave_dropped_member_chat(member_chat_was_open);
         if self.channel_app() && !self.channel_open() {
             if let Some(id) = self.channel_to_show() {
                 self.open_channel_by_id(&id);
@@ -616,8 +627,8 @@ impl App {
         (index < state.open_members()).then_some(index)
     }
 
-    /// Highlight member row `index` (clamped). Members only show; going
-    /// to a member's own chat would leave the channel app.
+    /// Highlight member row `index` (clamped). Opening a member's chat
+    /// is [`Self::open_channel_member`]'s.
     pub(in crate::app) fn select_channel_member(&mut self, index: usize) {
         self.channels.set_member_selected(index);
     }
@@ -628,14 +639,16 @@ impl App {
         self.channels.set_member_selected(row);
     }
 
-    /// Clicking a member row highlights it.
+    /// Clicking a member row highlights it and opens the member's chat,
+    /// or the channel's on the coordinator's row.
     pub(in crate::app) fn click_channel_member(&mut self, column: u16, row: u16) {
         if let Some(index) = self.channel_member_row_at(column, row) {
-            self.select_channel_member(index);
+            self.open_channel_member(index);
         }
     }
 
-    /// Keys of the MEMBERS side tab, which move its highlight.
+    /// Keys of the MEMBERS side tab, which move its highlight; Enter
+    /// opens the highlighted member's chat, as a click does.
     pub(in crate::app) fn handle_channel_members_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Up => self.move_channel_member(-1),
@@ -644,6 +657,7 @@ impl App {
             KeyCode::PageDown => self.move_channel_member(SIDE_PAGE),
             KeyCode::Home => self.select_channel_member(0),
             KeyCode::End => self.select_channel_member(usize::MAX),
+            KeyCode::Enter => self.open_channel_member(self.channels.member_selected),
             _ => {}
         }
     }

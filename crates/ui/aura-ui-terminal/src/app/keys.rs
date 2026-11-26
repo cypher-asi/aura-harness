@@ -389,6 +389,9 @@ impl App {
         if let Some(result) = self.handle_queue_key(key) {
             return result;
         }
+        if self.esc_closes_member_chat(key) {
+            return KeyResult::continue_running();
+        }
         if self.toggle_terminal_mode(key) {
             return KeyResult::continue_running();
         }

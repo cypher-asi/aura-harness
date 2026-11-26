@@ -175,11 +175,11 @@ impl App {
     }
 
     /// Close what covers `pane` and focus it, as its bar's close button
-    /// does.
+    /// does: on the chat, a view over it, else a channel member's chat.
     pub fn close_pane_view(&mut self, pane: Pane) {
         self.focus_pane(pane);
         if pane == Pane::Chat {
-            self.close_detail();
+            self.close_chat_view();
         }
     }
 

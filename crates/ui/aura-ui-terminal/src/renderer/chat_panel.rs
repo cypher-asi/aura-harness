@@ -43,7 +43,9 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
             cell,
         })
     };
-    if let Some((title, info)) = detail_header(app, theme) {
+    if let Some((title, info)) =
+        detail_header(app, theme).or_else(|| member_chat_header(app, theme))
+    {
         let expand = expand(header::expand_cell(bar, true));
         if !hosted {
             app.set_detail_close_area(header::close_cell(bar));
@@ -172,6 +174,27 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     app.set_chat_scrollbar(scrollbar, frame.buffer_mut());
     let below = app.scroll_offset().saturating_sub(rows.padding);
     render_lines_below_hint(frame, area, below, theme);
+}
+
+/// The chat panel's header over a channel member's own chat: the
+/// member's name, its code, role and the channel's `#slug`, and the close
+/// button that goes back to the channel's chat. `None` elsewhere.
+///
+/// ```text
+/// │ Reviewer           RE36 · agent · #zode ✕ │
+/// ```
+fn member_chat_header(app: &App, theme: &Theme) -> Option<(String, Option<HeaderInfo>)> {
+    let (name, about) = app.member_chat_title()?;
+    let short = app
+        .member_chat()
+        .and_then(|member| member.code.clone())
+        .unwrap_or_default();
+    let info = HeaderInfo {
+        text: about,
+        short,
+        color: theme.colors.muted,
+    };
+    Some((name, Some(info)))
 }
 
 /// The scrollbar [`render_scrollbar`] draws on the chat panel `panel`
