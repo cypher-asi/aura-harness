@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::MessageRole;
 
 /// `turns` prompts, each answered with a tool call, a notice and a
 /// reply that has a list, code and a footer.
