@@ -241,7 +241,6 @@ crates/ui/aura-ui-terminal/src/renderer/plan_doc.rs
 crates/ui/aura-ui-terminal/src/renderer/run_log.rs
 crates/ui/aura-ui-terminal/src/renderer/tests.rs
 crates/ui/aura-ui-terminal/src/terminal.rs
-crates/ui/aura-ui-terminal/tests/chat_load_perf.rs
 evals/polyglot/rust-xorcism/checks/.gate_checks/xorcism.rs
 tests/async_process_tests.rs
 tests/common/mod.rs
