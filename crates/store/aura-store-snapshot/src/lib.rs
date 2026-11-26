@@ -32,6 +32,7 @@
 //!   matches, but the stub does not.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
