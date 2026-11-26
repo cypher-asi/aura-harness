@@ -3,6 +3,7 @@
 
 mod lifecycle;
 mod messaging;
+mod outcome;
 mod run;
 mod spawn;
 mod task;

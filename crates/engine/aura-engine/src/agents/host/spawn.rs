@@ -4,11 +4,13 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
+use aura_agent::AgentLoopConfig;
 use aura_agent_kernel::{ChildAgentSpec, SpawnHook, SpawnOutcome};
-use aura_agent_kernel::{KernelSpawnHook, PolicyConfig};
+use aura_agent_kernel::{ExecutorRouter, KernelSpawnHook, PolicyConfig};
 use aura_core_types::{
     AgentId, AgentMode, AgentPermissions, AgentToolPermissions, Transaction, TransactionType,
 };
+use aura_model::ToolDefinition;
 use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -19,6 +21,13 @@ use crate::agents::inbox::MessageKind;
 use crate::agents::setup;
 
 use super::{write_observed, AgentEntry, AgentEnv, Body, HostInner, RunSetup, ThreadChoice};
+
+/// A child's loop settings and tools, before it joins the table.
+struct ChildRuntime {
+    loop_config: AgentLoopConfig,
+    router: ExecutorRouter,
+    tools: Vec<ToolDefinition>,
+}
 
 impl HostInner {
     // ------------------------------------------------------------------
@@ -39,6 +48,41 @@ impl HostInner {
                 "agent {parent} is not registered with the agent host"
             ));
         };
+        self.check_spawn_allowed(&parent_entry, &child)?;
+
+        let child_id = child.preassigned_agent_id.unwrap_or_else(AgentId::generate);
+        if self.agents.lock().contains_key(&child_id) {
+            return Err(format!("agent {child_id} already exists"));
+        }
+        let plan = self.spawn_plan(parent, &parent_entry, &child, child_id);
+        let outcome = self
+            .create_child(plan, &parent_entry, None, originating_user_id)
+            .await?;
+
+        if let Some(prompt) = initial_prompt.filter(|p| !p.trim().is_empty()) {
+            let envelope = self.envelope(
+                Some(parent),
+                child_id,
+                MessageKind::Request,
+                prompt,
+                ThreadChoice::New,
+            );
+            self.enqueue(child_id, envelope)?;
+        }
+        Ok(SpawnOutcome {
+            child_agent_id: child_id,
+            external_agent_id: Some(child_id.to_hex()),
+            delegate_tx_hash: outcome.delegate_tx_hash,
+        })
+    }
+
+    /// Whether `parent_entry` may spawn `child` now: its mode, its
+    /// permissions, the depth limit and the running limit.
+    fn check_spawn_allowed(
+        &self,
+        parent_entry: &ParentSnapshot,
+        child: &ChildAgentSpec,
+    ) -> Result<(), String> {
         if !parent_entry.mode.allows_spawn() {
             return Err(format!(
                 "{:?} mode does not allow spawning agents",
@@ -61,11 +105,18 @@ impl HostInner {
                 self.config.max_running
             ));
         }
+        Ok(())
+    }
 
-        let child_id = child.preassigned_agent_id.unwrap_or_else(AgentId::generate);
-        if self.agents.lock().contains_key(&child_id) {
-            return Err(format!("agent {child_id} already exists"));
-        }
+    /// The plan for a `spawn_agent` child: the parent's mode and model,
+    /// the child's own permissions and prompt.
+    fn spawn_plan(
+        &self,
+        parent: AgentId,
+        parent_entry: &ParentSnapshot,
+        child: &ChildAgentSpec,
+        child_id: AgentId,
+    ) -> ChildPlan {
         let tool_permissions = child
             .tool_permissions
             .clone()
@@ -83,7 +134,7 @@ impl HostInner {
             &parent_entry.env.user_tool_defaults,
             parent_entry.mode,
         );
-        let plan = ChildPlan {
+        ChildPlan {
             child_id,
             parent,
             name: child.name.clone(),
@@ -99,26 +150,7 @@ impl HostInner {
             iteration_cap: None,
             timeout: None,
             policy,
-        };
-        let outcome = self
-            .create_child(plan, &parent_entry, None, originating_user_id)
-            .await?;
-
-        if let Some(prompt) = initial_prompt.filter(|p| !p.trim().is_empty()) {
-            let envelope = self.envelope(
-                Some(parent),
-                child_id,
-                MessageKind::Request,
-                prompt,
-                ThreadChoice::New,
-            );
-            self.enqueue(child_id, envelope)?;
         }
-        Ok(SpawnOutcome {
-            child_agent_id: child_id,
-            external_agent_id: Some(child_id.to_hex()),
-            delegate_tx_hash: outcome.delegate_tx_hash,
-        })
     }
 
     // ------------------------------------------------------------------
@@ -152,47 +184,73 @@ impl HostInner {
         let originating_user_id = originating_user_id
             .map(ToString::to_string)
             .or_else(|| parent.env.originating_user_id.clone());
-        let outcome = {
-            let lock = self.parent_lock(plan.parent);
-            let _guard = lock.lock().await;
-            if let Some(record) = spawn_record {
-                let tx = Transaction::new_chained(
-                    plan.parent,
-                    TransactionType::SubagentSpawn,
-                    Bytes::from(record.to_string().into_bytes()),
-                    None,
-                );
-                write_observed(
-                    &self.store,
-                    self.scheduler.record_observer(),
-                    plan.parent,
-                    &tx,
-                )
-                .map_err(|e| format!("spawn record: {e}"))?;
-            }
-            KernelSpawnHook::new(self.store.clone())
-                .spawn_child(
-                    &plan.parent,
-                    originating_user_id.as_deref(),
-                    ChildAgentSpec {
-                        name: plan.name.clone(),
-                        role: plan.role.clone(),
-                        permissions: plan.permissions.clone(),
-                        tool_permissions: Some(plan.tool_permissions.clone()),
-                        parent_tool_permissions: parent.tool_permissions.clone(),
-                        system_prompt_override: Some(plan.system_prompt.clone()),
-                        preassigned_agent_id: Some(plan.child_id),
-                        initial_prompt: None,
-                    },
-                )
-                .await
-                .map_err(|e| format!("spawn child: {e}"))?
-        };
+        let outcome = self
+            .write_spawn_records(&plan, parent, spawn_record, originating_user_id.as_deref())
+            .await?;
 
         let mut chain = Vec::with_capacity(parent.chain.len() + 1);
         chain.push(plan.parent);
         chain.extend(parent.chain.iter().copied());
 
+        let loop_config = self.child_loop_config(&plan);
+        let (router, tools) = self.child_tools(&plan, parent, &chain, originating_user_id);
+        let runtime = ChildRuntime {
+            loop_config,
+            router,
+            tools,
+        };
+        self.insert_child(plan, parent, chain, runtime);
+        Ok(outcome)
+    }
+
+    /// Under the parent's spawn lock, append the `SubagentSpawn` audit
+    /// row (when there is one) and create the child's record.
+    async fn write_spawn_records(
+        &self,
+        plan: &ChildPlan,
+        parent: &ParentSnapshot,
+        spawn_record: Option<serde_json::Value>,
+        originating_user_id: Option<&str>,
+    ) -> Result<SpawnOutcome, String> {
+        let lock = self.parent_lock(plan.parent);
+        let _guard = lock.lock().await;
+        if let Some(record) = spawn_record {
+            let tx = Transaction::new_chained(
+                plan.parent,
+                TransactionType::SubagentSpawn,
+                Bytes::from(record.to_string().into_bytes()),
+                None,
+            );
+            write_observed(
+                &self.store,
+                self.scheduler.record_observer(),
+                plan.parent,
+                &tx,
+            )
+            .map_err(|e| format!("spawn record: {e}"))?;
+        }
+        KernelSpawnHook::new(self.store.clone())
+            .spawn_child(
+                &plan.parent,
+                originating_user_id,
+                ChildAgentSpec {
+                    name: plan.name.clone(),
+                    role: plan.role.clone(),
+                    permissions: plan.permissions.clone(),
+                    tool_permissions: Some(plan.tool_permissions.clone()),
+                    parent_tool_permissions: parent.tool_permissions.clone(),
+                    system_prompt_override: Some(plan.system_prompt.clone()),
+                    preassigned_agent_id: Some(plan.child_id),
+                    initial_prompt: None,
+                },
+            )
+            .await
+            .map_err(|e| format!("spawn child: {e}"))
+    }
+
+    /// Register the child's identity (from its parent's, with the plan's
+    /// model and prompt) and build its loop settings.
+    fn child_loop_config(&self, plan: &ChildPlan) -> AgentLoopConfig {
         let identity = self
             .scheduler
             .identity_registry()
@@ -218,13 +276,23 @@ impl HostInner {
         if let Some(cap) = plan.iteration_cap {
             loop_config.max_iterations = loop_config.max_iterations.min(cap as usize);
         }
+        loop_config
+    }
 
+    /// Build the child's kernel tools and attach the host's hooks to them.
+    fn child_tools(
+        self: &Arc<Self>,
+        plan: &ChildPlan,
+        parent: &ParentSnapshot,
+        chain: &[AgentId],
+        originating_user_id: Option<String>,
+    ) -> (ExecutorRouter, Vec<ToolDefinition>) {
         let request = ChildKernelRequest {
             child_agent_id: plan.child_id,
             permissions: plan.permissions.clone(),
             tool_permissions: plan.tool_permissions.clone(),
             user_tool_defaults: parent.env.user_tool_defaults.clone(),
-            parent_chain: chain.clone(),
+            parent_chain: chain.to_vec(),
             originating_user_id: originating_user_id.clone(),
             model_id: plan.model.clone(),
         };
@@ -237,7 +305,7 @@ impl HostInner {
                 parent.env.user_tool_defaults.clone(),
                 Some(plan.tool_permissions.clone()),
             )
-            .with_parent_chain(chain.clone());
+            .with_parent_chain(chain.to_vec());
         if let Some(user) = originating_user_id.filter(|u| !u.trim().is_empty()) {
             resolver = resolver.with_originating_user_id(user);
         }
@@ -248,13 +316,23 @@ impl HostInner {
         if let Some(allowed) = &plan.allowed_tools {
             tools.retain(|tool| allowed.contains(&tool.name));
         }
+        (crate::executor::build_executor_router(resolver), tools)
+    }
 
+    /// Add the new child to the table as idle.
+    fn insert_child(
+        &self,
+        plan: ChildPlan,
+        parent: &ParentSnapshot,
+        chain: Vec<AgentId>,
+        runtime: ChildRuntime,
+    ) {
         let one_shot = plan.kind.is_some();
         let setup = RunSetup {
-            loop_config,
+            loop_config: runtime.loop_config,
             policy: plan.policy,
-            router: crate::executor::build_executor_router(resolver),
-            tools,
+            router: runtime.router,
+            tools: runtime.tools,
             timeout: plan.timeout,
         };
         info!(
@@ -289,7 +367,6 @@ impl HostInner {
                 },
             },
         );
-        Ok(outcome)
     }
 }
 

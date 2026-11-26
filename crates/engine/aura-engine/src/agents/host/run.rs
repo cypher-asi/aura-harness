@@ -8,15 +8,18 @@ use aura_agent::{AgentLoopEvent, AgentLoopResult};
 use aura_core_types::time::now_ms;
 use aura_core_types::{AgentId, SubagentExit, SubagentResult, Transaction};
 use aura_model::Message;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::agents::inbox::MessageKind;
 use crate::agents::mail::{MailMessage, ThreadId};
-use crate::agents::observer::{HostedTurn, TurnObserver};
+use crate::agents::observer::HostedTurn;
 use crate::scheduler::ScheduleOverrides;
 
+use super::outcome::{
+    cancelled, ended, failed, observe_end, observe_start, reply_text, RELAY_DRAIN,
+};
 use super::{Body, Envelope, HostInner, RunSetup, ThreadChoice};
 
 impl HostInner {
@@ -77,115 +80,142 @@ impl HostInner {
             model,
             parent,
         } = turn;
-        let Envelope {
+        let (answer, handles) = TurnAnswer::split(envelope, name);
+        let hosted = HostedTurn {
+            agent_id,
+            parent,
+            name: &answer.name,
+            model: &model,
+            prompt: &prompt,
+        };
+        let input = TurnInput {
+            prompt: &prompt,
+            history,
+            setup: &setup,
+            workspace,
+            events: handles.events,
+            cancel: handles.cancel,
+            stop: &stop,
+        };
+        let (result, messages) = self.observed_execute(&hosted, input).await;
+        let replier = self.record_turn_end(agent_id, &result, messages);
+        match handles.waiter {
+            Some(waiter) => self.answer_waiter(agent_id, answer, waiter, result),
+            None => self.route_answer(agent_id, answer, replier, &result),
+        }
+        if !self.retire_if_done(agent_id) {
+            self.pump(agent_id);
+        }
+    }
+
+    /// [`Self::execute`] the turn, telling the turn observer (if any)
+    /// when it starts and ends and relaying its events.
+    async fn observed_execute(
+        &self,
+        hosted: &HostedTurn<'_>,
+        mut input: TurnInput<'_>,
+    ) -> (SubagentResult, Option<Vec<Message>>) {
+        let agent_id = hosted.agent_id;
+        let observer = self.observer.lock().clone();
+        let (events, relay) = observe_start(observer.as_ref(), hosted, input.events.take());
+        input.events = events;
+        let ran = self.execute(agent_id, input).await;
+        if let Some(relay) = relay {
+            let _ = tokio::time::timeout(RELAY_DRAIN, relay).await;
+        }
+        observe_end(observer.as_ref(), agent_id, ran)
+    }
+
+    /// Mark the turn finished on the agent's entry and keep its history.
+    /// Returns the agent's parent and parent thread, or `None` when the
+    /// agent was stopped while the turn ran: the entry is gone and nobody
+    /// but a waiter should hear about it.
+    fn record_turn_end(
+        &self,
+        agent_id: AgentId,
+        result: &SubagentResult,
+        messages: Option<Vec<Message>>,
+    ) -> Option<Replier> {
+        let mut agents = self.agents.lock();
+        agents.get_mut(&agent_id).map(|entry| {
+            entry.running = false;
+            entry.turns += 1;
+            if !result.final_message.trim().is_empty() {
+                entry.last_reply = Some(result.final_message.clone());
+            }
+            if let (Some(messages), Body::Hosted { history, .. }) = (messages, &mut entry.body) {
+                *history = messages;
+            }
+            Replier {
+                parent: entry.parent(),
+                parent_thread: entry.parent_thread.clone(),
+            }
+        })
+    }
+
+    /// Hand a waiting `task` its result. That result never goes through
+    /// `enqueue`, so it is posted as mail here, before the parent hears it.
+    fn answer_waiter(
+        &self,
+        agent_id: AgentId,
+        answer: TurnAnswer,
+        waiter: oneshot::Sender<SubagentResult>,
+        result: SubagentResult,
+    ) {
+        if let Some(parent) = answer.from {
+            let to_name = self
+                .agents
+                .lock()
+                .get(&parent)
+                .map_or_else(|| "user".to_string(), |e| e.name.clone());
+            self.post_mail(MailMessage {
+                id: 0,
+                thread: answer.thread,
+                subject: answer.subject,
+                from: agent_id,
+                from_name: answer.name,
+                to: parent,
+                to_name,
+                kind: MessageKind::Reply,
+                text: reply_text(&result),
+                sent_ms: now_ms(),
+                subject_from_text: false,
+            });
+        }
+        let _ = waiter.send(result);
+    }
+
+    /// Send the turn's answer as a reply to wherever [`reply_route`] says.
+    fn route_answer(
+        self: &Arc<Self>,
+        agent_id: AgentId,
+        answer: TurnAnswer,
+        replier: Option<Replier>,
+        result: &SubagentResult,
+    ) {
+        let TurnAnswer {
             from,
             kind,
             thread,
             subject,
-            waiter,
-            events,
-            cancel,
             ..
-        } = envelope;
-        let observer = self.observer.lock().clone();
-        let (events, relay) = match &observer {
-            Some(observer) => {
-                observer.turn_started(&HostedTurn {
-                    agent_id,
-                    parent,
-                    name: &name,
-                    model: &model,
-                    prompt: &prompt,
-                });
-                let (tx, relay) = relay_events(Arc::clone(observer), agent_id, events);
-                (Some(tx), Some(relay))
-            }
-            None => (events, None),
-        };
-        let ran = self
-            .execute(
-                agent_id, &prompt, history, &setup, workspace, events, cancel, &stop,
+        } = answer;
+        let route = replier.and_then(|replier| {
+            reply_route(
+                kind,
+                from,
+                replier.parent,
+                replier.parent_thread,
+                thread,
+                subject,
             )
-            .await;
-        if let Some(relay) = relay {
-            let _ = tokio::time::timeout(RELAY_DRAIN, relay).await;
-        }
-        let (result, messages) = match ran {
-            Ok(loop_result) => {
-                let exit = exit_of(&loop_result);
-                if let Some(observer) = &observer {
-                    observer.turn_ended(agent_id, Some(&loop_result), &exit);
-                }
-                finished(agent_id, loop_result, exit)
+        });
+        if let Some((to, choice)) = route {
+            let text = reply_text(result);
+            let envelope = self.envelope(Some(agent_id), to, MessageKind::Reply, text, choice);
+            if let Err(err) = self.enqueue(to, envelope) {
+                warn!(agent = %agent_id, %err, "could not deliver reply");
             }
-            Err(early) => {
-                if let Some(observer) = &observer {
-                    observer.turn_ended(agent_id, None, &early.exit);
-                }
-                (early, None)
-            }
-        };
-
-        // Stopped while the turn ran: the entry is gone and nobody but a
-        // waiter should hear about it.
-        let replier = {
-            let mut agents = self.agents.lock();
-            agents.get_mut(&agent_id).map(|entry| {
-                entry.running = false;
-                entry.turns += 1;
-                if !result.final_message.trim().is_empty() {
-                    entry.last_reply = Some(result.final_message.clone());
-                }
-                if let (Some(messages), Body::Hosted { history, .. }) = (messages, &mut entry.body)
-                {
-                    *history = messages;
-                }
-                (entry.parent(), entry.parent_thread.clone())
-            })
-        };
-
-        match waiter {
-            Some(waiter) => {
-                // A waiting `task` result never goes through `enqueue`, so
-                // it is posted as mail here, before the parent hears it.
-                if let Some(parent) = from {
-                    let to_name = self
-                        .agents
-                        .lock()
-                        .get(&parent)
-                        .map_or_else(|| "user".to_string(), |e| e.name.clone());
-                    self.post_mail(MailMessage {
-                        id: 0,
-                        thread,
-                        subject,
-                        from: agent_id,
-                        from_name: name,
-                        to: parent,
-                        to_name,
-                        kind: MessageKind::Reply,
-                        text: reply_text(&result),
-                        sent_ms: now_ms(),
-                        subject_from_text: false,
-                    });
-                }
-                let _ = waiter.send(result);
-            }
-            None => {
-                let route = replier.and_then(|(parent, parent_thread)| {
-                    reply_route(kind, from, parent, parent_thread, thread, subject)
-                });
-                if let Some((to, choice)) = route {
-                    let text = reply_text(&result);
-                    let envelope =
-                        self.envelope(Some(agent_id), to, MessageKind::Reply, text, choice);
-                    if let Err(err) = self.enqueue(to, envelope) {
-                        warn!(agent = %agent_id, %err, "could not deliver reply");
-                    }
-                }
-            }
-        }
-        if !self.retire_if_done(agent_id) {
-            self.pump(agent_id);
         }
     }
 
@@ -210,22 +240,16 @@ impl HostInner {
 
     /// Run one turn of a hosted agent through the scheduler. `Err` is how
     /// a turn that produced no loop result ended.
-    #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
         agent_id: AgentId,
-        prompt: &str,
-        history: Vec<Message>,
-        setup: &RunSetup,
-        workspace: Option<(PathBuf, bool)>,
-        events: Option<mpsc::Sender<AgentLoopEvent>>,
-        cancel: Option<CancellationToken>,
-        stop: &CancellationToken,
+        input: TurnInput<'_>,
     ) -> Result<AgentLoopResult, SubagentResult> {
+        let setup = input.setup;
         if setup.timeout == Some(Duration::ZERO) {
             return Err(ended(agent_id, SubagentExit::Timeout));
         }
-        let tx = Transaction::user_prompt(agent_id, prompt.to_string());
+        let tx = Transaction::user_prompt(agent_id, input.prompt.to_string());
         if let Err(err) = self.store.enqueue_tx(&tx) {
             return Err(failed(agent_id, format!("enqueue prompt: {err}")));
         }
@@ -235,11 +259,11 @@ impl HostInner {
                 caller_owns_deadline: true,
                 loop_config: Some(setup.loop_config.clone()),
                 policy: Some(setup.policy.clone()),
-                event_tx: events,
-                workspace_override: workspace,
+                event_tx: input.events,
+                workspace_override: input.workspace,
                 router_override: Some(setup.router.clone()),
                 tools_override: Some(setup.tools.clone()),
-                history,
+                history: input.history,
             },
         );
         let bounded = async {
@@ -248,10 +272,10 @@ impl HostInner {
                 None => Some(schedule.await),
             }
         };
-        let cancel = cancel.unwrap_or_default();
+        let cancel = input.cancel.unwrap_or_default();
         let processed = tokio::select! {
             biased;
-            () = stop.cancelled() => return Err(cancelled(agent_id)),
+            () = input.stop.cancelled() => return Err(cancelled(agent_id)),
             () = cancel.cancelled() => return Err(cancelled(agent_id)),
             outcome = bounded => match outcome {
                 None => return Err(ended(agent_id, SubagentExit::Timeout)),
@@ -262,6 +286,71 @@ impl HostInner {
         processed
             .last_result
             .ok_or_else(|| failed(agent_id, "the turn produced no result".into()))
+    }
+}
+
+/// What [`HostInner::execute`] needs to run one turn.
+struct TurnInput<'a> {
+    prompt: &'a str,
+    history: Vec<Message>,
+    setup: &'a RunSetup,
+    workspace: Option<(PathBuf, bool)>,
+    events: Option<mpsc::Sender<AgentLoopEvent>>,
+    cancel: Option<CancellationToken>,
+    stop: &'a CancellationToken,
+}
+
+/// The answering agent's parent and the thread of the parent's last
+/// request, read when its turn ends.
+struct Replier {
+    parent: Option<AgentId>,
+    parent_thread: Option<(ThreadId, String)>,
+}
+
+/// Where a turn's message came from, which decides where its answer goes.
+struct TurnAnswer {
+    from: Option<AgentId>,
+    kind: MessageKind,
+    thread: ThreadId,
+    subject: String,
+    /// The answering agent's display name.
+    name: String,
+}
+
+/// The parts of a turn's envelope that steer the turn itself.
+struct TurnHandles {
+    waiter: Option<oneshot::Sender<SubagentResult>>,
+    events: Option<mpsc::Sender<AgentLoopEvent>>,
+    cancel: Option<CancellationToken>,
+}
+
+impl TurnAnswer {
+    /// Split a turn's `envelope` into what its answer needs (with the
+    /// answering agent's `name`), and the turn's [`TurnHandles`].
+    fn split(envelope: Envelope, name: String) -> (Self, TurnHandles) {
+        let Envelope {
+            from,
+            kind,
+            thread,
+            subject,
+            waiter,
+            events,
+            cancel,
+            ..
+        } = envelope;
+        let answer = Self {
+            from,
+            kind,
+            thread,
+            subject,
+            name,
+        };
+        let handles = TurnHandles {
+            waiter,
+            events,
+            cancel,
+        };
+        (answer, handles)
     }
 }
 
@@ -320,100 +409,4 @@ fn render_for_hosted(envelope: &Envelope, parent: Option<AgentId>) -> String {
             envelope.from_name, envelope.subject, envelope.text
         ),
     }
-}
-
-pub(super) fn reply_text(result: &SubagentResult) -> String {
-    match &result.exit {
-        SubagentExit::Completed if result.final_message.trim().is_empty() => {
-            "(finished without a reply)".to_string()
-        }
-        SubagentExit::Completed => result.final_message.clone(),
-        SubagentExit::Failed { reason } => format!("failed: {reason}"),
-        SubagentExit::Cancelled => "was cancelled".to_string(),
-        SubagentExit::Timeout => "timed out".to_string(),
-        SubagentExit::Rejected { reason } => format!("rejected: {reason}"),
-    }
-}
-
-/// How a turn that produced `result` ended.
-fn exit_of(result: &AgentLoopResult) -> SubagentExit {
-    if result.output_truncated || result.insufficient_credits || result.stalled {
-        SubagentExit::Failed {
-            reason: "child execution stopped before completion".into(),
-        }
-    } else if result.timed_out {
-        SubagentExit::Timeout
-    } else {
-        result
-            .llm_error
-            .as_ref()
-            .map_or(SubagentExit::Completed, |reason| SubagentExit::Failed {
-                reason: reason.clone(),
-            })
-    }
-}
-
-/// The outcome of a turn that produced `result`, and the history it
-/// leaves.
-fn finished(
-    agent_id: AgentId,
-    result: AgentLoopResult,
-    exit: SubagentExit,
-) -> (SubagentResult, Option<Vec<Message>>) {
-    let outcome = SubagentResult {
-        child_agent_id: Some(agent_id),
-        final_message: result.final_text,
-        total_input_tokens: result.total_input_tokens,
-        total_output_tokens: result.total_output_tokens,
-        files_changed: result
-            .file_changes
-            .into_iter()
-            .map(|change| change.path)
-            .collect(),
-        exit,
-    };
-    (outcome, Some(result.messages))
-}
-
-/// How long the end of a turn waits for its events to reach the
-/// observer.
-const RELAY_DRAIN: Duration = Duration::from_secs(5);
-
-/// A sender for a turn's events that shows each to `observer`, in order,
-/// then passes it on to `downstream`. The task ends once every sender is
-/// gone.
-fn relay_events(
-    observer: Arc<dyn TurnObserver>,
-    agent_id: AgentId,
-    downstream: Option<mpsc::Sender<AgentLoopEvent>>,
-) -> (mpsc::Sender<AgentLoopEvent>, tokio::task::JoinHandle<()>) {
-    let (tx, mut rx) = mpsc::channel::<AgentLoopEvent>(1024);
-    let relay = tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            observer.on_event(agent_id, &event);
-            if let Some(downstream) = &downstream {
-                let _ = downstream.send(event).await;
-            }
-        }
-    });
-    (tx, relay)
-}
-
-fn ended(agent_id: AgentId, exit: SubagentExit) -> SubagentResult {
-    SubagentResult {
-        child_agent_id: Some(agent_id),
-        final_message: String::new(),
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        files_changed: Vec::new(),
-        exit,
-    }
-}
-
-pub(super) fn cancelled(agent_id: AgentId) -> SubagentResult {
-    ended(agent_id, SubagentExit::Cancelled)
-}
-
-pub(super) fn failed(agent_id: AgentId, reason: String) -> SubagentResult {
-    ended(agent_id, SubagentExit::Failed { reason })
 }

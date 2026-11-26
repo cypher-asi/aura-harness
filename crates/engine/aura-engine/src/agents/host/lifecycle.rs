@@ -11,7 +11,7 @@ use tracing::info;
 use crate::agents::inbox::MessageKind;
 use crate::agents::mail::MailMessage;
 
-use super::run::{cancelled, reply_text};
+use super::outcome::{cancelled, reply_text};
 use super::{AgentEntry, Body, Envelope, HostInner, LifecycleAction};
 
 impl HostInner {

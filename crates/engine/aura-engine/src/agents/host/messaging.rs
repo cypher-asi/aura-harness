@@ -6,7 +6,7 @@ use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use tracing::info;
 
-use crate::agents::inbox::{InboxMessage, MessageKind};
+use crate::agents::inbox::{InboxMessage, MessageKind, ParentInbox};
 use crate::agents::mail::{MailMessage, Resolved};
 use crate::agents::remote::RemoteMail;
 
@@ -151,35 +151,45 @@ impl HostInner {
                 self.pump(to);
                 Ok(())
             }
-            Some((inbox, envelope)) => {
-                let (Some(from), Some(mail)) = (envelope.from, mail) else {
-                    return Err("roots only accept messages from agents".to_string());
-                };
-                self.show_mail(&mail);
-                let message = InboxMessage {
-                    to,
-                    from,
-                    from_name: envelope.from_name,
-                    kind: envelope.kind,
-                    text: envelope.text,
-                    subject: envelope.subject,
-                    thread: envelope.thread,
-                };
-                let store = self.store.clone();
-                let observer = self.scheduler.record_observer().cloned();
-                tokio::spawn(async move {
-                    let delivered = match inbox {
-                        Some(inbox) => inbox.deliver(message.clone()).await,
-                        None => Err("no inbox".to_string()),
-                    };
-                    if let Err(err) = delivered {
-                        info!(root = %to, %err, "root inbox unavailable; recording message");
-                        record_message(&store, observer.as_ref(), &message);
-                    }
-                });
-                Ok(())
-            }
+            Some((inbox, envelope)) => self.deliver_to_root(to, inbox, envelope, mail),
         }
+    }
+
+    /// Hand `envelope` to root `to`'s inbox, recording it on the root
+    /// instead when the inbox is gone. Roots only take mail from agents.
+    fn deliver_to_root(
+        &self,
+        to: AgentId,
+        inbox: Option<Arc<dyn ParentInbox>>,
+        envelope: Envelope,
+        mail: Option<MailMessage>,
+    ) -> Result<(), String> {
+        let (Some(from), Some(mail)) = (envelope.from, mail) else {
+            return Err("roots only accept messages from agents".to_string());
+        };
+        self.show_mail(&mail);
+        let message = InboxMessage {
+            to,
+            from,
+            from_name: envelope.from_name,
+            kind: envelope.kind,
+            text: envelope.text,
+            subject: envelope.subject,
+            thread: envelope.thread,
+        };
+        let store = self.store.clone();
+        let observer = self.scheduler.record_observer().cloned();
+        tokio::spawn(async move {
+            let delivered = match inbox {
+                Some(inbox) => inbox.deliver(message.clone()).await,
+                None => Err("no inbox".to_string()),
+            };
+            if let Err(err) = delivered {
+                info!(root = %to, %err, "root inbox unavailable; recording message");
+                record_message(&store, observer.as_ref(), &message);
+            }
+        });
+        Ok(())
     }
 
     /// Send `envelope` for `to` to the node holding it, or fail as an
