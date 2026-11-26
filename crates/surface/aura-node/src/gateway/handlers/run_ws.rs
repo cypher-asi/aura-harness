@@ -48,38 +48,10 @@ pub(in crate::gateway) async fn run_ws_handler(
     Path(run_id): Path<String>,
     State(state): State<RouterState>,
 ) -> Response {
-    // A cloud node's hub calls with its claimed node token, which the
-    // auth middleware already checked; its startup token is never used.
-    let authorized = if state.cloud.enabled() {
-        state
-            .cloud
-            .authorize(&headers, "/stream")
-            .map(|_| String::new())
-    } else if state.config.require_auth {
-        aura_auth_kit::bearer::check_bearer(&headers, &state.config.auth_token)
-    } else {
-        Ok(String::new())
-    };
-    if let Err(status) = authorized {
-        crate::inbound_console::ws_rejection_line(
-            "upgrade.run",
-            "unauthorized",
-            Some(&format!("run_id={run_id}")),
-        );
-        return status.into_response();
+    if let Some(rejection) = run_ws_auth_rejection(&state, &headers, &run_id) {
+        return rejection;
     }
-
-    let Some(permit) = try_acquire_ws_slot(&state.ws_slots) else {
-        warn!(
-            cap = MAX_WS_CONNS_PER_NODE,
-            run_id = %run_id,
-            "Refusing /stream/:run_id upgrade: WS connection cap reached"
-        );
-        crate::inbound_console::ws_rejection_line(
-            "upgrade.run",
-            "slot_full",
-            Some(&format!("cap={MAX_WS_CONNS_PER_NODE} run_id={run_id}")),
-        );
+    let Some(permit) = acquire_run_ws_slot(&state, &run_id) else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
 
@@ -118,6 +90,54 @@ pub(in crate::gateway) async fn run_ws_handler(
         drop(permit);
     })
     .into_response()
+}
+
+/// Bearer / cloud-token check for the upgrade; logs and returns the
+/// rejection response on failure.
+fn run_ws_auth_rejection(
+    state: &RouterState,
+    headers: &HeaderMap,
+    run_id: &str,
+) -> Option<Response> {
+    // A cloud node's hub calls with its claimed node token, which the
+    // auth middleware already checked; its startup token is never used.
+    let authorized = if state.cloud.enabled() {
+        state
+            .cloud
+            .authorize(headers, "/stream")
+            .map(|_| String::new())
+    } else if state.config.require_auth {
+        aura_auth_kit::bearer::check_bearer(headers, &state.config.auth_token)
+    } else {
+        Ok(String::new())
+    };
+    if let Err(status) = authorized {
+        crate::inbound_console::ws_rejection_line(
+            "upgrade.run",
+            "unauthorized",
+            Some(&format!("run_id={run_id}")),
+        );
+        return Some(status.into_response());
+    }
+    None
+}
+
+/// Reserve a WS slot; logs the rejection when the cap is reached.
+fn acquire_run_ws_slot(state: &RouterState, run_id: &str) -> Option<OwnedSemaphorePermit> {
+    let permit = try_acquire_ws_slot(&state.ws_slots);
+    if permit.is_none() {
+        warn!(
+            cap = MAX_WS_CONNS_PER_NODE,
+            run_id = %run_id,
+            "Refusing /stream/:run_id upgrade: WS connection cap reached"
+        );
+        crate::inbound_console::ws_rejection_line(
+            "upgrade.run",
+            "slot_full",
+            Some(&format!("cap={MAX_WS_CONNS_PER_NODE} run_id={run_id}")),
+        );
+    }
+    permit
 }
 
 async fn handle_automaton_ws(
@@ -167,9 +187,6 @@ async fn forward_automaton_subscription<S>(
 ) where
     S: futures_util::Sink<axum::extract::ws::Message> + Unpin,
 {
-    use axum::extract::ws::Message as WsMessage;
-    use futures_util::SinkExt;
-
     let aura_engine::automaton::EventSubscription {
         history,
         mut live,
@@ -177,51 +194,11 @@ async fn forward_automaton_subscription<S>(
     } = subscription;
 
     let forward = async {
-        let mut saw_done_in_history = false;
-        for event in history {
-            let is_done = matches!(event, aura_engine_automaton::AutomatonEvent::Done);
-            match serde_json::to_string(&event) {
-                Ok(json) => {
-                    if ws_tx.send(WsMessage::Text(json)).await.is_err() {
-                        return;
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to serialize replayed automaton event");
-                }
-            }
-            if is_done {
-                saw_done_in_history = true;
-                break;
-            }
+        if !replay_automaton_history(ws_tx, history).await {
+            return;
         }
-
-        if !saw_done_in_history && !already_done {
-            loop {
-                match live.recv().await {
-                    Ok(event) => {
-                        let is_done = matches!(event, aura_engine_automaton::AutomatonEvent::Done);
-                        match serde_json::to_string(&event) {
-                            Ok(json) => {
-                                if ws_tx.send(WsMessage::Text(json)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "Failed to serialize automaton event");
-                            }
-                        }
-                        if is_done {
-                            break;
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        let msg = serde_json::json!({"type": "warning", "message": format!("dropped {n} events (client too slow)")});
-                        let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                }
-            }
+        if !already_done {
+            forward_live_automaton_events(ws_tx, &mut live).await;
         }
     };
     tokio::select! {
@@ -230,6 +207,74 @@ async fn forward_automaton_subscription<S>(
         () = forward => {},
     }
     reader.abort();
+}
+
+/// Replay buffered history; returns `true` when the live stream should
+/// follow (no send failure and no `Done` in history).
+async fn replay_automaton_history<S>(
+    ws_tx: &mut S,
+    history: Vec<aura_engine_automaton::AutomatonEvent>,
+) -> bool
+where
+    S: futures_util::Sink<axum::extract::ws::Message> + Unpin,
+{
+    use axum::extract::ws::Message as WsMessage;
+    use futures_util::SinkExt;
+
+    for event in history {
+        let is_done = matches!(event, aura_engine_automaton::AutomatonEvent::Done);
+        match serde_json::to_string(&event) {
+            Ok(json) => {
+                if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                    return false;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to serialize replayed automaton event");
+            }
+        }
+        if is_done {
+            return false;
+        }
+    }
+    true
+}
+
+/// Forward live events until `Done`, a send failure, or channel close.
+async fn forward_live_automaton_events<S>(
+    ws_tx: &mut S,
+    live: &mut tokio::sync::broadcast::Receiver<aura_engine_automaton::AutomatonEvent>,
+) where
+    S: futures_util::Sink<axum::extract::ws::Message> + Unpin,
+{
+    use axum::extract::ws::Message as WsMessage;
+    use futures_util::SinkExt;
+
+    loop {
+        match live.recv().await {
+            Ok(event) => {
+                let is_done = matches!(event, aura_engine_automaton::AutomatonEvent::Done);
+                match serde_json::to_string(&event) {
+                    Ok(json) => {
+                        if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to serialize automaton event");
+                    }
+                }
+                if is_done {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                let msg = serde_json::json!({"type": "warning", "message": format!("dropped {n} events (client too slow)")});
+                let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -168,52 +168,67 @@ async fn bridge_pty_ws(
 
     let (mut ws_write, mut ws_read) = socket.split();
 
-    let outbound = async {
-        loop {
-            tokio::select! {
-                Some(data) = output_rx.recv() => {
-                    let msg = serde_json::json!({"type":"output","data": B64.encode(&data)});
-                    if ws_write.send(Message::Text(msg.to_string())).await.is_err() {
-                        break;
-                    }
-                }
-                Some(code) = exit_rx.recv() => {
-                    let _ = ws_write.send(Message::Text(
-                        serde_json::json!({"type":"exit","code":code}).to_string(),
-                    )).await;
+    let outbound = pump_pty_outbound(&mut ws_write, &mut output_rx, &mut exit_rx, &mut error_rx);
+    let inbound = pump_ws_inbound(&mut ws_read, &error_tx, &mut writer, &master);
+
+    tokio::select! {
+        () = outbound => {}
+        () = inbound => {}
+    }
+}
+
+/// PTY output / exit / error channels → WebSocket frames.
+async fn pump_pty_outbound(
+    ws_write: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    output_rx: &mut mpsc::Receiver<Vec<u8>>,
+    exit_rx: &mut mpsc::Receiver<i32>,
+    error_rx: &mut mpsc::Receiver<String>,
+) {
+    loop {
+        tokio::select! {
+            Some(data) = output_rx.recv() => {
+                let msg = serde_json::json!({"type":"output","data": B64.encode(&data)});
+                if ws_write.send(Message::Text(msg.to_string())).await.is_err() {
                     break;
                 }
-                Some(err_msg) = error_rx.recv() => {
-                    let msg = serde_json::json!({"type":"error","message": err_msg});
-                    if ws_write.send(Message::Text(msg.to_string())).await.is_err() {
-                        break;
-                    }
+            }
+            Some(code) = exit_rx.recv() => {
+                let _ = ws_write.send(Message::Text(
+                    serde_json::json!({"type":"exit","code":code}).to_string(),
+                )).await;
+                break;
+            }
+            Some(err_msg) = error_rx.recv() => {
+                let msg = serde_json::json!({"type":"error","message": err_msg});
+                if ws_write.send(Message::Text(msg.to_string())).await.is_err() {
+                    break;
                 }
             }
         }
-    };
+    }
+}
 
-    let inbound = async {
-        while let Some(Ok(msg)) = ws_read.next().await {
-            let text = match msg {
-                Message::Text(t) => t,
-                Message::Close(_) => break,
-                _ => continue,
-            };
-            let cm = match serde_json::from_str::<ClientMsg>(&text) {
-                Ok(cm) => cm,
-                Err(e) => {
-                    let _ = error_tx.try_send(format!("invalid JSON: {e}"));
-                    continue;
-                }
-            };
-            handle_inbound_frame(&cm, &mut writer, &master);
-        }
-    };
-
-    tokio::select! {
-        _ = outbound => {}
-        _ = inbound => {}
+/// WebSocket client frames → PTY input / resize.
+async fn pump_ws_inbound(
+    ws_read: &mut futures_util::stream::SplitStream<WebSocket>,
+    error_tx: &mpsc::Sender<String>,
+    writer: &mut Box<dyn std::io::Write + Send>,
+    master: &Arc<Mutex<Box<dyn MasterPty + Send>>>,
+) {
+    while let Some(Ok(msg)) = ws_read.next().await {
+        let text = match msg {
+            Message::Text(t) => t,
+            Message::Close(_) => break,
+            _ => continue,
+        };
+        let cm = match serde_json::from_str::<ClientMsg>(&text) {
+            Ok(cm) => cm,
+            Err(e) => {
+                let _ = error_tx.try_send(format!("invalid JSON: {e}"));
+                continue;
+            }
+        };
+        handle_inbound_frame(&cm, writer, master);
     }
 }
 

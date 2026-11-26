@@ -174,33 +174,8 @@ impl TriggerRegistrar {
 
         let mut attempt = 0usize;
         loop {
-            let result = self
-                .client
-                .put(&url)
-                .bearer_auth(&target.token)
-                .json(&metas)
-                .timeout(REQUEST_TIMEOUT)
-                .send()
-                .await;
-
-            match result {
-                Ok(resp) if resp.status().is_success() => {
-                    tracing::debug!(
-                        count = metas.len(),
-                        "registered process triggers with swarm gateway"
-                    );
-                    return SyncOutcome::Pushed;
-                }
-                Ok(resp) => {
-                    tracing::warn!(
-                        status = %resp.status(),
-                        attempt,
-                        "swarm gateway rejected trigger registration"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, attempt, "trigger registration push failed");
-                }
+            if self.push_once(target, &url, &metas, attempt).await {
+                return SyncOutcome::Pushed;
             }
 
             let Some(delay) = RETRY_DELAYS.get(attempt) else {
@@ -212,6 +187,46 @@ impl TriggerRegistrar {
             };
             tokio::time::sleep(*delay).await;
             attempt += 1;
+        }
+    }
+
+    /// One PUT of the trigger metadata; logs and returns whether it succeeded.
+    async fn push_once(
+        &self,
+        target: &RegistrarTarget,
+        url: &str,
+        metas: &[aura_store_db::ProcessTriggerMeta],
+        attempt: usize,
+    ) -> bool {
+        let result = self
+            .client
+            .put(url)
+            .bearer_auth(&target.token)
+            .json(metas)
+            .timeout(REQUEST_TIMEOUT)
+            .send()
+            .await;
+
+        match result {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::debug!(
+                    count = metas.len(),
+                    "registered process triggers with swarm gateway"
+                );
+                true
+            }
+            Ok(resp) => {
+                tracing::warn!(
+                    status = %resp.status(),
+                    attempt,
+                    "swarm gateway rejected trigger registration"
+                );
+                false
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, attempt, "trigger registration push failed");
+                false
+            }
         }
     }
 }

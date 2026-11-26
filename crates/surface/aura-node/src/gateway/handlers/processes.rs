@@ -38,7 +38,8 @@ use crate::gateway::RouterState;
 use crate::protocol::{InboundMessage, OutboundMessage, UserMessage};
 use aura_core_protocol::{RuntimeRequest, RuntimeRequestType};
 use aura_store_db::{
-    NewProcess, ProcessError, ProcessRunRecord, ProcessRunStatus, ProcessStore, ProcessUpdate,
+    NewProcess, ProcessError, ProcessRecord, ProcessRunRecord, ProcessRunStatus, ProcessStore,
+    ProcessUpdate,
 };
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -254,11 +255,32 @@ pub(in crate::gateway) async fn trigger_process_handler(
     // updated schedule with the swarm gateway (best-effort).
     notify_trigger_registrar(&state);
 
-    // Synthetic chat request — the same shape POST /v1/run (Chat)
-    // consumes. Identity / workspace use node defaults; the process
-    // prompt is delivered as the first user message below. The model
-    // must be non-empty for turn dispatch, so resolve it from the
-    // process config (`"model"`), then the node's env default.
+    let handle = match start_triggered_run(&state, &store, &process, &id, &run).await {
+        Ok(handle) => handle,
+        Err(response) => return response,
+    };
+
+    tokio::spawn(watch_process_run(
+        store,
+        handle,
+        id.clone(),
+        run.run_id.clone(),
+    ));
+
+    let stream_url = format!("/stream/{}", run.run_id);
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "ok": true, "run": run, "event_stream_url": stream_url })),
+    )
+        .into_response()
+}
+
+/// Synthetic chat request — the same shape POST /v1/run (Chat)
+/// consumes. Identity / workspace use node defaults; the process
+/// prompt is delivered as the first user message. The model must be
+/// non-empty for turn dispatch, so resolve it from the process config
+/// (`"model"`), then the node's env default.
+fn trigger_chat_request(process: &ProcessRecord, id: &str) -> RuntimeRequest {
     let model_id = process
         .config
         .as_ref()
@@ -267,7 +289,7 @@ pub(in crate::gateway) async fn trigger_process_handler(
         .map(str::to_string)
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(default_model_id);
-    let request = RuntimeRequest {
+    RuntimeRequest {
         r#type: RuntimeRequestType::Chat {
             conversation_messages: Vec::new(),
         },
@@ -284,24 +306,36 @@ pub(in crate::gateway) async fn trigger_process_handler(
         auth_jwt: None,
         user_id: format!("process:{id}"),
         mode: None,
-    };
+    }
+}
 
-    let ctx = WsContext::from_state(&state, None);
+/// Prepare the chat session, spawn the run driver under the process-run
+/// id and enqueue the process prompt. On failure the run is recorded as
+/// failed and the HTTP error response is returned.
+async fn start_triggered_run(
+    state: &RouterState,
+    store: &Arc<ProcessStore>,
+    process: &ProcessRecord,
+    id: &str,
+    run: &ProcessRunRecord,
+) -> Result<Arc<ChatRunHandle>, axum::response::Response> {
+    let request = trigger_chat_request(process, id);
+    let ctx = WsContext::from_state(state, None);
     let session = match prepare_chat_session(request, &ctx).await {
         Ok(session) => session,
         Err(e) => {
             let _ = store.finish_run(
-                &id,
+                id,
                 &run.run_id,
                 ProcessRunStatus::Failure,
                 None,
                 Some(format!("failed to prepare run session: {}", e.message)),
             );
-            return (
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "ok": false, "error": e.message, "code": e.code })),
             )
-                .into_response();
+                .into_response());
         }
     };
 
@@ -319,32 +353,19 @@ pub(in crate::gateway) async fn trigger_process_handler(
     {
         handle.shutdown.cancel();
         let _ = store.finish_run(
-            &id,
+            id,
             &run.run_id,
             ProcessRunStatus::Failure,
             None,
             Some("run driver rejected the process prompt".into()),
         );
-        return (
+        return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "ok": false, "error": "failed to dispatch process prompt" })),
         )
-            .into_response();
+            .into_response());
     }
-
-    tokio::spawn(watch_process_run(
-        store,
-        handle,
-        id.clone(),
-        run.run_id.clone(),
-    ));
-
-    let stream_url = format!("/stream/{}", run.run_id);
-    (
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "ok": true, "run": run, "event_stream_url": stream_url })),
-    )
-        .into_response()
+    Ok(handle)
 }
 
 /// Node-default model for triggered runs: same env resolution the

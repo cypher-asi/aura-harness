@@ -37,6 +37,7 @@
 //! - Config helpers shared with surface-cli.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 pub mod cloud_node;
 mod config;

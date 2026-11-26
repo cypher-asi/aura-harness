@@ -141,48 +141,11 @@ pub fn migrate_state_if_needed(
     let backup = backup_dir(db_path);
 
     if marker.exists() {
-        // Crash window (1): temp leftovers are disposable.
-        if temp.exists() {
-            warn!(temp = %temp.display(), "removing stale migration temp dir");
-            std::fs::remove_dir_all(&temp)
-                .with_context(|| format!("removing stale temp dir {}", temp.display()))?;
-        }
-        // Crash window (4)→(5): finish the deferred backup cleanup, but
-        // only once the live sealed database provably opens.
-        if backup.exists() {
-            verify_sealed_open(db_path, cipher).context(
-                "sealed database failed to open while a plaintext backup exists; \
-                 keeping the backup for operator recovery",
-            )?;
-            std::fs::remove_dir_all(&backup)
-                .with_context(|| format!("removing plaintext backup {}", backup.display()))?;
-            info!("completed deferred plaintext-backup cleanup from an interrupted migration");
-        }
+        finish_sealed_state(db_path, &temp, &backup, cipher)?;
         return Ok(MigrationOutcome::NotNeeded("state is already sealed"));
     }
 
-    // No marker. A backup without a marker means a migration was
-    // interrupted mid-swap — the backup is the authoritative plaintext,
-    // so roll back to it and restart from scratch.
-    if backup.exists() {
-        warn!(
-            backup = %backup.display(),
-            "interrupted state migration detected; rolling back to the plaintext backup"
-        );
-        if db_path.exists() {
-            std::fs::remove_dir_all(db_path)
-                .with_context(|| format!("removing partial database {}", db_path.display()))?;
-        }
-        std::fs::rename(&backup, db_path)
-            .with_context(|| format!("restoring plaintext backup to {}", db_path.display()))?;
-    }
-
-    // A temp dir without a marker is a partial copy — restart it.
-    if temp.exists() {
-        warn!(temp = %temp.display(), "removing partial migration temp dir; restarting copy");
-        std::fs::remove_dir_all(&temp)
-            .with_context(|| format!("removing partial temp dir {}", temp.display()))?;
-    }
+    recover_interrupted_migration(db_path, &temp, &backup)?;
 
     if !db_has_data(db_path) {
         return Ok(MigrationOutcome::NotNeeded(
@@ -195,16 +158,89 @@ pub fn migrate_state_if_needed(
         "plaintext state found on sealed boot; starting encrypt-in-place migration"
     );
 
+    let stats = seal_and_swap(data_dir, db_path, &temp, &backup, key_id, cipher)?;
+
+    info!(
+        values_sealed = stats.values_sealed,
+        values_copied = stats.values_copied,
+        "encrypt-in-place state migration complete"
+    );
+    Ok(MigrationOutcome::Migrated(stats))
+}
+
+/// Already-sealed boot: clear leftovers from an interrupted migration.
+fn finish_sealed_state(
+    db_path: &Path,
+    temp: &Path,
+    backup: &Path,
+    cipher: &Arc<SealCipher>,
+) -> anyhow::Result<()> {
+    // Crash window (1): temp leftovers are disposable.
+    if temp.exists() {
+        warn!(temp = %temp.display(), "removing stale migration temp dir");
+        std::fs::remove_dir_all(temp)
+            .with_context(|| format!("removing stale temp dir {}", temp.display()))?;
+    }
+    // Crash window (4)→(5): finish the deferred backup cleanup, but
+    // only once the live sealed database provably opens.
+    if backup.exists() {
+        verify_sealed_open(db_path, cipher).context(
+            "sealed database failed to open while a plaintext backup exists; \
+             keeping the backup for operator recovery",
+        )?;
+        std::fs::remove_dir_all(backup)
+            .with_context(|| format!("removing plaintext backup {}", backup.display()))?;
+        info!("completed deferred plaintext-backup cleanup from an interrupted migration");
+    }
+    Ok(())
+}
+
+/// No marker: roll back a mid-swap migration and drop partial copies.
+fn recover_interrupted_migration(db_path: &Path, temp: &Path, backup: &Path) -> anyhow::Result<()> {
+    // No marker. A backup without a marker means a migration was
+    // interrupted mid-swap — the backup is the authoritative plaintext,
+    // so roll back to it and restart from scratch.
+    if backup.exists() {
+        warn!(
+            backup = %backup.display(),
+            "interrupted state migration detected; rolling back to the plaintext backup"
+        );
+        if db_path.exists() {
+            std::fs::remove_dir_all(db_path)
+                .with_context(|| format!("removing partial database {}", db_path.display()))?;
+        }
+        std::fs::rename(backup, db_path)
+            .with_context(|| format!("restoring plaintext backup to {}", db_path.display()))?;
+    }
+
+    // A temp dir without a marker is a partial copy — restart it.
+    if temp.exists() {
+        warn!(temp = %temp.display(), "removing partial migration temp dir; restarting copy");
+        std::fs::remove_dir_all(temp)
+            .with_context(|| format!("removing partial temp dir {}", temp.display()))?;
+    }
+    Ok(())
+}
+
+/// Copy + seal, verify, swap, mark, then drop the plaintext backup.
+fn seal_and_swap(
+    data_dir: &Path,
+    db_path: &Path,
+    temp: &Path,
+    backup: &Path,
+    key_id: Option<&str>,
+    cipher: &Arc<SealCipher>,
+) -> anyhow::Result<SealCopyStats> {
     // (1) Copy + seal into the temp dir (flushed durable by the copy),
     // then prove the copy opens before touching the live directory.
-    let stats = seal_db_copy(db_path, &temp, cipher)
+    let stats = seal_db_copy(db_path, temp, cipher)
         .with_context(|| format!("sealing state copy into {}", temp.display()))?;
-    verify_sealed_open(&temp, cipher)?;
+    verify_sealed_open(temp, cipher)?;
 
     // (2)+(3) Atomic swap: plaintext aside, sealed copy live.
-    std::fs::rename(db_path, &backup)
+    std::fs::rename(db_path, backup)
         .with_context(|| format!("moving plaintext database to {}", backup.display()))?;
-    std::fs::rename(&temp, db_path)
+    std::fs::rename(temp, db_path)
         .with_context(|| format!("moving sealed copy to {}", db_path.display()))?;
     if let Some(parent) = db_path.parent() {
         fsync_dir_best_effort(parent);
@@ -216,15 +252,9 @@ pub fn migrate_state_if_needed(
     // (5) Drop the plaintext only after the live sealed DB opens cleanly.
     verify_sealed_open(db_path, cipher)
         .context("swapped-in sealed database failed to open; plaintext backup preserved")?;
-    std::fs::remove_dir_all(&backup)
+    std::fs::remove_dir_all(backup)
         .with_context(|| format!("removing plaintext backup {}", backup.display()))?;
-
-    info!(
-        values_sealed = stats.values_sealed,
-        values_copied = stats.values_copied,
-        "encrypt-in-place state migration complete"
-    );
-    Ok(MigrationOutcome::Migrated(stats))
+    Ok(stats)
 }
 
 #[cfg(test)]
