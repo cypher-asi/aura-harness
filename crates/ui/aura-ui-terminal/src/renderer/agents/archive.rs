@@ -1,12 +1,23 @@
 //! The agents panel's ARCHIVE tab: archived agents under the day they
-//! were archived on.
+//! were archived on, the agents under one hanging from its name as the
+//! projects list hangs spawns.
+//!
+//! ```text
+//! Yesterday
+//! ▾  Agent                    2d
+//!    └── reviewer #1          2d
+//!    Agent 2                  3d
+//! ```
 
 use super::draw_list;
-use crate::components::{cell_style, format_ago, list_row, CellState, StatusIcon};
+use super::projects::spawn_guides;
+use crate::components::{
+    cell_style, format_ago, tree_row, truncate_record_info, CellState, StatusIcon, ROW_INSET,
+};
 use crate::renderer::chrome::ScrollView;
 use crate::renderer::side_list::empty_line;
 use crate::{
-    app::{ArchiveRow, HoverTarget, MenuTarget, PanelFocus},
+    app::{AgentRowEnd, ArchiveRow, HoverTarget, MenuTarget, PanelFocus},
     App, Theme,
 };
 use aura_core_types::time::now_ms;
@@ -14,7 +25,7 @@ use ratatui::Frame;
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
-    text::Line,
+    text::{Line, Span},
 };
 use std::ops::Range;
 
@@ -42,13 +53,13 @@ pub(super) fn render_archive(
 }
 
 /// Archive rows: a muted header for each day agents were archived on, then
-/// each archived agent, with the agents under it indented below while it
-/// is open, each showing how long ago it was last active on the right.
-/// An agent with
-/// agents under it shows ▸ in the icon column while folded over them,
-/// as it starts, and ▾ once opened. Empty, a single muted line. Only
-/// the rows in `window` are drawn; the total comes with them. Unfocused,
-/// the agent on screen keeps the highlight, or the folded agent over it.
+/// each archived agent, with the agents under it on tree lines below while
+/// it is open, each showing how long ago it was last active on the right.
+/// An agent with agents under it shows ▸ in the icon column while folded
+/// over them, as it starts, and ▾ once opened. Empty, a single muted line.
+/// Only the rows in `window` are drawn; the total comes with them.
+/// Unfocused, the agent on screen keeps the highlight, or the folded agent
+/// over it.
 fn build_archived_lines<'a>(
     app: &App,
     inner: Rect,
@@ -100,10 +111,16 @@ struct Archive<'s> {
 }
 
 impl Archive<'_> {
-    /// The muted header of the day `label`.
+    /// The muted header of the day `label`, from the icon column on.
     fn day_line<'a>(&self, label: &str) -> Line<'a> {
-        empty_line(label, self.inner.width, self.theme)
-            .patch_style(Style::default().add_modifier(Modifier::BOLD))
+        let room = usize::from(self.inner.width).saturating_sub(2 * ROW_INSET);
+        let label = truncate_record_info(label, room);
+        Line::from(Span::styled(
+            format!("{:ROW_INSET$}{label}", ""),
+            Style::default()
+                .fg(self.theme.colors.muted)
+                .add_modifier(Modifier::BOLD),
+        ))
     }
 
     /// The row of archived agent `index`, `None` when there is none.
@@ -117,34 +134,30 @@ impl Archive<'_> {
         };
         let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index)
             || matches!(self.menu_target, Some(MenuTarget::Archived(id)) if *id == agent.id);
-        // Top-level rows leave the right side blank; agents under them
-        // show how long ago they were last active.
-        let side = if agent.depth == 0 {
-            None
-        } else {
-            agent.last_active_ms.map(|ms| format_ago(ms, self.now_ms))
-        };
+        let ago = agent.last_active_ms.map(|ms| format_ago(ms, self.now_ms));
         // ▸ over folded agents under it, ▾ once opened.
         let marker = match (app.archived_has_spawns(index), app.archived_folded(index)) {
             (false, _) => "",
             (true, true) => "▸",
             (true, false) => "▾",
         };
-        Some(list_row(
-            self.inner.width as usize,
-            agent.depth,
+        let name = if agent.depth == 0 {
+            theme.colors.foreground
+        } else {
+            theme.colors.muted
+        };
+        Some(tree_row(
+            usize::from(self.inner.width),
+            (&spawn_guides(app.archived(), index), theme.colors.muted),
             StatusIcon::new(marker, theme.colors.muted),
-            &agent.name,
+            (&agent.name, None),
             cell_style(
                 theme,
                 CellState::of(selected, hovered),
-                Style::default().fg(if agent.depth == 0 {
-                    theme.colors.foreground
-                } else {
-                    theme.colors.muted
-                }),
+                Style::default().fg(name),
             ),
-            side.as_deref(),
+            &AgentRowEnd::time(ago.as_deref()),
+            &[],
         ))
     }
 }

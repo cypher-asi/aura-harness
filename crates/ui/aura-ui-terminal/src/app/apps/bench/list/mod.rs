@@ -5,8 +5,8 @@
 //! agent per arm, which only labels the runs under it, then the runs and
 //! the agents they spawned.
 //!
-//! - Benchmarks start folded. Space on one, or a click on the arrow
-//!   before its status, unfolds or folds it; Space on one of its agents
+//! - Benchmarks start folded. Space on one, or a click on its arrow (the
+//!   spinner while it runs), unfolds or folds it; Space on one of its agents
 //!   folds it, and the highlight moves onto it. A benchmark unfolds when
 //!   one of its agents is shown, and when the form starts it.
 //! - The highlight stays on its row as rows come and go, and passes over
@@ -25,10 +25,6 @@ use std::ops::Range;
 
 /// Rows a PageUp or PageDown moves the highlight by.
 const PAGE_STEP: isize = 5;
-
-/// Columns from a row's left edge where a click folds a benchmark: the
-/// row's inset, its arrow and the blank after it.
-const FOLD_COLUMNS: usize = crate::components::ROW_INSET + 2;
 
 /// A row of BENCH's list as drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,11 +292,15 @@ impl App {
         (index < new_bench && takes_highlight(rows[index])).then_some(index)
     }
 
-    /// Whether `column` is on the arrow before a benchmark's status.
+    /// Whether `column` is on a benchmark's arrow, or its spinner while it
+    /// runs: its icon column, after the row's inset, and the blank after
+    /// it, as [`App::fold_marker_at`] reads a projects-list row.
     fn on_bench_fold(&self, column: u16) -> bool {
-        self.bench
-            .rows_area
-            .is_some_and(|area| usize::from(column.saturating_sub(area.x)) < FOLD_COLUMNS)
+        use crate::{animation::AURA_WIDTH, components::ROW_INSET};
+        self.bench.rows_area.is_some_and(|area| {
+            let offset = usize::from(column.saturating_sub(area.x));
+            (ROW_INSET..=ROW_INSET + AURA_WIDTH).contains(&offset)
+        })
     }
 
     /// Clicking a benchmark's arrow folds or unfolds it. Clicking a row

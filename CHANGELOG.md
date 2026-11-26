@@ -7,6 +7,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BENCH rows name what ran, and every list lines up
+
+##### Changed
+
+- A BENCH row reads `#51 swe-pro ×20  gate vs opus-5-5  2d` instead of
+  `Compare #51  20 example coding tasks  2d`: the comparison's number,
+  its work (the suite and how many tasks, `mixed` for several suites, a
+  prompt's first line, `↻` and a replayed session's title, or `plan`
+  and the plan's file), its two arms, and how long ago it started. The
+  rest of the app still calls it `Compare #51`.
+- BENCH rows have a single icon column, as the other lists do: the
+  spinner while the comparison runs, else its fold arrow. The `✓` and
+  `■` marks are gone; a stopped comparison is gray instead. Its name
+  now starts in the same column as `+ New bench` and the names in
+  PROJECTS, and a click on the spinner or arrow folds it.
+- ARCHIVE draws the agents under an agent on tree lines, as PROJECTS
+  does, shows how long ago every agent was last active, top-level ones
+  included, and starts its day headers in the icon column.
+
 ### Panels keep their text off the borders and show no key hints
 
 ##### Changed

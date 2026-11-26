@@ -1,5 +1,28 @@
 //! The agents panel: a CHANNELS | PROJECTS | AGENTS | BENCH | ARCHIVE
 //! header bar over the list of the app in front, one module per app.
+//!
+//! Every app lays its rows out alike, so names line up from one app to
+//! the next (drawn here without the row's inset):
+//!
+//! ```text
+//! Today
+//! ▾  name  detail                   5m
+//!    ├── name                       2m
+//!    └── name                       2d
+//! +  New …
+//! ```
+//!
+//! - The row's inset, the icon column (as wide as the aura ring), a space,
+//!   then the name.
+//! - The icon column holds one thing: the spinner while the row, or a row
+//!   folded under it, works; else `▸` over the rows it folds, `▾` once
+//!   they show; else the app's mark (`@`, a folder, `+`); else nothing.
+//! - A muted detail may follow the name, and is cut first. The right end
+//!   is muted too: how long ago, a code, or a project's `+`.
+//! - Rows under a row hang from its name on tree lines.
+//! - A header grouping rows, a project or a day, starts in the icon
+//!   column.
+//! - The row that makes something new is pinned to the bottom.
 
 mod archive;
 mod bench;

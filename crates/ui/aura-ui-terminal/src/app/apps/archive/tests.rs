@@ -79,21 +79,15 @@ fn the_empty_archive_says_so_inside_the_panels_padding() {
 }
 
 #[test]
-fn archived_agents_keep_their_indent_under_the_one_they_ran_for() {
-    let (mut app, _rx) = app();
-    app.process_command(UiCommand::SetArchivedAgents(vec![
-        agent("dd", 0),
-        agent("ee", 1),
-    ]));
-    app.show_agents_tab(AgentsTab::Archive);
+fn archived_agents_hang_on_tree_lines_from_the_one_they_ran_for() {
+    let (mut app, _rx) = nested_archive();
+    app.handle_key(key(KeyCode::Char(' ')));
+    app.handle_key(key(KeyCode::Down));
     app.handle_key(key(KeyCode::Char(' ')));
     let rows = screen(&mut app, 100);
-    let column = |name: &str| {
-        let row = rows.iter().find(|row| row.contains(name));
-        let row = row.unwrap_or_else(|| panic!("no {name}:\n{}", rows.join("\n")));
-        row[..row.find(name).unwrap_or(0)].chars().count()
-    };
-    assert_eq!(column("EE"), column("DD") + 2);
+    let column = |text: &str| cell_of(&rows, text).0;
+    assert_eq!(column("└▾  EE"), column("DD"), "{}", rows.join("\n"));
+    assert_eq!(column("└── FF"), column("EE"), "{}", rows.join("\n"));
 }
 
 #[test]
@@ -472,5 +466,17 @@ fn the_marker_folds_and_the_rest_of_the_row_opens_the_chat() {
     assert!(rows.iter().any(|row| row.contains("EE")));
 
     click(&mut app, cell_of(&rows, "EE"));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "ee"));
+}
+
+#[test]
+fn a_nested_marker_is_its_icon_column_past_the_tree_line() {
+    let (mut app, mut rx) = nested_archive();
+    app.handle_key(key(KeyCode::Char(' ')));
+    let (marker, row) = cell_of(&screen(&mut app, 100), "└▸  EE");
+    click(&mut app, (marker + 2, row));
+    assert!(!app.archived_folded(1), "the blank beside ▸ opens EE");
+    assert!(rx.try_recv().is_err(), "and opens no chat");
+    click(&mut app, (marker, row));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "ee"));
 }

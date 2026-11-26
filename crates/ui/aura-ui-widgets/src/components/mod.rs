@@ -35,7 +35,7 @@ pub use header::HeaderBar;
 pub use info::{truncate_line, Info, Value};
 pub use input::InputField;
 pub use list_row::{
-    cell_style, fold_row, format_ago, list_row, list_row_ending, list_row_with_detail, tree_row,
+    cell_style, format_ago, list_row, list_row_ending, list_row_with_detail, tree_row,
     truncate_record_info, CellState, RowBadge, StatusIcon, PLAN_BADGE, ROW_INSET,
 };
 pub use live_output::{quiet_for, LiveOutput, QUIET_AFTER};

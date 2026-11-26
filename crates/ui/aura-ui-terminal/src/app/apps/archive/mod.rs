@@ -278,13 +278,15 @@ impl App {
     }
 
     /// Whether `column` is on the fold marker of archived agent `index`:
-    /// its icon column, after the row's inset and two columns per level.
+    /// its icon column, which `tree_row` puts after the row's inset and
+    /// the tree lines, `AURA_WIDTH + 2` columns per level, and the blank
+    /// after it.
     fn on_archived_marker(&self, index: usize, column: u16) -> bool {
-        use crate::animation::AURA_WIDTH;
+        use crate::{animation::AURA_WIDTH, components::ROW_INSET};
         let Some(rows) = self.areas.archived_rows else {
             return false;
         };
-        let start = crate::components::ROW_INSET + 2 * self.archived.items[index].depth;
+        let start = ROW_INSET + self.archived.items[index].depth * (AURA_WIDTH + 2);
         let offset = usize::from(column.saturating_sub(rows.x));
         self.archived_has_spawns(index) && (start..=start + AURA_WIDTH).contains(&offset)
     }

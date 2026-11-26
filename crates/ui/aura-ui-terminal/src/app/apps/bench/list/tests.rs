@@ -300,8 +300,10 @@ fn a_click_folds_on_the_arrow_and_shows_elsewhere() {
     app.focus = PanelFocus::Swarm;
     app.set_bench_rows_area(Rect::new(1, 2, 40, 12));
     app.set_new_bench_area(Rect::new(1, 14, 40, 1));
+    let arrow = 1 + u16::try_from(crate::components::ROW_INSET).unwrap();
+    let blank = arrow + u16::try_from(crate::animation::AURA_WIDTH).unwrap();
     // c1 is on screen row 3: its arrow unfolds it, and shows nothing.
-    app.click_bench_row(2, 3);
+    app.click_bench_row(arrow, 3);
     assert!(app.bench_unfolded(1));
     assert_eq!(app.bench.mode, Some(BenchMode::Detail("c2".to_string())));
     assert_eq!(app.bench_row_at(10, 4), None, "arm-a takes no click");
@@ -317,9 +319,12 @@ fn a_click_folds_on_the_arrow_and_shows_elsewhere() {
     assert_eq!(app.bench.mode, Some(agent_mode("a-1")));
     assert_eq!(app.focus(), PanelFocus::Chat, "an agent takes them");
 
-    // c2 has no agents: its arrow's columns show it.
-    app.click_bench_row(2, 2);
+    // c2 has no agents: its icon column shows it.
+    app.click_bench_row(arrow, 2);
     assert_eq!(app.bench.mode, Some(BenchMode::Detail("c2".to_string())));
+    // The blank after c1's icon column folds it, as its arrow does.
+    app.click_bench_row(blank, 3);
+    assert!(!app.bench_unfolded(1));
 }
 
 #[test]
@@ -366,6 +371,14 @@ fn screen(app: &mut App, width: u16) -> Vec<String> {
 #[test]
 fn an_unfolded_benchmark_hangs_its_agents_from_its_name() {
     let (mut app, _rx) = unfolded();
+    // Done, so the arrows show where a running benchmark's spinner goes.
+    for id in ["c1", "c2"] {
+        let done = BenchView {
+            status: crate::events::BenchStatus::Done,
+            ..view(id)
+        };
+        app.process_command(UiCommand::BenchUpsert(Box::new(done)));
+    }
     let rows = screen(&mut app, 140);
     let at = |text: &str| {
         rows.iter()
@@ -373,10 +386,10 @@ fn an_unfolded_benchmark_hangs_its_agents_from_its_name() {
             .unwrap_or_else(|| panic!("no {text}:\n{}", rows.join("\n")))
     };
     let before = |row: usize, text: &str| &rows[row][..rows[row].find(text).unwrap()];
-    let bench = at("Compare c1");
-    assert!(before(bench, "Compare c1").contains('▾'), "{}", rows[bench]);
+    let bench = at("c1 work c1");
+    assert!(before(bench, "c1 work c1").contains('▾'), "{}", rows[bench]);
     // The list's c2, above it: no arrow without agents.
-    let lead = before(bench - 1, "Compare c2");
+    let lead = before(bench - 1, "c2 work c2");
     assert!(!lead.contains('▸') && !lead.contains('▾'), "{lead}");
     for (row, guides) in [
         (bench + 1, "├── arm-a"),
@@ -390,7 +403,7 @@ fn an_unfolded_benchmark_hangs_its_agents_from_its_name() {
     }
     assert_eq!(
         before(bench + 1, "├── arm-a").chars().count(),
-        before(bench, "Compare c1").chars().count(),
+        before(bench, "c1 work c1").chars().count(),
         "the lines drop from the benchmark's name"
     );
 }

@@ -27,6 +27,7 @@ mod copy_buttons;
 mod drag_scroll;
 mod input_box;
 mod input_overlays;
+mod list_rows;
 mod model_selector;
 mod notifications;
 mod panel_buttons;

@@ -96,40 +96,6 @@ pub fn list_row_ending<'a>(
     indented_row(width, indent, icon, label, cell, end, &[])
 }
 
-/// [`list_row_with_detail`] led by `fold`, a fold arrow or a blank, drawn
-/// in its own color before the icon, as the benchmark timeline leads its
-/// rows: `  ▾ ✓  name  detail   time  `.
-pub fn fold_row<'a>(
-    width: usize,
-    (fold, color): (&str, Color),
-    icon: StatusIcon,
-    (name, detail): (&str, Option<&str>),
-    cell: CellStyle,
-    time: Option<&str>,
-) -> Line<'a> {
-    let fill = cell
-        .bg
-        .map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let lead = Span::styled(
-        format!("{INSET}{fold} "),
-        fill.fg(cell.icon.unwrap_or(color)),
-    );
-    let label = RowLabel {
-        name,
-        badge: None,
-        detail,
-    };
-    indented_row(
-        width,
-        lead,
-        icon,
-        label,
-        cell,
-        &AgentRowEnd::time(time),
-        &[],
-    )
-}
-
 /// [`list_row`] for an agent in a project's tree: indented by `guides`,
 /// the lines from the agent that spawned it, drawn in their color. A
 /// spawn with no icon has its elbow run on through the icon column. The

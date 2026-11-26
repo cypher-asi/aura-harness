@@ -1,32 +1,37 @@
 //! The agents panel's BENCH tab: every benchmark, newest first, one row
-//! each with its name, what it is about and how long ago it started, and
-//! "+ New bench" pinned to the bottom row. A benchmark with agents to
-//! unfold over has an arrow before its status; unfolded, they hang from
-//! its name as the projects list hangs spawns: the agent of each arm,
-//! muted, over its runs, and under a run the agents it spawned.
+//! each with its number and what it ran, its arms and how long ago it
+//! started, and "+ New bench" pinned to the bottom row (see [`label`]).
+//! A benchmark with agents to unfold over has an arrow in its icon
+//! column, the spinner while it runs; unfolded, they hang from its name
+//! as the projects list hangs spawns: the agent of each arm, muted, over
+//! its runs, and under a run the agents it spawned.
 //!
 //! ```text
-//!  ▸ ⠋  Compare #3  fix the parser    2m
-//!  ▾ ✓  Compare #2  add retries       3h
-//!       ├── arm A
-//!       │   ├── run A1                3h
-//!       │   │   └── scout             3h
-//!       │   └── run A2                3h
-//!       └── arm B
-//!           └── run B1                3h
+//! ⠋  #3 fix the parser  gate vs opus-5-5      2m
+//! ▾  #2 swe-pro ×20  gate vs opus-5-5         3h
+//!    ├── arm A
+//!    │   ├── run A1                           3h
+//!    │   │   └── scout                        3h
+//!    │   └── run A2                           3h
+//!    └── arm B
+//!        └── run B1                           3h
 //!
-//!  +  New bench
+//! +  New bench
 //! ```
 //!
 //! What a row shows, a benchmark's numbers, an agent's chat or the form,
 //! is in the chat panel. While the panel is focused the keyboard's row is
 //! lit; otherwise the row of what the chat panel shows is.
 
+mod label;
+#[cfg(test)]
+mod tests;
+
 use super::projects::spawn_guides_below;
 use super::{draw_list, split_pinned, working_icon};
 use crate::app::{AgentRowEnd, BenchAgent, BenchRow, HoverTarget, PanelFocus};
 use crate::components::{
-    cell_style, fold_row, format_ago, list_row, tree_row, CellState, StatusIcon,
+    cell_style, format_ago, list_row, list_row_with_detail, tree_row, CellState, StatusIcon,
 };
 use crate::events::BenchStatus;
 use crate::renderer::chrome::ScrollView;
@@ -118,10 +123,10 @@ fn row_line<'a>(
     }
 }
 
-/// `  ▾ ✓  Compare #2  add retries  3h  `: `▸` folded over its agents, `▾`
-/// unfolded, or a blank with none listed; the spinner while it runs, `■`
-/// once stopped and `✓` once its runs ended, as the PROCESSES tab marks a
-/// process; then its name, what it is about, and how long ago it started.
+/// `▾  #2 swe-pro ×20  gate vs opus-5-5  3h`: in the icon column the
+/// spinner while it runs, else `▸` folded over its agents, `▾` unfolded,
+/// or nothing with none listed; then its number and work, its arms muted,
+/// and how long ago it started. A benchmark the user stopped is muted.
 fn bench_row<'a>(
     app: &App,
     width: usize,
@@ -130,31 +135,27 @@ fn bench_row<'a>(
     theme: &Theme,
 ) -> Line<'a> {
     let view = &app.bench().benches[index];
-    let fold = if !app.bench_has_agents(index) {
-        " "
+    let icon = if view.status == BenchStatus::Running {
+        working_icon(app, theme)
+    } else if !app.bench_has_agents(index) {
+        StatusIcon::new("", theme.colors.muted)
     } else if app.bench_unfolded(index) {
-        "▾"
+        StatusIcon::new("▾", theme.colors.muted)
     } else {
-        "▸"
+        StatusIcon::new("▸", theme.colors.muted)
     };
-    let icon = match view.status {
-        BenchStatus::Running => working_icon(app, theme),
-        BenchStatus::Cancelled => StatusIcon::new("■", theme.colors.muted),
-        _ => StatusIcon::new("✓", theme.colors.success),
+    let color = if view.status == BenchStatus::Cancelled {
+        theme.colors.muted
+    } else {
+        theme.colors.foreground
     };
-    let cell = cell_style(theme, state, Style::default().fg(theme.colors.foreground));
-    let about = view
-        .title
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or_default()
-        .trim();
+    let cell = cell_style(theme, state, Style::default().fg(color));
     let ago = (view.started_ms > 0).then(|| format_ago(view.started_ms, now));
-    fold_row(
+    list_row_with_detail(
         width,
-        (fold, theme.colors.muted),
+        0,
         icon,
-        (&view.name, Some(about)),
+        (&label::name(view), label::arms(view).as_deref()),
         cell,
         ago.as_deref(),
     )
@@ -173,8 +174,7 @@ fn agent_row<'a>(
 ) -> Line<'a> {
     let list = app.bench_agent_list(at.archived);
     let agent = &list[at.index];
-    // Two blanks put the first level's line under the benchmark's name.
-    let guides = format!("  {}", spawn_guides_below(list, at.index, at.top));
+    let guides = spawn_guides_below(list, at.index, at.top);
     let icon = if app.agent_thinking(agent) {
         working_icon(app, theme)
     } else {
