@@ -24,8 +24,6 @@
 //!   checks, the judge, and the record of how it ended
 //! - [`view`]: what `/compare` shows
 
-#![deny(clippy::too_many_lines)]
-
 mod ended;
 mod handle;
 mod lifecycle;

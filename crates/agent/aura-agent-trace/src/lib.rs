@@ -19,8 +19,6 @@
 //! The recorder is a sidecar: it never appends to the kernel record
 //! log, it joins to it by tool-use id and file path.
 
-#![deny(clippy::too_many_lines)]
-
 pub mod activity;
 pub mod bundle;
 pub mod dataset;

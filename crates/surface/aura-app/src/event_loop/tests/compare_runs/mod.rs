@@ -25,8 +25,6 @@
 //! - `pins`: one comparison whose every word and record is pinned byte for
 //!   byte
 
-#![deny(clippy::too_many_lines)]
-
 mod answers;
 mod applying;
 mod asking;

@@ -19,8 +19,6 @@
 //!
 //! Running the arms, the check command and the judge live with the app.
 
-#![deny(clippy::too_many_lines)]
-
 mod args;
 mod arms;
 mod estimate;

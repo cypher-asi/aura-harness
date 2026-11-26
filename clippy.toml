@@ -1,9 +1,8 @@
 # Clippy configuration for the whole workspace.
 
 # No function longer than 50 lines (clippy counts lines of code in the body,
-# not blank or comment-only lines). Enforced per crate with
-# `#![deny(clippy::too_many_lines)]` and, once every crate is done, through
-# `[workspace.lints.clippy]`.
+# not blank or comment-only lines). `clippy::too_many_lines` is on for every
+# crate through `[workspace.lints.clippy]`.
 too-many-lines-threshold = 50
 
 # Tests may unwrap and expect; production code may not

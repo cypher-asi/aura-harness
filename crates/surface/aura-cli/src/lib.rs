@@ -31,7 +31,6 @@
 //!   binaries had.
 
 #![forbid(unsafe_code)]
-#![deny(clippy::too_many_lines)]
 
 use aura_core_modes::{AgentMode, ApprovalLevel};
 use clap::ValueEnum;

@@ -360,6 +360,8 @@ cast_sign_loss = "warn"
 # integration-test, example and build-script crates opt out at their root.
 unwrap_used = "warn"
 expect_used = "warn"
+# No function over 50 lines, in every target (threshold in `clippy.toml`).
+too_many_lines = "warn"
 
 [lints]
 workspace = true

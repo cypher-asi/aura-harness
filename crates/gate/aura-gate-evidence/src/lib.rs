@@ -18,8 +18,6 @@
 //! - `test_support`: builders of a turn's messages, for tests (feature
 //!   `test-support`)
 
-#![deny(clippy::too_many_lines)]
-
 mod category;
 pub mod checks;
 pub mod coverage;

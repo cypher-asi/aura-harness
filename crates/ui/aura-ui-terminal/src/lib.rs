@@ -32,7 +32,6 @@
 //! ```
 
 #![forbid(unsafe_code)]
-#![deny(clippy::too_many_lines)]
 
 pub mod alerts;
 pub use aura_ui::events;

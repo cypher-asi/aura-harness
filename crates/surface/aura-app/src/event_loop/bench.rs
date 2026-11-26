@@ -1,8 +1,6 @@
 //! The BENCH tab's requests, served by `/compare`'s actions: every
 //! benchmark is a comparison, shown as a [`BenchView`].
 
-#![deny(clippy::too_many_lines)]
-
 use super::agent_events::AgentUi;
 use super::compare;
 use super::subagents::lock;

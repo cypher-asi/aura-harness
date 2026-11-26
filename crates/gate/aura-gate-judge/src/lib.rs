@@ -11,8 +11,6 @@
 //! Gate never calls a model itself: it builds these requests, and the
 //! calls go through the agent's kernel as usual.
 
-#![deny(clippy::too_many_lines)]
-
 pub mod blind;
 pub mod classify;
 pub mod criteria;

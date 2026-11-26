@@ -15,7 +15,6 @@
 //! [`session::SessionOptions`] or [`headless::HeadlessOptions`].
 
 #![forbid(unsafe_code)]
-#![deny(clippy::too_many_lines)]
 
 /// The agent definitions, moved to `aura-engine-registry`.
 pub use aura_engine_registry::definitions as agent_definitions;

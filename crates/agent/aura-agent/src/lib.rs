@@ -27,7 +27,6 @@
 //! ```
 
 #![forbid(unsafe_code)]
-#![deny(clippy::too_many_lines)]
 
 mod agent_loop;
 mod budget;

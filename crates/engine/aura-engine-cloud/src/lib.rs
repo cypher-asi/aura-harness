@@ -52,8 +52,6 @@
 //!   process either: machines hold only `bxds_` placeholders.
 //! - Every external call has a timeout (rules.md §6.2).
 
-#![deny(clippy::too_many_lines)]
-
 pub mod boot;
 pub mod boxd;
 pub mod cost;

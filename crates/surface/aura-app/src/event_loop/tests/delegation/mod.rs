@@ -13,8 +13,6 @@
 //! - `undo`: what of a failed attempt is undone before the retry
 //! - `figures`: `/gate`'s delegation figures
 
-#![deny(clippy::too_many_lines)]
-
 mod check;
 mod escalation;
 mod figures;

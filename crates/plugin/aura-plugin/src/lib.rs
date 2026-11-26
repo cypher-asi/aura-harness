@@ -43,7 +43,6 @@
 //!   plugin-pipeline call sites on a single type.
 
 #![forbid(unsafe_code)]
-#![deny(clippy::too_many_lines)]
 
 pub mod api;
 pub mod cache;

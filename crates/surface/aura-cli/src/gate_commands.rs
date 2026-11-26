@@ -1,8 +1,6 @@
 //! `aura gate`: reading Gate's attempt log, and asking Gate's reviewer
 //! about the attempts in it.
 
-#![deny(clippy::too_many_lines)]
-
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;

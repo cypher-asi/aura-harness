@@ -5,8 +5,6 @@
 //! - `eval`: `aura eval run`'s runs under Gate
 //! - `output`: what Gate's own check streams
 
-#![deny(clippy::too_many_lines)]
-
 mod eval;
 mod output;
 mod tools;

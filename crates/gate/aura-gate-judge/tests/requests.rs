@@ -10,7 +10,6 @@
 
 // Integration-test crate: test code may unwrap/expect.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-#![deny(clippy::too_many_lines)]
 
 use std::fmt::Debug;
 use std::path::PathBuf;

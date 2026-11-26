@@ -41,7 +41,6 @@
 //! - [`rereview`]: asking the reviewer again about attempts in the log,
 //!   for `aura gate replay`
 //! - `samples` (tests only): the lines and logs the unit tests share
-#![deny(clippy::too_many_lines)]
 
 mod file;
 mod join;

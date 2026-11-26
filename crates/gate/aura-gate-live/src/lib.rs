@@ -15,7 +15,6 @@
 //! - `record`: a turn's `Outcome`s on the record, and the user's later
 //!   verdicts on the turn (a retry on a stronger model, a rewind)
 //! - `runtime`: the clock, and threads startup doesn't wait for
-#![deny(clippy::too_many_lines)]
 
 mod ask;
 mod attempts;

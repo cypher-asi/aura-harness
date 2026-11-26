@@ -32,7 +32,6 @@
 //! - `criteria`: the criteria written for replays, and their writer's
 //!   calls
 //! - `ask`: the reviewer's calls, and the log's lines for its answers
-#![deny(clippy::too_many_lines)]
 
 use std::collections::HashMap;
 use std::path::PathBuf;

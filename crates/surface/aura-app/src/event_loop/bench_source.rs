@@ -2,8 +2,6 @@
 //! they were when it started, what it cost, and what the user kept from
 //! it (the reference the judge rates each run against).
 
-#![deny(clippy::too_many_lines)]
-
 use super::LoopState;
 use crate::file_checkpoints::{FileCheckpoints, TurnManifest};
 use crate::session_checkpoint::{SessionCheckpoint, SessionUsage};

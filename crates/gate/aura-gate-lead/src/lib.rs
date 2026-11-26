@@ -15,8 +15,6 @@
 //! - `executor`: a led turn's tools and calls ([`lead_tools`], [`LeadExecutor`])
 //! - [`delegation`]: how much of a lead's work went to subtasks
 
-#![deny(clippy::too_many_lines)]
-
 pub mod delegation;
 mod executor;
 mod limits;

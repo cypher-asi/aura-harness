@@ -72,8 +72,6 @@
 //! - `prompts`: what the model is told when its work is sent back, or
 //!   goes on to a stronger model ([`takeover_prompt`], [`retry_prompt`])
 
-#![deny(clippy::too_many_lines)]
-
 mod prompts;
 mod review;
 mod step;

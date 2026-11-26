@@ -36,7 +36,6 @@
 //! `tests/layer_boundary.rs` check enforces this on every CI run.
 
 #![forbid(unsafe_code)]
-#![deny(clippy::too_many_lines)]
 
 mod helpers;
 mod registry;

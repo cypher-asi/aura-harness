@@ -8,7 +8,6 @@
 //! be owned by the signed-in zOS user.
 
 #![forbid(unsafe_code)]
-#![deny(clippy::too_many_lines)]
 
 mod client;
 mod error;

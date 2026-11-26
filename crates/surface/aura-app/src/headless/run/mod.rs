@@ -17,8 +17,6 @@
 //!
 //! [`drive_turn`]: crate::event_loop::handlers::drive_turn
 
-#![deny(clippy::too_many_lines)]
-
 mod drive;
 mod follow;
 mod notices;

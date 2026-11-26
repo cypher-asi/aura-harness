@@ -13,7 +13,6 @@
 //! place.
 
 #![forbid(unsafe_code)]
-#![deny(clippy::too_many_lines)]
 
 mod provider;
 

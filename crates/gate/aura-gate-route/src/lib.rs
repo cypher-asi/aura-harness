@@ -22,8 +22,6 @@
 //! Gate never calls a model itself: it chooses which model a turn runs
 //! on, and the calls go through the agent's kernel as usual.
 
-#![deny(clippy::too_many_lines)]
-
 mod candidate;
 mod cost;
 mod decision;

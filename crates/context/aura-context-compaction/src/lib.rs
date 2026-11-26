@@ -10,7 +10,6 @@
 //! Layer: context
 
 #![forbid(unsafe_code)]
-#![deny(clippy::too_many_lines)]
 
 mod messages;
 mod tools;

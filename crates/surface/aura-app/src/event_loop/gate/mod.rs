@@ -7,8 +7,6 @@
 //! - [`turn`]: Gate's part of a terminal turn, from its label to its outcome
 //! - [`view`]: `/gate`, what Gate has learned and how it has routed
 
-#![deny(clippy::too_many_lines)]
-
 pub(crate) mod followup;
 pub(super) mod subtask;
 pub(super) mod turn;
