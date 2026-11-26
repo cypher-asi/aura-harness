@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::FakeProvider;
 use aura_core_protocol::{ErrorMsg, TextDelta, ToolUseStart};

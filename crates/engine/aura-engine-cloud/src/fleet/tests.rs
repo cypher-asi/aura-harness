@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::boot::{BootEvent, StageState};
 use crate::fake::FakeProvider;

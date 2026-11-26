@@ -9,6 +9,7 @@
 //! Contains no provider-specific endpoints.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 pub mod bearer;
 mod browser;

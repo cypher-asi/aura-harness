@@ -11,53 +11,57 @@ async fn serve() -> (ClaudeProvider, Seen) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let seen: Seen = Arc::default();
-    let log = seen.clone();
     let app = Router::new()
-        .route(
-            "/v1/oauth/token",
-            post(move |Json(body): Json<Value>| {
-                let log = log.clone();
-                async move {
-                    log.lock().unwrap().push(body.clone());
-                    if body["refresh_token"] == "revoked" {
-                        return (
-                            axum::http::StatusCode::BAD_REQUEST,
-                            Json(json!({"error":"invalid_grant"})),
-                        );
-                    }
-                    (
-                        axum::http::StatusCode::OK,
-                        Json(json!({
-                            "access_token": "sk-ant-oat-1",
-                            "refresh_token": "sk-ant-ort-1",
-                            "expires_in": 28800,
-                            "scope": SCOPE,
-                            "account": {"uuid": "acct-1", "email_address": "bob@example.com"},
-                        })),
-                    )
-                }
-            }),
-        )
-        .route(
-            "/api/oauth/profile",
-            get(|headers: axum::http::HeaderMap| async move {
-                if headers["authorization"] != "Bearer sk-ant-oat-1" {
-                    return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({})));
-                }
-                (
-                    axum::http::StatusCode::OK,
-                    Json(json!({
-                        "account": {"has_claude_max": true, "has_claude_pro": false},
-                        "organization": {
-                            "organization_type": "claude_max",
-                            "rate_limit_tier": "default_claude_max_20x",
-                        },
-                    })),
-                )
-            }),
-        );
+        .route("/v1/oauth/token", token_route(seen.clone()))
+        .route("/api/oauth/profile", profile_route());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (ClaudeProvider::fixture(&base).unwrap(), seen)
+}
+
+/// The token endpoint: logs each request body and refuses the `revoked`
+/// refresh token.
+fn token_route(log: Seen) -> axum::routing::MethodRouter {
+    post(move |Json(body): Json<Value>| {
+        let log = log.clone();
+        async move {
+            log.lock().unwrap().push(body.clone());
+            if body["refresh_token"] == "revoked" {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(json!({"error":"invalid_grant"})),
+                );
+            }
+            (
+                axum::http::StatusCode::OK,
+                Json(json!({
+                    "access_token": "sk-ant-oat-1",
+                    "refresh_token": "sk-ant-ort-1",
+                    "expires_in": 28800,
+                    "scope": SCOPE,
+                    "account": {"uuid": "acct-1", "email_address": "bob@example.com"},
+                })),
+            )
+        }
+    })
+}
+
+/// The profile endpoint: a Max plan for the fixture's access token.
+fn profile_route() -> axum::routing::MethodRouter {
+    get(|headers: axum::http::HeaderMap| async move {
+        if headers["authorization"] != "Bearer sk-ant-oat-1" {
+            return (axum::http::StatusCode::UNAUTHORIZED, Json(json!({})));
+        }
+        (
+            axum::http::StatusCode::OK,
+            Json(json!({
+                "account": {"has_claude_max": true, "has_claude_pro": false},
+                "organization": {
+                    "organization_type": "claude_max",
+                    "rate_limit_tier": "default_claude_max_20x",
+                },
+            })),
+        )
+    })
 }
 
 fn linked(client_id: &str) -> LinkedAccount {

@@ -13,6 +13,7 @@
 //! header lives in this crate so it can be updated in one place.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 mod provider;
 

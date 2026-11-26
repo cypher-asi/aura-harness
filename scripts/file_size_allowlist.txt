@@ -23,8 +23,6 @@ crates/agent/aura-agent/src/agent_runner/mod.rs
 crates/agent/aura-agent/src/task_executor/mod.rs
 crates/agent/aura-agent/src/task_executor/tests.rs
 crates/agent/aura-agent/src/verify/runner.rs
-crates/auth/aura-auth/src/manager.rs
-crates/auth/aura-auth/src/manager/tests.rs
 crates/engine/aura-engine-automaton/src/builtins/dev_loop/tests.rs
 crates/engine/aura-engine-automaton/src/builtins/task_refinement/tests.rs
 crates/engine/aura-engine-cloud/src/boxd.rs
