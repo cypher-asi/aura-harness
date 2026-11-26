@@ -68,6 +68,14 @@ pub fn shimmer_spans(
     spans
 }
 
+/// Frames one pass of the band over `text` takes, from entering on its
+/// left to leaving on its right, for a sweep shown once: frames `0` to
+/// this, not included.
+#[must_use]
+pub fn shimmer_pass_frames(text: &str) -> usize {
+    (text.chars().count() + 2 * BAND_RADIUS) * FRAMES_PER_STEP
+}
+
 /// `color` as red, green and blue, when it has a fixed value.
 pub(crate) const fn rgb(color: Color) -> Option<(u8, u8, u8)> {
     match color {
@@ -155,6 +163,24 @@ mod tests {
         let spans = shimmer_spans("abc", resting, Style::default(), (BASE, LIGHT));
         assert!(colors(&spans).iter().all(|c| *c == BASE));
         assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn one_pass_lights_the_text_until_its_last_frame() {
+        let pass = shimmer_pass_frames("abc");
+        let lit = |frame| {
+            colors(&shimmer_spans(
+                "abc",
+                frame,
+                Style::default(),
+                (BASE, LIGHT),
+            ))
+            .iter()
+            .any(|c| *c != BASE)
+        };
+        assert!(lit(0), "the band enters at once");
+        assert!(lit(pass - 1));
+        assert!(!lit(pass), "and has left after the pass");
     }
 
     #[test]

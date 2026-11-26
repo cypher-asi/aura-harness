@@ -47,6 +47,15 @@ impl PlacementView {
             Self::Cloud => Self::Local,
         }
     }
+
+    /// What the footer switch says while an agent moves away from here.
+    #[must_use]
+    pub const fn moving_label(self) -> &'static str {
+        match self {
+            Self::Local => "moving to cloud",
+            Self::Cloud => "bringing back",
+        }
+    }
 }
 
 /// The footer switch of one agent.
@@ -261,5 +270,7 @@ mod tests {
         assert_eq!(PlacementView::Local.flipped(), PlacementView::Cloud);
         assert_eq!(PlacementView::Cloud.label(), "cloud");
         assert_eq!(PlacementView::default(), PlacementView::Local);
+        assert_eq!(PlacementView::Local.moving_label(), "moving to cloud");
+        assert_eq!(PlacementView::Cloud.moving_label(), "bringing back");
     }
 }

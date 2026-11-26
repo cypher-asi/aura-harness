@@ -7,6 +7,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### The placement switch answers at once
+
+##### Changed
+
+- Clicking the `⌂ local` / `☁  cloud` switch at the right of the
+  footer, `/cloud` and `/local` show the move on the switch on the next
+  frame. Before, it could take up to three seconds to change. While the
+  agent moves, a `◐` turns before `moving to cloud` or `bringing back`
+  and a band of light crosses the text, as on the chat's `Working` line.
+- The switch shows where the agent is as soon as a move ends or is
+  turned down, instead of on the next refresh. When the agent lands, a
+  band of the success color crosses the new label once.
+
+##### Added
+
+- The switch lights up like a button under the pointer, one column past
+  each side of its label, and those columns take the click too. It
+  doesn't light while it shows a move or on another user's agent.
+
 ### ARCHIVE headers spell out the date
 
 ##### Changed

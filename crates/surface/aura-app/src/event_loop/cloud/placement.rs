@@ -7,19 +7,11 @@ pub(in crate::event_loop) async fn handle_set_placement(
     placement: PlacementView,
 ) {
     let agent = state.agent_or_active(agent_hex);
-    if state.hub.is_running(agent) || state.cloud.shared.running.lock().contains_key(&agent) {
-        system(
-            state,
-            agent,
-            "This agent is working; stop it or wait before moving it.",
-        )
-        .await;
-        return;
-    }
-    if state.cloud.is_moving(agent) {
+    if turned_down(state, agent).await {
         return;
     }
     // A move shows from the moment it's asked for, connecting included.
+    let mark = MoveMark::take(&state.cloud.shared, agent);
     let placed = state.cloud.hub().is_some_and(|hub| hub.is_placed(agent));
     let console = (matches!(placement, PlacementView::Cloud) && !placed).then(|| {
         BootConsoleUi::new(
@@ -41,16 +33,36 @@ pub(in crate::event_loop) async fn handle_set_placement(
     match placement {
         PlacementView::Cloud => {
             let Some(console) = console else { return };
-            move_to_cloud(state, hub, agent, console).await;
+            move_to_cloud(state, hub, agent, console, mark).await;
         }
         PlacementView::Local => {
             if !hub.is_placed(agent) {
                 return;
             }
             set_project_default(state, &hub, agent, Placement::Local);
-            recall(state, &hub, agent, "returned to local");
+            recall(state, &hub, agent, "returned to local", mark);
         }
     }
+}
+
+/// Turn down a move of `agent` while it works or is already moving.
+/// Returns whether it was turned down.
+async fn turned_down(state: &LoopState<'_>, agent: AgentId) -> bool {
+    let busy = state.hub.is_running(agent) || state.cloud.is_running(agent);
+    if !busy && !state.cloud.is_moving(agent) {
+        return false;
+    }
+    // The switch showed a move when it was clicked; put it right.
+    state.cloud.shared.publish_now();
+    if busy {
+        system(
+            state,
+            agent,
+            "This agent is working; stop it or wait before moving it.",
+        )
+        .await;
+    }
+    true
 }
 
 /// Make `placement` the default of `agent`'s project, if it has one.
@@ -68,12 +80,14 @@ fn set_project_default(
     }
 }
 
-/// Place `agent` on a cloud machine, showing the move on `console`.
+/// Place `agent` on a cloud machine, showing the move on `console` and
+/// holding its `mark` until the move ends.
 async fn move_to_cloud(
     state: &mut LoopState<'_>,
     hub: Arc<CloudHub>,
     agent: AgentId,
     console: BootConsoleUi,
+    mark: MoveMark,
 ) {
     if hub.is_placed(agent) {
         console
@@ -91,12 +105,10 @@ async fn move_to_cloud(
         return;
     };
     set_project_default(state, &hub, agent, Placement::Cloud);
-    state.cloud.shared.moving.lock().insert(agent);
     // The local kernel must not write for it from here on, and
     // its machine traces the conversation as a run of its own.
     state.idle.remove(&agent);
     state.hub.traces.close(agent);
-    let shared = Arc::clone(&state.cloud.shared);
     let ui = AgentUi::new(state.commands.clone(), agent);
     tokio::spawn(async move {
         let (boot, events) = BootReporter::channel();
@@ -104,7 +116,7 @@ async fn move_to_cloud(
         let result = hub.place(request, &boot).await;
         drop(boot);
         let _ = shown.await;
-        shared.moving.lock().remove(&agent);
+        drop(mark);
         if result.is_ok() {
             let root = PathBuf::from(aura_engine_cloud::machine_env::WORKSPACE_DIR);
             ui.send(UiCommand::SetSandboxRemote(root)).await;
@@ -121,13 +133,19 @@ async fn move_to_cloud(
     });
 }
 
-fn recall(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, reason: &'static str) {
+/// Bring `agent` back to this machine, holding its `mark` until it is.
+fn recall(
+    state: &LoopState<'_>,
+    hub: &Arc<CloudHub>,
+    agent: AgentId,
+    reason: &'static str,
+    mark: MoveMark,
+) {
     let shared = Arc::clone(&state.cloud.shared);
     let hub = Arc::clone(hub);
     let ui = AgentUi::new(state.commands.clone(), agent);
     let console = BootConsoleUi::new(ui.clone(), "Bringing the agent back");
     let workspace = lock(&state.hub.registry).project_folder(agent);
-    shared.moving.lock().insert(agent);
     tokio::spawn(async move {
         console.begin().await;
         let (boot, events) = BootReporter::channel();
@@ -135,7 +153,7 @@ fn recall(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, reason: &'
         let result = hub.recall(agent, reason, &boot).await;
         drop(boot);
         let _ = shown.await;
-        shared.moving.lock().remove(&agent);
+        drop(mark);
         let (ok, note) = match result {
             Ok(outcome) => {
                 shared.stale.lock().insert(agent);
@@ -187,7 +205,8 @@ pub(in crate::event_loop) fn on_archive(state: &LoopState<'_>, agents: &[AgentId
         return;
     };
     for agent in agents.iter().copied().filter(|agent| hub.is_placed(*agent)) {
-        recall(state, &hub, agent, "agent archived");
+        let mark = MoveMark::take(&state.cloud.shared, agent);
+        recall(state, &hub, agent, "agent archived", mark);
     }
 }
 

@@ -3,7 +3,8 @@
 
 use super::*;
 
-/// How often the HOST tab and the footer switch are refreshed.
+/// How often the HOST tab and the footer switch are refreshed when
+/// nothing wakes the publisher sooner ([`Shared::publish_now`]).
 const PUBLISH_EVERY: Duration = Duration::from_secs(3);
 
 /// Bring the hub up at start when a key is set, so placed agents keep
@@ -24,8 +25,9 @@ pub(super) fn start_publisher(state: &mut LoopState<'_>) {
     if let Some(old) = state.cloud.publisher.take() {
         old.abort();
     }
+    let shared = Arc::clone(&state.cloud.shared);
     let mut publisher = Publisher {
-        shared: Arc::clone(&state.cloud.shared),
+        shared: Arc::clone(&shared),
         hub: Arc::clone(&state.hub),
         commands: state.commands.clone(),
         auth: Arc::clone(&state.auth),
@@ -34,7 +36,10 @@ pub(super) fn start_publisher(state: &mut LoopState<'_>) {
     state.cloud.publisher = Some(tokio::spawn(async move {
         let mut interval = tokio::time::interval(PUBLISH_EVERY);
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = interval.tick() => {}
+                () = shared.changed.notified() => {}
+            }
             publisher.publish().await;
         }
     }));

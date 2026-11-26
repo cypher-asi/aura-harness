@@ -49,6 +49,7 @@ use crate::cloud::{CloudHub, PlaceRequest, RemoteEvent};
 mod boot;
 mod forward;
 mod machine;
+mod moving;
 mod placement;
 mod publish;
 mod submit;
@@ -59,6 +60,7 @@ mod view;
 use boot::BootConsoleUi;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
+use moving::MoveMark;
 pub(super) use placement::{handle_host_action, handle_set_placement, handle_setup, on_archive};
 pub(super) use publish::start;
 use publish::start_publisher;
@@ -69,8 +71,10 @@ use view::{build_view, placement_state};
 #[derive(Default)]
 struct Shared {
     hub: Mutex<Option<Arc<CloudHub>>>,
-    /// Agents being moved.
+    /// Agents being moved, each held by a [`MoveMark`].
     moving: Mutex<HashSet<AgentId>>,
+    /// Wakes the HOST publisher before its next refresh is due.
+    changed: tokio::sync::Notify,
     /// Cloud agents with a turn running, and how to stop it.
     running: Mutex<std::collections::HashMap<AgentId, CancellationToken>>,
     /// Agents whose local session is older than their record.
@@ -84,6 +88,14 @@ struct Shared {
 }
 
 impl Shared {
+    /// Refresh the footer switches and the HOST tab now, so the switch a
+    /// click turned shows where its agent really is without waiting for
+    /// the next refresh. Wakes that come while one is under way make one
+    /// more.
+    fn publish_now(&self) {
+        self.changed.notify_one();
+    }
+
     /// `agent`'s cloud turn (or `/new`) is over. The loop frees it and
     /// starts what it queued meanwhile, so nothing sent while the turn
     /// ended overtakes that; with no loop listening it is freed here.

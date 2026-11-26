@@ -120,6 +120,7 @@ pub(crate) use hit_targets::{
     CodeCopyHit, CopyText, HoverTarget, ImageHit, ProjectListRow, ToggleRow, ToggleTarget,
 };
 use host_chrome::HostChrome;
+pub(crate) use host_tab::switch_button;
 pub use host_tab::{switch_label, switch_rect, SWITCH_GAP};
 use hud::Hud;
 pub use inbox::{InboxRow, ThreadView};

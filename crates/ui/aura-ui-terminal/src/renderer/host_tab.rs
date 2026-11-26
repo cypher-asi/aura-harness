@@ -22,9 +22,10 @@
 
 use super::chrome::Body;
 use super::side_list::render_empty;
-use crate::app::{switch_label, switch_rect, PanelFocus, SideScope, SWITCH_GAP};
+use crate::animation::shimmer_spans;
+use crate::app::{switch_button, switch_label, switch_rect, PanelFocus, SideScope, SWITCH_GAP};
 use crate::components::{Info, Value};
-use crate::host::{HostView, PlacementView};
+use crate::host::{HostView, PlacementState, PlacementView};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -34,26 +35,71 @@ use ratatui::{
     Frame,
 };
 
+/// The half circle of a move under way, a quarter turn at a time.
+const MOVING_GLYPHS: [&str; 4] = ["◐", "◓", "◑", "◒"];
+
+/// Frames each quarter of the half circle's turn shows.
+const FRAMES_PER_QUARTER: usize = 3;
+
 /// Take the switch's cells off the right of the footer `row` and draw it
-/// there. Returns the row left for the status and stats.
+/// there, lit as a button under the pointer. Returns the row left for the
+/// status and stats.
 pub(super) fn split_footer(frame: &mut Frame, row: Rect, app: &App, theme: &Theme) -> Rect {
     let state = app.placement();
     let label = switch_label(&state);
     let Some(rect) = switch_rect(row, &label) else {
         return row;
     };
-    let color = match (state.moving.is_some(), state.placement) {
-        (true, _) => theme.colors.success,
-        (false, PlacementView::Cloud) => theme.colors.primary,
-        (false, PlacementView::Local) => theme.colors.muted,
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(label, Style::default().fg(color)))),
-        rect,
-    );
+    let lit = app.placement_switch_lit();
+    if lit {
+        let fill = Style::default().bg(theme.colors.surface_hover);
+        frame.buffer_mut().set_style(switch_button(rect), fill);
+    }
+    let spans = switch_spans(&state, label, (app, lit), theme);
+    frame.render_widget(Paragraph::new(Line::from(spans)), rect);
     Rect {
         width: row.width.saturating_sub(rect.width + SWITCH_GAP),
         ..row
+    }
+}
+
+/// The switch's `label` for `state`. While a move runs its half circle
+/// turns and a band of light crosses its text, as on the chat's working
+/// line; once it lands one band of the accent crosses the new label. Lit,
+/// the label reads in the foreground.
+fn switch_spans(
+    state: &PlacementState,
+    label: String,
+    (app, lit): (&App, bool),
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let colors = &theme.colors;
+    let frame = theme.animate_spinners.then(|| app.animation_frame());
+    if let Some(moving) = &state.moving {
+        let Some(frame) = frame else {
+            return vec![Span::styled(label, Style::default().fg(colors.success))];
+        };
+        let glyph = MOVING_GLYPHS[(frame / FRAMES_PER_QUARTER) % MOVING_GLYPHS.len()];
+        let mut spans = vec![Span::styled(
+            format!("{glyph} "),
+            Style::default().fg(colors.success),
+        )];
+        spans.extend(shimmer_spans(
+            moving,
+            frame,
+            Style::default(),
+            (colors.muted, colors.foreground),
+        ));
+        return spans;
+    }
+    let color = match (lit, state.placement) {
+        (true, _) => colors.foreground,
+        (false, PlacementView::Cloud) => colors.primary,
+        (false, PlacementView::Local) => colors.muted,
+    };
+    match app.switch_sweep().filter(|_| frame.is_some()) {
+        Some(step) => shimmer_spans(&label, step, Style::default(), (color, colors.success)),
+        None => vec![Span::styled(label, Style::default().fg(color))],
     }
 }
 

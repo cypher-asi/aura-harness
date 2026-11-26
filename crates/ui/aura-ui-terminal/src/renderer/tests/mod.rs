@@ -30,6 +30,7 @@ mod input_overlays;
 mod model_selector;
 mod notifications;
 mod panel_buttons;
+mod placement_switch;
 mod plan_badge;
 mod record_info;
 mod reply_footer;
