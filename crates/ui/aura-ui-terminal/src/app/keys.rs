@@ -22,7 +22,7 @@ impl App {
         if just_queued.as_deref() == Some(self.active_agent_id.as_str())
             && key.code == KeyCode::Enter
             && key.modifiers.is_empty()
-            && self.input.is_empty()
+            && self.input.text.is_empty()
             && self.state == AppState::Processing
             && self.context_menu.is_none()
             && self.detail.is_none()
@@ -243,16 +243,16 @@ impl App {
             KeyCode::Esc => {
                 self.state = AppState::Idle;
                 self.status = "Ready".to_string();
-                self.input.clear();
-                self.cursor_pos = 0;
+                self.input.text.clear();
+                self.input.cursor_pos = 0;
                 self.login_email.clear();
                 self.pending_model = None;
                 self.notification =
                     Some(("Login cancelled".to_string(), NotificationType::Warning));
             }
             KeyCode::Enter => {
-                let value = std::mem::take(&mut self.input);
-                self.cursor_pos = 0;
+                let value = std::mem::take(&mut self.input.text);
+                self.input.cursor_pos = 0;
 
                 if value.trim().is_empty() {
                     self.notification =
@@ -454,13 +454,13 @@ impl App {
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         if self.focus == PanelFocus::Swarm
-            && self.input.is_empty()
+            && self.input.text.is_empty()
             && self.agents_panel_shortcut(key, word_motion)
         {
             return KeyResult::continue_running();
         }
         if self.focus == PanelFocus::Chat
-            && self.input.is_empty()
+            && self.input.text.is_empty()
             && key.modifiers.contains(KeyModifiers::SHIFT)
             && matches!(key.code, KeyCode::Left | KeyCode::Right)
         {
@@ -469,7 +469,7 @@ impl App {
         }
         if self.focus == PanelFocus::Chat
             && matches!(self.chat_tab(), ChatTab::Graph | ChatTab::Time)
-            && self.input.is_empty()
+            && self.input.text.is_empty()
             && self.handle_flow_key(key)
         {
             return KeyResult::continue_running();
@@ -479,7 +479,9 @@ impl App {
             if key.code == KeyCode::Enter && key.modifiers.is_empty() && self.bench_fill_field() {
                 return KeyResult::continue_running();
             }
-            if self.focus == PanelFocus::Chat && self.input.is_empty() && self.handle_bench_key(key)
+            if self.focus == PanelFocus::Chat
+                && self.input.text.is_empty()
+                && self.handle_bench_key(key)
             {
                 return KeyResult::continue_running();
             }
@@ -487,20 +489,20 @@ impl App {
         if self.focus == PanelFocus::Chat
             && self.chat_tab() == ChatTab::Log
             && self.detail.is_none()
-            && self.input.is_empty()
+            && self.input.text.is_empty()
             && self.handle_log_key(key)
         {
             return KeyResult::continue_running();
         }
         if self.focus == PanelFocus::Sandbox
-            && self.input.is_empty()
+            && self.input.text.is_empty()
             && !word_motion
             && (self.handle_side_tab_key(key) || self.handle_side_list_shortcut(key))
         {
             return KeyResult::continue_running();
         }
         if self.focus == PanelFocus::Records
-            && self.input.is_empty()
+            && self.input.text.is_empty()
             && !word_motion
             && self.handle_records_shortcut(key)
         {
@@ -514,11 +516,11 @@ impl App {
             | KeyCode::End => {
                 return self.handle_chat_key(key);
             }
-            KeyCode::Left | KeyCode::Right if word_motion || !self.input.is_empty() => {
+            KeyCode::Left | KeyCode::Right if word_motion || !self.input.text.is_empty() => {
                 return self.handle_chat_key(key);
             }
             KeyCode::Enter => {
-                if !self.input.is_empty() {
+                if !self.input.text.is_empty() {
                     return self.handle_chat_key(key);
                 }
             }
@@ -583,12 +585,12 @@ impl App {
         let tab_owns_keys = self.focus == PanelFocus::Chat
             && !matches!(self.chat_tab(), ChatTab::Chat | ChatTab::Terminal);
         let prompt_owns_keys =
-            self.queue_selected().is_none() && (!self.input.is_empty() || !tab_owns_keys);
+            self.queue_selected().is_none() && (!self.input.text.is_empty() || !tab_owns_keys);
         if !(is_newline_key(key) && prompt_owns_keys) {
             return false;
         }
         self.insert_newline();
-        self.reset_slash_menu();
+        self.input.reset_slash_menu();
         true
     }
 
@@ -600,10 +602,10 @@ impl App {
             && !key
                 .modifiers
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-            && self.input.is_empty();
+            && self.input.text.is_empty();
         let leaving = self.terminal_mode
             && (key.code == KeyCode::Esc
-                || (key.code == KeyCode::Backspace && self.input.is_empty()));
+                || (key.code == KeyCode::Backspace && self.input.text.is_empty()));
         if !(entering || leaving) {
             return false;
         }
@@ -619,9 +621,9 @@ impl App {
     /// messages otherwise.
     pub(super) fn history(&mut self) -> &mut InputHistory {
         if self.terminal_mode {
-            &mut self.command_history
+            &mut self.input.command_history
         } else {
-            &mut self.input_history
+            &mut self.input.history
         }
     }
 
@@ -666,13 +668,13 @@ impl App {
         }
         if let Some(edit) = self.edit_input(key) {
             if edit == LineEdit::Changed {
-                self.reset_slash_menu();
+                self.input.reset_slash_menu();
             }
             return KeyResult::continue_running();
         }
         match key.code {
             KeyCode::Enter => {
-                if !self.input.trim().is_empty() {
+                if !self.input.text.trim().is_empty() {
                     return self.submit_input();
                 }
                 // Enter on an empty (or blank) prompt sends the oldest
@@ -689,9 +691,9 @@ impl App {
                     return KeyResult::continue_running();
                 }
                 if let Some(prev) = self.history().previous().map(str::to_string) {
-                    self.input = prev;
-                    self.cursor_pos = self.input.len();
-                    self.slash_dismissed = true;
+                    self.input.text = prev;
+                    self.input.cursor_pos = self.input.text.len();
+                    self.input.slash_dismissed = true;
                 }
             }
             KeyCode::Down => {
@@ -701,16 +703,16 @@ impl App {
                 // A typed draft is not history: Down on its last line only
                 // goes to its end.
                 if !self.history().is_browsing() {
-                    self.cursor_pos = self.input.len();
+                    self.input.cursor_pos = self.input.text.len();
                     return KeyResult::continue_running();
                 }
                 if let Some(newer) = self.history().next_newer().map(str::to_string) {
-                    self.input = newer;
-                    self.cursor_pos = self.input.len();
-                    self.slash_dismissed = true;
+                    self.input.text = newer;
+                    self.input.cursor_pos = self.input.text.len();
+                    self.input.slash_dismissed = true;
                 } else {
-                    self.input.clear();
-                    self.cursor_pos = 0;
+                    self.input.text.clear();
+                    self.input.cursor_pos = 0;
                 }
             }
             KeyCode::PageUp => {
@@ -760,13 +762,13 @@ impl App {
                 }
             }
             KeyCode::Char(c) => {
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += 1;
+                self.input.text.insert(self.input.cursor_pos, c);
+                self.input.cursor_pos += 1;
             }
             KeyCode::Backspace => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos -= 1;
-                    self.input.remove(self.cursor_pos);
+                if self.input.cursor_pos > 0 {
+                    self.input.cursor_pos -= 1;
+                    self.input.text.remove(self.input.cursor_pos);
                 }
             }
             _ => {}
@@ -797,12 +799,12 @@ impl App {
     pub(super) fn submit_input(&mut self) -> KeyResult {
         // With no agent on screen there is nobody to send to; the draft
         // stays for when one is. Commands still run.
-        if self.no_agent_on_screen() && !self.input.trim_start().starts_with('/') {
+        if self.no_agent_on_screen() && !self.input.text.trim_start().starts_with('/') {
             self.notification = Some((self.app_send_refusal(), NotificationType::Warning));
             return KeyResult::continue_running();
         }
-        let text = std::mem::take(&mut self.input);
-        self.cursor_pos = 0;
+        let text = std::mem::take(&mut self.input.text);
+        self.input.cursor_pos = 0;
         self.history().add(&text);
         self.scroll_chat_to_bottom();
 
@@ -814,8 +816,8 @@ impl App {
                 return KeyResult::continue_running();
             }
             if busy {
-                self.input = text;
-                self.cursor_pos = self.input.len();
+                self.input.text = text;
+                self.input.cursor_pos = self.input.text.len();
                 self.notification = Some((
                     "Wait for this agent's turn to finish before running a command".to_string(),
                     NotificationType::Warning,

@@ -553,8 +553,8 @@ fn test_terminal_prompt_recalls_only_commands() {
     assert_eq!(app.input(), "ls", "stays at the oldest command");
 
     app.handle_key(key(KeyCode::Esc));
-    app.input.clear();
-    app.cursor_pos = 0;
+    app.input.text.clear();
+    app.input.cursor_pos = 0;
     app.handle_key(key(KeyCode::Up));
     assert_eq!(app.input(), "hello agent");
 }
@@ -1522,8 +1522,8 @@ fn test_the_agents_app_with_no_instance_shows_nothing_and_refuses_to_send() {
         app.app_placeholder().as_deref(),
         Some("Pick a permanent agent")
     );
-    app.input = "hello".to_string();
-    app.cursor_pos = app.input.len();
+    app.input.text = "hello".to_string();
+    app.input.cursor_pos = app.input.text.len();
     app.submit_input();
     assert_eq!(app.input(), "hello", "the draft is kept");
     assert!(rx.try_recv().is_err(), "nothing is sent");
@@ -2681,7 +2681,7 @@ fn test_incoming_messages_keep_scroll_but_sending_jumps_to_bottom() {
     app.add_message(Message::new(MessageRole::System, "tool output"));
     assert_eq!(app.scroll_offset(), 7);
 
-    app.input = "hello".to_string();
+    app.input.text = "hello".to_string();
     app.submit_input();
     assert_eq!(app.scroll_offset(), 0);
 }
@@ -3839,7 +3839,7 @@ fn ctrl_t_stops_the_command_and_keeps_the_turn() {
     app.handle_key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::StopCommand(id)) if id == "aa"));
     assert!(app.is_busy());
-    assert!(app.input.is_empty());
+    assert!(app.input.text.is_empty());
 }
 
 #[test]
@@ -4243,8 +4243,8 @@ fn test_pasted_text_keeps_its_newlines_instead_of_sending() {
     assert!(rx.try_recv().is_err(), "nothing was sent");
 
     app.state = AppState::LinkCode;
-    app.input.clear();
-    app.cursor_pos = 0;
+    app.input.text.clear();
+    app.input.cursor_pos = 0;
     app.handle_paste("  code-123\n");
     assert_eq!(app.input(), "code-123");
 }
@@ -6387,8 +6387,8 @@ fn test_channels_with_nothing_open_hide_the_right_column_and_refuse_to_send() {
     assert!(!app.sandbox_panel_visible());
     assert_eq!(app.app_placeholder().as_deref(), Some("Pick a channel"));
 
-    app.input = "hello".to_string();
-    app.cursor_pos = app.input.len();
+    app.input.text = "hello".to_string();
+    app.input.cursor_pos = app.input.text.len();
     app.submit_input();
     assert_eq!(app.input(), "hello", "the draft is kept");
     assert!(rx.try_recv().is_err(), "nothing is sent");
@@ -6509,8 +6509,8 @@ fn test_at_outside_a_coordinator_chat_lists_only_files() {
     app.switch_app(AgentsTab::Projects);
     app.process_command(UiCommand::SetActiveAgent("co".to_string()));
     app.process_command(UiCommand::SetSandboxRoot(_dir.path().to_path_buf()));
-    app.input.clear();
-    app.cursor_pos = 0;
+    app.input.text.clear();
+    app.input.cursor_pos = 0;
     type_keys(&mut app, "@RE");
     assert_eq!(mention_paths(&app), ["README.md"]);
 }

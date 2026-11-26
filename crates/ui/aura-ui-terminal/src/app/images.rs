@@ -131,11 +131,11 @@ impl App {
             ));
         }
         self.prune_images();
-        if self.images.len() >= MAX_IMAGES {
+        if self.input.images.len() >= MAX_IMAGES {
             return Err(format!("A message holds at most {MAX_IMAGES} images"));
         }
-        let label = self.images.iter().map(|p| p.label).max().unwrap_or(0) + 1;
-        self.images.push(PendingImage {
+        let label = self.input.images.iter().map(|p| p.label).max().unwrap_or(0) + 1;
+        self.input.images.push(PendingImage {
             label,
             image: ImageAttachment {
                 media_type: media_type.to_string(),
@@ -151,16 +151,19 @@ impl App {
     /// Images whose chip is still in the input.
     #[must_use]
     pub fn attached_images(&self) -> usize {
-        self.images
+        self.input
+            .images
             .iter()
-            .filter(|p| self.input.contains(&image_chip(p.label)))
+            .filter(|p| self.input.text.contains(&image_chip(p.label)))
             .count()
     }
 
     /// Forget images whose chip was deleted from the input.
     fn prune_images(&mut self) {
-        let input = &self.input;
-        self.images.retain(|p| input.contains(&image_chip(p.label)));
+        let input = &self.input.text;
+        self.input
+            .images
+            .retain(|p| input.contains(&image_chip(p.label)));
     }
 
     /// The images to send with `text`, and their previews for the chat,
@@ -169,7 +172,7 @@ impl App {
         &mut self,
         text: &str,
     ) -> (Vec<ImageAttachment>, Vec<Arc<ImagePreview>>) {
-        std::mem::take(&mut self.images)
+        std::mem::take(&mut self.input.images)
             .into_iter()
             .filter(|p| text.contains(&image_chip(p.label)))
             .map(|p| (p.image, p.preview))
@@ -180,9 +183,10 @@ impl App {
     /// labels, for the thumbnails above it.
     #[must_use]
     pub(crate) fn pending_previews(&self) -> Vec<(usize, Arc<ImagePreview>)> {
-        self.images
+        self.input
+            .images
             .iter()
-            .filter(|p| self.input.contains(&image_chip(p.label)))
+            .filter(|p| self.input.text.contains(&image_chip(p.label)))
             .map(|p| (p.label, Arc::clone(&p.preview)))
             .collect()
     }
@@ -279,6 +283,7 @@ impl App {
         // ── Pending-input thumbnails ───────────────────────────────────────
         for &(tile, label) in &self.pending_image_areas {
             let Some(preview) = self
+                .input
                 .images
                 .iter()
                 .find(|p| p.label == label)
@@ -343,6 +348,7 @@ impl App {
             .find(|(area, _)| super::contains(Some(*area), column, row))
         {
             let preview = self
+                .input
                 .images
                 .iter()
                 .find(|p| p.label == label)
@@ -408,9 +414,9 @@ impl App {
 
     /// Put `chip` at the cursor with a blank on either side.
     fn insert_chip(&mut self, chip: &str) {
-        let pos = self.cursor_pos.min(self.input.len());
-        let before = &self.input[..pos];
-        let after = &self.input[pos..];
+        let pos = self.input.cursor_pos.min(self.input.text.len());
+        let before = &self.input.text[..pos];
+        let after = &self.input.text[pos..];
         let lead = if before.is_empty() || before.ends_with(char::is_whitespace) {
             ""
         } else {
@@ -422,21 +428,21 @@ impl App {
             " "
         };
         let text = format!("{lead}{chip}{trail}");
-        self.input.insert_str(pos, &text);
-        self.cursor_pos = pos + text.len();
+        self.input.text.insert_str(pos, &text);
+        self.input.cursor_pos = pos + text.len();
     }
 
     /// Ask for the clipboard to be pasted before the next frame (Ctrl+V).
     /// Reading it runs a clipboard tool, which the terminal does outside
     /// key handling.
     pub(super) fn request_paste(&mut self) {
-        self.paste_requested = true;
+        self.input.paste_requested = true;
     }
 
     /// Whether Ctrl+V asked for the clipboard, once. The terminal reads it
     /// and hands it to [`Self::paste_clipboard`].
     pub fn take_paste_request(&mut self) -> bool {
-        std::mem::take(&mut self.paste_requested)
+        std::mem::take(&mut self.input.paste_requested)
     }
 
     /// Read the system clipboard and paste it, for frontends other than
@@ -522,10 +528,10 @@ impl App {
     }
 
     fn insert_text(&mut self, text: &str) {
-        let pos = self.cursor_pos.min(self.input.len());
-        self.input.insert_str(pos, text);
-        self.cursor_pos = pos + text.len();
-        self.reset_slash_menu();
+        let pos = self.input.cursor_pos.min(self.input.text.len());
+        self.input.text.insert_str(pos, text);
+        self.input.cursor_pos = pos + text.len();
+        self.input.reset_slash_menu();
     }
 }
 
@@ -574,7 +580,7 @@ mod tests {
         img.write_to(&mut png, image::ImageFormat::Png).unwrap();
         let mut app = App::new();
         app.attach_image(png.get_ref()).unwrap();
-        let preview = Arc::clone(&app.images[0].preview);
+        let preview = Arc::clone(&app.input.images[0].preview);
         let cols = preview.thumbnail_width();
         let rows = u16::try_from(preview.thumbnail().len()).unwrap();
         // The tile is wider than the picture for its caption, and a row

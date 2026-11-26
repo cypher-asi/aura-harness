@@ -771,11 +771,14 @@ impl App {
     /// typed: the text becomes its value. Returns whether it did.
     pub(in crate::app) fn bench_fill_field(&mut self) -> bool {
         let field = self.bench.form.field;
-        if self.bench.mode != Some(BenchMode::Form) || !field.is_text() || self.input.is_empty() {
+        if self.bench.mode != Some(BenchMode::Form)
+            || !field.is_text()
+            || self.input.text.is_empty()
+        {
             return false;
         }
-        let text = std::mem::take(&mut self.input);
-        self.cursor_pos = 0;
+        let text = std::mem::take(&mut self.input.text);
+        self.input.cursor_pos = 0;
         if field.holds_model() {
             self.open_bench_model_picker(field, &text);
             return true;
@@ -1612,11 +1615,11 @@ mod tests {
         app.bench.mode = Some(BenchMode::Form);
         app.bench.form.b = BY_DIFFICULTY.to_string();
         app.bench.form.field = FormField::BHard;
-        app.input = "gpt".to_string();
+        app.input.text = "gpt".to_string();
         assert!(app.bench_fill_field());
         assert_eq!(app.state, AppState::SelectingModel);
         assert_eq!(app.model_picker.filter(), "gpt");
-        assert!(app.input.is_empty());
+        assert!(app.input.text.is_empty());
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.bench.form.b_models[2], "chatgpt/gpt-5.4");
     }

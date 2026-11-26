@@ -27,14 +27,14 @@ impl App {
     /// - Ctrl or Alt + Delete, Alt+D: delete the word after the cursor
     /// - Ctrl+U/K: delete to the start or end
     pub(super) fn edit_input(&mut self, key: KeyEvent) -> Option<LineEdit> {
-        edit_line(&mut self.input, &mut self.cursor_pos, key)
+        edit_line(&mut self.input.text, &mut self.input.cursor_pos, key)
     }
 
     /// Break the input line at the cursor.
     pub(super) fn insert_newline(&mut self) {
-        let pos = self.cursor_pos.min(self.input.len());
-        self.input.insert(pos, '\n');
-        self.cursor_pos = pos + 1;
+        let pos = self.input.cursor_pos.min(self.input.text.len());
+        self.input.text.insert(pos, '\n');
+        self.input.cursor_pos = pos + 1;
     }
 
     /// Move the cursor to the same column on the row above (`up`) or
@@ -44,23 +44,24 @@ impl App {
     /// leaving the cursor where it was, when there is no row that way, so
     /// the key can recall history instead.
     pub(super) fn move_cursor_line(&mut self, up: bool) -> bool {
-        let pos = self.cursor_pos.min(self.input.len());
+        let pos = self.input.cursor_pos.min(self.input.text.len());
         let target = match self.areas.input_wrap {
             Some(width) => {
-                let offset = self.input[..pos].chars().count();
-                crate::input_wrap::row_move(&self.input, width, offset, up).map(|offset| {
+                let offset = self.input.text[..pos].chars().count();
+                crate::input_wrap::row_move(&self.input.text, width, offset, up).map(|offset| {
                     self.input
+                        .text
                         .char_indices()
                         .nth(offset)
-                        .map_or(self.input.len(), |(i, _)| i)
+                        .map_or(self.input.text.len(), |(i, _)| i)
                 })
             }
-            None if up => line_above(&self.input, pos),
-            None => line_below(&self.input, pos),
+            None if up => line_above(&self.input.text, pos),
+            None => line_below(&self.input.text, pos),
         };
         match target {
             Some(target) => {
-                self.cursor_pos = target;
+                self.input.cursor_pos = target;
                 true
             }
             None => false,
@@ -219,8 +220,8 @@ mod tests {
 
     fn app_with(input: &str, cursor: usize) -> App {
         let mut app = App::new();
-        app.input = input.to_string();
-        app.cursor_pos = cursor;
+        app.input.text = input.to_string();
+        app.input.cursor_pos = cursor;
         app
     }
 
@@ -233,9 +234,9 @@ mod tests {
         let text = "git commit -m fix";
         let mut app = app_with(text, text.len());
         let mut seen = Vec::new();
-        while !app.input.is_empty() {
+        while !app.input.text.is_empty() {
             press(&mut app, KeyCode::Backspace, KeyModifiers::CONTROL);
-            seen.push(app.input.clone());
+            seen.push(app.input.text.clone());
         }
         assert_eq!(
             seen,
@@ -252,8 +253,8 @@ mod tests {
         ] {
             let mut app = app_with("cd src/main.rs", 14);
             press(&mut app, code, modifiers);
-            assert_eq!(app.input, "cd src/main.", "{code:?} {modifiers:?}");
-            assert_eq!(app.cursor_pos, 12);
+            assert_eq!(app.input.text, "cd src/main.", "{code:?} {modifiers:?}");
+            assert_eq!(app.input.cursor_pos, 12);
         }
     }
 
@@ -264,14 +265,14 @@ mod tests {
         let mut stops = Vec::new();
         for _ in 0..4 {
             press(&mut app, KeyCode::Left, KeyModifiers::CONTROL);
-            stops.push(app.cursor_pos);
+            stops.push(app.input.cursor_pos);
         }
         assert_eq!(stops, [12, 5, 0, 0]);
 
         stops.clear();
         for _ in 0..4 {
             press(&mut app, KeyCode::Right, KeyModifiers::ALT);
-            stops.push(app.cursor_pos);
+            stops.push(app.input.cursor_pos);
         }
         assert_eq!(stops, [4, 10, 17, 17]);
     }
@@ -280,22 +281,25 @@ mod tests {
     fn line_kills_and_jumps() {
         let mut app = app_with("hello world", 5);
         press(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
-        assert_eq!((app.input.as_str(), app.cursor_pos), ("hello", 5));
+        assert_eq!(
+            (app.input.text.as_str(), app.input.cursor_pos),
+            ("hello", 5)
+        );
         press(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
-        assert_eq!(app.cursor_pos, 0);
+        assert_eq!(app.input.cursor_pos, 0);
         press(&mut app, KeyCode::Char('e'), KeyModifiers::CONTROL);
-        assert_eq!(app.cursor_pos, 5);
+        assert_eq!(app.input.cursor_pos, 5);
         press(&mut app, KeyCode::Char('u'), KeyModifiers::CONTROL);
-        assert_eq!((app.input.as_str(), app.cursor_pos), ("", 0));
+        assert_eq!((app.input.text.as_str(), app.input.cursor_pos), ("", 0));
     }
 
     #[test]
     fn forward_word_delete() {
         let mut app = app_with("one two three", 3);
         press(&mut app, KeyCode::Delete, KeyModifiers::CONTROL);
-        assert_eq!(app.input, "one three");
+        assert_eq!(app.input.text, "one three");
         press(&mut app, KeyCode::Char('d'), KeyModifiers::ALT);
-        assert_eq!(app.input, "one");
+        assert_eq!(app.input.text, "one");
     }
 
     #[test]
@@ -304,14 +308,14 @@ mod tests {
         for c in "héllo wörld".chars() {
             press(&mut app, KeyCode::Char(c), KeyModifiers::NONE);
         }
-        assert_eq!(app.input, "héllo wörld");
+        assert_eq!(app.input.text, "héllo wörld");
         press(&mut app, KeyCode::Left, KeyModifiers::NONE);
         press(&mut app, KeyCode::Left, KeyModifiers::NONE);
         press(&mut app, KeyCode::Left, KeyModifiers::NONE);
         press(&mut app, KeyCode::Backspace, KeyModifiers::NONE);
-        assert_eq!(app.input, "héllo wrld");
+        assert_eq!(app.input.text, "héllo wrld");
         press(&mut app, KeyCode::Backspace, KeyModifiers::CONTROL);
-        assert_eq!(app.input, "héllo rld");
+        assert_eq!(app.input.text, "héllo rld");
     }
 
     #[test]
@@ -358,12 +362,12 @@ mod tests {
         let mut app = app_with("one two three four", 2);
         app.areas.input_wrap = Some(8);
         assert!(app.move_cursor_line(false));
-        assert_eq!(app.cursor_pos, 10);
+        assert_eq!(app.input.cursor_pos, 10);
         assert!(app.move_cursor_line(false));
-        assert_eq!(app.cursor_pos, 16);
+        assert_eq!(app.input.cursor_pos, 16);
         assert!(!app.move_cursor_line(false), "last row");
         assert!(app.move_cursor_line(true));
-        assert_eq!(app.cursor_pos, 10);
+        assert_eq!(app.input.cursor_pos, 10);
 
         // Unwrapped, it is one line, so Up has nowhere to go.
         app.areas.input_wrap = None;
@@ -377,6 +381,6 @@ mod tests {
             app.edit_input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
             None
         );
-        assert!(app.input.is_empty());
+        assert!(app.input.text.is_empty());
     }
 }

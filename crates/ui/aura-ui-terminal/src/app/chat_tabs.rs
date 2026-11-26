@@ -436,24 +436,24 @@ mod tests {
     /// Leave `text` on the input line, as typing it does, on tabs whose
     /// keys would take the first letters typed.
     fn draft(app: &mut App, text: &str) {
-        app.input = text.to_string();
-        app.cursor_pos = text.len();
+        app.input.text = text.to_string();
+        app.input.cursor_pos = text.len();
     }
 
     #[test]
     fn each_agent_gets_back_the_draft_it_was_left_with() {
         let (mut app, _rx) = two_agents();
         type_text(&mut app, "hello there");
-        app.cursor_pos = 5;
+        app.input.cursor_pos = 5;
 
         switch_to(&mut app, "bb");
         assert_eq!(app.input(), "", "aa's draft does not carry over to bb");
-        assert_eq!(app.cursor_pos, 0);
+        assert_eq!(app.input.cursor_pos, 0);
         type_text(&mut app, "for bb");
 
         switch_to(&mut app, "aa");
         assert_eq!(app.input(), "hello there");
-        assert_eq!(app.cursor_pos, 5, "the cursor is where it was left");
+        assert_eq!(app.input.cursor_pos, 5, "the cursor is where it was left");
 
         switch_to(&mut app, "bb");
         assert_eq!(app.input(), "for bb");
@@ -463,8 +463,8 @@ mod tests {
         assert_eq!(app.input(), "for bb");
 
         // A draft cleared before leaving stays cleared.
-        app.input.clear();
-        app.cursor_pos = 0;
+        app.input.text.clear();
+        app.input.cursor_pos = 0;
         switch_to(&mut app, "aa");
         switch_to(&mut app, "bb");
         assert_eq!(app.input(), "");
@@ -523,8 +523,8 @@ mod tests {
         // aa's draft waits for a switch made outside the prompt; the
         // prompt, once answered, leaves the input empty.
         app.state = AppState::Idle;
-        app.input.clear();
-        app.cursor_pos = 0;
+        app.input.text.clear();
+        app.input.cursor_pos = 0;
         switch_to(&mut app, "bb");
         switch_to(&mut app, "aa");
         assert_eq!(app.input(), "for aa");

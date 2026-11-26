@@ -38,13 +38,18 @@ impl App {
         } else {
             (top + 1).min(rows.max_top())
         };
-        if let Some(view) = self.input_view.as_mut().filter(|_| scrolled.is_some()) {
+        if let Some(view) = self
+            .input
+            .input_view
+            .as_mut()
+            .filter(|_| scrolled.is_some())
+        {
             view.top = top;
         } else {
-            self.input_view = Some(InputView {
+            self.input.input_view = Some(InputView {
                 top,
-                input: self.input.clone(),
-                cursor: self.cursor_pos,
+                input: self.input.text.clone(),
+                cursor: self.input.cursor_pos,
             });
         }
         true

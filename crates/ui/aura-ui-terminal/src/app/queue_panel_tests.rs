@@ -641,8 +641,8 @@ fn esc_after_an_edit_of_a_message_that_ran_brings_the_draft_back_at_once() {
     assert_eq!(app.attached_images(), 1);
     assert!(events(&mut rx).is_empty());
     // The edited text went into the history rather than away.
-    app.input.clear();
-    app.cursor_pos = 0;
+    app.input.text.clear();
+    app.input.cursor_pos = 0;
     key(&mut app, KeyCode::Up, KeyModifiers::empty());
     assert_eq!(app.input(), "first!");
 }

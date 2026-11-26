@@ -322,8 +322,8 @@ impl App {
     pub(super) fn start_login(&mut self) {
         self.state = AppState::LoginEmail;
         self.login_email.clear();
-        self.input.clear();
-        self.cursor_pos = 0;
+        self.input.text.clear();
+        self.input.cursor_pos = 0;
         self.status = "Login — enter email".to_string();
     }
 

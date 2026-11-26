@@ -805,13 +805,13 @@ impl App {
             KeyCode::Home => self.select_agent_row(0),
             KeyCode::End => self.select_last_agent_row(),
             KeyCode::Char(c) => {
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += 1;
+                self.input.text.insert(self.input.cursor_pos, c);
+                self.input.cursor_pos += 1;
             }
             KeyCode::Backspace => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos -= 1;
-                    self.input.remove(self.cursor_pos);
+                if self.input.cursor_pos > 0 {
+                    self.input.cursor_pos -= 1;
+                    self.input.text.remove(self.input.cursor_pos);
                 }
             }
             _ => {}

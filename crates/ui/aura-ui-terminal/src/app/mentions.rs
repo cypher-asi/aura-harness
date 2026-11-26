@@ -335,10 +335,10 @@ impl App {
     /// Close the `@` picker, as when another agent's draft comes into the
     /// input; the next key opens it again on an `@word` there.
     pub(super) fn close_mentions(&mut self) {
-        self.mentions.query = None;
-        self.mentions.matches.clear();
-        self.mentions.cursor = 0;
-        self.mentions.dismissed = None;
+        self.input.mentions.query = None;
+        self.input.mentions.matches.clear();
+        self.input.mentions.cursor = 0;
+        self.input.mentions.dismissed = None;
     }
 
     /// Files and folders matching the `@word` at the cursor. Empty while
@@ -348,8 +348,8 @@ impl App {
     #[must_use]
     pub fn mention_matches(&self) -> &[MentionCandidate] {
         let typing = matches!(self.state, AppState::Idle | AppState::Processing);
-        if typing && self.mentions.query.is_some() {
-            &self.mentions.matches
+        if typing && self.input.mentions.query.is_some() {
+            &self.input.mentions.matches
         } else {
             &[]
         }
@@ -358,9 +358,10 @@ impl App {
     /// Highlighted row in the `@` picker.
     #[must_use]
     pub fn mention_cursor(&self) -> usize {
-        self.mentions
+        self.input
+            .mentions
             .cursor
-            .min(self.mentions.matches.len().saturating_sub(1))
+            .min(self.input.mentions.matches.len().saturating_sub(1))
     }
 
     /// Bring the `@` picker in line with the input: open it on an `@word`
@@ -369,24 +370,25 @@ impl App {
         let active =
             matches!(self.state, AppState::Idle | AppState::Processing) && self.detail.is_none();
         let word = active
-            .then(|| mention_at(&self.input, self.cursor_pos))
+            .then(|| mention_at(&self.input.text, self.input.cursor_pos))
             .flatten();
         // Esc closes the picker for one word; leaving that word forgets it.
-        if word.map(|(start, _, _)| start) != self.mentions.dismissed {
-            self.mentions.dismissed = None;
+        if word.map(|(start, _, _)| start) != self.input.mentions.dismissed {
+            self.input.mentions.dismissed = None;
         }
-        let word = word.filter(|(start, _, _)| self.mentions.dismissed != Some(*start));
+        let word = word.filter(|(start, _, _)| self.input.mentions.dismissed != Some(*start));
         let members = self
             .channels
             .coordinated_by(&self.active_agent_id)
             .map_or(&[][..], |channel| channel.members.as_slice());
         let root = self.sandbox.root();
         let Some((start, _, query)) = word.filter(|_| root.is_some() || !members.is_empty()) else {
-            self.mentions.query = None;
-            self.mentions.matches.clear();
+            self.input.mentions.query = None;
+            self.input.mentions.matches.clear();
             return;
         };
         if self
+            .input
             .mentions
             .query
             .as_ref()
@@ -398,26 +400,28 @@ impl App {
         if let Some(root) = root {
             // A new `@` word walks the tree again so files created since
             // show up; typing within one word reuses the walk.
-            let opening = self.mentions.query.is_none();
+            let opening = self.input.mentions.query.is_none();
             let stale = self
+                .input
                 .mentions
                 .index
                 .as_ref()
                 .is_none_or(|index| opening || !index.is_fresh_for(root));
             if stale {
-                self.mentions.index = Some(MentionIndex::build(root));
+                self.input.mentions.index = Some(MentionIndex::build(root));
             }
             matches.extend(
-                self.mentions
+                self.input
+                    .mentions
                     .index
                     .as_ref()
                     .map(|index| index.rank(query))
                     .unwrap_or_default(),
             );
         }
-        self.mentions.matches = matches;
-        self.mentions.query = Some((start, query.to_string()));
-        self.mentions.cursor = 0;
+        self.input.mentions.matches = matches;
+        self.input.mentions.query = Some((start, query.to_string()));
+        self.input.mentions.cursor = 0;
     }
 
     /// Handle a key while the `@` picker is open. `None` when it is closed
@@ -433,10 +437,10 @@ impl App {
         let selected = self.mention_matches()[self.mention_cursor()].clone();
         match key.code {
             KeyCode::Up => {
-                self.mentions.cursor = self.mention_cursor().checked_sub(1).unwrap_or(last);
+                self.input.mentions.cursor = self.mention_cursor().checked_sub(1).unwrap_or(last);
             }
             KeyCode::Down => {
-                self.mentions.cursor = if self.mention_cursor() >= last {
+                self.input.mentions.cursor = if self.mention_cursor() >= last {
                     0
                 } else {
                     self.mention_cursor() + 1
@@ -446,8 +450,9 @@ impl App {
             KeyCode::Tab => self.insert_mention(&selected, !selected.is_dir),
             KeyCode::Enter => self.insert_mention(&selected, true),
             KeyCode::Esc => {
-                self.mentions.dismissed = self.mentions.query.as_ref().map(|(start, _)| *start);
-                self.mentions.query = None;
+                self.input.mentions.dismissed =
+                    self.input.mentions.query.as_ref().map(|(start, _)| *start);
+                self.input.mentions.query = None;
             }
             _ => return None,
         }
@@ -457,18 +462,18 @@ impl App {
     /// Replace the `@word` at the cursor with `@path`, followed by a blank
     /// when `finish` is set.
     fn insert_mention(&mut self, candidate: &MentionCandidate, finish: bool) {
-        let Some((start, end, _)) = mention_at(&self.input, self.cursor_pos) else {
+        let Some((start, end, _)) = mention_at(&self.input.text, self.input.cursor_pos) else {
             return;
         };
         let mut text = format!("@{}", candidate.path);
-        let next_is_blank = self.input[end..].starts_with(char::is_whitespace);
+        let next_is_blank = self.input.text[end..].starts_with(char::is_whitespace);
         if finish && !next_is_blank {
             text.push(' ');
         }
-        self.input.replace_range(start..end, &text);
-        self.cursor_pos = start + text.len() + usize::from(finish && next_is_blank);
+        self.input.text.replace_range(start..end, &text);
+        self.input.cursor_pos = start + text.len() + usize::from(finish && next_is_blank);
         if finish {
-            self.mentions.query = None;
+            self.input.mentions.query = None;
         }
     }
 }

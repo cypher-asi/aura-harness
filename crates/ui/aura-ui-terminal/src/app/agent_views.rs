@@ -264,10 +264,10 @@ impl App {
             self.drafts.insert(previous.to_string(), outgoing);
         }
         // Menus and history browsing followed the old text.
-        self.reset_slash_menu();
+        self.input.reset_slash_menu();
         self.close_mentions();
-        self.input_history.reset();
-        self.command_history.reset();
+        self.input.history.reset();
+        self.input.command_history.reset();
     }
 
     /// State of the chat swapped in, whose agent is `busy` or not. A turn

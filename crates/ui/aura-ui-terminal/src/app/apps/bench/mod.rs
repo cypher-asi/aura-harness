@@ -824,8 +824,8 @@ mod tests {
         let (mut app, mut rx) = app_with_benches();
         app.show_agents_tab(AgentsTab::Bench);
         app.focus = PanelFocus::Chat;
-        app.input = "hello".to_string();
-        app.cursor_pos = 5;
+        app.input.text = "hello".to_string();
+        app.input.cursor_pos = 5;
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.input(), "hello", "the draft stays");
         let (text, _) = app.notification.clone().expect("a refusal");
@@ -842,8 +842,8 @@ mod tests {
         assert_eq!(app.input(), "");
 
         app.bench.form.field = FormField::Work;
-        app.input = "/agents".to_string();
-        app.cursor_pos = 7;
+        app.input.text = "/agents".to_string();
+        app.input.cursor_pos = 7;
         app.handle_key(key(KeyCode::Enter));
         assert!(!app.swarm_panel_visible(), "commands run");
     }

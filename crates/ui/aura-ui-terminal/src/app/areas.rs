@@ -51,9 +51,10 @@ impl App {
     /// changed, so the box follows the cursor again.
     #[must_use]
     pub(crate) fn input_scroll_top(&self) -> Option<usize> {
-        self.input_view
+        self.input
+            .input_view
             .as_ref()
-            .filter(|view| view.cursor == self.cursor_pos && view.input == self.input)
+            .filter(|view| view.cursor == self.input.cursor_pos && view.input == self.input.text)
             .map(|view| view.top)
     }
 

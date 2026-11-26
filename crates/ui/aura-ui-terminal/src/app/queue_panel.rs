@@ -585,14 +585,14 @@ impl App {
         self.queue_panel.editing = Some(QueueEdit { id, draft });
         self.queue_panel.selected = None;
         self.focus = PanelFocus::Chat;
-        self.slash_dismissed = true;
+        self.input.slash_dismissed = true;
     }
 
     /// Put `text` in the input and return what it held.
     pub(super) fn take_draft(&mut self, text: String) -> Draft {
-        let text = std::mem::replace(&mut self.input, text);
-        let cursor = std::mem::replace(&mut self.cursor_pos, self.input.len());
-        let images = std::mem::take(&mut self.images);
+        let text = std::mem::replace(&mut self.input.text, text);
+        let cursor = std::mem::replace(&mut self.input.cursor_pos, self.input.text.len());
+        let images = std::mem::take(&mut self.input.images);
         Draft {
             text,
             cursor,
@@ -609,9 +609,9 @@ impl App {
     }
 
     pub(super) fn restore_draft(&mut self, draft: Draft) {
-        self.input = draft.text;
-        self.cursor_pos = draft.cursor.min(self.input.len());
-        self.images = draft.images;
+        self.input.text = draft.text;
+        self.input.cursor_pos = draft.cursor.min(self.input.text.len());
+        self.input.images = draft.images;
     }
 
     /// Give up on sending the edited text of a message that already ran:
@@ -621,7 +621,7 @@ impl App {
         let Some(draft) = self.queue_panel.parked.take() else {
             return;
         };
-        let edited = std::mem::take(&mut self.input);
+        let edited = std::mem::take(&mut self.input.text);
         if !edited.trim().is_empty() {
             self.history().add(&edited);
         }
@@ -633,7 +633,7 @@ impl App {
     /// the text, so the text stays in the input to send as a new one and
     /// the draft waits until then.
     fn finish_queue_edit(&mut self) {
-        if self.input.trim().is_empty() {
+        if self.input.text.trim().is_empty() {
             self.notification = Some((
                 "A queued message can't be empty; Esc cancels the edit".to_string(),
                 NotificationType::Warning,
@@ -653,7 +653,7 @@ impl App {
             ));
             return;
         };
-        let text = std::mem::take(&mut self.input);
+        let text = std::mem::take(&mut self.input.text);
         let old = std::mem::replace(&mut item.text, text.clone());
         self.note_queued_rename(edit.id, old, &text);
         self.restore_draft(edit.draft);
@@ -765,12 +765,12 @@ impl App {
             }
             KeyCode::Enter
                 if !key.modifiers.contains(KeyModifiers::SHIFT)
-                    && !self.input.trim().is_empty() =>
+                    && !self.input.text.trim().is_empty() =>
             {
                 let result = self.submit_input();
                 // A send that was refused puts the text back; the draft
                 // waits for the next try.
-                if self.input.is_empty() {
+                if self.input.text.is_empty() {
                     if let Some(draft) = self.queue_panel.parked.take() {
                         self.restore_draft(draft);
                     }

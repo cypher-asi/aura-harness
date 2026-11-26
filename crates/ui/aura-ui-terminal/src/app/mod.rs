@@ -24,6 +24,7 @@ pub(crate) use crate::components::image_preview;
 pub mod images;
 mod inbox;
 mod input_editor;
+mod input_state;
 mod keys;
 mod line_edit;
 mod list_state;
@@ -72,7 +73,6 @@ use crate::{
         AgentDefinitionSummary, AgentSummary, ChannelPostView, ModelOptionView, PlanView,
         ProcessSummary, ProjectSummary, RecordSummary, UiCommand, UiEvent,
     },
-    input::InputHistory,
     renderer::{ChatLineCache, GroupState},
 };
 pub use apps::{
@@ -87,6 +87,7 @@ use folder_picker::FolderPicker;
 pub use host_tab::{switch_label, switch_rect, SWITCH_GAP};
 use hud::Hud;
 pub use inbox::{InboxRow, ThreadView};
+use input_state::InputState;
 use list_state::ListState;
 pub use members::{MemberRow, RecordsTab};
 pub use model_picker::{ModelPicker, ModelTab, PickerLayout, PickerTarget};
@@ -207,12 +208,9 @@ pub struct App {
     pub(super) project_info: Option<String>,
     /// Conversation messages
     pub(super) messages: VecDeque<Message>,
-    /// Current input text
-    pub(super) input: String,
-    /// Input history for navigation
-    pub(super) input_history: InputHistory,
-    /// Cursor position in input
-    pub(super) cursor_pos: usize,
+    /// The input box: its text, cursor, histories, menus, images and
+    /// scroll
+    pub(super) input: InputState,
     /// Current status message
     pub(super) status: String,
     /// Calls waiting for an answer, oldest first; the front one is shown.
@@ -394,19 +392,6 @@ pub struct App {
     /// panel shows the session's shell commands, and Enter runs the line
     /// as one
     pub(super) terminal_mode: bool,
-    /// Commands run at the terminal prompt, recalled there instead of chat
-    /// history
-    pub(super) command_history: InputHistory,
-    /// Highlighted row in the slash menu
-    pub(super) slash_cursor: usize,
-    /// Whether Esc closed the slash menu (until the input is edited)
-    pub(super) slash_dismissed: bool,
-    /// `@` file picker shown while an `@path` word is typed
-    pub(super) mentions: mentions::MentionMenu,
-    /// Images pasted into the input, each under an `[image N]` chip
-    pub(super) images: Vec<images::PendingImage>,
-    /// Whether Ctrl+V asked for the clipboard before the next frame
-    pub(super) paste_requested: bool,
     /// Images of messages sent to a busy agent, by message text, until
     /// the chat shows the message
     pub(super) queued_images: VecDeque<(String, Vec<std::sync::Arc<image_preview::ImagePreview>>)>,
@@ -530,8 +515,6 @@ pub struct App {
     pub(super) copy_pending_text: Option<String>,
     /// What that text is, for the notice once it is copied
     pub(super) copy_label: Option<String>,
-    /// Where the wheel scrolled the input box's text, if it did
-    pub(super) input_view: Option<InputView>,
 }
 
 /// Rows of the input box's wrapped text in the last frame.
@@ -908,9 +891,7 @@ impl App {
             projects: Vec::new(),
             project_info: None,
             messages: VecDeque::new(),
-            input: String::new(),
-            input_history: InputHistory::new(),
-            cursor_pos: 0,
+            input: InputState::default(),
             status: "Ready".to_string(),
             pending_approvals: VecDeque::new(),
             scroll_offset: 0,
@@ -994,12 +975,6 @@ impl App {
             shell_prompt: shell_prompt::detect(),
             chat_width: 0,
             terminal_mode: false,
-            command_history: InputHistory::new(),
-            slash_cursor: 0,
-            slash_dismissed: false,
-            mentions: mentions::MentionMenu::default(),
-            images: Vec::new(),
-            paste_requested: false,
             queued_images: VecDeque::new(),
             just_queued: None,
             image_hits: Vec::new(),
@@ -1055,7 +1030,6 @@ impl App {
             log: run_log::LogState::default(),
             copy_pending_text: None,
             copy_label: None,
-            input_view: None,
         }
     }
 
@@ -1395,13 +1369,13 @@ impl App {
     /// Get the current input text.
     #[must_use]
     pub fn input(&self) -> &str {
-        &self.input
+        &self.input.text
     }
 
     /// Get the cursor position.
     #[must_use]
     pub const fn cursor_pos(&self) -> usize {
-        self.cursor_pos
+        self.input.cursor_pos
     }
 
     /// Get the scroll offset.

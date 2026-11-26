@@ -31,7 +31,7 @@ fn create_input_file(text: &str) -> std::io::Result<PathBuf> {
 impl App {
     /// Open the input in `$VISUAL`/`$EDITOR` (Ctrl+G).
     pub(super) fn edit_input_in_editor(&mut self) {
-        match create_input_file(&self.input) {
+        match create_input_file(&self.input.text) {
             Ok(path) => {
                 self.input_editor_file = Some(path.clone());
                 self.editor_request = Some(path);
@@ -63,9 +63,9 @@ impl App {
         match text {
             Ok(text) => {
                 // Editors end the file with a newline the user didn't type.
-                self.input = text.trim_end_matches(['\n', '\r']).to_string();
-                self.cursor_pos = self.input.len();
-                self.reset_slash_menu();
+                self.input.text = text.trim_end_matches(['\n', '\r']).to_string();
+                self.input.cursor_pos = self.input.text.len();
+                self.input.reset_slash_menu();
                 self.sync_mentions();
             }
             Err(e) => {
