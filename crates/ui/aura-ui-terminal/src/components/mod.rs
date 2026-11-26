@@ -8,6 +8,7 @@ mod boot;
 mod code_block;
 mod diff;
 mod header;
+mod info;
 mod input;
 mod list_row;
 mod live_output;
@@ -21,12 +22,14 @@ pub use crate::events::MessageRole;
 pub(crate) use activity::elapsed_ms;
 pub use activity::{Activity, ThinkingStep, ToolStep};
 pub use boot::{
-    boot_duration, BootConsole, BootOutcome, BootStep, LIVE_BOOT_LOG_LINES, MAX_BOOT_LOG_LINES,
+    boot_duration, wait_clock, BootConsole, BootOutcome, BootStep, BootWait, LIVE_BOOT_LOG_LINES,
+    MAX_BOOT_LOG_LINES,
 };
 pub use code_block::{highlight_code_line, CodeBlock};
 pub(crate) use code_block::{unframe_code, COPY_BUTTON};
 pub use diff::{DiffLine, DiffLineType, DiffView};
 pub use header::HeaderBar;
+pub(crate) use info::{truncate_line, Info, Value};
 pub use input::InputField;
 pub(crate) use list_row::{
     cell_style, format_ago, list_row, list_row_ending, list_row_with_detail, now_ms, tree_row,

@@ -384,11 +384,28 @@ impl Outline {
     /// A new stroke along the circle around `center`, from the angle
     /// `start` to the angle `end`.
     pub fn arc(&mut self, center: Point, radius: f32, start: f32, end: f32) {
-        let sweep = end - start;
         self.move_to(Point::new(
             center.x + radius * start.cos(),
             center.y + radius * start.sin(),
         ));
+        self.sweep(center, radius, start, end);
+    }
+
+    /// A line to the angle `start` on the circle around `center`, then
+    /// along it to the angle `end`: the stroke goes on unbroken, so its
+    /// corners are joined rather than capped.
+    fn arc_on(&mut self, center: Point, radius: f32, start: f32, end: f32) {
+        self.line_to(Point::new(
+            center.x + radius * start.cos(),
+            center.y + radius * start.sin(),
+        ));
+        self.sweep(center, radius, start, end);
+    }
+
+    /// Along the circle around `center` from the angle `start`, where the
+    /// path is, to the angle `end`.
+    fn sweep(&mut self, center: Point, radius: f32, start: f32, end: f32) {
+        let sweep = end - start;
         // lyon cuts these arcs with twice the digits.
         let (cx, cy) = (f64::from(center.x), f64::from(center.y));
         let radii = (f64::from(radius), f64::from(radius));
@@ -821,25 +838,26 @@ fn folder(pen: &mut Pen, open: bool, cell: Rectangle) {
     pen.stroke(b, (1.8 * s).max(1.0), LineCap::Round, LineJoin::Round);
 }
 
-/// A filled cloud on a 24-unit grid: a dome between two lower bumps, on a
+/// An outline cloud on a 24-unit grid, stroked like the folders and hollow
+/// inside: a big round bump on the left, a smaller one on the right and a
 /// flat base. One cell wide it is a speck, so like the folders it spans
 /// this cell and the next, which must be blank: the terminal UI's cloud
 /// mark leaves it so.
 fn cloud(pen: &mut Pen, cell: Rectangle) {
-    let s = (cell.width * 1.8 / 24.0).min(cell.height * 0.62 / 16.0);
+    let s = (cell.width * 1.7 / 20.0).min(cell.height * 0.66 / 14.0);
     let (cx, cy) = (cell.x + cell.width, cell.y + cell.height / 2.0);
     let q = |x: f32, y: f32| Point::new(cx + (x - 12.0) * s, cy + (y - 12.0) * s);
-    // The bumps and the base wind the same way, so they fill as one.
+    // The big bump, around (9, 12), runs from the base up over the top to
+    // where it meets the small bump's top at y = 10.
+    let meets = 2.0 * PI - (2.0_f32 / 7.0).asin();
     let mut cloud = Outline::new();
-    for (x, y, r) in [(6.0, 14.0, 6.0), (12.0, 11.5, 7.5), (19.0, 15.0, 5.0)] {
-        cloud.arc(q(x, y), r * s, 0.0, 2.0 * PI);
-    }
-    cloud.move_to(q(6.0, 15.0));
-    cloud.line_to(q(19.0, 15.0));
-    cloud.line_to(q(19.0, 20.0));
-    cloud.line_to(q(6.0, 20.0));
+    cloud.move_to(q(17.5, 19.0));
+    cloud.line_to(q(9.0, 19.0));
+    cloud.arc_on(q(9.0, 12.0), 7.0 * s, PI / 2.0, meets);
+    cloud.line_to(q(17.5, 10.0));
+    cloud.arc_on(q(17.5, 14.5), 4.5 * s, -PI / 2.0, PI / 2.0);
     cloud.close();
-    pen.fill(cloud);
+    pen.stroke(cloud, (1.8 * s).max(1.0), LineCap::Round, LineJoin::Round);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1098,6 +1116,17 @@ mod tests {
             WHITE
         ));
         assert!(quads.is_empty(), "blank braille has no dots");
+    }
+
+    #[test]
+    fn the_cloud_is_an_outline_hollow_inside() {
+        // At 8.4 × 18 a grid unit is 0.714 px and the cloud is centered on
+        // the right edge of the cell, (25.2, 45).
+        let (quads, text) = drawn('☁', cell(16.8, 36.0));
+        let at = |x: i32, y: i32| coverage(&quads, text.atlas(), x, y);
+        assert_eq!(at(23, 46), 0, "the inside is left empty");
+        assert!(at(25, 49).max(at(25, 50)) > 128, "the base is stroked");
+        assert!(at(17, 45).max(at(18, 45)) > 128, "the left bump is stroked");
     }
 
     #[test]

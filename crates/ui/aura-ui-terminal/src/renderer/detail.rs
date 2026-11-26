@@ -194,10 +194,10 @@ fn draw_record(
     let lines = match app.detail_view()? {
         DetailView::Record => {
             let record = app.selected_record_data()?;
-            record_detail_lines(record, rows.width.saturating_add(2), theme)
+            record_detail_lines(record, usize::from(rows.width), theme)
         }
         DetailView::Process(process) => {
-            process_detail_lines(process, rows.width.saturating_add(2), theme)
+            process_detail_lines(process, usize::from(rows.width), theme)
         }
         DetailView::Thread(view) => {
             let (lines, header_lines) = thread_lines(app, view, rows.width, theme);
@@ -929,7 +929,7 @@ mod tests {
         assert!(!text.contains("TERMINAL"), "the tabs give way: {text}");
         let border: String = rows[top][left..=right].concat();
         assert!(border.trim_matches(['┌', '─', '┐']).is_empty(), "{border}");
-        assert!(text.contains("Sequence:    60"), "{text}");
+        assert!(text.contains("  Sequence      60"), "{text}");
         assert!(text.contains("Esc close"), "{text}");
 
         app.handle_key(KeyEvent::from(KeyCode::Esc));

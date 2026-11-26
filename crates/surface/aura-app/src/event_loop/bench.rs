@@ -38,7 +38,11 @@ async fn reply(
     request: BenchRequest,
 ) -> Option<UiCommand> {
     let notice = match request {
-        BenchRequest::List => return Some(bench_list(state, agent_id)),
+        BenchRequest::List => {
+            return Some(UiCommand::BenchList {
+                benches: list(state),
+            })
+        }
         BenchRequest::Sessions => return Some(bench_sessions(state, agent_id)),
         BenchRequest::Prepare(spec) => {
             let estimate = compare::prepare(state, agent_id, request_of(spec)).await;
@@ -69,16 +73,6 @@ async fn reply(
         return None;
     }
     Some(UiCommand::BenchNotice(notice))
-}
-
-/// The benchmarks of the tree `agent_id` is in.
-fn bench_list(state: &LoopState<'_>, agent_id: AgentId) -> UiCommand {
-    let root = lock(&state.hub.registry).root(agent_id);
-    UiCommand::BenchList {
-        agent_id: agent_id.to_hex(),
-        root: root.to_hex(),
-        benches: list(state, root),
-    }
 }
 
 /// The sessions of `agent_id` the BENCH tab can replay, and the example
@@ -130,13 +124,12 @@ fn request_of(spec: BenchSpec) -> CompareRequest {
     }
 }
 
-/// The benchmarks with a record in the tree under `root`, oldest first.
-fn list(state: &LoopState<'_>, root: AgentId) -> Vec<BenchView> {
+/// Every benchmark with a record, of every tree, oldest first.
+fn list(state: &LoopState<'_>) -> Vec<BenchView> {
     let all = compare::comparisons(state);
     let registry = lock(&state.hub.registry);
     all.into_iter()
-        .filter(|(id, _, _)| registry.root(*id) == root)
-        .filter_map(|(id, name, payload)| Some(view(id, root, &name, &payload?)))
+        .filter_map(|(id, name, payload)| Some(view(id, registry.root(id), &name, &payload?)))
         .collect()
 }
 

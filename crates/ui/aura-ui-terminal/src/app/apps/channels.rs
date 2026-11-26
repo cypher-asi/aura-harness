@@ -36,6 +36,7 @@
 //! asks for a channel to be picked.
 
 use crate::app::processes::SIDE_PAGE;
+use crate::app::scroll::InfoScroll;
 use crate::app::{
     contains, follow_selection, AgentsTab, App, ChatTab, NotificationType, SidePanelTab,
 };
@@ -79,6 +80,8 @@ pub(crate) struct ChannelState {
     member_scroll: usize,
     /// Where the MEMBERS side tab's rows were drawn this frame
     member_rows_area: Option<Rect>,
+    /// How far the INFO side tab is scrolled
+    info_scroll: InfoScroll,
     /// The side tab shown before the channel opened, shown again when it
     /// closes
     side_tab_before: Option<SidePanelTab>,
@@ -320,6 +323,7 @@ impl App {
         if self.apps.channel.as_deref() != Some(id) {
             self.channels.member_selected = 0;
             self.channels.member_scroll = 0;
+            self.channels.info_scroll = InfoScroll::default();
         }
         self.apps.channel = Some(id.to_string());
         self.channels.selected = row;
@@ -651,5 +655,24 @@ impl App {
             KeyCode::End => self.select_channel_member(usize::MAX),
             _ => {}
         }
+    }
+
+    // ---- The INFO side tab ---------------------------------------------
+
+    /// Keep the INFO side tab's scroll inside a document `total` lines
+    /// long shown `visible` lines at a time, returning the first line to
+    /// show.
+    pub(crate) fn sync_channel_info_scroll(&mut self, total: usize, visible: usize) -> usize {
+        self.channels.info_scroll.sync(total, visible)
+    }
+
+    /// Scroll the INFO side tab by `delta` lines, as the wheel does.
+    pub(in crate::app) fn scroll_channel_info(&mut self, delta: isize) {
+        self.channels.info_scroll.by(delta);
+    }
+
+    /// Keys of the INFO side tab, which scroll it.
+    pub(in crate::app) fn handle_channel_info_key(&mut self, key: KeyEvent) {
+        self.channels.info_scroll.key(key.code);
     }
 }

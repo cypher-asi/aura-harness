@@ -271,11 +271,7 @@ impl App {
                 lanes,
                 nodes,
             } => self.upsert_flow(&agent_id, lanes, nodes),
-            UiCommand::BenchList {
-                agent_id,
-                root,
-                benches,
-            } => self.cmd_bench_list(&agent_id, root, benches),
+            UiCommand::BenchList { benches } => self.cmd_bench_list(benches),
             UiCommand::BenchUpsert(view) => self.cmd_bench_upsert(*view),
             UiCommand::BenchSessions {
                 agent_id,

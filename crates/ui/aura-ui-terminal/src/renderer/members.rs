@@ -2,15 +2,13 @@
 //! run, then every agent the run brought in, each under the one that
 //! started it, with how it is doing and how long it has worked.
 
-use super::chrome::{render_scrollbar, ScrollView};
+use super::chrome::{Body, ScrollView};
 use super::processes::{format_elapsed, status_icon};
-use super::side_list::{
-    empty_line, name_style, render_empty, render_hint, split_hint, Tone, MEMBERS_HINT,
-};
+use super::side_list::{empty_line, name_style, render_empty, Tone, MEMBERS_HINT};
 use crate::app::{HoverTarget, MemberRow, PanelFocus};
 use crate::components::{cell_style, list_row, now_ms, CellState};
 use crate::{App, Theme};
-use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
+use ratatui::{layout::Rect, text::Line, Frame};
 
 /// Draw the members into `inner`, the body below the tab bar of the
 /// panel bordered by `area`.
@@ -27,8 +25,8 @@ pub(super) fn render_members(
         return;
     }
 
-    let (rows_area, hint) = split_hint(inner, is_focused);
-    let visible = usize::from(rows_area.height);
+    let body = Body::new(area, inner, is_focused);
+    let visible = body.visible();
     let scroll = app.sync_members_scroll(visible);
     let hovered = match app.hover() {
         Some(HoverTarget::MemberRow(index)) => Some(index),
@@ -36,7 +34,7 @@ pub(super) fn render_members(
     };
     let selected = app.selected_member();
     let now = now_ms();
-    let width = usize::from(inner.width);
+    let width = body.width();
     let mut lines: Vec<Line> = app
         .members()
         .iter()
@@ -65,12 +63,8 @@ pub(super) fn render_members(
         visible,
         first: scroll,
     };
-    app.set_member_rows_area(rows_area, scroll);
-    frame.render_widget(Paragraph::new(lines), rows_area);
-    render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-    if let Some(hint) = hint {
-        render_hint(frame, hint, MEMBERS_HINT, theme);
-    }
+    app.set_member_rows_area(body.rows(), scroll);
+    body.draw(frame, lines, view, MEMBERS_HINT, theme);
 }
 
 /// `lead` for the agent on screen; how a member joined and how long it

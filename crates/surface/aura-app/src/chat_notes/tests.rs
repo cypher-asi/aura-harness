@@ -64,6 +64,17 @@ fn notices_and_consoles_come_back_as_they_were_sent() {
     );
     notes.record(
         agent,
+        &boot(
+            "b1",
+            BootUpdate::Waiting {
+                key: "create".into(),
+                what: Some("boxd is creating aura-1".into()),
+                limit_ms: Some(180_000),
+            },
+        ),
+    );
+    notes.record(
+        agent,
         &boot("b1", stage("create", BootStageState::Done { ms: 5 })),
     );
     notes.record(
@@ -91,6 +102,13 @@ fn notices_and_consoles_come_back_as_they_were_sent() {
             .iter()
             .any(|u| matches!(u, BootUpdate::Progress { .. })),
         "progress is not kept"
+    );
+    assert!(
+        !history
+            .updates
+            .iter()
+            .any(|u| matches!(u, BootUpdate::Waiting { .. })),
+        "waiting lines are not kept"
     );
     let logged: Vec<&str> = history
         .updates

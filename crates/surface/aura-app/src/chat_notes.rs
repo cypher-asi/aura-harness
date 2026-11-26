@@ -177,7 +177,7 @@ impl ChatNotes {
 }
 
 /// What a console's `update` adds to its notes. Log lines wait for the
-/// next step or the end; progress is not kept.
+/// next step or the end; progress and waiting lines are not kept.
 fn boot_notes(open: &mut HashMap<String, OpenConsole>, id: &str, update: &BootUpdate) -> Vec<Note> {
     let console = open.entry(id.to_string()).or_default();
     let boot = |update| Note::Boot {
@@ -189,7 +189,7 @@ fn boot_notes(open: &mut HashMap<String, OpenConsole>, id: &str, update: &BootUp
             console.keep(lines);
             Vec::new()
         }
-        BootUpdate::Progress { .. } => Vec::new(),
+        BootUpdate::Progress { .. } | BootUpdate::Waiting { .. } => Vec::new(),
         update => {
             let mut notes: Vec<Note> = console
                 .take()

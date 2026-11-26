@@ -69,7 +69,7 @@ async fn a_comparison_recorded_running_that_nothing_runs_is_stopped() {
     drain(&mut commands);
 
     bench(&mut state, &links, BenchRequest::List).await;
-    let (listed, _) = bench_list(&mut commands).unwrap();
+    let listed = bench_list(&mut commands).unwrap();
     assert_eq!(listed[0].status, BenchStatus::Cancelled);
     assert!(
         listed[0]

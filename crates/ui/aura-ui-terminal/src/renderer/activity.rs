@@ -57,7 +57,7 @@ fn digits(n: usize) -> usize {
 }
 
 /// Thinking lines shown under a collapsed block while it streams.
-const LIVE_THINKING_LINES: usize = 3;
+const LIVE_THINKING_LINES: usize = 12;
 
 /// Output lines shown in an expanded tool block.
 const MAX_RESULT_LINES: usize = 200;
@@ -912,7 +912,7 @@ fn tool_header(
     if !quiet.is_empty() {
         spans.push(Span::styled(
             quiet,
-            Style::default().fg(theme.colors.warning),
+            Style::default().fg(theme.colors.success),
         ));
     }
     Line::from(spans)
@@ -1368,8 +1368,12 @@ mod tests {
 
     #[test]
     fn running_thinking_shows_its_tail_and_finished_collapses() {
+        let total = LIVE_THINKING_LINES + 2;
         let mut step = ThinkingStep {
-            text: "one\ntwo\nthree\nfour".to_string(),
+            text: (1..=total)
+                .map(|n| format!("line {n}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
             started: None,
             duration_ms: None,
             running: true,
@@ -1382,10 +1386,10 @@ mod tests {
             80,
             &Theme::default(),
         );
-        assert_eq!(
-            texts(&live),
-            ["  ⠹ Thinking…", "    │ two", "    │ three", "    │ four"]
-        );
+        let expected: Vec<String> = std::iter::once("  ⠹ Thinking…".to_string())
+            .chain((3..=total).map(|n| format!("    │ line {n}")))
+            .collect();
+        assert_eq!(texts(&live), expected);
 
         step.running = false;
         step.duration_ms = Some(4200);

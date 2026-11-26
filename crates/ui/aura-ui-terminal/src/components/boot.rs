@@ -31,6 +31,17 @@ pub fn boot_duration(ms: u64) -> String {
     }
 }
 
+/// How long `wait` has gone on, against its limit: `42.0s of 3m 00s`,
+/// or `42.0s` without one.
+#[must_use]
+pub fn wait_clock(wait: &BootWait) -> String {
+    let waited = boot_duration(wait.waited_ms());
+    match wait.limit_ms {
+        Some(limit) => format!("{waited} of {}", boot_duration(limit)),
+        None => waited,
+    }
+}
+
 /// Numbers spill files, so two consoles never share one.
 static NEXT_SPILL: AtomicU64 = AtomicU64::new(0);
 
@@ -134,6 +145,25 @@ impl PartialEq for SpillFile {
 
 impl Eq for SpillFile {}
 
+/// What a running step waits on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootWait {
+    /// The call or command pending
+    pub what: String,
+    /// When the wait began: kept while it is only reworded
+    pub since: Instant,
+    /// When it gives up, ms, if it does
+    pub limit_ms: Option<u64>,
+}
+
+impl BootWait {
+    /// Milliseconds it has waited.
+    #[must_use]
+    pub fn waited_ms(&self) -> u64 {
+        u64::try_from(self.since.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
 /// One step of a boot console.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootStep {
@@ -147,6 +177,8 @@ pub struct BootStep {
     pub started: Option<Instant>,
     /// How far it has got
     pub progress: Option<(u64, u64)>,
+    /// What it waits on now, while it runs
+    pub waiting: Option<BootWait>,
 }
 
 impl BootStep {
@@ -202,6 +234,8 @@ pub struct BootConsole {
     spill: Option<SpillFile>,
     /// Set once it ended
     pub outcome: Option<BootOutcome>,
+    /// When it last heard anything
+    pub last_update: Instant,
 }
 
 impl BootConsole {
@@ -220,6 +254,7 @@ impl BootConsole {
             revealed: 0,
             spill: None,
             outcome: None,
+            last_update: Instant::now(),
         }
     }
 
@@ -337,7 +372,15 @@ impl BootConsole {
             let label = &step.label;
             let _ = match &step.state {
                 BootStageState::Pending => writeln!(out, "· {label}"),
-                BootStageState::Running => writeln!(out, "… {label} (running)"),
+                BootStageState::Running => match &step.waiting {
+                    Some(wait) => writeln!(
+                        out,
+                        "… {label} (running; waiting on {}, {})",
+                        wait.what,
+                        wait_clock(wait)
+                    ),
+                    None => writeln!(out, "… {label} (running)"),
+                },
                 BootStageState::Done { ms } => writeln!(out, "✓ {label}  {}", boot_duration(*ms)),
                 BootStageState::Skipped(why) => writeln!(out, "– {label}  skipped: {why}"),
                 BootStageState::Failed(why) => writeln!(out, "✗ {label}  {why}"),
@@ -379,6 +422,12 @@ impl BootConsole {
             out.push('\n');
         }
         out
+    }
+
+    /// Milliseconds since it last heard anything.
+    #[must_use]
+    pub fn quiet_ms(&self) -> u64 {
+        u64::try_from(self.last_update.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
     /// Whether it is still going.
@@ -437,6 +486,7 @@ impl BootConsole {
                         state: BootStageState::Running,
                         started: Some(Instant::now()),
                         progress: None,
+                        waiting: None,
                     },
                 );
                 at
@@ -447,6 +497,7 @@ impl BootConsole {
 
     /// Take `update`.
     pub fn apply(&mut self, update: BootUpdate) {
+        self.last_update = Instant::now();
         match update {
             BootUpdate::Begin { title } => self.title = title,
             BootUpdate::Plan(planned) => {
@@ -458,6 +509,7 @@ impl BootConsole {
                             state: BootStageState::Pending,
                             started: None,
                             progress: None,
+                            waiting: None,
                         });
                     }
                 }
@@ -472,6 +524,8 @@ impl BootConsole {
                 if matches!(state, BootStageState::Running) {
                     step.progress = None;
                 }
+                // A step that starts again or ends waits on nothing yet.
+                step.waiting = None;
                 step.state = state;
             }
             BootUpdate::Fact { key, value } => {
@@ -499,10 +553,35 @@ impl BootConsole {
             BootUpdate::Progress { key, done, total } => {
                 self.step(&key, None).progress = Some((done, total));
             }
+            BootUpdate::Waiting {
+                key,
+                what,
+                limit_ms,
+            } => match what {
+                Some(what) => {
+                    let step = self.step(&key, None);
+                    let since = step
+                        .waiting
+                        .as_ref()
+                        .map_or_else(Instant::now, |wait| wait.since);
+                    step.waiting = Some(BootWait {
+                        what,
+                        since,
+                        limit_ms,
+                    });
+                }
+                // A clear never adds a step.
+                None => {
+                    if let Some(step) = self.steps.iter_mut().find(|s| s.key == key) {
+                        step.waiting = None;
+                    }
+                }
+            },
             BootUpdate::End { ok, summary } => {
                 let elapsed_ms = self.elapsed_ms();
                 self.steps.retain(|s| s.state != BootStageState::Pending);
                 for step in &mut self.steps {
+                    step.waiting = None;
                     if step.state == BootStageState::Running {
                         step.state = if ok {
                             BootStageState::Done {
@@ -606,6 +685,91 @@ mod tests {
             summary: "seal failed".into(),
         });
         assert_eq!(keys(&console), ["wake", "seal"], "steps never begun go");
+    }
+
+    fn waiting(key: &str, what: Option<&str>, limit_ms: Option<u64>) -> BootUpdate {
+        BootUpdate::Waiting {
+            key: key.into(),
+            what: what.map(str::to_string),
+            limit_ms,
+        }
+    }
+
+    #[test]
+    fn a_wait_is_set_reworded_and_cleared() {
+        let mut console = BootConsole::new("b1", "Moving to the cloud");
+        console.apply(stage("create", BootStageState::Running));
+        console.apply(waiting(
+            "create",
+            Some("boxd is creating aura-1"),
+            Some(180_000),
+        ));
+        let wait = console.steps[0].waiting.clone().expect("waits");
+        assert_eq!(wait.what, "boxd is creating aura-1");
+        assert_eq!(wait.limit_ms, Some(180_000));
+
+        console.apply(waiting("create", Some("boxd says pending"), Some(180_000)));
+        let reworded = console.steps[0].waiting.clone().expect("still waits");
+        assert_eq!(reworded.what, "boxd says pending");
+        assert_eq!(reworded.since, wait.since, "rewording keeps the clock");
+        assert!(console
+            .transcript()
+            .contains("… Doing create (running; waiting on boxd says pending, "));
+
+        console.apply(waiting("create", None, None));
+        assert_eq!(console.steps[0].waiting, None);
+        console.apply(waiting("create", Some("again"), None));
+        assert!(console.steps[0].waiting.as_ref().unwrap().since >= wait.since);
+
+        console.apply(waiting("claim", None, None));
+        assert_eq!(console.steps.len(), 1, "a clear never adds a step");
+    }
+
+    #[test]
+    fn a_step_that_ends_or_a_console_that_ends_waits_on_nothing() {
+        let mut console = BootConsole::new("b1", "t");
+        console.apply(stage("create", BootStageState::Running));
+        console.apply(waiting("create", Some("create"), None));
+        console.apply(stage("create", BootStageState::Done { ms: 5 }));
+        assert_eq!(console.steps[0].waiting, None);
+
+        console.apply(stage("claim", BootStageState::Running));
+        console.apply(waiting("claim", Some("claim"), None));
+        console.apply(BootUpdate::End {
+            ok: false,
+            summary: "stopped".into(),
+        });
+        assert!(console.steps.iter().all(|s| s.waiting.is_none()));
+    }
+
+    #[test]
+    fn every_update_resets_the_quiet_clock() {
+        let mut console = BootConsole::new("b1", "t");
+        console.last_update = Instant::now()
+            .checked_sub(Duration::from_secs(90))
+            .expect("an instant 90s ago");
+        assert!(console.quiet_ms() >= 90_000);
+        console.apply(waiting("create", Some("x"), None));
+        assert!(console.quiet_ms() < 90_000);
+    }
+
+    #[test]
+    fn a_wait_clock_reads_against_its_limit() {
+        let wait = BootWait {
+            what: "x".into(),
+            since: Instant::now(),
+            limit_ms: Some(180_000),
+        };
+        assert!(
+            wait_clock(&wait).ends_with(" of 3m 00s"),
+            "{}",
+            wait_clock(&wait)
+        );
+        let open = BootWait {
+            limit_ms: None,
+            ..wait
+        };
+        assert!(!wait_clock(&open).contains(" of "));
     }
 
     #[test]

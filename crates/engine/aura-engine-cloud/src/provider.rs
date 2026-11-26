@@ -359,6 +359,20 @@ pub trait VmProvider: Send + Sync {
     }
     /// Write `bytes` to `path` in the machine.
     async fn upload(&self, machine: &str, path: &str, bytes: Vec<u8>) -> CloudResult<u64>;
+    /// [`Self::upload`], calling `on_sent(sent, total)` now and then as
+    /// the bytes go out. By default it is called once, when all are sent.
+    async fn upload_reported(
+        &self,
+        machine: &str,
+        path: &str,
+        bytes: Vec<u8>,
+        on_sent: &mut (dyn FnMut(u64, u64) + Send),
+    ) -> CloudResult<u64> {
+        let total = bytes.len() as u64;
+        let written = self.upload(machine, path, bytes).await?;
+        on_sent(total, total);
+        Ok(written)
+    }
     /// Read `path` from the machine, at most `max_bytes`.
     async fn download(&self, machine: &str, path: &str, max_bytes: u64) -> CloudResult<Vec<u8>>;
     /// Save a snapshot of a running machine under `name`.

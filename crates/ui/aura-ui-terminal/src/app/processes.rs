@@ -292,12 +292,12 @@ impl App {
                     SidePanelTab::Sandbox => self.sandbox.select(index),
                     SidePanelTab::Processes => self.select_process(index),
                     SidePanelTab::Host => {
-                        self.cloud.host_scroll = if index == 0 { 0 } else { usize::MAX / 2 };
+                        self.host_key(key);
                     }
                     SidePanelTab::Trace => self.trace_feed.select(index),
                     SidePanelTab::Tasks => self.task_list.select(index),
                     SidePanelTab::ChannelMembers => self.select_channel_member(index),
-                    SidePanelTab::ChannelInfo => {}
+                    SidePanelTab::ChannelInfo => self.handle_channel_info_key(key),
                 }
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),

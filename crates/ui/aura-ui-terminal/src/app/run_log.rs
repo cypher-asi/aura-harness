@@ -1159,8 +1159,6 @@ mod tests {
         let mut app = App::new().with_event_sender(tx);
         app.active_agent_id = "a".into();
         app.process_command(UiCommand::BenchList {
-            agent_id: "a".into(),
-            root: String::new(),
             benches: vec![BenchView {
                 id: "ab".into(),
                 name: "Compare #1".into(),

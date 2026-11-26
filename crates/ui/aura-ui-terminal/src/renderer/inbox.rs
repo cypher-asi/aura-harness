@@ -14,8 +14,8 @@
 //! at the right. The messages of an unfolded thread follow it, indented,
 //! as `from → to`, a preview and the time each was sent.
 
-use super::chrome::{render_scrollbar, ScrollView};
-use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, INBOX_HINT};
+use super::chrome::{Body, ScrollView};
+use super::side_list::{name_style, render_empty, Tone, INBOX_HINT};
 use super::text::display_width;
 use crate::app::ThreadView;
 use crate::app::{HoverTarget, InboxRow, PanelFocus};
@@ -24,7 +24,7 @@ use crate::events::MailView;
 use crate::{App, Theme};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
-use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
+use ratatui::{layout::Rect, text::Line, Frame};
 
 /// Columns before a thread's subject: ` ● ▾ `.
 const THREAD_PREFIX: usize = 5;
@@ -55,15 +55,15 @@ pub(super) fn render_inbox(
         return;
     }
 
-    let (rows_area, hint) = split_hint(inner, is_focused);
-    let visible = usize::from(rows_area.height);
+    let body = Body::new(area, inner, is_focused);
+    let visible = body.visible();
     let scroll = app.sync_inbox_scroll(visible);
     let hovered = match app.hover() {
         Some(HoverTarget::InboxRow(index)) => Some(index),
         _ => None,
     };
     let selected = app.selected_inbox_row();
-    let width = usize::from(rows_area.width);
+    let width = body.width();
     let lines: Vec<Line> = app
         .inbox_rows()
         .iter()
@@ -80,12 +80,8 @@ pub(super) fn render_inbox(
         visible,
         first: scroll,
     };
-    app.set_inbox_rows_area(rows_area, scroll);
-    frame.render_widget(Paragraph::new(lines), rows_area);
-    render_scrollbar(frame, area, rows_area, view, is_focused, theme);
-    if let Some(hint) = hint {
-        render_hint(frame, hint, INBOX_HINT, theme);
-    }
+    app.set_inbox_rows_area(body.rows(), scroll);
+    body.draw(frame, lines, view, INBOX_HINT, theme);
 }
 
 /// The styles of one row's pieces, on the row's fill.

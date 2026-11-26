@@ -1,0 +1,11 @@
+{
+  "id": "01a215a622830004",
+  "title": "thinking preview window should be at least 4x larger",
+  "state": "completed",
+  "agent_id": "8523c2fea64ffbfbd2dea044e67a28429c6850e74155313e1382d2c4290a5bee",
+  "agent_name": "Agent 1636",
+  "items": [],
+  "summary": "The live thinking preview is set by `LIVE_THINKING_LINES = 3` in the terminal renderer. I'll raise it to 12 (4x) and update the test so it still checks the tail trimming.",
+  "updated_ms": 1795659980157,
+  "created_ms": 1795659539075
+}

@@ -1,7 +1,9 @@
 //! What a machine coming up shows while it happens: the stages of a
 //! move to the cloud, a move back or a wake, the facts boxd reports
 //! about the machine, and the output of the commands run on it. The app
-//! draws these as a boot console in the agent's chat.
+//! draws these as a boot console in the agent's chat. A stage blocked on
+//! a slow call says what it waits on and for how long at most, so a slow
+//! boot can be told from a stuck one.
 //!
 //! ## Invariants
 //!
@@ -10,10 +12,12 @@
 //!   tokens) is never streamed.
 //! - Reporting never blocks or fails the work it reports on: the channel
 //!   is unbounded and a closed receiver is ignored.
+//! - A waiting line is cleared when its wait ends, however it ends
+//!   (done, failed or dropped).
 
 use std::fmt::Display;
 use std::future::Future;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
@@ -23,6 +27,8 @@ pub const MAX_LINE_CHARS: usize = 400;
 /// A step of bringing an agent's machine up or an agent back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BootStage {
+    /// Reach boxd and take back the machines placed agents had.
+    Connect,
     /// Hand the owner's plan secrets to boxd.
     Plans,
     /// Find or build the project snapshot.
@@ -56,6 +62,7 @@ impl BootStage {
     #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
+            Self::Connect => "connect",
             Self::Plans => "plans",
             Self::Snapshot => "snapshot",
             Self::Quota => "quota",
@@ -76,6 +83,7 @@ impl BootStage {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Connect => "Connecting to boxd",
             Self::Plans => "Sharing plan sign-ins",
             Self::Snapshot => "Preparing project snapshot",
             Self::Quota => "Checking machine quota",
@@ -148,6 +156,18 @@ pub enum BootEvent {
         /// Out of.
         total: u64,
     },
+    /// What a running stage is waiting on now, and how long it may take;
+    /// `what: None` clears it. A wait replaced without being cleared
+    /// first is the same wait going on, so keeps its clock.
+    Waiting {
+        /// The stage.
+        stage: BootStage,
+        /// The call or command pending, e.g. `boxd is creating aura-x
+        /// from snapshot y`.
+        what: Option<String>,
+        /// When it gives up, if it does.
+        limit: Option<Duration>,
+    },
 }
 
 /// Where boot events go. Cheap to clone; [`Self::none`] drops them.
@@ -218,6 +238,45 @@ impl BootReporter {
         });
     }
 
+    /// Say `stage` waits on `what` now, giving up after `limit`.
+    pub fn waiting(&self, stage: BootStage, what: impl Into<String>, limit: Option<Duration>) {
+        self.send(BootEvent::Waiting {
+            stage,
+            what: Some(what.into()),
+            limit,
+        });
+    }
+
+    /// Say `stage` waits on nothing now.
+    pub fn done_waiting(&self, stage: BootStage) {
+        self.send(BootEvent::Waiting {
+            stage,
+            what: None,
+            limit: None,
+        });
+    }
+
+    /// Await `work`, showing on `stage` that it waits on `what` (giving
+    /// up after `limit`) until it ends, however it ends: the line is
+    /// cleared when `work` finishes, and when the wait is dropped.
+    pub async fn wait<T>(
+        &self,
+        stage: BootStage,
+        what: impl Into<String>,
+        limit: Option<Duration>,
+        work: impl Future<Output = T>,
+    ) -> T {
+        let what = what.into();
+        tracing::debug!(stage = stage.key(), %what, ?limit, "boot waits");
+        self.waiting(stage, what, limit);
+        let _clear = ClearWait {
+            reporter: self,
+            stage,
+            started: Instant::now(),
+        };
+        work.await
+    }
+
     /// Run `work` as `stage`: started now, then done or failed with its
     /// error.
     ///
@@ -233,13 +292,19 @@ impl BootReporter {
             stage,
             state: StageState::Started,
         });
+        tracing::info!(stage = stage.key(), "boot stage started");
         let started = Instant::now();
         let result = work.await;
+        let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let state = match &result {
-            Ok(_) => StageState::Done {
-                ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            },
-            Err(err) => StageState::Failed(err.to_string()),
+            Ok(_) => {
+                tracing::info!(stage = stage.key(), ms, "boot stage done");
+                StageState::Done { ms }
+            }
+            Err(err) => {
+                tracing::warn!(stage = stage.key(), ms, error = %err, "boot stage failed");
+                StageState::Failed(err.to_string())
+            }
         };
         self.send(BootEvent::Stage { stage, state });
         result
@@ -255,6 +320,21 @@ impl BootReporter {
             stdout: LineSplitter::default(),
             stderr: LineSplitter::default(),
         }
+    }
+}
+
+/// Clears a waiting line when dropped: when its wait ends or is dropped.
+struct ClearWait<'a> {
+    reporter: &'a BootReporter,
+    stage: BootStage,
+    started: Instant,
+}
+
+impl Drop for ClearWait<'_> {
+    fn drop(&mut self) {
+        let ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        tracing::debug!(stage = self.stage.key(), ms, "boot wait ended");
+        self.reporter.done_waiting(self.stage);
     }
 }
 
@@ -484,6 +564,85 @@ mod tests {
         let boot = BootReporter::none();
         assert!(!boot.is_active());
         boot.fact("region", "nyc");
+    }
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<BootEvent>) -> Vec<BootEvent> {
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    fn cleared(stage: BootStage) -> BootEvent {
+        BootEvent::Waiting {
+            stage,
+            what: None,
+            limit: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wait_shows_what_it_waits_on_then_clears() {
+        let (boot, mut rx) = BootReporter::channel();
+        let limit = Some(Duration::from_secs(180));
+        let got = boot
+            .wait(BootStage::Create, "boxd is creating aura-1", limit, async {
+                7
+            })
+            .await;
+        assert_eq!(got, 7);
+        assert_eq!(
+            drain(&mut rx),
+            vec![
+                BootEvent::Waiting {
+                    stage: BootStage::Create,
+                    what: Some("boxd is creating aura-1".into()),
+                    limit,
+                },
+                cleared(BootStage::Create),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_wait_clears_too() {
+        let (boot, mut rx) = BootReporter::channel();
+        let got: Result<(), String> = boot
+            .wait(BootStage::Claim, "claim", None, async {
+                Err("refused".to_string())
+            })
+            .await;
+        assert!(got.is_err());
+        assert_eq!(drain(&mut rx).last(), Some(&cleared(BootStage::Claim)));
+    }
+
+    #[tokio::test]
+    async fn a_dropped_wait_clears_too() {
+        let (boot, mut rx) = BootReporter::channel();
+        let timed_out = tokio::time::timeout(
+            Duration::from_millis(1),
+            boot.wait(BootStage::Wake, "wake", None, std::future::pending::<()>()),
+        )
+        .await;
+        assert!(timed_out.is_err());
+        let events = drain(&mut rx);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events.last(), Some(&cleared(BootStage::Wake)));
+    }
+
+    #[tokio::test]
+    async fn a_silent_reporter_still_runs_the_work() {
+        let got = BootReporter::none()
+            .wait(BootStage::Quota, "quota", None, async { "ran" })
+            .await;
+        assert_eq!(got, "ran");
+    }
+
+    #[test]
+    fn connecting_is_a_stage_of_its_own() {
+        assert_eq!(BootStage::Connect.key(), "connect");
+        assert_eq!(BootStage::Connect.label(), "Connecting to boxd");
     }
 
     #[test]

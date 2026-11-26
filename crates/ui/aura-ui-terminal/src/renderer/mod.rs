@@ -228,66 +228,62 @@ fn render_content_panels(
 
 /// Split `area` into the Agents, Chat and right columns. Only `area`'s
 /// width decides where the columns go.
+///
+/// The Agents column's width never depends on whether the right column
+/// is shown: opening or closing the right column only moves the Chat
+/// panel's right edge.
 fn columns(area: Rect, app: &App) -> (Option<Rect>, Rect, Option<Rect>) {
     let swarm_visible = app.swarm_panel_visible();
     let right_visible = right_column_visible(app);
     let splits = app.pane_splits();
 
-    let gutters = GUTTER * (u16::from(swarm_visible) + u16::from(right_visible));
-    let room = area.width.saturating_sub(MIN_CHAT_WIDTH + gutters);
-    let side = |split: Option<f32>, percent: u16| match split {
-        Some(split) => [
-            Constraint::Length(dragged(area.width, split).min(room)),
-            Constraint::Fill(1),
-        ],
-        None => [
-            Constraint::Percentage(percent),
-            Constraint::Percentage(100 - percent),
-        ],
-    };
-    match (swarm_visible, right_visible) {
-        (true, true) => {
-            let default = area.width * 24 / 100;
-            let left = splits
-                .agents
-                .map_or(default, |split| dragged(area.width, split).min(room / 2));
-            let right = splits.right.map_or(default, |split| {
-                dragged(area.width, split).min(room.saturating_sub(left))
-            });
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .spacing(GUTTER)
-                .constraints([
-                    Constraint::Length(left),
-                    Constraint::Fill(1),
-                    Constraint::Length(right),
-                ])
-                .split(area);
-            (Some(chunks[0]), chunks[1], Some(chunks[2]))
-        }
-        (true, false) => {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .spacing(GUTTER)
-                .constraints(side(splits.agents, 25))
-                .split(area);
-            (Some(chunks[0]), chunks[1], None)
-        }
-        (false, true) => {
-            let [right, chat] = side(splits.right, 35);
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .spacing(GUTTER)
-                .constraints([chat, right])
-                .split(area);
-            (None, chunks[0], Some(chunks[1]))
-        }
-        (false, false) => (None, area, None),
-    }
+    let left = swarm_visible.then(|| agents_width(area.width, splits.agents));
+    let used = left.map_or(0, |left| left + GUTTER);
+    let right = right_visible.then(|| {
+        // What the Agents column and the Chat panel leave over.
+        let room = area.width.saturating_sub(used + MIN_CHAT_WIDTH + GUTTER);
+        let default = if swarm_visible {
+            area.width * 24 / 100
+        } else {
+            area.width * 35 / 100
+        };
+        splits
+            .right
+            .map_or(default.min(room.max(MIN_RIGHT_WIDTH)), |split| {
+                dragged(area.width, split).min(room)
+            })
+    });
+
+    let mut constraints = Vec::with_capacity(3);
+    constraints.extend(left.map(Constraint::Length));
+    constraints.push(Constraint::Fill(1));
+    constraints.extend(right.map(Constraint::Length));
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .spacing(GUTTER)
+        .constraints(constraints)
+        .split(area);
+    let swarm = left.map(|_| chunks[0]);
+    let chat = chunks[usize::from(swarm_visible)];
+    let right = right.map(|_| chunks[chunks.len() - 1]);
+    (swarm, chat, right)
+}
+
+/// Width of the Agents column in a `width`-wide row. A dragged divider
+/// leaves room for the Chat panel and a narrow right column beside it
+/// whether or not the right column is shown, so showing it never moves
+/// this column.
+fn agents_width(width: u16, split: Option<f32>) -> u16 {
+    let room = width.saturating_sub(MIN_CHAT_WIDTH + MIN_RIGHT_WIDTH + 2 * GUTTER);
+    split.map_or(width * 24 / 100, |split| dragged(width, split).min(room))
 }
 
 /// Columns the Chat panel keeps however far the dividers are dragged.
 const MIN_CHAT_WIDTH: u16 = 30;
+
+/// Columns the Agents column leaves for the right column, shown or not,
+/// so opening it does not push the Agents column's divider.
+const MIN_RIGHT_WIDTH: u16 = 20;
 
 /// Blank columns between panels side by side. Cells are about twice as
 /// tall as they are wide, so one column matches the gap between panels

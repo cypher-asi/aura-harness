@@ -1,0 +1,41 @@
+{
+  "id": "01a2154f12d30001",
+  "title": "finish and then integrate into main",
+  "state": "cancelled",
+  "agent_id": "e60170c715e9ce02418018d77585543bd03201cc00bcce74e26ba39958d37dec",
+  "agent_name": "Agent 1620",
+  "items": [
+    {
+      "content": "aura-store-db: one project per channel",
+      "state": "completed",
+      "assignee": "tests"
+    },
+    {
+      "content": "aura-ui + aura-ui-terminal: form Project field, Edit channel, INFO",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "aura-app: create/update/spawn/visibility/migration",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the whole branch for bugs, regressions and missing tests",
+      "state": "completed",
+      "assignee": "rust-engineer",
+      "task": "01a215546c9f0003"
+    },
+    {
+      "content": "Run fmt, clippy -D warnings, tests and the aura-desktop check; commit on channel-projects",
+      "state": "pending"
+    },
+    {
+      "content": "Merge channel-projects into main without losing main's uncommitted work",
+      "state": "pending"
+    }
+  ],
+  "summary": "fmt and workspace clippy pass. The test run died because `/tmp` ran out of quota, not because a test failed. The review found five real bugs, so I'll fix those first. Checking the disk:",
+  "updated_ms": 1795657762281,
+  "created_ms": 1795653833427
+}
