@@ -52,9 +52,10 @@ themes keep working:
 
 - No italics in UI chrome: steps, hints, notices and counts are upright.
   Italics are kept for markdown emphasis in replies.
-- Bold is for headings, the active tab, the live tail's `Working` and
-  status label, and the to-do being worked on. Prompts, project names and
-  code block labels are regular weight.
+- Bold is for titles and headings, the active tab, the live tail's
+  `Working` and status label, and the to-do being worked on. Prompts,
+  project names, code block labels and the section titles of panel
+  bodies are regular weight.
 
 ### Status Indicators
 
@@ -119,15 +120,13 @@ agents the run brought in, each indented under the agent that started it.
 Its rows use the Processes tab's status glyphs, and `lead`, `task` or
 `agent` with the time worked in place of a row's time.
 
-The POLICIES tab is a read-only document in sections (STATUS,
-CAPABILITIES, TOOLS, ALWAYS ALLOW, SESSION GRANTS, INTEGRATIONS), each
-headed in bold accent (`success`) with a `muted` note after it. STATUS
-rows put a `muted` label column before the value. TOOLS rows mark each
-tool `✓ on`, `? ask` or `✗ off`, all in the accent, followed by the
-deciding rule in `muted`. Every highlight on the tab uses the accent:
-what weakens the guardrails (`yolo`, commands that can't be confined, no
-live prompts) is shown in it, and the header's `MODE/APPROVAL` info turns
-the accent under `yolo`.
+The POLICIES tab is an info body (see Panel Bodies) in sections: STATUS,
+CAPABILITIES, TOOLS, ALWAYS ALLOW, SESSION GRANTS and INTEGRATIONS.
+TOOLS rows mark each tool `✓`, `?` or `✗` in the accent, then give its
+state (`on`, `ask`, `off`) and the deciding rule in `muted`. Only what
+weakens the guardrails takes the accent: `yolo`, commands that can't be
+confined, no live prompts. The header's `MODE/APPROVAL` info stays
+`muted` like every other count.
 
 The INBOX tab lists the threads of mail between the agents of the run,
 the most recently active first. A thread row starts with the unread dot
@@ -159,11 +158,53 @@ them all, and Esc closes the view.
 - **Active tab**: bold. While the panel is focused it is filled with `selection` and labelled in `on_selection`; otherwise the label is `foreground` with no fill
 - **Hovered tab**: `surface_hover` fill with a `secondary` label
 - **Other tabs**: `muted` label, no fill
-- **Info cell**: no fill; counts in `foreground`, problems (trace issues) in `error`
+- **Info cell**: no fill; counts and `MODE/APPROVAL` in `muted`, unread mail and trace issues in `warning`
 
 Narrow bars drop the tab padding, then switch to three-letter labels
 (`short_label`), and give the info cell's room to the tabs when it would be
 under three columns.
+
+### Panel Bodies
+
+Below its header bar every panel draws its tab in the same body
+(`chrome::Body`): the tab's rows, a scrollbar on the right border when
+they overflow and, while the panel has focus and is four rows tall or
+more, a `muted` key hint on its last row. Every hint ends in `⇧←→ tabs`.
+What the rows are depends on what the tab shows:
+
+- **Lists** (SANDBOX, PROCESSES, TRACE, TASKS, KERNEL, MEMBERS, INBOX,
+  a channel's MEMBERS) draw one `components::list_row` row per thing: its
+  status glyph, its name and its details on the right. ↑↓ move the
+  selection and ⏎ opens it.
+- **Info bodies** (POLICIES, HOST, a channel's INFO, the RECORD and
+  PROCESS views, a project's info box) describe one thing as a document
+  built with `components::Info`. The whole document scrolls with ↑↓,
+  PgUp/PgDn and Home/End, and its hint is `↑↓ scroll  ⇧←→ tabs`.
+
+```text
+boxd · aura-re36-3f9c              title     bold foreground
+● ready · up 2h 14m                status    the accent
+
+RESOURCES  1 near full             section   secondary, then a muted note
+  Region    fra                    fact      muted label, value cut with …
+  Disk      █████████░ 91%         bar       the accent, the rest faint
+  ✓ read_file   on   per tool      marked    only the glyph colored
+  `cargo test` commands            item      foreground, then a muted detail
+
+[p] pull changes  [s] sleep        actions   primary keys, muted labels
+```
+
+- **Sections**: titled in `secondary`, regular weight, flush left, with
+  one blank row before each but the first. Everything under a title is
+  indented two columns.
+- **Facts**: a `muted` label in a ten-column label column, then the
+  value, cut with `…`. The RECORD and PROCESS views use fourteen columns
+  and wrap long values under themselves. A fact without a value shows a
+  `muted` `—`.
+- **Values** are `foreground`; ids, hashes and `none` are `muted`; what
+  failed is `error`. Only a value that needs attention takes the accent
+  (`yolo`, a disk 90% full, a verdict still pending). Section titles,
+  labels and the header's info cell never do.
 
 ### The Chat Column
 
@@ -293,7 +334,8 @@ let (icon, color) = match status {
 
 ### Don't
 
-- Use the accent for borders, tabs or selections
+- Use the accent for borders, tabs, selections, section titles or a
+  header's info cell
 - Use arbitrary RGB values not in the palette
 - Use italics outside markdown emphasis
 - Use color as the only indicator (add icons too)
