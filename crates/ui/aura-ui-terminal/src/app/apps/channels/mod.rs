@@ -215,14 +215,11 @@ impl App {
     }
 
     /// The chat panel's title in the channel app: `#slug`, with the
-    /// channel's title as its info, or a member's name over its own
-    /// chat (see [`Self::member_chat_title`]). `None` with no channel
-    /// open.
+    /// channel's title as its info. `None` with no channel open. Over a
+    /// member's chat the panel draws [`Self::member_chat_title`] instead,
+    /// with its close button.
     #[must_use]
     pub(crate) fn channel_chat_title(&self) -> Option<(String, String)> {
-        if let Some(title) = self.member_chat_title() {
-            return Some(title);
-        }
         self.open_channel()
             .map(|channel| (format!("#{}", channel.slug), channel.title.clone()))
     }

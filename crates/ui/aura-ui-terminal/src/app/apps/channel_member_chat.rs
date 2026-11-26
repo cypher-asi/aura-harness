@@ -111,7 +111,9 @@ impl App {
     /// The channel list changed under a member's chat (`was_open` before
     /// it did): a member no longer in the open channel gives way to the
     /// coordinator, so the chat is never an outsider's under the
-    /// channel's name.
+    /// channel's name. When the request cannot go out, the coordinator
+    /// comes back on screen all the same, with what its chat holds: once
+    /// the member is gone from the list nothing would know to try again.
     pub(in crate::app) fn leave_dropped_member_chat(&mut self, was_open: bool) {
         let Some(coordinator) = self
             .open_channel()
@@ -120,8 +122,12 @@ impl App {
         else {
             return;
         };
-        if was_open && self.member_chat().is_none() && self.active_agent_id != coordinator {
-            self.switch_on_screen(&coordinator);
+        if was_open
+            && self.member_chat().is_none()
+            && self.active_agent_id != coordinator
+            && !self.switch_on_screen(&coordinator)
+        {
+            self.apply_active_agent(&coordinator);
         }
     }
 }
