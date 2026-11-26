@@ -227,6 +227,39 @@ async fn test_deterministic_record_entry_seq() {
 // Multi-Agent Concurrent Processing Tests
 // ============================================================================
 
+/// One agent's share of the concurrent test: run its loop on the queued
+/// prompt, then commit the dequeued transaction.
+async fn run_concurrent_agent(
+    store: Arc<dyn Store>,
+    ws_base: std::path::PathBuf,
+    agent_id: AgentId,
+) -> AgentId {
+    let provider: Arc<dyn ModelProvider + Send + Sync> =
+        Arc::new(MockProvider::simple_response("concurrent response"));
+    let router = ExecutorRouter::new();
+    let config = KernelConfig {
+        workspace_base: ws_base,
+        ..KernelConfig::default()
+    };
+    let kernel =
+        Arc::new(Kernel::new(store.clone(), provider.clone(), router, config, agent_id).unwrap());
+    let executor = KernelToolGateway::new(kernel.clone());
+
+    let agent_loop = AgentLoop::new(AgentLoopConfig::for_agent("claude-test-model"));
+
+    let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
+    let prompt = String::from_utf8(tx.payload.to_vec()).unwrap();
+    let messages = vec![aura_model::Message::user(prompt)];
+    let _result = agent_loop
+        .run(provider.as_ref(), &executor, messages, vec![])
+        .await
+        .unwrap();
+
+    kernel.process_dequeued(tx, token).await.unwrap();
+
+    agent_id
+}
+
 #[tokio::test]
 async fn test_multi_agent_concurrent_processing() {
     let db_dir = TempDir::new().unwrap();
@@ -249,35 +282,7 @@ async fn test_multi_agent_concurrent_processing() {
     for agent_id in agent_ids.clone() {
         let store = store.clone();
         let ws_base = ws_dir.path().to_path_buf();
-
-        let handle = tokio::spawn(async move {
-            let provider: Arc<dyn ModelProvider + Send + Sync> =
-                Arc::new(MockProvider::simple_response("concurrent response"));
-            let router = ExecutorRouter::new();
-            let config = KernelConfig {
-                workspace_base: ws_base,
-                ..KernelConfig::default()
-            };
-            let kernel = Arc::new(
-                Kernel::new(store.clone(), provider.clone(), router, config, agent_id).unwrap(),
-            );
-            let executor = KernelToolGateway::new(kernel.clone());
-
-            let agent_loop = AgentLoop::new(AgentLoopConfig::for_agent("claude-test-model"));
-
-            let (token, tx) = store.dequeue_tx(agent_id).unwrap().unwrap();
-            let prompt = String::from_utf8(tx.payload.to_vec()).unwrap();
-            let messages = vec![aura_model::Message::user(prompt)];
-            let _result = agent_loop
-                .run(provider.as_ref(), &executor, messages, vec![])
-                .await
-                .unwrap();
-
-            kernel.process_dequeued(tx, token).await.unwrap();
-
-            agent_id
-        });
-        handles.push(handle);
+        handles.push(tokio::spawn(run_concurrent_agent(store, ws_base, agent_id)));
     }
 
     let results: Vec<AgentId> = futures::future::join_all(handles)

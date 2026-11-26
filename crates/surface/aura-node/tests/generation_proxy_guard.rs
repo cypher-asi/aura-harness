@@ -1,6 +1,6 @@
 //! Regression guard for the **generation-proxy declared exception**.
 //!
-//! The module `crates/surface/aura-node/src/gateway/session/generation.rs` is documented in
+//! The module `crates/surface/aura-node/src/gateway/session/generation/` is documented in
 //! `docs/invariants.md` as an explicit exception to the "all LLM calls go
 //! through the kernel gateway" invariant. The exception is narrow: the
 //! module is a pure SSE pass-through that proxies image / video / 3D
@@ -26,8 +26,9 @@
 
 use std::path::PathBuf;
 
-/// Path (relative to the crate root) of the module the guard watches.
-const GENERATION_SRC_REL: &str = "src/gateway/session/generation.rs";
+/// Path (relative to the crate root) of the module directory the guard
+/// watches; every `.rs` file in it is scanned.
+const GENERATION_SRC_REL: &str = "src/gateway/session/generation";
 
 /// Identifiers that, if they appear in the generation-proxy source,
 /// indicate the module has started doing something the declared
@@ -93,28 +94,9 @@ fn line_is_code(line: &str) -> bool {
 
 #[test]
 fn generation_proxy_has_no_forbidden_identifiers() {
-    let path = generation_source_path();
-    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "failed to read generation-proxy source at {}: {e}",
-            path.display()
-        )
-    });
-
     let mut violations: Vec<String> = Vec::new();
-    for (lineno, line) in src.lines().enumerate() {
-        if !line_is_code(line) {
-            continue;
-        }
-        for (label, pattern) in forbidden_patterns() {
-            if line.contains(pattern.as_str()) {
-                violations.push(format!(
-                    "  {path}:{lineno}\n    pattern: {pattern:?}\n    reason : {label}\n    line   : {line}",
-                    path = path.display(),
-                    lineno = lineno + 1,
-                ));
-            }
-        }
+    for path in generation_source_files() {
+        scan_source_file(&path, &mut violations);
     }
 
     assert!(
@@ -130,6 +112,51 @@ fn generation_proxy_has_no_forbidden_identifiers() {
         rel = GENERATION_SRC_REL,
         list = violations.join("\n\n")
     );
+}
+
+/// Every `.rs` file of the generation-proxy module directory, sorted.
+fn generation_source_files() -> Vec<PathBuf> {
+    let dir = generation_source_path();
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to read generation-proxy source dir at {}: {e}",
+            dir.display()
+        )
+    });
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no generation-proxy sources in {}",
+        dir.display()
+    );
+    files
+}
+
+fn scan_source_file(path: &std::path::Path, violations: &mut Vec<String>) {
+    let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "failed to read generation-proxy source at {}: {e}",
+            path.display()
+        )
+    });
+    for (lineno, line) in src.lines().enumerate() {
+        if !line_is_code(line) {
+            continue;
+        }
+        for (label, pattern) in forbidden_patterns() {
+            if line.contains(pattern.as_str()) {
+                violations.push(format!(
+                    "  {path}:{lineno}\n    pattern: {pattern:?}\n    reason : {label}\n    line   : {line}",
+                    path = path.display(),
+                    lineno = lineno + 1,
+                ));
+            }
+        }
+    }
 }
 
 #[test]

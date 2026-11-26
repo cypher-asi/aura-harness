@@ -234,35 +234,8 @@ mod tests {
         assert!(all.len() >= 30, "{} tasks", all.len());
         let ids: HashSet<&str> = all.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids.len(), all.len(), "ids are unique");
-        let suite = |t: &ExampleTask| t.id.split('/').next().unwrap_or_default().to_string();
-        let order: Vec<String> = all.iter().map(suite).collect();
-        let first = |name: &str| order.iter().position(|s| s == name).unwrap();
-        assert!(first("coding") < first("gate_cost") && first("gate_cost") < first("gate_hard"));
-        assert!(first("gate_hard") < first("polyglot") && first("polyglot") < first("codebases"));
-        assert!(first("codebases") < first("swe_bench_pro_hard"));
-        assert_eq!(
-            suites(),
-            [
-                "coding",
-                "gate_cost",
-                "gate_hard",
-                "polyglot",
-                "codebases",
-                "swe_bench_pro_hard"
-            ]
-        );
-        for task in all {
-            let expected = match task.suite() {
-                "codebases" => Some("repo"),
-                "swe_bench_pro_hard" => Some("image"),
-                _ => None,
-            };
-            let source = task.source.as_ref().map(|source| match source {
-                Source::Repo(_) => "repo",
-                Source::Image(_) => "image",
-            });
-            assert_eq!(source, expected, "{}", task.id);
-        }
+        assert_suites_easiest_first(all);
+        assert_sources(all);
         assert_eq!(
             all.iter()
                 .filter(|t| t.suite() == "swe_bench_pro_hard")
@@ -286,6 +259,43 @@ mod tests {
             by_id("gate_cost/long-session-todo-cli").map(|t| t.prompts.len()),
             Some(3)
         );
+    }
+
+    /// Suites come in the pack easiest first, and `suites()` lists them so.
+    fn assert_suites_easiest_first(all: &[ExampleTask]) {
+        let suite = |t: &ExampleTask| t.id.split('/').next().unwrap_or_default().to_string();
+        let order: Vec<String> = all.iter().map(suite).collect();
+        let first = |name: &str| order.iter().position(|s| s == name).unwrap();
+        assert!(first("coding") < first("gate_cost") && first("gate_cost") < first("gate_hard"));
+        assert!(first("gate_hard") < first("polyglot") && first("polyglot") < first("codebases"));
+        assert!(first("codebases") < first("swe_bench_pro_hard"));
+        assert_eq!(
+            suites(),
+            [
+                "coding",
+                "gate_cost",
+                "gate_hard",
+                "polyglot",
+                "codebases",
+                "swe_bench_pro_hard"
+            ]
+        );
+    }
+
+    /// Only the repository and image suites bring their own source.
+    fn assert_sources(all: &[ExampleTask]) {
+        for task in all {
+            let expected = match task.suite() {
+                "codebases" => Some("repo"),
+                "swe_bench_pro_hard" => Some("image"),
+                _ => None,
+            };
+            let source = task.source.as_ref().map(|source| match source {
+                Source::Repo(_) => "repo",
+                Source::Image(_) => "image",
+            });
+            assert_eq!(source, expected, "{}", task.id);
+        }
     }
 
     #[test]

@@ -68,12 +68,7 @@ fn fields_for_tool(tool_name: &str) -> &'static [&'static str] {
 /// the returned value rather than being mis-decoded; the next call with more
 /// bytes will pick it up cleanly.
 fn extract_partial_string_field(buf: &str, key: &str) -> Option<String> {
-    let needle_a = format!("\"{key}\":\"");
-    let needle_b = format!("\"{key}\": \"");
-    let start = buf
-        .find(&needle_a)
-        .map(|i| i + needle_a.len())
-        .or_else(|| buf.find(&needle_b).map(|i| i + needle_b.len()))?;
+    let start = find_string_value_start(buf, key)?;
 
     let mut out = String::new();
     let bytes = buf.as_bytes();
@@ -83,97 +78,98 @@ fn extract_partial_string_field(buf: &str, key: &str) -> Option<String> {
         if b == b'"' {
             return Some(out);
         }
-        if b == b'\\' {
-            if i + 1 >= bytes.len() {
-                return Some(out);
-            }
-            let esc = bytes[i + 1];
-            match esc {
-                b'"' => {
-                    out.push('"');
-                    i += 2;
-                }
-                b'\\' => {
-                    out.push('\\');
-                    i += 2;
-                }
-                b'/' => {
-                    out.push('/');
-                    i += 2;
-                }
-                b'n' => {
-                    out.push('\n');
-                    i += 2;
-                }
-                b't' => {
-                    out.push('\t');
-                    i += 2;
-                }
-                b'r' => {
-                    out.push('\r');
-                    i += 2;
-                }
-                b'b' => {
-                    out.push('\u{0008}');
-                    i += 2;
-                }
-                b'f' => {
-                    out.push('\u{000C}');
-                    i += 2;
-                }
-                b'u' => {
-                    if i + 6 > bytes.len() {
-                        return Some(out);
-                    }
-                    let hex = std::str::from_utf8(&bytes[i + 2..i + 6]).unwrap_or("");
-                    if let Ok(code) = u32::from_str_radix(hex, 16) {
-                        if let Some(ch) = char::from_u32(code) {
-                            out.push(ch);
-                            i += 6;
-                            continue;
-                        }
-                    }
-                    out.push('\u{FFFD}');
-                    i += 6;
-                }
-                _ => {
-                    out.push(esc as char);
-                    i += 2;
-                }
-            }
-            continue;
-        }
-        match std::str::from_utf8(&bytes[i..]) {
-            Ok(_) => {
-                // Invariant: the outer `while i < bytes.len()` guard and the
-                // valid-UTF-8 branch above guarantee `buf[i..]` holds at
-                // least one char. `debug_assert!` locks the invariant in
-                // tests; release builds fall back to returning the
-                // accumulated prefix rather than panicking.
-                let Some(ch) = buf[i..].chars().next() else {
-                    debug_assert!(false, "partial_json: empty suffix after UTF-8 validation");
-                    return Some(out);
-                };
-                out.push(ch);
-                i += ch.len_utf8();
-            }
-            Err(e) => {
-                let valid_up_to = e.valid_up_to();
-                if valid_up_to == 0 {
-                    return Some(out);
-                }
-                let chunk = &buf[i..i + valid_up_to];
-                for ch in chunk.chars() {
-                    if ch == '"' {
-                        return Some(out);
-                    }
-                    out.push(ch);
-                }
-                return Some(out);
-            }
+        let next = if b == b'\\' {
+            decode_escape(bytes, i, &mut out)
+        } else {
+            push_raw_char(buf, i, &mut out)
+        };
+        match next {
+            Some(next_i) => i = next_i,
+            None => return Some(out),
         }
     }
     Some(out)
+}
+
+/// Byte offset just past the opening quote of `"key":"` (or `"key": "`).
+fn find_string_value_start(buf: &str, key: &str) -> Option<usize> {
+    let needle_a = format!("\"{key}\":\"");
+    let needle_b = format!("\"{key}\": \"");
+    buf.find(&needle_a)
+        .map(|i| i + needle_a.len())
+        .or_else(|| buf.find(&needle_b).map(|i| i + needle_b.len()))
+}
+
+/// Decodes the escape whose backslash sits at `i`, returning the index after
+/// it, or `None` when the escape is cut off by the end of the buffer.
+fn decode_escape(bytes: &[u8], i: usize, out: &mut String) -> Option<usize> {
+    if i + 1 >= bytes.len() {
+        return None;
+    }
+    let esc = bytes[i + 1];
+    let decoded = match esc {
+        b'"' => '"',
+        b'\\' => '\\',
+        b'/' => '/',
+        b'n' => '\n',
+        b't' => '\t',
+        b'r' => '\r',
+        b'b' => '\u{0008}',
+        b'f' => '\u{000C}',
+        b'u' => return decode_unicode_escape(bytes, i, out),
+        _ => esc as char,
+    };
+    out.push(decoded);
+    Some(i + 2)
+}
+
+/// Decodes a `\uXXXX` escape starting at `i`; `None` when it is incomplete.
+fn decode_unicode_escape(bytes: &[u8], i: usize, out: &mut String) -> Option<usize> {
+    if i + 6 > bytes.len() {
+        return None;
+    }
+    let hex = std::str::from_utf8(&bytes[i + 2..i + 6]).unwrap_or("");
+    let ch = u32::from_str_radix(hex, 16)
+        .ok()
+        .and_then(char::from_u32)
+        .unwrap_or('\u{FFFD}');
+    out.push(ch);
+    Some(i + 6)
+}
+
+/// Appends the unescaped character at `i`, returning the index after it, or
+/// `None` when the scan must stop (invalid UTF-8 tail or closing quote).
+fn push_raw_char(buf: &str, i: usize, out: &mut String) -> Option<usize> {
+    let bytes = buf.as_bytes();
+    match std::str::from_utf8(&bytes[i..]) {
+        Ok(_) => {
+            // Invariant: the outer `while i < bytes.len()` guard and the
+            // valid-UTF-8 branch above guarantee `buf[i..]` holds at
+            // least one char. `debug_assert!` locks the invariant in
+            // tests; release builds fall back to returning the
+            // accumulated prefix rather than panicking.
+            let Some(ch) = buf[i..].chars().next() else {
+                debug_assert!(false, "partial_json: empty suffix after UTF-8 validation");
+                return None;
+            };
+            out.push(ch);
+            Some(i + ch.len_utf8())
+        }
+        Err(e) => {
+            let valid_up_to = e.valid_up_to();
+            if valid_up_to == 0 {
+                return None;
+            }
+            let chunk = &buf[i..i + valid_up_to];
+            for ch in chunk.chars() {
+                if ch == '"' {
+                    return None;
+                }
+                out.push(ch);
+            }
+            None
+        }
+    }
 }
 
 #[cfg(test)]

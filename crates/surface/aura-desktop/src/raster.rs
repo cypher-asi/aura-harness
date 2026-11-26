@@ -62,54 +62,82 @@ fn paint_band(scene: &Scene, atlas: &Atlas, band: &mut [u8], top: usize) {
 }
 
 /// Paint `quad` into `out`, which holds the frame's `rows`.
+fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8], rows: Range<usize>) {
+    let Some(clip) = Clip::new(quad, scene, &rows) else {
+        return;
+    };
+    let stride = scene.width as usize * 4;
+    for y in clip.top..clip.bottom {
+        let row = clip.row(out, stride, rows.start, y);
+        if quad.fill == Fill::Solid {
+            paint_solid(row, quad.color);
+        } else {
+            clip.paint_texels(row, quad, atlas, y);
+        }
+    }
+}
+
+/// The part of a quad inside the frame, and in the rows being painted.
+struct Clip {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss
 )]
-fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8], rows: Range<usize>) {
-    // The part of the quad inside the frame, and in these rows.
-    let left = quad.x.max(0);
-    let top = quad.y.max(rows.start as i32);
-    let right = quad
-        .x
-        .saturating_add_unsigned(quad.w)
-        .min(scene.width as i32);
-    let bottom = quad
-        .y
-        .saturating_add_unsigned(quad.h)
-        .min(scene.height as i32)
-        .min(rows.end as i32);
-    if right <= left || bottom <= top {
-        return;
-    }
-    let stride = scene.width as usize * 4;
-    let span = (right - left) as usize * 4;
-    let (atlas_width, atlas_height) = atlas.size();
-    let [red, green, blue, alpha] = quad.color;
-    for y in top..bottom {
-        let start = (y as usize - rows.start) * stride + left as usize * 4;
-        let row = &mut out[start..start + span];
-        if quad.fill == Fill::Solid {
-            if alpha == 255 {
-                for pixel in row.chunks_exact_mut(4) {
-                    pixel[..3].copy_from_slice(&[red, green, blue]);
-                }
-            } else {
-                for pixel in row.chunks_exact_mut(4) {
-                    blend(pixel, [red, green, blue], u32::from(alpha) * 255);
-                }
-            }
-            continue;
+impl Clip {
+    /// `None` when none of `quad` is there.
+    #[inline]
+    fn new(quad: &Quad, scene: &Scene, rows: &Range<usize>) -> Option<Self> {
+        let left = quad.x.max(0);
+        let top = quad.y.max(rows.start as i32);
+        let right = quad
+            .x
+            .saturating_add_unsigned(quad.w)
+            .min(scene.width as i32);
+        let bottom = quad
+            .y
+            .saturating_add_unsigned(quad.h)
+            .min(scene.height as i32)
+            .min(rows.end as i32);
+        if right <= left || bottom <= top {
+            return None;
         }
+        Some(Self {
+            left,
+            top,
+            right,
+            bottom,
+        })
+    }
+
+    /// The clipped part of frame row `y` in `out`, which starts at row
+    /// `first` and is `stride` bytes a row.
+    #[inline]
+    fn row<'a>(&self, out: &'a mut [u8], stride: usize, first: usize, y: i32) -> &'a mut [u8] {
+        let span = (self.right - self.left) as usize * 4;
+        let start = (y as usize - first) * stride + self.left as usize * 4;
+        &mut out[start..start + span]
+    }
+
+    /// Row `y` of a quad drawn from the atlas, cut to this clip.
+    #[inline]
+    fn paint_texels(&self, row: &mut [u8], quad: &Quad, atlas: &Atlas, y: i32) {
+        let (atlas_width, atlas_height) = atlas.size();
+        let [red, green, blue, alpha] = quad.color;
         // Skipped columns and rows of the quad are skipped in the atlas.
         let v = quad.v + (y - quad.y) as u32;
-        let u = quad.u + (left - quad.x) as u32;
-        if v >= atlas_height || u + (right - left) as u32 > atlas_width {
-            continue;
+        let u = quad.u + (self.left - quad.x) as u32;
+        if v >= atlas_height || u + (self.right - self.left) as u32 > atlas_width {
+            return;
         }
         let from = ((v * atlas_width + u) * 4) as usize;
-        let texels = &atlas.pixels()[from..from + span];
+        let texels = &atlas.pixels()[from..from + row.len()];
         for (pixel, texel) in row.chunks_exact_mut(4).zip(texels.chunks_exact(4)) {
             let coverage = u32::from(texel[3]) * u32::from(alpha);
             if coverage == 0 {
@@ -120,6 +148,20 @@ fn paint_quad(quad: &Quad, scene: &Scene, atlas: &Atlas, out: &mut [u8], rows: R
             } else {
                 blend(pixel, [texel[0], texel[1], texel[2]], coverage);
             }
+        }
+    }
+}
+
+/// One row of a solid quad in `color`.
+#[inline]
+fn paint_solid(row: &mut [u8], [red, green, blue, alpha]: [u8; 4]) {
+    if alpha == 255 {
+        for pixel in row.chunks_exact_mut(4) {
+            pixel[..3].copy_from_slice(&[red, green, blue]);
+        }
+    } else {
+        for pixel in row.chunks_exact_mut(4) {
+            blend(pixel, [red, green, blue], u32::from(alpha) * 255);
         }
     }
 }

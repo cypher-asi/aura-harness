@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aura_config::{PluginConfig, PluginsConfig, PluginsTable};
-use aura_plugin::load_enabled_plugins;
+use aura_plugin::{load_enabled_plugins, PluginRuntime};
 use aura_plugin_hooks::{HookEvent, PluginHookHost};
 use tempfile::TempDir;
 
@@ -70,13 +70,7 @@ fn install_fixture_plugin(tmp: &Path) -> (PathBuf, String, PathBuf) {
     let plugin_dir = aura_home.join("plugins").join(&plugin_id).join(version);
     std::fs::create_dir_all(&plugin_dir).unwrap();
 
-    // Skill: a markdown body under `skills/`.
-    std::fs::create_dir_all(plugin_dir.join("skills")).unwrap();
-    std::fs::write(
-        plugin_dir.join("skills").join("hello.md"),
-        "# hello\n\nfixture skill body\n",
-    )
-    .unwrap();
+    write_fixture_skill(&plugin_dir);
 
     // Hook script that writes a side-effect file.
     let side_effect = tmp.join("hook-fired.txt");
@@ -88,6 +82,33 @@ fn install_fixture_plugin(tmp: &Path) -> (PathBuf, String, PathBuf) {
         .into_owned()
         .replace('\\', "/");
 
+    let manifest = fixture_manifest(&plugin_id, version, &script_rel);
+    std::fs::write(plugin_dir.join(".aura-plugin.toml"), manifest).unwrap();
+
+    // Active version pointer (the cache uses a bare `active`
+    // filename, not a dotfile).
+    std::fs::write(
+        aura_home.join("plugins").join(&plugin_id).join("active"),
+        version,
+    )
+    .unwrap();
+
+    (aura_home, plugin_id, side_effect)
+}
+
+/// Skill: a markdown body under `skills/`.
+fn write_fixture_skill(plugin_dir: &Path) {
+    std::fs::create_dir_all(plugin_dir.join("skills")).unwrap();
+    std::fs::write(
+        plugin_dir.join("skills").join("hello.md"),
+        "# hello\n\nfixture skill body\n",
+    )
+    .unwrap();
+}
+
+/// The fixture `.aura-plugin.toml` contributing one skill, hook, MCP
+/// server and connector.
+fn fixture_manifest(plugin_id: &str, version: &str, script_rel: &str) -> String {
     // Use a real OS binary as the MCP server stub. The
     // [`McpConnectionManager::register`] path immediately spawns
     // the child; it doesn't JSON-RPC until a caller invokes
@@ -108,7 +129,7 @@ args = ["-c", "sleep 5"]
 "#
     };
 
-    let manifest = format!(
+    format!(
         r#"manifest_version = "v1"
 id = "{plugin_id}"
 version = "{version}"
@@ -129,18 +150,7 @@ args = []
 id = "test-connector"
 endpoint = "noop://"
 "#
-    );
-    std::fs::write(plugin_dir.join(".aura-plugin.toml"), manifest).unwrap();
-
-    // Active version pointer (the cache uses a bare `active`
-    // filename, not a dotfile).
-    std::fs::write(
-        aura_home.join("plugins").join(&plugin_id).join("active"),
-        version,
     )
-    .unwrap();
-
-    (aura_home, plugin_id, side_effect)
 }
 
 fn enabled_plugins_config(plugin_id: &str) -> PluginsConfig {
@@ -166,6 +176,14 @@ fn e2e_fixture_plugin_materialises_all_contributions() {
 
     let runtime = load_enabled_plugins(&aura_home, &cfg).expect("plugin runtime materialises");
 
+    assert_loaded_cleanly(&runtime);
+    assert_skill_and_mcp(&runtime);
+    assert_hook_registration(&runtime);
+    assert_connector(&runtime);
+    assert_pre_tool_use_fires(&runtime, &aura_home, &side_effect);
+}
+
+fn assert_loaded_cleanly(runtime: &PluginRuntime) {
     assert_eq!(
         runtime.enabled.len(),
         1,
@@ -177,7 +195,9 @@ fn e2e_fixture_plugin_materialises_all_contributions() {
         "no failures expected, got {:?}",
         runtime.load_failures
     );
+}
 
+fn assert_skill_and_mcp(runtime: &PluginRuntime) {
     // (1) Skill: the plugin contributed `./skills/hello.md`.
     //     The materialiser collects the *parent* directory as a
     //     skill root (the loader downstream walks the directory
@@ -205,7 +225,9 @@ fn e2e_fixture_plugin_materialises_all_contributions() {
         server_ids.iter().any(|s| s == "test-mcp"),
         "server_ids() should include the fixture's id, got {server_ids:?}"
     );
+}
 
+fn assert_hook_registration(runtime: &PluginRuntime) {
     // (3) Hook: engine reports a registered handler for
     //     `PreToolUse`.
     assert!(
@@ -230,7 +252,9 @@ fn e2e_fixture_plugin_materialises_all_contributions() {
             "fixture only wires PreToolUse; {event:?} must remain empty"
         );
     }
+}
 
+fn assert_connector(runtime: &PluginRuntime) {
     // (4) Connector: registry returns the plugin-supplied entry.
     let connector = runtime
         .connectors
@@ -238,14 +262,16 @@ fn e2e_fixture_plugin_materialises_all_contributions() {
         .expect("connector `test-connector` must be registered");
     assert_eq!(connector.endpoint, "noop://");
     assert_eq!(connector.plugin_id, "test-plugin");
+}
 
+fn assert_pre_tool_use_fires(runtime: &PluginRuntime, aura_home: &Path, side_effect: &Path) {
     // (5) Fire the PreToolUse hook and assert the side-effect
     //     file exists with the expected content. We use the
     //     production `PluginHookHost` so the env-injection /
     //     scrubbing pipeline is exercised end-to-end.
     let host = PluginHookHost {
         engine: Arc::clone(&runtime.hook_engine),
-        aura_home: aura_home.clone(),
+        aura_home: aura_home.to_path_buf(),
         session_id: "sess-e2e".to_string(),
         agent_id: "agent-e2e".to_string(),
         parent_agent_id: None,
@@ -274,7 +300,7 @@ fn e2e_fixture_plugin_materialises_all_contributions() {
         "PreToolUse hook should have written {}",
         side_effect.display()
     );
-    let body = std::fs::read_to_string(&side_effect).unwrap();
+    let body = std::fs::read_to_string(side_effect).unwrap();
     assert!(
         body.contains("fired"),
         "hook side-effect file should contain 'fired', got {body:?}"

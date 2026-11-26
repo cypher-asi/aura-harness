@@ -1,6 +1,8 @@
 use super::*;
 use aura_agent::ProcessManagerConfig;
-use aura_core_types::Transaction;
+use aura_agent::ProcessMeta;
+use aura_core_types::{ActionId, Hash, Transaction};
+use tokio::sync::mpsc;
 
 fn turn(agent: AgentId, started_ms: u64) -> ProcessSummary {
     ProcessSummary {
@@ -111,15 +113,8 @@ fn finished_rows_outlive_the_session() {
     assert!(!rows[0].killable);
 }
 
-#[tokio::test]
-async fn background_commands_are_listed_killed_and_reported() {
-    let (tx, mut completions) = mpsc::channel::<Transaction>(4);
-    let manager = Arc::new(ProcessManager::new(tx, ProcessManagerConfig::default()));
-    let table = ProcessTable::without_os_scan(None, Some(Arc::clone(&manager)));
-    let agent = AgentId::generate();
-    table.name_agent(agent, "Agent01");
-    table.start(turn(agent, 0), None);
-
+/// Register a `sleep 30` background command for `agent`.
+fn register_sleep(manager: &Arc<ProcessManager>, agent: AgentId) -> u32 {
     let process_id = ProcessId::generate();
     let child = std::process::Command::new("sleep")
         .arg("30")
@@ -139,6 +134,20 @@ async fn background_commands_are_listed_killed_and_reported() {
             tool_use_id: Some("toolu_1".into()),
         },
     );
+
+    pid
+}
+
+#[tokio::test]
+async fn background_commands_are_listed_killed_and_reported() {
+    let (tx, mut completions) = mpsc::channel::<Transaction>(4);
+    let manager = Arc::new(ProcessManager::new(tx, ProcessManagerConfig::default()));
+    let table = ProcessTable::without_os_scan(None, Some(Arc::clone(&manager)));
+    let agent = AgentId::generate();
+    table.name_agent(agent, "Agent01");
+    table.start(turn(agent, 0), None);
+
+    let pid = register_sleep(&manager, agent);
 
     let rows = table.snapshot();
     let row = rows
@@ -174,6 +183,47 @@ async fn background_commands_are_listed_killed_and_reported() {
 }
 
 #[cfg(target_os = "linux")]
+/// Snapshots of `table` until `agent` owns `count` rows, or 50 tries.
+fn wait_for_rows(table: &ProcessTable, agent: AgentId, count: usize) -> Vec<ProcessSummary> {
+    let mut rows = Vec::new();
+    for _ in 0..50 {
+        rows = table.snapshot();
+        if rows
+            .iter()
+            .filter(|r| r.owner_agent_id == agent.to_hex())
+            .count()
+            == count
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    rows
+}
+
+#[cfg(target_os = "linux")]
+/// Whether `shell` is kept as killed once `agent`'s rows stop, polling
+/// up to 50 times.
+fn wait_killed(table: &ProcessTable, agent: AgentId, shell: &str) -> bool {
+    let mut gone = false;
+    for _ in 0..50 {
+        let rows = table.snapshot();
+        if rows
+            .iter()
+            .filter(|r| r.owner_agent_id == agent.to_hex())
+            .all(|r| r.kind == ProcessKind::Turn || !r.status.is_live())
+        {
+            gone = rows
+                .iter()
+                .any(|r| r.id == shell && r.status == ProcessStatus::Killed);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    gone
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn tagged_os_processes_are_listed_under_their_parent_and_killable() {
     use aura_exec_tools::{AGENT_ID_VAR, HARNESS_PID_VAR};
@@ -191,19 +241,7 @@ fn tagged_os_processes_are_listed_under_their_parent_and_killable() {
         .spawn()
         .unwrap();
 
-    let mut rows = Vec::new();
-    for _ in 0..50 {
-        rows = table.snapshot();
-        if rows
-            .iter()
-            .filter(|r| r.owner_agent_id == agent.to_hex())
-            .count()
-            == 3
-        {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let rows = wait_for_rows(&table, agent, 3);
     let mine: Vec<&ProcessSummary> = rows
         .iter()
         .filter(|r| r.owner_agent_id == agent.to_hex())
@@ -222,20 +260,6 @@ fn tagged_os_processes_are_listed_under_their_parent_and_killable() {
     let shell = mine[1].id.clone();
     table.kill(&shell).unwrap();
     child.wait().unwrap();
-    let mut gone = false;
-    for _ in 0..50 {
-        let rows = table.snapshot();
-        if rows
-            .iter()
-            .filter(|r| r.owner_agent_id == agent.to_hex())
-            .all(|r| r.kind == ProcessKind::Turn || !r.status.is_live())
-        {
-            gone = rows
-                .iter()
-                .any(|r| r.id == shell && r.status == ProcessStatus::Killed);
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let gone = wait_killed(&table, agent, &shell);
     assert!(gone, "the killed shell is kept as killed");
 }

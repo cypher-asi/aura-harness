@@ -1,7 +1,8 @@
 //! The tab bar as quads.
 
-use super::{label_size, unit, Bar, Hit, CONTROLS};
+use super::{label_size, unit, Bar, Hit, Title, CONTROLS};
 use crate::geom::{rgba, Color, Point, Rectangle};
+use crate::grid::Palette;
 use crate::scene::{fill, Layers, Quad};
 use crate::shapes::{self, LineCap, LineJoin, Outline};
 use crate::text::{Align, Face, Label, ShapeKey, Shaping, TextSystem, LABEL_LINE_EM};
@@ -10,33 +11,59 @@ use crate::text::{Align, Face, Label, ShapeKey, Shaping, TextSystem, LABEL_LINE_
 /// character.
 const CROSS: u32 = 0x0011_0000;
 
+/// What every section of the bar is drawn with.
+struct Pen {
+    palette: Palette,
+    /// Stroke thickness
+    line: f32,
+    /// How far the glyphs in the boxes reach from their middles
+    arm: f32,
+    plain: Label<'static>,
+}
+
+/// The middle of `rect`.
+fn middle(rect: &Rectangle) -> Point {
+    Point::new(rect.center_x(), rect.center_y())
+}
+
 impl Bar {
     /// The bar's quads, from the top of the window.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn quads(&self, text: &mut TextSystem, out: &mut Layers) {
         let Some(model) = &self.model else {
             return;
         };
-        let (layout, hover) = (&self.layout, self.hover);
-        let palette = model.palette;
-        let unit = unit(&model.metrics);
-        let line = (model.metrics.font_size / 14.0).round().max(1.0);
-        let idle = palette.faint;
         let size = label_size(&model.metrics);
-        let plain = Label {
-            text: "",
-            face: Face::mono(false),
-            size,
-            line_height: size * LABEL_LINE_EM,
-            shaping: Shaping::Advanced,
-            align: Align::Center,
-            middle: true,
-            color: [0; 4],
-            on_row: false,
+        let pen = Pen {
+            palette: model.palette,
+            line: (model.metrics.font_size / 14.0).round().max(1.0),
+            arm: (unit(&model.metrics) * 0.55).round(),
+            plain: Label {
+                text: "",
+                face: Face::mono(false),
+                size,
+                line_height: size * LABEL_LINE_EM,
+                shaping: Shaping::Advanced,
+                align: Align::Center,
+                middle: true,
+                color: [0; 4],
+                on_row: false,
+            },
         };
-        let middle = |rect: &Rectangle| Point::new(rect.center_x(), rect.center_y());
+        self.tabs_quads(&pen, text, out);
+        self.plus_quads(&pen, out);
+        if let Some(title) = &self.layout.title {
+            title_quads(&pen, title, text, out);
+        }
+        self.controls_quads(&pen, text, out);
+    }
 
-        for (index, (rect, item)) in layout.tabs.iter().zip(&model.items).enumerate() {
+    /// The tabs' boxes and labels.
+    fn tabs_quads(&self, pen: &Pen, text: &mut TextSystem, out: &mut Layers) {
+        let Some(model) = &self.model else {
+            return;
+        };
+        let (palette, line) = (pen.palette, pen.line);
+        for (index, (rect, item)) in self.layout.tabs.iter().zip(&model.items).enumerate() {
             let front = index == model.front;
             let ink = if front {
                 fill(
@@ -48,18 +75,18 @@ impl Bar {
                     palette.selection,
                 );
                 palette.fg
-            } else if hover == Some(Hit::Tab(index)) {
+            } else if self.hover == Some(Hit::Tab(index)) {
                 outline(&mut out.under, *rect, palette.muted, line);
                 palette.fg
             } else {
-                outline(&mut out.under, *rect, idle, line);
+                outline(&mut out.under, *rect, palette.faint, line);
                 palette.muted
             };
             let label = Label {
                 text: &item.label,
                 face: Face::mono(front),
                 color: rgba(ink),
-                ..plain
+                ..pen.plain
             };
             text.write(&mut out.over, &label, middle(rect));
             if item.busy {
@@ -68,19 +95,24 @@ impl Bar {
                 outline(&mut out.under, *rect, palette.accent, line);
             }
         }
+    }
 
-        let over = hover == Some(Hit::New);
-        let (edge, ink) = if over {
-            (palette.muted, palette.fg)
+    /// The edge and ink of a box, brighter while `hit` is under the
+    /// pointer.
+    fn box_colors(&self, pen: &Pen, hit: Hit) -> (Color, Color) {
+        if self.hover == Some(hit) {
+            (pen.palette.muted, pen.palette.fg)
         } else {
-            (idle, palette.muted)
-        };
-        outline(&mut out.under, layout.plus, edge, line);
-        let arm = (unit * 0.55).round();
-        let (cx, cy) = (
-            layout.plus.center_x().round(),
-            layout.plus.center_y().round(),
-        );
+            (pen.palette.faint, pen.palette.muted)
+        }
+    }
+
+    /// The `+` box that opens a tab.
+    fn plus_quads(&self, pen: &Pen, out: &mut Layers) {
+        let (line, arm, plus) = (pen.line, pen.arm, self.layout.plus);
+        let (edge, ink) = self.box_colors(pen, Hit::New);
+        outline(&mut out.under, plus, edge, line);
+        let (cx, cy) = (plus.center_x().round(), plus.center_y().round());
         let half = (line / 2.0).floor();
         fill(
             &mut out.under,
@@ -98,27 +130,13 @@ impl Bar {
             2.0 * arm + line,
             ink,
         );
+    }
 
-        if let Some(title) = &layout.title {
-            outline(&mut out.under, title.rect, idle, line);
-            if !title.text.is_empty() {
-                let ink = palette.fg.mix(palette.muted, 0.4);
-                let at = Point::new(title.center, title.rect.center_y());
-                let label = Label {
-                    text: &title.text,
-                    color: rgba(ink),
-                    ..plain
-                };
-                text.write(&mut out.over, &label, at);
-            }
-        }
-
-        for (rect, control) in layout.controls.iter().zip(CONTROLS) {
-            let (edge, ink) = if hover == Some(control) {
-                (palette.muted, palette.fg)
-            } else {
-                (idle, palette.muted)
-            };
+    /// The window's minimize, maximize and close boxes.
+    fn controls_quads(&self, pen: &Pen, text: &mut TextSystem, out: &mut Layers) {
+        let (line, arm) = (pen.line, pen.arm);
+        for (rect, control) in self.layout.controls.iter().zip(CONTROLS) {
+            let (edge, ink) = self.box_colors(pen, control);
             outline(&mut out.under, *rect, edge, line);
             let (cx, cy) = (rect.center_x().round(), rect.center_y().round());
             match control {
@@ -143,6 +161,22 @@ impl Bar {
                 _ => cross(text, out, middle(rect), (arm, line), ink),
             }
         }
+    }
+}
+
+/// The title's box and text.
+fn title_quads(pen: &Pen, title: &Title, text: &mut TextSystem, out: &mut Layers) {
+    let palette = pen.palette;
+    outline(&mut out.under, title.rect, palette.faint, pen.line);
+    if !title.text.is_empty() {
+        let ink = palette.fg.mix(palette.muted, 0.4);
+        let at = Point::new(title.center, title.rect.center_y());
+        let label = Label {
+            text: &title.text,
+            color: rgba(ink),
+            ..pen.plain
+        };
+        text.write(&mut out.over, &label, at);
     }
 }
 

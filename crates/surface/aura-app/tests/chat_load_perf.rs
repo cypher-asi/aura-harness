@@ -110,13 +110,12 @@ fn tool_output(turn: usize) -> String {
     text
 }
 
-/// Every entry of one turn: a prompt, thinking, twelve tool calls with
-/// results and policies, two long replies, and every tenth turn a plan
-/// write. Sequence numbers continue from `first_seq`.
-fn turn(agent: AgentId, turn: usize, first_seq: u64) -> Vec<RecordEntry> {
-    let mut out: Vec<RecordEntry> = Vec::new();
-    let mut push = |entry: RecordEntry| out.push(entry);
-    let mut draft: Vec<(TransactionType, Vec<u8>, Option<Vec<u8>>)> = Vec::new();
+/// One entry before it is chained: its type, payload and optional effect.
+type Draft = (TransactionType, Vec<u8>, Option<Vec<u8>>);
+
+/// The prompt and the three thinking entries that open a turn.
+fn prompt_and_thinking(turn: usize) -> Vec<Draft> {
+    let mut draft: Vec<Draft> = Vec::new();
     draft.push((
         TransactionType::UserPrompt,
         PromptPayload::new(format!("Load pass {turn}: measure where the time goes.")).to_bytes(),
@@ -140,63 +139,105 @@ fn turn(agent: AgentId, turn: usize, first_seq: u64) -> Vec<RecordEntry> {
             None,
         ));
     }
+    draft
+}
+
+/// The policy decision that approves tool call `id`.
+fn policy_decision(id: String, name: &str) -> Draft {
+    let decision = PolicyDecision {
+        tool_use_id: id,
+        tool: name.to_string(),
+        verdict: ToolGateVerdict::Approved,
+        reason: None,
+        decided_by: PolicyRule::new(PolicySource::User, "on"),
+        trace: Vec::new(),
+        approval: None,
+        mode: "agent".to_string(),
+        policy_hash: "abc123".to_string(),
+        action_id: None,
+    };
+    (
+        TransactionType::PolicyDecision,
+        serde_json::to_vec(&decision).expect("decision"),
+        None,
+    )
+}
+
+/// One tool call: its proposal, policy decision and execution with result.
+fn tool_call(agent: AgentId, turn: usize, call: usize) -> [Draft; 3] {
+    let id = format!("t{turn}-{call}");
+    let name = if call % 4 == 3 {
+        "write_file"
+    } else {
+        "read_file"
+    };
+    let proposal = ToolProposal::new(
+        id.clone(),
+        name,
+        serde_json::json!({
+            "path": format!("crates/surface/aura-app/src/gen_{turn}_{call}.rs"),
+            "content": "pub fn generated() -> usize { 42 }\n".repeat(40),
+        }),
+    );
+    let proposal_draft = (
+        TransactionType::ToolProposal,
+        serde_json::to_vec(&proposal).expect("proposal"),
+        None,
+    );
+    let decision_draft = policy_decision(id.clone(), name);
+    let execution = ToolExecution {
+        tool_use_id: id,
+        tool: name.to_string(),
+        args: proposal.args.clone(),
+        decision: ToolGateVerdict::Approved,
+        reason: None,
+        result: None,
+        is_error: false,
+        duration_ms: Some(120),
+        parent_agent_id: agent,
+        originating_user_id: String::new(),
+    };
+    // The kernel no longer copies a tool's output into the payload: it
+    // lives in the entry's effect, which the loader decodes.
+    let result = ToolResult::success(name, tool_output(turn));
+    let execution_draft = (
+        TransactionType::ToolExecution,
+        serde_json::to_vec(&execution).expect("execution"),
+        Some(serde_json::to_vec(&result).expect("tool result")),
+    );
+    [proposal_draft, decision_draft, execution_draft]
+}
+
+/// The plan write every tenth turn ends with.
+fn plan_write(agent: AgentId, turn: usize) -> Draft {
+    let plan = ToolExecution {
+        tool_use_id: format!("plan-{turn}"),
+        tool: "create_plan".to_string(),
+        args: serde_json::json!({ "name": "perf" }),
+        decision: ToolGateVerdict::Approved,
+        reason: None,
+        result: Some(format!(
+            "Plan saved: .aura/plans/pass-{turn}.plan.md\nCreated plan 'pass {turn}' with 3 todos:\n"
+        )),
+        is_error: false,
+        duration_ms: Some(9),
+        parent_agent_id: agent,
+        originating_user_id: String::new(),
+    };
+    (
+        TransactionType::ToolExecution,
+        serde_json::to_vec(&plan).expect("plan"),
+        None,
+    )
+}
+
+/// Every entry of one turn: a prompt, thinking, twelve tool calls with
+/// results and policies, two long replies, and every tenth turn a plan
+/// write. Sequence numbers continue from `first_seq`.
+fn turn(agent: AgentId, turn: usize, first_seq: u64) -> Vec<RecordEntry> {
+    let mut draft = prompt_and_thinking(turn);
     for call in 0..12 {
-        let id = format!("t{turn}-{call}");
-        let name = if call % 4 == 3 {
-            "write_file"
-        } else {
-            "read_file"
-        };
-        let proposal = ToolProposal::new(
-            id.clone(),
-            name,
-            serde_json::json!({
-                "path": format!("crates/surface/aura-app/src/gen_{turn}_{call}.rs"),
-                "content": "pub fn generated() -> usize { 42 }\n".repeat(40),
-            }),
-        );
-        draft.push((
-            TransactionType::ToolProposal,
-            serde_json::to_vec(&proposal).expect("proposal"),
-            None,
-        ));
-        let decision = PolicyDecision {
-            tool_use_id: id.clone(),
-            tool: name.to_string(),
-            verdict: ToolGateVerdict::Approved,
-            reason: None,
-            decided_by: PolicyRule::new(PolicySource::User, "on"),
-            trace: Vec::new(),
-            approval: None,
-            mode: "agent".to_string(),
-            policy_hash: "abc123".to_string(),
-            action_id: None,
-        };
-        draft.push((
-            TransactionType::PolicyDecision,
-            serde_json::to_vec(&decision).expect("decision"),
-            None,
-        ));
-        let execution = ToolExecution {
-            tool_use_id: id,
-            tool: name.to_string(),
-            args: proposal.args.clone(),
-            decision: ToolGateVerdict::Approved,
-            reason: None,
-            result: None,
-            is_error: false,
-            duration_ms: Some(120),
-            parent_agent_id: agent,
-            originating_user_id: String::new(),
-        };
-        // The kernel no longer copies a tool's output into the payload: it
-        // lives in the entry's effect, which the loader decodes.
-        let result = ToolResult::success(name, tool_output(turn));
-        draft.push((
-            TransactionType::ToolExecution,
-            serde_json::to_vec(&execution).expect("execution"),
-            Some(serde_json::to_vec(&result).expect("tool result")),
-        ));
+        draft.extend(tool_call(agent, turn, call));
     }
     for part in 0..2 {
         draft.push((
@@ -208,26 +249,9 @@ fn turn(agent: AgentId, turn: usize, first_seq: u64) -> Vec<RecordEntry> {
     // Every tenth turn writes a plan, so `latest_plan_path` finds its tool
     // execution at the very end of the record: the worst case for it.
     if turn % 10 == 9 {
-        let plan = ToolExecution {
-            tool_use_id: format!("plan-{turn}"),
-            tool: "create_plan".to_string(),
-            args: serde_json::json!({ "name": "perf" }),
-            decision: ToolGateVerdict::Approved,
-            reason: None,
-            result: Some(format!(
-                "Plan saved: .aura/plans/pass-{turn}.plan.md\nCreated plan 'pass {turn}' with 3 todos:\n"
-            )),
-            is_error: false,
-            duration_ms: Some(9),
-            parent_agent_id: agent,
-            originating_user_id: String::new(),
-        };
-        draft.push((
-            TransactionType::ToolExecution,
-            serde_json::to_vec(&plan).expect("plan"),
-            None,
-        ));
+        draft.push(plan_write(agent, turn));
     }
+    let mut out: Vec<RecordEntry> = Vec::new();
     for (offset, (tx_type, payload, effect)) in draft.into_iter().enumerate() {
         let tx = Transaction::new_chained(agent, tx_type, payload, None);
         let seq = first_seq + offset as u64;
@@ -240,7 +264,7 @@ fn turn(agent: AgentId, turn: usize, first_seq: u64) -> Vec<RecordEntry> {
                 effect,
             )]);
         }
-        push(builder.build());
+        out.push(builder.build());
     }
     out
 }
@@ -267,37 +291,18 @@ fn write_agent(store: &RocksStore, agent: AgentId, entries: usize) -> usize {
     bytes
 }
 
-fn main_bench(entries: usize) {
-    let dir = TempDir::new().expect("tempdir");
-    let data = dir.path().join("data");
-    std::fs::create_dir_all(&data).expect("data dir");
-    let launch = std::env::current_dir().expect("cwd");
-
-    let start = Instant::now();
-    let store = RocksStore::open(dir.path().join("db"), false).expect("open store");
-    print_row("RocksStore::open (empty store)", start.elapsed());
-
-    // The registry, with a few dozen agents so the list row work is real.
-    let mut registry =
-        AgentRegistry::open(aura_store_db::AgentStore::for_store(&store), &data, &launch)
-            .expect("registry");
+/// Give `registry` a few dozen agents so the list row work is real.
+/// Returns the active agent.
+fn seed_registry(registry: &mut AgentRegistry) -> AgentId {
     let mut ids = vec![registry.active().agent_id()];
     for _ in 0..48 {
         ids.push(registry.create(None).expect("agent").agent_id());
     }
-    let active = ids[0];
-    let start = Instant::now();
-    let bytes = write_agent(&store, active, entries);
-    let took = start.elapsed();
-    println!(
-        "\nwrote {entries} entries for {} ({:.1} KB, {:.3} ms per entry)",
-        active.to_hex(),
-        kb(bytes),
-        took.as_secs_f64() * 1000.0 / num(entries)
-    );
+    ids[0]
+}
 
-    let store_read: &dyn ReadStore = &store;
-
+/// The scan, the chat rebuild and the shown-chat cache.
+fn time_chat(store_read: &dyn ReadStore, active: AgentId) {
     // The scan `scan_tail` does, straight on the store. `scan_tail` itself is
     // `pub(crate)`; this is the public read it makes.
     let head = store_read.get_head_seq(active).expect("head");
@@ -338,7 +343,10 @@ fn main_bench(entries: usize) {
             .expect("warm")
             .len()
     });
+}
 
+/// The Record panel, the plan path and the model history.
+fn time_panels(store_read: &dyn ReadStore, active: AgentId) {
     let records = time("recent_record_summaries (Record panel)", 3, || {
         recent_record_summaries(store_read, active).expect("records")
     });
@@ -360,10 +368,12 @@ fn main_bench(entries: usize) {
         model_history(store_read, active).expect("model history")
     });
     println!("    {} model messages", model.len());
+}
 
-    // A first open reads the newest entries once, then rebuilds the chat
-    // from them while the session opens with the plan path and the model
-    // history from the same entries.
+/// A first open reads the newest entries once, then rebuilds the chat
+/// from them while the session opens with the plan path and the model
+/// history from the same entries.
+fn time_first_open(store_read: &dyn ReadStore, active: AgentId) {
     let tail = time("RecordTail::read (the one read of a first open)", 5, || {
         RecordTail::read(store_read, active).expect("tail")
     });
@@ -376,17 +386,19 @@ fn main_bench(entries: usize) {
             model_history_from(tail.entries()).len(),
         )
     });
+}
 
-    // The list the session sends on every switch.
+/// The list the session sends on every switch.
+fn time_lists(registry: &mut AgentRegistry, store_read: &dyn ReadStore, active: AgentId) {
     time("registry.tree() (rows to build)", 5, || {
         registry.tree().len()
     });
     let running = HashSet::new();
     time("agent_summaries (Agents panel rows)", 3, || {
-        agent_summaries(&registry, store_read, active, &running).len()
+        agent_summaries(registry, store_read, active, &running).len()
     });
     time("archived_summaries (Archive rows)", 3, || {
-        archived_summaries(&registry, store_read).len()
+        archived_summaries(registry, store_read).len()
     });
     // `ListRows`, `send_agent_list` and `send_channels_with`/`member_rows` are
     // `pub(crate)`: `agent_summaries` above is the public path closest to
@@ -394,6 +406,37 @@ fn main_bench(entries: usize) {
     time("registry.set_active (persists)", 3, || {
         registry.set_active(active).expect("set active");
     });
+}
+
+fn main_bench(entries: usize) {
+    let dir = TempDir::new().expect("tempdir");
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).expect("data dir");
+    let launch = std::env::current_dir().expect("cwd");
+
+    let start = Instant::now();
+    let store = RocksStore::open(dir.path().join("db"), false).expect("open store");
+    print_row("RocksStore::open (empty store)", start.elapsed());
+
+    let mut registry =
+        AgentRegistry::open(aura_store_db::AgentStore::for_store(&store), &data, &launch)
+            .expect("registry");
+    let active = seed_registry(&mut registry);
+    let start = Instant::now();
+    let bytes = write_agent(&store, active, entries);
+    let took = start.elapsed();
+    println!(
+        "\nwrote {entries} entries for {} ({:.1} KB, {:.3} ms per entry)",
+        active.to_hex(),
+        kb(bytes),
+        took.as_secs_f64() * 1000.0 / num(entries)
+    );
+
+    let store_read: &dyn ReadStore = &store;
+    time_chat(store_read, active);
+    time_panels(store_read, active);
+    time_first_open(store_read, active);
+    time_lists(&mut registry, store_read, active);
 }
 
 #[test]

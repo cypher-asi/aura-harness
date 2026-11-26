@@ -4,7 +4,8 @@ use std::io::Write;
 
 use anyhow::Context;
 use aura_auth::{
-    sign_in_notice, AuthManager, LinkMode, LinkStatus, LinkedAccount, Owner, ProviderKind,
+    sign_in_notice, AuthManager, LinkMode, LinkStatus, LinkedAccount, Owner, PendingLink,
+    ProviderKind,
 };
 use colored::Colorize;
 
@@ -67,6 +68,18 @@ async fn login_zos(auth: &AuthManager) -> anyhow::Result<()> {
 }
 
 async fn link_plan(auth: &AuthManager, kind: ProviderKind, paste: bool) -> anyhow::Result<()> {
+    let pending = begin_plan_link(auth, kind, paste).await?;
+    let link = finish_plan_link(auth, kind, pending).await?;
+    print_plan_linked(auth, kind, &link);
+    Ok(())
+}
+
+/// Starts the sign-in and shows the URL to open (opening it when it can).
+async fn begin_plan_link(
+    auth: &AuthManager,
+    kind: ProviderKind,
+    paste: bool,
+) -> anyhow::Result<PendingLink> {
     if let Some(notice) = sign_in_notice(kind) {
         println!("{} {notice}", "!".yellow().bold());
     }
@@ -88,7 +101,15 @@ async fn link_plan(auth: &AuthManager, kind: ProviderKind, paste: bool) -> anyho
         },
         kind.label(),
     );
+    Ok(pending)
+}
 
+/// Waits for the browser, or reads the pasted code, and finishes the link.
+async fn finish_plan_link(
+    auth: &AuthManager,
+    kind: ProviderKind,
+    pending: PendingLink,
+) -> anyhow::Result<LinkedAccount> {
     let link = if pending.needs_paste() {
         if kind == ProviderKind::OpenRouter {
             print!("Paste the code shown after sign-in (or an sk-or- API key): ");
@@ -106,14 +127,17 @@ async fn link_plan(auth: &AuthManager, kind: ProviderKind, paste: bool) -> anyho
         );
         auth.finish_link(pending, None).await?
     };
+    Ok(link)
+}
 
+fn print_plan_linked(auth: &AuthManager, kind: ProviderKind, link: &LinkedAccount) {
     println!(
         "{} {} linked to {}",
         "✓".green().bold(),
         kind.label(),
         owner_label(&auth.owner()),
     );
-    println!("  {}", describe_link(&link));
+    println!("  {}", describe_link(link));
     if kind == ProviderKind::OpenRouter {
         println!(
             "  Pick an `openrouter/<vendor>/<model>` model with /model; those turns bill your \
@@ -125,7 +149,6 @@ async fn link_plan(auth: &AuthManager, kind: ProviderKind, paste: bool) -> anyho
             kind.id()
         );
     }
-    Ok(())
 }
 
 pub(crate) async fn cmd_logout(args: LogoutArgs) -> anyhow::Result<()> {

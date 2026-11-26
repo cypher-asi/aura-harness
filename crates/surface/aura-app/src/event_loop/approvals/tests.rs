@@ -1,4 +1,9 @@
+use super::prompt::describe;
+use super::rules::stays_in_folder;
 use super::*;
+use aura_agent_kernel::{
+    ToolApprovalError, ToolApprovalPrompter, ToolApprovalRemember, ToolApprovalResponse,
+};
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;

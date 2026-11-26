@@ -76,6 +76,19 @@ fn agent_tools_leave_out_delegate_task_and_task() {
     assert!(!names.iter().any(|n| n == TASK_TOOL_NAME), "{names:?}");
 }
 
+fn helper_spec() -> ChildAgentSpec {
+    ChildAgentSpec {
+        name: "helper".into(),
+        role: "helper".into(),
+        permissions: AgentPermissions::full_access(),
+        tool_permissions: None,
+        parent_tool_permissions: None,
+        system_prompt_override: None,
+        preassigned_agent_id: None,
+        initial_prompt: Some("go".into()),
+    }
+}
+
 #[tokio::test]
 async fn spawned_agent_replies_with_a_notice_and_is_listed() {
     let dir = TempDir::new().unwrap();
@@ -99,20 +112,7 @@ async fn spawned_agent_replies_with_a_notice_and_is_listed() {
 
     let outcome = agents
         .hooks_for(root)
-        .spawn_child(
-            &root,
-            None,
-            ChildAgentSpec {
-                name: "helper".into(),
-                role: "helper".into(),
-                permissions: AgentPermissions::full_access(),
-                tool_permissions: None,
-                parent_tool_permissions: None,
-                system_prompt_override: None,
-                preassigned_agent_id: None,
-                initial_prompt: Some("go".into()),
-            },
-        )
+        .spawn_child(&root, None, helper_spec())
         .await
         .unwrap();
 

@@ -83,63 +83,21 @@ where
     ) -> std::fmt::Result {
         let metadata = event.metadata();
 
-        let timer = HmsTime;
         if CONSOLE_TARGETS.contains(&metadata.target()) {
-            // Visual-block events: render the message verbatim. The
-            // block already encodes its own context; we only prepend a
-            // short timestamp so an operator scanning a file can tell
-            // when each block landed.
-            let mut ts_buf = String::new();
-            let mut ts_writer = Writer::new(&mut ts_buf);
-            timer.format_time(&mut ts_writer).ok();
-            let timestamp = ts_buf.trim_end();
-            if !timestamp.is_empty() {
-                write!(writer, "{}  ", timestamp.dimmed())?;
-            }
-            let mut visitor = MessageVisitor::default();
-            event.record(&mut visitor);
-            writeln!(writer, "{}", visitor.message)?;
-            return Ok(());
+            return write_console_block(&mut writer, event);
         }
 
         // Compact fallback for ordinary events.
         let mut ts_buf = String::new();
         let mut ts_writer = Writer::new(&mut ts_buf);
-        timer.format_time(&mut ts_writer).ok();
+        HmsTime.format_time(&mut ts_writer).ok();
         write!(writer, "{}  ", ts_buf.trim_end().dimmed())?;
 
-        let level = metadata.level();
-        let level_str = format!("{level:>5}");
-        let colored_level = match *level {
-            Level::ERROR => level_str.red().bold(),
-            Level::WARN => level_str.yellow().bold(),
-            Level::INFO => level_str.green(),
-            Level::DEBUG | Level::TRACE => level_str.cyan(),
-        };
-        write!(writer, "{colored_level}  ")?;
+        write!(writer, "{}  ", colored_level(metadata.level()))?;
 
-        // Span chain: `agent{id=…}:worker:task{id=…}:turn{0}:sampling{4}`.
-        // Walk leaf → root via `ctx.event_scope()` and stitch them with
-        // colons so the order matches reading direction.
-        if let Some(scope) = ctx.event_scope() {
-            let mut first = true;
-            let mut chain = String::new();
-            for span in scope.from_root() {
-                if !first {
-                    chain.push(':');
-                }
-                first = false;
-                chain.push_str(span.name());
-                let ext = span.extensions();
-                if let Some(fields) = ext.get::<FormattedFields<N>>() {
-                    if !fields.fields.is_empty() {
-                        let _ = write!(chain, "{{{}}}", fields.fields);
-                    }
-                }
-            }
-            if !chain.is_empty() {
-                write!(writer, "{}  ", chain.cyan().dimmed())?;
-            }
+        let chain = span_chain(ctx);
+        if !chain.is_empty() {
+            write!(writer, "{}  ", chain.cyan().dimmed())?;
         }
 
         // Render the event message and field tail into a side buffer
@@ -169,6 +127,60 @@ where
         }
         Ok(())
     }
+}
+
+/// Visual-block events: render the message verbatim. The block already
+/// encodes its own context; we only prepend a short timestamp so an
+/// operator scanning a file can tell when each block landed.
+fn write_console_block(writer: &mut Writer<'_>, event: &Event<'_>) -> std::fmt::Result {
+    let mut ts_buf = String::new();
+    let mut ts_writer = Writer::new(&mut ts_buf);
+    HmsTime.format_time(&mut ts_writer).ok();
+    let timestamp = ts_buf.trim_end();
+    if !timestamp.is_empty() {
+        write!(writer, "{}  ", timestamp.dimmed())?;
+    }
+    let mut visitor = MessageVisitor::default();
+    event.record(&mut visitor);
+    writeln!(writer, "{}", visitor.message)
+}
+
+fn colored_level(level: &Level) -> colored::ColoredString {
+    let level_str = format!("{level:>5}");
+    match *level {
+        Level::ERROR => level_str.red().bold(),
+        Level::WARN => level_str.yellow().bold(),
+        Level::INFO => level_str.green(),
+        Level::DEBUG | Level::TRACE => level_str.cyan(),
+    }
+}
+
+/// Span chain: `agent{id=…}:worker:task{id=…}:turn{0}:sampling{4}`.
+/// Walk leaf → root via `ctx.event_scope()` and stitch them with
+/// colons so the order matches reading direction.
+fn span_chain<S, N>(ctx: &FmtContext<'_, S, N>) -> String
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    let mut chain = String::new();
+    if let Some(scope) = ctx.event_scope() {
+        let mut first = true;
+        for span in scope.from_root() {
+            if !first {
+                chain.push(':');
+            }
+            first = false;
+            chain.push_str(span.name());
+            let ext = span.extensions();
+            if let Some(fields) = ext.get::<FormattedFields<N>>() {
+                if !fields.fields.is_empty() {
+                    let _ = write!(chain, "{{{}}}", fields.fields);
+                }
+            }
+        }
+    }
+    chain
 }
 
 #[derive(Default)]

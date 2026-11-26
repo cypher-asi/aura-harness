@@ -1,0 +1,45 @@
+//! UI events for channels and where agents run.
+
+use crate::event_loop::{channels, cloud, LoopState};
+use aura_ui::UiEvent;
+
+/// Channels and cloud placement.
+pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
+    match event {
+        UiEvent::SetPlacement {
+            agent_id,
+            placement,
+        } => cloud::handle_set_placement(state, &agent_id, placement).await,
+        UiEvent::HostAction { agent_id, action } => {
+            cloud::handle_host_action(state, &agent_id, action).await;
+        }
+        UiEvent::CloudSetup => cloud::handle_setup(state).await,
+        UiEvent::CreateChannel {
+            slug,
+            title,
+            description,
+            project_id,
+        } => {
+            let new = aura_store_db::NewChannel {
+                slug,
+                title,
+                description,
+                project_id,
+            };
+            channels::handle_create(state, new).await;
+        }
+        UiEvent::OpenChannel(channel_id) => channels::handle_open(state, &channel_id).await,
+        UiEvent::CloseChannel => channels::handle_close(state),
+        UiEvent::UpdateChannel {
+            channel_id,
+            title,
+            description,
+            project_id,
+        } => {
+            channels::handle_update(state, &channel_id, &title, &description, project_id).await;
+        }
+        UiEvent::ArchiveChannel(channel_id) => channels::handle_archive(state, &channel_id).await,
+        // `domain_of` routes no other event here.
+        _ => {}
+    }
+}

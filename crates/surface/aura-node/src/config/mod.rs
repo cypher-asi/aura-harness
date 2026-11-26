@@ -2,6 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
+mod auth_token;
+pub use auth_token::resolve_auth_token;
+
 /// Default test-only placeholder for [`NodeConfig::auth_token`].
 ///
 /// Real deployments replace this via [`NodeConfig::from_env`] (if
@@ -229,84 +232,10 @@ impl NodeConfig {
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
-        if let Ok(val) = std::env::var("AURA_DATA_DIR").or_else(|_| std::env::var("DATA_DIR")) {
-            config.data_dir = PathBuf::from(val);
-        }
-        if let Ok(val) = std::env::var("AURA_LISTEN_ADDR").or_else(|_| std::env::var("BIND_ADDR")) {
-            config.bind_addr = val;
-        }
-        if let Ok(val) = std::env::var("SYNC_WRITES") {
-            config.sync_writes = val == "true" || val == "1";
-        }
-        if let Ok(val) = std::env::var("RECORD_WINDOW_SIZE") {
-            if let Ok(n) = val.parse() {
-                config.record_window_size = n;
-            }
-        }
-        if let Ok(val) = std::env::var("AURA_STORAGE_URL") {
-            config.aura_storage_url = val;
-        }
-        if let Ok(val) = std::env::var("AURA_NETWORK_URL") {
-            config.aura_network_url = val;
-        }
-        if let Ok(val) =
-            std::env::var("AURA_OS_SERVER_URL").or_else(|_| std::env::var("AURA_SERVER_BASE_URL"))
-        {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                config.aura_os_server_url = Some(trimmed.to_string());
-            }
-        }
-        // Local-desktop convenience default: aura-os-desktop's embedded
-        // aura-os-server always binds `PREFERRED_PORT = 19847` on
-        // loopback, so when the harness is also bound to loopback (the
-        // sidecar case) we can wire the `send_to_agent` runtime hook
-        // and the HttpDomainApi spec/task overrides without making the
-        // operator set `AURA_OS_SERVER_URL` by hand. Skipped for
-        // non-loopback binds (Docker / swarm pods on 0.0.0.0) so the
-        // historical "post directly to aura-storage" fallback in
-        // `HttpDomainApi::specs_tasks_base_url` stays intact for
-        // remote deployments — those operators continue to set
-        // `AURA_OS_SERVER_URL` explicitly to a public URL, and any
-        // explicit value still wins because this only runs when
-        // `is_none()`.
-        if config.aura_os_server_url.is_none() && bind_addr_is_loopback(&config.bind_addr) {
-            config.aura_os_server_url = Some(DESKTOP_LOOPBACK_OS_SERVER_URL.to_string());
-        }
-        if let Ok(val) = std::env::var("AURA_PROJECT_BASE") {
-            if !val.is_empty() {
-                config.project_base = Some(PathBuf::from(val));
-            }
-        }
-        if let Ok(val) = std::env::var("AURA_NODE_AUTH_TOKEN") {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                config.auth_token = trimmed.to_string();
-            }
-        }
-        if let Ok(val) = std::env::var("AURA_NODE_REQUIRE_AUTH") {
-            let v = val.trim();
-            config.require_auth = v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        if let Ok(val) = std::env::var("AURA_SWARM_INTERNAL_TOKEN") {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                config.swarm_internal_token = Some(trimmed.to_string());
-            }
-        }
-        if let Ok(val) = std::env::var("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS") {
-            let v = val.trim();
-            config.allow_unrestricted_full_access = v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        if let Ok(val) = std::env::var("AURA_CLOUD_NODE") {
-            let v = val.trim();
-            config.cloud_node = v == "1" || v.eq_ignore_ascii_case("true");
-        }
-        if let Ok(val) = std::env::var("AURA_WORKSPACE") {
-            if !val.trim().is_empty() {
-                config.workspace = Some(PathBuf::from(val.trim()));
-            }
-        }
+        apply_storage_env(&mut config);
+        apply_service_url_env(&mut config);
+        apply_auth_env(&mut config);
+        apply_access_env(&mut config);
         config
     }
 
@@ -441,133 +370,106 @@ impl NodeConfig {
     }
 }
 
+/// Data dir, bind address and record-store tuning.
+fn apply_storage_env(config: &mut NodeConfig) {
+    if let Ok(val) = std::env::var("AURA_DATA_DIR").or_else(|_| std::env::var("DATA_DIR")) {
+        config.data_dir = PathBuf::from(val);
+    }
+    if let Ok(val) = std::env::var("AURA_LISTEN_ADDR").or_else(|_| std::env::var("BIND_ADDR")) {
+        config.bind_addr = val;
+    }
+    if let Ok(val) = std::env::var("SYNC_WRITES") {
+        config.sync_writes = val == "true" || val == "1";
+    }
+    if let Ok(val) = std::env::var("RECORD_WINDOW_SIZE") {
+        if let Ok(n) = val.parse() {
+            config.record_window_size = n;
+        }
+    }
+}
+
+/// Upstream service URLs.
+fn apply_service_url_env(config: &mut NodeConfig) {
+    if let Ok(val) = std::env::var("AURA_STORAGE_URL") {
+        config.aura_storage_url = val;
+    }
+    if let Ok(val) = std::env::var("AURA_NETWORK_URL") {
+        config.aura_network_url = val;
+    }
+    if let Ok(val) =
+        std::env::var("AURA_OS_SERVER_URL").or_else(|_| std::env::var("AURA_SERVER_BASE_URL"))
+    {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            config.aura_os_server_url = Some(trimmed.to_string());
+        }
+    }
+    // Local-desktop convenience default: aura-os-desktop's embedded
+    // aura-os-server always binds `PREFERRED_PORT = 19847` on
+    // loopback, so when the harness is also bound to loopback (the
+    // sidecar case) we can wire the `send_to_agent` runtime hook
+    // and the HttpDomainApi spec/task overrides without making the
+    // operator set `AURA_OS_SERVER_URL` by hand. Skipped for
+    // non-loopback binds (Docker / swarm pods on 0.0.0.0) so the
+    // historical "post directly to aura-storage" fallback in
+    // `HttpDomainApi::specs_tasks_base_url` stays intact for
+    // remote deployments — those operators continue to set
+    // `AURA_OS_SERVER_URL` explicitly to a public URL, and any
+    // explicit value still wins because this only runs when
+    // `is_none()`.
+    if config.aura_os_server_url.is_none() && bind_addr_is_loopback(&config.bind_addr) {
+        config.aura_os_server_url = Some(DESKTOP_LOOPBACK_OS_SERVER_URL.to_string());
+    }
+}
+
+/// Project base and node auth settings.
+fn apply_auth_env(config: &mut NodeConfig) {
+    if let Ok(val) = std::env::var("AURA_PROJECT_BASE") {
+        if !val.is_empty() {
+            config.project_base = Some(PathBuf::from(val));
+        }
+    }
+    if let Ok(val) = std::env::var("AURA_NODE_AUTH_TOKEN") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            config.auth_token = trimmed.to_string();
+        }
+    }
+    if let Ok(val) = std::env::var("AURA_NODE_REQUIRE_AUTH") {
+        let v = val.trim();
+        config.require_auth = v == "1" || v.eq_ignore_ascii_case("true");
+    }
+}
+
+/// Swarm token, access flags and workspace override.
+fn apply_access_env(config: &mut NodeConfig) {
+    if let Ok(val) = std::env::var("AURA_SWARM_INTERNAL_TOKEN") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            config.swarm_internal_token = Some(trimmed.to_string());
+        }
+    }
+    if let Ok(val) = std::env::var("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS") {
+        let v = val.trim();
+        config.allow_unrestricted_full_access = v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    if let Ok(val) = std::env::var("AURA_CLOUD_NODE") {
+        let v = val.trim();
+        config.cloud_node = v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    if let Ok(val) = std::env::var("AURA_WORKSPACE") {
+        if !val.trim().is_empty() {
+            config.workspace = Some(PathBuf::from(val.trim()));
+        }
+    }
+}
+
 /// Strip the `\\?\` verbatim prefix that Windows `canonicalize()` adds.
 /// On non-Windows this is a no-op.
 fn strip_unc_prefix(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     s.strip_prefix(r"\\?\")
         .map_or_else(|| path.to_path_buf(), PathBuf::from)
-}
-
-/// File name used for persisted per-install auth tokens under `$data_dir`.
-const AUTH_TOKEN_FILENAME: &str = "auth_token";
-
-/// Resolve the bearer secret the node will enforce on protected routes.
-///
-/// Source order, matching the Wave 5 / phase-4 security hardening spec:
-///
-/// 1. `AURA_NODE_AUTH_TOKEN` environment variable — if present and
-///    non-empty, used verbatim. Not persisted and not printed; the
-///    operator is assumed to have deliberately set it.
-/// 2. `$data_dir/auth_token` file — if present and non-empty, reused
-///    so operators don't get a fresh token on every restart. On Unix
-///    the file's mode must be `0600`; anything more permissive is
-///    treated as tampered and a fresh token is minted over the top.
-/// 3. Otherwise a new 32-byte random value is minted (hex-encoded to
-///    64 chars), written to `$data_dir/auth_token` with mode `0600`
-///    on Unix, and printed **once** to stderr so the launching shell
-///    can copy it into client tooling.
-///
-/// Errors bubble up as `io::Error`; the caller (`Node::run`) decides
-/// whether to abort startup or proceed with a best-effort fallback.
-pub fn resolve_auth_token(data_dir: &Path) -> std::io::Result<String> {
-    if let Ok(env_val) = std::env::var("AURA_NODE_AUTH_TOKEN") {
-        let trimmed = env_val.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    let token_path = data_dir.join(AUTH_TOKEN_FILENAME);
-    if let Some(existing) = read_existing_auth_token(&token_path) {
-        return Ok(existing);
-    }
-
-    let token = mint_auth_token();
-    std::fs::create_dir_all(data_dir)?;
-    write_auth_token(&token_path, &token)?;
-    // Log-once to stderr matches the `jupyter notebook` UX: a human
-    // can copy the token into curl/browser tooling on first launch.
-    // Do NOT promote this to stdout, the tracing logger, or any file
-    // other than `$data_dir/auth_token` — the token is only as strong
-    // as its handling.
-    eprintln!(
-        "aura-node auth token: {token} (store in client: export AURA_NODE_AUTH_TOKEN={token})"
-    );
-    Ok(token)
-}
-
-/// Try to reuse an on-disk auth token.
-///
-/// Returns `None` when the file is missing, empty, unreadable, or —
-/// on Unix — has permissions more permissive than `0600`. In each of
-/// those cases the caller mints a fresh token instead so an attacker
-/// who managed to drop a world-readable file can't pin the secret.
-fn read_existing_auth_token(path: &Path) -> Option<String> {
-    let contents = std::fs::read_to_string(path).ok()?;
-    let trimmed = contents.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::metadata(path).ok()?;
-        // Reject any group / world bits — `0o077` tests "other than
-        // owner-rw"; anything matching is considered tampered.
-        if meta.permissions().mode() & 0o077 != 0 {
-            return None;
-        }
-    }
-    Some(trimmed.to_string())
-}
-
-/// Mint a 32-byte random hex token (~256 bits of entropy).
-///
-/// Uses two `uuid::Uuid::new_v4()` values concatenated so we don't have
-/// to pull in `rand` just for this — `uuid` is already a workspace
-/// dependency and v4 UUIDs are cryptographically random on every
-/// supported platform. Mirrors the pattern used by the terminal-mode
-/// `api_server` minted in phase 3.
-fn mint_auth_token() -> String {
-    let a = uuid::Uuid::new_v4().simple().to_string();
-    let b = uuid::Uuid::new_v4().simple().to_string();
-    format!("{a}{b}")
-}
-
-/// Persist `token` at `path` with tight permissions.
-///
-/// On Unix the file is created with mode `0600` via `OpenOptions::mode`
-/// so we never briefly expose a world-readable file. On Windows we fall
-/// back to a plain write; NTFS ACLs are inherited from the parent data
-/// directory and the token file never contains anything a Windows user
-/// wouldn't already have access to (everything runs under their own
-/// account).
-fn write_auth_token(path: &Path, token: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)?;
-        f.write_all(token.as_bytes())?;
-        f.sync_all()?;
-    }
-    #[cfg(not(unix))]
-    {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)?;
-        f.write_all(token.as_bytes())?;
-        f.sync_all()?;
-    }
-    Ok(())
 }
 
 fn slugify(name: &str) -> String {

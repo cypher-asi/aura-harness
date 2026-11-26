@@ -40,57 +40,8 @@ pub(in crate::gateway) async fn submit_tx_handler(
         ));
     }
 
-    let tx_type = match request.kind.as_str() {
-        "user_prompt" => TransactionType::UserPrompt,
-        "agent_msg" => TransactionType::AgentMsg,
-        "trigger" => TransactionType::Trigger,
-        "action_result" => TransactionType::ActionResult,
-        "system" => TransactionType::System,
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("Invalid kind: {}", request.kind),
-            ))
-        }
-    };
-
-    use base64::Engine;
-    let payload = base64::engine::general_purpose::STANDARD
-        .decode(&request.payload)
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!("Invalid payload encoding: {e}"),
-            )
-        })?;
-
-    // Phase 5: reject mid-session `AgentPermissions` mutation.
-    //
-    // Per-run permissions are baked in from the `RuntimeRequest` and
-    // applied to the kernel `PolicyConfig` during session bootstrap. Any
-    // attempt to ship a new permission bundle via `/tx` (regardless of
-    // transaction kind) is refused so a running session cannot escalate its
-    // own capabilities.
-    if matches!(tx_type, TransactionType::System) && carries_agent_permissions_mutation(&payload) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            "permissions: AgentPermissions are frozen per run; start a new run instead".to_string(),
-        ));
-    }
-
-    // A submitted prompt is its text; the record keeps it as a prompt
-    // payload like every other prompt.
-    let payload = if tx_type == TransactionType::UserPrompt {
-        let text = String::from_utf8(payload).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!("Prompt payload is not UTF-8 text: {e}"),
-            )
-        })?;
-        aura_core_types::PromptPayload::new(text).to_bytes()
-    } else {
-        payload
-    };
+    let tx_type = parse_tx_kind(&request.kind)?;
+    let payload = decode_tx_payload(tx_type, &request.payload)?;
     let tx = Transaction::new_chained(agent_id, tx_type, Bytes::from(payload), None);
 
     state.store.enqueue_tx(&tx).map_err(|e| {
@@ -119,6 +70,62 @@ pub(in crate::gateway) async fn submit_tx_handler(
             tx_id: tx.hash.to_hex(),
         }),
     ))
+}
+
+fn parse_tx_kind(kind: &str) -> Result<TransactionType, (StatusCode, String)> {
+    match kind {
+        "user_prompt" => Ok(TransactionType::UserPrompt),
+        "agent_msg" => Ok(TransactionType::AgentMsg),
+        "trigger" => Ok(TransactionType::Trigger),
+        "action_result" => Ok(TransactionType::ActionResult),
+        "system" => Ok(TransactionType::System),
+        _ => Err((StatusCode::BAD_REQUEST, format!("Invalid kind: {kind}"))),
+    }
+}
+
+/// Decode the base64 payload, refuse permission mutations, and wrap
+/// prompt text as a prompt payload.
+fn decode_tx_payload(
+    tx_type: TransactionType,
+    encoded: &str,
+) -> Result<Vec<u8>, (StatusCode, String)> {
+    use base64::Engine;
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid payload encoding: {e}"),
+            )
+        })?;
+
+    // Phase 5: reject mid-session `AgentPermissions` mutation.
+    //
+    // Per-run permissions are baked in from the `RuntimeRequest` and
+    // applied to the kernel `PolicyConfig` during session bootstrap. Any
+    // attempt to ship a new permission bundle via `/tx` (regardless of
+    // transaction kind) is refused so a running session cannot escalate its
+    // own capabilities.
+    if matches!(tx_type, TransactionType::System) && carries_agent_permissions_mutation(&payload) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "permissions: AgentPermissions are frozen per run; start a new run instead".to_string(),
+        ));
+    }
+
+    // A submitted prompt is its text; the record keeps it as a prompt
+    // payload like every other prompt.
+    if tx_type == TransactionType::UserPrompt {
+        let text = String::from_utf8(payload).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Prompt payload is not UTF-8 text: {e}"),
+            )
+        })?;
+        Ok(aura_core_types::PromptPayload::new(text).to_bytes())
+    } else {
+        Ok(payload)
+    }
 }
 
 /// Phase 5: detect whether a `System`-kind transaction payload is
@@ -164,6 +171,33 @@ pub(in crate::gateway) async fn tx_status_handler(
     let tx_hash = Hash::from_hex(&tx_id_hex)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid tx_id: {e}")))?;
 
+    if recent_record_contains(&state, agent_id, tx_hash)? {
+        return Ok(Json(TxStatusResponse {
+            tx_id: tx_id_hex,
+            status: "processed".to_string(),
+        }));
+    }
+
+    if let Some(err) = state.failed_txs.get(&tx_id_hex) {
+        return Ok(Json(TxStatusResponse {
+            tx_id: tx_id_hex,
+            status: format!("failed: {}", err.value()),
+        }));
+    }
+
+    let status = pending_tx_status(&state, agent_id, &agent_id_hex, &tx_id_hex)?;
+    Ok(Json(TxStatusResponse {
+        tx_id: tx_id_hex,
+        status: status.to_string(),
+    }))
+}
+
+/// Whether the last 100 record entries include `tx_hash`.
+fn recent_record_contains(
+    state: &RouterState,
+    agent_id: aura_core_types::AgentId,
+    tx_hash: Hash,
+) -> Result<bool, (StatusCode, String)> {
     let head_seq = state.store.get_head_seq(agent_id).map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -181,30 +215,24 @@ pub(in crate::gateway) async fn tx_status_handler(
                 format!("Storage error: {e}"),
             )
         })?;
+    Ok(entries.iter().any(|e| e.tx.hash == tx_hash))
+}
 
-    if entries.iter().any(|e| e.tx.hash == tx_hash) {
-        return Ok(Json(TxStatusResponse {
-            tx_id: tx_id_hex,
-            status: "processed".to_string(),
-        }));
-    }
-
-    if let Some(err) = state.failed_txs.get(&tx_id_hex) {
-        return Ok(Json(TxStatusResponse {
-            tx_id: tx_id_hex,
-            status: format!("failed: {}", err.value()),
-        }));
-    }
-
+fn pending_tx_status(
+    state: &RouterState,
+    agent_id: aura_core_types::AgentId,
+    agent_id_hex: &str,
+    tx_id_hex: &str,
+) -> Result<&'static str, (StatusCode, String)> {
     // Phase 5 (error-handling polish): we used to fall back to
     // `"unknown"` on `has_pending_tx` errors via `.unwrap_or(false)`,
     // which silently mapped storage failures to a generic status the
     // WS client could not distinguish from "tx never submitted".
     // Surface the error to the caller (and trace it) so a misbehaving
     // store does not get hidden behind a benign-looking status code.
-    let status = match state.store.has_pending_tx(agent_id) {
-        Ok(true) => "pending",
-        Ok(false) => "unknown",
+    match state.store.has_pending_tx(agent_id) {
+        Ok(true) => Ok("pending"),
+        Ok(false) => Ok("unknown"),
         Err(e) => {
             tracing::error!(
                 error = %e,
@@ -212,17 +240,12 @@ pub(in crate::gateway) async fn tx_status_handler(
                 tx_id = %tx_id_hex,
                 "tx_status: store.has_pending_tx failed"
             );
-            return Err((
+            Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Storage error: {e}"),
-            ));
+            ))
         }
-    };
-
-    Ok(Json(TxStatusResponse {
-        tx_id: tx_id_hex,
-        status: status.to_string(),
-    }))
+    }
 }
 
 // === Get Head ===
@@ -326,13 +349,57 @@ pub(in crate::gateway) async fn tool_call_audit_handler(
     Path((agent_id_hex, tool_use_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let agent_id = parse_agent_id(&agent_id_hex).map_err(ApiError::into_string_tuple)?;
-    let storage_err = |e: aura_store_db::StoreError| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Storage error: {e}"),
-        )
+    let Some((decision_entry, decision)) = find_policy_decision(&state, agent_id, &tool_use_id)?
+    else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("No policy decision recorded for tool_use_id '{tool_use_id}'"),
+        ));
     };
 
+    let proposal = match (decision_entry.tx.reference_tx_hash, decision_entry.seq) {
+        (Some(proposal_hash), seq) if seq > 1 => state
+            .store
+            .get_record_entry(agent_id, seq - 1)
+            .ok()
+            .filter(|entry| entry.tx.hash == proposal_hash),
+        _ => None,
+    };
+
+    let execution = state
+        .store
+        .scan_record(agent_id, decision_entry.seq + 1, AUDIT_EXECUTION_SCAN_LIMIT)
+        .map_err(|e| audit_storage_err(&e))?
+        .into_iter()
+        .find(|entry| {
+            entry.tx.tx_type == TransactionType::ToolExecution
+                && entry.tx.reference_tx_hash == Some(decision_entry.tx.hash)
+        });
+
+    Ok(Json(ToolCallAuditResponse {
+        agent_id: agent_id_hex,
+        tool_use_id,
+        proposal,
+        policy_decision: decision_entry,
+        decision,
+        execution,
+    }))
+}
+
+fn audit_storage_err(e: &aura_store_db::StoreError) -> (StatusCode, String) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("Storage error: {e}"),
+    )
+}
+
+/// Page backwards from head looking for the `PolicyDecision` of `tool_use_id`.
+fn find_policy_decision(
+    state: &RouterState,
+    agent_id: aura_core_types::AgentId,
+    tool_use_id: &str,
+) -> Result<Option<(RecordEntry, PolicyDecision)>, (StatusCode, String)> {
+    let storage_err = |e: aura_store_db::StoreError| audit_storage_err(&e);
     let head_seq = state.store.get_head_seq(agent_id).map_err(storage_err)?;
     let floor = head_seq.saturating_sub(AUDIT_DECISION_SCAN_LIMIT).max(1);
     let mut cursor = head_seq;
@@ -356,38 +423,5 @@ pub(in crate::gateway) async fn tool_call_audit_handler(
         }
         cursor = next_cursor;
     }
-    let Some((decision_entry, decision)) = found else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            format!("No policy decision recorded for tool_use_id '{tool_use_id}'"),
-        ));
-    };
-
-    let proposal = match (decision_entry.tx.reference_tx_hash, decision_entry.seq) {
-        (Some(proposal_hash), seq) if seq > 1 => state
-            .store
-            .get_record_entry(agent_id, seq - 1)
-            .ok()
-            .filter(|entry| entry.tx.hash == proposal_hash),
-        _ => None,
-    };
-
-    let execution = state
-        .store
-        .scan_record(agent_id, decision_entry.seq + 1, AUDIT_EXECUTION_SCAN_LIMIT)
-        .map_err(storage_err)?
-        .into_iter()
-        .find(|entry| {
-            entry.tx.tx_type == TransactionType::ToolExecution
-                && entry.tx.reference_tx_hash == Some(decision_entry.tx.hash)
-        });
-
-    Ok(Json(ToolCallAuditResponse {
-        agent_id: agent_id_hex,
-        tool_use_id,
-        proposal,
-        policy_decision: decision_entry,
-        decision,
-        execution,
-    }))
+    Ok(found)
 }

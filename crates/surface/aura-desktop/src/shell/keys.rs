@@ -188,6 +188,13 @@ impl Shell {
             }
             return false;
         }
+        self.chord(press)
+    }
+
+    /// A shortcut held with the window's chord modifier: zoom, paste,
+    /// copy, and opening and closing tabs. Whether `press` was one.
+    fn chord(&mut self, press: &Press) -> bool {
+        let m = self.modifiers;
         // Ctrl+C, Ctrl+V, Ctrl+T and Ctrl+W on their own belong to the
         // UI, as in a terminal; the window takes them with Shift.
         let shifted = m.shift_key() || m.super_key() || cfg!(target_os = "macos");
