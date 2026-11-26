@@ -152,6 +152,17 @@ async fn subtask_outcomes_fill_the_subtask_rows_and_show_in_slash_gate() {
     let errored = errored.child_agent_id.unwrap();
     assert_eq!(signals(&fixture, errored), [OutcomeSignal::Error]);
     assert_eq!(subtask_row(&fixture, SONNET), Some((3, 1)));
+    assert_subtasks_only_teach_subtask_rows(&fixture);
+
+    drain(&mut commands);
+    handle_ui_event(&mut state, UiEvent::ShowGate, &links).await;
+    let text = system_texts(&drain(&mut commands));
+    assert_slash_gate_shows_subtasks(&text);
+}
+
+/// Turn rows learn nothing from subtasks, and a startup scan rebuilds the
+/// subtask row from the children's records.
+fn assert_subtasks_only_teach_subtask_rows(fixture: &Fixture) {
     assert!(
         fixture
             .hub
@@ -178,11 +189,10 @@ async fn subtask_outcomes_fill_the_subtask_rows_and_show_in_slash_gate() {
         Some((3, 1)),
         "the startup scan reads the children's records too"
     );
+}
 
-    drain(&mut commands);
-    handle_ui_event(&mut state, UiEvent::ShowGate, &links).await;
-    let text = system_texts(&drain(&mut commands));
-    let (_, subtasks) = text.split_once("\n\nSubtasks\n").expect(&text);
+fn assert_slash_gate_shows_subtasks(text: &str) {
+    let (_, subtasks) = text.split_once("\n\nSubtasks\n").expect(text);
     let sonnet = subtasks
         .lines()
         .find(|line| line.contains("aura-claude-sonnet-4-6 (cloud)"))

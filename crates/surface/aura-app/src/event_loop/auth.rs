@@ -7,7 +7,7 @@
 
 use aura_auth::{
     sign_in_notice, AuthError, AuthManager, AuthSummary, LinkMode, LinkStatus, LinkedAccount,
-    Owner, ProviderKind,
+    Owner, PendingLink, ProviderKind,
 };
 use aura_core_types::{SystemKind, Transaction, TransactionType};
 use aura_ui::UiCommand;
@@ -239,45 +239,69 @@ pub(super) async fn handle_link(
         "Open this URL"
     };
     if pending.needs_paste() {
-        let api_key = if kind == ProviderKind::OpenRouter {
-            " (or paste an sk-or- API key)"
-        } else {
-            ""
-        };
-        show_system_message(
-            state,
-            format!(
-                "{how} to sign in to {}, then paste the code it shows{api_key}:\n{url}",
-                kind.label()
-            ),
-        )
-        .await;
-        state.pending_link = Some(pending);
-        send(
-            state,
-            UiCommand::PromptLinkCode {
-                provider: kind.label().to_string(),
-            },
-        )
-        .await;
+        await_pasted_code(state, kind, how, &url, pending).await;
     } else {
-        show_system_message(
-            state,
-            format!(
-                "{how} to sign in to {}:\n{url}\nWaiting for the browser to finish \
-                 (on another machine? use /login {} paste).",
-                kind.label(),
-                kind.id()
-            ),
-        )
-        .await;
-        let auth = state.auth.clone();
-        let outcomes = outcomes.clone();
-        tokio::spawn(async move {
-            let result = auth.finish_link(pending, None).await;
-            let _ = outcomes.send((kind, result)).await;
-        });
+        await_browser(state, kind, how, &url, pending, outcomes).await;
     }
+}
+
+/// Paste sign-in: show the URL and keep `pending` until the code arrives.
+async fn await_pasted_code(
+    state: &mut LoopState<'_>,
+    kind: ProviderKind,
+    how: &str,
+    url: &str,
+    pending: PendingLink,
+) {
+    let api_key = if kind == ProviderKind::OpenRouter {
+        " (or paste an sk-or- API key)"
+    } else {
+        ""
+    };
+    show_system_message(
+        state,
+        format!(
+            "{how} to sign in to {}, then paste the code it shows{api_key}:\n{url}",
+            kind.label()
+        ),
+    )
+    .await;
+    state.pending_link = Some(pending);
+    send(
+        state,
+        UiCommand::PromptLinkCode {
+            provider: kind.label().to_string(),
+        },
+    )
+    .await;
+}
+
+/// Browser sign-in: show the URL and wait for the redirect in the
+/// background, reporting through `outcomes`.
+async fn await_browser(
+    state: &mut LoopState<'_>,
+    kind: ProviderKind,
+    how: &str,
+    url: &str,
+    pending: PendingLink,
+    outcomes: &mpsc::Sender<LinkOutcome>,
+) {
+    show_system_message(
+        state,
+        format!(
+            "{how} to sign in to {}:\n{url}\nWaiting for the browser to finish \
+             (on another machine? use /login {} paste).",
+            kind.label(),
+            kind.id()
+        ),
+    )
+    .await;
+    let auth = state.auth.clone();
+    let outcomes = outcomes.clone();
+    tokio::spawn(async move {
+        let result = auth.finish_link(pending, None).await;
+        let _ = outcomes.send((kind, result)).await;
+    });
 }
 
 pub(super) async fn handle_link_code(state: &mut LoopState<'_>, code: &str) {

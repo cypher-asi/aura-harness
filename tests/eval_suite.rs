@@ -60,7 +60,21 @@ async fn eval_runs_are_verified_scored_and_compared() {
     assert!(tasks.len() >= 5, "suite has {} tasks", tasks.len());
     tasks.retain(|t| t.id == "write-file");
 
-    let good = evals::run_suite(&tasks, &options(home.path(), "good", write_greeting))
+    check_good_run(home.path(), &tasks).await;
+
+    let lazy = || MockProvider::simple_response("I'd rather not.");
+    let bad = evals::run_suite(&tasks, &options(home.path(), "lazy", lazy))
+        .await
+        .unwrap();
+    assert!(!bad[0].passed);
+    assert_eq!(bad[0].scorecard.outcome, Some(0.0));
+    assert!(evals::results_table(&bad).contains("0/1 passed"));
+
+    check_arm_comparisons(home.path());
+}
+
+async fn check_good_run(home: &Path, tasks: &[evals::EvalTask]) {
+    let good = evals::run_suite(tasks, &options(home, "good", write_greeting))
         .await
         .unwrap();
     assert_eq!(good.len(), 1);
@@ -71,7 +85,7 @@ async fn eval_runs_are_verified_scored_and_compared() {
     assert_eq!(good[0].cost_usd(), good[0].scorecard.cost_usd);
     assert!(!evals::results_table(&good).contains("gate routed"));
 
-    let bundle = RunBundle::find(home.path(), &good[0].run_id).unwrap();
+    let bundle = RunBundle::find(home, &good[0].run_id).unwrap();
     let trace = RunTrace::load(&bundle).unwrap();
     assert_eq!(trace.meta.source, RunSource::Eval);
     assert_eq!(trace.meta.model, "mock-model");
@@ -96,16 +110,10 @@ async fn eval_runs_are_verified_scored_and_compared() {
                 && !s.links.record_seqs.is_empty()),
         "tool results are joined to the kernel record (linked steps: {linked:?})"
     );
+}
 
-    let lazy = || MockProvider::simple_response("I'd rather not.");
-    let bad = evals::run_suite(&tasks, &options(home.path(), "lazy", lazy))
-        .await
-        .unwrap();
-    assert!(!bad[0].passed);
-    assert_eq!(bad[0].scorecard.outcome, Some(0.0));
-    assert!(evals::results_table(&bad).contains("0/1 passed"));
-
-    let runs = evals::runs_by_arm(home.path(), Some("coding"));
+fn check_arm_comparisons(home: &Path) {
+    let runs = evals::runs_by_arm(home, Some("coding"));
     assert_eq!(runs.keys().collect::<Vec<_>>(), ["good", "lazy"]);
     let (report, regressions) =
         evals::compare(&runs, &["good".into(), "lazy".into()], 0.1).unwrap();
@@ -114,7 +122,7 @@ async fn eval_runs_are_verified_scored_and_compared() {
     assert!(report.contains("coding/write-file"), "{report}");
     assert!(evals::compare(&runs, &["missing".into()], 0.1).is_err());
 
-    let path = home.path().join("baseline.json");
+    let path = home.join("baseline.json");
     evals::Baseline::from_runs(&runs, "good", Some("coding"))
         .unwrap()
         .save(&path)
@@ -131,30 +139,42 @@ async fn eval_runs_are_verified_scored_and_compared() {
     assert!(regressions >= 2, "{report}");
 }
 
-#[tokio::test]
-async fn branch_replays_the_prefix_then_runs_live() {
-    let home = tempfile::tempdir().unwrap();
-    let original_ws = tempfile::tempdir().unwrap();
-    let original = recorded_runs::run(HeadlessRun {
-        home: home.path().to_path_buf(),
-        workspace: original_ws.path().to_path_buf(),
-        provider: Arc::new(write_greeting()),
+async fn run_headless(
+    home: &Path,
+    workspace: &Path,
+    provider: Arc<dyn ModelProvider + Send + Sync>,
+    prompts: Vec<String>,
+    meta: aura_agent_trace::RunMeta,
+) -> recorded_runs::HeadlessOutcome {
+    recorded_runs::run(HeadlessRun {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        provider,
         config: AgentLoopConfig::for_agent("mock-model"),
-        prompts: vec!["Write greeting.txt".into()],
-        meta: aura_agent_trace::RunMeta::new("mock-model", RunSource::Test),
+        prompts,
+        meta,
         level: TraceLevel::Full,
         tool_config: ToolConfig::for_autonomous_dev_loop(),
     })
     .await
-    .unwrap();
+    .unwrap()
+}
+
+#[tokio::test]
+async fn branch_replays_the_prefix_then_runs_live() {
+    let home = tempfile::tempdir().unwrap();
+    let original_ws = tempfile::tempdir().unwrap();
+    let original = run_headless(
+        home.path(),
+        original_ws.path(),
+        Arc::new(write_greeting()),
+        vec!["Write greeting.txt".into()],
+        aura_agent_trace::RunMeta::new("mock-model", RunSource::Test),
+    )
+    .await;
     assert!(original.error.is_none(), "{:?}", original.error);
     let source = RunTrace::load(&RunBundle::find(home.path(), &original.run_id).unwrap()).unwrap();
-    let model_steps: Vec<u64> = source
-        .steps
-        .iter()
-        .filter(|s| matches!(s.action, StepAction::Model(_)))
-        .map(|s| s.seq)
-        .collect();
+    let model_steps = model_step_seqs(&source);
     assert_eq!(model_steps.len(), 2);
 
     let from = model_steps[1];
@@ -164,18 +184,14 @@ async fn branch_replays_the_prefix_then_runs_live() {
         Arc::new(MockProvider::simple_response("A different ending."));
     let provider = recorded_runs::replay_provider(home.path(), &source, from, live).unwrap();
     let branch_ws = tempfile::tempdir().unwrap();
-    let branch = recorded_runs::run(HeadlessRun {
-        home: home.path().to_path_buf(),
-        workspace: branch_ws.path().to_path_buf(),
+    let branch = run_headless(
+        home.path(),
+        branch_ws.path(),
         provider,
-        config: AgentLoopConfig::for_agent("mock-model"),
-        prompts: plan.prompts,
-        meta: plan.meta,
-        level: TraceLevel::Full,
-        tool_config: ToolConfig::for_autonomous_dev_loop(),
-    })
-    .await
-    .unwrap();
+        plan.prompts,
+        plan.meta,
+    )
+    .await;
 
     assert_eq!(
         std::fs::read_to_string(branch_ws.path().join("greeting.txt")).unwrap(),
@@ -189,7 +205,23 @@ async fn branch_replays_the_prefix_then_runs_live() {
         Some(original.run_id.as_str())
     );
     assert_eq!(trace.meta.branch_step, Some(from));
-    let last_text = trace
+    let last_text = last_model_text(&trace);
+    assert!(last_text.contains("different ending"), "{last_text}");
+}
+
+/// Sequence numbers of the model steps in `trace`, in order.
+fn model_step_seqs(trace: &RunTrace) -> Vec<u64> {
+    trace
+        .steps
+        .iter()
+        .filter(|s| matches!(s.action, StepAction::Model(_)))
+        .map(|s| s.seq)
+        .collect()
+}
+
+/// Text of the last model step in `trace`.
+fn last_model_text(trace: &RunTrace) -> String {
+    trace
         .steps
         .iter()
         .rev()
@@ -197,8 +229,7 @@ async fn branch_replays_the_prefix_then_runs_live() {
             StepAction::Model(m) => Some(m.text.clone()),
             _ => None,
         })
-        .unwrap();
-    assert!(last_text.contains("different ending"), "{last_text}");
+        .unwrap()
 }
 
 /// Every gate-cost task must fail as shipped and pass once its reference

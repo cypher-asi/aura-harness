@@ -22,6 +22,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 use tracing::{debug, info, warn};
 
+mod frontmatter;
+
+#[cfg(test)]
+use frontmatter::parse_rule_meta;
+use frontmatter::{rule_kind, split_frontmatter};
+
 /// Most bytes of instructions one system prompt carries. Instruction files
 /// ride along on every model call, so a runaway file must not eat the
 /// context window.
@@ -197,41 +203,10 @@ impl ProjectInstructions {
             .map(|s| s.path.display().to_string())
             .collect();
 
-        let mut files = Vec::new();
-        let mut on_request = Vec::new();
-        let mut omitted = Vec::new();
+        let mut parts = Parts::default();
         let mut views = Vec::new();
         for ((source, use_), path) in sources.iter().zip(&uses).zip(&paths) {
-            let (bytes, status) = match *use_ {
-                Use::Whole => {
-                    files.push(InstructionFile {
-                        path,
-                        globs: source.globs(),
-                        body: &source.body,
-                        truncated_from: None,
-                    });
-                    (source.body.len(), InstructionStatus::Included)
-                }
-                Use::Start(cut) => {
-                    files.push(InstructionFile {
-                        path,
-                        globs: source.globs(),
-                        body: &source.body[..cut],
-                        truncated_from: Some(source.body.len()),
-                    });
-                    (cut, InstructionStatus::Truncated(source.body.len()))
-                }
-                Use::OnRequest => {
-                    if let Kind::OnRequest(description) = &source.kind {
-                        on_request.push(OnRequestRule { path, description });
-                    }
-                    (0, InstructionStatus::OnRequest)
-                }
-                Use::Omitted => {
-                    omitted.push(path.as_str());
-                    (0, InstructionStatus::Omitted)
-                }
-            };
+            let (bytes, status) = parts.add(source, *use_, path);
             views.push(InstructionFileView {
                 path: self.label(&source.path),
                 bytes,
@@ -240,9 +215,9 @@ impl ProjectInstructions {
             });
         }
         let text = render(&ProjectInstructionsView {
-            files: &files,
-            on_request: &on_request,
-            omitted: &omitted,
+            files: &parts.files,
+            on_request: &parts.on_request,
+            omitted: &parts.omitted,
         })
         .unwrap_or_default();
         LoadedInstructions {
@@ -407,101 +382,48 @@ fn read_source(candidate: &Candidate) -> Option<Source> {
     })
 }
 
-/// `content` split into its `---` frontmatter (if any) and the rest.
-fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
-    let Some(rest) = content
-        .strip_prefix("---\r\n")
-        .or_else(|| content.strip_prefix("---\n"))
-    else {
-        return (None, content);
-    };
-    let mut offset = 0;
-    for line in rest.split_inclusive('\n') {
-        if line.trim_end() == "---" {
-            return (Some(&rest[..offset]), &rest[offset + line.len()..]);
-        }
-        offset += line.len();
-    }
-    (None, content)
+/// What the prompt carries, in the shape the template renders.
+#[derive(Default)]
+struct Parts<'a> {
+    files: Vec<InstructionFile<'a>>,
+    on_request: Vec<OnRequestRule<'a>>,
+    omitted: Vec<&'a str>,
 }
 
-/// The frontmatter fields Cursor rules use. Parsed by hand: Cursor writes
-/// `globs: **/*.rs` unquoted, which is not valid YAML.
-#[derive(Debug, Default)]
-struct RuleMeta {
-    description: String,
-    globs: Vec<String>,
-    always_apply: bool,
-}
-
-fn parse_rule_meta(frontmatter: &str) -> RuleMeta {
-    let mut meta = RuleMeta::default();
-    let mut in_globs_list = false;
-    for line in frontmatter.lines() {
-        let trimmed = line.trim();
-        if in_globs_list {
-            if let Some(item) = trimmed.strip_prefix('-') {
-                meta.globs.extend(split_globs(item));
-                continue;
+impl<'a> Parts<'a> {
+    /// Add `source` as `use_` says, returning the bytes it puts in the
+    /// prompt and its status.
+    fn add(&mut self, source: &'a Source, use_: Use, path: &'a str) -> (usize, InstructionStatus) {
+        match use_ {
+            Use::Whole => {
+                self.files.push(InstructionFile {
+                    path,
+                    globs: source.globs(),
+                    body: &source.body,
+                    truncated_from: None,
+                });
+                (source.body.len(), InstructionStatus::Included)
             }
-            in_globs_list = false;
+            Use::Start(cut) => {
+                self.files.push(InstructionFile {
+                    path,
+                    globs: source.globs(),
+                    body: &source.body[..cut],
+                    truncated_from: Some(source.body.len()),
+                });
+                (cut, InstructionStatus::Truncated(source.body.len()))
+            }
+            Use::OnRequest => {
+                if let Kind::OnRequest(description) = &source.kind {
+                    self.on_request.push(OnRequestRule { path, description });
+                }
+                (0, InstructionStatus::OnRequest)
+            }
+            Use::Omitted => {
+                self.omitted.push(path);
+                (0, InstructionStatus::Omitted)
+            }
         }
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim();
-        match key.trim() {
-            "description" => meta.description = unquote(value).to_string(),
-            "globs" if value.is_empty() => in_globs_list = true,
-            "globs" => meta.globs.extend(split_globs(value)),
-            "alwaysApply" => meta.always_apply = value.eq_ignore_ascii_case("true"),
-            _ => {}
-        }
-    }
-    meta
-}
-
-fn split_globs(value: &str) -> impl Iterator<Item = String> + '_ {
-    let value = value.trim();
-    let value = value
-        .strip_prefix('[')
-        .and_then(|v| v.strip_suffix(']'))
-        .unwrap_or(value);
-    value
-        .split(',')
-        .map(unquote)
-        .filter(|glob| !glob.is_empty())
-        .map(str::to_string)
-}
-
-fn unquote(value: &str) -> &str {
-    let value = value.trim();
-    for quote in ['"', '\''] {
-        if let Some(inner) = value
-            .strip_prefix(quote)
-            .and_then(|v| v.strip_suffix(quote))
-        {
-            return inner.trim();
-        }
-    }
-    value
-}
-
-/// When a rule applies, per its frontmatter. `None` for rules that apply
-/// only when the user names them.
-fn rule_kind(frontmatter: Option<&str>) -> Option<Kind> {
-    let Some(frontmatter) = frontmatter else {
-        return Some(Kind::Always);
-    };
-    let meta = parse_rule_meta(frontmatter);
-    if meta.always_apply {
-        Some(Kind::Always)
-    } else if !meta.globs.is_empty() {
-        Some(Kind::Scoped(meta.globs.join(", ")))
-    } else if !meta.description.is_empty() {
-        Some(Kind::OnRequest(meta.description))
-    } else {
-        None
     }
 }
 

@@ -78,27 +78,11 @@ async fn a_plan_with_every_todo_closed_is_not_continued() {
     assert_eq!(kept_tasks(&fixture), [(None, false)]);
 }
 
-#[tokio::test]
-async fn closing_every_todo_of_the_plan_being_built_completes_it() {
-    let (fixture, mut commands) = fixture();
-    let mut b = borrowed(&fixture);
-    let links = b.links.clone();
-    let first = fixture.first;
-    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
-    let mut state = loop_state(&fixture, &mut b);
-    give_plan(&fixture, &mut state, "pending");
-
-    turn(&mut state, &mut done, &links, first, "close every todo").await;
-
-    let session = &state.idle[&first];
-    assert!(!session.building_plan);
-    assert!(session.todos.is_empty(), "a finished list is dropped");
-    assert_eq!(session.active_plan, None, "the next /plan writes a new one");
-    let plan = aura_exec_tools::plan_tools::PlanFile::load(&fixture.workspace.join(PLAN)).unwrap();
-    assert_eq!(plan.progress(), (2, 2));
-
-    let hex = first.to_hex();
-    let shown: Vec<UiCommand> = drain(&mut commands)
+/// The chat of `agent` dropped its list, said the plan is complete and
+/// shows no plan.
+fn assert_plan_completion_shown(commands: &mut mpsc::Receiver<UiCommand>, agent: AgentId) {
+    let hex = agent.to_hex();
+    let shown: Vec<UiCommand> = drain(commands)
         .into_iter()
         .filter(|(to, _)| to.as_deref() == Some(hex.as_str()))
         .map(|(_, command)| command)
@@ -121,6 +105,27 @@ async fn closing_every_todo_of_the_plan_being_built_completes_it() {
         ),
         "no plan is being worked on"
     );
+}
+
+#[tokio::test]
+async fn closing_every_todo_of_the_plan_being_built_completes_it() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let first = fixture.first;
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+    give_plan(&fixture, &mut state, "pending");
+
+    turn(&mut state, &mut done, &links, first, "close every todo").await;
+
+    let session = &state.idle[&first];
+    assert!(!session.building_plan);
+    assert!(session.todos.is_empty(), "a finished list is dropped");
+    assert_eq!(session.active_plan, None, "the next /plan writes a new one");
+    let plan = aura_exec_tools::plan_tools::PlanFile::load(&fixture.workspace.join(PLAN)).unwrap();
+    assert_eq!(plan.progress(), (2, 2));
+    assert_plan_completion_shown(&mut commands, first);
 
     // A new list is the agent's own: it is not filed under the finished
     // plan, nor mirrored into it.

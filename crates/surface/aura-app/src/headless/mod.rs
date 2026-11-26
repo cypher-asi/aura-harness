@@ -9,6 +9,7 @@
 
 mod eval;
 mod gate_replay;
+mod model_choice;
 mod output;
 mod run;
 mod sink;
@@ -20,6 +21,7 @@ mod tests;
 pub use crate::event_loop::task_check::CheckRun;
 pub use eval::{copy_dir, EvalRan, EvalTurn, EvalTurns, GateUse};
 pub use gate_replay::{gate_replay, ReplayOptions};
+use model_choice::{choose_model, warn_unknown_tools};
 pub(crate) use output::{ExitReason, Output, RunReport};
 pub use run::Headless;
 pub(crate) use run::{Request, RunLimits, SessionChoice};
@@ -30,11 +32,10 @@ use crate::agent_registry::AgentRegistry;
 use crate::event_loop::Permissions;
 use crate::event_loop::TurnBase;
 use crate::harness::{
-    agent_tools, background_process_manager, build_hub, build_provider, mode_policy,
-    policy_tool_names, post_edit_check_from_env, project_instructions, Harness, HubSetup,
+    agent_tools, background_process_manager, build_hub, mode_policy, policy_tool_names,
+    post_edit_check_from_env, project_instructions, Harness, HubSetup,
 };
 use crate::long_run::LongRunSettings;
-use crate::model_selection::{may_be_alias, ModelSelection};
 use crate::session_helpers;
 use anyhow::Context;
 use aura_core_modes::AgentMode;
@@ -45,7 +46,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::warn;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Default longest wait for background jobs after the agent's last turn
@@ -269,149 +270,36 @@ async fn build(
     data_dir: &std::path::Path,
     long_run: LongRunSettings,
 ) -> anyhow::Result<Headless> {
-    tokio::fs::create_dir_all(data_dir)
-        .await
-        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let store_path = session_helpers::resolve_store_path(data_dir);
-    // RocksDB allows one process per store, so a terminal open on the
-    // same data directory makes this fail rather than share it. The
-    // registry lives in the same database, so it is opened first.
-    let store = session_helpers::open_store(&store_path).with_context(|| {
-        format!(
-            "opening {} (is a terminal or another `aura -p` using this data directory?)",
-            store_path.display()
-        )
-    })?;
-    let registry = AgentRegistry::open(
-        aura_store_db::AgentStore::for_store(&store),
-        data_dir,
-        &workspace_root,
-    )
-    .context("loading agent registry")?;
-    let definitions =
-        AgentDefinitions::load_or_seed(data_dir).context("loading permanent agents")?;
-
+    let stores = open_stores(data_dir, &workspace_root).await?;
     let (tool_config, tools, web_tools) = agent_tools(false);
     let tool_filter = ToolFilter::new(&args.allowed_tools, &args.disallowed_tools);
-    let unknown = tool_filter.unknown(&tools);
-    if !unknown.is_empty() {
-        let known: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        warn!(
-            ?unknown,
-            ?known,
-            "Tool names in --allowed-tools/--disallowed-tools match no tool"
-        );
-    }
+    warn_unknown_tools(&tool_filter, &tools);
 
-    let provider_name = args.provider.as_deref().unwrap_or("anthropic");
-    let mock = provider_name == "mock";
-    let mut config = if mock {
-        session_helpers::default_agent_config_with_auth(aura_model::ENV_FALLBACK_MODEL, None)
-    } else {
-        session_helpers::default_agent_config(aura_model::ENV_FALLBACK_MODEL)
-    };
-    let (selection, auth) = if mock {
-        // No sign-in state is needed, so tests and offline runs never
-        // touch the keyring.
-        (aura_model::mock_provider(), None)
-    } else {
-        let auth =
-            std::sync::Arc::new(aura_auth::AuthManager::new().context("loading sign-in state")?);
-        (build_provider(provider_name, &auth)?, Some(auth))
-    };
-    let summary = auth
-        .as_ref()
-        .map_or_else(aura_auth::AuthSummary::default, |auth| {
-            crate::event_loop::auth::auth_summary(auth, config.auth_token.as_deref())
-        });
-    let mut models = ModelSelection::init(&mut config, summary);
-    let mut notes = Vec::new();
-    // A short name (`opus`, `deepseek`) resolves among the listed models,
-    // so load the live lists first. Mock runs skip this: they have no
-    // sign-ins and must not touch the network.
-    let mut local_probed = false;
-    let mut plans_refreshed = false;
-    if let (Some(model), Some(auth)) = (&args.model, &auth) {
-        if may_be_alias(model) {
-            models.refresh_local().await;
-            local_probed = true;
-            if let Some(note) = models.refresh_plans(auth.as_ref()).await {
-                warn!("{note}");
-                notes.push(note);
-            }
-            plans_refreshed = true;
-        }
-    }
-    if let Some(model) = &args.model {
-        if let Err(problem) = models.use_for_run(&mut config, model) {
-            if !mock {
-                anyhow::bail!("--model {model}: {problem}");
-            }
-        }
-    }
-    if let Some(auth) = &auth {
-        let local = |config: &aura_agent::AgentLoopConfig| {
-            aura_model::model_catalog::local_model_name(&config.model).is_some()
-        };
-        if !local_probed && (models.is_gate() || local(&config)) {
-            models.refresh_local().await;
-        }
-        if models.is_gate() {
-            if !plans_refreshed {
-                if let Some(note) = models.refresh_plans(auth.as_ref()).await {
-                    warn!("{note}");
-                    notes.push(note);
-                }
-            }
-            models.refresh_route(&mut config);
-            info!(model = %config.model, "{}", models.display());
-        }
-        if local(&config) {
-            if let Some(hint) = models.local_hint() {
-                anyhow::bail!("{hint}");
-            }
-        }
-    }
-    let model = config.model.clone();
+    let choice = choose_model(args).await?;
+    let model = choice.config.model.clone();
 
     let mode = aura_config::session_mode(requested_mode);
     let permissions = permissions(mode, args.approval);
     let tool_names = policy_tool_names(&tools);
-    let (commands, mut ui_commands) = mpsc::channel(256);
-    // Spawned permanent agents report to a chat; nothing shows it here.
-    tokio::spawn(async move { while ui_commands.recv().await.is_some() {} });
     let (process_manager, completions) = background_process_manager();
-    let Harness { hub, background } = build_hub(HubSetup {
-        data_dir: data_dir.to_path_buf(),
-        workspace_root: workspace_root.clone(),
-        registry,
-        definitions,
-        store,
-        provider: selection.provider,
+    let Harness { hub, background } = build_hub(hub_setup(HubParts {
+        data_dir,
+        workspace_root: &workspace_root,
+        stores,
+        provider: choice.selection.provider,
         tool_config,
         base: TurnBase {
-            config,
+            config: choice.config,
             tools,
-            limits: models.limits(),
-            gate: crate::event_loop::GateBase::of(&models),
+            limits: choice.models.limits(),
+            gate: crate::event_loop::GateBase::of(&choice.models),
         },
-        gate: aura_config::gate(),
         policy: tool_filter.apply(mode_policy(permissions, &tool_names), &tool_names),
-        record_observer: None,
-        record_panel: crate::event_loop::RecordPanelAgent::default(),
-        record_router: None,
-        trace_home: aura_config::AuraHome::resolve().ok().map(|home| home.path),
-        commands,
         long_run,
         process_manager,
-        background_agents: true,
         permissions,
-        instructions: project_instructions(),
-        approvals: None,
         web_tools,
-        post_edit_check: post_edit_check_from_env(),
-        trace_snapshots: false,
-    });
+    }));
     // See the matching call in session.rs: clean up spawns an earlier,
     // killed run never got to start.
     hub.archive_unstarted_spawns();
@@ -429,11 +317,101 @@ async fn build(
         tool_filter,
         job_wait: job_wait_from_env(),
         trace: None,
-        notes,
+        notes: choice.notes,
         judged: Vec::new(),
         criteria: None,
         criteria_due: false,
     })
+}
+
+/// The database and what `aura -p` loads from it and the data directory.
+struct Stores {
+    store: std::sync::Arc<aura_store_db::RocksStore>,
+    registry: AgentRegistry,
+    definitions: AgentDefinitions,
+}
+
+/// Open the store in `data_dir` (creating the folder), then the agent
+/// registry in it and the permanent agents.
+async fn open_stores(
+    data_dir: &std::path::Path,
+    workspace_root: &std::path::Path,
+) -> anyhow::Result<Stores> {
+    tokio::fs::create_dir_all(data_dir)
+        .await
+        .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    let store_path = session_helpers::resolve_store_path(data_dir);
+    // RocksDB allows one process per store, so a terminal open on the
+    // same data directory makes this fail rather than share it. The
+    // registry lives in the same database, so it is opened first.
+    let store = session_helpers::open_store(&store_path).with_context(|| {
+        format!(
+            "opening {} (is a terminal or another `aura -p` using this data directory?)",
+            store_path.display()
+        )
+    })?;
+    let registry = AgentRegistry::open(
+        aura_store_db::AgentStore::for_store(&store),
+        data_dir,
+        workspace_root,
+    )
+    .context("loading agent registry")?;
+    let definitions =
+        AgentDefinitions::load_or_seed(data_dir).context("loading permanent agents")?;
+    Ok(Stores {
+        store,
+        registry,
+        definitions,
+    })
+}
+
+/// What [`build`] chose for the hub; the rest of [`HubSetup`] is fixed for
+/// `aura -p`.
+struct HubParts<'a> {
+    data_dir: &'a std::path::Path,
+    workspace_root: &'a std::path::Path,
+    stores: Stores,
+    provider: std::sync::Arc<dyn aura_model::ModelProvider + Send + Sync>,
+    tool_config: aura_exec_tools::ToolConfig,
+    base: TurnBase,
+    policy: aura_agent_kernel::PolicyConfig,
+    long_run: LongRunSettings,
+    process_manager: std::sync::Arc<aura_agent::ProcessManager>,
+    permissions: Permissions,
+    web_tools: crate::long_run::WebTools,
+}
+
+/// The hub setup for `aura -p`, with a command channel nothing reads from.
+fn hub_setup(parts: HubParts<'_>) -> HubSetup {
+    let (commands, mut ui_commands) = mpsc::channel(256);
+    // Spawned permanent agents report to a chat; nothing shows it here.
+    tokio::spawn(async move { while ui_commands.recv().await.is_some() {} });
+    HubSetup {
+        data_dir: parts.data_dir.to_path_buf(),
+        workspace_root: parts.workspace_root.to_path_buf(),
+        registry: parts.stores.registry,
+        definitions: parts.stores.definitions,
+        store: parts.stores.store,
+        provider: parts.provider,
+        tool_config: parts.tool_config,
+        base: parts.base,
+        gate: aura_config::gate(),
+        policy: parts.policy,
+        record_observer: None,
+        record_panel: crate::event_loop::RecordPanelAgent::default(),
+        record_router: None,
+        trace_home: aura_config::AuraHome::resolve().ok().map(|home| home.path),
+        commands,
+        long_run: parts.long_run,
+        process_manager: parts.process_manager,
+        background_agents: true,
+        permissions: parts.permissions,
+        instructions: project_instructions(),
+        approvals: None,
+        web_tools: parts.web_tools,
+        post_edit_check: post_edit_check_from_env(),
+        trace_snapshots: false,
+    }
 }
 
 /// The work mode and approval level `aura -p` agents run under for the

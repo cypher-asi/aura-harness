@@ -114,30 +114,8 @@ async fn run(
         }
         let Some(hub) = hub.upgrade() else { break };
         for message in batch {
-            match message {
-                FlowMsg::Entry(entry) => {
-                    for watch in &mut watches {
-                        watch.take(&hub, &entry);
-                    }
-                }
-                FlowMsg::Open(focus) => {
-                    let Some(mut watch) = open(&hub, &mut watches, focus).await else {
-                        continue;
-                    };
-                    let (lanes, nodes) = watch.builder.snapshot();
-                    watches.push(watch);
-                    if watches.len() > MAX_WATCHES {
-                        watches.remove(0);
-                    }
-                    let load = UiCommand::FlowLoad {
-                        agent_id: focus.to_hex(),
-                        lanes,
-                        nodes,
-                    };
-                    if commands.send(load).await.is_err() {
-                        return;
-                    }
-                }
+            if !handle_message(&hub, &mut watches, &commands, message).await {
+                return;
             }
         }
         for watch in &mut watches {
@@ -154,6 +132,42 @@ async fn run(
             }
         }
     }
+}
+
+/// Apply one inbox message to `watches`. Returns `false` once the UI is
+/// gone.
+async fn handle_message(
+    hub: &Arc<AgentHub>,
+    watches: &mut Vec<Watch>,
+    commands: &mpsc::Sender<UiCommand>,
+    message: FlowMsg,
+) -> bool {
+    match message {
+        FlowMsg::Entry(entry) => {
+            for watch in watches.iter_mut() {
+                watch.take(hub, &entry);
+            }
+        }
+        FlowMsg::Open(focus) => {
+            let Some(mut watch) = open(hub, watches, focus).await else {
+                return true;
+            };
+            let (lanes, nodes) = watch.builder.snapshot();
+            watches.push(watch);
+            if watches.len() > MAX_WATCHES {
+                watches.remove(0);
+            }
+            let load = UiCommand::FlowLoad {
+                agent_id: focus.to_hex(),
+                lanes,
+                nodes,
+            };
+            if commands.send(load).await.is_err() {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// The watch of `focus`: the one already kept up to date, else a new one

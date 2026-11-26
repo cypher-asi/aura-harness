@@ -18,7 +18,7 @@ use aura_config::trace::TraceLevel;
 use aura_core_types::trace::StepAction;
 use aura_core_types::{AgentId, AgentPermissions};
 use aura_exec_tools::{ToolConfig, ToolExecutor};
-use aura_model::{Message, ModelProvider};
+use aura_model::{Message, ModelProvider, ToolDefinition};
 use tokio::sync::mpsc;
 
 use crate::session_helpers;
@@ -80,28 +80,13 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
     meta.workspace = spec.workspace.display().to_string();
     let rec = RunRecorder::start(&spec.home, meta, level)?.context("tracing is off")?;
 
-    let store = session_helpers::open_store(&rec.dir().join("record"))?;
-    let agent_id = AgentId::generate();
-    let records = Arc::new(RecordRouter::new());
-    records.attach(agent_id, &rec);
-    let (_, tools) = session_helpers::build_executor_router_with_config(&spec.tool_config);
-    let executor = ToolExecutor::new(spec.tool_config)
-        .with_caller_permissions(AgentPermissions::full_access());
-    let mut router = ExecutorRouter::new();
-    router.add_executor(Arc::new(executor));
-    let kernel = Arc::new(Kernel::new(
-        store,
-        Arc::clone(&spec.provider),
-        router,
-        KernelConfig {
-            workspace_base: spec.workspace.clone(),
-            use_workspace_base_as_root: true,
-            record_observer: Some(records),
-            snapshot_store: aura_agent_trace::kernel_snapshot_store(&spec.home)?,
-            ..KernelConfig::default()
-        },
-        agent_id,
-    )?);
+    let (kernel, tools) = build_kernel(
+        &rec,
+        &spec.home,
+        &spec.workspace,
+        spec.provider,
+        spec.tool_config,
+    )?;
     let model_gateway = KernelModelGateway::new(Arc::clone(&kernel));
     let tool_gateway = KernelToolGateway::new(kernel);
 
@@ -109,30 +94,50 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
     config.trace_blobs = rec.blob_store();
     let agent_loop = AgentLoop::new(config);
 
+    let (turns, error) = run_prompts(
+        &rec,
+        &agent_loop,
+        &model_gateway,
+        &tool_gateway,
+        &spec.prompts,
+        &tools,
+    )
+    .await;
+    let scorecard = rec.finish();
+    Ok(HeadlessOutcome {
+        run_id: rec.run_id(),
+        bundle_dir: rec.dir().to_path_buf(),
+        turns,
+        error,
+        scorecard,
+    })
+}
+
+/// Run `prompts` one turn each until one fails; returns the completed
+/// turns and the error that ended the run.
+async fn run_prompts(
+    rec: &Arc<RunRecorder>,
+    agent_loop: &AgentLoop,
+    model_gateway: &KernelModelGateway,
+    tool_gateway: &KernelToolGateway,
+    prompts: &[String],
+    tools: &[ToolDefinition],
+) -> (Vec<AgentLoopResult>, Option<String>) {
     let mut messages: Vec<Message> = Vec::new();
     let mut turns = Vec::new();
     let mut error = None;
-    for prompt in &spec.prompts {
+    for prompt in prompts {
         rec.begin_turn(prompt);
         messages.push(Message::user(prompt.clone()));
-        let (tx, mut rx) = mpsc::channel(256);
-        let sink = Arc::clone(&rec);
-        let forwarder = tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                sink.on_event(&event);
-            }
-        });
-        let result = agent_loop
-            .run_with_events(
-                &model_gateway,
-                &tool_gateway,
-                messages.clone(),
-                tools.clone(),
-                Some(tx),
-                None,
-            )
-            .await;
-        let _ = tokio::time::timeout(RECORDER_DRAIN, forwarder).await;
+        let result = run_turn(
+            rec,
+            agent_loop,
+            model_gateway,
+            tool_gateway,
+            &messages,
+            tools,
+        )
+        .await;
         match result {
             Ok(result) => {
                 rec.end_turn(&result);
@@ -154,14 +159,71 @@ pub async fn run(spec: HeadlessRun) -> anyhow::Result<HeadlessOutcome> {
             }
         }
     }
-    let scorecard = rec.finish();
-    Ok(HeadlessOutcome {
-        run_id: rec.run_id(),
-        bundle_dir: rec.dir().to_path_buf(),
-        turns,
-        error,
-        scorecard,
-    })
+    (turns, error)
+}
+
+/// The kernel recording into `rec`'s `record/` directory, plus the tool
+/// definitions the loop offers the model.
+fn build_kernel(
+    rec: &Arc<RunRecorder>,
+    home: &Path,
+    workspace: &Path,
+    provider: Arc<dyn ModelProvider + Send + Sync>,
+    tool_config: ToolConfig,
+) -> anyhow::Result<(Arc<Kernel>, Vec<ToolDefinition>)> {
+    let store = session_helpers::open_store(&rec.dir().join("record"))?;
+    let agent_id = AgentId::generate();
+    let records = Arc::new(RecordRouter::new());
+    records.attach(agent_id, rec);
+    let (_, tools) = session_helpers::build_executor_router_with_config(&tool_config);
+    let executor =
+        ToolExecutor::new(tool_config).with_caller_permissions(AgentPermissions::full_access());
+    let mut router = ExecutorRouter::new();
+    router.add_executor(Arc::new(executor));
+    let kernel = Arc::new(Kernel::new(
+        store,
+        provider,
+        router,
+        KernelConfig {
+            workspace_base: workspace.to_path_buf(),
+            use_workspace_base_as_root: true,
+            record_observer: Some(records),
+            snapshot_store: aura_agent_trace::kernel_snapshot_store(home)?,
+            ..KernelConfig::default()
+        },
+        agent_id,
+    )?);
+    Ok((kernel, tools))
+}
+
+/// Drive one turn over `messages`, forwarding its events to `rec`.
+async fn run_turn(
+    rec: &Arc<RunRecorder>,
+    agent_loop: &AgentLoop,
+    model_gateway: &KernelModelGateway,
+    tool_gateway: &KernelToolGateway,
+    messages: &[Message],
+    tools: &[ToolDefinition],
+) -> Result<AgentLoopResult, aura_agent::AgentError> {
+    let (tx, mut rx) = mpsc::channel(256);
+    let sink = Arc::clone(rec);
+    let forwarder = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            sink.on_event(&event);
+        }
+    });
+    let result = agent_loop
+        .run_with_events(
+            model_gateway,
+            tool_gateway,
+            messages.to_vec(),
+            tools.to_vec(),
+            Some(tx),
+            None,
+        )
+        .await;
+    let _ = tokio::time::timeout(RECORDER_DRAIN, forwarder).await;
+    result
 }
 
 /// Inputs for re-running `source` from step `from_step`.

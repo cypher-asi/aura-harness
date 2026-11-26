@@ -13,8 +13,9 @@ use super::run::{Headless, RunLimits};
 use super::OutputFormat;
 use crate::event_loop::subagents::lock;
 use crate::event_loop::task_check::{run_script, CheckRun};
+use crate::event_loop::{AgentHub, AgentSession};
 use aura_agent_trace::RunRecorder;
-use aura_core_types::ModelTokens;
+use aura_core_types::{ModelTokens, OutcomePayload};
 use aura_gate::live::{self, Judged, RunOf};
 use std::path::Path;
 use std::sync::Arc;
@@ -79,27 +80,37 @@ impl EvalTurns {
     /// When the run's agent can't be registered or opened.
     pub async fn run(&mut self, turn: EvalTurn<'_>) -> anyhow::Result<EvalRan> {
         let hub = Arc::clone(&self.headless.hub);
-        let agent = {
-            let mut registry = lock(&hub.registry);
-            let parent = registry.headless()?;
-            registry.create_child(
-                turn.name,
-                &parent.zns_id,
-                Some(turn.workspace.to_path_buf()),
-            )?
-        };
-        crate::event_loop::channels::join_or_warn(&hub, &agent);
-        let mut session =
-            hub.factory
-                .open(&agent, Vec::new(), Some(turn.workspace.to_path_buf()))?;
+        let mut session = open_session(&hub, &turn)?;
         let agent_id = session.agent_id();
-
         let limits = RunLimits {
             max_turns: None,
             max_time: hub.long_run.turn_timeout,
             max_cost_usd: hub.long_run.max_turn_cost_usd,
             max_iterations: turn.max_iterations,
         };
+        let (error, last) = self.run_prompts(&mut session, &turn, limits).await;
+        let (check, check_ms) = verify(&session, &turn).await?;
+        record_check(&hub, &session, &turn, &check, last.as_ref()).await;
+        Ok(EvalRan {
+            error,
+            check,
+            check_ms,
+            gate: GateUse {
+                routed: hub.routed_models(agent_id),
+                tokens: hub.tokens_by_model(agent_id),
+                judged: std::mem::take(&mut self.headless.judged),
+            },
+        })
+    }
+
+    /// Drive `turn`'s prompts one by one, stopping at the first that
+    /// fails; returns why it failed and the last turn's recorded outcome.
+    async fn run_prompts(
+        &mut self,
+        session: &mut AgentSession,
+        turn: &EvalTurn<'_>,
+        limits: RunLimits,
+    ) -> (Option<String>, Option<OutcomePayload>) {
         let interrupt = CancellationToken::new();
         let started = Instant::now();
         self.headless.trace = Some(Arc::clone(&turn.trace));
@@ -110,7 +121,7 @@ impl EvalTurns {
             let (report, ended) = self
                 .headless
                 .drive(
-                    &mut session,
+                    session,
                     prompt.clone(),
                     limits,
                     started,
@@ -131,39 +142,64 @@ impl EvalTurns {
             }
         }
         self.headless.trace = None;
+        (error, last)
+    }
+}
 
-        if let Some(checks) = turn.checks {
-            copy_dir(checks, turn.workspace)?;
-        }
-        let check_started = Instant::now();
-        let check = run_script(&session, &verify_script(turn.verify), VERIFY_SOURCE).await;
-        let check_ms = u64::try_from(check_started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        match (check.signal(), &last) {
-            (Some(signal), Some(ended)) => {
-                if let Some(passed) = signal.success() {
-                    let of = RunOf {
-                        compare: "aura eval",
-                        run: turn.name,
-                        task: None,
-                        copy: None,
-                    };
-                    hub.gate.log_truth(agent_id, ended.prompt_tx, passed, of);
-                }
-                live::record(&session.kernel, agent_id, &ended.with_signal(signal)).await;
+/// Register `turn`'s agent under the headless one and open its session.
+fn open_session(hub: &Arc<AgentHub>, turn: &EvalTurn<'_>) -> anyhow::Result<AgentSession> {
+    let agent = {
+        let mut registry = lock(&hub.registry);
+        let parent = registry.headless()?;
+        registry.create_child(
+            turn.name,
+            &parent.zns_id,
+            Some(turn.workspace.to_path_buf()),
+        )?
+    };
+    crate::event_loop::channels::join_or_warn(hub, &agent);
+    let session = hub
+        .factory
+        .open(&agent, Vec::new(), Some(turn.workspace.to_path_buf()))?;
+    Ok(session)
+}
+
+/// Copy in the hidden checks and run `turn`'s verify command; returns its
+/// run and how long it took, in milliseconds.
+async fn verify(session: &AgentSession, turn: &EvalTurn<'_>) -> anyhow::Result<(CheckRun, u64)> {
+    if let Some(checks) = turn.checks {
+        copy_dir(checks, turn.workspace)?;
+    }
+    let check_started = Instant::now();
+    let check = run_script(session, &verify_script(turn.verify), VERIFY_SOURCE).await;
+    let check_ms = u64::try_from(check_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    Ok((check, check_ms))
+}
+
+/// Tell Gate what the verify command said about the last routed turn.
+async fn record_check(
+    hub: &AgentHub,
+    session: &AgentSession,
+    turn: &EvalTurn<'_>,
+    check: &CheckRun,
+    last: Option<&OutcomePayload>,
+) {
+    let agent_id = session.agent_id();
+    match (check.signal(), last) {
+        (Some(signal), Some(ended)) => {
+            if let Some(passed) = signal.success() {
+                let of = RunOf {
+                    compare: "aura eval",
+                    run: turn.name,
+                    task: None,
+                    copy: None,
+                };
+                hub.gate.log_truth(agent_id, ended.prompt_tx, passed, of);
             }
-            (None, _) => warn!(%agent_id, "{}", check.describe()),
-            (Some(_), None) => {}
+            live::record(&session.kernel, agent_id, &ended.with_signal(signal)).await;
         }
-        Ok(EvalRan {
-            error,
-            check,
-            check_ms,
-            gate: GateUse {
-                routed: hub.routed_models(agent_id),
-                tokens: hub.tokens_by_model(agent_id),
-                judged: std::mem::take(&mut self.headless.judged),
-            },
-        })
+        (None, _) => warn!(%agent_id, "{}", check.describe()),
+        (Some(_), None) => {}
     }
 }
 

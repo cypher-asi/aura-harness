@@ -4,6 +4,7 @@
 use crate::agent_definitions::AgentDefinitions;
 use crate::agent_registry::AgentRegistry;
 use crate::event_loop;
+use crate::file_checkpoints::FileCheckpoints;
 use crate::long_run::{add_long_run_tools, WebTools};
 use crate::project_instructions::{InstructionSettings, ProjectInstructions};
 use crate::session_helpers;
@@ -14,9 +15,10 @@ use aura_agent_kernel::{
     ExecutorRouter, Kernel, KernelConfig, RecordObserver, ToolApprovalPrompter,
 };
 use aura_context_skills::{SkillLoader, SkillManager};
-use aura_core_types::{AgentPermissions, Transaction};
+use aura_core_types::{AgentId, AgentPermissions, Transaction};
 use aura_exec_tools::todo::TodoWriteTool;
-use aura_exec_tools::{BackgroundProcessHook, ToolConfig, ToolExecutor};
+use aura_exec_tools::{BackgroundProcessHook, SubagentDispatchHook, ToolConfig, ToolExecutor};
+use aura_gate::live::GateLive;
 use aura_model::ModelProvider;
 use aura_ui::{ApprovalLevel, PermissionMode, UiCommand};
 use std::path::PathBuf;
@@ -182,201 +184,273 @@ pub(crate) fn project_instructions() -> ProjectInstructions {
 /// the host for background agents, and a kernel factory whose kernels run
 /// the tools in `setup` under its policy, hand background commands to its
 /// process manager, and checkpoint their sessions under `data_dir`.
-pub(crate) fn build_hub(setup: HubSetup) -> Harness {
-    let HubSetup {
-        data_dir,
-        workspace_root,
-        registry,
-        definitions,
-        store,
-        provider,
-        tool_config,
-        base,
-        gate,
-        policy,
-        record_observer,
-        record_panel,
-        record_router,
-        trace_home,
-        commands,
-        long_run,
-        process_manager,
-        background_agents,
-        permissions,
-        instructions,
-        approvals,
-        web_tools,
-        post_edit_check,
-        trace_snapshots,
-    } = setup;
-    let gate = Arc::new(aura_gate::live::GateLive::new(gate));
+pub(crate) fn build_hub(mut setup: HubSetup) -> Harness {
+    let gate = start_gate(&setup);
+    let kernel_config = kernel_config(&mut setup, &gate);
+    let wiring = wire_agents(&mut setup, gate, kernel_config);
+    assemble_hub(setup, wiring)
+}
+
+/// What [`build_hub`] wires before it assembles the hub.
+struct Wiring {
+    gate: Arc<GateLive>,
+    kernel_config: KernelConfig,
+    traces: Arc<event_loop::Traces>,
+    processes: Arc<event_loop::ProcessTable>,
+    background: Arc<dyn BackgroundProcessHook>,
+    agents: Option<event_loop::TerminalAgents>,
+}
+
+/// Gate, rebuilding its tables and catching up on compare agents in the
+/// background, logging its attempts under the data dir.
+fn start_gate(setup: &HubSetup) -> Arc<GateLive> {
+    let gate = Arc::new(GateLive::new(setup.gate));
     gate.rebuild_in_background(
-        store.clone() as Arc<dyn aura_store_db::ReadStore>,
-        registry.agents().iter().map(|a| a.agent_id()).collect(),
+        setup.store.clone() as Arc<dyn aura_store_db::ReadStore>,
+        setup
+            .registry
+            .agents()
+            .iter()
+            .map(|a| a.agent_id())
+            .collect(),
     );
-    gate.log_attempts_to(aura_gate::attempts::AttemptLog::in_data_dir(&data_dir));
+    gate.log_attempts_to(aura_gate::attempts::AttemptLog::in_data_dir(
+        &setup.data_dir,
+    ));
+    let compares = setup.registry.compares();
     gate.catch_up_in_background(
-        store.clone() as Arc<dyn aura_store_db::ReadStore>,
-        registry
-            .compares()
+        setup.store.clone() as Arc<dyn aura_store_db::ReadStore>,
+        compares
             .iter()
             .map(|a| (a.agent_id(), a.name.clone()))
             .collect(),
-        crate::session_checkpoint::Checkpoints::new(&data_dir),
+        crate::session_checkpoint::Checkpoints::new(&setup.data_dir),
     );
-    let record_observer: Option<Arc<dyn RecordObserver>> =
-        Some(Arc::new(event_loop::FanoutObserver(
-            record_observer
-                .into_iter()
-                .chain([Arc::clone(&gate) as Arc<dyn RecordObserver>])
-                .collect(),
-        )));
+    gate
+}
+
+/// The config every agent's kernel starts from. Takes the policy and the
+/// record observer out of `setup`; Gate sees the records too.
+fn kernel_config(setup: &mut HubSetup, gate: &Arc<GateLive>) -> KernelConfig {
+    let observers = setup.record_observer.take().into_iter();
+    let observer = event_loop::FanoutObserver(
+        observers
+            .chain([Arc::clone(gate) as Arc<dyn RecordObserver>])
+            .collect(),
+    );
+    let prompter = setup
+        .approvals
+        .clone()
+        .map(|approvals| approvals as Arc<dyn ToolApprovalPrompter>);
     let mut kernel_config = KernelConfig {
-        workspace_base: workspace_root.clone(),
+        workspace_base: setup.workspace_root.clone(),
         use_workspace_base_as_root: true,
-        policy,
-        tool_approval_prompter: approvals
-            .clone()
-            .map(|approvals| approvals as Arc<dyn ToolApprovalPrompter>),
-        record_observer: record_observer.clone(),
+        policy: std::mem::take(&mut setup.policy),
+        tool_approval_prompter: prompter,
+        record_observer: Some(Arc::new(observer)),
         ..KernelConfig::default()
     };
-    if let Some(store) = trace_snapshots
+    if let Some(store) = setup
+        .trace_snapshots
         .then(|| aura_config::AuraHome::resolve().ok())
         .flatten()
         .and_then(|home| aura_agent_trace::kernel_snapshot_store(&home.path).ok())
     {
         kernel_config.snapshot_store = store;
     }
-    let kernel_store = store.clone() as Arc<dyn aura_store_db::Store>;
+    kernel_config
+}
 
-    let host = background_agents.then(|| {
-        let mut scheduler = aura_engine::Scheduler::new(
-            Arc::clone(&kernel_store),
-            Arc::clone(&provider),
-            Vec::new(),
-            base.tools.clone(),
-            workspace_root.clone(),
-            None,
-        );
-        if let Some(observer) = &record_observer {
-            scheduler = scheduler.with_record_observer(Arc::clone(observer));
-        }
-        let scheduler =
-            Arc::new(scheduler.with_snapshot_store(Arc::clone(&kernel_config.snapshot_store)));
-        let host = aura_engine::AgentHost::new(
-            Arc::clone(&kernel_store),
-            Arc::clone(&scheduler),
-            aura_engine::AgentHostConfig::default(),
-        );
-        (host, scheduler)
-    });
+/// The host and scheduler background agents run on.
+fn agent_host(
+    setup: &HubSetup,
+    config: &KernelConfig,
+) -> (aura_engine::AgentHost, Arc<aura_engine::Scheduler>) {
+    let kernel_store = setup.store.clone() as Arc<dyn aura_store_db::Store>;
+    let mut scheduler = aura_engine::Scheduler::new(
+        Arc::clone(&kernel_store),
+        Arc::clone(&setup.provider),
+        Vec::new(),
+        setup.base.tools.clone(),
+        setup.workspace_root.clone(),
+        None,
+    );
+    if let Some(observer) = &config.record_observer {
+        scheduler = scheduler.with_record_observer(Arc::clone(observer));
+    }
+    let scheduler = Arc::new(scheduler.with_snapshot_store(Arc::clone(&config.snapshot_store)));
+    let host_config = aura_engine::AgentHostConfig::default();
+    let host = aura_engine::AgentHost::new(kernel_store, Arc::clone(&scheduler), host_config);
+    (host, scheduler)
+}
+
+/// Run traces, the Processes tab's table, background commands and the
+/// background-agent host. Takes the trace settings out of `setup`.
+fn wire_agents(setup: &mut HubSetup, gate: Arc<GateLive>, kernel_config: KernelConfig) -> Wiring {
+    let host = setup
+        .background_agents
+        .then(|| agent_host(setup, &kernel_config));
+    let trace_store = aura_store_db::TraceStore::for_store(&setup.store);
     let traces = event_loop::Traces::new(
-        trace_home,
-        Some(Arc::new(aura_store_db::TraceStore::for_store(&store))),
-        record_router,
-        commands.clone(),
+        setup.trace_home.take(),
+        Some(Arc::new(trace_store)),
+        setup.record_router.take(),
+        setup.commands.clone(),
     );
     if let Some((host, _)) = &host {
         host.set_turn_observer(Arc::clone(&traces) as Arc<dyn aura_engine::TurnObserver>);
     }
+    let manager = &setup.process_manager;
     let processes = event_loop::ProcessTable::new(
         host.as_ref().map(|(host, _)| host.clone()),
-        Some(Arc::clone(&process_manager)),
+        Some(Arc::clone(manager)),
     );
     let background: Arc<dyn BackgroundProcessHook> = Arc::new(event_loop::BackgroundCommands::new(
-        process_manager,
-        store.clone() as Arc<dyn aura_store_db::ReadStore>,
-        data_dir.join("processes"),
+        Arc::clone(manager),
+        setup.store.clone() as Arc<dyn aura_store_db::ReadStore>,
+        setup.data_dir.join("processes"),
         &processes,
     ));
     let agents = host.map(|(host, scheduler)| {
-        event_loop::TerminalAgents::new(
-            host,
-            scheduler,
-            Arc::new(
-                event_loop::TerminalChildKernels::new(tool_config.clone(), Arc::clone(&background))
-                    .with_command_output(commands.clone()),
-            ),
-        )
+        let tool_config = setup.tool_config.clone();
+        let kernels = event_loop::TerminalChildKernels::new(tool_config, Arc::clone(&background))
+            .with_command_output(setup.commands.clone());
+        event_loop::TerminalAgents::new(host, scheduler, Arc::new(kernels))
     });
-    let kernel_agents = agents.clone();
-    let kernel_background = Arc::clone(&background);
+    Wiring {
+        gate,
+        kernel_config,
+        traces,
+        processes,
+        background,
+        agents,
+    }
+}
 
-    let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
-    let file_checkpoints = crate::file_checkpoints::FileCheckpoints::new(&data_dir);
-    let factory_files = file_checkpoints.clone();
-    let diff_commands = commands.clone();
-    let check_commands = commands.clone();
+/// The hub over `setup` and `wiring`, with its kernel factory.
+fn assemble_hub(setup: HubSetup, wiring: Wiring) -> Harness {
+    let background = wiring.background;
+    let checkpoints = crate::session_checkpoint::Checkpoints::new(&setup.data_dir);
+    let kernels = KernelParts {
+        store: setup.store.clone() as Arc<dyn aura_store_db::Store>,
+        provider: setup.provider,
+        config: wiring.kernel_config,
+        tool_config: setup.tool_config,
+        background: Arc::clone(&background),
+        files: FileCheckpoints::new(&setup.data_dir),
+        commands: setup.commands.clone(),
+        agents: wiring.agents.clone(),
+        approvals: setup.approvals.clone(),
+        web_tools: setup.web_tools,
+    };
+    let check_commands = setup.commands.clone();
+    let skills = SkillLoader::with_defaults(Some(setup.workspace_root), None);
     let hub = event_loop::AgentHub::new(
         event_loop::AgentHubParts {
-            registry,
-            definitions,
-            skills: SkillManager::new(SkillLoader::with_defaults(Some(workspace_root), None)),
-            base,
-            commands,
-            long_run,
-            mode: permissions.mode,
-            approval: permissions.approval,
-            approvals: approvals.clone(),
-            instructions,
-            processes,
-            agents,
-            record_panel,
-            gate,
-            traces,
-            channels: Some(aura_store_db::ChannelStore::for_store(&store)),
+            registry: setup.registry,
+            definitions: setup.definitions,
+            skills: SkillManager::new(skills),
+            base: setup.base,
+            commands: setup.commands,
+            long_run: setup.long_run,
+            mode: setup.permissions.mode,
+            approval: setup.permissions.approval,
+            approvals: setup.approvals,
+            instructions: setup.instructions,
+            processes: wiring.processes,
+            agents: wiring.agents,
+            record_panel: setup.record_panel,
+            gate: wiring.gate,
+            traces: wiring.traces,
+            channels: Some(aura_store_db::ChannelStore::for_store(&setup.store)),
         },
         move |dispatcher| {
-            event_loop::KernelFactory::new(
-                store,
-                Box::new(move |agent_id, parent_chain, folder| {
-                    let chain = std::iter::once(agent_id)
-                        .chain(parent_chain.iter().copied())
-                        .collect();
-                    let file_hook = factory_files.hook(chain, Some(diff_commands.clone()));
-                    let command_output =
-                        event_loop::TerminalCommandOutput::new(diff_commands.clone(), agent_id);
-                    let mut executor = ToolExecutor::new(tool_config.clone())
-                        .with_caller_permissions(AgentPermissions::full_access())
-                        .with_parent_chain(parent_chain)
-                        .with_subagent_dispatch_hook(Arc::clone(&dispatcher))
-                        .with_background_process_hook(Arc::clone(&kernel_background))
-                        .with_file_change_hook(file_hook)
-                        .with_command_output_hook(Arc::new(command_output));
-                    if let Some(agents) = &kernel_agents {
-                        let hooks = agents.hooks_for(agent_id);
-                        executor = executor
-                            .with_spawn_hook(hooks.clone())
-                            .with_agent_control_hook(hooks.clone())
-                            .with_agent_read_hook(hooks);
-                    }
-                    executor.register(Box::new(TodoWriteTool));
-                    web_tools.register(&mut executor);
-                    let mut executor_router = ExecutorRouter::new();
-                    executor_router.add_executor(Arc::new(executor));
-                    let mut config = kernel_config.clone();
-                    if let Some(folder) = folder {
-                        config.workspace_base = folder;
-                    }
-                    if let Some(approvals) = &approvals {
-                        approvals.set_folder(agent_id, config.workspace_base.clone());
-                    }
-                    Ok(Kernel::new(
-                        Arc::clone(&kernel_store),
-                        Arc::clone(&provider),
-                        executor_router,
-                        config,
-                        agent_id,
-                    )?)
-                }),
-            )
-            .with_checkpoints(checkpoints)
-            .with_file_checkpoints(file_checkpoints)
-            .with_post_edit_check(post_edit_check, check_commands)
+            kernels
+                .into_factory(setup.store, dispatcher)
+                .with_checkpoints(checkpoints)
+                .with_post_edit_check(setup.post_edit_check, check_commands)
         },
     );
     Harness { hub, background }
+}
+
+/// What the kernel factory builds each agent's kernel from.
+struct KernelParts {
+    store: Arc<dyn aura_store_db::Store>,
+    provider: Arc<dyn ModelProvider + Send + Sync>,
+    config: KernelConfig,
+    tool_config: ToolConfig,
+    background: Arc<dyn BackgroundProcessHook>,
+    files: FileCheckpoints,
+    commands: mpsc::Sender<UiCommand>,
+    agents: Option<event_loop::TerminalAgents>,
+    approvals: Option<Arc<event_loop::TerminalApprovals>>,
+    web_tools: WebTools,
+}
+
+impl KernelParts {
+    /// The kernel factory over `store`, whose kernels hand their `task`
+    /// calls to `dispatcher`.
+    fn into_factory(
+        self,
+        store: Arc<aura_store_db::RocksStore>,
+        dispatcher: Arc<dyn SubagentDispatchHook>,
+    ) -> event_loop::KernelFactory {
+        let files = self.files.clone();
+        let build = Box::new(move |agent_id, parent_chain, folder| {
+            self.kernel(&dispatcher, agent_id, parent_chain, folder)
+        });
+        event_loop::KernelFactory::new(store, build).with_file_checkpoints(files)
+    }
+
+    /// The kernel for `agent_id`, spawned by `parent_chain` (nearest
+    /// first), with its tools run in `folder` (`None`: the launch folder).
+    fn kernel(
+        &self,
+        dispatcher: &Arc<dyn SubagentDispatchHook>,
+        agent_id: AgentId,
+        parent_chain: Vec<AgentId>,
+        folder: Option<PathBuf>,
+    ) -> anyhow::Result<Kernel> {
+        let chain = std::iter::once(agent_id)
+            .chain(parent_chain.iter().copied())
+            .collect();
+        let file_hook = self.files.hook(chain, Some(self.commands.clone()));
+        let command_output =
+            event_loop::TerminalCommandOutput::new(self.commands.clone(), agent_id);
+        let mut executor = ToolExecutor::new(self.tool_config.clone())
+            .with_caller_permissions(AgentPermissions::full_access())
+            .with_parent_chain(parent_chain)
+            .with_subagent_dispatch_hook(Arc::clone(dispatcher))
+            .with_background_process_hook(Arc::clone(&self.background))
+            .with_file_change_hook(file_hook)
+            .with_command_output_hook(Arc::new(command_output));
+        if let Some(agents) = &self.agents {
+            let hooks = agents.hooks_for(agent_id);
+            executor = executor
+                .with_spawn_hook(hooks.clone())
+                .with_agent_control_hook(hooks.clone())
+                .with_agent_read_hook(hooks);
+        }
+        executor.register(Box::new(TodoWriteTool));
+        self.web_tools.register(&mut executor);
+        let mut executor_router = ExecutorRouter::new();
+        executor_router.add_executor(Arc::new(executor));
+        let mut config = self.config.clone();
+        if let Some(folder) = folder {
+            config.workspace_base = folder;
+        }
+        if let Some(approvals) = &self.approvals {
+            approvals.set_folder(agent_id, config.workspace_base.clone());
+        }
+        Ok(Kernel::new(
+            Arc::clone(&self.store),
+            Arc::clone(&self.provider),
+            executor_router,
+            config,
+            agent_id,
+        )?)
+    }
 }
 
 /// The permission mode terminal agents start in: `--mode`, else

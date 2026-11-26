@@ -30,14 +30,8 @@ fn aura(home: &Path, args: &[&str]) -> (bool, String) {
     (out.status.success(), text)
 }
 
-fn record_run(home: &Path, workspace: &Path) -> String {
-    let mut meta = RunMeta::new("test-model", RunSource::Test);
-    meta.workspace = workspace.display().to_string();
-    let rec = RunRecorder::start(home, meta, TraceLevel::Full)
-        .expect("start")
-        .expect("enabled");
-    rec.begin_turn("add a greeting");
-    rec.on_event(&AgentLoopEvent::Debug(DebugEvent::Decision {
+fn steering_decision() -> AgentLoopEvent {
+    AgentLoopEvent::Debug(DebugEvent::Decision {
         timestamp: chrono::Utc::now(),
         decision: Box::new(
             HarnessDecision::new(
@@ -50,9 +44,12 @@ fn record_run(home: &Path, workspace: &Path) -> String {
             .at_iteration(0),
         ),
         task_id: None,
-    }));
+    })
+}
+
+fn write_file_exchange() -> AgentLoopEvent {
     let input = json!({"path": "hello.txt", "content": "hi"});
-    rec.on_event(&AgentLoopEvent::Debug(DebugEvent::ModelExchange {
+    AgentLoopEvent::Debug(DebugEvent::ModelExchange {
         timestamp: chrono::Utc::now(),
         exchange: Box::new(ModelExchange {
             iteration: 0,
@@ -78,7 +75,18 @@ fn record_run(home: &Path, workspace: &Path) -> String {
             provider_request_id: None,
         }),
         task_id: None,
-    }));
+    })
+}
+
+fn record_run(home: &Path, workspace: &Path) -> String {
+    let mut meta = RunMeta::new("test-model", RunSource::Test);
+    meta.workspace = workspace.display().to_string();
+    let rec = RunRecorder::start(home, meta, TraceLevel::Full)
+        .expect("start")
+        .expect("enabled");
+    rec.begin_turn("add a greeting");
+    rec.on_event(&steering_decision());
+    rec.on_event(&write_file_exchange());
     rec.on_event(&AgentLoopEvent::ToolResult {
         tool_use_id: "t1".into(),
         tool_name: "write_file".into(),
@@ -191,9 +199,13 @@ fn eval_and_branch_commands_run_with_the_mock_provider() {
     assert!(!ok);
     assert!(out.contains("unknown harness parameter"), "{out}");
 
+    check_branch_command(home.path(), &mock);
+}
+
+fn check_branch_command(home: &Path, mock: &[&str]) {
     let workspace = tempfile::tempdir().unwrap();
-    let id = record_run(home.path(), workspace.path());
-    let bundle = aura_agent_trace::RunBundle::find(home.path(), &id).unwrap();
+    let id = record_run(home, workspace.path());
+    let bundle = aura_agent_trace::RunBundle::find(home, &id).unwrap();
     let last = aura_agent_trace::RunTrace::load(&bundle)
         .unwrap()
         .steps
@@ -212,7 +224,7 @@ fn eval_and_branch_commands_run_with_the_mock_provider() {
         &ws,
     ];
     args.extend(mock);
-    let (ok, out) = aura(home.path(), &args);
+    let (ok, out) = aura(home, &args);
     assert!(ok, "{out}");
     assert!(out.contains(&format!("of {id} from step {last}")), "{out}");
 }

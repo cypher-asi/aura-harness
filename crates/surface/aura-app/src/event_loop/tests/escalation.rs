@@ -5,7 +5,7 @@
 //! refuses the user's sign-in.
 
 use super::*;
-use aura_core_types::{CompareStatus, Difficulty};
+use aura_core_types::{CompareRun, CompareStatus, Difficulty};
 use aura_ui::events::MessageRole;
 
 const HAIKU: &str = "aura-claude-haiku-4-5";
@@ -335,9 +335,18 @@ async fn a_compare_gate_run_re_routes_a_refused_sign_in_where_a_pinned_run_stops
     let payload = compare_runs::run_comparison(&mut state, &links, &mut commands, &args).await;
     assert_eq!(payload.status, CompareStatus::Done, "{payload:#?}");
     let (gate, pinned) = (payload.run("a-1").unwrap(), payload.run("b-1").unwrap());
+    assert_gate_run_re_routed(&state, &mut commands, gate);
+    assert_pinned_run_stopped(&state, pinned);
+}
 
+/// The Gate run of the refused sign-in test went on to Opus.
+fn assert_gate_run_re_routed(
+    state: &LoopState<'_>,
+    commands: &mut mpsc::Receiver<UiCommand>,
+    gate: &CompareRun,
+) {
     assert_eq!(gate.error, None, "the Gate run goes on: {gate:#?}");
-    let (prompts, outcomes) = recorded(&compare_runs::entries(&state, gate.agent_id));
+    let (prompts, outcomes) = recorded(&compare_runs::entries(state, gate.agent_id));
     let asked = PromptPayload {
         category: Some(PromptCategory::Question),
         classifier: "claude/claude-haiku-4-5".to_string(),
@@ -368,7 +377,7 @@ async fn a_compare_gate_run_re_routes_a_refused_sign_in_where_a_pinned_run_stops
         (opus, Some(REFUSING_MODEL), 0)
     );
     assert_eq!(
-        system_lines(&mut commands, gate.agent_id),
+        system_lines(commands, gate.agent_id),
         [
             "Compare #1 a-1 · gate:nodelegate → claude-sonnet-4-6 (claude plan) · question",
             "claude/claude-sonnet-4-6 refused your sign-in; Gate skips it until your sign-ins \
@@ -376,10 +385,14 @@ async fn a_compare_gate_run_re_routes_a_refused_sign_in_where_a_pinned_run_stops
              question, default",
         ]
     );
-    assert_eq!(parked_conversation(&state, gate.agent_id), ["hello"]);
+    assert_eq!(parked_conversation(state, gate.agent_id), ["hello"]);
+}
 
+/// The pinned run of the refused sign-in test stopped.
+fn assert_pinned_run_stopped(state: &LoopState<'_>, pinned: &CompareRun) {
+    let question = PromptCategory::Question;
     assert!(pinned.error.is_some(), "the pinned run stops: {pinned:#?}");
-    let (_, outcomes) = recorded(&compare_runs::entries(&state, pinned.agent_id));
+    let (_, outcomes) = recorded(&compare_runs::entries(state, pinned.agent_id));
     let stopped = (
         0,
         question,

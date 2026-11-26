@@ -44,64 +44,23 @@ pub(super) async fn handle_rewind(
         .await;
         return;
     };
-    let turns = blocking({
-        let files = files.clone();
-        let started_ms = session.started_ms;
-        move || files.turns(agent_id, started_ms)
-    })
-    .await
-    .unwrap_or_default();
-    let Some(number) = turn else {
-        ui.send(system_message(turn_list(&turns))).await;
+    let Some((number, undone)) = pick_turns(&ui, &files, agent_id, session.started_ms, turn).await
+    else {
         return;
     };
-    let Some(first) = turns.iter().position(|t| t.number == number) else {
-        ui.send(UiCommand::ShowWarning(format!(
-            "No turn {number}; /rewind lists them"
-        )))
-        .await;
-        return;
-    };
-    let undone = turns[first..].to_vec();
 
     // Find the cut before touching any file, so a conversation that can't
     // be rewound leaves the files alone too.
     let cut = if scope.chat() {
-        match prompt_position(&session.messages, &undone[0].manifest) {
-            Some(cut) => Some(cut),
-            None => {
-                ui.send(UiCommand::ShowWarning(format!(
-                    "Turn {number} is no longer in the conversation the model sees (it was \
-                     summarized); use /rewind {number} code to put back only the files"
-                )))
-                .await;
-                return;
-            }
-        }
+        let Some(cut) = find_cut(&ui, &session.messages, &undone, number).await else {
+            return;
+        };
+        Some(cut)
     } else {
         None
     };
 
-    let report = if scope.code() {
-        blocking({
-            let files = files.clone();
-            let undone = undone.clone();
-            move || files.restore(agent_id, &undone)
-        })
-        .await
-    } else {
-        None
-    };
-    if let Some(cut) = cut {
-        session.messages.truncate(cut);
-        session.todos = super::plan_mode::unfinished_todos(todos_from_history(&session.messages));
-        blocking({
-            let files = files.clone();
-            let undone = undone.clone();
-            move || files.mark_rewound(agent_id, &undone)
-        })
-        .await;
-    }
+    let report = apply_rewind(&files, session, agent_id, &undone, scope, cut).await;
 
     info!(%agent_id, turn = number, scope = scope.as_str(), "Rewound agent");
     record_rewind(session, number, scope, &undone[0].manifest, report.as_ref()).await;
@@ -119,13 +78,101 @@ pub(super) async fn handle_rewind(
         .await;
         send_session(&ui, session).await;
     }
+    report_rewind(&ui, number, scope, report.as_ref()).await;
+}
+
+/// Put back the files (scope `code`) and cut the conversation at `cut`.
+async fn apply_rewind(
+    files: &FileCheckpoints,
+    session: &mut super::AgentSession,
+    agent_id: AgentId,
+    undone: &[Turn],
+    scope: RewindScope,
+    cut: Option<usize>,
+) -> Option<RestoreReport> {
+    let report = if scope.code() {
+        blocking({
+            let files = files.clone();
+            let undone = undone.to_vec();
+            move || files.restore(agent_id, &undone)
+        })
+        .await
+    } else {
+        None
+    };
+    if let Some(cut) = cut {
+        session.messages.truncate(cut);
+        session.todos = super::plan_mode::unfinished_todos(todos_from_history(&session.messages));
+        blocking({
+            let files = files.clone();
+            let undone = undone.to_vec();
+            move || files.mark_rewound(agent_id, &undone)
+        })
+        .await;
+    }
+    report
+}
+
+/// The turns from `turn` on, or `None` after listing the turns (no
+/// `turn`) or warning about an unknown one.
+async fn pick_turns(
+    ui: &AgentUi,
+    files: &FileCheckpoints,
+    agent_id: AgentId,
+    started_ms: u64,
+    turn: Option<usize>,
+) -> Option<(usize, Vec<Turn>)> {
+    let turns = blocking({
+        let files = files.clone();
+        move || files.turns(agent_id, started_ms)
+    })
+    .await
+    .unwrap_or_default();
+    let Some(number) = turn else {
+        ui.send(system_message(turn_list(&turns))).await;
+        return None;
+    };
+    let Some(first) = turns.iter().position(|t| t.number == number) else {
+        ui.send(UiCommand::ShowWarning(format!(
+            "No turn {number}; /rewind lists them"
+        )))
+        .await;
+        return None;
+    };
+    Some((number, turns[first..].to_vec()))
+}
+
+/// Where to cut the conversation to undo `undone`, warning when the turn
+/// was summarized away.
+async fn find_cut(
+    ui: &AgentUi,
+    messages: &[Message],
+    undone: &[Turn],
+    number: usize,
+) -> Option<usize> {
+    let cut = prompt_position(messages, &undone[0].manifest);
+    if cut.is_none() {
+        ui.send(UiCommand::ShowWarning(format!(
+            "Turn {number} is no longer in the conversation the model sees (it was \
+             summarized); use /rewind {number} code to put back only the files"
+        )))
+        .await;
+    }
+    cut
+}
+
+/// The closing summary, plus what could not be put back.
+async fn report_rewind(
+    ui: &AgentUi,
+    number: usize,
+    scope: RewindScope,
+    report: Option<&RestoreReport>,
+) {
     ui.send(UiCommand::ShowSuccess(rewind_summary(
-        number,
-        scope,
-        report.as_ref(),
+        number, scope, report,
     )))
     .await;
-    if let Some(report) = &report {
+    if let Some(report) = report {
         let mut notes = vec![SHELL_NOTE.to_string()];
         notes.extend(
             report

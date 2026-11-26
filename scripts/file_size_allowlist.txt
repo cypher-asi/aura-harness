@@ -218,8 +218,3 @@ crates/ui/aura-ui-widgets/src/components/message.rs
 crates/ui/aura-ui-widgets/src/components/syntax.rs
 crates/ui/aura-ui-widgets/src/graphics.rs
 evals/polyglot/rust-xorcism/checks/.gate_checks/xorcism.rs
-tests/async_process_tests.rs
-tests/common/mod.rs
-tests/e2e_full.rs
-tests/e2e_live.rs
-tests/proptest_tests.rs

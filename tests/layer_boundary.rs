@@ -107,32 +107,8 @@ fn every_crate_carries_a_matching_layer_doc_tag() {
             continue;
         };
 
-        let tag_line = lib_contents
-            .lines()
-            .find(|l| l.trim_start().starts_with("//! Layer:"));
-        match tag_line {
-            Some(line) => {
-                let body = line
-                    .trim_start()
-                    .trim_start_matches("//!")
-                    .trim()
-                    .trim_start_matches("Layer:")
-                    .trim();
-                // Allow trailing notes after the layer word
-                // (e.g. "core (Phase 1 — narrowing)"). We just
-                // require the first whitespace-delimited token to
-                // match the expected layer.
-                let first_word = body.split_whitespace().next().unwrap_or("");
-                if first_word != expected_layer {
-                    offenders.push(format!(
-                        "{name}: //! Layer: tag declares `{first_word}` \
-                         but Cargo manifest classifies it as `{expected_layer}`"
-                    ));
-                }
-            }
-            None => offenders.push(format!(
-                "{name}: missing `//! Layer: {expected_layer}` doc-comment tag in src/lib.rs"
-            )),
+        if let Some(offence) = layer_tag_offence(&name, expected_layer, &lib_contents) {
+            offenders.push(offence);
         }
     }
 
@@ -238,6 +214,37 @@ fn crate_dirs() -> Vec<(String, PathBuf)> {
     }
     assert!(!out.is_empty(), "no crates found under crates/<layer>/");
     out
+}
+
+/// Describes what's wrong with `lib_contents`' `//! Layer:` tag, if anything.
+fn layer_tag_offence(name: &str, expected_layer: &str, lib_contents: &str) -> Option<String> {
+    let tag_line = lib_contents
+        .lines()
+        .find(|l| l.trim_start().starts_with("//! Layer:"));
+    match tag_line {
+        Some(line) => {
+            let body = line
+                .trim_start()
+                .trim_start_matches("//!")
+                .trim()
+                .trim_start_matches("Layer:")
+                .trim();
+            // Allow trailing notes after the layer word
+            // (e.g. "core (Phase 1 — narrowing)"). We just
+            // require the first whitespace-delimited token to
+            // match the expected layer.
+            let first_word = body.split_whitespace().next().unwrap_or("");
+            (first_word != expected_layer).then(|| {
+                format!(
+                    "{name}: //! Layer: tag declares `{first_word}` \
+                     but Cargo manifest classifies it as `{expected_layer}`"
+                )
+            })
+        }
+        None => Some(format!(
+            "{name}: missing `//! Layer: {expected_layer}` doc-comment tag in src/lib.rs"
+        )),
+    }
 }
 
 fn layer_for(name: &str) -> Option<&'static str> {

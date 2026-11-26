@@ -49,25 +49,13 @@ fn parents(lanes: &[FlowLane]) -> Vec<(&str, Option<&str>)> {
         .collect()
 }
 
-#[tokio::test]
-async fn the_flow_of_an_agent_loads_from_the_store_and_follows_new_entries() {
-    let (fixture, _commands) = fixture();
-    let mut b = borrowed(&fixture);
-    let _state = loop_state(&fixture, &mut b);
-    let (first, second) = (fixture.first, fixture.second);
-    let store = Arc::clone(&fixture.hub.factory.store);
-    let child = spawned(&fixture, first, "check the parser").await;
-
-    let (feed, inbox) = FlowFeed::new();
-    let (flows_tx, mut flows) = mpsc::channel(16);
-    inbox.serve(&fixture.hub, flows_tx);
-    feed.open(first);
-
+/// Check the first `FlowLoad`: `first` with its child `child` and its prompt.
+async fn assert_first_load(flows: &mut mpsc::Receiver<UiCommand>, first: AgentId, child: AgentId) {
     let UiCommand::FlowLoad {
         agent_id,
         lanes,
         nodes,
-    } = next_flow(&mut flows).await
+    } = next_flow(flows).await
     else {
         panic!("expected the flow to load first");
     };
@@ -84,6 +72,50 @@ async fn the_flow_of_an_agent_loads_from_the_store_and_follows_new_entries() {
     assert!(nodes
         .iter()
         .any(|node| node.kind == FlowKind::Reply && node.agent_id == child_hex));
+}
+
+/// Collect `FlowUpsert`s of `first_hex` until one adds a reply.
+async fn upserts_until_reply(
+    flows: &mut mpsc::Receiver<UiCommand>,
+    first_hex: &str,
+) -> (Vec<FlowLane>, Vec<FlowNode>) {
+    let mut joined = Vec::new();
+    let mut added = Vec::new();
+    while !added
+        .iter()
+        .any(|node: &FlowNode| node.kind == FlowKind::Reply)
+    {
+        let UiCommand::FlowUpsert {
+            agent_id,
+            lanes,
+            nodes,
+        } = next_flow(flows).await
+        else {
+            panic!("expected an update to the flow");
+        };
+        assert_eq!(agent_id, first_hex);
+        joined.extend(lanes);
+        added.extend(nodes);
+    }
+    (joined, added)
+}
+
+#[tokio::test]
+async fn the_flow_of_an_agent_loads_from_the_store_and_follows_new_entries() {
+    let (fixture, _commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let _state = loop_state(&fixture, &mut b);
+    let (first, second) = (fixture.first, fixture.second);
+    let store = Arc::clone(&fixture.hub.factory.store);
+    let child = spawned(&fixture, first, "check the parser").await;
+
+    let (feed, inbox) = FlowFeed::new();
+    let (flows_tx, mut flows) = mpsc::channel(16);
+    inbox.serve(&fixture.hub, flows_tx);
+    feed.open(first);
+
+    assert_first_load(&mut flows, first, child).await;
+    let (first_hex, child_hex) = (first.to_hex(), child.to_hex());
 
     // An agent spawned after the flow loaded joins it with its first
     // entry; agents outside the flow never do.
@@ -95,24 +127,7 @@ async fn the_flow_of_an_agent_loads_from_the_store_and_follows_new_entries() {
         }
     }
     let later_hex = later.to_hex();
-    let mut joined = Vec::new();
-    let mut added = Vec::new();
-    while !added
-        .iter()
-        .any(|node: &FlowNode| node.kind == FlowKind::Reply)
-    {
-        let UiCommand::FlowUpsert {
-            agent_id,
-            lanes,
-            nodes,
-        } = next_flow(&mut flows).await
-        else {
-            panic!("expected an update to the flow");
-        };
-        assert_eq!(agent_id, first_hex);
-        joined.extend(lanes);
-        added.extend(nodes);
-    }
+    let (joined, added) = upserts_until_reply(&mut flows, &first_hex).await;
     assert_eq!(
         parents(&joined),
         [(later_hex.as_str(), Some(first_hex.as_str()))]

@@ -34,11 +34,8 @@ fn at(text: &str, ms: u64) -> MessageData {
     }
 }
 
-#[test]
-fn notices_and_consoles_come_back_as_they_were_sent() {
-    let dir = tempfile::tempdir().unwrap();
-    let agent = AgentId::generate();
-    let notes = ChatNotes::new(dir.path());
+/// Record an error, a whole boot console and a status line for `agent`.
+fn record_error_and_console(notes: &ChatNotes, agent: AgentId) {
     notes.record(agent, &UiCommand::ShowError("claim failed".into()));
     notes.record(
         agent,
@@ -88,6 +85,14 @@ fn notices_and_consoles_come_back_as_they_were_sent() {
         ),
     );
     notes.record(agent, &UiCommand::SetStatus("Ready".into()));
+}
+
+#[test]
+fn notices_and_consoles_come_back_as_they_were_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent = AgentId::generate();
+    let notes = ChatNotes::new(dir.path());
+    record_error_and_console(&notes, agent);
 
     let chat = ChatNotes::new(dir.path()).chat(agent);
     assert_eq!(chat.len(), 2, "{chat:?}");

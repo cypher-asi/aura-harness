@@ -196,6 +196,19 @@ async fn switch(
     }
     state.hub.set_permissions(agent_id, to);
     info!(%agent_id, from = %from.name(), to = %to.name(), "Changed permissions");
+    announce_switch(state, &ui, agent_id, from, to).await;
+    super::policies::send_policies_of(state, agent_id).await;
+    true
+}
+
+/// Show what changed between `from` and `to` (mode and/or approval).
+async fn announce_switch(
+    state: &LoopState<'_>,
+    ui: &AgentUi,
+    agent_id: AgentId,
+    from: Permissions,
+    to: Permissions,
+) {
     if from.mode != to.mode {
         ui.send(UiCommand::SetMode(to.mode)).await;
         ui.send(UiCommand::ShowSuccess(format!(
@@ -226,8 +239,6 @@ async fn switch(
             warn_if_unconfined(state, agent_id).await;
         }
     }
-    super::policies::send_policies_of(state, agent_id).await;
-    true
 }
 
 /// Tell `agent_id` when it is at `yolo` but its commands can't be confined.
