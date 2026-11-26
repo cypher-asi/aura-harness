@@ -73,23 +73,7 @@ impl SpawnHook for KernelSpawnHook {
     ) -> Result<SpawnOutcome, SpawnError> {
         let child_agent_id = child.preassigned_agent_id.unwrap_or_else(AgentId::generate);
 
-        let user_default = match originating_user_id {
-            Some(user_id) => self
-                .store
-                .get_user_tool_defaults(user_id)
-                .map_err(|e| SpawnError::Store(format!("get_user_tool_defaults: {e}")))?
-                .unwrap_or_default(),
-            None => UserToolDefaults::default(),
-        };
-        let parent_tool_permissions = child.parent_tool_permissions.clone().or_else(|| {
-            self.latest_identity(parent_agent_id)
-                .and_then(|id| id.tool_permissions)
-        });
-        enforce_tool_subset(
-            &user_default,
-            parent_tool_permissions.as_ref(),
-            child.tool_permissions.as_ref(),
-        )?;
+        self.check_child_tools(parent_agent_id, originating_user_id, &child)?;
 
         let zns_id = format!("0://spawn/{}", child_agent_id.to_hex());
         let mut identity = Identity::new(&zns_id, &child.name);
@@ -107,25 +91,7 @@ impl SpawnHook for KernelSpawnHook {
         let identity_bytes = serde_json::to_vec(&identity_payload)
             .map_err(|e| SpawnError::Serialization(format!("child identity: {e}")))?;
 
-        let child_tx = Transaction::new_chained(
-            child_agent_id,
-            TransactionType::System,
-            Bytes::from(identity_bytes),
-            None,
-        );
-        let child_seq = self
-            .store
-            .get_head_seq(child_agent_id)
-            .map_err(|e| SpawnError::Store(format!("get_head_seq(child): {e}")))?
-            + 1;
-        let child_ctx_hash = crate::context::hash_tx_with_window(&child_tx, &[])
-            .map_err(|e| SpawnError::Other(format!("context hash(child): {e}")))?;
-        let child_entry = aura_core_types::RecordEntry::builder(child_seq, child_tx)
-            .context_hash(child_ctx_hash)
-            .build();
-        self.store
-            .append_entry_direct(child_agent_id, child_seq, &child_entry)
-            .map_err(|e| SpawnError::Store(format!("append_entry_direct(child): {e}")))?;
+        self.append_system_entry(child_agent_id, identity_bytes, "child")?;
 
         let delegate_payload = DelegateSpawnPayload {
             kind: "spawn_agent",
@@ -140,26 +106,7 @@ impl SpawnHook for KernelSpawnHook {
         let delegate_bytes = serde_json::to_vec(&delegate_payload)
             .map_err(|e| SpawnError::Serialization(format!("delegate payload: {e}")))?;
 
-        let delegate_tx = Transaction::new_chained(
-            *parent_agent_id,
-            TransactionType::System,
-            Bytes::from(delegate_bytes),
-            None,
-        );
-        let delegate_hash = delegate_tx.hash;
-        let parent_seq = self
-            .store
-            .get_head_seq(*parent_agent_id)
-            .map_err(|e| SpawnError::Store(format!("get_head_seq(parent): {e}")))?
-            + 1;
-        let parent_ctx_hash = crate::context::hash_tx_with_window(&delegate_tx, &[])
-            .map_err(|e| SpawnError::Other(format!("context hash(parent): {e}")))?;
-        let parent_entry = aura_core_types::RecordEntry::builder(parent_seq, delegate_tx)
-            .context_hash(parent_ctx_hash)
-            .build();
-        self.store
-            .append_entry_direct(*parent_agent_id, parent_seq, &parent_entry)
-            .map_err(|e| SpawnError::Store(format!("append_entry_direct(parent): {e}")))?;
+        let delegate_hash = self.append_system_entry(*parent_agent_id, delegate_bytes, "parent")?;
 
         Ok(SpawnOutcome {
             child_agent_id,
@@ -170,6 +117,64 @@ impl SpawnHook for KernelSpawnHook {
 }
 
 impl KernelSpawnHook {
+    /// Reject a child whose tool permissions exceed the parent's effective ones.
+    fn check_child_tools(
+        &self,
+        parent_agent_id: &AgentId,
+        originating_user_id: Option<&str>,
+        child: &ChildAgentSpec,
+    ) -> Result<(), SpawnError> {
+        let user_default = match originating_user_id {
+            Some(user_id) => self
+                .store
+                .get_user_tool_defaults(user_id)
+                .map_err(|e| SpawnError::Store(format!("get_user_tool_defaults: {e}")))?
+                .unwrap_or_default(),
+            None => UserToolDefaults::default(),
+        };
+        let parent_tool_permissions = child.parent_tool_permissions.clone().or_else(|| {
+            self.latest_identity(parent_agent_id)
+                .and_then(|id| id.tool_permissions)
+        });
+        enforce_tool_subset(
+            &user_default,
+            parent_tool_permissions.as_ref(),
+            child.tool_permissions.as_ref(),
+        )
+    }
+
+    /// Append `payload` as a `System` transaction at the head of
+    /// `agent_id`'s record log; `side` (`child`/`parent`) labels errors.
+    /// Returns the transaction hash.
+    fn append_system_entry(
+        &self,
+        agent_id: AgentId,
+        payload: Vec<u8>,
+        side: &str,
+    ) -> Result<aura_core_types::Hash, SpawnError> {
+        let tx = Transaction::new_chained(
+            agent_id,
+            TransactionType::System,
+            Bytes::from(payload),
+            None,
+        );
+        let tx_hash = tx.hash;
+        let seq = self
+            .store
+            .get_head_seq(agent_id)
+            .map_err(|e| SpawnError::Store(format!("get_head_seq({side}): {e}")))?
+            + 1;
+        let ctx_hash = crate::context::hash_tx_with_window(&tx, &[])
+            .map_err(|e| SpawnError::Other(format!("context hash({side}): {e}")))?;
+        let entry = aura_core_types::RecordEntry::builder(seq, tx)
+            .context_hash(ctx_hash)
+            .build();
+        self.store
+            .append_entry_direct(agent_id, seq, &entry)
+            .map_err(|e| SpawnError::Store(format!("append_entry_direct({side}): {e}")))?;
+        Ok(tx_hash)
+    }
+
     fn latest_identity(&self, agent_id: &AgentId) -> Option<Identity> {
         let head = self.store.get_head_seq(*agent_id).ok()?;
         let from_seq = head.saturating_sub(256).saturating_add(1);

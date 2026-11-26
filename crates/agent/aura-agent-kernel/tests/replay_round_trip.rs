@@ -41,7 +41,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use aura_agent_kernel::{
     hash_tx_with_window, Executor, ExecutorError, ExecutorRouter, Kernel, KernelConfig,
-    KernelError, ReplayError,
+    KernelError, ProcessResult, ReplayError, ReplayReport,
 };
 use aura_core_modes::KernelMode;
 use aura_core_types::{
@@ -190,6 +190,83 @@ fn build_replay_kernel(
     )
 }
 
+impl LiveFixture {
+    async fn prompt(&self, text: &str) {
+        self.kernel
+            .process_direct(Transaction::user_prompt(self.agent_id, text))
+            .await
+            .expect("process user prompt");
+    }
+
+    async fn read_file_call(&self, tool_use_id: &str, path: &str) -> ProcessResult {
+        let proposal = ToolProposal::new(
+            tool_use_id,
+            "read_file",
+            serde_json::json!({ "path": path }),
+        );
+        let tool_tx =
+            Transaction::tool_proposal(self.agent_id, &proposal).expect("tool proposal tx");
+        self.kernel
+            .process_direct(tool_tx)
+            .await
+            .expect("process tool")
+    }
+
+    fn recorded(&self) -> Vec<RecordEntry> {
+        self.store
+            .scan_record(self.agent_id, 1, 10)
+            .expect("scan recorded entries")
+    }
+}
+
+/// Replay from seq 0 against a no-op snapshot store and return the report.
+fn noop_replay_report(fixture: &LiveFixture) -> ReplayReport {
+    build_replay_kernel(fixture, 0, Arc::new(NoopSnapshotStore))
+        .expect("replay kernel construction must succeed")
+        .replay_report()
+        .expect("replay kernel must produce a report")
+        .clone()
+}
+
+/// Count recorded effects whose payload is an AuditedLite `Summary`.
+fn summary_count(entries: &[RecordEntry]) -> usize {
+    entries
+        .iter()
+        .flat_map(|e| &e.effects)
+        .filter(|effect| {
+            serde_json::from_slice::<aura_store_record::RecordPayload>(&effect.payload)
+                .ok()
+                .is_some_and(|payload| {
+                    matches!(payload, aura_store_record::RecordPayload::Summary { .. })
+                })
+        })
+        .count()
+}
+
+/// Forge a seq=3 user-prompt entry with an all-FF (`0xFF * 32`)
+/// context_hash that cannot match any recomputation. Returns
+/// `(forged_hash, recomputed_hash)`.
+fn forge_divergent_entry(fixture: &LiveFixture) -> (ContextHash, ContextHash) {
+    let prior_window = fixture.recorded();
+    let bogus_tx = Transaction::user_prompt(fixture.agent_id, "diverging");
+    let recomputed =
+        hash_tx_with_window(&bogus_tx, &prior_window).expect("recompute prior window hash");
+    let bogus_hash = ContextHash::from([0xFFu8; 32]);
+    assert_ne!(
+        bogus_hash, recomputed,
+        "the divergence test relies on the bogus hash differing from the recomputation"
+    );
+    let bogus_entry = RecordEntry::builder(3, bogus_tx)
+        .context_hash(bogus_hash)
+        .proposals(ProposalSet::new())
+        .decision(Decision::new())
+        .build();
+    let rocks_store = Arc::clone(&fixture.store);
+    WriteStore::append_entry_direct(rocks_store.as_ref(), fixture.agent_id, 3, &bogus_entry)
+        .expect("forge divergent entry");
+    (bogus_hash, recomputed)
+}
+
 // =============================================================================
 // Scenario 1 — happy path
 // =============================================================================
@@ -200,23 +277,8 @@ async fn replay_reproduces_recorded_decisions_and_state_hash() {
 
     // Record a user prompt (seq=1) and a tool call: proposal (seq=2),
     // policy decision (seq=3), execution (seq=4).
-    fixture
-        .kernel
-        .process_direct(Transaction::user_prompt(fixture.agent_id, "hello world"))
-        .await
-        .expect("process user prompt");
-
-    let proposal = ToolProposal::new(
-        "tool-use-replay",
-        "read_file",
-        serde_json::json!({ "path": "a.txt" }),
-    );
-    let tool_tx = Transaction::tool_proposal(fixture.agent_id, &proposal).expect("tool tx");
-    let result = fixture
-        .kernel
-        .process_direct(tool_tx)
-        .await
-        .expect("process tool");
+    fixture.prompt("hello world").await;
+    let result = fixture.read_file_call("tool-use-replay", "a.txt").await;
     assert!(
         !result.had_failures,
         "tool execution must succeed; tool_output={:?}",
@@ -226,20 +288,11 @@ async fn replay_reproduces_recorded_decisions_and_state_hash() {
 
     // Snapshot the recorded entries so we can compare per-entry
     // decisions after replay.
-    let recorded: Vec<RecordEntry> = fixture
-        .store
-        .scan_record(fixture.agent_id, 1, 10)
-        .expect("scan recorded entries");
+    let recorded = fixture.recorded();
     assert_eq!(recorded.len(), 4, "fixture should have recorded 4 entries");
 
     // Replay 1.
-    let replay_kernel_a = build_replay_kernel(&fixture, 0, Arc::new(NoopSnapshotStore))
-        .expect("replay kernel A construction must succeed");
-    let report_a = replay_kernel_a
-        .replay_report()
-        .expect("replay kernel must produce a report")
-        .clone();
-
+    let report_a = noop_replay_report(&fixture);
     assert_eq!(report_a.replayed_seqs, vec![1, 2, 3, 4]);
     assert_eq!(report_a.decisions.len(), 4);
     for (seq_idx, decision) in report_a.decisions.iter().enumerate() {
@@ -257,13 +310,7 @@ async fn replay_reproduces_recorded_decisions_and_state_hash() {
 
     // Determinism: replay 2 over the same store must produce a
     // byte-identical report.
-    let replay_kernel_b = build_replay_kernel(&fixture, 0, Arc::new(NoopSnapshotStore))
-        .expect("replay kernel B construction must succeed");
-    let report_b = replay_kernel_b
-        .replay_report()
-        .expect("replay kernel must produce a report")
-        .clone();
-
+    let report_b = noop_replay_report(&fixture);
     assert_eq!(report_a.replayed_seqs, report_b.replayed_seqs);
     assert_eq!(report_a.decisions, report_b.decisions);
     assert_eq!(report_a.final_state_hash, report_b.final_state_hash);
@@ -277,45 +324,12 @@ async fn replay_reproduces_recorded_decisions_and_state_hash() {
 async fn replay_aborts_on_context_divergence() {
     let fixture = build_live_kernel(b"small-result".to_vec(), KernelMode::Audited);
 
-    // Genuine entry at seq=1 — context_hash is correct.
-    fixture
-        .kernel
-        .process_direct(Transaction::user_prompt(fixture.agent_id, "first"))
-        .await
-        .expect("process first user prompt");
+    // Genuine entries at seq=1 and seq=2 — context_hash is correct.
+    fixture.prompt("first").await;
+    fixture.prompt("second").await;
 
-    // Genuine entry at seq=2 — context_hash is correct.
-    fixture
-        .kernel
-        .process_direct(Transaction::user_prompt(fixture.agent_id, "second"))
-        .await
-        .expect("process second user prompt");
-
-    // Forge a divergent entry at seq=3. We compute the prior window
-    // through hash_tx_with_window for context, then write the entry
-    // with an all-FF (`0xFF * 32`) context_hash that cannot possibly
-    // match any recomputation.
-    let prior_window: Vec<RecordEntry> = fixture
-        .store
-        .scan_record(fixture.agent_id, 1, 10)
-        .expect("scan prior window");
-    let bogus_tx = Transaction::user_prompt(fixture.agent_id, "diverging");
-    let recomputed =
-        hash_tx_with_window(&bogus_tx, &prior_window).expect("recompute prior window hash");
-    let bogus_hash = ContextHash::from([0xFFu8; 32]);
-    assert_ne!(
-        bogus_hash, recomputed,
-        "the divergence test relies on the bogus hash differing from the recomputation"
-    );
-    let bogus_entry = RecordEntry::builder(3, bogus_tx.clone())
-        .context_hash(bogus_hash)
-        .proposals(ProposalSet::new())
-        .decision(Decision::new())
-        .build();
-
-    let rocks_store = Arc::clone(&fixture.store);
-    WriteStore::append_entry_direct(rocks_store.as_ref(), fixture.agent_id, 3, &bogus_entry)
-        .expect("forge divergent entry");
+    // Forge a divergent entry at seq=3.
+    let (bogus_hash, recomputed) = forge_divergent_entry(&fixture);
 
     match build_replay_kernel(&fixture, 0, Arc::new(NoopSnapshotStore)) {
         Ok(_) => panic!("replay must abort on context divergence"),
@@ -352,13 +366,6 @@ async fn replay_aborts_on_snapshot_missing_for_audited_lite_summary() {
     let large_payload = vec![0x5Au8; 64];
     let fixture = build_live_kernel(large_payload, KernelMode::AuditedLite);
 
-    let proposal = ToolProposal::new(
-        "tool-use-lite",
-        "read_file",
-        serde_json::json!({ "path": "lite.txt" }),
-    );
-    let tool_tx =
-        Transaction::tool_proposal(fixture.agent_id, &proposal).expect("tool proposal tx");
     // `had_failures` is intentionally NOT asserted: AuditedLite
     // summarisation rewrites the effect payload into a
     // `RecordPayload::Summary` JSON envelope BEFORE the kernel's
@@ -367,32 +374,14 @@ async fn replay_aborts_on_snapshot_missing_for_audited_lite_summary() {
     // parse it as `ToolResult`. The replay test does not depend on
     // the `tool_output.is_error` flag — only on the persisted
     // effect carrying the `Summary` shape.
-    let _ = fixture
-        .kernel
-        .process_direct(tool_tx)
-        .await
-        .expect("process tool");
+    let _ = fixture.read_file_call("tool-use-lite", "lite.txt").await;
 
     // Confirm the recorded effect was actually summarised — the
     // SnapshotMissing path only fires when the replay consumer
     // observes a `RecordPayload::Summary` envelope.
-    let entries = fixture
-        .store
-        .scan_record(fixture.agent_id, 1, 10)
-        .expect("scan entries");
-    let summary_count = entries
-        .iter()
-        .flat_map(|e| &e.effects)
-        .filter(|effect| {
-            serde_json::from_slice::<aura_store_record::RecordPayload>(&effect.payload)
-                .ok()
-                .is_some_and(|payload| {
-                    matches!(payload, aura_store_record::RecordPayload::Summary { .. })
-                })
-        })
-        .count();
     assert_eq!(
-        summary_count, 1,
+        summary_count(&fixture.recorded()),
+        1,
         "AuditedLite + threshold=16 + 64-byte payload should summarise exactly one effect"
     );
 
@@ -425,18 +414,7 @@ async fn replay_resolves_audited_lite_summary_from_fs_snapshot_store() {
     let fixture =
         build_live_kernel_with(vec![0x5Au8; 64], KernelMode::AuditedLite, snapshots.clone());
 
-    let proposal = ToolProposal::new(
-        "tool-use-lite",
-        "read_file",
-        serde_json::json!({ "path": "lite.txt" }),
-    );
-    let tool_tx =
-        Transaction::tool_proposal(fixture.agent_id, &proposal).expect("tool proposal tx");
-    let _ = fixture
-        .kernel
-        .process_direct(tool_tx)
-        .await
-        .expect("process tool");
+    let _ = fixture.read_file_call("tool-use-lite", "lite.txt").await;
 
     build_replay_kernel(&fixture, 0, snapshots)
         .expect("replay must resolve the summary from the snapshot store");

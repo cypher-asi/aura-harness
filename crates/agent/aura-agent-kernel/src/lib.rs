@@ -21,6 +21,7 @@
 //! The turn processor and process manager now live under `aura-agent::runtime`.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 // TODO(Phase 8): GitExecutor for kernel-recorded git mutations
 // TODO(Phase 8): BuildVerifyExecutor for kernel-recorded build/test

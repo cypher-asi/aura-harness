@@ -23,35 +23,36 @@
 //! - [`tools`]   — `process_tool_proposal` and the batch `process_tools`.
 //! - [`reason`]  — `reason` / `reason_streaming` and their timeout wrappers.
 //! - [`stream`]  — the `ReasonStreamHandle` finalization handle.
+//! - [`config`], [`approval`], [`system_record`] — `KernelConfig`, the
+//!   live tool-approval types, and the `write_system_*` record helpers.
 //! - [`window`]  — the context hashes of the newest entries, kept so an
 //!   append need not read the record window back from the store.
 //! - [`tests`]   — integration tests that exercise the full `Kernel` surface.
 
-use crate::policy::{Policy, PolicyConfig};
+use crate::policy::Policy;
 use crate::replay::{ReplayConsumer, ReplayReport};
 use crate::ExecutorRouter;
-use async_trait::async_trait;
 use aura_core_modes::KernelMode;
 use aura_core_types::{
-    AgentId, ContextHash, Hash, PolicyDecision, RecordEntry, RuntimeCapabilityInstall, ToolState,
+    AgentId, ContextHash, Hash, PolicyDecision, RecordEntry, RuntimeCapabilityInstall,
 };
 use aura_exec_traits::RunScratch;
 use aura_model::{ModelProvider, ModelRequest};
-use aura_plugin_hooks::PluginHookHost;
 use aura_store_db::Store;
-use aura_store_record::DEFAULT_SUMMARY_CHUNK_BYTES;
-use aura_store_snapshot::{NoopSnapshotStore, SnapshotStore};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+mod approval;
 #[cfg(test)]
 mod cache_salt_tests;
+mod config;
 #[cfg(test)]
 mod mode_switch_tests;
 mod process;
 mod reason;
 mod seq;
 mod stream;
+mod system_record;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -59,135 +60,14 @@ mod tool_audit_tests;
 mod tools;
 mod window;
 
+pub use approval::{
+    ApprovalRequiredInfo, PendingToolPrompt, ToolApprovalError, ToolApprovalPrompter,
+    ToolApprovalRemember, ToolApprovalResponse,
+};
+pub use config::KernelConfig;
 pub use stream::ReasonStreamHandle;
+pub use system_record::{write_system_entry, write_system_record};
 pub use tools::{PresetToolResult, ToolRun};
-
-// ============================================================================
-// Configuration
-// ============================================================================
-
-/// Kernel configuration.
-#[derive(Debug, Clone)]
-pub struct KernelConfig {
-    /// Size of record window for context
-    pub record_window_size: usize,
-    /// Policy configuration
-    pub policy: PolicyConfig,
-    /// Base workspace directory
-    pub workspace_base: PathBuf,
-    /// When true, use `workspace_base` directly instead of appending `agent_id`.
-    pub use_workspace_base_as_root: bool,
-    /// Phase 6b replay anchor.
-    ///
-    /// - `None` (default) — live mode: the kernel calls the live
-    ///   reasoner and executor as usual.
-    /// - `Some(from_seq)` — replay mode: at construction the kernel
-    ///   runs a [`crate::ReplayConsumer`] over its store's record log
-    ///   for `agent_id`, starting at `from_seq` (inclusive), to
-    ///   replay every historical [`aura_core_types::RecordEntry`] in
-    ///   forward `seq` order. The replay validates each entry's
-    ///   `context_hash` against a fresh recomputation through
-    ///   [`crate::hash_tx_with_window`] and, for AuditedLite
-    ///   entries whose effect payloads were summarised, validates
-    ///   the `full_hash` against [`KernelConfig::snapshot_store`].
-    ///   On success the [`crate::ReplayReport`] is stashed on the
-    ///   kernel and exposed via [`Kernel::replay_report`]. On
-    ///   failure the constructor returns
-    ///   [`crate::KernelError::Replay`] and no further processing
-    ///   is permitted from that instance.
-    ///
-    /// Wiring this field replaces the Phase 6a `replay_mode: bool`
-    /// placeholder that had no consumer.
-    pub replay_from: Option<u64>,
-    /// Content-addressed store for AuditedLite payloads: the kernel
-    /// writes each summarised effect's full bytes here, and replay
-    /// reads them back. Defaults to
-    /// [`aura_store_snapshot::NoopSnapshotStore`] (keeps nothing), so
-    /// replay of an AuditedLite turn surfaces
-    /// [`crate::ReplayError::SnapshotMissing`] unless a real backend
-    /// such as [`aura_store_snapshot::FsSnapshotStore`] is wired here.
-    pub snapshot_store: Arc<dyn SnapshotStore>,
-    /// Timeout for reasoner proposals in milliseconds.
-    pub proposal_timeout_ms: u64,
-    /// Per-tool execution timeout in milliseconds. Each individual tool in
-    /// a batch is wrapped in a `tokio::time::timeout` with this budget; on
-    /// expiration a failed `Effect` is emitted and the batch continues.
-    pub tool_timeout_ms: u64,
-    /// Live approval bridge for tri-state `ask` tool calls. When absent,
-    /// `ask` resolves to a headless deny.
-    pub tool_approval_prompter: Option<Arc<dyn ToolApprovalPrompter>>,
-    /// Originating user id used when a live approval response is remembered
-    /// forever into persisted user tool defaults.
-    pub originating_user_id: Option<String>,
-    /// Phase 6a kernel audit tier (`Audited` vs `AuditedLite`).
-    ///
-    /// Imported from [`aura_core_modes::KernelMode`]; the kernel does
-    /// not own this enum. `Audited` (default) records full inline
-    /// payloads; `AuditedLite` summarises payloads above
-    /// [`KernelConfig::audited_lite_threshold_bytes`] into a
-    /// `RecordPayload::Summary { head, tail, full_hash, full_len }`.
-    /// Sequence numbers and `RecordKind` values are identical across
-    /// the two modes — only the payload representation differs.
-    pub kernel_mode: KernelMode,
-    /// Payload-size threshold (bytes) above which `AuditedLite`
-    /// switches from full inline to head/tail summary. Defaults to
-    /// [`aura_store_record::DEFAULT_SUMMARY_CHUNK_BYTES`] (1 KiB).
-    /// Ignored when `kernel_mode == KernelMode::Audited`.
-    pub audited_lite_threshold_bytes: usize,
-    /// Phase 10 carve-out 5b: optional [`PluginHookHost`] consulted
-    /// by [`Kernel::resolve_prompt_verdict`] before the interactive
-    /// `ToolApprovalPrompter` is invoked. A registered
-    /// `PermissionRequest` handler that returns
-    /// [`aura_plugin_hooks::HookOutcome::Approve`] short-circuits
-    /// the prompt with `PolicyVerdict::Allow`, and `Deny` with
-    /// `PolicyVerdict::Deny { reason }`. Any other outcome
-    /// (`Continue` / `TimedOut`) falls through to the interactive
-    /// prompt.
-    ///
-    /// `None` (default) preserves Phase 8 behaviour exactly — the
-    /// kernel never fires `PermissionRequest` hooks and the
-    /// interactive prompt is always reached when configured.
-    pub plugin_hooks: Option<Arc<PluginHookHost>>,
-    /// Notified with every record entry this kernel persists (tool
-    /// proposals, policy decisions, executions, reasoning, prompts,
-    /// replies, system entries) immediately after it is appended, so UIs
-    /// can show the policy decision before the tool runs and the record
-    /// feed stays gapless.
-    pub record_observer: Option<Arc<dyn RecordObserver>>,
-    /// Prompt-cache scope of every model request this kernel sends (see
-    /// [`aura_model::ModelRequest::scope_cache`]). Requests from kernels
-    /// with different salts never share provider prompt-cache entries;
-    /// `None` (default) leaves requests unscoped.
-    pub cache_salt: Option<String>,
-    /// The run's private folder for its commands' temp files, caches and
-    /// builds (see [`aura_exec_traits::RunScratch`]). Kernels with
-    /// different scratch folders never share those through the command
-    /// environment; `None` (default) leaves commands on the shared ones.
-    pub run_scratch: Option<RunScratch>,
-}
-
-impl Default for KernelConfig {
-    fn default() -> Self {
-        Self {
-            record_window_size: 50,
-            policy: PolicyConfig::default(),
-            workspace_base: PathBuf::from("./workspaces"),
-            use_workspace_base_as_root: false,
-            replay_from: None,
-            snapshot_store: Arc::new(NoopSnapshotStore),
-            proposal_timeout_ms: 120_000,
-            tool_timeout_ms: 120_000,
-            tool_approval_prompter: None,
-            originating_user_id: None,
-            kernel_mode: KernelMode::Audited,
-            audited_lite_threshold_bytes: DEFAULT_SUMMARY_CHUNK_BYTES,
-            plugin_hooks: None,
-            record_observer: None,
-            cache_salt: None,
-            run_scratch: None,
-        }
-    }
-}
 
 // ============================================================================
 // Result types
@@ -220,65 +100,6 @@ pub struct ToolOutput {
     /// replay the screenshot to the model as an image block. `None` for
     /// every other tool and for tool failures.
     pub image: Option<aura_core_types::ToolResultImage>,
-}
-
-/// Details about a tool invocation that was denied because it needs an
-/// out-of-band operator approval. Set on [`ToolOutput::approval_required`]
-/// when the policy returns [`crate::PolicyVerdict::RequireApproval`].
-#[derive(Debug, Clone)]
-pub struct ApprovalRequiredInfo {
-    /// Tool name, e.g. `"run_command"`.
-    pub tool: String,
-    /// Structured live prompt metadata for tri-state `ask` prompts.
-    pub prompt: Option<PendingToolPrompt>,
-}
-
-/// Scope for remembering a live approval response.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolApprovalRemember {
-    /// Do not cache; the next call prompts again.
-    Once,
-    /// Cache for the current session.
-    Session,
-    /// Persist to the originating user's defaults.
-    Forever,
-}
-
-/// Live approval response returned by a [`ToolApprovalPrompter`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ToolApprovalResponse {
-    pub decision: ToolState,
-    pub remember: ToolApprovalRemember,
-}
-
-/// Structured prompt metadata emitted when a tool resolves to `ask`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingToolPrompt {
-    pub request_id: String,
-    pub tool_name: String,
-    pub args: serde_json::Value,
-    pub agent_id: AgentId,
-    pub remember_options: Vec<ToolApprovalRemember>,
-}
-
-/// Error returned by a live approval bridge.
-#[derive(Debug, thiserror::Error)]
-pub enum ToolApprovalError {
-    #[error("approval prompt could not be delivered")]
-    DeliveryFailed,
-    #[error("approval prompt was cancelled")]
-    Cancelled,
-    #[error("{0}")]
-    Internal(String),
-}
-
-/// Bridge from the deterministic kernel to an attached interactive client.
-#[async_trait]
-pub trait ToolApprovalPrompter: Send + Sync + std::fmt::Debug {
-    async fn prompt(
-        &self,
-        prompt: PendingToolPrompt,
-    ) -> Result<ToolApprovalResponse, ToolApprovalError>;
 }
 
 /// Receives every record entry as the kernel persists it, in sequence
@@ -623,121 +444,5 @@ impl Kernel {
                 self.config.audited_lite_threshold_bytes,
             ),
         }
-    }
-}
-
-/// Phase 6a consolidation: write a System-shaped `RecordEntry`
-/// through the kernel crate.
-///
-/// Previously `aura-node::tool_permissions::append_agent_tool_permissions_entry`
-/// constructed and appended this entry inline, bypassing the kernel
-/// and violating the "kernel owns every `RecordEntry` write"
-/// invariant. The body of the build-and-write now lives here; the
-/// runtime retains responsibility for the scheduler's
-/// `processing_claim` (a scheduler-side lock) which the kernel crate
-/// would not be able to see without a layering violation.
-///
-/// On-disk shape: identical to the prior runtime path — same
-/// `seq = head_seq + 1`, same window-hashed `context_hash`, same
-/// `append_entry_direct` write path. Replay and audit consumers see
-/// no diff.
-///
-/// # Errors
-///
-/// Returns [`KernelError::Store`] for any backend failure.
-pub fn write_system_record(
-    store: &Arc<dyn Store>,
-    agent_id: AgentId,
-    tx: &aura_core_types::Transaction,
-) -> Result<u64, crate::KernelError> {
-    write_system_entry(store, agent_id, tx).map(|entry| entry.seq)
-}
-
-/// [`write_system_record`], returning the stored entry so the caller can
-/// hand it to a [`RecordObserver`].
-///
-/// # Errors
-///
-/// Returns [`KernelError::Store`] for any backend failure.
-pub fn write_system_entry(
-    store: &Arc<dyn Store>,
-    agent_id: AgentId,
-    tx: &aura_core_types::Transaction,
-) -> Result<RecordEntry, crate::KernelError> {
-    // The `seq` for a System record is derived from a `get_head_seq`
-    // read that is NOT serialized with the actual `append_entry_direct`
-    // write at the store level. When another writer for the same agent
-    // commits between our read and our append (e.g. a SubagentSpawn
-    // audit record racing the parent's own turn writes), the store's
-    // pre-flight `assert_next_seq` rejects us with
-    // [`StoreError::SequenceMismatch`]. That is a transient,
-    // recompute-and-retry condition rather than a hard failure, so we
-    // re-read the head and rebuild the entry on a bounded retry loop.
-    const MAX_RETRIES: u32 = 16;
-    for attempt in 0..=MAX_RETRIES {
-        match append_system_record_once(store, agent_id, tx) {
-            Ok(entry) => return Ok(entry),
-            Err(SystemRecordError::SequenceMismatch) if attempt < MAX_RETRIES => {
-                // Brief backoff so the racing writer can land before we
-                // recompute. Capped low because the audit append is on
-                // the subagent spawn hot path.
-                std::thread::sleep(std::time::Duration::from_millis(
-                    u64::from(attempt + 1).min(8),
-                ));
-            }
-            Err(SystemRecordError::SequenceMismatch) => {
-                return Err(crate::KernelError::Store(format!(
-                    "append_entry_direct: sequence mismatch unresolved after {MAX_RETRIES} retries"
-                )));
-            }
-            Err(SystemRecordError::Other(err)) => return Err(err),
-        }
-    }
-    unreachable!("write_system_record retry loop always returns")
-}
-
-/// Internal error discriminator for [`write_system_record`]'s retry
-/// loop: `SequenceMismatch` is the retryable case, everything else is
-/// terminal.
-enum SystemRecordError {
-    SequenceMismatch,
-    Other(crate::KernelError),
-}
-
-/// Single attempt to append a System record: read the head, hash the
-/// transaction against the trailing window, and direct-append at
-/// `head + 1`. Returns [`SystemRecordError::SequenceMismatch`] when the
-/// store rejects the computed sequence so the caller can retry.
-fn append_system_record_once(
-    store: &Arc<dyn Store>,
-    agent_id: AgentId,
-    tx: &aura_core_types::Transaction,
-) -> Result<RecordEntry, SystemRecordError> {
-    let head = store.get_head_seq(agent_id).map_err(|e| {
-        SystemRecordError::Other(crate::KernelError::Store(format!("get_head_seq: {e}")))
-    })?;
-    let from_seq = head.saturating_sub(49).max(1);
-    let window = if head == 0 {
-        Vec::new()
-    } else {
-        store.scan_record(agent_id, from_seq, 50).map_err(|e| {
-            SystemRecordError::Other(crate::KernelError::Store(format!("scan_record: {e}")))
-        })?
-    };
-    let context_hash = crate::context::hash_tx_with_window(tx, &window).map_err(|e| {
-        SystemRecordError::Other(crate::KernelError::Internal(format!("context hash: {e}")))
-    })?;
-    let seq = head + 1;
-    let entry = RecordEntry::builder(seq, tx.clone())
-        .context_hash(context_hash)
-        .build();
-    match store.append_entry_direct(agent_id, seq, &entry) {
-        Ok(()) => Ok(entry),
-        Err(aura_store_db::StoreError::SequenceMismatch { .. }) => {
-            Err(SystemRecordError::SequenceMismatch)
-        }
-        Err(e) => Err(SystemRecordError::Other(crate::KernelError::Store(
-            format!("append_entry_direct: {e}"),
-        ))),
     }
 }
