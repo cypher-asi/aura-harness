@@ -1,8 +1,7 @@
 //! Test verification helpers.
 //!
 //! Provides [`run_full_test_suite`] for running the project's test command and
-//! reporting pass/fail status, plus [`run_and_handle_tests`] for the legacy
-//! build-verify fix loop.
+//! reporting pass/fail status.
 //!
 //! Earlier revisions exposed a `capture_test_baseline` helper that recorded
 //! pre-existing test failures so the agent loop could whitelist them. The
@@ -14,14 +13,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use tracing::warn;
-
-use crate::file_ops::FileOp;
-
-use super::common::apply_fix_and_record;
-use super::error_types::BuildFixAttemptRecord;
 use super::runner;
-use super::{emit, FixProvider, VerifyEvent};
 
 /// Outcome of running the full project test suite via [`run_full_test_suite`].
 #[derive(Debug, Clone, Default)]
@@ -32,12 +24,8 @@ pub struct TestSuiteOutcome {
     pub summary: String,
     /// Names of tests that failed in this run. May be empty when the runner
     /// output is unparseable but the exit code was non-zero — in that case
-    /// `passed` is still `false` and callers should fall back to `raw_stderr`.
+    /// `passed` is still `false`.
     pub failed_tests: Vec<String>,
-    /// Captured stdout (truncated to the runner's standard output limit).
-    pub raw_stdout: String,
-    /// Captured stderr (truncated to the runner's standard output limit).
-    pub raw_stderr: String,
     /// Wall-clock duration of the test run, milliseconds.
     pub duration_ms: u64,
 }
@@ -75,98 +63,6 @@ pub async fn run_full_test_suite(
         passed,
         summary,
         failed_tests,
-        raw_stdout: result.stdout,
-        raw_stderr: result.stderr,
         duration_ms,
     })
-}
-
-/// Run the test suite and attempt a fix if needed.
-///
-/// Used by the legacy [`super::build::verify_and_fix_build`] loop. Returns
-/// `(tests_passed, input_tokens, output_tokens)`. Exactly seven args
-/// (the default clippy ceiling) — splitting further would only
-/// fragment a single linear "drive one test attempt" call site, so
-/// it is kept flat per Rule 1.4.
-pub async fn run_and_handle_tests(
-    base_path: &Path,
-    test_command: &str,
-    attempt: u32,
-    fix_provider: &dyn FixProvider,
-    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<VerifyEvent>>,
-    prior_test_attempts: &mut Vec<BuildFixAttemptRecord>,
-    all_fix_ops: &mut Vec<FileOp>,
-) -> anyhow::Result<(bool, u64, u64)> {
-    emit(
-        event_tx,
-        VerifyEvent::TestStarted {
-            command: test_command.to_string(),
-        },
-    );
-
-    let test_start = Instant::now();
-    let test_result = runner::run_build_command(base_path, test_command, None, None).await?;
-    let dur = u64::try_from(test_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-
-    let (tests, summary) = runner::parse_test_output(
-        &test_result.stdout,
-        &test_result.stderr,
-        test_result.success,
-    );
-
-    let failure_count = tests.iter().filter(|t| t.status == "failed").count();
-    if test_result.success && failure_count == 0 {
-        emit(
-            event_tx,
-            VerifyEvent::TestPassed {
-                command: test_command.to_string(),
-                stdout: test_result.stdout.clone(),
-                summary: summary.clone(),
-                duration_ms: dur,
-            },
-        );
-        return Ok((true, 0, 0));
-    }
-
-    emit(
-        event_tx,
-        VerifyEvent::TestFailed {
-            command: test_command.to_string(),
-            stdout: test_result.stdout.clone(),
-            stderr: test_result.stderr.clone(),
-            attempt,
-            summary: summary.clone(),
-            duration_ms: dur,
-        },
-    );
-    emit(event_tx, VerifyEvent::TestFixAttempt { attempt });
-
-    let (response, inp, out) = fix_provider
-        .request_fix(
-            test_command,
-            &test_result.stderr,
-            &test_result.stdout,
-            prior_test_attempts,
-        )
-        .await?;
-
-    apply_fix_and_record(
-        base_path,
-        super::common::FixAttempt {
-            response: &response,
-            attempt,
-            stderr: &test_result.stderr,
-            fix_kind: "test-fix",
-        },
-        prior_test_attempts,
-        all_fix_ops,
-        fix_provider,
-    )
-    .await?;
-
-    if tests.is_empty() {
-        warn!("test runner produced no parseable test results; relying on exit code");
-    }
-
-    Ok((false, inp, out))
 }

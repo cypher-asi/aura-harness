@@ -65,69 +65,6 @@ pub fn sampling_boundary(task_id: &str, turn: u32, iter: usize) {
     info!(target: CONSOLE_TARGET, "{}", line.bright_cyan());
 }
 
-/// Render the request half of an Anthropic call as a multi-line block.
-/// Field arguments are passed verbatim and trusted; the helper does
-/// not redact or truncate.
-pub fn anthropic_request_block(req: &AnthropicRequestView<'_>) {
-    let mut out = String::new();
-    let header = "→ POST /v1/messages".cyan().bold();
-    let tag = destination_tag(req.destination, Some(req.destination_host));
-    out.push_str(&format!("{} {header}  {tag}\n", "┌─".dimmed()));
-    out.push_str(&wrap_row("model", req.model));
-    out.push_str(&wrap_row("kind", req.kind));
-    out.push_str(&wrap_row("body", &human_bytes(req.body_bytes)));
-    out.push_str(&wrap_row("msgs", &req.messages_count.to_string()));
-    out.push_str(&wrap_row(
-        "tools",
-        &format!("{} ({})", req.tools_count, req.tool_choice),
-    ));
-    out.push_str(&wrap_row(
-        "thinking",
-        &format!(
-            "{:<14} system {:<6} last_user {} / {}",
-            req.thinking_label,
-            human_bytes(req.system_bytes),
-            human_bytes(req.last_user_bytes),
-            req.last_user_hash.unwrap_or("-"),
-        ),
-    ));
-    out.push_str(&wrap_row("headers", req.headers_present));
-    out.push_str(&wrap_row("request_hash", req.request_hash));
-    out.push_str(&format!("{}", "└─".dimmed()));
-    info!(target: CONSOLE_TARGET, "{out}");
-}
-
-/// Render the response half of an Anthropic call symmetric to
-/// [`anthropic_request_block`].
-pub fn anthropic_response_block(resp: &AnthropicResponseView<'_>) {
-    let mut out = String::new();
-    let header_text = format!("← {} {}", resp.status_code, resp.status_text);
-    let header = match resp.status_code {
-        200..=299 => header_text.green().bold(),
-        300..=399 => header_text.yellow().bold(),
-        _ => header_text.red().bold(),
-    };
-    let tag = destination_tag(resp.destination, None);
-    out.push_str(&format!("{} {header}  {tag}\n", "┌─".dimmed()));
-    out.push_str(&wrap_row(
-        "stop",
-        &format!(
-            "{:<14} elapsed {:>7}",
-            resp.stop_reason,
-            human_duration_ms(resp.elapsed_ms)
-        ),
-    ));
-    out.push_str(&wrap_row(
-        "tokens",
-        &format!("in {} / out {}", resp.input_tokens, resp.output_tokens),
-    ));
-    if let Some(req_id) = resp.request_id {
-        out.push_str(&wrap_row("request_id", req_id));
-    }
-    out.push_str(&format!("{}", "└─".dimmed()));
-    info!(target: CONSOLE_TARGET, "{out}");
-}
-
 /// Render the "tools requested + executed" block from a tool-use
 /// stop reason. Each tool gets one line with a status glyph
 /// (`✓` success, `✗` error, `↺` cached) so the operator can spot
@@ -231,7 +168,7 @@ pub struct StreamTimeoutView {
 
 /// Render a dedicated failure block when the streaming pump's
 /// per-event liveness timeout fires. Symmetric to
-/// [`anthropic_response_block`] but red — turns the previously-silent
+/// [`aura_model::console::anthropic_response_block`] but red — turns the previously-silent
 /// 90s gap into an actionable box naming the stalled phase and how
 /// much content had streamed before the stream went quiet.
 pub fn stream_timeout_block(view: &StreamTimeoutView) {
@@ -270,46 +207,6 @@ pub fn task_start_banner(task_id: &str, max_turns: u32, max_iterations_per_task:
         "═══ task {short} started · max_turns {max_turns} · max_iterations {max_iterations_per_task} ═══"
     );
     info!(target: CONSOLE_TARGET, "{}", line.bright_green().bold());
-}
-
-/// Inputs to [`anthropic_request_block`]. Passing a borrowed view
-/// avoids a string-clone storm at the call site.
-pub struct AnthropicRequestView<'a> {
-    pub model: &'a str,
-    pub kind: &'a str,
-    pub body_bytes: usize,
-    pub messages_count: usize,
-    pub tools_count: usize,
-    pub tool_choice: &'a str,
-    pub thinking_label: &'a str,
-    pub system_bytes: usize,
-    pub last_user_bytes: usize,
-    pub last_user_hash: Option<&'a str>,
-    pub headers_present: &'a str,
-    pub request_hash: &'a str,
-    /// Short semantic label for the network destination (e.g.
-    /// `"aura-network"` for any call routed through the LLM proxy).
-    pub destination: &'a str,
-    /// Host portion of the target URL (e.g.
-    /// `"aura-router.onrender.com"`). Surfaced alongside
-    /// [`Self::destination`] in the request header.
-    pub destination_host: &'a str,
-}
-
-/// Inputs to [`anthropic_response_block`].
-pub struct AnthropicResponseView<'a> {
-    pub status_code: u16,
-    pub status_text: &'a str,
-    pub stop_reason: &'a str,
-    pub elapsed_ms: u64,
-    pub input_tokens: u32,
-    pub output_tokens: u32,
-    pub request_id: Option<&'a str>,
-    /// Short semantic label for the network destination (e.g.
-    /// `"aura-network"`). Host is omitted on the response side to
-    /// keep the header line scannable — the request header above
-    /// already carries the full host.
-    pub destination: &'a str,
 }
 
 // ----------------------------------------------------------------------

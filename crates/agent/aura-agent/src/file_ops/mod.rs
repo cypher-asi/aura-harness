@@ -1,43 +1,18 @@
-// TODO(phase5, 2026-04-22): most of the file_ops helpers (walkers,
-// workspace_map, task_keywords, task_relevance, type_resolution,
-// validation, and the apply module) are WIP plumbing that is not yet
-// wired into the live agent loop. Rather than deleting them — Phase 5
-// is expected to integrate them as part of the task-centric executor —
-// we keep the symbols but silence the dead-code warning at the module
-// root so the workspace can build with `-D warnings`. When Phase 5
-// lands, remove this allow and prune whatever still is unused.
-#![allow(dead_code)]
-
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-mod apply;
 pub mod error_context;
-pub mod file_walkers;
 pub mod source_parser;
 pub mod stub_detection;
-pub mod task_keywords;
-pub mod task_relevance;
-pub mod type_resolution;
-pub mod validation;
-pub mod workspace_map;
 
-pub use apply::apply_file_ops;
-pub use error_context::{resolve_error_context, resolve_error_source_files};
-pub use source_parser::{extract_definition_block, extract_pub_signatures};
+pub use error_context::resolve_error_context;
 pub use stub_detection::*;
-pub use task_relevance::*;
-pub use workspace_map::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FileOpsError {
-    #[error("IO error: {0}")]
-    Io(String),
     #[error("path escape attempt: {0}")]
     PathEscape(String),
-    #[error("parse error: {0}")]
-    Parse(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,86 +85,4 @@ pub struct ErrorReferences {
     pub missing_fields: Vec<(String, String)>,
     pub source_locations: Vec<(String, u32)>,
     pub wrong_arg_counts: Vec<String>,
-}
-
-pub const INCLUDE_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "json", "toml", "md", "css", "html", "yaml", "yml", "py", "sh",
-    "sql", "graphql",
-];
-
-pub fn read_relevant_files(linked_folder: &str, max_bytes: usize) -> Result<String, FileOpsError> {
-    let base = Path::new(linked_folder);
-    let mut output = String::new();
-    let mut current_size: usize = 0;
-    walk_and_collect(base, base, &mut output, &mut current_size, max_bytes)?;
-    Ok(output)
-}
-
-fn walk_and_collect(
-    base: &Path,
-    dir: &Path,
-    output: &mut String,
-    current_size: &mut usize,
-    max_bytes: usize,
-) -> Result<(), FileOpsError> {
-    let mut included = std::collections::HashSet::new();
-    file_walkers::walk_and_collect_filtered(
-        base,
-        dir,
-        output,
-        current_size,
-        max_bytes,
-        &mut included,
-    )
-}
-
-/// Fuzzy whitespace-insensitive search and replace. Matches lines by trimmed
-/// content rather than exact whitespace. Returns `None` if zero or multiple
-/// matches are found.
-pub fn fuzzy_search_replace(content: &str, search: &str, replace: &str) -> Option<String> {
-    let search_lines: Vec<&str> = search.lines().map(str::trim).collect();
-    if search_lines.is_empty() || search_lines.iter().all(|l| l.is_empty()) {
-        return None;
-    }
-
-    let content_lines: Vec<&str> = content.lines().collect();
-    let mut match_positions: Vec<usize> = Vec::new();
-
-    'outer: for start in 0..content_lines.len() {
-        if start + search_lines.len() > content_lines.len() {
-            break;
-        }
-        for (j, search_line) in search_lines.iter().enumerate() {
-            if content_lines[start + j].trim() != *search_line {
-                continue 'outer;
-            }
-        }
-        match_positions.push(start);
-    }
-
-    if match_positions.len() != 1 {
-        return None;
-    }
-
-    let match_start = match_positions[0];
-    let match_end = match_start + search_lines.len();
-
-    let mut result = String::with_capacity(content.len());
-    for (i, line) in content_lines.iter().enumerate() {
-        if i == match_start {
-            result.push_str(replace);
-            if !replace.ends_with('\n') {
-                result.push('\n');
-            }
-        } else if i >= match_start && i < match_end {
-        } else {
-            result.push_str(line);
-            result.push('\n');
-        }
-    }
-    if !content.ends_with('\n') && result.ends_with('\n') {
-        result.pop();
-    }
-
-    Some(result)
 }

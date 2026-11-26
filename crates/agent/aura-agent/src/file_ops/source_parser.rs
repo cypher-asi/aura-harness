@@ -1,5 +1,3 @@
-use super::type_resolution::is_impl_for_type;
-
 pub fn extract_struct_fields(content: &str, type_name: &str) -> Option<String> {
     let struct_prefix_pub = format!("pub struct {type_name}");
     let struct_prefix = format!("struct {type_name}");
@@ -91,40 +89,6 @@ pub fn extract_pub_signatures(content: &str, type_name: &str) -> Vec<String> {
     signatures
 }
 
-/// Extract the definition block (struct, trait, or enum) for a given type name.
-/// Tries each keyword in order and returns the first match found.
-pub fn extract_definition_block(content: &str, type_name: &str) -> Option<String> {
-    let lines: Vec<&str> = content.lines().collect();
-
-    for keyword in &["struct", "trait", "enum"] {
-        let prefix_pub = format!("pub {keyword} {type_name}");
-        let prefix_plain = format!("{keyword} {type_name}");
-
-        for (i, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-            let after = trimmed
-                .strip_prefix(prefix_pub.as_str())
-                .or_else(|| trimmed.strip_prefix(prefix_plain.as_str()));
-            let Some(after) = after else {
-                continue;
-            };
-            match after.chars().next() {
-                Some('{' | ' ' | '<' | ':') | None => {}
-                _ => continue,
-            }
-            if !trimmed.contains('{') {
-                if trimmed.ends_with(';') {
-                    break;
-                }
-                continue;
-            }
-
-            return Some(extract_braced_block(&lines, i));
-        }
-    }
-    None
-}
-
 /// Shared helper: extract a brace-delimited block starting at `start_idx`.
 fn extract_braced_block(lines: &[&str], start_idx: usize) -> String {
     let mut result = String::new();
@@ -144,4 +108,36 @@ fn extract_braced_block(lines: &[&str], start_idx: usize) -> String {
         }
     }
     result
+}
+
+/// Check whether a line is an `impl` block header for the given type name.
+fn is_impl_for_type(line: &str, type_name: &str) -> bool {
+    if !line.starts_with("impl") {
+        return false;
+    }
+    if line.len() > 4 {
+        let fifth = line.as_bytes()[4];
+        if fifth.is_ascii_alphanumeric() || fifth == b'_' {
+            return false;
+        }
+    }
+
+    let bytes = line.as_bytes();
+    let tn_bytes = type_name.as_bytes();
+    let tn_len = tn_bytes.len();
+
+    let mut i = 4;
+    while i + tn_len <= bytes.len() {
+        if &bytes[i..i + tn_len] == tn_bytes {
+            let before_ok =
+                i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            let after_ok = i + tn_len >= bytes.len()
+                || !(bytes[i + tn_len].is_ascii_alphanumeric() || bytes[i + tn_len] == b'_');
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }

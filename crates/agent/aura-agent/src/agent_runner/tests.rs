@@ -23,32 +23,6 @@ fn configure_loop_config_maps_all_fields() {
 }
 
 #[test]
-fn check_repeated_error_returns_none_on_first() {
-    let result = check_repeated_error(&[], "sig1", 1, "cargo build");
-    assert!(result.is_none());
-}
-
-#[test]
-fn check_repeated_error_triggers_after_three_dupes() {
-    let prior = vec![
-        BuildFixAttemptRecord {
-            stderr: "err".into(),
-            error_signature: "sig1".into(),
-            files_changed: vec![],
-            changes_summary: String::new(),
-        },
-        BuildFixAttemptRecord {
-            stderr: "err".into(),
-            error_signature: "sig1".into(),
-            files_changed: vec![],
-            changes_summary: String::new(),
-        },
-    ];
-    let result = check_repeated_error(&prior, "sig1", 3, "cargo build");
-    assert!(result.is_some());
-}
-
-#[test]
 fn finalize_loop_result_uses_text_when_present() {
     let result = AgentLoopResult {
         total_text: "Did the thing".to_string(),

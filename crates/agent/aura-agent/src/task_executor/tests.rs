@@ -56,7 +56,6 @@ impl MockTestRunner {
                 passed: false,
                 summary: "9 passed, 1 failed".to_string(),
                 failed_tests: vec!["my_crate::tests::it_works".to_string()],
-                raw_stderr: "thread 'it_works' panicked at 'assertion failed'".to_string(),
                 ..Default::default()
             }));
         }
@@ -292,30 +291,6 @@ async fn engine_tools_and_guard_blocks_settle_through_the_inner_executor() {
             ("task_done".to_string(), "task_executor"),
             ("read_file".to_string(), "task_guard"),
         ]
-    );
-}
-
-/// Parity check after the strip: an exploring-phase executor produces
-/// the same rejection as an implementing-phase one. The submit_plan
-/// gate is gone, so the wording must not regress to phase-specific
-/// language.
-#[tokio::test]
-async fn task_done_in_exploring_phase_uses_phase_neutral_message() {
-    let executor = make_exploring_executor();
-    let calls = [task_done_call("done")];
-    let results = executor.execute(&calls).await;
-
-    assert_eq!(results.len(), 1);
-    assert!(results[0].is_error);
-    assert!(!results[0].stop_loop);
-    let body = &results[0].content;
-    assert!(
-        !body.contains("EXPLORING phase"),
-        "phase-aware rejection wording must be gone: {body}"
-    );
-    assert!(
-        body.contains("have not produced any file changes"),
-        "rejection must still tell the model to make file changes: {body}"
     );
 }
 
@@ -609,59 +584,6 @@ async fn policy_denials_do_not_count_against_error_ratio() {
     );
 }
 
-/// Build an executor stuck in [`TaskPhase::Exploring`]. Used to exercise
-/// the write/edit/delete gate without going through the real agent loop.
-fn make_exploring_executor() -> TaskToolExecutor {
-    TaskToolExecutor {
-        inner: Arc::new(NoOpInner),
-        project_folder: "/tmp/test".to_string(),
-        build_command: None,
-        test_command: Some("cargo test --workspace".to_string()),
-        test_command_override: None,
-        task_context: String::new(),
-        tracked_file_ops: Default::default(),
-        notes: Default::default(),
-        follow_ups: Default::default(),
-        stub_fix_attempts: Default::default(),
-        test_runner: Arc::new(MockTestRunner::always_pass()),
-        task_phase: Arc::new(Mutex::new(TaskPhase::Exploring)),
-        self_review: Default::default(),
-        event_tx: None,
-        no_changes_needed: Default::default(),
-        recent_tool_outcomes: Default::default(),
-        reset_explore_on_phase_change: Arc::new(AtomicBool::new(false)),
-    }
-}
-
-/// After the 2026-05 strip, the submit_plan write gate is gone:
-/// `write_file` from the `Exploring` phase must reach the inner
-/// executor (and succeed in this test since [`NoOpInner`] reports
-/// every call as a no-op success).
-#[tokio::test]
-async fn write_file_in_exploring_phase_is_not_gated() {
-    let executor = make_exploring_executor();
-    let call = ToolCallInfo {
-        id: "wf_1".into(),
-        name: "write_file".into(),
-        input: serde_json::json!({
-            "path": "src/lib.rs",
-            "content": "fn main() {}",
-        }),
-    };
-
-    let results = executor.execute(&[call]).await;
-
-    assert_eq!(results.len(), 1);
-    let r = &results[0];
-    assert!(
-        !r.is_error,
-        "write_file must reach the delegate (gate removed): {}",
-        r.content
-    );
-    let ops = executor.tracked_file_ops.lock().await;
-    assert_eq!(ops.len(), 1, "write_file should record a file op");
-}
-
 #[tokio::test]
 async fn submit_plan_resets_outcome_window() {
     let executor = TaskToolExecutor {
@@ -676,7 +598,7 @@ async fn submit_plan_resets_outcome_window() {
         follow_ups: Default::default(),
         stub_fix_attempts: Default::default(),
         test_runner: Arc::new(MockTestRunner::always_pass()),
-        task_phase: Arc::new(Mutex::new(TaskPhase::Exploring)),
+        task_phase: Arc::new(Mutex::new(TaskPhase::default())),
         self_review: Default::default(),
         event_tx: None,
         no_changes_needed: Default::default(),
@@ -914,10 +836,9 @@ async fn resolve_test_command_falls_back_to_inferred_default() {
 // Phase-reset handshake tests
 // ------------------------------------------------------------------
 
-/// Build an executor stuck in [`TaskPhase::Exploring`] and wired to a
-/// caller-supplied `Arc<AtomicBool>` so the test can inspect the
-/// reset-signal flip directly.
-fn make_exploring_executor_with_signal(signal: Arc<AtomicBool>) -> TaskToolExecutor {
+/// Build an executor wired to a caller-supplied `Arc<AtomicBool>` so the
+/// test can inspect the reset-signal flip directly.
+fn make_executor_with_signal(signal: Arc<AtomicBool>) -> TaskToolExecutor {
     TaskToolExecutor {
         inner: Arc::new(NoOpInner),
         project_folder: "/tmp/test".to_string(),
@@ -930,7 +851,7 @@ fn make_exploring_executor_with_signal(signal: Arc<AtomicBool>) -> TaskToolExecu
         follow_ups: Default::default(),
         stub_fix_attempts: Default::default(),
         test_runner: Arc::new(MockTestRunner::always_pass()),
-        task_phase: Arc::new(Mutex::new(TaskPhase::Exploring)),
+        task_phase: Arc::new(Mutex::new(TaskPhase::default())),
         self_review: Default::default(),
         event_tx: None,
         no_changes_needed: Default::default(),
@@ -1066,7 +987,7 @@ async fn write_file_then_task_done_succeeds_without_submit_plan() {
 #[tokio::test]
 async fn submit_plan_flips_reset_signal() {
     let signal = Arc::new(AtomicBool::new(false));
-    let executor = make_exploring_executor_with_signal(Arc::clone(&signal));
+    let executor = make_executor_with_signal(Arc::clone(&signal));
 
     let plan_call = ToolCallInfo {
         id: "sp_1".into(),
@@ -1092,7 +1013,7 @@ async fn submit_plan_flips_reset_signal() {
 #[tokio::test]
 async fn invalid_plan_does_not_flip_reset_signal() {
     let signal = Arc::new(AtomicBool::new(false));
-    let executor = make_exploring_executor_with_signal(Arc::clone(&signal));
+    let executor = make_executor_with_signal(Arc::clone(&signal));
 
     let plan_call = ToolCallInfo {
         id: "sp_1".into(),

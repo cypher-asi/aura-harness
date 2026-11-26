@@ -1,10 +1,9 @@
-//! High-level agent execution: agentic task, chat, and shell-task runners.
+//! High-level agent execution: agentic task and chat runners.
 //!
 //! `AgentRunner` combines task context setup, agent loop configuration, and
 //! result processing into a convenient orchestration layer built on top of
 //! [`AgentLoop`].
 
-use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,9 +27,6 @@ use crate::task_context;
 use crate::task_executor::TaskToolExecutor;
 use crate::turn_config::{classify_task_complexity, resolve_simple_model, TaskComplexity};
 use crate::types::{AgentLoopResult, AgentToolExecutor};
-use crate::verify::{
-    auto_correct_build_command, normalize_error_signature, run_build_command, BuildFixAttemptRecord,
-};
 
 // ---------------------------------------------------------------------------
 // Internal call-shape helpers
@@ -127,7 +123,6 @@ pub struct FollowUpSuggestion {
 #[derive(Debug, Clone)]
 pub struct AgentRunnerConfig {
     pub max_agentic_iterations: usize,
-    pub max_shell_task_retries: u32,
     /// Explicit selected effort, independent of the response token allowance.
     pub reasoning_effort: Option<aura_model::ThinkingEffort>,
     pub stream_timeout_secs: u64,
@@ -210,7 +205,6 @@ impl AgentRunnerConfig {
         let model = model.into();
         Self {
             max_agentic_iterations: aura_core_types::MAX_TURNS as usize,
-            max_shell_task_retries: 4,
             reasoning_effort: None,
             // Matches the reasoner's default reqwest request timeout
             // (300s / `AURA_MODEL_TIMEOUT_MS`) so the outer `timeout()`
@@ -242,16 +236,6 @@ impl AgentRunnerConfig {
     #[must_use]
     pub fn with_simple_model(mut self, simple: impl Into<String>) -> Self {
         self.simple_model = simple.into();
-        self
-    }
-
-    /// Set the `early_test_oracle` switch. Task-shaped automatons
-    /// (`TaskRunAutomaton`, `DevLoopAutomaton`) call this from their
-    /// dispatch JSON parser; chat / shell / generic runners leave the
-    /// default (`false`) in place.
-    #[must_use]
-    pub fn with_early_test_oracle(mut self, enabled: bool) -> Self {
-        self.early_test_oracle = enabled;
         self
     }
 }
@@ -287,12 +271,6 @@ pub struct AgenticTaskParams<'a> {
     /// the bundle so PR C's aura-os populator can flip a single field
     /// and have identity flow into the model-facing prompt.
     pub agent: Option<&'a AgentInfo<'a>>,
-}
-
-/// Context for a shell task execution.
-pub struct ShellTaskParams<'a> {
-    pub command: &'a str,
-    pub project_root: &'a Path,
 }
 
 /// Configuration for task-aware tracking in [`AgentRunner::execute_task_tracked`].
@@ -617,79 +595,6 @@ impl AgentRunner {
             .run_with_events(provider, executor, messages, tools, event_tx, cancel)
             .await
     }
-
-    /// Execute a shell task with automatic retry on failure.
-    pub async fn execute_shell_task(
-        &self,
-        params: &ShellTaskParams<'_>,
-        event_tx: Option<&mpsc::Sender<AgentLoopEvent>>,
-    ) -> Result<TaskExecutionResult, crate::AgentError> {
-        let command = auto_correct_build_command(params.command)
-            .unwrap_or_else(|| params.command.to_string());
-        let max_attempts = self.config.max_shell_task_retries;
-        let mut prior: Vec<BuildFixAttemptRecord> = Vec::new();
-
-        for attempt in 1..=max_attempts {
-            if let Some(tx) = event_tx {
-                let _ = tx.try_send(AgentLoopEvent::TextDelta(format!(
-                    "Running: {command} (attempt {attempt}/{max_attempts})\n",
-                )));
-            }
-
-            let result = run_build_command(params.project_root, &command, None, None)
-                .await
-                .map_err(|e| crate::AgentError::BuildFailed(e.to_string()))?;
-
-            if result.success {
-                let notes = format!(
-                    "Command `{}` succeeded on attempt {attempt}.\n{}",
-                    command, result.stdout,
-                );
-                if let Some(tx) = event_tx {
-                    let _ = tx.try_send(AgentLoopEvent::TextDelta(notes.clone()));
-                }
-                return Ok(TaskExecutionResult {
-                    notes,
-                    files_already_applied: false,
-                    ..TaskExecutionResult::default()
-                });
-            }
-
-            let detail = if result.stderr.is_empty() {
-                &result.stdout
-            } else {
-                &result.stderr
-            };
-
-            if let Some(tx) = event_tx {
-                let _ = tx.try_send(AgentLoopEvent::TextDelta(format!(
-                    "Command failed (attempt {attempt}):\n{detail}\n",
-                )));
-            }
-
-            if let Some(err) = check_repeated_error(
-                &prior,
-                &normalize_error_signature(detail),
-                attempt,
-                &command,
-            ) {
-                return Err(crate::AgentError::BuildFailed(err.to_string()));
-            }
-
-            if attempt < max_attempts {
-                prior.push(BuildFixAttemptRecord {
-                    stderr: detail.clone(),
-                    error_signature: normalize_error_signature(detail),
-                    files_changed: Vec::new(),
-                    changes_summary: String::new(),
-                });
-            }
-        }
-
-        Err(crate::AgentError::BuildFailed(format!(
-            "command `{command}` failed after {max_attempts} attempts"
-        )))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -761,7 +666,7 @@ pub fn configure_loop_config(
 /// Stripped (2026-05): historically this returned the full
 /// project/spec/task header plus a 160 KB bundle of workspace map,
 /// type defs, codebase snapshot, and dep-API surface (capped via
-/// `task_context::MAX_TASK_CONTEXT_CHARS`). On every `get_task_context`
+/// `aura_config::MAX_TASK_CONTEXT_CHARS`). On every `get_task_context`
 /// call the agent received ~40 K tokens of pre-bundled material; once
 /// compaction redacted the older copy the model called the tool again
 /// and the conversation thrashed. The agent already has
@@ -840,34 +745,6 @@ fn finalize_loop_result(result: AgentLoopResult) -> TaskExecutionResult {
         files_already_applied: true,
         messages,
     }
-}
-
-/// Check if the same error signature is repeating across fix attempts.
-///
-/// Returns an error if the same pattern has appeared 3+ consecutive times.
-pub fn check_repeated_error(
-    prior: &[BuildFixAttemptRecord],
-    current_sig: &str,
-    attempt: u32,
-    command: &str,
-) -> Option<anyhow::Error> {
-    let consecutive_dupes = prior
-        .iter()
-        .rev()
-        .take_while(|a| a.error_signature == current_sig)
-        .count();
-    if consecutive_dupes >= 2 {
-        tracing::info!(
-            attempt,
-            "same shell error pattern repeated {} times, aborting fix loop",
-            consecutive_dupes + 1,
-        );
-        return Some(anyhow::anyhow!(
-            "command `{command}` keeps failing with the same error after {} attempts",
-            consecutive_dupes + 1,
-        ));
-    }
-    None
 }
 
 #[cfg(test)]

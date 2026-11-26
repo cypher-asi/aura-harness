@@ -6,15 +6,9 @@
 //! is now optional planning metadata — it still records the plan and resets
 //! the rolling-outcome window, but is no longer required for a task to reach
 //! the implement phase.
-//
-// `Exploring` is preserved in the enum so historical traces, telemetry, and
-// the `validate_execution` `reached_implementing` check keep round-tripping;
-// nothing in the live code path constructs it any more.
-#![allow(dead_code)]
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskPhase {
-    Exploring,
     Implementing { plan: TaskPlan },
 }
 
@@ -192,10 +186,8 @@ mod tests {
         // produces file ops, regardless of whether `submit_plan` ran.
         // Tests in the dev-loop validation suite rely on this default
         // matching the production executor's initial phase.
-        match TaskPhase::default() {
-            TaskPhase::Implementing { plan } => assert_eq!(plan, TaskPlan::empty()),
-            TaskPhase::Exploring => panic!("default phase must be Implementing"),
-        }
+        let TaskPhase::Implementing { plan } = TaskPhase::default();
+        assert_eq!(plan, TaskPlan::empty());
     }
 
     #[test]

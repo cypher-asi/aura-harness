@@ -1,4 +1,4 @@
-//! Build/test fix attempt tracking and error reference extraction.
+//! Error reference extraction from compiler output.
 
 use std::sync::LazyLock;
 
@@ -56,14 +56,6 @@ static LOC_RE: LazyLock<Regex> =
 )]
 static ARG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"takes (\d+) arguments? but (\d+)").expect("static regex"));
-
-/// Tracks a single build-fix attempt for retry history prompts.
-pub struct BuildFixAttemptRecord {
-    pub stderr: String,
-    pub error_signature: String,
-    pub files_changed: Vec<String>,
-    pub changes_summary: String,
-}
 
 /// Extract type names, method references, field mismatches, and source
 /// locations from compiler error output.

@@ -1059,7 +1059,7 @@ The following operations intentionally do NOT route through `Kernel::process_*`:
 | Operation | Rationale |
 |---|---|
 | Message history management (`Vec<Message>` mutations in AgentLoop) | Internal orchestration state. The kernel records inputs (`UserPrompt`) and outputs (`AgentMsg`). |
-| Read-only file operations (`workspace_map`, `file_walkers`, `error_context`, `prompts`) | No state mutation, no external side effect. |
+| Read-only file operations (`error_context`, `stub_detection`, `prompts`) | No state mutation, no external side effect. |
 | Infrastructure bootstrap (`RocksStore::open`, `create_dir_all` for data dirs) | One-time setup, not a runtime state transition. |
 | Server listeners (`TcpListener::bind`) | Inbound edge, not an outbound state change. |
 | Interactive PTY ([`crates/surface/aura-node/src/gateway/terminal_ws.rs`](../crates/surface/aura-node/src/gateway/terminal_ws.rs)) | User-driven interactive shell behind `/ws/terminal`; different execution model. |

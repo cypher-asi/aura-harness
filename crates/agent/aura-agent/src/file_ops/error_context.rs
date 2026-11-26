@@ -66,47 +66,6 @@ pub fn resolve_error_context(base_path: &Path, refs: &ErrorReferences) -> String
     output
 }
 
-/// Read the actual source files where compiler errors occur (from
-/// `ErrorReferences.source_locations`), deduplicated by file path.
-pub fn resolve_error_source_files(
-    base_path: &Path,
-    refs: &ErrorReferences,
-    budget: usize,
-) -> String {
-    if refs.source_locations.is_empty() {
-        return String::new();
-    }
-
-    let mut seen = HashSet::new();
-    let mut output = String::from("## Error Source Files\n\n");
-    let initial_len = output.len();
-    let mut remaining = budget;
-
-    for (file, _line) in &refs.source_locations {
-        if !seen.insert(file.clone()) {
-            continue;
-        }
-        let full = base_path.join(file);
-        if validate_path(base_path, &full).is_err() {
-            continue;
-        }
-        let Ok(content) = std::fs::read_to_string(&full) else {
-            continue;
-        };
-        let section = format!("--- {file} ---\n{content}\n\n");
-        if section.len() > remaining {
-            break;
-        }
-        output.push_str(&section);
-        remaining = remaining.saturating_sub(section.len());
-    }
-
-    if output.len() <= initial_len {
-        return String::new();
-    }
-    output
-}
-
 pub fn find_type_sources(
     base_path: &Path,
     type_name: &str,
