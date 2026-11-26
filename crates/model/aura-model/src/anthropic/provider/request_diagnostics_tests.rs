@@ -1,4 +1,15 @@
+use super::diagnostics::{
+    format_thinking_label, sanitize_filename_segment, stable_hash_hex, summarize_anthropic_request,
+};
+use super::errors::extract_waf_request_id_from_body;
+use super::request::build_api_request;
+use super::waf::{
+    defang_waf_command_patterns, replace_all_subslice, serialize_request_body, WafSafeFormatter,
+};
 use super::*;
+use crate::anthropic::ReasoningOrigin;
+use crate::ThinkingEffort;
+use serde::Serialize;
 use serde_json::json;
 
 #[test]

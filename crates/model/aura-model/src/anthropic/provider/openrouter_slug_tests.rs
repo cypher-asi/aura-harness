@@ -1,4 +1,4 @@
-use super::AnthropicProvider;
+use crate::anthropic::AnthropicProvider;
 
 #[test]
 fn claude_on_openrouter_counts_as_anthropic() {

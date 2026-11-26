@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::error::ReasonerError;
 use crate::types::{Message, ProviderTrace, Role, StopReason, Usage};

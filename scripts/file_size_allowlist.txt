@@ -55,7 +55,6 @@ crates/exec/aura-exec-tools/src/resolver_tests.rs
 crates/exec/aura-exec-tools/src/web/html.rs
 crates/exec/aura-exec-tools/src/web/search.rs
 crates/model/aura-model/src/anthropic/convert.rs
-crates/model/aura-model/src/anthropic/provider.rs
 crates/model/aura-model/src/anthropic/provider/emergency_body_cap_tests.rs
 crates/model/aura-model/src/anthropic/provider/retry_tests.rs
 crates/model/aura-model/src/anthropic/sse/tests.rs
