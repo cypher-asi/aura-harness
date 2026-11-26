@@ -7,7 +7,6 @@ mod agent_views;
 mod apps;
 mod areas;
 pub(crate) mod bench_progress;
-pub mod benchmarks;
 pub(crate) mod channel_form;
 mod chat_tabs;
 mod commands;
@@ -75,7 +74,10 @@ use crate::{
     input::InputHistory,
     renderer::{ChatLineCache, GroupState},
 };
-pub use apps::{AgentsTab, ArchiveRow};
+pub use apps::{
+    AgentsTab, ArchiveRow, BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER,
+    BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
+};
 pub use chat_tabs::ChatTab;
 pub(crate) use context_menu::{MenuTarget, SubmenuEntry};
 pub use context_menu::{WorkspaceMove, WorkspaceTarget};
@@ -529,7 +531,7 @@ pub struct App {
     /// Flow between agents shown by the chat panel's GRAPH tab
     pub(super) flow: flow::FlowState,
     /// Benchmarks shown by the chat panel's BENCH tab
-    pub(super) bench: benchmarks::BenchState,
+    pub(super) bench: BenchState,
     /// Run log shown by the chat panel's LOG tab
     pub(super) log: run_log::LogState,
     /// Text to copy after the next frame instead of the selection
@@ -1262,7 +1264,7 @@ impl App {
             list_places_due: None,
             pending_graph_node: None,
             flow: flow::FlowState::default(),
-            bench: benchmarks::BenchState::default(),
+            bench: BenchState::default(),
             log: run_log::LogState::default(),
             copy_pending_text: None,
             copy_label: None,

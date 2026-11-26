@@ -336,7 +336,7 @@ impl App {
         match (picked, picker.target()) {
             (Some(id), super::PickerTarget::Session) => self.choose_model(&id),
             (Some(id), target) => {
-                if let Some(field) = super::benchmarks::FormField::of_picker(target) {
+                if let Some(field) = super::FormField::of_picker(target) {
                     self.pick_bench_model(field, &id);
                 }
             }

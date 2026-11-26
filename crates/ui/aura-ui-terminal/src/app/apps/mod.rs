@@ -23,11 +23,16 @@
 //! key, a click, a hover or the wheel is handed to the app in front here.
 
 mod archive;
+mod bench;
 mod channels;
 mod projects;
 mod roster;
 
 pub use archive::ArchiveRow;
+pub use bench::{
+    BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST,
+    DIFFICULTIES,
+};
 pub(super) use channels::ChannelState;
 
 use super::{contains, tab_at, tab_bar::TabLayout, App, HoverTarget};

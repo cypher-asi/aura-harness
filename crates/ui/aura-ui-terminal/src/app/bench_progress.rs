@@ -10,8 +10,7 @@
 //! it, on its `×` closes it, on the toggle folds or opens the panel, and
 //! anywhere else on it opens the benchmark in the BENCH tab.
 
-use super::benchmarks::BenchMode;
-use super::{App, ChatTab};
+use super::{App, BenchMode, ChatTab};
 use crate::events::BenchView;
 use crossterm::event::{MouseButton, MouseEventKind};
 use ratatui::layout::Rect;

@@ -215,7 +215,7 @@ fn render_model_selector(frame: &mut Frame, app: &mut App, theme: &Theme) {
         crate::app::PickerTarget::Session => " Select model ".to_string(),
         crate::app::PickerTarget::BenchDifficulty { arm, difficulty } => format!(
             " Model for {} work · arm {} ",
-            crate::app::benchmarks::DIFFICULTIES
+            crate::app::DIFFICULTIES
                 .get(difficulty)
                 .copied()
                 .unwrap_or("medium"),

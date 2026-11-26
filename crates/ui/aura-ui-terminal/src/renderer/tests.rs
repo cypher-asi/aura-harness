@@ -4277,8 +4277,7 @@ fn test_a_selection_dragged_past_a_record_scrolls_it() {
 
 #[test]
 fn test_clicking_a_difficulty_row_then_a_model_picks_it_from_the_selector() {
-    use crate::app::benchmarks::BY_DIFFICULTY;
-    use crate::app::{AppState, PickerTarget};
+    use crate::app::{AppState, PickerTarget, BY_DIFFICULTY};
     use crate::events::{ModelOptionView, UiCommand};
     use crossterm::event::{
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,

@@ -3,7 +3,7 @@
 
 use super::chrome::body_block;
 use super::text::display_width;
-use crate::app::benchmarks::{
+use crate::app::{
     BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST,
 };
 use crate::events::{
@@ -2728,7 +2728,7 @@ mod tests {
 
     #[test]
     fn a_by_difficulty_arm_shows_a_row_per_difficulty() {
-        use crate::app::benchmarks::BY_DIFFICULTY;
+        use crate::app::BY_DIFFICULTY;
         let theme = Theme::default();
         let mut app = App::new();
         app.bench_mut().form.b.clear();
