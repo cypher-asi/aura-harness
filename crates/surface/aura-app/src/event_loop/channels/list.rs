@@ -82,6 +82,7 @@ fn summarize(
         coordinator_id,
         project,
         archived: channel.archived,
+        placement: placement_view(channel.placement),
     }
 }
 

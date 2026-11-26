@@ -12,11 +12,19 @@ pub(crate) enum ChannelField {
     Description,
     /// The project the channel's agents work in
     Project,
+    /// Where the members the channel starts run
+    Placement,
 }
 
 impl ChannelField {
     /// Every field, top to bottom.
-    pub(crate) const ALL: [Self; 4] = [Self::Slug, Self::Title, Self::Description, Self::Project];
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Slug,
+        Self::Title,
+        Self::Description,
+        Self::Project,
+        Self::Placement,
+    ];
 
     /// What the field's label reads.
     pub(crate) const fn label(self) -> &'static str {
@@ -25,6 +33,7 @@ impl ChannelField {
             Self::Title => "Title",
             Self::Description => "Description",
             Self::Project => "Project",
+            Self::Placement => "Agents run",
         }
     }
 
@@ -34,7 +43,7 @@ impl ChannelField {
             Self::Slug => Some(0),
             Self::Title => Some(1),
             Self::Description => Some(2),
-            Self::Project => None,
+            Self::Project | Self::Placement => None,
         }
     }
 
@@ -43,16 +52,18 @@ impl ChannelField {
             Self::Slug => Self::Title,
             Self::Title => Self::Description,
             Self::Description => Self::Project,
-            Self::Project => Self::Slug,
+            Self::Project => Self::Placement,
+            Self::Placement => Self::Slug,
         }
     }
 
     pub(super) const fn previous(self) -> Self {
         match self {
-            Self::Slug => Self::Project,
+            Self::Slug => Self::Placement,
             Self::Title => Self::Slug,
             Self::Description => Self::Title,
             Self::Project => Self::Description,
+            Self::Placement => Self::Project,
         }
     }
 }

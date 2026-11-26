@@ -57,13 +57,18 @@ fn an_empty_title_becomes_the_slug() {
     form.insert("   ");
     assert!(matches!(
         form.submission(),
-        Some(UiEvent::CreateChannel { slug, title, description, project_id: None })
-            if slug == "zode" && title == "zode" && description.is_empty()
+        Ok(UiEvent::CreateChannel {
+            slug,
+            title,
+            description,
+            project_id: None,
+            placement: PlacementView::Local,
+        }) if slug == "zode" && title == "zode" && description.is_empty()
     ));
 }
 
 #[test]
-fn tab_order_wraps_both_ways_through_the_project() {
+fn tab_order_wraps_both_ways_through_the_project_and_where_agents_run() {
     for field in ChannelField::ALL {
         assert_eq!(field.next().previous(), field);
     }
@@ -79,11 +84,54 @@ fn tab_order_wraps_both_ways_through_the_project() {
             ChannelField::Title,
             ChannelField::Description,
             ChannelField::Project,
+            ChannelField::Placement,
             ChannelField::Slug
         ]
     );
     form.move_focus(false);
-    assert_eq!(form.focus(), ChannelField::Project);
+    assert_eq!(form.focus(), ChannelField::Placement);
+}
+
+#[test]
+fn where_agents_run_flips_both_ways_and_the_cloud_needs_a_project() {
+    let mut form = ChannelForm::create(&[project("p1", "alpha")], None);
+    form.insert("zode");
+    form.focus = ChannelField::Placement;
+    assert_eq!(form.placement(), PlacementView::Local, "agents start local");
+    for (code, placement) in [
+        (KeyCode::Right, PlacementView::Cloud),
+        (KeyCode::Left, PlacementView::Local),
+        (KeyCode::Char(' '), PlacementView::Cloud),
+    ] {
+        assert!(form.edit_key(KeyEvent::from(code)));
+        assert_eq!(form.placement(), placement, "{code:?}");
+    }
+    assert!(!form.edit_key(KeyEvent::from(KeyCode::Char('a'))));
+    form.insert("pasted");
+    assert!(form.fields.iter().all(|field| field.text != "pasted"));
+
+    assert!(form.cloud_without_project());
+    assert_eq!(form.submission().err(), Some(ChannelField::Project));
+    form.focus = ChannelField::Project;
+    assert!(form.edit_key(KeyEvent::from(KeyCode::Right)));
+    assert!(!form.cloud_without_project());
+    assert!(matches!(
+        form.submission(),
+        Ok(UiEvent::CreateChannel {
+            project_id: Some(project),
+            placement: PlacementView::Cloud,
+            ..
+        }) if project == "p1"
+    ));
+}
+
+#[test]
+fn a_bad_slug_is_fixed_before_the_project() {
+    let mut form = ChannelForm::create(&[], None);
+    form.placement = PlacementView::Cloud;
+    assert_eq!(form.submission().err(), Some(ChannelField::Slug));
+    form.insert("zode");
+    assert_eq!(form.submission().err(), Some(ChannelField::Project));
 }
 
 #[test]
@@ -149,11 +197,49 @@ fn editing_keeps_the_channels_own_project_and_skips_the_slug() {
     assert_eq!(chosen(&form), Some("p9"), "kept though not listed");
     form.set_projects(&[]);
     assert_eq!(chosen(&form), Some("p9"));
-    form.focus = ChannelField::Project;
+    form.focus = ChannelField::Placement;
     form.move_focus(true);
     assert_eq!(form.focus(), ChannelField::Title, "Tab skips the slug");
     form.move_focus(false);
-    assert_eq!(form.focus(), ChannelField::Project);
+    assert_eq!(form.focus(), ChannelField::Placement);
+}
+
+#[test]
+fn editing_starts_on_where_the_channels_agents_run_and_sends_it_back() {
+    let channel = ChannelSummary {
+        id: "c1".into(),
+        slug: "zode".into(),
+        title: "Zode".into(),
+        project: Some(view("p9", "own")),
+        placement: PlacementView::Cloud,
+        ..ChannelSummary::default()
+    };
+    let mut form = ChannelForm::edit(&channel, &[]);
+    assert_eq!(form.placement(), PlacementView::Cloud);
+    assert!(matches!(
+        form.submission(),
+        Ok(UiEvent::UpdateChannel {
+            placement: PlacementView::Cloud,
+            ..
+        })
+    ));
+
+    // Clearing the project of a cloud channel is refused until it runs
+    // its agents locally.
+    form.focus = ChannelField::Project;
+    assert!(form.edit_key(KeyEvent::from(KeyCode::Right)));
+    assert_eq!(chosen(&form), None);
+    assert_eq!(form.submission().err(), Some(ChannelField::Project));
+    form.focus = ChannelField::Placement;
+    assert!(form.edit_key(KeyEvent::from(KeyCode::Left)));
+    assert!(matches!(
+        form.submission(),
+        Ok(UiEvent::UpdateChannel {
+            project_id: None,
+            placement: PlacementView::Local,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -168,7 +254,7 @@ fn an_empty_title_in_an_edit_keeps_the_old_one() {
     form.fields[1] = FieldText::default();
     assert!(matches!(
         form.submission(),
-        Some(UiEvent::UpdateChannel { channel_id, title, project_id: None, .. })
+        Ok(UiEvent::UpdateChannel { channel_id, title, project_id: None, .. })
             if channel_id == "c1" && title == "Zode release"
     ));
 }

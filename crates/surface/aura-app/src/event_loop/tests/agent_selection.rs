@@ -100,6 +100,7 @@ async fn a_channel_opens_with_its_posts_before_its_chat_and_loads_it_once() {
         title: "Zode".to_string(),
         description: String::new(),
         project_id: None,
+        placement: aura_ui::host::PlacementView::Local,
     };
     handle_ui_event(&mut state, create, &links).await;
     let sent = drain(&mut commands);

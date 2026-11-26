@@ -6,19 +6,17 @@ use crate::event_loop::turns::Prompt;
 
 /// Prompts and commands for a cloud agent, or for one being moved.
 /// Returns the work when it is for the local kernel after all. Work for
-/// a cloud agent with a turn running waits in its queue.
+/// a moving agent, or a cloud agent with a turn running, waits in its
+/// queue.
 pub(in crate::event_loop) async fn submit(
     state: &mut LoopState<'_>,
     agent: AgentId,
     work: Work,
 ) -> Option<Work> {
     if state.cloud.is_moving(agent) {
-        system(
-            state,
-            agent,
-            "This agent is moving between machines; send it again when the move is done.",
-        )
-        .await;
+        info!(%agent, "Agent is moving between machines; queueing work");
+        state.queued.push_back(agent, work);
+        crate::event_loop::hud::send_queued(state, agent).await;
         return None;
     }
     if state.cloud.take_stale(agent) {
@@ -42,11 +40,13 @@ pub(in crate::event_loop) async fn submit(
     None
 }
 
-/// Start the work queued for cloud agent `agent`, an item at a time while
-/// it has no turn running: one that starts none (a command, a refusal)
-/// leaves the next free to.
+/// Start the work queued for `agent` where it runs now, through
+/// [`submit`]: on its machine an item at a time while it has no turn
+/// running, as one that starts none (a command, a refusal) leaves the
+/// next free to; else the first item on this computer. Nothing starts
+/// while it moves.
 pub(in crate::event_loop) async fn start_queued(state: &mut LoopState<'_>, agent: AgentId) {
-    while !state.cloud.is_running(agent) {
+    while !state.cloud.is_running(agent) && !state.cloud.is_moving(agent) {
         let Some(work) = state.queued.pop_front(agent) else {
             return;
         };

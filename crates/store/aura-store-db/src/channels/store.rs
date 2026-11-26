@@ -25,6 +25,9 @@ fn apply_update(record: &mut ChannelRecord, update: ChannelUpdate) {
     if let Some(project_id) = update.project_id {
         record.project_id = project_id;
     }
+    if let Some(placement) = update.placement {
+        record.placement = placement;
+    }
 }
 
 impl ChannelStore {
@@ -97,6 +100,7 @@ impl ChannelStore {
             updated_at: now,
             archived: false,
             project_id: new.project_id,
+            placement: new.placement,
         };
         let member = MemberRecord {
             agent_id: agent,
@@ -219,8 +223,8 @@ impl ChannelStore {
         Ok(channels)
     }
 
-    /// Change the title, description and/or project of channel `id`,
-    /// stamping `updated_at` with `now`.
+    /// Change the title, description, project and/or placement of channel
+    /// `id`, stamping `updated_at` with `now`.
     ///
     /// # Errors
     /// [`ChannelError::InvalidProjectId`] for an empty or blank project

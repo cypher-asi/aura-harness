@@ -69,7 +69,7 @@ pub(super) fn new_channel(slug: &str) -> NewChannel {
         slug: slug.to_string(),
         title: format!("Channel {slug}"),
         description: format!("about {slug}"),
-        project_id: None,
+        ..NewChannel::default()
     }
 }
 

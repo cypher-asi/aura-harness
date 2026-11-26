@@ -182,6 +182,71 @@ async fn assigning_to_a_member_by_code_reuses_it() {
 }
 
 #[tokio::test]
+async fn each_assignment_titles_its_member_with_what_it_is_on() {
+    let mut fixture = fixture("unused");
+    let _notices = fixture.hub.take_notices();
+    let channel = create_channel(&fixture.hub, new_channel("site", None))
+        .await
+        .unwrap();
+    let coordinator = channel.coordinator;
+    let untitled = channels::add_agent(&fixture.hub, coordinator, "reviewer")
+        .unwrap()
+        .agent_id();
+    assert!(
+        fixture.hub.titles_turn(untitled, true),
+        "a typed prompt titles an untitled member"
+    );
+    assert!(
+        !fixture.hub.titles_turn(untitled, false),
+        "a notice doesn't"
+    );
+    assert!(!fixture.hub.titles_turn(coordinator, true));
+    let first = start(&mut fixture, coordinator, "reviewer").await;
+    let second = start(&mut fixture, coordinator, "reviewer").await;
+    let title = |agent: AgentId| {
+        let registry = lock(&fixture.hub.registry);
+        let agent = registry.find(agent).unwrap();
+        (agent.title.clone(), agent.display_name().into_owned())
+    };
+    let kick_off = (Some("Kick-off".to_string()), "Kick-off".to_string());
+    assert_eq!(title(first), kick_off, "the subject titles a new member");
+    assert_eq!(title(second), kick_off);
+    assert_ne!(first, second, "each `agent` assignment starts an instance");
+
+    let code = code_of(&fixture, first);
+    let args = AssignArgs {
+        subject: "  \"Review the header.\" ".to_string(),
+        ..to_member(&code, "Check the header links.")
+    };
+    assign(&fixture.hub, coordinator, args).await.unwrap();
+    let header = "Review the header".to_string();
+    assert_eq!(title(first), (Some(header.clone()), header));
+    assert_eq!(title(second), kick_off, "instances keep their own titles");
+
+    assign(
+        &fixture.hub,
+        coordinator,
+        to_member(&code, "\n  Now the   footer links\nand the icons."),
+    )
+    .await
+    .unwrap();
+    let footer = "Now the footer links".to_string();
+    assert_eq!(
+        title(first),
+        (Some(footer.clone()), footer),
+        "without a subject, the brief's first line titles it"
+    );
+    fixture.drain_commands();
+    let registry = lock(&fixture.hub.registry);
+    assert_eq!(registry.find(coordinator).unwrap().title, None);
+    assert_eq!(
+        registry.find(first).unwrap().definition.as_deref(),
+        Some("reviewer"),
+        "the title is the instance's, not the permanent agent's"
+    );
+}
+
+#[tokio::test]
 async fn only_a_coordinator_assigns_and_only_work_to_real_members() {
     let mut fixture = fixture("unused");
     let channel = create_channel(&fixture.hub, new_channel("site", None))
@@ -225,4 +290,42 @@ async fn only_a_coordinator_assigns_and_only_work_to_real_members() {
         assert!(error.contains(expected), "{expected}: {error}");
     }
     assert_eq!(lock(&fixture.hub.registry).agents().len(), before);
+}
+
+#[tokio::test]
+async fn new_members_of_a_cloud_channel_wait_to_start_in_the_cloud() {
+    use aura_store_db::{ChannelPlacement, NewChannel};
+    let mut fixture = fixture("unused");
+    let in_cloud = NewChannel {
+        placement: ChannelPlacement::Cloud,
+        ..new_channel("site", None)
+    };
+    let cloud = create_channel(&fixture.hub, in_cloud).await.unwrap();
+    let local = create_channel(&fixture.hub, new_channel("docs", None))
+        .await
+        .unwrap();
+    assert!(
+        lock(&fixture.hub.cloud_starts).is_empty(),
+        "coordinators stay here"
+    );
+
+    let first = start(&mut fixture, cloud.coordinator, "reviewer").await;
+    let second = start(&mut fixture, cloud.coordinator, "reviewer").await;
+    let here = start(&mut fixture, local.coordinator, "reviewer").await;
+    let waiting = lock(&fixture.hub.cloud_starts).clone();
+    assert_eq!(waiting, [first, second].into_iter().collect());
+    assert!(!waiting.contains(&here));
+
+    // Work for a member it has starts it nowhere new.
+    let code = code_of(&fixture, first);
+    lock(&fixture.hub.cloud_starts).clear();
+    assign(
+        &fixture.hub,
+        cloud.coordinator,
+        to_member(&code, "Then the header."),
+    )
+    .await
+    .unwrap();
+    fixture.drain_commands();
+    assert!(lock(&fixture.hub.cloud_starts).is_empty());
 }

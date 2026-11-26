@@ -1,6 +1,6 @@
-//! The channel form: a centered box with the slug, title, description and
-//! project fields, the slug's inline hint, and the keys that drive it,
-//! drawn as the folder browser is.
+//! The channel form: a centered box with the slug, title, description,
+//! project and "Agents run" fields, the slug's inline hint, and the keys
+//! that drive it, drawn as the folder browser is.
 //!
 //! ```text
 //!  New channel
@@ -14,9 +14,12 @@
 //!   Project
 //!     ‹ Zode ›
 //!     ~/code/zode
+//!   Agents run
+//!     ‹ Locally ›
+//!     New members run on this computer
 //!
-//! Tab/↑↓ field  ←→ choose project
-//! Enter next, submits on Project  Ctrl+Enter submit
+//! Tab/↑↓ field  ←→ choose project, where agents run
+//! Enter next, submits on Agents run  Ctrl+Enter submit
 //! Esc cancel  Title defaults to the slug
 //! ```
 //!
@@ -27,6 +30,7 @@ use super::hud::truncate;
 use super::text::{centered_rect, display_width};
 use crate::app::channel_form::{ChannelField, ChannelForm, FormMode, SLUG_HINT};
 use crate::app::AppState;
+use crate::host::PlacementView;
 use crate::{App, Theme};
 use ratatui::{
     style::Style,
@@ -38,14 +42,25 @@ use ratatui::{
 /// Widest the box gets, border included.
 const WIDTH: u16 = 64;
 /// Rows inside the border: a label and a value per field, the slug's
-/// hint, the project's folder, a blank line and three lines of keys.
-const INNER_HEIGHT: u16 = 14;
+/// hint, the project's folder, what where agents run means, a blank line
+/// and three lines of keys.
+const INNER_HEIGHT: u16 = 17;
 /// What marks the cursor in the focused field.
 const CURSOR: &str = "█";
 /// Columns a field's value is indented by.
 const INDENT: &str = "    ";
 /// What the form says under "None".
 pub(crate) const NO_PROJECT_HINT: &str = "None — agents work in the channel's own folder";
+/// What the form says under "In the cloud" without a project.
+pub(crate) const CLOUD_NEEDS_PROJECT: &str = "Needs a project: choose one above";
+
+/// How a channel's placement reads, in the form and in INFO.
+pub(super) const fn placement_name(placement: PlacementView) -> &'static str {
+    match placement {
+        PlacementView::Local => "Locally",
+        PlacementView::Cloud => "In the cloud",
+    }
+}
 
 /// Render the form, if it is open.
 pub(super) fn render_channel_form(frame: &mut Frame, app: &App, theme: &Theme) {
@@ -66,8 +81,16 @@ pub(super) fn render_channel_form(frame: &mut Frame, app: &App, theme: &Theme) {
         lines.push(label_line(form, field, theme));
         match field {
             ChannelField::Project => {
-                lines.push(project_line(form, theme, inner_width));
+                let name = form
+                    .project()
+                    .map_or("None", |project| project.name.as_str());
+                lines.push(chooser_line(form, field, name, theme, inner_width));
                 lines.push(project_detail_line(form, theme, inner_width));
+            }
+            ChannelField::Placement => {
+                let name = placement_name(form.placement());
+                lines.push(chooser_line(form, field, name, theme, inner_width));
+                lines.push(placement_detail_line(form, theme, inner_width));
             }
             _ => lines.push(value_line(form, field, theme, inner_width)),
         }
@@ -103,8 +126,8 @@ fn key_lines(form: &ChannelForm, theme: &Theme, width: usize) -> Vec<Line<'stati
         "Esc cancel  Title defaults to the slug"
     };
     [
-        "Tab/↑↓ field  ←→ choose project",
-        "Enter next, submits on Project  Ctrl+Enter submit",
+        "Tab/↑↓ field  ←→ choose project, where agents run",
+        "Enter next, submits on Agents run  Ctrl+Enter submit",
         title_rule,
     ]
     .into_iter()
@@ -174,13 +197,16 @@ fn value_line(
     ])
 }
 
-/// The chosen project, `‹ name ›`, or `‹ None ›`; the arrows are lit
-/// while the project has the cursor.
-fn project_line(form: &ChannelForm, theme: &Theme, width: usize) -> Line<'static> {
-    let name = form
-        .project()
-        .map_or("None", |project| project.name.as_str());
-    let arrow_color = if form.focus() == ChannelField::Project {
+/// The choice `name` of chooser `field`, `‹ name ›`; the arrows are lit
+/// while the chooser has the cursor.
+fn chooser_line(
+    form: &ChannelForm,
+    field: ChannelField,
+    name: &str,
+    theme: &Theme,
+    width: usize,
+) -> Line<'static> {
+    let arrow_color = if form.focus() == field {
         theme.colors.primary
     } else {
         theme.colors.muted
@@ -206,13 +232,28 @@ fn project_detail_line(form: &ChannelForm, theme: &Theme, width: usize) -> Line<
         Some(project) => project.folder.as_str(),
         None => NO_PROJECT_HINT,
     };
+    detail_line(detail, theme.colors.muted, width)
+}
+
+/// Under where agents run, muted: what it means for the members the
+/// channel starts; in the error color while the cloud lacks a project.
+fn placement_detail_line(form: &ChannelForm, theme: &Theme, width: usize) -> Line<'static> {
+    if form.cloud_without_project() {
+        return detail_line(CLOUD_NEEDS_PROJECT, theme.colors.error, width);
+    }
+    let detail = match form.placement() {
+        PlacementView::Local => "New members run on this computer",
+        PlacementView::Cloud => "Each new member runs on a cloud machine of its own",
+    };
+    detail_line(detail, theme.colors.muted, width)
+}
+
+/// `detail` indented under a field's value, cut to `width`.
+fn detail_line(detail: &str, color: ratatui::style::Color, width: usize) -> Line<'static> {
     let room = width.saturating_sub(INDENT.len());
     Line::from(vec![
         Span::raw(INDENT),
-        Span::styled(
-            truncate(detail, room),
-            Style::default().fg(theme.colors.muted),
-        ),
+        Span::styled(truncate(detail, room), Style::default().fg(color)),
     ])
 }
 

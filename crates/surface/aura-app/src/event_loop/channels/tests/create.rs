@@ -109,6 +109,15 @@ async fn channel_prompt_gives_the_coordinator_the_channel_and_how_it_works() {
     }
     assert!(prompt.ends_with("</channel>"));
 
+    lock(&fixture.hub.registry)
+        .set_title(member, "Review the footer")
+        .unwrap();
+    let prompt = channel_prompt(&fixture.hub, channel.coordinator).unwrap();
+    assert!(
+        prompt.contains(": free, last on \"Review the footer\"\n"),
+        "a member's title says what it was on: {prompt}"
+    );
+
     let outsider = lock(&fixture.hub.registry).active().agent_id();
     assert_eq!(channel_prompt(&fixture.hub, outsider), None);
 }

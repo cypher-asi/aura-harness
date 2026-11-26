@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::PlacementView;
 
 // ========================================================================
 // Channel form and the CHANNELS tab's menu
@@ -36,6 +37,16 @@ fn form_project(app: &App) -> Option<String> {
     app.channel_form()
         .and_then(super::super::channel_form::ChannelForm::project)
         .map(|project| project.id.clone())
+}
+
+/// From the form's first field, go back past "Agents run" to the project.
+fn focus_project(app: &mut App) {
+    app.handle_key(key(KeyCode::BackTab));
+    app.handle_key(key(KeyCode::BackTab));
+    assert_eq!(
+        form_focus(app),
+        Some(super::super::channel_form::ChannelField::Project)
+    );
 }
 
 #[test]
@@ -79,7 +90,7 @@ fn test_an_invalid_slug_shows_the_hint_and_blocks_submit() {
     app.handle_key(key(KeyCode::BackTab));
     assert_eq!(
         form_focus(&app),
-        Some(super::super::channel_form::ChannelField::Project)
+        Some(super::super::channel_form::ChannelField::Placement)
     );
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.state(), AppState::ChannelForm);
@@ -110,6 +121,12 @@ fn test_a_valid_form_submits_create_channel_and_closes() {
         Some(super::super::channel_form::ChannelField::Project),
         "Enter on the description goes to the project"
     );
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(
+        form_focus(&app),
+        Some(super::super::channel_form::ChannelField::Placement),
+        "Enter on the project goes to where agents run"
+    );
     assert!(rx.try_recv().is_err(), "not submitted yet");
     app.handle_key(key(KeyCode::Enter));
 
@@ -117,10 +134,46 @@ fn test_a_valid_form_submits_create_channel_and_closes() {
     assert!(app.channel_form().is_none());
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::CreateChannel { slug, title, description, project_id: None })
-            if slug == "zode-2" && title == "Zode two" && description == "Ship it"
+        Ok(UiEvent::CreateChannel {
+            slug,
+            title,
+            description,
+            project_id: None,
+            placement: PlacementView::Local,
+        }) if slug == "zode-2" && title == "Zode two" && description == "Ship it"
     ));
     assert!(rx.try_recv().is_err(), "exactly one event");
+}
+
+#[test]
+fn test_agents_run_in_the_cloud_only_once_the_form_has_a_project() {
+    use super::super::channel_form::ChannelField;
+    let (mut app, mut rx) = app_with_channel_form_and_projects();
+    type_keys(&mut app, "zode");
+    app.handle_key(key(KeyCode::BackTab));
+    app.handle_key(key(KeyCode::Right));
+    let text = drawn_text(&mut app);
+    assert!(text.contains("‹ In the cloud ›"), "{text}");
+    assert!(text.contains("Needs a project"), "{text}");
+
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.state(), AppState::ChannelForm, "still open");
+    assert_eq!(form_focus(&app), Some(ChannelField::Project));
+    assert!(rx.try_recv().is_err(), "nothing sent");
+
+    app.handle_key(key(KeyCode::Right));
+    let text = drawn_text(&mut app);
+    assert!(!text.contains("Needs a project"), "{text}");
+    assert!(text.contains("on a cloud machine of its own"), "{text}");
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::CreateChannel {
+            project_id: Some(project),
+            placement: PlacementView::Cloud,
+            ..
+        }) if project == "p1"
+    ));
 }
 
 #[test]
@@ -138,17 +191,18 @@ fn test_tab_in_the_form_walks_every_field_through_the_project_and_wraps() {
             ChannelField::Title,
             ChannelField::Description,
             ChannelField::Project,
+            ChannelField::Placement,
             ChannelField::Slug
         ]
     );
     app.handle_key(key(KeyCode::Up));
-    assert_eq!(form_focus(&app), Some(ChannelField::Project), "Up wraps");
+    assert_eq!(form_focus(&app), Some(ChannelField::Placement), "Up wraps");
 }
 
 #[test]
 fn test_left_and_right_on_the_project_cycle_none_and_each_project() {
     let (mut app, _rx) = app_with_channel_form_and_projects();
-    app.handle_key(key(KeyCode::BackTab));
+    focus_project(&mut app);
     assert_eq!(form_project(&app), None);
     let mut forward = Vec::new();
     for _ in 0..3 {
@@ -168,12 +222,14 @@ fn test_left_and_right_on_the_project_cycle_none_and_each_project() {
 }
 
 #[test]
-fn test_enter_on_the_project_submits_the_chosen_project() {
+fn test_enter_on_agents_run_submits_the_chosen_project() {
     let (mut app, mut rx) = app_with_channel_form_and_projects();
     type_keys(&mut app, "zode-2");
-    app.handle_key(key(KeyCode::BackTab));
+    focus_project(&mut app);
     app.handle_key(key(KeyCode::Right));
     app.handle_key(key(KeyCode::Right));
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.state(), AppState::ChannelForm, "Enter goes on");
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.state(), AppState::Idle);
     assert!(matches!(
@@ -217,7 +273,7 @@ fn test_a_new_channel_from_an_agent_without_a_project_starts_on_none() {
 #[test]
 fn test_a_chosen_project_that_leaves_the_projects_list_falls_back_to_none() {
     let (mut app, _rx) = app_with_channel_form_and_projects();
-    app.handle_key(key(KeyCode::BackTab));
+    focus_project(&mut app);
     app.handle_key(key(KeyCode::Right));
     assert_eq!(form_project(&app), Some("p1".to_string()));
     app.process_command(UiCommand::SetProjects(vec![
@@ -318,15 +374,22 @@ fn test_the_edit_form_submits_update_channel_with_the_new_project() {
     app.handle_key(key(KeyCode::Left));
     assert_eq!(form_project(&app), Some("p1".to_string()));
     app.handle_key(key(KeyCode::Enter));
+    app.handle_key(key(KeyCode::Right));
+    app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.state(), AppState::Idle);
     assert!(app.channel_form().is_none());
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::UpdateChannel { channel_id, title, description, project_id: Some(project) })
-            if channel_id == "c1"
-                && title == "Zode release 2"
-                && description == "Ship the zode crate"
-                && project == "p1"
+        Ok(UiEvent::UpdateChannel {
+            channel_id,
+            title,
+            description,
+            project_id: Some(project),
+            placement: PlacementView::Cloud,
+        }) if channel_id == "c1"
+            && title == "Zode release 2"
+            && description == "Ship the zode crate"
+            && project == "p1"
     ));
     assert!(rx.try_recv().is_err(), "exactly one event");
 }
@@ -335,6 +398,7 @@ fn test_the_edit_form_submits_update_channel_with_the_new_project() {
 fn test_choosing_none_in_the_edit_form_clears_the_project() {
     let (mut app, mut rx) = app_with_projects_channel();
     open_edit_form(&mut app);
+    app.handle_key(key(KeyCode::BackTab));
     app.handle_key(key(KeyCode::BackTab));
     app.handle_key(key(KeyCode::Right));
     assert_eq!(form_project(&app), None, "after the last project is None");

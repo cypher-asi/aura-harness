@@ -36,8 +36,8 @@ pub use agents::{
 };
 pub use aura_core_types::AgentStatus;
 pub use channels::{
-    valid_slug, ChannelError, ChannelPost, ChannelRecord, ChannelStore, ChannelUpdate,
-    MemberRecord, MemberRole, NewChannel, NewPost, PostAuthor, ProjectLink,
+    valid_slug, ChannelError, ChannelPlacement, ChannelPost, ChannelRecord, ChannelStore,
+    ChannelUpdate, MemberRecord, MemberRole, NewChannel, NewPost, PostAuthor, ProjectLink,
 };
 pub use error::StoreError;
 pub use keys::{AgentMetaKey, InboxKey, KeyCodec, MetaField, RecordKey};

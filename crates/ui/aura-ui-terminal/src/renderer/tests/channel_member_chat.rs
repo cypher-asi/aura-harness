@@ -32,10 +32,12 @@ fn test_a_member_chat_is_named_in_the_chat_bar_and_its_close_button_goes_back() 
     };
     let (mut app, _rx) = channels_app_with_events();
     let rows = render_rows(&mut app, 140);
+    // The worker's status row, which hits the worker as its first does.
     let (row, column) = rows
         .iter()
         .enumerate()
-        .find_map(|(y, text)| text.find("Worker").map(|x| (y, text[..x].chars().count())))
+        .skip_while(|(_, text)| !text.contains("WK7"))
+        .find_map(|(y, text)| text.find("Idle").map(|x| (y, text[..x].chars().count())))
         .unwrap_or_else(|| panic!("no member row in:\n{}", rows.join("\n")));
     let at = |n: usize| u16::try_from(n).unwrap();
     app.handle_mouse(mouse(
@@ -53,7 +55,7 @@ fn test_a_member_chat_is_named_in_the_chat_bar_and_its_close_button_goes_back() 
         .unwrap_or_else(|| panic!("no member bar in:\n{screen}"));
     assert!(rows[bar].contains("│ Worker"), "{:?}", rows[bar]);
     assert!(rows[bar].contains('✕'), "{:?}", rows[bar]);
-    assert!(screen.contains("Message Worker"), "{screen}");
+    assert!(screen.contains("Message WK7"), "{screen}");
 
     let close = app.areas.detail_close.expect("the close button");
     app.handle_mouse(mouse(MouseEventKind::Moved, close.x, close.y));

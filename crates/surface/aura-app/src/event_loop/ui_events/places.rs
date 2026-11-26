@@ -21,12 +21,14 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
             title,
             description,
             project_id,
+            placement,
         } => {
             let new = aura_store_db::NewChannel {
                 slug,
                 title,
                 description,
                 project_id,
+                placement: channels::channel_placement(placement),
             };
             channels::handle_create(state, new).await;
         }
@@ -37,8 +39,15 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
             title,
             description,
             project_id,
+            placement,
         } => {
-            channels::handle_update(state, &channel_id, &title, &description, project_id).await;
+            let edit = channels::ChannelEdit {
+                title,
+                description,
+                project_id,
+                placement: channels::channel_placement(placement),
+            };
+            channels::handle_update(state, &channel_id, edit).await;
         }
         UiEvent::ArchiveChannel(channel_id) => channels::handle_archive(state, &channel_id).await,
         // `domain_of` routes no other event here.

@@ -3,15 +3,17 @@
 //! Its fields are a slug, a title and a description, each a line edited
 //! as the input line is (see [`edit_line`]), then the project the
 //! channel's agents work in, a chooser of "None" and every listed
-//! project, in list order.
+//! project, in list order, and where the members it starts run ("Agents
+//! run": locally or in the cloud).
 //!
 //! Keys, as the form's hint lines say:
 //!
 //! - Tab or Down goes to the next field, Shift+Tab or Up to the one
 //!   before; both wrap.
-//! - On the project, Left goes to the choice before and Right or Space to
-//!   the next one, wrapping; other typing is ignored there.
-//! - Enter goes to the next field, and on the last one (Project)
+//! - On the project and on where agents run, Left goes to the choice
+//!   before and Right or Space to the next one, wrapping; other typing is
+//!   ignored there.
+//! - Enter goes to the next field, and on the last one (Agents run)
 //!   submits. Ctrl+Enter submits from any field.
 //! - Esc closes the form and sends nothing.
 //!
@@ -21,10 +23,15 @@
 //! refused. A submit with a bad slug sends nothing and puts the cursor
 //! back in the slug. An empty title becomes the slug.
 //!
+//! Agents run in the cloud only in a project, whose folder their machines
+//! start from: a submit with "In the cloud" and no project sends nothing
+//! and puts the cursor on the project.
+//!
 //! A new channel's project starts as the one of the agent that was on
-//! screen before CHANNELS took over, when that project is listed. The
-//! choices follow the projects list while the form is open; a chosen
-//! project that drops out of it falls back to "None".
+//! screen before CHANNELS took over, when that project is listed, and its
+//! agents run locally. The choices follow the projects list while the
+//! form is open; a chosen project that drops out of it falls back to
+//! "None".
 //!
 //! Submitting a new channel sends [`UiEvent::CreateChannel`] and closes
 //! the form; the session opens the channel once it has made it.
@@ -34,12 +41,13 @@
 //! choice even when the projects list leaves it out, so saving without
 //! touching it keeps it. An empty title keeps the one the channel has.
 //! Submitting sends [`UiEvent::UpdateChannel`] with every field, so
-//! "None" clears the project.
+//! "None" clears the project. Where agents run applies to the members the
+//! channel starts from then on; the ones it has stay where they are.
 
 use super::line_edit::edit_line;
-use super::{App, AppState};
 use crate::events::{ChannelProjectView, ChannelSummary, ProjectSummary, UiEvent};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::host::PlacementView;
+use crossterm::event::{KeyCode, KeyEvent};
 pub(crate) use field::ChannelField;
 
 /// Longest slug, in characters.
@@ -96,6 +104,8 @@ pub(crate) struct ChannelForm {
     choices: Vec<ChannelProjectView>,
     /// Id of the chosen project; `None` for "None"
     project: Option<String>,
+    /// Where the members the channel starts run
+    placement: PlacementView,
     /// Field the keys go to
     focus: ChannelField,
 }
@@ -138,6 +148,7 @@ impl ChannelForm {
                 FieldText::at_end(&channel.description),
             ],
             project: channel.project.as_ref().map(|project| project.id.clone()),
+            placement: channel.placement,
             focus: ChannelField::Title,
             ..Self::default()
         };
@@ -155,7 +166,7 @@ impl ChannelForm {
         matches!(self.mode, FormMode::Edit { .. })
     }
 
-    /// Text typed into `field`; empty for the project, which is no text.
+    /// Text typed into `field`; empty for the choosers, which are no text.
     pub(crate) fn text(&self, field: ChannelField) -> &str {
         self.field(field).map_or("", |field| field.text.as_str())
     }
@@ -174,6 +185,17 @@ impl ChannelForm {
     pub(crate) fn project(&self) -> Option<&ChannelProjectView> {
         let id = self.project.as_deref()?;
         self.choices.iter().find(|choice| choice.id == id)
+    }
+
+    /// Where the members the channel starts run.
+    pub(crate) const fn placement(&self) -> PlacementView {
+        self.placement
+    }
+
+    /// Whether agents are to run in the cloud with no project to work
+    /// in, which the form refuses.
+    pub(crate) fn cloud_without_project(&self) -> bool {
+        self.placement == PlacementView::Cloud && self.project().is_none()
     }
 
     /// Whether `field` takes the cursor: all but the slug of a channel
@@ -255,13 +277,19 @@ impl ChannelForm {
     }
 
     /// Apply a key to the focused field: an editing key to a text field,
-    /// Left, Right or Space to the project. Returns whether it was one.
+    /// Left, Right or Space to a chooser. Returns whether it was one.
     fn edit_key(&mut self, key: KeyEvent) -> bool {
-        if self.focus == ChannelField::Project {
-            match key.code {
-                KeyCode::Left => self.cycle_project(false),
-                KeyCode::Right | KeyCode::Char(' ') => self.cycle_project(true),
+        if matches!(self.focus, ChannelField::Project | ChannelField::Placement) {
+            let forward = match key.code {
+                KeyCode::Left => false,
+                KeyCode::Right | KeyCode::Char(' ') => true,
                 _ => return false,
+            };
+            if self.focus == ChannelField::Project {
+                self.cycle_project(forward);
+            } else {
+                // Two choices: either way is the other one.
+                self.placement = self.placement.flipped();
             }
             return true;
         }
@@ -279,7 +307,7 @@ impl ChannelForm {
 
     /// Type `text` into the focused field at its cursor, as a paste does.
     /// Line breaks are dropped: every field is one line. Nothing goes
-    /// into the project.
+    /// into the choosers.
     fn insert(&mut self, text: &str) {
         let slug = self.focus == ChannelField::Slug;
         let Some(field) = self.field_mut(self.focus) else {
@@ -293,28 +321,34 @@ impl ChannelForm {
         }
     }
 
-    /// The event the form sends, or `None` while the slug of a new
-    /// channel is refused.
-    fn submission(&self) -> Option<UiEvent> {
+    /// The event the form sends, or the field to fix first: the slug of a
+    /// new channel while it is refused, or the project while agents are
+    /// to run in the cloud without one.
+    fn submission(&self) -> Result<UiEvent, ChannelField> {
+        if !self.is_edit() && !self.slug_is_valid() {
+            return Err(ChannelField::Slug);
+        }
+        if self.cloud_without_project() {
+            return Err(ChannelField::Project);
+        }
         let typed_title = self.text(ChannelField::Title).trim();
         let description = self.text(ChannelField::Description).trim().to_string();
         let project_id = self.project().map(|project| project.id.clone());
-        match &self.mode {
+        let placement = self.placement;
+        Ok(match &self.mode {
             FormMode::Create => {
-                if !self.slug_is_valid() {
-                    return None;
-                }
                 let slug = self.text(ChannelField::Slug).to_string();
                 let title = match typed_title {
                     "" => slug.clone(),
                     title => title.to_string(),
                 };
-                Some(UiEvent::CreateChannel {
+                UiEvent::CreateChannel {
                     slug,
                     title,
                     description,
                     project_id,
-                })
+                    placement,
+                }
             }
             FormMode::Edit {
                 channel_id,
@@ -327,14 +361,15 @@ impl ChannelForm {
                     ("", _) => title.clone(),
                     (typed, _) => typed.to_string(),
                 };
-                Some(UiEvent::UpdateChannel {
+                UiEvent::UpdateChannel {
                     channel_id: channel_id.clone(),
                     title,
                     description,
                     project_id,
-                })
+                    placement,
+                }
             }
-        }
+        })
     }
 }
 
@@ -346,117 +381,7 @@ pub(crate) fn is_valid_slug(slug: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-impl App {
-    /// The channel form, while it is open.
-    #[must_use]
-    pub(crate) const fn channel_form(&self) -> Option<&ChannelForm> {
-        self.channel_form.as_ref()
-    }
-
-    /// Open the new-channel form, empty, on its slug, with the project of
-    /// the agent on screen before CHANNELS chosen.
-    pub(crate) fn start_new_channel(&mut self) {
-        let project = self.project_before_channels();
-        self.open_channel_form(
-            ChannelForm::create(&self.project_list.projects, project),
-            "New channel",
-        );
-    }
-
-    /// Open the form on listed channel `channel_id`, filled with its
-    /// title, description and project, to change them. Does nothing for
-    /// a channel that is not listed.
-    pub(crate) fn start_edit_channel(&mut self, channel_id: &str) {
-        let Some(channel) = self.channels().iter().find(|c| c.id == channel_id) else {
-            return;
-        };
-        let form = ChannelForm::edit(channel, &self.project_list.projects);
-        let status = format!("Edit #{}", channel.slug);
-        self.open_channel_form(form, &status);
-    }
-
-    fn open_channel_form(&mut self, form: ChannelForm, status: &str) {
-        self.context_menu = None;
-        self.channel_form = Some(form);
-        self.state = AppState::ChannelForm;
-        self.status = status.to_string();
-    }
-
-    /// The listed project of the agent on screen before CHANNELS took
-    /// over (else of the agent on screen), if it has one.
-    fn project_before_channels(&self) -> Option<String> {
-        let agent_id = self.agent_before_channels();
-        let project = self
-            .agents
-            .iter()
-            .chain(&self.archived.items)
-            .find(|agent| agent.id == agent_id)?
-            .project_id
-            .clone()?;
-        self.project_list
-            .projects
-            .iter()
-            .any(|listed| listed.id == project)
-            .then_some(project)
-    }
-
-    /// The projects list changed: let the open form offer the new one.
-    pub(super) fn projects_changed_under_channel_form(&mut self) {
-        if let Some(form) = self.channel_form.as_mut() {
-            form.set_projects(&self.project_list.projects);
-        }
-    }
-
-    /// Close the form without sending anything.
-    fn close_channel_form(&mut self) {
-        self.channel_form = None;
-        self.state = AppState::Idle;
-        self.status = "Ready".to_string();
-    }
-
-    /// Paste `text` into the form's focused field.
-    pub(super) fn paste_into_channel_form(&mut self, text: &str) {
-        if let Some(form) = self.channel_form.as_mut() {
-            form.insert(text);
-        }
-    }
-
-    /// Keys while the form is open; see the module docs.
-    pub(super) fn handle_channel_form_key(&mut self, key: KeyEvent) {
-        let Some(form) = self.channel_form.as_mut() else {
-            self.state = AppState::Idle;
-            return;
-        };
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Esc => self.close_channel_form(),
-            KeyCode::Enter if ctrl || form.focus == ChannelField::Project => {
-                self.submit_channel_form();
-            }
-            KeyCode::Enter | KeyCode::Tab | KeyCode::Down => form.move_focus(true),
-            KeyCode::BackTab | KeyCode::Up => form.move_focus(false),
-            _ => {
-                form.edit_key(key);
-            }
-        }
-    }
-
-    /// Send the form and close it, or, while the slug is refused, put
-    /// the cursor back in the slug and keep the form open.
-    fn submit_channel_form(&mut self) {
-        let Some(form) = self.channel_form.as_mut() else {
-            return;
-        };
-        match form.submission() {
-            Some(event) => {
-                self.close_channel_form();
-                self.try_send_event(event);
-            }
-            None => form.focus = ChannelField::Slug,
-        }
-    }
-}
-
+mod app;
 mod field;
 #[cfg(test)]
 mod tests;

@@ -73,6 +73,7 @@ impl AgentHub {
             last_active: Mutex::default(),
             channel_members: Mutex::new(channel_sets.members),
             hidden_members: Mutex::new(channel_sets.hidden),
+            cloud_starts: Mutex::default(),
             channels: parts.channels,
             channel_chat: crate::event_loop::channels::ChannelChat::default(),
             inbox: crate::event_loop::inbox::Inbox::default(),

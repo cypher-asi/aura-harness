@@ -5,7 +5,9 @@
 //!
 //! * [`crate::cf::CHANNELS`]:
 //!   * `c/{channel_id}`: a JSON [`ChannelRecord`]. Its optional
-//!     `project_id` is the one project the channel's agents work in.
+//!     `project_id` is the one project the channel's agents work in, and
+//!     its `placement` ([`ChannelPlacement`]) where the members it starts
+//!     run: `"cloud"`, or left out for `local`.
 //!   * `s/{slug}`: the JSON string of the id of the channel owning the
 //!     slug (unique slug index).
 //!   * `p/{channel_id}/{project_id}`: legacy, a JSON [`ProjectLink`] from
@@ -48,6 +50,11 @@
 //! * A channel has at most one project, held on its `c/` record. A
 //!   stored project id is never empty or all whitespace. `c/` rows
 //!   written before the field existed decode with no project.
+//! * A channel's placement is held on its `c/` record and says only where
+//!   members started from then on run; it moves no member. A local
+//!   channel's row leaves it out, so rows written before the field
+//!   existed decode as local. It does not depend on the project: a cloud
+//!   channel with none is the session's to handle.
 //! * After [`ChannelStore::migrate_links`] a channel has no `p/` rows
 //!   (unless its migration failed, or a legacy
 //!   [`ChannelStore::link_project`] call adds one); each channel's
@@ -64,6 +71,8 @@
 //!   of it does.
 //! * A value that fails to unseal (wrong key, tampering) or to decode
 //!   fails the read: sealed values fail closed instead of dropping rows.
+//!   A placement other than `local` or `cloud`, written by a newer
+//!   version, fails its channel's read the same way.
 //! * A row whose key disagrees with its value (a `c/` row whose id is not
 //!   its key, a member row whose agent id is not its key) is skipped with
 //!   a `warn!` naming the key, never the payload. So is a slug index
@@ -91,8 +100,8 @@ mod validate;
 
 pub use error::ChannelError;
 pub use types::{
-    ChannelPost, ChannelRecord, ChannelUpdate, MemberRecord, MemberRole, NewChannel, NewPost,
-    PostAuthor, ProjectLink,
+    ChannelPlacement, ChannelPost, ChannelRecord, ChannelUpdate, MemberRecord, MemberRole,
+    NewChannel, NewPost, PostAuthor, ProjectLink,
 };
 pub use validate::valid_slug;
 

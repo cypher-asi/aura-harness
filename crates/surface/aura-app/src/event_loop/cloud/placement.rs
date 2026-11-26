@@ -91,6 +91,63 @@ async fn move_to_cloud(
         return;
     };
     set_project_default(state, &hub, agent, Placement::Cloud);
+    place(state, hub, request, console);
+}
+
+/// Move `agent`, a new member of a channel whose agents run in the cloud,
+/// to a cloud machine of its own before it starts its first work, which
+/// waits in its queue meanwhile. Its project's default placement stays as
+/// it is: the channel, not the project, puts it there. Without the cloud
+/// (no boxd key, no project folder to start from, no connection) it
+/// stays here, and its chat says why.
+pub(in crate::event_loop) async fn start_in_cloud(state: &mut LoopState<'_>, agent: AgentId) {
+    // A channel without a project it can use keeps its members in the
+    // launch project, whose folder is not theirs to take to a machine.
+    if lock(&state.hub.hidden_members).contains(&agent) {
+        system(state, agent, local_instead(agent, NO_PROJECT_FOLDER)).await;
+        return;
+    }
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    let console = BootConsoleUi::new(ui, "Starting in the cloud");
+    let why = match connect(state, Some(&console)).await {
+        Ok(hub) => match place_request(state, &hub, agent) {
+            Some(request) => {
+                place(state, hub, request, console);
+                return;
+            }
+            None => NO_PROJECT_FOLDER.to_string(),
+        },
+        Err(why) => why,
+    };
+    let note = local_instead(agent, &why);
+    if !console.end(false, note.clone()).await {
+        system(state, agent, note).await;
+    }
+}
+
+/// Why a new member of a cloud channel stays here when its project
+/// gives a machine nothing to start from.
+const NO_PROJECT_FOLDER: &str =
+    "The channel has no project folder for a cloud machine to start from";
+
+/// What the chat of `agent`, a new member of a channel whose agents run
+/// in the cloud, says when it works here instead because of `why`.
+fn local_instead(agent: AgentId, why: &str) -> String {
+    info!(%agent, why, "A cloud channel's new member stays local");
+    format!("{why} — it works on this computer instead.")
+}
+
+/// Place the agent `request` asks for on a cloud machine, showing the
+/// move on `console`. Work sent meanwhile waits in its queue; the loop
+/// starts it once it hears the move ended, in the cloud or, when the
+/// move failed, here.
+fn place(
+    state: &mut LoopState<'_>,
+    hub: Arc<CloudHub>,
+    request: PlaceRequest,
+    console: BootConsoleUi,
+) {
+    let agent = request.agent;
     state.cloud.shared.moving.lock().insert(agent);
     // The local kernel must not write for it from here on, and
     // its machine traces the conversation as a run of its own.
@@ -104,7 +161,6 @@ async fn move_to_cloud(
         let result = hub.place(request, &boot).await;
         drop(boot);
         let _ = shown.await;
-        shared.moving.lock().remove(&agent);
         if result.is_ok() {
             let root = PathBuf::from(aura_engine_cloud::machine_env::WORKSPACE_DIR);
             ui.send(UiCommand::SetSandboxRemote(root)).await;
@@ -118,6 +174,8 @@ async fn move_to_cloud(
         };
         info!(%agent, %note, "placement");
         console.end(ok, note).await;
+        // After the console's last line, so queued work shows below it.
+        shared.end_move(agent);
     });
 }
 
@@ -135,7 +193,6 @@ fn recall(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, reason: &'
         let result = hub.recall(agent, reason, &boot).await;
         drop(boot);
         let _ = shown.await;
-        shared.moving.lock().remove(&agent);
         let (ok, note) = match result {
             Ok(outcome) => {
                 shared.stale.lock().insert(agent);
@@ -154,6 +211,7 @@ fn recall(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, reason: &'
             ),
         };
         console.end(ok, note).await;
+        shared.end_move(agent);
     });
 }
 

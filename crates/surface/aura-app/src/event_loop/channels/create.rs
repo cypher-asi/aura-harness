@@ -129,6 +129,7 @@ fn trimmed(new: NewChannel) -> NewChannel {
         description: new.description.trim().to_string(),
         slug,
         project_id: trimmed_project(new.project_id),
+        placement: new.placement,
     }
 }
 

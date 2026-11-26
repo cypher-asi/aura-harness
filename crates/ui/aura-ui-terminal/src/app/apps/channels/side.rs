@@ -5,22 +5,26 @@ use crate::app::{contains, follow_selection, App};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
+/// Rows each member takes on the MEMBERS side tab: its name, then what it
+/// works on.
+pub(crate) const CHANNEL_MEMBER_ROWS: usize = 2;
+
 impl App {
-    /// Highlighted row of the MEMBERS side tab.
+    /// Highlighted member of the MEMBERS side tab.
     #[must_use]
     pub(crate) const fn selected_channel_member(&self) -> usize {
         self.channels.member_selected
     }
 
-    /// Keep the highlighted member inside rows `visible_rows` tall,
-    /// returning the first row to draw.
-    pub(crate) fn sync_channel_members_scroll(&mut self, visible_rows: usize) -> usize {
+    /// Keep the highlighted member among the `visible_members` that fit,
+    /// returning the first member to draw.
+    pub(crate) fn sync_channel_members_scroll(&mut self, visible_members: usize) -> usize {
         let members = self.channels.open_members();
         let state = &mut self.channels;
         state.member_scroll = follow_selection(
             state.member_scroll,
             state.member_selected,
-            visible_rows,
+            visible_members,
             members,
         );
         state.member_scroll
@@ -37,13 +41,14 @@ impl App {
         self.channels.member_rows_area = None;
     }
 
-    /// Member row of the MEMBERS side tab drawn at a screen cell.
+    /// Member of the MEMBERS side tab drawn at a screen cell, on either of
+    /// its rows.
     pub(in crate::app) fn channel_member_row_at(&self, column: u16, row: u16) -> Option<usize> {
         let state = &self.channels;
         let rows = state
             .member_rows_area
             .filter(|&rows| contains(Some(rows), column, row))?;
-        let index = state.member_scroll + usize::from(row - rows.y);
+        let index = state.member_scroll + usize::from(row - rows.y) / CHANNEL_MEMBER_ROWS;
         (index < state.open_members()).then_some(index)
     }
 

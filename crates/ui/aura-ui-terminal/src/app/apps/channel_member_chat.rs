@@ -33,14 +33,19 @@ impl App {
     }
 
     /// The chat panel's title over a member's chat, and what it says
-    /// beside it: the member's name, then its code, role and the
-    /// channel's `#slug`, as `RE36 · reviewer · #zode`. The role is the
-    /// permanent agent it is an instance of, else what it is in the
-    /// channel.
+    /// beside it: what the member works on (its title, a subagent's
+    /// subtask), else its name, then its code, role and the channel's
+    /// `#slug`, as `RE36 · reviewer · #zode`. The role is the permanent
+    /// agent it is an instance of, else what it is in the channel.
     #[must_use]
     pub(crate) fn member_chat_title(&self) -> Option<(String, String)> {
         let channel = self.open_channel()?;
         let member = self.member_chat()?;
+        let title = member
+            .title
+            .as_deref()
+            .or(member.subtitle.as_deref())
+            .unwrap_or(&member.name);
         let role = member
             .definition
             .as_deref()
@@ -52,7 +57,7 @@ impl App {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join(" · ");
-        Some((member.name.clone(), info))
+        Some((title.to_string(), info))
     }
 
     /// Open the chat of member `index` of the open channel, highlighting

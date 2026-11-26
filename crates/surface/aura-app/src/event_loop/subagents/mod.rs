@@ -390,6 +390,9 @@ pub struct AgentHub {
     /// leaves them out. Members of a channel with a project are listed
     /// under it.
     pub(crate) hidden_members: Mutex<HashSet<AgentId>>,
+    /// New members of channels whose agents run in the cloud, until the
+    /// loop moves each to a machine of its own before its first work.
+    pub(crate) cloud_starts: Mutex<HashSet<AgentId>>,
     /// Replies the channels wait for and what each coordinator has seen.
     pub(crate) channel_chat: super::channels::ChannelChat,
     /// What agents owe each other through their inboxes.

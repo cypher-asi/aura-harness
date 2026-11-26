@@ -8,12 +8,18 @@
 //!
 //! ## Invariants
 //!
-//! - **One writer per agent.** A moving agent takes no work: its prompts
-//!   are refused until the move ends. A cloud agent's prompts and `/new`
-//!   go to its node, never to the local kernel ([`CloudState::node_writes`]
-//!   keeps `/resume`, `/rewind` and auth notes off its local record), and
-//!   a recalled agent's local session is reopened from the record (which
-//!   now holds what the node wrote) before its next local turn.
+//! - **One writer per agent.** A moving agent starts no work: what it is
+//!   sent waits in its queue until the loop hears the move ended
+//!   ([`Ended::Move`]), then goes where the agent runs now. A cloud agent's
+//!   prompts and `/new` go to its node, never to the local kernel
+//!   ([`CloudState::node_writes`] keeps `/resume`, `/rewind` and auth
+//!   notes off its local record), and a recalled agent's local session is
+//!   reopened from the record (which now holds what the node wrote) before
+//!   its next local turn.
+//! - **Only the loop frees an agent it was told about.** A task that ends
+//!   a turn or a move says so on [`Shared::ended`] and leaves the agent
+//!   busy, so no work the loop starts before it hears overlaps; only with
+//!   no loop listening does the task free the agent itself.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -59,11 +65,22 @@ mod view;
 use boot::BootConsoleUi;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
-pub(super) use placement::{handle_host_action, handle_set_placement, handle_setup, on_archive};
+pub(super) use placement::{
+    handle_host_action, handle_set_placement, handle_setup, on_archive, start_in_cloud,
+};
 pub(super) use publish::start;
 use publish::start_publisher;
 pub(super) use submit::{new_session, start_queued, submit};
 use view::{build_view, placement_state};
+
+/// What a cloud task tells the loop it is done with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Ended {
+    /// The agent's cloud turn, or `/new`
+    Turn(AgentId),
+    /// The agent's move between machines, whichever way it went
+    Move(AgentId),
+}
 
 /// Shared between the loop and its tasks.
 #[derive(Default)]
@@ -75,9 +92,9 @@ struct Shared {
     running: Mutex<std::collections::HashMap<AgentId, CancellationToken>>,
     /// Agents whose local session is older than their record.
     stale: Mutex<HashSet<AgentId>>,
-    /// Where an ended turn is said, once the loop listens
+    /// Where an ended turn or move is said, once the loop listens
     /// ([`CloudState::take_ended`]).
-    ended: Mutex<Option<tokio::sync::mpsc::UnboundedSender<AgentId>>>,
+    ended: Mutex<Option<tokio::sync::mpsc::UnboundedSender<Ended>>>,
     /// The plans last read from each cloud agent's machine (path and
     /// text), shown while it sleeps.
     plans: Mutex<std::collections::HashMap<AgentId, Vec<(String, String)>>>,
@@ -88,14 +105,26 @@ impl Shared {
     /// starts what it queued meanwhile, so nothing sent while the turn
     /// ended overtakes that; with no loop listening it is freed here.
     fn end_turn(&self, agent: AgentId) {
-        let told = self
-            .ended
-            .lock()
-            .as_ref()
-            .is_some_and(|ended| ended.send(agent).is_ok());
-        if !told {
+        if !self.tell_loop(Ended::Turn(agent)) {
             self.running.lock().remove(&agent);
         }
+    }
+
+    /// `agent`'s move is over, done or not. The loop lets it take work
+    /// again and starts what it queued meanwhile, where it runs now; with
+    /// no loop listening it is let go here.
+    fn end_move(&self, agent: AgentId) {
+        if !self.tell_loop(Ended::Move(agent)) {
+            self.moving.lock().remove(&agent);
+        }
+    }
+
+    /// Say `ended` to the loop. Returns whether one listens.
+    fn tell_loop(&self, ended: Ended) -> bool {
+        self.ended
+            .lock()
+            .as_ref()
+            .is_some_and(|loop_tx| loop_tx.send(ended).is_ok())
     }
 }
 
@@ -157,17 +186,27 @@ impl CloudState {
             .is_some()
     }
 
-    /// The agents whose cloud turn (or `/new`) ended, each to be freed
-    /// with [`Self::free`].
-    pub(super) fn take_ended(&self) -> tokio::sync::mpsc::UnboundedReceiver<AgentId> {
+    /// The cloud turns (and `/new`) and moves that ended, each to be
+    /// freed with [`Self::free`].
+    pub(super) fn take_ended(&self) -> tokio::sync::mpsc::UnboundedReceiver<Ended> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         *self.shared.ended.lock() = Some(tx);
         rx
     }
 
-    /// Let `agent`, whose cloud turn ended, take work again.
-    pub(super) fn free(&self, agent: AgentId) {
-        self.shared.running.lock().remove(&agent);
+    /// Let the agent whose turn or move `ended` take work again. Returns
+    /// the agent.
+    pub(super) fn free(&self, ended: Ended) -> AgentId {
+        match ended {
+            Ended::Turn(agent) => {
+                self.shared.running.lock().remove(&agent);
+                agent
+            }
+            Ended::Move(agent) => {
+                self.shared.moving.lock().remove(&agent);
+                agent
+            }
+        }
     }
 
     fn hub(&self) -> Option<Arc<CloudHub>> {

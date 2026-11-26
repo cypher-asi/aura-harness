@@ -29,6 +29,53 @@ fn only_placeholder_named_agents_need_a_title() {
 }
 
 #[test]
+fn channel_members_want_a_title_but_not_their_coordinator_or_subagents() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    let mut registry = open(dir.path(), launch.path());
+    let member = registry.create_instance("rust-engineer", None).unwrap();
+    let other = registry.create_instance("rust-engineer", None).unwrap();
+    let coordinator = registry
+        .create_instance(crate::definitions::COORDINATOR_DEFINITION, None)
+        .unwrap();
+    let subagent = registry
+        .create_instance("reviewer", Some(member.zns_id.clone()))
+        .unwrap();
+    let outside = registry.create_instance("rust-engineer", None).unwrap();
+    registry.mark_channel_members([
+        member.agent_id(),
+        other.agent_id(),
+        coordinator.agent_id(),
+        subagent.agent_id(),
+    ]);
+
+    assert!(registry.wants_title(member.agent_id()));
+    assert!(registry.wants_title(other.agent_id()));
+    assert!(!registry.wants_title(coordinator.agent_id()));
+    assert!(
+        !registry.wants_title(subagent.agent_id()),
+        "a subagent is named after its subtask"
+    );
+    assert!(
+        !registry.wants_title(outside.agent_id()),
+        "an instance in no channel keeps its name"
+    );
+
+    registry
+        .set_title(member.agent_id(), "Fix parser escapes")
+        .unwrap();
+    assert!(!registry.wants_title(member.agent_id()));
+    assert!(
+        registry.wants_title(other.agent_id()),
+        "each instance has a title of its own"
+    );
+    let stored = registry.find(member.agent_id()).unwrap();
+    assert_eq!(stored.display_name(), "Fix parser escapes");
+    assert_eq!(stored.name, member.name);
+    assert_eq!(stored.definition.as_deref(), Some("rust-engineer"));
+}
+
+#[test]
 fn titles_are_shown_and_kept_without_changing_the_identity() {
     let dir = tempfile::tempdir().unwrap();
     let launch = tempfile::tempdir().unwrap();

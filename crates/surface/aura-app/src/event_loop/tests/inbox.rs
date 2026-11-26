@@ -6,6 +6,7 @@ use super::*;
 use crate::event_loop::inbox::{assign, AssignArgs};
 use aura_exec_tools::todo::task_report_line;
 use aura_store_db::NewChannel;
+use aura_ui::events::MessageRole;
 
 /// A channel `#site` with the fixture's second agent as a member, as
 /// a member joins: top-level, the coordinator having brought it in.
@@ -17,7 +18,7 @@ async fn channel_with_member(fixture: &Fixture) -> AgentId {
             slug: "site".to_string(),
             title: "Website relaunch".to_string(),
             description: String::new(),
-            project_id: None,
+            ..NewChannel::default()
         },
     )
     .await
@@ -116,6 +117,61 @@ async fn run_notice(
     let finished = next_done(done).await;
     assert_eq!(finished.agent_id, agent);
     handle_work_done(state, finished).await;
+}
+
+#[tokio::test]
+async fn a_new_member_of_a_cloud_channel_without_a_project_works_here_and_says_why() {
+    let (fixture, mut commands) = fixture();
+    let in_cloud = NewChannel {
+        slug: "site".to_string(),
+        title: "Website relaunch".to_string(),
+        placement: aura_store_db::ChannelPlacement::Cloud,
+        ..NewChannel::default()
+    };
+    let channel = channels::create_channel(&fixture.hub, in_cloud)
+        .await
+        .unwrap();
+    let mut notices = fixture.hub.take_notices();
+    let mut b = borrowed(&fixture);
+    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
+    let mut state = loop_state(&fixture, &mut b);
+
+    let brief = AssignArgs {
+        to: None,
+        agent: Some("reviewer".to_string()),
+        subject: "Footer".to_string(),
+        prompt: "Make the footer links work.".to_string(),
+        todo_id: None,
+    };
+    let said = assign(&fixture.hub, channel.coordinator, brief)
+        .await
+        .unwrap();
+    assert!(said.contains("(new member)"), "{said}");
+    let assignment = notices.try_recv().unwrap();
+    let member = assignment.to;
+    assert!(subagents::lock(&state.hub.cloud_starts).contains(&member));
+
+    run_notice(&mut state, &mut done, assignment, member).await;
+    assert!(subagents::lock(&state.hub.cloud_starts).is_empty());
+    assert!(!state.cloud.is_cloud(member) && !state.cloud.is_moving(member));
+    let member_hex = member.to_hex();
+    let why: Vec<String> = drain(&mut commands)
+        .into_iter()
+        .filter(|(to, _)| to.as_deref() == Some(member_hex.as_str()))
+        .filter_map(|(_, command)| match command {
+            UiCommand::ShowMessage(message) if message.role == MessageRole::System => {
+                Some(message.content)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        why,
+        [
+            "The channel has no project folder for a cloud machine to start from — it works on \
+          this computer instead."
+        ],
+    );
 }
 
 /// The one text in `texts`.

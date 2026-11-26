@@ -130,6 +130,9 @@ fn write_member(
 /// registry lock is held from reading the channel to updating
 /// [`AgentHub::hidden_members`], and the reads and the write are
 /// synchronous: callers on the async runtime run it on a blocking thread.
+/// In a channel whose agents run in the cloud it goes on
+/// [`AgentHub::cloud_starts`], so the loop moves it to a machine before
+/// the work it is started for.
 ///
 /// # Errors
 /// Returns an error if there is no channel store, `coordinator` runs no
@@ -168,6 +171,9 @@ pub(crate) fn add_agent(
     lock(&hub.channel_members).insert(agent_id);
     if !has_known_project(&registry, &channel) {
         lock(&hub.hidden_members).insert(agent_id);
+    }
+    if channel.placement == ChannelPlacement::Cloud {
+        lock(&hub.cloud_starts).insert(agent_id);
     }
     drop(registry);
     if let Some(workspace) = workspace {

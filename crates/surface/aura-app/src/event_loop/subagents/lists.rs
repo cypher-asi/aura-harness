@@ -86,12 +86,10 @@ impl AgentHub {
 
     /// Whether a turn on `agent` titles its chat: one whose prompt someone
     /// `typed` (not a notice or a plan build), while the agent still has a
-    /// placeholder name.
+    /// placeholder name or is an untitled channel member
+    /// ([`AgentRegistry::wants_title`]).
     pub(in crate::event_loop) fn titles_turn(&self, agent: AgentId, typed: bool) -> bool {
-        typed
-            && lock(&self.registry)
-                .find(agent)
-                .is_some_and(crate::agent_registry::RegisteredAgent::needs_title)
+        typed && lock(&self.registry).wants_title(agent)
     }
 
     /// Give `agent` the chat title `title` and show it in the Agents panel
@@ -100,9 +98,7 @@ impl AgentHub {
     pub(in crate::event_loop) async fn apply_title(&self, agent: AgentId, title: &str) -> bool {
         let applied = {
             let mut registry = lock(&self.registry);
-            let wanted = registry
-                .find(agent)
-                .is_some_and(crate::agent_registry::RegisteredAgent::needs_title);
+            let wanted = registry.wants_title(agent);
             wanted
                 && match registry.set_title(agent, title) {
                     Ok(()) => true,

@@ -372,9 +372,40 @@ mod machine_tests {
             cloud.is_running(agent),
             "what is sent until the loop frees it still queues"
         );
-        assert_eq!(ended.try_recv().ok(), Some(agent));
-        cloud.free(agent);
+        let turn = ended.try_recv().unwrap();
+        assert_eq!(turn, Ended::Turn(agent));
+        assert_eq!(cloud.free(turn), agent);
         assert!(!cloud.is_running(agent));
+    }
+
+    #[test]
+    fn an_ended_move_lets_its_agent_take_work_only_through_the_loop() {
+        let cloud = CloudState::default();
+        let agent = AgentId::generate();
+        cloud.shared.moving.lock().insert(agent);
+        cloud.shared.end_move(agent);
+        assert!(!cloud.is_moving(agent), "no loop listens: let go at once");
+
+        let mut ended = cloud.take_ended();
+        cloud.shared.moving.lock().insert(agent);
+        cloud
+            .shared
+            .running
+            .lock()
+            .insert(agent, CancellationToken::new());
+        cloud.shared.end_move(agent);
+        assert!(
+            cloud.is_moving(agent),
+            "work still queues until the loop hears"
+        );
+        let moved = ended.try_recv().unwrap();
+        assert_eq!(moved, Ended::Move(agent));
+        assert_eq!(cloud.free(moved), agent);
+        assert!(!cloud.is_moving(agent));
+        assert!(
+            cloud.is_running(agent),
+            "a move's end leaves a turn the loop started alone"
+        );
     }
 }
 

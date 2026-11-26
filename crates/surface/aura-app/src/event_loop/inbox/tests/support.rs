@@ -12,6 +12,7 @@ pub(super) fn new_channel(slug: &str, project_id: Option<String>) -> NewChannel 
         title: "Website relaunch".to_string(),
         description: "Ship the new marketing site.".to_string(),
         project_id,
+        ..NewChannel::default()
     }
 }
 

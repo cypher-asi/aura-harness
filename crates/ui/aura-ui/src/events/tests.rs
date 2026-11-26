@@ -204,6 +204,7 @@ fn channel_views_round_trip_through_json() {
         }),
         members: nest_members("co", vec![member("co", None), member("a", Some("co"))]),
         archived: false,
+        placement: crate::host::PlacementView::Cloud,
     };
     let json = serde_json::to_string(&channel).unwrap();
     assert_eq!(

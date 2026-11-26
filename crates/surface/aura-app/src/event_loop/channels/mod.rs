@@ -45,10 +45,11 @@ use anyhow::{bail, Context};
 use aura_core_types::AgentId;
 use aura_store_db::agents::derive_agent_id;
 use aura_store_db::{
-    valid_slug, ChannelRecord, ChannelStore, ChannelUpdate, MemberRecord, MemberRole, NewChannel,
-    RegistryDiff, WriteBatch,
+    valid_slug, ChannelPlacement, ChannelRecord, ChannelStore, ChannelUpdate, MemberRecord,
+    MemberRole, NewChannel, RegistryDiff, WriteBatch,
 };
 use aura_ui::events::{nest_members, AgentSummary, ChannelProjectView, ChannelSummary};
+use aura_ui::host::PlacementView;
 use aura_ui::UiCommand;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -87,7 +88,23 @@ use load::load_members;
 pub(crate) use load::{load_channels, ChannelSets};
 use load::{move_placements, stage_rows};
 pub(crate) use prompt::{channel_prompt, is_coordinator};
-pub(crate) use update::{archive_channel, update_channel, CoordinatorBusy};
+pub(crate) use update::{archive_channel, update_channel, ChannelEdit, CoordinatorBusy};
+
+/// The channel placement the UI's `placement` stands for.
+pub(crate) const fn channel_placement(placement: PlacementView) -> ChannelPlacement {
+    match placement {
+        PlacementView::Local => ChannelPlacement::Local,
+        PlacementView::Cloud => ChannelPlacement::Cloud,
+    }
+}
+
+/// How the UI shows channel placement `placement`.
+const fn placement_view(placement: ChannelPlacement) -> PlacementView {
+    match placement {
+        ChannelPlacement::Local => PlacementView::Local,
+        ChannelPlacement::Cloud => PlacementView::Cloud,
+    }
+}
 
 /// Directory under the data directory holding each channel's folder.
 const CHANNELS_DIR: &str = "channels";

@@ -345,8 +345,8 @@ async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
             Some(done) = inbox.done_rx.recv() => {
                 handle_work_done(state, done).await;
             }
-            Some(agent_id) = cloud_ended.recv() => {
-                state.cloud.free(agent_id);
+            Some(ended) = cloud_ended.recv() => {
+                let agent_id = state.cloud.free(ended);
                 // The turn may have written or worked through a plan.
                 if agent_id == state.active {
                     cloud::refresh_machine_plans(state, agent_id);

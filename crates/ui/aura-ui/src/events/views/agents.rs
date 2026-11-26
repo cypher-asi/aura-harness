@@ -70,6 +70,11 @@ pub struct AgentSummary {
     /// (`REN36: Fix parser escapes`); kept apart so UIs can style it.
     #[serde(default)]
     pub subtitle: Option<String>,
+    /// Title of what its chat is about, such as `Fix parser escapes`; for a
+    /// channel member, what it works on. `name` already shows it; kept
+    /// apart so a channel can show it under the member's name.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 impl AgentSummary {

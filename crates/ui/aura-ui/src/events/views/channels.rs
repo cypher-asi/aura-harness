@@ -29,6 +29,9 @@ pub struct ChannelSummary {
     /// Whether it was archived
     #[serde(default)]
     pub archived: bool,
+    /// Where the members it starts run
+    #[serde(default)]
+    pub placement: crate::host::PlacementView,
 }
 
 /// The project of a channel.

@@ -44,6 +44,7 @@ pub use bench::{
     BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
 pub(super) use channels::ChannelState;
+pub(crate) use channels::CHANNEL_MEMBER_ROWS;
 
 use super::{contains, tab_at, tab_bar::TabLayout, App, ChatTab, HoverTarget};
 use crate::terminal::KeyResult;
