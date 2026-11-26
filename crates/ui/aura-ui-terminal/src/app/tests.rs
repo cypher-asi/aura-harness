@@ -773,6 +773,60 @@ fn a_boot_console_is_updated_in_place_in_its_agents_chat() {
 }
 
 #[test]
+fn a_boot_console_in_a_loaded_history_comes_back_and_goes_on() {
+    use crate::events::{BootHistory, BootStageState, BootUpdate};
+    let mut app = App::new();
+    let stage = |state| BootUpdate::Stage {
+        key: "create".into(),
+        label: "Creating machine".into(),
+        state,
+    };
+    let console = |id: &str, updates: Vec<BootUpdate>, elapsed_ms| MessageData {
+        timestamp_ms: Some(1_700_000_000_000),
+        boot: Some(BootHistory {
+            id: id.into(),
+            updates,
+            elapsed_ms,
+        }),
+        ..MessageData::new(MessageRole::System, "")
+    };
+    app.process_command(UiCommand::LoadConversation(vec![
+        console(
+            "boot-old",
+            vec![
+                BootUpdate::Begin {
+                    title: "Moving to the cloud".into(),
+                },
+                stage(BootStageState::Running),
+                BootUpdate::End {
+                    ok: false,
+                    summary: "claim failed".into(),
+                },
+            ],
+            Some(4_200),
+        ),
+        console("boot-live", vec![stage(BootStageState::Running)], None),
+    ]));
+    let ended = app.messages()[0].boot_console().expect("console");
+    assert_eq!(ended.title, "Moving to the cloud");
+    let outcome = ended.outcome.as_ref().expect("ended");
+    assert_eq!((outcome.ok, outcome.elapsed_ms), (false, 4_200));
+    assert!(app.messages()[1].is_live_boot());
+
+    app.process_command(UiCommand::Boot {
+        id: "boot-live".into(),
+        update: stage(BootStageState::Done { ms: 300 }),
+    });
+    assert_eq!(
+        app.messages().len(),
+        2,
+        "the update went to the console shown"
+    );
+    let live = app.messages()[1].boot_console().expect("console");
+    assert_eq!(live.steps[0].state, BootStageState::Done { ms: 300 });
+}
+
+#[test]
 fn only_what_changes_the_screen_asks_for_a_frame() {
     let (mut app, _rx) = app_with_agents();
     assert!(app.take_redraw(), "nothing is drawn yet");

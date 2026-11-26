@@ -955,6 +955,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
                     warn!(error = %e, "Failed to rebuild conversation from record");
                     Vec::new()
                 });
+            let history = crate::chat_notes::with_notes(agent_id, history);
             AgentUi::new(state.commands.clone(), agent_id)
                 .send(UiCommand::LoadConversation(history))
                 .await;

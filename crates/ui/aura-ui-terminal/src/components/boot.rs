@@ -1,14 +1,14 @@
 //! A boot console in the chat: a machine coming up, or an agent moving
 //! between machines, as it happens.
 
-use crate::events::{BootLogLine, BootStageState, BootUpdate};
+use crate::events::{BootHistory, BootLogLine, BootStageState, BootUpdate};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Most log lines a console keeps in memory; older ones go to its spill
 /// file.
@@ -207,6 +207,30 @@ impl BootConsole {
             spill: None,
             outcome: None,
         }
+    }
+
+    /// The console `history` describes, begun at `begun_ms` (ms since the
+    /// epoch; now when unknown). One that ended keeps how long it took;
+    /// one still running carries on with the next update for its id.
+    #[must_use]
+    pub fn replay(history: &BootHistory, begun_ms: Option<u64>) -> Self {
+        let mut console = Self::new(&history.id, "Cloud machine");
+        let ago = begun_ms.and_then(|at| {
+            let now = u64::try_from(chrono::Utc::now().timestamp_millis()).ok()?;
+            now.checked_sub(at)
+        });
+        if let Some(started) =
+            ago.and_then(|ms| Instant::now().checked_sub(Duration::from_millis(ms)))
+        {
+            console.started = started;
+        }
+        for update in history.updates.iter().cloned() {
+            console.apply(update);
+        }
+        if let (Some(outcome), Some(ms)) = (console.outcome.as_mut(), history.elapsed_ms) {
+            outcome.elapsed_ms = ms;
+        }
+        console
     }
 
     /// Lines of `log` shown: the newest few while it runs, more as

@@ -121,7 +121,9 @@ fn env_file() -> PathBuf {
         .join(".env")
 }
 
-/// Numbers boot consoles, so each move or wake gets one of its own.
+/// Numbers boot consoles, so each move or wake gets one of its own. Ids
+/// also carry when they were made: kept consoles come back after a
+/// restart, and must not take a new console's updates.
 static NEXT_BOOT: AtomicU64 = AtomicU64::new(1);
 
 /// A boot console in an agent's chat: what a move or a wake shows while
@@ -138,7 +140,11 @@ impl BootConsoleUi {
     fn new(ui: AgentUi, title: &str) -> Self {
         Self {
             ui,
-            id: format!("boot-{}", NEXT_BOOT.fetch_add(1, Ordering::Relaxed)),
+            id: format!(
+                "boot-{}-{}",
+                crate::session_checkpoint::now_ms(),
+                NEXT_BOOT.fetch_add(1, Ordering::Relaxed)
+            ),
             title: title.to_string(),
             begun: Arc::default(),
         }

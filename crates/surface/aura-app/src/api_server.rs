@@ -164,6 +164,7 @@ pub async fn start_api_server(
                             model: None,
                             usage: None,
                             sources: Vec::new(),
+                            boot: None,
                         },
                     ));
                 }

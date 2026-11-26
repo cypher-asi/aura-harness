@@ -173,9 +173,11 @@ pub async fn start(
     let identity = active_agent.identity();
     let active_folder = registry.project_folder(identity.agent_id);
 
+    crate::chat_notes::install(crate::chat_notes::ChatNotes::new(&data_dir));
     record_loader::load_existing_records(store.as_ref(), identity.agent_id, &cmd_tx);
     match record_loader::conversation_history(store.as_ref(), identity.agent_id) {
         Ok(history) => {
+            let history = crate::chat_notes::with_notes(identity.agent_id, history);
             let _ = cmd_tx.try_send(UiCommand::LoadConversation(history));
         }
         Err(e) => warn!(error = %e, "Failed to rebuild conversation from record"),

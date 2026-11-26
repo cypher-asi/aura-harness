@@ -1373,6 +1373,22 @@ pub struct MessageData {
     /// Those tokens split by the sign-in that paid for them
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<SourceUsage>,
+    /// A boot console, shown again as it was
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot: Option<BootHistory>,
+}
+
+/// A boot console as its updates, to show it again in a chat rebuilt
+/// from history. Its `timestamp_ms` is when it began.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootHistory {
+    /// Console id; later [`UiCommand::Boot`]s for it change it
+    pub id: String,
+    /// Its updates, oldest first
+    pub updates: Vec<BootUpdate>,
+    /// How long it took, once it ended
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
 }
 
 /// Tokens of a turn that one sign-in paid for: `Claude plan`,
@@ -1698,6 +1714,36 @@ impl MessageData {
             model: None,
             usage: None,
             sources: Vec::new(),
+            boot: None,
+        }
+    }
+}
+
+/// What the chat line of a [`UiCommand::ShowError`] starts with.
+pub const ERROR_PREFIX: &str = "error: ";
+/// What the chat line of a [`UiCommand::ShowSuccess`] starts with.
+pub const SUCCESS_PREFIX: &str = "✓ ";
+/// What the chat line of a [`UiCommand::ShowWarning`] starts with.
+pub const WARNING_PREFIX: &str = "warning: ";
+
+impl UiCommand {
+    /// The system line this command adds to a chat, when it is a notice:
+    /// an error, success or warning, or a plain system message.
+    #[must_use]
+    pub fn chat_notice(&self) -> Option<String> {
+        match self {
+            Self::ShowError(msg) => Some(format!("{ERROR_PREFIX}{msg}")),
+            Self::ShowSuccess(msg) => Some(format!("{SUCCESS_PREFIX}{msg}")),
+            Self::ShowWarning(msg) => Some(format!("{WARNING_PREFIX}{msg}")),
+            Self::ShowMessage(data)
+                if data.role == MessageRole::System
+                    && data.activity.is_none()
+                    && data.command.is_none()
+                    && data.boot.is_none() =>
+            {
+                Some(data.content.clone())
+            }
+            _ => None,
         }
     }
 }

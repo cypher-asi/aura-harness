@@ -721,15 +721,8 @@ fn interleave_posts<'a>(
     let stamps: Vec<MessageData> = history
         .iter()
         .map(|message| MessageData {
-            role: message.role(),
-            content: String::new(),
-            is_streaming: false,
             timestamp_ms: Some(message.timestamp_ms()),
-            command: None,
-            activity: None,
-            model: None,
-            usage: None,
-            sources: Vec::new(),
+            ..MessageData::new(message.role(), String::new())
         })
         .collect();
     let mut history = history.into_iter();

@@ -34,7 +34,7 @@ const HISTORY_SCAN_LIMIT: usize = 1000;
 
 /// Number of chat messages kept after rebuilding, activity blocks included
 /// (matches the UI cap).
-const HISTORY_MESSAGE_LIMIT: usize = 300;
+pub(crate) const HISTORY_MESSAGE_LIMIT: usize = 300;
 
 /// Upper bound on the summary string; the panel truncates to its own
 /// width, this only keeps huge prompts from being copied around.
@@ -904,6 +904,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
             model: None,
             usage: None,
             sources: Vec::new(),
+            boot: None,
         });
     }
     let (role, content) = match tx.tx_type {
@@ -941,6 +942,7 @@ fn history_message(tx: &Transaction) -> Option<MessageData> {
         model: None,
         usage: None,
         sources: Vec::new(),
+        boot: None,
     })
 }
 
