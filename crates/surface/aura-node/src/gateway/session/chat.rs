@@ -16,7 +16,7 @@
 //! - WS framing/transport errors are handled per-attach by the adapter
 //!   and are not broadcast as `Error` frames to other attached clients.
 
-use super::chat_run::{ChatEventChannel, CHAT_RUN_IDLE_RETENTION};
+use super::chat_run::{ChatEventChannel, RunControl, CHAT_RUN_IDLE_RETENTION};
 use super::generation::{self, GenerationTurn};
 use super::helpers;
 use super::{Session, ToolApprovalBroker, WsContext};
@@ -107,16 +107,21 @@ impl Drop for TitleTask {
 /// Lifecycle (plan Part C decisions ii/v): the run survives WS drops;
 /// it is reaped only when fully idle (no active turn) with zero
 /// attached clients for [`CHAT_RUN_IDLE_RETENTION`], or on explicit
-/// stop via `shutdown`.
+/// stop via `control.shutdown`. `control.activity` holds the turn under
+/// way.
 pub(super) async fn run_chat_driver(
     mut session: Session,
     ctx: WsContext,
     events: Arc<ChatEventChannel>,
     outbound_tx: mpsc::Sender<OutboundMessage>,
     mut commands_rx: mpsc::Receiver<InboundMessage>,
-    attach_count: Arc<AtomicUsize>,
-    shutdown: CancellationToken,
+    control: RunControl,
 ) {
+    let RunControl {
+        attach_count,
+        shutdown,
+        activity,
+    } = control;
     session.tool_approval_broker = Some(Arc::new(ToolApprovalBroker::new(outbound_tx.clone())));
     info!(session_id = %session.session_id, "Chat run driver started");
 
@@ -139,7 +144,10 @@ pub(super) async fn run_chat_driver(
             )
             .await;
             match action {
-                TurnAction::TurnFinished => active_turn = None,
+                TurnAction::TurnFinished => {
+                    active_turn = None;
+                    activity.end();
+                }
                 TurnAction::Close => break,
                 TurnAction::Continue => {}
             }
@@ -154,7 +162,10 @@ pub(super) async fn run_chat_driver(
             )
             .await
             {
-                IdleAction::StartTurn(turn) => active_turn = Some(turn),
+                IdleAction::StartTurn(turn) => {
+                    activity.begin(turn_label(&session, &turn));
+                    active_turn = Some(turn);
+                }
                 IdleAction::Close => break,
                 IdleAction::Continue => {}
             }
@@ -169,9 +180,31 @@ pub(super) async fn run_chat_driver(
         Some(ActiveTurn::Generation(gen)) => gen.cancel_token.cancel(),
         None => {}
     }
+    activity.end();
     events.mark_done();
     info!(session_id = %session.session_id, "Chat run driver stopped");
     drop(outbound_tx);
+}
+
+/// Longest turn label, in characters.
+const TURN_LABEL_CHARS: usize = 120;
+
+/// What `turn` is called in PROCESSES: its prompt's first line, which
+/// starting it appended to `session`'s messages.
+fn turn_label(session: &Session, turn: &ActiveTurn) -> String {
+    let prompt = match turn {
+        ActiveTurn::Agent(_) => session
+            .messages
+            .last()
+            .map(Message::text_content)
+            .unwrap_or_default(),
+        ActiveTurn::Generation(_) => return "Generating media".into(),
+    };
+    let line = prompt.lines().map(str::trim).find(|line| !line.is_empty());
+    line.map_or_else(
+        || "Turn".into(),
+        |line| line.chars().take(TURN_LABEL_CHARS).collect(),
+    )
 }
 
 enum TurnAction {

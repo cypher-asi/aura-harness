@@ -5,6 +5,7 @@
 use super::*;
 use crate::cloud::test_node::TestNode;
 use aura_agent::checkpoint::{SessionCheckpoint, SessionUsage};
+use aura_core_protocol::cloud::{MeshProcess, MESH_PROCESS_AGENT};
 use aura_core_types::{RecordEntry, Transaction, TransactionType};
 use aura_engine_cloud::{FakeProvider, MachineInfo, MachineStatus};
 use aura_model::{ContentBlock, Message, Role, ToolResultContent};
@@ -726,4 +727,114 @@ async fn a_renamed_cloud_agent_is_named_so_in_its_placement_and_the_directory() 
         !p.hub.is_placed(AgentId::new([1; 32])),
         "only placed agents"
     );
+}
+
+/// A row of a machine's PROCESSES frame: a turn, or with a `parent` an
+/// agent spawned there.
+fn process(id: &str, agent: &str, status: &str, parent: Option<&str>) -> MeshProcess {
+    MeshProcess {
+        id: id.into(),
+        agent_id: agent.into(),
+        label: id.into(),
+        status: status.into(),
+        started_ms: 1,
+        kind: parent.map(|_| MESH_PROCESS_AGENT.into()),
+        run_id: parent.is_none().then(|| "run-1".into()),
+        parent: parent.map(str::to_string),
+        name: parent.map(|_| "helper".into()),
+    }
+}
+
+#[tokio::test]
+async fn the_turn_streamed_from_here_is_not_also_the_machine_s() {
+    let p = placed(CloudConfig::defaults()).await;
+    let hex = p.agent.to_hex();
+    let streamed = p.hub.streaming_turn(&hex, "run-1".into());
+    p.hub
+        .note_processes(&hex, vec![process("turn:run-1:1", &hex, "running", None)]);
+    assert!(
+        p.hub.machine_processes().is_empty(),
+        "shown as its own turn"
+    );
+
+    drop(streamed);
+    p.hub.note_processes(
+        &hex,
+        vec![
+            process("turn:run-1:1", &hex, "running", None),
+            process("turn:run-1:2", &hex, "running", None),
+        ],
+    );
+    let ids: Vec<String> = p
+        .hub
+        .machine_processes()
+        .into_iter()
+        .flat_map(|(_, rows)| rows.into_iter().map(|row| row.id))
+        .collect();
+    assert_eq!(
+        ids,
+        ["turn:run-1:2"],
+        "the streamed turn stays its own until it ends; the next one in the run is the machine's"
+    );
+}
+
+#[tokio::test]
+async fn work_a_machine_reports_keeps_it_awake_and_shows_only_its_agent_s() {
+    let p = placed(CloudConfig {
+        idle_hibernate_secs: 1,
+        ..CloudConfig::defaults()
+    })
+    .await;
+    let hex = p.agent.to_hex();
+    let helper = AgentId::new([7; 32]).to_hex();
+    let grandchild = AgentId::new([8; 32]).to_hex();
+    let known = AgentId::new([9; 32]);
+    append(
+        p.hub.store.as_ref(),
+        1,
+        reply(known, "an agent of this computer"),
+    );
+
+    p.hub.note_processes(
+        &hex,
+        vec![
+            process("turn:r1", &hex, "running", None),
+            process("turn:r2", &AgentId::new([5; 32]).to_hex(), "running", None),
+            process("agent:h", &helper, "idle", Some(&hex)),
+            process("agent:g", &grandchild, "running", Some(&helper)),
+            process("agent:k", &known.to_hex(), "running", Some(&hex)),
+            process(
+                "agent:o",
+                &AgentId::new([4; 32]).to_hex(),
+                "running",
+                Some("ff"),
+            ),
+        ],
+    );
+
+    let shown = p.hub.machine_processes();
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].0, hex);
+    let ids: Vec<&str> = shown[0].1.iter().map(|row| row.id.as_str()).collect();
+    assert_eq!(ids, ["turn:r1", "agent:h", "agent:g"]);
+
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    p.hub.sleep_idle_machines().await;
+    assert_eq!(
+        p.fake.machine(MACHINE).expect("machine").status,
+        MachineStatus::Running,
+        "kept awake while its work runs"
+    );
+
+    p.hub
+        .note_processes(&hex, vec![process("agent:h", &helper, "idle", Some(&hex))]);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    p.hub.sleep_idle_machines().await;
+    assert_eq!(
+        p.fake.machine(MACHINE).expect("machine").status,
+        MachineStatus::Hibernated
+    );
+
+    p.hub.forget_processes(&hex);
+    assert!(p.hub.machine_processes().is_empty());
 }

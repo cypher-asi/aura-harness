@@ -4,7 +4,8 @@
 //! and `task` spawns) and, on every snapshot, merges in what runs on its
 //! own: background agents in the [`AgentHost`], background commands in
 //! the [`ProcessManager`], and any OS process an agent's command started
-//! (see [`super::os_processes`]). Rows that disappear are kept, with how
+//! (see [`super::os_processes`]), and what cloud agents' machines have
+//! under way ([`RemoteRows`]). Rows that disappear are kept, with how
 //! they ended, until [`MAX_FINISHED`] newer ones push them out.
 //!
 //! A publisher task sends the list to the UI whenever it changes, so it
@@ -138,11 +139,19 @@ fn short_hex(hex: &str) -> String {
     hex.chars().take(8).collect()
 }
 
+/// Work that runs somewhere else: listed in every snapshot, stopped only
+/// where it runs.
+pub(crate) trait RemoteRows: Send + Sync {
+    /// The rows, with ids no other row here has.
+    fn rows(&self) -> Vec<ProcessSummary>;
+}
+
 /// Everything the Processes tab lists.
 pub struct ProcessTable {
     inner: Mutex<Inner>,
     host: Option<AgentHost>,
     commands: Option<Arc<ProcessManager>>,
+    remote: Mutex<Option<Arc<dyn RemoteRows>>>,
     scan_os: bool,
     /// Where finished rows are kept between sessions.
     history: OnceLock<PathBuf>,
@@ -155,9 +164,15 @@ impl ProcessTable {
             inner: Mutex::new(Inner::default()),
             host,
             commands,
+            remote: Mutex::new(None),
             scan_os: true,
             history: OnceLock::new(),
         })
+    }
+
+    /// List what `rows` has under way in every snapshot from now on.
+    pub(crate) fn set_remote(&self, rows: Arc<dyn RemoteRows>) {
+        *lock(&self.remote) = Some(rows);
     }
 
     /// Keep finished rows in `path` between sessions, starting with the
@@ -213,6 +228,7 @@ impl ProcessTable {
             inner: Mutex::new(Inner::default()),
             host,
             commands,
+            remote: Mutex::new(None),
             scan_os: false,
             history: OnceLock::new(),
         })
@@ -425,6 +441,8 @@ impl ProcessTable {
             (true, true) => os_processes::tagged_processes(),
             (true, false) => lock(&self.inner).os.values().cloned().collect(),
         };
+        let source = lock(&self.remote).clone();
+        let remote = source.map_or_else(Vec::new, |source| source.rows());
 
         let mut inner = lock(&self.inner);
         let mut found: Vec<Row> = Vec::new();
@@ -446,6 +464,9 @@ impl ProcessTable {
             .collect();
         for process in &os {
             found.push(os_row(&inner, process));
+        }
+        for summary in remote {
+            found.push(remote_row(&inner, summary));
         }
 
         let now: HashSet<String> = found.iter().map(|row| row.summary.id.clone()).collect();
@@ -536,6 +557,23 @@ fn agent_row(inner: &Inner, root: AgentId, tree: &[AgentInfo], info: &AgentInfo)
             ..ProcessSummary::default()
         },
         subject: Some(info.agent_id.to_hex()),
+        ppid: None,
+    }
+}
+
+/// A row of work running somewhere else, which can't be killed here.
+fn remote_row(inner: &Inner, mut summary: ProcessSummary) -> Row {
+    if summary.owner_name.is_empty() {
+        summary.owner_name = inner.name_of(&summary.owner_agent_id);
+    }
+    summary.killable = false;
+    let subject = match summary.kind {
+        ProcessKind::Turn => Some(summary.owner_agent_id.clone()),
+        _ => summary.id.strip_prefix("agent:").map(str::to_string),
+    };
+    Row {
+        summary,
+        subject,
         ppid: None,
     }
 }

@@ -20,7 +20,8 @@ pub mod sync;
 
 pub use host::{HostAddress, HostStats, SnapshotOrigin};
 pub use mesh::{
-    MeshAgent, MeshFrame, MeshMail, MeshMailKind, MeshPeer, MeshProcess, MESH_PROTOCOL,
+    MeshAgent, MeshFrame, MeshMail, MeshMailKind, MeshPeer, MeshProcess, MESH_PROCESS_AGENT,
+    MESH_PROTOCOL,
 };
 pub use sync::{
     GitClaim, NodeClaim, NodeClaimed, PlanTemplate, RecordPage, SealResponse, SessionSaved,

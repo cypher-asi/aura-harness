@@ -292,10 +292,15 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     handlers::announce_models(&mut state).await;
 
     let hub = Arc::clone(&state.hub);
+    let mut cloud_ended = state.cloud.take_ended();
     loop {
         tokio::select! {
             Some(done) = done_rx.recv() => {
                 handle_work_done(&mut state, done).await;
+            }
+            Some(agent_id) = cloud_ended.recv() => {
+                state.cloud.free(agent_id);
+                start_next(&mut state, agent_id).await;
             }
             () = hub.spawn_finished.notified() => {
                 state.park_finished_spawns().await;
@@ -801,6 +806,10 @@ async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId) {
     if state.queued.len(agent_id) == 0 {
         return;
     }
+    if state.cloud.cancel(agent_id) {
+        info!(%agent_id, "Sending queued work now; stopping the cloud turn");
+        return;
+    }
     if !state.hub.is_running(agent_id) {
         start_next(state, agent_id).await;
         return;
@@ -814,6 +823,10 @@ async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId) {
 
 /// Start the oldest work waiting for `agent_id`, if any.
 async fn start_next(state: &mut LoopState<'_>, agent_id: AgentId) {
+    if state.cloud.is_cloud(agent_id) {
+        cloud::start_queued(state, agent_id).await;
+        return;
+    }
     if state.queued.len(agent_id) == 0 {
         return;
     }

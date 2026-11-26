@@ -21,11 +21,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use aura_core_protocol::cloud::MeshProcess;
 use aura_core_types::{AgentId, Placement};
 use aura_engine_cloud::{BootEvent, BootReporter, BootStage, StageState};
 use aura_store_db::Store;
 use aura_ui_terminal::events::{
-    BootLogLine, BootPlanStep, BootStageState, BootUpdate, MessageData, MessageRole, ToolData,
+    BootLogLine, BootPlanStep, BootStageState, BootUpdate, MessageData, MessageRole, ProcessKind,
+    ProcessStatus, ProcessSummary, ToolData,
 };
 use aura_ui_terminal::host::{HostAction, HostRow, HostView, PlacementState, PlacementView};
 use aura_ui_terminal::UiCommand;
@@ -35,6 +37,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::agent_events::AgentUi;
+use super::processes::RemoteRows;
 use super::subagents::{lock, AgentHub};
 use super::turns::Work;
 use super::LoopState;
@@ -55,6 +58,25 @@ struct Shared {
     running: Mutex<std::collections::HashMap<AgentId, CancellationToken>>,
     /// Agents whose local session is older than their record.
     stale: Mutex<HashSet<AgentId>>,
+    /// Where an ended turn is said, once the loop listens
+    /// ([`CloudState::take_ended`]).
+    ended: Mutex<Option<tokio::sync::mpsc::UnboundedSender<AgentId>>>,
+}
+
+impl Shared {
+    /// `agent`'s cloud turn (or `/new`) is over. The loop frees it and
+    /// starts what it queued meanwhile, so nothing sent while the turn
+    /// ended overtakes that; with no loop listening it is freed here.
+    fn end_turn(&self, agent: AgentId) {
+        let told = self
+            .ended
+            .lock()
+            .as_ref()
+            .is_some_and(|ended| ended.send(agent).is_ok());
+        if !told {
+            self.running.lock().remove(&agent);
+        }
+    }
 }
 
 /// The loop's cloud state.
@@ -113,6 +135,19 @@ impl CloudState {
             .get(&agent)
             .map(CancellationToken::cancel)
             .is_some()
+    }
+
+    /// The agents whose cloud turn (or `/new`) ended, each to be freed
+    /// with [`Self::free`].
+    pub(super) fn take_ended(&self) -> tokio::sync::mpsc::UnboundedReceiver<AgentId> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *self.shared.ended.lock() = Some(tx);
+        rx
+    }
+
+    /// Let `agent`, whose cloud turn ended, take work again.
+    pub(super) fn free(&self, agent: AgentId) {
+        self.shared.running.lock().remove(&agent);
     }
 
     fn hub(&self) -> Option<Arc<CloudHub>> {
@@ -324,8 +359,85 @@ async fn ensure_hub(
     ))));
     hub.start_reported(&keep, boot).await;
     *state.cloud.shared.hub.lock() = Some(Arc::clone(&hub));
+    state
+        .processes
+        .set_remote(Arc::new(MachineRows(Arc::downgrade(&hub))));
     start_publisher(state);
     Ok(hub)
+}
+
+/// What cloud agents' machines have under way, as PROCESSES rows.
+struct MachineRows(std::sync::Weak<CloudHub>);
+
+impl RemoteRows for MachineRows {
+    fn rows(&self) -> Vec<ProcessSummary> {
+        self.0.upgrade().map_or_else(Vec::new, |hub| {
+            hub.machine_processes()
+                .iter()
+                .flat_map(|(agent, rows)| machine_rows(agent, rows))
+                .collect()
+        })
+    }
+}
+
+/// `rows`, what placed `agent`'s machine has under way, as PROCESSES
+/// rows. Spawned agents nest under the agent that spawned them, with the
+/// ids local ones have, so MEMBERS lists them too.
+fn machine_rows(agent: &str, rows: &[MeshProcess]) -> Vec<ProcessSummary> {
+    let parents: std::collections::HashMap<&str, &str> = rows
+        .iter()
+        .filter(|row| row.is_agent())
+        .filter_map(|row| Some((row.agent_id.as_str(), row.parent.as_deref()?)))
+        .collect();
+    let names: std::collections::HashMap<&str, &str> = rows
+        .iter()
+        .filter_map(|row| Some((row.agent_id.as_str(), row.name.as_deref()?)))
+        .collect();
+    rows.iter()
+        .map(|row| {
+            let status = match row.status.as_str() {
+                "idle" => ProcessStatus::Idle,
+                "paused" => ProcessStatus::Paused,
+                "done" => ProcessStatus::Exited,
+                "failed" => ProcessStatus::Failed,
+                _ => ProcessStatus::Running,
+            };
+            let summary = ProcessSummary {
+                label: row.label.clone(),
+                status,
+                started_ms: row.started_ms,
+                jump_agent_id: agent.to_string(),
+                ..ProcessSummary::default()
+            };
+            if !row.is_agent() {
+                return ProcessSummary {
+                    id: format!("machine:{}", row.id),
+                    kind: ProcessKind::Turn,
+                    detail: row.label.clone(),
+                    owner_agent_id: row.agent_id.clone(),
+                    ..summary
+                };
+            }
+            let owner = row.parent.clone().unwrap_or_else(|| agent.to_string());
+            let mut chain = Vec::new();
+            let mut above = parents.get(owner.as_str()).copied();
+            while let Some(parent) = above.filter(|_| chain.len() < rows.len()) {
+                chain.push(parent.to_string());
+                above = parents.get(parent).copied();
+            }
+            ProcessSummary {
+                id: format!("agent:{}", row.agent_id),
+                kind: ProcessKind::Agent,
+                owner_name: names
+                    .get(owner.as_str())
+                    .map(|name| (*name).to_string())
+                    .unwrap_or_default(),
+                owner_agent_id: owner,
+                parent_chain: chain,
+                ..summary
+            }
+        })
+        .collect()
 }
 
 /// The hub, started if need be. With a `console`, it shows at once, the
@@ -893,7 +1005,8 @@ pub(super) async fn handle_setup(state: &mut LoopState<'_>) {
 }
 
 /// Prompts and commands for a cloud agent, or for one being moved.
-/// Returns `false` when `work` is for the local kernel after all.
+/// Returns the work when it is for the local kernel after all. Work for
+/// a cloud agent with a turn running waits in its queue.
 pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work) -> Option<Work> {
     if state.cloud.is_moving(agent) {
         system(
@@ -915,17 +1028,36 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
         system(state, agent, refusal).await;
         return None;
     }
+    if state.cloud.is_running(agent) {
+        info!(%agent, "Cloud agent is busy; queueing work");
+        state.queued.push_back(agent, work);
+        super::hud::send_queued(state, agent).await;
+        return None;
+    }
+    run(state, hub, agent, work).await;
+    None
+}
+
+/// Start the work queued for cloud agent `agent`, an item at a time while
+/// it has no turn running: one that starts none (a command, a refusal)
+/// leaves the next free to.
+pub(super) async fn start_queued(state: &mut LoopState<'_>, agent: AgentId) {
+    while !state.cloud.is_running(agent) {
+        let Some(work) = state.queued.pop_front(agent) else {
+            return;
+        };
+        super::hud::send_queued(state, agent).await;
+        if let Some(work) = submit(state, agent, work).await {
+            super::start_work(state, agent, work).await;
+            return;
+        }
+    }
+}
+
+/// Run `work` on cloud agent `agent`, which has no turn running.
+async fn run(state: &mut LoopState<'_>, hub: Arc<CloudHub>, agent: AgentId, work: Work) {
     match work {
         Work::Prompt { prompt, shown } => {
-            if state.cloud.shared.running.lock().contains_key(&agent) {
-                system(
-                    state,
-                    agent,
-                    "The cloud agent is still working; wait or stop it first.",
-                )
-                .await;
-                return None;
-            }
             let ui = AgentUi::new(state.commands.clone(), agent);
             if !shown {
                 ui.send(UiCommand::ShowMessage(MessageData::new(
@@ -958,7 +1090,7 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
                         ),
                     )
                     .await;
-                    return None;
+                    return;
                 }
             }
             let model =
@@ -990,6 +1122,7 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
                 titles,
                 context_limit: model.as_deref().map(aura_engine::context_window_for_model),
             };
+            // Stopped from the chat or its PROCESSES row alike.
             let cancel = CancellationToken::new();
             state
                 .cloud
@@ -997,12 +1130,23 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
                 .running
                 .lock()
                 .insert(agent, cancel.clone());
-            let mut rx = hub.run_turn(agent, prompt.text, model, title_model, jwt, cancel);
+            let mut row = super::handlers::turn_summary(
+                agent,
+                &prompt.text,
+                model.as_deref().unwrap_or_default(),
+            );
+            row.model.clone_from(&model);
+            state.processes.start(row, Some(cancel.clone()));
+            let mut rx = hub.run_turn(agent, prompt.text, model, title_model, jwt, cancel.clone());
             let shared = Arc::clone(&state.cloud.shared);
+            let processes = Arc::clone(&state.processes);
             let sessions = state.hub.factory.checkpoints.clone();
             tokio::spawn(async move {
-                forward(&ui, &mut rx, &mut extras).await;
-                shared.running.lock().remove(&agent);
+                let end = forward(&ui, &mut rx, &mut extras, &cancel).await;
+                processes.finish(
+                    &super::processes::turn_id(agent),
+                    end.status(cancel.is_cancelled()),
+                );
                 // The hub copies the turn's session here before it lets go
                 // of the channel; the totals come from that copy.
                 while rx.recv().await.is_some() {}
@@ -1016,6 +1160,7 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
                         .await;
                     }
                 }
+                shared.end_turn(agent);
             });
         }
         Work::Command { command, .. } => {
@@ -1041,7 +1186,6 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
             system(state, agent, "Cloud agents summarize and build plans on their own machine; send it as a message instead.").await;
         }
     }
-    None
 }
 
 /// `/new` for a cloud agent: its node writes the `SessionStart`, waking
@@ -1085,7 +1229,7 @@ pub(super) async fn new_session(state: &mut LoopState<'_>, agent: AgentId) -> bo
     let ui = AgentUi::new(state.commands.clone(), agent);
     tokio::spawn(async move {
         let result = hub.new_session(agent).await;
-        shared.running.lock().remove(&agent);
+        shared.end_turn(agent);
         if let Err(err) = result {
             warn!(%agent, error = %err, "the cloud node did not start a new session");
             ui.send(UiCommand::ShowMessage(MessageData::new(
@@ -1161,12 +1305,36 @@ struct TurnExtras {
     context_limit: Option<u64>,
 }
 
+/// How a cloud turn's stream ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnEnd {
+    /// The reply ended.
+    Done,
+    /// The turn failed, or its stream closed first.
+    Failed,
+}
+
+impl TurnEnd {
+    /// The PROCESSES status of a turn that ended so, when the user
+    /// `stopped` it or not.
+    fn status(self, stopped: bool) -> ProcessStatus {
+        match (self, stopped) {
+            (_, true) => ProcessStatus::Killed,
+            (Self::Done, false) => ProcessStatus::Exited,
+            (Self::Failed, false) => ProcessStatus::Failed,
+        }
+    }
+}
+
 /// Show a cloud turn's events in its agent's chat, until the turn ends.
+/// A turn ended by `cancel` says so, without an error.
 async fn forward(
     ui: &AgentUi,
     rx: &mut tokio::sync::mpsc::Receiver<RemoteEvent>,
     extras: &mut TurnExtras,
-) {
+    cancel: &CancellationToken,
+) -> TurnEnd {
+    let mut end = TurnEnd::Failed;
     let mut streaming = false;
     let mut thinking = false;
     // A sleeping machine's wake, shown until the turn's first event.
@@ -1188,6 +1356,11 @@ async fn forward(
         }
         if let Some(console) = waking.take() {
             match &event {
+                RemoteEvent::Failed(_) if cancel.is_cancelled() => {
+                    console
+                        .end(false, "The turn was stopped.".to_string())
+                        .await;
+                }
                 RemoteEvent::Failed(err) => {
                     console
                         .end(false, format!("Could not wake the machine: {err}"))
@@ -1257,6 +1430,13 @@ async fn forward(
                     &usage, limit,
                 )))
                 .await;
+                end = TurnEnd::Done;
+                break;
+            }
+            RemoteEvent::Failed(err) if cancel.is_cancelled() => {
+                info!(error = %err, "Cancelled cloud turn ended with an error");
+                ui.send(UiCommand::ShowWarning("Turn cancelled".to_string()))
+                    .await;
                 break;
             }
             RemoteEvent::Failed(err) => {
@@ -1293,6 +1473,7 @@ async fn forward(
     // alone leaves it there, so the working line keeps saying Thinking
     // after the turn is over.
     ui.send(UiCommand::Complete).await;
+    end
 }
 
 impl Drop for CloudState {
@@ -1407,8 +1588,9 @@ mod forward_tests {
             context_limit: Some(1_000),
             ..TurnExtras::default()
         };
-        forward(&ui, &mut events, &mut extras).await;
+        let end = forward(&ui, &mut events, &mut extras, &CancellationToken::new()).await;
 
+        assert_eq!(end, TurnEnd::Done);
         let sent = commands(&mut rx);
         ends_the_turn(&sent);
         assert!(sent
@@ -1434,8 +1616,15 @@ mod forward_tests {
         tx.send(RemoteEvent::Failed("boom".into())).await.unwrap();
         drop(tx);
 
-        forward(&ui, &mut events, &mut TurnExtras::default()).await;
+        let end = forward(
+            &ui,
+            &mut events,
+            &mut TurnExtras::default(),
+            &CancellationToken::new(),
+        )
+        .await;
 
+        assert_eq!(end, TurnEnd::Failed);
         let sent = commands(&mut rx);
         ends_the_turn(&sent);
         assert!(sent.iter().any(|command| matches!(
@@ -1445,14 +1634,63 @@ mod forward_tests {
     }
 
     #[tokio::test]
+    async fn a_stopped_cloud_turn_says_so_without_an_error() {
+        let (ui, mut rx) = chat();
+        let (tx, mut events) = mpsc::channel(8);
+        tx.send(RemoteEvent::Text("half a reply".into()))
+            .await
+            .unwrap();
+        tx.send(RemoteEvent::Failed(
+            "machine aura-1 is cancelled; cannot finish the turn".into(),
+        ))
+        .await
+        .unwrap();
+        drop(tx);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        let end = forward(&ui, &mut events, &mut TurnExtras::default(), &cancel).await;
+
+        assert_eq!(end.status(cancel.is_cancelled()), ProcessStatus::Killed);
+        let sent = commands(&mut rx);
+        ends_the_turn(&sent);
+        assert!(
+            sent.iter().any(
+                |command| matches!(command, UiCommand::ShowWarning(message) if message == "Turn cancelled")
+            ),
+            "{sent:?}"
+        );
+        assert!(
+            !sent
+                .iter()
+                .any(|command| matches!(command, UiCommand::ShowError(_))),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn a_cloud_turn_s_row_ends_as_the_turn_did() {
+        assert_eq!(TurnEnd::Done.status(false), ProcessStatus::Exited);
+        assert_eq!(TurnEnd::Failed.status(false), ProcessStatus::Failed);
+        assert_eq!(TurnEnd::Done.status(true), ProcessStatus::Killed);
+    }
+
+    #[tokio::test]
     async fn a_dropped_cloud_turn_completes_the_chat() {
         let (ui, mut rx) = chat();
         let (tx, mut events) = mpsc::channel(8);
         tx.send(RemoteEvent::Thinking("hmm".into())).await.unwrap();
         drop(tx);
 
-        forward(&ui, &mut events, &mut TurnExtras::default()).await;
+        let end = forward(
+            &ui,
+            &mut events,
+            &mut TurnExtras::default(),
+            &CancellationToken::new(),
+        )
+        .await;
 
+        assert_eq!(end, TurnEnd::Failed, "closed before the reply ended");
         let sent = commands(&mut rx);
         ends_the_turn(&sent);
         assert!(sent
@@ -1498,7 +1736,7 @@ mod forward_tests {
             ..TurnExtras::default()
         };
 
-        forward(&ui, &mut events, &mut extras).await;
+        forward(&ui, &mut events, &mut extras, &CancellationToken::new()).await;
 
         assert_eq!(*seen.lock(), ["Build fix"], "and no title from the prompt");
         let sent = commands(&mut rx);
@@ -1523,7 +1761,7 @@ mod forward_tests {
                 ..TurnExtras::default()
             };
 
-            forward(&ui, &mut events, &mut extras).await;
+            forward(&ui, &mut events, &mut extras, &CancellationToken::new()).await;
 
             assert_eq!(*seen.lock(), ["fix the build"]);
         }
@@ -1542,6 +1780,84 @@ mod forward_tests {
         assert!(!runs_on_machine("local/qwen3:4b", &linked));
         assert!(!runs_on_machine("gate", &linked));
         assert!(!runs_on_machine("", &linked));
+    }
+}
+
+#[cfg(test)]
+mod machine_tests {
+    use super::*;
+    use aura_core_protocol::cloud::MESH_PROCESS_AGENT;
+
+    fn row(id: &str, agent: &str, status: &str, parent: Option<&str>) -> MeshProcess {
+        MeshProcess {
+            id: id.into(),
+            agent_id: agent.into(),
+            label: id.into(),
+            status: status.into(),
+            started_ms: 5,
+            kind: parent.map(|_| MESH_PROCESS_AGENT.into()),
+            run_id: None,
+            parent: parent.map(str::to_string),
+            name: parent.map(|_| format!("name of {agent}")),
+        }
+    }
+
+    #[test]
+    fn a_machine_s_work_becomes_rows_members_can_list() {
+        let rows = machine_rows(
+            "aa",
+            &[
+                row("turn:r1:5", "aa", "running", None),
+                row("agent:bb", "bb", "running", Some("aa")),
+                row("agent:cc", "cc", "idle", Some("bb")),
+            ],
+        );
+
+        assert_eq!(rows[0].id, "machine:turn:r1:5");
+        assert_eq!(rows[0].kind, ProcessKind::Turn);
+        assert_eq!(rows[0].owner_agent_id, "aa");
+
+        assert_eq!(rows[1].id, "agent:bb");
+        assert_eq!(rows[1].kind, ProcessKind::Agent);
+        assert_eq!(rows[1].owner_agent_id, "aa");
+        assert!(rows[1].parent_chain.is_empty());
+        assert_eq!(rows[1].status, ProcessStatus::Running);
+
+        assert_eq!(rows[2].owner_agent_id, "bb");
+        assert_eq!(rows[2].owner_name, "name of bb");
+        assert_eq!(rows[2].parent_chain, ["aa"]);
+        assert_eq!(rows[2].status, ProcessStatus::Idle);
+
+        assert!(rows.iter().all(|row| row.jump_agent_id == "aa"));
+        assert!(rows.iter().all(|row| !row.killable));
+    }
+
+    #[test]
+    fn an_ended_cloud_turn_frees_its_agent_through_the_loop() {
+        let cloud = CloudState::default();
+        let agent = AgentId::generate();
+        cloud
+            .shared
+            .running
+            .lock()
+            .insert(agent, CancellationToken::new());
+        cloud.shared.end_turn(agent);
+        assert!(!cloud.is_running(agent), "no loop listens: freed at once");
+
+        let mut ended = cloud.take_ended();
+        cloud
+            .shared
+            .running
+            .lock()
+            .insert(agent, CancellationToken::new());
+        cloud.shared.end_turn(agent);
+        assert!(
+            cloud.is_running(agent),
+            "what is sent until the loop frees it still queues"
+        );
+        assert_eq!(ended.try_recv().ok(), Some(agent));
+        cloud.free(agent);
+        assert!(!cloud.is_running(agent));
     }
 }
 

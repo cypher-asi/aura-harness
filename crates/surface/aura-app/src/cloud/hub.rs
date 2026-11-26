@@ -82,6 +82,7 @@ use tokio_util::sync::CancellationToken;
 use super::node_client::{NodeClient, NODE_TIMEOUT};
 use super::store::{agent_id_of, record_placement, StoreLedger, StoreSink};
 
+mod machine_work;
 mod persist;
 pub use persist::SyncStatus;
 
@@ -428,6 +429,10 @@ pub struct CloudHub {
     sessions: Mutex<Option<Checkpoints>>,
     /// The user signed in here: local agents act as this user.
     current_owner: Mutex<Owner>,
+    /// What each link's node has under way for its agent, by agent hex.
+    work: Mutex<HashMap<String, machine_work::MachineWork>>,
+    /// The chat run each agent's turn is streamed from, by agent hex.
+    streaming: Mutex<HashMap<String, String>>,
     stop: CancellationToken,
 }
 
@@ -554,6 +559,8 @@ impl CloudHub {
             repos: Mutex::new(repos),
             sessions: Mutex::new(None),
             current_owner: Mutex::new(Owner::Local),
+            work: Mutex::new(HashMap::new()),
+            streaming: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
         });
         hub.save_placements();
@@ -2706,6 +2713,10 @@ async fn stream_turn(
 ) -> CloudResult<()> {
     use tokio_tungstenite::tungstenite::Message;
     let started = node.start_run(&request).await?;
+    let _streamed = started
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(|run| hub.streaming_turn(&agent.to_hex(), run.to_string()));
     let path = started
         .get("event_stream_url")
         .and_then(serde_json::Value::as_str)
@@ -2861,6 +2872,7 @@ async fn run_link(
     // Mail queued for a socket that is gone still goes out, directly.
     outbox.close();
     if let Some(hub) = hub.upgrade() {
+        hub.forget_processes(&hex);
         while let Ok(frame) = outbox.try_recv() {
             if let MeshFrame::Mail(mail) = frame {
                 hub.send_direct(&hex, mail);
@@ -2956,6 +2968,7 @@ async fn run_link_socket(
                                 hub.copy_soon(agent);
                             }
                         }
+                        MeshFrame::Processes { processes } => hub.note_processes(hex, processes),
                         MeshFrame::Ping { ms } => {
                             let _ = sink.send(Message::Text(MeshFrame::Pong { ms }.to_text().into())).await;
                         }
@@ -2963,6 +2976,10 @@ async fn run_link_socket(
                     }
                 }
             }
+        }
+        // The next socket's first frame says what runs now.
+        if let Some(hub) = hub.upgrade() {
+            hub.forget_processes(hex);
         }
     }
 }

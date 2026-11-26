@@ -173,6 +173,52 @@ pub(crate) struct RunLinkage {
     pub(crate) parent_chain: Vec<String>,
 }
 
+/// The turn a chat run is taking, for the PROCESSES tab of the computer
+/// that placed its agent here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TurnUnderWay {
+    /// What it is: its prompt's first line.
+    pub(crate) label: String,
+    /// When it started, Unix milliseconds.
+    pub(crate) started_ms: u64,
+}
+
+/// The turn a run's driver has under way, if any.
+#[derive(Debug, Default)]
+pub(crate) struct RunActivity(Mutex<Option<TurnUnderWay>>);
+
+impl RunActivity {
+    pub(crate) fn begin(&self, label: String) {
+        *self.slot() = Some(TurnUnderWay {
+            label,
+            started_ms: aura_agent::checkpoint::now_ms(),
+        });
+    }
+
+    pub(crate) fn end(&self) {
+        *self.slot() = None;
+    }
+
+    pub(crate) fn current(&self) -> Option<TurnUnderWay> {
+        self.slot().clone()
+    }
+
+    fn slot(&self) -> std::sync::MutexGuard<'_, Option<TurnUnderWay>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// What a run's driver shares with its registry entry besides events:
+/// the attached clients it may not reap under, the stop signal, and the
+/// turn it has under way.
+pub(crate) struct RunControl {
+    pub(crate) attach_count: Arc<AtomicUsize>,
+    pub(crate) shutdown: CancellationToken,
+    pub(crate) activity: Arc<RunActivity>,
+}
+
 /// Registry entry for a live chat run. Shared between the registry
 /// (`RouterState::chat_runs`), the driver task, and every attached WS
 /// adapter.
@@ -194,6 +240,10 @@ pub(crate) struct ChatRunHandle {
     /// Parent-linkage metadata. `None` for a top-level run, `Some` for a
     /// child subagent run.
     pub(crate) linkage: Option<RunLinkage>,
+    /// The agent whose session a top-level run drives.
+    pub(crate) agent: Option<aura_core_types::AgentId>,
+    /// The turn a top-level run has under way.
+    pub(crate) activity: Arc<RunActivity>,
 }
 
 /// `run_id` → live chat run.
@@ -211,6 +261,8 @@ pub(crate) struct RunRegistration {
     pub(crate) attach_count: Arc<AtomicUsize>,
     pub(crate) shutdown: CancellationToken,
     pub(crate) linkage: Option<RunLinkage>,
+    pub(crate) agent: Option<aura_core_types::AgentId>,
+    pub(crate) activity: Arc<RunActivity>,
 }
 
 /// Build a [`ChatRunHandle`] from `reg` and insert it into `registry`
@@ -227,6 +279,8 @@ pub(crate) fn register_run(
         attach_count: reg.attach_count,
         shutdown: reg.shutdown,
         linkage: reg.linkage,
+        agent: reg.agent,
+        activity: reg.activity,
     });
     registry.insert(run_id, handle.clone());
     handle
@@ -273,6 +327,7 @@ pub(crate) fn spawn_chat_run(
     let (commands_tx, commands_rx) = mpsc::channel::<InboundMessage>(256);
     let attach_count = Arc::new(AtomicUsize::new(0));
     let shutdown = CancellationToken::new();
+    let activity = Arc::new(RunActivity::default());
 
     let handle = register_run(
         &registry,
@@ -284,6 +339,8 @@ pub(crate) fn spawn_chat_run(
             shutdown: shutdown.clone(),
             // Top-level run: no parent linkage.
             linkage: None,
+            agent: Some(session.agent_id),
+            activity: Arc::clone(&activity),
         },
     );
 
@@ -295,8 +352,11 @@ pub(crate) fn spawn_chat_run(
             events,
             outbound_tx,
             commands_rx,
-            attach_count,
-            shutdown,
+            RunControl {
+                attach_count,
+                shutdown,
+                activity,
+            },
         )
         .await;
         // Driver stopped: drop the registry entry so no new attach finds

@@ -25,11 +25,12 @@ use std::time::Duration;
 use aura_agent::checkpoint::{SessionCheckpoint, CHECKPOINT_VERSION};
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_core_protocol::cloud::{
-    MeshFrame, MeshMail, MeshMailKind, MeshPeer, SealResponse, SessionSaved, SessionStarted,
-    SyncImport, SyncImported, TracePage, WorkspacePatch, MESH_PROTOCOL,
+    MeshFrame, MeshMail, MeshMailKind, MeshPeer, MeshProcess, SealResponse, SessionSaved,
+    SessionStarted, SyncImport, SyncImported, TracePage, WorkspacePatch, MESH_PROCESS_AGENT,
+    MESH_PROTOCOL,
 };
 use aura_core_types::{AgentId, Transaction};
-use aura_engine::agents::{MessageKind, RemoteMail, RemoteRouter, ThreadId};
+use aura_engine::agents::{AgentInfo, AgentState, MessageKind, RemoteMail, RemoteRouter, ThreadId};
 use aura_engine_cloud::mesh::{global_thread, MailBook};
 use aura_engine_cloud::replica::verify_page;
 use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
@@ -57,6 +58,9 @@ const HOST_STATS_EVERY: Duration = Duration::from_secs(5);
 /// How often the hosted agents' heads are compared with what the hub
 /// was last told.
 const HEAD_WATCH_EVERY: Duration = Duration::from_secs(1);
+/// How often the hosted agents' turns and spawned agents are compared
+/// with what the hub was last told.
+const PROCESS_WATCH_EVERY: Duration = Duration::from_secs(1);
 /// Limit on a direct send to a peer node.
 const PEER_TIMEOUT: Duration = Duration::from_secs(15);
 /// Runs of an agent served per traces call: its open run and the ones
@@ -745,6 +749,11 @@ async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
         let state = state.clone();
         tokio::spawn(async move { watch_heads(&state, &tx).await })
     };
+    let processes = {
+        let tx = tx.clone();
+        let state = state.clone();
+        tokio::spawn(async move { watch_processes(&state, &tx).await })
+    };
 
     while let Some(Ok(message)) = stream.next().await {
         let WsMessage::Text(text) = message else {
@@ -777,6 +786,7 @@ async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
             _ => {}
         }
     }
+    processes.abort();
     heads.abort();
     stats.abort();
     writer.abort();
@@ -813,6 +823,89 @@ async fn watch_heads(state: &RouterState, tx: &mpsc::UnboundedSender<MeshFrame>)
         }
         tokio::time::sleep(HEAD_WATCH_EVERY).await;
     }
+}
+
+/// Tell the hub on `tx` what its agents have under way here whenever
+/// that changes: their turns, and the agents they spawned. The first
+/// look is always sent, so the hub drops what an earlier socket said.
+async fn watch_processes(state: &RouterState, tx: &mpsc::UnboundedSender<MeshFrame>) {
+    let mut first_seen: HashMap<String, u64> = HashMap::new();
+    let mut told: Option<Vec<MeshProcess>> = None;
+    loop {
+        let rows = node_processes(state, &mut first_seen);
+        if told.as_ref() != Some(&rows) {
+            let frame = MeshFrame::Processes {
+                processes: rows.clone(),
+            };
+            if tx.send(frame).is_err() {
+                return;
+            }
+            told = Some(rows);
+        }
+        tokio::time::sleep(PROCESS_WATCH_EVERY).await;
+    }
+}
+
+/// The hosted agents' turns under way and the agents they spawned, in a
+/// stable order. `first_seen` dates the spawned agents' rows.
+fn node_processes(state: &RouterState, first_seen: &mut HashMap<String, u64>) -> Vec<MeshProcess> {
+    let hosted = state.cloud.hosted();
+    let mut rows: Vec<MeshProcess> = state
+        .chat_runs
+        .iter()
+        .filter_map(|run| {
+            let agent = run.value().agent.filter(|agent| hosted.contains(agent))?;
+            let turn = run.value().activity.current()?;
+            // A run takes turn after turn: each is a row of its own.
+            Some(MeshProcess {
+                id: format!("turn:{}:{}", run.key(), turn.started_ms),
+                agent_id: agent.to_hex(),
+                label: turn.label,
+                status: "running".into(),
+                started_ms: turn.started_ms,
+                kind: None,
+                run_id: Some(run.key().clone()),
+                parent: None,
+                name: None,
+            })
+        })
+        .collect();
+    let now = aura_agent::checkpoint::now_ms();
+    for root in hosted {
+        let tree = state.agent_host.tree(root);
+        rows.extend(
+            tree.iter()
+                .filter_map(|info| spawned_row(root, info, first_seen, now)),
+        );
+    }
+    first_seen.retain(|id, _| rows.iter().any(|row| row.id == *id));
+    rows.sort_by(|a, b| a.id.cmp(&b.id));
+    rows
+}
+
+/// The row of `info`, an agent in `root`'s tree, unless it is `root`.
+fn spawned_row(
+    root: AgentId,
+    info: &AgentInfo,
+    first_seen: &mut HashMap<String, u64>,
+    now: u64,
+) -> Option<MeshProcess> {
+    if matches!(info.state, AgentState::Root) {
+        return None;
+    }
+    let id = format!("agent:{}", info.agent_id.to_hex());
+    let started_ms = *first_seen.entry(id.clone()).or_insert(now);
+    Some(MeshProcess {
+        id,
+        agent_id: info.agent_id.to_hex(),
+        label: format!("{} ({})", info.name, info.role),
+        status: info.state.as_str().into(),
+        started_ms,
+        kind: Some(MESH_PROCESS_AGENT.into()),
+        run_id: None,
+        parent: Some(info.parent.unwrap_or(root).to_hex()),
+        name: Some(info.name.clone()),
+    })
 }
 
 #[cfg(test)]
@@ -1462,5 +1555,104 @@ mod tests {
             ..mail
         })
         .is_err());
+    }
+
+    fn run_of(
+        state: &RouterState,
+        run_id: &str,
+        agent: AgentId,
+    ) -> Arc<crate::gateway::session::chat_run::ChatRunHandle> {
+        use crate::gateway::session::chat_run::{register_run, ChatEventChannel, RunRegistration};
+        let (commands, _commands_rx) = mpsc::channel(1);
+        register_run(
+            &state.chat_runs,
+            run_id.into(),
+            RunRegistration {
+                commands,
+                events: ChatEventChannel::new(),
+                attach_count: Arc::default(),
+                shutdown: tokio_util::sync::CancellationToken::new(),
+                linkage: None,
+                agent: Some(agent),
+                activity: Arc::default(),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn the_hub_hears_of_turns_only_while_they_run_and_only_of_hosted_agents() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = cloud_state(dir.path());
+        claim(&state);
+        let hosted = AgentId::new([1; 32]);
+        state.cloud.host(hosted);
+        let busy = run_of(&state, "r1", hosted);
+        run_of(&state, "r2", AgentId::new([2; 32]))
+            .activity
+            .begin("Not hosted here".into());
+        let mut first_seen = HashMap::new();
+        assert!(node_processes(&state, &mut first_seen).is_empty());
+
+        busy.activity.begin("Fix the parser".into());
+        let rows = node_processes(&state, &mut first_seen);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].id.starts_with("turn:r1:"), "{rows:?}");
+        assert_eq!(rows[0].run_id.as_deref(), Some("r1"));
+        assert_eq!(rows[0].agent_id, hosted.to_hex());
+        assert_eq!(rows[0].label, "Fix the parser");
+        assert!(rows[0].is_running() && !rows[0].is_agent());
+
+        busy.activity.end();
+        assert!(node_processes(&state, &mut first_seen).is_empty());
+    }
+
+    #[test]
+    fn a_spawned_agent_is_a_row_under_its_parent_dated_when_first_seen() {
+        let root = AgentId::new([1; 32]);
+        let child = AgentId::new([2; 32]);
+        let info = |agent_id, parent, state| AgentInfo {
+            agent_id,
+            name: "scout".into(),
+            role: "explorer".into(),
+            parent,
+            depth: 1,
+            state,
+            model: String::new(),
+            turns: 0,
+            queued: 0,
+            last_reply: None,
+        };
+        let mut first_seen = HashMap::new();
+        assert_eq!(
+            spawned_row(
+                root,
+                &info(root, None, AgentState::Root),
+                &mut first_seen,
+                5
+            ),
+            None
+        );
+        let row = spawned_row(
+            root,
+            &info(child, None, AgentState::Idle),
+            &mut first_seen,
+            5,
+        )
+        .expect("a row");
+        assert!(row.is_agent() && !row.is_running());
+        assert_eq!(row.id, format!("agent:{}", child.to_hex()));
+        assert_eq!(row.label, "scout (explorer)");
+        assert_eq!(row.name.as_deref(), Some("scout"));
+        assert_eq!(row.parent, Some(root.to_hex()));
+
+        let again = spawned_row(
+            root,
+            &info(child, Some(root), AgentState::Running),
+            &mut first_seen,
+            9,
+        )
+        .expect("a row");
+        assert!(again.is_running());
+        assert_eq!(again.started_ms, 5);
     }
 }

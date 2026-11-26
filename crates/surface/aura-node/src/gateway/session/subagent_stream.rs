@@ -185,6 +185,8 @@ impl RuntimeSubagentObservabilityHook {
                 attach_count: Arc::new(AtomicUsize::new(0)),
                 shutdown,
                 linkage: Some(linkage),
+                agent: None,
+                activity: Arc::default(),
             },
         );
 
