@@ -39,6 +39,7 @@ use super::text::Measure;
 use crate::app::{PlanDoc, ProseRow};
 use crate::{App, Theme};
 use ratatui::{
+    buffer::Buffer,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
@@ -117,74 +118,96 @@ fn layout(doc: &PlanDoc, width: usize, measure: Measure, theme: &Theme) -> Laid 
     }
 
     if !doc.todos.is_empty() {
-        laid.gap();
-        let (closed, total) = doc.progress();
-        let label = Style::default()
-            .fg(theme.colors.muted)
-            .add_modifier(Modifier::BOLD);
-        laid.push(Line::from(vec![
-            Span::styled("TODOS", label),
-            Span::styled(
-                format!("  {closed}/{total}"),
-                Style::default().fg(theme.colors.muted),
-            ),
-        ]));
-        let room = width.saturating_sub(usize::from(TODO_INDENT)).max(1);
-        for todo in &doc.todos {
-            laid.todo_rows.push(laid.lines.len());
-            let style = todo_style(todo.state, theme);
-            let mut text = todo.content.clone();
-            if let Some(assignee) = &todo.assignee {
-                text.push_str(&format!(" (@{assignee})"));
-            }
-            let (mut lines, prose) = render_markdown_flow(&text, room, style, theme, measure);
-            if lines.is_empty() {
-                lines.push(Line::default());
-            }
-            let box_style = Style::default().fg(super::plans::marker_color(todo.state, theme));
-            for (i, line) in lines.iter_mut().enumerate() {
-                let lead = if i == 0 {
-                    Span::styled(format!("{} ", marker(todo.state)), box_style)
-                } else {
-                    Span::raw("  ")
-                };
-                line.spans.insert(0, lead);
-            }
-            let prose = prose
-                .into_iter()
-                .map(|cols| cols.map(|cols| cols.saturating_add(TODO_INDENT)))
-                .collect();
-            laid.extend(lines, prose);
-        }
+        push_todos(&mut laid, doc, (width, measure), theme);
     }
 
     if !doc.body.trim().is_empty() {
-        let rule = Style::default().fg(theme.colors.faint);
-        laid.push(Line::default());
-        laid.push(Line::from(Span::styled("─".repeat(width), rule)));
-        laid.push(Line::default());
-        let base = Style::default().fg(theme.colors.text);
-        for segment in parse_content_segments(&doc.body) {
-            match segment {
-                ContentSegment::Text(text) => {
-                    let (lines, prose) = render_markdown_flow(&text, width, base, theme, measure);
-                    laid.extend(lines, prose);
-                }
-                ContentSegment::CodeBlock { language, code } => {
-                    let mut lines = Vec::new();
-                    // The copy button is the chat's; here the block is
-                    // only read, so its hit is not kept.
-                    let _ = render_code_segment(&mut lines, &language, &code, width, theme);
-                    laid.extend(lines, Vec::new());
-                }
-            }
-        }
+        push_body(&mut laid, doc, (width, measure), theme);
     }
     while laid.lines.last().is_some_and(|line| line.width() == 0) {
         laid.lines.pop();
         laid.prose.pop();
     }
     laid
+}
+
+/// The TODOS section: its label with the progress, then every todo.
+fn push_todos(laid: &mut Laid, doc: &PlanDoc, (width, measure): (usize, Measure), theme: &Theme) {
+    laid.gap();
+    let (closed, total) = doc.progress();
+    let label = Style::default()
+        .fg(theme.colors.muted)
+        .add_modifier(Modifier::BOLD);
+    laid.push(Line::from(vec![
+        Span::styled("TODOS", label),
+        Span::styled(
+            format!("  {closed}/{total}"),
+            Style::default().fg(theme.colors.muted),
+        ),
+    ]));
+    let room = width.saturating_sub(usize::from(TODO_INDENT)).max(1);
+    for index in 0..doc.todos.len() {
+        push_todo(laid, (doc, index), (room, measure), theme);
+    }
+}
+
+/// Todo `index` of `doc`, `room` columns wide: its marker, then its text
+/// and assignee.
+fn push_todo(
+    laid: &mut Laid,
+    (doc, index): (&PlanDoc, usize),
+    (room, measure): (usize, Measure),
+    theme: &Theme,
+) {
+    let todo = &doc.todos[index];
+    laid.todo_rows.push(laid.lines.len());
+    let style = todo_style(todo.state, theme);
+    let mut text = todo.content.clone();
+    if let Some(assignee) = &todo.assignee {
+        text.push_str(&format!(" (@{assignee})"));
+    }
+    let (mut lines, prose) = render_markdown_flow(&text, room, style, theme, measure);
+    if lines.is_empty() {
+        lines.push(Line::default());
+    }
+    let box_style = Style::default().fg(super::plans::marker_color(todo.state, theme));
+    for (i, line) in lines.iter_mut().enumerate() {
+        let lead = if i == 0 {
+            Span::styled(format!("{} ", marker(todo.state)), box_style)
+        } else {
+            Span::raw("  ")
+        };
+        line.spans.insert(0, lead);
+    }
+    let prose = prose
+        .into_iter()
+        .map(|cols| cols.map(|cols| cols.saturating_add(TODO_INDENT)))
+        .collect();
+    laid.extend(lines, prose);
+}
+
+/// The body below a rule: its text and code blocks.
+fn push_body(laid: &mut Laid, doc: &PlanDoc, (width, measure): (usize, Measure), theme: &Theme) {
+    let rule = Style::default().fg(theme.colors.faint);
+    laid.push(Line::default());
+    laid.push(Line::from(Span::styled("─".repeat(width), rule)));
+    laid.push(Line::default());
+    let base = Style::default().fg(theme.colors.text);
+    for segment in parse_content_segments(&doc.body) {
+        match segment {
+            ContentSegment::Text(text) => {
+                let (lines, prose) = render_markdown_flow(&text, width, base, theme, measure);
+                laid.extend(lines, prose);
+            }
+            ContentSegment::CodeBlock { language, code } => {
+                let mut lines = Vec::new();
+                // The copy button is the chat's; here the block is
+                // only read, so its hit is not kept.
+                let _ = render_code_segment(&mut lines, &language, &code, width, theme);
+                laid.extend(lines, Vec::new());
+            }
+        }
+    }
 }
 
 /// `title` as a paragraph of Markdown: a leading `#`, `-`, `>` or `1.`
@@ -260,22 +283,58 @@ pub(super) fn draw_plan(
     let end = (first + visible).min(total);
     let shown = end - first;
 
+    let footer = footer_line((first, shown, total), theme);
+    frame.render_widget(Clear, area);
+    frame.render_widget(body_block((true, hosted), theme).title_bottom(footer), area);
+
+    let prose_rows = draw_rows(
+        frame.buffer_mut(),
+        (&doc.layout.lines, &doc.layout.prose),
+        (first, end),
+        rows,
+        (measure, theme),
+    );
+    // The plan covers the chat, whose prose rows no longer show.
+    app.set_prose_rows(prose_rows);
+    let view = ScrollView {
+        total,
+        visible: shown,
+        first,
+    };
+    render_scrollbar(frame, area, rows, view, true, theme);
+    Some(DrawnPlan {
+        max_scroll,
+        shown,
+        first,
+        view,
+        column: rows,
+    })
+}
+
+/// The footer: the rows shown out of all, then the keys.
+fn footer_line((first, shown, total): (usize, usize, usize), theme: &Theme) -> Line<'static> {
     let muted = Style::default().fg(theme.colors.muted);
-    let footer = Line::from(vec![
+    Line::from(vec![
         Span::styled(
             format!(" {}-{}/{total} ", (first + 1).min(total), first + shown),
             muted,
         ),
         Span::styled("Esc close  s source  ↑↓ PgUp/PgDn scroll ", muted),
-    ]);
-    frame.render_widget(Clear, area);
-    frame.render_widget(body_block((true, hosted), theme).title_bottom(footer), area);
+    ])
+}
 
-    let buffer = frame.buffer_mut();
+/// Draw rows `first..end` of the laid-out `lines` (with their `prose`
+/// indents) on `rows`, and return the prose rows.
+fn draw_rows(
+    buffer: &mut Buffer,
+    (lines, prose): (&[Line<'static>], &[Option<u16>]),
+    (first, end): (usize, usize),
+    rows: Rect,
+    (measure, theme): (Measure, &Theme),
+) -> Vec<ProseRow> {
     let mut prose_rows = Vec::new();
     for (offset, index) in (first..end).enumerate() {
-        let (Some(line), Some(prose)) = (doc.layout.lines.get(index), doc.layout.prose.get(index))
-        else {
+        let (Some(line), Some(prose)) = (lines.get(index), prose.get(index)) else {
             continue;
         };
         let row = Rect {
@@ -295,21 +354,7 @@ pub(super) fn draw_plan(
         };
         prose_rows.push(ProseRow::new(buffer, (row.x, row.y), (width, indent), code));
     }
-    // The plan covers the chat, whose prose rows no longer show.
-    app.set_prose_rows(prose_rows);
-    let view = ScrollView {
-        total,
-        visible: shown,
-        first,
-    };
-    render_scrollbar(frame, area, rows, view, true, theme);
-    Some(DrawnPlan {
-        max_scroll,
-        shown,
-        first,
-        view,
-        column: rows,
-    })
+    prose_rows
 }
 
 #[cfg(test)]

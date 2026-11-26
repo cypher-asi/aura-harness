@@ -67,6 +67,12 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         return;
     };
 
+    render_tab(frame, area, body, app, theme);
+}
+
+/// Draw the open tab into `body`, the body below the tab bar of the panel
+/// bordered by `area`.
+fn render_tab(frame: &mut Frame, area: Rect, body: Rect, app: &mut App, theme: &Theme) {
     match app.side_tab() {
         SidePanelTab::Sandbox => render_tree(frame, area, body, app, theme),
         SidePanelTab::Processes => {

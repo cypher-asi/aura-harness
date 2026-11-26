@@ -77,13 +77,7 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
         .then(|| app.animation_frame())
         .filter(|_| progress.phase.under_way());
 
-    let block = Block::default()
-        .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-        .border_style(Style::default().fg(border_color(app.focus() == PanelFocus::Chat, theme)));
-    let inner = block.inner(area);
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    join_divider(frame, area);
+    let inner = draw_border(frame, area, app.focus() == PanelFocus::Chat, theme);
 
     let header = Rect { height: 1, ..inner };
     let (line, tab_areas, toggle) =
@@ -96,17 +90,7 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
         width: inner.width.saturating_sub(2),
         height: inner.height.saturating_sub(1),
     };
-    let width = usize::from(body.width);
-    let mut lines = Vec::new();
-    if !app.bench_panel_collapsed() {
-        lines.extend(fact_lines(&view, width, theme));
-        lines.push(status_line(&view, width, lit, theme));
-    }
-    lines.push(bar_line(&view, width, theme));
-    // Short of rows, the facts give way before the bar.
-    while lines.len() > usize::from(body.height) && lines.len() > 1 {
-        lines.remove(lines.len() - 2);
-    }
+    let lines = body_lines(&view, body, app.bench_panel_collapsed(), lit, theme);
     frame.render_widget(Paragraph::new(lines), body);
 
     app.set_bench_panel_areas(BenchPanelAreas {
@@ -114,6 +98,42 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
         toggle: Some(toggle),
         panel: Some(area),
     });
+}
+
+/// Clear `area` and draw its border, joined to the Chat body's above;
+/// returns what is inside.
+fn draw_border(frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) -> Rect {
+    let block = Block::default()
+        .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+        .border_style(Style::default().fg(border_color(focused, theme)));
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    join_divider(frame, area);
+    inner
+}
+
+/// The facts, the status and the bar, or only the bar when `collapsed`,
+/// cut to the rows of `body`.
+fn body_lines(
+    view: &BenchView,
+    body: Rect,
+    collapsed: bool,
+    lit: Option<usize>,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let width = usize::from(body.width);
+    let mut lines = Vec::new();
+    if !collapsed {
+        lines.extend(fact_lines(view, width, theme));
+        lines.push(status_line(view, width, lit, theme));
+    }
+    lines.push(bar_line(view, width, theme));
+    // Short of rows, the facts give way before the bar.
+    while lines.len() > usize::from(body.height) && lines.len() > 1 {
+        lines.remove(lines.len() - 2);
+    }
+    lines
 }
 
 /// ` COMPARE #2 ×   COMPARE #3        — `: a tab per benchmark, the
@@ -157,20 +177,7 @@ fn header_line(
         spans.push(Span::raw(" ".repeat(usize::from(gap))));
         x += gap;
         let tab = Rect { x, width, ..row };
-        if is_picked {
-            spans.push(Span::styled(
-                label,
-                Style::default()
-                    .fg(theme.colors.success)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            ));
-            spans.push(Span::styled(
-                " ×",
-                Style::default().fg(theme.colors.success),
-            ));
-        } else {
-            spans.push(Span::styled(label, muted));
-        }
+        push_tab(&mut spans, label, is_picked, theme);
         areas.push(BenchTabArea {
             id: id.clone(),
             tab,
@@ -182,14 +189,37 @@ fn header_line(
         });
         x += width;
     }
+    push_toggle(&mut spans, toggle.x.saturating_sub(row.x), collapsed, muted);
+    (Line::from(spans), areas, toggle)
+}
+
+/// A tab's label, lit and followed by its `×` when it is the picked one.
+fn push_tab(spans: &mut Vec<Span<'static>>, label: String, is_picked: bool, theme: &Theme) {
+    if is_picked {
+        spans.push(Span::styled(
+            label,
+            Style::default()
+                .fg(theme.colors.success)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        ));
+        spans.push(Span::styled(
+            " ×",
+            Style::default().fg(theme.colors.success),
+        ));
+    } else {
+        spans.push(Span::styled(label, Style::default().fg(theme.colors.muted)));
+    }
+}
+
+/// Blank up to `before` columns, then the toggle: `+` to unfold, `—` to fold.
+fn push_toggle(spans: &mut Vec<Span<'static>>, before: u16, collapsed: bool, muted: Style) {
     let used: usize = spans.iter().map(|s| display_width(&s.content)).sum();
-    let fill = usize::from(toggle.x.saturating_sub(row.x)).saturating_sub(used);
+    let fill = usize::from(before).saturating_sub(used);
     spans.push(Span::raw(" ".repeat(fill)));
     spans.push(Span::styled(
         format!(" {} ", if collapsed { "+" } else { "—" }),
         muted,
     ));
-    (Line::from(spans), areas, toggle)
 }
 
 /// What a benchmark runs, as `(label, value)` rows: its work, its arms,

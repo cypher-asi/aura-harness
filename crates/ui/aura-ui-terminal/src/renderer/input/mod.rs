@@ -19,6 +19,12 @@
 //! │ →  Add a follow-up            ■ Stop │
 //! ```
 
+mod spans;
+#[cfg(test)]
+mod wrap_tests;
+
+pub(super) use spans::{chat_spans, prompt_spans, prose_spans};
+
 use super::text::display_width;
 use crate::{
     app::{AppState, HoverTarget, InputRows, PanelFocus},
@@ -131,43 +137,10 @@ impl Shape<'_> {
 /// See [`Shape`].
 fn shape(area: Rect, app: &App) -> Shape<'_> {
     let input = app.input();
-    let before_cursor = input.get(..app.cursor_pos()).unwrap_or(input);
     let command = app.input_is_command();
-    let (prompt, display_input, display_before) = match app.state() {
-        _ if command => (
-            app.shell_prompt(),
-            input.to_string(),
-            before_cursor.chars().count(),
-        ),
-        AppState::LoginEmail => ("Email: ", input.to_string(), before_cursor.chars().count()),
-        AppState::LinkCode => (
-            "Code: ",
-            "•".repeat(input.chars().count()),
-            before_cursor.chars().count(),
-        ),
-        AppState::LoginPassword => (
-            "Password: ",
-            "•".repeat(input.chars().count()),
-            before_cursor.chars().count(),
-        ),
-        _ => (
-            CHAT_PROMPT,
-            input.to_string(),
-            before_cursor.chars().count(),
-        ),
-    };
+    let (prompt, display_input, display_before) = prompt_and_display(app, command);
     let prompt_width = u16::try_from(display_width(prompt)).unwrap_or(u16::MAX);
-    let placeholder = (input.is_empty() && prompt == CHAT_PROMPT).then(|| {
-        // The channel app says who a message goes to; an app showing
-        // nothing says what to pick first.
-        if let Some(text) = app.app_placeholder() {
-            text
-        } else if app.messages().is_empty() {
-            FIRST_PLACEHOLDER.to_string()
-        } else {
-            FOLLOW_UP_PLACEHOLDER.to_string()
-        }
-    });
+    let placeholder = placeholder(app, input, prompt);
 
     let prompt_x = area.x + 1 + PAD;
     let typing_x = prompt_x.saturating_add(prompt_width);
@@ -193,6 +166,51 @@ fn shape(area: Rect, app: &App) -> Shape<'_> {
         placeholder,
         stop_x,
     }
+}
+
+/// The prompt, the text as drawn (masked for a secret) and how many of
+/// its chars sit before the cursor.
+fn prompt_and_display(app: &App, command: bool) -> (&str, String, usize) {
+    let input = app.input();
+    let before_cursor = input.get(..app.cursor_pos()).unwrap_or(input);
+    match app.state() {
+        _ if command => (
+            app.shell_prompt(),
+            input.to_string(),
+            before_cursor.chars().count(),
+        ),
+        AppState::LoginEmail => ("Email: ", input.to_string(), before_cursor.chars().count()),
+        AppState::LinkCode => (
+            "Code: ",
+            "•".repeat(input.chars().count()),
+            before_cursor.chars().count(),
+        ),
+        AppState::LoginPassword => (
+            "Password: ",
+            "•".repeat(input.chars().count()),
+            before_cursor.chars().count(),
+        ),
+        _ => (
+            CHAT_PROMPT,
+            input.to_string(),
+            before_cursor.chars().count(),
+        ),
+    }
+}
+
+/// What the empty chat input says in place of the text.
+fn placeholder(app: &App, input: &str, prompt: &str) -> Option<String> {
+    (input.is_empty() && prompt == CHAT_PROMPT).then(|| {
+        // The channel app says who a message goes to; an app showing
+        // nothing says what to pick first.
+        if let Some(text) = app.app_placeholder() {
+            text
+        } else if app.messages().is_empty() {
+            FIRST_PLACEHOLDER.to_string()
+        } else {
+            FOLLOW_UP_PLACEHOLDER.to_string()
+        }
+    })
 }
 
 /// Column where the stop button starts, right-aligned before the box's
@@ -268,6 +286,48 @@ pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &The
     if area.height < BOX_ROWS + 1 || area.width < 2 * (1 + PAD) + 2 {
         return InputDrawn::default();
     }
+    let inner = render_box(frame, area, app, theme);
+
+    let plan = plan(area, app, theme);
+    let wrap_width = plan.width;
+    let right = inner.x + inner.width;
+    render_prompt(frame, &plan, inner, right, theme);
+
+    let typing_right = plan
+        .stop_x
+        .map_or(right, |x| x.saturating_sub(STOP_GAP).min(right));
+    let text = TextArea {
+        x: plan.typing_x,
+        y: inner.y,
+        width: typing_right.saturating_sub(plan.typing_x),
+    };
+    let stop = plan
+        .stop_x
+        .map(|x| render_stop_button(frame, x, inner, app, theme));
+    if let Some(placeholder) = plan.placeholder {
+        render_placeholder(frame, placeholder, &text, theme);
+    }
+
+    let rows = shown_rows(app, plan.cursor, plan.rows.len(), inner);
+    render_rows(frame, plan.rows, &rows, &text);
+    place_cursor(frame, app, plan.cursor, &rows, &text);
+    InputDrawn {
+        stop,
+        wrap_width: Some(wrap_width),
+        rows: Some(rows),
+    }
+}
+
+/// Where the rows of typed text go: their column, first row and width.
+struct TextArea {
+    x: u16,
+    y: u16,
+    width: u16,
+}
+
+/// Draw the box's side and bottom borders, join them to the divider
+/// above, and return the cells inside.
+fn render_box(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Rect {
     let block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
         .border_style(Style::default().fg(super::chrome::border_color(
@@ -282,10 +342,10 @@ pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &The
     let inner = block.inner(area);
     frame.render_widget(block, area);
     join_divider(frame, area);
+    inner
+}
 
-    let plan = plan(area, app, theme);
-    let wrap_width = plan.width;
-    let right = inner.x + inner.width;
+fn render_prompt(frame: &mut Frame, plan: &Plan<'_>, inner: Rect, right: u16, theme: &Theme) {
     let prompt_width = plan.typing_x - plan.prompt_x;
     frame.render_widget(
         Paragraph::new(Line::from(prompt_spans(
@@ -300,72 +360,80 @@ pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &The
             height: 1,
         },
     );
+}
 
-    let typing_right = plan
-        .stop_x
-        .map_or(right, |x| x.saturating_sub(STOP_GAP).min(right));
-    let typing_width = typing_right.saturating_sub(plan.typing_x);
-    let stop = plan
-        .stop_x
-        .map(|x| render_stop_button(frame, x, inner, app, theme));
-    if let Some(placeholder) = plan.placeholder {
-        // Start one column past the cursor so its blink lands on a blank
-        // cell instead of covering the placeholder's first letter.
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                placeholder,
-                Style::default().fg(theme.colors.muted),
-            )),
-            Rect {
-                x: plan.typing_x.saturating_add(PLACEHOLDER_GAP),
-                y: inner.y,
-                width: typing_width.saturating_sub(PLACEHOLDER_GAP),
-                height: 1,
-            },
-        );
-    }
+fn render_placeholder(frame: &mut Frame, placeholder: String, text: &TextArea, theme: &Theme) {
+    // Start one column past the cursor so its blink lands on a blank
+    // cell instead of covering the placeholder's first letter.
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            placeholder,
+            Style::default().fg(theme.colors.muted),
+        )),
+        Rect {
+            x: text.x.saturating_add(PLACEHOLDER_GAP),
+            y: text.y,
+            width: text.width.saturating_sub(PLACEHOLDER_GAP),
+            height: 1,
+        },
+    );
+}
 
+/// Which of the `total` rows of text are shown in `inner`.
+fn shown_rows(app: &App, cursor: (usize, usize), total: usize, inner: Rect) -> InputRows {
     // Once the input outgrows its rows, show where the wheel scrolled it
     // to, or else keep the cursor's row in view.
     let visible = usize::from(inner.height);
-    let total = plan.rows.len();
     let first = app.input_scroll_top().map_or_else(
-        || (plan.cursor.0 + 1).saturating_sub(visible),
+        || (cursor.0 + 1).saturating_sub(visible),
         |top| top.min(total.saturating_sub(visible)),
     );
-    let rows = InputRows {
+    InputRows {
         top: first,
         total,
         visible,
-    };
-    for (i, row) in plan.rows.into_iter().skip(first).take(visible).enumerate() {
-        let y = inner.y + u16::try_from(i).unwrap_or(u16::MAX);
+    }
+}
+
+fn render_rows(
+    frame: &mut Frame,
+    rows: Vec<Vec<Span<'static>>>,
+    shown: &InputRows,
+    text: &TextArea,
+) {
+    let (first, visible) = (shown.top, shown.visible);
+    for (i, row) in rows.into_iter().skip(first).take(visible).enumerate() {
+        let y = text.y + u16::try_from(i).unwrap_or(u16::MAX);
         frame.render_widget(
             Paragraph::new(Line::from(row)),
             Rect {
-                x: plan.typing_x,
+                x: text.x,
                 y,
-                width: typing_width,
+                width: text.width,
                 height: 1,
             },
         );
     }
+}
 
+fn place_cursor(
+    frame: &mut Frame,
+    app: &App,
+    cursor: (usize, usize),
+    shown: &InputRows,
+    text: &TextArea,
+) {
     // A cursor scrolled out of view stays hidden rather than being drawn
     // on a row it is not on.
-    let (row, col) = plan.cursor;
+    let (first, visible) = (shown.top, shown.visible);
+    let (row, col) = cursor;
     let cursor_shown = (first..first + visible).contains(&row);
     if cursor_shown && !app.status().contains("Thinking") {
-        let y = inner.y + u16::try_from(row - first).unwrap_or(0);
-        let x = plan
-            .typing_x
+        let y = text.y + u16::try_from(row - first).unwrap_or(0);
+        let x = text
+            .x
             .saturating_add(u16::try_from(col).unwrap_or(u16::MAX));
         frame.set_cursor_position((x, y));
-    }
-    InputDrawn {
-        stop,
-        wrap_width: Some(wrap_width),
-        rows: Some(rows),
     }
 }
 
@@ -405,136 +473,5 @@ pub(super) fn join_divider(frame: &mut Frame, area: Rect) {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.set_symbol(joint);
         }
-    }
-}
-
-/// A chat draft: [`prose_spans`], with every `/plan` word in the theme's
-/// accent (bold) so it reads as "this goes in plan mode", like the badge.
-pub(super) fn chat_spans<'a>(text: &'a str, theme: &Theme) -> Vec<Span<'a>> {
-    let ranges = crate::app::plan_ranges(text);
-    if ranges.is_empty() {
-        return prose_spans(text, theme);
-    }
-    let accent = Style::default()
-        .fg(theme.colors.success)
-        .add_modifier(Modifier::BOLD);
-    let mut spans = Vec::new();
-    let mut last = 0;
-    for range in ranges {
-        spans.extend(prose_spans(&text[last..range.start], theme));
-        spans.push(Span::styled(&text[range.clone()], accent));
-        last = range.end;
-    }
-    spans.extend(prose_spans(&text[last..], theme));
-    spans
-}
-
-/// Typed text in the reply color, with `@path` mentions and `[image N]`
-/// chips picked out so it is clear what will be attached.
-pub(super) fn prose_spans<'a>(text: &'a str, theme: &Theme) -> Vec<Span<'a>> {
-    let plain = Style::default().fg(theme.colors.text);
-    let chip = Style::default()
-        .fg(theme.colors.foreground)
-        .add_modifier(Modifier::UNDERLINED);
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut i = 0;
-    while i < text.len() {
-        let rest = &text[i..];
-        let at_word_start = i == 0 || text[..i].ends_with(char::is_whitespace);
-        let token_len = if at_word_start && rest.starts_with('@') && rest.len() > 1 {
-            rest.find(char::is_whitespace).unwrap_or(rest.len())
-        } else {
-            image_chip_len(rest)
-        };
-        if token_len == 0 {
-            i += rest.chars().next().map_or(1, char::len_utf8);
-            continue;
-        }
-        if start < i {
-            spans.push(Span::styled(&text[start..i], plain));
-        }
-        spans.push(Span::styled(&text[i..i + token_len], chip));
-        i += token_len;
-        start = i;
-    }
-    if start < text.len() {
-        spans.push(Span::styled(&text[start..], plain));
-    }
-    spans
-}
-
-/// Length of an `[image N]` chip at the start of `text`, or 0.
-fn image_chip_len(text: &str) -> usize {
-    let Some(rest) = text.strip_prefix("[image ") else {
-        return 0;
-    };
-    let digits = rest.chars().take_while(char::is_ascii_digit).count();
-    if digits > 0 && rest[digits..].starts_with(']') {
-        "[image ".len() + digits + 1
-    } else {
-        0
-    }
-}
-
-/// `[user@host dir]$ ` with the user in the success color and `@host` muted;
-/// any other prompt is drawn in `color`.
-pub(super) fn prompt_spans<'a>(
-    prompt: &'a str,
-    color: ratatui::style::Color,
-    theme: &Theme,
-) -> Vec<Span<'a>> {
-    let plain = || vec![Span::styled(prompt, Style::default().fg(color))];
-    let Some(body) = prompt.strip_prefix('[') else {
-        return plain();
-    };
-    let Some(at) = body.find('@') else {
-        return plain();
-    };
-    let host_end = body[at..].find(' ').map_or(body.len(), |i| at + i);
-    vec![
-        Span::styled("[", Style::default().fg(color)),
-        Span::styled(&body[..at], Style::default().fg(theme.colors.success)),
-        Span::styled(&body[at..host_end], Style::default().fg(theme.colors.muted)),
-        Span::styled(&body[host_end..], Style::default().fg(color)),
-    ]
-}
-#[cfg(test)]
-mod wrap_tests {
-    use super::{row_starts, split_rows};
-    use ratatui::text::Span;
-
-    fn rows(text: &str, width: usize) -> Vec<String> {
-        let starts = row_starts(text, width);
-        split_rows(vec![Span::raw(text.to_string())], &starts)
-            .iter()
-            .map(|row| row.iter().map(|s| s.content.as_ref()).collect())
-            .collect()
-    }
-
-    #[test]
-    fn words_move_to_the_next_row_whole() {
-        assert_eq!(rows("hello world foo", 8), vec!["hello ", "world ", "foo"]);
-        assert_eq!(rows("ab cdefg", 5), vec!["ab ", "cdefg"]);
-    }
-
-    #[test]
-    fn words_wider_than_a_row_are_broken() {
-        assert_eq!(rows("ab abcdefghij", 5), vec!["ab ", "abcde", "fghij"]);
-    }
-
-    #[test]
-    fn newlines_start_rows_and_are_not_drawn() {
-        assert_eq!(rows("ab\ncd", 10), vec!["ab", "cd"]);
-        assert_eq!(rows("ab\n", 10), vec!["ab", ""]);
-        assert_eq!(rows("\n\nx", 10), vec!["", "", "x"]);
-        assert_eq!(rows("abc de\nf", 4), vec!["abc ", "de", "f"]);
-    }
-
-    #[test]
-    fn wrapped_rows_never_start_with_a_space() {
-        assert_eq!(rows("abcde fg", 5), vec!["abcde ", "fg"]);
-        assert_eq!(rows("abcde   fg", 5), vec!["abcde   ", "fg"]);
-        assert_eq!(rows("ab cd ef", 5), vec!["ab cd ", "ef"]);
     }
 }

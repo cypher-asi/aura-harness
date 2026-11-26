@@ -197,38 +197,18 @@ fn render_row(
     let item = app.queue().get(index)?;
     let look = row_look(app, index, item.id);
     let colors = &theme.colors;
-    let (bg, text_fg) = if look.selected {
-        (Some(colors.selection), colors.on_selection)
-    } else if look.lit {
-        (Some(colors.surface_hover), colors.foreground)
-    } else if item.editable {
-        (None, colors.text)
-    } else {
-        (None, colors.muted)
-    };
+    let (bg, text_fg) = row_colors(look, item.editable, theme);
     let base = bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
 
     let has_actions = row.width >= ACTIONS_WIDTH + MIN_TEXT_WIDTH + 2;
     let show_actions = has_actions && (look.selected || look.lit);
-    let right = row.x + row.width;
+    let (send_now, edit, remove) = action_rects(row, show_actions, item.editable);
     let area = QueueRowArea {
         id: item.id,
         row,
-        send_now: show_actions.then(|| Rect {
-            x: right - ACTIONS_WIDTH,
-            width: 10,
-            ..row
-        }),
-        edit: (show_actions && item.editable).then(|| Rect {
-            x: right - 6,
-            width: 3,
-            ..row
-        }),
-        remove: show_actions.then(|| Rect {
-            x: right - 3,
-            width: 3,
-            ..row
-        }),
+        send_now,
+        edit,
+        remove,
     };
 
     let tail = if show_actions { ACTIONS_WIDTH + 1 } else { 1 };
@@ -246,29 +226,75 @@ fn render_row(
         Span::styled(" ".repeat(pad), base),
     ];
     if show_actions {
-        let action = |part: QueuePart| {
-            let color = if look.hovered_part == Some(part) {
-                colors.foreground
-            } else if look.selected {
-                colors.on_selection
-            } else {
-                colors.muted
-            };
-            base.fg(color)
-        };
-        let edit = if item.editable { EDIT } else { " " };
-        spans.extend([
-            Span::styled(" ", base),
-            Span::styled(SEND_NOW, action(QueuePart::SendNow)),
-            Span::styled("  ", base),
-            Span::styled(edit, action(QueuePart::Edit)),
-            Span::styled("  ", base),
-            Span::styled(REMOVE, action(QueuePart::Remove)),
-        ]);
+        spans.extend(action_spans(look, base, item.editable, theme));
     }
     spans.push(Span::styled(" ", base));
     frame.render_widget(Paragraph::new(Line::from(spans)), row);
     Some(area)
+}
+
+/// The row's background, if any, and its text color.
+fn row_colors(look: RowLook, editable: bool, theme: &Theme) -> (Option<Color>, Color) {
+    let colors = &theme.colors;
+    if look.selected {
+        (Some(colors.selection), colors.on_selection)
+    } else if look.lit {
+        (Some(colors.surface_hover), colors.foreground)
+    } else if editable {
+        (None, colors.text)
+    } else {
+        (None, colors.muted)
+    }
+}
+
+/// Where the send-now, edit and remove actions of `row` go, when drawn.
+fn action_rects(
+    row: Rect,
+    show_actions: bool,
+    editable: bool,
+) -> (Option<Rect>, Option<Rect>, Option<Rect>) {
+    let right = row.x + row.width;
+    (
+        show_actions.then(|| Rect {
+            x: right - ACTIONS_WIDTH,
+            width: 10,
+            ..row
+        }),
+        (show_actions && editable).then(|| Rect {
+            x: right - 6,
+            width: 3,
+            ..row
+        }),
+        show_actions.then(|| Rect {
+            x: right - 3,
+            width: 3,
+            ..row
+        }),
+    )
+}
+
+/// The send-now, edit and remove actions after the row's text.
+fn action_spans<'a>(look: RowLook, base: Style, editable: bool, theme: &Theme) -> [Span<'a>; 6] {
+    let colors = &theme.colors;
+    let action = |part: QueuePart| {
+        let color = if look.hovered_part == Some(part) {
+            colors.foreground
+        } else if look.selected {
+            colors.on_selection
+        } else {
+            colors.muted
+        };
+        base.fg(color)
+    };
+    let edit = if editable { EDIT } else { " " };
+    [
+        Span::styled(" ", base),
+        Span::styled(SEND_NOW, action(QueuePart::SendNow)),
+        Span::styled("  ", base),
+        Span::styled(edit, action(QueuePart::Edit)),
+        Span::styled("  ", base),
+        Span::styled(REMOVE, action(QueuePart::Remove)),
+    ]
 }
 
 /// The input box's title while it holds a queued message being edited.

@@ -14,10 +14,11 @@
 //! It is drawn in cells over a canvas the front end draws too, which then
 //! leaves those cells to it.
 
-use crate::app::flow::MinimapView;
+use crate::app::flow::{FlowState, MinimapView};
 use crate::events::TraceNodeStatus;
 use crate::{App, Theme};
 use ratatui::{
+    buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
     text::Span,
@@ -59,21 +60,12 @@ fn covered(start: usize, end: usize, scale: f32, count: usize) -> Range<usize> {
     clippy::cast_sign_loss
 )]
 pub(super) fn render_minimap(frame: &mut Frame, inner: Rect, app: &mut App, theme: &Theme) {
-    let flow = app.flow();
-    let layout = flow.layout();
-    let room = (
-        MAX_WIDTH.min(inner.width / 4).saturating_sub(2),
-        MAX_HEIGHT.min(inner.height / 3).saturating_sub(2),
-    );
-    if !flow.shows_minimap(inner.width, inner.height)
-        || room.0 < MIN_INNER.0
-        || room.1 < MIN_INNER.1
-        || layout.width == 0
-        || layout.height == 0
-    {
+    let Some(room) = map_room(app, inner) else {
         app.flow_mut().set_minimap(None);
         return;
-    }
+    };
+    let flow = app.flow();
+    let layout = flow.layout();
     // A map cell stands for as many canvas columns as rows, so the map
     // has the canvas's shape; its box is no larger than that takes.
     let scale = (layout.width as f32 / f32::from(room.0))
@@ -94,9 +86,54 @@ pub(super) fn render_minimap(frame: &mut Frame, inner: Rect, app: &mut App, them
         scale: (scale, scale),
     };
     let body = map.inner();
+    let paint = paint_cards(flow, theme, scale, body);
 
-    // Each map cell is two halves, a top and a bottom, so a card a
-    // half's height tall still shows.
+    // The part of the canvas on screen.
+    let (pan, zoom) = (flow.pan(), flow.zoom());
+    let seen = (
+        pan.0 / scale,
+        pan.1 / scale,
+        (pan.0 + f32::from(inner.width) / zoom) / scale,
+        (pan.1 + f32::from(inner.height) / zoom) / scale,
+    );
+    let in_view = |x: usize, y: usize| {
+        let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
+        x >= seen.0 && x < seen.2 && y >= seen.1 && y < seen.3
+    };
+
+    frame_map(frame, area, theme);
+    draw_cells(frame.buffer_mut(), body, &paint, in_view, theme);
+    app.flow_mut().set_minimap(Some(map));
+}
+
+/// The inside of the map's box at its largest, when the canvas in
+/// `inner` is large enough to need a map and the map has room.
+fn map_room(app: &App, inner: Rect) -> Option<(u16, u16)> {
+    let flow = app.flow();
+    let layout = flow.layout();
+    let room = (
+        MAX_WIDTH.min(inner.width / 4).saturating_sub(2),
+        MAX_HEIGHT.min(inner.height / 3).saturating_sub(2),
+    );
+    let hidden = !flow.shows_minimap(inner.width, inner.height)
+        || room.0 < MIN_INNER.0
+        || room.1 < MIN_INNER.1
+        || layout.width == 0
+        || layout.height == 0;
+    (!hidden).then_some(room)
+}
+
+/// Each card painted on the map cells inside `body`, of `scale` canvas
+/// cells each, the most telling colour winning a cell. Each map cell is
+/// two halves, a top and a bottom, so a card a half's height tall still
+/// shows; the halves go row by row.
+fn paint_cards(
+    flow: &FlowState,
+    theme: &Theme,
+    scale: f32,
+    body: Rect,
+) -> Vec<Option<(u8, Color)>> {
+    let layout = flow.layout();
     let (columns, halves) = (usize::from(body.width), usize::from(body.height) * 2);
     let mut paint: Vec<Option<(u8, Color)>> = vec![None; columns * halves];
     let selected = flow.selected_card();
@@ -121,20 +158,11 @@ pub(super) fn render_minimap(frame: &mut Frame, inner: Rect, app: &mut App, them
             }
         }
     }
+    paint
+}
 
-    // The part of the canvas on screen.
-    let (pan, zoom) = (flow.pan(), flow.zoom());
-    let seen = (
-        pan.0 / scale,
-        pan.1 / scale,
-        (pan.0 + f32::from(inner.width) / zoom) / scale,
-        (pan.1 + f32::from(inner.height) / zoom) / scale,
-    );
-    let in_view = |x: usize, y: usize| {
-        let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
-        x >= seen.0 && x < seen.2 && y >= seen.1 && y < seen.3
-    };
-
+/// The map's box at `area`, cleared, with its title.
+fn frame_map(frame: &mut Frame, area: Rect, theme: &Theme) {
     frame.render_widget(Clear, area);
     let border = Style::default().fg(theme.colors.muted);
     frame.render_widget(
@@ -144,7 +172,18 @@ pub(super) fn render_minimap(frame: &mut Frame, inner: Rect, app: &mut App, them
             .title(Span::styled(" map ", border)),
         area,
     );
-    let buffer = frame.buffer_mut();
+}
+
+/// The map cells inside `body`, from the halves `paint` gave them, lit
+/// where `in_view` says the canvas is on screen.
+fn draw_cells(
+    buffer: &mut Buffer,
+    body: Rect,
+    paint: &[Option<(u8, Color)>],
+    in_view: impl Fn(usize, usize) -> bool,
+    theme: &Theme,
+) {
+    let columns = usize::from(body.width);
     for row in 0..usize::from(body.height) {
         for column in 0..columns {
             let top = paint[row * 2 * columns + column].map(|(_, color)| color);
@@ -153,25 +192,7 @@ pub(super) fn render_minimap(frame: &mut Frame, inner: Rect, app: &mut App, them
             if in_view(column, row) {
                 style = style.bg(theme.colors.selection);
             }
-            let symbol = match (top, bottom) {
-                (Some(top), Some(bottom)) if top == bottom => {
-                    style = style.fg(top);
-                    "█"
-                }
-                (Some(top), Some(bottom)) => {
-                    style = style.fg(top).bg(bottom);
-                    "▀"
-                }
-                (Some(top), None) => {
-                    style = style.fg(top);
-                    "▀"
-                }
-                (None, Some(bottom)) => {
-                    style = style.fg(bottom);
-                    "▄"
-                }
-                (None, None) => " ",
-            };
+            let (symbol, style) = half_blocks(top, bottom, style);
             let at = (
                 body.x + u16::try_from(column).unwrap_or(u16::MAX),
                 body.y + u16::try_from(row).unwrap_or(u16::MAX),
@@ -183,5 +204,16 @@ pub(super) fn render_minimap(frame: &mut Frame, inner: Rect, app: &mut App, them
             }
         }
     }
-    app.flow_mut().set_minimap(Some(map));
+}
+
+/// The block glyph of a map cell with `top` and `bottom` halves, and
+/// `style` with their colours.
+fn half_blocks(top: Option<Color>, bottom: Option<Color>, style: Style) -> (&'static str, Style) {
+    match (top, bottom) {
+        (Some(top), Some(bottom)) if top == bottom => ("█", style.fg(top)),
+        (Some(top), Some(bottom)) => ("▀", style.fg(top).bg(bottom)),
+        (Some(top), None) => ("▀", style.fg(top)),
+        (None, Some(bottom)) => ("▄", style.fg(bottom)),
+        (None, None) => (" ", style),
+    }
 }

@@ -49,25 +49,7 @@ pub(super) fn render_processes(
         .take(visible)
         .map(|(i, process)| {
             let state = CellState::of(is_focused && i == selected, hovered == Some(i));
-            let cell = cell_style(
-                theme,
-                state,
-                name_style(Tone::active_if(process.status.is_live()), theme),
-            );
-            let icon = status_icon(app, process.status, theme);
-            let time = format!(
-                "{} {}",
-                process.kind.label(),
-                format_elapsed(process_elapsed_ms(process, now))
-            );
-            list_row(
-                width,
-                process.depth,
-                icon,
-                &process.label,
-                cell,
-                Some(&time),
-            )
+            process_line(app, process, (state, width, now), theme)
         })
         .collect();
     let view = ScrollView {
@@ -77,6 +59,36 @@ pub(super) fn render_processes(
     };
     app.set_process_rows_area(body.rows(), scroll);
     body.draw(frame, lines, view, PROCESSES_HINT, theme);
+}
+
+/// One list row: the status icon, the label, then the kind and elapsed
+/// time; `(state, width, now)` are the row's cell state, the body width and
+/// the current time in ms.
+fn process_line<'a>(
+    app: &App,
+    process: &ProcessSummary,
+    (state, width, now): (CellState, usize, u64),
+    theme: &Theme,
+) -> Line<'a> {
+    let cell = cell_style(
+        theme,
+        state,
+        name_style(Tone::active_if(process.status.is_live()), theme),
+    );
+    let icon = status_icon(app, process.status, theme);
+    let time = format!(
+        "{} {}",
+        process.kind.label(),
+        format_elapsed(process_elapsed_ms(process, now))
+    );
+    list_row(
+        width,
+        process.depth,
+        icon,
+        &process.label,
+        cell,
+        Some(&time),
+    )
 }
 
 /// Spinning ring while running; a glyph for every other state.
@@ -145,6 +157,16 @@ pub(super) fn process_detail_lines(
     let mut info = Info::new(width, theme)
         .label_width(DETAIL_LABEL_WIDTH)
         .wrap_values();
+    push_identity(&mut info, process);
+    push_timing(&mut info, process);
+    push_origin(&mut info, process);
+    push_runtime(&mut info, process);
+    push_detail(&mut info, process);
+    info.into_lines()
+}
+
+/// PROCESS and OWNER: what it is and who started it.
+fn push_identity(info: &mut Info<'_>, process: &ProcessSummary) {
     info.section("PROCESS", None);
     info.fact("Process id", &process.id, Value::Quiet);
     info.fact("Kind", process.kind.label(), Value::Plain);
@@ -159,7 +181,10 @@ pub(super) fn process_detail_lines(
         let label = if depth == 0 { "Spawned by" } else { "" };
         info.fact(label, ancestor, Value::Quiet);
     }
+}
 
+/// TIMING: when it started and ended, and for how long it ran.
+fn push_timing(info: &mut Info<'_>, process: &ProcessSummary) {
     info.section("TIMING", None);
     info.fact(
         "Started",
@@ -171,7 +196,10 @@ pub(super) fn process_detail_lines(
     }
     let elapsed = process_elapsed_ms(process, now_ms());
     info.fact("Duration", &format_elapsed(elapsed), Value::Plain);
+}
 
+/// ORIGIN: the tool use and spawn transaction it came from, if any.
+fn push_origin(info: &mut Info<'_>, process: &ProcessSummary) {
     let origin = [
         ("Tool use id", process.tool_use_id.as_deref()),
         ("Spawn tx", process.spawn_tx.as_deref()),
@@ -184,7 +212,10 @@ pub(super) fn process_detail_lines(
             }
         }
     }
+}
 
+/// RUNTIME: how it runs, when any of it is known.
+fn push_runtime(info: &mut Info<'_>, process: &ProcessSummary) {
     let runtime = [
         ("PID", process.pid.map(|pid| pid.to_string())),
         ("Folder", process.cwd.clone()),
@@ -205,13 +236,15 @@ pub(super) fn process_detail_lines(
             }
         }
     }
+}
 
+/// COMMAND or PROMPT: its whole command or prompt.
+fn push_detail(info: &mut Info<'_>, process: &ProcessSummary) {
     if !process.detail.is_empty() {
         let command = matches!(process.kind, ProcessKind::Shell | ProcessKind::Command);
         info.section(if command { "COMMAND" } else { "PROMPT" }, None);
         info.text(&process.detail, Value::Plain);
     }
-    info.into_lines()
 }
 
 #[cfg(test)]

@@ -103,7 +103,14 @@ pub(super) fn group_lines(
             look,
         );
     }
-    let kept = if keeping {
+    let kept = keep_steps(&steps, drawn, keeping);
+    (lines, toggles, kept)
+}
+
+/// What a group's steps are drawn as now, by message id, for the next
+/// frame when `keeping`; else nothing.
+fn keep_steps(steps: &[(&Message, &Activity)], drawn: Vec<StepLines>, keeping: bool) -> KeptSteps {
+    if keeping {
         steps
             .iter()
             .zip(drawn)
@@ -111,8 +118,7 @@ pub(super) fn group_lines(
             .collect()
     } else {
         KeptSteps::new()
-    };
-    (lines, toggles, kept)
+    }
 }
 
 /// Every step of an open group, numbered from `place`'s first, after the

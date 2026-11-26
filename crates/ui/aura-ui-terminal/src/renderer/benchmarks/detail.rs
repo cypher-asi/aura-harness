@@ -6,7 +6,9 @@ use super::format::{
     tokens, tokens_label, tokens_so_far, turn_cell, verdict_mark,
 };
 use super::table::{muted_line, rule, section_rule, table, Cell, Col, Row};
-use crate::events::{arm_letter, BenchCost, BenchLiveRun, BenchStatus, BenchTaskSetup, BenchView};
+use crate::events::{
+    arm_letter, BenchCost, BenchLiveRun, BenchStatus, BenchTaskRow, BenchTaskSetup, BenchView,
+};
 use crate::renderer::text::display_width;
 use crate::Theme;
 use ratatui::{
@@ -171,47 +173,7 @@ impl Detail<'_> {
         if view.tasks.is_empty() {
             return Vec::new();
         }
-        let task_of = |name: &str| {
-            view.runs
-                .iter()
-                .find(|r| r.name == name)
-                .and_then(|r| r.task.as_deref())
-        };
-        let judged = |id: &str| -> String {
-            view.judge
-                .iter()
-                .flat_map(|j| &j.verdicts)
-                .filter(|v| task_of(&v.a_run) == Some(id))
-                .map(verdict_mark)
-                .collect()
-        };
-        let (theme, good) = (self.theme, self.good());
-        let rows: Vec<Row> = view
-            .tasks
-            .iter()
-            .map(|task| {
-                let [da, db] = saving(task.arms[0].mean_cost(), task.arms[1].mean_cost());
-                let [check_a, cost_a] = task_cells(&task.arms[0], theme);
-                let [check_b, cost_b] = task_cells(&task.arms[1], theme);
-                let last = match &task.setup {
-                    BenchTaskSetup::Ready => (judged(&task.id), self.bold()),
-                    BenchTaskSetup::Failed(_) => {
-                        (task.setup.label(), Style::default().fg(theme.colors.error))
-                    }
-                    setup => (setup.label(), Style::default().fg(theme.colors.pending)),
-                };
-                Row::Cells(vec![
-                    self.cell(task_name(&task.id, self.prefix.as_deref()).to_string()),
-                    check_a,
-                    cost_a,
-                    (da, good),
-                    check_b,
-                    cost_b,
-                    (db, good),
-                    last,
-                ])
-            })
-            .collect();
+        let rows: Vec<Row> = view.tasks.iter().map(|task| self.task_row(task)).collect();
         let judge = if view.judge.is_some() { "judge" } else { "" };
         self.section(
             "tasks",
@@ -228,6 +190,48 @@ impl Detail<'_> {
             Some(&["task", "A", "", "", "B", "", "", judge]),
             &rows,
         )
+    }
+
+    /// The judge's marks for the runs of task `id`.
+    fn judged(&self, id: &str) -> String {
+        let view = self.view;
+        let task_of = |name: &str| {
+            view.runs
+                .iter()
+                .find(|r| r.name == name)
+                .and_then(|r| r.task.as_deref())
+        };
+        view.judge
+            .iter()
+            .flat_map(|j| &j.verdicts)
+            .filter(|v| task_of(&v.a_run) == Some(id))
+            .map(verdict_mark)
+            .collect()
+    }
+
+    /// One example task's row.
+    fn task_row(&self, task: &BenchTaskRow) -> Row {
+        let (theme, good) = (self.theme, self.good());
+        let [da, db] = saving(task.arms[0].mean_cost(), task.arms[1].mean_cost());
+        let [check_a, cost_a] = task_cells(&task.arms[0], theme);
+        let [check_b, cost_b] = task_cells(&task.arms[1], theme);
+        let last = match &task.setup {
+            BenchTaskSetup::Ready => (self.judged(&task.id), self.bold()),
+            BenchTaskSetup::Failed(_) => {
+                (task.setup.label(), Style::default().fg(theme.colors.error))
+            }
+            setup => (setup.label(), Style::default().fg(theme.colors.pending)),
+        };
+        Row::Cells(vec![
+            self.cell(task_name(&task.id, self.prefix.as_deref()).to_string()),
+            check_a,
+            cost_a,
+            (da, good),
+            check_b,
+            cost_b,
+            (db, good),
+            last,
+        ])
     }
 
     /// The prompts replayed, when there are several.

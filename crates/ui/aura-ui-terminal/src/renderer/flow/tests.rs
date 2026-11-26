@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::ChatTab;
-use crate::events::{FlowLane, FlowNode, TraceNodeStatus, UiCommand};
+use crate::events::{FlowKind, FlowLane, FlowNode, TraceNodeStatus, UiCommand};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{backend::TestBackend, Terminal};
 

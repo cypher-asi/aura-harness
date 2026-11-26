@@ -51,34 +51,11 @@ fn status_info(icon: &str, label: &str, color: Color) -> HeaderInfo {
 /// ```
 pub(super) fn detail_header(app: &App, theme: &Theme) -> Option<(String, Option<HeaderInfo>)> {
     match app.detail_view()? {
-        DetailView::Record => {
-            let record = app.selected_record_data()?;
-            let (icon, color) = record_status(record, theme);
-            let info = status_info(icon, &record.tx_kind, color);
-            Some((format!("RECORD #{}", record.seq), Some(info)))
-        }
+        DetailView::Record => record_header(app, theme),
         DetailView::File(file) => Some(file_header(file, theme)),
-        DetailView::Process(process) => {
-            let (icon, color) = status_glyph(process.status, theme);
-            let title = format!(
-                "{} {}",
-                process.kind.label().to_uppercase(),
-                truncate_record_info(&process.label, 40)
-            );
-            Some((
-                title,
-                Some(status_info(icon, process.status.label(), color)),
-            ))
-        }
+        DetailView::Process(process) => Some(process_header(process, theme)),
         DetailView::Graph => Some(super::graph::graph_header(app, theme)),
-        DetailView::Image(view) => {
-            let info = HeaderInfo {
-                text: view.info(),
-                short: String::new(),
-                color: theme.colors.muted,
-            };
-            Some((view.title.clone(), Some(info)))
-        }
+        DetailView::Image(view) => Some(image_header(view, theme)),
         DetailView::Thread(view) => {
             let count = app.thread_messages(&view.thread_id).len();
             let unit = if count == 1 { "MESSAGE" } else { "MESSAGES" };
@@ -101,6 +78,41 @@ pub(super) fn detail_header(app: &App, theme: &Theme) -> Option<(String, Option<
             ))
         }
     }
+}
+
+/// The selected record's header: `RECORD #seq` and its status.
+fn record_header(app: &App, theme: &Theme) -> Option<(String, Option<HeaderInfo>)> {
+    let record = app.selected_record_data()?;
+    let (icon, color) = record_status(record, theme);
+    let info = status_info(icon, &record.tx_kind, color);
+    Some((format!("RECORD #{}", record.seq), Some(info)))
+}
+
+/// A process's header: its kind and label, and its status.
+fn process_header(
+    process: &crate::events::ProcessSummary,
+    theme: &Theme,
+) -> (String, Option<HeaderInfo>) {
+    let (icon, color) = status_glyph(process.status, theme);
+    let title = format!(
+        "{} {}",
+        process.kind.label().to_uppercase(),
+        truncate_record_info(&process.label, 40)
+    );
+    (
+        title,
+        Some(status_info(icon, process.status.label(), color)),
+    )
+}
+
+/// An image's header: its title and size.
+fn image_header(view: &ImageView, theme: &Theme) -> (String, Option<HeaderInfo>) {
+    let info = HeaderInfo {
+        text: view.info(),
+        short: String::new(),
+        color: theme.colors.muted,
+    };
+    (view.title.clone(), Some(info))
 }
 
 /// A file's header: its title, and its line count unless it is empty.

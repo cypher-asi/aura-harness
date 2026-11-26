@@ -343,10 +343,9 @@ mod tests {
         assert!(!screen.contains("No tasks yet."), "{screen}");
     }
 
-    #[test]
-    fn row_icons_sit_under_the_headers_arrow_and_tasks_one_level_in() {
-        let mut app = App::new();
-        app.process_command(UiCommand::SetTasks(vec![
+    /// A Lead's request whose item a Coder's task does.
+    fn coder_tasks() -> Vec<TaskView> {
+        vec![
             TaskView {
                 id: "part".into(),
                 title: "Parse".into(),
@@ -374,7 +373,13 @@ mod tests {
                 }],
                 ..TaskView::default()
             },
-        ]));
+        ]
+    }
+
+    #[test]
+    fn row_icons_sit_under_the_headers_arrow_and_tasks_one_level_in() {
+        let mut app = App::new();
+        app.process_command(UiCommand::SetTasks(coder_tasks()));
         let screen = drawn(&mut app);
         let lines: Vec<&str> = screen.lines().collect();
         let column = |line: &str, glyph: char| {
@@ -406,50 +411,70 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_earlier_round_lists_its_items_and_a_replaced_failure_is_muted() {
-        let path = ".aura/plans/ch.plan.md";
-        let todo = |content: &str, state, task: Option<&str>| TodoView {
+    const ROUND_PLAN: &str = ".aura/plans/ch.plan.md";
+
+    fn round_todo(content: &str, state: TodoState, task: Option<&str>) -> TodoView {
+        TodoView {
             content: content.into(),
             state,
             assignee: None,
             task: task.map(Into::into),
-        };
-        let try_at = |id: &str| TaskView {
+        }
+    }
+
+    fn failed_try(id: &str) -> TaskView {
+        TaskView {
             id: id.into(),
             title: format!("Work ONLY in the worktree {id}"),
             state: TaskState::Failed,
             agent_id: format!("agent-{id}"),
             assignee: Some("coder".into()),
             parent: Some("b1".into()),
-            plan: Some(path.into()),
+            plan: Some(ROUND_PLAN.into()),
             plan_todo: Some("a".into()),
             ..TaskView::default()
-        };
-        let build = |id: &str, items| TaskView {
+        }
+    }
+
+    fn round_build(id: &str, items: Vec<TodoView>) -> TaskView {
+        TaskView {
             id: id.into(),
             title: format!("asked {id}"),
             agent_id: "lead".into(),
-            plan: Some(path.into()),
+            plan: Some(ROUND_PLAN.into()),
             builds: true,
             items,
             ..TaskView::default()
-        };
+        }
+    }
+
+    /// Two rounds of the plan: `b1` with two failed tries, then `b2`.
+    fn two_rounds() -> App {
         let mut app = App::new();
         app.process_command(UiCommand::SetPlans(vec![PlanView {
-            path: path.into(),
+            path: ROUND_PLAN.into(),
             name: "ch".into(),
-            todos: vec![todo("new", TodoState::Pending, None)],
+            todos: vec![round_todo("new", TodoState::Pending, None)],
         }]));
         app.process_command(UiCommand::SetTasks(vec![
-            build("b2", vec![todo("new", TodoState::Pending, None)]),
-            try_at("t2"),
-            try_at("t1"),
-            build(
+            round_build("b2", vec![round_todo("new", TodoState::Pending, None)]),
+            failed_try("t2"),
+            failed_try("t1"),
+            round_build(
                 "b1",
-                vec![todo("Add the store", TodoState::InProgress, Some("t2"))],
+                vec![round_todo(
+                    "Add the store",
+                    TodoState::InProgress,
+                    Some("t2"),
+                )],
             ),
         ]));
+        app
+    }
+
+    #[test]
+    fn an_earlier_round_lists_its_items_and_a_replaced_failure_is_muted() {
+        let mut app = two_rounds();
         let buffer = buffer_of(&mut app, 6);
         let screen = text_of(&buffer);
         let lines: Vec<&str> = screen.lines().collect();

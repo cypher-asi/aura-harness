@@ -2,6 +2,7 @@
 //! menu so it sits directly above the input line: a channel's members,
 //! then files and folders.
 
+use crate::app::mentions::MentionCandidate;
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -39,27 +40,7 @@ pub(super) fn render_mention_menu(frame: &mut Frame, chat: Rect, app: &App, them
         .enumerate()
         .skip(scroll)
         .take(rows)
-        .map(|(idx, candidate)| {
-            let (marker, color) = if idx == cursor {
-                ("› ", theme.colors.primary)
-            } else if candidate.is_dir {
-                ("  ", theme.colors.secondary)
-            } else {
-                ("  ", theme.colors.foreground)
-            };
-            let mut spans = vec![
-                Span::styled(marker, Style::default().fg(theme.colors.primary)),
-                Span::styled(format!("@{}", candidate.path), Style::default().fg(color)),
-            ];
-            if let Some(member) = &candidate.member {
-                spans.push(Span::raw(format!("  {}", member.name)));
-                spans.push(Span::styled(
-                    format!("  {}", member.role),
-                    Style::default().fg(theme.colors.muted),
-                ));
-            }
-            Line::from(spans)
-        })
+        .map(|(idx, candidate)| candidate_line(candidate, idx == cursor, theme))
         .collect();
 
     let title = if matches.iter().any(|candidate| candidate.member.is_some()) {
@@ -76,4 +57,27 @@ pub(super) fn render_mention_menu(frame: &mut Frame, chat: Rect, app: &App, them
         .border_style(Style::default().fg(theme.colors.muted));
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// One match: the cursor marker, `@path`, and a member's name and role.
+fn candidate_line<'a>(candidate: &MentionCandidate, selected: bool, theme: &Theme) -> Line<'a> {
+    let (marker, color) = if selected {
+        ("› ", theme.colors.primary)
+    } else if candidate.is_dir {
+        ("  ", theme.colors.secondary)
+    } else {
+        ("  ", theme.colors.foreground)
+    };
+    let mut spans = vec![
+        Span::styled(marker, Style::default().fg(theme.colors.primary)),
+        Span::styled(format!("@{}", candidate.path), Style::default().fg(color)),
+    ];
+    if let Some(member) = &candidate.member {
+        spans.push(Span::raw(format!("  {}", member.name)));
+        spans.push(Span::styled(
+            format!("  {}", member.role),
+            Style::default().fg(theme.colors.muted),
+        ));
+    }
+    Line::from(spans)
 }

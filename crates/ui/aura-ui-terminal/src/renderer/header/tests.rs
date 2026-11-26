@@ -1,5 +1,5 @@
 use super::*;
-use ratatui::{backend::TestBackend, Terminal};
+use ratatui::{backend::TestBackend, buffer::Buffer, style::Modifier, Terminal};
 
 const TABS: [&str; 2] = ["CHAT", "TERMINAL"];
 

@@ -10,6 +10,7 @@ mod channel_side;
 mod chat_lines;
 mod chat_panel;
 mod chrome;
+mod columns;
 mod command;
 mod context_menu;
 mod detail;
@@ -52,6 +53,8 @@ pub(crate) use crate::components::format_ago;
 pub(crate) use chat_lines::{ChatLineCache, GroupState};
 pub(crate) use chat_panel::format_elapsed;
 
+use columns::{columns, split_right_column};
+
 use crate::mode_command::ApprovalLevel;
 use crate::{app::PanelAreas, App, Theme};
 use ratatui::{
@@ -85,11 +88,36 @@ fn inset_edges(area: Rect) -> Rect {
     }
 }
 
+/// Where this frame's parts go.
+struct FrameLayout {
+    header: Rect,
+    swarm: Option<Rect>,
+    right: Option<Rect>,
+    /// The Chat column's rows: chat, benchmarks, queue, input and footer
+    chat_column: [Rect; 5],
+    /// The footer row under the right column, when it is shown
+    under_right: Option<Rect>,
+}
+
 /// Render the full application UI: the header row, then the panels, with
 /// the input at the bottom of the Chat panel and the footer under it. The
 /// side columns end level with the input.
 pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
-    let area = frame.area();
+    let layout = frame_layout(frame.area(), app);
+    app.set_prose_rows(Vec::new());
+    app.clear_chat_scroll();
+    let panels = (layout.swarm, layout.chat_column[0], layout.right);
+    let chat = render_content_panels(frame, panels, app, theme);
+    // After the panels, which start this frame's clickable areas afresh.
+    render_header(frame, layout.header, app, theme);
+    render_chat_overlays(frame, chat, app, theme);
+    render_below_chat(frame, &layout, app, theme);
+    render_popups(frame, chat, app, theme);
+    drop_covered(frame, app);
+}
+
+/// Lay out the header row, the side columns and the Chat column's rows.
+fn frame_layout(area: Rect, app: &App) -> FrameLayout {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(3)])
@@ -99,6 +127,37 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     // The input grows upward as it wraps inside the Chat column, so its
     // height comes from where the columns fall.
     let (swarm, column, right) = columns(content, app);
+    let chat_column = chat_column_rows(content, column, app);
+    let above_footer = |side: Rect| Rect {
+        height: side.height.saturating_sub(hud::FOOTER_ROWS),
+        ..side
+    };
+    let under_right = right.map(|side| Rect {
+        y: side.bottom().saturating_sub(hud::FOOTER_ROWS),
+        height: hud::FOOTER_ROWS.min(side.height),
+        ..side
+    });
+
+    // The panels' outer borders run through the middle of `content`'s
+    // edge columns, so the header keeps a column in from those to stay
+    // inside them.
+    let header = inset_edges(Rect {
+        x: content.x,
+        width: content.width,
+        ..rows[0]
+    });
+    FrameLayout {
+        header,
+        swarm: swarm.map(above_footer),
+        right: right.map(above_footer),
+        chat_column,
+        under_right,
+    }
+}
+
+/// Split the Chat `column` into the chat, benchmarks, queue, input and
+/// footer rows.
+fn chat_column_rows(content: Rect, column: Rect, app: &App) -> [Rect; 5] {
     // The queue and benchmark panels give up rows before the chat does:
     // the chat keeps three and the input one. The queue goes first.
     let queue_rows = queue_panel::height(app).min(
@@ -116,7 +175,7 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
         .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 3 + queue_rows + bench_rows)
         .max(1);
     let input_rows = input::input_rows(column, app, max_input_rows);
-    let chat_column = Layout::default()
+    let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
@@ -126,36 +185,22 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
             Constraint::Length(hud::FOOTER_ROWS),
         ])
         .split(column);
-    let above_footer = |side: Rect| Rect {
-        height: side.height.saturating_sub(hud::FOOTER_ROWS),
-        ..side
-    };
-    let under_right = right.map(|side| Rect {
-        y: side.bottom().saturating_sub(hud::FOOTER_ROWS),
-        height: hud::FOOTER_ROWS.min(side.height),
-        ..side
-    });
-    let (swarm, right) = (swarm.map(above_footer), right.map(above_footer));
+    [rows[0], rows[1], rows[2], rows[3], rows[4]]
+}
 
-    // The panels' outer borders run through the middle of `content`'s
-    // edge columns, so the header keeps a column in from those to stay
-    // inside them.
-    let header = inset_edges(Rect {
-        x: content.x,
-        width: content.width,
-        ..rows[0]
-    });
-    app.set_prose_rows(Vec::new());
-    app.clear_chat_scroll();
-    let chat = render_content_panels(frame, (swarm, chat_column[0], right), app, theme);
-    // After the panels, which start this frame's clickable areas afresh.
-    render_header(frame, header, app, theme);
+/// Images, the detail view and the selection over the Chat panel's body.
+fn render_chat_overlays(frame: &mut Frame, chat: Rect, app: &mut App, theme: &Theme) {
     images::render_pending_images(frame, chat, app, theme);
     detail::render_detail_view(frame, chat, app, theme);
     app.track_selection(frame.buffer_mut());
     if let Some(selection) = app.selection() {
         selection.highlight(frame.buffer_mut());
     }
+}
+
+/// The benchmark and queue panels, the input, the footer and the notice.
+fn render_below_chat(frame: &mut Frame, layout: &FrameLayout, app: &mut App, theme: &Theme) {
+    let chat_column = &layout.chat_column;
     bench_panel::render(frame, chat_column[1], app, theme);
     queue_panel::render(frame, chat_column[2], app, theme);
     app.set_input_area(chat_column[3]);
@@ -165,12 +210,15 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     app.set_input_rows(drawn.rows);
     let footer_gap = hud::render_footer(frame, inset_edges(chat_column[4]), app, theme);
     app.set_footer_area(inset_edges(chat_column[4]));
-    let (records, sandbox) = split_right_column(right, app);
-    let notice_area = under_right.unwrap_or(footer_gap);
+    let (records, sandbox) = split_right_column(layout.right, app);
+    let notice_area = layout.under_right.unwrap_or(footer_gap);
     if let Some(read) = hud::render_notice(frame, (notice_area, sandbox.or(records)), app, theme) {
         app.hold_notification_for(read);
     }
+}
 
+/// The menus, pickers and overlays drawn over everything else.
+fn render_popups(frame: &mut Frame, chat: Rect, app: &mut App, theme: &Theme) {
     hud::render_todo_panel(frame, chat, app, theme);
     slash_menu::render_slash_menu(frame, chat, app, theme);
     mention_menu::render_mention_menu(frame, chat, app, theme);
@@ -178,16 +226,16 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     overlays::render_folder_picker(frame, app, theme);
     channel_form::render_channel_form(frame, app, theme);
     overlays::render_overlays(frame, app, theme);
+}
+
+/// Drop what was drawn over from this frame's clickable areas, and take
+/// the flow canvas's marks from the buffer.
+fn drop_covered(frame: &mut Frame, app: &mut App) {
     app.drop_covered_prose(frame.buffer_mut());
     app.drop_covered_code_copies(frame.buffer_mut());
     app.drop_covered_chat(frame.buffer_mut());
     app.trim_covered_scrollbar(frame.buffer_mut());
     app.flow_mut().take_canvas_marks(frame.buffer_mut());
-}
-
-/// Whether the right column (Record above Sandbox) has anything to show.
-fn right_column_visible(app: &App) -> bool {
-    app.record_panel_visible() || app.sandbox_panel_visible()
 }
 
 /// Render the content panels (Swarm, Chat, Record, Sandbox) in the columns
@@ -224,108 +272,6 @@ fn render_content_panels(
         sandbox::render_sandbox_panel(frame, sandbox, app, theme);
     }
     header::split(chat, app.host_chrome()).1
-}
-
-/// Split `area` into the Agents, Chat and right columns. Only `area`'s
-/// width decides where the columns go.
-///
-/// The Agents column's width never depends on whether the right column
-/// is shown: opening or closing the right column only moves the Chat
-/// panel's right edge.
-fn columns(area: Rect, app: &App) -> (Option<Rect>, Rect, Option<Rect>) {
-    let swarm_visible = app.swarm_panel_visible();
-    let right_visible = right_column_visible(app);
-    let splits = app.pane_splits();
-
-    let left = swarm_visible.then(|| agents_width(area.width, splits.agents));
-    let used = left.map_or(0, |left| left + GUTTER);
-    let right = right_visible.then(|| {
-        // What the Agents column and the Chat panel leave over.
-        let room = area.width.saturating_sub(used + MIN_CHAT_WIDTH + GUTTER);
-        let default = if swarm_visible {
-            area.width * 24 / 100
-        } else {
-            area.width * 35 / 100
-        };
-        splits
-            .right
-            .map_or(default.min(room.max(MIN_RIGHT_WIDTH)), |split| {
-                dragged(area.width, split).min(room)
-            })
-    });
-
-    let mut constraints = Vec::with_capacity(3);
-    constraints.extend(left.map(Constraint::Length));
-    constraints.push(Constraint::Fill(1));
-    constraints.extend(right.map(Constraint::Length));
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .spacing(GUTTER)
-        .constraints(constraints)
-        .split(area);
-    let swarm = left.map(|_| chunks[0]);
-    let chat = chunks[usize::from(swarm_visible)];
-    let right = right.map(|_| chunks[chunks.len() - 1]);
-    (swarm, chat, right)
-}
-
-/// Width of the Agents column in a `width`-wide row. A dragged divider
-/// leaves room for the Chat panel and a narrow right column beside it
-/// whether or not the right column is shown, so showing it never moves
-/// this column.
-fn agents_width(width: u16, split: Option<f32>) -> u16 {
-    let room = width.saturating_sub(MIN_CHAT_WIDTH + MIN_RIGHT_WIDTH + 2 * GUTTER);
-    split.map_or(width * 24 / 100, |split| dragged(width, split).min(room))
-}
-
-/// Columns the Chat panel keeps however far the dividers are dragged.
-const MIN_CHAT_WIDTH: u16 = 30;
-
-/// Columns the Agents column leaves for the right column, shown or not,
-/// so opening it does not push the Agents column's divider.
-const MIN_RIGHT_WIDTH: u16 = 20;
-
-/// Blank columns between panels side by side. Cells are about twice as
-/// tall as they are wide, so one column matches the gap between panels
-/// stacked on rows that touch.
-const GUTTER: u16 = 1;
-
-/// Rows each panel of the right column keeps when they share it.
-const MIN_STACKED_HEIGHT: u16 = 6;
-
-/// The cells a divider dragged to `split` of `total` leaves before it.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn dragged(total: u16, split: f32) -> u16 {
-    (f32::from(total) * split.clamp(0.0, 1.0)).round() as u16
-}
-
-/// Record on top and Sandbox below, halves unless the divider between
-/// them was moved; either one takes the whole column when the other is
-/// hidden.
-fn split_right_column(right: Option<Rect>, app: &App) -> (Option<Rect>, Option<Rect>) {
-    let Some(area) = right else {
-        return (None, None);
-    };
-    match (app.record_panel_visible(), app.sandbox_panel_visible()) {
-        (true, true) => {
-            let constraints = app.pane_splits().records.map_or(
-                [Constraint::Percentage(50), Constraint::Percentage(50)],
-                |split| {
-                    let keep = MIN_STACKED_HEIGHT.min(area.height / 2);
-                    let top = dragged(area.height, split).clamp(keep, area.height - keep);
-                    [Constraint::Length(top), Constraint::Fill(1)]
-                },
-            );
-            let halves = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(constraints)
-                .split(area);
-            (Some(halves[0]), Some(halves[1]))
-        }
-        (true, false) => (Some(area), None),
-        (false, true) => (None, Some(area)),
-        (false, false) => (None, None),
-    }
 }
 
 /// Columns of the header's hamburger button: a space, then its glyph in

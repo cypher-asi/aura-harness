@@ -195,15 +195,8 @@ crates/ui/aura-ui-terminal/src/app/tasks/tests.rs
 crates/ui/aura-ui-terminal/src/app/tests.rs
 crates/ui/aura-ui-terminal/src/renderer/activity/tests.rs
 crates/ui/aura-ui-terminal/src/renderer/benchmarks/tests.rs
-crates/ui/aura-ui-terminal/src/renderer/boot/mod.rs
-crates/ui/aura-ui-terminal/src/renderer/flow/mod.rs
-crates/ui/aura-ui-terminal/src/renderer/header/mod.rs
-crates/ui/aura-ui-terminal/src/renderer/hud/mod.rs
-crates/ui/aura-ui-terminal/src/renderer/input.rs
 crates/ui/aura-ui-terminal/src/renderer/markdown/tests.rs
-crates/ui/aura-ui-terminal/src/renderer/mod.rs
 crates/ui/aura-ui-terminal/src/renderer/tests.rs
-crates/ui/aura-ui-terminal/src/terminal/mod.rs
 evals/polyglot/rust-xorcism/checks/.gate_checks/xorcism.rs
 tests/async_process_tests.rs
 tests/common/mod.rs

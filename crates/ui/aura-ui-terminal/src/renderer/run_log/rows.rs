@@ -181,63 +181,88 @@ fn row_text<'a>(
     spans: &mut Vec<Span<'static>>,
     theme: &Theme,
 ) -> Option<RowText<'a>> {
+    match panel {
+        LogPanel::Run(id) => run_text(state, id, theme),
+        LogPanel::Details(id) => Some(details_text(state, id, theme)),
+        LogPanel::Turn(id, n) => turn_text(state, (id, *n), width, spans, theme),
+        LogPanel::Step(id, seq) => step_text(state, (id, *seq), width, spans, theme),
+    }
+}
+
+/// A run's row: its title and what it is doing.
+fn run_text<'a>(state: &'a LogState, id: &str, theme: &Theme) -> Option<RowText<'a>> {
+    let muted = Style::default().fg(theme.colors.muted);
+    let run = state.run(id)?;
+    Some(RowText {
+        label: run.title.as_str(),
+        label_style: Style::default()
+            .fg(theme.colors.secondary)
+            .add_modifier(Modifier::BOLD),
+        summary: run.detail.as_str(),
+        summary_style: muted,
+        right: String::new(),
+        right_style: muted,
+    })
+}
+
+/// A turn's row, after `Turn n` goes onto `spans`.
+fn turn_text<'a>(
+    state: &'a LogState,
+    (id, n): (&str, u32),
+    width: usize,
+    spans: &mut Vec<Span<'static>>,
+    theme: &Theme,
+) -> Option<RowText<'a>> {
+    let muted = Style::default().fg(theme.colors.muted);
+    let text = Style::default().fg(theme.colors.text);
+    let turn = state.turn(id, n)?;
+    spans.push(Span::styled(
+        format!("Turn {n}  "),
+        text.add_modifier(Modifier::BOLD),
+    ));
+    let (label, summary) = if turn.prompt.is_empty() {
+        (turn.detail.as_str(), "")
+    } else {
+        (turn.prompt.as_str(), turn.detail.as_str())
+    };
+    Some(RowText {
+        label,
+        label_style: if turn.prompt.is_empty() { muted } else { text },
+        summary,
+        summary_style: muted,
+        right: columns([&turn.tokens, &turn.cost, &turn.took], width),
+        right_style: muted,
+    })
+}
+
+/// A step's row, after its kind (or `↳` under its parent) goes onto
+/// `spans`.
+fn step_text<'a>(
+    state: &'a LogState,
+    (id, seq): (&str, u64),
+    width: usize,
+    spans: &mut Vec<Span<'static>>,
+    theme: &Theme,
+) -> Option<RowText<'a>> {
     let muted = Style::default().fg(theme.colors.muted);
     let faint = Style::default().fg(theme.colors.faint);
     let text = Style::default().fg(theme.colors.text);
-    match panel {
-        LogPanel::Run(id) => {
-            let run = state.run(id)?;
-            Some(RowText {
-                label: run.title.as_str(),
-                label_style: Style::default()
-                    .fg(theme.colors.secondary)
-                    .add_modifier(Modifier::BOLD),
-                summary: run.detail.as_str(),
-                summary_style: muted,
-                right: String::new(),
-                right_style: muted,
-            })
-        }
-        LogPanel::Details(id) => Some(details_text(state, id, theme)),
-        LogPanel::Turn(id, n) => {
-            let turn = state.turn(id, *n)?;
-            spans.push(Span::styled(
-                format!("Turn {n}  "),
-                text.add_modifier(Modifier::BOLD),
-            ));
-            let (label, summary) = if turn.prompt.is_empty() {
-                (turn.detail.as_str(), "")
-            } else {
-                (turn.prompt.as_str(), turn.detail.as_str())
-            };
-            Some(RowText {
-                label,
-                label_style: if turn.prompt.is_empty() { muted } else { text },
-                summary,
-                summary_style: muted,
-                right: columns([&turn.tokens, &turn.cost, &turn.took], width),
-                right_style: muted,
-            })
-        }
-        LogPanel::Step(id, seq) => {
-            let step = state.step(id, *seq)?;
-            if step.parent.is_some() {
-                spans.push(Span::raw(" ".repeat(KIND_WIDTH)));
-                spans.push(Span::styled("↳ ", faint));
-            } else {
-                spans.push(Span::styled(format!("{:<KIND_WIDTH$}", step.kind), faint));
-            }
-            Some(RowText {
-                label: step.label.as_str(),
-                // The end of a turn is said quietly; what it did is in its turn.
-                label_style: if step.kind == "end" { muted } else { text },
-                summary: step.summary.as_str(),
-                summary_style: summary_style(step.status, theme),
-                right: columns([&step.tokens, &step.cost, &step.took], width),
-                right_style: muted,
-            })
-        }
+    let step = state.step(id, seq)?;
+    if step.parent.is_some() {
+        spans.push(Span::raw(" ".repeat(KIND_WIDTH)));
+        spans.push(Span::styled("↳ ", faint));
+    } else {
+        spans.push(Span::styled(format!("{:<KIND_WIDTH$}", step.kind), faint));
     }
+    Some(RowText {
+        label: step.label.as_str(),
+        // The end of a turn is said quietly; what it did is in its turn.
+        label_style: if step.kind == "end" { muted } else { text },
+        summary: step.summary.as_str(),
+        summary_style: summary_style(step.status, theme),
+        right: columns([&step.tokens, &step.cost, &step.took], width),
+        right_style: muted,
+    })
 }
 
 /// The `Details` row: how many problems the run had, at the right.

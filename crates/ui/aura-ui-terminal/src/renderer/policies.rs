@@ -47,6 +47,16 @@ pub(super) fn render_policies(
 fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let mut info = Info::new(width, theme);
 
+    push_status(&mut info, view);
+    push_status_rules(&mut info, view);
+    push_capabilities(&mut info, view);
+    push_tools(&mut info, view, width, theme);
+    push_lists(&mut info, view);
+    info.into_lines()
+}
+
+/// STATUS, first half: mode, approval, commands and prompts.
+fn push_status(info: &mut Info<'_>, view: &PolicyView) {
     info.section("STATUS", None);
     info.fact(
         "Mode",
@@ -77,6 +87,10 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
         "none: ask calls are denied".to_string()
     };
     info.fact("Prompts", &prompts, Value::flag_if(!view.live_prompts));
+}
+
+/// STATUS, second half: hooks, actions and the policy hash.
+fn push_status_rules(info: &mut Info<'_>, view: &PolicyView) {
     let (hooks, hooks_kind) = match view.permission_hooks {
         0 => ("none".to_string(), Value::Quiet),
         1 => ("1 permission hook".to_string(), Value::Plain),
@@ -95,7 +109,10 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
     );
     let hash: String = view.policy_hash.chars().take(8).collect();
     info.fact("Hash", &hash, Value::Quiet);
+}
 
+/// CAPABILITIES: the ones held, out of all, and their scope.
+fn push_capabilities(info: &mut Info<'_>, view: &PolicyView) {
     let held = format!("{}/{}", view.capabilities.len(), view.capability_total);
     info.section("CAPABILITIES", Some(&held));
     if view.capabilities.is_empty() {
@@ -104,7 +121,10 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
         info.text(&view.capabilities.join(", "), Value::Plain);
     }
     info.fact("Scope", &view.scope, Value::Plain);
+}
 
+/// TOOLS: every tool's state and what decided it.
+fn push_tools(info: &mut Info<'_>, view: &PolicyView, width: usize, theme: &Theme) {
     let (on, ask, off) = view.tool_counts();
     info.section("TOOLS", Some(&format!("{on} on · {ask} ask · {off} off")));
     info.text("per tool, before arguments", Value::Quiet);
@@ -129,7 +149,10 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
             &detail,
         );
     }
+}
 
+/// ALWAYS ALLOW, SESSION GRANTS and INTEGRATIONS.
+fn push_lists(info: &mut Info<'_>, view: &PolicyView) {
     let ignored = (view.approval == ApprovalLevel::Strict).then_some("ignored at strict");
     info.section("ALWAYS ALLOW", ignored);
     info.items(&view.always_allow);
@@ -137,7 +160,6 @@ fn policy_lines(view: &PolicyView, width: usize, theme: &Theme) -> Vec<Line<'sta
     info.items(&view.session_grants);
     info.section("INTEGRATIONS", None);
     info.items(&view.integrations);
-    info.into_lines()
 }
 
 #[cfg(test)]
