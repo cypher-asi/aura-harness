@@ -119,12 +119,9 @@ fn group_header_counts_what_the_steps_did() {
 }
 
 #[test]
-fn collapsed_hint_counts_the_steps() {
+fn collapsed_steps_counts_the_steps() {
     let theme = Theme::default();
-    assert_eq!(
-        text(&collapsed_hint(5, &theme)),
-        "    5 steps (click to expand)"
-    );
+    assert_eq!(text(&collapsed_steps(5, &theme)), "    5 steps");
 }
 
 #[test]

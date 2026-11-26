@@ -9,7 +9,7 @@ mod runs;
 mod summary;
 mod table;
 
-use super::chrome::body_block;
+use super::chrome::{body_block, inset_lines, pad_sides, pad_top};
 use crate::app::{BenchMode, FormField};
 use crate::{App, Theme};
 use detail::detail_lines;
@@ -40,19 +40,17 @@ pub(super) fn render_benchmarks(
     app.set_chat_code_copies(Vec::new());
     app.set_chat_width(inner.width);
     app.set_chat_text_area(inner);
-    let padded = Rect {
-        x: inner.x.saturating_add(1),
-        width: inner.width.saturating_sub(2),
-        ..inner
-    };
+    let rows = pad_top(inner);
+    let padded = pad_sides(rows);
     if padded.width < 12 || padded.height == 0 {
         return;
     }
     let width = usize::from(padded.width);
     let frame_no = theme.animate_spinners.then(|| app.animation_frame());
     let state = app.bench();
-    // The form wraps; the detail's tables fit the width, and wrapping
-    // would only break them.
+    // The form wraps, so it keeps to the text area; the detail's tables
+    // fit the width, and wrapping would only break them, so their lines
+    // take the full rows and the picked run is lit border to border.
     let wrap = state.mode == Some(BenchMode::Form);
     let mut form_rows = None;
     let (lines, scroll) = if wrap {
@@ -60,31 +58,38 @@ pub(super) fn render_benchmarks(
         form_rows = Some(rows);
         (lines, 0)
     } else {
-        match state.shown() {
+        let (lines, scroll) = match state.shown() {
             Some(view) => {
                 let lines = detail_lines(view, state.run, theme, width, frame_no);
                 let last = u16::try_from(lines.len().saturating_sub(1)).unwrap_or(u16::MAX);
                 (lines, state.scroll.min(last))
             }
             None => (vec![muted_line("That benchmark is gone.", theme)], 0),
-        }
+        };
+        (inset_lines(lines), scroll)
     };
-    // The form is drawn from its top, so a row's line is its screen row.
-    let form_rows: Vec<(u16, FormField)> = form_rows
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(line, _)| *line < usize::from(padded.height))
-        .filter_map(|(line, field)| Some((padded.y.checked_add(u16::try_from(line).ok()?)?, field)))
-        .collect();
-    let form_area = (!form_rows.is_empty()).then_some(padded);
-    app.set_bench_form_rows(form_area, form_rows);
+    set_form_rows(app, padded, form_rows.unwrap_or_default());
     app.clamp_bench_scroll(scroll);
-    app.set_chat_rows(Some((inner, usize::from(scroll))));
+    let text = if wrap { padded } else { rows };
+    app.set_chat_rows(Some((text, usize::from(scroll))));
     let mut paragraph = Paragraph::new(lines).scroll((scroll, 0));
     if wrap {
         paragraph = paragraph.wrap(Wrap { trim: false });
     }
-    frame.render_widget(paragraph, padded);
+    frame.render_widget(paragraph, text);
+}
+
+/// Hand the pointer the form's field `rows`, each the line of `padded`
+/// it is drawn on. The form is drawn from its top, so a row's line is its
+/// screen row.
+fn set_form_rows(app: &mut App, padded: Rect, rows: Vec<(usize, FormField)>) {
+    let rows: Vec<(u16, FormField)> = rows
+        .into_iter()
+        .filter(|(line, _)| *line < usize::from(padded.height))
+        .filter_map(|(line, field)| Some((padded.y.checked_add(u16::try_from(line).ok()?)?, field)))
+        .collect();
+    let area = (!rows.is_empty()).then_some(padded);
+    app.set_bench_form_rows(area, rows);
 }
 
 #[cfg(test)]

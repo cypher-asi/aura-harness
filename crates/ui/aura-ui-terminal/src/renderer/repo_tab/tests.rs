@@ -3,7 +3,7 @@ use super::*;
 use crate::app::{PaneTab, SidePanelTab};
 use crate::events::UiCommand;
 use crate::repo::{
-    ChangeKind, EventKind, EventState, RepoBranch, RepoChange, RepoEvent, RepoTarget,
+    ChangeKind, EventKind, EventState, RepoBranch, RepoChange, RepoEvent, RepoTarget, RepoView,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{backend::TestBackend, Terminal};

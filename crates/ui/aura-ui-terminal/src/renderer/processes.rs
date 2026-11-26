@@ -4,7 +4,7 @@
 use super::agents::aura_icon;
 use super::chrome::{Body, ScrollView};
 use super::overlays::DETAIL_LABEL_WIDTH;
-use super::side_list::{name_style, render_empty, render_hidden, Tone, PROCESSES_HINT};
+use super::side_list::{name_style, render_empty, render_hidden, Tone};
 use crate::app::{HoverTarget, PanelFocus};
 use crate::components::{cell_style, list_row, CellState, Info, StatusIcon, Value};
 use crate::events::{ProcessKind, ProcessStatus, ProcessSummary};
@@ -58,7 +58,7 @@ pub(super) fn render_processes(
         first: scroll,
     };
     app.set_process_rows_area(body.rows(), scroll);
-    body.draw(frame, lines, view, PROCESSES_HINT, theme);
+    body.draw(frame, lines, view, theme);
 }
 
 /// One list row: the status icon, the label, then the kind and elapsed

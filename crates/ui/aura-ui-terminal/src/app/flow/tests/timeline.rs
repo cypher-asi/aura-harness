@@ -275,6 +275,9 @@ fn the_timeline_draws_a_row_an_agent_with_its_turns_as_bars() {
         "status, bar and check: {b_1}"
     );
     find("Lead · 1 turn · 0 calls");
-    find("Enter opens its cards");
+    assert!(
+        !screen.iter().any(|line| line.contains("Enter opens")),
+        "no keys"
+    );
     assert_eq!(app.flow_canvas(), None, "every front end draws it in cells");
 }

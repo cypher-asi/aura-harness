@@ -125,9 +125,9 @@ impl Detail<'_> {
 
     /// The row of `r`, an ended run, in the selection style if `selected`.
     fn ended_row(&self, r: &BenchRun, selected: bool, shown: Shown) -> Row {
-        let warning = self.style(|t| t.colors.warning);
+        let errored = self.good();
         let base = if r.error.is_some() {
-            warning
+            errored
         } else {
             self.text()
         };
@@ -163,7 +163,7 @@ impl Detail<'_> {
                 r.error
                     .as_deref()
                     .map_or_else(String::new, |e| headline(e, usize::MAX)),
-                warning,
+                errored,
             ),
         ];
         if selected {

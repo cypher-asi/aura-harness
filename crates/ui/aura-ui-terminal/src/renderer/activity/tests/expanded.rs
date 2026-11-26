@@ -129,10 +129,7 @@ fn expanded_result_is_capped() {
         80,
         &Theme::default(),
     );
-    assert_eq!(
-        texts(&lines).last().unwrap(),
-        "    │ … 50 more lines · click to show 50 more"
-    );
+    assert_eq!(texts(&lines).last().unwrap(), "    │ … 50 more lines");
 }
 
 #[test]
@@ -150,16 +147,10 @@ fn each_page_moves_the_cut_of_a_result_until_it_is_all_shown() {
     };
     let (lines, more) = draw(0);
     assert_eq!(more, [(lines.len() - 1, MoreSection::Result)]);
-    assert_eq!(
-        text(&lines[more[0].0]),
-        "    │ … 450 more lines · click to show 200 more"
-    );
+    assert_eq!(text(&lines[more[0].0]), "    │ … 450 more lines");
 
     let (lines, more) = draw(MORE_PAGE_LINES);
-    assert_eq!(
-        text(&lines[more[0].0]),
-        "    │ … 250 more lines · click to show 200 more"
-    );
+    assert_eq!(text(&lines[more[0].0]), "    │ … 250 more lines");
     assert_eq!(text(&lines[more[0].0 - 1]), "    │ line 399");
 
     let (lines, more) = draw(3 * MORE_PAGE_LINES);

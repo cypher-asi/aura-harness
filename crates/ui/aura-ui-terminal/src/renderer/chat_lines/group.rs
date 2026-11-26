@@ -6,7 +6,7 @@ use super::{StepLines, TurnPlace};
 use crate::app::{ToggleRow, ToggleTarget};
 use crate::components::{truncate_line, Activity, Message};
 use crate::renderer::activity::{
-    activity_lines, collapsed_hint, group_header_of, records_link, GroupView, Shown, StepNumber,
+    activity_lines, collapsed_steps, group_header_of, records_link, GroupView, Shown, StepNumber,
     Tally,
 };
 use crate::renderer::boot::boot_fold_rows;
@@ -95,7 +95,7 @@ pub(super) fn group_lines(
             target: group,
             open: false,
         });
-        lines.push(collapsed_hint(steps.len(), theme));
+        lines.push(collapsed_steps(steps.len(), theme));
     } else {
         push_steps(
             (&mut lines, &mut toggles),
@@ -198,14 +198,11 @@ pub(super) fn single_lines(
         }
         let (laid, more) = message_lines(message, (width, measure), theme, spinner);
         // A boot console still going shows everything; once done it
-        // folds, and opens or closes on its header, its outcome and the
-        // row inviting the click.
+        // folds, and opens or closes on its header and its outcome.
         let id = message.version().0;
         let toggles = message
             .boot_console()
-            .map_or(0..0, |console| {
-                boot_fold_rows(console, message.is_expanded(), width)
-            })
+            .map_or(0..0, |console| boot_fold_rows(console, width))
             .map(|line| ToggleRow {
                 line,
                 target: ToggleTarget::Step(id),

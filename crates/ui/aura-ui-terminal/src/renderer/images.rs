@@ -172,7 +172,6 @@ pub(super) fn render_pending_images(frame: &mut Frame, chat: Rect, app: &mut App
     };
     let block = Block::default()
         .title(" ATTACHED ")
-        .title_bottom(Line::from(" click to view ").right_aligned())
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.colors.muted));
     frame.render_widget(Clear, area);

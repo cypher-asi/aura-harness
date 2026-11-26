@@ -9,14 +9,14 @@ fn test_long_command_wraps_at_the_last_column() {
     submit_message(&mut app, &format!("${command}"));
     let rows = render_rows(&mut app, 120);
 
-    let start = rows.iter().position(|r| r.contains("│ $ echo x")).unwrap();
+    let start = rows.iter().position(|r| r.contains("│  $ echo x")).unwrap();
     let chars: Vec<char> = rows[start].chars().collect();
     let left = rows[start]
-        .find("│ $ echo")
+        .find("│  $ echo")
         .map(|i| rows[start][..i].chars().count());
     let left = left.unwrap();
     let right = left + 1 + chars[left + 1..].iter().position(|c| *c == '│').unwrap();
-    let (text_x, text_width) = (left + 2, right - left - 3);
+    let (text_x, text_width) = (left + 3, right - left - 5);
     let shown: String = rows[start..]
         .iter()
         .take_while(|r| r.contains('x'))
@@ -37,7 +37,7 @@ fn test_pane_shows_only_the_running_command_and_input_keeps_the_prompt() {
     assert_eq!(pane.matches("[u@h d]$ ").count(), 1, "{pane}");
     assert!(pane.contains("[u@h d]$ sleep 5"), "{pane}");
     assert!(!pane.contains("running sleep"), "{pane}");
-    let typed: String = rows[input_y].chars().skip(chat_left + 2).collect();
+    let typed: String = rows[input_y].chars().skip(chat_left + 3).collect();
     assert!(typed.starts_with("[u@h d]$ "), "{:?}", rows[input_y]);
 }
 
@@ -93,11 +93,11 @@ fn test_terminal_pane_shows_only_commands_and_chat_hides_them() {
 }
 
 #[test]
-fn test_empty_terminal_pane_says_how_to_leave() {
+fn test_empty_terminal_pane_spells_out_no_keys() {
     let mut app = app_with_model(None);
     type_text(&mut app, "$");
     let screen = render_rows(&mut app, 120).join("\n");
-    assert!(screen.contains("Esc returns to chat"), "{screen}");
+    assert!(!screen.contains("Esc returns to chat"), "{screen}");
 }
 
 #[test]

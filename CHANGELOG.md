@@ -7,6 +7,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Panels keep their text off the borders and show no key hints
+
+##### Changed
+
+- Every panel's text starts one blank row under its top border and two
+  columns in from each side: the side panels' tabs, the chat and the
+  terminal, and the views that open over the chat (a record, a file, a
+  plan, LOG, GRAPH, TIME and the benchmarks). Selected and hovered rows
+  still fill from border to border. The to-do drawer, the benchmark and
+  queue panels and the input box keep the same two columns at the
+  sides.
+- Panels no longer spell out their keys or what a click does. Lines
+  such as `↑↓ scroll  ⇧←→ tabs`, `Esc close`, `click to open`,
+  `(click to expand)` and `click to show the boot log` are gone, and
+  the keys and clicks still work. Approval choices, the HOST tab's
+  `[p] pull changes  [s] sleep  [m] move`, `/help` and counts such as
+  `1-12/80` stay.
+- The benchmark app uses the accent color where it used blue: a
+  stopped or cancelled benchmark, a run that errored and the
+  benchmark's notes. A failed check is an accent `▓` in the progress
+  bar.
+
 ### The placement switch answers at once
 
 ##### Changed

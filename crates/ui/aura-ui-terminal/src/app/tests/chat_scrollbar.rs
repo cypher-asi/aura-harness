@@ -25,9 +25,11 @@ fn clicking_a_finished_boot_consoles_fold_opens_and_closes_it() {
     draw(&mut app, &mut terminal);
     assert!(cell_of(&terminal, "booted line").is_none(), "folded");
 
-    let hint = cell_of(&terminal, "click to show the boot log").expect("the hint is on screen");
-    click_at(&mut app, hint);
-    assert!(app.messages()[0].is_expanded(), "the hint opens it");
+    assert!(cell_of(&terminal, "click to").is_none(), "no hint");
+
+    let summary = cell_of(&terminal, "Now running in the cloud.").expect("summary on screen");
+    click_at(&mut app, summary);
+    assert!(app.messages()[0].is_expanded(), "the outcome opens it");
     draw(&mut app, &mut terminal);
     assert!(cell_of(&terminal, "booted line").is_some());
     assert!(cell_of(&terminal, "Creating machine").is_some());
@@ -327,8 +329,8 @@ fn test_the_scrollbar_of_a_file_reaches_no_further_than_its_text() {
     let (_dir, mut app, mut terminal) = long_file_over_the_chat();
     let bar = app.areas.scrollbar.expect("the file overflows");
     let rows = app.areas.chat_rows.expect("the file's rows");
-    assert_eq!(bar.track.x - rows.right(), 1, "a column of padding");
-    let (padding, text) = (bar.track.x - 1, bar.track.x - 2);
+    assert_eq!(bar.track.x - rows.right(), 2, "two columns of padding");
+    let (padding, text) = (bar.track.x - 2, bar.track.x - 3);
     let (top, bottom) = (bar.track.y, bar.track.bottom() - 1);
 
     // The padding grabs it: pressed at the bottom, the thumb jumps there.

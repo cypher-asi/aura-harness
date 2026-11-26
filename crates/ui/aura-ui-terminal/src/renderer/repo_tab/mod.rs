@@ -5,14 +5,14 @@
 //! one picked, with `‹` and `›` where it is cut.
 //!
 //! ```text
-//!  All  Changes  Commits  Pushes │ Branches  Tags
-//!  ↑  main  2 ahead of origin/main         a1b2c3d4
-//!  ▾  Uncommitted changes                   2 files
-//!    M  src/lib.rs                           staged
-//!    ?  notes.txt
-//!  ○  Add the REPO tab  a1b2c3d4 · main          now
-//!  ↑  Pushed 2 commits to origin/main             5m
-//!  ●  Fix the parser  e5f6a7b8                    2h
+//!    All  Changes  Commits  Pushes │ Branches  Tags
+//!   ↑  main  2 ahead of origin/main         a1b2c3d4
+//!   ▾  Uncommitted changes                   2 files
+//!     M  src/lib.rs                           staged
+//!     ?  notes.txt
+//!   ○  Add the REPO tab  a1b2c3d4 · main          now
+//!   ↑  Pushed 2 commits to origin/main             5m
+//!   ●  Fix the parser  e5f6a7b8                    2h
 //! ```
 
 mod rows;
@@ -20,12 +20,11 @@ mod strip;
 #[cfg(test)]
 mod tests;
 
-use super::chrome::{Body, ScrollView};
-use super::side_list::{render_empty, REPO_HINT, REPO_PR_HINT};
-use crate::app::repo_tab::{RepoFilter, RepoRow};
+use super::chrome::{pad_sides, Body, ScrollView};
+use super::side_list::render_empty;
+use crate::app::repo_tab::RepoFilter;
 use crate::app::{HoverTarget, PanelFocus};
 use crate::components::CellState;
-use crate::repo::RepoView;
 use crate::{App, Theme};
 use aura_core_types::time::now_ms;
 use ratatui::{layout::Rect, text::Line, Frame};
@@ -57,7 +56,7 @@ pub(super) fn render_repo(
         height: inner.height.min(1),
         ..inner
     };
-    strip::render_strip(frame, strip, app, theme);
+    strip::render_strip(frame, pad_sides(strip), app, theme);
 
     let list = Rect {
         y: inner.y + strip.height,
@@ -99,26 +98,11 @@ fn render_list(frame: &mut Frame, area: Rect, list: Rect, app: &mut App, theme: 
             row_line(view, row, state, look, theme)
         })
         .collect();
-    let hint = hint_of(view, rows.get(selected));
     let shown = ScrollView {
         total: rows.len(),
         visible,
         first: scroll,
     };
     app.set_repo_rows_area(Some(body.rows()), scroll);
-    body.draw(frame, lines, shown, hint, theme);
-}
-
-/// The key hint under the rows: on a PR, which has a page, it says how to
-/// open it.
-fn hint_of(view: &RepoView, selected: Option<&RepoRow>) -> &'static str {
-    let on_pr = match selected {
-        Some(&RepoRow::Event(i)) => view.events.get(i).is_some_and(|e| e.url.is_some()),
-        _ => false,
-    };
-    if on_pr {
-        REPO_PR_HINT
-    } else {
-        REPO_HINT
-    }
+    body.draw(frame, lines, shown, theme);
 }

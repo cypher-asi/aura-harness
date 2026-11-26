@@ -311,11 +311,12 @@ fn finish_row(
     } else if picked {
         spans.push(Span::raw(" ".repeat(width.saturating_sub(drawn))));
     }
-    if picked {
-        let style = Style::default()
-            .bg(theme.colors.selection)
-            .fg(theme.colors.on_selection);
-        spans = spans.into_iter().map(|s| s.patch_style(style)).collect();
+    if !picked {
+        return Line::from(spans);
     }
-    Line::from(spans)
+    let style = Style::default()
+        .bg(theme.colors.selection)
+        .fg(theme.colors.on_selection);
+    spans = spans.into_iter().map(|s| s.patch_style(style)).collect();
+    Line::from(spans).style(style)
 }

@@ -106,12 +106,36 @@ fn a_running_benchmark_shows_its_progress_above_the_input_from_any_tab() {
     assert!(find(&rows, "├ Setup   1/2 tasks ready · 1 fetching").is_some());
     assert!(find(&rows, "└ Spent   A $0.40 · B $0.25").is_some());
     let (status, line) = find(&rows, "Running · 1 working · 1 of 4 done").expect("status");
-    assert!(line.contains("click to open"), "{line:?}");
+    assert!(!line.contains("click to"), "no keys: {line:?}");
     let (bar, line) = find(&rows, "25%").expect("bar");
     assert!(line.contains('█') && line.contains('▒') && line.contains('░'));
     let (input, _) = find(&rows, "→ ").expect("the input");
     assert!(header < work && work < status && status < bar && bar < input);
     assert!(rows[header - 1].contains('├'), "{:?}", rows[header - 1]);
+}
+
+#[test]
+fn a_failed_check_is_an_accent_block_and_nothing_is_blue() {
+    let mut app = App::new();
+    let mut failed = bench("1", "Compare #1");
+    failed.runs[0].check_passed = Some(false);
+    app.process_command(UiCommand::BenchUpsert(Box::new(failed)));
+    let theme = Theme::cyber();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 40)).unwrap();
+    terminal
+        .draw(|frame| super::super::render(frame, &mut app, &theme))
+        .unwrap();
+    let panel = app.bench_panel_areas().panel.expect("panel");
+    let buffer = terminal.backend().buffer();
+    let cells: Vec<_> = (panel.top()..panel.bottom())
+        .flat_map(|y| (panel.left()..panel.right()).map(move |x| &buffer[(x, y)]))
+        .collect();
+    let block = cells
+        .iter()
+        .find(|cell| cell.symbol() == "▓")
+        .expect("the failed check");
+    assert_eq!(block.fg, theme.colors.success);
+    assert!(cells.iter().all(|cell| cell.fg != theme.colors.warning));
 }
 
 #[test]

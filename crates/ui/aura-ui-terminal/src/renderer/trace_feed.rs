@@ -2,7 +2,7 @@
 
 use super::chrome::{Body, ScrollView};
 use super::graph::status_glyph;
-use super::side_list::{name_style, render_empty, render_hidden, Tone, TRACE_HINT};
+use super::side_list::{name_style, render_empty, render_hidden, Tone};
 use crate::app::{HoverTarget, PanelFocus};
 use crate::components::{cell_style, list_row_with_detail, CellState, StatusIcon};
 use crate::events::TraceNodeStatus;
@@ -66,5 +66,5 @@ pub(super) fn render_trace_feed(
         visible,
         first: scroll,
     };
-    body.draw(frame, lines, view, TRACE_HINT, theme);
+    body.draw(frame, lines, view, theme);
 }

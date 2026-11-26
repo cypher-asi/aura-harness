@@ -1,11 +1,10 @@
-//! One benchmark's numbers: its head, its sections and the keys under
-//! them.
+//! One benchmark's numbers: its head, its sections and its notes.
 
 use super::format::{
     fit, headline, money, saving, setup_line, short_model, task_cells, task_name, task_prefix,
     tokens, tokens_label, tokens_so_far, turn_cell, verdict_mark,
 };
-use super::table::{muted_line, rule, section_rule, table, Cell, Col, Row};
+use super::table::{section_rule, table, Cell, Col, Row};
 use crate::events::{
     arm_letter, BenchCost, BenchLiveRun, BenchStatus, BenchTaskRow, BenchTaskSetup, BenchView,
 };
@@ -102,7 +101,6 @@ impl Detail<'_> {
         let status = view.status.label();
         let status_color = match view.status {
             BenchStatus::Running => theme.colors.pending,
-            BenchStatus::Cancelled => theme.colors.warning,
             _ => theme.colors.success,
         };
         let room = width.saturating_sub(display_width(&view.name) + display_width(&status) + 4);
@@ -362,27 +360,13 @@ impl Detail<'_> {
         )
     }
 
-    /// The notes, a rule and the keys.
+    /// The notes.
     fn footer_lines(&self) -> Vec<Line<'static>> {
         let (view, width) = (self.view, self.width);
-        let warning = self.style(|t| t.colors.warning);
-        let mut lines: Vec<Line<'static>> = view
-            .notes
+        let accent = self.good();
+        view.notes
             .iter()
-            .map(|note| Line::from(Span::styled(fit(&format!("note: {note}"), width), warning)))
-            .collect();
-        lines.push(rule(width, self.theme));
-        let running = view.status == BenchStatus::Running;
-        let keys = if view.status.has_copies() && !running && !view.tasks.is_empty() {
-            "←/→ run · L log · d diff · x remove copies · Esc list"
-        } else if view.status.has_copies() && !running {
-            "←/→ run · L log · d diff · y apply · x remove copies · Esc list"
-        } else if running {
-            "↑/↓ scroll · L log · c stop · Esc list"
-        } else {
-            "↑/↓ scroll · L log · Esc list"
-        };
-        lines.push(muted_line(fit(keys, width), self.theme));
-        lines
+            .map(|note| Line::from(Span::styled(fit(&format!("note: {note}"), width), accent)))
+            .collect()
     }
 }

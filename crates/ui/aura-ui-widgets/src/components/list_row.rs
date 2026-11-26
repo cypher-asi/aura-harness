@@ -15,6 +15,14 @@ fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
+/// The blanks a list row keeps at each end, inside the panel's borders.
+/// The row's fill runs across them, from one border to the other.
+pub(super) const INSET: &str = "  ";
+
+/// Columns of [`INSET`]: where a row's icon column starts, and how far
+/// its time or code ends from the right edge.
+pub const ROW_INSET: usize = INSET.len();
+
 /// What sits in the icon column of a projects-list row.
 pub struct StatusIcon {
     glyph: String,
@@ -30,7 +38,7 @@ impl StatusIcon {
     }
 }
 
-/// ` icon name      time `, filled with the row's background (if it has
+/// `  icon name      time  `, filled with the row's background (if it has
 /// one) from one panel border to the other. The icon column is wide enough
 /// for the aura ring, so names line up whatever icon a row shows. `depth`
 /// indents the row two columns per level.
@@ -79,7 +87,7 @@ pub fn list_row_ending<'a>(
     let fill = cell
         .bg
         .map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let indent = Span::styled(format!(" {}", "  ".repeat(depth)), fill);
+    let indent = Span::styled(format!("{INSET}{}", "  ".repeat(depth)), fill);
     let label = RowLabel {
         name,
         badge: None,
@@ -90,7 +98,7 @@ pub fn list_row_ending<'a>(
 
 /// [`list_row_with_detail`] led by `fold`, a fold arrow or a blank, drawn
 /// in its own color before the icon, as the benchmark timeline leads its
-/// rows: ` ▾ ✓  name  detail   time `.
+/// rows: `  ▾ ✓  name  detail   time  `.
 pub fn fold_row<'a>(
     width: usize,
     (fold, color): (&str, Color),
@@ -102,7 +110,10 @@ pub fn fold_row<'a>(
     let fill = cell
         .bg
         .map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let lead = Span::styled(format!(" {fold} "), fill.fg(cell.icon.unwrap_or(color)));
+    let lead = Span::styled(
+        format!("{INSET}{fold} "),
+        fill.fg(cell.icon.unwrap_or(color)),
+    );
     let label = RowLabel {
         name,
         badge: None,
@@ -143,7 +154,7 @@ pub fn tree_row<'a>(
     } else {
         icon
     };
-    let indent = Span::styled(format!(" {guides}"), fill.fg(color));
+    let indent = Span::styled(format!("{INSET}{guides}"), fill.fg(color));
     let label = RowLabel {
         name,
         badge,
@@ -192,9 +203,9 @@ fn indented_row<'a>(
     let icon_width = display_width(&icon.glyph);
     let icon_pad = AURA_WIDTH.saturating_sub(icon_width) + 1;
     // Buttons sit just left of the time and code, laid out from the same
-    // pieces as `agent_button_offset`. Rows without buttons keep the
-    // same time and code, so neither moves when the pointer comes.
-    let time = end.time_cell(!buttons.is_empty());
+    // pieces as `agent_button_offset`, so the time and code stay put when
+    // the pointer brings the buttons.
+    let time = end.time_cell();
     let code = end.code_cell();
     let buttons: Vec<Span<'a>> = buttons
         .iter()
@@ -207,7 +218,8 @@ fn indented_row<'a>(
             + icon_pad
             + button_width
             + display_width(&time)
-            + display_width(&code),
+            + display_width(&code)
+            + ROW_INSET,
     );
     let icon_color = cell.icon.unwrap_or(icon.color);
     let mut spans = vec![
@@ -223,6 +235,7 @@ fn indented_row<'a>(
     if !code.is_empty() {
         spans.push(Span::styled(code, fill.fg(cell.time)));
     }
+    spans.push(Span::styled(INSET, fill));
     Line::from(spans)
 }
 

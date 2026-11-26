@@ -4,6 +4,7 @@ use crate::app::{
     agent_button_at, contains, AgentButton, AgentRowEnd, App, HoverTarget, ProjectListRow,
     PROJECT_ADD_WIDTH,
 };
+use crate::components::ROW_INSET;
 use crate::events::UiEvent;
 
 impl App {
@@ -124,7 +125,7 @@ impl App {
 
     /// Agent whose fold marker is at `column` on projects-list row `row`.
     /// An agent with spawns draws its marker as `tree_row` lays the icon
-    /// column out: after one leading space and the spawn guides,
+    /// column out: after the row's inset and the spawn guides,
     /// `AURA_WIDTH + 2` columns per level. An idle agent's marker opens the
     /// icon column, and the blank rest of that column counts too, as it
     /// does for [`processes::on_row_icon`]. A busy agent's ring stands in
@@ -139,7 +140,7 @@ impl App {
         if !self.agent_has_spawns(index) {
             return None;
         }
-        let start = 1 + self.agents[index].depth * (AURA_WIDTH + 2);
+        let start = ROW_INSET + self.agents[index].depth * (AURA_WIDTH + 2);
         let offset = usize::from(column.checked_sub(list.x)?);
         (start..=start + AURA_WIDTH)
             .contains(&offset)

@@ -10,7 +10,7 @@
 
 use super::chrome::{render_body_block, Body, ScrollView};
 use super::header::{self, PanelHeader};
-use super::side_list::{name_style, render_empty, Tone, SANDBOX_HINT};
+use super::side_list::{name_style, render_empty, Tone};
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
 use crate::app::{HoverTarget, Pane, PanelFocus, SidePanelTab, SideScope};
 use crate::components::{cell_style, list_row, CellState, StatusIcon};
@@ -144,7 +144,7 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
         first: scroll,
     };
     app.set_sandbox_rows_area(body.rows(), scroll);
-    body.draw(frame, lines, view, SANDBOX_HINT, theme);
+    body.draw(frame, lines, view, theme);
 }
 
 /// What a tree with no rows says; a cloud machine's tree says why it has
@@ -267,9 +267,9 @@ mod tests {
     fn directories_show_their_fold_state() {
         let theme = Theme::cyber();
         let mut dir = row("src", SandboxEntryKind::Dir);
-        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▸"));
+        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with("  ▸"));
         dir.expanded = true;
-        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▾"));
+        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with("  ▾"));
     }
 
     #[test]

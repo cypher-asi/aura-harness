@@ -59,8 +59,8 @@ fn test_input_shows_image_chips_and_pasted_newlines() {
     let rows = render_rows(&mut app, 120);
     let input_row = &rows[rows.len() - INPUT_FROM_BOTTOM];
     let first_row = &rows[rows.len() - INPUT_FROM_BOTTOM - 1];
-    assert!(input_row.contains("│   second [image 1]"), "{input_row:?}");
-    assert!(first_row.contains("│ → first "), "{first_row:?}");
+    assert!(input_row.contains("│    second [image 1]"), "{input_row:?}");
+    assert!(first_row.contains("│  → first "), "{first_row:?}");
     assert!(!first_row.contains('↵') && !input_row.contains('↵'));
 
     let spans = super::super::input::prose_spans("see @src/a.rs and [image 2] me@x", &theme);
@@ -164,7 +164,7 @@ fn test_header_shows_local_and_model_moves_to_the_footer() {
     );
 
     let input_row = &rows[n - INPUT_FROM_BOTTOM];
-    assert!(input_row.contains("│ →  Ask anything"), "{input_row:?}");
+    assert!(input_row.contains("│  →  Ask anything"), "{input_row:?}");
     assert!(!input_row.contains("]$ "), "{input_row:?}");
     assert!(!input_row.contains("qwen3:4b"), "{input_row:?}");
 

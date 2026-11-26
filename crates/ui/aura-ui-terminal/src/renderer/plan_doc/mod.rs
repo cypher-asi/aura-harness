@@ -17,7 +17,7 @@
 //! │  Why plans read badly today                               │
 //! │                                                           │
 //! │  The agent writes plans the way it is told to. Two ...    │
-//! │ 1-24/80  Esc close  s source  ↑↓ PgUp/PgDn scroll         │
+//! └ 1-24/80 ──────────────────────────────────────────────────┘
 //! ```
 //!
 //! The frontmatter and the generated header's marker never show. Flowing
@@ -311,16 +311,12 @@ pub(super) fn draw_plan(
     })
 }
 
-/// The footer: the rows shown out of all, then the keys.
+/// The footer: the rows shown out of all.
 fn footer_line((first, shown, total): (usize, usize, usize), theme: &Theme) -> Line<'static> {
-    let muted = Style::default().fg(theme.colors.muted);
-    Line::from(vec![
-        Span::styled(
-            format!(" {}-{}/{total} ", (first + 1).min(total), first + shown),
-            muted,
-        ),
-        Span::styled("Esc close  s source  ↑↓ PgUp/PgDn scroll ", muted),
-    ])
+    Line::from(Span::styled(
+        format!(" {}-{}/{total} ", (first + 1).min(total), first + shown),
+        Style::default().fg(theme.colors.muted),
+    ))
 }
 
 /// Draw rows `first..end` of the laid-out `lines` (with their `prose`

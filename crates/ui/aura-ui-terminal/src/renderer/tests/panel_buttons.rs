@@ -95,8 +95,8 @@ fn moved(column: usize, row: usize) -> crossterm::event::MouseEvent {
     }
 }
 
-/// An agent with no time has its archive button one column in from the
-/// edge; returns that agent's row.
+/// An agent with no time has its archive button just inside the row's
+/// inset; returns that agent's row.
 fn check_archive_button_with_no_time(app: &mut crate::App, before: &[String]) -> usize {
     use crate::app::HoverTarget;
 
@@ -112,7 +112,7 @@ fn check_archive_button_with_no_time(app: &mut crate::App, before: &[String]) ->
         .find(|&(_, c)| c == '│')
         .map(|(i, _)| i)
         .expect("panel border");
-    app.handle_mouse(moved(edge - 4, other));
+    app.handle_mouse(moved(edge - 5, other));
     assert!(matches!(app.hover(), Some(HoverTarget::ProjectRow(_))));
     // Off the button it stays muted like the time; on it, it lights up.
     let colors = test_theme().colors;
@@ -120,10 +120,10 @@ fn check_archive_button_with_no_time(app: &mut crate::App, before: &[String]) ->
     let buffer = render_buffer(app, 120);
     let (_, archive) = find_cell(&buffer, row, "✕").expect("archive button");
     assert_eq!(archive.fg, Some(colors.muted));
-    app.handle_mouse(moved(edge - 2, other));
+    app.handle_mouse(moved(edge - 3, other));
     assert!(matches!(app.hover(), Some(HoverTarget::ArchiveAgent(_))));
     let no_time = render_rows(app, 120);
-    assert_eq!(glyph_at(&no_time[other], edge - 2), Some('✕'));
+    assert_eq!(glyph_at(&no_time[other], edge - 3), Some('✕'));
     let buffer = render_buffer(app, 120);
     let (_, archive) = find_cell(&buffer, row, "✕").expect("archive button");
     assert_eq!(archive.fg, Some(colors.foreground));
@@ -155,7 +155,7 @@ fn test_hovered_agent_row_shows_an_archive_button_left_of_its_time() {
     assert!(hovered[line].contains(" ✕ 3m "), "{}", hovered[line]);
     assert!(!hovered[line].contains('↗'), "{}", hovered[line]);
     assert_eq!(glyph_at(&hovered[line], time - 2), Some('✕'));
-    assert_eq!(glyph_at(&hovered[line], time - 4), Some(' '));
+    assert_eq!(glyph_at(&hovered[line], time - 3), Some(' '));
     assert_eq!(char_col(&hovered[line], " 3m ") + 1, time, "the time stays");
 
     // The glyph is where the hit test puts the button; left of it is the

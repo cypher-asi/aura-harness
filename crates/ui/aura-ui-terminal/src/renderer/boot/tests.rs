@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::MORE_PAGE_LINES;
 use crate::events::{BootLogLine, BootUpdate};
 
 fn boot_lines(
@@ -83,10 +84,8 @@ fn a_running_console_shows_steps_facts_and_the_newest_output() {
     assert!(shown.contains("✓ Step snapshot  3m 12s"), "{shown}");
     assert!(shown.contains("⠋ Step create"), "{shown}");
     assert!(shown.contains("region   nyc"), "{shown}");
-    assert!(
-        shown.contains("│ … 4 earlier lines · click to load 4 more"),
-        "{shown}"
-    );
+    assert!(shown.contains("│ … 4 earlier lines\n"), "{shown}");
+    assert!(!shown.contains("click to"), "{shown}");
     assert!(shown.contains("│ line 11"));
     assert!(!shown.contains("│ line 3\n"));
 }
@@ -212,10 +211,10 @@ fn build_output_is_colored_by_what_it_says() {
 }
 
 #[test]
-fn a_finished_console_folds_and_opens_on_its_header_outcome_and_hint() {
+fn a_finished_console_folds_and_opens_on_its_header_and_outcome() {
     let theme = Theme::cyber();
     let mut console = console();
-    assert!(boot_fold_rows(&console, false, 80).is_empty(), "running");
+    assert!(boot_fold_rows(&console, 80).is_empty(), "running");
     console.apply(BootUpdate::End {
         ok: true,
         summary: "Now running in the cloud on aura-age1301-acaa (4 vCPU). Its record \
@@ -223,13 +222,13 @@ fn a_finished_console_folds_and_opens_on_its_header_outcome_and_hint() {
             .into(),
     });
     let folded = boot_lines(&console, false, "⠋", 80, &theme);
-    let rows = boot_fold_rows(&console, false, 80);
-    assert_eq!(rows, 0..4, "header, two summary rows, hint");
-    assert!(text(&folded[rows.end - 1..rows.end]).contains("click to show the boot log"));
-    assert_eq!(rows.end, folded.len());
+    let rows = boot_fold_rows(&console, 80);
+    assert_eq!(rows, 0..3, "header and two summary rows");
+    assert_eq!(rows.end, folded.len(), "nothing under the outcome");
+    assert!(!text(&folded).contains("click to"), "{}", text(&folded));
 
     let open = boot_lines(&console, true, "⠋", 80, &theme);
-    let rows = boot_fold_rows(&console, true, 80);
+    let rows = boot_fold_rows(&console, 80);
     assert_eq!(rows, 0..3, "header and summary");
     assert!(text(&open[1..3]).contains("`/local` brings it back."));
     assert!(!text(&open[rows]).contains("Step quota"));

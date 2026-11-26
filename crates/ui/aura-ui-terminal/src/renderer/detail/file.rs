@@ -75,7 +75,7 @@ pub(super) fn draw_file(
 }
 
 /// The footer under a file: the vim prompt or message, else the cursor
-/// position, pending keys and the keys.
+/// position and pending keys.
 fn file_footer(
     vim: &Vim,
     is_code: bool,
@@ -118,7 +118,6 @@ fn file_footer(
                 Style::default().fg(theme.colors.text),
             ));
         }
-        footer.push(Span::styled(" q close  / search  :N line ", muted));
     }
     Line::from(footer)
 }

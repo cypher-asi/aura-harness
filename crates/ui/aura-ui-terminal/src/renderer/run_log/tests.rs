@@ -116,7 +116,7 @@ fn row<'a>(screen: &'a str, needle: &str) -> &'a str {
 fn rule_row(screen: &str) -> usize {
     screen
         .lines()
-        .position(|line| line.contains("│ ────────"))
+        .position(|line| line.contains("│  ────────"))
         .unwrap_or_else(|| panic!("no rule:\n{screen}"))
 }
 
@@ -268,7 +268,7 @@ fn says_why_there_is_no_log() {
     });
     let text = screen(&mut app);
     assert!(text.contains("no run log yet"), "{text}");
-    assert!(text.contains("r to retry"), "{text}");
+    assert!(!text.contains("r to retry"), "no keys: {text}");
     assert!(!text.contains("Copy log"));
 }
 

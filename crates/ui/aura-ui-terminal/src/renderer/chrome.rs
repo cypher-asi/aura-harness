@@ -1,9 +1,13 @@
-//! What every panel is drawn in: its bordered body block, the [`Body`]
-//! inside it (the tab's rows, the key hint while focused) and the
+//! What every panel is drawn in: its bordered body block, the padding
+//! inside the border, the [`Body`] that holds the tab's rows and the
 //! scrollbar on its right border.
+//!
+//! Every panel keeps [`PAD_TOP`] blank rows under its top border and
+//! [`PAD_SIDE`] blank columns inside each side. A list's rows still run
+//! from one border to the other, so a selected or hovered row's fill
+//! meets them; the rows keep their own blanks at each end instead
+//! ([`ROW_INSET`](crate::components::ROW_INSET)).
 
-use super::side_list::INFO_HINT;
-use crate::components::truncate_line;
 use crate::Theme;
 use ratatui::{
     layout::Rect,
@@ -13,9 +17,69 @@ use ratatui::{
     Frame,
 };
 
+/// Rows a panel keeps blank under its top border.
+pub(super) const PAD_TOP: u16 = 1;
+
+/// Columns a panel keeps blank inside each side border, as many as a list
+/// row keeps at its ends. A cell is about twice as tall as it is wide, so
+/// two columns look as wide as the blank row on top.
+pub(super) const PAD_SIDE: u16 = 2;
+
+/// `inner` below its blank top row, where a panel's rows go. A body under
+/// three rows has none to spare and keeps them all.
+pub(super) const fn pad_top(inner: Rect) -> Rect {
+    if inner.height < 3 {
+        return inner;
+    }
+    Rect {
+        y: inner.y + PAD_TOP,
+        height: inner.height - PAD_TOP,
+        ..inner
+    }
+}
+
+/// `area` inside its blank side columns, where text that is not a list's
+/// rows goes. An area too narrow for them keeps its columns.
+pub(super) const fn pad_sides(area: Rect) -> Rect {
+    if area.width <= 2 * PAD_SIDE {
+        return area;
+    }
+    Rect {
+        x: area.x + PAD_SIDE,
+        width: area.width - 2 * PAD_SIDE,
+        ..area
+    }
+}
+
+/// `inner` inside the blank row on top and the blank columns at the
+/// sides, where a view that is not a list draws.
+pub(super) const fn padded(inner: Rect) -> Rect {
+    pad_sides(pad_top(inner))
+}
+
+/// `lines` laid out as wide as a text area ([`pad_sides`]), with the side
+/// padding added at each end so they can be drawn on the full rows. A
+/// line whose own style has a fill, as a picked row does, carries it
+/// across the padding, so the row is lit from one border to the other.
+pub(super) fn inset_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|mut line| {
+            let fill = line
+                .style
+                .bg
+                .map_or_else(Style::default, |bg| Style::default().bg(bg));
+            let inset = Span::styled(" ".repeat(usize::from(PAD_SIDE)), fill);
+            line.spans.insert(0, inset.clone());
+            line.spans.push(inset);
+            line
+        })
+        .collect()
+}
 /// Draw a panel's bordered body in `area`, below its header bar, returning
-/// the area inside the border when it has any rows. A `hosted` bar is
-/// open at the bottom, so the body's top border joins its sides.
+/// where its rows go, below the blank top row ([`pad_top`]), when it has
+/// any. A `hosted` bar is open at the bottom, so the body's top border
+/// joins its sides.
 pub(super) fn render_body_block(
     frame: &mut Frame,
     area: Rect,
@@ -25,7 +89,7 @@ pub(super) fn render_body_block(
     let block = body_block(focus, theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    (inner.height > 0).then_some(inner)
+    (inner.height > 0).then(|| pad_top(inner))
 }
 
 /// The border of a panel's body, below its header bar.
@@ -55,43 +119,25 @@ pub(super) const fn border_color(is_focused: bool, theme: &Theme) -> Color {
     }
 }
 
-/// A panel's body inside its border: the rows its tab draws in, the key
-/// hint on the last row while the panel has focus, and the scrollbar on
-/// the panel's right border. Lists and info bodies both draw through one,
-/// so every tab scrolls and shows its keys the same way.
+/// A panel's body inside its border: the rows its tab draws in and the
+/// scrollbar on the panel's right border. Lists and info bodies both draw
+/// through one, so every tab scrolls the same way.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Body {
     /// The panel, whose right border holds the scrollbar
     panel: Rect,
     /// Where the tab's rows go
     rows: Rect,
-    /// The hint's row, while the panel has focus and room for it
-    hint: Option<Rect>,
     focused: bool,
 }
 
 impl Body {
-    /// The body `inner` of the panel bordered by `panel`. A focused body
-    /// four rows tall or more keeps its last row for the hint.
-    pub(super) const fn new(panel: Rect, inner: Rect, focused: bool) -> Self {
-        let (rows, hint) = if focused && inner.height >= 4 {
-            let rows = Rect {
-                height: inner.height - 1,
-                ..inner
-            };
-            let hint = Rect {
-                y: inner.y + inner.height - 1,
-                height: 1,
-                ..inner
-            };
-            (rows, Some(hint))
-        } else {
-            (inner, None)
-        };
+    /// The body of the panel bordered by `panel`, its rows drawn in
+    /// `rows`.
+    pub(super) const fn new(panel: Rect, rows: Rect, focused: bool) -> Self {
         Self {
             panel,
             rows,
-            hint,
             focused,
         }
     }
@@ -111,32 +157,27 @@ impl Body {
         usize::from(self.rows.width)
     }
 
+    /// Columns of a document's lines, inside the side padding.
+    pub(super) fn text_width(&self) -> usize {
+        usize::from(pad_sides(self.rows).width)
+    }
+
     /// Draw `lines`, the rows on screen from `view.first` on, then the
-    /// scrollbar for `view` and, while the panel has focus, `hint`.
+    /// scrollbar for `view`.
     pub(super) fn draw(
         &self,
         frame: &mut Frame,
         lines: Vec<Line<'_>>,
         view: ScrollView,
-        hint: &str,
         theme: &Theme,
     ) {
         frame.render_widget(Paragraph::new(lines), self.rows);
         render_scrollbar(frame, self.panel, self.rows, view, self.focused, theme);
-        if let Some(area) = self.hint {
-            let hint = truncate_line(hint, usize::from(area.width).saturating_sub(1));
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    format!(" {hint}"),
-                    Style::default().fg(theme.colors.muted),
-                ))),
-                area,
-            );
-        }
     }
 
-    /// Draw a whole info document, `lines`, from line `first` (which the
-    /// tab keeps inside it), with the hint every info body shares.
+    /// Draw a whole info document, `lines` [`Body::text_width`] columns
+    /// wide, from line `first` (which the tab keeps inside it), inside the
+    /// side padding.
     pub(super) fn draw_document(
         &self,
         frame: &mut Frame,
@@ -149,8 +190,9 @@ impl Body {
             visible: self.visible(),
             first,
         };
-        let shown = lines.into_iter().skip(first).take(view.visible).collect();
-        self.draw(frame, shown, view, INFO_HINT, theme);
+        let shown: Vec<Line<'_>> = lines.into_iter().skip(first).take(view.visible).collect();
+        frame.render_widget(Paragraph::new(shown), pad_sides(self.rows));
+        render_scrollbar(frame, self.panel, self.rows, view, self.focused, theme);
     }
 }
 
@@ -216,16 +258,26 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
-    fn only_a_focused_body_with_room_keeps_a_hint_row() {
+    fn a_body_keeps_a_blank_row_on_top_and_blank_columns_for_text() {
         let inner = Rect::new(1, 1, 20, 6);
-        let panel = Rect::new(0, 0, 22, 8);
-        let focused = Body::new(panel, inner, true);
-        assert_eq!(focused.rows(), Rect::new(1, 1, 20, 5));
-        assert_eq!(focused.visible(), 5);
-        assert_eq!(focused.width(), 20);
-        assert_eq!(Body::new(panel, inner, false).rows(), inner);
-        let short = Rect::new(1, 1, 20, 3);
-        assert_eq!(Body::new(panel, short, true).rows(), short);
+        assert_eq!(pad_top(inner), Rect::new(1, 2, 20, 5));
+        assert_eq!(pad_sides(inner), Rect::new(3, 1, 16, 6));
+        assert_eq!(padded(inner), Rect::new(3, 2, 16, 5));
+        let short = Rect::new(1, 1, 20, 2);
+        assert_eq!(pad_top(short), short, "no row to spare");
+        let narrow = Rect::new(1, 1, 4, 6);
+        assert_eq!(pad_sides(narrow), narrow, "no columns to spare");
+
+        let body = Body::new(Rect::new(0, 0, 22, 8), pad_top(inner), true);
+        assert_eq!(body.rows(), Rect::new(1, 2, 20, 5), "rows meet the borders");
+        assert_eq!(body.visible(), 5);
+        assert_eq!(body.width(), 20);
+        assert_eq!(body.text_width(), 16);
+    }
+
+    #[test]
+    fn the_side_padding_is_as_wide_as_a_rows_inset() {
+        assert_eq!(usize::from(PAD_SIDE), crate::components::ROW_INSET);
     }
 
     /// The rows of a focused 30x6 panel with a document `lines` long
@@ -251,18 +303,18 @@ mod tests {
     }
 
     fn right_border(rows: &[String]) -> String {
-        rows[1..4]
+        rows[2..5]
             .iter()
             .filter_map(|row| row.chars().last())
             .collect()
     }
 
     #[test]
-    fn a_document_longer_than_its_body_shows_a_scrollbar_and_the_hint() {
+    fn a_document_sits_inside_the_padding_and_scrolls_when_longer_than_its_body() {
         let rows = document(10, 2);
-        assert!(rows[1].starts_with("│line 2"), "{rows:?}");
-        assert!(rows[3].starts_with("│line 4"), "{rows:?}");
-        assert!(rows[4].starts_with("│ ↑↓ scroll  ⇧←→ tabs"), "{rows:?}");
+        assert_eq!(rows[1].trim_matches('│').trim(), "", "{rows:?}");
+        assert!(rows[2].starts_with("│  line 2"), "{rows:?}");
+        assert!(rows[4].starts_with("│  line 4"), "no hint row: {rows:?}");
         assert!(right_border(&rows).contains('┃'), "{rows:?}");
 
         let rows = document(2, 0);

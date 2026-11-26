@@ -62,6 +62,9 @@ themes keep working:
 - **Ready (`●`)** and **working (`⬢`)**: `success`
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
+- **Benchmarks** never use `warning`: a stopped or cancelled benchmark,
+  a run that errored and the detail's notes read in the accent, and a
+  failed check is an accent `▓` in the progress bar.
 - **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
   `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
   ten, the rest are counted on a `muted` `+N more` row. The boxes line up
@@ -91,6 +94,12 @@ themes keep working:
   is wide, so that matches panels stacked on rows that touch. The side
   columns end level with the input box; the footer sits under the Chat
   column alone.
+- **Padding**: a panel's body starts one blank row under its top border
+  and keeps two columns from each side border, so its text sits as far
+  from the sides as from the top. Fills (a selected or hovered row)
+  still run border to border; only their text moves in. The sections
+  under the chat (the to-do drawer, the benchmark and queue panels and
+  the input box) keep the two columns but no blank row.
 
 ### Panel Headers
 
@@ -139,14 +148,13 @@ participants (`Lead ↔ scout`) and the `HH:MM` of its newest message sit
 on the right. An unfolded thread lists its messages under it, indented:
 an optional `↩` for replies, `from → to`, a preview cut to fit and the
 time. Counts, participants, names and times are `muted`; the subject
-and preview are `foreground`. Rows highlight like MEMBERS rows, and the
-hint reads `↑↓ move  ←→ fold  ⏎ open  ⇧←→ tabs`.
+and preview are `foreground`. Rows highlight like MEMBERS rows.
 
 ```text
- ● ▾ Review parser changes (3)   Lead ↔ scout  12:04
-       Lead → scout   Please check the tokenizer…  12:01
-     ↩ scout → Lead   Found two issues: …          12:03
-   ▸ Benchmark run (1)           Lead → bench  11:50
+  ● ▾ Review parser changes (3)   Lead ↔ scout  12:04
+        Lead → scout   Please check the tokenizer…  12:01
+      ↩ scout → Lead   Found two issues: …          12:03
+    ▸ Benchmark run (1)           Lead → bench  11:50
 ```
 
 Opening a thread or a message shows the conversation over the chat,
@@ -181,19 +189,20 @@ their glyphs, and on a bar narrower still `⤢` goes.
 ### Panel Bodies
 
 Below its header bar every panel draws its tab in the same body
-(`chrome::Body`): the tab's rows, a scrollbar on the right border when
-they overflow and, while the panel has focus and is four rows tall or
-more, a `muted` key hint on its last row. Every hint ends in `⇧←→ tabs`.
+(`chrome::Body`): the tab's rows, padded as above, and a scrollbar on
+the right border when they overflow. No body spells out its keys or
+what a click does; its text names things and gives their state.
 What the rows are depends on what the tab shows:
 
 - **Lists** (SANDBOX, REPO, PROCESSES, TRACE, TASKS, KERNEL, MEMBERS, INBOX,
   a channel's MEMBERS) draw one `components::list_row` row per thing: its
-  status glyph, its name and its details on the right. ↑↓ move the
+  status glyph, its name and its details on the right. A row's fill runs
+  border to border, its text two columns in from each. ↑↓ move the
   selection and ⏎ opens it.
 - **Info bodies** (POLICIES, HOST, a channel's INFO, the RECORD and
   PROCESS views, a project's info box) describe one thing as a document
   built with `components::Info`. The whole document scrolls with ↑↓,
-  PgUp/PgDn and Home/End, and its hint is `↑↓ scroll  ⇧←→ tabs`.
+  PgUp/PgDn and Home/End.
 
 ```text
 boxd · aura-re36-3f9c              title     bold foreground
@@ -228,14 +237,14 @@ Under `All` the branch's sync comes first, then the uncommitted changes
 under a fold arrow, then the timeline, newest first.
 
 ```text
- All  Changes  Commits  Pushes │ Branches  Tags
- ↑  main  2 ahead of origin/main         a1b2c3d4
- ▾  Uncommitted changes                   2 files
-   M  src/lib.rs                           staged
-   ?  notes.txt
- ○  Add the REPO tab  a1b2c3d4 · main          now
- ↑  Pushed 2 commits to origin/main             5m
- ●  Fix the parser  e5f6a7b8                    2h
+   All  Changes  Commits  Pushes │ Branches  Tags
+  ↑  main  2 ahead of origin/main         a1b2c3d4
+  ▾  Uncommitted changes                   2 files
+    M  src/lib.rs                           staged
+    ?  notes.txt
+  ○  Add the REPO tab  a1b2c3d4 · main          now
+  ↑  Pushed 2 commits to origin/main             5m
+  ●  Fix the parser  e5f6a7b8                    2h
 ```
 
 - **Sync**: `↑` `↓` `↕` in `warning` while the branch and its upstream
@@ -248,8 +257,6 @@ under a fold arrow, then the timeline, newest first.
   (`↪`) and a merged one (`✓`) take the accent, a reset (`↩`) `warning`.
   Merged and closed PRs, gone branches and notes such as how to sign in
   to GitHub read as settled. The age is on the right in `muted`.
-- **Hint**: `⏎ open  [] filter  r refresh  ⇧←→ tabs`, with `o web` for
-  `r refresh` on a PR.
 
 ### The Chat Column
 
@@ -259,15 +266,15 @@ under a fold arrow, then the timeline, newest first.
 │  → fix the login bug                         │
 │                                              │
 │    ▸ Explored 4 files, 2 searches            │
-│      2 steps (click to expand)               │
+│      2 steps                                 │
 │                                              │
 │  ⬢ Thinking… 12s                             │
 ├──────────────────────────────────────────────┤
-│ ⬢ Working on 2 to-dos  1/2                 — │
-│ ☒ Read the handler                           │
-│ ▣ Fix the redirect                           │
+│  ⬢ Working on 2 to-dos  1/2               —  │
+│  ☒ Read the handler                          │
+│  ▣ Fix the redirect                          │
 ├──────────────────────────────────────────────┤
-│ →  Add a follow-up                           │
+│  →  Add a follow-up                          │
 └──────────────────────────────────────────────┘
  qwen3:4b · 23% context used · 2 calls  ● Ready
 ```
@@ -327,6 +334,7 @@ under a fold arrow, then the timeline, newest first.
 ```text
 │ PLAN Plans that read like a document     2/5 TODOS ✕ │
 ┌──────────────────────────────────────────────────────┐
+│                                                      │
 │  Plans that read like a document                     │
 │                                                      │
 │  Change the guidance the agent gets for writing...   │
@@ -339,7 +347,7 @@ under a fold arrow, then the timeline, newest first.
 │  Why plans read badly today                          │
 │                                                      │
 │  The agent writes plans the way it is told to...     │
-└ 1-12/80  Esc close  s source  ↑↓ PgUp/PgDn scroll ───┘
+└ 1-12/80 ─────────────────────────────────────────────┘
 ```
 
 - A plan opened from the TASKS tab, a `create_plan` or `read_file` step

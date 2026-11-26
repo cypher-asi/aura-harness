@@ -118,7 +118,7 @@ fn row_line<'a>(
     }
 }
 
-/// ` ▾ ✓  Compare #2  add retries  3h`: `▸` folded over its agents, `▾`
+/// `  ▾ ✓  Compare #2  add retries  3h  `: `▸` folded over its agents, `▾`
 /// unfolded, or a blank with none listed; the spinner while it runs, `■`
 /// once stopped and `✓` once its runs ended, as the PROCESSES tab marks a
 /// process; then its name, what it is about, and how long ago it started.

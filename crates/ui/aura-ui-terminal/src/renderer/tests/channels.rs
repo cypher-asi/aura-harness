@@ -159,26 +159,24 @@ fn test_channel_info_tab_shows_what_the_channel_is() {
 }
 
 #[test]
-fn test_channel_info_without_a_project_says_where_agents_work_and_how_to_set_one() {
+fn test_channel_info_without_a_project_says_where_agents_work() {
     let mut app = channel_info_app(None);
     let rows = render_rows(&mut app, 140);
     let heading = info_row(&rows, "PROJECT");
     let none = info_row(&rows, "No project —");
-    let hint = info_row(&rows, "Right-click › Edit channel…");
-    assert!(heading < none && none < hint, "{heading} {none} {hint}");
+    assert!(heading < none, "{heading} {none}");
     let info: String = rows[none..]
         .iter()
         .filter_map(|row| row.split('│').nth(5))
         .map(str::trim)
         .collect::<Vec<_>>()
         .join(" ");
-    for text in [
-        "No project — agents work in the channel's folder",
-        "Right-click › Edit channel… to set one",
-    ] {
-        assert!(info.contains(text), "{text:?} in {info:?}");
-    }
+    assert!(
+        info.contains("No project — agents work in the channel's folder"),
+        "{info:?}"
+    );
     assert!(!info.contains("……"), "wrapped, not cut: {info:?}");
+    assert!(!info.contains("Right-click"), "no keys: {info:?}");
 }
 
 #[test]

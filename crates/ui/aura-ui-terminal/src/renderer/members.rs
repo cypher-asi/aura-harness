@@ -4,7 +4,7 @@
 
 use super::chrome::{Body, ScrollView};
 use super::processes::{format_elapsed, status_icon};
-use super::side_list::{empty_line, name_style, render_empty, Tone, MEMBERS_HINT};
+use super::side_list::{empty_line, name_style, render_empty, Tone};
 use crate::app::{HoverTarget, MemberRow, PanelFocus};
 use crate::components::{cell_style, list_row, CellState};
 use crate::{App, Theme};
@@ -65,7 +65,7 @@ pub(super) fn render_members(
         first: scroll,
     };
     app.set_member_rows_area(body.rows(), scroll);
-    body.draw(frame, lines, view, MEMBERS_HINT, theme);
+    body.draw(frame, lines, view, theme);
 }
 
 /// `lead` for the agent on screen; how a member joined and how long it
@@ -151,7 +151,7 @@ mod tests {
             indent(grandchild) > indent(child),
             "nested under its starter"
         );
-        assert!(screen.contains("o chat"), "the focused tab shows its keys");
+        assert!(!screen.contains("o chat"), "no tab spells out its keys");
     }
 
     #[test]

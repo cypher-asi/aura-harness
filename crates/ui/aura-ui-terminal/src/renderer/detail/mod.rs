@@ -10,7 +10,7 @@ mod source;
 mod wrap;
 
 use super::chat_panel::chat_scrollbar;
-use super::chrome::{body_block, render_scrollbar, ScrollView};
+use super::chrome::{body_block, padded, render_scrollbar, ScrollView};
 use super::header::HeaderInfo;
 use super::inbox::thread_lines;
 use super::overlays::{record_detail_lines, record_status};
@@ -138,13 +138,8 @@ pub(super) fn render_detail_view(frame: &mut Frame, area: Rect, app: &mut App, t
         super::graph::render_graph(frame, area, app, theme);
         return;
     }
-    let rows = Rect {
-        x: area.x.saturating_add(2),
-        y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(2),
-    };
     let hosted = app.host_chrome();
+    let rows = padded(body_block((true, hosted), theme).inner(area));
     if let Some(view) = app.image_view_mut() {
         let rect = draw_image(frame, (area, rows, hosted), view, theme);
         app.set_detail_image_rect(Some(rect));
@@ -221,28 +216,23 @@ struct Drawn {
     thread_headers: Vec<(usize, u64)>,
 }
 
-/// A record's, process's or thread's lines, the keys for its footer and,
-/// for a thread, the line of each message header with its id.
-type RecordLines<'a> = (Vec<Line<'a>>, &'static str, Vec<(usize, u64)>);
+/// A record's, process's or thread's lines and, for a thread, the line of
+/// each message header with its id.
+type RecordLines<'a> = (Vec<Line<'a>>, Vec<(usize, u64)>);
 
 /// The lines of what `draw_record` shows; `None` for views drawn elsewhere.
 fn record_lines<'a>(app: &'a App, rows: Rect, theme: &'a Theme) -> Option<RecordLines<'a>> {
-    let hint = "Esc close  ↑↓ PgUp/PgDn scroll ";
     match app.detail_view()? {
         DetailView::Record => {
             let record = app.selected_record_data()?;
             let lines = record_detail_lines(record, usize::from(rows.width), theme);
-            Some((lines, hint, Vec::new()))
+            Some((lines, Vec::new()))
         }
         DetailView::Process(process) => {
             let lines = process_detail_lines(process, usize::from(rows.width), theme);
-            Some((lines, hint, Vec::new()))
+            Some((lines, Vec::new()))
         }
-        DetailView::Thread(view) => {
-            let (lines, header_lines) = thread_lines(app, view, rows.width, theme);
-            let hint = "Esc close  n/p message  ⏎ fold  e/c all  ↑↓ scroll ";
-            Some((lines, hint, header_lines))
-        }
+        DetailView::Thread(view) => Some(thread_lines(app, view, rows.width, theme)),
         // Drawn by `plan_doc::draw_plan`.
         DetailView::Plan(_) | DetailView::File(_) | DetailView::Graph | DetailView::Image(_) => {
             None
@@ -257,7 +247,7 @@ fn draw_record(
     app: &App,
     theme: &Theme,
 ) -> Option<Drawn> {
-    let (lines, hint, headers) = record_lines(app, rows, theme)?;
+    let (lines, headers) = record_lines(app, rows, theme)?;
     let source = Source::Styled(lines);
     let width = usize::from(rows.width).max(1);
     let thread_headers = headers
@@ -270,14 +260,10 @@ fn draw_record(
     let first = app.detail_scroll().min(max_scroll);
     let (lines, shown) = source.visible(first, width, visible, theme, None);
 
-    let muted = Style::default().fg(theme.colors.muted);
-    let footer = Line::from(vec![
-        Span::styled(
-            format!(" {}-{}/{total} ", (first + 1).min(total), first + shown),
-            muted,
-        ),
-        Span::styled(hint, muted),
-    ]);
+    let footer = Line::from(Span::styled(
+        format!(" {}-{}/{total} ", (first + 1).min(total), first + shown),
+        Style::default().fg(theme.colors.muted),
+    ));
     let view = ScrollView {
         total,
         visible: shown,
@@ -313,9 +299,7 @@ fn draw_image(
         width,
         height,
     };
-    let muted = Style::default().fg(theme.colors.muted);
-    let footer = Line::from(Span::styled(" o open externally  Esc close ", muted));
-    let block = body_block((true, hosted), theme).title_bottom(footer);
+    let block = body_block((true, hosted), theme);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(lines), centered);

@@ -178,7 +178,7 @@ fn test_terminal_output_runs_to_the_bottom_row() {
 }
 
 #[test]
-fn test_chat_runs_from_the_top_border_to_the_bottom_one() {
+fn test_chat_runs_from_its_top_padding_to_the_bottom_border() {
     use crate::components::{Message, MessageRole};
 
     let mut app = crate::App::new();
@@ -210,12 +210,12 @@ fn test_chat_runs_from_the_top_border_to_the_bottom_one() {
         .iter()
         .position(|row| row.contains("prompt"))
         .expect("the prompt at the top");
-    // Above the prompt: its frame's padding row, its top border, then the
-    // panel's top border.
+    // Above the prompt: its frame's padding row, its top border, the
+    // panel's blank row, then the panel's top border.
     assert!(rows[first - 2].contains('╭'), "prompt framed:\n{screen}");
     assert!(
-        border(&rows[first - 3]),
-        "first line on the top row:\n{screen}"
+        !border(&rows[first - 3]) && border(&rows[first - 4]),
+        "first line a row under the top border:\n{screen}"
     );
 }
 

@@ -1,15 +1,14 @@
 //! Pieces shared by the tabs of the side and Kernel panels, so every tab
-//! draws its empty state, its key hint and its text tone the same way.
-//! Each tab draws into a [`super::chrome::Body`], which puts the hint on
-//! its last row while the panel has focus.
+//! draws its empty state and its text tone the same way. Each tab draws
+//! into a [`super::chrome::Body`].
 //!
 //! List tabs follow the same rules: rows are drawn with
 //! [`crate::components::list_row`], a status color only ever sits on a
-//! row's icon, the name is `foreground` (or `muted` once the item is
-//! finished), and the hint reads `⏎ open  <extras>  ⇧←→ tabs`. Info tabs
-//! are [`crate::components::Info`] documents with [`INFO_HINT`].
+//! row's icon, and the name is `foreground` (or `muted` once the item is
+//! finished). Info tabs are [`crate::components::Info`] documents. No tab
+//! spells out its keys.
 
-use crate::components::truncate_record_info;
+use crate::components::{truncate_record_info, ROW_INSET};
 use crate::{SideScope, Theme};
 use ratatui::{
     layout::Rect,
@@ -18,29 +17,6 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
-
-/// Hint of the SANDBOX tab.
-pub(super) const SANDBOX_HINT: &str = "⏎ open  ←→ fold  ⇧←→ tabs";
-/// Hint of the REPO tab, and of it on a PR, which has a page to open.
-pub(super) const REPO_HINT: &str = "⏎ open  [] filter  r refresh  ⇧←→ tabs";
-pub(super) const REPO_PR_HINT: &str = "⏎ open  o web  [] filter  ⇧←→ tabs";
-/// Hint of the PROCESSES tab.
-pub(super) const PROCESSES_HINT: &str = "⏎ open  o agent  k kill  l log  ⇧←→ tabs";
-/// Hint of the TRACE tab.
-pub(super) const TRACE_HINT: &str = "⏎ open  g graph  ⇧←→ tabs";
-/// Hint of the TASKS tab, which also lists the plans the tasks work on.
-pub(super) const TASKS_HINT: &str = "⏎ open  p plan  t task  ←→ fold  ⇧←→ tabs";
-/// Hint of an open channel's MEMBERS tab, whose rows only show.
-pub(super) const CHANNEL_MEMBERS_HINT: &str = "↑↓ move  ⇧←→ tabs";
-/// Hint of the Kernel panel's KERNEL tab, its records.
-pub(super) const KERNEL_HINT: &str = "⏎ open  ⇧←→ tabs";
-/// Hint of the Kernel panel's MEMBERS tab.
-pub(super) const MEMBERS_HINT: &str = "⏎ open  o chat  ⇧←→ tabs";
-/// Hint of every info tab (POLICIES, HOST, a channel's INFO): a document
-/// with nothing to open.
-pub(super) const INFO_HINT: &str = "↑↓ scroll  ⇧←→ tabs";
-/// Hint of the Kernel panel's INBOX tab, whose threads also fold.
-pub(super) const INBOX_HINT: &str = "↑↓ move  ←→ fold  ⏎ open  ⇧←→ tabs";
 
 /// Whether a side-panel row is still in play. This alone decides white
 /// versus gray text in every tab, so the tabs read the same way:
@@ -79,17 +55,15 @@ pub(super) fn name_style(tone: Tone, theme: &Theme) -> Style {
     })
 }
 
-/// Columns kept clear on each side of a panel's empty message.
-pub(super) const EMPTY_INDENT: usize = 2;
-
-/// A tab's empty state: one muted line, indented two columns, cut to
-/// `width` with an ellipsis rather than wrapped. Lists that build their
-/// own lines use this too, so every empty state reads the same way.
+/// A tab's empty state: one muted line, kept a row's inset from either
+/// side of `width` and cut to fit with an ellipsis rather than wrapped.
+/// Lists that build their own lines use this too, so every empty state
+/// reads the same way.
 pub(super) fn empty_line(text: &str, width: u16, theme: &Theme) -> Line<'static> {
-    let room = usize::from(width).saturating_sub(EMPTY_INDENT);
+    let room = usize::from(width).saturating_sub(2 * ROW_INSET);
     let text = truncate_record_info(text, room);
     Line::from(Span::styled(
-        format!("{}{text}", " ".repeat(EMPTY_INDENT)),
+        format!("{}{text}", " ".repeat(ROW_INSET)),
         Style::default().fg(theme.colors.muted),
     ))
 }
@@ -114,26 +88,6 @@ pub(super) fn render_hidden(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hints_share_one_format() {
-        for hint in [
-            SANDBOX_HINT,
-            REPO_HINT,
-            REPO_PR_HINT,
-            PROCESSES_HINT,
-            TRACE_HINT,
-            TASKS_HINT,
-            KERNEL_HINT,
-            MEMBERS_HINT,
-        ] {
-            assert!(hint.starts_with("⏎ open  "), "{hint}");
-            assert!(hint.ends_with("  ⇧←→ tabs"), "{hint}");
-        }
-        for hint in [INFO_HINT, CHANNEL_MEMBERS_HINT, INBOX_HINT] {
-            assert!(hint.ends_with("  ⇧←→ tabs"), "{hint}");
-        }
-    }
 
     #[test]
     fn the_tone_rule_is_the_only_white_or_gray_switch() {
@@ -170,7 +124,7 @@ mod tests {
         let rows: Vec<String> = (0..3)
             .map(|y| (0..12).map(|x| buffer[(x, y)].symbol()).collect())
             .collect();
-        assert_eq!(rows[0], "  No messag…", "{rows:?}");
+        assert_eq!(rows[0], "  No mess…  ", "clear on both sides: {rows:?}");
         assert!(rows[1].trim().is_empty(), "{rows:?}");
         assert!(rows[2].trim().is_empty(), "{rows:?}");
     }

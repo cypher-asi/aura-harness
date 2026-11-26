@@ -229,8 +229,8 @@ fn clear_chat_rows(app: &mut App, padded: Rect) {
     app.set_chat_rows(Some((padded, 0)));
 }
 
-/// Draw the loading line while the agent's history is on its way, or the
-/// welcome text while there is nothing to show; returns whether it did.
+/// Draw the loading line while the agent's history is on its way, or
+/// nothing while there is nothing to show; returns whether it did.
 fn render_waiting(
     frame: &mut Frame,
     app: &mut App,
@@ -249,7 +249,6 @@ fn render_waiting(
     }
     if app.pane_is_empty() && tail.lines.is_empty() {
         clear_chat_rows(app, padded);
-        render_welcome(frame, padded, (terminal, app.channel_open()), theme);
         return true;
     }
     false
@@ -332,17 +331,4 @@ fn render_chat_loading(frame: &mut Frame, area: Rect, theme: &Theme) {
         Style::default().fg(theme.colors.faint),
     ));
     frame.render_widget(Paragraph::new(line), area);
-}
-
-fn render_welcome(frame: &mut Frame, area: Rect, (terminal, channel): (bool, bool), theme: &Theme) {
-    let text = if terminal {
-        "Enter runs a command. Esc returns to chat."
-    } else if channel {
-        // A channel has no terminal: `$` does nothing there.
-        "Message the coordinator, @CODE a member, /help for commands."
-    } else {
-        "Type a message, $ for a terminal, /help for commands."
-    };
-    let welcome = Line::from(Span::styled(text, Style::default().fg(theme.colors.muted)));
-    frame.render_widget(Paragraph::new(welcome), area);
 }

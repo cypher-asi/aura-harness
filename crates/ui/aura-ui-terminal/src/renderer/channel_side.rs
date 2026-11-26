@@ -6,8 +6,8 @@
 //! while it works and its code at the right:
 //!
 //! ```text
-//!     Coordinator               CO
-//!      └─ Worker                WK
+//!      Coordinator              CO
+//!       └─ Worker               WK
 //! ```
 //!
 //! INFO is what the channel is, as an info document: its slug, title
@@ -34,13 +34,12 @@
 //! ```text
 //! PROJECT
 //!   No project — agents work in the channel's folder
-//!   Right-click › Edit channel… to set one
 //! ```
 
 use super::agents::projects::spawn_guides;
 use super::agents::working_icon;
 use super::chrome::{Body, ScrollView};
-use super::side_list::{render_empty, CHANNEL_MEMBERS_HINT};
+use super::side_list::render_empty;
 use super::text::display_width;
 use crate::app::{AgentRowEnd, HoverTarget, PanelFocus};
 use crate::components::{cell_style, tree_row, CellState, Info, StatusIcon, Value};
@@ -86,7 +85,7 @@ pub(super) fn render_channel_members(
         visible,
         first,
     };
-    body.draw(frame, lines, view, CHANNEL_MEMBERS_HINT, theme);
+    body.draw(frame, lines, view, theme);
 }
 
 /// Member `index` of `members`: under the guides from the agent that
@@ -161,7 +160,7 @@ pub(super) fn render_channel_info(
         return;
     };
     let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
-    let lines = info_lines(app, channel, body.width(), theme);
+    let lines = info_lines(app, channel, body.text_width(), theme);
     let first = app.sync_channel_info_scroll(lines.len(), body.visible());
     body.draw_document(frame, lines, first, theme);
 }
@@ -203,17 +202,10 @@ fn info_lines(
             &project.name,
             Some(project.folder.as_str()).filter(|folder| !folder.is_empty()),
         ),
-        None => {
-            for text in [NO_PROJECT, SET_PROJECT_HINT] {
-                info.text(text, Value::Quiet);
-            }
-        }
+        None => info.text(NO_PROJECT, Value::Quiet),
     }
     info.into_lines()
 }
 
 /// What INFO says of a channel without a project.
 const NO_PROJECT: &str = "No project — agents work in the channel's folder";
-
-/// How INFO says to give a channel a project.
-const SET_PROJECT_HINT: &str = "Right-click › Edit channel… to set one";

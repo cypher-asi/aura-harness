@@ -38,7 +38,7 @@ pub(super) fn render_policies(
         return;
     };
     let body = Body::new(area, inner, app.focus() == PanelFocus::Records);
-    let lines = policy_lines(view, body.width(), theme);
+    let lines = policy_lines(view, body.text_width(), theme);
     let first = app.sync_policies_scroll(lines.len(), body.visible());
     body.draw_document(frame, lines, first, theme);
 }
@@ -279,10 +279,7 @@ mod tests {
         assert!(write.contains("user_default.fallback=ask"), "{write}");
         let push = rows.iter().find(|row| row.contains("git_push")).unwrap();
         assert!(push.contains('✗') && push.contains("mode.plan"), "{push}");
-        assert!(
-            screen.contains("⇧←→ tabs"),
-            "the focused tab shows its keys"
-        );
+        assert!(!screen.contains("⇧←→ tabs"), "no tab spells out its keys");
 
         // The panel is short: the last sections are further down.
         app.handle_key(crossterm::event::KeyEvent::from(

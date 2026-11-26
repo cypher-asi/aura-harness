@@ -198,7 +198,7 @@ impl<'c> Layout<'c> {
         if let Some((_, (text, style), frame)) = live.filter(|(_, (text, _), _)| !text.is_empty()) {
             self.push_status(&mut spans, &cols_in, (text, *style), frame);
         }
-        Line::from(spans)
+        Line::from(spans).style(picked.unwrap_or_default())
     }
 
     fn cell_spans(
@@ -297,13 +297,6 @@ pub(super) fn section_rule(title: &str, width: usize, theme: &Theme) -> Line<'st
         ),
         Span::styled(format!(" {}", "─".repeat(rest)), faint),
     ])
-}
-
-pub(super) fn rule(width: usize, theme: &Theme) -> Line<'static> {
-    Line::from(Span::styled(
-        "─".repeat(width),
-        Style::default().fg(theme.colors.faint),
-    ))
 }
 
 pub(super) fn muted_line<'a>(text: impl Into<String>, theme: &Theme) -> Line<'a> {

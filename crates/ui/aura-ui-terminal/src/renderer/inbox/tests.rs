@@ -56,7 +56,7 @@ fn the_inbox_bar_counts_unread_threads() {
     let screen = render_rows(&mut app).join("\n");
     assert!(screen.contains("INBOX"), "{screen}");
     assert!(screen.contains("2 NEW │"), "{screen}");
-    assert!(screen.contains("⏎ open"), "the focused tab shows its keys");
+    assert!(!screen.contains("⏎ open"), "no keys: {screen}");
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn thread_view_folds_older_messages_and_unfolds_the_newest() {
     assert!(screen.contains(" · reply"), "{screen}");
     assert!(screen.contains("  Found two issues:"), "{screen}");
     assert!(screen.contains("  1. spaces"), "{screen}");
-    assert!(screen.contains("n/p message"), "{screen}");
+    assert!(!screen.contains("n/p message"), "no keys: {screen}");
 
     // The drawn headers map clicks: the first header unfolds.
     click(&mut app, &rows, "▸ Lead");

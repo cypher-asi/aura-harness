@@ -146,7 +146,7 @@ fn a_long_name_in_plan_mode_is_cut_and_keeps_its_plan_badge() {
     let at = row_at(&rows);
     let row = &rows[at];
     assert!(!row.contains(name), "the name is cut: {row:?}");
-    assert!(row.contains("… (P) 3m │"), "{row:?}");
+    assert!(row.contains("… (P) 3m  │"), "{row:?}");
     // The cut name, `…` included, and the badge fill the room the whole
     // name has without it: the row is as wide as any other in the panel.
     let right_border = |row: &str| row.chars().skip(2).position(|c| c == '│');
@@ -169,7 +169,7 @@ fn a_long_name_in_plan_mode_is_cut_and_keeps_its_plan_badge() {
     let rows = render_rows(&mut app, 120);
     let row = &rows[row_at(&rows)];
     assert!(!row.contains("(P)"), "{row:?}");
-    assert!(row.contains("… 3m │"), "{row:?}");
+    assert!(row.contains("… 3m  │"), "{row:?}");
     assert_eq!(shown_name(row), with_badge + PLAN_BADGE_WIDTH, "{row:?}");
     assert_eq!(right_border(row), right_border(&rows[at - 1]));
 }
@@ -179,7 +179,9 @@ const PLAN_BADGE_WIDTH: usize = 4;
 
 #[test]
 fn a_tree_row_keeps_its_width_with_the_plan_badge_and_drops_it_when_too_narrow() {
-    use crate::components::{cell_style, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE};
+    use crate::components::{
+        cell_style, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE, ROW_INSET,
+    };
     let theme = test_theme();
     assert_eq!(display_width(PLAN_BADGE), PLAN_BADGE_WIDTH);
     let badge = RowBadge {
@@ -199,8 +201,9 @@ fn a_tree_row_keeps_its_width_with_the_plan_badge_and_drops_it_when_too_narrow()
             &[],
         )
     };
-    // ` `, the icon column and its pad, then the name, then ` 3m `.
-    let around = 1 + crate::animation::AURA_WIDTH + 1 + 4;
+    // The inset, the icon column and its pad, then the name, then ` 3m` and
+    // the inset again.
+    let around = ROW_INSET + crate::animation::AURA_WIDTH + 1 + 3 + ROW_INSET;
     for width in around + 1..=around + 20 {
         let plain = row(width, None);
         let marked = row(width, Some(badge));

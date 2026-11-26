@@ -10,7 +10,7 @@ use super::MoreRows;
 use crate::app::{CodeCopyHit, CopyText};
 use crate::components::{
     boot_duration as duration, wait_clock, BootConsole, BootStep, BootWait, MoreSection,
-    COPY_BUTTON, MORE_PAGE_LINES,
+    COPY_BUTTON,
 };
 use crate::events::BootStageState;
 use crate::Theme;
@@ -55,19 +55,13 @@ fn summary_rows(summary: &str, width: usize) -> Vec<String> {
 }
 
 /// The lines of a finished `console`, drawn `width` columns wide, that
-/// open or close it on a click: its header and outcome, and while folded
-/// the row inviting the click. Empty while it runs, as it then shows
-/// everything.
-pub(super) fn boot_fold_rows(
-    console: &BootConsole,
-    expanded: bool,
-    width: usize,
-) -> std::ops::Range<usize> {
+/// open or close it on a click: its header and outcome. Empty while it
+/// runs, as it then shows everything.
+pub(super) fn boot_fold_rows(console: &BootConsole, width: usize) -> std::ops::Range<usize> {
     let Some(outcome) = &console.outcome else {
         return 0..0;
     };
-    let hint = usize::from(!expanded);
-    0..1 + summary_rows(&outcome.summary, width).len() + hint
+    0..1 + summary_rows(&outcome.summary, width).len()
 }
 
 /// The header, with the copy button at its right end when there is room.
@@ -146,7 +140,6 @@ pub(super) fn boot_lines(
     width: usize,
     theme: &Theme,
 ) -> (Vec<Line<'static>>, MoreRows) {
-    let faint = Style::default().fg(theme.colors.faint);
     let mut lines = vec![header_line(console, expanded, spinner, width, theme)];
     if console.is_running() {
         lines.push(bar_line(console, width, theme));
@@ -164,10 +157,6 @@ pub(super) fn boot_lines(
             ]));
         }
         if !expanded {
-            lines.push(Line::from(vec![
-                Span::raw(BODY),
-                Span::styled("click to show the boot log", faint),
-            ]));
             return (lines, MoreRows::new());
         }
     }
@@ -370,17 +359,10 @@ fn log_lines(console: &BootConsole, width: usize, theme: &Theme) -> Vec<Line<'st
     let text_width = width.saturating_sub(BODY.len() + 2).max(10);
     let mut lines = Vec::new();
     if hidden > 0 {
-        let page = console.can_show().min(MORE_PAGE_LINES);
-        let mut spans = vec![
+        let spans = vec![
             Span::raw(BODY),
             Span::styled(format!("│ … {hidden} earlier lines"), faint),
         ];
-        if page > 0 {
-            spans.push(Span::styled(
-                format!(" · click to load {page} more"),
-                Style::default().fg(theme.colors.muted),
-            ));
-        }
         lines.push(clip(Line::from(spans), width));
     }
     let skipped = console.log.len() - shown;

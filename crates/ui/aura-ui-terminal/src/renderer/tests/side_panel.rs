@@ -34,16 +34,18 @@ fn test_sandbox_panel_sits_below_record() {
         "{}",
         rows[sandbox]
     );
+    // The tabs, their bottom border, the body's top border and its blank
+    // row come first.
     assert!(
-        rows[sandbox + 3].contains("▸  src"),
+        rows[sandbox + 4].contains("▸  src"),
         "{}",
-        rows[sandbox + 3]
+        rows[sandbox + 4]
     );
-    assert!(rows[sandbox + 4].contains("Cargo.toml"));
+    assert!(rows[sandbox + 5].contains("Cargo.toml"));
     assert_eq!(
-        column(&rows[sandbox + 3], "▸  src"),
-        kernel_border + 2,
-        "tree rows share the Record panel's one-column gutter"
+        column(&rows[sandbox + 4], "▸  src"),
+        kernel_border + 1 + crate::components::ROW_INSET,
+        "tree rows share the Record panel's gutter"
     );
 }
 
@@ -243,4 +245,44 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
     assert_eq!(app.side_tab(), SidePanelTab::Processes);
     let screen = render_rows(&mut app, 300).join("\n");
     assert!(!screen.contains("LIVE"), "{screen}");
+}
+
+#[test]
+fn test_a_picked_row_is_lit_border_to_border_with_its_text_two_columns_in() {
+    use crate::app::{PaneTab, PanelFocus, SidePanelTab};
+    use crate::components::ROW_INSET;
+    use crate::events::{ProcessStatus, ProcessSummary, UiCommand};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetProcesses(vec![ProcessSummary {
+        id: "cmd-1".into(),
+        label: "cargo build".into(),
+        status: ProcessStatus::Exited,
+        ..ProcessSummary::default()
+    }]));
+    app.select_pane_tab(PaneTab::Side(SidePanelTab::Processes));
+    assert_eq!(app.focus(), PanelFocus::Sandbox);
+
+    let buffer = render_buffer(&mut app, 175);
+    let row = row_of(&buffer, "cargo build");
+    let (label, _) = find_cell(&buffer, row, "cargo build").unwrap();
+    let border = |x: u16| buffer[(x, row)].symbol() == "│";
+    let left = (0..label).rev().find(|&x| border(x)).expect("left border");
+    let right = (label..buffer.area.width)
+        .find(|&x| border(x))
+        .expect("right border");
+    let selection = Some(test_theme().colors.selection);
+    assert!(
+        (left + 1..right).all(|x| buffer[(x, row)].style().bg == selection),
+        "lit from border to border"
+    );
+    let inset = u16::try_from(ROW_INSET).unwrap();
+    let blank = |x: u16, y: u16| buffer[(x, y)].symbol() == " ";
+    assert!((left + 1..=left + inset).all(|x| blank(x, row)));
+    assert!(!blank(left + 1 + inset, row), "the status glyph");
+    assert!((right - inset..right).all(|x| blank(x, row)));
+    assert!(
+        (left + 1..right).all(|x| blank(x, row - 1)),
+        "a blank row under the top border"
+    );
 }

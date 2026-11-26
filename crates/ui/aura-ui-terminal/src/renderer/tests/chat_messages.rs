@@ -302,7 +302,12 @@ fn panel_around(row: &str, needle: &str) -> (usize, usize) {
         .rposition(|&c| c == '│')
         .unwrap();
     let chars: Vec<char> = row.chars().collect();
-    let right_border = border + 1 + chars[border + 1..].iter().position(|&c| c == '│').unwrap();
+    let right_border = border
+        + 1
+        + chars[border + 1..]
+            .iter()
+            .position(|&c| c == '│' || c == '┃')
+            .unwrap();
     let inner = right_border - border - 1;
     (border, inner)
 }

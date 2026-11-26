@@ -3,12 +3,12 @@
 //! metadata and links in a modal. Nodes linked to the selection are
 //! marked in the tree.
 
-use super::chrome::{body_block, render_scrollbar, ScrollView};
+use super::chrome::{body_block, pad_top, render_scrollbar, ScrollView};
 use super::header::HeaderInfo;
 use super::side_list::render_empty;
 use super::text::display_width;
 use crate::app::graph::GraphRow;
-use crate::components::truncate_record_info;
+use crate::components::{truncate_record_info, ROW_INSET};
 use crate::events::{TraceNode, TraceNodeStatus};
 use crate::{App, Theme};
 use ratatui::{
@@ -18,9 +18,6 @@ use ratatui::{
     widgets::{Clear, Paragraph},
     Frame,
 };
-
-const HINT: &str =
-    "↑↓ move  ⏎/click open  Space/←→ fold  Tab link  e issues  +/- label  r record  o run/file  Esc close";
 
 pub(super) const fn status_glyph(status: TraceNodeStatus, theme: &Theme) -> (&'static str, Color) {
     match status {
@@ -60,6 +57,8 @@ fn tree_prefix(row: &GraphRow) -> String {
     out
 }
 
+/// A row of the tree, `width` columns wide so the selection's fill runs
+/// from one border to the other, its text kept a row's inset from both.
 fn tree_line<'a>(
     row: &GraphRow,
     node: &TraceNode,
@@ -69,9 +68,9 @@ fn tree_line<'a>(
     theme: &Theme,
 ) -> Line<'a> {
     let (glyph, color) = status_glyph(node.status, theme);
-    let prefix = tree_prefix(row);
+    let prefix = format!("{}{}", " ".repeat(ROW_INSET), tree_prefix(row));
     let marker = if linked { "↔ " } else { "" };
-    let used = display_width(&prefix) + 2 + display_width(marker);
+    let used = display_width(&prefix) + 2 + display_width(marker) + ROW_INSET;
     let label = truncate_record_info(&node.label, width.saturating_sub(used).max(1));
     let rest = width.saturating_sub(used + display_width(&label) + 1);
     let detail = if node.detail.is_empty() || rest < 4 {
@@ -97,6 +96,8 @@ fn tree_line<'a>(
     });
     spans.push(Span::styled(label, label_style));
     spans.push(Span::styled(detail, Style::default().fg(muted)));
+    let filled: usize = spans.iter().map(Span::width).sum();
+    spans.push(Span::raw(" ".repeat(width.saturating_sub(filled))));
     let line = Line::from(spans);
     if selected {
         line.style(
@@ -156,25 +157,14 @@ pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: 
     app.set_detail_bounds(0, visible);
 }
 
-/// Draw the graph's frame over `area` and return the cells inside it.
+/// Draw the graph's frame over `area` and return where the tree's rows go
+/// inside it, below its blank top row.
 fn render_frame(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Rect {
-    let footer = Line::from(Span::styled(
-        format!(
-            " {} ",
-            truncate_record_info(HINT, usize::from(area.width).saturating_sub(4))
-        ),
-        Style::default().fg(theme.colors.muted),
-    ));
-    let block = body_block((true, app.host_chrome()), theme).title_bottom(footer);
+    let block = body_block((true, app.host_chrome()), theme);
+    let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
-
-    Rect {
-        x: area.x.saturating_add(1),
-        y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(2),
-    }
+    pad_top(inner)
 }
 
 /// The `visible` rows of the tree from `first`, `width` columns wide.
@@ -314,8 +304,9 @@ mod tests {
             ],
         });
         screen(&mut app, 50, 16);
-        // Row 0 of the tree sits inside the border at y = 1.
-        app.click_graph(5, 1);
+        // Row 0 of the tree sits under the border and the blank row, at
+        // y = 2.
+        app.click_graph(5, 2);
         assert!(open_json(&app).contains("\"id\": \"run\""));
         app.handle_key(KeyEvent::from(KeyCode::Char('q')));
         assert_eq!(app.detail_view(), Some(&DetailView::Graph));

@@ -166,7 +166,7 @@ pub(super) fn render_host(
     };
     let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
     let project = app.side_scope() == SideScope::Project;
-    let lines = host_lines(view, project, body.width(), theme);
+    let lines = host_lines(view, project, body.text_width(), theme);
     let first = app.sync_host_scroll(lines.len(), body.visible());
     body.draw_document(frame, lines, first, theme);
 }
@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_view_scrolls_inside_a_scrollbar_with_the_tabs_hint() {
+    fn a_long_view_scrolls_inside_a_scrollbar() {
         use crate::events::{AgentSummary, UiCommand};
         use crate::{PaneTab, SidePanelTab};
         use ratatui::{backend::TestBackend, Terminal};
@@ -272,7 +272,10 @@ mod tests {
         }
         let all = screen(&mut app);
         assert!(all.contains("boxd · aura-re36-3f9c"), "{all}");
-        assert!(all.contains("↑↓ scroll  ⇧←→ tabs"), "{all}");
+        assert!(
+            !all.contains("⇧←→ tabs"),
+            "no tab spells out its keys: {all}"
+        );
         assert!(all.contains('┃'), "the scrollbar's thumb: {all}");
         assert!(!all.contains("[p] pull changes"), "the buttons are below");
 

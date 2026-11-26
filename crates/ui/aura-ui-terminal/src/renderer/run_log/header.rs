@@ -1,9 +1,9 @@
-//! The LOG tab's header, column heads and keys.
+//! The LOG tab's header and column heads.
 
 use super::super::benchmarks::fit;
 use super::super::text::display_width;
 use super::rows::columns;
-use super::{COLUMN_HEADS, COPIED_BUTTON, COPY_BUTTON, KEYS};
+use super::{COLUMN_HEADS, COPIED_BUTTON, COPY_BUTTON};
 use crate::app::run_log::LogState;
 use crate::events::{LogStatus, LogView};
 use crate::Theme;
@@ -137,28 +137,6 @@ pub(super) fn column_heads(width: usize, theme: &Theme) -> Line<'static> {
         Span::raw(" ".repeat(width.saturating_sub(display_width(&heads)))),
         Span::styled(heads, Style::default().fg(theme.colors.faint)),
     ])
-}
-
-/// The keys at the bottom, as many as fit in `width`.
-pub(super) fn keys_line(width: usize, theme: &Theme) -> Line<'static> {
-    let key = Style::default().fg(theme.colors.muted);
-    let what = Style::default().fg(theme.colors.faint);
-    let mut spans = Vec::new();
-    let mut used = 0;
-    for (i, (k, does)) in KEYS.iter().enumerate() {
-        let gap = if i == 0 { 0 } else { 2 };
-        let needs = gap + display_width(k) + 1 + display_width(does);
-        if used + needs > width {
-            break;
-        }
-        if gap > 0 {
-            spans.push(Span::raw("  "));
-        }
-        spans.push(Span::styled(*k, key));
-        spans.push(Span::styled(format!(" {does}"), what));
-        used += needs;
-    }
-    Line::from(spans)
 }
 
 fn rule(width: usize, theme: &Theme) -> Line<'static> {

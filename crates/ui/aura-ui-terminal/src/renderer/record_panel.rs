@@ -3,9 +3,9 @@
 
 use super::chrome::{render_body_block, Body, ScrollView};
 use super::header::{self, HeaderInfo, PanelHeader};
-use super::side_list::{render_empty, KERNEL_HINT};
+use super::side_list::render_empty;
 use super::text::display_width;
-use crate::components::truncate_record_info;
+use crate::components::{truncate_record_info, ROW_INSET};
 use crate::events::{RecordStatus, RecordSummary};
 use crate::{
     app::{HoverTarget, Pane, PanelFocus, RecordsTab},
@@ -115,7 +115,7 @@ fn render_records(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, the
         visible,
         first: scroll,
     };
-    body.draw(frame, lines, view, KERNEL_HINT, theme);
+    body.draw(frame, lines, view, theme);
 }
 
 fn render_empty_records(frame: &mut Frame, inner: Rect, theme: &Theme) {
@@ -175,8 +175,9 @@ fn record_line<'a>(
 
     let (fixed_spans, detail) = record_spans(record, highlighted, line_style, theme);
     let used: usize = fixed_spans.iter().map(|s| display_width(&s.content)).sum();
-    // One column for the separator space before the detail text.
-    let available = width.saturating_sub(used + 1);
+    // One column for the separator space before the detail text, and the
+    // row's inset after it.
+    let available = width.saturating_sub(used + 1 + ROW_INSET);
     let info_display = truncate_record_info(detail, available);
 
     let mut spans = fixed_spans;
@@ -202,7 +203,7 @@ fn record_spans<'a, 'r>(
     line_style: Style,
     theme: &Theme,
 ) -> (Vec<Span<'a>>, &'r str) {
-    let prefix = " ";
+    let prefix = " ".repeat(ROW_INSET);
     let kind_style = if highlighted {
         line_style
     } else {

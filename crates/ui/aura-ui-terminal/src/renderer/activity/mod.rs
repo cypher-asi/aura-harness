@@ -218,11 +218,11 @@ pub(super) fn records_link(
     )
 }
 
-/// `5 steps (click to expand)` under a collapsed group's summary line.
-pub(super) fn collapsed_hint(steps: usize, theme: &Theme) -> Line<'static> {
+/// `5 steps` under a collapsed group's summary line.
+pub(super) fn collapsed_steps(steps: usize, theme: &Theme) -> Line<'static> {
     Line::from(Span::styled(
         format!(
-            "{}{} (click to expand)",
+            "{}{}",
             " ".repeat(LABEL_COLUMN),
             count(steps, "step", "steps")
         ),

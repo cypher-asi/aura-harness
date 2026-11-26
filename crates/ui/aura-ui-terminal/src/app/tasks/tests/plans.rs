@@ -138,8 +138,9 @@ fn enter_and_clicks_show_the_agent_and_fold_on_the_icon() {
     app.set_task_rows_area(Rect::new(10, 5, 30, 8), 0);
     assert_eq!(shape(app.task_list()), ["-No Plan", "-x", "  @p"]);
 
-    // Column 1 of the rows holds every icon at the left edge.
-    app.click_task_row(11, 6);
+    // Column 2 of the rows, past their inset, holds every icon at the
+    // left edge.
+    app.click_task_row(12, 6);
     assert_eq!(shape(app.task_list()), ["-No Plan", "+x"]);
     app.click_task_row(20, 6);
     assert_eq!(

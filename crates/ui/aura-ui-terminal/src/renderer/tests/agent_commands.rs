@@ -383,8 +383,5 @@ fn test_tasks_tab_lists_requests_items_not_what_was_asked() {
     assert_eq!(last_column(&rows, no_plan + 1, '☒'), arrow);
     assert_eq!(last_column(&rows, no_plan + 2, '☐'), arrow);
     assert_eq!(last_column(&rows, part, '✓'), arrow);
-    assert!(
-        rows.iter().any(|r| r.contains("p plan")),
-        "the hint names the plan key"
-    );
+    assert!(!rows.iter().any(|r| r.contains("p plan")), "no keys");
 }

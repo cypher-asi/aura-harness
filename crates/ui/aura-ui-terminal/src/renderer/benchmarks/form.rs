@@ -21,14 +21,11 @@ fn arm_reads(value: &str, arm_b: bool) -> String {
     }
 }
 
-/// How a difficulty's row reads: its model and who serves it, or how to
-/// pick one. Returns whether it reads faint.
+/// How a difficulty's row reads: its model and who serves it, or a faint
+/// `none`. Returns whether it reads faint.
 fn difficulty_reads(app: &App, model: &str) -> (String, bool) {
     if model.is_empty() {
-        return (
-            "Enter opens the model selector · ←/→ cycles".to_string(),
-            true,
-        );
+        return ("none".to_string(), true);
     }
     let group = app
         .models()
@@ -56,7 +53,7 @@ pub(super) fn form_layout<'a>(
     width: usize,
 ) -> (Vec<Line<'a>>, Vec<(usize, FormField)>) {
     let form = &app.bench().form;
-    let mut lines = title_lines(theme, width);
+    let mut lines = title_lines(theme);
     let mut rows = Vec::with_capacity(FormField::ALL.len());
     for field in FormField::ALL {
         if !form.shown(field) {
@@ -72,20 +69,13 @@ pub(super) fn form_layout<'a>(
     (lines, rows)
 }
 
-/// The title and the keys, and a blank line.
-fn title_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
+/// The title, and a blank line.
+fn title_lines(theme: &Theme) -> Vec<Line<'static>> {
     let bold = Style::default()
         .fg(theme.colors.text)
         .add_modifier(Modifier::BOLD);
-    let muted = Style::default().fg(theme.colors.muted);
-    const TITLE: &str = "New benchmark";
-    let hint = fit(
-        "   ↑/↓ row · ←/→ change · click or Enter a model row to pick it · text rows take what \
-         you type below, then Enter · Esc drops it",
-        width.saturating_sub(TITLE.len()),
-    );
     vec![
-        Line::from(vec![Span::styled(TITLE, bold), Span::styled(hint, muted)]),
+        Line::from(Span::styled("New benchmark", bold)),
         Line::default(),
     ]
 }
@@ -145,7 +135,7 @@ fn field_value(app: &App, field: FormField, width: usize) -> (String, bool) {
             difficulty_reads(app, form.difficulty_model(field).unwrap_or_default())
         }
         FormField::Classifier if form.classifier_model().is_none() => (
-            format!("{AUTO_CLASSIFIER} · Gate's choice of fast model · Enter picks another"),
+            format!("{AUTO_CLASSIFIER} · Gate's choice of fast model"),
             true,
         ),
         FormField::Classifier => difficulty_reads(app, &form.classifier),
@@ -178,7 +168,7 @@ fn from_value(app: &App) -> (String, bool) {
             "none yet: make an agent in PROJECTS first".to_string(),
             true,
         ),
-        None => ("←/→ picks the agent it runs from".to_string(), true),
+        None => ("none".to_string(), true),
     }
 }
 
@@ -217,7 +207,7 @@ fn prompt_value(app: &App, width: usize) -> (String, bool) {
     if !matches!(state.work(), WorkChoice::Prompt) {
         ("(only when the work is a typed prompt)".to_string(), true)
     } else if form.prompt.is_empty() {
-        ("type it in the input line, then Enter".to_string(), true)
+        ("none".to_string(), true)
     } else {
         (headline(&form.prompt, width.saturating_sub(24)), false)
     }
@@ -249,9 +239,9 @@ fn go_value(app: &App) -> String {
     if form.waiting {
         "Estimating…".to_string()
     } else if form.ready() {
-        "[ Start ]  Enter starts it".to_string()
+        "[ Start ]".to_string()
     } else {
-        "[ Estimate ]  Enter shows what it should cost".to_string()
+        "[ Estimate ]".to_string()
     }
 }
 

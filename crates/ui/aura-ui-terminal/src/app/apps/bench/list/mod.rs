@@ -26,9 +26,9 @@ use std::ops::Range;
 /// Rows a PageUp or PageDown moves the highlight by.
 const PAGE_STEP: isize = 5;
 
-/// Columns from a row's left edge where a click folds a benchmark: its
-/// arrow and the blanks either side of it.
-const FOLD_COLUMNS: u16 = 3;
+/// Columns from a row's left edge where a click folds a benchmark: the
+/// row's inset, its arrow and the blank after it.
+const FOLD_COLUMNS: usize = crate::components::ROW_INSET + 2;
 
 /// A row of BENCH's list as drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,7 +300,7 @@ impl App {
     fn on_bench_fold(&self, column: u16) -> bool {
         self.bench
             .rows_area
-            .is_some_and(|area| column.saturating_sub(area.x) < FOLD_COLUMNS)
+            .is_some_and(|area| usize::from(column.saturating_sub(area.x)) < FOLD_COLUMNS)
     }
 
     /// Clicking a benchmark's arrow folds or unfolds it. Clicking a row

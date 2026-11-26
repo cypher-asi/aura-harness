@@ -64,7 +64,36 @@ fn bench_draws_the_benchmark_it_shows() {
     let screen = format!("{:?}", terminal.backend().buffer());
     assert!(screen.contains("Compare #1"), "{screen}");
     assert!(screen.contains("cost/run"), "{screen}");
-    assert!(screen.contains("Esc list"), "{screen}");
+    assert!(!screen.contains("Esc list"), "no keys: {screen}");
+}
+
+#[test]
+fn bench_draws_a_cancelled_benchmark_its_errors_and_notes_in_the_accent() {
+    let mut cancelled = view();
+    cancelled.status = BenchStatus::Cancelled;
+    cancelled.notes = vec!["one task has no checks".to_string()];
+    cancelled.runs[0].error = Some("timed out".to_string());
+    let mut app = App::new();
+    app.process_command(UiCommand::BenchList {
+        benches: vec![cancelled],
+    });
+    app.bench_mut().mode = Some(BenchMode::Detail("ab".to_string()));
+    let theme = Theme::default();
+    let mut terminal = Terminal::new(TestBackend::new(120, 80)).unwrap();
+    terminal
+        .draw(|frame| render_benchmarks(frame, frame.area(), &mut app, &theme, true))
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    let screen = format!("{buffer:?}");
+    assert!(screen.contains("note: one task has no checks"), "{screen}");
+    assert!(screen.contains("timed out"), "{screen}");
+    assert!(
+        buffer
+            .content()
+            .iter()
+            .all(|cell| cell.fg != theme.colors.warning),
+        "{screen}"
+    );
 }
 
 #[test]
@@ -85,10 +114,8 @@ fn the_from_row_names_the_agent_and_its_project() {
         ..AgentSummary::default()
     }]));
     let shown = text(&form_lines(&app, &theme, 120));
-    assert!(
-        shown.contains("←/→ picks the agent it runs from"),
-        "{shown}"
-    );
+    assert!(shown.contains("From          none"), "{shown}");
+    assert!(!shown.contains("none yet"), "{shown}");
     let form = &mut app.bench_mut().form;
     form.from = Some("a".to_string());
     form.field = FormField::From;
@@ -185,11 +212,7 @@ fn a_by_difficulty_arm_shows_a_row_per_difficulty() {
         shown.contains("‹ openrouter/deepseek/deepseek-v3.2 ›"),
         "{shown}"
     );
-    assert!(shown.contains("  Medium"), "{shown}");
-    assert!(
-        shown.contains("Enter opens the model selector · ←/→ cycles"),
-        "{shown}"
-    );
+    assert!(shown.contains("  Medium      none"), "{shown}");
     assert_eq!(
         short_model("difficulty:easy=a,medium=b,hard=c"),
         BY_DIFFICULTY

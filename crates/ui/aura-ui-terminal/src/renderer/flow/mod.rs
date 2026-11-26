@@ -21,7 +21,7 @@
 mod card;
 mod wires;
 
-use super::chrome::{body_block, render_scrollbar, ScrollView};
+use super::chrome::{body_block, pad_top, padded, render_scrollbar, ScrollView};
 use super::flow_minimap::render_minimap;
 use super::flow_timeline::render_timeline;
 use super::side_list::render_empty;
@@ -63,7 +63,7 @@ pub(super) fn render_flow(
         } else {
             "Loading the graph…"
         };
-        render_empty(frame, inner, text, theme);
+        render_empty(frame, pad_top(inner), text, theme);
         return;
     }
 
@@ -71,11 +71,13 @@ pub(super) fn render_flow(
         // Drawn in cells by every front end.
         app.flow_mut().set_view(None, false);
         app.flow_mut().set_minimap(None);
-        render_timeline(frame, area, inner, app, theme, is_focused);
+        render_timeline(frame, area, padded(inner), app, theme, is_focused);
         return;
     }
     app.flow_mut().timeline_mut().set_view(None);
 
+    // The canvas pans under the borders; its layout keeps the padding's
+    // margin around the cards at its origin.
     let first = render_canvas(frame, inner, app, theme);
     render_minimap(frame, inner, app, theme);
 

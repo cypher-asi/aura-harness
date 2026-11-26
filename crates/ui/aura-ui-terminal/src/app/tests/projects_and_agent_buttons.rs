@@ -109,8 +109,9 @@ fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
     use crossterm::event::{MouseButton, MouseEventKind};
     let (mut app, mut rx) = app_with_agent_areas();
 
-    // Rows span columns 1..19; the "+" takes the last three. Fold the
-    // second project (line 7) so adding to it opens it again.
+    // Rows span columns 1..19; the "+" and the row's inset after it take
+    // the last four. Fold the second project (line 7) so adding to it
+    // opens it again.
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 7));
     app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 5, 7));
     assert!(matches!(
@@ -121,9 +122,9 @@ fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
         }
     ));
 
-    app.handle_mouse(mouse(MouseEventKind::Moved, 15, 7));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 14, 7));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(3)));
-    app.handle_mouse(mouse(MouseEventKind::Moved, 16, 7));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 15, 7));
     assert_eq!(app.hover(), Some(HoverTarget::AddToProject(3)));
     app.handle_mouse(mouse(MouseEventKind::Moved, 13, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
@@ -139,13 +140,13 @@ fn test_clicking_a_projects_plus_adds_an_agent_to_it() {
 
 #[test]
 fn test_agent_buttons_sit_left_of_the_time() {
-    // ` ✕ 5m `: the glyph after a space, then the time with a space each
-    // side.
+    // ` ✕ 5m  `: the glyph after a space, then the time after a space and
+    // the row's inset.
     let at = |ago, button| agent_button_offset(18, &AgentRowEnd::time(ago), button);
-    assert_eq!(at(Some("5m"), AgentButton::Archive), 13);
-    assert_eq!(at(Some("now"), AgentButton::Archive), 12);
-    // No time: the archive glyph one column in from the right edge.
-    assert_eq!(at(None, AgentButton::Archive), 16);
+    assert_eq!(at(Some("5m"), AgentButton::Archive), 12);
+    assert_eq!(at(Some("now"), AgentButton::Archive), 11);
+    // No time: the archive glyph just inside the row's inset.
+    assert_eq!(at(None, AgentButton::Archive), 15);
     assert_eq!(
         agent_button_offset(1, &AgentRowEnd::time(Some("5m")), AgentButton::Archive),
         0
@@ -154,46 +155,42 @@ fn test_agent_buttons_sit_left_of_the_time() {
 
 #[test]
 fn test_agent_archive_button_zone_spans_its_space_glyph_and_gap() {
-    // Archive takes its space, glyph and the space before the edge
-    // (15..=17); the name left of it is not a button.
+    // Archive takes its space, glyph and the column after it (14..=16);
+    // the name left of it and the rest of the row's inset are not a
+    // button.
     let expected = [
+        (12, None),
         (13, None),
-        (14, None),
+        (14, Some(AgentButton::Archive)),
         (15, Some(AgentButton::Archive)),
         (16, Some(AgentButton::Archive)),
-        (17, Some(AgentButton::Archive)),
+        (17, None),
     ];
     let no_time = AgentRowEnd::time(None);
     for (offset, button) in expected {
         assert_eq!(agent_button_at(18, &no_time, offset), button, "{offset}");
     }
     let five_minutes = AgentRowEnd::time(Some("5m"));
-    assert_eq!(agent_button_at(18, &five_minutes, 11), None, "the name");
-    for offset in 12..=14 {
+    assert_eq!(agent_button_at(18, &five_minutes, 10), None, "the name");
+    for offset in 11..=13 {
         assert_eq!(
             agent_button_at(18, &five_minutes, offset),
             Some(AgentButton::Archive),
             "{offset}"
         );
     }
-    assert_eq!(agent_button_at(18, &five_minutes, 15), None, "the time");
+    assert_eq!(agent_button_at(18, &five_minutes, 14), None, "the time");
 }
 
 #[test]
 fn test_agent_row_end_is_the_time_alone_even_for_coded_agents() {
     for ago in [Some("5m"), None] {
-        for has_buttons in [true, false] {
-            let end = AgentRowEnd::agent(ago);
-            assert_eq!(end, AgentRowEnd::time(ago));
-            assert_eq!(
-                end.text(has_buttons),
-                AgentRowEnd::time(ago).text(has_buttons)
-            );
-        }
+        let end = AgentRowEnd::agent(ago);
+        assert_eq!(end, AgentRowEnd::time(ago));
+        assert_eq!(end.text(), AgentRowEnd::time(ago).text());
     }
-    assert_eq!(AgentRowEnd::time(Some("5m")).text(false), " 5m ");
-    assert_eq!(AgentRowEnd::time(None).text(false), "");
-    assert_eq!(AgentRowEnd::time(None).text(true), " ");
+    assert_eq!(AgentRowEnd::time(Some("5m")).text(), " 5m  ");
+    assert_eq!(AgentRowEnd::time(None).text(), "  ");
 }
 
 #[test]
@@ -207,13 +204,13 @@ fn test_an_agents_buttons_leave_room_for_its_time() {
     }]));
     let mut app = with_agent_areas(app);
 
-    // Rows span columns 1..19 and end in ` ✕ ` (no time, and no code even
-    // though the agent has one): the archive glyph at column 1 + 16.
+    // Rows span columns 1..19 and end in ` ✕  ` (no time, and no code
+    // even though the agent has one): the archive glyph at column 1 + 15.
     let end = AgentRowEnd::agent(None);
-    assert_eq!(agent_button_offset(18, &end, AgentButton::Archive), 16);
-    app.handle_mouse(mouse(MouseEventKind::Moved, 15, 5));
+    assert_eq!(agent_button_offset(18, &end, AgentButton::Archive), 15);
+    app.handle_mouse(mouse(MouseEventKind::Moved, 14, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
-    app.handle_mouse(mouse(MouseEventKind::Moved, 17, 5));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 16, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(1)));
 }
 
@@ -223,13 +220,13 @@ fn test_hovering_an_agents_buttons_targets_them() {
     let (mut app, _rx) = app_with_agent_areas();
 
     // Rows span columns 1..19. Agent `aa` (row 1, line 5) has no time, so
-    // its archive glyph is at column 17 and that button takes columns
-    // 16..=18; left of it is the row.
-    for column in 13..=15 {
+    // its archive glyph is at column 16 and that button takes columns
+    // 15..=17; left of it and the last column of the inset are the row.
+    for column in [12, 13, 14, 18] {
         app.handle_mouse(mouse(MouseEventKind::Moved, column, 5));
         assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)), "{column}");
     }
-    for column in 16..=18 {
+    for column in 15..=17 {
         app.handle_mouse(mouse(MouseEventKind::Moved, column, 5));
         assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(1)), "{column}");
     }
@@ -255,13 +252,13 @@ fn test_an_agents_buttons_follow_its_time() {
     }]));
     let mut app = with_agent_areas(app);
 
-    // ` ✕ 3m `: the archive glyph at column 1 + 13, the time in columns
-    // 15..19.
-    app.handle_mouse(mouse(MouseEventKind::Moved, 12, 5));
+    // ` ✕ 3m  `: the archive glyph at column 1 + 12, the time in columns
+    // 15..17, then the row's inset.
+    app.handle_mouse(mouse(MouseEventKind::Moved, 11, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
-    app.handle_mouse(mouse(MouseEventKind::Moved, 14, 5));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 13, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ArchiveAgent(1)));
-    app.handle_mouse(mouse(MouseEventKind::Moved, 17, 5));
+    app.handle_mouse(mouse(MouseEventKind::Moved, 15, 5));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(1)));
 }
 

@@ -24,7 +24,7 @@
 use super::agents::aura_icon;
 use super::chrome::{Body, ScrollView};
 use super::plans::{marker, marker_color, todo_style};
-use super::side_list::{name_style, render_empty, render_hidden, Tone, TASKS_HINT};
+use super::side_list::{name_style, render_empty, render_hidden, Tone};
 use crate::app::tasks::{TaskList, TaskRow};
 use crate::app::{HoverTarget, PanelFocus};
 use crate::components::{cell_style, list_row, list_row_with_detail, CellState, StatusIcon};
@@ -87,7 +87,7 @@ pub(super) fn render_tasks(
         hovered,
     };
     let (lines, scroll) = task_tree_lines(app.task_list(), view, &body, app, theme);
-    body.draw(frame, lines, scroll, TASKS_HINT, theme);
+    body.draw(frame, lines, scroll, theme);
 }
 
 /// How a task tree is drawn: where it starts and which row is lit.
