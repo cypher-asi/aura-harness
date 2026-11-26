@@ -24,6 +24,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to the coordinator even when the session can't be told at once, so
   it never stays on screen under the channel's name.
 
+### ARCHIVE headers spell out the date
+
+##### Changed
+
+- Day headers in the ARCHIVE tab older than Yesterday read in full, as
+  `Wednesday, September 16 2026`, instead of `2026-09-16`. `Today`,
+  `Yesterday` and `Earlier` are unchanged.
+
 ### To-dos move to a drawer above the input
 
 ##### Changed
