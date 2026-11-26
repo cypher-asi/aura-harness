@@ -1,4 +1,5 @@
 use super::*;
+use crate::hub::turn::{chat_request, ws_url};
 
 #[test]
 fn choose_binary_prefers_env_then_cloud_home_then_running_exe() {

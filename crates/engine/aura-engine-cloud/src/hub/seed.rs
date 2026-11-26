@@ -1,0 +1,285 @@
+//! Seeding a new machine: the project's files and commits, scripts run on
+//! it, and the agent's record imported into its node.
+
+use crate::boot::human_bytes;
+use crate::fleet::MachineView;
+use crate::snapshots::{self};
+use crate::workspace::{self, BranchStart};
+use crate::{boxd, delta, BootReporter, BootStage, CloudError, CloudResult};
+use aura_core_protocol::cloud::SyncImport;
+
+use super::node_client::NODE_TIMEOUT;
+
+use super::{short_commit, CloudHub, PackedProject, PlaceRequest, APPLY_TIMEOUT};
+
+impl CloudHub {
+    /// Bring the project files up to date on the machine and give its
+    /// node the agent's record.
+    pub(super) async fn seed(
+        &self,
+        request: &PlaceRequest,
+        view: &MachineView,
+        snapshot_commit: Option<&str>,
+        branch: &str,
+        remote_url: Option<&str>,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
+        match snapshot_commit {
+            Some(commit) => {
+                boot.run(
+                    BootStage::SyncFiles,
+                    self.sync_files(request, view, commit, branch, remote_url, boot),
+                )
+                .await?;
+            }
+            None => {
+                boot.run(BootStage::SyncFiles, async {
+                    boot.fact("files", "the parent's, on a branch of its own");
+                    let script = workspace::fork_branch(branch)?;
+                    self.run_script(view, BootStage::SyncFiles, "branch the fork", &script, boot)
+                        .await
+                })
+                .await?;
+            }
+        }
+        boot.run(
+            BootStage::ImportRecord,
+            self.import_record(request, view, boot),
+        )
+        .await
+    }
+
+    /// Bring the machine's workspace to the project here: the commits
+    /// made since the snapshot's `snapshot_commit`, the agent's branch at
+    /// HEAD, and the uncommitted changes on top.
+    async fn sync_files(
+        &self,
+        request: &PlaceRequest,
+        view: &MachineView,
+        snapshot_commit: &str,
+        branch: &str,
+        remote_url: Option<&str>,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
+        boot.fact("snapshot commit", short_commit(snapshot_commit));
+        let dir = request.project_dir.clone();
+        let base = snapshot_commit.to_string();
+        let packed = boot
+            .wait(
+                BootStage::SyncFiles,
+                format!(
+                    "bundling the project's commits since {} and packing its changes",
+                    short_commit(snapshot_commit)
+                ),
+                None,
+                tokio::task::spawn_blocking(move || -> CloudResult<PackedProject> {
+                    let head = delta::head_commit(&dir)?;
+                    let bundle = if head == base {
+                        None
+                    } else {
+                        delta::bundle_since(&dir, &base)?
+                    };
+                    let changes = delta::collect(&dir, &head)?;
+                    let changed = changes.files.len() + changes.deleted.len();
+                    let archive = if changes.is_empty() {
+                        None
+                    } else {
+                        Some(delta::pack(&dir, &changes)?)
+                    };
+                    Ok(PackedProject {
+                        head,
+                        bundle,
+                        changed,
+                        archive,
+                    })
+                }),
+            )
+            .await
+            .map_err(|err| {
+                CloudError::io("pack changes", std::io::Error::other(err.to_string()))
+            })??;
+        boot.fact("head", short_commit(&packed.head));
+        let has_bundle = packed.bundle.is_some();
+        match packed.bundle {
+            Some(bytes) => {
+                boot.fact(
+                    "commits",
+                    format!(
+                        "made since the snapshot, {} bundled",
+                        human_bytes(bytes.len() as u64)
+                    ),
+                );
+                self.upload_file(view, workspace::HEAD_BUNDLE, bytes, boot)
+                    .await?;
+            }
+            None => boot.fact("commits", "none since the snapshot"),
+        }
+        let has_delta = packed.archive.is_some();
+        match packed.archive {
+            Some(bytes) => {
+                boot.fact(
+                    "changes",
+                    format!(
+                        "{} uncommitted file(s), {} packed",
+                        packed.changed,
+                        human_bytes(bytes.len() as u64)
+                    ),
+                );
+                self.upload_file(view, workspace::DELTA_ARCHIVE, bytes, boot)
+                    .await?;
+            }
+            None => boot.fact("changes", "none uncommitted"),
+        }
+        let script = workspace::start_branch(&BranchStart {
+            branch,
+            head: &packed.head,
+            remote_url,
+            bundle: has_bundle,
+            delta: has_delta,
+        })?;
+        self.run_script(
+            view,
+            BootStage::SyncFiles,
+            "start the agent's branch",
+            &script,
+            boot,
+        )
+        .await
+    }
+
+    /// Upload `bytes` to `path` on the machine, showing progress.
+    async fn upload_file(
+        &self,
+        view: &MachineView,
+        path: &str,
+        bytes: Vec<u8>,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
+        let provider = self.fleet.provider();
+        let machine = &view.machine.name;
+        let size = human_bytes(bytes.len() as u64);
+        boot.log(
+            BootStage::SyncFiles,
+            false,
+            format!("upload {path} ({size})"),
+        );
+        boot.wait(
+            BootStage::SyncFiles,
+            format!("uploading {path} ({size}) to {machine}"),
+            Some(boxd::CREATE_TIMEOUT),
+            provider.upload_reported(machine, path, bytes, &mut |sent, total| {
+                boot.waiting(
+                    BootStage::SyncFiles,
+                    snapshots::uploading(path, sent, total, machine),
+                    Some(boxd::CREATE_TIMEOUT),
+                );
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Run `script` on the machine, streaming its output to `stage`.
+    async fn run_script(
+        &self,
+        view: &MachineView,
+        stage: BootStage,
+        what: &str,
+        script: &str,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
+        let provider = self.fleet.provider();
+        let machine = &view.machine.name;
+        boot.log(stage, false, format!("$ {what}"));
+        let mut lines = boot.output(stage);
+        let out = boot
+            .wait(
+                stage,
+                format!("{what} on {machine}"),
+                Some(APPLY_TIMEOUT),
+                provider.exec_streaming(
+                    machine,
+                    script,
+                    None,
+                    APPLY_TIMEOUT,
+                    &mut |stderr, chunk| lines.chunk(stderr, chunk),
+                ),
+            )
+            .await?;
+        lines.finish();
+        if out.success() {
+            Ok(())
+        } else {
+            Err(CloudError::ExecFailed {
+                machine: machine.clone(),
+                command: what.to_string(),
+                exit_code: out.exit_code,
+                stderr: out.stderr_tail(400),
+            })
+        }
+    }
+
+    /// Give the machine's node the agent's record, page by page.
+    async fn import_record(
+        &self,
+        request: &PlaceRequest,
+        view: &MachineView,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
+        let node = self.node(&view.agent)?;
+        let head = self
+            .store
+            .get_head_seq(request.agent)
+            .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))?;
+        let remote = boot
+            .wait(
+                BootStage::ImportRecord,
+                format!("asking {} how much of the record it has", view.machine.name),
+                Some(NODE_TIMEOUT),
+                node.head(request.agent),
+            )
+            .await
+            .unwrap_or(0);
+        boot.fact("record", format!("{head} entries"));
+        let mut from = remote + 1;
+        loop {
+            boot.progress(
+                BootStage::ImportRecord,
+                from.saturating_sub(1).min(head),
+                head,
+            );
+            let entries = if from > head {
+                Vec::new()
+            } else {
+                self.store
+                    .scan_record(request.agent, from, super::node_client::PAGE)
+                    .map_err(|e| {
+                        CloudError::io("read record", std::io::Error::other(e.to_string()))
+                    })?
+            };
+            let count = entries.len() as u64;
+            let done = from + count > head;
+            let last = (from + count).saturating_sub(1);
+            boot.wait(
+                BootStage::ImportRecord,
+                format!(
+                    "{} is importing entries {from}..={last} of {head}",
+                    view.machine.name
+                ),
+                Some(NODE_TIMEOUT),
+                node.import(&SyncImport {
+                    agent_id: request.agent.to_hex(),
+                    name: request.name.clone(),
+                    entries,
+                    done,
+                }),
+            )
+            .await?;
+            if done {
+                boot.progress(BootStage::ImportRecord, head, head);
+                return Ok(());
+            }
+            from += count;
+        }
+    }
+}

@@ -1,0 +1,289 @@
+//! Building the hub, starting it on the machines it had and stopping it,
+//! and the fleet's timers.
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Weak};
+
+use crate::cost::CostModel;
+use crate::fleet::VmFleet;
+use crate::github::{GithubApp, RepoTokens};
+use crate::mesh::{Directory, MailBook};
+use crate::plans::SYNC_EVERY;
+use crate::repos::RepoSync;
+use crate::snapshots::{AuraBinary, SnapshotBuilder};
+use crate::{boxd, BootReporter, BootStage, CloudResult, VmProvider};
+use aura_config::CloudConfig;
+use aura_core_auth::Owner;
+use aura_store_db::Store;
+use parking_lot::Mutex;
+use tokio_util::sync::CancellationToken;
+
+use super::store::StoreLedger;
+
+use super::{choose_binary, io, load_placements, CloudHub, POLL_EVERY, TICK_EVERY, USAGE_EVERY};
+
+impl CloudHub {
+    /// A hub over `provider`, keeping its files in `home`
+    /// (`AURA_HOME/cloud`).
+    ///
+    /// # Errors
+    ///
+    /// When `home` can't be created.
+    pub fn new(
+        config: CloudConfig,
+        store: Arc<dyn Store>,
+        home: PathBuf,
+        provider: Arc<dyn VmProvider>,
+        binary: AuraBinary,
+    ) -> CloudResult<Arc<Self>> {
+        std::fs::create_dir_all(&home).map_err(io(format!("create {}", home.display())))?;
+        let placements_path = home.join("placements.json");
+        let mut placements = load_placements(&placements_path);
+        if placements.install.is_empty() {
+            placements.install = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
+        }
+        let ledger = Arc::new(StoreLedger::new(Arc::clone(&store)));
+        let settings =
+            crate::fleet::FleetSettings::from_config(&config, placements.install.clone());
+        let fleet = Arc::new(VmFleet::new(
+            Arc::clone(&provider),
+            Arc::clone(&ledger) as Arc<dyn crate::fleet::VmLedger>,
+            settings,
+        ));
+        let tokens = config.github_app.clone().and_then(|app| match GithubApp::new(app) {
+            Ok(app) => Some(Arc::new(app) as Arc<dyn RepoTokens>),
+            Err(err) => {
+                tracing::warn!(error = %err, "the GitHub App can't be used; cloud agents get no GitHub access");
+                None
+            }
+        });
+        let repos = Arc::new(RepoSync::new(
+            Arc::clone(&provider),
+            tokens,
+            placements.install.clone(),
+        ));
+        let snapshots = SnapshotBuilder::new(
+            provider,
+            Arc::clone(&ledger) as Arc<dyn crate::fleet::VmLedger>,
+            placements.install.clone(),
+            config.size,
+            config.isolated,
+            env!("CARGO_PKG_VERSION"),
+            binary,
+            home.clone(),
+        );
+        let hub = Arc::new(Self {
+            costs: CostModel::from_config(&config),
+            config,
+            store,
+            ledger,
+            fleet,
+            snapshots,
+            directory: Directory::new(),
+            mail: MailBook::new(),
+            home,
+            placements: Mutex::new(placements),
+            host: Mutex::new(None),
+            links: Mutex::new(HashMap::new()),
+            tracks: Mutex::new(HashMap::new()),
+            mirrors: Mutex::new(HashMap::new()),
+            plans: Mutex::new(None),
+            repos: Mutex::new(repos),
+            current_owner: Mutex::new(Owner::Local),
+            stop: CancellationToken::new(),
+        });
+        hub.save_placements();
+        Ok(hub)
+    }
+
+    /// A hub over boxd itself, from the cloud settings.
+    ///
+    /// # Errors
+    ///
+    /// [`CloudError::NotConfigured`] without a key; otherwise as
+    /// [`Self::new`].
+    pub fn from_config(
+        config: CloudConfig,
+        store: Arc<dyn Store>,
+        home: PathBuf,
+    ) -> CloudResult<Arc<Self>> {
+        let provider = Arc::new(crate::BoxdProvider::from_config(&config)?);
+        let binary = if cfg!(target_os = "linux") {
+            choose_binary(
+                config.binary.as_deref(),
+                &home,
+                std::env::current_exe().ok(),
+            )
+        } else {
+            AuraBinary::Installed
+        };
+        Self::new(config, store, home, provider, binary)
+    }
+
+    /// Take back the machines placed agents had before this hub started,
+    /// destroy machines no kept agent owns, and start the fleet's
+    /// timers. `keep` are the agents that still exist (hex).
+    pub async fn start(self: &Arc<Self>, keep: &HashSet<String>) {
+        self.start_reported(keep, &BootReporter::none()).await;
+    }
+
+    /// [`Self::start`], showing on `boot` each machine it takes back and
+    /// the sweep, as the [`BootStage::Connect`] stage's waits.
+    pub async fn start_reported(self: &Arc<Self>, keep: &HashSet<String>, boot: &BootReporter) {
+        let placed = self.placed();
+        let kept = placed.iter().filter(|(hex, _)| keep.contains(hex)).count();
+        if kept > 0 {
+            boot.log(
+                BootStage::Connect,
+                false,
+                format!("taking back {kept} cloud machine(s)"),
+            );
+        }
+        let repos = self.repo_sync();
+        let identity = if placed.iter().any(|(_, agent)| agent.repo.is_some()) {
+            repos.identity().await
+        } else {
+            None
+        };
+        for (hex, agent) in &placed {
+            if !keep.contains(hex) {
+                continue;
+            }
+            let templates = self
+                .plan_sync()
+                .map(|plans| plans.templates(&agent.owner()))
+                .unwrap_or_default();
+            let git = Self::git_claim(
+                agent.branch.as_deref(),
+                agent.repo.as_ref(),
+                agent.repo.as_ref().map(|repo| repos.secret_name(repo)),
+                identity.as_ref(),
+            );
+            let adopted = boot
+                .wait(
+                    BootStage::Connect,
+                    format!("boxd is looking up {} ({})", agent.machine, agent.name),
+                    Some(boxd::CALL_TIMEOUT),
+                    self.fleet.adopt(
+                        hex,
+                        &agent.zns,
+                        &agent.project,
+                        &agent.machine,
+                        templates,
+                        git,
+                    ),
+                )
+                .await;
+            match adopted {
+                Ok(view) => {
+                    boot.log(
+                        BootStage::Connect,
+                        false,
+                        format!("{} is {}", agent.machine, view.state.label()),
+                    );
+                    self.place_in_directory(hex, agent, &view);
+                }
+                Err(err) => {
+                    tracing::warn!(agent = %hex, machine = %agent.machine, error = %err, "cloud machine is gone; the agent runs here again");
+                    boot.log(
+                        BootStage::Connect,
+                        true,
+                        format!("{} is gone; {} runs here again", agent.machine, agent.name),
+                    );
+                    self.placements.lock().agents.remove(hex);
+                }
+            }
+        }
+        self.save_placements();
+        let owned: HashSet<String> = placed
+            .iter()
+            .filter(|(hex, _)| keep.contains(hex))
+            .map(|(hex, _)| hex.clone())
+            .collect();
+        let swept = boot
+            .wait(
+                BootStage::Connect,
+                "boxd is listing this install's machines, to destroy those no agent owns",
+                Some(boxd::CALL_TIMEOUT),
+                self.fleet.sweep_orphans(&owned),
+            )
+            .await;
+        match swept {
+            Ok(swept) if !swept.is_empty() => {
+                tracing::info!(machines = ?swept, "destroyed cloud machines no agent owns");
+                boot.log(
+                    BootStage::Connect,
+                    false,
+                    format!("destroyed {} machine(s) no agent owns", swept.len()),
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(error = %err, "could not list cloud machines");
+                boot.log(
+                    BootStage::Connect,
+                    true,
+                    format!("could not list cloud machines: {err}"),
+                );
+            }
+        }
+        for (hex, _) in self.placed() {
+            self.open_link(&hex);
+        }
+        let hub = Arc::downgrade(self);
+        let stop = self.stop.clone();
+        tokio::spawn(async move { maintain(hub, stop).await });
+    }
+
+    /// Stop the timers and close every socket. Machines keep running and
+    /// sleep on boxd's own idle timer.
+    pub fn shutdown(&self) {
+        self.stop.cancel();
+        for (_, link) in self.links.lock().drain() {
+            link.stop.cancel();
+        }
+    }
+}
+
+/// The fleet's timers.
+async fn maintain(hub: Weak<CloudHub>, stop: CancellationToken) {
+    let mut tick = tokio::time::interval(TICK_EVERY);
+    let mut poll = tokio::time::interval(POLL_EVERY);
+    let mut usage = tokio::time::interval(USAGE_EVERY);
+    let mut plans = tokio::time::interval(SYNC_EVERY);
+    loop {
+        tokio::select! {
+            () = stop.cancelled() => return,
+            _ = tick.tick() => {
+                let Some(hub) = hub.upgrade() else { return };
+                let slept = hub.fleet.tick().await;
+                for agent in slept {
+                    if let Some(link) = hub.links.lock().get(&agent) {
+                        link.stop.cancel();
+                    }
+                }
+            }
+            _ = poll.tick() => {
+                let Some(hub) = hub.upgrade() else { return };
+                for agent in hub.fleet.poll().await {
+                    hub.open_link(&agent);
+                }
+            }
+            _ = usage.tick() => {
+                let Some(hub) = hub.upgrade() else { return };
+                hub.fleet.record_usage().await;
+            }
+            _ = plans.tick() => {
+                let Some(hub) = hub.upgrade() else { return };
+                if let Some(sync) = hub.plan_sync() {
+                    sync.tick(&hub.owners()).await;
+                }
+                let repos = hub.placed_repos();
+                if !repos.is_empty() {
+                    hub.repo_sync().tick(&repos).await;
+                }
+            }
+        }
+    }
+}
