@@ -38,7 +38,7 @@ fs::rename(&tmp, &config_path)?;             // ← Crash here loses config
 
 ### 2. Unsafe Shell Execution in Evals
 
-**File:** `crates/surface/aura-cli/src/evals.rs` — `verify()` function
+**File:** `crates/surface/aura-cli/src/evals/run.rs` — `verify()` function
 
 **Risk:** Unbounded blocking, platform dependency, path control.
 
@@ -68,7 +68,7 @@ pub fn verify(cmd: &str, dir: &Path, source: &str) -> anyhow::Result<(bool, Rewa
 
 ### 3. Invalid Argument Values Not Caught
 
-**File:** `crates/surface/aura-cli/src/cli.rs` — `--tolerance` and `--budget-usd`
+**File:** `crates/surface/aura-cli/src/cli/eval.rs` — `--tolerance` and `--budget-usd`
 
 **Risk:** Broken comparison logic.
 
@@ -187,7 +187,7 @@ The root `Cargo.toml` has `features default = ["desktop"]`. If the user built wi
 
 ### 10. No Tests for Baseline Comparison Logic
 
-**File:** `crates/surface/aura-cli/src/evals.rs`
+**File:** `crates/surface/aura-cli/src/evals/comparison.rs`
 
 **Missing:**
 - `Baseline::compare()` computes regressions. No unit test for the logic.
