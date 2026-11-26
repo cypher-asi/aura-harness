@@ -4,7 +4,7 @@
 
 ```sh
 cargo fmt --all
-cargo clippy --workspace --all-targets --all-features -- -W warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 
 # Invariant grep gate
@@ -60,7 +60,7 @@ The desktop snapshot tests run the terminal UI in the window's shell, without a 
 
 [`.github/workflows/`](../.github/workflows) runs, on every PR:
 
-- `cargo fmt --check`, `cargo clippy` (warnings reported, not denied), and `cargo test --workspace --all-features`.
+- `cargo fmt --check`, `cargo clippy` with warnings denied, and `cargo test --workspace --all-features`.
 - `cargo check` on the MSRV (1.85), except `aura-desktop`, which needs 1.88 for wgpu.
 - `cargo deny check` (hard fail) and `cargo audit` (soft fail).
 - `cargo machete` for unused dependencies.

@@ -89,25 +89,12 @@ pub budget_usd: Option<f64>,           // ← No validation
 
 ---
 
-### 4. Clippy Warnings Don't Fail CI
+### 4. Clippy Warnings Don't Fail CI (resolved)
 
 **File:** `.github/workflows/ci.yml`
 
-**Risk:** Clippy regressions are not caught.
-
-```yaml
-- name: cargo clippy
-  run: cargo clippy --workspace --all-targets --all-features -- -W warnings
-  # ↑ `-W` warns; it does not error
-```
-
-The repo rules (`.cursor/rules.md` §1.4) say: "Lint check (deny warnings): `cargo clippy --all-targets --all-features -- -D warnings`"
-
-**Fix:**
-```yaml
-- name: cargo clippy
-  run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-```
+CI now runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+as `.cursor/rules.md` §1.4 asks, so a clippy warning fails the build.
 
 ---
 
@@ -275,7 +262,7 @@ The check should explicitly verify that `aura --no-default-features` works end-t
 | Config loss on crash | Critical | Safety | runner.rs |
 | Unbounded shell execution | Critical | Timeout/Path | evals.rs |
 | Invalid args (tolerance, budget) | Critical | Logic | cli.rs |
-| Clippy warnings don't fail CI | Critical | CI | ci.yml |
+| Clippy warnings don't fail CI (resolved) | Critical | CI | ci.yml |
 | Logout partial failure | High | Error handling | auth_commands.rs |
 | Tracing filter override | High | UX | runner.rs |
 | Desktop error message | Medium | UX | runner.rs |
@@ -293,7 +280,7 @@ The check should explicitly verify that `aura --no-default-features` works end-t
 
 1. **Fix critical issues** (1–4) before merging.
 2. **Add unit tests** for auth, baseline, and plugin config logic.
-3. **Fix CI** to catch Clippy warnings and test at MSRV.
+3. **Fix CI** to test at MSRV.
 4. **Review `aura-exec-tools`** for path traversal and timeout enforcement (§1 invariants).
 5. **Review `aura-agent-kernel`** for the commit/seq/context-hash pipeline.
 
