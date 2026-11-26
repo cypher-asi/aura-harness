@@ -38,13 +38,14 @@ impl MenuRow<'_> {
     }
 }
 
-/// The menu's title and its rows: the matching commands, or the agents to
-/// add after `/agent `.
-fn menu_rows(app: &App) -> (&'static str, Vec<MenuRow<'_>>) {
+/// The menu's title, its key hint and its rows: the matching commands, or
+/// the agents to add after `/agent `.
+fn menu_rows(app: &App) -> (&'static str, &'static str, Vec<MenuRow<'_>>) {
     let commands = app.slash_matches();
     if commands.is_empty() {
         (
             " ADD AGENT TO PROJECT ",
+            " ↑/↓ select  Tab complete  Enter add  Esc close ",
             app.agent_picks()
                 .into_iter()
                 .map(|definition| MenuRow {
@@ -57,6 +58,7 @@ fn menu_rows(app: &App) -> (&'static str, Vec<MenuRow<'_>>) {
     } else {
         (
             " COMMANDS ",
+            " ↑/↓ select  Tab complete  Enter run  Esc close ",
             commands
                 .into_iter()
                 .map(|command| MenuRow {
@@ -99,7 +101,7 @@ fn menu_line<'a>(row: &MenuRow<'a>, selected: bool, label_width: usize, theme: &
 /// Render the slash menu across the full width of `chat`, bottom-aligned
 /// with it. Draws nothing while the menu is closed.
 pub(super) fn render_slash_menu(frame: &mut Frame, chat: Rect, app: &App, theme: &Theme) {
-    let (title, rows) = menu_rows(app);
+    let (title, hint, rows) = menu_rows(app);
     if rows.is_empty() || chat.height < 3 {
         return;
     }
@@ -127,6 +129,7 @@ pub(super) fn render_slash_menu(frame: &mut Frame, chat: Rect, app: &App, theme:
 
     let block = Block::default()
         .title(title)
+        .title_bottom(Line::from(hint).right_aligned())
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.colors.muted));
     frame.render_widget(Clear, area);

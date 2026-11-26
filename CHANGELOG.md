@@ -40,9 +40,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Panels no longer spell out their keys or what a click does. Lines
   such as `↑↓ scroll  ⇧←→ tabs`, `Esc close`, `click to open`,
   `(click to expand)` and `click to show the boot log` are gone, and
-  so is the `↑/↓ select  Tab complete  Enter run  Esc close` line
-  under the `/` and `@` menus. The keys and clicks still work.
-  Approval choices, the HOST tab's
+  the keys and clicks still work. Approval choices, the HOST tab's
   `[p] pull changes  [s] sleep  [m] move`, `/help` and counts such as
   `1-12/80` stay.
 - The benchmark app uses the accent color where it used blue: a

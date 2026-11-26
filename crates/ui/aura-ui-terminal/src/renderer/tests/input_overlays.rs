@@ -13,10 +13,7 @@ fn test_slash_menu_spans_chat_width_above_input() {
     let chars: Vec<char> = menu_bottom.chars().collect();
     assert_eq!(chars[chat_left], '└', "{menu_bottom:?}");
     assert_eq!(chars[chat_right], '┘', "{menu_bottom:?}");
-    assert!(
-        chars[chat_left + 1..chat_right].iter().all(|&c| c == '─'),
-        "no keys: {menu_bottom:?}"
-    );
+    assert!(menu_bottom.contains("Esc close"), "{menu_bottom:?}");
 
     assert!(rows[n - 7].contains("› /log "), "{:?}", rows[n - 7]);
     assert!(rows[n - 6].contains("  /login"), "{:?}", rows[n - 6]);
@@ -46,8 +43,7 @@ fn test_mention_picker_lists_files_above_the_input() {
     let n = rows.len();
     assert!(rows[n - 6].contains(" FILES "), "{:?}", rows[n - 6]);
     assert!(rows[n - 5].contains("› @src/main.rs"), "{:?}", rows[n - 5]);
-    assert!(rows[n - 4].contains("└─"), "{:?}", rows[n - 4]);
-    assert!(!rows[n - 4].contains("Enter"), "no keys: {:?}", rows[n - 4]);
+    assert!(rows[n - 4].contains("Enter insert"), "{:?}", rows[n - 4]);
 
     type_text(&mut app, " ");
     let screen = render_rows(&mut app, 120).join("\n");
@@ -144,8 +140,7 @@ fn test_agent_space_shows_permanent_agents_to_add() {
         "{:?}",
         rows[n - 5]
     );
-    assert!(rows[n - 4].contains("└─"), "{:?}", rows[n - 4]);
-    assert!(!rows[n - 4].contains("Enter"), "no keys: {:?}", rows[n - 4]);
+    assert!(rows[n - 4].contains("Enter add"), "{:?}", rows[n - 4]);
 }
 
 #[test]
