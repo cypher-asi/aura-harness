@@ -1,5 +1,18 @@
 use super::*;
 
+/// A short name for the event kinds the replay tests emit.
+fn event_kind(event: &aura_engine_automaton::AutomatonEvent) -> &'static str {
+    use aura_engine_automaton::AutomatonEvent;
+    match event {
+        AutomatonEvent::Started { .. } => "started",
+        AutomatonEvent::TaskStarted { .. } => "task_started",
+        AutomatonEvent::TaskFailed { .. } => "task_failed",
+        AutomatonEvent::Stopped { .. } => "stopped",
+        AutomatonEvent::Done => "done",
+        _ => "other",
+    }
+}
+
 /// A subscriber that joins after every event has been emitted still
 /// sees the full sequence via [`EventSubscription::history`].
 #[tokio::test]
@@ -11,30 +24,27 @@ async fn late_subscriber_sees_replayed_history_after_done() {
     let (tx, rx) = tokio::sync::mpsc::channel(16);
     bridge.spawn_event_forwarder(automaton_id.clone(), rx);
 
-    tx.send(AutomatonEvent::Started {
-        automaton_id: automaton_id.clone(),
-    })
-    .await
-    .unwrap();
-    tx.send(AutomatonEvent::TaskStarted {
-        task_id: "task-1".into(),
-        task_title: "first task".into(),
-    })
-    .await
-    .unwrap();
-    tx.send(AutomatonEvent::TaskFailed {
-        task_id: "task-1".into(),
-        reason: "boom".into(),
-    })
-    .await
-    .unwrap();
-    tx.send(AutomatonEvent::Stopped {
-        automaton_id: automaton_id.clone(),
-        reason: "Failed".into(),
-    })
-    .await
-    .unwrap();
-    tx.send(AutomatonEvent::Done).await.unwrap();
+    let events = [
+        AutomatonEvent::Started {
+            automaton_id: automaton_id.clone(),
+        },
+        AutomatonEvent::TaskStarted {
+            task_id: "task-1".into(),
+            task_title: "first task".into(),
+        },
+        AutomatonEvent::TaskFailed {
+            task_id: "task-1".into(),
+            reason: "boom".into(),
+        },
+        AutomatonEvent::Stopped {
+            automaton_id: automaton_id.clone(),
+            reason: "Failed".into(),
+        },
+        AutomatonEvent::Done,
+    ];
+    for event in events {
+        tx.send(event).await.unwrap();
+    }
 
     // Wait for the forwarder to observe Done and set `done=true`.
     // The forwarder pushes history before toggling the flag, so
@@ -49,18 +59,7 @@ async fn late_subscriber_sees_replayed_history_after_done() {
         }
     };
 
-    let kinds: Vec<&'static str> = subscription
-        .history
-        .iter()
-        .map(|e| match e {
-            AutomatonEvent::Started { .. } => "started",
-            AutomatonEvent::TaskStarted { .. } => "task_started",
-            AutomatonEvent::TaskFailed { .. } => "task_failed",
-            AutomatonEvent::Stopped { .. } => "stopped",
-            AutomatonEvent::Done => "done",
-            _ => "other",
-        })
-        .collect();
+    let kinds: Vec<&'static str> = subscription.history.iter().map(event_kind).collect();
     assert_eq!(
         kinds,
         vec!["started", "task_started", "task_failed", "stopped", "done"],

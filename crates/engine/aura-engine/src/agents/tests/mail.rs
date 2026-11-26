@@ -92,12 +92,23 @@ async fn mail_subject_threads_messages_sent_through_the_hook() {
     );
     assert_no_mail(&mut mail);
 
-    // Each root delivery runs on its own task, so match them up by text.
+    assert_root_deliveries(&mut h.inbox, &sends, &posted, child).await;
+}
+
+/// Each of `sends` reached the root as a request from `child`, in the
+/// thread its posted mail got, rendered with its subject. Each root
+/// delivery runs on its own task, so they are matched up by text.
+async fn assert_root_deliveries(
+    inbox: &mut mpsc::UnboundedReceiver<InboxMessage>,
+    sends: &[(&str, &str)],
+    posted: &[MailMessage],
+    child: AgentId,
+) {
     let mut delivered = Vec::new();
     for _ in 0..sends.len() {
-        delivered.push(next_message(&mut h.inbox).await);
+        delivered.push(next_message(inbox).await);
     }
-    for (text, subject) in sends {
+    for &(text, subject) in sends {
         let message = delivered
             .iter()
             .find(|m| m.text == text)

@@ -1,18 +1,12 @@
 use super::*;
 
-/// §2 + §8: starting and stopping an automaton must each produce
-/// one `System::AutomatonLifecycle` entry in the record log for the
-/// owning agent. This test exercises the bridge's
-/// `record_lifecycle_event` seam directly so the assertion is
-/// focused on the inbox → scheduler → record-log hop that the
-/// automaton runtime triggers, without spinning up a real dev loop.
-#[tokio::test]
-async fn start_then_stop_records_two_automaton_lifecycle_entries() {
-    let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
+/// A bridge over a fresh store in `dir`, with a scheduler attached so
+/// lifecycle events drain into the record log.
+fn scheduled_bridge(dir: &std::path::Path) -> (Arc<dyn Store>, AutomatonBridge) {
+    let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.join("db"), false).unwrap());
     let provider: Arc<dyn ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("noop"));
-    let ws_dir = dir.path().join("workspaces");
+    let ws_dir = dir.join("workspaces");
     std::fs::create_dir_all(&ws_dir).unwrap();
 
     let scheduler = Arc::new(Scheduler::new(
@@ -36,17 +30,12 @@ async fn start_then_stop_records_two_automaton_lifecycle_entries() {
         ToolConfig::default(),
     )
     .with_scheduler(scheduler);
+    (store, bridge)
+}
 
-    let agent_id = AgentId::generate();
-
-    // The post-fix `Scheduler::schedule_agent` requires the agent's
-    // identity to be registered before it will dispatch a tick. The
-    // production dev-loop / task-run kickoff paths register identity
-    // in `register_automaton_identity` (called from
-    // `dispatch.rs::start_dev_loop_with_capabilities`); this test
-    // exercises `record_lifecycle_event` directly so we register
-    // here to mirror the production flow without spinning up a full
-    // dev loop.
+/// Register the dev-loop identity the scheduler needs before it will
+/// dispatch a tick for `agent_id`.
+fn register_test_identity(bridge: &AutomatonBridge, agent_id: AgentId) {
     bridge.register_automaton_identity(
         agent_id,
         super::super::RunIdentity {
@@ -59,6 +48,30 @@ async fn start_then_stop_records_two_automaton_lifecycle_entries() {
         },
         aura_model::ModelRequestKind::DevLoopBootstrap,
     );
+}
+
+/// §2 + §8: starting and stopping an automaton must each produce
+/// one `System::AutomatonLifecycle` entry in the record log for the
+/// owning agent. This test exercises the bridge's
+/// `record_lifecycle_event` seam directly so the assertion is
+/// focused on the inbox → scheduler → record-log hop that the
+/// automaton runtime triggers, without spinning up a real dev loop.
+#[tokio::test]
+async fn start_then_stop_records_two_automaton_lifecycle_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, bridge) = scheduled_bridge(dir.path());
+
+    let agent_id = AgentId::generate();
+
+    // The post-fix `Scheduler::schedule_agent` requires the agent's
+    // identity to be registered before it will dispatch a tick. The
+    // production dev-loop / task-run kickoff paths register identity
+    // in `register_automaton_identity` (called from
+    // `dispatch.rs::start_dev_loop_with_capabilities`); this test
+    // exercises `record_lifecycle_event` directly so we register
+    // here to mirror the production flow without spinning up a full
+    // dev loop.
+    register_test_identity(&bridge, agent_id);
 
     bridge
         .record_lifecycle_event(agent_id, "aut-1", "start_dev_loop")
@@ -91,47 +104,10 @@ async fn start_then_stop_records_two_automaton_lifecycle_entries() {
 #[tokio::test]
 async fn pause_then_stop_records_distinct_lifecycle_entries_in_order() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path().join("db"), false).unwrap());
-    let provider: Arc<dyn ModelProvider + Send + Sync> =
-        Arc::new(MockProvider::simple_response("noop"));
-    let ws_dir = dir.path().join("workspaces");
-    std::fs::create_dir_all(&ws_dir).unwrap();
-
-    let scheduler = Arc::new(Scheduler::new(
-        store.clone(),
-        provider.clone(),
-        vec![],
-        vec![],
-        ws_dir,
-        None,
-    ));
-
-    let runtime = Arc::new(AutomatonRuntime::new());
-    let catalog = Arc::new(ToolCatalog::new());
-    let domain: Arc<dyn DomainApi> = Arc::new(UnusedDomain);
-    let bridge = AutomatonBridge::new(
-        runtime,
-        store.clone(),
-        domain,
-        provider,
-        catalog,
-        ToolConfig::default(),
-    )
-    .with_scheduler(scheduler);
+    let (store, bridge) = scheduled_bridge(dir.path());
 
     let agent_id = AgentId::generate();
-    bridge.register_automaton_identity(
-        agent_id,
-        super::super::RunIdentity {
-            model: "claude-test-model",
-            auth_token: None,
-            aura_org_id: None,
-            aura_session_id: None,
-            aura_agent_id: None,
-            aura_project_id: None,
-        },
-        aura_model::ModelRequestKind::DevLoopBootstrap,
-    );
+    register_test_identity(&bridge, agent_id);
 
     bridge
         .record_lifecycle_event(agent_id, "aut-1", "start_dev_loop")
