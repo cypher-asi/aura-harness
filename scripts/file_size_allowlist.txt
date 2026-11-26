@@ -42,7 +42,6 @@ crates/engine/aura-engine/src/automaton/mod.rs
 crates/engine/aura-engine/src/automaton/tests.rs
 crates/engine/aura-engine/src/scheduler.rs
 crates/exec/aura-exec-tools/src/agents/send_to_agent/tests.rs
-crates/exec/aura-exec-tools/src/fs_tools/cmd/mod.rs
 crates/exec/aura-exec-tools/src/fs_tools/cmd/tests.rs
 crates/exec/aura-exec-tools/src/fs_tools/search/tests.rs
 crates/exec/aura-exec-tools/src/git_tool/mod.rs

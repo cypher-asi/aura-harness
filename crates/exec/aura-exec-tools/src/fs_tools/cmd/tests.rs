@@ -1,4 +1,15 @@
+use super::args::without_stray_zero_width;
+use super::output::{
+    classify_cargo_invocation, extract_cargo_errors, truncate_output, STDOUT_TRUNCATE_LIMIT,
+};
+use super::policy::{
+    check_binary_allowlist, check_command_allowlist, is_shell_program, script_program,
+    strip_windows_executable_suffix, validate_program_name,
+};
+use super::wait::{cmd_run, cmd_run_shell_script, read_capped, PIPE_KEEP_BYTES};
 use super::*;
+use crate::sandbox::Sandbox;
+use std::path::Path;
 use tempfile::TempDir;
 
 fn create_test_sandbox() -> (Sandbox, TempDir) {

@@ -179,7 +179,7 @@ mod tests {
         let stopper = stop_soon(agent.clone());
         let start = Instant::now();
 
-        let result = super::super::cmd_run_shell_script(
+        let result = super::super::wait::cmd_run_shell_script(
             &sandbox,
             "echo started; sleep 30",
             None,
@@ -204,7 +204,7 @@ mod tests {
         let stopper = stop_soon(tags.agent_id.clone().unwrap());
         let start = Instant::now();
 
-        let result = super::super::cmd_run_shell_script(
+        let result = super::super::wait::cmd_run_shell_script(
             &sandbox,
             "trap '' TERM; echo started; sleep 30",
             None,

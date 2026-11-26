@@ -3,8 +3,8 @@
 //! `git` / `grep` colors).
 
 use super::live::LiveOutput;
+use super::output::{truncate_output, STDOUT_TRUNCATE_LIMIT};
 use super::stop::Registration;
-use super::{truncate_output, STDOUT_TRUNCATE_LIMIT};
 use crate::error::ToolError;
 use crate::sandbox::Sandbox;
 use aura_core_types::ToolResult;
@@ -60,26 +60,9 @@ pub(super) fn cmd_run_in_pty(
         None => sandbox.root().to_path_buf(),
     };
 
-    let pair = match native_pty_system().openpty(PtySize {
-        rows: ROWS,
-        cols: cols.max(1),
-        pixel_width: 0,
-        pixel_height: 0,
-    }) {
-        Ok(pair) => pair,
-        Err(e) => {
-            debug!(error = %e, "No pseudo-terminal; running over pipes");
-            return None;
-        }
-    };
+    let pair = open_pty(cols)?;
 
-    let mut builder = command_builder(command);
-    builder.cwd(&working_dir);
-    apply_terminal_env(&mut builder, cols);
-    for (key, value) in tags.vars() {
-        builder.env(key, value);
-    }
-
+    let builder = terminal_command(command, &working_dir, cols, tags);
     let child = pair.slave.spawn_command(builder);
     drop(pair.slave);
     let mut child = match child {
@@ -124,16 +107,65 @@ pub(super) fn cmd_run_in_pty(
             return Some(Err(e));
         }
     };
-    let deadline = Instant::now() + DRAIN_GRACE;
-    while let Ok(chunk) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-        live.push(&chunk);
-        capture(&mut captured, &chunk);
-    }
+    drain_after_exit(&rx, &mut captured, live);
     live.finish();
     drop(writer);
     drop(pair.master);
 
-    let output = normalize_terminal_output(&String::from_utf8_lossy(&captured));
+    Some(Ok(terminal_result(&status, &captured, &stop)))
+}
+
+/// A pseudo-terminal `cols` wide, or `None` when the system has none.
+fn open_pty(cols: u16) -> Option<portable_pty::PtyPair> {
+    match native_pty_system().openpty(PtySize {
+        rows: ROWS,
+        cols: cols.max(1),
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(pair) => Some(pair),
+        Err(e) => {
+            debug!(error = %e, "No pseudo-terminal; running over pipes");
+            None
+        }
+    }
+}
+
+/// `command` set up to run in `working_dir` in a `cols`-wide terminal,
+/// with `tags` in its environment.
+fn terminal_command(
+    command: &PtyCommand<'_>,
+    working_dir: &std::path::Path,
+    cols: u16,
+    tags: &super::ProcessTags,
+) -> CommandBuilder {
+    let mut builder = command_builder(command);
+    builder.cwd(working_dir);
+    apply_terminal_env(&mut builder, cols);
+    for (key, value) in tags.vars() {
+        builder.env(key, value);
+    }
+    builder
+}
+
+/// Keep reading for [`DRAIN_GRACE`] after the program exits, for output
+/// still buffered in the terminal.
+fn drain_after_exit(rx: &mpsc::Receiver<Vec<u8>>, captured: &mut Vec<u8>, live: &LiveOutput) {
+    let deadline = Instant::now() + DRAIN_GRACE;
+    while let Ok(chunk) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        live.push(&chunk);
+        capture(captured, &chunk);
+    }
+}
+
+/// The tool result for a program that exited with `status` after
+/// printing `captured`.
+fn terminal_result(
+    status: &portable_pty::ExitStatus,
+    captured: &[u8],
+    stop: &Registration,
+) -> ToolResult {
+    let output = normalize_terminal_output(&String::from_utf8_lossy(captured));
     let output = truncate_output(&output, STDOUT_TRUNCATE_LIMIT);
     let exit_code = i32::try_from(status.exit_code()).unwrap_or(-1);
     let result = if status.success() {
@@ -144,7 +176,7 @@ pub(super) fn cmd_run_in_pty(
         result.exit_code = Some(exit_code);
         stop.annotate(result)
     };
-    Some(Ok(result.with_metadata("exit_code", exit_code.to_string())))
+    result.with_metadata("exit_code", exit_code.to_string())
 }
 
 fn command_builder(command: &PtyCommand<'_>) -> CommandBuilder {
@@ -199,8 +231,8 @@ fn apply_terminal_env(builder: &mut CommandBuilder, cols: u16) {
     builder.env("PAGER", "cat");
     builder.env("GIT_PAGER", "cat");
     builder.env("GIT_TERMINAL_PROMPT", "0");
-    if let Some(jobs) = super::build_jobs_limit() {
-        builder.env(super::BUILD_JOBS_VAR, jobs);
+    if let Some(jobs) = super::spawn::build_jobs_limit() {
+        builder.env(super::spawn::BUILD_JOBS_VAR, jobs);
     }
 }
 
