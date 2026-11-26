@@ -17,10 +17,10 @@ use crate::event_loop::bench;
 use crate::event_loop::channels::join_or_warn;
 use crate::event_loop::compare::view::render;
 use crate::event_loop::handlers::system_message;
-use crate::event_loop::processes::now_ms;
 use crate::event_loop::subagents::{lock, AgentHub};
 use crate::isolation::changes;
 use aura_agent_kernel::Kernel;
+use aura_core_types::time::now_ms;
 use aura_core_types::{
     AgentId, CompareArm, ComparePayload, CompareStatus, SystemKind, Transaction,
 };

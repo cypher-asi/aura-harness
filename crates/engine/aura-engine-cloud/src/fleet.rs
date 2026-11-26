@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 
 use aura_config::{BoxdToken, CloudConfig, MachineSize};
 use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed, PlanTemplate};
+use aura_core_types::time::now_ms;
 use aura_core_types::{VmEvent, VmPayload, VmResources, VmSource};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -260,10 +261,6 @@ pub struct VmFleet {
     machines: Mutex<HashMap<String, Entry>>,
     mesh_tokens: Mutex<HashMap<String, BoxdToken>>,
     usage_denied: Mutex<bool>,
-}
-
-fn now_ms() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 
 /// What boxd says about a machine it just made, as boot facts.

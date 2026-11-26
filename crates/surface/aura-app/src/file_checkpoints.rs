@@ -223,7 +223,7 @@ impl FileCheckpoints {
         message_index: usize,
         prompt: &str,
     ) {
-        let mut started_ms = crate::session_checkpoint::now_ms();
+        let mut started_ms = aura_core_types::time::now_ms();
         // Manifests are named by start time; two turns in the same
         // millisecond (tests, instant replies) must not share a file.
         while self.manifest_path(agent, started_ms).exists() {

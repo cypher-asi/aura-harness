@@ -44,6 +44,7 @@ use aura_core_protocol::{
     AgentCapabilities, AgentIdentity, AgentPermissionsWire, InboundMessage, ModelSelection,
     OutboundMessage, RuntimeRequest, RuntimeRequestType, UserMessage, WorkspaceLocation,
 };
+use aura_core_types::time::now_ms;
 use aura_core_types::{AgentId, Placement, PlacementPayload, VmPayload};
 use aura_engine::{AgentHost, MessageKind, RemoteMail, RemoteRouter, ThreadId};
 use aura_engine_cloud::boot::human_bytes;
@@ -397,10 +398,6 @@ impl std::fmt::Debug for CloudHub {
             .field("home", &self.home)
             .finish_non_exhaustive()
     }
-}
-
-fn now_ms() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 
 fn io(context: impl Into<String>) -> impl FnOnce(std::io::Error) -> CloudError {

@@ -28,6 +28,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use aura_core_auth::{InferenceCredential, Owner, ProviderKind};
 use aura_core_protocol::cloud::PlanTemplate;
+use aura_core_types::time::now_ms;
 use parking_lot::Mutex;
 
 use crate::error::CloudResult;
@@ -120,10 +121,6 @@ impl std::fmt::Debug for PlanSync {
             .field("install", &self.install)
             .finish_non_exhaustive()
     }
-}
-
-fn now_ms() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 
 fn hash(value: &str) -> [u8; 32] {

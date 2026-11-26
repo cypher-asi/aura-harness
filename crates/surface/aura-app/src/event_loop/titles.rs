@@ -21,6 +21,7 @@ use aura_context_prompts::auxiliary::chat_title::{
     chat_title_user_prompt, mail_subject_user_prompt, subtask_title_user_prompt,
     CHAT_TITLE_SYSTEM_PROMPT, MAIL_SUBJECT_SYSTEM_PROMPT, SUBTASK_TITLE_SYSTEM_PROMPT,
 };
+use aura_core_types::text::truncate_with_ellipsis;
 use aura_core_types::{AgentId, BenchSource};
 use aura_model::{
     Message, ModelCallPurpose, ModelProvider, ModelRequest, ModelRequestKind, Role, ThinkingEffort,
@@ -252,8 +253,8 @@ async fn ask(
     let reply = last_reply(messages);
     let request = ModelRequest::builder(model, kind.system_prompt())
         .messages(vec![Message::user(kind.user_prompt(
-            &shorten(prompt, MAX_SIDE_CHARS),
-            &shorten(&reply, MAX_SIDE_CHARS),
+            &truncate_with_ellipsis(prompt, MAX_SIDE_CHARS),
+            &truncate_with_ellipsis(&reply, MAX_SIDE_CHARS),
         ))])
         .tools(Vec::new())
         .tool_choice(ToolChoice::None)
@@ -427,16 +428,6 @@ fn cut_at_word(text: &str, max: usize) -> String {
         _ => cut.as_str(),
     };
     cut.trim_end_matches([' ', ',', ';', ':', '-']).to_string()
-}
-
-/// `text` cut to at most `max` characters, marked when cut.
-fn shorten(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut cut: String = text.chars().take(max).collect();
-    cut.push('…');
-    cut
 }
 
 #[cfg(test)]

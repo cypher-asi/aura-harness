@@ -12,7 +12,7 @@ use aura_model::ModelProvider;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::event_loop::processes::now_ms;
+use aura_core_types::time::now_ms;
 
 /// How long one review may take.
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(420);

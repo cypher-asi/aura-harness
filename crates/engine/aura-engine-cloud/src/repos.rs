@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use aura_core_types::time::now_ms;
 use parking_lot::Mutex;
 
 use crate::error::CloudResult;
@@ -97,10 +98,6 @@ impl std::fmt::Debug for RepoSync {
             .field("configured", &self.tokens.is_some())
             .finish_non_exhaustive()
     }
-}
-
-fn now_ms() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 
 fn hash(value: &str) -> [u8; 32] {

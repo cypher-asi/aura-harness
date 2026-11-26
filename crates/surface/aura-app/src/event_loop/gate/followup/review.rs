@@ -3,8 +3,8 @@
 
 use super::FollowUp;
 use crate::event_loop::agents::AgentSession;
-use crate::event_loop::processes::now_ms;
 use aura_agent::AgentLoopResult;
+use aura_core_types::time::now_ms;
 use aura_core_types::{Hash, OutcomeSignal, PromptCategory};
 use aura_gate::attempts::Review;
 use aura_gate::evidence::flags;

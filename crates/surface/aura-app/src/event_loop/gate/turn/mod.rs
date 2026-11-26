@@ -22,9 +22,9 @@ pub(crate) use label::Routing;
 pub(crate) use route::GateTurn;
 
 use crate::event_loop::agents::AgentSession;
-use crate::event_loop::processes::now_ms;
 use crate::event_loop::turns::{begin_files, model_message, Prompt, Ran, TurnParts};
 use attempts::{Asked, Current};
+use aura_core_types::time::now_ms;
 use aura_gate::live;
 use aura_ui_terminal::UiCommand;
 use label::Label;

@@ -3,7 +3,7 @@
 use super::agent_events::{AgentUi, CostCap, ForwarderState, TurnPlan};
 use super::agents::AgentSession;
 use super::hud::{context_view, send_session, todo_views};
-use super::processes::{now_ms, warn_kill_failed};
+use super::processes::warn_kill_failed;
 use super::record_ui::create_response_transaction;
 use super::steering::Steering;
 use super::turns::{record_user_prompt, Prompt, Work};
@@ -14,6 +14,7 @@ use crate::record_loader::chat_from_messages;
 use crate::session_checkpoint::SessionListing;
 use aura_agent::{AgentLoopEvent, AgentToolExecutor, RunOptions, WithPostEditCheck};
 use aura_context_prompts::model_messages::init_project::init_project_prompt;
+use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use aura_core_types::{RecordEntry, Transaction};
 use aura_gate::lead::LeadExecutor;

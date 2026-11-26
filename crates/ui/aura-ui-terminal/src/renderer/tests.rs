@@ -2703,7 +2703,7 @@ fn test_hovered_agent_row_shows_an_archive_button_left_of_its_time() {
         AgentSummary {
             id: "aa".to_string(),
             name: "Terminal Agent".to_string(),
-            last_active_ms: Some(super::now_ms() - 3 * 60 * 1000),
+            last_active_ms: Some(aura_core_types::time::now_ms() - 3 * 60 * 1000),
             ..Default::default()
         },
         AgentSummary {
@@ -5938,7 +5938,7 @@ fn the_plan_badge_follows_mode_switches_live() {
 fn a_long_name_in_plan_mode_is_cut_and_keeps_its_plan_badge() {
     use crate::events::{AgentSummary, UiCommand};
     let name = "An agent with a very long name that never ends";
-    let three_minutes_ago = crate::components::now_ms() - 3 * 60 * 1000;
+    let three_minutes_ago = aura_core_types::time::now_ms() - 3 * 60 * 1000;
     let mut app = crate::App::new();
     app.process_command(UiCommand::SetAgents(vec![AgentSummary {
         id: "aa".to_string(),
@@ -6060,7 +6060,7 @@ fn app_with_coded_agents(aa_code: Option<&str>, bb_code: Option<&str>) -> crate:
         AgentSummary {
             id: "aa".to_string(),
             name: "Terminal Agent".to_string(),
-            last_active_ms: Some(super::now_ms() - 3 * 60 * 1000),
+            last_active_ms: Some(aura_core_types::time::now_ms() - 3 * 60 * 1000),
             code: aa_code.map(str::to_string),
             ..Default::default()
         },

@@ -36,7 +36,7 @@ use super::host::{agent_tool_definitions, TerminalAgents};
 use super::mail::{MailItem, MailSender, Mailbox, TaskMail};
 use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
-use super::processes::{now_ms, task_id, ProcessTable};
+use super::processes::{task_id, ProcessTable};
 use super::record_ui::RecordPanelAgent;
 use super::steering::{SteerSource, Steering};
 use super::task_check;
@@ -57,6 +57,7 @@ use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_agent_kernel::Kernel;
 use aura_agent_trace::{RunMeta, RunRecorder, RunSource};
 use aura_context_skills::SkillManager;
+use aura_core_types::time::now_ms;
 use aura_core_types::{
     AgentId, Hash, ModelTokens, OutcomePayload, OutcomeSignal, PromptCategory, RecordEntry,
     RouteLevel, SpawnMode, SubagentDispatchRequest, SubagentExit, SubagentResult, Transaction,

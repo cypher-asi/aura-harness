@@ -29,6 +29,7 @@ use std::time::Duration;
 
 use aura_config::MachineSize;
 use aura_core_protocol::cloud::SnapshotOrigin;
+use aura_core_types::time::now_ms;
 use aura_core_types::{VmEvent, VmPayload};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -986,10 +987,6 @@ fn rebuild_reason(
         }
         Some(_) => "no longer on boxd",
     }
-}
-
-fn now_ms() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 
 #[cfg(test)]

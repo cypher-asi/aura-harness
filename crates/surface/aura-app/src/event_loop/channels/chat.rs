@@ -20,6 +20,7 @@ use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::steering::SteerSource;
 use crate::event_loop::subagents::{lock, AgentHub};
 use crate::event_loop::LoopState;
+use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use aura_model::Role;
 use aura_store_db::{ChannelPost, ChannelRecord, MemberRecord, NewPost, PostAuthor};
@@ -572,11 +573,6 @@ pub(crate) fn render_digest(lines: &[String]) -> Option<String> {
     }
     kept.reverse();
     Some(format!("{DIGEST_HEADER}\n{}", kept.join("\n")))
-}
-
-/// Now, in Unix milliseconds.
-fn now_ms() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 
 #[cfg(test)]

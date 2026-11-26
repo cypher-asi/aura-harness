@@ -13,7 +13,8 @@
 //! Agent ids are hex ([`AgentId::to_hex`]), the same form the process
 //! table uses, so the UI can match mail to the agents of a run.
 
-use super::processes::{now_ms, task_id};
+use super::processes::task_id;
+use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use aura_engine::{MailMessage, MailObserver, MessageKind};
 use aura_ui_terminal::events::MailView;

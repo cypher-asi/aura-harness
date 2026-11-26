@@ -1988,7 +1988,7 @@ fn test_an_agents_buttons_follow_its_time() {
     use crossterm::event::MouseEventKind;
     let (tx, _rx) = mpsc::channel(8);
     let mut app = App::new().with_event_sender(tx);
-    let three_minutes_ago = crate::renderer::now_ms() - 3 * 60 * 1000;
+    let three_minutes_ago = aura_core_types::time::now_ms() - 3 * 60 * 1000;
     app.process_command(UiCommand::SetAgents(vec![crate::events::AgentSummary {
         last_active_ms: Some(three_minutes_ago),
         ..agent("aa", "A")

@@ -4,7 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use aura_agent::{AgentLoopConfig, AgentLoopEvent, AgentLoopResult};
 use aura_agent_kernel::{
@@ -15,6 +15,7 @@ use aura_agent_subagent::{
     narrow_permissions, overrides_from_request, parent_context_from_request, DefaultDerivation,
     SubagentDerivation, SubagentDerivationConfig, SubagentRegistry,
 };
+use aura_core_types::time::now_ms;
 use aura_core_types::{
     AgentId, AgentMode, AgentPermissions, AgentToolPermissions, SpawnMode, SubagentDispatchRequest,
     SubagentExit, SubagentResult, Transaction, TransactionType, UserToolDefaults,
@@ -1705,15 +1706,6 @@ fn unsent_mail(envelope: &Envelope, to: AgentId, to_name: &str) -> Option<MailMe
         sent_ms: now_ms(),
         subject_from_text: envelope.subject_from_text,
     })
-}
-
-/// The wall clock in Unix milliseconds; 0 if it reads before 1970.
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-        })
 }
 
 fn reply_text(result: &SubagentResult) -> String {

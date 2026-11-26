@@ -17,14 +17,13 @@ use crate::file_checkpoints::FileCheckpoints;
 use crate::record_loader::{
     conversation_from, latest_plan_path_in, model_history_from, RecordTail,
 };
-use crate::session_checkpoint::{
-    is_resumable, now_ms, Checkpoints, SessionCheckpoint, SessionUsage,
-};
+use crate::session_checkpoint::{is_resumable, Checkpoints, SessionCheckpoint, SessionUsage};
 use aura_agent::{
     CheckNotifier, CheckOutcome, CheckReport, CheckSource, KernelModelGateway, KernelToolGateway,
     PostEditCheck, PostEditCheckConfig,
 };
 use aura_agent_kernel::Kernel;
+use aura_core_types::time::now_ms;
 use aura_core_types::{AgentId, Identity};
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::todo::{

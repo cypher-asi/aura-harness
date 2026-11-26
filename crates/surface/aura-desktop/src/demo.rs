@@ -3,6 +3,7 @@
 //! be shown and profiled without a model or an agent store.
 
 use crate::shell::Handles;
+use aura_core_types::time::now_ms;
 use aura_ui::events::{
     AgentDefinitionSummary, AgentSummary, CallUsage, MessageData, MessageRole, ModelOptionView,
     ProcessKind, ProcessStatus, ProcessSummary, RecordStatus, RecordSummary, SourceUsage, ToolData,
@@ -453,10 +454,6 @@ impl Demo {
         self.finish(process, status).await;
         self.chat(UiCommand::Complete).await;
     }
-}
-
-fn now_ms() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or_default()
 }
 
 pub(crate) const LISTING: &str =

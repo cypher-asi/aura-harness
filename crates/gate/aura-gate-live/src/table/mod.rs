@@ -28,8 +28,8 @@
 //! facts about one agent's work, which only that agent's subtasks read,
 //! never something learned from another agent.
 
-use crate::runtime::now_ms;
 use aura_config::GateConfig;
+use aura_core_types::time::now_ms;
 use aura_core_types::{
     AgentId, Difficulty, OutcomeSignal, PromptCategory, RouteLevel, RouteReason,
 };

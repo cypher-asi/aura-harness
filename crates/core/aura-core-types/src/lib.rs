@@ -39,7 +39,8 @@ pub mod hash;
 mod ids;
 mod registry;
 mod serde_helpers;
-mod time;
+pub mod text;
+pub mod time;
 mod types;
 
 pub use ids::{RunId, SessionId, ToolCallId, TransactionId, TurnId, UserId};

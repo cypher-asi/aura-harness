@@ -405,7 +405,7 @@ impl App {
             return None;
         };
         let agent = self.agents.get(agent)?;
-        let now = crate::renderer::now_ms();
+        let now = aura_core_types::time::now_ms();
         let ago = agent
             .last_active_ms
             .map(|ms| crate::renderer::format_ago(ms, now));

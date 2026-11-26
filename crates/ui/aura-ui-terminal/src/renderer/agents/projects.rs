@@ -3,7 +3,7 @@
 
 use super::{draw_list, split_pinned, working_icon};
 use crate::components::{
-    cell_style, format_ago, list_row, now_ms, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE,
+    cell_style, format_ago, list_row, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE,
 };
 use crate::renderer::chrome::ScrollView;
 use crate::{
@@ -11,6 +11,7 @@ use crate::{
     app::{AgentButton, AgentRowEnd, HoverTarget, MenuTarget, PanelFocus, ProjectListRow},
     App, Theme,
 };
+use aura_core_types::time::now_ms;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},

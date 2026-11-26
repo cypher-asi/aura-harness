@@ -48,7 +48,7 @@ mod bench;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use crate::components::{format_ago, now_ms};
+pub(crate) use crate::components::format_ago;
 pub(crate) use chat_lines::{ChatLineCache, GroupState};
 pub(crate) use chat_panel::format_elapsed;
 

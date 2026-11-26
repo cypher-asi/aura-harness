@@ -14,7 +14,7 @@
 //! never ended (the app closed during it) shows as stopped, unless it is
 //! still running in this process.
 
-use crate::session_checkpoint::now_ms;
+use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use aura_ui_terminal::events::{BootHistory, BootLogLine, BootUpdate, MessageData, MessageRole};
 use aura_ui_terminal::UiCommand;

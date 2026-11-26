@@ -3,11 +3,11 @@
 //! led; and its prompt, recorded and given to the model.
 
 use super::Carry;
-use crate::event_loop::processes::now_ms;
 use crate::event_loop::turns::record_prompt;
 use crate::headless::run::drive::Driving;
 use crate::headless::run::route::Prompted;
 use aura_agent::{AgentLoop, AgentLoopConfig};
+use aura_core_types::time::now_ms;
 use aura_core_types::{Hash, OutcomePayload, PromptCategory, PromptPayload, RouteReason};
 use aura_gate::attempts::Terms;
 use aura_model::{Message, ToolDefinition};

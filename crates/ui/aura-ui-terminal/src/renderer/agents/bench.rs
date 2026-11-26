@@ -26,12 +26,13 @@ use super::projects::spawn_guides_below;
 use super::{draw_list, split_pinned, working_icon};
 use crate::app::{AgentRowEnd, BenchAgent, BenchRow, HoverTarget, PanelFocus};
 use crate::components::{
-    cell_style, fold_row, format_ago, list_row, now_ms, tree_row, CellState, StatusIcon,
+    cell_style, fold_row, format_ago, list_row, tree_row, CellState, StatusIcon,
 };
 use crate::events::BenchStatus;
 use crate::renderer::chrome::ScrollView;
 use crate::renderer::side_list::empty_line;
 use crate::{App, Theme};
+use aura_core_types::time::now_ms;
 use ratatui::{layout::Rect, style::Style, text::Line, Frame};
 
 /// Draw the BENCH tab into `body`, the inside of the panel bordered by

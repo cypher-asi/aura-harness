@@ -20,6 +20,7 @@ use aura_agent_kernel::{
     PendingToolPrompt, ToolApprovalError, ToolApprovalPrompter, ToolApprovalRemember,
     ToolApprovalResponse,
 };
+use aura_core_types::text::truncate_with_ellipsis;
 use aura_core_types::{AgentId, ToolState};
 use aura_ui_terminal::{ApprovalLevel, UiCommand};
 use serde::{Deserialize, Serialize};
@@ -619,7 +620,7 @@ fn describe(tool: &str, args: &Value) -> String {
     } else {
         args.to_string()
     };
-    truncate(&text, MAX_DESCRIPTION_CHARS)
+    truncate_with_ellipsis(&text, MAX_DESCRIPTION_CHARS)
 }
 
 fn describe_command(args: &Value) -> String {
@@ -646,15 +647,6 @@ fn describe_command(args: &Value) -> String {
     } else {
         format!("{line} ({})", notes.join(", "))
     }
-}
-
-fn truncate(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let mut cut: String = text.chars().take(max_chars).collect();
-    cut.push('…');
-    cut
 }
 
 /// Write `bytes` to `path` through a temporary file, so a crash never

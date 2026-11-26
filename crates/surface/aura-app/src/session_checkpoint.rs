@@ -9,6 +9,7 @@
 //! replayed on top of it, and a checkpoint older than the last session
 //! start is ignored.
 
+use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use aura_exec_tools::todo::TodoItem;
 use aura_model::{ContentBlock, Message, Role};
@@ -245,14 +246,6 @@ async fn replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     tokio::fs::write(&tmp, bytes).await?;
     tokio::fs::rename(&tmp, path).await
-}
-
-/// Milliseconds since the Unix epoch.
-#[must_use]
-pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Whether `messages` end in a state the model can continue from: no tool

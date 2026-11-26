@@ -10,11 +10,11 @@ use crate::event_loop::compare::run::arm::short_label;
 use crate::event_loop::compare::run::turn::RunParts;
 use crate::event_loop::gate::followup;
 use crate::event_loop::handlers::system_message;
-use crate::event_loop::processes::now_ms;
 use crate::event_loop::subagents::{ArmRouting, LeadProfile};
 use crate::event_loop::turns::record_prompt;
 use crate::model_selection::routed_effort;
 use aura_agent::AgentLoopConfig;
+use aura_core_types::time::now_ms;
 use aura_core_types::{
     Difficulty, Hash, OutcomeSignal, PromptCategory, PromptPayload, Route, RouteReason, RunTurn,
 };

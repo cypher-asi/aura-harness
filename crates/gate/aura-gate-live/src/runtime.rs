@@ -1,14 +1,4 @@
-//! What Gate needs of the running app: the clock, and threads startup
-//! doesn't wait for.
-
-use std::time::{SystemTime, UNIX_EPOCH};
-
-/// Now, in Unix milliseconds.
-pub(crate) fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-}
+//! What Gate needs of the running app: threads startup doesn't wait for.
 
 /// Run `work` on a blocking thread of the current Tokio runtime, or here
 /// when there is none.

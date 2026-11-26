@@ -136,10 +136,6 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    fn now_ms() -> u64 {
-        crate::time::now_ms()
-    }
-
     /// Create a new transaction with explicit hash (for replay/import).
     #[must_use]
     pub fn new(
@@ -169,7 +165,7 @@ impl Transaction {
     ) -> Self {
         let payload = payload.into();
         let hash = Hash::from_content_chained(&payload, prev_hash);
-        let ts_ms = Self::now_ms();
+        let ts_ms = crate::time::now_ms();
 
         Self {
             hash,
@@ -276,7 +272,7 @@ impl Transaction {
     ) -> Self {
         let payload = payload.into();
         let hash = Hash::from_content_chained(&payload, prev_hash);
-        let ts_ms = Self::now_ms();
+        let ts_ms = crate::time::now_ms();
 
         Self {
             hash,
@@ -419,7 +415,7 @@ impl Transaction {
     ) -> Result<Self, AuraError> {
         let payload_bytes = serde_json::to_vec(payload)?;
         let hash = Hash::from_content_chained(&payload_bytes, prev_hash);
-        let ts_ms = Self::now_ms();
+        let ts_ms = crate::time::now_ms();
 
         Ok(Self {
             hash,

@@ -7,8 +7,8 @@
 use super::attempts::{Attempting, Ended};
 use crate::event_loop::gate::followup::{joined, record_message, stronger, Judging, Takeover};
 use crate::event_loop::handlers::system_message;
-use crate::event_loop::processes::now_ms;
 use crate::model_selection::routed_effort;
+use aura_core_types::time::now_ms;
 use aura_core_types::{OutcomePayload, OutcomeSignal, PromptCategory};
 use aura_gate::judge::turn::Failed;
 use aura_gate::live;

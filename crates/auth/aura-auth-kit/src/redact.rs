@@ -19,6 +19,8 @@
 //! - Long hex blobs (≥ 32 chars) → `<HEX>`
 //! - Hard cap at [`MAX_LEN`] chars, with `…` suffix on overflow
 
+use aura_core_types::text::truncate_with_ellipsis;
+
 /// Hard cap on the returned string length (counted in `char`s, not
 /// bytes, so we never slice mid-codepoint).
 const MAX_LEN: usize = 200;
@@ -37,7 +39,7 @@ pub fn redact_error(msg: impl AsRef<str>) -> String {
     let s = redact_home_dirs(s);
     let s = redact_uuids(&s);
     let s = redact_long_hex(&s);
-    truncate(&s, MAX_LEN)
+    truncate_with_ellipsis(&s, MAX_LEN)
 }
 
 fn redact_home_dirs(s: &str) -> String {
@@ -198,15 +200,6 @@ fn redact_long_hex(s: &str) -> String {
         }
     }
     out
-}
-
-fn truncate(s: &str, max_chars: usize) -> String {
-    let count = s.chars().count();
-    if count <= max_chars {
-        return s.to_string();
-    }
-    let short: String = s.chars().take(max_chars).collect();
-    format!("{short}…")
 }
 
 #[cfg(test)]

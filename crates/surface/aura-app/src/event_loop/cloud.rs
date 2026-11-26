@@ -140,7 +140,7 @@ impl BootConsoleUi {
             ui,
             id: format!(
                 "boot-{}-{}",
-                crate::session_checkpoint::now_ms(),
+                aura_core_types::time::now_ms(),
                 NEXT_BOOT.fetch_add(1, Ordering::Relaxed)
             ),
             title: title.to_string(),

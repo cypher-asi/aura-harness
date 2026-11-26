@@ -14,6 +14,7 @@
 use super::os_processes::{self, OsProcess};
 use super::subagents::lock;
 use aura_agent::{ProcessInfo, ProcessManager, ProcessMeta};
+use aura_core_types::time::now_ms;
 use aura_core_types::{ActionId, AgentId, Hash, ProcessId};
 use aura_engine::agents::LifecycleAction;
 use aura_engine::{AgentHost, AgentInfo, AgentState};
@@ -55,12 +56,6 @@ fn agent_row_id(agent: AgentId) -> String {
 
 fn command_row_id(process: ProcessId) -> String {
     format!("cmd:{}", process.to_hex())
-}
-
-pub(crate) fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Work the event loop started and can cancel.

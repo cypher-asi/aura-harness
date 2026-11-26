@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use aura_config::GithubAppConfig;
+use aura_core_types::time::now_ms;
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -45,10 +46,6 @@ const JWT_LIFETIME_SECS: i64 = 9 * 60;
 const ASSUMED_TOKEN_LIFETIME_MS: u64 = 50 * 60 * 1000;
 /// The REST API version every call asks for.
 const API_VERSION: &str = "2022-11-28";
-
-fn now_ms() -> u64 {
-    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
-}
 
 /// A repository on github.com: `owner/name`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

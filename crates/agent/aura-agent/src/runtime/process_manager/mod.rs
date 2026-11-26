@@ -11,6 +11,7 @@ mod tests;
 
 pub use types::{ProcessInfo, ProcessManagerConfig, ProcessMeta, ProcessOutput, RunningProcess};
 
+use aura_core_types::time::now_ms;
 use aura_core_types::{ActionId, AgentId, Hash, ProcessId, ProcessPending, Transaction};
 use dashmap::DashMap;
 use std::process::Child;
@@ -175,12 +176,6 @@ impl ProcessManager {
     pub fn create_pending_payload(process_id: ProcessId, command: &str) -> ProcessPending {
         ProcessPending::new(process_id, command)
     }
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Kill `child` and, on Unix, the process group it leads, so shells take

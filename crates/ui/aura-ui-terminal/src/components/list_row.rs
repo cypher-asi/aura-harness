@@ -306,14 +306,6 @@ pub(crate) fn cell_style(theme: &Theme, state: CellState, text: Style) -> CellSt
     }
 }
 
-pub(crate) fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| {
-            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-        })
-}
-
 /// `now`, `5m`, `3h`, `2d`, `6w`: how long before `now_ms` `then_ms` was.
 pub(crate) fn format_ago(then_ms: u64, now_ms: u64) -> String {
     const MINUTE: u64 = 60;

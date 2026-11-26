@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ansi;
 pub mod benchmarks;
 pub mod events;
 pub mod flow;

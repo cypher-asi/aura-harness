@@ -6,9 +6,10 @@ use super::chrome::{Body, ScrollView};
 use super::overlays::DETAIL_LABEL_WIDTH;
 use super::side_list::{name_style, render_empty, render_hidden, Tone, PROCESSES_HINT};
 use crate::app::{HoverTarget, PanelFocus};
-use crate::components::{cell_style, list_row, now_ms, CellState, Info, StatusIcon, Value};
+use crate::components::{cell_style, list_row, CellState, Info, StatusIcon, Value};
 use crate::events::{ProcessKind, ProcessStatus, ProcessSummary};
 use crate::{App, Theme};
+use aura_core_types::time::now_ms;
 use ratatui::{layout::Rect, style::Color, text::Line, Frame};
 
 /// Draw the Processes list into `inner`, the body below the tab bar of the

@@ -2,13 +2,14 @@
 //! were archived on.
 
 use super::draw_list;
-use crate::components::{cell_style, format_ago, list_row, now_ms, CellState, StatusIcon};
+use crate::components::{cell_style, format_ago, list_row, CellState, StatusIcon};
 use crate::renderer::chrome::ScrollView;
 use crate::renderer::side_list::empty_line;
 use crate::{
     app::{ArchiveRow, HoverTarget, MenuTarget, PanelFocus},
     App, Theme,
 };
+use aura_core_types::time::now_ms;
 use ratatui::Frame;
 use ratatui::{
     layout::Rect,

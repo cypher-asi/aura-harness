@@ -26,9 +26,9 @@ mod tests;
 
 pub use catch_up::{sent_text, SavedSessions};
 
-use crate::runtime::now_ms;
 use crate::table::{lock, GateLive};
 use aura_agent::AgentLoopResult;
+use aura_core_types::time::now_ms;
 use aura_core_types::{AgentId, CompareCopy, Hash, OutcomePayload, RecordEntry};
 use aura_gate_attempts::{Attempt, AttemptLog, CopyAt, Line, Review, Terms, Truth, TruthSource};
 use aura_gate_evidence::Evidence;

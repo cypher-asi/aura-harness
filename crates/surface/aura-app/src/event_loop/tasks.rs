@@ -23,6 +23,7 @@
 
 use super::record_ui::RecordPanelAgent;
 use super::subagents::{lock, AgentHub};
+use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use aura_ui_terminal::events::{TaskState, TaskView, TodoState, TodoView};
 use aura_ui_terminal::UiCommand;
@@ -52,10 +53,6 @@ pub(crate) struct TaskRecord {
     /// The `task` call it answers, for a spawned task
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
-}
-
-fn now_ms() -> u64 {
-    super::processes::now_ms()
 }
 
 /// A new task id: when it started, and a count that keeps ids made in

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aura_config::HarnessParams;
+pub use aura_core_types::time::now_ms;
 use aura_core_types::trace::{Reward, Step, TRACE_SCHEMA_VERSION};
 use aura_store_snapshot::{FsSnapshotStore, SnapshotStore};
 use serde::{Deserialize, Serialize};
@@ -179,15 +180,6 @@ pub fn harness_version() -> String {
 pub fn new_run_id() -> String {
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     format!("{:011x}-{}", now_ms(), &suffix[..8])
-}
-
-/// Current unix time in milliseconds.
-#[must_use]
-pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or_default()
 }
 
 /// Directory holding every run bundle.

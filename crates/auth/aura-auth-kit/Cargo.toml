@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 aura-core-auth = { path = "../../core/aura-core-auth" }
+aura-core-types = { path = "../../core/aura-core-types" }
 axum = { workspace = true }
 base64 = { workspace = true }
 reqwest = { workspace = true }

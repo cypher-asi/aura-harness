@@ -6,8 +6,9 @@ use super::chrome::{Body, ScrollView};
 use super::processes::{format_elapsed, status_icon};
 use super::side_list::{empty_line, name_style, render_empty, Tone, MEMBERS_HINT};
 use crate::app::{HoverTarget, MemberRow, PanelFocus};
-use crate::components::{cell_style, list_row, now_ms, CellState};
+use crate::components::{cell_style, list_row, CellState};
 use crate::{App, Theme};
+use aura_core_types::time::now_ms;
 use ratatui::{layout::Rect, text::Line, Frame};
 
 /// Draw the members into `inner`, the body below the tab bar of the

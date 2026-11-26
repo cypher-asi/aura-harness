@@ -16,6 +16,7 @@ path = "src/main.rs"
 aura-ui = { path = "../../ui/aura-ui" }
 aura-app = { path = "../aura-app" }
 aura-core-modes = { path = "../../core/aura-core-modes" }
+aura-core-types = { path = "../../core/aura-core-types" }
 aura-ui-terminal = { path = "../../ui/aura-ui-terminal" }
 
 ratatui = { workspace = true }
