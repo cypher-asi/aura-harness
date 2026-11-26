@@ -80,6 +80,67 @@ fn trusted_runtime_metadata(spec: serde_json::Value) -> std::collections::HashMa
     metadata
 }
 
+/// An integration with no base-url override and no provider config.
+fn runtime_integration(
+    integration_id: &str,
+    auth: InstalledToolRuntimeAuth,
+) -> InstalledToolRuntimeIntegration {
+    InstalledToolRuntimeIntegration {
+        integration_id: integration_id.into(),
+        base_url: None,
+        auth,
+        provider_config: std::collections::HashMap::new(),
+    }
+}
+
+/// An app-provider runtime with one integration and no static headers.
+fn provider_runtime(
+    provider: &str,
+    base_url: String,
+    integration: InstalledToolRuntimeIntegration,
+) -> InstalledToolRuntimeExecution {
+    InstalledToolRuntimeExecution::AppProvider(InstalledToolRuntimeProviderExecution {
+        provider: provider.into(),
+        base_url,
+        static_headers: std::collections::HashMap::new(),
+        integrations: vec![integration],
+    })
+}
+
+/// An installed org tool driven by the trusted runtime metadata `spec`.
+fn trusted_installed_tool(
+    name: &str,
+    description: &str,
+    runtime: InstalledToolRuntimeExecution,
+    spec: Value,
+) -> InstalledToolDefinition {
+    InstalledToolDefinition {
+        name: name.into(),
+        description: description.into(),
+        input_schema: serde_json::json!({"type":"object"}),
+        endpoint: "http://unused.local".into(),
+        auth: ToolAuth::None,
+        timeout_ms: Some(5_000),
+        namespace: Some("aura_org_tools".into()),
+        required_integration: None,
+        runtime_execution: Some(runtime),
+        metadata: trusted_runtime_metadata(spec),
+    }
+}
+
+/// Installs `tool` on a fresh resolver, calls it with `args`, asserts the
+/// effect committed and returns the tool result.
+async fn execute_installed_tool(tool: InstalledToolDefinition, args: Value) -> ToolResult {
+    let (_cat, resolver) = make_catalog_and_resolver();
+    let tc = ToolCall::new(tool.name.as_str(), args);
+    let resolver = resolver.with_installed_tools(vec![tool]);
+    let (ctx, _dir) = test_context();
+    let action = Action::delegate_tool(&tc).unwrap();
+    let effect = resolver.execute(&ctx, &action).await.unwrap();
+    assert_eq!(effect.status, EffectStatus::Committed);
+    serde_json::from_slice(&effect.payload).unwrap()
+}
+
 fn notion_runtime_execution(endpoint: String) -> InstalledToolRuntimeExecution {
     InstalledToolRuntimeExecution::AppProvider(InstalledToolRuntimeProviderExecution {
         provider: "notion".into(),

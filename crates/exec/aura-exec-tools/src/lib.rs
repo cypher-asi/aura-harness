@@ -16,6 +16,7 @@
 //! Command execution is disabled by default and requires explicit allowlisting.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 pub mod agents;
 pub mod automaton_tools;

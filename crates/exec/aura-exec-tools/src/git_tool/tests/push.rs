@@ -75,66 +75,28 @@ async fn git_push_to_a_bare_origin_pushes_the_current_branch_and_tracks_it() {
     );
 }
 
-#[tokio::test]
-async fn a_pinned_branch_refuses_every_other_branch() {
-    if !git_available() {
-        eprintln!("skip: git not available on PATH");
-        return;
-    }
-    let (_parent, repo, origin) = repo_with_bare_origin().await;
-    let pinned = |branch: Option<&'static str>, force: bool| PushTarget {
+/// Pushes `repo` with `work` as the only branch allowed.
+async fn push_pinned_to_work(
+    repo: &Path,
+    branch: Option<&str>,
+    force: bool,
+) -> Result<crate::git_tool::Pushed, GitToolError> {
+    let target = PushTarget {
         branch,
         force,
         only_branch: Some("work"),
     };
-    for (branch, force) in [(Some("main"), false), (Some("main"), true)] {
-        let err = git_push_impl(
-            &repo,
-            pinned(branch, force),
-            PushPolicy::single(Duration::from_secs(20)),
-        )
-        .await
-        .expect_err("other branch");
-        assert!(
-            matches!(&err, GitToolError::BranchNotAllowed { branch, allowed } if branch == "main" && allowed == "work"),
-            "got {err:?}"
-        );
-    }
-    // The current branch is checked too: on `other`, a bare push is refused.
-    git(&repo, &["checkout", "-q", "-b", "other"]).await;
-    let err = git_push_impl(
-        &repo,
-        pinned(None, false),
-        PushPolicy::single(Duration::from_secs(20)),
-    )
-    .await
-    .expect_err("current branch is not the pinned one");
-    assert!(
-        matches!(err, GitToolError::BranchNotAllowed { .. }),
-        "{err:?}"
-    );
-    let refs = git(&origin, &["for-each-ref", "--format=%(refname)"]).await;
-    assert!(refs.is_empty(), "nothing reached origin: {refs}");
+    git_push_impl(repo, target, PushPolicy::single(Duration::from_secs(20))).await
+}
 
-    // Its own branch, forced or not, goes through.
-    git_push_impl(
-        &repo,
-        pinned(Some("work"), true),
-        PushPolicy::single(Duration::from_secs(20)),
-    )
-    .await
-    .expect("own branch");
-    assert!(!git(&origin, &["rev-parse", "refs/heads/work"])
-        .await
-        .is_empty());
-
-    // Through the tool, the pin comes from the config.
+/// Through the tool, the pin comes from the config.
+async fn assert_tool_pins_push_branch_from_config(repo: &Path) {
     use crate::sandbox::Sandbox;
     let config = crate::ToolConfig {
         push_branch: Some("work".into()),
         ..Default::default()
     };
-    let ctx = ToolContext::new(Sandbox::new(&repo).unwrap(), config);
+    let ctx = ToolContext::new(Sandbox::new(repo).unwrap(), config);
     let err = GitPushTool
         .execute(&ctx, serde_json::json!({ "branch": "main" }))
         .await
@@ -143,6 +105,45 @@ async fn a_pinned_branch_refuses_every_other_branch() {
         matches!(&err, ToolError::InvalidArguments(msg) if msg.contains("work")),
         "got {err:?}"
     );
+}
+
+#[tokio::test]
+async fn a_pinned_branch_refuses_every_other_branch() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let (_parent, repo, origin) = repo_with_bare_origin().await;
+    for (branch, force) in [(Some("main"), false), (Some("main"), true)] {
+        let err = push_pinned_to_work(&repo, branch, force)
+            .await
+            .expect_err("other branch");
+        assert!(
+            matches!(&err, GitToolError::BranchNotAllowed { branch, allowed } if branch == "main" && allowed == "work"),
+            "got {err:?}"
+        );
+    }
+    // The current branch is checked too: on `other`, a bare push is refused.
+    git(&repo, &["checkout", "-q", "-b", "other"]).await;
+    let err = push_pinned_to_work(&repo, None, false)
+        .await
+        .expect_err("current branch is not the pinned one");
+    assert!(
+        matches!(err, GitToolError::BranchNotAllowed { .. }),
+        "{err:?}"
+    );
+    let refs = git(&origin, &["for-each-ref", "--format=%(refname)"]).await;
+    assert!(refs.is_empty(), "nothing reached origin: {refs}");
+
+    // Its own branch, forced or not, goes through.
+    push_pinned_to_work(&repo, Some("work"), true)
+        .await
+        .expect("own branch");
+    assert!(!git(&origin, &["rev-parse", "refs/heads/work"])
+        .await
+        .is_empty());
+
+    assert_tool_pins_push_branch_from_config(&repo).await;
 }
 
 #[tokio::test]

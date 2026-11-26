@@ -144,6 +144,26 @@ async fn test_foreground_output_reaches_the_hook_while_the_command_runs() {
     }
 }
 
+/// A context whose commands may write only inside `workspace`.
+#[cfg(target_os = "linux")]
+fn confined_ctx(workspace: &std::path::Path) -> ToolContext {
+    let config = command_config(crate::CommandPolicy {
+        enabled: true,
+        allow_shell: true,
+        binary_allowlist: vec!["sh".to_string(), "touch".to_string()],
+        ..Default::default()
+    });
+    let mut ctx = ToolContext::new(Sandbox::new(workspace).unwrap(), config);
+    ctx.confine_writes = true;
+    ctx
+}
+
+#[cfg(target_os = "linux")]
+async fn assert_run_command_succeeds(ctx: &ToolContext, args: serde_json::Value) {
+    let result = CmdRunTool.execute(ctx, args).await.unwrap();
+    assert!(result.ok, "{result:?}");
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_confined_run_command_cannot_write_above_the_workspace() {
@@ -154,21 +174,13 @@ async fn test_confined_run_command_cannot_write_above_the_workspace() {
     let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let workspace = parent.path().join("ws");
     std::fs::create_dir(&workspace).unwrap();
-    let config = command_config(crate::CommandPolicy {
-        enabled: true,
-        allow_shell: true,
-        binary_allowlist: vec!["sh".to_string(), "touch".to_string()],
-        ..Default::default()
-    });
-    let mut ctx = ToolContext::new(Sandbox::new(&workspace).unwrap(), config);
-    ctx.confine_writes = true;
+    let mut ctx = confined_ctx(&workspace);
 
     for args in [
         serde_json::json!({ "shell_script": "touch inside" }),
         serde_json::json!({ "program": "touch", "args": ["inside2"] }),
     ] {
-        let result = CmdRunTool.execute(&ctx, args).await.unwrap();
-        assert!(result.ok, "{result:?}");
+        assert_run_command_succeeds(&ctx, args).await;
     }
     assert!(workspace.join("inside").exists());
     assert!(workspace.join("inside2").exists());
@@ -184,14 +196,8 @@ async fn test_confined_run_command_cannot_write_above_the_workspace() {
     assert!(!parent.path().join("outside").exists());
 
     // The confinement, not the binary allowlist, bounds confined commands.
-    let result = CmdRunTool
-        .execute(
-            &ctx,
-            serde_json::json!({ "program": "mkdir", "args": ["unlisted"] }),
-        )
-        .await
-        .unwrap();
-    assert!(result.ok, "{result:?}");
+    let unlisted = serde_json::json!({ "program": "mkdir", "args": ["unlisted"] });
+    assert_run_command_succeeds(&ctx, unlisted).await;
     assert!(workspace.join("unlisted").is_dir());
 
     ctx.confine_writes = false;
@@ -204,12 +210,6 @@ async fn test_confined_run_command_cannot_write_above_the_workspace() {
         .expect_err("unconfined commands keep the binary allowlist");
     assert!(matches!(err, ToolError::Forbidden(_)), "{err:?}");
 
-    let result = CmdRunTool
-        .execute(
-            &ctx,
-            serde_json::json!({ "program": "touch", "args": ["../outside"] }),
-        )
-        .await
-        .unwrap();
-    assert!(result.ok, "{result:?}");
+    let outside = serde_json::json!({ "program": "touch", "args": ["../outside"] });
+    assert_run_command_succeeds(&ctx, outside).await;
 }
