@@ -266,7 +266,8 @@ fn archive_day_names_today_yesterday_a_date_or_earlier() {
     let cases = [
         (ms_of(noon(10)), "Today"),
         (ms_of(noon(9)), "Yesterday"),
-        (ms_of(noon(3)), "2024-01-03"),
+        (ms_of(noon(8)), "Monday, January 8 2024"),
+        (ms_of(noon(3)), "Wednesday, January 3 2024"),
         (None, "Earlier"),
     ];
     for (ms, want) in cases {

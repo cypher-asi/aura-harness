@@ -31,7 +31,8 @@ use ratatui::layout::Rect;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchiveRow {
     /// The day the agents below it were archived: `Today`, `Yesterday`,
-    /// a `%Y-%m-%d` date, or `Earlier` when the time is unknown.
+    /// a date such as `Wednesday, September 16 2026`, or `Earlier` when
+    /// the time is unknown.
     Day(String),
     /// The archived agent at `index` in [`App::archived`].
     Agent {
@@ -41,8 +42,9 @@ pub enum ArchiveRow {
 }
 
 /// Header of the day an agent archived at `ms` (Unix milliseconds) falls
-/// on, as seen at `now`: `Today`, `Yesterday`, else its local date. An
-/// unknown time reads `Earlier`.
+/// on, as seen at `now`: `Today`, `Yesterday`, else its local date in
+/// full, as `Wednesday, September 16 2026`. An unknown time reads
+/// `Earlier`.
 pub(crate) fn archive_day(ms: Option<u64>, now: DateTime<Local>) -> String {
     let Some(at) = ms
         .and_then(|ms| i64::try_from(ms).ok())
@@ -57,7 +59,7 @@ pub(crate) fn archive_day(ms: Option<u64>, now: DateTime<Local>) -> String {
     } else if today.pred_opt() == Some(day) {
         "Yesterday".to_string()
     } else {
-        day.format("%Y-%m-%d").to_string()
+        day.format("%A, %B %-d %Y").to_string()
     }
 }
 
