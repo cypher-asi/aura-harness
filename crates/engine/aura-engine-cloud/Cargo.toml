@@ -1,6 +1,6 @@
 [package]
 name = "aura-engine-cloud"
-description = "Cloud agents on boxd machines: the boxd gRPC client, the machine fleet, snapshots, the mesh and the record mirror"
+description = "Cloud agents on boxd machines: the boxd gRPC client, the machine fleet, snapshots, the mesh, the record mirror and the cloud hub"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aura-auth = { path = "../../auth/aura-auth" }
 aura-config = { path = "../../config/aura-config" }
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }
+aura-engine = { path = "../aura-engine" }
+aura-store-db = { path = "../../store/aura-store-db" }
 async-trait = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
@@ -30,9 +33,13 @@ tar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
+# The hub drives each node's run stream and mesh socket.
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 tonic = { version = "0.12", default-features = false, features = ["transport", "codegen", "prost", "tls", "tls-webpki-roots"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
+which = { workspace = true }
 zeroize = { workspace = true }
 
 [build-dependencies]

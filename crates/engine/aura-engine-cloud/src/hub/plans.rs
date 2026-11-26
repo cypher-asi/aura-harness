@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
+use crate::plans::PlanCredentials;
 use async_trait::async_trait;
 use aura_auth::AuthManager;
 use aura_core_auth::{AuthError, InferenceCredential, Owner, ProviderKind};
-use aura_engine_cloud::plans::PlanCredentials;
 
 /// Plan credentials from the vault, for any user who has linked plans
 /// here (not only the one signed in).

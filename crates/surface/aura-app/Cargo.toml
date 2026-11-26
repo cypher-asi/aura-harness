@@ -58,11 +58,7 @@ flate2 = { workspace = true }
 tar = { workspace = true }
 walkdir = { workspace = true }
 parking_lot = { workspace = true }
-sysinfo = { workspace = true }
 which = { workspace = true }
-zeroize = { workspace = true }
-# Cloud agents: the hub drives each node's run stream and mesh socket.
-tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 
 # Lowers the agents' threads below the UI's (`priority`).
 [target.'cfg(target_os = "linux")'.dependencies]

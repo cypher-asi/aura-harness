@@ -473,12 +473,10 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
- "sysinfo",
  "tar",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
- "tokio-tungstenite 0.26.2",
  "tokio-util",
  "toml",
  "tower 0.5.2",
@@ -488,7 +486,6 @@ dependencies = [
  "uuid",
  "walkdir",
  "which",
- "zeroize",
 ]
 
 [[package]]
@@ -860,10 +857,13 @@ name = "aura-engine-cloud"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "aura-auth",
  "aura-config",
  "aura-core-auth",
  "aura-core-protocol",
  "aura-core-types",
+ "aura-engine",
+ "aura-store-db",
  "axum",
  "blake3",
  "bytes",
@@ -883,10 +883,13 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tokio-util",
  "tonic",
  "tonic-build",
  "tracing",
  "uuid",
+ "which",
  "zeroize",
 ]
 

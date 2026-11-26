@@ -218,7 +218,7 @@ pub async fn store_key(env_file: &Path, key: &BoxdApiKey) -> Result<(), SetupErr
 #[must_use]
 pub fn key_name() -> String {
     let host = sysinfo::System::host_name().unwrap_or_else(|| "host".to_string());
-    format!("aura-{}", aura_engine_cloud::names::dns_fragment(&host))
+    format!("aura-{}", crate::names::dns_fragment(&host))
 }
 
 /// Run the whole setup: find the CLI, sign in if needed, mint a key and

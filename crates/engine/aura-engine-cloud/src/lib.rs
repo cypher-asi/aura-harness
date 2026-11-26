@@ -22,6 +22,11 @@
 //! - [`delta`]: the project files a machine gets on top of its snapshot,
 //!   never including `.env` files.
 //! - [`host`]: samples a host's name, addresses, CPU, memory and disk.
+//! - [`hub`]: the [`hub::CloudHub`] that moves agents to and from their
+//!   machines (place and recall), mirrors their records into the local
+//!   store, drives their turns and routes their mail over the mesh; with
+//!   the machine ledger writer, vault plan credentials, the node client
+//!   and `aura cloud setup`.
 //! - [`machine_env`]: the allowlisted environment a machine gets.
 //! - [`cost`]: metered usage plus a live estimate since the last reading.
 //! - [`replica`]: checks and mirrors a node's record pages into the
@@ -57,6 +62,7 @@ pub mod fleet;
 pub mod github;
 pub mod glibc;
 pub mod host;
+pub mod hub;
 pub mod machine_env;
 pub mod mesh;
 pub mod names;

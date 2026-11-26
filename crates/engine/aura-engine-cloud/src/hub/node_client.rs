@@ -5,12 +5,12 @@
 
 use std::time::Duration;
 
+use crate::{CloudError, CloudResult};
 use aura_config::BoxdToken;
 use aura_core_protocol::cloud::{
     HostStats, MeshMail, SealResponse, SyncImport, SyncImported, WorkspacePatch,
 };
 use aura_core_types::{AgentId, RecordEntry};
-use aura_engine_cloud::{CloudError, CloudResult};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 

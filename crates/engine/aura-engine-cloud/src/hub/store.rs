@@ -12,12 +12,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::replica::ReplicaSink;
+use crate::{CloudError, CloudResult};
 use aura_core_types::{
     AgentId, Hash, PlacementPayload, RecordEntry, SystemKind, Transaction, TransactionType,
     VmPayload,
 };
-use aura_engine_cloud::replica::ReplicaSink;
-use aura_engine_cloud::{CloudError, CloudResult};
 use aura_store_db::Store;
 use parking_lot::Mutex;
 
@@ -96,7 +96,7 @@ fn store_error(err: aura_store_db::StoreError) -> CloudError {
     CloudError::io("cloud ledger", std::io::Error::other(err.to_string()))
 }
 
-impl aura_engine_cloud::fleet::VmLedger for StoreLedger {
+impl crate::fleet::VmLedger for StoreLedger {
     fn record(&self, ledger_zns: &str, payload: &VmPayload) {
         if let Err(err) = self.append_system(agent_id_of(ledger_zns), payload.to_bytes()) {
             tracing::warn!(ledger = %ledger_zns, event = payload.event.as_str(), error = %err, "could not record a machine row");
@@ -148,9 +148,9 @@ impl ReplicaSink for StoreSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fleet::VmLedger;
+    use crate::replica::apply_page;
     use aura_core_types::{Placement, VmEvent};
-    use aura_engine_cloud::fleet::VmLedger;
-    use aura_engine_cloud::replica::apply_page;
     use aura_store_db::RocksStore;
 
     fn store() -> (Arc<dyn Store>, tempfile::TempDir) {
@@ -175,10 +175,7 @@ mod tests {
         // Rows chain: the second's hash covers the first's.
         let second = store.get_record_entry(agent_id_of(zns), 2).expect("entry");
         let first = store.get_record_entry(agent_id_of(zns), 1).expect("entry");
-        assert!(aura_engine_cloud::replica::hash_holds(
-            &second,
-            Some(&first.tx.hash)
-        ));
+        assert!(crate::replica::hash_holds(&second, Some(&first.tx.hash)));
     }
 
     #[test]

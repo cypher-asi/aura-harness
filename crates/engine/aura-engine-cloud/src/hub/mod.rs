@@ -15,11 +15,11 @@
 //!   kernel writes again. The [`aura_core_types::SystemKind::Placement`]
 //!   row marks each move.
 //! - **The local store is the main copy.** Every page a node commits is
-//!   checked ([`aura_engine_cloud::replica::verify_page`]) and appended
+//!   checked ([`crate::replica::verify_page`]) and appended
 //!   verbatim; a bad page stops the mirror for that agent and is never
 //!   written.
 //! - **The boxd key never leaves the hub.** Machines get the env
-//!   allowlist of [`aura_engine_cloud::machine_env`] and their tokens over
+//!   allowlist of [`crate::machine_env`] and their tokens over
 //!   boxd's authenticated `Exec`.
 //!
 //! ## Failure modes
@@ -29,12 +29,42 @@
 //!   next attempt.
 //! - A patch that doesn't apply is saved under
 //!   `AURA_HOME/cloud/<agent>/` and reported, never dropped.
+//!
+//! ## Submodules
+//!
+//! - [`store`]: the machine ledger writer and the record mirror's sink
+//!   over the main store.
+//! - [`plans`]: users' plan credentials from the vault, for their
+//!   machines' boxd plan secrets.
+//! - [`node_client`]: HTTP calls to one cloud node.
+//! - [`setup`]: `aura cloud setup`, which puts a boxd API key in
+//!   `AURA_HOME/.env`.
+
+pub mod node_client;
+pub mod plans;
+pub mod setup;
+pub mod store;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use crate::boot::human_bytes;
+use crate::cost::{latest_reading, CostEstimate, CostModel, CostSample};
+use crate::delta::BranchFetch;
+use crate::fleet::{MachineView, ProvisionRequest, VmFleet};
+use crate::github::{BotIdentity, GithubApp, RepoRef, RepoTokens};
+use crate::machine_env::{MachineEnv, WORKSPACE_DIR};
+use crate::mesh::{global_thread, Directory, Holder, MailBook, HUB_NODE};
+use crate::plans::{PlanCredentials, PlanStatus, PlanSync, SYNC_EVERY};
+use crate::repos::{RepoStatus, RepoSync};
+use crate::snapshots::{self, AuraBinary, SnapshotBuilder, SnapshotRecord};
+use crate::workspace::{self, BranchStart, Bundled};
+use crate::{
+    boxd, delta, names, replica, BootEvent, BootReporter, BootStage, CloudError, CloudResult,
+    MachineOrigin, VmProvider,
+};
 use aura_config::{BoxdToken, CloudConfig};
 pub use aura_core_auth::Owner;
 use aura_core_protocol::cloud::{
@@ -47,21 +77,6 @@ use aura_core_protocol::{
 use aura_core_types::time::now_ms;
 use aura_core_types::{AgentId, Placement, PlacementPayload, VmPayload};
 use aura_engine::{AgentHost, MessageKind, RemoteMail, RemoteRouter, ThreadId};
-use aura_engine_cloud::boot::human_bytes;
-use aura_engine_cloud::cost::{latest_reading, CostEstimate, CostModel, CostSample};
-use aura_engine_cloud::delta::BranchFetch;
-use aura_engine_cloud::fleet::{MachineView, ProvisionRequest, VmFleet};
-use aura_engine_cloud::github::{BotIdentity, GithubApp, RepoRef, RepoTokens};
-use aura_engine_cloud::machine_env::{MachineEnv, WORKSPACE_DIR};
-use aura_engine_cloud::mesh::{global_thread, Directory, Holder, MailBook, HUB_NODE};
-use aura_engine_cloud::plans::{PlanCredentials, PlanStatus, PlanSync, SYNC_EVERY};
-use aura_engine_cloud::repos::{RepoStatus, RepoSync};
-use aura_engine_cloud::snapshots::{self, AuraBinary, SnapshotBuilder, SnapshotRecord};
-use aura_engine_cloud::workspace::{self, BranchStart, Bundled};
-use aura_engine_cloud::{
-    boxd, delta, names, replica, BootEvent, BootReporter, BootStage, CloudError, CloudResult,
-    MachineOrigin, VmProvider,
-};
 use aura_store_db::Store;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
@@ -69,8 +84,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::node_client::{NodeClient, NODE_TIMEOUT};
-use super::store::{agent_id_of, record_placement, StoreLedger, StoreSink};
+use self::node_client::{NodeClient, NODE_TIMEOUT};
+use self::store::{agent_id_of, record_placement, StoreLedger, StoreSink};
 
 /// How often idle machines are checked for sleep.
 const TICK_EVERY: Duration = Duration::from_secs(5);
@@ -412,7 +427,7 @@ fn choose_binary(env: Option<&Path>, home: &Path, current_exe: Option<PathBuf>) 
         tracing::info!(path = %path.display(), "cloud aura binary from AURA_CLOUD_BINARY");
         return AuraBinary::Upload(path.to_path_buf());
     }
-    let built = aura_engine_cloud::snapshots::cloud_binary_path(home);
+    let built = crate::snapshots::cloud_binary_path(home);
     if built.is_file() {
         tracing::info!(path = %built.display(), "cloud aura binary from the cloud home");
         return AuraBinary::Upload(built);
@@ -454,13 +469,11 @@ impl CloudHub {
             placements.install = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
         }
         let ledger = Arc::new(StoreLedger::new(Arc::clone(&store)));
-        let settings = aura_engine_cloud::fleet::FleetSettings::from_config(
-            &config,
-            placements.install.clone(),
-        );
+        let settings =
+            crate::fleet::FleetSettings::from_config(&config, placements.install.clone());
         let fleet = Arc::new(VmFleet::new(
             Arc::clone(&provider),
-            Arc::clone(&ledger) as Arc<dyn aura_engine_cloud::fleet::VmLedger>,
+            Arc::clone(&ledger) as Arc<dyn crate::fleet::VmLedger>,
             settings,
         ));
         let tokens = config.github_app.clone().and_then(|app| match GithubApp::new(app) {
@@ -477,7 +490,7 @@ impl CloudHub {
         ));
         let snapshots = SnapshotBuilder::new(
             provider,
-            Arc::clone(&ledger) as Arc<dyn aura_engine_cloud::fleet::VmLedger>,
+            Arc::clone(&ledger) as Arc<dyn crate::fleet::VmLedger>,
             placements.install.clone(),
             config.size,
             config.isolated,
@@ -520,7 +533,7 @@ impl CloudHub {
         store: Arc<dyn Store>,
         home: PathBuf,
     ) -> CloudResult<Arc<Self>> {
-        let provider = Arc::new(aura_engine_cloud::BoxdProvider::from_config(&config)?);
+        let provider = Arc::new(crate::BoxdProvider::from_config(&config)?);
         let binary = if cfg!(target_os = "linux") {
             choose_binary(
                 config.binary.as_deref(),
@@ -1468,7 +1481,7 @@ impl CloudHub {
                 Vec::new()
             } else {
                 self.store
-                    .scan_record(request.agent, from, super::node_client::PAGE)
+                    .scan_record(request.agent, from, node_client::PAGE)
                     .map_err(|e| {
                         CloudError::io("read record", std::io::Error::other(e.to_string()))
                     })?
@@ -2016,11 +2029,7 @@ impl CloudHub {
     /// # Errors
     ///
     /// When the machine can't be woken or the call fails.
-    pub async fn exec(
-        &self,
-        agent: AgentId,
-        command: &str,
-    ) -> CloudResult<aura_engine_cloud::ExecOutput> {
+    pub async fn exec(&self, agent: AgentId, command: &str) -> CloudResult<crate::ExecOutput> {
         let hex = agent.to_hex();
         let view = self.fleet.ensure_awake(&hex).await?;
         let _guard = self.fleet.begin_work(&hex);
@@ -2641,8 +2650,8 @@ pub fn zns_agent(zns: &str) -> AgentId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FakeProvider;
     use aura_core_protocol::{ErrorMsg, TextDelta, ToolUseStart};
-    use aura_engine_cloud::FakeProvider;
     use aura_store_db::RocksStore;
 
     #[test]
@@ -2662,7 +2671,7 @@ mod tests {
         );
 
         // A build in the cloud home wins over the running executable.
-        let built = aura_engine_cloud::snapshots::cloud_binary_path(home.path());
+        let built = crate::snapshots::cloud_binary_path(home.path());
         std::fs::create_dir_all(built.parent().expect("parent")).expect("mkdir");
         std::fs::write(&built, b"elf").expect("write");
         assert_eq!(
@@ -2876,9 +2885,7 @@ mod tests {
     #[tokio::test]
     async fn a_project_on_github_gives_its_machine_a_repository_secret_and_the_bot() {
         let (hub, fake, dir) = hub();
-        let tokens = Arc::new(aura_engine_cloud::github::FakeRepoTokens::new(
-            "aura-agents",
-        ));
+        let tokens = Arc::new(crate::github::FakeRepoTokens::new("aura-agents"));
         let repo = RepoRef {
             owner: "acme".into(),
             name: "proj".into(),
@@ -2927,7 +2934,7 @@ mod tests {
         let secret = share.secret.expect("secret");
         assert_eq!(
             fake.secret_value(&secret).as_deref(),
-            Some(aura_engine_cloud::repos::UNLINKED)
+            Some(crate::repos::UNLINKED)
         );
         let status = hub
             .repo_status(share.repo.as_ref().expect("repo"))
@@ -2975,7 +2982,7 @@ mod tests {
             if let Ok(bytes) = std::fs::read(root.join("aura-out.bundle")) {
                 files.put_file(machine, workspace::OUT_BUNDLE, bytes);
             }
-            aura_engine_cloud::ExecOutput {
+            crate::ExecOutput {
                 exit_code: out.status.code().unwrap_or(-1),
                 stdout: out.stdout,
                 stderr: out.stderr,
@@ -2991,7 +2998,7 @@ mod tests {
         project: &Path,
         branch: Option<&str>,
     ) -> PlacedAgent {
-        use aura_engine_cloud::{MachineInfo, MachineStatus};
+        use crate::{MachineInfo, MachineStatus};
         let name = "aura-sc01-0101";
         fake.insert_machine(MachineInfo {
             id: "vm-1".into(),
