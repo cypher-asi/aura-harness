@@ -57,7 +57,7 @@ impl App {
             return;
         }
         self.side_tab = tab;
-        self.pending_kill = None;
+        self.pending.kill = None;
     }
 
     /// Replace the list, keeping the highlight on the same process when it
@@ -259,13 +259,13 @@ impl App {
             ),
             NotificationType::Warning,
         ));
-        self.pending_kill = Some(process.id);
+        self.pending.kill = Some(process.id);
     }
 
     /// Resolve a pending kill with `key`. Returns `false` when nothing was
     /// pending.
     pub(super) fn handle_pending_kill(&mut self, key: KeyEvent) -> bool {
-        let Some(id) = self.pending_kill.take() else {
+        let Some(id) = self.pending.kill.take() else {
             return false;
         };
         if matches!(key.code, KeyCode::Char('y' | 'Y')) {

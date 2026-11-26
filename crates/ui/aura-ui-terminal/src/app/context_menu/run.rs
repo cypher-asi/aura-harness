@@ -23,7 +23,7 @@ impl App {
             MenuTarget::Archived(_) | MenuTarget::Channel(_) => None,
         };
         if let Some(project) = project {
-            self.workspace_move = Some(WorkspaceMove { project, to });
+            self.pending.workspace_move = Some(WorkspaceMove { project, to });
         }
     }
 

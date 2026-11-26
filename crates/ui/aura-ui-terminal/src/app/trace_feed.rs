@@ -312,7 +312,7 @@ impl App {
             self.open_detail(DetailView::Graph);
             return;
         }
-        self.pending_graph_node = Some(entry.node.id.clone());
+        self.pending.graph_node = Some(entry.node.id.clone());
         if let Some(tx) = &self.event_tx {
             let _ = tx.try_send(UiEvent::OpenGraph(Some(entry.run_id)));
         }

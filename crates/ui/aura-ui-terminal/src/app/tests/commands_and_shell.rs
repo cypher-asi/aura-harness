@@ -229,7 +229,7 @@ fn a_running_call_keeps_its_output_until_its_result_arrives() {
 fn the_working_line_counts_the_running_call_not_the_turn() {
     let mut app = App::new();
     submit(&mut app, "test it");
-    app.processing_since = Instant::now().checked_sub(Duration::from_secs(600));
+    app.ticks.processing_since = Instant::now().checked_sub(Duration::from_secs(600));
     assert!(app.working_times().0.unwrap() >= Duration::from_secs(600));
 
     run_command_call(&mut app, "t1");

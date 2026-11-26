@@ -40,7 +40,11 @@ impl App {
         if agent_id == self.active_agent_id {
             return true;
         }
-        let loaded = self.views.get(agent_id).is_some_and(|view| view.loaded);
+        let loaded = self
+            .switching
+            .views
+            .get(agent_id)
+            .is_some_and(|view| view.loaded);
         let event = if loaded {
             UiEvent::FocusAgent(agent_id.to_string())
         } else {
@@ -51,10 +55,12 @@ impl App {
         if !self.try_send_event(event) {
             return false;
         }
-        if self.switch_sent.is_none() && self.confirmed_agent.is_empty() {
-            self.confirmed_agent.clone_from(&self.active_agent_id);
+        if self.switching.switch_sent.is_none() && self.switching.confirmed_agent.is_empty() {
+            self.switching
+                .confirmed_agent
+                .clone_from(&self.active_agent_id);
         }
-        self.switch_sent = Some(agent_id.to_string());
+        self.switching.switch_sent = Some(agent_id.to_string());
         self.apply_active_agent(agent_id);
         self.start_chat_loading();
         true
@@ -66,19 +72,19 @@ impl App {
     /// before B was confirmed) is dropped, so the screen never jumps back
     /// to an agent the user left.
     pub(in crate::app) fn cmd_set_active_agent(&mut self, agent_id: &str) {
-        let Some(sent) = self.switch_sent.as_deref() else {
-            self.confirmed_agent = agent_id.to_string();
+        let Some(sent) = self.switching.switch_sent.as_deref() else {
+            self.switching.confirmed_agent = agent_id.to_string();
             self.apply_active_agent(agent_id);
             return;
         };
         // The session's active agent is `agent_id` either way, which is
         // where a failed switch should go back to.
         let confirms = sent == agent_id;
-        self.confirmed_agent = agent_id.to_string();
+        self.switching.confirmed_agent = agent_id.to_string();
         if !confirms {
             return;
         }
-        self.switch_sent = None;
+        self.switching.switch_sent = None;
         if agent_id == self.active_agent_id {
             // The screen switched when the user asked; only the marks
             // the agents list draws may have been redrawn since.
@@ -92,19 +98,21 @@ impl App {
     /// shows it goes back to the agent the session still has active, so
     /// it doesn't wait for a chat that will not come.
     pub(in crate::app) fn cmd_switch_failed(&mut self, agent_id: &str) {
-        if self.switch_sent.as_deref() != Some(agent_id) && self.active_agent_id != agent_id {
+        if self.switching.switch_sent.as_deref() != Some(agent_id)
+            && self.active_agent_id != agent_id
+        {
             return;
         }
-        self.switch_sent = None;
+        self.switching.switch_sent = None;
         // The failed agent's chat keeps `loaded` unset, so the next
         // switch to it asks for its history again.
-        self.chat_loading_since = None;
-        let back = self.confirmed_agent.clone();
+        self.switching.chat_loading_since = None;
+        let back = self.switching.confirmed_agent.clone();
         if !back.is_empty() && back != self.active_agent_id {
             self.apply_active_agent(&back);
             // The session sends nothing more for the agent it kept, so a
             // chat of it still waiting shows what it holds.
-            self.chat_loading_since = None;
+            self.switching.chat_loading_since = None;
         }
     }
 
@@ -132,7 +140,7 @@ impl App {
             self.follow_into_agent_app();
         }
         self.refresh_side_scope();
-        if let Some(places) = self.list_places_due.take() {
+        if let Some(places) = self.switching.list_places_due.take() {
             self.put_back_list_places(places);
         }
         if self.log_wanted_for(agent_id) {

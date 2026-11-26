@@ -33,8 +33,8 @@ impl App {
     pub(super) fn edit_input_in_editor(&mut self) {
         match create_input_file(&self.input.text) {
             Ok(path) => {
-                self.input_editor_file = Some(path.clone());
-                self.editor_request = Some(path);
+                self.pending.input_editor_file = Some(path.clone());
+                self.pending.editor_request = Some(path);
             }
             Err(e) => {
                 self.notifications.current = Some((
@@ -52,10 +52,10 @@ impl App {
         path: &Path,
         result: &std::io::Result<()>,
     ) -> bool {
-        if self.input_editor_file.as_deref() != Some(path) {
+        if self.pending.input_editor_file.as_deref() != Some(path) {
             return false;
         }
-        self.input_editor_file = None;
+        self.pending.input_editor_file = None;
         let text = match result {
             Ok(()) => std::fs::read_to_string(path).map_err(|e| e.to_string()),
             Err(e) => Err(e.to_string()),

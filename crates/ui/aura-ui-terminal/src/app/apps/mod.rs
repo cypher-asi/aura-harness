@@ -353,9 +353,9 @@ impl App {
     /// callers that do that part themselves.
     pub(super) fn set_agents_tab(&mut self, tab: AgentsTab) {
         self.agents_tab = tab;
-        self.pending_delete = None;
-        self.pending_remove_project = None;
-        self.pending_archive_channel = None;
+        self.pending.delete = None;
+        self.pending.remove_project = None;
+        self.pending.archive_channel = None;
     }
 
     /// Note what `app`, being left, has on screen, to show it again.

@@ -418,13 +418,13 @@ impl App {
             ),
             NotificationType::Warning,
         ));
-        self.pending_remove_project = Some(key);
+        self.pending.remove_project = Some(key);
     }
 
     /// Resolve a pending project removal with `key`. Returns `false` when
     /// nothing was pending.
     pub(in crate::app) fn handle_pending_remove_project(&mut self, key: KeyEvent) -> bool {
-        let Some(id) = self.pending_remove_project.take() else {
+        let Some(id) = self.pending.remove_project.take() else {
             return false;
         };
         if matches!(key.code, KeyCode::Char('y' | 'Y')) {

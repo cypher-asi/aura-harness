@@ -54,7 +54,8 @@ fn a_loading_chat_draws_no_welcome_and_says_it_loads_after_a_moment() {
     assert!(!text.contains("Type a message"), "{text}");
     assert!(!text.contains("Loading chat"), "a quick load says nothing");
 
-    app.chat_loading_since = Instant::now().checked_sub(super::super::run_log::LOADING_DELAY);
+    app.switching.chat_loading_since =
+        Instant::now().checked_sub(super::super::run_log::LOADING_DELAY);
     let text = drawn_text(&mut app);
     assert!(text.contains("Loading chat"), "{text}");
 

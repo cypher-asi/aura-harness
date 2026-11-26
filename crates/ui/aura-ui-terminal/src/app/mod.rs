@@ -3,6 +3,7 @@
 //! Manages the overall application state, conversation history,
 //! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
+mod agent_switch;
 mod agent_views;
 mod approval;
 mod apps;
@@ -36,6 +37,7 @@ mod mouse;
 mod notifications;
 mod panel_layout;
 mod panes;
+mod pending;
 mod plan_doc;
 pub mod plans;
 mod policies;
@@ -65,6 +67,7 @@ mod smooth;
 mod status;
 mod switching;
 pub mod tab_bar;
+mod ticks;
 mod tool_view;
 pub mod trace_feed;
 mod trace_json;
@@ -88,6 +91,7 @@ use crate::{
     },
     renderer::{ChatLineCache, GroupState},
 };
+use agent_switch::AgentSwitch;
 pub use approval::PendingApproval;
 pub use apps::{
     AgentsTab, ArchiveRow, BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice,
@@ -115,6 +119,7 @@ use panel_areas::{contains, tab_at};
 pub(crate) use panel_areas::{follow_selection, InputRows, InputView};
 use panel_layout::PanelLayout;
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
+use pending::Pending;
 pub(crate) use plan_doc::PlanDoc;
 pub use processes::SidePanelTab;
 pub use prose::{ProseMeasure, ProseRow};
@@ -125,8 +130,8 @@ use selection_state::SelectionState;
 pub use side_scope::SideScope;
 pub use smooth::ChatScroll;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use ticks::Ticks;
 use tokio::sync::mpsc;
 
 /// Maximum number of messages to keep in history. Every tool call, thinking
@@ -210,10 +215,9 @@ pub struct App {
     pub(super) input: InputState,
     /// Current status message
     pub(super) status: String,
-    /// Calls waiting for an answer, oldest first; the front one is shown.
-    /// Calls of one turn ask together, so one prompt must not replace
-    /// another.
-    pub(super) pending_approvals: VecDeque<PendingApproval>,
+    /// Things waiting on the user or the host: approvals, confirmations
+    /// and requests not yet taken
+    pub(super) pending: Pending,
     /// Chat lines below the bottom of the chat view (0 = following the end)
     pub(super) scroll_offset: usize,
     /// Rendered lines of each message, reused between frames
@@ -232,8 +236,6 @@ pub struct App {
     /// Groups of steps the user opened (`true`) or closed, by the id of
     /// their first message
     pub(super) group_open: HashMap<u64, bool>,
-    /// Whether verbose mode is enabled
-    pub(super) verbose: bool,
     /// Event sender (for sending events to kernel)
     pub(super) event_tx: Option<mpsc::Sender<UiEvent>>,
     /// Command receiver (for receiving commands from kernel)
@@ -248,16 +250,8 @@ pub struct App {
     pub(super) panels: PanelLayout,
     /// File tree of the active agent's sandbox
     pub(super) sandbox: SandboxTree,
-    /// Whether a tool may have changed files since the tree was read; the
-    /// next tick reads it again, once however many tools finished
-    pub(super) sandbox_stale: bool,
-    /// Animation frame counter for spinners
-    pub(super) animation_frame: usize,
-    /// Ticks until spinners turn again while nothing else animates
-    pub(super) spinner_wait: usize,
-    /// Whether the screen may look different since the host last drew
-    /// it; see [`Self::take_redraw`]
-    pub(super) redraw: bool,
+    /// Animation, redraw and alert bookkeeping kept from tick to tick
+    pub(super) ticks: Ticks,
     /// Kernel records list
     pub(super) records: VecDeque<RecordSummary>,
     /// Selected record index in the list
@@ -293,26 +287,8 @@ pub struct App {
     pub(super) project_moves: usize,
     /// Currently active agent ID
     pub(super) active_agent_id: String,
-    /// Chats of the agents not on screen, by agent ID
-    pub(super) views: HashMap<String, agent_views::AgentView>,
-    /// Whether the chat on screen holds its agent's history, so showing
-    /// it again needs no reload (see `agent_views`)
-    pub(super) chat_loaded: bool,
-    /// When the chat on screen started waiting for its history
-    pub(super) chat_loading_since: Option<Instant>,
-    /// When the chat on screen got its history after waiting for it, to
-    /// fade it in
-    pub(super) chat_revealed_at: Option<Instant>,
-    /// The agent the UI switched to on screen and asked the session for,
-    /// until the session confirms it; echoes of earlier switches are
-    /// ignored meanwhile
-    pub(super) switch_sent: Option<String>,
-    /// The agent the session last confirmed as active, to go back to when
-    /// a switch fails
-    pub(super) confirmed_agent: String,
-    /// What was typed for the agents not on screen, by agent ID; each
-    /// agent gets its draft back when it comes on screen again
-    pub(super) drafts: HashMap<String, queue_panel::Draft>,
+    /// Switching which agent is on screen
+    pub(super) switching: AgentSwitch,
     /// Whether the API is currently active
     pub(super) api_active: bool,
     /// Stored email during login flow (between email and password steps)
@@ -335,8 +311,6 @@ pub struct App {
     pub(super) model_picker: ModelPicker,
     /// Where the model selector's rows were drawn, for clicks
     pub(super) model_picker_layout: PickerLayout,
-    /// Cloud model to select once the in-chat login completes
-    pub(super) pending_model: Option<String>,
     /// First visible row of the agents list
     pub(super) agents_scroll: usize,
     /// The wheel moved the agents list away from the highlight; it stays
@@ -363,8 +337,6 @@ pub struct App {
     pane_splits: PaneSplits,
     /// Clickable item under the mouse pointer
     hover: Option<HoverTarget>,
-    /// When the in-flight turn started (`None` unless processing)
-    pub(super) processing_since: Option<Instant>,
     /// `[user@host dir]$ ` shown before the input line at the terminal prompt
     pub(super) shell_prompt: String,
     /// Width of the chat text area in the last frame (0 before the first)
@@ -376,11 +348,6 @@ pub struct App {
     /// Images of messages sent to a busy agent, by message text, until
     /// the chat shows the message
     pub(super) queued_images: VecDeque<(String, Vec<std::sync::Arc<image_preview::ImagePreview>>)>,
-    /// Agent (hex id) whose queue the last key put a message in. The next
-    /// key, if it is Enter on an empty prompt, sends that message now even
-    /// before the event loop's `SetQueue` shows it, and whatever panel has
-    /// the keys; any other key clears it.
-    pub(super) just_queued: Option<String>,
     /// Image thumbnails in the chat in the last frame
     pub(super) image_hits: Vec<ImageHit>,
     /// Copy buttons of code blocks in the chat in the last frame
@@ -402,14 +369,6 @@ pub struct App {
     /// Permanent agents, the highlighted row in the roster (one past the
     /// last agent is "+ New agent") and its first visible row
     pub(super) definitions: ListState<AgentDefinitionSummary>,
-    /// File to open in the editor before the next frame
-    pub(super) editor_request: Option<PathBuf>,
-    /// Temp file holding the input while Ctrl+G has it in the editor
-    pub(super) input_editor_file: Option<PathBuf>,
-    /// Permanent agent waiting for `y` to confirm its deletion
-    pub(super) pending_delete: Option<String>,
-    /// Agent whose project waits for `y` to confirm removing it
-    pub(super) pending_remove_project: Option<String>,
     /// Archived agents, each followed by the agents under it; the
     /// highlighted one, and the first visible row of the Archive
     pub(super) archived: ListState<AgentSummary>,
@@ -420,15 +379,10 @@ pub struct App {
     pub(super) folder_picker: Option<FolderPicker>,
     /// The new-channel form, while it is open
     pub(super) channel_form: Option<channel_form::ChannelForm>,
-    /// Id of the channel waiting for `y` to be archived
-    pub(super) pending_archive_channel: Option<String>,
     /// Menu a right click opened on the projects list
     pub(super) context_menu: Option<context_menu::ContextMenu>,
     /// The host's workspaces, which the menu offers to move a project to
     pub(super) workspaces: context_menu::Workspaces,
-    /// A move to another workspace the menu asked for, until the host
-    /// takes it
-    pub(super) workspace_move: Option<WorkspaceMove>,
     /// Usage, todos and jobs of the agent on screen
     pub(super) hud: Hud,
     /// Where each agent runs, and the HOST tab
@@ -441,10 +395,6 @@ pub struct App {
     pub(super) todos_open: bool,
     /// Whether the chat's live to-do checklist lists every item in full
     pub(super) todos_expanded: bool,
-    /// When to get the user's attention
-    pub(super) alert_settings: AlertSettings,
-    /// Messages for the user that the terminal should ring the bell for
-    pub(super) alerts: Vec<String>,
     /// Which view the panel below the Record panel shows
     pub(super) side_tab: SidePanelTab,
     /// Whose items the panel's lists show
@@ -456,8 +406,6 @@ pub struct App {
     /// Rows of the Processes tab: the processes `process_filter` lets
     /// through; the highlighted row, and the first visible row
     pub(super) processes: ListState<ProcessSummary>,
-    /// Process waiting for `y` to confirm killing it
-    pub(super) pending_kill: Option<String>,
     /// Run graph shown by `/graph`
     pub(super) graph: graph::GraphState,
     pub(super) trace_feed: trace_feed::TraceFeed,
@@ -467,11 +415,6 @@ pub struct App {
     pub(super) task_list: tasks::TaskList,
     /// First visible row of the TASKS tab
     pub(super) tasks_scroll: usize,
-    /// Where the side panel's lists were when the agent just put on
-    /// screen was last shown, put back once they are filtered for it
-    list_places_due: Option<side_scope::ListPlaces>,
-    /// Node to select once the requested graph loads.
-    pub(super) pending_graph_node: Option<String>,
     /// Flow between agents shown by the chat panel's GRAPH tab
     pub(super) flow: flow::FlowState,
     /// Benchmarks, and the one shown in the BENCH tab

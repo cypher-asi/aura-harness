@@ -103,7 +103,7 @@ impl App {
     /// Report the outcome of copying `chars` characters to the clipboard.
     ///
     pub fn notify_copied(&mut self, chars: usize, result: &std::io::Result<()>) {
-        self.redraw = true;
+        self.ticks.redraw = true;
         let what = self.select.copy_label.take();
         self.log.copy_finished(result.is_ok());
         self.notifications.current = Some(match result {
@@ -124,13 +124,13 @@ impl App {
     /// The approval prompt on screen: the oldest call still waiting.
     #[must_use]
     pub fn pending_approval(&self) -> Option<&PendingApproval> {
-        self.pending_approvals.front()
+        self.pending.approvals.front()
     }
 
     /// How many calls of the chat on screen wait for an answer.
     #[must_use]
     pub fn pending_approval_count(&self) -> usize {
-        self.pending_approvals.len()
+        self.pending.approvals.len()
     }
 
     /// Get the current notification.

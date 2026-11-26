@@ -10,7 +10,7 @@ impl App {
     pub(super) fn workspace_ui_command(&mut self, cmd: UiCommand) -> Option<UiCommand> {
         match cmd {
             UiCommand::SetSandboxRoot(root) => self.set_sandbox_root(root),
-            UiCommand::OpenEditor(path) => self.editor_request = Some(path),
+            UiCommand::OpenEditor(path) => self.pending.editor_request = Some(path),
             UiCommand::SetPlan(plan) => self.cmd_set_plan(plan),
             UiCommand::SetPlans(plans) => self.task_list.set_plans(plans),
             UiCommand::SetTasks(tasks) => self.task_list.set_tasks(tasks),
@@ -26,7 +26,7 @@ impl App {
     /// what changed while it was away.
     fn set_sandbox_root(&mut self, root: PathBuf) {
         if self.sandbox.root() == Some(root.as_path()) {
-            self.sandbox_stale = true;
+            self.ticks.sandbox_stale = true;
             return;
         }
         self.sandbox.set_root(root);
@@ -36,7 +36,7 @@ impl App {
     /// Re-read the sandbox tree on the next tick, so files the agent
     /// writes show up.
     pub(super) fn refresh_sandbox(&mut self) {
-        self.sandbox_stale = true;
+        self.ticks.sandbox_stale = true;
     }
 
     fn cmd_set_plan(&mut self, plan: Option<PlanView>) {

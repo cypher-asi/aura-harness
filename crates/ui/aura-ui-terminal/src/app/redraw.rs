@@ -26,7 +26,7 @@ impl App {
         if self.is_busy() {
             // The event loop denies the waiting call when it cancels the
             // turn, so the prompts can go now.
-            for approval in std::mem::take(&mut self.pending_approvals) {
+            for approval in std::mem::take(&mut self.pending.approvals) {
                 self.mark_awaiting_approval(&approval.id, false);
             }
             self.state = AppState::Idle;
@@ -77,10 +77,10 @@ impl App {
         }
 
         self.receive_commands();
-        if self.sandbox_stale && self.panels.sandbox_visible {
-            self.sandbox_stale = false;
+        if self.ticks.sandbox_stale && self.panels.sandbox_visible {
+            self.ticks.sandbox_stale = false;
             self.sandbox.refresh();
-            self.redraw = true;
+            self.ticks.redraw = true;
         }
         self.refresh_live_log();
 
@@ -88,27 +88,27 @@ impl App {
             self.state,
             AppState::Processing | AppState::AwaitingApproval
         ) {
-            self.processing_since.get_or_insert_with(Instant::now);
+            self.ticks.processing_since.get_or_insert_with(Instant::now);
         } else {
-            self.processing_since = None;
+            self.ticks.processing_since = None;
         }
         let turns = if shown || self.animates_every_tick() {
             true
         } else if self.spinners_turning() {
-            let due = self.spinner_wait == 0;
-            self.spinner_wait = if due {
+            let due = self.ticks.spinner_wait == 0;
+            self.ticks.spinner_wait = if due {
                 SPINNER_TICKS - 1
             } else {
-                self.spinner_wait - 1
+                self.ticks.spinner_wait - 1
             };
             due
         } else {
-            self.spinner_wait = 0;
+            self.ticks.spinner_wait = 0;
             false
         };
         if turns {
-            self.animation_frame = self.animation_frame.wrapping_add(1);
-            self.redraw = true;
+            self.ticks.animation_frame = self.ticks.animation_frame.wrapping_add(1);
+            self.ticks.redraw = true;
         }
     }
 
@@ -119,12 +119,12 @@ impl App {
     /// notification, the projects list's marks). The host draws when this
     /// says so, and after input, which this doesn't track.
     pub fn take_redraw(&mut self) -> bool {
-        std::mem::take(&mut self.redraw)
+        std::mem::take(&mut self.ticks.redraw)
     }
 
     /// Have the next [`Self::take_redraw`] say the screen changed.
     pub fn request_redraw(&mut self) {
-        self.redraw = true;
+        self.ticks.redraw = true;
     }
 
     /// Whether the screen changes from tick to tick: a spinner turns for

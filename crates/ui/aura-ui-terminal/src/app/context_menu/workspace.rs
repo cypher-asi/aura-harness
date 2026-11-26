@@ -17,7 +17,7 @@ impl App {
             return;
         }
         self.workspaces = workspaces;
-        self.redraw = true;
+        self.ticks.redraw = true;
         let targets = match self.context_menu.as_ref() {
             Some(menu) if menu.items.contains(&MenuItem::MoveToWorkspace) => {
                 self.workspace_targets(&menu.target)
@@ -41,7 +41,7 @@ impl App {
     /// The move to another workspace the user picked since the last call,
     /// if any. The host does it: the UI only asks.
     pub fn take_workspace_move(&mut self) -> Option<WorkspaceMove> {
-        self.workspace_move.take()
+        self.pending.workspace_move.take()
     }
 
     /// The workspaces' titles, as the host last gave them.

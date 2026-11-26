@@ -312,12 +312,12 @@ fn a_long_turn_alerts_when_it_finishes_and_a_short_one_does_not() {
     let mut app = App::new();
     app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
     app.process_command(for_agent("aa", UiCommand::TurnStarted { prompt: None }));
-    app.processing_since = Some(Instant::now());
+    app.ticks.processing_since = Some(Instant::now());
     app.process_command(for_agent("aa", UiCommand::Complete));
     assert!(app.take_alerts().is_empty());
 
     app.process_command(for_agent("aa", UiCommand::TurnStarted { prompt: None }));
-    app.processing_since = Instant::now().checked_sub(Duration::from_secs(30));
+    app.ticks.processing_since = Instant::now().checked_sub(Duration::from_secs(30));
     app.process_command(for_agent("aa", UiCommand::Complete));
     let alerts = app.take_alerts();
     assert_eq!(alerts.len(), 1);

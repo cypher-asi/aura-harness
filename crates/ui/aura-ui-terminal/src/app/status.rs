@@ -6,19 +6,19 @@ impl App {
     /// Get the user's attention according to `settings`.
     #[must_use]
     pub const fn with_alert_settings(mut self, settings: AlertSettings) -> Self {
-        self.alert_settings = settings;
+        self.ticks.alert_settings = settings;
         self
     }
 
     /// When the terminal gets the user's attention.
     #[must_use]
     pub const fn alert_settings(&self) -> &AlertSettings {
-        &self.alert_settings
+        &self.ticks.alert_settings
     }
 
     /// Messages to get the user's attention for since the last call.
     pub fn take_alerts(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.alerts)
+        std::mem::take(&mut self.ticks.alerts)
     }
 
     /// Set the event sender for communication with kernel.
@@ -37,13 +37,13 @@ impl App {
 
     /// Enable or disable verbose mode.
     pub fn set_verbose(&mut self, verbose: bool) {
-        self.verbose = verbose;
+        self.ticks.verbose = verbose;
     }
 
     /// Get whether verbose mode is enabled.
     #[must_use]
     pub const fn verbose(&self) -> bool {
-        self.verbose
+        self.ticks.verbose
     }
 
     /// Get the current application state.
@@ -109,7 +109,7 @@ impl App {
     #[must_use]
     pub fn working_times(&self) -> (Option<Duration>, Option<Duration>) {
         if let Some(run) = self.running_shell() {
-            let quiet = quiet_for(self.processing_since, &run.live);
+            let quiet = quiet_for(self.ticks.processing_since, &run.live);
             return (self.processing_elapsed(), quiet);
         }
         if let Some(tool) = self.running_tool() {
@@ -147,7 +147,7 @@ impl App {
     /// Time since the in-flight turn started.
     #[must_use]
     pub fn processing_elapsed(&self) -> Option<Duration> {
-        self.processing_since.map(|since| since.elapsed())
+        self.ticks.processing_since.map(|since| since.elapsed())
     }
 
     /// Usage, todos and jobs of the agent on screen.

@@ -26,12 +26,12 @@ impl App {
     }
 
     fn cmd_request_approval(&mut self, approval: PendingApproval) {
-        if self.pending_approvals.is_empty() {
+        if self.pending.approvals.is_empty() {
             self.status = format!("Waiting for approval to run {}", approval.tool);
         }
-        if !self.pending_approvals.iter().any(|a| a.id == approval.id) {
+        if !self.pending.approvals.iter().any(|a| a.id == approval.id) {
             self.mark_awaiting_approval(&approval.id, true);
-            self.pending_approvals.push_back(approval);
+            self.pending.approvals.push_back(approval);
         }
         self.state = AppState::AwaitingApproval;
     }
@@ -39,9 +39,9 @@ impl App {
     /// Drop the prompt for approval `id`, which stopped waiting; the turn
     /// goes on without it.
     fn cmd_close_approval(&mut self, id: &str) {
-        let before = self.pending_approvals.len();
-        self.pending_approvals.retain(|a| a.id != id);
-        if self.pending_approvals.len() < before {
+        let before = self.pending.approvals.len();
+        self.pending.approvals.retain(|a| a.id != id);
+        if self.pending.approvals.len() < before {
             self.mark_awaiting_approval(id, false);
             self.after_approval_closed();
         }
@@ -60,7 +60,7 @@ impl App {
     /// Show the next waiting prompt, or go back to the turn when none is
     /// left.
     pub(in crate::app) fn after_approval_closed(&mut self) {
-        if let Some(next) = self.pending_approvals.front() {
+        if let Some(next) = self.pending.approvals.front() {
             self.status = format!("Waiting for approval to run {}", next.tool);
         } else if self.state == AppState::AwaitingApproval {
             self.state = AppState::Processing;

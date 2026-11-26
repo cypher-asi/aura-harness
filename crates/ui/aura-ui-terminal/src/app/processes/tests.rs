@@ -98,7 +98,7 @@ fn selection_follows_the_process_across_updates() {
 fn kill_asks_first_and_only_for_live_killable_processes() {
     let (mut app, mut rx) = app();
     app.handle_key(key(KeyCode::Char('k')));
-    assert_eq!(app.pending_kill.as_deref(), Some("a"));
+    assert_eq!(app.pending.kill.as_deref(), Some("a"));
     app.handle_key(key(KeyCode::Char('y')));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::KillProcess(id)) if id == "a"));
 
@@ -110,7 +110,7 @@ fn kill_asks_first_and_only_for_live_killable_processes() {
     for index in [1, 2] {
         app.processes.selected = index;
         app.handle_key(key(KeyCode::Delete));
-        assert!(app.pending_kill.is_none());
+        assert!(app.pending.kill.is_none());
         assert!(app.notification().is_some());
     }
 }

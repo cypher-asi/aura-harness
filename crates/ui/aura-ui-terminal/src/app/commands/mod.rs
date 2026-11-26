@@ -32,11 +32,12 @@ impl App {
         self.plans = plans;
         self.model_picker.clamp(&self.models);
         let pending_ready = self
-            .pending_model
+            .pending
+            .model
             .as_deref()
             .is_some_and(|id| self.models.iter().any(|m| m.id == id && m.available));
         if pending_ready {
-            if let Some(id) = self.pending_model.take() {
+            if let Some(id) = self.pending.model.take() {
                 self.choose_model(&id);
             }
         }
@@ -50,7 +51,7 @@ impl App {
     }
 
     fn cmd_end_link(&mut self) {
-        self.pending_model = None;
+        self.pending.model = None;
         if self.state == AppState::LinkCode {
             self.state = AppState::Idle;
             self.input.text.clear();
@@ -77,7 +78,7 @@ impl App {
             return;
         }
         if !matches!(cmd, UiCommand::ForAgent { .. }) {
-            self.redraw = true;
+            self.ticks.redraw = true;
         }
         let unhandled = self
             .turn_ui_command(cmd)

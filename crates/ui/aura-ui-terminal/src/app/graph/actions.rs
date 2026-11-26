@@ -27,7 +27,7 @@ impl App {
         let rows = self.graph.rows();
         let last = rows.len().saturating_sub(1);
         self.graph.select_row(&rows, last);
-        if let Some(id) = self.pending_graph_node.take() {
+        if let Some(id) = self.pending.graph_node.take() {
             self.graph.select_id(&id);
         }
         self.open_detail(DetailView::Graph);

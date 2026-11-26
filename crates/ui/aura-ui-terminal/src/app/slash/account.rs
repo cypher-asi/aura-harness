@@ -111,7 +111,7 @@ impl App {
             .find(|m| m.id == id && !m.available)
             .map(|m| m.provider.clone().unwrap_or_default());
         if let Some(provider) = missing {
-            self.pending_model = Some(id.to_string());
+            self.pending.model = Some(id.to_string());
             match plan_provider(&provider) {
                 Some(plan) => self.start_link(plan, false),
                 None => {

@@ -109,7 +109,7 @@ fn test_a_message_to_members_does_not_wait_on_the_coordinator() {
     type_keys(&mut app, "@RE36 look");
     app.handle_key(KeyEvent::from(KeyCode::Enter));
     assert_ne!(app.state, AppState::Processing);
-    assert!(app.just_queued.is_none());
+    assert!(app.pending.just_queued.is_none());
     assert!(
         app.notifications
             .current

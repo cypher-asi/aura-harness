@@ -354,7 +354,8 @@ fn a_chat_that_was_said_to_be_loading_fades_in_once_loaded() {
     let (mut app, mut rx) = app_with_agents();
     app.handle_command("/agent 2");
     let _ = rx.try_recv();
-    app.chat_loading_since = Instant::now().checked_sub(super::super::run_log::LOADING_DELAY);
+    app.switching.chat_loading_since =
+        Instant::now().checked_sub(super::super::run_log::LOADING_DELAY);
     assert!(app.chat_loading_shown());
 
     load_chat_of(&mut app, "bb", "bb's history");

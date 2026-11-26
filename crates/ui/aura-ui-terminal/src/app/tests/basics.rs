@@ -48,7 +48,7 @@ fn test_cursor_movement() {
 #[test]
 fn test_approval_state() {
     let mut app = App::new();
-    app.pending_approvals.push_back(PendingApproval {
+    app.pending.approvals.push_back(PendingApproval {
         id: "test".to_string(),
         tool: "fs.write".to_string(),
         description: "Write file".to_string(),
@@ -57,7 +57,7 @@ fn test_approval_state() {
     app.state = AppState::AwaitingApproval;
 
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()));
-    assert!(app.pending_approvals.is_empty());
+    assert!(app.pending.approvals.is_empty());
     assert_eq!(
         app.state(),
         AppState::Processing,
@@ -85,7 +85,7 @@ fn test_state_transition_to_processing() {
 #[test]
 fn test_state_transition_to_awaiting_approval() {
     let mut app = App::new();
-    app.pending_approvals.push_back(PendingApproval {
+    app.pending.approvals.push_back(PendingApproval {
         id: "t1".to_string(),
         tool: "write_file".to_string(),
         description: "Write file".to_string(),

@@ -179,5 +179,5 @@ pub(super) fn assert_still_open(app: &App, rx: &mut mpsc::Receiver<UiEvent>, wha
     assert!(menu.submenu.is_some(), "{what}: the submenu stays");
     assert!(rx.try_recv().is_err(), "{what}: nothing runs");
     assert_eq!(app.state(), AppState::Idle, "{what}");
-    assert!(app.workspace_move.is_none(), "{what}");
+    assert!(app.pending.workspace_move.is_none(), "{what}");
 }

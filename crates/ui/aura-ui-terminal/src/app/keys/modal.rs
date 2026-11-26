@@ -43,7 +43,8 @@ impl App {
     /// way; Ctrl+C cancels it instead.
     pub(super) fn handle_approval_key(&mut self, key: KeyEvent) -> KeyResult {
         let always_offered = self
-            .pending_approvals
+            .pending
+            .approvals
             .front()
             .is_some_and(|a| !a.always.is_empty());
         let answer = match key.code {
@@ -52,7 +53,7 @@ impl App {
             KeyCode::Char('n' | 'N') | KeyCode::Esc => "Denied",
             _ => return KeyResult::continue_running(),
         };
-        if let Some(approval) = self.pending_approvals.pop_front() {
+        if let Some(approval) = self.pending.approvals.pop_front() {
             self.mark_awaiting_approval(&approval.id, false);
             let event = match key.code {
                 KeyCode::Char('y' | 'Y') => UiEvent::Approve(approval.id),
@@ -64,7 +65,7 @@ impl App {
             }
             self.status = format!("{answer}, continuing...");
         }
-        if self.pending_approvals.is_empty() {
+        if self.pending.approvals.is_empty() {
             self.state = AppState::Processing;
         } else {
             self.after_approval_closed();
@@ -90,7 +91,7 @@ impl App {
         self.input.text.clear();
         self.input.cursor_pos = 0;
         self.login_email.clear();
-        self.pending_model = None;
+        self.pending.model = None;
         self.notifications.current =
             Some(("Login cancelled".to_string(), NotificationType::Warning));
     }

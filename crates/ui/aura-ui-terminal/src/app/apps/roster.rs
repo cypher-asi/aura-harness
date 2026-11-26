@@ -60,12 +60,12 @@ impl App {
     /// File the user asked to edit, once. The terminal opens it in the
     /// editor and then calls [`Self::editor_closed`].
     pub fn take_editor_request(&mut self) -> Option<PathBuf> {
-        self.editor_request.take()
+        self.pending.editor_request.take()
     }
 
     /// Report that the editor opened for `path` exited.
     pub fn editor_closed(&mut self, path: PathBuf, result: &std::io::Result<()>) {
-        self.redraw = true;
+        self.ticks.redraw = true;
         if self.input_editor_closed(&path, result) {
             return;
         }
@@ -129,13 +129,13 @@ impl App {
             format!("Delete permanent agent {name}? Press y to confirm"),
             NotificationType::Warning,
         ));
-        self.pending_delete = Some(name);
+        self.pending.delete = Some(name);
     }
 
     /// Resolve a pending deletion with `key`. Returns `false` when nothing
     /// was pending.
     pub(in crate::app) fn handle_pending_delete(&mut self, key: KeyEvent) -> bool {
-        let Some(name) = self.pending_delete.take() else {
+        let Some(name) = self.pending.delete.take() else {
             return false;
         };
         if matches!(key.code, KeyCode::Char('y' | 'Y')) {

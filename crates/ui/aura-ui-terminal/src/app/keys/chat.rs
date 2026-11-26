@@ -217,7 +217,7 @@ impl App {
             });
         }
         if busy {
-            self.just_queued = Some(agent_id);
+            self.pending.just_queued = Some(agent_id);
         }
         KeyResult::continue_running()
     }

@@ -14,7 +14,7 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
         self.notifications.current = None;
         self.clear_selection();
-        let just_queued = self.just_queued.take();
+        let just_queued = self.pending.just_queued.take();
 
         // Enter right after queueing a message sends it now: the event
         // loop gets the message first, so its queue holds it even when the

@@ -146,19 +146,19 @@ impl App {
     #[must_use]
     pub fn spinner_char(&self) -> &'static str {
         const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        SPINNER_FRAMES[self.animation_frame % SPINNER_FRAMES.len()]
+        SPINNER_FRAMES[self.ticks.animation_frame % SPINNER_FRAMES.len()]
     }
 
     /// Frames drawn so far, to step animations by.
     #[must_use]
     pub const fn animation_frame(&self) -> usize {
-        self.animation_frame
+        self.ticks.animation_frame
     }
 
     /// Current frame of the ring shown beside thinking agents.
     #[must_use]
     pub fn aura_frame(&self) -> (String, ratatui::style::Color) {
-        crate::animation::aura_ring(self.animation_frame)
+        crate::animation::aura_ring(self.ticks.animation_frame)
     }
 
     /// Get the records list.

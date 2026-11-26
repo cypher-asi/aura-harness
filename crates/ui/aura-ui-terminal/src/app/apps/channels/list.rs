@@ -191,13 +191,13 @@ impl App {
             format!("Archive channel #{slug}? Press y to confirm"),
             NotificationType::Warning,
         ));
-        self.pending_archive_channel = Some(id);
+        self.pending.archive_channel = Some(id);
     }
 
     /// Resolve a pending channel archive with `key`. Returns `false` when
     /// nothing was pending.
     pub(in crate::app) fn handle_pending_archive_channel(&mut self, key: KeyEvent) -> bool {
-        let Some(id) = self.pending_archive_channel.take() else {
+        let Some(id) = self.pending.archive_channel.take() else {
             return false;
         };
         if matches!(key.code, KeyCode::Char('y' | 'Y')) {
