@@ -49,6 +49,21 @@ pub(super) fn str_arg<'a>(
         .ok_or(GitToolError::MissingArg(name))
 }
 
+/// Extract an optional string argument; missing, non-string and empty
+/// values are all `None`.
+pub(super) fn opt_str<'a>(args: &'a serde_json::Value, name: &str) -> Option<&'a str> {
+    args.get(name)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// The only branch pushes from this workspace may update, if the
+/// runtime pinned one ([`crate::ToolConfig::push_branch`]).
+pub(super) fn push_branch_for(ctx: &ToolContext) -> Option<&str> {
+    ctx.config.push_branch.as_deref()
+}
+
 /// Extract an optional boolean argument (`force` etc.). Defaults to
 /// `false` when missing or wrongly typed.
 pub(super) fn opt_bool(args: &serde_json::Value, name: &str) -> bool {

@@ -295,16 +295,6 @@ impl DomainApi for MockDomain {
         self.record("get_active_session");
         Ok(None)
     }
-    async fn orbit_api_call(
-        &self,
-        method: &str,
-        _path: &str,
-        _body: Option<&serde_json::Value>,
-        _jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
-        self.record("orbit_api_call");
-        Ok(format!("orbit:{method}"))
-    }
     async fn network_api_call(
         &self,
         method: &str,
@@ -428,20 +418,20 @@ async fn mutating_method_records_on_failure() {
 }
 
 #[tokio::test]
-async fn orbit_get_is_passthrough_post_is_recorded() {
+async fn network_get_is_passthrough_post_is_recorded() {
     let (kernel, store, _db, _ws) = build_kernel();
     let inner = Arc::new(MockDomain::new());
     let gw = KernelDomainGateway::new(inner.clone(), kernel.clone());
 
     let _ = gw
-        .orbit_api_call("GET", "/repos", None, None)
+        .network_api_call("GET", "/api/feed", None, None)
         .await
         .unwrap();
     let no_entries = count_domain_mutation_entries(&store, &kernel);
     assert!(no_entries.is_empty(), "GET must not record");
 
     let _ = gw
-        .orbit_api_call("POST", "/repos", None, None)
+        .network_api_call("POST", "/api/feed", None, None)
         .await
         .unwrap();
     let entries = count_domain_mutation_entries(&store, &kernel);

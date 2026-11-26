@@ -201,15 +201,6 @@ impl DomainApi for DummyDomain {
     ) -> anyhow::Result<Option<SessionDescriptor>> {
         Ok(None)
     }
-    async fn orbit_api_call(
-        &self,
-        _method: &str,
-        _path: &str,
-        _body: Option<&serde_json::Value>,
-        _jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
-        Ok(String::new())
-    }
     async fn network_api_call(
         &self,
         _method: &str,

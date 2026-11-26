@@ -148,6 +148,15 @@ pub const AURA_CLOUD_PRICE_DISK_GIB_HOUR: &str = "AURA_CLOUD_PRICE_DISK_GIB_HOUR
 /// that runs on the machines' glibc. Consumed by
 /// [`crate::CloudConfig::binary`].
 pub const AURA_CLOUD_BINARY: &str = "AURA_CLOUD_BINARY";
+/// The GitHub App cloud machines push as: its client id (`Iv23…`) or
+/// numeric app id. Consumed by [`crate::CloudConfig::github_app`].
+pub const AURA_GITHUB_APP_ID: &str = "AURA_GITHUB_APP_ID";
+/// PEM file holding that App's private key. Consumed by
+/// [`crate::CloudConfig::github_app`].
+pub const AURA_GITHUB_APP_PRIVATE_KEY_PATH: &str = "AURA_GITHUB_APP_PRIVATE_KEY_PATH";
+/// Whether cloud machines' repo tokens may also edit workflows
+/// (`workflows: write`). Consumed by [`crate::CloudConfig::github_app`].
+pub const AURA_GITHUB_APP_WORKFLOWS: &str = "AURA_GITHUB_APP_WORKFLOWS";
 
 /// The full list of env-var names this crate owns. Boundary tests use
 /// this to enforce that no other crate calls `std::env::var(...)` on
@@ -203,6 +212,9 @@ pub const ENV_VAR_NAMES: &[&str] = &[
     AURA_CLOUD_PRICE_MEM_GIB_HOUR,
     AURA_CLOUD_PRICE_DISK_GIB_HOUR,
     AURA_CLOUD_BINARY,
+    AURA_GITHUB_APP_ID,
+    AURA_GITHUB_APP_PRIVATE_KEY_PATH,
+    AURA_GITHUB_APP_WORKFLOWS,
 ];
 
 // ---------------------------------------------------------------------------

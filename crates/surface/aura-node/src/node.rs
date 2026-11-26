@@ -154,7 +154,6 @@ impl Node {
         let domain_api: Arc<dyn DomainApi> = Arc::new(HttpDomainApi::new(
             &self.config.aura_storage_url,
             &self.config.aura_network_url,
-            &self.config.orbit_url,
             self.config.aura_os_server_url.clone(),
         )?);
         info!(

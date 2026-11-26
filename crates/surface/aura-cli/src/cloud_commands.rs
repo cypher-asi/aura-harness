@@ -94,6 +94,17 @@ pub(crate) async fn cmd_node(args: NodeCommand) -> anyhow::Result<()> {
                 "plans with a placeholder: {filled} of {}",
                 parsed.plans.len()
             );
+            if let Some(git) = &parsed.git {
+                eprintln!(
+                    "git: branch {}, GitHub token {}",
+                    git.branch,
+                    if git.placeholder.is_some() {
+                        "placeholder set"
+                    } else {
+                        "none"
+                    }
+                );
+            }
             let claim = serde_json::to_vec(&parsed).context("encoding the claim")?;
             let data_dir = aura_node::NodeConfig::from_env().data_dir;
             let socket = aura_node::cloud_node::claim_socket_path(&data_dir);

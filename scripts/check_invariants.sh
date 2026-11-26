@@ -142,12 +142,16 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     Declared exception in docs/invariants.md.
 #   * Cloud agents (declared exception in docs/invariants.md):
 #     `crates/engine/aura-engine-cloud/src/delta.rs` and `snapshots.rs`
-#     read the project (`rev-parse`, `diff`, `ls-files`, `archive`) to
-#     pack what a machine needs; `crates/surface/aura-app/src/cloud/hub.rs`
-#     runs `git apply --3way` of a cloud agent's patch into its own
-#     project; `crates/surface/aura-node/src/gateway/handlers/cloud.rs`
-#     diffs the machine's workspace for that patch. No commit, fetch or
-#     push.
+#     read the project (`rev-parse`, `rev-list`, `diff`, `ls-files`,
+#     `config`) and `bundle create` its commits for a machine, and
+#     `delta.rs` fetches an agent's branch from the bundle its machine
+#     made into the project's branch of the same name, fast-forward only;
+#     `crates/surface/aura-app/src/cloud/hub.rs` runs `git apply --3way`
+#     of a cloud agent's patch into its own project;
+#     `crates/surface/aura-node/src/gateway/handlers/cloud.rs` diffs the
+#     machine's workspace for that patch, staging it in a scratch
+#     `GIT_INDEX_FILE` (`add`, `write-tree`). No commit, push, or call to
+#     a remote.
 #   * Test files.
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \

@@ -66,7 +66,6 @@ impl AutomatonBridge {
             domain,
             auth_token.map(String::from),
             project_id.map(String::from),
-            Some(workspace.to_string_lossy().into_owned()),
         ));
         let resolver = executor::build_tool_resolver(
             &self.catalog,

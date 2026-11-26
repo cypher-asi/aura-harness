@@ -117,14 +117,14 @@ mod tool_call_debug_tests {
 
     #[test]
     fn debug_redacts_jwt_in_top_level_args() {
-        // Real-world shape: the `git_commit_push` tool is called with
-        // a `jwt` field that must NEVER appear in logs.
+        // Real-world shape: domain tools get the session `jwt`
+        // injected into their args, and it must NEVER appear in logs.
         let call = ToolCall::new(
-            "git_commit_push",
+            "create_spec",
             json!({
                 "branch": "main",
                 "message": "task: completed",
-                "remote_url": "https://orbit.example.com/proj.git",
+                "remote_url": "https://github.com/acme/proj.git",
                 "jwt": "eyJhbGciOiJIUzI1NiIs.SECRETPAYLOAD.SECRETSIG",
             }),
         );
@@ -144,7 +144,7 @@ mod tool_call_debug_tests {
         // Non-sensitive fields must remain visible for debugging.
         assert!(rendered.contains("main"), "branch missing: {rendered}");
         assert!(
-            rendered.contains("https://orbit.example.com/proj.git"),
+            rendered.contains("https://github.com/acme/proj.git"),
             "remote_url missing: {rendered}"
         );
     }

@@ -51,7 +51,7 @@ pub struct RouterState {
     pub(crate) tool_config: ToolConfig,
     /// Canonical tool catalog (shared across sessions).
     pub(crate) catalog: Arc<ToolCatalog>,
-    /// Domain API for specs/tasks/project/orbit/network (None if no internal token).
+    /// Domain API for specs/tasks/project/network (None if no internal token).
     pub(crate) domain_api: Option<Arc<dyn DomainApi>>,
     /// Automaton controller for dev-loop lifecycle (None when domain API unavailable).
     pub(crate) automaton_controller: Option<Arc<dyn AutomatonController>>,

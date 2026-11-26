@@ -271,6 +271,12 @@ keyring = { version = "3", default-features = false, features = [
 # Sealed state-at-rest (Swarm TEE upgrade phase 5)
 aes-gcm = "0.10"
 zeroize = "1"
+# JWTs: ChatGPT id tokens, and the GitHub App JWTs the cloud hub signs.
+# `~10.3`: 10.3.0 fixes GHSA-h395-gr6q-cpjc and is the newest release that
+# still builds on the workspace MSRV (10.4+ needs Rust 1.88). The crypto
+# backend is aws-lc-rs: `rust_crypto` would pull in `rsa`, which carries an
+# unfixed advisory of its own (RUSTSEC-2023-0071).
+jsonwebtoken = { version = "~10.3", features = ["aws_lc_rs"] }
 
 [dev-dependencies]
 aura-app = { path = "crates/surface/aura-app" }

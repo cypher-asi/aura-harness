@@ -18,12 +18,15 @@
 //!   restart). Agents listed in `seal` are sealed: this node never runs
 //!   or appends for them again.
 //! - Tokens are compared in constant time and never logged.
+//! - The claim's GitHub token reaches git and `gh` only as its boxd
+//!   placeholder, in files only the machine's user can read
+//!   ([`write_git_files`]).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use aura_core_protocol::cloud::{HostStats, NodeClaim, NodeClaimed};
+use aura_core_protocol::cloud::{GitClaim, HostStats, NodeClaim, NodeClaimed};
 use aura_core_types::AgentId;
 use aura_engine_cloud::host::HostSampler;
 use axum::http::{HeaderMap, StatusCode};
@@ -59,8 +62,12 @@ pub struct CloudNode {
     /// filled at each claim.
     plans: RwLock<Option<Arc<PlanResolver>>>,
     claim: RwLock<Option<Claim>>,
+    /// The claim's git settings, without the placeholder.
+    git: RwLock<Option<GitClaim>>,
     sealed: RwLock<HashSet<AgentId>>,
     workspace: Option<PathBuf>,
+    /// Where git and `gh` look for their settings; `None` off the cloud.
+    home: Option<PathBuf>,
     sampler: Arc<Mutex<HostSampler>>,
 }
 
@@ -90,10 +97,23 @@ impl CloudNode {
             enabled: config.cloud_node,
             plans: RwLock::new(None),
             claim: RwLock::new(None),
+            git: RwLock::new(None),
             sealed: RwLock::new(HashSet::new()),
             workspace,
+            home: config.cloud_node.then(dirs::home_dir).flatten(),
             sampler: Arc::new(Mutex::new(HostSampler::new(disk_path, manifest))),
         })
+    }
+
+    /// The branch the hub placed this machine's agent on: the only one
+    /// its git tools push.
+    #[must_use]
+    pub fn git_branch(&self) -> Option<String> {
+        self.git
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|git| git.branch.clone())
     }
 
     /// Fill `plans` from every claim from now on (the node's model client
@@ -161,6 +181,11 @@ impl CloudNode {
         {
             plans.set(claim.owner.clone(), &claim.plans);
         }
+        *self.git.write().unwrap_or_else(PoisonError::into_inner) =
+            claim.git.clone().map(|git| GitClaim {
+                placeholder: None,
+                ..git
+            });
         *self.claim.write().unwrap_or_else(PoisonError::into_inner) = Some(Claim {
             node_id: claim.node_id,
             node_token: Zeroizing::new(claim.node_token),
@@ -261,6 +286,16 @@ pub async fn serve_claims(node: Arc<CloudNode>, path: PathBuf, port: u16) -> any
             let answer = match read {
                 Ok(Ok(_)) => match serde_json::from_slice::<NodeClaim>(&buf) {
                     Ok(claim) => {
+                        if let (Some(git), Some(home)) = (claim.git.clone(), node.home.clone()) {
+                            let written =
+                                tokio::task::spawn_blocking(move || write_git_files(&home, &git))
+                                    .await
+                                    .map_err(std::io::Error::other)
+                                    .and_then(|written| written);
+                            if let Err(err) = written {
+                                tracing::warn!(error = %err, "could not write the machine's git settings; pushes will fail");
+                            }
+                        }
                         serde_json::to_vec(&node.apply_claim(claim, port)).unwrap_or_default()
                     }
                     Err(err) => format!("{{\"error\":\"bad claim: {err}\"}}").into_bytes(),
@@ -387,7 +422,181 @@ pub fn fill_placeholders(
         plan.placeholder = Some(value);
         filled += 1;
     }
+    if let Some(git) = claim.git.as_mut() {
+        git.placeholder = None;
+        if let Some(env) = git.env.as_deref() {
+            if !aura_engine_cloud::names::is_repo_secret(env) {
+                return Err(format!("git names {env}, which is not a repository secret"));
+            }
+            if let Some(value) = lookup(env).filter(|v| !v.trim().is_empty()) {
+                let value = value.trim().to_string();
+                if !value.starts_with(aura_core_protocol::cloud::PLACEHOLDER_PREFIX) {
+                    return Err(format!(
+                        "{env} holds a value that is not a boxd placeholder; refusing to keep a GitHub token on this machine"
+                    ));
+                }
+                git.placeholder = Some(value);
+            }
+        }
+    }
     Ok(filled)
+}
+
+/// Whether `value` is a boxd placeholder that can go in a file line.
+fn is_placeholder(value: &str) -> bool {
+    value.len() > aura_core_protocol::cloud::PLACEHOLDER_PREFIX.len()
+        && value.starts_with(aura_core_protocol::cloud::PLACEHOLDER_PREFIX)
+        && value.chars().all(|c| c.is_ascii_graphic())
+}
+
+/// `value` as it may sit in a URL's user info.
+fn url_encoded(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+/// `value` inside a double-quoted YAML string.
+fn yaml_quoted(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Where git and `gh` read the settings [`write_git_files`] writes,
+/// under a home folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitFiles {
+    /// git's own settings (`~/.config/git/config`).
+    pub config: PathBuf,
+    /// The credential store git's helper reads.
+    pub credentials: PathBuf,
+    /// `gh`'s hosts file.
+    pub gh_hosts: PathBuf,
+}
+
+impl GitFiles {
+    /// The files under `home`.
+    #[must_use]
+    pub fn under(home: &Path) -> Self {
+        let config = home.join(".config");
+        Self {
+            config: config.join("git").join("config"),
+            credentials: config.join("aura").join("git-credentials"),
+            gh_hosts: config.join("gh").join("hosts.yml"),
+        }
+    }
+}
+
+/// Whether `value` can sit in a git config value unquoted.
+fn plain_config_value(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|c| !c.is_control() && !matches!(c, '"' | '\\' | '#' | ';'))
+}
+
+/// Write a file only the machine's user can read, replacing it whole.
+fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other(format!("{} has no folder", path.display())))?;
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)?;
+    let tmp = path.with_extension("aura-tmp");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    {
+        use std::io::Write;
+        let mut file = options.open(&tmp)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
+/// Set up git and `gh` for `git` (a claim's, its placeholder filled):
+/// the bot as commit author, `git push` pushing the current branch, and,
+/// when the claim has a token, the placeholder as the password git sends
+/// to `github.com` and the token `gh` sends to its API. Each run replaces
+/// the files whole; a claim without a token removes the token files.
+/// Blocking IO; spawns nothing.
+///
+/// # Errors
+///
+/// When a file can't be written, or the placeholder is not one.
+pub fn write_git_files(home: &Path, git: &GitClaim) -> std::io::Result<()> {
+    let files = GitFiles::under(home);
+    let name = git
+        .author_name
+        .as_deref()
+        .filter(|name| plain_config_value(name))
+        .unwrap_or("aura-agent");
+    let email = git
+        .author_email
+        .as_deref()
+        .filter(|email| plain_config_value(email))
+        .unwrap_or("aura-agent@localhost");
+    let mut config =
+        format!("[user]\n\tname = {name}\n\temail = {email}\n[push]\n\tdefault = current\n");
+    match git.placeholder.as_deref() {
+        Some(placeholder) => {
+            if !is_placeholder(placeholder) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "the git token is not a boxd placeholder",
+                ));
+            }
+            let store = files.credentials.to_string_lossy().into_owned();
+            if !store
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+            {
+                return Err(std::io::Error::other(format!(
+                    "{store} can't be named in a credential helper"
+                )));
+            }
+            write_private(
+                &files.credentials,
+                &format!(
+                    "https://x-access-token:{}@github.com\n",
+                    url_encoded(placeholder)
+                ),
+            )?;
+            write_private(
+                &files.gh_hosts,
+                &format!(
+                    "github.com:\n    oauth_token: {}\n    user: {}\n    git_protocol: https\n",
+                    yaml_quoted(placeholder),
+                    yaml_quoted(name)
+                ),
+            )?;
+            // The empty helper drops any helper set elsewhere for GitHub.
+            config.push_str(&format!(
+                "[credential \"https://github.com\"]\n\thelper =\n\thelper = store --file {store}\n"
+            ));
+        }
+        None => {
+            for stale in [&files.credentials, &files.gh_hosts] {
+                match std::fs::remove_file(stale) {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+    }
+    write_private(&files.config, &config)
 }
 
 /// Send `claim` (JSON) to the node listening on `path` and return its
@@ -456,6 +665,7 @@ mod tests {
             seal,
             owner: None,
             plans: Vec::new(),
+            git: None,
         }
     }
 
@@ -550,7 +760,106 @@ mod tests {
                 system_preamble: None,
                 placeholder: None,
             }],
+            git: None,
         }
+    }
+
+    const REPO_SECRET: &str = "AURA_GH_INST01_0A1B2C3D";
+
+    fn git_claim(placeholder: Option<&str>) -> GitClaim {
+        GitClaim {
+            branch: "aura/reviewer-re36".into(),
+            remote_url: Some("https://github.com/acme/app.git".into()),
+            env: Some(REPO_SECRET.into()),
+            placeholder: placeholder.map(str::to_string),
+            author_name: Some("aura-agents[bot]".into()),
+            author_email: Some("4242+aura-agents[bot]@users.noreply.github.com".into()),
+        }
+    }
+
+    #[test]
+    fn the_git_placeholder_is_filled_like_the_plans() {
+        let mut claim = claim(Vec::new());
+        claim.git = Some(git_claim(Some("bxds_sent-by-the-hub")));
+        fill_placeholders(&mut claim, |name| {
+            (name == REPO_SECRET).then(|| "bxds_gh123".to_string())
+        })
+        .expect("filled");
+        assert_eq!(
+            claim.git.as_ref().and_then(|g| g.placeholder.as_deref()),
+            Some("bxds_gh123")
+        );
+
+        let mut unset = claim.clone();
+        fill_placeholders(&mut unset, |_| None).expect("unset");
+        assert_eq!(unset.git.and_then(|g| g.placeholder), None);
+
+        let mut leaked = claim.clone();
+        let err = fill_placeholders(&mut leaked, |_| Some("ghs_realtoken".into()))
+            .expect_err("real token");
+        assert!(
+            err.contains("not a boxd placeholder") && !err.contains("ghs_"),
+            "{err}"
+        );
+
+        let mut foreign = claim.clone();
+        if let Some(git) = foreign.git.as_mut() {
+            git.env = Some("AURA_A11CE000_INST01_CLAUDE".into());
+        }
+        let err = fill_placeholders(&mut foreign, |_| Some("bxds_x".into())).expect_err("plan");
+        assert!(err.contains("not a repository secret"), "{err}");
+    }
+
+    #[test]
+    fn git_files_hold_only_the_placeholder_and_only_the_user_reads_them() {
+        let home = tempfile::tempdir().expect("tempdir");
+        write_git_files(home.path(), &git_claim(Some("bxds_gh123"))).expect("written");
+        let files = GitFiles::under(home.path());
+        let config = std::fs::read_to_string(&files.config).expect("config");
+        assert!(config.contains("name = aura-agents[bot]"), "{config}");
+        assert!(config.contains("email = 4242+aura-agents[bot]@users.noreply.github.com"));
+        assert!(config.contains("default = current"));
+        assert!(config.contains(&format!(
+            "helper = store --file {}",
+            files.credentials.display()
+        )));
+        assert!(!config.contains("bxds_"), "no token in git's own settings");
+        assert_eq!(
+            std::fs::read_to_string(&files.credentials).expect("store"),
+            "https://x-access-token:bxds_gh123@github.com\n"
+        );
+        let hosts = std::fs::read_to_string(&files.gh_hosts).expect("hosts");
+        assert!(hosts.contains("oauth_token: \"bxds_gh123\""), "{hosts}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for file in [&files.credentials, &files.gh_hosts] {
+                let mode = std::fs::metadata(file).expect("stat").permissions().mode();
+                assert_eq!(mode & 0o777, 0o600, "{}", file.display());
+            }
+        }
+
+        // A re-claim without a token takes the token files away.
+        write_git_files(home.path(), &git_claim(None)).expect("rewritten");
+        assert!(!files.credentials.exists() && !files.gh_hosts.exists());
+        let config = std::fs::read_to_string(&files.config).expect("config");
+        assert!(!config.contains("credential"), "{config}");
+
+        let err = write_git_files(home.path(), &git_claim(Some("ghs_real"))).expect_err("real");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(!files.credentials.exists());
+    }
+
+    #[test]
+    fn the_claimed_branch_is_kept_without_the_placeholder() {
+        let node = node();
+        assert_eq!(node.git_branch(), None);
+        let mut claimed = claim(Vec::new());
+        claimed.git = Some(git_claim(Some("bxds_gh123")));
+        node.apply_claim(claimed, 8080);
+        assert_eq!(node.git_branch().as_deref(), Some("aura/reviewer-re36"));
+        let kept = node.git.read().expect("lock").clone().expect("git");
+        assert_eq!(kept.placeholder, None);
     }
 
     #[test]

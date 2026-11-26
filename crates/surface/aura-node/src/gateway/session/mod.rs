@@ -80,7 +80,7 @@ pub(crate) struct WsContext {
     pub(crate) auth_token: Option<String>,
     /// Canonical tool catalog (shared across sessions).
     pub(crate) catalog: Arc<ToolCatalog>,
-    /// Domain API for native spec/task/project/orbit/network tool execution.
+    /// Domain API for native spec/task/project/network tool execution.
     pub(crate) domain_api: Option<Arc<dyn DomainApi>>,
     /// Automaton controller for dev-loop lifecycle (None when domain API unavailable).
     pub(crate) automaton_controller: Option<Arc<dyn AutomatonController>>,
@@ -119,12 +119,17 @@ impl WsContext {
         state: &crate::gateway::RouterState,
         auth_token: Option<String>,
     ) -> Self {
+        let mut tool_config = state.tool_config.clone();
+        // A cloud agent pushes its own branch only.
+        if let Some(branch) = state.cloud.git_branch() {
+            tool_config.push_branch = Some(branch);
+        }
         Self {
             workspace_base: state.config.workspaces_path(),
             provider: state.provider.clone(),
             store: state.store.clone(),
             scheduler: state.scheduler.clone(),
-            tool_config: state.tool_config.clone(),
+            tool_config,
             auth_token,
             catalog: state.catalog.clone(),
             domain_api: state.domain_api.clone(),

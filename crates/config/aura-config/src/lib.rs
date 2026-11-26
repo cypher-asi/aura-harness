@@ -100,6 +100,9 @@
 //! | `AURA_CLOUD_PRICE_MEM_GIB_HOUR` | f64 | boxd's | [`CloudConfig::price_mem_gib_hour`] |
 //! | `AURA_CLOUD_PRICE_DISK_GIB_HOUR` | f64 | boxd's | [`CloudConfig::price_disk_gib_hour`] |
 //! | `AURA_CLOUD_BINARY` | path | unset (the hub picks) | [`CloudConfig::binary`] |
+//! | `AURA_GITHUB_APP_ID` | string | unset (no pushes from cloud machines) | [`CloudConfig::github_app`] |
+//! | `AURA_GITHUB_APP_PRIVATE_KEY_PATH` | path | unset | [`CloudConfig::github_app`] |
+//! | `AURA_GITHUB_APP_WORKFLOWS` | bool | `false` | [`GithubAppConfig::workflows`] |
 //!
 //! Tool-sandbox knobs (`file_ops::SKIP_DIRS`, `INCLUDE_EXTENSIONS`),
 //! console formatting constants, transport-layer debug / emergency /
@@ -172,8 +175,8 @@ pub use agent::AgentConfig;
 pub use aura_home::{AuraHome, AuraHomeError, AuraHomeSource};
 pub use automaton::AutomatonConfig;
 pub use cloud::{
-    BoxdApiKey, BoxdCredential, BoxdToken, CloudConfig, MachineSize, MachineSizeError,
-    MISSING_CREDENTIAL_NOTICE,
+    BoxdApiKey, BoxdCredential, BoxdToken, CloudConfig, GithubAppConfig, MachineSize,
+    MachineSizeError, MISSING_CREDENTIAL_NOTICE,
 };
 pub use compaction::{CompactionConfig, COMPACTION_TRIGGER_DEFAULT};
 pub use conflict::ConflictConfig;

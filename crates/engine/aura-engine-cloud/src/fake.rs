@@ -156,6 +156,14 @@ impl FakeProvider {
         self.state.lock().machines.keys().cloned().collect()
     }
 
+    /// Put a file on a machine, as a command run there would.
+    pub fn put_file(&self, machine: &str, path: &str, bytes: Vec<u8>) {
+        self.state
+            .lock()
+            .files
+            .insert((machine.to_string(), path.to_string()), bytes);
+    }
+
     /// A file uploaded to a machine.
     #[must_use]
     pub fn file(&self, machine: &str, path: &str) -> Option<Vec<u8>> {

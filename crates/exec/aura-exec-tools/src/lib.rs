@@ -203,6 +203,7 @@ pub const DEFAULT_AUTONOMOUS_DEV_LOOP_BINARIES: &[&str] = &[
     "cmd",
     "dir",
     "dpkg",
+    "gh",
     "git",
     "go",
     "make",
@@ -262,17 +263,16 @@ pub struct ToolConfig {
     pub max_async_timeout_ms: u64,
     /// Per-attempt timeout for `git push` (milliseconds).
     ///
-    /// Push is a network operation against Orbit and on a healthy
-    /// remote completes well under five seconds. Anything past a
-    /// handful of seconds is overwhelmingly the orbit endpoint
-    /// being unreachable rather than a slow-but-progressing push,
-    /// so the budget is tuned tight: short timeout, few attempts,
-    /// fail fast and let the dev-loop / agent move on instead of
-    /// burning minutes per task on a wedged network. The knob is
-    /// still its own field (and separate from
+    /// Push is a network operation and on a healthy remote completes
+    /// well under five seconds. Anything past a handful of seconds is
+    /// overwhelmingly the remote being unreachable rather than a
+    /// slow-but-progressing push, so the budget is tuned tight: short
+    /// timeout, few attempts, fail fast and let the dev-loop / agent
+    /// move on instead of burning minutes per task on a wedged
+    /// network. The knob is still its own field (and separate from
     /// `max_async_timeout_ms`, clamped to 120s for every other git
     /// operation inside `git_tool::workspace_timeout`) so operators
-    /// who run against a slow self-hosted Orbit can raise it
+    /// who push large histories or to a slow remote can raise it
     /// without inflating every other async command's ceiling.
     pub git_push_timeout_ms: u64,
     /// Number of `git push` attempts, including the first. Values
@@ -286,6 +286,10 @@ pub struct ToolConfig {
     /// tries") rather than three-plus so a dead remote doesn't burn
     /// the agent's wall-clock budget.
     pub git_push_attempts: u32,
+    /// The only branch `git_push` and `git_commit_push` may update.
+    /// A cloud node sets it to its agent's own branch; `None` allows
+    /// any branch.
+    pub push_branch: Option<String>,
     /// Extra filesystem paths to allow beyond the workspace root.
     /// Granted by skill permissions at runtime.
     pub extra_allowed_paths: Vec<std::path::PathBuf>,
@@ -319,11 +323,12 @@ impl ToolConfig {
             // worst-case before we surrender and let the agent move
             // on. Bumped down from the legacy 5min × 3 (2s/5s/15s
             // backoff) = ~15min budget that used to wedge dev-loop
-            // runs whenever Orbit was unreachable. Operators who
-            // host a slow self-hosted Orbit can raise these
-            // explicitly on the tool config.
+            // runs whenever the remote was unreachable. Operators
+            // with a slow remote can raise these explicitly on the
+            // tool config.
             git_push_timeout_ms: 10_000,
             git_push_attempts: 2,
+            push_branch: None,
             extra_allowed_paths: vec![],
         }
     }
@@ -408,6 +413,14 @@ mod default_tests {
         assert!(
             cfg.command.binary_allowlist.contains(&"git".to_string()),
             "workspace synchronization needs git"
+        );
+        assert!(
+            cfg.command.binary_allowlist.contains(&"gh".to_string()),
+            "cloud agents open pull requests with gh"
+        );
+        assert_eq!(
+            cfg.push_branch, None,
+            "only a cloud node pins a push branch"
         );
         assert!(
             cfg.command

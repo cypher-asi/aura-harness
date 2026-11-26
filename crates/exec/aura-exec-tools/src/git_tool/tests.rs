@@ -7,10 +7,14 @@
 
 use super::executor::spawn_git;
 use super::push::{
-    push_backoff_for_attempt, stderr_looks_remote_exhausted, stderr_looks_transient,
+    check_branch_name, push_backoff_for_attempt, stderr_looks_remote_exhausted,
+    stderr_looks_transient, stderr_looks_unauthorized,
 };
-use super::redact::{build_auth_url, redact_url};
-use super::{git_commit_impl, git_push_impl, GitCommitTool, GitToolError, PushPolicy};
+use super::redact::redact_url;
+use super::{
+    git_commit_impl, git_commit_push_impl, git_push_impl, GitCommitPushTool, GitCommitTool,
+    GitPushTool, GitToolError, PushPolicy, PushTarget,
+};
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 use std::path::Path;
@@ -46,6 +50,46 @@ async fn init_repo(dir: &Path) {
             .await
             .expect("git config");
         assert!(s.status.success(), "git config {k} failed: {s:?}");
+    }
+}
+
+async fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .await
+        .expect("git");
+    assert!(out.status.success(), "git {args:?} failed: {out:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// A repo on branch `work` with one commit, whose `origin` is a bare
+/// repo next to it. Returns (parent dir, repo, bare origin).
+async fn repo_with_bare_origin() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let parent = TempDir::new().unwrap();
+    let origin = parent.path().join("origin.git");
+    let repo = parent.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git(parent.path(), &["init", "-q", "--bare", "origin.git"]).await;
+    init_repo(&repo).await;
+    git(&repo, &["checkout", "-q", "-b", "work"]).await;
+    git(
+        &repo,
+        &["remote", "add", "origin", &origin.to_string_lossy()],
+    )
+    .await;
+    std::fs::write(repo.join("a.txt"), b"a").unwrap();
+    git_commit_impl(&repo, "seed", Duration::from_secs(10))
+        .await
+        .expect("seed commit");
+    (parent, repo, origin)
+}
+
+fn to_branch(branch: &str) -> PushTarget<'_> {
+    PushTarget {
+        branch: Some(branch),
+        ..PushTarget::default()
     }
 }
 
@@ -145,12 +189,19 @@ async fn spawn_git_times_out() {
     let _ = git_commit_impl(dir.path(), "seed", Duration::from_secs(10))
         .await
         .expect("seed commit");
+    git(
+        dir.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://10.255.255.1/unreachable.git",
+        ],
+    )
+    .await;
     let err = git_push_impl(
         dir.path(),
-        "https://10.255.255.1/unreachable.git",
-        "main",
-        "fake-token",
-        false,
+        to_branch("main"),
         PushPolicy::single(Duration::from_millis(50)),
     )
     .await
@@ -159,60 +210,281 @@ async fn spawn_git_times_out() {
 }
 
 #[test]
-fn build_auth_url_injects_token() {
-    let url = build_auth_url("https://orbit.example.com/acme/repo.git", "jwt123").unwrap();
-    assert_eq!(
-        url,
-        "https://x-token:jwt123@orbit.example.com/acme/repo.git"
-    );
-}
-
-#[test]
-fn build_auth_url_strips_existing_credentials() {
-    let url = build_auth_url("https://olduser:oldpass@orbit.example.com/r.git", "new").unwrap();
-    assert_eq!(url, "https://x-token:new@orbit.example.com/r.git");
-}
-
-#[test]
-fn build_auth_url_rejects_non_http_schemes() {
-    let err = build_auth_url("ssh://git@github.com/aura/repo.git", "jwt").unwrap_err();
-    assert!(matches!(err, GitToolError::InvalidUrl(_)));
-}
-
-#[test]
-fn build_auth_url_rejects_control_chars_in_token() {
-    let err = build_auth_url("https://orbit/r.git", "abc def").unwrap_err();
-    assert!(matches!(err, GitToolError::InvalidUrl(_)));
-    let err = build_auth_url("https://orbit/r.git", "abc\ndef").unwrap_err();
-    assert!(matches!(err, GitToolError::InvalidUrl(_)));
-}
-
-#[test]
 fn redact_url_masks_user_info() {
     assert_eq!(
-        redact_url("https://x-token:secret@orbit.example.com/a/b.git"),
-        "https://***@orbit.example.com/a/b.git"
+        redact_url("https://x-access-token:secret@github.com/a/b.git"),
+        "https://***@github.com/a/b.git"
     );
     assert_eq!(
-        redact_url("https://orbit.example.com/a/b.git"),
-        "https://orbit.example.com/a/b.git"
+        redact_url("https://github.com/a/b.git"),
+        "https://github.com/a/b.git"
     );
+}
+
+#[test]
+fn push_schemas_take_no_credentials() {
+    for definition in [GitPushTool.definition(), GitCommitPushTool.definition()] {
+        let schema = definition.input_schema.to_string();
+        for field in ["jwt", "token", "remote_url", "password"] {
+            assert!(
+                !schema.contains(&format!("\"{field}\"")),
+                "{} takes {field}: {schema}",
+                definition.name
+            );
+        }
+        assert!(schema.contains("\"branch\""), "{schema}");
+    }
+    let required = GitCommitPushTool.definition().input_schema["required"].clone();
+    assert_eq!(required, serde_json::json!(["message"]));
+    assert!(GitPushTool.definition().input_schema["required"].is_null());
 }
 
 #[tokio::test]
-async fn git_push_rejects_missing_fields() {
+async fn git_push_without_origin_says_so() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
     let dir = TempDir::new().unwrap();
+    init_repo(dir.path()).await;
+    std::fs::write(dir.path().join("a.txt"), b"a").unwrap();
+    git_commit_impl(dir.path(), "seed", Duration::from_secs(10))
+        .await
+        .expect("seed commit");
     let err = git_push_impl(
         dir.path(),
-        "",
-        "main",
-        "jwt",
-        false,
+        to_branch("main"),
         PushPolicy::single(Duration::from_secs(5)),
     )
     .await
     .unwrap_err();
-    assert!(matches!(err, GitToolError::MissingArg("remote_url")));
+    assert!(matches!(err, GitToolError::NoOrigin), "got {err:?}");
+}
+
+#[tokio::test]
+async fn git_push_to_a_bare_origin_pushes_the_current_branch_and_tracks_it() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let (_parent, repo, origin) = repo_with_bare_origin().await;
+    let pushed = git_push_impl(
+        &repo,
+        PushTarget::default(),
+        PushPolicy::single(Duration::from_secs(20)),
+    )
+    .await
+    .expect("push");
+    assert_eq!(pushed.branch, "work");
+    assert_eq!(pushed.commits.len(), 1, "{pushed:?}");
+    assert_eq!(pushed.commits[0].message, "seed");
+    let head = git(&repo, &["rev-parse", "HEAD"]).await;
+    assert_eq!(git(&origin, &["rev-parse", "refs/heads/work"]).await, head);
+    assert_eq!(
+        git(&repo, &["rev-parse", "--abbrev-ref", "work@{upstream}"]).await,
+        "origin/work",
+        "pushing the current branch makes it track origin"
+    );
+
+    // Nothing new: the next push lists no commits.
+    let again = git_push_impl(
+        &repo,
+        PushTarget::default(),
+        PushPolicy::single(Duration::from_secs(20)),
+    )
+    .await
+    .expect("push again");
+    assert!(again.commits.is_empty(), "{again:?}");
+
+    // Another branch name pushes HEAD there without retargeting `work`.
+    git_push_impl(
+        &repo,
+        to_branch("feature/x"),
+        PushPolicy::single(Duration::from_secs(20)),
+    )
+    .await
+    .expect("push to another name");
+    assert_eq!(
+        git(&origin, &["rev-parse", "refs/heads/feature/x"]).await,
+        head
+    );
+    assert_eq!(
+        git(&repo, &["rev-parse", "--abbrev-ref", "work@{upstream}"]).await,
+        "origin/work"
+    );
+}
+
+#[tokio::test]
+async fn a_pinned_branch_refuses_every_other_branch() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let (_parent, repo, origin) = repo_with_bare_origin().await;
+    let pinned = |branch: Option<&'static str>, force: bool| PushTarget {
+        branch,
+        force,
+        only_branch: Some("work"),
+    };
+    for (branch, force) in [(Some("main"), false), (Some("main"), true)] {
+        let err = git_push_impl(
+            &repo,
+            pinned(branch, force),
+            PushPolicy::single(Duration::from_secs(20)),
+        )
+        .await
+        .expect_err("other branch");
+        assert!(
+            matches!(&err, GitToolError::BranchNotAllowed { branch, allowed } if branch == "main" && allowed == "work"),
+            "got {err:?}"
+        );
+    }
+    // The current branch is checked too: on `other`, a bare push is refused.
+    git(&repo, &["checkout", "-q", "-b", "other"]).await;
+    let err = git_push_impl(
+        &repo,
+        pinned(None, false),
+        PushPolicy::single(Duration::from_secs(20)),
+    )
+    .await
+    .expect_err("current branch is not the pinned one");
+    assert!(
+        matches!(err, GitToolError::BranchNotAllowed { .. }),
+        "{err:?}"
+    );
+    let refs = git(&origin, &["for-each-ref", "--format=%(refname)"]).await;
+    assert!(refs.is_empty(), "nothing reached origin: {refs}");
+
+    // Its own branch, forced or not, goes through.
+    git_push_impl(
+        &repo,
+        pinned(Some("work"), true),
+        PushPolicy::single(Duration::from_secs(20)),
+    )
+    .await
+    .expect("own branch");
+    assert!(!git(&origin, &["rev-parse", "refs/heads/work"])
+        .await
+        .is_empty());
+
+    // Through the tool, the pin comes from the config.
+    use crate::sandbox::Sandbox;
+    let config = crate::ToolConfig {
+        push_branch: Some("work".into()),
+        ..Default::default()
+    };
+    let ctx = ToolContext::new(Sandbox::new(&repo).unwrap(), config);
+    let err = GitPushTool
+        .execute(&ctx, serde_json::json!({ "branch": "main" }))
+        .await
+        .expect_err("tool refuses other branches");
+    assert!(
+        matches!(&err, ToolError::InvalidArguments(msg) if msg.contains("work")),
+        "got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn commit_push_reports_the_commit_when_the_push_is_refused() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let (_parent, repo, _origin) = repo_with_bare_origin().await;
+    std::fs::write(repo.join("b.txt"), b"b").unwrap();
+    let outcome = git_commit_push_impl(
+        &repo,
+        "more",
+        PushTarget {
+            branch: Some("main"),
+            force: false,
+            only_branch: Some("work"),
+        },
+        Duration::from_secs(10),
+        PushPolicy::single(Duration::from_secs(20)),
+    )
+    .await
+    .expect("commit");
+    assert!(outcome.commit_sha.is_some());
+    assert!(matches!(
+        outcome.push_result,
+        Err(GitToolError::BranchNotAllowed { .. })
+    ));
+}
+
+#[tokio::test]
+async fn a_detached_head_needs_a_branch() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let (_parent, repo, _origin) = repo_with_bare_origin().await;
+    git(&repo, &["checkout", "-q", "--detach"]).await;
+    let err = git_push_impl(
+        &repo,
+        PushTarget::default(),
+        PushPolicy::single(Duration::from_secs(20)),
+    )
+    .await
+    .expect_err("detached");
+    assert!(matches!(err, GitToolError::DetachedHead), "{err:?}");
+}
+
+#[test]
+fn branch_names_that_would_be_options_or_refspecs_are_refused() {
+    for good in ["main", "aura/reviewer-re36", "feature/x.y", "v1_2"] {
+        assert!(check_branch_name(good).is_ok(), "{good}");
+    }
+    for bad in [
+        "-f",
+        "--delete",
+        "a:b",
+        "HEAD:main",
+        "a..b",
+        "a b",
+        "x.lock",
+        "a/",
+        "/a",
+        "a@{1}",
+        "a~1",
+        "a^",
+        "a\nb",
+    ] {
+        assert!(check_branch_name(bad).is_err(), "{bad:?}");
+    }
+    assert!(matches!(
+        check_branch_name(""),
+        Err(GitToolError::MissingArg("branch"))
+    ));
+}
+
+#[test]
+fn refused_credentials_are_neither_transient_nor_retried() {
+    for stderr in [
+        "remote: Invalid username or token. Password authentication is not supported.\n\
+         fatal: Authentication failed for 'https://github.com/acme/app.git/'",
+        "remote: Write access to repository not granted.\n\
+         fatal: unable to access 'https://github.com/acme/app.git/': The requested URL returned error: 403",
+        "remote: Repository not found.\nfatal: repository 'https://github.com/acme/app.git/' not found",
+        "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+        "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+    ] {
+        assert!(stderr_looks_unauthorized(stderr), "{stderr}");
+        assert!(!stderr_looks_transient(stderr), "{stderr}");
+    }
+    assert!(!stderr_looks_unauthorized("error: RPC failed; result=18"));
+    let cloud = GitToolError::Unauthorized {
+        remote: "https://github.com/acme/app.git".into(),
+        cloud: true,
+        stderr: "403".into(),
+    };
+    assert!(cloud.to_string().contains("GitHub App"), "{cloud}");
+    let local = GitToolError::Unauthorized {
+        remote: "https://github.com/acme/app.git".into(),
+        cloud: false,
+        stderr: "403".into(),
+    };
+    assert!(local.to_string().contains("git credentials"), "{local}");
 }
 
 #[tokio::test]
@@ -393,6 +665,17 @@ async fn git_push_retries_on_timeout_then_errors_out() {
         .await
         .expect("seed commit");
 
+    git(
+        dir.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://10.255.255.1/unreachable.git",
+        ],
+    )
+    .await;
+
     let policy = PushPolicy {
         per_attempt_timeout: Duration::from_millis(50),
         // Two attempts keeps the test fast (one ~1s backoff slot
@@ -401,16 +684,9 @@ async fn git_push_retries_on_timeout_then_errors_out() {
         attempts: 2,
     };
     let start = std::time::Instant::now();
-    let err = git_push_impl(
-        dir.path(),
-        "https://10.255.255.1/unreachable.git",
-        "main",
-        "fake-token",
-        false,
-        policy,
-    )
-    .await
-    .expect_err("push must time out on all attempts");
+    let err = git_push_impl(dir.path(), to_branch("main"), policy)
+        .await
+        .expect_err("push must time out on all attempts");
     assert!(matches!(err, GitToolError::Timeout(_, _)), "got {err:?}");
     // At least one ~1s backoff slot must have elapsed between the
     // two attempts, confirming the retry loop ran instead of

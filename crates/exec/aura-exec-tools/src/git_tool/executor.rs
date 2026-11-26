@@ -51,8 +51,8 @@ pub(crate) async fn spawn_git(
     cmd.arg(subcmd)
         .args(args)
         .current_dir(workspace)
-        // Never prompt for credentials — we always pre-embed auth into
-        // the URL and rely on the non-interactive push path.
+        // Never prompt for credentials: a push authenticates through
+        // git's configured helper or fails.
         .env("GIT_TERMINAL_PROMPT", "0");
 
     debug!(?workspace, "spawning git");
@@ -84,20 +84,23 @@ pub(super) async fn run_git_expect_ok(
     Ok(output)
 }
 
-/// Read `git log HEAD --pretty=format:'%H %s'` up to 50 entries. Only
-/// used for audit logging on successful pushes. Missing refs yield an
-/// empty vec rather than an error.
+/// Read `git log HEAD --not --remotes=<remote> --pretty=format:'%H %s'`
+/// up to 50 entries: the commits `remote` doesn't have as far as this
+/// repository knows. Only used for the push result and audit logging.
+/// Missing refs yield an empty vec rather than an error.
 pub(super) async fn list_unpushed_commits(
     workspace: &std::path::Path,
-    git_ref: &str,
+    remote: &str,
     timeout: Duration,
 ) -> Result<Vec<CommitInfo>, GitToolError> {
     // `log` is a read-only subcommand. The allow-list keeps it close
     // to `rev-parse` — both are inspection helpers for the mutating
-    // flow and never take caller-controlled args beyond a bounded ref.
+    // flow and never take caller-controlled args.
     let mut cmd = Command::new("git");
     cmd.arg("log")
-        .arg(git_ref)
+        .arg("HEAD")
+        .arg("--not")
+        .arg(format!("--remotes={remote}"))
         .arg("--pretty=format:%H %s")
         .arg("-50")
         .current_dir(workspace)

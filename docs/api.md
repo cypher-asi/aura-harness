@@ -133,7 +133,7 @@ Served only by a node started with `AURA_CLOUD_NODE=1` on a boxd machine (other 
 | POST | `/v1/sync/import` | Seed an agent's record (`SyncImport`): entries are checked and appended verbatim. |
 | POST | `/v1/sync/seal/:agent_id` | Stop writing for an agent; returns its final head. `/tx` and `/v1/run` then refuse it. |
 | GET | `/v1/sync/traces` | Trace runs since a cursor. |
-| GET | `/v1/workspace/patch` | The machine's work as a patch against the snapshot's commit. |
+| GET | `/v1/workspace/patch` | The working tree's changes since the hub last pulled (`refs/aura/base`; `HEAD` on a machine without it) as a `WorkspacePatch`: `base_commit`, the binary `patch`, the changed `files`, and the `tree` it was taken from, which the hub marks as pulled once the patch applies. The agent's own index is not touched. |
 | POST | `/v1/mesh/mail` | One message for an agent on this node (from the hub or a peer). |
 | WS | `/v1/mesh` | The hub's socket: mail both ways, the project's directory, host stats, keep-alive. |
 

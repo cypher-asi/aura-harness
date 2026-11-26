@@ -485,7 +485,7 @@ fn tool_arg_summary(name: &str, input: &serde_json::Value) -> Option<String> {
         }
         "search_code" | "find_files" => str_field("pattern"),
         "git_commit" | "git_commit_push" => str_field("message"),
-        "git_push" => str_field("branch").or_else(|| str_field("remote_url")),
+        "git_push" => str_field("branch"),
         "run_command" => run_command_summary(input),
         _ => None,
     }

@@ -19,4 +19,4 @@ pub mod plans;
 pub mod setup;
 pub mod store;
 
-pub use hub::{CloudHub, PatchOutcome, PlaceRequest, RemoteEvent};
+pub use hub::{CloudHub, CommitsOutcome, PatchOutcome, PlaceRequest, PullOutcome, RemoteEvent};

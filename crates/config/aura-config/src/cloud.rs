@@ -25,8 +25,9 @@ use zeroize::Zeroizing;
 use crate::env::{
     ConfigError, AURA_CLOUD_BINARY, AURA_CLOUD_FORK_ON_SPAWN, AURA_CLOUD_IDLE_HIBERNATE_SECS,
     AURA_CLOUD_IDLE_STANDBY_SECS, AURA_CLOUD_ISOLATED, AURA_CLOUD_PRICE_DISK_GIB_HOUR,
-    AURA_CLOUD_PRICE_MEM_GIB_HOUR, AURA_CLOUD_PRICE_VCPU_HOUR, AURA_CLOUD_SIZE, BOXD_API_KEY,
-    BOXD_API_URL, BOXD_BASE_URL, BOXD_ORG, BOXD_REGION, BOXD_TOKEN,
+    AURA_CLOUD_PRICE_MEM_GIB_HOUR, AURA_CLOUD_PRICE_VCPU_HOUR, AURA_CLOUD_SIZE, AURA_GITHUB_APP_ID,
+    AURA_GITHUB_APP_PRIVATE_KEY_PATH, AURA_GITHUB_APP_WORKFLOWS, BOXD_API_KEY, BOXD_API_URL,
+    BOXD_BASE_URL, BOXD_ORG, BOXD_REGION, BOXD_TOKEN,
 };
 
 /// Shown when cloud mode is asked for without a credential.
@@ -292,6 +293,24 @@ impl<'de> Deserialize<'de> for MachineSize {
     }
 }
 
+/// The GitHub App cloud machines push as. The hub signs its App JWTs
+/// with the private key and mints each machine a short-lived token for
+/// one repository; the key itself never leaves the hub.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubAppConfig {
+    /// The App's client id (`Iv23…`) or numeric app id
+    /// (`AURA_GITHUB_APP_ID`): the App JWT's issuer.
+    pub app_id: String,
+    /// PEM file with its private key
+    /// (`AURA_GITHUB_APP_PRIVATE_KEY_PATH`). Read when a token is
+    /// minted, so a rotated key needs no restart.
+    pub private_key_path: PathBuf,
+    /// Whether repo tokens may also edit workflows
+    /// (`AURA_GITHUB_APP_WORKFLOWS`). Off by default: a workflow edit
+    /// can read the repository's Actions secrets.
+    pub workflows: bool,
+}
+
 /// Settings for running agents on boxd machines.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CloudConfig {
@@ -326,6 +345,10 @@ pub struct CloudConfig {
     /// Linux aura build for the base snapshot (`AURA_CLOUD_BINARY`);
     /// `None` lets the hub pick one.
     pub binary: Option<PathBuf>,
+    /// The GitHub App cloud machines push as; `None` (either variable
+    /// unset) keeps cloud agents' commits on their machines until a
+    /// pull brings them back.
+    pub github_app: Option<GithubAppConfig>,
 }
 
 impl CloudConfig {
@@ -346,6 +369,7 @@ impl CloudConfig {
             price_mem_gib_hour: None,
             price_disk_gib_hour: None,
             binary: None,
+            github_app: None,
         }
     }
 
@@ -409,6 +433,25 @@ impl CloudConfig {
             None => defaults.size,
         };
 
+        let workflows = parse_switch(&get, AURA_GITHUB_APP_WORKFLOWS, false)?;
+        let github_app = match (
+            get(AURA_GITHUB_APP_ID),
+            get(AURA_GITHUB_APP_PRIVATE_KEY_PATH),
+        ) {
+            (Some(app_id), Some(path)) => Some(GithubAppConfig {
+                app_id,
+                private_key_path: expand_home(&path, dirs::home_dir()),
+                workflows,
+            }),
+            (None, None) => None,
+            (Some(_), None) | (None, Some(_)) => {
+                tracing::warn!(
+                    "the GitHub App needs both {AURA_GITHUB_APP_ID} and {AURA_GITHUB_APP_PRIVATE_KEY_PATH}; cloud agents won't push"
+                );
+                None
+            }
+        };
+
         Ok(Self {
             credential,
             base_url: get(BOXD_BASE_URL).or_else(|| get(BOXD_API_URL)),
@@ -425,6 +468,7 @@ impl CloudConfig {
             price_mem_gib_hour: parse_price(&get, AURA_CLOUD_PRICE_MEM_GIB_HOUR)?,
             price_disk_gib_hour: parse_price(&get, AURA_CLOUD_PRICE_DISK_GIB_HOUR)?,
             binary: get(AURA_CLOUD_BINARY).map(PathBuf::from),
+            github_app,
         })
     }
 
@@ -444,6 +488,14 @@ impl CloudConfig {
 impl Default for CloudConfig {
     fn default() -> Self {
         Self::defaults()
+    }
+}
+
+/// `raw` with a leading `~/` replaced by `home`, as a shell would.
+fn expand_home(raw: &str, home: Option<PathBuf>) -> PathBuf {
+    match (raw.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => PathBuf::from(raw),
     }
 }
 
@@ -659,5 +711,42 @@ mod tests {
         assert_eq!(cfg.price_vcpu_hour, Some(0.05));
         assert_eq!(cfg.region.as_deref(), Some("nyc"));
         assert_eq!(cfg.org.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn the_github_app_needs_its_id_and_key() {
+        assert_eq!(config(&[]).expect("parse").github_app, None);
+        let cfg = config(&[
+            (AURA_GITHUB_APP_ID, " Iv23liAbc "),
+            (AURA_GITHUB_APP_PRIVATE_KEY_PATH, "/keys/aura.pem"),
+        ])
+        .expect("parse");
+        assert_eq!(
+            cfg.github_app,
+            Some(GithubAppConfig {
+                app_id: "Iv23liAbc".into(),
+                private_key_path: PathBuf::from("/keys/aura.pem"),
+                workflows: false,
+            })
+        );
+        let cfg = config(&[
+            (AURA_GITHUB_APP_ID, "12345"),
+            (AURA_GITHUB_APP_PRIVATE_KEY_PATH, "/keys/aura.pem"),
+            (AURA_GITHUB_APP_WORKFLOWS, "1"),
+        ])
+        .expect("parse");
+        assert!(cfg.github_app.is_some_and(|app| app.workflows));
+        let half = config(&[(AURA_GITHUB_APP_ID, "12345")]).expect("parse");
+        assert_eq!(half.github_app, None, "an id without a key is off");
+        assert_eq!(
+            expand_home("~/.aura/app.pem", Some(PathBuf::from("/home/u"))),
+            PathBuf::from("/home/u/.aura/app.pem")
+        );
+        assert_eq!(
+            expand_home("/keys/app.pem", Some(PathBuf::from("/home/u"))),
+            PathBuf::from("/keys/app.pem")
+        );
+        let err = config(&[(AURA_GITHUB_APP_WORKFLOWS, "sometimes")]).expect_err("must fail");
+        assert!(err.to_string().contains(AURA_GITHUB_APP_WORKFLOWS), "{err}");
     }
 }

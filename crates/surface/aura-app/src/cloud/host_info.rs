@@ -12,7 +12,9 @@ use aura_core_protocol::cloud::HostStats;
 use aura_core_types::{AgentId, VmPayload};
 use aura_engine_cloud::cost::CostEstimate;
 use aura_engine_cloud::fleet::MachineView;
+use aura_engine_cloud::github::RepoRef;
 use aura_engine_cloud::plans::PlanStatus;
+use aura_engine_cloud::repos::RepoStatus;
 use aura_ui_terminal::host::{
     format_bytes, format_duration, format_money, HostAction, HostFact, HostRow, HostSection,
     HostView, PlacementView,
@@ -354,6 +356,73 @@ pub fn add_owner_and_models(view: &mut HostView, owner: &str, plans: &[PlanStatu
     );
 }
 
+/// What a cloud agent's view shows of its git.
+#[derive(Debug, Clone, Copy)]
+pub struct GitFacts<'a> {
+    /// Its branch.
+    pub branch: &'a str,
+    /// The GitHub repository it pushes to.
+    pub repo: Option<&'a RepoRef>,
+    /// That repository's token on its machine; `None` until synced.
+    pub token: Option<&'a RepoStatus>,
+    /// The branch's tip last fetched here.
+    pub fetched: Option<&'a str>,
+}
+
+/// Add a cloud agent's branch, and the GitHub access its machine has,
+/// to its view, after its machine.
+pub fn add_git(view: &mut HostView, git: &GitFacts<'_>, now_ms: u64) {
+    let mut facts = vec![HostFact::new("Branch", git.branch.to_string())];
+    facts.push(HostFact::new(
+        "Fetched here",
+        git.fetched.map_or_else(
+            || "not yet".to_string(),
+            |tip| tip.chars().take(12).collect(),
+        ),
+    ));
+    match git.repo {
+        None => facts.push(HostFact::new(
+            "GitHub",
+            "no GitHub origin · commits come back with pulls",
+        )),
+        Some(repo) => {
+            facts.push(HostFact::new("Repository", repo.full_name()));
+            facts.push(match git.token {
+                Some(status) if status.linked => HostFact::new(
+                    "Token",
+                    match status.synced_ms {
+                        Some(at) => format!(
+                            "synced {} ago · pushes as the App's bot",
+                            format_duration(now_ms.saturating_sub(at) / 1000)
+                        ),
+                        None => "set · pushes as the App's bot".to_string(),
+                    },
+                ),
+                Some(status) => HostFact {
+                    warn: true,
+                    ..HostFact::new(
+                        "Token",
+                        match (&status.install_url, &status.error) {
+                            (Some(url), _) => format!("App not installed · {url}"),
+                            (None, Some(error)) => format!("none · {error}"),
+                            (None, None) => "none".to_string(),
+                        },
+                    )
+                },
+                None => HostFact::new("Token", "not synced since aura started"),
+            });
+        }
+    }
+    let at = view.sections.len().min(1);
+    view.sections.insert(
+        at,
+        HostSection {
+            title: "GIT".into(),
+            facts,
+        },
+    );
+}
+
 /// One project row for a cloud agent; `owner` names the user it belongs
 /// to when the project has several.
 #[must_use]
@@ -640,5 +709,83 @@ mod tests {
             ]
         );
         assert_eq!(view.sections[1].title, "MODELS");
+    }
+
+    #[test]
+    fn cloud_views_show_the_branch_and_why_github_is_out_of_reach() {
+        let repo = RepoRef {
+            owner: "cypher-asi".into(),
+            name: "aura".into(),
+        };
+        let unlinked = RepoStatus {
+            repo: repo.clone(),
+            secret: "AURA_GH_ABC123_0123ABCD".into(),
+            linked: false,
+            expires_at_ms: None,
+            synced_ms: Some(1_000),
+            error: Some("not installed".into()),
+            install_url: Some("https://github.com/apps/aura-agents/installations/new".into()),
+        };
+        let mut view = cloud_view(
+            AgentId::new([1; 32]),
+            &machine_view(VmState::Ready),
+            None,
+            None,
+            &[],
+        );
+        add_git(
+            &mut view,
+            &GitFacts {
+                branch: "aura/scout-a1b2",
+                repo: Some(&repo),
+                token: Some(&unlinked),
+                fetched: None,
+            },
+            61_000,
+        );
+        assert_eq!(view.sections[1].title, "GIT");
+        assert_eq!(
+            facts(&view, "GIT"),
+            vec![
+                "Branch: aura/scout-a1b2".to_string(),
+                "Fetched here: not yet".to_string(),
+                "Repository: cypher-asi/aura".to_string(),
+                "Token: App not installed · https://github.com/apps/aura-agents/installations/new"
+                    .to_string(),
+            ]
+        );
+        assert!(view.sections[1].facts[3].warn);
+
+        let linked = RepoStatus {
+            linked: true,
+            error: None,
+            install_url: None,
+            ..unlinked
+        };
+        let mut view = cloud_view(
+            AgentId::new([1; 32]),
+            &machine_view(VmState::Ready),
+            None,
+            None,
+            &[],
+        );
+        add_git(
+            &mut view,
+            &GitFacts {
+                branch: "aura/scout-a1b2",
+                repo: Some(&repo),
+                token: Some(&linked),
+                fetched: Some("0123456789abcdef0123456789abcdef01234567"),
+            },
+            61_000,
+        );
+        assert_eq!(
+            facts(&view, "GIT")[1..],
+            [
+                "Fetched here: 0123456789ab".to_string(),
+                "Repository: cypher-asi/aura".to_string(),
+                "Token: synced 1m ago · pushes as the App's bot".to_string(),
+            ]
+        );
     }
 }

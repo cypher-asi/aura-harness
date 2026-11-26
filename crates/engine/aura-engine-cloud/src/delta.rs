@@ -1,26 +1,35 @@
-//! The project files a machine gets.
+//! The project a machine gets, and the commits it sends back.
 //!
-//! - A **snapshot build** gets the project as committed: `git archive`
-//!   of a commit.
-//! - A **new agent machine** gets the delta on top of its snapshot: the
-//!   tracked files changed since the snapshot's commit, the untracked
+//! - A **snapshot build** gets the project's history: a `git bundle` of
+//!   HEAD ([`bundle_head`]), cloned on the builder
+//!   ([`crate::workspace::clone_snapshot`]).
+//! - A **new agent machine** gets what the hub has on top of its
+//!   snapshot: a bundle of the commits since the snapshot's commit
+//!   ([`bundle_since`]), and the working tree's changes since HEAD
+//!   ([`collect`], [`pack`]): the tracked files changed, the untracked
 //!   files `.gitignore` lets through, and the list of deleted files.
+//! - An agent's **commits come back** as a bundle of its branch, fetched
+//!   into the project's branch of the same name ([`fetch_branch`]).
 //!
 //! ## Invariants
 //!
-//! - `.env` and `.env.*` files (except `.env.example`) are never packed,
-//!   whatever `.gitignore` says, and neither is anything under `.git/`,
-//!   `.aura/`, `aura_data/` or `target/` ([`is_denied`]).
-//! - A delta larger than [`MAX_DELTA_BYTES`] is refused rather than
-//!   uploaded; the caller rebuilds the snapshot instead.
-//! - Packing is blocking IO: call it from `spawn_blocking`.
+//! - `.env` and `.env.*` files (except `.env.example`) are never packed
+//!   from the working tree, whatever `.gitignore` says, and neither is
+//!   anything under `.git/`, `.aura/`, `aura_data/` or `target/`
+//!   ([`is_denied`]). Committed files travel with the history, as they
+//!   would to the repository's remote.
+//! - A delta or bundle larger than [`MAX_DELTA_BYTES`] is refused rather
+//!   than uploaded.
+//! - Fetching never moves a branch that is checked out or that the agent
+//!   rewrote: git refuses, and the caller says so ([`BranchFetch`]).
+//! - All of it is blocking IO: call it from `spawn_blocking`.
 
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use crate::error::{CloudError, CloudResult};
 
-/// Largest delta archive uploaded to a machine.
+/// Largest delta archive or history bundle uploaded to a machine.
 pub const MAX_DELTA_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Changed files past which the snapshot is rebuilt instead.
@@ -235,52 +244,181 @@ pub fn pack(project: &Path, delta: &Delta) -> CloudResult<Vec<u8>> {
         .map_err(|err| CloudError::io("compress delta archive", err))
 }
 
-/// The committed project at `commit` as a gzipped tar (`git archive`),
-/// for snapshot builds. Denied paths are filtered out on the machine
-/// side by [`APPLY_ARCHIVE`]'s exclude list.
+/// The project's history up to HEAD, as a machine's snapshot gets it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HistoryBundle {
+    /// HEAD's commit.
+    pub commit: String,
+    /// The `refs/remotes/origin/<branch>` HEAD's branch tracks, when the
+    /// bundle carries it too: what this repository knows `origin` has.
+    pub upstream: Option<String>,
+    /// The bundle.
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for HistoryBundle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistoryBundle")
+            .field("commit", &self.commit)
+            .field("upstream", &self.upstream)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
+}
+
+fn repo_error(project: &Path, message: impl Into<String>) -> CloudError {
+    CloudError::Repo {
+        project: project.to_path_buf(),
+        message: message.into(),
+    }
+}
+
+/// `git bundle create` of `revs` in `project`, read back.
+fn bundle(project: &Path, revs: &[&str]) -> CloudResult<Vec<u8>> {
+    let dir = tempfile::tempdir().map_err(|err| CloudError::io("make a bundle folder", err))?;
+    let path = dir.path().join("project.bundle");
+    let path_arg = path.to_string_lossy().into_owned();
+    let mut args = vec!["bundle", "create", "-q", path_arg.as_str()];
+    args.extend_from_slice(revs);
+    git(project, &args)?;
+    let size = std::fs::metadata(&path)
+        .map_err(|err| CloudError::io("stat the bundle", err))?
+        .len();
+    if size > MAX_DELTA_BYTES {
+        return Err(repo_error(
+            project,
+            format!(
+                "its history is {size} bytes as a git bundle, above the {MAX_DELTA_BYTES} a \
+                 cloud machine is sent"
+            ),
+        ));
+    }
+    std::fs::read(&path).map_err(|err| CloudError::io("read the bundle", err))
+}
+
+/// The project's history up to HEAD, for a snapshot build.
 ///
 /// # Errors
 ///
-/// When git fails.
-pub fn archive_commit(project: &Path, commit: &str) -> CloudResult<Vec<u8>> {
+/// When `project` is not a repository with a commit, is a shallow clone
+/// (its history can't be bundled), or the bundle is too large.
+pub fn bundle_head(project: &Path) -> CloudResult<HistoryBundle> {
+    let commit = head_commit(project)?;
+    if git(project, &["rev-parse", "--is-shallow-repository"])?.trim() == "true" {
+        return Err(repo_error(
+            project,
+            "it is a shallow clone, so its history can't go to a cloud machine; \
+             run `git fetch --unshallow` first",
+        ));
+    }
+    let upstream = git(
+        project,
+        &["rev-parse", "--symbolic-full-name", "HEAD@{upstream}"],
+    )
+    .ok()
+    .map(|name| name.trim().to_string())
+    .filter(|name| {
+        name.strip_prefix("refs/remotes/origin/")
+            .is_some_and(crate::workspace::is_branch_name)
+    });
+    let mut revs = vec!["HEAD"];
+    if let Some(name) = upstream.as_deref() {
+        revs.push(name);
+    }
+    let bytes = bundle(project, &revs)?;
+    Ok(HistoryBundle {
+        commit,
+        upstream,
+        bytes,
+    })
+}
+
+/// The commits HEAD has that `base` (a snapshot's commit) lacks, as a
+/// bundle; `None` when there are none.
+///
+/// # Errors
+///
+/// When git fails or the bundle is too large.
+pub fn bundle_since(project: &Path, base: &str) -> CloudResult<Option<Vec<u8>>> {
+    let not_base = format!("^{base}");
+    let count = git(project, &["rev-list", "--count", "HEAD", &not_base])?;
+    if count.trim() == "0" {
+        return Ok(None);
+    }
+    bundle(project, &["HEAD", &not_base]).map(Some)
+}
+
+/// `origin`'s URL, when the project has one.
+#[must_use]
+pub fn origin_url(project: &Path) -> Option<String> {
+    git(project, &["remote", "get-url", "origin"])
+        .ok()
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty())
+}
+
+/// How fetching an agent's branch into the project went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchFetch {
+    /// The branch now points at `tip`.
+    Updated {
+        /// The branch's new tip.
+        tip: String,
+    },
+    /// The branch is checked out here, and git doesn't move a checked-out
+    /// branch.
+    CheckedOut,
+    /// The branch here and the agent's have gone different ways.
+    Diverged,
+}
+
+/// Fetch `branch` from the bundle at `bundle` into the project's branch
+/// of the same name, fast-forward only.
+///
+/// # Errors
+///
+/// When git fails for another reason (a bundle needing commits the
+/// project lost, an unreadable bundle).
+pub fn fetch_branch(project: &Path, bundle: &Path, branch: &str) -> CloudResult<BranchFetch> {
+    if !crate::workspace::is_branch_name(branch) {
+        return Err(repo_error(project, format!("refusing branch {branch:?}")));
+    }
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
     let output = Command::new("git")
         .arg("-C")
         .arg(project)
-        .args(["archive", "--format=tar.gz", commit])
+        .args(["fetch", "--no-write-fetch-head"])
+        .arg(bundle)
+        .arg(&refspec)
         .output()
-        .map_err(|err| CloudError::io("run git archive", err))?;
-    if !output.status.success() {
-        return Err(CloudError::io(
-            format!("git archive {commit}"),
-            std::io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_string()),
-        ));
+        .map_err(|err| CloudError::io("run git fetch", err))?;
+    if output.status.success() {
+        let tip = git(project, &["rev-parse", &format!("refs/heads/{branch}")])?;
+        return Ok(BranchFetch::Updated {
+            tip: tip.trim().to_string(),
+        });
     }
-    Ok(output.stdout)
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("refusing to fetch into branch") || stderr.contains("checked out at") {
+        return Ok(BranchFetch::CheckedOut);
+    }
+    if stderr.contains("non-fast-forward") || stderr.contains("[rejected]") {
+        return Ok(BranchFetch::Diverged);
+    }
+    Err(repo_error(
+        project,
+        format!(
+            "could not fetch {branch} from the machine: {}",
+            stderr.trim().chars().take(300).collect::<String>()
+        ),
+    ))
 }
 
-/// Shell run in a machine to apply a delta uploaded to
-/// `/tmp/aura-delta.tgz`, then commit it there: the machine's patch is
-/// taken against its `HEAD`, so it then holds only the machine's own
-/// work, not the files this machine sent it.
-pub const APPLY_DELTA: &str = "set -e; cd \"$AURA_WORKSPACE\"; \
-tar -xzf /tmp/aura-delta.tgz; \
-if [ -s .aura-deleted ]; then tr '\\n' '\\0' < .aura-deleted | xargs -0 rm -f --; fi; \
-rm -f .aura-deleted /tmp/aura-delta.tgz; \
-git add -A; git -c user.name=aura -c user.email=aura@localhost commit -q --allow-empty -m 'aura: changes from the hub'";
-
-/// Shell run in a machine after its patch was applied locally: commit
-/// its work there, so the next pull holds only what came after.
-pub const MARK_PULLED: &str = "set -e; cd \"$AURA_WORKSPACE\"; git add -A; \
+/// Shell run, after a pull, in a machine made from a snapshot of the
+/// older layout (no [`crate::workspace::BASE_REF`]): commit its work
+/// there, since its patch is taken against `HEAD`.
+pub const MARK_PULLED_LEGACY: &str = "set -e; cd \"$AURA_WORKSPACE\"; git add -A; \
 git -c user.name=aura -c user.email=aura@localhost commit -q --allow-empty -m 'aura: pulled to the hub'";
-
-/// Shell run in a builder to unpack a `git archive` uploaded to
-/// `/tmp/aura-project.tgz` and commit it, so the machine can diff its
-/// work against the snapshot later.
-pub const APPLY_ARCHIVE: &str = "set -e; mkdir -p \"$AURA_WORKSPACE\"; cd \"$AURA_WORKSPACE\"; \
-tar -xzf /tmp/aura-project.tgz --exclude='.env' --exclude='.env.*' --exclude='.git'; \
-rm -f /tmp/aura-project.tgz; \
-git init -q 2>/dev/null || true; git add -A; \
-git -c user.name=aura -c user.email=aura@localhost commit -q -m snapshot --allow-empty";
 
 #[cfg(test)]
 mod tests {
@@ -381,13 +519,50 @@ mod tests {
         let delta = collect(dir.path(), &base).expect("delta");
         assert!(delta.is_empty());
         assert!(!delta.wants_rebuild());
-        assert!(!archive_commit(dir.path(), &base)
-            .expect("archive")
-            .is_empty());
         assert!(has_commit(dir.path(), &base));
         assert!(!has_commit(
             dir.path(),
             "e91dfbe90eb7b51f7b0459ce0c829d439a150396"
         ));
+    }
+
+    #[test]
+    fn history_is_bundled_whole_then_by_what_is_new() {
+        let dir = repo();
+        let first = head_commit(dir.path()).expect("head");
+        let history = bundle_head(dir.path()).expect("bundle");
+        assert_eq!(history.commit, first);
+        assert_eq!(history.upstream, None, "no origin here");
+        assert!(history.bytes.starts_with(b"# v2 git bundle"));
+        assert!(!format!("{history:?}").contains("git bundle"));
+        assert_eq!(bundle_since(dir.path(), &first).expect("since"), None);
+
+        std::fs::write(dir.path().join("b.rs"), "fn b() {}").expect("write");
+        sh(dir.path(), &["add", "-A"]);
+        sh(dir.path(), &["commit", "-q", "-m", "next"]);
+        let newer = bundle_since(dir.path(), &first)
+            .expect("since")
+            .expect("one commit");
+        assert!(newer.len() < history.bytes.len() + 4096);
+        assert_eq!(origin_url(dir.path()), None);
+    }
+
+    #[test]
+    fn a_shallow_clone_is_refused_with_what_to_do() {
+        let dir = repo();
+        let shallow = tempfile::tempdir().expect("tempdir");
+        sh(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "second"],
+        );
+        let status = Command::new("git")
+            .args(["clone", "-q", "--depth", "1"])
+            .arg(format!("file://{}", dir.path().display()))
+            .arg(shallow.path())
+            .status()
+            .expect("git clone");
+        assert!(status.success());
+        let err = bundle_head(shallow.path()).expect_err("shallow");
+        assert!(err.to_string().contains("git fetch --unshallow"), "{err}");
     }
 }

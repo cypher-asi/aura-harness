@@ -128,7 +128,7 @@ Settings are read from the environment, which `.env` files can set: the `.env` f
 | `AURA_CLOUD_FORK_ON_SPAWN` | `1` | Give an agent spawned by a cloud agent a fork of its parent's machine. |
 | `AURA_CLOUD_PRICE_VCPU_HOUR`, `AURA_CLOUD_PRICE_MEM_GIB_HOUR`, `AURA_CLOUD_PRICE_DISK_GIB_HOUR` | boxd list prices (€0.039, €0.012, €0.00008) | Rates for the live estimate between boxd's meter readings. |
 
-How it works: the first move of a project builds a snapshot holding the finished build and a running aura node (rebuilt only when lockfiles, the toolchain or the build command change). A new agent's machine is restored from it and gets only the files changed since, never `.env` files. The agent's record is handed to the machine's node, which becomes its single writer; the app mirrors every entry back into the main RocksDB. Messages between agents on different machines travel over each node's mesh socket. `/local` (or archiving the agent) seals the node, copies the rest of the record, applies the agent's changes with `git apply --3way` (saving the patch under `AURA_HOME/cloud/<agent>/` if it doesn't apply) and destroys the machine. Cloud agents' turns run on aura-router models or on the owner's Claude, ChatGPT and OpenRouter plans (below); Gate routing, `/compare` and local models stay on this machine.
+How it works: the first move of a project builds a snapshot holding the finished build, the project's git history at HEAD and a running aura node (rebuilt only when lockfiles, the toolchain or the build command change). A new agent's machine is restored from it and gets the commits made since and the uncommitted changes, never `.env` files, on a branch of its own (below). The agent's record is handed to the machine's node, which becomes its single writer; the app mirrors every entry back into the main RocksDB. Messages between agents on different machines travel over each node's mesh socket. `/local` (or archiving the agent) seals the node, copies the rest of the record, applies the agent's changes with `git apply --3way` (saving the patch under `AURA_HOME/cloud/<agent>/` if it doesn't apply), fetches its commits and destroys the machine. Cloud agents' turns run on aura-router models or on the owner's Claude, ChatGPT and OpenRouter plans (below); Gate routing, `/compare` and local models stay on this machine.
 
 ### Plans and several users
 
@@ -140,6 +140,30 @@ The app refreshes every placing owner's tokens 15 minutes before they expire and
 
 Claude Pro/Max and ChatGPT plans are meant for one person's interactive use: a user's machines share that user's plan limits, and running many may conflict with the provider's terms. OpenRouter keys bill the owner's OpenRouter credits. If this machine is offline longer than a token lives (about an hour for ChatGPT), cloud turns on that plan fail until it is back.
 
+### GitHub for cloud agents
+
+A cloud agent works in a real clone of its project. The snapshot holds the project's history at the commit it was built from, sent as a `git bundle` rather than a copy of `.git`, so this repository's config, hooks and credentials stay here (a shallow clone can't be bundled: run `git fetch --unshallow` first). A new machine also gets the commits made since and the uncommitted changes, and starts a branch of its own, `aura/<name>-<code>`, at this repository's HEAD. A spawned agent that forks its parent's machine starts its own branch from the parent's. The agent commits with `git_commit`, pushes with `git_push` or `git_commit_push` to its own branch only (pushing any other branch is refused before git runs), and opens pull requests with `gh pr create`.
+
+Pull (the HOST tab's Pull button or `/cloud pull`) and `/local` bring the work back in two ways. The working-tree changes the machine made since the last pull are applied to the project folder, as before. Its commits are fetched into this repository's branch of the same name, fast-forward only. A pull never moves the branch checked out here (it says to switch to another branch and pull again), and it leaves alone a branch here that has commits the agent's branch lacks.
+
+Pushing needs a GitHub App:
+
+1. Create a GitHub App in the organization (Settings → Developer settings → GitHub Apps → New GitHub App) with no webhook and these repository permissions: **Contents** read and write, **Pull requests** read and write, and **Workflows** read and write only if you set `AURA_GITHUB_APP_WORKFLOWS=1`.
+2. Generate a private key and save the `.pem` on this machine, for example as `~/.aura/github-app.pem` with mode `600`.
+3. Install the App on the repositories cloud agents may push to.
+4. Set the variables below.
+5. Protect `main` with a ruleset that requires a pull request and blocks force pushes and deletion, so the App's bot can only propose changes to it.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AURA_GITHUB_APP_ID` | unset | The App's client ID (`Iv23li…`) or its numeric App ID. |
+| `AURA_GITHUB_APP_PRIVATE_KEY_PATH` | unset | The App's private key (PEM), read on this machine only; `~` expands. |
+| `AURA_GITHUB_APP_WORKFLOWS` | `0` | Also let agents' tokens change `.github/workflows/`. Off by default, because a workflow change can read the repository's Actions secrets. |
+
+A machine never holds the key or a token. The app signs a short-lived App JWT with the key and mints a one-hour installation token limited to the project's one repository and the permissions above. It stores the token as a boxd secret named `AURA_GH_<install>_<repo>` (`<repo>` is 8 hex characters hashed from `owner/name`), bound to `github.com` and `api.github.com` and replaced in request headers only. The machine's git credential store and `gh` config hold only the secret's `bxds_…` placeholder, and boxd's egress proxy puts the real token into requests to GitHub. Tokens are minted again 15 minutes before they expire and the secret is updated in place, so running machines keep pushing. Commits, pushes and pull requests are by `<app-slug>[bot]`.
+
+Without the App, or when it isn't installed on the repository, the secret holds `unlinked`. The agent still commits on its branch and pulls still bring the commits back, but a push fails with a message saying the App lacks access, and the boot console shows "GitHub App not installed on owner/repo" with the install link. A project with no `origin`, or one not on GitHub, gets no secret and no remote on the machine. The HOST tab's GIT section shows the agent's branch, the tip last fetched here, the repository and the state of its token.
+
 ## Node runtime
 
 | Variable | Default | Description |
@@ -149,7 +173,6 @@ Claude Pro/Max and ChatGPT plans are meant for one person's interactive use: a u
 | `SYNC_WRITES` | `false` | Sync RocksDB writes (`true` / `1`). |
 | `RECORD_WINDOW_SIZE` | `50` | Kernel context record window. |
 | `AURA_PROJECT_BASE` | — | Remaps incoming project paths to `{base}/{slug}` (remote VM mode). |
-| `ORBIT_URL` | `https://orbit-sfvu.onrender.com` | Orbit service URL. |
 | `AURA_STORAGE_URL` | `https://aura-storage.onrender.com` | Aura Storage service URL. |
 | `AURA_NETWORK_URL` | `https://aura-network.onrender.com` | Aura Network service URL. |
 | `AURA_OS_SERVER_URL` (alias `AURA_SERVER_BASE_URL`) | `http://127.0.0.1:19847` on loopback binds, else unset | Routes spec/task/project/log writes (and the cross-agent `send_to_agent` hook) through `aura-os-server`. |

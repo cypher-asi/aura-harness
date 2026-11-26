@@ -73,6 +73,48 @@ pub fn is_plan_secret_of(name: &str, owner_tag: &str) -> bool {
             .any(|suffix| name.ends_with(suffix))
 }
 
+/// The repository as it may appear outside this machine: 8 hex
+/// characters of `blake3("aura-repo:" + owner/name)`, case-insensitive
+/// (GitHub names are).
+#[must_use]
+pub fn repo_tag(full_name: &str) -> String {
+    let hash = blake3::hash(format!("aura-repo:{}", full_name.to_ascii_lowercase()).as_bytes());
+    hash.to_hex()[..8].to_string()
+}
+
+/// Name of the boxd secret holding install `install`'s GitHub token for
+/// the repository `full_name` (`owner/name`): `AURA_GH_<install6>_<repo8>`.
+/// Every owner's machines in that repository's projects share it.
+#[must_use]
+pub fn repo_secret(install: &str, full_name: &str) -> String {
+    let install: String = install
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(6)
+        .collect();
+    format!(
+        "AURA_GH_{}_{}",
+        install.to_ascii_uppercase(),
+        repo_tag(full_name).to_ascii_uppercase()
+    )
+}
+
+/// Whether `name` is a repository secret ([`repo_secret`], any install).
+#[must_use]
+pub fn is_repo_secret(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("AURA_GH_") else {
+        return false;
+    };
+    let Some((install, repo)) = rest.split_once('_') else {
+        return false;
+    };
+    !install.is_empty()
+        && install.len() <= 6
+        && install.chars().all(|c| c.is_ascii_alphanumeric())
+        && repo.len() == 8
+        && repo.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// ZNS id of the ledger agent holding an owner's plan-sync rows.
 #[must_use]
 pub fn owner_ledger(owner_tag: &str) -> String {
@@ -198,6 +240,32 @@ mod tests {
         assert!(!is_plan_secret_of(&name, &owner_tag(&bob)));
         assert_eq!(plan_secret(&tag, "i", ProviderKind::Zos), None);
         assert_eq!(owner_ledger(&tag), format!("0://cloud/owner/{tag}"));
+    }
+
+    #[test]
+    fn repo_secrets_name_the_install_and_hide_the_repo() {
+        let name = repo_secret("ab12cd34ef56", "Cypher-ASI/aura-harness");
+        assert_eq!(name, repo_secret("ab12cd34ef56", "cypher-asi/AURA-harness"));
+        assert!(name.starts_with("AURA_GH_AB12CD_"), "{name}");
+        assert!(!name.to_ascii_lowercase().contains("aura-harness"));
+        assert_eq!(name.len(), "AURA_GH_AB12CD_".len() + 8);
+        assert!(is_repo_secret(&name));
+        assert_ne!(name, repo_secret("ab12cd34ef56", "cypher-asi/other"));
+        assert_ne!(name, repo_secret("ffffff", "cypher-asi/aura-harness"));
+        let alice = owner_tag(&Owner::Zos {
+            user_id: "alice".into(),
+        });
+        let plan = plan_secret(&alice, "ab12cd", ProviderKind::Claude).expect("plan");
+        assert!(!is_repo_secret(&plan));
+        assert!(!is_plan_secret_of(&name, &alice));
+        for not in [
+            "AURA_GH_",
+            "AURA_GH_AB12CD",
+            "AURA_GH_AB12CD_xyz",
+            "GH_AB_12345678",
+        ] {
+            assert!(!is_repo_secret(not), "{not}");
+        }
     }
 
     #[test]

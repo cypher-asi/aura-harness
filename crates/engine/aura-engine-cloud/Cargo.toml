@@ -19,6 +19,7 @@ chrono = { workspace = true }
 flate2 = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
+jsonwebtoken = { workspace = true }
 parking_lot = { workspace = true }
 prost = "0.13"
 reqwest = { workspace = true }
@@ -26,6 +27,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sysinfo = { workspace = true }
 tar = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { version = "0.12", default-features = false, features = ["transport", "codegen", "prost", "tls", "tls-webpki-roots"] }
@@ -38,7 +40,7 @@ protox = "0.7"
 tonic-build = { version = "0.12", default-features = false, features = ["prost", "transport"] }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+axum = { workspace = true }
 
 [lints]
 workspace = true

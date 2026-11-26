@@ -171,15 +171,6 @@ impl DomainApi for UnusedDomain {
     async fn get_active_session(&self, _i: &str) -> anyhow::Result<Option<SessionDescriptor>> {
         unimplemented!("UnusedDomain")
     }
-    async fn orbit_api_call(
-        &self,
-        _m: &str,
-        _p: &str,
-        _b: Option<&serde_json::Value>,
-        _j: Option<&str>,
-    ) -> anyhow::Result<String> {
-        unimplemented!("UnusedDomain")
-    }
     async fn network_api_call(
         &self,
         _m: &str,

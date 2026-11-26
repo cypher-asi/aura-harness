@@ -16,7 +16,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Instant;
 
-use aura_app::cloud::{CloudHub, PatchOutcome, PlaceRequest};
+use aura_app::cloud::{CloudHub, CommitsOutcome, PatchOutcome, PlaceRequest};
 use aura_core_types::{AgentId, RecordEntry, Transaction};
 use aura_engine_cloud::snapshots::AuraBinary;
 use aura_engine_cloud::BootReporter;
@@ -133,7 +133,11 @@ async fn an_agent_moves_to_the_cloud_works_there_and_comes_back() {
             .exec(
                 agent,
                 "ls -a; test ! -e .env && echo no-env-uploaded; cat notes.txt; \
-                 echo 'made in the cloud' > cloud.txt; git status --short",
+                 echo 'made in the cloud' > cloud.txt; git status --short; \
+                 echo \"on branch $(git branch --show-current)\"; \
+                 echo 'committed in the cloud' > committed.txt; \
+                 git add committed.txt && \
+                 git -c user.name=t -c user.email=t@t commit -q -m 'cloud commit' committed.txt",
             )
             .await?;
         println!(
@@ -150,6 +154,11 @@ async fn an_agent_moves_to_the_cloud_works_there_and_comes_back() {
             out.stdout_text().contains("made locally"),
             "the delta arrived"
         );
+        assert!(
+            out.stdout_text().contains("on branch aura/"),
+            "the agent works on its own branch"
+        );
+        assert!(out.success(), "the agent can commit");
         let mirrored = hub.mirror(agent).await?;
         println!(
             "mirrored {mirrored} entries; local head {}",
@@ -170,12 +179,25 @@ async fn an_agent_moves_to_the_cloud_works_there_and_comes_back() {
     }
     let outcome = result.expect("cloud round trip");
     assert!(
-        matches!(outcome, PatchOutcome::Applied { .. }),
+        matches!(outcome.patch, PatchOutcome::Applied { .. }),
         "{outcome:?}"
     );
     assert_eq!(
         std::fs::read_to_string(dir.join("cloud.txt")).expect("cloud.txt applied"),
         "made in the cloud\n"
+    );
+    let CommitsOutcome::Fetched { branch, commits } = &outcome.commits else {
+        panic!("the cloud commit did not come back: {outcome:?}");
+    };
+    assert_eq!(*commits, 1);
+    git(
+        &dir,
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/heads/{branch}"),
+        ],
     );
     assert!(!hub.is_placed(agent));
     assert!(

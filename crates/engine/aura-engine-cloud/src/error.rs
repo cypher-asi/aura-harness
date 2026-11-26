@@ -102,6 +102,14 @@ pub enum CloudError {
         /// What was asked.
         op: &'static str,
     },
+    /// The project's repository can't go to a machine as it is.
+    #[error("{}: {message}", project.display())]
+    Repo {
+        /// The project folder.
+        project: PathBuf,
+        /// What is wrong and what to do.
+        message: String,
+    },
     /// Local file IO failed.
     #[error("{context}: {source}")]
     Io {

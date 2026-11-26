@@ -12,36 +12,43 @@
 //! - Operates strictly inside `ToolContext::sandbox.root()` — the kernel
 //!   rooted workspace. No caller-supplied cwd is honored.
 //! - Restricts itself to the allow-listed subcommand (`add`, `commit`,
-//!   `push`, plus the read-only helpers `diff --cached` and
-//!   `rev-parse HEAD` used to implement commit).
+//!   `push`, plus the read-only helpers `diff --cached`, `rev-parse`
+//!   and `remote get-url` used to implement commit and push).
+//! - Takes no credentials as arguments: `git push` goes to `origin` and
+//!   authenticates with git's own configuration (a credential helper or
+//!   SSH key; on a cloud machine, the credential store its claim wrote,
+//!   which holds only a placeholder).
 //! - Scrubs credentials from structured tracing output.
 //!
 //! Tool availability is resolved by the kernel's tri-state policy
 //! (`UserToolDefaults` plus optional `AgentToolPermissions`). Even when
 //! these tools resolve to `on`, this module still enforces workspace
-//! confinement, subcommand allowlists, timeouts, and credential scrubbing.
+//! confinement, subcommand allowlists, timeouts, the runtime's pinned
+//! push branch ([`crate::ToolConfig::push_branch`]) and credential
+//! scrubbing.
 //!
 //! ## Layout (Phase 2b)
 //!
 //! - [`mod@executor`] — every `Command::new("git")` call site lives
 //!   here. Owns the subcommand allowlist + timeout-wrapped `spawn_git`.
-//! - [`mod@redact`] — `build_auth_url` (JWT injection into push URLs)
-//!   and `redact_url` (mask user-info in tracing output).
+//! - [`mod@redact`] — `redact_url` (mask user-info in tracing output).
 //! - [`mod@commit`] — `git_commit_impl` (`add -A`, `diff --cached`,
 //!   `commit`, `rev-parse HEAD`).
-//! - [`mod@push`] — `git_push_impl` plus the retry / transient
-//!   classifier / remote-storage-exhausted short-circuit.
+//! - [`mod@push`] — `git_push_impl` plus the branch checks, the retry
+//!   loop and the failure classifiers.
 //! - [`mod@commit_push`] — `git_commit_push_impl` (the transactional
 //!   commit-and-push pair the dev-loop relies on).
 //! - [`mod@sandbox`] — `ToolContext` bridging helpers
-//!   (`workspace_timeout`, `push_policy_for`, `str_arg`, `opt_bool`).
+//!   (`workspace_timeout`, `push_policy_for`, `push_branch_for`,
+//!   `str_arg`, `opt_str`, `opt_bool`).
 //! - `tests` — unit tests for the helpers above; declared
 //!   `#[cfg(test)] mod tests;` so the module path matches `super::*`.
 //!
 //! `mod.rs` keeps the public-facing surface: [`GitToolError`],
-//! [`CommitInfo`], [`PushPolicy`], [`CommitPushOutcome`], the three
-//! `Tool` impls, and the `GIT_*_TOOL_NAMES` constants used by the
-//! catalog. `pub use` re-exports the impl functions so the legacy
+//! [`CommitInfo`], [`PushPolicy`], [`PushTarget`], [`Pushed`],
+//! [`CommitPushOutcome`], the three `Tool` impls, and the
+//! `GIT_*_TOOL_NAMES` constants used by the catalog. `pub use`
+//! re-exports the impl functions so the
 //! `aura_exec_tools::git_tool::git_push_impl` paths keep resolving.
 
 use std::time::Duration;
@@ -70,8 +77,7 @@ pub use commit_push::git_commit_push_impl;
 pub use push::git_push_impl;
 
 use push::duration_millis_u64;
-use redact::redact_url;
-use sandbox::{opt_bool, push_policy_for, str_arg, workspace_timeout};
+use sandbox::{opt_bool, opt_str, push_branch_for, push_policy_for, str_arg, workspace_timeout};
 
 // -----------------------------------------------------------------------
 // Error type
@@ -106,8 +112,38 @@ pub enum GitToolError {
     #[error("failed to spawn git {0}: {1}")]
     Spawn(&'static str, std::io::Error),
 
-    #[error("invalid remote URL: {0}")]
-    InvalidUrl(String),
+    /// The workspace has no `origin` to push to.
+    #[error(
+        "this workspace has no `origin` remote, so there is nowhere to push; \
+         commits stay local (a cloud agent's commits come back with the next pull)"
+    )]
+    NoOrigin,
+
+    /// `HEAD` is on no branch and no `branch` was given.
+    #[error("HEAD is detached: pass `branch` to name the branch to push")]
+    DetachedHead,
+
+    /// The runtime pinned this workspace to one branch
+    /// ([`crate::ToolConfig::push_branch`]) and the push named another.
+    #[error("this machine pushes only its own branch `{allowed}`; pushing `{branch}` is refused")]
+    BranchNotAllowed { branch: String, allowed: String },
+
+    /// The remote refused the credentials or they grant no access to
+    /// the repository. Not retried.
+    #[error(
+        "push to {remote} was not authorized: {} (server reported: {stderr})",
+        if *cloud {
+            "the GitHub App isn't installed on this repository or lacks permission"
+        } else {
+            "check your git credentials for this remote"
+        }
+    )]
+    Unauthorized {
+        remote: String,
+        /// Pushed from a cloud machine (with the GitHub App's token).
+        cloud: bool,
+        stderr: String,
+    },
 
     /// The remote rejected the push because it could not persist the
     /// objects (out of disk, HTTP 507, disk quota exceeded, etc.).
@@ -143,7 +179,12 @@ impl From<GitToolError> for ToolError {
                 exit_code,
                 stderr,
             } => Self::CommandFailed(format!("git {op} exited {exit_code}: {stderr}")),
-            GitToolError::InvalidUrl(msg) => Self::InvalidArguments(msg),
+            err @ (GitToolError::DetachedHead | GitToolError::BranchNotAllowed { .. }) => {
+                Self::InvalidArguments(err.to_string())
+            }
+            err @ (GitToolError::NoOrigin | GitToolError::Unauthorized { .. }) => {
+                Self::CommandFailed(err.to_string())
+            }
             GitToolError::RemoteStorageExhausted { op, stderr } => Self::CommandFailed(format!(
                 "git {op} failed: remote storage exhausted ({stderr}). \
                  Free space on the remote (or switch remotes) before retrying."
@@ -166,10 +207,9 @@ pub struct CommitInfo {
 /// Per-attempt timeout and attempt budget for `git push`.
 ///
 /// Push is a network operation and benefits from a different budget
-/// than the rest of the git tools — Orbit round-trips routinely
-/// exceed the 120s cap that covers `git add` / `git commit`. Keeping
-/// push on its own knob also makes it safe to retry: a single slow
-/// remote shouldn't force us to raise every other tool's ceiling.
+/// than the rest of the git tools. Keeping push on its own knob also
+/// makes it safe to retry: a single slow remote shouldn't force us to
+/// raise every other tool's ceiling.
 #[derive(Debug, Clone, Copy)]
 pub struct PushPolicy {
     /// Per-attempt timeout passed to the underlying `git push`
@@ -203,6 +243,45 @@ impl PushPolicy {
     }
 }
 
+/// What a push updates on `origin`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PushTarget<'a> {
+    /// Branch to update; `None` pushes to the current branch's name.
+    pub branch: Option<&'a str>,
+    /// Overwrite the remote branch even when it isn't an ancestor.
+    pub force: bool,
+    /// The only branch this workspace may update (a cloud machine's own
+    /// branch); `None` allows any.
+    pub only_branch: Option<&'a str>,
+}
+
+/// A push that landed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Pushed {
+    /// `origin`'s URL, user-info masked.
+    pub remote: String,
+    /// The branch it updated.
+    pub branch: String,
+    /// Commits `origin` didn't have as far as this repository knew
+    /// (best-effort, at most 50).
+    pub commits: Vec<CommitInfo>,
+}
+
+impl Pushed {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "pushed": true,
+            "remote": self.remote,
+            "branch": self.branch,
+            "commits": self
+                .commits
+                .iter()
+                .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
+                .collect::<Vec<_>>(),
+        })
+    }
+}
+
 /// Outcome of [`git_commit_push_impl`].
 ///
 /// The commit half and the push half are reported independently so a
@@ -218,7 +297,31 @@ pub struct CommitPushOutcome {
     /// on any push-specific failure (timeout, non-zero exit, spawn
     /// error). Independent of `commit_sha` — the commit SHA stays
     /// populated even when the push fails.
-    pub push_result: Result<Vec<CommitInfo>, GitToolError>,
+    pub push_result: Result<Pushed, GitToolError>,
+}
+
+/// The JSON schema properties `git_push` and `git_commit_push` share.
+fn push_properties() -> serde_json::Value {
+    serde_json::json!({
+        "branch": {
+            "type": "string",
+            "description": "Branch to update on origin. Defaults to the current branch."
+        },
+        "force": {
+            "type": "boolean",
+            "description": "Overwrite the remote branch even when it isn't an ancestor of HEAD."
+        }
+    })
+}
+
+/// Read `branch` / `force` from `args`, with the runtime's pinned
+/// branch.
+fn push_target<'a>(args: &'a serde_json::Value, ctx: &'a ToolContext) -> PushTarget<'a> {
+    PushTarget {
+        branch: opt_str(args, "branch"),
+        force: opt_bool(args, "force"),
+        only_branch: push_branch_for(ctx),
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -297,7 +400,8 @@ impl Tool for GitCommitTool {
     }
 }
 
-/// `git_push` — push `HEAD` to `<remote_url>:<branch>` with inline JWT auth.
+/// `git_push` — push `HEAD` to a branch of `origin` with git's own
+/// credentials.
 pub struct GitPushTool;
 
 #[async_trait]
@@ -309,19 +413,14 @@ impl Tool for GitPushTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "git_push".into(),
-            description: "Push HEAD to the given remote URL + branch using a JWT-authenticated \
-                URL (no on-disk remote registration). Runs inside the kernel's sandboxed \
-                workspace root only."
+            description: "Push HEAD to a branch of the workspace's `origin` remote, \
+                authenticating with git's configured credentials. Pushing the current branch \
+                also sets it to track origin. Runs inside the kernel's sandboxed workspace root \
+                only."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
-                "required": ["remote_url", "branch", "jwt"],
-                "properties": {
-                    "remote_url": { "type": "string" },
-                    "branch": { "type": "string" },
-                    "jwt": { "type": "string" },
-                    "force": { "type": "boolean" }
-                }
+                "properties": push_properties(),
             }),
             cache_control: None,
             eager_input_streaming: None,
@@ -333,10 +432,7 @@ impl Tool for GitPushTool {
         ctx: &ToolContext,
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolError> {
-        let remote_url = str_arg(&args, "remote_url").map_err(ToolError::from)?;
-        let branch = str_arg(&args, "branch").map_err(ToolError::from)?;
-        let jwt = str_arg(&args, "jwt").map_err(ToolError::from)?;
-        let force = opt_bool(&args, "force");
+        let target = push_target(&args, ctx);
         let workspace = ctx.sandbox.root().to_path_buf();
         let policy = push_policy_for(ctx);
 
@@ -346,24 +442,23 @@ impl Tool for GitPushTool {
         info!(
             op = "git_push",
             %agent_id,
-            target_branch = branch,
-            remote = %redact_url(remote_url),
+            target_branch = target.branch.unwrap_or("(current)"),
+            pinned_branch = target.only_branch.is_some(),
             per_attempt_timeout_ms = duration_millis_u64(policy.per_attempt_timeout),
             attempts = policy.attempts,
             "git tool dispatched"
         );
 
-        match git_push_impl(&workspace, remote_url, branch, jwt, force, policy).await {
-            Ok(commits) => Ok(ToolResult::success(
+        match git_push_impl(&workspace, target, policy).await {
+            Ok(pushed) => Ok(ToolResult::success(
                 "git_push",
-                serde_json::to_string(&serde_json::json!({
-                    "pushed": true,
-                    "commits": commits
-                        .iter()
-                        .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
-                        .collect::<Vec<_>>(),
-                }))
-                .unwrap_or_else(|_| format!("pushed {} commits", commits.len())),
+                serde_json::to_string(&pushed.to_json()).unwrap_or_else(|_| {
+                    format!(
+                        "pushed {} commits to {}",
+                        pushed.commits.len(),
+                        pushed.branch
+                    )
+                }),
             )),
             Err(e) => {
                 warn!(error = %e, "git_push failed");
@@ -383,22 +478,22 @@ impl Tool for GitCommitPushTool {
     }
 
     fn definition(&self) -> ToolDefinition {
+        let mut properties = push_properties();
+        properties["message"] = serde_json::json!({
+            "type": "string",
+            "description": "Commit message (non-empty)."
+        });
         ToolDefinition {
             name: "git_commit_push".into(),
             description: "Stage all changes, commit with the given message, and push the \
-                resulting HEAD to <remote_url>:<branch>. Runs as a single kernel-mediated \
-                tool so the dev-loop can treat the pair as an atomic unit."
+                resulting HEAD to a branch of the workspace's `origin` remote with git's \
+                configured credentials. Runs as a single kernel-mediated tool so the dev-loop \
+                can treat the pair as an atomic unit."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
-                "required": ["message", "remote_url", "branch", "jwt"],
-                "properties": {
-                    "message": { "type": "string" },
-                    "remote_url": { "type": "string" },
-                    "branch": { "type": "string" },
-                    "jwt": { "type": "string" },
-                    "force": { "type": "boolean" }
-                }
+                "required": ["message"],
+                "properties": properties,
             }),
             cache_control: None,
             eager_input_streaming: None,
@@ -415,11 +510,8 @@ impl Tool for GitCommitPushTool {
 
         match git_commit_push_impl(
             &parsed.workspace,
-            &parsed.message,
-            &parsed.remote_url,
-            &parsed.branch,
-            &parsed.jwt,
-            parsed.force,
+            parsed.message,
+            parsed.target,
             parsed.commit_timeout,
             parsed.push_policy,
         )
@@ -436,65 +528,43 @@ impl Tool for GitCommitPushTool {
 
 /// Parsed-and-validated `git_commit_push` inputs plus the workspace /
 /// timeout / push-policy fields the impl needs.
-///
-/// Owns its strings so the calling [`Tool::execute`] can use it across
-/// `await` boundaries and across the dispatcher log + impl call without
-/// re-borrowing `args` or `ctx`.
-struct CommitPushArgs {
-    message: String,
-    remote_url: String,
-    branch: String,
-    jwt: String,
-    force: bool,
+struct CommitPushArgs<'a> {
+    message: &'a str,
+    target: PushTarget<'a>,
     workspace: std::path::PathBuf,
     commit_timeout: Duration,
     push_policy: PushPolicy,
 }
 
 /// Validate and parse the JSON arguments for `git_commit_push`, also
-/// pulling the workspace/timeout/push-policy from the [`ToolContext`].
-///
-/// Mirrors the original inline parse step exactly: the same `str_arg` /
-/// `opt_bool` calls in the same order, so any malformed-input error
-/// message keeps its pre-refactor wording.
-fn parse_commit_push_args(
-    args: &serde_json::Value,
-    ctx: &ToolContext,
-) -> Result<CommitPushArgs, ToolError> {
+/// pulling the workspace/timeout/push-policy and the pinned branch from
+/// the [`ToolContext`].
+fn parse_commit_push_args<'a>(
+    args: &'a serde_json::Value,
+    ctx: &'a ToolContext,
+) -> Result<CommitPushArgs<'a>, ToolError> {
     let message = str_arg(args, "message").map_err(ToolError::from)?;
-    let remote_url = str_arg(args, "remote_url").map_err(ToolError::from)?;
-    let branch = str_arg(args, "branch").map_err(ToolError::from)?;
-    let jwt = str_arg(args, "jwt").map_err(ToolError::from)?;
-    let force = opt_bool(args, "force");
-    let workspace = ctx.sandbox.root().to_path_buf();
-    let commit_timeout = workspace_timeout(ctx);
-    let push_policy = push_policy_for(ctx);
     Ok(CommitPushArgs {
-        message: message.to_string(),
-        remote_url: remote_url.to_string(),
-        branch: branch.to_string(),
-        jwt: jwt.to_string(),
-        force,
-        workspace,
-        commit_timeout,
-        push_policy,
+        message,
+        target: push_target(args, ctx),
+        workspace: ctx.sandbox.root().to_path_buf(),
+        commit_timeout: workspace_timeout(ctx),
+        push_policy: push_policy_for(ctx),
     })
 }
 
 /// Emit the `git tool dispatched` info line before
 /// [`git_commit_push_impl`] runs. Kept as a separate function so the
-/// orchestrator stays short; the field set / order matches the
-/// pre-refactor `info!` call exactly so log consumers / dashboards do
-/// not see drift.
-fn log_commit_push_dispatch(ctx: &ToolContext, parsed: &CommitPushArgs) {
+/// orchestrator stays short.
+fn log_commit_push_dispatch(ctx: &ToolContext, parsed: &CommitPushArgs<'_>) {
     let agent_id = ctx
         .caller_agent_id
         .map_or_else(|| "unknown".to_string(), |id| id.to_string());
     info!(
         op = "git_commit_push",
         %agent_id,
-        target_branch = parsed.branch,
-        remote = %redact_url(&parsed.remote_url),
+        target_branch = parsed.target.branch.unwrap_or("(current)"),
+        pinned_branch = parsed.target.only_branch.is_some(),
         commit_timeout_ms = duration_millis_u64(parsed.commit_timeout),
         push_per_attempt_timeout_ms = duration_millis_u64(parsed.push_policy.per_attempt_timeout),
         push_attempts = parsed.push_policy.attempts,
@@ -520,17 +590,14 @@ fn assemble_commit_push_result(outcome: CommitPushOutcome) -> ToolResult {
         push_result,
     } = outcome;
     match push_result {
-        Ok(commits) => ToolResult::success(
+        Ok(pushed) => ToolResult::success(
             "git_commit_push",
-            serde_json::to_string(&serde_json::json!({
-                "sha": commit_sha,
-                "committed": commit_sha.is_some(),
-                "pushed": true,
-                "commits": commits
-                    .iter()
-                    .map(|c| serde_json::json!({"sha": c.sha, "message": c.message}))
-                    .collect::<Vec<_>>(),
-            }))
+            serde_json::to_string(&{
+                let mut json = pushed.to_json();
+                json["sha"] = serde_json::json!(commit_sha);
+                json["committed"] = serde_json::json!(commit_sha.is_some());
+                json
+            })
             .unwrap_or_else(|_| {
                 format!(
                     "committed+pushed {}",
@@ -570,11 +637,10 @@ fn assemble_commit_push_result(outcome: CommitPushOutcome) -> ToolResult {
 /// contained by the `GitExecutor` workspace-escape checks.
 pub const GIT_LOCAL_TOOL_NAMES: &[&str] = &["git_commit"];
 
-/// Git tools that talk to a remote (require both a repo URL and an
-/// auth token to be meaningful). Without remote configuration, these
-/// should usually remain unavailable or ask-gated by the caller's
-/// tri-state tool policy so a misconfigured workspace does not silently
-/// push to the wrong upstream.
+/// Git tools that talk to a remote: they push to the workspace's
+/// `origin` with git's configured credentials. Without a remote they
+/// fail; they should usually stay ask-gated by the caller's tri-state
+/// tool policy so an agent does not push to an upstream unasked.
 pub const GIT_REMOTE_TOOL_NAMES: &[&str] = &["git_push", "git_commit_push"];
 
 /// The full set of git tool names registered by this module.

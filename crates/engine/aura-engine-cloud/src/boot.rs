@@ -31,6 +31,8 @@ pub enum BootStage {
     Connect,
     /// Hand the owner's plan secrets to boxd.
     Plans,
+    /// Hand the project's GitHub token to boxd.
+    Repo,
     /// Find or build the project snapshot.
     Snapshot,
     /// Check the org has room for another machine.
@@ -64,6 +66,7 @@ impl BootStage {
         match self {
             Self::Connect => "connect",
             Self::Plans => "plans",
+            Self::Repo => "repo",
             Self::Snapshot => "snapshot",
             Self::Quota => "quota",
             Self::Create => "create",
@@ -85,6 +88,7 @@ impl BootStage {
         match self {
             Self::Connect => "Connecting to boxd",
             Self::Plans => "Sharing plan sign-ins",
+            Self::Repo => "Sharing GitHub access",
             Self::Snapshot => "Preparing project snapshot",
             Self::Quota => "Checking machine quota",
             Self::Create => "Creating machine",

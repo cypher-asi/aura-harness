@@ -1,14 +1,13 @@
 //! Domain tool handlers and the `DomainApi` callback trait.
 //!
 //! This module provides the harness-side tool handlers for domain operations
-//! (specs, tasks, projects, orbit, network, storage). The actual data access
+//! (specs, tasks, projects, network, storage). The actual data access
 //! is delegated through the [`DomainApi`] trait so that the harness never
 //! depends on app-level crates.
 
 pub use aura_exec_traits::domain as api;
 pub mod helpers;
 pub mod network;
-pub mod orbit;
 pub mod project;
 pub mod specs;
 pub mod storage;
@@ -76,16 +75,6 @@ const DOMAIN_TOOL_NAMES: &[&str] = &[
     "create_log",
     "list_logs",
     "get_project_stats",
-    "orbit_push",
-    "orbit_create_repo",
-    "orbit_list_repos",
-    "orbit_list_branches",
-    "orbit_create_branch",
-    "orbit_list_commits",
-    "orbit_get_diff",
-    "orbit_create_pr",
-    "orbit_list_prs",
-    "orbit_merge_pr",
     "post_to_feed",
     "list_projects",
     "check_budget",
@@ -95,14 +84,11 @@ const DOMAIN_TOOL_NAMES: &[&str] = &[
 /// Dispatches domain tool calls to the appropriate handler via `DomainApi`.
 pub struct DomainToolExecutor {
     api: Arc<dyn DomainApi>,
-    /// Per-session JWT for orbit/network calls that need user auth.
+    /// Per-session JWT for network calls that need user auth.
     session_jwt: Option<String>,
     /// Per-session project ID; used as fallback when the LLM tool call args
     /// do not include `project_id` (single-project mode).
     session_project_id: Option<String>,
-    /// Per-session workspace path; injected into orbit tool calls that need
-    /// a local working directory (e.g. `orbit_push`).
-    session_workspace: Option<String>,
 }
 
 impl DomainToolExecutor {
@@ -111,17 +97,15 @@ impl DomainToolExecutor {
             api,
             session_jwt: None,
             session_project_id: None,
-            session_workspace: None,
         }
     }
 
-    /// Create an executor with a session-scoped JWT for orbit/network auth.
+    /// Create an executor with a session-scoped JWT for network auth.
     pub fn with_session_jwt(api: Arc<dyn DomainApi>, jwt: Option<String>) -> Self {
         Self {
             api,
             session_jwt: jwt,
             session_project_id: None,
-            session_workspace: None,
         }
     }
 
@@ -133,29 +117,22 @@ impl DomainToolExecutor {
         api: Arc<dyn DomainApi>,
         jwt: Option<String>,
         project_id: Option<String>,
-        workspace: Option<String>,
     ) -> Self {
         Self {
             api,
             session_jwt: jwt,
             session_project_id: project_id,
-            session_workspace: workspace,
         }
     }
 
-    /// Inject session-scoped fields (JWT, workspace) into input args so
-    /// orbit/network handlers can use them without the LLM needing to provide them.
+    /// Inject the session JWT into input args so network handlers can use
+    /// it without the LLM needing to provide it.
     fn inject_session_fields(&self, input: &Value) -> Value {
         let mut patched = input.clone();
         if let Some(obj) = patched.as_object_mut() {
             if let Some(jwt) = &self.session_jwt {
                 if !obj.contains_key("jwt") {
                     obj.insert("jwt".to_string(), Value::String(jwt.clone()));
-                }
-            }
-            if let Some(workspace) = &self.session_workspace {
-                if !obj.contains_key("workspace") {
-                    obj.insert("workspace".to_string(), Value::String(workspace.clone()));
                 }
             }
         }
@@ -215,30 +192,6 @@ impl DomainToolExecutor {
             "get_project_stats" => {
                 storage::get_project_stats(self.api.as_ref(), project_id, &input).await
             }
-
-            // Orbit (git operations)
-            "orbit_push" => orbit::orbit_push(self.api.as_ref(), project_id, &input).await,
-            "orbit_create_repo" => {
-                orbit::orbit_create_repo(self.api.as_ref(), project_id, &input).await
-            }
-            "orbit_list_repos" => {
-                orbit::orbit_list_repos(self.api.as_ref(), project_id, &input).await
-            }
-            "orbit_list_branches" => {
-                orbit::orbit_list_branches(self.api.as_ref(), project_id, &input).await
-            }
-            "orbit_create_branch" => {
-                orbit::orbit_create_branch(self.api.as_ref(), project_id, &input).await
-            }
-            "orbit_list_commits" => {
-                orbit::orbit_list_commits(self.api.as_ref(), project_id, &input).await
-            }
-            "orbit_get_diff" => orbit::orbit_get_diff(self.api.as_ref(), project_id, &input).await,
-            "orbit_create_pr" => {
-                orbit::orbit_create_pr(self.api.as_ref(), project_id, &input).await
-            }
-            "orbit_list_prs" => orbit::orbit_list_prs(self.api.as_ref(), project_id, &input).await,
-            "orbit_merge_pr" => orbit::orbit_merge_pr(self.api.as_ref(), project_id, &input).await,
 
             // Network (social, billing)
             "post_to_feed" => network::post_to_feed(self.api.as_ref(), project_id, &input).await,

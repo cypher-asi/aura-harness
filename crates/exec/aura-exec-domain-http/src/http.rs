@@ -41,15 +41,14 @@ pub struct HttpDomainApi {
     http: Client,
     storage_url: String,
     network_url: String,
-    orbit_url: String,
     /// Optional `aura-os-server` base URL. When set, it replaces
     /// [`Self::storage_url`] as the base for spec / task / project /
     /// log routes so those writes hit `aura-os-server` and fire its
     /// side effects (disk mirror of spec markdown to
     /// `<workspace_root>/spec/<slug>.md`, SSE broadcast on the project
-    /// stream, JWT billing header injection). Orbit / feed / billing
-    /// routes are unaffected — they keep using their existing direct
-    /// base URLs because `aura-os-server` does not proxy them.
+    /// stream, JWT billing header injection). Feed / billing routes
+    /// are unaffected — they keep using their existing direct base
+    /// URLs because `aura-os-server` does not proxy them.
     ///
     /// Sourced from `NodeConfig::aura_os_server_url` (env var
     /// `AURA_OS_SERVER_URL`). `None` preserves the historical
@@ -74,7 +73,6 @@ impl HttpDomainApi {
     pub fn new(
         storage_url: &str,
         network_url: &str,
-        orbit_url: &str,
         os_server_url: Option<String>,
     ) -> anyhow::Result<Self> {
         let http = Client::builder()
@@ -86,7 +84,6 @@ impl HttpDomainApi {
             http,
             storage_url: storage_url.trim_end_matches('/').to_string(),
             network_url: network_url.trim_end_matches('/').to_string(),
-            orbit_url: orbit_url.trim_end_matches('/').to_string(),
             os_server_url: os_server_url.map(|u| u.trim_end_matches('/').to_string()),
         })
     }
@@ -565,46 +562,6 @@ impl DomainApi for HttpDomainApi {
         Ok(None)
     }
 
-    // -- Orbit (raw JSON pass-through) ----------------------------------------
-
-    async fn orbit_api_call(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&serde_json::Value>,
-        jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
-        let url = format!("{}{path}", self.orbit_url);
-        debug!(url, method, "HttpDomainApi orbit call");
-        let mut req = match method {
-            "POST" => self.http.post(&url),
-            "PUT" => self.http.put(&url),
-            "DELETE" => self.http.delete(&url),
-            _ => self.http.get(&url),
-        };
-        if let Some(jwt) = jwt {
-            req = req.bearer_auth(jwt);
-        }
-        if let Some(body) = body {
-            req = req.json(body);
-        }
-        let resp = req
-            .send()
-            .await
-            .map_err(|error| transport_error(method, &url, error))?;
-        let status = resp.status();
-        let text = resp.text().await?;
-        if !status.is_success() {
-            let truncated: String = text.chars().take(500).collect();
-            return Err(anyhow!("HTTP {status}: {truncated}"));
-        }
-        Ok(text)
-    }
-
-    fn orbit_url(&self) -> &str {
-        &self.orbit_url
-    }
-
     // -- Network (raw JSON pass-through) --------------------------------------
 
     async fn network_api_call(
@@ -651,7 +608,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         drop(listener);
         let base = format!("http://{addr}");
-        let api = HttpDomainApi::new(&base, &base, &base, Some(base.clone())).unwrap();
+        let api = HttpDomainApi::new(&base, &base, Some(base.clone())).unwrap();
         let error = api
             .get_project("project-test", Some("test-token"))
             .await
@@ -673,7 +630,7 @@ mod tests {
             let (_socket, _) = listener.accept().await.unwrap();
             std::future::pending::<()>().await;
         });
-        let mut api = HttpDomainApi::new(&base, &base, &base, Some(base.clone())).unwrap();
+        let mut api = HttpDomainApi::new(&base, &base, Some(base.clone())).unwrap();
         api.http = Client::builder()
             .timeout(std::time::Duration::from_millis(50))
             .build()
@@ -702,7 +659,6 @@ mod tests {
         let api = HttpDomainApi::new(
             "https://storage.example.com",
             "https://network.example.com",
-            "https://orbit.example.com",
             Some("http://os".to_string()),
         )
         .expect("build HttpDomainApi");
@@ -728,7 +684,6 @@ mod tests {
         let api = HttpDomainApi::new(
             "https://storage.example.com",
             "https://network.example.com",
-            "https://orbit.example.com",
             None,
         )
         .expect("build HttpDomainApi");
@@ -753,7 +708,6 @@ mod tests {
         let api = HttpDomainApi::new(
             "https://storage.example.com/",
             "https://network.example.com",
-            "https://orbit.example.com",
             Some("http://os/".to_string()),
         )
         .expect("build HttpDomainApi");
@@ -769,7 +723,6 @@ mod tests {
         let api = HttpDomainApi::new(
             "https://storage.example.com",
             "https://network.example.com",
-            "https://orbit.example.com",
             Some("http://os".to_string()),
         )
         .expect("build HttpDomainApi");
@@ -790,7 +743,6 @@ mod tests {
         let api = HttpDomainApi::new(
             "https://storage.example.com",
             "https://network.example.com",
-            "https://orbit.example.com",
             None,
         )
         .expect("build HttpDomainApi");

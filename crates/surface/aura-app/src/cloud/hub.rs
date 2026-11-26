@@ -38,7 +38,7 @@ use std::time::Duration;
 use aura_config::{BoxdToken, CloudConfig};
 pub use aura_core_auth::Owner;
 use aura_core_protocol::cloud::{
-    HostStats, MeshFrame, MeshMail, MeshMailKind, SyncImport, MESH_PROTOCOL,
+    GitClaim, HostStats, MeshFrame, MeshMail, MeshMailKind, SyncImport, MESH_PROTOCOL,
 };
 use aura_core_protocol::{
     AgentCapabilities, AgentIdentity, AgentPermissionsWire, InboundMessage, ModelSelection,
@@ -48,11 +48,15 @@ use aura_core_types::{AgentId, Placement, PlacementPayload, VmPayload};
 use aura_engine::{AgentHost, MessageKind, RemoteMail, RemoteRouter, ThreadId};
 use aura_engine_cloud::boot::human_bytes;
 use aura_engine_cloud::cost::{latest_reading, CostEstimate, CostModel, CostSample};
+use aura_engine_cloud::delta::BranchFetch;
 use aura_engine_cloud::fleet::{MachineView, ProvisionRequest, VmFleet};
+use aura_engine_cloud::github::{BotIdentity, GithubApp, RepoRef, RepoTokens};
 use aura_engine_cloud::machine_env::{MachineEnv, WORKSPACE_DIR};
 use aura_engine_cloud::mesh::{global_thread, Directory, Holder, MailBook, HUB_NODE};
 use aura_engine_cloud::plans::{PlanCredentials, PlanStatus, PlanSync, SYNC_EVERY};
+use aura_engine_cloud::repos::{RepoStatus, RepoSync};
 use aura_engine_cloud::snapshots::{self, AuraBinary, SnapshotBuilder, SnapshotRecord};
+use aura_engine_cloud::workspace::{self, BranchStart, Bundled};
 use aura_engine_cloud::{
     boxd, delta, names, replica, BootEvent, BootReporter, BootStage, CloudError, CloudResult,
     MachineOrigin, VmProvider,
@@ -79,10 +83,14 @@ const MIRROR_EVERY: Duration = Duration::from_secs(5);
 const MAX_SAMPLES: usize = 720;
 /// Longest a turn may run on a node before the hub gives up on it.
 const TURN_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
-/// Where an uploaded delta goes (see [`delta::APPLY_DELTA`]).
-const DELTA_PATH: &str = "/tmp/aura-delta.tgz";
 /// Limit on applying the project's changes on a new machine.
 const APPLY_TIMEOUT: Duration = Duration::from_secs(120);
+/// Limit on the short git scripts run on a machine (branching, marking a
+/// pull, bundling its branch).
+const GIT_SCRIPT_TIMEOUT: Duration = Duration::from_secs(120);
+/// Limit on git work in the project folder here (applying a patch,
+/// fetching an agent's branch).
+const LOCAL_GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// `commit` as shown: its first 12 characters.
 fn short_commit(commit: &str) -> String {
@@ -150,6 +158,96 @@ impl PatchOutcome {
             }
         }
     }
+}
+
+/// How bringing an agent's commits back went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitsOutcome {
+    /// It made no commits the project lacks (or its machine predates
+    /// agent branches).
+    None,
+    /// They are on the project's branch of the same name.
+    Fetched {
+        /// The branch.
+        branch: String,
+        /// How many came.
+        commits: u64,
+    },
+    /// They stayed on the machine.
+    Kept {
+        /// The branch.
+        branch: String,
+        /// Why.
+        reason: String,
+    },
+}
+
+impl CommitsOutcome {
+    /// A short report for the chat; `None` when there is nothing to say.
+    #[must_use]
+    pub fn describe(&self) -> Option<String> {
+        match self {
+            Self::None => None,
+            Self::Fetched { branch, commits } => {
+                Some(format!("{commits} commit(s) on branch {branch}"))
+            }
+            Self::Kept { branch, reason } => {
+                Some(format!("commits on {branch} not fetched: {reason}"))
+            }
+        }
+    }
+}
+
+/// What pulling an agent's work back brought.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullOutcome {
+    /// Its working tree's changes, applied to the project folder.
+    pub patch: PatchOutcome,
+    /// Its commits, as a branch here.
+    pub commits: CommitsOutcome,
+}
+
+impl PullOutcome {
+    /// Only a patch outcome.
+    #[must_use]
+    pub const fn patch_only(patch: PatchOutcome) -> Self {
+        Self {
+            patch,
+            commits: CommitsOutcome::None,
+        }
+    }
+
+    /// A one-line report for the chat.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self.commits.describe() {
+            Some(commits) => format!("{}; {commits}", self.patch.describe()),
+            None => self.patch.describe(),
+        }
+    }
+}
+
+/// What a new machine gets of its project's GitHub repository.
+#[derive(Default)]
+struct RepoShare {
+    /// The repository, when origin is on GitHub.
+    repo: Option<RepoRef>,
+    /// Its secret's name, once boxd holds it.
+    secret: Option<String>,
+    /// The App's bot, who the agent commits as.
+    identity: Option<BotIdentity>,
+}
+
+/// The project here, packed for a new machine.
+struct PackedProject {
+    /// Its HEAD.
+    head: String,
+    /// The commits made since the snapshot, as a git bundle.
+    bundle: Option<Vec<u8>>,
+    /// How many files differ from HEAD.
+    changed: usize,
+    /// Those files, as a gzipped tar.
+    archive: Option<Vec<u8>>,
 }
 
 /// What a cloud agent's turn shows, as it streams.
@@ -220,6 +318,16 @@ pub struct PlacedAgent {
     /// That user's display name, for notices here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_name: Option<String>,
+    /// The agent's branch on its machine, and here once its commits come
+    /// back. `None` in files from before agent branches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The project's GitHub repository, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<RepoRef>,
+    /// The branch's tip last fetched here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_tip: Option<String>,
 }
 
 impl PlacedAgent {
@@ -276,6 +384,8 @@ pub struct CloudHub {
     /// Users' plan tokens as boxd secrets; `None` until the app hands
     /// the hub its credentials.
     plans: Mutex<Option<Arc<PlanSync>>>,
+    /// Projects' GitHub tokens as boxd secrets.
+    repos: Mutex<Arc<RepoSync>>,
     /// The user signed in here: local agents act as this user.
     current_owner: Mutex<Owner>,
     stop: CancellationToken,
@@ -356,6 +466,18 @@ impl CloudHub {
             Arc::clone(&ledger) as Arc<dyn aura_engine_cloud::fleet::VmLedger>,
             settings,
         ));
+        let tokens = config.github_app.clone().and_then(|app| match GithubApp::new(app) {
+            Ok(app) => Some(Arc::new(app) as Arc<dyn RepoTokens>),
+            Err(err) => {
+                tracing::warn!(error = %err, "the GitHub App can't be used; cloud agents get no GitHub access");
+                None
+            }
+        });
+        let repos = Arc::new(RepoSync::new(
+            Arc::clone(&provider),
+            tokens,
+            placements.install.clone(),
+        ));
         let snapshots = SnapshotBuilder::new(
             provider,
             Arc::clone(&ledger) as Arc<dyn aura_engine_cloud::fleet::VmLedger>,
@@ -382,6 +504,7 @@ impl CloudHub {
             tracks: Mutex::new(HashMap::new()),
             mirrors: Mutex::new(HashMap::new()),
             plans: Mutex::new(None),
+            repos: Mutex::new(repos),
             current_owner: Mutex::new(Owner::Local),
             stop: CancellationToken::new(),
         });
@@ -521,6 +644,35 @@ impl CloudHub {
         self.plans.lock().clone()
     }
 
+    /// Mint GitHub tokens with `tokens` from now on (`None`: no App).
+    pub fn set_repo_tokens(&self, tokens: Option<Arc<dyn RepoTokens>>) {
+        let install = self.placements.lock().install.clone();
+        *self.repos.lock() = Arc::new(RepoSync::new(self.fleet.provider(), tokens, install));
+    }
+
+    fn repo_sync(&self) -> Arc<RepoSync> {
+        Arc::clone(&self.repos.lock())
+    }
+
+    /// The GitHub token state of `repo`'s machines, once it was synced.
+    #[must_use]
+    pub fn repo_status(&self, repo: &RepoRef) -> Option<RepoStatus> {
+        self.repo_sync().status(repo)
+    }
+
+    /// The repositories placed agents work in.
+    fn placed_repos(&self) -> Vec<RepoRef> {
+        let mut repos: Vec<RepoRef> = Vec::new();
+        for placed in self.placements.lock().agents.values() {
+            if let Some(repo) = &placed.repo {
+                if !repos.contains(repo) {
+                    repos.push(repo.clone());
+                }
+            }
+        }
+        repos
+    }
+
     /// The user signed in here changed; local agents act as `owner`.
     pub fn set_current_owner(&self, owner: Owner) {
         *self.current_owner.lock() = owner;
@@ -540,6 +692,12 @@ impl CloudHub {
             .agents
             .get(&agent.to_hex())
             .map(PlacedAgent::owner)
+    }
+
+    /// Where `agent` stands, while it is placed.
+    #[must_use]
+    pub fn placed_agent(&self, agent: AgentId) -> Option<PlacedAgent> {
+        self.placements.lock().agents.get(&agent.to_hex()).cloned()
     }
 
     /// The display name of the user who placed `agent`.
@@ -617,6 +775,12 @@ impl CloudHub {
                 format!("taking back {kept} cloud machine(s)"),
             );
         }
+        let repos = self.repo_sync();
+        let identity = if placed.iter().any(|(_, agent)| agent.repo.is_some()) {
+            repos.identity().await
+        } else {
+            None
+        };
         for (hex, agent) in &placed {
             if !keep.contains(hex) {
                 continue;
@@ -625,13 +789,25 @@ impl CloudHub {
                 .plan_sync()
                 .map(|plans| plans.templates(&agent.owner()))
                 .unwrap_or_default();
+            let git = Self::git_claim(
+                agent.branch.as_deref(),
+                agent.repo.as_ref(),
+                agent.repo.as_ref().map(|repo| repos.secret_name(repo)),
+                identity.as_ref(),
+            );
             let adopted = boot
                 .wait(
                     BootStage::Connect,
                     format!("boxd is looking up {} ({})", agent.machine, agent.name),
                     Some(boxd::CALL_TIMEOUT),
-                    self.fleet
-                        .adopt(hex, &agent.zns, &agent.project, &agent.machine, templates),
+                    self.fleet.adopt(
+                        hex,
+                        &agent.zns,
+                        &agent.project,
+                        &agent.machine,
+                        templates,
+                        git,
+                    ),
                 )
                 .await;
             match adopted {
@@ -773,6 +949,7 @@ impl CloudHub {
         boot.fact("agent", request.name.clone());
         boot.plan(&[
             BootStage::Plans,
+            BootStage::Repo,
             BootStage::Snapshot,
             BootStage::Quota,
             BootStage::Create,
@@ -812,6 +989,15 @@ impl CloudHub {
                 (Vec::new(), Vec::new())
             }
         };
+        let branch = workspace::agent_branch(&request.name, request.code.as_deref(), &hex);
+        boot.fact("branch", branch.clone());
+        let github = self.share_repo(&request, boot).await?;
+        let git = Self::git_claim(
+            Some(&branch),
+            github.repo.as_ref(),
+            github.secret.clone(),
+            github.identity.as_ref(),
+        );
         let (origin, base_commit, seal) = match parent.as_deref().and_then(|p| self.fleet.view(p)) {
             Some(parent_view) => {
                 boot.skip(
@@ -849,6 +1035,8 @@ impl CloudHub {
                     owner: owner_tag.clone(),
                     secrets,
                     plans,
+                    repo_secret: github.secret.clone(),
+                    git,
                 },
                 boot,
             )
@@ -862,8 +1050,16 @@ impl CloudHub {
                 env.keys().map(String::as_str).collect::<Vec<_>>().join(" ")
             ),
         );
+        let remote_url = github.repo.as_ref().map(RepoRef::https_url);
         if let Err(err) = self
-            .seed(&request, &view, base_commit.as_deref(), boot)
+            .seed(
+                &request,
+                &view,
+                base_commit.as_deref(),
+                &branch,
+                remote_url.as_deref(),
+                boot,
+            )
             .await
         {
             tracing::warn!(agent = %hex, error = %err, "could not move the agent to its machine; destroying it");
@@ -878,6 +1074,9 @@ impl CloudHub {
             machine: view.machine.name.clone(),
             owner: Some(request.owner.clone()),
             owner_name: request.owner_name.clone(),
+            branch: Some(branch),
+            repo: github.repo,
+            fetched_tip: None,
         };
         record_placement(
             &self.ledger,
@@ -938,24 +1137,129 @@ impl CloudHub {
         ensure(true).await
     }
 
+    /// Hand the project's GitHub token to boxd as the repository's
+    /// secret. Never fails placement: without a token the agent still
+    /// commits on its branch, and pulls bring the commits back.
+    async fn share_repo(
+        &self,
+        request: &PlaceRequest,
+        boot: &BootReporter,
+    ) -> CloudResult<RepoShare> {
+        let dir = request.project_dir.clone();
+        let url = tokio::task::spawn_blocking(move || delta::origin_url(&dir))
+            .await
+            .ok()
+            .flatten();
+        let Some(repo) = url.as_deref().and_then(RepoRef::from_remote) else {
+            let why = if url.is_some() {
+                "origin is not on GitHub"
+            } else {
+                "the project has no origin"
+            };
+            boot.skip(
+                BootStage::Repo,
+                format!("{why}: the agent's commits come back with pulls"),
+            );
+            return Ok(RepoShare::default());
+        };
+        boot.run(BootStage::Repo, async {
+            boot.fact("repository", repo.full_name());
+            let sync = self.repo_sync();
+            let ensured = boot
+                .wait(
+                    BootStage::Repo,
+                    format!("boxd is storing the GitHub token for {repo} as a machine secret"),
+                    None,
+                    sync.ensure(&repo),
+                )
+                .await;
+            let status = match ensured {
+                Ok(status) => status,
+                Err(err) => {
+                    tracing::warn!(repo = %repo, error = %err, "could not set the repository secret; the machine gets no GitHub access");
+                    boot.log(
+                        BootStage::Repo,
+                        true,
+                        format!("no GitHub access for this machine: {err}"),
+                    );
+                    return Ok(RepoShare {
+                        repo: Some(repo.clone()),
+                        ..RepoShare::default()
+                    });
+                }
+            };
+            if status.linked {
+                boot.fact("github", "token shared; the App's bot pushes and opens pull requests");
+            } else {
+                let notice = match (&status.install_url, &status.error) {
+                    (Some(url), _) => format!("GitHub App not installed on {repo}: {url}"),
+                    (None, Some(error)) => format!("no GitHub token for {repo}: {error}"),
+                    (None, None) => format!("no GitHub token for {repo}"),
+                };
+                boot.log(BootStage::Repo, true, notice);
+                boot.fact("github", "no token; the agent's commits come back with pulls");
+            }
+            // Only ask GitHub who the bot is when it answered just now.
+            let identity = if status.linked || status.install_url.is_some() {
+                sync.identity().await
+            } else {
+                None
+            };
+            Ok::<_, CloudError>(RepoShare {
+                repo: Some(repo.clone()),
+                secret: Some(status.secret),
+                identity,
+            })
+        })
+        .await
+    }
+
+    /// What a node is told about git: the agent's branch, and the
+    /// repository it pushes to as the App's bot.
+    fn git_claim(
+        branch: Option<&str>,
+        repo: Option<&RepoRef>,
+        secret: Option<String>,
+        identity: Option<&BotIdentity>,
+    ) -> Option<GitClaim> {
+        Some(GitClaim {
+            branch: branch?.to_string(),
+            remote_url: repo.map(RepoRef::https_url),
+            env: secret,
+            placeholder: None,
+            author_name: identity.map(BotIdentity::login),
+            author_email: identity.map(BotIdentity::email),
+        })
+    }
+
     /// Bring the project files up to date on the machine and give its
     /// node the agent's record.
     async fn seed(
         &self,
         request: &PlaceRequest,
         view: &MachineView,
-        base_commit: Option<&str>,
+        snapshot_commit: Option<&str>,
+        branch: &str,
+        remote_url: Option<&str>,
         boot: &BootReporter,
     ) -> CloudResult<()> {
-        match base_commit {
-            Some(base) => {
+        match snapshot_commit {
+            Some(commit) => {
                 boot.run(
                     BootStage::SyncFiles,
-                    self.sync_files(request, view, base, boot),
+                    self.sync_files(request, view, commit, branch, remote_url, boot),
                 )
                 .await?;
             }
-            None => boot.skip(BootStage::SyncFiles, "the fork has its parent's files"),
+            None => {
+                boot.run(BootStage::SyncFiles, async {
+                    boot.fact("files", "the parent's, on a branch of its own");
+                    let script = workspace::fork_branch(branch)?;
+                    self.run_script(view, BootStage::SyncFiles, "branch the fork", &script, boot)
+                        .await
+                })
+                .await?;
+            }
         }
         boot.run(
             BootStage::ImportRecord,
@@ -964,77 +1268,157 @@ impl CloudHub {
         .await
     }
 
-    /// Write the project's changes since `base` to the machine.
+    /// Bring the machine's workspace to the project here: the commits
+    /// made since the snapshot's `snapshot_commit`, the agent's branch at
+    /// HEAD, and the uncommitted changes on top.
     async fn sync_files(
         &self,
         request: &PlaceRequest,
         view: &MachineView,
-        base: &str,
+        snapshot_commit: &str,
+        branch: &str,
+        remote_url: Option<&str>,
         boot: &BootReporter,
     ) -> CloudResult<()> {
-        boot.fact("base commit", short_commit(base));
+        boot.fact("snapshot commit", short_commit(snapshot_commit));
         let dir = request.project_dir.clone();
-        let commit = base.to_string();
+        let base = snapshot_commit.to_string();
         let packed = boot
             .wait(
                 BootStage::SyncFiles,
-                format!("packing the project's changes since {}", short_commit(base)),
+                format!(
+                    "bundling the project's commits since {} and packing its changes",
+                    short_commit(snapshot_commit)
+                ),
                 None,
-                tokio::task::spawn_blocking(move || -> CloudResult<Option<(usize, Vec<u8>)>> {
-                    let changes = delta::collect(&dir, &commit)?;
-                    if changes.is_empty() {
-                        return Ok(None);
-                    }
-                    let count = changes.files.len() + changes.deleted.len();
-                    delta::pack(&dir, &changes).map(|bytes| Some((count, bytes)))
+                tokio::task::spawn_blocking(move || -> CloudResult<PackedProject> {
+                    let head = delta::head_commit(&dir)?;
+                    let bundle = if head == base {
+                        None
+                    } else {
+                        delta::bundle_since(&dir, &base)?
+                    };
+                    let changes = delta::collect(&dir, &head)?;
+                    let changed = changes.files.len() + changes.deleted.len();
+                    let archive = if changes.is_empty() {
+                        None
+                    } else {
+                        Some(delta::pack(&dir, &changes)?)
+                    };
+                    Ok(PackedProject {
+                        head,
+                        bundle,
+                        changed,
+                        archive,
+                    })
                 }),
             )
             .await
             .map_err(|err| {
                 CloudError::io("pack changes", std::io::Error::other(err.to_string()))
             })??;
-        let Some((count, bytes)) = packed else {
-            boot.fact("changes", "none since the snapshot");
-            return Ok(());
-        };
-        boot.fact(
-            "changes",
-            format!(
-                "{count} file(s) since the snapshot, {} packed",
-                human_bytes(bytes.len() as u64)
-            ),
-        );
+        boot.fact("head", short_commit(&packed.head));
+        let has_bundle = packed.bundle.is_some();
+        match packed.bundle {
+            Some(bytes) => {
+                boot.fact(
+                    "commits",
+                    format!(
+                        "made since the snapshot, {} bundled",
+                        human_bytes(bytes.len() as u64)
+                    ),
+                );
+                self.upload_file(view, workspace::HEAD_BUNDLE, bytes, boot)
+                    .await?;
+            }
+            None => boot.fact("commits", "none since the snapshot"),
+        }
+        let has_delta = packed.archive.is_some();
+        match packed.archive {
+            Some(bytes) => {
+                boot.fact(
+                    "changes",
+                    format!(
+                        "{} uncommitted file(s), {} packed",
+                        packed.changed,
+                        human_bytes(bytes.len() as u64)
+                    ),
+                );
+                self.upload_file(view, workspace::DELTA_ARCHIVE, bytes, boot)
+                    .await?;
+            }
+            None => boot.fact("changes", "none uncommitted"),
+        }
+        let script = workspace::start_branch(&BranchStart {
+            branch,
+            head: &packed.head,
+            remote_url,
+            bundle: has_bundle,
+            delta: has_delta,
+        })?;
+        self.run_script(
+            view,
+            BootStage::SyncFiles,
+            "start the agent's branch",
+            &script,
+            boot,
+        )
+        .await
+    }
+
+    /// Upload `bytes` to `path` on the machine, showing progress.
+    async fn upload_file(
+        &self,
+        view: &MachineView,
+        path: &str,
+        bytes: Vec<u8>,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
         let provider = self.fleet.provider();
+        let machine = &view.machine.name;
+        let size = human_bytes(bytes.len() as u64);
         boot.log(
             BootStage::SyncFiles,
             false,
-            format!("upload {DELTA_PATH} ({})", human_bytes(bytes.len() as u64)),
+            format!("upload {path} ({size})"),
         );
-        let machine = &view.machine.name;
-        let size = human_bytes(bytes.len() as u64);
         boot.wait(
             BootStage::SyncFiles,
-            format!("uploading {DELTA_PATH} ({size}) to {machine}"),
+            format!("uploading {path} ({size}) to {machine}"),
             Some(boxd::CREATE_TIMEOUT),
-            provider.upload_reported(machine, DELTA_PATH, bytes, &mut |sent, total| {
+            provider.upload_reported(machine, path, bytes, &mut |sent, total| {
                 boot.waiting(
                     BootStage::SyncFiles,
-                    snapshots::uploading(DELTA_PATH, sent, total, machine),
+                    snapshots::uploading(path, sent, total, machine),
                     Some(boxd::CREATE_TIMEOUT),
                 );
             }),
         )
         .await?;
-        boot.log(BootStage::SyncFiles, false, "$ apply changes");
-        let mut lines = boot.output(BootStage::SyncFiles);
+        Ok(())
+    }
+
+    /// Run `script` on the machine, streaming its output to `stage`.
+    async fn run_script(
+        &self,
+        view: &MachineView,
+        stage: BootStage,
+        what: &str,
+        script: &str,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
+        let provider = self.fleet.provider();
+        let machine = &view.machine.name;
+        boot.log(stage, false, format!("$ {what}"));
+        let mut lines = boot.output(stage);
         let out = boot
             .wait(
-                BootStage::SyncFiles,
-                format!("applying the changes on {machine}"),
+                stage,
+                format!("{what} on {machine}"),
                 Some(APPLY_TIMEOUT),
                 provider.exec_streaming(
                     machine,
-                    delta::APPLY_DELTA,
+                    script,
                     None,
                     APPLY_TIMEOUT,
                     &mut |stderr, chunk| lines.chunk(stderr, chunk),
@@ -1046,8 +1430,8 @@ impl CloudHub {
             Ok(())
         } else {
             Err(CloudError::ExecFailed {
-                machine: view.machine.name.clone(),
-                command: "apply changes".into(),
+                machine: machine.clone(),
+                command: what.to_string(),
                 exit_code: out.exit_code,
                 stderr: out.stderr_tail(400),
             })
@@ -1163,10 +1547,10 @@ impl CloudHub {
         agent: AgentId,
         reason: &str,
         boot: &BootReporter,
-    ) -> CloudResult<PatchOutcome> {
+    ) -> CloudResult<PullOutcome> {
         let hex = agent.to_hex();
         let Some(placed) = self.placements.lock().agents.get(&hex).cloned() else {
-            return Ok(PatchOutcome::Empty);
+            return Ok(PullOutcome::patch_only(PatchOutcome::Empty));
         };
         boot.fact("machine", placed.machine.clone());
         boot.fact("project folder", placed.project_dir.display().to_string());
@@ -1174,13 +1558,13 @@ impl CloudHub {
             // The machine is gone (deleted outside aura): the record the
             // mirror already holds is all there is.
             self.forget_placement(&hex, &placed.project);
-            return Ok(PatchOutcome::Saved {
+            return Ok(PullOutcome::patch_only(PatchOutcome::Saved {
                 path: self.home.join(&hex),
                 reason: format!(
                     "machine {} no longer exists; its unsynced work is lost",
                     placed.machine
                 ),
-            });
+            }));
         }
         boot.plan(&[
             BootStage::Seal,
@@ -1215,7 +1599,7 @@ impl CloudHub {
         .await?;
         let outcome = boot
             .run(BootStage::PullChanges, async {
-                let outcome = match node.patch().await {
+                let patch = match node.patch().await {
                     Ok(patch) => {
                         self.apply_patch(&hex, &placed.project_dir, &patch.patch, patch.files)
                             .await
@@ -1225,13 +1609,19 @@ impl CloudHub {
                         reason: format!("could not read the machine's changes: {err}"),
                     },
                 };
-                if let PatchOutcome::Applied { files } = &outcome {
+                if let PatchOutcome::Applied { files } = &patch {
                     for file in files {
                         boot.log(BootStage::PullChanges, false, format!("M {file}"));
                     }
                 }
-                boot.fact("changes", outcome.describe());
-                Ok::<_, CloudError>(outcome)
+                boot.fact("changes", patch.describe());
+                let commits = self.fetch_commits(&hex, &placed).await;
+                if let Some(report) = commits.describe() {
+                    let kept = matches!(commits, CommitsOutcome::Kept { .. });
+                    boot.log(BootStage::PullChanges, kept, report.clone());
+                    boot.fact("commits", report);
+                }
+                Ok::<_, CloudError>(PullOutcome { patch, commits })
             })
             .await?;
         record_placement(
@@ -1284,40 +1674,192 @@ impl CloudHub {
         self.tracks.lock().remove(hex);
     }
 
-    /// Pull `agent`'s work into the project without moving the agent.
+    /// Pull `agent`'s work into the project without moving the agent:
+    /// its working tree's changes into the project folder, its commits
+    /// onto the project's branch of the same name.
     ///
     /// # Errors
     ///
     /// When the node can't be reached.
-    pub async fn pull(&self, agent: AgentId) -> CloudResult<PatchOutcome> {
+    pub async fn pull(&self, agent: AgentId) -> CloudResult<PullOutcome> {
         let hex = agent.to_hex();
         let Some(placed) = self.placements.lock().agents.get(&hex).cloned() else {
-            return Ok(PatchOutcome::Empty);
+            return Ok(PullOutcome::patch_only(PatchOutcome::Empty));
         };
         let node = self.awake_node(&hex, &BootReporter::none()).await?;
         let patch = node.patch().await?;
+        let tree = patch.tree.clone();
         let outcome = self
             .apply_patch(&hex, &placed.project_dir, &patch.patch, patch.files)
             .await;
         if matches!(outcome, PatchOutcome::Applied { .. }) {
-            // The machine keeps working; the next pull starts from here.
-            if let Some(view) = self.fleet.view(&hex) {
-                let marked = self
-                    .fleet
-                    .provider()
-                    .exec(
-                        &view.machine.name,
-                        delta::MARK_PULLED,
-                        None,
-                        Duration::from_secs(60),
-                    )
-                    .await;
-                if let Err(err) = marked {
-                    tracing::warn!(agent = %hex, error = %err, "could not mark the pulled work on the machine; the next pull repeats it");
+            // The machine keeps working; the next pull starts from what
+            // this one took.
+            self.mark_pulled(&hex, tree.as_deref()).await;
+        }
+        let commits = self.fetch_commits(&hex, &placed).await;
+        Ok(PullOutcome {
+            patch: outcome,
+            commits,
+        })
+    }
+
+    /// Tell `hex`'s machine its patch up to `tree` is in the project.
+    /// Machines from before the patch named its tree mark all they have.
+    async fn mark_pulled(&self, hex: &str, tree: Option<&str>) {
+        let Some(view) = self.fleet.view(hex) else {
+            return;
+        };
+        let script = match tree {
+            Some(tree) => match workspace::mark_pulled(tree) {
+                Ok(script) => script,
+                Err(err) => {
+                    tracing::warn!(agent = %hex, error = %err, "the machine named a bad tree; the next pull repeats this one");
+                    return;
+                }
+            },
+            None => delta::MARK_PULLED_LEGACY.to_string(),
+        };
+        let marked = self
+            .fleet
+            .provider()
+            .exec(&view.machine.name, &script, None, GIT_SCRIPT_TIMEOUT)
+            .await;
+        match marked {
+            Ok(out) if out.success() => {}
+            Ok(out) => {
+                tracing::warn!(agent = %hex, stderr = %out.stderr_tail(300), "could not mark the pulled work on the machine; the next pull repeats it");
+            }
+            Err(err) => {
+                tracing::warn!(agent = %hex, error = %err, "could not mark the pulled work on the machine; the next pull repeats it");
+            }
+        }
+    }
+
+    /// Fetch the commits on `placed`'s branch that the project here
+    /// lacks into the project's branch of the same name.
+    async fn fetch_commits(&self, hex: &str, placed: &PlacedAgent) -> CommitsOutcome {
+        let Some(branch) = placed.branch.clone() else {
+            return CommitsOutcome::None;
+        };
+        let Some(view) = self.fleet.view(hex) else {
+            return CommitsOutcome::None;
+        };
+        match self.fetch_branch(hex, placed, &view, &branch).await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                tracing::warn!(agent = %hex, error = %err, "could not fetch the agent's commits");
+                CommitsOutcome::Kept {
+                    branch,
+                    reason: err.to_string(),
                 }
             }
         }
-        Ok(outcome)
+    }
+
+    async fn fetch_branch(
+        &self,
+        hex: &str,
+        placed: &PlacedAgent,
+        view: &MachineView,
+        branch: &str,
+    ) -> CloudResult<CommitsOutcome> {
+        let provider = self.fleet.provider();
+        let machine = &view.machine.name;
+        // The bundle leaves out what the hub last took; only while it
+        // still has it.
+        let fetched = match placed.fetched_tip.clone() {
+            Some(tip) => {
+                let project = placed.project_dir.clone();
+                let check = tip.clone();
+                tokio::task::spawn_blocking(move || delta::has_commit(&project, &check))
+                    .await
+                    .unwrap_or(false)
+                    .then_some(tip)
+            }
+            None => None,
+        };
+        let script = workspace::bundle_branch(branch, fetched.as_deref())?;
+        let out = provider
+            .exec(machine, &script, None, GIT_SCRIPT_TIMEOUT)
+            .await?;
+        if !out.success() {
+            return Err(CloudError::ExecFailed {
+                machine: machine.clone(),
+                command: "bundle the agent's branch".into(),
+                exit_code: out.exit_code,
+                stderr: out.stderr_tail(400),
+            });
+        }
+        let commits = match workspace::parse_bundled(&out.stdout_text()) {
+            Some(Bundled::Nothing) => return Ok(CommitsOutcome::None),
+            Some(Bundled::Commits { commits, .. }) => commits,
+            None => {
+                return Err(CloudError::ExecFailed {
+                    machine: machine.clone(),
+                    command: "bundle the agent's branch".into(),
+                    exit_code: out.exit_code,
+                    stderr: "it did not say what it bundled".into(),
+                })
+            }
+        };
+        let bytes = provider
+            .download(machine, workspace::OUT_BUNDLE, delta::MAX_DELTA_BYTES)
+            .await?;
+        let dir = self.home.join(hex);
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|err| CloudError::io("save the agent's commits", err))?;
+        let path = dir.join(format!("branch-{}.bundle", now_ms()));
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(|err| CloudError::io("save the agent's commits", err))?;
+        let project = placed.project_dir.clone();
+        let bundle = path.clone();
+        let name = branch.to_string();
+        let fetched = tokio::time::timeout(
+            LOCAL_GIT_TIMEOUT,
+            tokio::task::spawn_blocking(move || delta::fetch_branch(&project, &bundle, &name)),
+        )
+        .await;
+        let _ = tokio::fs::remove_file(&path).await;
+        let fetched = match fetched {
+            Ok(Ok(fetched)) => fetched?,
+            Ok(Err(err)) => {
+                return Err(CloudError::io(
+                    "fetch the agent's commits",
+                    std::io::Error::other(err.to_string()),
+                ))
+            }
+            Err(_) => {
+                return Err(CloudError::io(
+                    "fetch the agent's commits",
+                    std::io::Error::new(std::io::ErrorKind::TimedOut, "git fetch took too long"),
+                ))
+            }
+        };
+        let branch = branch.to_string();
+        Ok(match fetched {
+            BranchFetch::Updated { tip } => {
+                if let Some(placed) = self.placements.lock().agents.get_mut(hex) {
+                    placed.fetched_tip = Some(tip);
+                }
+                self.save_placements();
+                CommitsOutcome::Fetched { branch, commits }
+            }
+            BranchFetch::CheckedOut => CommitsOutcome::Kept {
+                reason: format!(
+                    "{branch} is checked out here; switch to another branch and pull again"
+                ),
+                branch,
+            },
+            BranchFetch::Diverged => CommitsOutcome::Kept {
+                reason: format!(
+                    "{branch} here has commits the agent's branch lacks; rename it and pull again"
+                ),
+                branch,
+            },
+        })
     }
 
     async fn apply_patch(
@@ -1344,19 +1886,23 @@ impl CloudHub {
                 reason: format!("could not save it: {err}"),
             };
         }
-        let applied = tokio::process::Command::new("git")
-            .arg("-C")
-            .arg(project)
-            .args(["apply", "--3way", "--whitespace=nowarn"])
-            .arg(&path)
-            .output()
-            .await;
+        let applied = tokio::time::timeout(
+            LOCAL_GIT_TIMEOUT,
+            tokio::process::Command::new("git")
+                .arg("-C")
+                .arg(project)
+                .args(["apply", "--3way", "--whitespace=nowarn"])
+                .arg(&path)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await;
         match applied {
-            Ok(out) if out.status.success() => {
+            Ok(Ok(out)) if out.status.success() => {
                 let _ = tokio::fs::remove_file(&path).await;
                 PatchOutcome::Applied { files }
             }
-            Ok(out) => PatchOutcome::Saved {
+            Ok(Ok(out)) => PatchOutcome::Saved {
                 path,
                 reason: String::from_utf8_lossy(&out.stderr)
                     .trim()
@@ -1364,9 +1910,13 @@ impl CloudHub {
                     .take(300)
                     .collect(),
             },
-            Err(err) => PatchOutcome::Saved {
+            Ok(Err(err)) => PatchOutcome::Saved {
                 path,
                 reason: format!("git apply: {err}"),
+            },
+            Err(_) => PatchOutcome::Saved {
+                path,
+                reason: "git apply took too long".into(),
             },
         }
     }
@@ -1910,6 +2460,10 @@ async fn maintain(hub: Weak<CloudHub>, stop: CancellationToken) {
                 if let Some(sync) = hub.plan_sync() {
                     sync.tick(&hub.owners()).await;
                 }
+                let repos = hub.placed_repos();
+                if !repos.is_empty() {
+                    hub.repo_sync().tick(&repos).await;
+                }
             }
         }
     }
@@ -2261,6 +2815,299 @@ mod tests {
         );
     }
 
+    fn test_git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn test_commit(dir: &Path, file: &str, message: &str) -> String {
+        std::fs::write(dir.join(file), message).expect("write");
+        test_git(dir, &["add", "-A"]);
+        test_git(
+            dir,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                message,
+            ],
+        );
+        test_git(dir, &["rev-parse", "HEAD"])
+    }
+
+    /// A project with one commit and `origin`, if any.
+    fn project_repo(dir: &Path, origin: Option<&str>) {
+        std::fs::create_dir_all(dir).expect("mkdir");
+        test_git(dir, &["init", "-q", "-b", "main"]);
+        if let Some(url) = origin {
+            test_git(dir, &["remote", "add", "origin", url]);
+        }
+        test_commit(dir, "a.txt", "first");
+    }
+
+    fn request_in(project: &Path) -> PlaceRequest {
+        PlaceRequest {
+            agent: AgentId::new([1; 32]),
+            agent_zns: "0://scout".into(),
+            name: "scout".into(),
+            code: Some("SC01".into()),
+            project_id: "p1".into(),
+            project_dir: project.to_path_buf(),
+            build_command: None,
+            fork_from: None,
+            owner: Owner::Local,
+            owner_name: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_project_on_github_gives_its_machine_a_repository_secret_and_the_bot() {
+        let (hub, fake, dir) = hub();
+        let tokens = Arc::new(aura_engine_cloud::github::FakeRepoTokens::new(
+            "aura-agents",
+        ));
+        let repo = RepoRef {
+            owner: "acme".into(),
+            name: "proj".into(),
+        };
+        tokens.install(&repo, "ghs_secret", now_ms() + 3_600_000);
+        hub.set_repo_tokens(Some(tokens));
+
+        let project = dir.path().join("project");
+        project_repo(&project, Some("git@github.com:acme/proj.git"));
+        let share = hub
+            .share_repo(&request_in(&project), &BootReporter::none())
+            .await
+            .expect("share");
+        assert_eq!(share.repo, Some(repo.clone()));
+        let secret = share.secret.clone().expect("secret");
+        assert!(names::is_repo_secret(&secret), "{secret}");
+        assert_eq!(fake.secret_value(&secret).as_deref(), Some("ghs_secret"));
+        let claim = CloudHub::git_claim(
+            Some("aura/scout-sc01"),
+            share.repo.as_ref(),
+            share.secret.clone(),
+            share.identity.as_ref(),
+        )
+        .expect("claim");
+        assert_eq!(claim.branch, "aura/scout-sc01");
+        assert_eq!(
+            claim.remote_url.as_deref(),
+            Some("https://github.com/acme/proj.git")
+        );
+        assert_eq!(claim.env.as_deref(), Some(secret.as_str()));
+        assert_eq!(claim.placeholder, None);
+        assert_eq!(claim.author_name.as_deref(), Some("aura-agents[bot]"));
+        assert_eq!(
+            claim.author_email.as_deref(),
+            Some("41000000+aura-agents[bot]@users.noreply.github.com")
+        );
+        assert!(hub.repo_status(&repo).is_some_and(|status| status.linked));
+
+        // Not installed: the secret holds no token, and placing goes on.
+        let other = dir.path().join("other");
+        project_repo(&other, Some("https://github.com/acme/other.git"));
+        let share = hub
+            .share_repo(&request_in(&other), &BootReporter::none())
+            .await
+            .expect("share");
+        let secret = share.secret.expect("secret");
+        assert_eq!(
+            fake.secret_value(&secret).as_deref(),
+            Some(aura_engine_cloud::repos::UNLINKED)
+        );
+        let status = hub
+            .repo_status(share.repo.as_ref().expect("repo"))
+            .expect("status");
+        assert!(!status.linked);
+        assert_eq!(
+            status.install_url.as_deref(),
+            Some("https://github.com/apps/aura-agents/installations/new")
+        );
+
+        // No origin, or one off GitHub: no secret, and still a branch.
+        for (name, origin) in [
+            ("local", None),
+            ("gitlab", Some("https://gitlab.com/acme/proj.git")),
+        ] {
+            let project = dir.path().join(name);
+            project_repo(&project, origin);
+            let share = hub
+                .share_repo(&request_in(&project), &BootReporter::none())
+                .await
+                .expect("share");
+            assert!(share.repo.is_none() && share.secret.is_none(), "{name}");
+            let claim =
+                CloudHub::git_claim(Some("aura/scout-sc01"), None, None, None).expect("claim");
+            assert_eq!((claim.remote_url, claim.env), (None, None));
+        }
+        assert_eq!(CloudHub::git_claim(None, Some(&repo), None, None), None);
+    }
+
+    /// Answer the fake's execs by running them against `workspace`, with
+    /// `/tmp/` under `root`, and hand back the bundle they leave.
+    fn run_scripts_in(fake: &FakeProvider, root: &Path, workspace_dir: &Path) {
+        let files = fake.clone();
+        let root = root.to_path_buf();
+        let workspace_dir = workspace_dir.to_path_buf();
+        fake.on_exec(Arc::new(move |machine, command, _stdin| {
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(command.replace("/tmp/", &format!("{}/", root.display())))
+                .env("AURA_WORKSPACE", &workspace_dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .expect("sh");
+            if let Ok(bytes) = std::fs::read(root.join("aura-out.bundle")) {
+                files.put_file(machine, workspace::OUT_BUNDLE, bytes);
+            }
+            aura_engine_cloud::ExecOutput {
+                exit_code: out.status.code().unwrap_or(-1),
+                stdout: out.stdout,
+                stderr: out.stderr,
+            }
+        }));
+    }
+
+    /// Place `agent` on a fake machine as a restart would find it.
+    async fn adopt_machine(
+        hub: &CloudHub,
+        fake: &FakeProvider,
+        agent: AgentId,
+        project: &Path,
+        branch: Option<&str>,
+    ) -> PlacedAgent {
+        use aura_engine_cloud::{MachineInfo, MachineStatus};
+        let name = "aura-sc01-0101";
+        fake.insert_machine(MachineInfo {
+            id: "vm-1".into(),
+            name: name.into(),
+            status: MachineStatus::Running,
+            region: String::new(),
+            vcpu: 4,
+            memory_bytes: 0,
+            disk_bytes: 0,
+            domain: format!("{name}.boxd.sh"),
+            public_ip: String::new(),
+            ssh_port: 0,
+            isolated: true,
+            labels: std::collections::BTreeMap::new(),
+            source: None,
+            created_ms: 0,
+            boot_ms: 0,
+        });
+        hub.fleet
+            .adopt(&agent.to_hex(), "0://scout", "p1", name, Vec::new(), None)
+            .await
+            .expect("adopt");
+        let placed = PlacedAgent {
+            zns: "0://scout".into(),
+            name: "scout".into(),
+            project: "p1".into(),
+            project_dir: project.to_path_buf(),
+            machine: name.into(),
+            owner: None,
+            owner_name: None,
+            branch: branch.map(str::to_string),
+            repo: None,
+            fetched_tip: None,
+        };
+        hub.placements
+            .lock()
+            .agents
+            .insert(agent.to_hex(), placed.clone());
+        placed
+    }
+
+    #[tokio::test]
+    async fn the_agents_commits_come_back_on_its_branch_once_each() {
+        let (hub, fake, dir) = hub();
+        let project = dir.path().join("project");
+        project_repo(&project, None);
+        let root = dir.path().join("vm");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let machine = root.join("workspace");
+        test_git(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                &project.display().to_string(),
+                &machine.display().to_string(),
+            ],
+        );
+        test_git(&machine, &["update-ref", workspace::HUB_HEAD_REF, "HEAD"]);
+        let branch = "aura/scout-sc01";
+        test_git(&machine, &["checkout", "-q", "-b", branch]);
+        test_commit(&machine, "b.txt", "agent work");
+        let tip = test_commit(&machine, "c.txt", "more agent work");
+        run_scripts_in(&fake, &root, &machine);
+        let agent = AgentId::new([1; 32]);
+        let hex = agent.to_hex();
+        let placed = adopt_machine(&hub, &fake, agent, &project, Some(branch)).await;
+
+        assert_eq!(
+            hub.fetch_commits(&hex, &placed).await,
+            CommitsOutcome::Fetched {
+                branch: branch.into(),
+                commits: 2
+            }
+        );
+        assert_eq!(
+            test_git(&project, &["rev-parse", &format!("refs/heads/{branch}")]),
+            tip
+        );
+        // The project's own branch and files are left as they were.
+        assert_eq!(test_git(&project, &["branch", "--show-current"]), "main");
+        assert!(!project.join("b.txt").exists());
+
+        // What came is remembered: nothing new comes again.
+        let placed = hub.placed_agent(agent).expect("placed");
+        assert_eq!(placed.fetched_tip.as_deref(), Some(tip.as_str()));
+        assert_eq!(hub.fetch_commits(&hex, &placed).await, CommitsOutcome::None);
+        test_commit(&machine, "d.txt", "last");
+        assert_eq!(
+            hub.fetch_commits(&hex, &placed).await,
+            CommitsOutcome::Fetched {
+                branch: branch.into(),
+                commits: 1
+            }
+        );
+
+        // A branch checked out here is not moved under the user.
+        test_git(&project, &["checkout", "-q", branch]);
+        test_commit(&machine, "e.txt", "after the checkout");
+        let placed = hub.placed_agent(agent).expect("placed");
+        let CommitsOutcome::Kept { reason, .. } = hub.fetch_commits(&hex, &placed).await else {
+            panic!("fetched into the checked-out branch");
+        };
+        assert!(reason.contains("checked out here"), "{reason}");
+
+        // A placement from before agent branches has none to fetch.
+        let legacy = PlacedAgent {
+            branch: None,
+            ..placed
+        };
+        assert_eq!(hub.fetch_commits(&hex, &legacy).await, CommitsOutcome::None);
+    }
+
     fn alice() -> Owner {
         Owner::Zos {
             user_id: "alice".into(),
@@ -2352,7 +3199,7 @@ mod tests {
             hub.recall(agent, "test", &BootReporter::none())
                 .await
                 .expect("recall"),
-            PatchOutcome::Empty
+            PullOutcome::patch_only(PatchOutcome::Empty)
         );
         assert_eq!(hub.placement_of(agent), Placement::Local);
     }
@@ -2366,6 +3213,21 @@ mod tests {
             }
             .describe(),
             "pulled 1 changed file(s)"
+        );
+        assert_eq!(
+            PullOutcome {
+                patch: PatchOutcome::Empty,
+                commits: CommitsOutcome::Fetched {
+                    branch: "aura/scout-a1b2".into(),
+                    commits: 2,
+                },
+            }
+            .describe(),
+            "no changes to pull; 2 commit(s) on branch aura/scout-a1b2"
+        );
+        assert_eq!(
+            PullOutcome::patch_only(PatchOutcome::Empty).describe(),
+            "no changes to pull"
         );
     }
 

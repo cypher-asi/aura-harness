@@ -699,6 +699,9 @@ async fn prepare_turn_context(
 
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
+    if let Some(branch) = ctx.tool_config.push_branch.as_deref() {
+        config.system_prompt.push_str(&cloud_git_note(branch));
+    }
 
     // Subagent surface is constant for the bundled registry today. The
     // dispatch tool re-emits the registry's name + description per
@@ -878,6 +881,15 @@ async fn fetch_attachment_data(url: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("read failed: {e}"))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// What a cloud agent's system prompt says about its git branch.
+fn cloud_git_note(branch: &str) -> String {
+    format!(
+        "\n\n<cloud_git>\nYou work on branch `{branch}` of a clone of this project's repository. \
+         Commit with git_commit and push with git_push, which only pushes this branch; \
+         open a pull request from it with `gh pr create`. Never push other branches.\n</cloud_git>"
+    )
 }
 
 #[cfg(test)]
@@ -1099,5 +1111,15 @@ mod tests {
         populate_tool_definitions(&mut session, &ctx);
 
         assert_cross_agent_tools(&session, &["list_agents"]);
+    }
+
+    #[test]
+    fn the_cloud_git_note_names_the_branch_and_the_tools() {
+        let note = cloud_git_note("aura/reviewer-re36");
+        assert!(note.contains("`aura/reviewer-re36`"), "{note}");
+        assert!(
+            note.contains("git_push") && note.contains("gh pr create"),
+            "{note}"
+        );
     }
 }

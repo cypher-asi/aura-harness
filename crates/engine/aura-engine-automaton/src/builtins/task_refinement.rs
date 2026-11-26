@@ -506,15 +506,6 @@ mod tests {
         async fn get_active_session(&self, _i: &str) -> anyhow::Result<Option<SessionDescriptor>> {
             unimplemented!("RecordingDomain")
         }
-        async fn orbit_api_call(
-            &self,
-            _m: &str,
-            _p: &str,
-            _b: Option<&serde_json::Value>,
-            _j: Option<&str>,
-        ) -> anyhow::Result<String> {
-            unimplemented!("RecordingDomain")
-        }
         async fn network_api_call(
             &self,
             _m: &str,

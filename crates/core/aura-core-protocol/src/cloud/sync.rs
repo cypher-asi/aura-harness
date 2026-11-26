@@ -66,7 +66,8 @@ pub struct TracePage {
     pub next_since: u64,
 }
 
-/// The agent's work as a patch against the snapshot's commit.
+/// The agent's work as a patch against what the hub last had of the
+/// machine's working tree (`refs/aura/base`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspacePatch {
     /// Commit the patch applies to.
@@ -75,6 +76,49 @@ pub struct WorkspacePatch {
     pub patch: String,
     /// Paths it touches.
     pub files: Vec<String>,
+    /// The working tree the patch was taken from, as a tree id: once the
+    /// patch is applied, the hub makes it the machine's base. `None` from
+    /// nodes of the older layout, whose patch is taken against `HEAD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<String>,
+}
+
+/// How a cloud machine's git reaches its project's GitHub repository.
+/// The token is a boxd host-bound secret: the machine holds only its
+/// `bxds_` placeholder, which boxd's egress proxy swaps for the real
+/// token on requests to GitHub. Never a real token.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitClaim {
+    /// The agent's branch, the only one its git tools push.
+    pub branch: String,
+    /// `origin`: the repository's https URL, when it is on GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+    /// Environment variable holding the placeholder (the repository
+    /// secret's name), when the hub keeps one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    /// The placeholder, filled in on the machine by `aura node claim`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    /// Commit author: the GitHub App's bot (`<slug>[bot]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_name: Option<String>,
+    /// Its noreply address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_email: Option<String>,
+}
+
+impl std::fmt::Debug for GitClaim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitClaim")
+            .field("branch", &self.branch)
+            .field("remote_url", &self.remote_url)
+            .field("env", &self.env)
+            .field("placeholder", &self.placeholder.is_some())
+            .field("author_name", &self.author_name)
+            .finish_non_exhaustive()
+    }
 }
 
 /// How a cloud node calls one plan provider for its owner. The bearer is
@@ -135,6 +179,10 @@ pub struct NodeClaim {
     /// the machine.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plans: Vec<PlanTemplate>,
+    /// The agent's branch and how its git reaches GitHub; `None` from
+    /// hubs before git claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitClaim>,
 }
 
 impl std::fmt::Display for NodeClaim {
@@ -143,10 +191,11 @@ impl std::fmt::Display for NodeClaim {
         let plans: Vec<&str> = self.plans.iter().map(|p| p.provider.as_str()).collect();
         write!(
             f,
-            "NodeClaim({}, owner {}, plans [{}], seal {})",
+            "NodeClaim({}, owner {}, plans [{}], git {}, seal {})",
             self.node_id,
             self.owner.as_deref().unwrap_or("-"),
             plans.join(","),
+            self.git.as_ref().map_or("-", |git| git.branch.as_str()),
             self.seal.len()
         )
     }
@@ -182,14 +231,26 @@ mod tests {
                 system_preamble: None,
                 placeholder: Some("bxds_secret-placeholder".into()),
             }],
+            git: Some(GitClaim {
+                branch: "aura/reviewer-re36".into(),
+                remote_url: Some("https://github.com/acme/app.git".into()),
+                env: Some("AURA_GH_INST01_0A1B2C3D".into()),
+                placeholder: Some("bxds_git-secret-placeholder".into()),
+                author_name: Some("aura-agents[bot]".into()),
+                author_email: Some("1+aura-agents[bot]@users.noreply.github.com".into()),
+            }),
         };
         let text = claim.to_string();
         assert!(!text.contains("secret"), "{text}");
         assert!(
-            text.contains("owner a11ce000") && text.contains("plans [claude]"),
+            text.contains("owner a11ce000")
+                && text.contains("plans [claude]")
+                && text.contains("git aura/reviewer-re36"),
             "{text}"
         );
         let debug = format!("{:?}", claim.plans[0]);
+        assert!(!debug.contains("bxds_"), "{debug}");
+        let debug = format!("{claim:?}");
         assert!(!debug.contains("bxds_"), "{debug}");
         let json = serde_json::to_string(&claim).expect("json");
         assert_eq!(

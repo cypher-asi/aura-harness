@@ -249,20 +249,6 @@ impl DomainApi for JwtDomainApi {
     ) -> anyhow::Result<Option<SessionDescriptor>> {
         self.inner.get_active_session(instance_id).await
     }
-    async fn orbit_api_call(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&serde_json::Value>,
-        jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
-        self.inner
-            .orbit_api_call(method, path, body, self.jwt_or(jwt))
-            .await
-    }
-    fn orbit_url(&self) -> &str {
-        self.inner.orbit_url()
-    }
     async fn network_api_call(
         &self,
         method: &str,

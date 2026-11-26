@@ -57,7 +57,7 @@ async fn git_output(cmd: &mut Command, label: &str) -> Result<std::process::Outp
 /// List commits on `HEAD` that have not yet been pushed to
 /// `<remote>/<branch>`.
 ///
-/// This is a **read-only** inspection used by dev-loop and orbit
+/// This is a **read-only** inspection used by dev-loop and push
 /// telemetry. It does not mutate any repository state. When the
 /// remote ref is missing (e.g. first push) we return an empty vector
 /// rather than propagating an error.

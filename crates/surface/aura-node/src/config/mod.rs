@@ -63,8 +63,6 @@ pub struct NodeConfig {
     pub sync_writes: bool,
     /// Record window size for kernel context
     pub record_window_size: usize,
-    /// Orbit service URL
-    pub orbit_url: String,
     /// Aura Storage service URL
     pub aura_storage_url: String,
     /// Aura Network service URL
@@ -156,7 +154,6 @@ impl std::fmt::Debug for NodeConfig {
             .field("bind_addr", &self.bind_addr)
             .field("sync_writes", &self.sync_writes)
             .field("record_window_size", &self.record_window_size)
-            .field("orbit_url", &self.orbit_url)
             .field("aura_storage_url", &self.aura_storage_url)
             .field("aura_network_url", &self.aura_network_url)
             .field("aura_os_server_url", &self.aura_os_server_url)
@@ -184,7 +181,6 @@ impl Default for NodeConfig {
             bind_addr: "127.0.0.1:8080".to_string(),
             sync_writes: false,
             record_window_size: 50,
-            orbit_url: "https://orbit-sfvu.onrender.com".to_string(),
             aura_storage_url: "https://aura-storage.onrender.com".to_string(),
             aura_network_url: "https://aura-network.onrender.com".to_string(),
             aura_os_server_url: None,
@@ -246,9 +242,6 @@ impl NodeConfig {
             if let Ok(n) = val.parse() {
                 config.record_window_size = n;
             }
-        }
-        if let Ok(val) = std::env::var("ORBIT_URL") {
-            config.orbit_url = val;
         }
         if let Ok(val) = std::env::var("AURA_STORAGE_URL") {
             config.aura_storage_url = val;

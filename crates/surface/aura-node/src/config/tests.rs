@@ -11,7 +11,6 @@ fn clear_node_env_vars() {
     std::env::remove_var("AURA_LISTEN_ADDR");
     std::env::remove_var("SYNC_WRITES");
     std::env::remove_var("RECORD_WINDOW_SIZE");
-    std::env::remove_var("ORBIT_URL");
     std::env::remove_var("AURA_STORAGE_URL");
     std::env::remove_var("AURA_NETWORK_URL");
     std::env::remove_var("AURA_OS_SERVER_URL");
@@ -31,7 +30,6 @@ fn test_default_config() {
     assert_eq!(config.bind_addr, "127.0.0.1:8080");
     assert!(!config.sync_writes);
     assert_eq!(config.record_window_size, 50);
-    assert_eq!(config.orbit_url, "https://orbit-sfvu.onrender.com");
     assert_eq!(config.aura_storage_url, "https://aura-storage.onrender.com");
     assert_eq!(config.aura_network_url, "https://aura-network.onrender.com");
     assert!(
@@ -371,7 +369,6 @@ fn test_full_env_override() {
     std::env::set_var("BIND_ADDR", "0.0.0.0:4000");
     std::env::set_var("SYNC_WRITES", "true");
     std::env::set_var("RECORD_WINDOW_SIZE", "200");
-    std::env::set_var("ORBIT_URL", "https://orbit.example.com");
     std::env::set_var("AURA_STORAGE_URL", "https://storage.example.com");
     std::env::set_var("AURA_NETWORK_URL", "https://network.example.com");
 
@@ -381,7 +378,6 @@ fn test_full_env_override() {
     assert_eq!(config.bind_addr, "0.0.0.0:4000");
     assert!(config.sync_writes);
     assert_eq!(config.record_window_size, 200);
-    assert_eq!(config.orbit_url, "https://orbit.example.com");
     assert_eq!(config.aura_storage_url, "https://storage.example.com");
     assert_eq!(config.aura_network_url, "https://network.example.com");
 

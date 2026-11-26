@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aura_config::{BoxdToken, CloudConfig, MachineSize};
-use aura_core_protocol::cloud::{NodeClaim, NodeClaimed, PlanTemplate};
+use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed, PlanTemplate};
 use aura_core_types::{VmEvent, VmPayload, VmResources, VmSource};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -195,11 +195,18 @@ pub struct ProvisionRequest {
     pub secrets: Vec<String>,
     /// How the machine's node calls the owner's plans (sent in its claim).
     pub plans: Vec<PlanTemplate>,
+    /// The project's repository secret the machine lists too
+    /// ([`names::repo_secret`]), when the project is on GitHub.
+    pub repo_secret: Option<String>,
+    /// The agent's branch and how its git reaches GitHub (sent in its
+    /// claim).
+    pub git: Option<GitClaim>,
 }
 
 struct Entry {
     owner: String,
     plans: Vec<PlanTemplate>,
+    git: Option<GitClaim>,
     project: String,
     ledger: String,
     machine: MachineInfo,
@@ -502,6 +509,17 @@ impl VmFleet {
                 op: "list a secret that is not its owner's plan",
             });
         }
+        if let Some(foreign) = request
+            .repo_secret
+            .as_deref()
+            .filter(|name| !names::is_repo_secret(name))
+        {
+            return Err(CloudError::BadState {
+                machine: request.name.clone(),
+                state: format!("asked for secret {foreign}"),
+                op: "list a repository secret that is not one",
+            });
+        }
         let ledger = names::machine_ledger(&request.agent_zns);
         let mut labels = BTreeMap::new();
         labels.insert(LABEL_OWNER.to_string(), request.owner.clone());
@@ -522,7 +540,12 @@ impl VmFleet {
                 vec![format!("aura-{}", names::dns_fragment(&request.project))]
             },
             delete_after_secs: None,
-            secrets: request.secrets.clone(),
+            secrets: request
+                .secrets
+                .iter()
+                .cloned()
+                .chain(request.repo_secret.clone())
+                .collect(),
         };
         let creating = match &request.origin {
             MachineOrigin::Snapshot(snapshot) => {
@@ -570,6 +593,7 @@ impl VmFleet {
             Entry {
                 owner: request.owner.clone(),
                 plans: request.plans.clone(),
+                git: request.git.clone(),
                 project: request.project.clone(),
                 ledger: ledger.clone(),
                 machine: machine.clone(),
@@ -665,7 +689,7 @@ impl VmFleet {
     ///
     /// When the command fails or answers something unreadable.
     pub async fn claim(&self, agent: &str, seal: &[String]) -> CloudResult<NodeClaimed> {
-        let (machine, project, ledger, owner, plans) = {
+        let (machine, project, ledger, owner, plans, git) = {
             let machines = self.machines.lock();
             let entry = machines.get(agent).ok_or_else(|| CloudError::NotFound {
                 what: "machine",
@@ -677,6 +701,7 @@ impl VmFleet {
                 entry.ledger.clone(),
                 entry.owner.clone(),
                 entry.plans.clone(),
+                entry.git.clone(),
             )
         };
         let node_token = random_token();
@@ -687,6 +712,7 @@ impl VmFleet {
             seal: seal.to_vec(),
             owner: (!owner.is_empty()).then(|| owner.clone()),
             plans,
+            git,
         };
         let stdin = serde_json::to_vec(&claim).map_err(|err| CloudError::InvalidResponse {
             op: "claim",
@@ -742,6 +768,7 @@ impl VmFleet {
         project: &str,
         machine: &str,
         plans: Vec<PlanTemplate>,
+        git: Option<GitClaim>,
     ) -> CloudResult<MachineView> {
         let info = self
             .provider
@@ -763,6 +790,7 @@ impl VmFleet {
             Entry {
                 owner,
                 plans,
+                git,
                 project: project.to_string(),
                 ledger: names::machine_ledger(agent_zns),
                 machine: info,
@@ -1310,11 +1338,67 @@ mod tests {
             owner: ALICE.into(),
             secrets: Vec::new(),
             plans: Vec::new(),
+            repo_secret: None,
+            git: None,
         }
     }
 
     const ALICE: &str = "a11ce000";
     const BOB: &str = "b0b00000";
+
+    #[tokio::test]
+    async fn a_machine_lists_one_repo_secret_and_its_claim_names_the_branch() {
+        let (fleet, fake, _) = fleet(Duration::from_secs(300));
+        let claims = Arc::new(Mutex::new(Vec::<NodeClaim>::new()));
+        let seen = Arc::clone(&claims);
+        fake.on_exec(Arc::new(move |_, _, stdin| {
+            if let Some(claim) = stdin.and_then(|s| serde_json::from_slice(s).ok()) {
+                seen.lock().push(claim);
+            }
+            crate::provider::ExecOutput::default()
+        }));
+        let plan = crate::names::plan_secret(ALICE, "inst-1", aura_core_auth::ProviderKind::Claude)
+            .expect("name");
+        let repo = crate::names::repo_secret("inst-1", "acme/app");
+        for name in [&plan, &repo] {
+            fake.set_secret(&crate::provider::HostSecret {
+                name: name.clone(),
+                value: zeroize::Zeroizing::new("unlinked".into()),
+                domains: vec!["github.com".into()],
+                replace_in: vec!["headers".into()],
+            })
+            .await
+            .expect("secret");
+        }
+        let mut aa = request("aa", MachineOrigin::Fresh);
+        aa.secrets = vec![plan.clone()];
+        aa.repo_secret = Some(repo.clone());
+        aa.git = Some(GitClaim {
+            branch: "aura/reviewer-re36".into(),
+            remote_url: Some("https://github.com/acme/app.git".into()),
+            env: Some(repo.clone()),
+            placeholder: None,
+            author_name: Some("aura-agents[bot]".into()),
+            author_email: None,
+        });
+        fleet.provision(aa).await.expect("provision");
+        assert_eq!(
+            fake.machine_secrets("aura-re36-aa"),
+            vec![plan, repo.clone()]
+        );
+        let git = claims.lock()[0].git.clone().expect("git claim");
+        assert_eq!(git.branch, "aura/reviewer-re36");
+        assert_eq!(git.env.as_deref(), Some(repo.as_str()));
+
+        // A plan secret passed as the repository secret is refused.
+        let mut bb = request("bb", MachineOrigin::Fresh);
+        bb.repo_secret = Some(
+            crate::names::plan_secret(BOB, "inst-1", aura_core_auth::ProviderKind::Claude)
+                .expect("name"),
+        );
+        let err = fleet.provision(bb).await.expect_err("not a repo secret");
+        assert!(err.to_string().contains("repository secret"), "{err}");
+    }
 
     #[tokio::test]
     async fn machines_carry_their_owner_and_only_their_owners_secrets() {
@@ -1792,7 +1876,14 @@ mod tests {
             settings(Duration::from_secs(300)),
         ));
         restarted
-            .adopt("aa", "0://terminal/aa", "p1", "aura-re36-aa", Vec::new())
+            .adopt(
+                "aa",
+                "0://terminal/aa",
+                "p1",
+                "aura-re36-aa",
+                Vec::new(),
+                None,
+            )
             .await
             .expect("adopt");
         assert!(restarted.node_token("aa").is_none());

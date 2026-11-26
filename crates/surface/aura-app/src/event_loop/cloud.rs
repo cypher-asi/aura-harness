@@ -545,6 +545,24 @@ async fn build_view(
                 &cloud.plan_status(&owner),
                 now,
             );
+            if let Some(placed) = cloud.placed_agent(agent) {
+                if let Some(branch) = placed.branch.as_deref() {
+                    let token = placed
+                        .repo
+                        .as_ref()
+                        .and_then(|repo| cloud.repo_status(repo));
+                    host_info::add_git(
+                        &mut view,
+                        &host_info::GitFacts {
+                            branch,
+                            repo: placed.repo.as_ref(),
+                            token: token.as_ref(),
+                            fetched: placed.fetched_tip.as_deref(),
+                        },
+                        now,
+                    );
+                }
+            }
             view
         }
         None => {

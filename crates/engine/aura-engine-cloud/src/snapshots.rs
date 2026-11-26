@@ -44,7 +44,7 @@ use crate::names::{self, BASE_SNAPSHOT, LABEL_INSTALL, LABEL_PROJECT, LABEL_ROLE
 use crate::provider::{MachineOrigin, NewMachine, VmProvider};
 
 /// Bump when [`base_packages`] or the node start changes.
-pub const BOOTSTRAP_VERSION: &str = "3";
+pub const BOOTSTRAP_VERSION: &str = "4";
 /// Where a machine finds out which snapshot it came from.
 pub const SNAPSHOT_MANIFEST: &str = "/etc/aura/snapshot.json";
 /// Builders delete themselves after this long, seconds.
@@ -86,6 +86,18 @@ pub fn base_packages() -> Vec<String> {
          --component rustfmt --component clippy"
             .into(),
         "sudo ln -sf \"$HOME/.cargo/bin/\"* /usr/local/bin/ && cargo --version".into(),
+        // GitHub's CLI, from GitHub's own apt repository, for pull requests.
+        "sudo mkdir -p -m 755 /etc/apt/keyrings \
+         && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+            | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+         && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+         && echo \"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] \
+            https://cli.github.com/packages stable main\" \
+            | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+         && sudo apt-get update -y \
+         && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gh \
+         && gh --version"
+            .into(),
         format!(
             "sudo mkdir -p /etc/aura {ws} {data} && sudo chown \"$(id -u)\" {ws} {data}",
             ws = crate::machine_env::WORKSPACE_DIR,
@@ -199,7 +211,7 @@ impl LocalBinary {
 #[must_use]
 pub fn project_fingerprint(project: &Path, base: &str, build_command: &str) -> String {
     let mut hasher = blake3::Hasher::new();
-    for part in [base, build_command] {
+    for part in [base, build_command, crate::workspace::FORMAT] {
         hasher.update(part.as_bytes());
         hasher.update(&[0]);
     }
@@ -552,29 +564,35 @@ impl SnapshotBuilder {
             ),
         );
         boot.fact("build command", command.clone());
-        let (commit, archive) = {
+        let history = {
             let dir = dir.clone();
             boot.wait(
                 BootStage::Snapshot,
-                "archiving the project at HEAD",
+                "bundling the project's history at HEAD",
                 None,
-                tokio::task::spawn_blocking(move || {
-                    let commit = delta::head_commit(&dir)?;
-                    let archive = delta::archive_commit(&dir, &commit)?;
-                    Ok::<_, CloudError>((commit, archive))
-                }),
+                tokio::task::spawn_blocking(move || delta::bundle_head(&dir)),
             )
             .await
-            .map_err(|err| CloudError::io("archive project", std::io::Error::other(err)))??
+            .map_err(|err| CloudError::io("bundle project", std::io::Error::other(err)))??
         };
+        boot.fact(
+            "history",
+            format!(
+                "{} at {}",
+                human_bytes(history.bytes.len() as u64),
+                history.commit.chars().take(12).collect::<String>()
+            ),
+        );
+        let clone = crate::workspace::clone_snapshot(&history.commit, history.upstream.as_deref())?;
+        let commit = history.commit;
         let name = names::project_snapshot(project_id);
         let steps = vec![
             Step::Upload {
-                path: "/tmp/aura-project.tgz".into(),
-                bytes: archive,
+                path: crate::workspace::SNAPSHOT_BUNDLE.into(),
+                bytes: history.bytes,
             },
             Step::Run {
-                command: delta::APPLY_ARCHIVE.into(),
+                command: clone,
                 timeout: SHORT_STEP_TIMEOUT,
             },
             Step::Run {

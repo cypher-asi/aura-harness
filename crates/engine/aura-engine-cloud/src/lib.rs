@@ -29,6 +29,11 @@
 //! - [`mesh`]: the directory of which node holds which agent, mail ids
 //!   and dedup.
 //! - [`plans`]: each user's plan tokens as boxd host-bound secrets.
+//! - [`github`]: the GitHub App client that mints one-repository
+//!   installation tokens; [`repos`] keeps them in boxd host-bound
+//!   secrets, one per repository.
+//! - [`workspace`]: the shell that keeps a machine's workspace a real
+//!   clone on its agent's branch, and the base it diffs against.
 //! - [`names`]: machine and ledger names.
 //! - [`boot`]: what a machine coming up shows while it happens, for the
 //!   chat's boot console.
@@ -38,6 +43,8 @@
 //! - The boxd key and tokens never leave this process: machines get an
 //!   explicit env allowlist, and node tokens travel only over boxd's
 //!   authenticated `Exec`.
+//! - The GitHub App key, App JWTs and repository tokens never leave this
+//!   process either: machines hold only `bxds_` placeholders.
 //! - Every external call has a timeout (rules.md §6.2).
 
 pub mod boot;
@@ -47,6 +54,7 @@ pub mod delta;
 pub mod error;
 pub mod fake;
 pub mod fleet;
+pub mod github;
 pub mod glibc;
 pub mod host;
 pub mod machine_env;
@@ -55,8 +63,10 @@ pub mod names;
 pub mod plans;
 pub mod provider;
 pub mod replica;
+pub mod repos;
 pub mod snapshots;
 pub mod token;
+pub mod workspace;
 
 pub mod proto {
     //! Code generated from boxd's vendored `api.proto` (`boxd.api.v1`).

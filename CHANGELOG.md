@@ -7,6 +7,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Cloud agents commit, push and open pull requests on GitHub
+
+##### Added
+
+- A cloud agent works in a real clone of its project, on a branch of
+  its own named `aura/<name>-<code>` that starts at this repository's
+  HEAD. The project's snapshot holds its git history at the commit it
+  was built from, sent as a `git bundle` rather than a copy of `.git`.
+  A new machine also gets the commits made since and the uncommitted
+  changes. A spawned agent that forks its parent's machine starts its
+  own branch from the parent's.
+- With a GitHub App set up (`AURA_GITHUB_APP_ID` and
+  `AURA_GITHUB_APP_PRIVATE_KEY_PATH`; see "GitHub for cloud agents" in
+  `docs/configuration.md`), the agent pushes its branch with `git_push`
+  or `git_commit_push` and opens pull requests with `gh pr create`, as
+  the App's bot. The app mints a one-hour token for the project's
+  repository only, renews it before it expires, and keeps it in a boxd
+  secret bound to GitHub. The machine holds only a placeholder, which
+  boxd's proxy swaps for the token. A cloud agent can push only its own
+  branch. `gh` is now installed on cloud machines.
+- Pull and `/local` also bring the agent's commits back. They are
+  fetched into this repository's branch of the same name, fast-forward
+  only, and never into the branch checked out here.
+- The boot console has a "Sharing GitHub access" step that names the
+  repository, and says when the App isn't installed on it, with the
+  install link. The HOST tab has a GIT section with the agent's branch,
+  the tip last fetched here, the repository and the state of its token.
+
+##### Changed
+
+- A pull takes only the work done since the last pull, measured from a
+  base the node keeps outside the agent's branch and index. A machine
+  no longer commits the agent's whole working tree after each pull, so
+  the agent's branch holds only its own commits.
+
+##### Removed
+
+- The Orbit tools (`orbit_*`), `ORBIT_URL` and the `x-token` push path.
+  `git_push` and `git_commit_push` push to `origin` with git's own
+  credentials and no longer take a `remote_url` or a JWT.
+
 ### An agent's chat opens quickly
 
 ##### Fixed

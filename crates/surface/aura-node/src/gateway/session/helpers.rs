@@ -386,10 +386,6 @@ pub(super) async fn build_kernel_with_config(
             api.clone(),
             session.auth_token.clone(),
             session.project_id.clone(),
-            session
-                .project_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned()),
         ))
     });
 
@@ -561,10 +557,6 @@ pub(super) fn register_session_agent(
             api.clone(),
             session.auth_token.clone(),
             session.project_id.clone(),
-            session
-                .project_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned()),
         ))
     });
     let user_default = session_user_defaults(session, ctx)?;

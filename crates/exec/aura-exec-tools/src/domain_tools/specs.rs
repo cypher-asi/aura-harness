@@ -403,15 +403,6 @@ mod tests {
         async fn get_active_session(&self, _: &str) -> anyhow::Result<Option<SessionDescriptor>> {
             Ok(None)
         }
-        async fn orbit_api_call(
-            &self,
-            _: &str,
-            _: &str,
-            _: Option<&serde_json::Value>,
-            _: Option<&str>,
-        ) -> anyhow::Result<String> {
-            Ok("{}".into())
-        }
         async fn network_api_call(
             &self,
             _: &str,

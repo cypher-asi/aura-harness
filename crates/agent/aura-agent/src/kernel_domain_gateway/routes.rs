@@ -1,7 +1,7 @@
 //! `DomainApi` implementation for [`KernelDomainGateway`].
 //!
 //! Each method is either a passthrough (read-only verbs and the few
-//! `GET`/`HEAD`/`OPTIONS` orbit/network calls) or a `with_recording!`-
+//! `GET`/`HEAD`/`OPTIONS` network calls) or a `with_recording!`-
 //! bracketed call that emits a request/response `RecordEntry` pair via
 //! [`KernelDomainGateway::record_request`](super::handle::KernelDomainGateway::record_request) and
 //! [`KernelDomainGateway::record_response`](super::handle::KernelDomainGateway::record_response).
@@ -353,38 +353,11 @@ impl DomainApi for KernelDomainGateway {
         self.inner.get_active_session(instance_id).await
     }
 
-    // --- Orbit / Network pass-through ----------------------------------
+    // --- Network pass-through ------------------------------------------
     //
-    // These are generic verbs; classify via HTTP method. `GET` /
-    // `HEAD` / `OPTIONS` are treated as read-only; everything else
-    // routes through the kernel.
-    async fn orbit_api_call(
-        &self,
-        method: &str,
-        path: &str,
-        body: Option<&serde_json::Value>,
-        jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
-        if is_read_only_http_method(method) {
-            return self.inner.orbit_api_call(method, path, body, jwt).await;
-        }
-        let args = json!({
-            "method": method,
-            "path": path,
-            "has_body": body.is_some(),
-        });
-        with_recording!(
-            self,
-            "orbit_api_call",
-            args,
-            self.inner.orbit_api_call(method, path, body, jwt)
-        )
-    }
-
-    fn orbit_url(&self) -> &str {
-        self.inner.orbit_url()
-    }
-
+    // A generic verb; classify via HTTP method. `GET` / `HEAD` /
+    // `OPTIONS` are treated as read-only; everything else routes
+    // through the kernel.
     async fn network_api_call(
         &self,
         method: &str,
