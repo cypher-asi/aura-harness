@@ -5,6 +5,7 @@ use crate::worker::{process_agent_with_timeout, ProcessedAgent, AGENT_LOOP_TIMEO
 use aura_agent::{AgentLoop, AgentLoopConfig};
 use aura_agent_kernel::{ExecutorRouter, Kernel, PolicyConfig};
 use aura_core_types::{AgentId, AgentStatus};
+use aura_store_db::StoreError;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, error, info, instrument};
@@ -23,7 +24,7 @@ impl Scheduler {
         &self,
         agent_id: AgentId,
         overrides: ScheduleOverrides,
-    ) -> anyhow::Result<ProcessedAgent> {
+    ) -> Result<ProcessedAgent, SchedulerError> {
         let ScheduleOverrides {
             caller_owns_deadline,
             loop_config: agent_loop_config,
@@ -68,11 +69,11 @@ impl Scheduler {
         )
         .await;
         let release_result = claim.release();
-        finish_processing(result, release_result)
+        finish_processing(result.map_err(SchedulerError::from), release_result)
     }
 
     /// Whether the agent is active and has pending transactions.
-    fn has_work(&self, agent_id: AgentId) -> anyhow::Result<bool> {
+    fn has_work(&self, agent_id: AgentId) -> Result<bool, StoreError> {
         let status = self.store.get_agent_status(agent_id)?;
         if status != AgentStatus::Active {
             debug!(?status, "Agent not active, skipping");
@@ -92,7 +93,7 @@ impl Scheduler {
         &self,
         agent_id: AgentId,
         agent_loop_config: Option<AgentLoopConfig>,
-    ) -> anyhow::Result<AgentLoopConfig> {
+    ) -> Result<AgentLoopConfig, SchedulerError> {
         match agent_loop_config {
             Some(cfg) => Ok(cfg),
             None => match self.identity_registry.get(agent_id) {
@@ -102,9 +103,7 @@ impl Scheduler {
                         agent_id = %agent_id,
                         "AgentIdentity not registered: refusing to dispatch without explicit model + X-Aura-* identity"
                     );
-                    Err(anyhow::Error::new(SchedulerError::AgentNotRegistered {
-                        agent_id,
-                    }))
+                    Err(SchedulerError::AgentNotRegistered { agent_id })
                 }
             },
         }
@@ -118,7 +117,7 @@ impl Scheduler {
         router_override: Option<ExecutorRouter>,
         policy: Option<PolicyConfig>,
         workspace_override: Option<(PathBuf, bool)>,
-    ) -> anyhow::Result<Arc<Kernel>> {
+    ) -> Result<Arc<Kernel>, SchedulerError> {
         // Child subagent runs inject a session-equivalent router (built
         // via `ChildKernelFactory`); everything else falls back to the
         // scheduler's shared bare executor list.
@@ -147,7 +146,7 @@ impl Scheduler {
             kernel_config,
             agent_id,
         )
-        .map_err(|e| anyhow::anyhow!("kernel construction failed: {e}"))?;
+        .map_err(SchedulerError::KernelConstruction)?;
         Ok(Arc::new(kernel))
     }
 
@@ -175,9 +174,9 @@ impl Scheduler {
 
 /// Log how a run ended and combine its result with the claim release.
 fn finish_processing(
-    result: anyhow::Result<ProcessedAgent>,
-    release_result: anyhow::Result<()>,
-) -> anyhow::Result<ProcessedAgent> {
+    result: Result<ProcessedAgent, SchedulerError>,
+    release_result: Result<(), StoreError>,
+) -> Result<ProcessedAgent, SchedulerError> {
     match (result, release_result) {
         (Ok(processed), Ok(())) => {
             info!(processed = processed.processed, "Agent processing complete");
@@ -185,7 +184,7 @@ fn finish_processing(
         }
         (Ok(_), Err(e)) => {
             error!(error = %e, "Agent processing claim release failed");
-            Err(e)
+            Err(e.into())
         }
         (Err(e), release) => {
             if let Err(release_error) = release {

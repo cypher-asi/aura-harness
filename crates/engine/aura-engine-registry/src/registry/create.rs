@@ -1,14 +1,14 @@
 //! Creating agents and projects: plain agents, children, compare runs,
 //! instances of definitions and the headless agent.
 
-use anyhow::Context;
 use aura_core_types::AgentId;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 
 use super::{
-    code, AgentRegistry, IdCache, Opened, Project, RegisteredAgent, COMPARE_ARM_ZNS_PREFIX,
-    COMPARE_ZNS_PREFIX, DEFAULT_PROJECT_AGENT, HEADLESS_AGENT_NAME, HEADLESS_ZNS_ID,
+    code, AgentRegistry, AgentRegistryError, IdCache, Opened, Project, RegisteredAgent,
+    COMPARE_ARM_ZNS_PREFIX, COMPARE_ZNS_PREFIX, DEFAULT_PROJECT_AGENT, HEADLESS_AGENT_NAME,
+    HEADLESS_ZNS_ID,
 };
 
 impl AgentRegistry {
@@ -50,7 +50,7 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// Returns an error if the registry cannot be written.
-    pub fn create(&mut self, name: Option<String>) -> anyhow::Result<RegisteredAgent> {
+    pub fn create(&mut self, name: Option<String>) -> Result<RegisteredAgent, AgentRegistryError> {
         let name = name
             .map(|n| n.trim().to_string())
             .filter(|n| !n.is_empty())
@@ -71,12 +71,18 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if `folder` is not a directory or the registry
     /// cannot be written.
-    pub fn open_project(&mut self, folder: &Path) -> anyhow::Result<(RegisteredAgent, Opened)> {
+    pub fn open_project(
+        &mut self,
+        folder: &Path,
+    ) -> Result<(RegisteredAgent, Opened), AgentRegistryError> {
         let folder = folder
             .canonicalize()
-            .with_context(|| format!("opening {}", folder.display()))?;
+            .map_err(|source| AgentRegistryError::OpenFolder {
+                folder: folder.to_path_buf(),
+                source,
+            })?;
         if !folder.is_dir() {
-            anyhow::bail!("{} is not a folder", folder.display());
+            return Err(AgentRegistryError::NotAFolder { folder });
         }
         let known = self
             .file
@@ -110,9 +116,14 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if the project is unknown or the registry cannot be
     /// written.
-    pub fn create_in_project(&mut self, project_id: &str) -> anyhow::Result<RegisteredAgent> {
+    pub fn create_in_project(
+        &mut self,
+        project_id: &str,
+    ) -> Result<RegisteredAgent, AgentRegistryError> {
         let Some(project) = self.file.projects.iter_mut().find(|p| p.id == project_id) else {
-            anyhow::bail!("no such project");
+            return Err(AgentRegistryError::NoSuchProject {
+                project_id: project_id.to_string(),
+            });
         };
         project.removed = false;
         let count = self
@@ -142,7 +153,7 @@ impl AgentRegistry {
         name: &str,
         parent: &str,
         folder: Option<PathBuf>,
-    ) -> anyhow::Result<RegisteredAgent> {
+    ) -> Result<RegisteredAgent, AgentRegistryError> {
         self.push(RegisteredAgent {
             parent: Some(parent.to_string()),
             project_id: self.project_id_of_zns(parent),
@@ -156,7 +167,7 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// Returns an error if the registry cannot be written.
-    pub fn create_compare(&mut self, parent: &str) -> anyhow::Result<RegisteredAgent> {
+    pub fn create_compare(&mut self, parent: &str) -> Result<RegisteredAgent, AgentRegistryError> {
         let n = self.compares().len() + 1;
         self.push(RegisteredAgent {
             zns_id: format!("{COMPARE_ZNS_PREFIX}{}", uuid::Uuid::new_v4()),
@@ -175,7 +186,7 @@ impl AgentRegistry {
         &mut self,
         name: &str,
         compare: &str,
-    ) -> anyhow::Result<RegisteredAgent> {
+    ) -> Result<RegisteredAgent, AgentRegistryError> {
         self.push(RegisteredAgent {
             zns_id: format!("{COMPARE_ARM_ZNS_PREFIX}{}", uuid::Uuid::new_v4()),
             parent: Some(compare.to_string()),
@@ -202,7 +213,7 @@ impl AgentRegistry {
         &mut self,
         definition: &str,
         parent: Option<String>,
-    ) -> anyhow::Result<RegisteredAgent> {
+    ) -> Result<RegisteredAgent, AgentRegistryError> {
         let project_id = match parent.as_deref() {
             Some(parent) => self.project_id_of_zns(parent),
             None => Some(self.launch_project()),
@@ -224,9 +235,11 @@ impl AgentRegistry {
         &mut self,
         definition: &str,
         project_id: &str,
-    ) -> anyhow::Result<RegisteredAgent> {
+    ) -> Result<RegisteredAgent, AgentRegistryError> {
         let Some(project) = self.file.projects.iter_mut().find(|p| p.id == project_id) else {
-            anyhow::bail!("no such project");
+            return Err(AgentRegistryError::NoSuchProject {
+                project_id: project_id.to_string(),
+            });
         };
         project.removed = false;
         self.push(RegisteredAgent {
@@ -268,7 +281,7 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// Returns an error if the registry cannot be written.
-    pub fn headless(&mut self) -> anyhow::Result<RegisteredAgent> {
+    pub fn headless(&mut self) -> Result<RegisteredAgent, AgentRegistryError> {
         if let Some(agent) = self
             .file
             .agents
@@ -307,7 +320,10 @@ impl AgentRegistry {
     }
 
     /// Register `agent`, giving it its code, and save.
-    pub(super) fn push(&mut self, mut agent: RegisteredAgent) -> anyhow::Result<RegisteredAgent> {
+    pub(super) fn push(
+        &mut self,
+        mut agent: RegisteredAgent,
+    ) -> Result<RegisteredAgent, AgentRegistryError> {
         if agent.code.is_none() {
             agent.code = Some(code::assign(
                 &agent,

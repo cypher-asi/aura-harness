@@ -1,7 +1,7 @@
 //! Hands background commands to the process manager.
 
 use super::ProcessTable;
-use aura_agent::{ProcessManager, ProcessMeta};
+use aura_agent::{NewProcess, ProcessManager, ProcessMeta};
 use aura_core_types::{ActionId, AgentId, Hash, ProcessId};
 use aura_exec_tools::{BackgroundJob, BackgroundProcess, BackgroundProcessHook};
 use aura_store_record::ReadStore;
@@ -64,19 +64,19 @@ impl BackgroundProcessHook for BackgroundCommands {
             return Err("no async runtime to watch the process".to_string());
         }
         let process_id = process.process_id;
-        self.manager.register_with(
+        self.manager.register_with(NewProcess {
             agent_id,
-            reference,
-            process.action_id.unwrap_or_else(ActionId::generate),
+            reference_tx_hash: reference,
+            action_id: process.action_id.unwrap_or_else(ActionId::generate),
             process_id,
-            process.child,
-            process.command,
-            ProcessMeta {
+            child: process.child,
+            command: process.command,
+            meta: ProcessMeta {
                 cwd: Some(process.cwd),
                 log_path: Some(process.log_path),
                 tool_use_id: process.tool_use_id,
             },
-        );
+        });
         let info = self
             .manager
             .snapshot()

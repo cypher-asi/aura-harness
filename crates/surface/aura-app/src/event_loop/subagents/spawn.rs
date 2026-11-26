@@ -302,6 +302,7 @@ impl AgentHub {
                 .map(|a| a.zns_id.clone());
             let instance = registry
                 .create_instance(&definition.name, parent)
+                .map_err(anyhow::Error::from)
                 .map_err(|e| format!("registering {} instance: {e:#}", definition.name))?;
             let folder = registry.project_folder(instance.agent_id());
             (instance, folder)

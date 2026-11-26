@@ -3,7 +3,7 @@
 use serde_json::{json, Value};
 use tracing::debug;
 
-use super::api::{DomainApi, TaskUpdate};
+use super::api::{DomainApi, NewTask, TaskUpdate};
 use super::helpers::{
     domain_err, domain_ok, opt_str_array, require_str, str_array, str_field, u32_field,
 };
@@ -69,18 +69,15 @@ pub async fn create_task(api: &dyn DomainApi, project_id: &str, input: &Value) -
         Err(_) => 0,
     };
 
-    match api
-        .create_task(
-            project_id,
-            &spec_id,
-            &title,
-            &description,
-            &deps,
-            order,
-            jwt.as_deref(),
-        )
-        .await
-    {
+    let task = NewTask {
+        project_id,
+        spec_id: &spec_id,
+        title: &title,
+        description: &description,
+        dependencies: &deps,
+        order,
+    };
+    match api.create_task(task, jwt.as_deref()).await {
         Ok(t) => domain_ok(json!({ "task": t })),
         Err(e) => domain_err(e),
     }

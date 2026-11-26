@@ -1,10 +1,15 @@
 use super::*;
 use crate::domain_tools::api::{
-    CreateSessionParams, MessageDescriptor, ProjectDescriptor, ProjectUpdate, SaveMessageParams,
-    SessionDescriptor, TaskDescriptor, TaskUpdate,
+    CreateSessionParams, DomainError, DomainResult, MessageDescriptor, NewTask, ProjectDescriptor,
+    ProjectUpdate, SaveMessageParams, SessionDescriptor, TaskDescriptor, TaskUpdate,
 };
 use async_trait::async_trait;
 use std::sync::Mutex;
+
+/// What the methods these tests never call return.
+fn unused<T>(operation: &'static str) -> DomainResult<T> {
+    Err(DomainError::Unsupported { operation })
+}
 
 /// Minimal `DomainApi` test double specialised for the spec handlers.
 /// Only the methods exercised by these tests are populated; everything
@@ -36,15 +41,19 @@ impl DomainApi for SpecMockApi {
         &self,
         _project_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<SpecDescriptor>> {
+    ) -> DomainResult<Vec<SpecDescriptor>> {
         Ok(self.specs_to_return.lock().unwrap().clone())
     }
-    async fn get_spec(&self, spec_id: &str, _jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
+    async fn get_spec(&self, spec_id: &str, _jwt: Option<&str>) -> DomainResult<SpecDescriptor> {
         self.single_spec
             .lock()
             .unwrap()
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("no spec configured for id {spec_id}"))
+            .ok_or_else(|| DomainError::Status {
+                status: 404,
+                reason: Some("Not Found"),
+                body: format!("no spec configured for id {spec_id}"),
+            })
     }
     async fn create_spec(
         &self,
@@ -53,8 +62,8 @@ impl DomainApi for SpecMockApi {
         _: &str,
         _: u32,
         _: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
-        anyhow::bail!("unused")
+    ) -> DomainResult<SpecDescriptor> {
+        unused("create_spec")
     }
     async fn update_spec(
         &self,
@@ -63,72 +72,67 @@ impl DomainApi for SpecMockApi {
         _: Option<&str>,
         _: Option<&str>,
         _: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
-        anyhow::bail!("unused")
+    ) -> DomainResult<SpecDescriptor> {
+        unused("update_spec")
     }
-    async fn delete_spec(&self, _: &str, _: Option<&str>) -> anyhow::Result<()> {
-        anyhow::bail!("unused")
+    async fn delete_spec(&self, _: &str, _: Option<&str>) -> DomainResult<()> {
+        unused("delete_spec")
     }
     async fn list_tasks(
         &self,
         _: &str,
         _: Option<&str>,
         _: Option<&str>,
-    ) -> anyhow::Result<Vec<TaskDescriptor>> {
+    ) -> DomainResult<Vec<TaskDescriptor>> {
         Ok(vec![])
     }
     async fn create_task(
         &self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &[String],
-        _: u32,
+        _task: NewTask<'_>,
         _: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
-        anyhow::bail!("unused")
+    ) -> DomainResult<TaskDescriptor> {
+        unused("create_task")
     }
     async fn update_task(
         &self,
         _: &str,
         _: TaskUpdate,
         _: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
-        anyhow::bail!("unused")
+    ) -> DomainResult<TaskDescriptor> {
+        unused("update_task")
     }
-    async fn delete_task(&self, _: &str, _: Option<&str>) -> anyhow::Result<()> {
-        anyhow::bail!("unused")
+    async fn delete_task(&self, _: &str, _: Option<&str>) -> DomainResult<()> {
+        unused("delete_task")
     }
     async fn transition_task(
         &self,
         _: &str,
         _: &str,
         _: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
-        anyhow::bail!("unused")
+    ) -> DomainResult<TaskDescriptor> {
+        unused("transition_task")
     }
     async fn claim_next_task(
         &self,
         _: &str,
         _: &str,
         _: Option<&str>,
-    ) -> anyhow::Result<Option<TaskDescriptor>> {
+    ) -> DomainResult<Option<TaskDescriptor>> {
         Ok(None)
     }
-    async fn get_task(&self, _: &str, _: Option<&str>) -> anyhow::Result<TaskDescriptor> {
-        anyhow::bail!("unused")
+    async fn get_task(&self, _: &str, _: Option<&str>) -> DomainResult<TaskDescriptor> {
+        unused("get_task")
     }
-    async fn get_project(&self, _: &str, _: Option<&str>) -> anyhow::Result<ProjectDescriptor> {
-        anyhow::bail!("unused")
+    async fn get_project(&self, _: &str, _: Option<&str>) -> DomainResult<ProjectDescriptor> {
+        unused("get_project")
     }
     async fn update_project(
         &self,
         _: &str,
         _: ProjectUpdate,
         _: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
-        anyhow::bail!("unused")
+    ) -> DomainResult<ProjectDescriptor> {
+        unused("update_project")
     }
     async fn create_log(
         &self,
@@ -138,7 +142,7 @@ impl DomainApi for SpecMockApi {
         _: Option<&str>,
         _: Option<&serde_json::Value>,
         _: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         Ok(serde_json::json!({}))
     }
     async fn list_logs(
@@ -147,26 +151,22 @@ impl DomainApi for SpecMockApi {
         _: Option<&str>,
         _: Option<u64>,
         _: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         Ok(serde_json::json!([]))
     }
-    async fn get_project_stats(
-        &self,
-        _: &str,
-        _: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    async fn get_project_stats(&self, _: &str, _: Option<&str>) -> DomainResult<serde_json::Value> {
         Ok(serde_json::json!({}))
     }
-    async fn list_messages(&self, _: &str, _: &str) -> anyhow::Result<Vec<MessageDescriptor>> {
+    async fn list_messages(&self, _: &str, _: &str) -> DomainResult<Vec<MessageDescriptor>> {
         Ok(vec![])
     }
-    async fn save_message(&self, _: SaveMessageParams) -> anyhow::Result<()> {
+    async fn save_message(&self, _: SaveMessageParams) -> DomainResult<()> {
         Ok(())
     }
-    async fn create_session(&self, _: CreateSessionParams) -> anyhow::Result<SessionDescriptor> {
-        anyhow::bail!("unused")
+    async fn create_session(&self, _: CreateSessionParams) -> DomainResult<SessionDescriptor> {
+        unused("create_session")
     }
-    async fn get_active_session(&self, _: &str) -> anyhow::Result<Option<SessionDescriptor>> {
+    async fn get_active_session(&self, _: &str) -> DomainResult<Option<SessionDescriptor>> {
         Ok(None)
     }
     async fn network_api_call(
@@ -175,7 +175,7 @@ impl DomainApi for SpecMockApi {
         _: &str,
         _: Option<&serde_json::Value>,
         _: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> DomainResult<String> {
         Ok("{}".into())
     }
 }

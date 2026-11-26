@@ -88,7 +88,7 @@ async fn a_project_a_member_is_in_counts_as_used_by_its_channel() {
                 project_id: Some(b.clone()),
                 folder: None,
             }],
-            |agents, rows| {
+            |agents, rows| -> anyhow::Result<()> {
                 agents.apply(&aura_store_db::RegistryDiff {
                     agents_put: rows,
                     ..Default::default()

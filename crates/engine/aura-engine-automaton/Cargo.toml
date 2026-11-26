@@ -14,7 +14,6 @@ aura-context-prompts = { path = "../../context/aura-context-prompts" }
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-exec-tools = { path = "../../exec/aura-exec-tools" }
 aura-model = { path = "../../model/aura-model" }
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

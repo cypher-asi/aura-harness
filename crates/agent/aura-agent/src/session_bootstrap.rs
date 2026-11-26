@@ -12,7 +12,7 @@ use aura_agent_kernel::ExecutorRouter;
 use aura_context_prompts::default_system_prompt;
 use aura_exec_tools::{ToolCatalog, ToolConfig, ToolExecutor};
 use aura_model::ToolDefinition;
-use aura_store_db::RocksStore;
+use aura_store_db::{RocksStore, StoreError};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -68,8 +68,9 @@ pub fn resolve_store_path(data_dir: &Path) -> PathBuf {
     canonical
 }
 
-pub fn open_store(path: &Path) -> anyhow::Result<Arc<RocksStore>> {
-    Ok(Arc::new(RocksStore::open(path, false)?))
+/// Open the record store at `path`.
+pub fn open_store(path: &Path) -> Result<Arc<RocksStore>, StoreError> {
+    RocksStore::open(path, false).map(Arc::new)
 }
 
 /// Build the default executor router used by the terminal harness and

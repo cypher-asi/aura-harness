@@ -13,7 +13,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use super::runner;
+use super::runner::{self, BuildRunnerError};
 
 /// Outcome of running the full project test suite via [`run_full_test_suite`].
 #[derive(Debug, Clone, Default)]
@@ -40,9 +40,9 @@ pub struct TestSuiteOutcome {
 pub async fn run_full_test_suite(
     project_root: &Path,
     test_command: &str,
-) -> anyhow::Result<TestSuiteOutcome> {
+) -> Result<TestSuiteOutcome, BuildRunnerError> {
     if test_command.trim().is_empty() {
-        anyhow::bail!("run_full_test_suite called with empty test_command");
+        return Err(BuildRunnerError::EmptyTestCommand);
     }
     let start = Instant::now();
     let result = runner::run_build_command(project_root, test_command, None, None).await?;

@@ -26,16 +26,7 @@ struct OkHook;
 
 #[async_trait]
 impl crate::tool::AgentControlHook for OkHook {
-    async fn deliver_message(
-        &self,
-        _target_agent_id: &str,
-        _parent_agent_id: Option<&str>,
-        _originating_user_id: Option<&str>,
-        _project_id: Option<&str>,
-        _content: &str,
-        _attachments: Option<serde_json::Value>,
-        _model: Option<&str>,
-    ) -> Result<(), String> {
+    async fn deliver_message(&self, _message: AgentMessage<'_>) -> Result<(), String> {
         Ok(())
     }
 
@@ -96,19 +87,10 @@ impl CapturingHook {
 
 #[async_trait]
 impl crate::tool::AgentControlHook for CapturingHook {
-    async fn deliver_message(
-        &self,
-        _target_agent_id: &str,
-        parent_agent_id: Option<&str>,
-        _originating_user_id: Option<&str>,
-        project_id: Option<&str>,
-        _content: &str,
-        _attachments: Option<serde_json::Value>,
-        model: Option<&str>,
-    ) -> Result<(), String> {
-        *self.captured_parent.lock().unwrap() = parent_agent_id.map(str::to_string);
-        *self.captured_project.lock().unwrap() = project_id.map(str::to_string);
-        *self.captured_model.lock().unwrap() = model.map(str::to_string);
+    async fn deliver_message(&self, message: AgentMessage<'_>) -> Result<(), String> {
+        *self.captured_parent.lock().unwrap() = message.parent_agent_id.map(str::to_string);
+        *self.captured_project.lock().unwrap() = message.project_id.map(str::to_string);
+        *self.captured_model.lock().unwrap() = message.model.map(str::to_string);
         Ok(())
     }
     async fn lifecycle(
@@ -141,31 +123,17 @@ struct ThreadedHook {
 
 #[async_trait]
 impl crate::tool::AgentControlHook for ThreadedHook {
-    async fn deliver_message(
-        &self,
-        _: &str,
-        _: Option<&str>,
-        _: Option<&str>,
-        _: Option<&str>,
-        _: &str,
-        _: Option<serde_json::Value>,
-        _: Option<&str>,
-    ) -> Result<(), String> {
+    async fn deliver_message(&self, _: AgentMessage<'_>) -> Result<(), String> {
         Err("send_to_agent must call deliver_message_in_thread".into())
     }
 
     async fn deliver_message_in_thread(
         &self,
-        _target_agent_id: &str,
-        _parent_agent_id: Option<&str>,
-        _originating_user_id: Option<&str>,
-        _project_id: Option<&str>,
-        content: &str,
-        _attachments: Option<serde_json::Value>,
-        _model: Option<&str>,
+        message: AgentMessage<'_>,
         subject: Option<&str>,
     ) -> Result<(), String> {
-        *self.captured.lock().unwrap() = Some((content.to_string(), subject.map(str::to_string)));
+        *self.captured.lock().unwrap() =
+            Some((message.content.to_string(), subject.map(str::to_string)));
         Ok(())
     }
 

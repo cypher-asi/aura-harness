@@ -50,13 +50,7 @@ async fn peer_hooks_reach_peers_and_go_on_with_the_last_subject() {
     hooked
         .hooks
         .deliver_message_in_thread(
-            "coordinator",
-            None,
-            None,
-            None,
-            "The footer is done.",
-            None,
-            None,
+            AgentMessage::new("coordinator", "The footer is done."),
             Some("Footer"),
         )
         .await
@@ -67,15 +61,10 @@ async fn peer_hooks_reach_peers_and_go_on_with_the_last_subject() {
 
     // Without a subject a message goes on with the last one, either way.
     PeerHooks::new(link(&hooked.fixture), coordinator, None)
-        .deliver_message(
+        .deliver_message(AgentMessage::new(
             &code_of(&hooked.fixture, member),
-            None,
-            None,
-            None,
             "Thanks.",
-            None,
-            None,
-        )
+        ))
         .await
         .unwrap();
     let [answered] = take_all(&mut hooked.notices).try_into().unwrap();
@@ -95,7 +84,7 @@ async fn peer_hooks_refuse_strangers_without_a_host() {
     let hooked = member_hooks().await;
     let hooks = &hooked.hooks;
     let error = hooks
-        .deliver_message("NOPE9", None, None, None, "Hello", None, None)
+        .deliver_message(AgentMessage::new("NOPE9", "Hello"))
         .await
         .unwrap_err();
     assert!(error.contains("unknown agent 'NOPE9'"), "{error}");

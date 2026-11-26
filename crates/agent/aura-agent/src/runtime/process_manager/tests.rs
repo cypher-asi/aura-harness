@@ -430,15 +430,15 @@ async fn test_snapshot_lists_running_processes_with_meta() {
         log_path: Some("/tmp/build.log".into()),
         tool_use_id: Some("toolu_1".into()),
     };
-    manager.register_with(
+    manager.register_with(super::NewProcess {
         agent_id,
-        Hash::from_content(b"proposal"),
-        ActionId::generate(),
+        reference_tx_hash: Hash::from_content(b"proposal"),
+        action_id: ActionId::generate(),
         process_id,
         child,
-        "sleep 30".to_string(),
-        meta.clone(),
-    );
+        command: "sleep 30".to_string(),
+        meta: meta.clone(),
+    });
 
     let snapshot = manager.snapshot();
     assert_eq!(snapshot.len(), 1);

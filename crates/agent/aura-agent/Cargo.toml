@@ -22,7 +22,6 @@ aura-exec-tools = { path = "../../exec/aura-exec-tools" }
 # (aura-auth); see crates/agent/aura-agent/src/session_bootstrap.rs
 # load_auth_token / default_agent_config_with_auth.
 aura-plugin-hooks = { path = "../../plugin/aura-plugin-hooks" }
-anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

@@ -32,7 +32,7 @@ impl AgentToolExecutor for NoOpInner {
 /// inferred default).
 #[derive(Debug, Default)]
 struct MockTestRunner {
-    queue: Mutex<Vec<anyhow::Result<TestSuiteOutcome>>>,
+    queue: Mutex<Vec<Result<TestSuiteOutcome, BuildRunnerError>>>,
     calls: Mutex<u32>,
     commands: Mutex<Vec<String>>,
 }
@@ -78,12 +78,15 @@ impl TaskTestRunner for MockTestRunner {
         &self,
         _project_root: &std::path::Path,
         command: &str,
-    ) -> anyhow::Result<TestSuiteOutcome> {
+    ) -> Result<TestSuiteOutcome, BuildRunnerError> {
         *self.calls.lock().await += 1;
         self.commands.lock().await.push(command.to_string());
         let mut q = self.queue.lock().await;
         if q.is_empty() {
-            anyhow::bail!("MockTestRunner queue exhausted");
+            return Err(BuildRunnerError::Wait {
+                command: command.to_string(),
+                source: std::io::Error::other("MockTestRunner queue exhausted"),
+            });
         }
         q.remove(0)
     }
@@ -98,8 +101,8 @@ impl TaskTestRunner for HangingTestRunner {
         &self,
         _project_root: &std::path::Path,
         _command: &str,
-    ) -> anyhow::Result<TestSuiteOutcome> {
-        std::future::pending::<anyhow::Result<TestSuiteOutcome>>().await
+    ) -> Result<TestSuiteOutcome, BuildRunnerError> {
+        std::future::pending().await
     }
 }
 

@@ -9,18 +9,17 @@ use async_trait::async_trait;
 use aura_core_types::{ActionId, AgentId, ProcessId, SubagentDispatchRequest, SubagentResult};
 use std::path::{Path, PathBuf};
 
-/// Hook invoked by the `send_to_agent` / `agent_lifecycle` / `delegate_task`
-/// tools to actually affect the target agent. Kept as a trait so the
-/// permission gate can be tested without wiring a real kernel writer.
-// `async_trait` moves a default method's body out of the method, so the
-// allow on `deliver_message_in_thread` alone does not reach it; its
-// arguments mirror the remote wire call one for one.
-#[allow(clippy::too_many_arguments)]
-#[async_trait]
-pub trait AgentControlHook: Send + Sync {
-    /// Deliver a user-message-shaped payload to `target`.
-    ///
-    /// `model` is the **caller's** resolved model id (from
+/// A user-message-shaped payload [`AgentControlHook::deliver_message`]
+/// delivers to `target_agent_id`.
+#[derive(Debug, Clone)]
+pub struct AgentMessage<'a> {
+    pub target_agent_id: &'a str,
+    pub parent_agent_id: Option<&'a str>,
+    pub originating_user_id: Option<&'a str>,
+    pub project_id: Option<&'a str>,
+    pub content: &'a str,
+    pub attachments: Option<serde_json::Value>,
+    /// The **caller's** resolved model id (from
     /// `ToolContext::caller_model_id`). It is forwarded so the
     /// target's turn runs on a real model: cross-agent recipients
     /// often have no server-side configured model (the UI sends the
@@ -28,16 +27,33 @@ pub trait AgentControlHook: Send + Sync {
     /// recipient's harness session with an empty model and the turn
     /// fails with "model name must not be empty". `None` preserves the
     /// legacy null-model wire value for callers without a known model.
-    async fn deliver_message(
-        &self,
-        target_agent_id: &str,
-        parent_agent_id: Option<&str>,
-        originating_user_id: Option<&str>,
-        project_id: Option<&str>,
-        content: &str,
-        attachments: Option<serde_json::Value>,
-        model: Option<&str>,
-    ) -> Result<(), String>;
+    pub model: Option<&'a str>,
+}
+
+impl<'a> AgentMessage<'a> {
+    /// `content` for `target_agent_id`, with no parent, originating user,
+    /// project, attachments or model.
+    #[must_use]
+    pub fn new(target_agent_id: &'a str, content: &'a str) -> Self {
+        Self {
+            target_agent_id,
+            parent_agent_id: None,
+            originating_user_id: None,
+            project_id: None,
+            content,
+            attachments: None,
+            model: None,
+        }
+    }
+}
+
+/// Hook invoked by the `send_to_agent` / `agent_lifecycle` / `delegate_task`
+/// tools to actually affect the target agent. Kept as a trait so the
+/// permission gate can be tested without wiring a real kernel writer.
+#[async_trait]
+pub trait AgentControlHook: Send + Sync {
+    /// Deliver `message` to its target.
+    async fn deliver_message(&self, message: AgentMessage<'_>) -> Result<(), String>;
 
     /// [`Self::deliver_message`] in the conversation named `subject`.
     ///
@@ -45,29 +61,13 @@ pub trait AgentControlHook: Send + Sync {
     /// starts a new one. `None` lets the implementor pick, e.g. the last
     /// thread between the two agents. Hooks without threads (remote
     /// servers) keep this default, which ignores `subject`.
-    #[allow(clippy::too_many_arguments)]
     async fn deliver_message_in_thread(
         &self,
-        target_agent_id: &str,
-        parent_agent_id: Option<&str>,
-        originating_user_id: Option<&str>,
-        project_id: Option<&str>,
-        content: &str,
-        attachments: Option<serde_json::Value>,
-        model: Option<&str>,
+        message: AgentMessage<'_>,
         subject: Option<&str>,
     ) -> Result<(), String> {
         let _ = subject;
-        self.deliver_message(
-            target_agent_id,
-            parent_agent_id,
-            originating_user_id,
-            project_id,
-            content,
-            attachments,
-            model,
-        )
-        .await
+        self.deliver_message(message).await
     }
 
     /// Apply a lifecycle transition to `target`.
@@ -201,20 +201,24 @@ pub struct BackgroundJob {
     pub started_ms: u64,
 }
 
+/// The project a dev loop or task run started through an
+/// [`AutomatonController`] works on, and where and how it runs.
+#[derive(Debug, Clone)]
+pub struct AutomatonRun<'a> {
+    pub project_id: &'a str,
+    pub workspace_root: Option<PathBuf>,
+    pub auth_token: Option<String>,
+    pub model: Option<String>,
+    pub git_repo_url: Option<String>,
+    pub git_branch: Option<String>,
+}
+
 /// Abstraction over automaton lifecycle so tools don't depend on `aura-engine-automaton`.
 #[async_trait]
 pub trait AutomatonController: Send + Sync {
-    /// Install and start a dev-loop automaton for `project_id`.
+    /// Install and start a dev-loop automaton for `run.project_id`.
     /// Returns the automaton ID on success.
-    async fn start_dev_loop(
-        &self,
-        project_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-    ) -> Result<String, String>;
+    async fn start_dev_loop(&self, run: AutomatonRun<'_>) -> Result<String, String>;
 
     /// Pause the running dev-loop for `project_id`.
     async fn pause_dev_loop(&self, project_id: &str) -> Result<(), String>;
@@ -222,17 +226,7 @@ pub trait AutomatonController: Send + Sync {
     /// Stop (cancel) the running dev-loop for `project_id`.
     async fn stop_dev_loop(&self, project_id: &str) -> Result<(), String>;
 
-    /// Execute a single task through the dev-loop engine (non-blocking).
-    /// Returns the automaton ID immediately.
-    #[allow(clippy::too_many_arguments)]
-    async fn run_task(
-        &self,
-        project_id: &str,
-        task_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-    ) -> Result<String, String>;
+    /// Execute the single task `task_id` through the dev-loop engine
+    /// (non-blocking). Returns the automaton ID immediately.
+    async fn run_task(&self, task_id: &str, run: AutomatonRun<'_>) -> Result<String, String>;
 }

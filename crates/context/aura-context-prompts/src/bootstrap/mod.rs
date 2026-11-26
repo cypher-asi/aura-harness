@@ -98,43 +98,45 @@ fn task_description_for_bootstrap(task: &TaskInfo<'_>) -> String {
     }
 }
 
+/// What [`build_agentic_task_context`] renders into a task run's first
+/// user message.
+#[derive(Debug, Clone, Copy)]
+pub struct BootstrapCtx<'a> {
+    pub project: &'a ProjectInfo<'a>,
+    pub spec: &'a SpecInfo<'a>,
+    pub task: &'a TaskInfo<'a>,
+    pub session: &'a SessionInfo<'a>,
+    /// Finished predecessor tasks, summarized under
+    /// `# Completed Predecessor Tasks` when non-empty.
+    pub completed_deps: &'a [TaskInfo<'a>],
+    /// The tasks this session completed so far, rendered under
+    /// `# Session Progress` when non-empty.
+    pub work_log_summary: &'a str,
+    /// 0-indexed retry counter — 0 for the first run, 1+ for retries.
+    pub attempt: u32,
+    /// Pre-resolved paths/symbols/file-heads markdown produced by the
+    /// [`crate::enrichment`] module via the agent-side
+    /// `prompt_resolve::resolve_hints` orchestrator. It is only spliced
+    /// when `attempt == 0` and the block is non-empty: on retries, Phase
+    /// 5's decomposition will provide a different, narrower context and
+    /// the resolve cost is wasted on re-runs of the same task.
+    pub enrichment_block: Option<&'a str>,
+}
+
 /// Build the initial user-message context for an agentic task run.
-///
-/// `attempt` is the 0-indexed retry counter — 0 for the first run,
-/// 1+ for retries. `enrichment_block` is the pre-resolved
-/// paths/symbols/file-heads markdown produced by the
-/// [`crate::enrichment`] module via the agent-side
-/// `prompt_resolve::resolve_hints` orchestrator. It is only spliced
-/// when `attempt == 0` and the block is non-empty: on retries, Phase
-/// 5's decomposition will provide a different, narrower context and
-/// the resolve cost is wasted on re-runs of the same task.
-// Phase 8 of the refactor plan collapses these 8 params into a
-// `BootstrapCtx` struct (one of the documented "8–12-parameter async
-// fn" cleanups). For Phase 2 we preserve the existing signature
-// verbatim so the relocation stays behavior-preserving.
-#[allow(clippy::too_many_arguments)]
 #[must_use]
-pub fn build_agentic_task_context(
-    project: &ProjectInfo<'_>,
-    spec: &SpecInfo<'_>,
-    task: &TaskInfo<'_>,
-    session: &SessionInfo<'_>,
-    completed_deps: &[TaskInfo<'_>],
-    work_log_summary: &str,
-    attempt: u32,
-    enrichment_block: Option<&str>,
-) -> String {
+pub fn build_agentic_task_context(input: BootstrapCtx<'_>) -> String {
     let mut ctx = String::new();
     ctx.push_str(&format!(
         "# Project: {}\n{}\n\n",
-        project.name, project.description
+        input.project.name, input.project.description
     ));
-    append_spec_section(&mut ctx, spec, bootstrap_spec_byte_budget());
-    let task_desc = task_description_for_bootstrap(task);
-    ctx.push_str(&format!("# Task: {}\n{task_desc}\n\n", task.title));
+    append_spec_section(&mut ctx, input.spec, bootstrap_spec_byte_budget());
+    let task_desc = task_description_for_bootstrap(input.task);
+    ctx.push_str(&format!("# Task: {}\n{task_desc}\n\n", input.task.title));
 
-    if attempt == 0 {
-        if let Some(block) = enrichment_block {
+    if input.attempt == 0 {
+        if let Some(block) = input.enrichment_block {
             let trimmed = block.trim();
             if !trimmed.is_empty() {
                 ctx.push_str(trimmed);
@@ -143,25 +145,26 @@ pub fn build_agentic_task_context(
         }
     }
 
-    if !session.summary_of_previous_context.is_empty() {
+    if !input.session.summary_of_previous_context.is_empty() {
         ctx.push_str(&format!(
             "# Previous Context Summary\n{}\n\n",
-            session.summary_of_previous_context
+            input.session.summary_of_previous_context
         ));
     }
-    if !task.execution_notes.is_empty() {
+    if !input.task.execution_notes.is_empty() {
         ctx.push_str(&format!(
             "# Notes from Prior Attempts\n{}\n\n",
-            task.execution_notes
+            input.task.execution_notes
         ));
     }
 
-    if !completed_deps.is_empty() {
+    if !input.completed_deps.is_empty() {
         ctx.push_str("# Completed Predecessor Tasks\n");
-        ctx.push_str(&format_completed_deps(completed_deps));
+        ctx.push_str(&format_completed_deps(input.completed_deps));
         ctx.push('\n');
     }
 
+    let work_log_summary = input.work_log_summary;
     if !work_log_summary.is_empty() {
         ctx.push_str(&format!(
             "# Session Progress (tasks completed so far)\n{work_log_summary}\n\n\

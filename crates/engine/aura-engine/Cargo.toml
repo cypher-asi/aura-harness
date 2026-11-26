@@ -18,13 +18,10 @@ aura-agent = { path = "../../agent/aura-agent" }
 aura-agent-subagent = { path = "../../agent/aura-agent-subagent" }
 aura-context-memory = { path = "../../context/aura-context-memory" }
 aura-engine-automaton = { path = "../aura-engine-automaton" }
-aura-context-compaction = { path = "../../context/aura-context-compaction" }
-aura-context-prompts = { path = "../../context/aura-context-prompts" }
 # Phase C / Commit 4: the JWT-injecting `DomainApi` wrapper moved
 # into `aura-exec-domain-http` alongside the HTTP impl. The automaton
 # bridge imports `JwtDomainApi` from there.
 aura-exec-domain-http = { path = "../../exec/aura-exec-domain-http" }
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
 bytes = { workspace = true }
@@ -39,14 +36,6 @@ tokio-util = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 insta = { workspace = true }
-
-# Phase B / Commit 3: the engine pulls in aura-prompts + aura-compaction
-# transitively through the agent loop wiring inside `worker.rs` and
-# `scheduler.rs`. Cargo-machete sometimes can't see those uses because
-# they're routed through the public agent-loop surface; pin the deps
-# so the deny-warnings lint doesn't trip on the indirect edges.
-[package.metadata.cargo-machete]
-ignored = ["aura-context-prompts", "aura-context-compaction"]
 
 [lints]
 workspace = true

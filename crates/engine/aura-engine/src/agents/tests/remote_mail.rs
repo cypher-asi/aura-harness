@@ -12,13 +12,7 @@ async fn mail_for_an_agent_on_another_node_goes_through_the_router() {
 
     h.hooks
         .deliver_message_in_thread(
-            &remote.to_hex(),
-            None,
-            None,
-            None,
-            "please review the parser",
-            None,
-            None,
+            AgentMessage::new(&remote.to_hex(), "please review the parser"),
             Some("Parser review"),
         )
         .await
@@ -65,15 +59,7 @@ async fn an_agent_no_node_holds_is_still_unknown() {
     }));
     let err = h
         .hooks
-        .deliver_message(
-            &AgentId::generate().to_hex(),
-            None,
-            None,
-            None,
-            "hi",
-            None,
-            None,
-        )
+        .deliver_message(AgentMessage::new(&AgentId::generate().to_hex(), "hi"))
         .await
         .expect_err("unknown");
     assert!(err.contains("unknown agent"), "{err}");

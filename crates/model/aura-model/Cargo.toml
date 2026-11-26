@@ -11,7 +11,6 @@ aura-config = { path = "../../config/aura-config" }
 aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -27,6 +26,7 @@ terminal_size = { workspace = true }
 # HTTP for direct API calls (more reliable than SDK wrappers)
 
 [dev-dependencies]
+anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
 

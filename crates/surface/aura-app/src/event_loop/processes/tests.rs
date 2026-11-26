@@ -1,6 +1,6 @@
 use super::*;
 use aura_agent::ProcessManagerConfig;
-use aura_agent::ProcessMeta;
+use aura_agent::{NewProcess, ProcessMeta};
 use aura_core_types::{ActionId, Hash, Transaction};
 use tokio::sync::mpsc;
 
@@ -202,19 +202,19 @@ fn register_sleep(manager: &Arc<ProcessManager>, agent: AgentId) -> u32 {
         .spawn()
         .unwrap();
     let pid = child.id();
-    manager.register_with(
-        agent,
-        Hash::from_content(b"proposal"),
-        ActionId::generate(),
+    manager.register_with(NewProcess {
+        agent_id: agent,
+        reference_tx_hash: Hash::from_content(b"proposal"),
+        action_id: ActionId::generate(),
         process_id,
         child,
-        "sleep 30".into(),
-        ProcessMeta {
+        command: "sleep 30".into(),
+        meta: ProcessMeta {
             cwd: Some(PathBuf::from("/tmp")),
             log_path: Some(PathBuf::from("/tmp/x.log")),
             tool_use_id: Some("toolu_1".into()),
         },
-    );
+    });
 
     pid
 }

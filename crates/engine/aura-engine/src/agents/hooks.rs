@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use aura_agent::AgentLoopEvent;
 use aura_agent_kernel::{ChildAgentSpec, SpawnError, SpawnHook, SpawnOutcome};
 use aura_core_types::{AgentId, SubagentDispatchRequest, SubagentResult};
-use aura_exec_tools::{AgentControlHook, AgentReadHook, SubagentDispatchHook, ToolResolver};
+use aura_exec_tools::{
+    AgentControlHook, AgentMessage, AgentReadHook, SubagentDispatchHook, ToolResolver,
+};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -142,41 +144,17 @@ impl SpawnHook for AgentHooks {
 
 #[async_trait]
 impl AgentControlHook for AgentHooks {
-    async fn deliver_message(
-        &self,
-        target_agent_id: &str,
-        parent_agent_id: Option<&str>,
-        originating_user_id: Option<&str>,
-        project_id: Option<&str>,
-        content: &str,
-        attachments: Option<serde_json::Value>,
-        model: Option<&str>,
-    ) -> Result<(), String> {
-        self.deliver_message_in_thread(
-            target_agent_id,
-            parent_agent_id,
-            originating_user_id,
-            project_id,
-            content,
-            attachments,
-            model,
-            None,
-        )
-        .await
+    async fn deliver_message(&self, message: AgentMessage<'_>) -> Result<(), String> {
+        self.deliver_message_in_thread(message, None).await
     }
 
     async fn deliver_message_in_thread(
         &self,
-        target_agent_id: &str,
-        parent_agent_id: Option<&str>,
-        originating_user_id: Option<&str>,
-        project_id: Option<&str>,
-        content: &str,
-        attachments: Option<serde_json::Value>,
-        model: Option<&str>,
+        message: AgentMessage<'_>,
         subject: Option<&str>,
     ) -> Result<(), String> {
         let host = self.host()?;
+        let target_agent_id = message.target_agent_id;
         let target = match self.local_target(&host, target_agent_id)? {
             Some(target) => Some(target),
             None => Self::remote_target(&host, target_agent_id),
@@ -186,25 +164,12 @@ impl AgentControlHook for AgentHooks {
                 Some(self.caller),
                 target,
                 MessageKind::Request,
-                content.to_string(),
+                message.content.to_string(),
                 subject,
             );
         }
         match self.env().and_then(|env| env.remote_control) {
-            Some(remote) => {
-                remote
-                    .deliver_message_in_thread(
-                        target_agent_id,
-                        parent_agent_id,
-                        originating_user_id,
-                        project_id,
-                        content,
-                        attachments,
-                        model,
-                        subject,
-                    )
-                    .await
-            }
+            Some(remote) => remote.deliver_message_in_thread(message, subject).await,
             None => Err(Self::unknown(target_agent_id)),
         }
     }

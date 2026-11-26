@@ -44,7 +44,7 @@ mod retriever_tests;
 pub use consolidation::{ConsolidationConfig, ConsolidationReport, MemoryConsolidator};
 pub use error::MemoryError;
 pub use extraction::ConversationTurn;
-pub use manager::MemoryManager;
+pub use manager::{MemoryConfig, MemoryManager};
 pub use procedures::{compute_skill_relevance, ProcedureConfig, ProcedureExtractor, StepSequence};
 pub use refinement::{LlmRefiner, RefinementRequestContext, RefinerConfig};
 pub use retrieval::{MemoryQueryContext, MemoryRetriever, RetrievalConfig};
@@ -56,4 +56,4 @@ pub use types::{
     MemoryContinuity, MemoryPacket, MemoryProvenance, MemoryRetrievalMode, MemoryRetrievalTrace,
     MemoryScope, MemorySelection, MemorySensitivity, MemoryStatus, MemoryWritePolicy, Procedure,
 };
-pub use write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
+pub use write_pipeline::{IngestProvenance, MemoryWritePipeline, WriteConfig, WriteReport};

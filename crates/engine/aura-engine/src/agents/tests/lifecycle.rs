@@ -14,7 +14,7 @@ async fn spawned_agent_keeps_its_conversation() {
     assert_eq!(first.text, "ok");
 
     h.hooks
-        .deliver_message("helper", None, None, None, "what number?", None, None)
+        .deliver_message(AgentMessage::new("helper", "what number?"))
         .await
         .unwrap();
     let second = next_message(&mut h.inbox).await;
@@ -54,7 +54,7 @@ async fn stopping_an_agent_cancels_it_and_rejects_messages() {
     assert!(h.host.info(child).is_none());
     let err = h
         .hooks
-        .deliver_message("sleeper", None, None, None, "hello", None, None)
+        .deliver_message(AgentMessage::new("sleeper", "hello"))
         .await
         .unwrap_err();
     assert!(err.contains("unknown agent"), "{err}");

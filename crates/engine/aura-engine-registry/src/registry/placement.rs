@@ -1,12 +1,15 @@
 //! Channel members and coordinators: where agents a channel or hub
 //! creates are placed.
 
-use anyhow::Context;
 use aura_core_types::AgentId;
 use aura_store_db::AgentStore;
 use std::path::PathBuf;
 
-use super::{code, persist, AgentPlacement, AgentRegistry, CoordinatorHome, RegisteredAgent};
+use super::{
+    code, persist, AgentPlacement, AgentRegistry, AgentRegistryError, CoordinatorHome,
+    RegisteredAgent,
+};
+use crate::error::chain;
 
 impl AgentRegistry {
     /// Tell the registry these agents are channel members: removing their
@@ -72,11 +75,11 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if an agent is not registered (nothing is
     /// written), or `write`'s error (nothing changes in memory).
-    pub fn place_agents<T>(
+    pub fn place_agents<T, E: From<AgentRegistryError>>(
         &mut self,
         placements: &[AgentPlacement],
-        write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T> {
+        write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> Result<T, E>,
+    ) -> Result<T, E> {
         let mut changed = Vec::with_capacity(placements.len());
         for placement in placements {
             let (index, mut agent) = self.registered(placement.agent_id)?;
@@ -95,11 +98,11 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if an agent is not registered (nothing is
     /// written), or `write`'s error (nothing changes in memory).
-    pub fn promote_agents<T>(
+    pub fn promote_agents<T, E: From<AgentRegistryError>>(
         &mut self,
         agents: &[AgentId],
-        write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T> {
+        write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> Result<T, E>,
+    ) -> Result<T, E> {
         let mut changed = Vec::with_capacity(agents.len());
         for &agent_id in agents {
             let folder = self.project_folder(agent_id);
@@ -112,20 +115,23 @@ impl AgentRegistry {
     }
 
     /// Where `agent_id` is in the registry, and a copy of it to change.
-    fn registered(&self, agent_id: AgentId) -> anyhow::Result<(usize, RegisteredAgent)> {
+    fn registered(
+        &self,
+        agent_id: AgentId,
+    ) -> Result<(usize, RegisteredAgent), AgentRegistryError> {
         self.position(agent_id)
             .and_then(|index| Some((index, self.file.agents.get(index)?.clone())))
-            .with_context(|| format!("{} is not registered", agent_id.to_hex()))
+            .ok_or(AgentRegistryError::NotRegistered { agent_id })
     }
 
     /// Have `write` store the rows of the `changed` agents (index and
     /// agent as it will be), then put them in the registry; see
     /// [`Self::place_agents`].
-    fn write_changed<T>(
+    fn write_changed<T, E>(
         &mut self,
         changed: Vec<(usize, RegisteredAgent)>,
-        write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T> {
+        write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> Result<T, E>,
+    ) -> Result<T, E> {
         let rows = persist::rows_at(&self.file, &changed);
         let written = write(&self.store, rows.clone())?;
         for (index, agent) in changed {
@@ -137,7 +143,7 @@ impl AgentRegistry {
         if let Err(error) = self.persist() {
             tracing::warn!(
                 agents = rows.len(),
-                error = %format!("{error:#}"),
+                error = %chain(&error),
                 "could not save the registry after placing agents; saved with the next write"
             );
         }
@@ -164,11 +170,11 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// `write`'s error; the registry is left as it was.
-    pub fn add_with<T>(
+    pub fn add_with<T, E>(
         &mut self,
         agent: RegisteredAgent,
-        write: impl FnOnce(&AgentStore, aura_store_db::AgentRecord) -> anyhow::Result<T>,
-    ) -> anyhow::Result<(RegisteredAgent, T)> {
+        write: impl FnOnce(&AgentStore, aura_store_db::AgentRecord) -> Result<T, E>,
+    ) -> Result<(RegisteredAgent, T), E> {
         let row = self.record_for(&agent);
         let written = write(&self.store, row)?;
         Ok((self.adopt(agent), written))
@@ -193,7 +199,7 @@ impl AgentRegistry {
         if let Err(error) = self.persist() {
             tracing::warn!(
                 agent = %agent.agent_id().to_hex(),
-                error = %format!("{error:#}"),
+                error = %chain(&error),
                 "could not save the code of a new agent; saved with the next write"
             );
         }

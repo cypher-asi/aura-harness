@@ -140,7 +140,8 @@ fn registered(
             .map(|()| {
                 agent.folder = Some(folder);
                 agent
-            }),
+            })
+            .map_err(anyhow::Error::from),
         None => {
             let created = lock(&ctx.hub.registry).create_child(
                 &run.name,
@@ -150,7 +151,7 @@ fn registered(
             if let Ok(agent) = &created {
                 crate::event_loop::channels::join_or_warn(&ctx.hub, agent);
             }
-            created
+            created.map_err(anyhow::Error::from)
         }
     }
 }

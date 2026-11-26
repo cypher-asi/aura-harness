@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use aura_agent_kernel::{ChildAgentSpec, KernelSpawnHook, SpawnError, SpawnHook, SpawnOutcome};
 use aura_core_types::AgentId;
-use aura_exec_tools::{AgentControlHook, AgentReadHook};
+use aura_exec_tools::{AgentControlHook, AgentMessage, AgentReadHook};
 use aura_store_db::Store;
 
 const CHAT_PERSISTED_HEADER: &str = "x-aura-chat-persisted";
@@ -173,16 +173,8 @@ impl SpawnHook for AuraServerSpawnHook {
 
 #[async_trait]
 impl AgentControlHook for AuraServerAgentHook {
-    async fn deliver_message(
-        &self,
-        target_agent_id: &str,
-        parent_agent_id: Option<&str>,
-        _originating_user_id: Option<&str>,
-        project_id: Option<&str>,
-        content: &str,
-        attachments: Option<Value>,
-        model: Option<&str>,
-    ) -> Result<(), String> {
+    async fn deliver_message(&self, message: AgentMessage<'_>) -> Result<(), String> {
+        let target_agent_id = message.target_agent_id;
         let url = self.endpoint(&format!("/api/agents/{target_agent_id}/events/stream"));
         // `originating_agent_id` enables the server-side async callback
         // wiring in `apps/aura-os-server/src/handlers/agents/chat/persist_task.rs`:
@@ -210,7 +202,7 @@ impl AgentControlHook for AuraServerAgentHook {
             .post(url)
             .bearer_auth(self.bearer()?)
             .json(&json!({
-                "content": content,
+                "content": message.content,
                 "action": null,
                 // Forward the caller's model so the target agent's turn
                 // runs on a real model. Cross-agent recipients usually
@@ -220,13 +212,13 @@ impl AgentControlHook for AuraServerAgentHook {
                 // model and the turn fails with "model name must not be
                 // empty". `effective_model(&agent, body.model)` on the
                 // server prefers this value when present.
-                "model": model,
+                "model": message.model,
                 "commands": null,
-                "project_id": project_id,
-                "attachments": attachments,
+                "project_id": message.project_id,
+                "attachments": message.attachments,
                 "new_session": false,
-                "originating_agent_id": parent_agent_id,
-                "from_agent_id": parent_agent_id,
+                "originating_agent_id": message.parent_agent_id,
+                "from_agent_id": message.parent_agent_id,
             }))
             .send()
             .await
@@ -293,15 +285,12 @@ impl AgentControlHook for AuraServerAgentHook {
             return Err(self.error_from_response("delegate_task", response).await);
         }
 
-        self.deliver_message(
-            target_agent_id,
-            None,
-            None,
-            None,
-            &format!("Delegated task:\n\n{task}"),
-            context.cloned(),
+        let content = format!("Delegated task:\n\n{task}");
+        self.deliver_message(AgentMessage {
+            attachments: context.cloned(),
             model,
-        )
+            ..AgentMessage::new(target_agent_id, &content)
+        })
         .await
     }
 }

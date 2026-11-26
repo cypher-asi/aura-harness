@@ -1,13 +1,12 @@
 //! Bringing an older registry up to date, and importing the legacy
 //! `agents.json` and identity files.
 
-use anyhow::Context;
 use std::fs;
 use std::path::Path;
 
 use super::{
-    canonical, AgentRegistry, Project, RegisteredAgent, RegistryFile, DESKTOP_TABS_FILE,
-    LEGACY_IDENTITY_FILE, MIGRATED_REGISTRY_FILE, REGISTRY_FILE,
+    canonical, AgentRegistry, AgentRegistryError, Project, RegisteredAgent, RegistryFile,
+    DESKTOP_TABS_FILE, LEGACY_IDENTITY_FILE, MIGRATED_REGISTRY_FILE, REGISTRY_FILE,
 };
 
 impl AgentRegistry {
@@ -178,7 +177,9 @@ pub(super) enum ImportSource {
 /// or, when only `agents.json.migrated` is left, that file again, since an
 /// empty store next to it means the store lost the earlier import. Empty
 /// when there is neither.
-pub(super) fn read_registry_file(data_dir: &Path) -> anyhow::Result<(RegistryFile, ImportSource)> {
+pub(super) fn read_registry_file(
+    data_dir: &Path,
+) -> Result<(RegistryFile, ImportSource), AgentRegistryError> {
     let path = data_dir.join(REGISTRY_FILE);
     let migrated = data_dir.join(MIGRATED_REGISTRY_FILE);
     let (path, source) = if path.exists() {
@@ -193,9 +194,12 @@ pub(super) fn read_registry_file(data_dir: &Path) -> anyhow::Result<(RegistryFil
     } else {
         return Ok((RegistryFile::default(), ImportSource::None));
     };
-    let body = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    let file =
-        serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))?;
+    let body = fs::read_to_string(&path).map_err(|source| AgentRegistryError::ReadFile {
+        path: path.clone(),
+        source,
+    })?;
+    let file = serde_json::from_str(&body)
+        .map_err(|source| AgentRegistryError::ParseFile { path, source })?;
     Ok((file, source))
 }
 
@@ -238,15 +242,18 @@ fn sync_dir(dir: &Path) {
 #[cfg(not(unix))]
 fn sync_dir(_dir: &Path) {}
 
-pub(super) fn legacy_or_new_zns_id(data_dir: &Path) -> anyhow::Result<String> {
+pub(super) fn legacy_or_new_zns_id(data_dir: &Path) -> Result<String, AgentRegistryError> {
     let identity_file = data_dir.join(LEGACY_IDENTITY_FILE);
     if identity_file.exists() {
-        let zns_id = fs::read_to_string(&identity_file)
-            .with_context(|| format!("reading {}", identity_file.display()))?;
-        return Ok(zns_id);
+        return fs::read_to_string(&identity_file).map_err(|source| AgentRegistryError::ReadFile {
+            path: identity_file,
+            source,
+        });
     }
     let zns_id = format!("0://terminal/{}", uuid::Uuid::new_v4());
-    fs::write(&identity_file, &zns_id)
-        .with_context(|| format!("writing {}", identity_file.display()))?;
+    fs::write(&identity_file, &zns_id).map_err(|source| AgentRegistryError::WriteFile {
+        path: identity_file,
+        source,
+    })?;
     Ok(zns_id)
 }

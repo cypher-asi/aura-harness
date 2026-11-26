@@ -63,7 +63,7 @@ pub(super) fn unpin(fixture: &Fixture, agent: AgentId, project_id: Option<String
         folder: None,
     };
     lock(&fixture.hub.registry)
-        .place_agents(&[unpinned], |agents, rows| {
+        .place_agents(&[unpinned], |agents, rows| -> anyhow::Result<()> {
             let mut batch = WriteBatch::default();
             stage_rows(agents, rows, &mut batch)?;
             Ok(store(fixture).write(batch)?)

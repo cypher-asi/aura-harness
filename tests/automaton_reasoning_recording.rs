@@ -18,8 +18,9 @@ use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_core_types::{AgentId, TransactionType};
 use aura_engine_automaton::{Automaton, AutomatonId, AutomatonState, TickContext};
 use aura_exec_tools::domain_tools::{
-    CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
-    SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
+    CreateSessionParams, DomainApi, DomainError, DomainResult, MessageDescriptor, NewTask,
+    ProjectDescriptor, ProjectUpdate, SaveMessageParams, SessionDescriptor, SpecDescriptor,
+    TaskDescriptor, TaskUpdate,
 };
 use aura_model::{MockProvider, ModelProvider};
 use aura_store_db::{RocksStore, Store};
@@ -34,17 +35,22 @@ use tokio_util::sync::CancellationToken;
 
 struct DummyDomain;
 
+/// What the methods this test never calls return.
+fn unused<T>(operation: &'static str) -> DomainResult<T> {
+    Err(DomainError::Unsupported { operation })
+}
+
 #[async_trait]
 impl DomainApi for DummyDomain {
     async fn list_specs(
         &self,
         _project_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<SpecDescriptor>> {
+    ) -> DomainResult<Vec<SpecDescriptor>> {
         Ok(vec![])
     }
-    async fn get_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
-        anyhow::bail!("not used")
+    async fn get_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> DomainResult<SpecDescriptor> {
+        unused("get_spec")
     }
     async fn create_spec(
         &self,
@@ -53,7 +59,7 @@ impl DomainApi for DummyDomain {
         content: &str,
         order: u32,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         Ok(SpecDescriptor {
             id: format!("spec-{order}"),
             project_id: project_id.into(),
@@ -71,10 +77,10 @@ impl DomainApi for DummyDomain {
         _content: Option<&str>,
         _if_match: Option<&str>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
-        anyhow::bail!("not used")
+    ) -> DomainResult<SpecDescriptor> {
+        unused("update_spec")
     }
-    async fn delete_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> DomainResult<()> {
         Ok(())
     }
     async fn list_tasks(
@@ -82,30 +88,25 @@ impl DomainApi for DummyDomain {
         _project_id: &str,
         _spec_id: Option<&str>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<TaskDescriptor>> {
+    ) -> DomainResult<Vec<TaskDescriptor>> {
         Ok(vec![])
     }
     async fn create_task(
         &self,
-        _project_id: &str,
-        _spec_id: &str,
-        _title: &str,
-        _description: &str,
-        _dependencies: &[String],
-        _order: u32,
+        _task: NewTask<'_>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
-        anyhow::bail!("not used")
+    ) -> DomainResult<TaskDescriptor> {
+        unused("create_task")
     }
     async fn update_task(
         &self,
         _task_id: &str,
         _updates: TaskUpdate,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
-        anyhow::bail!("not used")
+    ) -> DomainResult<TaskDescriptor> {
+        unused("update_task")
     }
-    async fn delete_task(&self, _task_id: &str, _jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_task(&self, _task_id: &str, _jwt: Option<&str>) -> DomainResult<()> {
         Ok(())
     }
     async fn transition_task(
@@ -113,25 +114,25 @@ impl DomainApi for DummyDomain {
         _task_id: &str,
         _status: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
-        anyhow::bail!("not used")
+    ) -> DomainResult<TaskDescriptor> {
+        unused("transition_task")
     }
     async fn claim_next_task(
         &self,
         _project_id: &str,
         _agent_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<Option<TaskDescriptor>> {
+    ) -> DomainResult<Option<TaskDescriptor>> {
         Ok(None)
     }
-    async fn get_task(&self, _task_id: &str, _jwt: Option<&str>) -> anyhow::Result<TaskDescriptor> {
-        anyhow::bail!("not used")
+    async fn get_task(&self, _task_id: &str, _jwt: Option<&str>) -> DomainResult<TaskDescriptor> {
+        unused("get_task")
     }
     async fn get_project(
         &self,
         project_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         Ok(ProjectDescriptor {
             id: project_id.into(),
             name: "proj".into(),
@@ -147,8 +148,8 @@ impl DomainApi for DummyDomain {
         _project_id: &str,
         _updates: ProjectUpdate,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
-        anyhow::bail!("not used")
+    ) -> DomainResult<ProjectDescriptor> {
+        unused("update_project")
     }
     async fn create_log(
         &self,
@@ -158,7 +159,7 @@ impl DomainApi for DummyDomain {
         _agent_id: Option<&str>,
         _metadata: Option<&serde_json::Value>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         Ok(serde_json::json!({}))
     }
     async fn list_logs(
@@ -167,30 +168,27 @@ impl DomainApi for DummyDomain {
         _level: Option<&str>,
         _limit: Option<u64>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         Ok(serde_json::json!([]))
     }
     async fn get_project_stats(
         &self,
         _project_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         Ok(serde_json::json!({}))
     }
     async fn list_messages(
         &self,
         _project_id: &str,
         _instance_id: &str,
-    ) -> anyhow::Result<Vec<MessageDescriptor>> {
+    ) -> DomainResult<Vec<MessageDescriptor>> {
         Ok(vec![])
     }
-    async fn save_message(&self, _params: SaveMessageParams) -> anyhow::Result<()> {
+    async fn save_message(&self, _params: SaveMessageParams) -> DomainResult<()> {
         Ok(())
     }
-    async fn create_session(
-        &self,
-        params: CreateSessionParams,
-    ) -> anyhow::Result<SessionDescriptor> {
+    async fn create_session(&self, params: CreateSessionParams) -> DomainResult<SessionDescriptor> {
         Ok(SessionDescriptor {
             id: "s1".into(),
             instance_id: params.instance_id,
@@ -201,7 +199,7 @@ impl DomainApi for DummyDomain {
     async fn get_active_session(
         &self,
         _instance_id: &str,
-    ) -> anyhow::Result<Option<SessionDescriptor>> {
+    ) -> DomainResult<Option<SessionDescriptor>> {
         Ok(None)
     }
     async fn network_api_call(
@@ -210,7 +208,7 @@ impl DomainApi for DummyDomain {
         _path: &str,
         _body: Option<&serde_json::Value>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> DomainResult<String> {
         Ok(String::new())
     }
 }

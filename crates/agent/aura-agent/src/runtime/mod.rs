@@ -8,7 +8,8 @@
 pub mod process_manager;
 
 pub use process_manager::{
-    ProcessInfo, ProcessManager, ProcessManagerConfig, ProcessMeta, ProcessOutput, RunningProcess,
+    NewProcess, ProcessInfo, ProcessManager, ProcessManagerConfig, ProcessMeta, ProcessOutput,
+    RunningProcess,
 };
 
 /// Errors from the process manager runtime layer.

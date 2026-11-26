@@ -3,7 +3,7 @@
 use aura_core_types::AgentId;
 use std::path::{Path, PathBuf};
 
-use super::{persist, AgentRegistry, Project, RegisteredAgent};
+use super::{persist, AgentRegistry, AgentRegistryError, Project, RegisteredAgent};
 
 impl AgentRegistry {
     #[must_use]
@@ -68,7 +68,7 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// Returns an error if the registry cannot be written.
-    pub fn set_active(&mut self, agent_id: AgentId) -> anyhow::Result<()> {
+    pub fn set_active(&mut self, agent_id: AgentId) -> Result<(), AgentRegistryError> {
         if let Some(agent) = self.find(agent_id) {
             if self.file.active.as_deref() == Some(agent.zns_id.as_str()) {
                 return Ok(());

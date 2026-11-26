@@ -1,10 +1,11 @@
 //! Worker for processing agent transactions via kernel-mediated `AgentLoop`.
 
-use aura_agent::{AgentLoop, AgentLoopEvent, AgentLoopResult};
+use aura_agent::{AgentError, AgentLoop, AgentLoopEvent, AgentLoopResult};
 use aura_agent::{KernelModelGateway, KernelToolGateway};
-use aura_agent_kernel::Kernel;
+use aura_agent_kernel::{Kernel, KernelError};
 use aura_core_types::{AgentId, PromptPayload, TransactionType};
 use aura_model::{Message, ToolDefinition};
+use aura_store_db::StoreError;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -17,6 +18,42 @@ pub(crate) const AGENT_LOOP_TIMEOUT: Duration = Duration::from_secs(300);
 pub struct ProcessedAgent {
     pub processed: u64,
     pub last_result: Option<AgentLoopResult>,
+}
+
+/// Errors from draining an agent's inbox.
+///
+/// A variant whose message already includes the underlying error holds
+/// it as a plain field rather than its `source()`, so the error chain
+/// does not repeat it.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkerError {
+    /// The store failed taking the next transaction off the inbox.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// The kernel refused a dequeued transaction.
+    #[error("kernel process_dequeued failed: {0}")]
+    ProcessDequeued(KernelError),
+    /// A `UserPrompt` transaction does not carry a prompt record.
+    #[error("Prompt payload is not a prompt record: {0}")]
+    PromptPayload(serde_json::Error),
+    /// Another transaction's payload is not UTF-8 text.
+    #[error("Transaction payload is not valid UTF-8: {0}")]
+    PayloadUtf8(std::string::FromUtf8Error),
+    /// The agent loop did not finish within the worker's deadline.
+    #[error("Agent loop timed out after {0:?}")]
+    Timeout(Duration),
+    /// The agent loop failed.
+    #[error(transparent)]
+    AgentLoop(Box<AgentError>),
+    /// The kernel refused the transaction committing the loop's response.
+    #[error("kernel process_direct (response) failed: {0}")]
+    CommitResponse(KernelError),
+}
+
+impl From<AgentError> for WorkerError {
+    fn from(error: AgentError) -> Self {
+        Self::AgentLoop(Box::new(error))
+    }
 }
 
 /// Detailed variant used by foreground subagent dispatch to retrieve the
@@ -40,7 +77,7 @@ pub async fn process_agent_detailed(
     agent_loop: &AgentLoop,
     tools: &[ToolDefinition],
     event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
-) -> anyhow::Result<ProcessedAgent> {
+) -> Result<ProcessedAgent, WorkerError> {
     process_agent_with_timeout(
         agent_id,
         kernel,
@@ -66,7 +103,7 @@ pub(crate) async fn process_agent_with_timeout(
     event_tx: Option<mpsc::Sender<AgentLoopEvent>>,
     timeout: Option<Duration>,
     mut history: Vec<Message>,
-) -> anyhow::Result<ProcessedAgent> {
+) -> Result<ProcessedAgent, WorkerError> {
     let mut processed = 0u64;
     let mut last_result = None;
     let store = kernel.store().clone();
@@ -89,7 +126,7 @@ pub(crate) async fn process_agent_with_timeout(
         let _prompt_result = kernel
             .process_dequeued(tx.clone(), token)
             .await
-            .map_err(|e| anyhow::anyhow!("kernel process_dequeued failed: {e}"))?;
+            .map_err(WorkerError::ProcessDequeued)?;
 
         let prompt = prompt_text(&tx)?;
         let mut messages = std::mem::take(&mut history);
@@ -106,7 +143,7 @@ pub(crate) async fn process_agent_with_timeout(
         let result = match timeout {
             Some(deadline) => tokio::time::timeout(deadline, run)
                 .await
-                .map_err(|_| anyhow::anyhow!("Agent loop timed out after {deadline:?}"))??,
+                .map_err(|_| WorkerError::Timeout(deadline))??,
             None => run.await?,
         };
 
@@ -124,14 +161,13 @@ pub(crate) async fn process_agent_with_timeout(
 
 /// The prompt text a dequeued transaction carries: a prompt record for
 /// `UserPrompt`, raw UTF-8 otherwise.
-fn prompt_text(tx: &aura_core_types::Transaction) -> anyhow::Result<String> {
+fn prompt_text(tx: &aura_core_types::Transaction) -> Result<String, WorkerError> {
     if tx.tx_type == TransactionType::UserPrompt {
         Ok(PromptPayload::from_bytes(&tx.payload)
-            .map_err(|e| anyhow::anyhow!("Prompt payload is not a prompt record: {e}"))?
+            .map_err(WorkerError::PromptPayload)?
             .text)
     } else {
-        String::from_utf8(tx.payload.to_vec())
-            .map_err(|e| anyhow::anyhow!("Transaction payload is not valid UTF-8: {e}"))
+        String::from_utf8(tx.payload.to_vec()).map_err(WorkerError::PayloadUtf8)
     }
 }
 
@@ -140,7 +176,7 @@ async fn commit_response(
     kernel: &Kernel,
     agent_id: AgentId,
     result: &AgentLoopResult,
-) -> anyhow::Result<()> {
+) -> Result<(), WorkerError> {
     let response_tx = aura_core_types::Transaction::new_chained(
         agent_id,
         aura_core_types::TransactionType::AgentMsg,
@@ -150,7 +186,7 @@ async fn commit_response(
     let _response_result = kernel
         .process_direct(response_tx)
         .await
-        .map_err(|e| anyhow::anyhow!("kernel process_direct (response) failed: {e}"))?;
+        .map_err(WorkerError::CommitResponse)?;
 
     if result.llm_error.is_some() {
         warn!("Transaction processed with LLM error");
@@ -240,7 +276,7 @@ mod tests {
         );
     }
 
-    async fn slow_worker(timeout: Option<Duration>) -> anyhow::Result<ProcessedAgent> {
+    async fn slow_worker(timeout: Option<Duration>) -> Result<ProcessedAgent, WorkerError> {
         let dir = tempfile::tempdir().unwrap();
         let agent_id = AgentId::generate();
         let store: Arc<dyn Store> =

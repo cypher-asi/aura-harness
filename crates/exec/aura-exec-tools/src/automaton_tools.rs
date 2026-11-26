@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use aura_core_types::ToolDefinition;
 use aura_core_types::ToolResult;
 
-pub use aura_exec_traits::AutomatonController;
+pub use aura_exec_traits::{AutomatonController, AutomatonRun};
 
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
@@ -81,14 +81,14 @@ impl Tool for StartDevLoopTool {
 
         match self
             .controller
-            .start_dev_loop(
-                &self.project_id,
-                self.workspace_root.clone(),
-                self.auth_token.clone(),
+            .start_dev_loop(AutomatonRun {
+                project_id: &self.project_id,
+                workspace_root: self.workspace_root.clone(),
+                auth_token: self.auth_token.clone(),
                 model,
-                None,
-                None,
-            )
+                git_repo_url: None,
+                git_branch: None,
+            })
             .await
         {
             Ok(automaton_id) => Ok(ToolResult::success(
@@ -255,13 +255,15 @@ impl Tool for RunTaskTool {
         match self
             .controller
             .run_task(
-                &self.project_id,
                 task_id,
-                self.workspace_root.clone(),
-                self.auth_token.clone(),
-                model,
-                None,
-                None,
+                AutomatonRun {
+                    project_id: &self.project_id,
+                    workspace_root: self.workspace_root.clone(),
+                    auth_token: self.auth_token.clone(),
+                    model,
+                    git_repo_url: None,
+                    git_branch: None,
+                },
             )
             .await
         {
@@ -343,15 +345,7 @@ mod tests {
 
     #[async_trait]
     impl AutomatonController for StubController {
-        async fn start_dev_loop(
-            &self,
-            _project_id: &str,
-            _workspace_root: Option<PathBuf>,
-            _auth_token: Option<String>,
-            _model: Option<String>,
-            _git_repo_url: Option<String>,
-            _git_branch: Option<String>,
-        ) -> Result<String, String> {
+        async fn start_dev_loop(&self, _run: AutomatonRun<'_>) -> Result<String, String> {
             Ok("stub".into())
         }
         async fn pause_dev_loop(&self, _project_id: &str) -> Result<(), String> {
@@ -360,16 +354,7 @@ mod tests {
         async fn stop_dev_loop(&self, _project_id: &str) -> Result<(), String> {
             Ok(())
         }
-        async fn run_task(
-            &self,
-            _project_id: &str,
-            _task_id: &str,
-            _workspace_root: Option<PathBuf>,
-            _auth_token: Option<String>,
-            _model: Option<String>,
-            _git_repo_url: Option<String>,
-            _git_branch: Option<String>,
-        ) -> Result<String, String> {
+        async fn run_task(&self, _task_id: &str, _run: AutomatonRun<'_>) -> Result<String, String> {
             Ok("stub".into())
         }
     }

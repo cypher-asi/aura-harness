@@ -12,7 +12,7 @@ use crate::types::{
     AgentContinuityConfig, MemoryPacket, MemoryRetrievalTrace, MemoryStatus, MemoryWritePolicy,
     Procedure,
 };
-use crate::write_pipeline::{MemoryWritePipeline, WriteConfig, WriteReport};
+use crate::write_pipeline::{IngestProvenance, MemoryWritePipeline, WriteConfig, WriteReport};
 use aura_core_types::AgentId;
 use aura_core_types::ProcedureId;
 use aura_model::ModelProvider;
@@ -20,6 +20,16 @@ use rocksdb::{DBWithThreadMode, MultiThreaded};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::{collections::HashMap, time::Duration};
+
+/// The configuration of each part a [`MemoryManager`] owns.
+#[derive(Default)]
+pub struct MemoryConfig {
+    pub refiner: RefinerConfig,
+    pub write: WriteConfig,
+    pub retrieval: RetrievalConfig,
+    pub consolidation: ConsolidationConfig,
+    pub procedure: ProcedureConfig,
+}
 
 /// Top-level memory facade owning the store, retriever, write pipeline,
 /// procedure extractor, and consolidator.
@@ -46,45 +56,27 @@ impl MemoryManager {
     pub fn new(
         db: Arc<DBWithThreadMode<MultiThreaded>>,
         provider: Arc<dyn ModelProvider + Send + Sync>,
-        refiner_config: RefinerConfig,
-        write_config: WriteConfig,
-        retrieval_config: RetrievalConfig,
-        consolidation_config: ConsolidationConfig,
-        procedure_config: ProcedureConfig,
+        config: MemoryConfig,
     ) -> Self {
-        Self::with_cipher(
-            db,
-            None,
-            provider,
-            refiner_config,
-            write_config,
-            retrieval_config,
-            consolidation_config,
-            procedure_config,
-        )
+        Self::with_cipher(db, None, provider, config)
     }
 
     /// Like [`Self::new`], but with optional sealed (encrypted-at-rest)
     /// memory values (Swarm TEE phase 5). `cipher: None` is exactly the
     /// legacy plaintext behavior.
-    #[allow(clippy::too_many_arguments)]
     pub fn with_cipher(
         db: Arc<DBWithThreadMode<MultiThreaded>>,
         cipher: Option<Arc<aura_store_db::SealCipher>>,
         provider: Arc<dyn ModelProvider + Send + Sync>,
-        refiner_config: RefinerConfig,
-        write_config: WriteConfig,
-        retrieval_config: RetrievalConfig,
-        consolidation_config: ConsolidationConfig,
-        procedure_config: ProcedureConfig,
+        config: MemoryConfig,
     ) -> Self {
         let store: Arc<dyn MemoryStoreApi> = Arc::new(MemoryStore::with_cipher(db, cipher));
-        let retriever = MemoryRetriever::new(Arc::clone(&store), retrieval_config);
-        let refiner = LlmRefiner::new(Arc::clone(&provider), refiner_config);
-        let pipeline = MemoryWritePipeline::new(Arc::clone(&store), refiner, write_config);
-        let procedure_extractor = ProcedureExtractor::new(Arc::clone(&store), procedure_config);
+        let retriever = MemoryRetriever::new(Arc::clone(&store), config.retrieval);
+        let refiner = LlmRefiner::new(Arc::clone(&provider), config.refiner);
+        let pipeline = MemoryWritePipeline::new(Arc::clone(&store), refiner, config.write);
+        let procedure_extractor = ProcedureExtractor::new(Arc::clone(&store), config.procedure);
         let consolidator =
-            MemoryConsolidator::new(Arc::clone(&store), provider, consolidation_config);
+            MemoryConsolidator::new(Arc::clone(&store), provider, config.consolidation);
 
         Self {
             store,
@@ -314,8 +306,10 @@ impl MemoryManager {
                 turn.as_ref(),
                 request_context,
                 active_skills,
-                source_session_id,
-                initial_status,
+                IngestProvenance {
+                    source_session_id,
+                    initial_status,
+                },
             )
             .await
     }

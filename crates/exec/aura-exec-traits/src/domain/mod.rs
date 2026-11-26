@@ -7,6 +7,10 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+mod error;
+
+pub use error::{DomainError, DomainResult};
+
 /// Deserialize a string that may be null or missing into `String::default()`.
 fn deser_string_or_default<'de, D>(d: D) -> Result<String, D::Error>
 where
@@ -197,6 +201,19 @@ pub struct CreateSessionParams {
     pub model: Option<String>,
 }
 
+/// The task [`DomainApi::create_task`] creates.
+#[derive(Debug, Clone, Copy)]
+pub struct NewTask<'a> {
+    pub project_id: &'a str,
+    pub spec_id: &'a str,
+    pub title: &'a str,
+    pub description: &'a str,
+    /// Ids of the tasks it depends on.
+    pub dependencies: &'a [String],
+    /// Its place among the spec's tasks.
+    pub order: u32,
+}
+
 // ---------------------------------------------------------------------------
 // DomainApi trait
 // ---------------------------------------------------------------------------
@@ -208,8 +225,8 @@ pub trait DomainApi: Send + Sync {
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<SpecDescriptor>>;
-    async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<SpecDescriptor>;
+    ) -> DomainResult<Vec<SpecDescriptor>>;
+    async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> DomainResult<SpecDescriptor>;
     async fn create_spec(
         &self,
         project_id: &str,
@@ -217,7 +234,7 @@ pub trait DomainApi: Send + Sync {
         content: &str,
         order: u32,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor>;
+    ) -> DomainResult<SpecDescriptor>;
     async fn update_spec(
         &self,
         spec_id: &str,
@@ -225,7 +242,7 @@ pub trait DomainApi: Send + Sync {
         content: Option<&str>,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor>;
+    ) -> DomainResult<SpecDescriptor>;
     /// Replace a single `## ` section of a spec without re-sending the
     /// whole body. Defaults to an error so only backends that support
     /// granular edits (the HTTP impl) need to implement it.
@@ -236,11 +253,11 @@ pub trait DomainApi: Send + Sync {
         new_body: &str,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         let _ = (spec_id, section_heading, new_body, if_match, jwt);
-        Err(anyhow::anyhow!(
-            "update_spec_section is not supported by this DomainApi implementation"
-        ))
+        Err(DomainError::Unsupported {
+            operation: "update_spec_section",
+        })
     }
     /// Append a markdown block to a spec without re-sending the body.
     /// Defaults to an error for the same reason as `update_spec_section`.
@@ -250,13 +267,13 @@ pub trait DomainApi: Send + Sync {
         markdown: &str,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         let _ = (spec_id, markdown, if_match, jwt);
-        Err(anyhow::anyhow!(
-            "append_to_spec is not supported by this DomainApi implementation"
-        ))
+        Err(DomainError::Unsupported {
+            operation: "append_to_spec",
+        })
     }
-    async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<()>;
+    async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> DomainResult<()>;
 
     // Tasks — JWT auth via /api/ routes
     async fn list_tasks(
@@ -264,53 +281,47 @@ pub trait DomainApi: Send + Sync {
         project_id: &str,
         spec_id: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<TaskDescriptor>>;
-    #[allow(clippy::too_many_arguments)]
+    ) -> DomainResult<Vec<TaskDescriptor>>;
     async fn create_task(
         &self,
-        project_id: &str,
-        spec_id: &str,
-        title: &str,
-        description: &str,
-        dependencies: &[String],
-        order: u32,
+        task: NewTask<'_>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor>;
+    ) -> DomainResult<TaskDescriptor>;
     async fn update_task(
         &self,
         task_id: &str,
         updates: TaskUpdate,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor>;
-    async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<()>;
+    ) -> DomainResult<TaskDescriptor>;
+    async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> DomainResult<()>;
     async fn transition_task(
         &self,
         task_id: &str,
         status: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor>;
+    ) -> DomainResult<TaskDescriptor>;
     async fn claim_next_task(
         &self,
         project_id: &str,
         agent_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Option<TaskDescriptor>>;
+    ) -> DomainResult<Option<TaskDescriptor>>;
 
     // Single task lookup — JWT auth via /api/ routes
-    async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<TaskDescriptor>;
+    async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> DomainResult<TaskDescriptor>;
 
     // Project (aura-network) — JWT auth via /api/ routes
     async fn get_project(
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor>;
+    ) -> DomainResult<ProjectDescriptor>;
     async fn update_project(
         &self,
         project_id: &str,
         updates: ProjectUpdate,
         jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor>;
+    ) -> DomainResult<ProjectDescriptor>;
 
     // Storage: logs — JWT auth via /api/ routes
     async fn create_log(
@@ -321,37 +332,34 @@ pub trait DomainApi: Send + Sync {
         agent_id: Option<&str>,
         metadata: Option<&serde_json::Value>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value>;
+    ) -> DomainResult<serde_json::Value>;
     async fn list_logs(
         &self,
         project_id: &str,
         level: Option<&str>,
         limit: Option<u64>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value>;
+    ) -> DomainResult<serde_json::Value>;
     async fn get_project_stats(
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value>;
+    ) -> DomainResult<serde_json::Value>;
 
     // Messages
     async fn list_messages(
         &self,
         project_id: &str,
         instance_id: &str,
-    ) -> anyhow::Result<Vec<MessageDescriptor>>;
-    async fn save_message(&self, params: SaveMessageParams) -> anyhow::Result<()>;
+    ) -> DomainResult<Vec<MessageDescriptor>>;
+    async fn save_message(&self, params: SaveMessageParams) -> DomainResult<()>;
 
     // Sessions
-    async fn create_session(
-        &self,
-        params: CreateSessionParams,
-    ) -> anyhow::Result<SessionDescriptor>;
+    async fn create_session(&self, params: CreateSessionParams) -> DomainResult<SessionDescriptor>;
     async fn get_active_session(
         &self,
         instance_id: &str,
-    ) -> anyhow::Result<Option<SessionDescriptor>>;
+    ) -> DomainResult<Option<SessionDescriptor>>;
 
     // Network (raw JSON pass-through)
     async fn network_api_call(
@@ -360,5 +368,5 @@ pub trait DomainApi: Send + Sync {
         path: &str,
         body: Option<&serde_json::Value>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<String>;
+    ) -> DomainResult<String>;
 }

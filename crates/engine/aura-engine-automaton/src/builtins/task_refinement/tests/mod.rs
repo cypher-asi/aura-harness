@@ -4,13 +4,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::sync::Mutex;
 
-use anyhow::anyhow;
-
 use async_trait::async_trait;
 
 use aura_exec_tools::domain_tools::{
-    CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
-    SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
+    CreateSessionParams, DomainApi, DomainError, DomainResult, MessageDescriptor, NewTask,
+    ProjectDescriptor, ProjectUpdate, SaveMessageParams, SessionDescriptor, SpecDescriptor,
+    TaskDescriptor, TaskUpdate,
 };
 
 use aura_model::{
@@ -110,10 +109,10 @@ impl DomainApi for RecordingDomain {
         &self,
         _project_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<SpecDescriptor>> {
+    ) -> DomainResult<Vec<SpecDescriptor>> {
         unimplemented!("RecordingDomain")
     }
-    async fn get_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
+    async fn get_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> DomainResult<SpecDescriptor> {
         unimplemented!("RecordingDomain")
     }
     async fn create_spec(
@@ -123,7 +122,7 @@ impl DomainApi for RecordingDomain {
         _c: &str,
         _o: u32,
         _j: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         unimplemented!("RecordingDomain")
     }
     async fn update_spec(
@@ -133,10 +132,10 @@ impl DomainApi for RecordingDomain {
         _c: Option<&str>,
         _if_match: Option<&str>,
         _j: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         unimplemented!("RecordingDomain")
     }
-    async fn delete_spec(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_spec(&self, _id: &str, _j: Option<&str>) -> DomainResult<()> {
         unimplemented!("RecordingDomain")
     }
     async fn list_tasks(
@@ -144,19 +143,14 @@ impl DomainApi for RecordingDomain {
         _p: &str,
         _s: Option<&str>,
         _j: Option<&str>,
-    ) -> anyhow::Result<Vec<TaskDescriptor>> {
+    ) -> DomainResult<Vec<TaskDescriptor>> {
         unimplemented!("RecordingDomain")
     }
     async fn create_task(
         &self,
-        _p: &str,
-        _s: &str,
-        _t: &str,
-        _d: &str,
-        _deps: &[String],
-        _o: u32,
+        _task: NewTask<'_>,
         _j: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         unimplemented!("RecordingDomain")
     }
     async fn update_task(
@@ -164,13 +158,17 @@ impl DomainApi for RecordingDomain {
         id: &str,
         updates: TaskUpdate,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         self.updates
             .lock()
             .unwrap()
             .push((id.to_string(), updates.clone()));
         if self.update_should_fail {
-            return Err(anyhow!("simulated update_task failure"));
+            return Err(DomainError::Status {
+                status: 500,
+                reason: Some("Internal Server Error"),
+                body: "simulated update_task failure".to_string(),
+            });
         }
         let new_desc = updates.description.clone().unwrap_or_default();
         Ok(TaskDescriptor {
@@ -184,7 +182,7 @@ impl DomainApi for RecordingDomain {
             order: 0,
         })
     }
-    async fn delete_task(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_task(&self, _id: &str, _j: Option<&str>) -> DomainResult<()> {
         unimplemented!("RecordingDomain")
     }
     async fn transition_task(
@@ -192,7 +190,7 @@ impl DomainApi for RecordingDomain {
         _id: &str,
         _s: &str,
         _j: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         unimplemented!("RecordingDomain")
     }
     async fn claim_next_task(
@@ -200,13 +198,13 @@ impl DomainApi for RecordingDomain {
         _p: &str,
         _a: &str,
         _j: Option<&str>,
-    ) -> anyhow::Result<Option<TaskDescriptor>> {
+    ) -> DomainResult<Option<TaskDescriptor>> {
         unimplemented!("RecordingDomain")
     }
-    async fn get_task(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<TaskDescriptor> {
+    async fn get_task(&self, _id: &str, _j: Option<&str>) -> DomainResult<TaskDescriptor> {
         unimplemented!("RecordingDomain")
     }
-    async fn get_project(&self, _p: &str, _j: Option<&str>) -> anyhow::Result<ProjectDescriptor> {
+    async fn get_project(&self, _p: &str, _j: Option<&str>) -> DomainResult<ProjectDescriptor> {
         unimplemented!("RecordingDomain")
     }
     async fn update_project(
@@ -214,7 +212,7 @@ impl DomainApi for RecordingDomain {
         _p: &str,
         _u: ProjectUpdate,
         _j: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         unimplemented!("RecordingDomain")
     }
     async fn create_log(
@@ -225,7 +223,7 @@ impl DomainApi for RecordingDomain {
         _a: Option<&str>,
         _md: Option<&serde_json::Value>,
         _j: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         unimplemented!("RecordingDomain")
     }
     async fn list_logs(
@@ -234,26 +232,26 @@ impl DomainApi for RecordingDomain {
         _l: Option<&str>,
         _n: Option<u64>,
         _j: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         unimplemented!("RecordingDomain")
     }
     async fn get_project_stats(
         &self,
         _p: &str,
         _j: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         unimplemented!("RecordingDomain")
     }
-    async fn list_messages(&self, _p: &str, _i: &str) -> anyhow::Result<Vec<MessageDescriptor>> {
+    async fn list_messages(&self, _p: &str, _i: &str) -> DomainResult<Vec<MessageDescriptor>> {
         unimplemented!("RecordingDomain")
     }
-    async fn save_message(&self, _p: SaveMessageParams) -> anyhow::Result<()> {
+    async fn save_message(&self, _p: SaveMessageParams) -> DomainResult<()> {
         unimplemented!("RecordingDomain")
     }
-    async fn create_session(&self, _p: CreateSessionParams) -> anyhow::Result<SessionDescriptor> {
+    async fn create_session(&self, _p: CreateSessionParams) -> DomainResult<SessionDescriptor> {
         unimplemented!("RecordingDomain")
     }
-    async fn get_active_session(&self, _i: &str) -> anyhow::Result<Option<SessionDescriptor>> {
+    async fn get_active_session(&self, _i: &str) -> DomainResult<Option<SessionDescriptor>> {
         unimplemented!("RecordingDomain")
     }
     async fn network_api_call(
@@ -262,7 +260,7 @@ impl DomainApi for RecordingDomain {
         _p: &str,
         _b: Option<&serde_json::Value>,
         _j: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> DomainResult<String> {
         unimplemented!("RecordingDomain")
     }
 }

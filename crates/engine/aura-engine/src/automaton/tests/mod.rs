@@ -21,8 +21,9 @@ use aura_core_types::{AgentId, InstalledIntegrationDefinition, TransactionType};
 use aura_engine_automaton::AutomatonRuntime;
 use aura_exec_tools::{
     domain_tools::{
-        CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
-        SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
+        CreateSessionParams, DomainApi, DomainResult, MessageDescriptor, NewTask,
+        ProjectDescriptor, ProjectUpdate, SaveMessageParams, SessionDescriptor, SpecDescriptor,
+        TaskDescriptor, TaskUpdate,
     },
     ToolCatalog, ToolConfig,
 };
@@ -45,10 +46,10 @@ impl DomainApi for UnusedDomain {
         &self,
         _project_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<SpecDescriptor>> {
+    ) -> DomainResult<Vec<SpecDescriptor>> {
         unimplemented!("UnusedDomain")
     }
-    async fn get_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
+    async fn get_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> DomainResult<SpecDescriptor> {
         unimplemented!("UnusedDomain")
     }
     async fn create_spec(
@@ -58,7 +59,7 @@ impl DomainApi for UnusedDomain {
         _c: &str,
         _o: u32,
         _j: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         unimplemented!("UnusedDomain")
     }
     async fn update_spec(
@@ -68,10 +69,10 @@ impl DomainApi for UnusedDomain {
         _c: Option<&str>,
         _if_match: Option<&str>,
         _j: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         unimplemented!("UnusedDomain")
     }
-    async fn delete_spec(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_spec(&self, _id: &str, _j: Option<&str>) -> DomainResult<()> {
         unimplemented!("UnusedDomain")
     }
     async fn list_tasks(
@@ -79,19 +80,14 @@ impl DomainApi for UnusedDomain {
         _p: &str,
         _s: Option<&str>,
         _j: Option<&str>,
-    ) -> anyhow::Result<Vec<TaskDescriptor>> {
+    ) -> DomainResult<Vec<TaskDescriptor>> {
         unimplemented!("UnusedDomain")
     }
     async fn create_task(
         &self,
-        _p: &str,
-        _s: &str,
-        _t: &str,
-        _d: &str,
-        _deps: &[String],
-        _o: u32,
+        _task: NewTask<'_>,
         _j: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         unimplemented!("UnusedDomain")
     }
     async fn update_task(
@@ -99,10 +95,10 @@ impl DomainApi for UnusedDomain {
         _id: &str,
         _u: TaskUpdate,
         _j: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         unimplemented!("UnusedDomain")
     }
-    async fn delete_task(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_task(&self, _id: &str, _j: Option<&str>) -> DomainResult<()> {
         unimplemented!("UnusedDomain")
     }
     async fn transition_task(
@@ -110,7 +106,7 @@ impl DomainApi for UnusedDomain {
         _id: &str,
         _s: &str,
         _j: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         unimplemented!("UnusedDomain")
     }
     async fn claim_next_task(
@@ -118,13 +114,13 @@ impl DomainApi for UnusedDomain {
         _p: &str,
         _a: &str,
         _j: Option<&str>,
-    ) -> anyhow::Result<Option<TaskDescriptor>> {
+    ) -> DomainResult<Option<TaskDescriptor>> {
         unimplemented!("UnusedDomain")
     }
-    async fn get_task(&self, _id: &str, _j: Option<&str>) -> anyhow::Result<TaskDescriptor> {
+    async fn get_task(&self, _id: &str, _j: Option<&str>) -> DomainResult<TaskDescriptor> {
         unimplemented!("UnusedDomain")
     }
-    async fn get_project(&self, _p: &str, _j: Option<&str>) -> anyhow::Result<ProjectDescriptor> {
+    async fn get_project(&self, _p: &str, _j: Option<&str>) -> DomainResult<ProjectDescriptor> {
         unimplemented!("UnusedDomain")
     }
     async fn update_project(
@@ -132,7 +128,7 @@ impl DomainApi for UnusedDomain {
         _p: &str,
         _u: ProjectUpdate,
         _j: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         unimplemented!("UnusedDomain")
     }
     async fn create_log(
@@ -143,7 +139,7 @@ impl DomainApi for UnusedDomain {
         _a: Option<&str>,
         _md: Option<&serde_json::Value>,
         _j: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         unimplemented!("UnusedDomain")
     }
     async fn list_logs(
@@ -152,26 +148,26 @@ impl DomainApi for UnusedDomain {
         _l: Option<&str>,
         _n: Option<u64>,
         _j: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         unimplemented!("UnusedDomain")
     }
     async fn get_project_stats(
         &self,
         _p: &str,
         _j: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         unimplemented!("UnusedDomain")
     }
-    async fn list_messages(&self, _p: &str, _i: &str) -> anyhow::Result<Vec<MessageDescriptor>> {
+    async fn list_messages(&self, _p: &str, _i: &str) -> DomainResult<Vec<MessageDescriptor>> {
         unimplemented!("UnusedDomain")
     }
-    async fn save_message(&self, _p: SaveMessageParams) -> anyhow::Result<()> {
+    async fn save_message(&self, _p: SaveMessageParams) -> DomainResult<()> {
         unimplemented!("UnusedDomain")
     }
-    async fn create_session(&self, _p: CreateSessionParams) -> anyhow::Result<SessionDescriptor> {
+    async fn create_session(&self, _p: CreateSessionParams) -> DomainResult<SessionDescriptor> {
         unimplemented!("UnusedDomain")
     }
-    async fn get_active_session(&self, _i: &str) -> anyhow::Result<Option<SessionDescriptor>> {
+    async fn get_active_session(&self, _i: &str) -> DomainResult<Option<SessionDescriptor>> {
         unimplemented!("UnusedDomain")
     }
     async fn network_api_call(
@@ -180,7 +176,7 @@ impl DomainApi for UnusedDomain {
         _p: &str,
         _b: Option<&serde_json::Value>,
         _j: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> DomainResult<String> {
         unimplemented!("UnusedDomain")
     }
 }

@@ -15,15 +15,15 @@ async fn finished_command(
     ));
     let table = ProcessTable::without_os_scan(None, Some(Arc::clone(&manager)));
     let process_id = aura_core_types::ProcessId::generate();
-    manager.register_with(
+    manager.register_with(aura_agent::NewProcess {
         agent_id,
-        aura_core_types::Hash::from_content(b"proposal"),
-        aura_core_types::ActionId::generate(),
+        reference_tx_hash: aura_core_types::Hash::from_content(b"proposal"),
+        action_id: aura_core_types::ActionId::generate(),
         process_id,
-        std::process::Command::new("true").spawn().unwrap(),
-        "true".to_string(),
-        aura_agent::ProcessMeta::default(),
-    );
+        child: std::process::Command::new("true").spawn().unwrap(),
+        command: "true".to_string(),
+        meta: aura_agent::ProcessMeta::default(),
+    });
     let info = manager
         .snapshot()
         .into_iter()

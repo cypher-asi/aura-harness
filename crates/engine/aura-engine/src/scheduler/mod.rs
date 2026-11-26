@@ -31,12 +31,14 @@
 //! * **Process crash while claimed** – the persisted claim can remain set after
 //!   a hard crash. A future lease timestamp/owner can recover abandoned claims.
 
-use crate::worker::ProcessedAgent;
+use crate::worker::{ProcessedAgent, WorkerError};
 use aura_agent::{AgentLoopConfig, AgentLoopEvent};
-use aura_agent_kernel::{Executor, ExecutorRouter, KernelConfig, PolicyConfig, RecordObserver};
+use aura_agent_kernel::{
+    Executor, ExecutorRouter, KernelConfig, KernelError, PolicyConfig, RecordObserver,
+};
 use aura_core_types::AgentId;
 use aura_model::{ModelProvider, ToolDefinition};
-use aura_store_db::Store;
+use aura_store_db::{Store, StoreError};
 use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
@@ -92,10 +94,11 @@ pub struct ScheduleOverrides {
     pub history: Vec<aura_model::Message>,
 }
 
-/// Errors surfaced by [`Scheduler::schedule_agent_with_overrides`]
-/// after Step 2 of the worker-routing-identity fix. Existing callers
-/// receive these wrapped in `anyhow::Error`; tests can downcast to
-/// match on the typed variant.
+/// Errors surfaced by [`Scheduler::schedule_agent_with_overrides`] and
+/// the processing-claim methods.
+///
+/// [`Self::KernelConstruction`]'s message includes the kernel error, so
+/// it holds it as a plain field rather than its `source()`.
 #[derive(Debug, Error)]
 pub enum SchedulerError {
     /// No [`AgentIdentity`] is registered for an agent that has pending
@@ -110,6 +113,16 @@ pub enum SchedulerError {
          back silently."
     )]
     AgentNotRegistered { agent_id: AgentId },
+    /// The store failed reading the agent's status or inbox, or taking or
+    /// releasing its processing claim.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// The per-agent kernel could not be built.
+    #[error("kernel construction failed: {0}")]
+    KernelConstruction(KernelError),
+    /// Draining the agent's inbox failed.
+    #[error(transparent)]
+    Worker(#[from] WorkerError),
 }
 
 /// Local guard that makes store-backed processing claims release on every
@@ -121,7 +134,7 @@ pub struct ProcessingClaim {
 }
 
 impl ProcessingClaim {
-    fn try_new(store: Arc<dyn Store>, agent_id: AgentId) -> anyhow::Result<Option<Self>> {
+    fn try_new(store: Arc<dyn Store>, agent_id: AgentId) -> Result<Option<Self>, StoreError> {
         if !store.try_claim_agent_processing(agent_id)? {
             return Ok(None);
         }
@@ -133,7 +146,7 @@ impl ProcessingClaim {
     }
 
     /// Release the underlying store claim. Idempotent.
-    pub fn release(&mut self) -> anyhow::Result<()> {
+    pub fn release(&mut self) -> Result<(), StoreError> {
         if !self.released {
             self.store.release_agent_processing(self.agent_id)?;
             self.released = true;
@@ -263,13 +276,13 @@ impl Scheduler {
     pub fn try_processing_claim(
         &self,
         agent_id: AgentId,
-    ) -> anyhow::Result<Option<ProcessingClaim>> {
+    ) -> Result<Option<ProcessingClaim>, StoreError> {
         ProcessingClaim::try_new(self.store.clone(), agent_id)
     }
 
     /// Wait for exclusive processing, used by short direct append paths that
     /// previously awaited the per-agent mutex.
-    pub async fn processing_claim(&self, agent_id: AgentId) -> anyhow::Result<ProcessingClaim> {
+    pub async fn processing_claim(&self, agent_id: AgentId) -> Result<ProcessingClaim, StoreError> {
         loop {
             if let Some(claim) = self.try_processing_claim(agent_id)? {
                 return Ok(claim);
@@ -292,7 +305,7 @@ impl Scheduler {
     /// delegates to [`Self::schedule_agent_with_overrides`], which owns
     /// the canonical `agent{id=...}` span so the prefix chain doesn't
     /// duplicate the `agent_id` field.
-    pub async fn schedule_agent(&self, agent_id: AgentId) -> anyhow::Result<u64> {
+    pub async fn schedule_agent(&self, agent_id: AgentId) -> Result<u64, SchedulerError> {
         self.schedule_agent_with_overrides(agent_id, None, None)
             .await
             .map(|processed| processed.processed)
@@ -314,7 +327,7 @@ impl Scheduler {
         agent_id: AgentId,
         agent_loop_config: Option<AgentLoopConfig>,
         policy: Option<PolicyConfig>,
-    ) -> anyhow::Result<ProcessedAgent> {
+    ) -> Result<ProcessedAgent, SchedulerError> {
         self.schedule_agent_with_options(
             agent_id,
             ScheduleOverrides {

@@ -351,6 +351,7 @@ mod persist;
 mod placement;
 mod tree;
 
+pub use crate::error::AgentRegistryError;
 use create::canonical;
 use migrate::{legacy_or_new_zns_id, read_registry_file, retire_registry_file, ImportSource};
 

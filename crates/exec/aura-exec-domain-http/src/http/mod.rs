@@ -6,11 +6,15 @@
 //! standalone `aura-exec-domain-http` crate so the gateway no longer owns
 //! domain HTTP routing or depends on `reqwest` for domain calls.
 
-use anyhow::Context;
 use reqwest::Client;
 
 mod domain_api;
 mod request;
+
+/// [`HttpDomainApi::new`] could not build its HTTP client.
+#[derive(Debug, thiserror::Error)]
+#[error("build HTTP client for HttpDomainApi")]
+pub struct HttpClientError(#[source] reqwest::Error);
 
 pub struct HttpDomainApi {
     http: Client,
@@ -49,12 +53,12 @@ impl HttpDomainApi {
         storage_url: &str,
         network_url: &str,
         os_server_url: Option<String>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, HttpClientError> {
         let http = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .context("build HTTP client for HttpDomainApi")?;
+            .map_err(HttpClientError)?;
         Ok(Self {
             http,
             storage_url: storage_url.trim_end_matches('/').to_string(),

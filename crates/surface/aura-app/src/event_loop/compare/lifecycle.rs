@@ -83,6 +83,7 @@ fn register(state: &LoopState<'_>, plan: &ComparePlan) -> Result<RegisteredAgent
         .ok_or("The agent that asked for the comparison is gone")?;
     let host = registry
         .create_compare(&parent)
+        .map_err(anyhow::Error::from)
         .map_err(|e| format!("Could not register the comparison: {e:#}"))?;
     // An agent opened only to run a benchmark never runs a typed turn,
     // so it would keep its placeholder name in the Agents panel: name

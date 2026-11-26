@@ -34,6 +34,22 @@ pub struct ProcessMeta {
     pub tool_use_id: Option<String>,
 }
 
+/// A process for [`ProcessManager::register_with`](super::ProcessManager::register_with)
+/// to watch.
+pub struct NewProcess {
+    /// The agent the process belongs to.
+    pub agent_id: AgentId,
+    /// The originating transaction's hash (for `reference_tx_hash`).
+    pub reference_tx_hash: Hash,
+    /// The action the process belongs to.
+    pub action_id: ActionId,
+    pub process_id: ProcessId,
+    pub child: Child,
+    /// The command being executed.
+    pub command: String,
+    pub meta: ProcessMeta,
+}
+
 /// Information about a running process.
 pub struct RunningProcess {
     /// The action ID this process belongs to.

@@ -1,15 +1,15 @@
 //! [`DomainApi`] for [`HttpDomainApi`], grouped by resource: specs,
 //! tasks, project, logs/stats, messages/sessions, network pass-through.
 
-use anyhow::anyhow;
 use async_trait::async_trait;
 use aura_exec_traits::domain::{
-    CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
-    SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
+    CreateSessionParams, DomainApi, DomainError, DomainResult, MessageDescriptor, NewTask,
+    ProjectDescriptor, ProjectUpdate, SaveMessageParams, SessionDescriptor, SpecDescriptor,
+    TaskDescriptor, TaskUpdate,
 };
 use tracing::{debug, warn};
 
-use super::request::transport_error;
+use super::request::{body_error, status_error, transport_error};
 use super::HttpDomainApi;
 
 #[async_trait]
@@ -20,7 +20,7 @@ impl DomainApi for HttpDomainApi {
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<SpecDescriptor>> {
+    ) -> DomainResult<Vec<SpecDescriptor>> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
             "{}/api/projects/{project_id}/specs",
@@ -29,7 +29,7 @@ impl DomainApi for HttpDomainApi {
         self.api_get(&url, jwt).await
     }
 
-    async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
+    async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> DomainResult<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/specs/{spec_id}", self.specs_tasks_base_url());
         self.api_get(&url, jwt).await
@@ -42,7 +42,7 @@ impl DomainApi for HttpDomainApi {
         content: &str,
         order: u32,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
             "{}/api/projects/{project_id}/specs",
@@ -63,7 +63,7 @@ impl DomainApi for HttpDomainApi {
         content: Option<&str>,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/specs/{spec_id}", self.specs_tasks_base_url());
         let body = serde_json::json!({
@@ -81,7 +81,7 @@ impl DomainApi for HttpDomainApi {
         new_body: &str,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
             "{}/api/specs/{spec_id}/section",
@@ -101,7 +101,7 @@ impl DomainApi for HttpDomainApi {
         markdown: &str,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/specs/{spec_id}/append", self.specs_tasks_base_url());
         let body = serde_json::json!({
@@ -111,7 +111,7 @@ impl DomainApi for HttpDomainApi {
         self.api_post(&url, &body, jwt).await
     }
 
-    async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> DomainResult<()> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/specs/{spec_id}", self.specs_tasks_base_url());
         self.api_delete(&url, jwt).await
@@ -124,7 +124,7 @@ impl DomainApi for HttpDomainApi {
         project_id: &str,
         spec_id: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<TaskDescriptor>> {
+    ) -> DomainResult<Vec<TaskDescriptor>> {
         let jwt = Self::require_jwt(jwt)?;
         let mut url = format!(
             "{}/api/projects/{project_id}/tasks",
@@ -139,25 +139,21 @@ impl DomainApi for HttpDomainApi {
 
     async fn create_task(
         &self,
-        project_id: &str,
-        spec_id: &str,
-        title: &str,
-        description: &str,
-        dependencies: &[String],
-        order: u32,
+        task: NewTask<'_>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
-            "{}/api/projects/{project_id}/tasks",
-            self.specs_tasks_base_url()
+            "{}/api/projects/{}/tasks",
+            self.specs_tasks_base_url(),
+            task.project_id
         );
         let body = serde_json::json!({
-            "specId": spec_id,
-            "title": title,
-            "description": description,
-            "dependencyTaskIds": dependencies,
-            "orderIndex": order,
+            "specId": task.spec_id,
+            "title": task.title,
+            "description": task.description,
+            "dependencyTaskIds": task.dependencies,
+            "orderIndex": task.order,
         });
         self.api_post(&url, &body, jwt).await
     }
@@ -167,7 +163,7 @@ impl DomainApi for HttpDomainApi {
         task_id: &str,
         updates: TaskUpdate,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/tasks/{task_id}", self.specs_tasks_base_url());
         let body = serde_json::json!({
@@ -180,7 +176,7 @@ impl DomainApi for HttpDomainApi {
         self.api_put(&url, &body, jwt).await
     }
 
-    async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> DomainResult<()> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/tasks/{task_id}", self.specs_tasks_base_url());
         self.api_delete(&url, jwt).await
@@ -191,7 +187,7 @@ impl DomainApi for HttpDomainApi {
         task_id: &str,
         status: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
             "{}/api/tasks/{task_id}/transition",
@@ -201,7 +197,7 @@ impl DomainApi for HttpDomainApi {
         self.api_post(&url, &body, jwt).await
     }
 
-    async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<TaskDescriptor> {
+    async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> DomainResult<TaskDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/tasks/{task_id}", self.specs_tasks_base_url());
         self.api_get(&url, jwt).await
@@ -212,7 +208,7 @@ impl DomainApi for HttpDomainApi {
         project_id: &str,
         agent_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Option<TaskDescriptor>> {
+    ) -> DomainResult<Option<TaskDescriptor>> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
             "{}/api/projects/{project_id}/tasks/claim?agentId={agent_id}",
@@ -243,7 +239,7 @@ impl DomainApi for HttpDomainApi {
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/projects/{project_id}", self.project_base_url());
         self.api_get(&url, jwt).await
@@ -254,7 +250,7 @@ impl DomainApi for HttpDomainApi {
         project_id: &str,
         updates: ProjectUpdate,
         jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!("{}/api/projects/{project_id}", self.project_base_url());
         let body = serde_json::json!({
@@ -277,7 +273,7 @@ impl DomainApi for HttpDomainApi {
         agent_id: Option<&str>,
         metadata: Option<&serde_json::Value>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
             "{}/api/projects/{project_id}/logs",
@@ -302,7 +298,7 @@ impl DomainApi for HttpDomainApi {
         level: Option<&str>,
         limit: Option<u64>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         let jwt = Self::require_jwt(jwt)?;
         let mut url = format!(
             "{}/api/projects/{project_id}/logs",
@@ -326,7 +322,7 @@ impl DomainApi for HttpDomainApi {
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         let jwt = Self::require_jwt(jwt)?;
         let url = format!(
             "{}/api/stats?scope=project&projectId={project_id}",
@@ -341,12 +337,12 @@ impl DomainApi for HttpDomainApi {
         &self,
         _project_id: &str,
         _instance_id: &str,
-    ) -> anyhow::Result<Vec<MessageDescriptor>> {
+    ) -> DomainResult<Vec<MessageDescriptor>> {
         warn!("HttpDomainApi::list_messages not implemented");
         Ok(vec![])
     }
 
-    async fn save_message(&self, _params: SaveMessageParams) -> anyhow::Result<()> {
+    async fn save_message(&self, _params: SaveMessageParams) -> DomainResult<()> {
         warn!("HttpDomainApi::save_message not implemented");
         Ok(())
     }
@@ -354,14 +350,16 @@ impl DomainApi for HttpDomainApi {
     async fn create_session(
         &self,
         _params: CreateSessionParams,
-    ) -> anyhow::Result<SessionDescriptor> {
-        Err(anyhow!("HttpDomainApi::create_session not implemented"))
+    ) -> DomainResult<SessionDescriptor> {
+        Err(DomainError::NotImplemented {
+            operation: "HttpDomainApi::create_session",
+        })
     }
 
     async fn get_active_session(
         &self,
         _instance_id: &str,
-    ) -> anyhow::Result<Option<SessionDescriptor>> {
+    ) -> DomainResult<Option<SessionDescriptor>> {
         Ok(None)
     }
 
@@ -373,7 +371,7 @@ impl DomainApi for HttpDomainApi {
         path: &str,
         body: Option<&serde_json::Value>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> DomainResult<String> {
         let url = format!("{}{path}", self.network_url);
         debug!(url, method, "HttpDomainApi network call");
         let mut req = match method {
@@ -392,10 +390,9 @@ impl DomainApi for HttpDomainApi {
             .await
             .map_err(|error| transport_error(method, &url, error))?;
         let status = resp.status();
-        let text = resp.text().await?;
+        let text = resp.text().await.map_err(body_error)?;
         if !status.is_success() {
-            let truncated: String = text.chars().take(500).collect();
-            return Err(anyhow!("HTTP {status}: {truncated}"));
+            return Err(status_error(status, text.chars().take(500).collect()));
         }
         Ok(text)
     }

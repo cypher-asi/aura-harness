@@ -157,15 +157,13 @@ async fn deliver_message_forwards_parent_agent_id_as_originating_agent_id() {
     let base_url = spawn_capturing_chat_stream_mock(captured.clone()).await;
 
     let hook = AuraServerAgentHook::new(base_url, Some("test-jwt".into()));
-    hook.deliver_message(
-        "target-agent",
-        Some("caller-agent"),
-        Some("user-root"),
-        Some("project-123"),
-        "hello",
-        None,
-        Some("aura-claude-sonnet-4-6"),
-    )
+    hook.deliver_message(AgentMessage {
+        parent_agent_id: Some("caller-agent"),
+        originating_user_id: Some("user-root"),
+        project_id: Some("project-123"),
+        model: Some("aura-claude-sonnet-4-6"),
+        ..AgentMessage::new("target-agent", "hello")
+    })
     .await
     .expect("deliver_message call");
 
@@ -212,7 +210,7 @@ async fn deliver_message_serializes_missing_parent_as_null() {
     let base_url = spawn_capturing_chat_stream_mock(captured.clone()).await;
 
     let hook = AuraServerAgentHook::new(base_url, Some("test-jwt".into()));
-    hook.deliver_message("target-agent", None, None, None, "hello", None, None)
+    hook.deliver_message(AgentMessage::new("target-agent", "hello"))
         .await
         .expect("deliver_message call");
 
@@ -252,15 +250,11 @@ async fn deliver_message_forwards_parent_agent_id_as_from_agent_id() {
     let base_url = spawn_capturing_chat_stream_mock(captured.clone()).await;
 
     let hook = AuraServerAgentHook::new(base_url, Some("test-jwt".into()));
-    hook.deliver_message(
-        "target-agent",
-        Some("caller-agent"),
-        Some("user-root"),
-        None,
-        "hello",
-        None,
-        None,
-    )
+    hook.deliver_message(AgentMessage {
+        parent_agent_id: Some("caller-agent"),
+        originating_user_id: Some("user-root"),
+        ..AgentMessage::new("target-agent", "hello")
+    })
     .await
     .expect("deliver_message call");
 

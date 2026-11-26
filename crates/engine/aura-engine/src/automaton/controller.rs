@@ -1,44 +1,40 @@
 //! [`AutomatonController`] for [`AutomatonBridge`]: the tool-facing
 //! dev-loop / task-run surface, fanned out to `dispatch::*`.
 
-use std::path::PathBuf;
-
 use async_trait::async_trait;
-use aura_exec_tools::automaton_tools::AutomatonController;
+use aura_exec_tools::automaton_tools::{AutomatonController, AutomatonRun};
 use tracing::info;
 
+use super::kickoff::{AutomatonStart, TaskSpec};
 use super::AutomatonBridge;
+
+/// What a start from the tools carries: `run`, with full access and
+/// no installed tools, identity or execution profile.
+fn tool_start(run: AutomatonRun<'_>) -> AutomatonStart<'_> {
+    AutomatonStart {
+        project_id: run.project_id,
+        workspace_root: run.workspace_root,
+        auth_token: run.auth_token,
+        model: run.model,
+        git_repo_url: run.git_repo_url,
+        git_branch: run.git_branch,
+        installed_tools: None,
+        installed_integrations: None,
+        agent_permissions: aura_core_types::AgentPermissions::full_access(),
+        aura_org_id: None,
+        aura_session_id: None,
+        aura_agent_id: None,
+        agent_persona: None,
+        agent_skills: Vec::new(),
+        agent_system_prompt: None,
+        execution_profile: None,
+    }
+}
 
 #[async_trait]
 impl AutomatonController for AutomatonBridge {
-    async fn start_dev_loop(
-        &self,
-        project_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-    ) -> Result<String, String> {
-        self.start_dev_loop_with_capabilities(
-            project_id,
-            workspace_root,
-            auth_token,
-            model,
-            git_repo_url,
-            git_branch,
-            None,
-            None,
-            aura_core_types::AgentPermissions::full_access(),
-            None,
-            None,
-            None,
-            None,
-            Vec::new(),
-            None,
-            None,
-        )
-        .await
+    async fn start_dev_loop(&self, run: AutomatonRun<'_>) -> Result<String, String> {
+        self.start_dev_loop_with_capabilities(tool_start(run)).await
     }
 
     async fn pause_dev_loop(&self, project_id: &str) -> Result<(), String> {
@@ -85,37 +81,12 @@ impl AutomatonController for AutomatonBridge {
         Ok(())
     }
 
-    async fn run_task(
-        &self,
-        project_id: &str,
-        task_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-    ) -> Result<String, String> {
-        self.run_task_with_capabilities(
-            project_id,
+    async fn run_task(&self, task_id: &str, run: AutomatonRun<'_>) -> Result<String, String> {
+        let task = TaskSpec {
             task_id,
-            workspace_root,
-            auth_token,
-            model,
-            git_repo_url,
-            git_branch,
-            None,
-            None,
-            aura_core_types::AgentPermissions::full_access(),
-            None,
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            Vec::new(),
-            None,
-            None,
-        )
-        .await
+            prior_failure: None,
+            work_log: Vec::new(),
+        };
+        self.run_task_with_capabilities(tool_start(run), task).await
     }
 }

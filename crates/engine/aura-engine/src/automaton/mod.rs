@@ -56,6 +56,7 @@ use aura_exec_domain_http::JwtDomainApi;
 
 pub(crate) use event_channel::EventChannel;
 pub use event_channel::EventSubscription;
+pub use kickoff::{AutomatonStart, TaskSpec};
 
 /// Bookkeeping for a running automaton so stop/pause paths can emit
 /// `System::AutomatonLifecycle` entries on the correct agent log

@@ -14,7 +14,7 @@ use aura_core_types::{
 use aura_exec_tools::catalog::ToolProfile;
 
 use aura_exec_tools::{
-    AgentControlHook, AgentReadHook, SubagentDispatchHook, ToolCatalog, ToolConfig,
+    AgentControlHook, AgentMessage, AgentReadHook, SubagentDispatchHook, ToolCatalog, ToolConfig,
 };
 
 use aura_model::{

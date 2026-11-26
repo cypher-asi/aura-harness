@@ -73,54 +73,24 @@ impl PeerHooks {
 
 #[async_trait]
 impl AgentControlHook for PeerHooks {
-    async fn deliver_message(
-        &self,
-        target_agent_id: &str,
-        parent_agent_id: Option<&str>,
-        originating_user_id: Option<&str>,
-        project_id: Option<&str>,
-        content: &str,
-        attachments: Option<serde_json::Value>,
-        model: Option<&str>,
-    ) -> Result<(), String> {
-        self.deliver_message_in_thread(
-            target_agent_id,
-            parent_agent_id,
-            originating_user_id,
-            project_id,
-            content,
-            attachments,
-            model,
-            None,
-        )
-        .await
+    async fn deliver_message(&self, message: AgentMessage<'_>) -> Result<(), String> {
+        self.deliver_message_in_thread(message, None).await
     }
 
     async fn deliver_message_in_thread(
         &self,
-        target_agent_id: &str,
-        parent_agent_id: Option<&str>,
-        originating_user_id: Option<&str>,
-        project_id: Option<&str>,
-        content: &str,
-        attachments: Option<serde_json::Value>,
-        model: Option<&str>,
+        message: AgentMessage<'_>,
         subject: Option<&str>,
     ) -> Result<(), String> {
-        if let Some(sent) = self.send_to_peer(target_agent_id, content, subject).await {
+        let target_agent_id = message.target_agent_id;
+        if let Some(sent) = self
+            .send_to_peer(target_agent_id, message.content, subject)
+            .await
+        {
             return sent;
         }
         self.host(target_agent_id)?
-            .deliver_message_in_thread(
-                target_agent_id,
-                parent_agent_id,
-                originating_user_id,
-                project_id,
-                content,
-                attachments,
-                model,
-                subject,
-            )
+            .deliver_message_in_thread(message, subject)
             .await
     }
 

@@ -8,8 +8,9 @@
 
 use async_trait::async_trait;
 use aura_exec_tools::domain_tools::{
-    CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
-    SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
+    CreateSessionParams, DomainApi, DomainResult, MessageDescriptor, NewTask, ProjectDescriptor,
+    ProjectUpdate, SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor,
+    TaskUpdate,
 };
 use serde_json::json;
 
@@ -23,11 +24,11 @@ impl DomainApi for KernelDomainGateway {
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<SpecDescriptor>> {
+    ) -> DomainResult<Vec<SpecDescriptor>> {
         self.inner.list_specs(project_id, jwt).await
     }
 
-    async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
+    async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> DomainResult<SpecDescriptor> {
         self.inner.get_spec(spec_id, jwt).await
     }
 
@@ -38,7 +39,7 @@ impl DomainApi for KernelDomainGateway {
         content: &str,
         order: u32,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         with_recording!(
             self,
             "create_spec",
@@ -60,7 +61,7 @@ impl DomainApi for KernelDomainGateway {
         content: Option<&str>,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         with_recording!(
             self,
             "update_spec",
@@ -82,7 +83,7 @@ impl DomainApi for KernelDomainGateway {
         new_body: &str,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         with_recording!(
             self,
             "update_spec_section",
@@ -103,7 +104,7 @@ impl DomainApi for KernelDomainGateway {
         markdown: &str,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         with_recording!(
             self,
             "append_to_spec",
@@ -116,7 +117,7 @@ impl DomainApi for KernelDomainGateway {
         )
     }
 
-    async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> DomainResult<()> {
         with_recording_unit!(
             self,
             "delete_spec",
@@ -131,40 +132,27 @@ impl DomainApi for KernelDomainGateway {
         project_id: &str,
         spec_id: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<TaskDescriptor>> {
+    ) -> DomainResult<Vec<TaskDescriptor>> {
         self.inner.list_tasks(project_id, spec_id, jwt).await
     }
 
     async fn create_task(
         &self,
-        project_id: &str,
-        spec_id: &str,
-        title: &str,
-        description: &str,
-        dependencies: &[String],
-        order: u32,
+        task: NewTask<'_>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         with_recording!(
             self,
             "create_task",
             json!({
-                "project_id": project_id,
-                "spec_id": spec_id,
-                "title": title,
-                "description_bytes": description.len(),
-                "dependencies": dependencies,
-                "order": order,
+                "project_id": task.project_id,
+                "spec_id": task.spec_id,
+                "title": task.title,
+                "description_bytes": task.description.len(),
+                "dependencies": task.dependencies,
+                "order": task.order,
             }),
-            self.inner.create_task(
-                project_id,
-                spec_id,
-                title,
-                description,
-                dependencies,
-                order,
-                jwt
-            )
+            self.inner.create_task(task, jwt)
         )
     }
 
@@ -173,7 +161,7 @@ impl DomainApi for KernelDomainGateway {
         task_id: &str,
         updates: TaskUpdate,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         let args = json!({
             "task_id": task_id,
             "updates": {
@@ -190,7 +178,7 @@ impl DomainApi for KernelDomainGateway {
         )
     }
 
-    async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> DomainResult<()> {
         with_recording_unit!(
             self,
             "delete_task",
@@ -204,7 +192,7 @@ impl DomainApi for KernelDomainGateway {
         task_id: &str,
         status: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         with_recording!(
             self,
             "transition_task",
@@ -218,7 +206,7 @@ impl DomainApi for KernelDomainGateway {
         project_id: &str,
         agent_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Option<TaskDescriptor>> {
+    ) -> DomainResult<Option<TaskDescriptor>> {
         with_recording!(
             self,
             "claim_next_task",
@@ -227,7 +215,7 @@ impl DomainApi for KernelDomainGateway {
         )
     }
 
-    async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<TaskDescriptor> {
+    async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> DomainResult<TaskDescriptor> {
         self.inner.get_task(task_id, jwt).await
     }
 
@@ -236,7 +224,7 @@ impl DomainApi for KernelDomainGateway {
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         self.inner.get_project(project_id, jwt).await
     }
 
@@ -245,7 +233,7 @@ impl DomainApi for KernelDomainGateway {
         project_id: &str,
         updates: ProjectUpdate,
         jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         let args = json!({
             "project_id": project_id,
             "updates": {
@@ -273,7 +261,7 @@ impl DomainApi for KernelDomainGateway {
         agent_id: Option<&str>,
         metadata: Option<&serde_json::Value>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         let args = json!({
             "project_id": project_id,
             "level": level,
@@ -296,7 +284,7 @@ impl DomainApi for KernelDomainGateway {
         level: Option<&str>,
         limit: Option<u64>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         self.inner.list_logs(project_id, level, limit, jwt).await
     }
 
@@ -304,7 +292,7 @@ impl DomainApi for KernelDomainGateway {
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         self.inner.get_project_stats(project_id, jwt).await
     }
 
@@ -313,11 +301,11 @@ impl DomainApi for KernelDomainGateway {
         &self,
         project_id: &str,
         instance_id: &str,
-    ) -> anyhow::Result<Vec<MessageDescriptor>> {
+    ) -> DomainResult<Vec<MessageDescriptor>> {
         self.inner.list_messages(project_id, instance_id).await
     }
 
-    async fn save_message(&self, params: SaveMessageParams) -> anyhow::Result<()> {
+    async fn save_message(&self, params: SaveMessageParams) -> DomainResult<()> {
         let args = json!({
             "project_id": params.project_id,
             "instance_id": params.instance_id,
@@ -329,10 +317,7 @@ impl DomainApi for KernelDomainGateway {
     }
 
     // --- Sessions -------------------------------------------------------
-    async fn create_session(
-        &self,
-        params: CreateSessionParams,
-    ) -> anyhow::Result<SessionDescriptor> {
+    async fn create_session(&self, params: CreateSessionParams) -> DomainResult<SessionDescriptor> {
         let args = json!({
             "instance_id": params.instance_id,
             "project_id": params.project_id,
@@ -349,7 +334,7 @@ impl DomainApi for KernelDomainGateway {
     async fn get_active_session(
         &self,
         instance_id: &str,
-    ) -> anyhow::Result<Option<SessionDescriptor>> {
+    ) -> DomainResult<Option<SessionDescriptor>> {
         self.inner.get_active_session(instance_id).await
     }
 
@@ -364,7 +349,7 @@ impl DomainApi for KernelDomainGateway {
         path: &str,
         body: Option<&serde_json::Value>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> DomainResult<String> {
         if is_read_only_http_method(method) {
             return self.inner.network_api_call(method, path, body, jwt).await;
         }

@@ -20,12 +20,14 @@ mod router;
 mod scratch;
 mod spawn_hook;
 
+pub use domain::{DomainError, DomainResult};
 pub use executor::{
     decode_tool_effect, DecodedToolResult, ExecuteContext, ExecuteLimits, Executor, ExecutorError,
 };
 pub use hooks::{
-    AgentControlHook, AgentReadHook, AutomatonController, BackgroundJob, BackgroundProcess,
-    BackgroundProcessHook, CommandOutputHook, FileChangeHook, SubagentDispatchHook,
+    AgentControlHook, AgentMessage, AgentReadHook, AutomatonController, AutomatonRun,
+    BackgroundJob, BackgroundProcess, BackgroundProcessHook, CommandOutputHook, FileChangeHook,
+    SubagentDispatchHook,
 };
 pub use router::ExecutorRouter;
 pub use scratch::RunScratch;

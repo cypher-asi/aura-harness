@@ -29,6 +29,10 @@ pub enum BuildRunnerError {
     /// Caller passed an empty command string.
     #[error("build_command is empty")]
     EmptyCommand,
+    /// [`run_full_test_suite`](crate::verify::run_full_test_suite) was
+    /// given an empty test command.
+    #[error("run_full_test_suite called with empty test_command")]
+    EmptyTestCommand,
     /// `Command::spawn` failed.
     #[error("failed to execute build command `{command}` in `{cwd}`: {source}")]
     SpawnFailed {

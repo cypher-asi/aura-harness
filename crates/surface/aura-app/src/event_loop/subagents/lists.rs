@@ -26,7 +26,7 @@ impl AgentHub {
             let mut registry = lock(&self.registry);
             registry.reserve_prefixes(&names).or_else(|error| {
                 tracing::warn!(
-                    error = %format!("{error:#}"),
+                    error = %format!("{:#}", anyhow::Error::from(error)),
                     "could not save the permanent agents' abbreviations"
                 );
                 // Reserved in memory all the same, so asking again

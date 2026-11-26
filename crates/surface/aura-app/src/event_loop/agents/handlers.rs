@@ -388,6 +388,7 @@ pub(crate) async fn handle_edit_definition(state: &LoopState<'_>, name: Option<S
                 .ok_or_else(|| format!("No permanent agent named {name}")),
             None => definitions
                 .create(None)
+                .map_err(anyhow::Error::from)
                 .map_err(|e| format!("Could not create a permanent agent: {e:#}")),
         }
     };
@@ -412,7 +413,7 @@ pub(crate) async fn handle_delete_definition(state: &LoopState<'_>, name: &str) 
             )
             .await;
         }
-        Err(e) => show_error(state, format!("{e:#}")).await,
+        Err(e) => show_error(state, format!("{:#}", anyhow::Error::from(e))).await,
     }
 }
 

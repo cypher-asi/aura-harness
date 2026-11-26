@@ -2,10 +2,7 @@ use crate::config::NodeConfig;
 use crate::gateway::*;
 use aura_agent::KernelModelGateway;
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
-use aura_context_memory::{
-    ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
-    WriteConfig,
-};
+use aura_context_memory::{MemoryConfig, MemoryManager};
 use aura_context_skills::{SkillInstallStore, SkillLoader, SkillManager};
 use aura_core_types::AgentId;
 use aura_engine::scheduler::Scheduler;
@@ -175,11 +172,7 @@ fn test_memory_manager(
     Arc::new(MemoryManager::new(
         rocks.db_handle().clone(),
         memory_gateway,
-        RefinerConfig::default(),
-        WriteConfig::default(),
-        RetrievalConfig::default(),
-        ConsolidationConfig::default(),
-        ProcedureConfig::default(),
+        MemoryConfig::default(),
     ))
 }
 

@@ -66,7 +66,7 @@ async fn mail_subject_threads_messages_sent_through_the_hook() {
     ];
     for (text, subject) in sends {
         child_hooks
-            .deliver_message_in_thread(&root_hex, None, None, None, text, None, None, Some(subject))
+            .deliver_message_in_thread(AgentMessage::new(&root_hex, text), Some(subject))
             .await
             .unwrap();
     }
@@ -147,7 +147,7 @@ async fn only_the_mail_that_opens_a_thread_named_from_its_text_is_marked() {
     ];
     for (text, subject) in sends {
         child_hooks
-            .deliver_message_in_thread(&root_hex, None, None, None, text, None, None, subject)
+            .deliver_message_in_thread(AgentMessage::new(&root_hex, text), subject)
             .await
             .unwrap();
     }

@@ -1,7 +1,7 @@
 //! Authenticated request helpers shared by every `DomainApi` route:
 //! JWT checks, Cloudflare-block retry, and typed JSON verbs.
 
-use anyhow::{anyhow, Context};
+use aura_exec_traits::domain::{DomainError, DomainResult};
 use serde::de::DeserializeOwned;
 use tracing::{debug, warn};
 
@@ -10,9 +10,10 @@ use super::HttpDomainApi;
 const MAX_CLOUDFLARE_RETRIES: u32 = 2;
 const CLOUDFLARE_RETRY_BASE_MS: u64 = 1500;
 
-// Tool envelopes display only the outer anyhow error. Include a safe transport
-// category there; keeping it solely in the source chain renders just GET <URL>.
-pub(super) fn transport_error(method: &str, url: &str, error: reqwest::Error) -> anyhow::Error {
+// Tool envelopes display only the error's message, not its source. Include
+// a safe transport category there; keeping it solely in the source chain
+// renders just GET <URL>.
+pub(super) fn transport_error(method: &str, url: &str, error: reqwest::Error) -> DomainError {
     let reason = if error.is_timeout() {
         "request timed out"
     } else if error.is_connect() {
@@ -20,7 +21,27 @@ pub(super) fn transport_error(method: &str, url: &str, error: reqwest::Error) ->
     } else {
         "request failed"
     };
-    anyhow::Error::new(error).context(format!("{method} {url}: {reason}"))
+    DomainError::Transport {
+        method: method.to_string(),
+        url: url.to_string(),
+        reason,
+        source: Box::new(error),
+    }
+}
+
+/// The response with the non-success `status` and `body` (the start of
+/// the response body).
+pub(super) fn status_error(status: reqwest::StatusCode, body: String) -> DomainError {
+    DomainError::Status {
+        status: status.as_u16(),
+        reason: status.canonical_reason(),
+        body,
+    }
+}
+
+/// The response body could not be read.
+pub(super) fn body_error(error: reqwest::Error) -> DomainError {
+    DomainError::Body(Box::new(error))
 }
 
 fn is_cloudflare_block(status: reqwest::StatusCode, body: &str) -> bool {
@@ -28,13 +49,21 @@ fn is_cloudflare_block(status: reqwest::StatusCode, body: &str) -> bool {
         && body.contains("<!DOCTYPE html")
 }
 
+/// `text`, the response from `url`, as JSON.
+fn decode<T: DeserializeOwned>(url: &str, text: &str) -> DomainResult<T> {
+    serde_json::from_str(text).map_err(|source| DomainError::Decode {
+        url: url.to_string(),
+        source,
+    })
+}
+
 impl HttpDomainApi {
     // -------------------------------------------------------------------------
     // JWT helpers (Authorization: Bearer, for /api/ routes)
     // -------------------------------------------------------------------------
 
-    pub(super) fn require_jwt(jwt: Option<&str>) -> anyhow::Result<&str> {
-        jwt.ok_or_else(|| anyhow!("JWT required for this operation but not provided — ensure the front-end sends a token in RuntimeRequest.auth_jwt"))
+    pub(super) fn require_jwt(jwt: Option<&str>) -> DomainResult<&str> {
+        jwt.ok_or(DomainError::MissingJwt)
     }
 
     async fn send_with_retry(
@@ -43,7 +72,7 @@ impl HttpDomainApi {
         url: &str,
         jwt: &str,
         body: Option<&serde_json::Value>,
-    ) -> anyhow::Result<String> {
+    ) -> DomainResult<String> {
         for attempt in 0..=MAX_CLOUDFLARE_RETRIES {
             let req = match method {
                 "POST" => self.http.post(url).bearer_auth(jwt),
@@ -58,7 +87,7 @@ impl HttpDomainApi {
                 .await
                 .map_err(|error| transport_error(method, url, error))?;
             let status = resp.status();
-            let text = resp.text().await?;
+            let text = resp.text().await.map_err(body_error)?;
 
             if status.is_success() {
                 return Ok(text);
@@ -76,12 +105,15 @@ impl HttpDomainApi {
                 continue;
             }
 
-            let truncated: String = if is_cloudflare_block(status, &text) {
-                format!("Cloudflare is blocking requests to {url} — the service may be cold-starting or temporarily unavailable")
+            return Err(if is_cloudflare_block(status, &text) {
+                DomainError::CloudflareBlocked {
+                    status: status.as_u16(),
+                    reason: status.canonical_reason(),
+                    url: url.to_string(),
+                }
             } else {
-                text.chars().take(300).collect()
-            };
-            return Err(anyhow!("HTTP {status}: {truncated}"));
+                status_error(status, text.chars().take(300).collect())
+            });
         }
         unreachable!()
     }
@@ -90,10 +122,10 @@ impl HttpDomainApi {
         &self,
         url: &str,
         jwt: &str,
-    ) -> anyhow::Result<T> {
+    ) -> DomainResult<T> {
         debug!(url, "HttpDomainApi api GET");
         let text = self.send_with_retry("GET", url, jwt, None).await?;
-        serde_json::from_str(&text).with_context(|| format!("parse response from {url}"))
+        decode(url, &text)
     }
 
     pub(super) async fn api_post<T: DeserializeOwned>(
@@ -101,10 +133,10 @@ impl HttpDomainApi {
         url: &str,
         body: &serde_json::Value,
         jwt: &str,
-    ) -> anyhow::Result<T> {
+    ) -> DomainResult<T> {
         debug!(url, "HttpDomainApi api POST");
         let text = self.send_with_retry("POST", url, jwt, Some(body)).await?;
-        serde_json::from_str(&text).with_context(|| format!("parse response from {url}"))
+        decode(url, &text)
     }
 
     pub(super) async fn api_put<T: DeserializeOwned>(
@@ -112,13 +144,13 @@ impl HttpDomainApi {
         url: &str,
         body: &serde_json::Value,
         jwt: &str,
-    ) -> anyhow::Result<T> {
+    ) -> DomainResult<T> {
         debug!(url, "HttpDomainApi api PUT");
         let text = self.send_with_retry("PUT", url, jwt, Some(body)).await?;
-        serde_json::from_str(&text).with_context(|| format!("parse response from {url}"))
+        decode(url, &text)
     }
 
-    pub(super) async fn api_delete(&self, url: &str, jwt: &str) -> anyhow::Result<()> {
+    pub(super) async fn api_delete(&self, url: &str, jwt: &str) -> DomainResult<()> {
         debug!(url, "HttpDomainApi api DELETE");
         self.send_with_retry("DELETE", url, jwt, None).await?;
         Ok(())

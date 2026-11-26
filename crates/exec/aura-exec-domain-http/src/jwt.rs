@@ -13,8 +13,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use aura_exec_traits::domain::{
-    CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
-    SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
+    CreateSessionParams, DomainApi, DomainResult, MessageDescriptor, NewTask, ProjectDescriptor,
+    ProjectUpdate, SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor,
+    TaskUpdate,
 };
 
 /// Wraps an inner [`DomainApi`] and stamps a captured JWT onto every
@@ -40,10 +41,10 @@ impl DomainApi for JwtDomainApi {
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<SpecDescriptor>> {
+    ) -> DomainResult<Vec<SpecDescriptor>> {
         self.inner.list_specs(project_id, self.jwt_or(jwt)).await
     }
-    async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
+    async fn get_spec(&self, spec_id: &str, jwt: Option<&str>) -> DomainResult<SpecDescriptor> {
         self.inner.get_spec(spec_id, self.jwt_or(jwt)).await
     }
     async fn create_spec(
@@ -53,7 +54,7 @@ impl DomainApi for JwtDomainApi {
         content: &str,
         order: u32,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         self.inner
             .create_spec(project_id, title, content, order, self.jwt_or(jwt))
             .await
@@ -65,7 +66,7 @@ impl DomainApi for JwtDomainApi {
         content: Option<&str>,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         self.inner
             .update_spec(spec_id, title, content, if_match, self.jwt_or(jwt))
             .await
@@ -77,7 +78,7 @@ impl DomainApi for JwtDomainApi {
         new_body: &str,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         self.inner
             .update_spec_section(
                 spec_id,
@@ -94,12 +95,12 @@ impl DomainApi for JwtDomainApi {
         markdown: &str,
         if_match: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         self.inner
             .append_to_spec(spec_id, markdown, if_match, self.jwt_or(jwt))
             .await
     }
-    async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_spec(&self, spec_id: &str, jwt: Option<&str>) -> DomainResult<()> {
         self.inner.delete_spec(spec_id, self.jwt_or(jwt)).await
     }
     async fn list_tasks(
@@ -107,44 +108,29 @@ impl DomainApi for JwtDomainApi {
         project_id: &str,
         spec_id: Option<&str>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<TaskDescriptor>> {
+    ) -> DomainResult<Vec<TaskDescriptor>> {
         self.inner
             .list_tasks(project_id, spec_id, self.jwt_or(jwt))
             .await
     }
     async fn create_task(
         &self,
-        project_id: &str,
-        spec_id: &str,
-        title: &str,
-        description: &str,
-        dependencies: &[String],
-        order: u32,
+        task: NewTask<'_>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
-        self.inner
-            .create_task(
-                project_id,
-                spec_id,
-                title,
-                description,
-                dependencies,
-                order,
-                self.jwt_or(jwt),
-            )
-            .await
+    ) -> DomainResult<TaskDescriptor> {
+        self.inner.create_task(task, self.jwt_or(jwt)).await
     }
     async fn update_task(
         &self,
         task_id: &str,
         updates: TaskUpdate,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         self.inner
             .update_task(task_id, updates, self.jwt_or(jwt))
             .await
     }
-    async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_task(&self, task_id: &str, jwt: Option<&str>) -> DomainResult<()> {
         self.inner.delete_task(task_id, self.jwt_or(jwt)).await
     }
     async fn transition_task(
@@ -152,7 +138,7 @@ impl DomainApi for JwtDomainApi {
         task_id: &str,
         status: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         self.inner
             .transition_task(task_id, status, self.jwt_or(jwt))
             .await
@@ -162,19 +148,19 @@ impl DomainApi for JwtDomainApi {
         project_id: &str,
         agent_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<Option<TaskDescriptor>> {
+    ) -> DomainResult<Option<TaskDescriptor>> {
         self.inner
             .claim_next_task(project_id, agent_id, self.jwt_or(jwt))
             .await
     }
-    async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> anyhow::Result<TaskDescriptor> {
+    async fn get_task(&self, task_id: &str, jwt: Option<&str>) -> DomainResult<TaskDescriptor> {
         self.inner.get_task(task_id, self.jwt_or(jwt)).await
     }
     async fn get_project(
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         self.inner.get_project(project_id, self.jwt_or(jwt)).await
     }
     async fn update_project(
@@ -182,7 +168,7 @@ impl DomainApi for JwtDomainApi {
         project_id: &str,
         updates: ProjectUpdate,
         jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         self.inner
             .update_project(project_id, updates, self.jwt_or(jwt))
             .await
@@ -195,7 +181,7 @@ impl DomainApi for JwtDomainApi {
         agent_id: Option<&str>,
         metadata: Option<&serde_json::Value>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         self.inner
             .create_log(
                 project_id,
@@ -213,7 +199,7 @@ impl DomainApi for JwtDomainApi {
         level: Option<&str>,
         limit: Option<u64>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         self.inner
             .list_logs(project_id, level, limit, self.jwt_or(jwt))
             .await
@@ -222,7 +208,7 @@ impl DomainApi for JwtDomainApi {
         &self,
         project_id: &str,
         jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         self.inner
             .get_project_stats(project_id, self.jwt_or(jwt))
             .await
@@ -231,22 +217,19 @@ impl DomainApi for JwtDomainApi {
         &self,
         project_id: &str,
         instance_id: &str,
-    ) -> anyhow::Result<Vec<MessageDescriptor>> {
+    ) -> DomainResult<Vec<MessageDescriptor>> {
         self.inner.list_messages(project_id, instance_id).await
     }
-    async fn save_message(&self, params: SaveMessageParams) -> anyhow::Result<()> {
+    async fn save_message(&self, params: SaveMessageParams) -> DomainResult<()> {
         self.inner.save_message(params).await
     }
-    async fn create_session(
-        &self,
-        params: CreateSessionParams,
-    ) -> anyhow::Result<SessionDescriptor> {
+    async fn create_session(&self, params: CreateSessionParams) -> DomainResult<SessionDescriptor> {
         self.inner.create_session(params).await
     }
     async fn get_active_session(
         &self,
         instance_id: &str,
-    ) -> anyhow::Result<Option<SessionDescriptor>> {
+    ) -> DomainResult<Option<SessionDescriptor>> {
         self.inner.get_active_session(instance_id).await
     }
     async fn network_api_call(
@@ -255,7 +238,7 @@ impl DomainApi for JwtDomainApi {
         path: &str,
         body: Option<&serde_json::Value>,
         jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> DomainResult<String> {
         self.inner
             .network_api_call(method, path, body, self.jwt_or(jwt))
             .await

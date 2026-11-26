@@ -1,7 +1,8 @@
 //! Sensitive and prompt-unsafe candidates never reach storage.
 
 use aura_context_memory::{
-    ConversationTurn, MemoryStatus, MemoryStoreApi, RefinementRequestContext, TurnSummary,
+    ConversationTurn, IngestProvenance, MemoryStatus, MemoryStoreApi, RefinementRequestContext,
+    TurnSummary,
 };
 use aura_core_types::AgentId;
 
@@ -50,8 +51,10 @@ async fn unsafe_prompt_memory_is_dropped_before_storage() {
                 ..RefinementRequestContext::default()
             },
             &[],
-            Some("session-safe"),
-            MemoryStatus::Active,
+            IngestProvenance {
+                source_session_id: Some("session-safe"),
+                initial_status: MemoryStatus::Active,
+            },
         )
         .await
         .expect("ingest unsafe candidate");

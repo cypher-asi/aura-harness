@@ -1,7 +1,7 @@
 //! Heuristic-only ingest: candidate counts, outcome events, provenance and
 //! supersession.
 
-use aura_context_memory::{MemoryStatus, MemoryStoreApi, TurnSummary};
+use aura_context_memory::{IngestProvenance, MemoryStatus, MemoryStoreApi, TurnSummary};
 use aura_core_types::AgentId;
 
 use crate::support::pipeline_with_silent_llm;
@@ -80,8 +80,10 @@ async fn approval_writes_pending_memory_with_provenance() {
             None,
             None,
             &[],
-            Some("session-approval-1"),
-            MemoryStatus::Pending,
+            IngestProvenance {
+                source_session_id: Some("session-approval-1"),
+                initial_status: MemoryStatus::Pending,
+            },
         )
         .await
         .expect("ingest pending memory");

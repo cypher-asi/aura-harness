@@ -77,6 +77,7 @@ impl Headless {
     fn agent_for(&self, choice: &SessionChoice) -> Result<(RegisteredAgent, Option<u64>), String> {
         let headless = lock(&self.hub.registry)
             .headless()
+            .map_err(anyhow::Error::from)
             .map_err(|e| format!("registering the headless agent: {e:#}"))?;
         let SessionChoice::Resume(id) = choice else {
             return Ok((headless, None));

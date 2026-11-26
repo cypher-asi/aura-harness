@@ -1,4 +1,5 @@
 use aura_agent::AgentError;
+use aura_exec_tools::domain_tools::DomainError;
 use thiserror::Error;
 
 /// Errors from automaton lifecycle operations (install, tick, stop) and runtime management.
@@ -20,8 +21,8 @@ pub enum AutomatonError {
     /// attributable to a specific task (dev-loop, task-run) and `None`
     /// for project- or chat-scoped operations.
     ///
-    /// The inner `source` is the originating `anyhow::Error` returned by
-    /// the `DomainApi` trait. We preserve it via `#[source]` so callers
+    /// The inner `source` is the [`DomainError`] returned by the
+    /// `DomainApi` trait. We preserve it via `#[source]` so callers
     /// can walk the chain (Rule 4.3) instead of reparsing the
     /// stringified message.
     #[error(
@@ -31,8 +32,22 @@ pub enum AutomatonError {
     DomainApi {
         task_id: Option<String>,
         #[source]
-        source: anyhow::Error,
+        source: DomainError,
     },
+
+    /// The domain API call made for `step` (e.g. `"list_messages"`)
+    /// failed. The message names only the step; the call's
+    /// [`DomainError`] is the `source`.
+    #[error("domain API error: {step}")]
+    DomainStep {
+        step: &'static str,
+        #[source]
+        source: DomainError,
+    },
+
+    /// The chat has no stored messages to process.
+    #[error("domain API error: No messages to process")]
+    NoMessages,
 
     /// Agent loop / sampling call failed under this automaton's tick.
     /// `task_id` is `Some` when the failure is attributable to a
@@ -90,9 +105,9 @@ impl AutomatonError {
         }
     }
 
-    /// Build a typed [`AutomatonError::DomainApi`] from an
-    /// `anyhow::Error` and an optional task scope.
-    pub(crate) fn domain_api(task_id: Option<String>, source: anyhow::Error) -> Self {
+    /// Build a typed [`AutomatonError::DomainApi`] from a
+    /// [`DomainError`] and an optional task scope.
+    pub(crate) fn domain_api(task_id: Option<String>, source: DomainError) -> Self {
         Self::DomainApi { task_id, source }
     }
 }

@@ -237,7 +237,10 @@ impl SpecGenAutomaton {
                     None,
                 )
                 .await
-                .map_err(|e| AutomatonError::domain_api(None, e.context("save spec")))?;
+                .map_err(|source| AutomatonError::DomainStep {
+                    step: "save spec",
+                    source,
+                })?;
 
             ctx.emit(AutomatonEvent::SpecSaved {
                 spec_id: saved.id,

@@ -11,6 +11,25 @@ fn install_strip_fences(enabled: bool) -> aura_config::ConfigGuard {
     aura_config::install_for_test(cfg)
 }
 
+/// A first attempt at `task`: no predecessors, work log or enrichment.
+fn first_attempt<'a>(
+    project: &'a ProjectInfo<'a>,
+    spec: &'a SpecInfo<'a>,
+    task: &'a TaskInfo<'a>,
+    session: &'a SessionInfo<'a>,
+) -> BootstrapCtx<'a> {
+    BootstrapCtx {
+        project,
+        spec,
+        task,
+        session,
+        completed_deps: &[],
+        work_log_summary: "",
+        attempt: 0,
+        enrichment_block: None,
+    }
+}
+
 #[test]
 fn basic_context_contains_project_and_task() {
     let project = ProjectInfo {
@@ -34,7 +53,7 @@ fn basic_context_contains_project_and_task() {
     let session = SessionInfo {
         summary_of_previous_context: "",
     };
-    let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
+    let ctx = build_agentic_task_context(first_attempt(&project, &spec, &task, &session));
     assert!(ctx.contains("myproj"));
     assert!(ctx.contains("Do the thing"));
     assert!(ctx.contains("Spec 1"));
@@ -73,7 +92,10 @@ fn context_includes_completed_deps() {
     let session = SessionInfo {
         summary_of_previous_context: "",
     };
-    let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[dep], "", 0, None);
+    let ctx = build_agentic_task_context(BootstrapCtx {
+        completed_deps: &[dep],
+        ..first_attempt(&project, &spec, &task, &session)
+    });
     assert!(ctx.contains("Prior task"));
     assert!(ctx.contains("src/lib.rs (modify)"));
 }
@@ -137,7 +159,7 @@ fn task_description_keeps_fences_for_bootstrap_by_default() {
     let session = SessionInfo {
         summary_of_previous_context: "",
     };
-    let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
+    let ctx = build_agentic_task_context(first_attempt(&project, &spec, &task, &session));
     assert!(ctx.contains("Do this:"));
     assert!(ctx.contains("Done."));
     assert!(ctx.contains("Linear1D"));
@@ -172,7 +194,7 @@ fn task_description_strips_fences_when_env_enabled() {
     let session = SessionInfo {
         summary_of_previous_context: "",
     };
-    let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
+    let ctx = build_agentic_task_context(first_attempt(&project, &spec, &task, &session));
     assert!(ctx.contains("Do this:"));
     assert!(ctx.contains("Done."));
     assert!(!ctx.contains("Linear1D"));
@@ -203,7 +225,7 @@ fn long_spec_markdown_is_truncated_to_budget() {
     let session = SessionInfo {
         summary_of_previous_context: "",
     };
-    let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
+    let ctx = build_agentic_task_context(first_attempt(&project, &spec, &task, &session));
     assert!(ctx.contains("# Spec: Big spec"));
     assert!(ctx.contains("spec truncated to fit body cap"));
     assert!(
@@ -236,7 +258,7 @@ fn short_spec_markdown_is_kept_intact() {
     let session = SessionInfo {
         summary_of_previous_context: "",
     };
-    let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
+    let ctx = build_agentic_task_context(first_attempt(&project, &spec, &task, &session));
     assert!(ctx.contains("tiny body"));
     assert!(!ctx.contains("spec truncated"));
 }
@@ -264,7 +286,7 @@ fn context_omits_test_warning_for_test_tasks() {
     let session = SessionInfo {
         summary_of_previous_context: "",
     };
-    let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, None);
+    let ctx = build_agentic_task_context(first_attempt(&project, &spec, &task, &session));
     assert!(
         !ctx.contains("This task involves writing tests"),
         "verify-before-writing block must stay out of the task context"
@@ -307,7 +329,10 @@ fn build_agentic_task_context_first_attempt_includes_block() {
                      - `crates/zero-network/src/publisher.rs`\n\n\
                      Use these as starting points; you do NOT need to re-list \
                      the directory or re-grep for these symbols.\n";
-    let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, Some(block));
+    let ctx = build_agentic_task_context(BootstrapCtx {
+        enrichment_block: Some(block),
+        ..first_attempt(&project, &spec, &task, &session)
+    });
     assert!(ctx.contains("## Pre-resolved context (from task description)"));
     assert!(ctx.contains("crates/zero-network/src/publisher.rs"));
     let task_idx = ctx.find("# Task: Implement enqueue").expect("task");
@@ -347,7 +372,11 @@ fn build_agentic_task_context_retry_attempt_skips_block() {
     let block = "## Pre-resolved context (from task description)\n\n\
                      Files mentioned in the task that exist in the workspace:\n\
                      - `crates/zero-network/src/publisher.rs`\n";
-    let ctx = build_agentic_task_context(&project, &spec, &task, &session, &[], "", 1, Some(block));
+    let ctx = build_agentic_task_context(BootstrapCtx {
+        attempt: 1,
+        enrichment_block: Some(block),
+        ..first_attempt(&project, &spec, &task, &session)
+    });
     assert!(!ctx.contains("## Pre-resolved context"));
 }
 
@@ -374,7 +403,9 @@ fn build_agentic_task_context_empty_block_is_skipped() {
     let session = SessionInfo {
         summary_of_previous_context: "",
     };
-    let ctx =
-        build_agentic_task_context(&project, &spec, &task, &session, &[], "", 0, Some("   \n"));
+    let ctx = build_agentic_task_context(BootstrapCtx {
+        enrichment_block: Some("   \n"),
+        ..first_attempt(&project, &spec, &task, &session)
+    });
     assert!(!ctx.contains("Pre-resolved context"));
 }

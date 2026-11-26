@@ -6,8 +6,9 @@ use async_trait::async_trait;
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_core_types::{AgentId, TransactionType};
 use aura_exec_tools::domain_tools::{
-    CreateSessionParams, DomainApi, MessageDescriptor, ProjectDescriptor, ProjectUpdate,
-    SaveMessageParams, SessionDescriptor, SpecDescriptor, TaskDescriptor, TaskUpdate,
+    CreateSessionParams, DomainApi, DomainError, DomainResult, MessageDescriptor, NewTask,
+    ProjectDescriptor, ProjectUpdate, SaveMessageParams, SessionDescriptor, SpecDescriptor,
+    TaskDescriptor, TaskUpdate,
 };
 use aura_model::{MockProvider, ModelProvider};
 use aura_store_db::{RocksStore, Store};
@@ -46,11 +47,11 @@ impl DomainApi for MockDomain {
         &self,
         _project_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<SpecDescriptor>> {
+    ) -> DomainResult<Vec<SpecDescriptor>> {
         self.record("list_specs");
         Ok(vec![])
     }
-    async fn get_spec(&self, spec_id: &str, _jwt: Option<&str>) -> anyhow::Result<SpecDescriptor> {
+    async fn get_spec(&self, spec_id: &str, _jwt: Option<&str>) -> DomainResult<SpecDescriptor> {
         self.record("get_spec");
         Ok(SpecDescriptor {
             id: spec_id.to_string(),
@@ -69,10 +70,14 @@ impl DomainApi for MockDomain {
         content: &str,
         order: u32,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         self.record("create_spec");
         if self.fail_create_spec {
-            anyhow::bail!("simulated domain failure");
+            return Err(DomainError::Status {
+                status: 500,
+                reason: Some("Internal Server Error"),
+                body: "simulated domain failure".to_string(),
+            });
         }
         Ok(SpecDescriptor {
             id: "new-spec".to_string(),
@@ -91,7 +96,7 @@ impl DomainApi for MockDomain {
         _content: Option<&str>,
         _if_match: Option<&str>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<SpecDescriptor> {
+    ) -> DomainResult<SpecDescriptor> {
         self.record("update_spec");
         Ok(SpecDescriptor {
             id: spec_id.to_string(),
@@ -103,7 +108,7 @@ impl DomainApi for MockDomain {
             content_hash: None,
         })
     }
-    async fn delete_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_spec(&self, _spec_id: &str, _jwt: Option<&str>) -> DomainResult<()> {
         self.record("delete_spec");
         Ok(())
     }
@@ -112,31 +117,26 @@ impl DomainApi for MockDomain {
         _project_id: &str,
         _spec_id: Option<&str>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<Vec<TaskDescriptor>> {
+    ) -> DomainResult<Vec<TaskDescriptor>> {
         self.list_tasks_calls.fetch_add(1, Ordering::SeqCst);
         self.record("list_tasks");
         Ok(vec![])
     }
     async fn create_task(
         &self,
-        project_id: &str,
-        spec_id: &str,
-        title: &str,
-        description: &str,
-        _dependencies: &[String],
-        order: u32,
+        task: NewTask<'_>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         self.record("create_task");
         Ok(TaskDescriptor {
             id: "t1".into(),
-            spec_id: spec_id.into(),
-            project_id: project_id.into(),
-            title: title.into(),
-            description: description.into(),
+            spec_id: task.spec_id.into(),
+            project_id: task.project_id.into(),
+            title: task.title.into(),
+            description: task.description.into(),
             status: "open".into(),
             dependencies: vec![],
-            order,
+            order: task.order,
         })
     }
     async fn update_task(
@@ -144,7 +144,7 @@ impl DomainApi for MockDomain {
         task_id: &str,
         _updates: TaskUpdate,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         self.record("update_task");
         Ok(TaskDescriptor {
             id: task_id.into(),
@@ -157,7 +157,7 @@ impl DomainApi for MockDomain {
             order: 0,
         })
     }
-    async fn delete_task(&self, _task_id: &str, _jwt: Option<&str>) -> anyhow::Result<()> {
+    async fn delete_task(&self, _task_id: &str, _jwt: Option<&str>) -> DomainResult<()> {
         self.record("delete_task");
         Ok(())
     }
@@ -166,7 +166,7 @@ impl DomainApi for MockDomain {
         task_id: &str,
         status: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<TaskDescriptor> {
+    ) -> DomainResult<TaskDescriptor> {
         self.record("transition_task");
         Ok(TaskDescriptor {
             id: task_id.into(),
@@ -184,11 +184,11 @@ impl DomainApi for MockDomain {
         _project_id: &str,
         _agent_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<Option<TaskDescriptor>> {
+    ) -> DomainResult<Option<TaskDescriptor>> {
         self.record("claim_next_task");
         Ok(None)
     }
-    async fn get_task(&self, task_id: &str, _jwt: Option<&str>) -> anyhow::Result<TaskDescriptor> {
+    async fn get_task(&self, task_id: &str, _jwt: Option<&str>) -> DomainResult<TaskDescriptor> {
         self.record("get_task");
         Ok(TaskDescriptor {
             id: task_id.into(),
@@ -205,7 +205,7 @@ impl DomainApi for MockDomain {
         &self,
         project_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         self.record("get_project");
         Ok(ProjectDescriptor {
             id: project_id.into(),
@@ -222,7 +222,7 @@ impl DomainApi for MockDomain {
         project_id: &str,
         _updates: ProjectUpdate,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<ProjectDescriptor> {
+    ) -> DomainResult<ProjectDescriptor> {
         self.record("update_project");
         Ok(ProjectDescriptor {
             id: project_id.into(),
@@ -242,7 +242,7 @@ impl DomainApi for MockDomain {
         _agent_id: Option<&str>,
         _metadata: Option<&serde_json::Value>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         self.record("create_log");
         Ok(json!({ "ok": true }))
     }
@@ -252,7 +252,7 @@ impl DomainApi for MockDomain {
         _level: Option<&str>,
         _limit: Option<u64>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         self.record("list_logs");
         Ok(json!([]))
     }
@@ -260,7 +260,7 @@ impl DomainApi for MockDomain {
         &self,
         _project_id: &str,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<serde_json::Value> {
+    ) -> DomainResult<serde_json::Value> {
         self.record("get_project_stats");
         Ok(json!({}))
     }
@@ -268,18 +268,15 @@ impl DomainApi for MockDomain {
         &self,
         _project_id: &str,
         _instance_id: &str,
-    ) -> anyhow::Result<Vec<MessageDescriptor>> {
+    ) -> DomainResult<Vec<MessageDescriptor>> {
         self.record("list_messages");
         Ok(vec![])
     }
-    async fn save_message(&self, _params: SaveMessageParams) -> anyhow::Result<()> {
+    async fn save_message(&self, _params: SaveMessageParams) -> DomainResult<()> {
         self.record("save_message");
         Ok(())
     }
-    async fn create_session(
-        &self,
-        params: CreateSessionParams,
-    ) -> anyhow::Result<SessionDescriptor> {
+    async fn create_session(&self, params: CreateSessionParams) -> DomainResult<SessionDescriptor> {
         self.record("create_session");
         Ok(SessionDescriptor {
             id: "s1".into(),
@@ -291,7 +288,7 @@ impl DomainApi for MockDomain {
     async fn get_active_session(
         &self,
         _instance_id: &str,
-    ) -> anyhow::Result<Option<SessionDescriptor>> {
+    ) -> DomainResult<Option<SessionDescriptor>> {
         self.record("get_active_session");
         Ok(None)
     }
@@ -301,7 +298,7 @@ impl DomainApi for MockDomain {
         _path: &str,
         _body: Option<&serde_json::Value>,
         _jwt: Option<&str>,
-    ) -> anyhow::Result<String> {
+    ) -> DomainResult<String> {
         self.record("network_api_call");
         Ok(format!("network:{method}"))
     }

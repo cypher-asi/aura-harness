@@ -12,7 +12,6 @@ aura-exec-traits = { path = "../aura-exec-traits" }
 # `permissions` reads `Identity` records off the per-agent log through
 # the backend-neutral `ReadStore`.
 aura-store-record = { path = "../../store/aura-store-record" }
-anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

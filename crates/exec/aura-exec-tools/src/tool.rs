@@ -13,8 +13,8 @@ use aura_core_types::{
     ToolDefinition, ToolResult, UserToolDefaults,
 };
 pub use aura_exec_traits::{
-    AgentControlHook, AgentReadHook, BackgroundJob, BackgroundProcess, BackgroundProcessHook,
-    CommandOutputHook, FileChangeHook, SubagentDispatchHook,
+    AgentControlHook, AgentMessage, AgentReadHook, BackgroundJob, BackgroundProcess,
+    BackgroundProcessHook, CommandOutputHook, FileChangeHook, SubagentDispatchHook,
 };
 use aura_exec_traits::{RunScratch, SpawnHook};
 use std::sync::Arc;

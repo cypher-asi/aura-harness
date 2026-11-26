@@ -27,7 +27,7 @@
 //! that owns the post-back side of this contract.
 
 use crate::error::ToolError;
-use crate::tool::{Tool, ToolContext};
+use crate::tool::{AgentMessage, Tool, ToolContext};
 use async_trait::async_trait;
 use aura_core_types::{Capability, ToolDefinition, ToolResult};
 use bytes::Bytes;
@@ -201,17 +201,17 @@ impl Tool for SendToAgentTool {
         };
 
         let parent = caller_external_id(ctx);
+        let message = AgentMessage {
+            target_agent_id: &input.agent_id,
+            parent_agent_id: parent.as_deref(),
+            originating_user_id: ctx.originating_user_id.as_deref(),
+            project_id: ctx.caller_project_id.as_deref(),
+            content: &input.content,
+            attachments: input.attachments.clone(),
+            model: ctx.caller_model_id.as_deref(),
+        };
         match hook
-            .deliver_message_in_thread(
-                &input.agent_id,
-                parent.as_deref(),
-                ctx.originating_user_id.as_deref(),
-                ctx.caller_project_id.as_deref(),
-                &input.content,
-                input.attachments.clone(),
-                ctx.caller_model_id.as_deref(),
-                input.subject.as_deref(),
-            )
+            .deliver_message_in_thread(message, input.subject.as_deref())
             .await
         {
             Ok(()) => {

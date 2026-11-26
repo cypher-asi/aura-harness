@@ -20,7 +20,9 @@
 #![forbid(unsafe_code)]
 
 pub mod definitions;
+mod error;
 pub mod registry;
 
 pub use definitions::{AgentDefinition, AgentDefinitions};
+pub use error::{AgentDefinitionError, AgentRegistryError};
 pub use registry::{AgentRegistry, Opened, Project, RegisteredAgent};

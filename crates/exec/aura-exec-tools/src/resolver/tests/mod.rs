@@ -294,17 +294,18 @@ mod stub_domain {
 
     pub struct StubDomainApi;
 
+    /// What the methods the resolver tests never call return.
+    fn unused<T>(operation: &'static str) -> DomainResult<T> {
+        Err(DomainError::Unsupported { operation })
+    }
+
     #[async_trait]
     impl DomainApi for StubDomainApi {
-        async fn list_specs(
-            &self,
-            _: &str,
-            _: Option<&str>,
-        ) -> anyhow::Result<Vec<SpecDescriptor>> {
+        async fn list_specs(&self, _: &str, _: Option<&str>) -> DomainResult<Vec<SpecDescriptor>> {
             Ok(vec![])
         }
-        async fn get_spec(&self, _: &str, _: Option<&str>) -> anyhow::Result<SpecDescriptor> {
-            anyhow::bail!("stub")
+        async fn get_spec(&self, _: &str, _: Option<&str>) -> DomainResult<SpecDescriptor> {
+            unused("get_spec")
         }
         async fn create_spec(
             &self,
@@ -313,7 +314,7 @@ mod stub_domain {
             _: &str,
             _: u32,
             _: Option<&str>,
-        ) -> anyhow::Result<SpecDescriptor> {
+        ) -> DomainResult<SpecDescriptor> {
             Ok(SpecDescriptor {
                 id: "s1".into(),
                 project_id: "p1".into(),
@@ -331,10 +332,10 @@ mod stub_domain {
             _: Option<&str>,
             _: Option<&str>,
             _: Option<&str>,
-        ) -> anyhow::Result<SpecDescriptor> {
-            anyhow::bail!("stub")
+        ) -> DomainResult<SpecDescriptor> {
+            unused("update_spec")
         }
-        async fn delete_spec(&self, _: &str, _: Option<&str>) -> anyhow::Result<()> {
+        async fn delete_spec(&self, _: &str, _: Option<&str>) -> DomainResult<()> {
             Ok(())
         }
         async fn list_tasks(
@@ -342,30 +343,25 @@ mod stub_domain {
             _: &str,
             _: Option<&str>,
             _: Option<&str>,
-        ) -> anyhow::Result<Vec<TaskDescriptor>> {
+        ) -> DomainResult<Vec<TaskDescriptor>> {
             Ok(vec![])
         }
         async fn create_task(
             &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &[String],
-            _: u32,
+            _task: NewTask<'_>,
             _: Option<&str>,
-        ) -> anyhow::Result<TaskDescriptor> {
-            anyhow::bail!("stub")
+        ) -> DomainResult<TaskDescriptor> {
+            unused("create_task")
         }
         async fn update_task(
             &self,
             _: &str,
             _: TaskUpdate,
             _: Option<&str>,
-        ) -> anyhow::Result<TaskDescriptor> {
-            anyhow::bail!("stub")
+        ) -> DomainResult<TaskDescriptor> {
+            unused("update_task")
         }
-        async fn delete_task(&self, _: &str, _: Option<&str>) -> anyhow::Result<()> {
+        async fn delete_task(&self, _: &str, _: Option<&str>) -> DomainResult<()> {
             Ok(())
         }
         async fn transition_task(
@@ -373,25 +369,25 @@ mod stub_domain {
             _: &str,
             _: &str,
             _: Option<&str>,
-        ) -> anyhow::Result<TaskDescriptor> {
-            anyhow::bail!("stub")
+        ) -> DomainResult<TaskDescriptor> {
+            unused("transition_task")
         }
         async fn claim_next_task(
             &self,
             _: &str,
             _: &str,
             _: Option<&str>,
-        ) -> anyhow::Result<Option<TaskDescriptor>> {
+        ) -> DomainResult<Option<TaskDescriptor>> {
             Ok(None)
         }
-        async fn get_task(&self, _: &str, _: Option<&str>) -> anyhow::Result<TaskDescriptor> {
-            anyhow::bail!("stub")
+        async fn get_task(&self, _: &str, _: Option<&str>) -> DomainResult<TaskDescriptor> {
+            unused("get_task")
         }
         async fn get_project(
             &self,
             project_id: &str,
             _: Option<&str>,
-        ) -> anyhow::Result<ProjectDescriptor> {
+        ) -> DomainResult<ProjectDescriptor> {
             Ok(ProjectDescriptor {
                 id: project_id.into(),
                 name: "test".into(),
@@ -407,8 +403,8 @@ mod stub_domain {
             _: &str,
             _: ProjectUpdate,
             _: Option<&str>,
-        ) -> anyhow::Result<ProjectDescriptor> {
-            anyhow::bail!("stub")
+        ) -> DomainResult<ProjectDescriptor> {
+            unused("update_project")
         }
         async fn create_log(
             &self,
@@ -418,7 +414,7 @@ mod stub_domain {
             _: Option<&str>,
             _: Option<&serde_json::Value>,
             _: Option<&str>,
-        ) -> anyhow::Result<serde_json::Value> {
+        ) -> DomainResult<serde_json::Value> {
             Ok(serde_json::json!({}))
         }
         async fn list_logs(
@@ -427,29 +423,26 @@ mod stub_domain {
             _: Option<&str>,
             _: Option<u64>,
             _: Option<&str>,
-        ) -> anyhow::Result<serde_json::Value> {
+        ) -> DomainResult<serde_json::Value> {
             Ok(serde_json::json!([]))
         }
         async fn get_project_stats(
             &self,
             _: &str,
             _: Option<&str>,
-        ) -> anyhow::Result<serde_json::Value> {
+        ) -> DomainResult<serde_json::Value> {
             Ok(serde_json::json!({}))
         }
-        async fn list_messages(&self, _: &str, _: &str) -> anyhow::Result<Vec<MessageDescriptor>> {
+        async fn list_messages(&self, _: &str, _: &str) -> DomainResult<Vec<MessageDescriptor>> {
             Ok(vec![])
         }
-        async fn save_message(&self, _: SaveMessageParams) -> anyhow::Result<()> {
+        async fn save_message(&self, _: SaveMessageParams) -> DomainResult<()> {
             Ok(())
         }
-        async fn create_session(
-            &self,
-            _: CreateSessionParams,
-        ) -> anyhow::Result<SessionDescriptor> {
-            anyhow::bail!("stub")
+        async fn create_session(&self, _: CreateSessionParams) -> DomainResult<SessionDescriptor> {
+            unused("create_session")
         }
-        async fn get_active_session(&self, _: &str) -> anyhow::Result<Option<SessionDescriptor>> {
+        async fn get_active_session(&self, _: &str) -> DomainResult<Option<SessionDescriptor>> {
             Ok(None)
         }
         async fn network_api_call(
@@ -458,7 +451,7 @@ mod stub_domain {
             _: &str,
             _: Option<&serde_json::Value>,
             _: Option<&str>,
-        ) -> anyhow::Result<String> {
+        ) -> DomainResult<String> {
             Ok("{}".into())
         }
     }

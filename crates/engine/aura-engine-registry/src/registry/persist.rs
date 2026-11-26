@@ -16,9 +16,9 @@
 //!   rows stay byte-stable across loads.
 //! * An active agent that is no registered agent loads as `None`.
 
-use anyhow::Context;
-
-use super::{code, AgentRegistry, IdCache, Project, RegisteredAgent, RegistryFile};
+use super::{
+    code, AgentRegistry, AgentRegistryError, IdCache, Project, RegisteredAgent, RegistryFile,
+};
 use aura_core_types::AgentId;
 use aura_store_db::agents::{
     derive_agent_id, AgentRecord, ProjectRecord, RegistryDiff, RegistryMeta, RegistrySnapshot,
@@ -282,18 +282,18 @@ impl AgentRegistry {
     /// Write the rows that changed since the last write, in one batch.
     /// What is remembered as stored moves on only once the batch landed,
     /// so a failed write is retried by the next one.
-    pub(super) fn persist(&mut self) -> anyhow::Result<()> {
+    pub(super) fn persist(&mut self) -> Result<(), AgentRegistryError> {
         self.persist_with(false)
     }
 
     /// [`Self::persist`], fsyncing the batch before returning whatever
     /// the store's `sync_writes` setting, for a write another durable step
     /// depends on.
-    pub(super) fn persist_durable(&mut self) -> anyhow::Result<()> {
+    pub(super) fn persist_durable(&mut self) -> Result<(), AgentRegistryError> {
         self.persist_with(true)
     }
 
-    fn persist_with(&mut self, durable: bool) -> anyhow::Result<()> {
+    fn persist_with(&mut self, durable: bool) -> Result<(), AgentRegistryError> {
         let (diff, next) = self.persisted.diff(to_rows(&self.file));
         if diff.is_empty() {
             return Ok(());
@@ -303,13 +303,11 @@ impl AgentRegistry {
         } else {
             self.store.apply(&diff)
         };
-        written.with_context(|| {
-            format!(
-                "saving agent registry in {} ({} agents, {} projects changed)",
-                self.data_dir.display(),
-                diff.agents_put.len() + diff.agents_del.len(),
-                diff.projects_put.len() + diff.projects_del.len(),
-            )
+        written.map_err(|source| AgentRegistryError::Save {
+            data_dir: self.data_dir.clone(),
+            agents: diff.agents_put.len() + diff.agents_del.len(),
+            projects: diff.projects_put.len() + diff.projects_del.len(),
+            source,
         })?;
         self.persisted = next;
         Ok(())

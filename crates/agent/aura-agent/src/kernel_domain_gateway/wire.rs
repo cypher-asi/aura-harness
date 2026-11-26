@@ -39,7 +39,7 @@ macro_rules! with_recording {
     }};
 }
 
-/// Helper macro for mutating calls returning `anyhow::Result<()>`.
+/// Helper macro for mutating calls returning `DomainResult<()>`.
 macro_rules! with_recording_unit {
     ($self:ident, $method:expr, $args:expr, $call:expr) => {{
         let method: &'static str = $method;

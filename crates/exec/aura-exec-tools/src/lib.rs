@@ -65,8 +65,9 @@ pub use resolver::ToolResolver;
 pub use sandbox::Sandbox;
 pub use schema::{from_claude_json, to_claude_json, SchemaError};
 pub use tool::{
-    AgentControlHook, AgentReadHook, BackgroundJob, BackgroundProcess, BackgroundProcessHook,
-    CommandOutputHook, FileChangeHook, SubagentDispatchHook, Tool, ToolContext,
+    AgentControlHook, AgentMessage, AgentReadHook, BackgroundJob, BackgroundProcess,
+    BackgroundProcessHook, CommandOutputHook, FileChangeHook, SubagentDispatchHook, Tool,
+    ToolContext,
 };
 
 /// Command execution policy for `run_command`.

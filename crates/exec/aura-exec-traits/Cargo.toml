@@ -8,7 +8,6 @@ license.workspace = true
 
 [dependencies]
 aura-core-types = { path = "../../core/aura-core-types" }
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

@@ -9,8 +9,7 @@ use anyhow::Context;
 use aura_agent::KernelModelGateway;
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_context_memory::{
-    ConsolidationConfig, MemoryManager, ProcedureConfig, RefinerConfig, RetrievalConfig,
-    WriteConfig, DEFAULT_MEMORY_MODEL,
+    ConsolidationConfig, MemoryConfig, MemoryManager, RefinerConfig, DEFAULT_MEMORY_MODEL,
 };
 use aura_core_types::AgentId;
 use aura_engine::automaton::AutomatonBridge;
@@ -192,23 +191,22 @@ fn build_memory_manager(
         .context("building memory-service kernel")?,
     );
     let memory_gateway = Arc::new(KernelModelGateway::new(memory_kernel));
-    let refiner_config = RefinerConfig {
-        model: memory_model.clone(),
-        ..Default::default()
-    };
-    let consolidation_config = ConsolidationConfig {
-        model: memory_model.clone(),
-        ..Default::default()
+    let config = MemoryConfig {
+        refiner: RefinerConfig {
+            model: memory_model.clone(),
+            ..Default::default()
+        },
+        consolidation: ConsolidationConfig {
+            model: memory_model.clone(),
+            ..Default::default()
+        },
+        ..MemoryConfig::default()
     };
     let memory_manager = Arc::new(MemoryManager::with_cipher(
         store.db_handle().clone(),
         seal_cipher.cloned(),
         memory_gateway,
-        refiner_config,
-        WriteConfig::default(),
-        RetrievalConfig::default(),
-        consolidation_config,
-        ProcedureConfig::default(),
+        config,
     ));
     info!(
         memory_agent_id = %memory_agent_id,

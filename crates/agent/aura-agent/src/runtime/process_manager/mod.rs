@@ -9,7 +9,9 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-pub use types::{ProcessInfo, ProcessManagerConfig, ProcessMeta, ProcessOutput, RunningProcess};
+pub use types::{
+    NewProcess, ProcessInfo, ProcessManagerConfig, ProcessMeta, ProcessOutput, RunningProcess,
+};
 
 use aura_core_types::time::now_ms;
 use aura_core_types::{ActionId, AgentId, Hash, ProcessId, ProcessPending, Transaction};
@@ -59,32 +61,40 @@ impl ProcessManager {
         child: Child,
         command: String,
     ) {
-        self.register_with(
+        self.register_with(NewProcess {
             agent_id,
             reference_tx_hash,
             action_id,
             process_id,
             child,
             command,
-            ProcessMeta::default(),
-        );
+            meta: ProcessMeta::default(),
+        });
     }
 
     /// [`Self::register`] with where the process runs and logs.
-    #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(self, child, meta), fields(process_id = %process_id, command = %command))]
-    pub fn register_with(
-        self: &Arc<Self>,
-        agent_id: AgentId,
-        reference_tx_hash: Hash,
-        action_id: ActionId,
-        process_id: ProcessId,
-        child: Child,
-        command: String,
-        meta: ProcessMeta,
-    ) {
+    #[instrument(
+        skip(self, process),
+        fields(
+            agent_id = ?process.agent_id,
+            reference_tx_hash = ?process.reference_tx_hash,
+            action_id = ?process.action_id,
+            process_id = %process.process_id,
+            command = %process.command,
+        )
+    )]
+    pub fn register_with(self: &Arc<Self>, process: NewProcess) {
         info!("Registering async process");
 
+        let NewProcess {
+            agent_id,
+            reference_tx_hash,
+            action_id,
+            process_id,
+            child,
+            command,
+            meta,
+        } = process;
         let running = RunningProcess {
             action_id,
             agent_id,

@@ -20,8 +20,6 @@ use std::sync::Arc;
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::{KernelDomainGateway, KernelModelGateway, KernelToolGateway};
 use aura_agent_kernel::Kernel;
-use aura_core_protocol::AgentPersona;
-use aura_core_types::AgentPermissions;
 use aura_engine_automaton::{DevLoopAutomaton, TaskRunAutomaton};
 use aura_exec_tools::catalog::ToolCatalog;
 use aura_exec_tools::domain_tools::DomainApi;
@@ -31,7 +29,7 @@ use crate::capabilities;
 use aura_core_protocol::installed_integration_to_core;
 
 use super::build::KernelParams;
-use super::kickoff::{require_model, Kickoff, KickoffTools, TaskSpec};
+use super::kickoff::{require_model, AutomatonStart, Kickoff, KickoffTools, TaskSpec};
 use super::{AutomatonBridge, ProjectHandle};
 
 /// Bootstrapping artefacts shared by every automaton kickoff path
@@ -270,25 +268,9 @@ impl AutomatonBridge {
         ));
     }
 
-    #[allow(clippy::too_many_arguments)] // TODO(W4): collapse dev-loop kickoff args.
     pub async fn start_dev_loop_with_capabilities(
         &self,
-        project_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-        installed_tools: Option<Vec<aura_core_protocol::InstalledTool>>,
-        installed_integrations: Option<Vec<aura_core_protocol::InstalledIntegration>>,
-        agent_permissions: AgentPermissions,
-        aura_org_id: Option<String>,
-        aura_session_id: Option<String>,
-        aura_agent_id: Option<String>,
-        agent_persona: Option<AgentPersona>,
-        agent_skills: Vec<String>,
-        agent_system_prompt: Option<String>,
-        execution_profile: Option<aura_core_protocol::ModelSelection>,
+        start: AutomatonStart<'_>,
     ) -> Result<String, String> {
         // Hard-fail when the operator did not pin a model. The
         // pre-fix dev-loop path silently fell back to a build-time
@@ -297,28 +279,9 @@ impl AutomatonBridge {
         // the gap loudly so the caller (typically aura-os's
         // `POST /v1/run`) sees the configuration mismatch instead of
         // routing eval traffic to an unintended model.
-        let model = require_model(model.as_deref(), "dev loop start request")?;
-        self.clear_stale_dev_loop(project_id)?;
-        let kickoff = Kickoff {
-            project_id,
-            model,
-            auth_token,
-            git_repo_url,
-            git_branch,
-            aura_org_id,
-            aura_session_id,
-            aura_agent_id,
-            agent_persona,
-            agent_skills,
-            agent_system_prompt,
-            execution_profile,
-        };
-        let tools = KickoffTools {
-            workspace_root,
-            installed_tools,
-            installed_integrations,
-            agent_permissions,
-        };
+        let model = require_model(start.model.as_deref(), "dev loop start request")?;
+        self.clear_stale_dev_loop(start.project_id)?;
+        let (kickoff, tools) = start.into_kickoff(model);
         self.launch_dev_loop(kickoff, tools).await
     }
 
@@ -375,57 +338,15 @@ impl AutomatonBridge {
         Ok(automaton_id)
     }
 
-    #[allow(clippy::too_many_arguments)] // TODO(W4): collapse task-runner args.
     pub async fn run_task_with_capabilities(
         &self,
-        project_id: &str,
-        task_id: &str,
-        workspace_root: Option<PathBuf>,
-        auth_token: Option<String>,
-        model: Option<String>,
-        git_repo_url: Option<String>,
-        git_branch: Option<String>,
-        installed_tools: Option<Vec<aura_core_protocol::InstalledTool>>,
-        installed_integrations: Option<Vec<aura_core_protocol::InstalledIntegration>>,
-        agent_permissions: AgentPermissions,
-        prior_failure: Option<String>,
-        work_log: Vec<String>,
-        aura_org_id: Option<String>,
-        aura_session_id: Option<String>,
-        aura_agent_id: Option<String>,
-        agent_persona: Option<AgentPersona>,
-        agent_skills: Vec<String>,
-        agent_system_prompt: Option<String>,
-        execution_profile: Option<aura_core_protocol::ModelSelection>,
+        start: AutomatonStart<'_>,
+        task: TaskSpec<'_>,
     ) -> Result<String, String> {
         // Mirror the dev-loop entry-point: refuse to start without an
         // explicit model. Same regression rationale.
-        let model = require_model(model.as_deref(), "task run request")?;
-        let kickoff = Kickoff {
-            project_id,
-            model,
-            auth_token,
-            git_repo_url,
-            git_branch,
-            aura_org_id,
-            aura_session_id,
-            aura_agent_id,
-            agent_persona,
-            agent_skills,
-            agent_system_prompt,
-            execution_profile,
-        };
-        let tools = KickoffTools {
-            workspace_root,
-            installed_tools,
-            installed_integrations,
-            agent_permissions,
-        };
-        let task = TaskSpec {
-            task_id,
-            prior_failure,
-            work_log,
-        };
+        let model = require_model(start.model.as_deref(), "task run request")?;
+        let (kickoff, tools) = start.into_kickoff(model);
         self.launch_task_run(kickoff, tools, task).await
     }
 

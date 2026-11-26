@@ -59,4 +59,4 @@ pub use automaton::{AutomatonBridge, EventSubscription};
 pub use memory_observer::{turn_summary_from_result, MemoryTurnObserver};
 pub use model_context::context_window_for_model;
 pub use scheduler::{AgentIdentity, AgentIdentityRegistry, Scheduler, SchedulerError};
-pub use worker::{process_agent_detailed, ProcessedAgent};
+pub use worker::{process_agent_detailed, ProcessedAgent, WorkerError};

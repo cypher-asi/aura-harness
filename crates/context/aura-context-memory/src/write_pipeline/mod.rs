@@ -43,6 +43,15 @@ impl Default for WriteConfig {
     }
 }
 
+/// Where an ingested turn came from, and the status its memories start
+/// in.
+#[derive(Debug, Clone, Copy)]
+pub struct IngestProvenance<'a> {
+    /// Session the turn was taken from, kept in each memory's provenance.
+    pub source_session_id: Option<&'a str>,
+    pub initial_status: MemoryStatus,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WriteReport {
     pub candidates_extracted: usize,
@@ -110,13 +119,14 @@ impl MemoryWritePipeline {
             turn,
             auth_token,
             active_skills,
-            None,
-            MemoryStatus::Active,
+            IngestProvenance {
+                source_session_id: None,
+                initial_status: MemoryStatus::Active,
+            },
         )
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn ingest_with_provenance(
         &self,
         agent_id: AgentId,
@@ -124,8 +134,7 @@ impl MemoryWritePipeline {
         turn: Option<&ConversationTurn>,
         auth_token: Option<String>,
         active_skills: &[String],
-        source_session_id: Option<&str>,
-        initial_status: MemoryStatus,
+        provenance: IngestProvenance<'_>,
     ) -> Result<WriteReport, MemoryError> {
         self.ingest_with_provenance_and_request_context(
             agent_id,
@@ -136,13 +145,11 @@ impl MemoryWritePipeline {
                 ..Default::default()
             },
             active_skills,
-            source_session_id,
-            initial_status,
+            provenance,
         )
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn ingest_with_provenance_and_request_context(
         &self,
         agent_id: AgentId,
@@ -150,8 +157,7 @@ impl MemoryWritePipeline {
         turn: Option<&ConversationTurn>,
         request_context: RefinementRequestContext,
         active_skills: &[String],
-        source_session_id: Option<&str>,
-        initial_status: MemoryStatus,
+        provenance: IngestProvenance<'_>,
     ) -> Result<WriteReport, MemoryError> {
         let mut report = WriteReport::default();
 
@@ -183,8 +189,8 @@ impl MemoryWritePipeline {
 
         let origin = WriteOrigin {
             contributor_agent_id: agent_id,
-            source_session_id,
-            initial_status,
+            source_session_id: provenance.source_session_id,
+            initial_status: provenance.initial_status,
             memory_context: &memory_context,
             extractor_model: self.refiner.model_name(),
         };

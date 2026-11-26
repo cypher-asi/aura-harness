@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use aura_model::ModelRequestKind;
 
-use aura_context_prompts::bootstrap::build_agentic_task_context;
+use aura_context_prompts::bootstrap::{build_agentic_task_context, BootstrapCtx};
 
 use super::{AgentRunnerConfig, AgenticTaskParams, TaskExecutionResult};
 use crate::agent_loop::AgentLoopConfig;
@@ -99,16 +99,16 @@ pub fn configure_loop_config(
 pub(super) async fn build_full_task_ctx(params: &AgenticTaskParams<'_>) -> String {
     let work_log_summary = task_context::build_work_log_summary(params.work_log);
     let enrichment_block = resolve_enrichment_block(params).await;
-    build_agentic_task_context(
-        params.project,
-        params.spec,
-        params.task,
-        params.session,
-        params.completed_deps,
-        &work_log_summary,
-        params.attempt,
-        enrichment_block.as_deref(),
-    )
+    build_agentic_task_context(BootstrapCtx {
+        project: params.project,
+        spec: params.spec,
+        task: params.task,
+        session: params.session,
+        completed_deps: params.completed_deps,
+        work_log_summary: &work_log_summary,
+        attempt: params.attempt,
+        enrichment_block: enrichment_block.as_deref(),
+    })
 }
 
 /// Phase 4: extract candidate paths & symbols from the task description

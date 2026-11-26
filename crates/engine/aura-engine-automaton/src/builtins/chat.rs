@@ -134,17 +134,17 @@ impl ChatAutomaton {
             .domain
             .list_messages(&cfg.project_id, &cfg.instance_id)
             .await
-            .map_err(|e| AutomatonError::domain_api(None, e.context("list_messages")))?;
+            .map_err(|source| AutomatonError::DomainStep {
+                step: "list_messages",
+                source,
+            })?;
 
         if stored.is_empty() {
             ctx.emit(AutomatonEvent::Error {
                 automaton_id: ctx.automaton_id.to_string(),
                 message: "No messages to process".into(),
             })?;
-            return Err(AutomatonError::domain_api(
-                None,
-                anyhow::anyhow!("No messages to process"),
-            ));
+            return Err(AutomatonError::NoMessages);
         }
 
         Ok(stored)

@@ -1,7 +1,6 @@
 //! Opening the registry: the shared database handle, loading or seeding
 //! it, and the codes and prefixes it hands out.
 
-use anyhow::Context;
 use aura_store_db::{AgentStore, RocksStore};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -9,8 +8,10 @@ use std::sync::{Arc, Mutex, Weak};
 
 use super::{
     canonical, code, legacy_or_new_zns_id, persist, read_registry_file, retire_registry_file,
-    AgentRegistry, ImportSource, RegisteredAgent, DB_DIR, DEFAULT_AGENT_NAME, REGISTRY_VERSION,
+    AgentRegistry, AgentRegistryError, ImportSource, RegisteredAgent, DB_DIR, DEFAULT_AGENT_NAME,
+    REGISTRY_VERSION,
 };
+use crate::error::chain;
 
 impl AgentRegistry {
     /// [`Self::load_or_init_in`] with the process's working directory as
@@ -18,8 +19,9 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// As [`Self::load_or_init_in`].
-    pub fn load_or_init(data_dir: &Path) -> anyhow::Result<Self> {
-        let launch_dir = std::env::current_dir().context("resolving working directory")?;
+    pub fn load_or_init(data_dir: &Path) -> Result<Self, AgentRegistryError> {
+        let launch_dir =
+            std::env::current_dir().map_err(|source| AgentRegistryError::WorkingDir { source })?;
         Self::load_or_init_in(data_dir, &launch_dir)
     }
 
@@ -32,7 +34,7 @@ impl AgentRegistry {
     /// Returns an error if the database cannot be opened, or as
     /// [`Self::open`].
     #[doc(hidden)]
-    pub fn load_or_init_in(data_dir: &Path, launch_dir: &Path) -> anyhow::Result<Self> {
+    pub fn load_or_init_in(data_dir: &Path, launch_dir: &Path) -> Result<Self, AgentRegistryError> {
         let rocks = shared_store(&data_dir.join(DB_DIR))?;
         let mut registry = Self::open(AgentStore::for_store(&rocks), data_dir, launch_dir)?;
         registry._keep_open = Some(rocks);
@@ -50,17 +52,25 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if the store, registry or identity file cannot be
     /// read, parsed, or written.
-    pub fn open(store: AgentStore, data_dir: &Path, launch_dir: &Path) -> anyhow::Result<Self> {
+    pub fn open(
+        store: AgentStore,
+        data_dir: &Path,
+        launch_dir: &Path,
+    ) -> Result<Self, AgentRegistryError> {
         let imported = store
             .is_empty()
-            .with_context(|| format!("reading agent registry in {}", data_dir.display()))?;
+            .map_err(|source| AgentRegistryError::Read {
+                data_dir: data_dir.to_path_buf(),
+                source,
+            })?;
         let (file, persisted, source) = if imported {
             let (file, source) = read_registry_file(data_dir)?;
             (file, persist::Persisted::default(), source)
         } else {
-            let snapshot = store
-                .load()
-                .with_context(|| format!("loading agent registry in {}", data_dir.display()))?;
+            let snapshot = store.load().map_err(|source| AgentRegistryError::Load {
+                data_dir: data_dir.to_path_buf(),
+                source,
+            })?;
             let file = persist::from_snapshot(snapshot);
             let persisted = persist::Persisted::of(&persist::to_rows(&file));
             (file, persisted, ImportSource::None)
@@ -89,7 +99,7 @@ impl AgentRegistry {
 
     /// Bring an older registry's version up to date and seed an empty one
     /// with its first agent. Returns whether anything changed.
-    fn upgrade(&mut self, data_dir: &Path) -> anyhow::Result<bool> {
+    fn upgrade(&mut self, data_dir: &Path) -> Result<bool, AgentRegistryError> {
         let mut changed = false;
         if self.file.version < 2 {
             self.migrate(data_dir);
@@ -137,7 +147,7 @@ impl AgentRegistry {
         imported: bool,
         source: ImportSource,
         codes_changed: bool,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), AgentRegistryError> {
         if changed {
             if imported {
                 // The rename below must never outlive the import after a
@@ -156,7 +166,7 @@ impl AgentRegistry {
             if let Err(error) = self.persist() {
                 tracing::warn!(
                     data_dir = %self.data_dir.display(),
-                    error = %format!("{error:#}"),
+                    error = %chain(&error),
                     "could not save the agents' new codes"
                 );
             }
@@ -198,7 +208,7 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if a new reservation cannot be saved. The
     /// reservations stay in memory regardless.
-    pub fn reserve_prefixes(&mut self, keys: &[&str]) -> anyhow::Result<Vec<String>> {
+    pub fn reserve_prefixes(&mut self, keys: &[&str]) -> Result<Vec<String>, AgentRegistryError> {
         let before = self.file.prefixes.len();
         let prefixes = keys
             .iter()
@@ -217,7 +227,7 @@ impl AgentRegistry {
 static OPEN: Mutex<Option<HashMap<PathBuf, Weak<RocksStore>>>> = Mutex::new(None);
 
 /// The live handle on the database at `path`, opened when there is none.
-pub(super) fn shared_store(path: &Path) -> anyhow::Result<Arc<RocksStore>> {
+pub(super) fn shared_store(path: &Path) -> Result<Arc<RocksStore>, AgentRegistryError> {
     let mut open = OPEN
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -226,10 +236,12 @@ pub(super) fn shared_store(path: &Path) -> anyhow::Result<Arc<RocksStore>> {
     if let Some(store) = open.get(path).and_then(Weak::upgrade) {
         return Ok(store);
     }
-    let store = Arc::new(
-        RocksStore::open(path, false)
-            .with_context(|| format!("opening agent registry database {}", path.display()))?,
-    );
+    let store = Arc::new(RocksStore::open(path, false).map_err(|source| {
+        AgentRegistryError::OpenDatabase {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?);
     open.insert(path.to_path_buf(), Arc::downgrade(&store));
     Ok(store)
 }

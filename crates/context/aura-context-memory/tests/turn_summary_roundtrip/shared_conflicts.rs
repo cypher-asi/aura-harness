@@ -2,8 +2,8 @@
 //! approval instead of superseding the first agent's fact.
 
 use aura_context_memory::{
-    ConversationTurn, Fact, MemoryAccessContext, MemoryScope, MemoryStatus, MemoryStoreApi,
-    MemoryWritePipeline, RefinementRequestContext, TurnSummary,
+    ConversationTurn, Fact, IngestProvenance, MemoryAccessContext, MemoryScope, MemoryStatus,
+    MemoryStoreApi, MemoryWritePipeline, RefinementRequestContext, TurnSummary,
 };
 use aura_core_types::AgentId;
 
@@ -34,8 +34,10 @@ async fn ingest_from_both_agents(
                 Some(&turn),
                 context.clone(),
                 &[],
-                Some("session-project"),
-                MemoryStatus::Active,
+                IngestProvenance {
+                    source_session_id: Some("session-project"),
+                    initial_status: MemoryStatus::Active,
+                },
             )
             .await
             .expect("ingest shared candidate");

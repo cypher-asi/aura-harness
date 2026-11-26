@@ -18,6 +18,7 @@ use crate::gateway::RouterState;
 use aura_core_protocol::{
     AgentPermissionsWire, RuntimeRequest, RuntimeRequestType, RuntimeRunResponse,
 };
+use aura_engine::automaton::{AutomatonStart, TaskSpec};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
@@ -257,24 +258,24 @@ async fn start_dev_loop_run(
     let (_, args) = automaton_run_args(&state, req, "dev-loop")?;
 
     let automaton_id = bridge
-        .start_dev_loop_with_capabilities(
-            &args.project.project_id,
-            args.workspace_root,
+        .start_dev_loop_with_capabilities(AutomatonStart {
+            project_id: &args.project.project_id,
+            workspace_root: args.workspace_root,
             auth_token,
-            args.model.id.clone(),
-            args.git_repo_url,
-            args.git_branch,
-            args.installed_tools,
-            args.installed_integrations,
-            args.agent_permissions,
-            args.project.aura_org_id,
-            args.project.aura_session_id,
-            args.project.aura_agent_id,
-            args.agent_persona,
-            args.agent_skills,
-            args.agent_system_prompt,
-            Some(args.model),
-        )
+            model: args.model.id.clone(),
+            git_repo_url: args.git_repo_url,
+            git_branch: args.git_branch,
+            installed_tools: args.installed_tools,
+            installed_integrations: args.installed_integrations,
+            agent_permissions: args.agent_permissions,
+            aura_org_id: args.project.aura_org_id,
+            aura_session_id: args.project.aura_session_id,
+            aura_agent_id: args.project.aura_agent_id,
+            agent_persona: args.agent_persona,
+            agent_skills: args.agent_skills,
+            agent_system_prompt: args.agent_system_prompt,
+            execution_profile: Some(args.model),
+        })
         .await
         .map_err(|e| run_start_error_response(&e))?;
 
@@ -298,28 +299,31 @@ async fn start_task_run(
         unreachable!("dispatched to task_run for non-TaskRun variant")
     };
 
+    let start = AutomatonStart {
+        project_id: &args.project.project_id,
+        workspace_root: args.workspace_root,
+        auth_token,
+        model: args.model.id.clone(),
+        git_repo_url: args.git_repo_url,
+        git_branch: args.git_branch,
+        installed_tools: args.installed_tools,
+        installed_integrations: args.installed_integrations,
+        agent_permissions: args.agent_permissions,
+        aura_org_id: args.project.aura_org_id,
+        aura_session_id: args.project.aura_session_id,
+        aura_agent_id: args.project.aura_agent_id,
+        agent_persona: args.agent_persona,
+        agent_skills: args.agent_skills,
+        agent_system_prompt: args.agent_system_prompt,
+        execution_profile: Some(args.model),
+    };
+    let task = TaskSpec {
+        task_id: &task_id,
+        prior_failure,
+        work_log,
+    };
     let automaton_id = bridge
-        .run_task_with_capabilities(
-            &args.project.project_id,
-            &task_id,
-            args.workspace_root,
-            auth_token,
-            args.model.id.clone(),
-            args.git_repo_url,
-            args.git_branch,
-            args.installed_tools,
-            args.installed_integrations,
-            args.agent_permissions,
-            prior_failure,
-            work_log,
-            args.project.aura_org_id,
-            args.project.aura_session_id,
-            args.project.aura_agent_id,
-            args.agent_persona,
-            args.agent_skills,
-            args.agent_system_prompt,
-            Some(args.model),
-        )
+        .run_task_with_capabilities(start, task)
         .await
         .map_err(|e| run_start_error_response(&e))?;
 

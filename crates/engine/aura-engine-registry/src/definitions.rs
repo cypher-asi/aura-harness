@@ -8,7 +8,6 @@
 //! The directory is re-read before every turn, so edits made outside the
 //! terminal apply to the next turn without a restart.
 
-use anyhow::{bail, Context};
 use aura_context_skills::prompt::{inject_full_skills, SkillPromptEntry};
 use aura_context_skills::SkillManager;
 use aura_exec_tools::agents::get_agent_state::GET_AGENT_STATE_TOOL_NAME;
@@ -21,6 +20,12 @@ use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+
+use crate::error::chain;
+pub use crate::error::AgentDefinitionError;
+use files::{create_dir, read_definition, read_seeded, refresh_retired, write_file};
+
+mod files;
 
 const DEFINITIONS_DIR: &str = "agent_defs";
 const MAX_NAME_LEN: usize = 40;
@@ -136,19 +141,20 @@ impl AgentDefinition {
     /// # Errors
     /// Returns an error if the frontmatter is missing or invalid, or the
     /// name is not a valid definition name.
-    pub fn parse(content: &str, path: &Path) -> anyhow::Result<Self> {
+    pub fn parse(content: &str, path: &Path) -> Result<Self, AgentDefinitionError> {
         let content = content.trim_start_matches('\u{feff}');
         let Some(after_open) = content.strip_prefix("---") else {
-            bail!("missing `---` frontmatter at the top of the file");
+            return Err(AgentDefinitionError::MissingFrontmatter);
         };
         let Some(close) = after_open.find("\n---") else {
-            bail!("frontmatter is not closed with `---`");
+            return Err(AgentDefinitionError::UnclosedFrontmatter);
         };
         let yaml = &after_open[..close];
         let rest = &after_open[close + "\n---".len()..];
         let body = rest.split_once('\n').map_or("", |(_, body)| body);
 
-        let frontmatter: Frontmatter = serde_yaml::from_str(yaml).context("invalid frontmatter")?;
+        let frontmatter: Frontmatter = serde_yaml::from_str(yaml)
+            .map_err(|source| AgentDefinitionError::InvalidFrontmatter { source })?;
         let name = frontmatter.name.trim().to_string();
         validate_name(&name)?;
         Ok(Self {
@@ -225,18 +231,23 @@ impl AgentDefinition {
 ///
 /// # Errors
 /// Returns an error describing what is wrong with the name.
-pub fn validate_name(name: &str) -> anyhow::Result<()> {
+pub fn validate_name(name: &str) -> Result<(), AgentDefinitionError> {
     if name.is_empty() {
-        bail!("name must not be empty");
+        return Err(AgentDefinitionError::EmptyName);
     }
     if name.len() > MAX_NAME_LEN {
-        bail!("name must be at most {MAX_NAME_LEN} characters");
+        return Err(AgentDefinitionError::NameTooLong {
+            name: name.to_string(),
+            max: MAX_NAME_LEN,
+        });
     }
     let valid = name
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
     if !valid || name.starts_with(['-', '_']) {
-        bail!("name `{name}` must use lowercase letters, digits, `-` or `_`");
+        return Err(AgentDefinitionError::InvalidName {
+            name: name.to_string(),
+        });
     }
     Ok(())
 }
@@ -256,12 +267,12 @@ impl AgentDefinitions {
     ///
     /// # Errors
     /// Returns an error if the directory cannot be created or seeded.
-    pub fn load_or_seed(data_dir: &Path) -> anyhow::Result<Self> {
+    pub fn load_or_seed(data_dir: &Path) -> Result<Self, AgentDefinitionError> {
         let dir = data_dir.join(DEFINITIONS_DIR);
         let mut seeded = if dir.exists() {
             read_seeded(&dir)
         } else {
-            fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+            create_dir(&dir)?;
             Vec::new()
         };
         let mut definitions = Self {
@@ -279,14 +290,14 @@ impl AgentDefinitions {
             added = true;
             let path = definitions.dir.join(format!("{name}.md"));
             if definitions.get(name).is_none() && !path.exists() {
-                fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
+                write_file(&path, content)?;
             }
         }
         if added {
             let path = definitions.dir.join(SEEDED_FILE);
             let mut list = seeded.join("\n");
             list.push('\n');
-            fs::write(&path, list).with_context(|| format!("writing {}", path.display()))?;
+            write_file(&path, list)?;
         }
         for name in refresh_retired(&definitions.dir, RETIRED_SEEDS)? {
             info!(
@@ -332,7 +343,7 @@ impl AgentDefinitions {
                         definitions.push(definition);
                     }
                 }
-                Err(e) => problems.push(format!("{}: {e:#}", path.display())),
+                Err(e) => problems.push(format!("{}: {}", path.display(), chain(&e))),
             }
         }
         self.definitions = definitions;
@@ -366,22 +377,21 @@ impl AgentDefinitions {
     /// # Errors
     /// Returns an error if the name is invalid or taken, or the file cannot
     /// be written.
-    pub fn create(&mut self, name: Option<&str>) -> anyhow::Result<PathBuf> {
+    pub fn create(&mut self, name: Option<&str>) -> Result<PathBuf, AgentDefinitionError> {
         let name = match name.map(str::trim).filter(|n| !n.is_empty()) {
             Some(name) => {
                 let name = name.to_lowercase();
                 validate_name(&name)?;
                 if self.get(&name).is_some() || self.dir.join(format!("{name}.md")).exists() {
-                    bail!("a permanent agent named `{name}` already exists");
+                    return Err(AgentDefinitionError::AlreadyExists { name });
                 }
                 name
             }
             None => self.free_name(),
         };
         let path = self.dir.join(format!("{name}.md"));
-        fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating {}", self.dir.display()))?;
-        fs::write(&path, skeleton(&name)).with_context(|| format!("writing {}", path.display()))?;
+        create_dir(&self.dir)?;
+        write_file(&path, skeleton(&name))?;
         self.reload();
         Ok(path)
     }
@@ -391,12 +401,16 @@ impl AgentDefinitions {
     /// # Errors
     /// Returns an error if no such definition exists or its file cannot be
     /// removed.
-    pub fn delete(&mut self, name: &str) -> anyhow::Result<AgentDefinition> {
+    pub fn delete(&mut self, name: &str) -> Result<AgentDefinition, AgentDefinitionError> {
         let Some(definition) = self.get(name).cloned() else {
-            bail!("no permanent agent named `{name}`");
+            return Err(AgentDefinitionError::NotFound {
+                name: name.to_string(),
+            });
         };
-        fs::remove_file(&definition.path)
-            .with_context(|| format!("removing {}", definition.path.display()))?;
+        fs::remove_file(&definition.path).map_err(|source| AgentDefinitionError::RemoveFile {
+            path: definition.path.clone(),
+            source,
+        })?;
         self.reload();
         Ok(definition)
     }
@@ -413,52 +427,6 @@ impl AgentDefinitions {
             .find(|name| self.get(name).is_none() && !self.dir.join(format!("{name}.md")).exists())
             .unwrap_or_else(|| NEW_DEFINITION_NAME.to_string())
     }
-}
-
-/// The seeds `dir` has already had. A directory without the list was
-/// created by a version that seeded only [`LEGACY_SEEDS`].
-fn read_seeded(dir: &Path) -> Vec<String> {
-    match fs::read_to_string(dir.join(SEEDED_FILE)) {
-        Ok(list) => list
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .collect(),
-        Err(_) => LEGACY_SEEDS.iter().map(|s| (*s).to_string()).collect(),
-    }
-}
-
-/// Write the current built-in over each seed file in `dir` that is byte
-/// for byte one of the `retired` versions (name and blake3 hash), and
-/// return the names written. A file that can't be read is left alone.
-fn refresh_retired(dir: &Path, retired: &[(&str, &str)]) -> anyhow::Result<Vec<&'static str>> {
-    let mut refreshed = Vec::new();
-    for (name, content) in SEED_DEFINITIONS {
-        if !retired.iter().any(|(retired, _)| retired == name) {
-            continue;
-        }
-        let path = dir.join(format!("{name}.md"));
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        let hash = blake3::hash(&bytes).to_hex();
-        if !retired.contains(&(*name, hash.as_str())) {
-            continue;
-        }
-        fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
-        refreshed.push(*name);
-    }
-    Ok(refreshed)
-}
-
-fn read_definition(path: &Path) -> anyhow::Result<AgentDefinition> {
-    let size = fs::metadata(path)?.len();
-    if size > MAX_FILE_BYTES {
-        bail!("file is larger than {MAX_FILE_BYTES} bytes");
-    }
-    let content = fs::read_to_string(path)?;
-    AgentDefinition::parse(&content, path)
 }
 
 fn skeleton(name: &str) -> String {

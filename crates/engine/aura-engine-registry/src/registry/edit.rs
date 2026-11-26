@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use super::{AgentRegistry, RegisteredAgent};
+use super::{AgentRegistry, AgentRegistryError, RegisteredAgent};
 
 impl AgentRegistry {
     /// Have `agent_id` work in `folder`.
@@ -14,9 +14,13 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if the agent is unknown or the registry cannot be
     /// written.
-    pub fn set_folder(&mut self, agent_id: AgentId, folder: PathBuf) -> anyhow::Result<()> {
+    pub fn set_folder(
+        &mut self,
+        agent_id: AgentId,
+        folder: PathBuf,
+    ) -> Result<(), AgentRegistryError> {
         let Some(index) = self.position(agent_id) else {
-            anyhow::bail!("no such agent");
+            return Err(AgentRegistryError::NoSuchAgent { agent_id });
         };
         self.file.agents[index].folder = Some(folder);
         self.persist()
@@ -27,7 +31,7 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// Returns an error if the registry cannot be written.
-    pub fn forget(&mut self, agent_id: AgentId) -> anyhow::Result<()> {
+    pub fn forget(&mut self, agent_id: AgentId) -> Result<(), AgentRegistryError> {
         let Some(index) = self.position(agent_id) else {
             return Ok(());
         };
@@ -49,13 +53,13 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if the agent is unknown or the registry cannot be
     /// written.
-    pub fn set_title(&mut self, agent_id: AgentId, title: &str) -> anyhow::Result<()> {
+    pub fn set_title(&mut self, agent_id: AgentId, title: &str) -> Result<(), AgentRegistryError> {
         let title = title.trim();
         if title.is_empty() {
             return Ok(());
         }
         let Some(index) = self.position(agent_id) else {
-            anyhow::bail!("no such agent");
+            return Err(AgentRegistryError::NoSuchAgent { agent_id });
         };
         self.file.agents[index].title = Some(title.to_string());
         self.persist()
@@ -67,13 +71,17 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if the agent is unknown or the registry cannot be
     /// written.
-    pub fn set_subtitle(&mut self, agent_id: AgentId, subtitle: &str) -> anyhow::Result<()> {
+    pub fn set_subtitle(
+        &mut self,
+        agent_id: AgentId,
+        subtitle: &str,
+    ) -> Result<(), AgentRegistryError> {
         let subtitle = subtitle.trim();
         if subtitle.is_empty() {
             return Ok(());
         }
         let Some(index) = self.position(agent_id) else {
-            anyhow::bail!("no such agent");
+            return Err(AgentRegistryError::NoSuchAgent { agent_id });
         };
         self.file.agents[index].subtitle = Some(subtitle.to_string());
         self.persist()
@@ -86,7 +94,7 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if the agent is unknown, it is the last listed
     /// agent, or the registry cannot be written.
-    pub fn archive(&mut self, agent_id: AgentId) -> anyhow::Result<()> {
+    pub fn archive(&mut self, agent_id: AgentId) -> Result<(), AgentRegistryError> {
         self.archive_at(agent_id, Utc::now())
     }
 
@@ -95,9 +103,9 @@ impl AgentRegistry {
         &mut self,
         agent_id: AgentId,
         at: DateTime<Utc>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), AgentRegistryError> {
         let Some(index) = self.position(agent_id) else {
-            anyhow::bail!("no such agent");
+            return Err(AgentRegistryError::NoSuchAgent { agent_id });
         };
         if self.file.agents[index].archived {
             return Ok(());
@@ -108,7 +116,7 @@ impl AgentRegistry {
             .iter()
             .all(|(agent, _)| hiding.contains(&agent.agent_id()))
         {
-            anyhow::bail!("it is the last agent in the list; create another project first");
+            return Err(AgentRegistryError::LastAgent { agent_id });
         }
         let agent = &mut self.file.agents[index];
         agent.archived = true;
@@ -124,9 +132,9 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if the agent is unknown or the registry cannot be
     /// written.
-    pub fn restore(&mut self, agent_id: AgentId) -> anyhow::Result<()> {
+    pub fn restore(&mut self, agent_id: AgentId) -> Result<(), AgentRegistryError> {
         let Some(agent) = self.find(agent_id) else {
-            anyhow::bail!("no such agent");
+            return Err(AgentRegistryError::NoSuchAgent { agent_id });
         };
         let mut restoring: Vec<String> = self
             .spawners(agent)
@@ -162,9 +170,11 @@ impl AgentRegistry {
     /// # Errors
     /// Returns an error if the project is unknown, it holds every listed
     /// agent, or the registry cannot be written.
-    pub fn remove_project(&mut self, project_id: &str) -> anyhow::Result<Vec<AgentId>> {
+    pub fn remove_project(&mut self, project_id: &str) -> Result<Vec<AgentId>, AgentRegistryError> {
         if self.project(project_id).is_none() {
-            anyhow::bail!("no such project");
+            return Err(AgentRegistryError::NoSuchProject {
+                project_id: project_id.to_string(),
+            });
         }
         let gone = self.leaving_agents(project_id)?;
         let (archived, hiding) = self.archived_of_project(project_id);
@@ -191,7 +201,7 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// Returns an error if the project holds every listed agent.
-    fn leaving_agents(&self, project_id: &str) -> anyhow::Result<Vec<AgentId>> {
+    fn leaving_agents(&self, project_id: &str) -> Result<Vec<AgentId>, AgentRegistryError> {
         let members = &self.channel_members;
         // Channel members are not the project's to remove: they stay, and
         // the project's own agents decide whether it is the last one.
@@ -202,7 +212,9 @@ impl AgentRegistry {
             .filter(|(agent, _)| !members.contains(&agent.agent_id()))
             .all(|(agent, _)| in_project(agent))
         {
-            anyhow::bail!("it is the last project in the list; create another one first");
+            return Err(AgentRegistryError::LastProject {
+                project_id: project_id.to_string(),
+            });
         }
         Ok(tree
             .iter()
@@ -251,7 +263,7 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// Returns an error if the registry cannot be written.
-    pub fn reorder_projects(&mut self, order: &[String]) -> anyhow::Result<()> {
+    pub fn reorder_projects(&mut self, order: &[String]) -> Result<(), AgentRegistryError> {
         let slots: Vec<usize> = (0..self.file.projects.len())
             .filter(|&i| order.contains(&self.file.projects[i].id))
             .collect();
@@ -267,7 +279,11 @@ impl AgentRegistry {
     ///
     /// # Errors
     /// Returns an error if the registry cannot be written.
-    pub fn reorder_agents(&mut self, project_id: &str, order: &[String]) -> anyhow::Result<()> {
+    pub fn reorder_agents(
+        &mut self,
+        project_id: &str,
+        order: &[String],
+    ) -> Result<(), AgentRegistryError> {
         let slots: Vec<usize> = (0..self.file.agents.len())
             .filter(|&i| {
                 let agent = &self.file.agents[i];

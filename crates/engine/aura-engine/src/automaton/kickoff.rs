@@ -8,6 +8,58 @@ use aura_core_types::AgentPermissions;
 
 use super::RunIdentity;
 
+/// A dev-loop or task-run start request, as
+/// [`AutomatonBridge::start_dev_loop_with_capabilities`](super::AutomatonBridge::start_dev_loop_with_capabilities)
+/// and
+/// [`AutomatonBridge::run_task_with_capabilities`](super::AutomatonBridge::run_task_with_capabilities)
+/// take it. `model` is required; a start without one is refused.
+pub struct AutomatonStart<'a> {
+    pub project_id: &'a str,
+    pub workspace_root: Option<PathBuf>,
+    pub auth_token: Option<String>,
+    pub model: Option<String>,
+    pub git_repo_url: Option<String>,
+    pub git_branch: Option<String>,
+    pub installed_tools: Option<Vec<aura_core_protocol::InstalledTool>>,
+    pub installed_integrations: Option<Vec<aura_core_protocol::InstalledIntegration>>,
+    pub agent_permissions: AgentPermissions,
+    pub aura_org_id: Option<String>,
+    pub aura_session_id: Option<String>,
+    pub aura_agent_id: Option<String>,
+    pub agent_persona: Option<AgentPersona>,
+    pub agent_skills: Vec<String>,
+    pub agent_system_prompt: Option<String>,
+    pub execution_profile: Option<ModelSelection>,
+}
+
+impl<'a> AutomatonStart<'a> {
+    /// The kickoff and tool surface of this start, run on `model` (its
+    /// checked `model`).
+    pub(super) fn into_kickoff(self, model: String) -> (Kickoff<'a>, KickoffTools) {
+        let kickoff = Kickoff {
+            project_id: self.project_id,
+            model,
+            auth_token: self.auth_token,
+            git_repo_url: self.git_repo_url,
+            git_branch: self.git_branch,
+            aura_org_id: self.aura_org_id,
+            aura_session_id: self.aura_session_id,
+            aura_agent_id: self.aura_agent_id,
+            agent_persona: self.agent_persona,
+            agent_skills: self.agent_skills,
+            agent_system_prompt: self.agent_system_prompt,
+            execution_profile: self.execution_profile,
+        };
+        let tools = KickoffTools {
+            workspace_root: self.workspace_root,
+            installed_tools: self.installed_tools,
+            installed_integrations: self.installed_integrations,
+            agent_permissions: self.agent_permissions,
+        };
+        (kickoff, tools)
+    }
+}
+
 /// One kickoff's validated request fields, shared by the dev-loop and
 /// task-run start paths.
 pub(super) struct Kickoff<'a> {
@@ -34,10 +86,12 @@ pub(super) struct KickoffTools {
 }
 
 /// The task a task-run kickoff executes.
-pub(super) struct TaskSpec<'a> {
-    pub(super) task_id: &'a str,
-    pub(super) prior_failure: Option<String>,
-    pub(super) work_log: Vec<String>,
+pub struct TaskSpec<'a> {
+    pub task_id: &'a str,
+    /// Why the previous attempt at the task failed, if one did.
+    pub prior_failure: Option<String>,
+    /// What earlier tasks of the run did.
+    pub work_log: Vec<String>,
 }
 
 impl Kickoff<'_> {

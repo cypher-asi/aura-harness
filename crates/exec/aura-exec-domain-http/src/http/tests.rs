@@ -1,5 +1,54 @@
 use super::*;
-use aura_exec_traits::domain::DomainApi;
+use aura_exec_traits::domain::{CreateSessionParams, DomainApi, DomainError};
+
+/// The status messages read exactly as the `HTTP {StatusCode}: ...` text
+/// they replaced, for codes without a reason phrase too.
+#[test]
+fn status_messages_match_status_code_display() {
+    for code in [404, 503, 599] {
+        let status = reqwest::StatusCode::from_u16(code).unwrap();
+        assert_eq!(
+            request::status_error(status, "body".to_string()).to_string(),
+            format!("HTTP {status}: body")
+        );
+        let blocked = DomainError::CloudflareBlocked {
+            status: code,
+            reason: status.canonical_reason(),
+            url: "https://storage.example.com/api/specs/s1".to_string(),
+        };
+        assert_eq!(
+            blocked.to_string(),
+            format!(
+                "HTTP {status}: Cloudflare is blocking requests to \
+                 https://storage.example.com/api/specs/s1 — the service may be \
+                 cold-starting or temporarily unavailable"
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn missing_jwt_and_unimplemented_messages_are_unchanged() {
+    let api = HttpDomainApi::new("http://storage", "http://network", None).unwrap();
+    let error = api.list_specs("project-test", None).await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "JWT required for this operation but not provided — ensure the front-end sends a \
+         token in RuntimeRequest.auth_jwt"
+    );
+    let error = api
+        .create_session(CreateSessionParams {
+            instance_id: "i".to_string(),
+            project_id: "p".to_string(),
+            model: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "HttpDomainApi::create_session not implemented"
+    );
+}
 
 #[tokio::test]
 async fn project_connection_failure_preserves_reason_in_display() {
@@ -19,6 +68,7 @@ async fn project_connection_failure_preserves_reason_in_display() {
         "{displayed}"
     );
     assert!(!displayed.contains("test-token"));
+    assert!(std::error::Error::source(&error).is_some());
 }
 
 #[tokio::test]

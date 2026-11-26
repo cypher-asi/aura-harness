@@ -59,7 +59,9 @@ use aura_core_types::time::now_ms;
 use aura_core_types::{AgentId, ToolDefinition, ToolResult};
 use aura_engine::AgentHooks;
 use aura_exec_tools::todo::{task_report_line, ASSIGN_TOOL_NAME};
-use aura_exec_tools::{AgentControlHook, AgentReadHook, Tool, ToolContext, ToolError};
+use aura_exec_tools::{
+    AgentControlHook, AgentMessage, AgentReadHook, Tool, ToolContext, ToolError,
+};
 use aura_model::{Message, Role};
 use aura_store_db::{ChannelRecord, MemberRecord, MemberRole};
 use aura_ui::events::MailView;

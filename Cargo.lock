@@ -321,7 +321,6 @@ dependencies = [
 name = "aura-agent"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "aura-agent-kernel",
  "aura-agent-steering",
@@ -798,14 +797,11 @@ dependencies = [
 name = "aura-engine"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "aura-agent",
  "aura-agent-kernel",
  "aura-agent-subagent",
- "aura-context-compaction",
  "aura-context-memory",
- "aura-context-prompts",
  "aura-core-protocol",
  "aura-core-types",
  "aura-engine-automaton",
@@ -830,7 +826,6 @@ dependencies = [
 name = "aura-engine-automaton"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "aura-agent",
  "aura-agent-trace",
@@ -900,7 +895,6 @@ dependencies = [
 name = "aura-engine-registry"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "aura-context-skills",
  "aura-core-types",
  "aura-exec-tools",
@@ -912,6 +906,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tempfile",
+ "thiserror 1.0.69",
  "tracing",
  "uuid",
 ]
@@ -920,7 +915,6 @@ dependencies = [
 name = "aura-exec-domain-http"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "aura-exec-traits",
  "reqwest",
@@ -935,7 +929,6 @@ dependencies = [
 name = "aura-exec-tools"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "aura-core-types",
  "aura-exec-traits",
@@ -967,7 +960,6 @@ dependencies = [
 name = "aura-exec-traits"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "aura-core-types",
  "bytes",

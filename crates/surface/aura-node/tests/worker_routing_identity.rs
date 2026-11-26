@@ -271,14 +271,10 @@ async fn refuses_to_schedule_without_registered_identity() {
         .await
         .expect_err("scheduler must refuse to dispatch without an AgentIdentity");
 
-    let typed = err
-        .downcast_ref::<SchedulerError>()
-        .expect("error must downcast to SchedulerError");
-    match typed {
-        SchedulerError::AgentNotRegistered { agent_id: aid } => {
-            assert_eq!(*aid, agent_id, "error must name the unregistered agent_id");
-        }
-    }
+    let SchedulerError::AgentNotRegistered { agent_id: aid } = &err else {
+        panic!("error must be SchedulerError::AgentNotRegistered, got: {err:?}");
+    };
+    assert_eq!(*aid, agent_id, "error must name the unregistered agent_id");
     assert!(
         fixture.provider.captured().is_empty(),
         "no outbound ModelRequest should reach the provider when scheduling fails"

@@ -26,14 +26,19 @@
 //!
 //! ## Error handling
 //!
-//! The current `DomainApi` trait returns `anyhow::Result`, so both
-//! impls also surface `anyhow::Error`. A future commit can introduce
-//! a typed `DomainError` once the trait migrates off `anyhow`.
+//! Both impls return the trait's typed
+//! [`aura_exec_traits::domain::DomainError`]: a missing JWT, a request
+//! that got no response, an unreadable body, a non-success status (with
+//! the start of the body), a Cloudflare block that outlasted the
+//! retries, or a response that is not the expected JSON. Each message
+//! names the request, as the domain tools show the message alone; the
+//! `reqwest` / `serde_json` error stays the `source()`.
+//! [`HttpDomainApi::new`] fails with [`HttpClientError`].
 
 #![forbid(unsafe_code)]
 
 mod http;
 mod jwt;
 
-pub use http::HttpDomainApi;
+pub use http::{HttpClientError, HttpDomainApi};
 pub use jwt::JwtDomainApi;

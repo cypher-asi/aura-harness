@@ -23,6 +23,7 @@ use crate::self_review::SelfReviewGuard;
 use crate::types::{
     AgentToolExecutor, AutoBuildResult, BuildBaseline, ToolCallInfo, ToolCallResult,
 };
+use crate::verify::runner::BuildRunnerError;
 use crate::verify::{infer_default_test_command, TestSuiteOutcome};
 
 pub(crate) use aura_config::MAX_STUB_FIX_ATTEMPTS;
@@ -55,7 +56,7 @@ pub(crate) trait TaskTestRunner: Send + Sync + std::fmt::Debug {
         &self,
         project_root: &Path,
         command: &str,
-    ) -> anyhow::Result<TestSuiteOutcome>;
+    ) -> Result<TestSuiteOutcome, BuildRunnerError>;
 }
 
 /// Default [`TaskTestRunner`] implementation that runs the project's test
@@ -69,7 +70,7 @@ impl TaskTestRunner for RealTaskTestRunner {
         &self,
         project_root: &Path,
         command: &str,
-    ) -> anyhow::Result<TestSuiteOutcome> {
+    ) -> Result<TestSuiteOutcome, BuildRunnerError> {
         crate::verify::run_full_test_suite(project_root, command).await
     }
 }
