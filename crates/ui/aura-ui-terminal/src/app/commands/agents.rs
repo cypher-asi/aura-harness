@@ -15,6 +15,7 @@ impl App {
             }
             UiCommand::SetPlacement { agent_id, state } => self.cmd_set_placement(agent_id, state),
             UiCommand::SetHost(view) => self.cmd_set_host(*view),
+            UiCommand::SetRepo(view) => self.cmd_set_repo(*view),
             UiCommand::SetProjects(projects) => self.cmd_set_projects(projects),
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
             UiCommand::SetArchivedAgents(agents) => self.set_archived(agents),

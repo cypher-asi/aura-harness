@@ -1,12 +1,12 @@
-//! The panel below the Record panel: a SANDBOX | PROCESSES | TRACE | TASKS
-//! header bar over the file tree of the active agent's workspace, the
-//! Processes list, the trace feed, or its tasks grouped under their plans.
-//! While a channel is open the bar lists only the channel's MEMBERS and
-//! INFO (see `channel_side`), and the panel fills the right column.
-//! Outside a channel the bar ends in a `*` button that lists the whole
-//! project's processes, steps, plans and tasks instead of the active
-//! agent's, then a ⤢ button that maximizes the panel over the Record
-//! panel, or restores it.
+//! The panel below the Record panel: a SANDBOX | REPO | PROCESSES | TRACE |
+//! TASKS header bar over the file tree of the active agent's workspace,
+//! its repo's timeline, the Processes list, the trace feed, or its tasks
+//! grouped under their plans. While a channel is open the bar lists only
+//! the channel's MEMBERS and INFO (see `channel_side`), and the panel
+//! fills the right column. Outside a channel the bar ends in HOST's 🖥
+//! tab, a `*` button that lists the whole project's processes, steps,
+//! plans and tasks instead of the active agent's, then a ⤢ button that
+//! maximizes the panel over the Record panel, or restores it.
 
 use super::chrome::{render_body_block, Body, ScrollView};
 use super::header::{self, PanelHeader};
@@ -28,14 +28,11 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     // features, are left out.
     let channel_open = app.channel_open();
     let layout = |width| SidePanelTab::layout(width, channel_open);
-    let end = header::bar_end(bar, (!channel_open, !channel_open), layout);
+    let icon_tab = SidePanelTab::icon_tab(channel_open);
+    let icon = icon_tab.and_then(SidePanelTab::icon);
+    let end = header::bar_end(bar, (icon, !channel_open, !channel_open), layout);
     if !hosted {
-        app.set_side_tabs_area(Rect {
-            width: end.tabs,
-            ..bar
-        });
-        app.set_side_scope_area(end.scope);
-        app.set_side_expand_area(end.expand);
+        set_bar_areas(app, bar, end);
     }
     let hovered = match app.hover() {
         Some(HoverTarget::SideTab(tab)) => Some(tab),
@@ -58,6 +55,11 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
             hovered: app.hover() == Some(HoverTarget::SideScope),
             cell: end.scope,
         }),
+        icon_tab: icon_tab.zip(icon).map(|(tab, icon)| header::IconTab {
+            tab,
+            icon,
+            cell: end.icon,
+        }),
         focused: is_focused,
         hosted,
     };
@@ -70,11 +72,24 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     render_tab(frame, area, body, app, theme);
 }
 
+/// Record where `bar`'s tabs and the buttons at its `end` fell, for the
+/// pointer.
+fn set_bar_areas(app: &mut App, bar: Rect, end: header::BarEnd) {
+    app.set_side_tabs_area(Rect {
+        width: end.tabs,
+        ..bar
+    });
+    app.set_side_icon_tab_area(end.icon);
+    app.set_side_scope_area(end.scope);
+    app.set_side_expand_area(end.expand);
+}
+
 /// Draw the open tab into `body`, the body below the tab bar of the panel
 /// bordered by `area`.
 fn render_tab(frame: &mut Frame, area: Rect, body: Rect, app: &mut App, theme: &Theme) {
     match app.side_tab() {
         SidePanelTab::Sandbox => render_tree(frame, area, body, app, theme),
+        SidePanelTab::Repo => super::repo_tab::render_repo(frame, area, body, app, theme),
         SidePanelTab::Processes => {
             super::processes::render_processes(frame, area, body, app, theme);
         }
@@ -97,12 +112,7 @@ fn render_tab(frame: &mut Frame, area: Rect, body: Rect, app: &mut App, theme: &
 fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
     if app.sandbox().rows().is_empty() {
-        let message = if app.sandbox().root().is_some() {
-            "Sandbox is empty."
-        } else {
-            "No sandbox yet."
-        };
-        render_empty(frame, inner, message, theme);
+        render_empty(frame, inner, &empty_message(app), theme);
         return;
     }
 
@@ -135,6 +145,27 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
     };
     app.set_sandbox_rows_area(body.rows(), scroll);
     body.draw(frame, lines, view, SANDBOX_HINT, theme);
+}
+
+/// What a tree with no rows says; a cloud machine's tree says why it has
+/// none yet.
+fn empty_message(app: &App) -> String {
+    let tree = app.sandbox();
+    if tree.is_remote() {
+        if app.machine_asleep() {
+            return "The machine is asleep; its files show when it wakes.".to_string();
+        }
+        return match tree.unlisted() {
+            Some(None) => "Reading the machine's files…".to_string(),
+            Some(Some(reason)) => format!("Could not read the machine's files: {reason}"),
+            None => "Sandbox is empty.".to_string(),
+        };
+    }
+    if tree.root().is_some() {
+        "Sandbox is empty.".to_string()
+    } else {
+        "No sandbox yet.".to_string()
+    }
 }
 
 /// A tree row: the fold glyph of a directory (none for files), then the
@@ -239,5 +270,37 @@ mod tests {
         assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▸"));
         dir.expanded = true;
         assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▾"));
+    }
+
+    #[test]
+    fn an_empty_tree_of_a_machine_says_whether_it_is_read_failed_or_asleep() {
+        use crate::events::UiCommand;
+        use crate::host::{PlacementState, PlacementView};
+        let mut app = App::new();
+        app.process_command(UiCommand::SetSandboxRemote("/workspace".into()));
+        assert_eq!(empty_message(&app), "Reading the machine's files…");
+
+        app.process_command(UiCommand::SandboxListing {
+            dir: "/workspace".into(),
+            entries: Err("refused".into()),
+        });
+        assert_eq!(
+            empty_message(&app),
+            "Could not read the machine's files: refused"
+        );
+
+        let agent_id = app.active_agent_id().to_string();
+        app.process_command(UiCommand::SetPlacement {
+            agent_id,
+            state: PlacementState {
+                placement: PlacementView::Cloud,
+                asleep: true,
+                ..PlacementState::default()
+            },
+        });
+        assert_eq!(
+            empty_message(&app),
+            "The machine is asleep; its files show when it wakes."
+        );
     }
 }

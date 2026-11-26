@@ -13,6 +13,9 @@ use aura_engine::{
     AgentEnv, AgentHooks, AgentHost, AgentIdentity, ChildKernel, ChildKernelFactory,
     ChildKernelRequest, InboxMessage, ParentInbox, RootAgent, Scheduler,
 };
+use aura_exec_tools::agents::get_agent_state::GET_AGENT_STATE_TOOL_NAME;
+use aura_exec_tools::agents::list_agents::LIST_AGENTS_TOOL_NAME;
+use aura_exec_tools::agents::send_to_agent::SEND_TO_AGENT_TOOL_NAME;
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::{BackgroundProcessHook, ToolCatalog, ToolConfig};
 use aura_model::{ModelRequestKind, ToolDefinition};
@@ -32,6 +35,35 @@ pub fn agent_tool_definitions() -> Vec<ToolDefinition> {
         .map(|(_, definition, _)| definition)
         .filter(|definition| !matches!(definition.name.as_str(), "delegate_task" | TASK_TOOL_NAME))
         .collect()
+}
+
+/// The [`agent_tool_definitions`] agents talk to each other with. Every
+/// top-level agent has them, background agents or not: they reach its
+/// peers through their inboxes (see `inbox`), and the agents it spawned.
+#[must_use]
+pub fn inbox_tool_definitions() -> Vec<ToolDefinition> {
+    agent_tool_definitions()
+        .into_iter()
+        .filter(|definition| is_inbox_tool(&definition.name))
+        .collect()
+}
+
+/// The [`agent_tool_definitions`] only background agents offer: starting
+/// them and stopping them.
+#[must_use]
+pub fn host_tool_definitions() -> Vec<ToolDefinition> {
+    agent_tool_definitions()
+        .into_iter()
+        .filter(|definition| !is_inbox_tool(&definition.name))
+        .collect()
+}
+
+/// Whether `name` is one of the [`inbox_tool_definitions`].
+pub(crate) fn is_inbox_tool(name: &str) -> bool {
+    matches!(
+        name,
+        SEND_TO_AGENT_TOOL_NAME | LIST_AGENTS_TOOL_NAME | GET_AGENT_STATE_TOOL_NAME
+    )
 }
 
 /// Gives spawned agents the tools the terminal's agents have.
@@ -95,6 +127,7 @@ impl ParentInbox for TerminalInbox {
             to: message.to,
             shown,
             prompt: message.render(),
+            inbox: None,
         };
         self.notices
             .send(notice)

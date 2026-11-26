@@ -71,7 +71,7 @@ fn domain_of(event: &UiEvent) -> Domain {
         E::Clear | E::NewSession | E::SelectModel(_) | E::SetThinking(_) => Domain::Session,
         E::Resume { .. } | E::InitProject { .. } | E::Rewind { .. } => Domain::Session,
         E::Diff { .. } | E::Compare { .. } | E::Bench { .. } => Domain::Session,
-        E::Log { .. } | E::KillProcess(_) => Domain::Session,
+        E::Log { .. } | E::KillProcess(_) | E::Repo { .. } => Domain::Session,
         E::SelectAgent(_) | E::FocusAgent(_) | E::CreateAgent(_) => Domain::Roster,
         E::CreateProject { .. } | E::AddAgentToProject(_) | E::ReorderProjects(_) => Domain::Roster,
         E::ReorderAgents { .. } | E::ArchiveAgent(_) | E::RestoreAgent(_) => Domain::Roster,
@@ -81,6 +81,7 @@ fn domain_of(event: &UiEvent) -> Domain {
         E::SetPlacement { .. } | E::HostAction { .. } | E::CloudSetup => Domain::Places,
         E::CreateChannel { .. } | E::OpenChannel(_) | E::CloseChannel => Domain::Places,
         E::UpdateChannel { .. } | E::ArchiveChannel(_) => Domain::Places,
+        E::ListSandbox(_) | E::ReadSandboxFile(_) => Domain::Places,
         E::LoginCredentials { .. } | E::Logout | E::Whoami => Domain::Account,
         E::LinkSubscription { .. } | E::LinkCode(_) | E::Unlink(_) => Domain::Account,
     }

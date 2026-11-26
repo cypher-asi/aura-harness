@@ -1,3 +1,4 @@
+use super::attach::AttachGuard;
 use super::*;
 use crate::protocol::{AssistantMessageStart, TextDelta};
 

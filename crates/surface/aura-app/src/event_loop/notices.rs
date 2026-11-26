@@ -13,6 +13,7 @@ use super::{deliver, LoopState};
 use aura_agent_kernel::Kernel;
 use aura_core_types::{ActionResultPayload, AgentId, Transaction};
 use aura_ui::events::ProcessSummary;
+use aura_ui::inbox::InboxKind;
 use std::path::Path;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -28,13 +29,21 @@ pub struct Notice {
     pub shown: String,
     /// What the agent is told.
     pub prompt: String,
+    /// What it is when another agent sent it through the inbox (see
+    /// [`super::inbox`]); `None` for the harness's own notices.
+    pub inbox: Option<InboxKind>,
 }
 
 /// Where notices are sent, for work that finishes off the event loop.
 pub type NoticeSender = mpsc::UnboundedSender<Notice>;
 
-/// Show `notice` in its agent's chat and give it to the agent.
+/// Show `notice` in its agent's chat and give it to the agent. An inbox
+/// message goes its own way ([`super::inbox::deliver`]).
 pub(super) async fn handle_notice(state: &mut LoopState<'_>, notice: Notice) {
+    if let Some(kind) = notice.inbox {
+        super::inbox::deliver(state, notice, kind).await;
+        return;
+    }
     info!(agent = %notice.to, shown = %notice.shown, "Delivering a notice");
     AgentUi::new(state.commands.clone(), notice.to)
         .send(system_message(notice.shown))
@@ -112,6 +121,7 @@ pub fn command_notice(to: AgentId, row: &ProcessSummary) -> Notice {
         to,
         shown: format!("Background command {how}: {}", row.label),
         prompt,
+        inbox: None,
     }
 }
 

@@ -1,5 +1,5 @@
 use super::*;
-use aura_model::MockProvider;
+use aura_model::{MockProvider, ModelRequest};
 
 #[test]
 fn titles_are_written_by_the_classifier_unless_configured() {
@@ -10,37 +10,6 @@ fn titles_are_written_by_the_classifier_unless_configured() {
         title_model_with(haiku(), Some("  ")),
         "claude/claude-haiku-5-5"
     );
-}
-
-#[test]
-fn sanitize_keeps_only_the_title() {
-    let sanitize = |reply: &str| sanitize(reply, MAX_TITLE_CHARS);
-    assert_eq!(
-        sanitize("\n  \"Task build issue.\"\nmore").as_deref(),
-        Some("Task build issue")
-    );
-    assert_eq!(
-        sanitize("Title: Agent trace persistence").as_deref(),
-        Some("Agent trace persistence")
-    );
-    assert_eq!(sanitize("**Fix login**").as_deref(), Some("Fix login"));
-    assert_eq!(sanitize("  \n \"\" "), None);
-    let long = sanitize(&"word ".repeat(30)).unwrap();
-    assert!(long.chars().count() <= MAX_TITLE_CHARS);
-    assert!(!long.ends_with(' '));
-}
-
-#[test]
-fn fallback_uses_the_start_of_the_prompt() {
-    assert_eq!(
-        fallback_title("\n  fix   the build\nthen run tests"),
-        "fix the build"
-    );
-    let long =
-        fallback_title("agent name in left side should update after there is info, use Haiku");
-    assert_eq!(long, "agent name in left side should update");
-    assert_eq!(fallback_title("   "), "New chat");
-    assert_eq!(fallback_title(&"é".repeat(60)).chars().count(), 40);
 }
 
 #[test]

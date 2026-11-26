@@ -1,53 +1,18 @@
-//! Mirroring a placed agent's record and recalling it from its machine.
+//! Recalling a placed agent from its machine.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{names, replica, BootReporter, BootStage, CloudError, CloudResult};
+use crate::{names, BootReporter, BootStage, CloudError, CloudResult};
+use aura_core_types::time::{format_duration, now_ms};
 use aura_core_types::{AgentId, Placement, PlacementPayload};
 
 use super::node_client::NodeClient;
-use super::store::{record_placement, StoreSink};
+use super::store::record_placement;
 
 use super::{CloudHub, CommitsOutcome, PatchOutcome, PlacedAgent, PullOutcome};
 
 impl CloudHub {
-    /// Copy what `agent`'s node committed since the local head. Returns
-    /// the entries copied.
-    ///
-    /// # Errors
-    ///
-    /// When the node can't be read or a page fails its checks.
-    pub async fn mirror(&self, agent: AgentId) -> CloudResult<usize> {
-        let node = self.node(&agent.to_hex())?;
-        self.mirror_from(&node, agent).await
-    }
-
-    pub(super) async fn mirror_from(
-        &self,
-        node: &NodeClient,
-        agent: AgentId,
-    ) -> CloudResult<usize> {
-        // One mirror per agent at a time: two racing copies of the same
-        // page would have the loser refused by the store.
-        let gate = Arc::clone(self.mirrors.lock().entry(agent).or_default());
-        let _one = gate.lock().await;
-        let sink = StoreSink(Arc::clone(&self.store));
-        let mut copied = 0;
-        loop {
-            let head = replica::ReplicaSink::head(&sink, agent)?;
-            let page = node.record(agent, head + 1).await?;
-            if page.is_empty() {
-                return Ok(copied);
-            }
-            let applied = replica::apply_page(&sink, agent, &page)?;
-            copied += applied;
-            if applied == 0 {
-                return Ok(copied);
-            }
-        }
-    }
-
     /// Bring `agent`'s single writer back here: seal it on its node,
     /// copy the rest of its record, pull its work into the project and
     /// destroy the machine, showing each step on `boot`.
@@ -69,16 +34,7 @@ impl CloudHub {
         boot.fact("machine", placed.machine.clone());
         boot.fact("project folder", placed.project_dir.display().to_string());
         if self.fleet.view(&hex).is_none() {
-            // The machine is gone (deleted outside aura): the record the
-            // mirror already holds is all there is.
-            self.forget_placement(&hex, &placed.project);
-            return Ok(PullOutcome::patch_only(PatchOutcome::Saved {
-                path: self.home.join(&hex),
-                reason: format!(
-                    "machine {} no longer exists; its unsynced work is lost",
-                    placed.machine
-                ),
-            }));
+            return Ok(self.recall_without_machine(&hex, &placed, boot).await);
         }
         boot.plan(&[
             BootStage::Seal,
@@ -113,6 +69,44 @@ impl CloudHub {
         Ok(outcome)
     }
 
+    /// Recall `hex` when its machine is gone (deleted outside aura): what
+    /// was copied already is all there is, with the changes saved at its
+    /// last sleep.
+    async fn recall_without_machine(
+        &self,
+        hex: &str,
+        placed: &PlacedAgent,
+        boot: &BootReporter,
+    ) -> PullOutcome {
+        let outcome = match self.saved_patch(hex) {
+            Some(saved) => {
+                boot.fact(
+                    "changes from",
+                    format!(
+                        "its last sleep, {} ago",
+                        format_duration(now_ms().saturating_sub(saved.saved_ms) / 1000)
+                    ),
+                );
+                self.apply_patch(
+                    hex,
+                    &placed.project_dir,
+                    &saved.patch.patch,
+                    saved.patch.files,
+                )
+                .await
+            }
+            None => PatchOutcome::Saved {
+                path: self.home.join(hex),
+                reason: format!(
+                    "machine {} no longer exists; its unsynced work is lost",
+                    placed.machine
+                ),
+            },
+        };
+        self.forget_placement(hex, &placed.project);
+        PullOutcome::patch_only(outcome)
+    }
+
     /// Copy the rest of `agent`'s record from its sealed node, up to
     /// `sealed_head`.
     async fn copy_rest(
@@ -135,6 +129,18 @@ impl CloudHub {
                 op: "recall",
                 message: format!("copied up to {local} of {sealed_head} entries"),
             });
+        }
+        // The whole session and its runs, so the agent resumes here
+        // with its tool calls; without them it resumes from the record.
+        match self.copy_session(node, agent).await {
+            Ok(true) => boot.fact("session", "copied"),
+            Ok(false) => {}
+            Err(err) => {
+                tracing::warn!(agent = %agent.to_hex(), error = %err, "could not copy the session checkpoint");
+            }
+        }
+        if let Err(err) = self.copy_traces(node, agent).await {
+            tracing::warn!(agent = %agent.to_hex(), error = %err, "could not copy the trace runs");
         }
         Ok(())
     }
@@ -212,6 +218,10 @@ impl CloudHub {
     fn forget_placement(&self, hex: &str, project: &str) {
         self.placements.lock().agents.remove(hex);
         self.save_placements();
+        self.forget_saved_patch(hex);
+        if let Ok(agent) = AgentId::from_hex(hex) {
+            self.sync.lock().remove(&agent);
+        }
         self.directory.remove(hex);
         self.send_directories(project);
         if let Some(link) = self.links.lock().remove(hex) {

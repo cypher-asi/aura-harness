@@ -87,25 +87,35 @@ impl ImageView {
         );
         let path = std::env::temp_dir().join(name);
         std::fs::write(&path, bytes)?;
-        let mut command = if cfg!(target_os = "macos") {
-            std::process::Command::new("open")
-        } else if cfg!(windows) {
-            let mut command = std::process::Command::new("cmd");
-            command.args(["/C", "start", ""]);
-            command
-        } else {
-            std::process::Command::new("xdg-open")
-        };
-        let mut child = command
-            .arg(&path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
-        // Reap the opener when it exits; it hands off to the viewer at once.
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
+        open_with_system(&path)?;
         Ok(path)
     }
+}
+
+/// Open `target`, a file or a web page, in the app the system picks for
+/// it.
+///
+/// # Errors
+/// Returns why the opener could not be started.
+pub fn open_with_system(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
+    let mut command = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    let mut child = command
+        .arg(target)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    // Reap the opener when it exits; it hands off to the viewer at once.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }

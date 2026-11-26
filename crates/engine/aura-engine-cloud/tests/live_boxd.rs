@@ -10,7 +10,9 @@
 // Integration-test crate: test code may unwrap/expect.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use aura_engine_cloud::{BoxdProvider, VmProvider};
+use std::time::Duration;
+
+use aura_engine_cloud::{BoxdProvider, CloudError, MachineOrigin, NewMachine, VmProvider};
 
 fn provider() -> BoxdProvider {
     let _ = aura_config::env_file::load();
@@ -47,16 +49,9 @@ async fn read_only_calls_succeed() {
     println!("aura-base snapshot: {snapshot:?}");
 }
 
-/// Creates one small fresh machine, runs a few commands, uploads and
-/// reads back a file, then destroys it. Costs a fraction of a cent; the
-/// machine also deletes itself after 30 minutes if the test dies.
-#[tokio::test]
-#[ignore = "creates a real boxd machine; needs BOXD_API_KEY"]
-async fn a_machine_runs_commands_and_is_destroyed() {
-    use aura_engine_cloud::{MachineOrigin, NewMachine};
-    use std::time::Duration;
-
-    let boxd = provider();
+/// A small fresh probe machine, which also deletes itself after 30
+/// minutes if the test dies.
+fn probe_spec() -> NewMachine {
     let name = format!(
         "aura-probe-{}",
         &uuid::Uuid::new_v4().simple().to_string()[..6]
@@ -65,6 +60,57 @@ async fn a_machine_runs_commands_and_is_destroyed() {
     spec.size = aura_config::MachineSize::S1x4;
     spec.delete_after_secs = Some(30 * 60);
     spec.labels.insert("aura.role".into(), "probe".into());
+    spec
+}
+
+/// Run a few commands on `machine`, upload a file and read it back.
+async fn probe(boxd: &BoxdProvider, machine: &str) -> Result<(), CloudError> {
+    let out = boxd
+        .exec(
+            machine,
+            "cat /etc/os-release | head -2; ldd --version | head -1; uname -m; whoami; \
+             sudo -n true && echo sudo-ok; nproc; free -g | head -2; df -h / | tail -1; \
+             command -v curl git cc || true",
+            None,
+            Duration::from_secs(120),
+        )
+        .await?;
+    println!(
+        "exit {}\n{}\n{}",
+        out.exit_code,
+        out.stdout_text(),
+        out.stderr_tail(2000)
+    );
+    let written = boxd
+        .upload(machine, "/tmp/aura-probe.txt", b"hello boxd".to_vec())
+        .await?;
+    let back = boxd.download(machine, "/tmp/aura-probe.txt", 1024).await?;
+    println!(
+        "uploaded {written} bytes, read back {:?}",
+        String::from_utf8_lossy(&back)
+    );
+    let stdin = boxd
+        .exec(
+            machine,
+            "cat",
+            Some(b"piped stdin".to_vec()),
+            Duration::from_secs(30),
+        )
+        .await?;
+    println!("stdin echo: {:?}", stdin.stdout_text());
+    let info = boxd.get(machine).await?;
+    println!("machine: {info:?}");
+    Ok(())
+}
+
+/// Creates one small fresh machine, runs a few commands, uploads and
+/// reads back a file, then destroys it. Costs a fraction of a cent; the
+/// machine also deletes itself after 30 minutes if the test dies.
+#[tokio::test]
+#[ignore = "creates a real boxd machine; needs BOXD_API_KEY"]
+async fn a_machine_runs_commands_and_is_destroyed() {
+    let boxd = provider();
+    let spec = probe_spec();
     let started = std::time::Instant::now();
     let machine = boxd
         .create(&spec, &MachineOrigin::Fresh)
@@ -77,48 +123,7 @@ async fn a_machine_runs_commands_and_is_destroyed() {
         started.elapsed(),
         machine.status
     );
-
-    let result = async {
-        let out = boxd
-            .exec(
-                &machine.name,
-                "cat /etc/os-release | head -2; ldd --version | head -1; uname -m; whoami; \
-                 sudo -n true && echo sudo-ok; nproc; free -g | head -2; df -h / | tail -1; \
-                 command -v curl git cc || true",
-                None,
-                Duration::from_secs(120),
-            )
-            .await?;
-        println!(
-            "exit {}\n{}\n{}",
-            out.exit_code,
-            out.stdout_text(),
-            out.stderr_tail(2000)
-        );
-        let written = boxd
-            .upload(&machine.name, "/tmp/aura-probe.txt", b"hello boxd".to_vec())
-            .await?;
-        let back = boxd
-            .download(&machine.name, "/tmp/aura-probe.txt", 1024)
-            .await?;
-        println!(
-            "uploaded {written} bytes, read back {:?}",
-            String::from_utf8_lossy(&back)
-        );
-        let stdin = boxd
-            .exec(
-                &machine.name,
-                "cat",
-                Some(b"piped stdin".to_vec()),
-                Duration::from_secs(30),
-            )
-            .await?;
-        println!("stdin echo: {:?}", stdin.stdout_text());
-        let info = boxd.get(&machine.name).await?;
-        println!("machine: {info:?}");
-        Ok::<_, aura_engine_cloud::CloudError>(())
-    }
-    .await;
+    let result = probe(&boxd, &machine.name).await;
     boxd.destroy(&machine.name).await.expect("destroy");
     let gone = boxd.get(&machine.name).await.expect("get after destroy");
     println!("after destroy: {:?}", gone.map(|m| m.status));

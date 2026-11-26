@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::replica::ReplicaSink;
 use crate::{CloudError, CloudResult};
+use aura_agent_kernel::RecordObserver;
 use aura_core_types::{
     AgentId, Hash, PlacementPayload, RecordEntry, SystemKind, Transaction, TransactionType,
     VmPayload,
@@ -120,16 +121,21 @@ pub fn record_placement(
     ledger.append_system(agent_id_of(ledger_zns), payload.to_bytes())
 }
 
-/// Mirror sink: verified pages go into the local store verbatim.
-pub struct StoreSink(pub Arc<dyn Store>);
+/// Mirror sink: verified pages go into the local store verbatim, and
+/// then to `observer`, which sees them as it sees the entries local
+/// kernels write (the KERNEL tab, Gate).
+pub struct StoreSink {
+    pub store: Arc<dyn Store>,
+    pub observer: Option<Arc<dyn RecordObserver>>,
+}
 
 impl ReplicaSink for StoreSink {
     fn head(&self, agent: AgentId) -> CloudResult<u64> {
-        self.0.get_head_seq(agent).map_err(store_error)
+        self.store.get_head_seq(agent).map_err(store_error)
     }
 
     fn hash_at(&self, agent: AgentId, seq: u64) -> CloudResult<Option<Hash>> {
-        match self.0.get_record_entry(agent, seq) {
+        match self.store.get_record_entry(agent, seq) {
             Ok(entry) => Ok(Some(entry.tx.hash)),
             Err(_) => Ok(None),
         }
@@ -139,9 +145,15 @@ impl ReplicaSink for StoreSink {
         let Some(first) = entries.first() else {
             return Ok(());
         };
-        self.0
+        self.store
             .append_replica_batch(agent, first.seq, entries)
-            .map_err(store_error)
+            .map_err(store_error)?;
+        if let Some(observer) = &self.observer {
+            for entry in entries {
+                observer.on_entry(entry);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -202,10 +214,23 @@ mod tests {
         );
     }
 
+    #[derive(Debug, Default)]
+    struct Seen(Mutex<Vec<u64>>);
+
+    impl RecordObserver for Seen {
+        fn on_entry(&self, entry: &RecordEntry) {
+            self.0.lock().push(entry.seq);
+        }
+    }
+
     #[test]
     fn the_sink_mirrors_a_remote_record_verbatim() {
         let (store, _dir) = store();
-        let sink = StoreSink(Arc::clone(&store));
+        let seen = Arc::new(Seen::default());
+        let sink = StoreSink {
+            store: Arc::clone(&store),
+            observer: Some(Arc::clone(&seen) as Arc<dyn RecordObserver>),
+        };
         let agent = AgentId::new([3; 32]);
         let mut prev: Option<Hash> = None;
         let page: Vec<RecordEntry> = (1..=3)
@@ -223,5 +248,10 @@ mod tests {
         assert_eq!(apply_page(&sink, agent, &page[..2]).expect("first"), 2);
         assert_eq!(apply_page(&sink, agent, &page).expect("rest"), 1);
         assert_eq!(store.get_record_entry(agent, 3).expect("entry"), page[2]);
+        assert_eq!(
+            *seen.0.lock(),
+            vec![1, 2, 3],
+            "each copied entry is seen once, in order"
+        );
     }
 }

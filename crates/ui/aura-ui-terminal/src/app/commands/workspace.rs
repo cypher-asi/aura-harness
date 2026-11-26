@@ -10,6 +10,9 @@ impl App {
     pub(super) fn workspace_ui_command(&mut self, cmd: UiCommand) -> Option<UiCommand> {
         match cmd {
             UiCommand::SetSandboxRoot(root) => self.set_sandbox_root(root),
+            UiCommand::SetSandboxRemote(root) => self.set_sandbox_remote(root),
+            UiCommand::SandboxListing { dir, entries } => self.set_sandbox_listing(dir, entries),
+            UiCommand::SandboxFile { path, text } => self.show_sandbox_file(&path, text),
             UiCommand::OpenEditor(path) => self.pending.editor_request = Some(path),
             UiCommand::SetPlan(plan) => self.cmd_set_plan(plan),
             UiCommand::SetPlans(plans) => self.task_list.set_plans(plans),
@@ -25,7 +28,7 @@ impl App {
     /// highlight and scroll, and is read again on the next tick to show
     /// what changed while it was away.
     fn set_sandbox_root(&mut self, root: PathBuf) {
-        if self.sandbox.root() == Some(root.as_path()) {
+        if !self.sandbox.is_remote() && self.sandbox.root() == Some(root.as_path()) {
             self.ticks.sandbox_stale = true;
             return;
         }

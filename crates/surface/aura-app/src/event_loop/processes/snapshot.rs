@@ -17,6 +17,8 @@ struct Sources {
     agents: Vec<(AgentId, Vec<AgentInfo>)>,
     commands: Vec<ProcessInfo>,
     os: Vec<OsProcess>,
+    /// Work running somewhere else (cloud machines).
+    remote: Vec<ProcessSummary>,
 }
 
 impl ProcessTable {
@@ -129,10 +131,13 @@ impl ProcessTable {
             (true, true) => os_processes::tagged_processes(),
             (true, false) => lock(&self.inner).os.values().cloned().collect(),
         };
+        let source = lock(&self.remote).clone();
+        let remote = source.map_or_else(Vec::new, |source| source.rows());
         Sources {
             agents,
             commands,
             os,
+            remote,
         }
     }
 }
@@ -143,6 +148,7 @@ fn found_rows(inner: &Inner, sources: Sources) -> (Vec<Row>, Vec<OsProcess>) {
         agents,
         commands,
         os,
+        remote,
     } = sources;
     let mut found: Vec<Row> = Vec::new();
     for (root, tree) in &agents {
@@ -163,6 +169,9 @@ fn found_rows(inner: &Inner, sources: Sources) -> (Vec<Row>, Vec<OsProcess>) {
         .collect();
     for process in &os {
         found.push(os_row(inner, process));
+    }
+    for summary in remote {
+        found.push(remote_row(inner, summary));
     }
     (found, os)
 }
@@ -256,6 +265,23 @@ fn agent_row(inner: &Inner, root: AgentId, tree: &[AgentInfo], info: &AgentInfo)
             ..ProcessSummary::default()
         },
         subject: Some(info.agent_id.to_hex()),
+        ppid: None,
+    }
+}
+
+/// A row of work running somewhere else, which can't be killed here.
+fn remote_row(inner: &Inner, mut summary: ProcessSummary) -> Row {
+    if summary.owner_name.is_empty() {
+        summary.owner_name = inner.name_of(&summary.owner_agent_id);
+    }
+    summary.killable = false;
+    let subject = match summary.kind {
+        ProcessKind::Turn => Some(summary.owner_agent_id.clone()),
+        _ => summary.id.strip_prefix("agent:").map(str::to_string),
+    };
+    Row {
+        summary,
+        subject,
         ppid: None,
     }
 }

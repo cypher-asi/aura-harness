@@ -7,7 +7,6 @@ use super::steering::Steering;
 use super::turns::{self, Prompt, Task, Work};
 use super::{agents, channels, handlers, modes, plan_mode, subagents, titles, trace};
 use super::{AgentSession, LoopState};
-use crate::agent_registry::RegisteredAgent;
 use aura_agent::AgentLoop;
 use aura_agent_trace::RunRecorder;
 use aura_core_types::{AgentId, RouteReason};
@@ -165,9 +164,7 @@ async fn turn_task(
     ));
     let turn_steering = Steering::new(cancel);
     let steering = Some(turn_steering.clone());
-    if prompt.mentions {
-        spawn_title(state, session, &agent_loop, &prompt.text);
-    }
+    spawn_title(state, session, &agent_loop, &prompt);
     let task = Task::Turn {
         prompt,
         planning: state.hub.mode_of(agent_id) == PermissionMode::Plan,
@@ -187,19 +184,21 @@ async fn turn_task(
 }
 
 /// Name the agent of `session` from `text` when it still needs a title.
-fn spawn_title(state: &LoopState<'_>, session: &AgentSession, agent_loop: &AgentLoop, text: &str) {
+fn spawn_title(
+    state: &LoopState<'_>,
+    session: &AgentSession,
+    agent_loop: &AgentLoop,
+    prompt: &Prompt,
+) {
     let agent_id = session.agent_id();
-    if subagents::lock(&state.hub.registry)
-        .find(agent_id)
-        .is_some_and(RegisteredAgent::needs_title)
-    {
+    if state.hub.titles_turn(agent_id, prompt.mentions) {
         titles::spawn(
             Arc::clone(&state.hub),
             agent_id,
             aura_agent::KernelModelGateway::new(Arc::clone(&session.kernel)),
             agent_loop.config().clone(),
             titles::title_model(state.models.classifier_model()),
-            text.to_string(),
+            prompt.text.clone(),
         );
     }
 }

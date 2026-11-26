@@ -30,12 +30,12 @@ pub(super) async fn handle_rewind(
     scope: RewindScope,
 ) {
     let ui = AgentUi::new(state.commands.clone(), agent_id);
-    let Some(files) = state.hub.factory.file_checkpoints.clone() else {
-        ui.send(UiCommand::ShowWarning(
-            "File checkpoints are off in this terminal".to_string(),
-        ))
-        .await;
-        return;
+    let files = match rewind_files(state, agent_id) {
+        Ok(files) => files,
+        Err(warning) => {
+            ui.send(UiCommand::ShowWarning(warning.to_string())).await;
+            return;
+        }
     };
     let Some(session) = state.idle.get_mut(&agent_id) else {
         ui.send(UiCommand::ShowWarning(
@@ -64,12 +64,7 @@ pub(super) async fn handle_rewind(
 
     info!(%agent_id, turn = number, scope = scope.as_str(), "Rewound agent");
     record_rewind(session, number, scope, &undone[0].manifest, report.as_ref()).await;
-    let prompts: Vec<Hash> = undone
-        .iter()
-        .filter_map(|turn| turn.manifest.prompt_tx.as_deref())
-        .filter_map(|hex| Hash::from_hex(hex).ok())
-        .collect();
-    aura_gate::live::note_rewind(&session.kernel, session.agent_id(), &prompts).await;
+    note_rewound_prompts(session, &undone).await;
     if cut.is_some() {
         session.save_checkpoint().await;
         ui.send(UiCommand::LoadConversation(chat_from_messages(
@@ -79,6 +74,29 @@ pub(super) async fn handle_rewind(
         send_session(&ui, session).await;
     }
     report_rewind(&ui, number, scope, report.as_ref()).await;
+}
+
+/// The file checkpoints `agent_id` rewinds from, or why it can't rewind.
+fn rewind_files(state: &LoopState<'_>, agent_id: AgentId) -> Result<FileCheckpoints, &'static str> {
+    if state.cloud.node_writes(agent_id) {
+        return Err("A cloud agent's files are on its machine: bring it back (/local) to rewind");
+    }
+    state
+        .hub
+        .factory
+        .file_checkpoints
+        .clone()
+        .ok_or("File checkpoints are off in this terminal")
+}
+
+/// Tell Gate the prompts of the `undone` turns failed.
+async fn note_rewound_prompts(session: &super::AgentSession, undone: &[Turn]) {
+    let prompts: Vec<Hash> = undone
+        .iter()
+        .filter_map(|turn| turn.manifest.prompt_tx.as_deref())
+        .filter_map(|hex| Hash::from_hex(hex).ok())
+        .collect();
+    aura_gate::live::note_rewind(&session.kernel, session.agent_id(), &prompts).await;
 }
 
 /// Put back the files (scope `code`) and cut the conversation at `cut`.

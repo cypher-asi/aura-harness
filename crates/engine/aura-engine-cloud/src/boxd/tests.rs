@@ -1,4 +1,6 @@
 use super::*;
+use crate::provider::{HostSecret, MachineStatus, MACHINE_DISK_BYTES};
+use aura_core_types::VmSource;
 
 #[test]
 fn region_endpoints() {

@@ -83,7 +83,9 @@ impl App {
             self.sandbox.refresh();
             self.ticks.redraw = true;
         }
+        self.ask_sandbox_listings();
         self.refresh_live_log();
+        self.refresh_repo_tab();
 
         if matches!(
             self.state,

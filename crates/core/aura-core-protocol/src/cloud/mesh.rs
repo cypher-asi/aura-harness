@@ -86,19 +86,51 @@ pub struct MeshMail {
     pub sent_ms: u64,
 }
 
-/// A process running for an agent on a node, for the PROCESSES tab.
+/// Work under way for an agent on a node, for the PROCESSES tab: a turn,
+/// or an agent one of its agents spawned.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeshProcess {
     /// Id unique on the node.
     pub id: String,
-    /// Agent that started it, hex.
+    /// Agent it is for, hex: the agent taking the turn, or the spawned
+    /// agent itself.
     pub agent_id: String,
-    /// What it is (`turn`, `cargo build`, ...).
+    /// What it is: a turn's prompt, or a spawned agent's name and role.
     pub label: String,
-    /// `running`, `done` or `failed`.
+    /// `running`, `done` or `failed`; a spawned agent can also be `idle`
+    /// or `paused`.
     pub status: String,
     /// When it started, Unix milliseconds.
     pub started_ms: u64,
+    /// [`MESH_PROCESS_AGENT`] for a spawned agent; a turn otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The chat run taking a turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// A spawned agent's parent, hex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// A spawned agent's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// [`MeshProcess::kind`] of a spawned agent.
+pub const MESH_PROCESS_AGENT: &str = "agent";
+
+impl MeshProcess {
+    /// Whether it is a spawned agent rather than a turn.
+    #[must_use]
+    pub fn is_agent(&self) -> bool {
+        self.kind.as_deref() == Some(MESH_PROCESS_AGENT)
+    }
+
+    /// Whether it is still working.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.status == "running"
+    }
 }
 
 /// One frame on a mesh socket, as JSON text.
@@ -225,10 +257,50 @@ mod tests {
             },
             MeshFrame::HostStats(HostStats::default()),
             MeshFrame::Ping { ms: 5 },
+            MeshFrame::Processes {
+                processes: vec![
+                    MeshProcess {
+                        id: "turn:r1:3".into(),
+                        agent_id: "aa".into(),
+                        label: "Fix the parser".into(),
+                        status: "running".into(),
+                        started_ms: 3,
+                        kind: None,
+                        run_id: Some("r1".into()),
+                        parent: None,
+                        name: None,
+                    },
+                    MeshProcess {
+                        id: "agent:bb".into(),
+                        agent_id: "bb".into(),
+                        label: "scout (explorer)".into(),
+                        status: "idle".into(),
+                        started_ms: 4,
+                        kind: Some(MESH_PROCESS_AGENT.into()),
+                        run_id: None,
+                        parent: Some("aa".into()),
+                        name: Some("scout".into()),
+                    },
+                ],
+            },
         ] {
             let text = frame.to_text();
             assert_eq!(MeshFrame::from_text(&text).expect("parse"), frame, "{text}");
         }
+    }
+
+    #[test]
+    fn a_process_without_a_kind_is_a_turn() {
+        let frame = MeshFrame::from_text(
+            r#"{"type":"processes","processes":[{"id":"t","agent_id":"aa","label":"x","status":"running","started_ms":1}]}"#,
+        )
+        .expect("parse");
+        let MeshFrame::Processes { processes } = frame else {
+            panic!("not a processes frame: {frame:?}");
+        };
+        assert!(!processes[0].is_agent());
+        assert!(processes[0].is_running());
+        assert_eq!(processes[0].parent, None);
     }
 
     #[test]

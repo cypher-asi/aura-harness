@@ -75,6 +75,7 @@ impl AgentHub {
             hidden_members: Mutex::new(channel_sets.hidden),
             channels: parts.channels,
             channel_chat: crate::event_loop::channels::ChannelChat::default(),
+            inbox: crate::event_loop::inbox::Inbox::default(),
             shown_chats: Mutex::default(),
             shown_records: Mutex::default(),
         }
@@ -190,21 +191,36 @@ impl AgentHub {
             .map(|tool| tool.name.clone())
             .collect();
         names.push(TASK_TOOL_NAME.to_string());
+        names.push(ASSIGN_TOOL_NAME.to_string());
+        names.extend(inbox_tool_definitions().into_iter().map(|tool| tool.name));
         if self.agents.is_some() {
-            names.extend(agent_tool_definitions().into_iter().map(|tool| tool.name));
+            names.extend(host_tool_definitions().into_iter().map(|tool| tool.name));
         }
         names
     }
 
-    /// Config and tools for a turn of an agent working in `workspace`,
-    /// applying the permanent agent `definition` when it names one.
+    /// Config and tools for a turn of an instance of the permanent agent
+    /// `definition` that another agent spawned, or of a user's own agent
+    /// when `None`, working in `workspace`. [`Self::agent_turn`] is the
+    /// turn of a given agent.
     pub fn turn(
         &self,
         definition: Option<&str>,
         workspace: &Path,
     ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+        self.ranked_turn(definition, workspace, definition.is_none())
+    }
+
+    /// [`Self::turn`] of a top-level agent, which nobody spawned, or of a
+    /// subagent.
+    fn ranked_turn(
+        &self,
+        definition: Option<&str>,
+        workspace: &Path,
+        top_level: bool,
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
         let instructions = self.instructions.for_workspace(workspace);
-        let (mut config, tools) = self.definition_turn(definition, &instructions.text);
+        let (mut config, tools) = self.definition_turn(definition, &instructions.text, top_level);
         self.long_run.apply(&mut config);
         (config, tools)
     }
@@ -261,24 +277,24 @@ impl AgentHub {
                 .system_prompt
                 .push_str(&aura_context_prompts::system::sections::coordinator::render());
         }
-        if crate::event_loop::channels::is_coordinator(definition.as_deref()) {
-            if let Some(channel) = crate::event_loop::channels::channel_prompt(self, agent_id) {
-                config.system_prompt.push_str("\n\n");
-                config.system_prompt.push_str(&channel);
-            }
+        if let Some(channel) = crate::event_loop::channels::channel_prompt(self, agent_id) {
+            config.system_prompt.push_str("\n\n");
+            config.system_prompt.push_str(&channel);
         }
         (config, tools, lead)
     }
 
-    /// [`Self::turn`] for `agent_id`, with the plan-mode instructions when
-    /// the agent is in plan mode.
+    /// [`Self::turn`] for `agent_id`, top level unless another agent
+    /// spawned it, with the plan-mode instructions when the agent is in
+    /// plan mode.
     pub(crate) fn agent_turn(
         &self,
         agent_id: AgentId,
         definition: Option<&str>,
         workspace: &Path,
     ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
-        let (mut config, tools) = self.turn(definition, workspace);
+        let top_level = lock(&self.registry).is_top_level_agent(agent_id);
+        let (mut config, tools) = self.ranked_turn(definition, workspace, top_level);
         if self.mode_of(agent_id) == PermissionMode::Plan {
             config.system_prompt.push_str("\n\n");
             config
@@ -301,10 +317,15 @@ impl AgentHub {
             .await;
     }
 
+    /// The config and tools of a turn of an instance of `definition`, or
+    /// of a user's own agent when `None`. A coordinator's tools are
+    /// [`COORDINATOR_TOOLS`] whatever its file says, even when the file is
+    /// gone.
     pub(super) fn definition_turn(
         &self,
         definition: Option<&str>,
         instructions: &str,
+        top_level: bool,
     ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
         let base = lock(&self.base);
         let definitions = lock(&self.definitions);
@@ -316,11 +337,19 @@ impl AgentHub {
             config.system_prompt.push_str(instructions);
         }
         let mut tools = base.tools.clone();
-        if let Some(task) = task_tool_definition(&definitions) {
-            tools.push(task);
-        }
-        if self.agents.is_some() {
-            tools.extend(agent_tool_definitions());
+        let coordinator = crate::event_loop::channels::is_coordinator(definition);
+        if coordinator {
+            tools.extend(assign_tool_definition(&definitions));
+            tools.extend(inbox_tool_definitions());
+            tools.retain(|tool| COORDINATOR_TOOLS.contains(&tool.name.as_str()));
+        } else {
+            tools.extend(task_tool_definition(&definitions));
+            if top_level || self.agents.is_some() {
+                tools.extend(inbox_tool_definitions());
+            }
+            if self.agents.is_some() {
+                tools.extend(host_tool_definitions());
+            }
         }
         let Some(name) = definition else {
             return (config, tools);
@@ -332,21 +361,9 @@ impl AgentHub {
             );
             return (config, tools);
         };
-        let filtered = definition.filter_tools(&tools);
-        // Planning and job tools only touch the agent's own state, so a
-        // permanent agent's tool list never needs to name them.
-        let keep_harness_tool = |tool: &ToolDefinition| {
-            tool.name == TODO_WRITE_TOOL_NAME
-                || ((tool.name == JOB_OUTPUT_TOOL_NAME || tool.name == JOB_KILL_TOOL_NAME)
-                    && filtered.iter().any(|t| t.name == "run_command"))
-        };
-        let harness: Vec<ToolDefinition> = tools
-            .iter()
-            .filter(|tool| keep_harness_tool(tool) && !filtered.iter().any(|t| t.name == tool.name))
-            .cloned()
-            .collect();
-        tools = filtered;
-        tools.extend(harness);
+        if !coordinator {
+            tools = definition_tools(definition, &tools, top_level);
+        }
         definition.extend_system_prompt(&mut config.system_prompt, &lock(&self.skills));
         if let Some(model) = &definition.model {
             base.limits.configure(&mut config, model);

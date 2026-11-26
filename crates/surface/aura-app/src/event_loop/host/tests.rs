@@ -89,6 +89,22 @@ fn helper_spec() -> ChildAgentSpec {
     }
 }
 
+#[test]
+fn inbox_and_host_tools_split_the_agent_tools() {
+    let names = |tools: Vec<ToolDefinition>| -> Vec<String> {
+        tools
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect()
+    };
+    let mut inbox = names(inbox_tool_definitions());
+    inbox.sort();
+    assert_eq!(inbox, ["get_agent_state", "list_agents", "send_to_agent"]);
+    let mut host = names(host_tool_definitions());
+    host.sort();
+    assert_eq!(host, ["agent_lifecycle", "spawn_agent"]);
+}
+
 #[tokio::test]
 async fn spawned_agent_replies_with_a_notice_and_is_listed() {
     let dir = TempDir::new().unwrap();

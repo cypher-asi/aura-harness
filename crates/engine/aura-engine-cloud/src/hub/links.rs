@@ -176,6 +176,7 @@ async fn run_link(
     // Mail queued for a socket that is gone still goes out, directly.
     outbox.close();
     if let Some(hub) = hub.upgrade() {
+        hub.forget_processes(&hex);
         while let Ok(frame) = outbox.try_recv() {
             if let MeshFrame::Mail(mail) = frame {
                 hub.send_direct(&hex, mail);
@@ -209,6 +210,11 @@ async fn run_link_socket(
         backoff = Duration::from_secs(1);
         let (mut sink, mut stream) = socket.split();
         greet(&mut sink, hub, &node, project.as_deref()).await;
+        // What the node wrote while no socket was open (a wake, a
+        // reconnect) has no hint coming.
+        if let (Some(hub), Ok(agent)) = (hub.upgrade(), AgentId::from_hex(hex)) {
+            hub.copy_soon(agent);
+        }
         let link = LinkSocket {
             hub,
             hex,
@@ -217,6 +223,10 @@ async fn run_link_socket(
         };
         if link.serve(outbox, stop).await == LinkEnd::Stop {
             return;
+        }
+        // The next socket's first frame says what runs now.
+        if let Some(hub) = hub.upgrade() {
+            hub.forget_processes(hex);
         }
     }
 }
@@ -307,7 +317,7 @@ impl LinkSocket<'_> {
     }
 
     /// Act on one frame from the node.
-    async fn take_frame(&mut self, hub: &CloudHub, frame: MeshFrame) {
+    async fn take_frame(&mut self, hub: &Arc<CloudHub>, frame: MeshFrame) {
         let hex = self.hex;
         match frame {
             MeshFrame::Mail(mail) => {
@@ -316,11 +326,24 @@ impl LinkSocket<'_> {
                 let _ = self.sink.send(Message::Text(ack.to_text().into())).await;
             }
             MeshFrame::HostStats(stats) => hub.track(hex, stats),
-            MeshFrame::RecordCommitted { .. } => {
-                if let Ok(agent) = AgentId::from_hex(hex) {
-                    let _ = hub.mirror(agent).await;
+            // Only the link's agent, and the agents it spawned
+            // there, are copied from its node.
+            MeshFrame::RecordCommitted { agent_id, head_seq } => {
+                let Ok(agent) = AgentId::from_hex(hex) else {
+                    return;
+                };
+                if agent_id == hex {
+                    hub.note_head(agent, head_seq);
+                    hub.copy_soon(agent);
+                } else if hub
+                    .children_of(hex)
+                    .iter()
+                    .any(|child| child.to_hex() == agent_id)
+                {
+                    hub.copy_soon(agent);
                 }
             }
+            MeshFrame::Processes { processes } => hub.note_processes(hex, processes),
             MeshFrame::Ping { ms } => {
                 let _ = self
                     .sink

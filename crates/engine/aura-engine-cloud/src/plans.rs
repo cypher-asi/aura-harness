@@ -271,28 +271,11 @@ impl PlanSync {
         let mut first_error: Option<String> = None;
         for kind in PLAN_KINDS {
             let value = if linked.contains(&kind) {
-                match self
-                    .credentials
-                    .credential(owner, kind, PLAN_MARGIN_SECS)
-                    .await
-                {
-                    Ok(Some(credential)) => zeroize::Zeroizing::new(credential.bearer),
-                    Ok(None) => zeroize::Zeroizing::new(UNLINKED.to_string()),
-                    Err(err) => {
-                        // Keep whatever the secret holds; a token that is
-                        // still valid there keeps working.
-                        first_error.get_or_insert(format!("{}: {err}", kind.label()));
-                        let known = self
-                            .owners
-                            .lock()
-                            .get(&tag)
-                            .is_some_and(|s| s.hashes.contains_key(&kind));
-                        if known {
-                            continue;
-                        }
-                        zeroize::Zeroizing::new(UNLINKED.to_string())
-                    }
-                }
+                let Some(value) = self.linked_value(owner, &tag, kind, &mut first_error).await
+                else {
+                    continue;
+                };
+                value
             } else {
                 zeroize::Zeroizing::new(UNLINKED.to_string())
             };
@@ -304,6 +287,45 @@ impl PlanSync {
                 return Ok(());
             }
         }
+        self.note_synced(tag, first_error);
+        Ok(())
+    }
+
+    /// What `owner`'s `kind` secret holds while they have that plan
+    /// linked: its bearer token, or [`UNLINKED`] when they have none.
+    /// `None` keeps whatever the secret holds now: the credential failed
+    /// (noted in `first_error`), and the secret was set before.
+    async fn linked_value(
+        &self,
+        owner: &Owner,
+        tag: &str,
+        kind: ProviderKind,
+        first_error: &mut Option<String>,
+    ) -> Option<zeroize::Zeroizing<String>> {
+        match self
+            .credentials
+            .credential(owner, kind, PLAN_MARGIN_SECS)
+            .await
+        {
+            Ok(Some(credential)) => Some(zeroize::Zeroizing::new(credential.bearer)),
+            Ok(None) => Some(zeroize::Zeroizing::new(UNLINKED.to_string())),
+            Err(err) => {
+                // Keep whatever the secret holds; a token that is
+                // still valid there keeps working.
+                first_error.get_or_insert(format!("{}: {err}", kind.label()));
+                let known = self
+                    .owners
+                    .lock()
+                    .get(tag)
+                    .is_some_and(|s| s.hashes.contains_key(&kind));
+                (!known).then(|| zeroize::Zeroizing::new(UNLINKED.to_string()))
+            }
+        }
+    }
+
+    /// Record how the last sync of `tag`'s secrets went: `first_error`,
+    /// or a clean sync that ends any backoff.
+    fn note_synced(&self, tag: String, first_error: Option<String>) {
         let mut owners = self.owners.lock();
         let state = owners.entry(tag).or_default();
         match first_error {
@@ -316,7 +338,6 @@ impl PlanSync {
                 state.retry_at = None;
             }
         }
-        Ok(())
     }
 
     fn fail(&self, tag: &str, error: String) {

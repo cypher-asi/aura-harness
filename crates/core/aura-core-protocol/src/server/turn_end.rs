@@ -25,7 +25,7 @@ pub struct AssistantMessageEnd {
 }
 
 /// Token usage information for a session.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "typescript", derive(TS), ts(export))]
 pub struct SessionUsage {
     pub input_tokens: u64,

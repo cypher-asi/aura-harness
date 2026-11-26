@@ -329,6 +329,7 @@ async fn plan_turn(
         "Reply with the single word: pong".into(),
         Some(plan_model(kind).into()),
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
     );
     let mut reply = String::new();

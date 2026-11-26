@@ -53,6 +53,8 @@ fn test_context() -> WsContext {
         chat_runs: Arc::new(dashmap::DashMap::new()),
         run_id: None,
         agent_host,
+        sessions: None,
+        cloud: None,
     }
 }
 

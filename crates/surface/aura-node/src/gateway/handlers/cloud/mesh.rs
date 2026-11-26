@@ -119,6 +119,8 @@ async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
         }
     });
     let stats = spawn_host_stats(tx.clone(), Arc::clone(&state.cloud));
+    let heads = watch::spawn_head_watch(tx.clone(), state.clone());
+    let processes = watch::spawn_process_watch(tx.clone(), state.clone());
 
     while let Some(Ok(message)) = stream.next().await {
         let WsMessage::Text(text) = message else {
@@ -133,6 +135,8 @@ async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
         };
         on_frame(&state, &mesh, &tx, frame);
     }
+    processes.abort();
+    heads.abort();
     stats.abort();
     writer.abort();
     let mut uplink = mesh.uplink.lock();

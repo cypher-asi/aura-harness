@@ -7,7 +7,7 @@ use crate::event_loop::tests::support::open_project;
 use aura_ui::UiCommand;
 
 #[tokio::test]
-async fn summaries_list_the_coordinator_first_and_nest_spawned_members() {
+async fn summaries_list_the_coordinator_first_with_its_agents_beside_it() {
     let mut fixture = fixture("Looks good.");
     let channel = create_channel(&fixture.hub, new_channel("site"))
         .await
@@ -45,7 +45,7 @@ async fn summaries_list_the_coordinator_first_and_nest_spawned_members() {
         .collect();
     assert_eq!(
         members,
-        [(channel.coordinator.to_hex(), 0), (agent.to_hex(), 1),]
+        [(channel.coordinator.to_hex(), 0), (agent.to_hex(), 0),]
     );
     // Member rows are the Agents panel's rows: named and coded the same.
     let registry = lock(&fixture.hub.registry);
@@ -83,14 +83,14 @@ async fn summaries_and_the_coordinator_prompt_name_the_channel_project() {
     let prompt = channel_prompt(&fixture.hub, projected.coordinator).unwrap();
     assert!(
         prompt.contains(&format!(
-            "Project: {name} ({}). Agents you spawn work there.",
+            "Project: {name} ({}). The channel's agents work there.",
             folder.display()
         )),
         "{prompt}"
     );
     let prompt = channel_prompt(&fixture.hub, plain.coordinator).unwrap();
     assert!(
-        prompt.contains("Project: none. Agents you spawn work in the channel's folder."),
+        prompt.contains("Project: none. The channel's agents work in its own folder."),
         "{prompt}"
     );
 }

@@ -16,31 +16,23 @@
 //! sent.
 
 use super::subagents::AgentHub;
+use aura_agent::titles::{
+    cut_at_word, fallback_title, sanitize, shorten, MAX_SIDE_CHARS, MAX_TITLE_CHARS, TITLE_TIMEOUT,
+};
 use aura_agent::{AgentLoopConfig, KernelModelGateway};
 use aura_context_prompts::auxiliary::chat_title::{
     chat_title_user_prompt, mail_subject_user_prompt, subtask_title_user_prompt,
     CHAT_TITLE_SYSTEM_PROMPT, MAIL_SUBJECT_SYSTEM_PROMPT, SUBTASK_TITLE_SYSTEM_PROMPT,
 };
-use aura_core_types::text::truncate_with_ellipsis;
 use aura_core_types::{AgentId, BenchSource};
-use aura_model::{
-    Message, ModelCallPurpose, ModelProvider, ModelRequest, ModelRequestKind, Role, ThinkingEffort,
-    ToolChoice,
-};
+use aura_model::{Message, ModelProvider, Role};
 use aura_ui::UiCommand;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Environment variable naming the model that writes titles.
 const TITLE_MODEL_ENV: &str = "AURA_TITLE_MODEL";
-/// How much of the prompt and of the reply the model sees.
-const MAX_SIDE_CHARS: usize = 2_000;
-/// Longest title kept, in characters.
-const MAX_TITLE_CHARS: usize = 50;
-/// Longest title made from the prompt when the model gives none.
-const MAX_FALLBACK_CHARS: usize = 40;
 /// Longest subtask name kept, in characters. Subtask rows sit indented in
 /// the tree after the helper's code, so they get less room than chats.
 const MAX_SUBTITLE_CHARS: usize = 28;
@@ -108,11 +100,6 @@ impl TitleKind {
         }
     }
 }
-/// How long the title model gets to answer before the title is made from
-/// the prompt instead. A title is cosmetic and its call runs beside the
-/// turn, so a stalled provider must not leave the job (and its kernel
-/// gateway) waiting for ever; a small model answers well within this.
-const TITLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The model that titles chats: `AURA_TITLE_MODEL` when set, else
 /// `classifier`, the cheap model Gate classifies prompts with.
@@ -251,22 +238,15 @@ async fn ask(
     messages: &[Message],
 ) -> Option<String> {
     let reply = last_reply(messages);
-    let request = ModelRequest::builder(model, kind.system_prompt())
-        .messages(vec![Message::user(kind.user_prompt(
-            &truncate_with_ellipsis(prompt, MAX_SIDE_CHARS),
-            &truncate_with_ellipsis(&reply, MAX_SIDE_CHARS),
-        ))])
-        .tools(Vec::new())
-        .tool_choice(ToolChoice::None)
-        .thinking_effort(Some(ThinkingEffort::Off))
-        .auth_token(config.auth_token.clone())
-        .aura_project_id(config.aura_project_id.clone())
-        .aura_agent_id(config.aura_agent_id.clone())
-        .aura_session_id(config.aura_session_id.clone())
-        .aura_org_id(config.aura_org_id.clone())
-        .request_kind(ModelRequestKind::Auxiliary)
-        .purpose(ModelCallPurpose::Title)
-        .try_build();
+    let request = aura_agent::titles::request(
+        model,
+        kind.system_prompt(),
+        kind.user_prompt(
+            &shorten(prompt, MAX_SIDE_CHARS),
+            &shorten(&reply, MAX_SIDE_CHARS),
+        ),
+        config,
+    );
     let titled = match request {
         Ok(request) => {
             match tokio::time::timeout(TITLE_TIMEOUT, provider.complete(request)).await {
@@ -307,27 +287,6 @@ fn last_reply(messages: &[Message]) -> String {
         .unwrap_or_default()
 }
 
-/// Labels a model may put before its answer, though asked not to.
-const ANSWER_LABELS: [&str; 4] = ["Title:", "title:", "Subject:", "subject:"];
-
-/// The title in the model's `reply`: its first line without quotes, a
-/// `Title:` or `Subject:` label or trailing punctuation, cut to `max`
-/// characters. `None` when nothing is left.
-fn sanitize(reply: &str, max: usize) -> Option<String> {
-    let line = reply.lines().map(str::trim).find(|l| !l.is_empty())?;
-    let line = ANSWER_LABELS
-        .iter()
-        .find_map(|label| line.strip_prefix(label))
-        .unwrap_or(line);
-    let line = line
-        .trim()
-        .trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | '*' | '“' | '”'))
-        .trim_end_matches(['.', '!', '?', ':', ';', ','])
-        .trim();
-    let title = cut_at_word(line, max);
-    (!title.is_empty()).then_some(title)
-}
-
 /// The title of an agent that ran a benchmark of `task` from `source`
 /// before it got one: what the BENCH tab names the benchmark, without a
 /// model call.
@@ -336,22 +295,6 @@ pub(super) fn bench_title(source: &BenchSource, task: &str) -> String {
         BenchSource::Session { title, .. } => fallback_title(title),
         BenchSource::Prompt => fallback_title(task),
         BenchSource::Examples { .. } => fallback_title(&format!("Bench: {task}")),
-    }
-}
-
-/// A title made from the start of the user's `prompt`.
-fn fallback_title(prompt: &str) -> String {
-    let line = prompt
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("");
-    let collapsed = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    let title = cut_at_word(&collapsed, MAX_FALLBACK_CHARS);
-    if title.is_empty() {
-        "New chat".to_string()
-    } else {
-        title
     }
 }
 
@@ -414,20 +357,6 @@ fn capitalize(text: &str) -> String {
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(chars).collect()
     })
-}
-
-/// `text` cut to at most `max` characters, at a word boundary when one
-/// exists past the first half.
-fn cut_at_word(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let cut: String = text.chars().take(max).collect();
-    let cut = match cut.rfind(' ') {
-        Some(space) if space >= max / 2 => &cut[..space],
-        _ => cut.as_str(),
-    };
-    cut.trim_end_matches([' ', ',', ';', ':', '-']).to_string()
 }
 
 #[cfg(test)]

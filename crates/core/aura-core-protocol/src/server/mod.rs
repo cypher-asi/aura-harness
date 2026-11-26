@@ -95,6 +95,18 @@ pub enum OutboundMessage {
     /// announced subagent child run. Emitted on the parent stream so
     /// the thread card reflects running/completed/failed/etc.
     SubagentStatus(SubagentStatus),
+    /// A title for the chat, written from the turn's prompt by the
+    /// model the request named as
+    /// [`crate::ModelSelection::title_model`]. Sent before the turn's
+    /// `assistant_message_end`, and only when the model gave one.
+    ChatTitle(ChatTitle),
+}
+
+/// Payload for `chat_title`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(TS), ts(export))]
+pub struct ChatTitle {
+    pub title: String,
 }
 
 /// Payload for `session_ready`.

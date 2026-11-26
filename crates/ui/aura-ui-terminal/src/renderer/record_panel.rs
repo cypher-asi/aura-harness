@@ -44,6 +44,7 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         close: None,
         expand: None,
         scope: None,
+        icon_tab: None,
         focused: is_focused,
         hosted,
     };

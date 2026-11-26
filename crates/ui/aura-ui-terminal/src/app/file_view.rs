@@ -13,6 +13,9 @@ const MAX_PREVIEW_BYTES: u64 = 1024 * 1024;
 /// Bytes checked for NUL when deciding whether a file is binary.
 const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 
+/// What a file of another machine shows until it is read.
+const READING_NOTE: &str = "Reading it from the machine…";
+
 /// What the preview shows for a file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileBody {
@@ -47,6 +50,34 @@ impl FileView {
     /// Read `path` for viewing, titling it relative to `root`.
     #[must_use]
     pub fn load(path: &Path, root: Option<&Path>) -> Self {
+        Self::titled(path, root, read_body(path))
+    }
+
+    /// `path` on another machine, titled relative to `root` there, while
+    /// it is read.
+    #[must_use]
+    pub fn reading(path: &Path, root: Option<&Path>) -> Self {
+        Self::titled(path, root, FileBody::Note(READING_NOTE.to_string()))
+    }
+
+    /// `path` on another machine, titled relative to `root` there, as
+    /// read: its `text`, or why it could not be read.
+    #[must_use]
+    pub fn read(path: &Path, root: Option<&Path>, text: Result<String, String>) -> Self {
+        let body = match text {
+            Ok(text) => body_of(text.into_bytes()),
+            Err(e) => FileBody::Note(format!("Cannot read file: {e}")),
+        };
+        Self::titled(path, root, body)
+    }
+
+    /// Whether the view waits for its file to be read on another machine.
+    #[must_use]
+    pub fn is_reading(&self) -> bool {
+        matches!(&self.body, FileBody::Note(note) if note == READING_NOTE)
+    }
+
+    fn titled(path: &Path, root: Option<&Path>, body: FileBody) -> Self {
         let title = root
             .and_then(|root| path.strip_prefix(root).ok())
             .filter(|rel| !rel.as_os_str().is_empty())
@@ -56,7 +87,7 @@ impl FileView {
         Self {
             path: path.to_path_buf(),
             title,
-            body: read_body(path),
+            body,
             vim: Vim::default(),
             first_line: 1,
             language: None,
@@ -141,7 +172,16 @@ fn read_body(path: &Path) -> FileBody {
     if let Err(e) = std::fs::File::open(path).and_then(|mut f| f.read_to_end(&mut bytes)) {
         return FileBody::Note(format!("Cannot read file: {e}"));
     }
-    if bytes[..bytes.len().min(BINARY_SNIFF_BYTES)].contains(&0) {
+    body_of(bytes)
+}
+
+/// What the preview shows of a file holding `bytes`.
+fn body_of(bytes: Vec<u8>) -> FileBody {
+    let size = bytes.len();
+    if u64::try_from(size).unwrap_or(u64::MAX) > MAX_PREVIEW_BYTES {
+        return FileBody::Note(format!("Too large to preview ({size} bytes)"));
+    }
+    if bytes[..size.min(BINARY_SNIFF_BYTES)].contains(&0) {
         return FileBody::Note(format!("Binary file ({} bytes)", bytes.len()));
     }
     match String::from_utf8(bytes) {

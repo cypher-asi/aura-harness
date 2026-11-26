@@ -243,3 +243,26 @@ async fn an_armed_guard_ends_only_the_running_it_started() {
     assert!(fixture.hub.is_running(agent));
     assert!(fixture.hub.take_abandoned().is_empty());
 }
+
+#[tokio::test]
+async fn only_a_typed_prompt_to_an_agent_nobody_named_titles_its_chat() {
+    let fixture = fixture("done");
+    let unnamed = lock(&fixture.hub.registry).active().agent_id();
+    let named = lock(&fixture.hub.registry)
+        .create(Some("Researcher".to_string()))
+        .unwrap()
+        .agent_id();
+
+    assert!(fixture.hub.titles_turn(unnamed, true));
+    assert!(
+        !fixture.hub.titles_turn(unnamed, false),
+        "a notice or plan build"
+    );
+    assert!(!fixture.hub.titles_turn(named, true));
+
+    assert!(!fixture.hub.apply_title(named, "Build fix").await);
+    assert_eq!(lock(&fixture.hub.registry).find(named).unwrap().title, None);
+    assert!(fixture.hub.apply_title(unnamed, "Build fix").await);
+    assert!(!fixture.hub.titles_turn(unnamed, true), "titled once");
+    assert!(!fixture.hub.apply_title(unnamed, "Other").await);
+}

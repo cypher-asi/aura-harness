@@ -92,9 +92,12 @@ async fn move_to_cloud(
     };
     set_project_default(state, &hub, agent, Placement::Cloud);
     state.cloud.shared.moving.lock().insert(agent);
-    // The local kernel must not write for it from here on.
+    // The local kernel must not write for it from here on, and
+    // its machine traces the conversation as a run of its own.
     state.idle.remove(&agent);
+    state.hub.traces.close(agent);
     let shared = Arc::clone(&state.cloud.shared);
+    let ui = AgentUi::new(state.commands.clone(), agent);
     tokio::spawn(async move {
         let (boot, events) = BootReporter::channel();
         let shown = console.pump(events);
@@ -102,6 +105,10 @@ async fn move_to_cloud(
         drop(boot);
         let _ = shown.await;
         shared.moving.lock().remove(&agent);
+        if result.is_ok() {
+            let root = PathBuf::from(aura_engine_cloud::machine_env::WORKSPACE_DIR);
+            ui.send(UiCommand::SetSandboxRemote(root)).await;
+        }
         let (ok, note) = match result {
             Ok(view) => (true, format!(
                 "Now running in the cloud on {} ({} vCPU). Its record syncs back here; `/local` brings it back.",
@@ -117,10 +124,9 @@ async fn move_to_cloud(
 fn recall(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, reason: &'static str) {
     let shared = Arc::clone(&state.cloud.shared);
     let hub = Arc::clone(hub);
-    let console = BootConsoleUi::new(
-        AgentUi::new(state.commands.clone(), agent),
-        "Bringing the agent back",
-    );
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    let console = BootConsoleUi::new(ui.clone(), "Bringing the agent back");
+    let workspace = lock(&state.hub.registry).project_folder(agent);
     shared.moving.lock().insert(agent);
     tokio::spawn(async move {
         console.begin().await;
@@ -133,6 +139,10 @@ fn recall(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, reason: &'
         let (ok, note) = match result {
             Ok(outcome) => {
                 shared.stale.lock().insert(agent);
+                shared.plans.lock().remove(&agent);
+                if let Some(workspace) = workspace {
+                    ui.send(UiCommand::SetSandboxRoot(workspace)).await;
+                }
                 (
                     true,
                     format!("Back on this machine: {}.", outcome.describe()),

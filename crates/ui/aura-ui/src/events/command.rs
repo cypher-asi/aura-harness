@@ -3,9 +3,9 @@
 use super::{
     AgentDefinitionSummary, AgentSummary, BenchExample, BenchSession, BenchView, BootUpdate,
     CallStats, CallUsage, ChannelPostView, ChannelSummary, ContextView, FileDiffData, FlowLane,
-    FlowNode, InstructionFileView, JobView, LogView, MailView, MessageData, MessageRole,
-    ModelOptionView, PlanView, PolicyView, ProcessSummary, ProjectSummary, QueuedItemView,
-    RecordSummary, SessionTotals, SourceUsage, TaskView, TodoView, ToolData, TraceNode,
+    FlowNode, InstructionFileView, JobView, LogView, MailView, MessageData, ModelOptionView,
+    PlanView, PolicyView, ProcessSummary, ProjectSummary, QueuedItemView, RecordSummary,
+    SessionTotals, SourceUsage, TaskView, TodoView, ToolData, TraceNode,
 };
 #[cfg(doc)]
 use super::{UiEvent, MAX_RECORDS};
@@ -295,6 +295,29 @@ pub enum UiCommand {
     /// Set the sandbox directory shown in the Sandbox panel (the active agent's workspace)
     SetSandboxRoot(PathBuf),
 
+    /// Show the active agent's machine in the Sandbox panel, its
+    /// workspace there at this path: directories are listed by asking
+    /// ([`UiEvent::ListSandbox`]), never read here
+    SetSandboxRemote(PathBuf),
+
+    /// What a directory of the active agent's machine holds, asked for
+    /// with [`UiEvent::ListSandbox`]
+    SandboxListing {
+        /// The directory, as asked for
+        dir: PathBuf,
+        /// Its entries, or why it could not be listed
+        entries: Result<Vec<crate::sandbox::RemoteEntry>, String>,
+    },
+
+    /// A file of the active agent's machine, asked for with
+    /// [`UiEvent::ReadSandboxFile`]
+    SandboxFile {
+        /// The file, as asked for
+        path: PathBuf,
+        /// Its text, or why it could not be read
+        text: Result<String, String>,
+    },
+
     /// Replace the Processes tab: everything running, plus recently finished work
     SetProcesses(Vec<ProcessSummary>),
 
@@ -433,6 +456,9 @@ pub enum UiCommand {
     /// The HOST tab of the agent on screen
     SetHost(Box<crate::host::HostView>),
 
+    /// The REPO tab of an agent; dropped unless it is the one on screen
+    SetRepo(Box<crate::repo::RepoView>),
+
     /// Every channel that is not archived, in list order
     SetChannels(Vec<ChannelSummary>),
 
@@ -456,33 +482,4 @@ pub enum UiCommand {
         channel_id: String,
         posts: Vec<ChannelPostView>,
     },
-}
-
-/// What the chat line of a [`UiCommand::ShowError`] starts with.
-pub const ERROR_PREFIX: &str = "error: ";
-/// What the chat line of a [`UiCommand::ShowSuccess`] starts with.
-pub const SUCCESS_PREFIX: &str = "✓ ";
-/// What the chat line of a [`UiCommand::ShowWarning`] starts with.
-pub const WARNING_PREFIX: &str = "warning: ";
-
-impl UiCommand {
-    /// The system line this command adds to a chat, when it is a notice:
-    /// an error, success or warning, or a plain system message.
-    #[must_use]
-    pub fn chat_notice(&self) -> Option<String> {
-        match self {
-            Self::ShowError(msg) => Some(format!("{ERROR_PREFIX}{msg}")),
-            Self::ShowSuccess(msg) => Some(format!("{SUCCESS_PREFIX}{msg}")),
-            Self::ShowWarning(msg) => Some(format!("{WARNING_PREFIX}{msg}")),
-            Self::ShowMessage(data)
-                if data.role == MessageRole::System
-                    && data.activity.is_none()
-                    && data.command.is_none()
-                    && data.boot.is_none() =>
-            {
-                Some(data.content.clone())
-            }
-            _ => None,
-        }
-    }
 }

@@ -22,7 +22,7 @@ A run is the entry point for all work. Start a chat session, dev-loop automaton,
 
 | Path | Purpose |
 |------|---------|
-| `/stream/:run_id` | Per-run event stream. Bidirectional on `Chat` runs (user messages in; deltas, tool calls and approvals out); event-only on `DevLoop` / `TaskRun` runs. The `run_id` is the value returned by `POST /v1/run`. |
+| `/stream/:run_id` | Per-run event stream. Bidirectional on `Chat` runs (user messages in; deltas, tool calls and approvals out); event-only on `DevLoop` / `TaskRun` runs. The `run_id` is the value returned by `POST /v1/run`. A chat run whose request names `model.title_model` titles the chat from its next turn's prompt through that turn's kernel, and sends `chat_title` (`{"type":"chat_title","title":"..."}`) before the turn's `assistant_message_end`, only when the model gave a title. |
 | `/ws/terminal` | Terminal bridge used by the TUI. |
 | `/ws/preview/tcp/:port` | WebSocket-to-TCP bridge for previewing a port served from the workspace. |
 
@@ -33,7 +33,7 @@ TypeScript bindings for the wire types are generated into [`crates/core/aura-cor
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Liveness probe. |
-| GET | `/api/files` | List files in the configured workspace root. |
+| GET | `/api/files` | List files in the workspace root: `AURA_PROJECT_BASE`, else `AURA_WORKSPACE` (a cloud machine's project directory), else the workspaces directory. |
 | GET | `/api/read-file` | Read a file from the workspace root. |
 | PUT | `/api/write-file` | Write a file under the workspace root. |
 | GET | `/workspace/resolve` | Resolve a project/workspace slug to a filesystem path. |
@@ -132,10 +132,13 @@ Served only by a node started with `AURA_CLOUD_NODE=1` on a boxd machine (other 
 | GET | `/v1/host` | The machine's `HostStats`: OS, addresses, CPU, memory, disk, the snapshot it came from. |
 | POST | `/v1/sync/import` | Seed an agent's record (`SyncImport`): entries are checked and appended verbatim. |
 | POST | `/v1/sync/seal/:agent_id` | Stop writing for an agent; returns its final head. `/tx` and `/v1/run` then refuse it. |
-| GET | `/v1/sync/traces` | Trace runs since a cursor. |
+| PUT | `/v1/sync/session/:agent_id` | Make a session checkpoint the agent's current session, so its next run continues it (`SessionSaved`). Refused past the node's record or once sealed. |
+| GET | `/v1/sync/session/:agent_id` | The agent's current session checkpoint, or `null`. Allowed once sealed, so Bring back can copy it. |
+| POST | `/v1/sync/session/:agent_id/new` | Start a new session: ends the agent's runs and records a `SessionStart` (`SessionStarted`). |
+| GET | `/v1/sync/traces?agent=` | The agent's newest trace runs on the node, whole (`TracePage`). |
 | GET | `/v1/workspace/patch` | The working tree's changes since the hub last pulled (`refs/aura/base`; `HEAD` on a machine without it) as a `WorkspacePatch`: `base_commit`, the binary `patch`, the changed `files`, and the `tree` it was taken from, which the hub marks as pulled once the patch applies. The agent's own index is not touched. |
 | POST | `/v1/mesh/mail` | One message for an agent on this node (from the hub or a peer). |
-| WS | `/v1/mesh` | The hub's socket: mail both ways, the project's directory, host stats, keep-alive. |
+| WS | `/v1/mesh` | The hub's socket: mail both ways, the project's directory, host stats, a hint when a hosted agent's record grows (`RecordCommitted`, which the hub answers by reading the record), what the hosted agents have under way when it changes (`Processes`: turns, with their run, and the agents they spawned), keep-alive. |
 
 ## Limits
 

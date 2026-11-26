@@ -78,11 +78,12 @@ fn urls_and_requests() {
         ws_url("http://127.0.0.1:8080", "/stream/1"),
         "ws://127.0.0.1:8080/stream/1"
     );
-    let request = chat_request(AgentId::new([1; 32]), Some("gate".into()), None);
+    let request = chat_request(AgentId::new([1; 32]), Some("gate".into()), None, None);
     assert_eq!(
         request.agent_identity.partition_id,
         Some(AgentId::new([1; 32]).to_hex())
     );
+    assert_eq!(request.model.title_model, None);
     assert_eq!(
         request.workspace.project_path.as_deref(),
         Some(WORKSPACE_DIR)

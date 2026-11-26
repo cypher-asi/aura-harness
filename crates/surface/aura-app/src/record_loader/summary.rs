@@ -2,31 +2,6 @@
 
 use super::*;
 
-pub(crate) fn scan_tail(
-    store: &dyn ReadStore,
-    agent_id: AgentId,
-    limit: usize,
-) -> Result<Vec<RecordEntry>, StoreError> {
-    let head_seq = store.get_head_seq(agent_id)?;
-    scan_below(store, agent_id, head_seq, limit)
-}
-
-/// The newest `limit` entries of `agent_id`'s record up to `head_seq`,
-/// oldest first.
-pub(super) fn scan_below(
-    store: &dyn ReadStore,
-    agent_id: AgentId,
-    head_seq: u64,
-    limit: usize,
-) -> Result<Vec<RecordEntry>, StoreError> {
-    if head_seq == 0 {
-        return Ok(Vec::new());
-    }
-    let window = u64::try_from(limit).unwrap_or(u64::MAX);
-    let from_seq = head_seq.saturating_sub(window.saturating_sub(1)).max(1);
-    store.scan_record(agent_id, from_seq, limit)
-}
-
 pub(super) fn history_message(tx: &Transaction) -> Option<MessageData> {
     if is_user_proposal(tx) {
         return user_command_message(tx);

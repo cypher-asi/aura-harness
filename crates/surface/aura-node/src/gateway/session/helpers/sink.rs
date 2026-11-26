@@ -134,7 +134,7 @@ enum StreamDeltaKind {
     Thinking,
 }
 
-pub(super) async fn send_outbound_with_backpressure(
+pub(in crate::gateway::session) async fn send_outbound_with_backpressure(
     outbound: &mpsc::Sender<OutboundMessage>,
     msg: OutboundMessage,
     context: &'static str,

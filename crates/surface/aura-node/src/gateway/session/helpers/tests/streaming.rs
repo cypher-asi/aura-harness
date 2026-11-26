@@ -40,7 +40,7 @@ async fn streamed_text_and_assistant_end_wait_for_outbound_capacity() {
     let loop_result = AgentLoopResult::default();
     let apply_tx = outbound_tx.clone();
     let apply_handle = tokio::spawn(async move {
-        apply_turn_result(&mut session, &loop_result, "msg-1", &apply_tx).await;
+        apply_turn_result(&mut session, &loop_result, "msg-1", &apply_tx, None).await;
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -254,7 +254,7 @@ async fn finalize_turn_error_waits_for_outbound_capacity() {
     let mut session = Session::new(PathBuf::from("/tmp/aura"));
     let finalize_tx = outbound_tx.clone();
     let finalize_handle = tokio::spawn(async move {
-        finalize_turn(&mut session, join_result, "msg-2", &finalize_tx).await;
+        finalize_turn(&mut session, join_result, "msg-2", &finalize_tx, None).await;
     });
 
     tokio::time::sleep(Duration::from_millis(10)).await;

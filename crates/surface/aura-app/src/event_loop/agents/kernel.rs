@@ -15,6 +15,9 @@ pub struct KernelFactory {
     pub(crate) checkpoints: Option<Checkpoints>,
     pub(crate) file_checkpoints: Option<FileCheckpoints>,
     pub(super) post_edit_check: Option<(PostEditCheckConfig, mpsc::Sender<UiCommand>)>,
+    /// What the kernels' record observer is; entries copied from cloud
+    /// machines go to it too
+    pub(crate) record_observer: Option<Arc<dyn RecordObserver>>,
     /// Every agent's current task; the hub gives it a way to show them
     pub(crate) tasks: Arc<TaskBoard>,
     /// Prompt-cache scope of each agent whose kernel is scoped: a
@@ -34,6 +37,7 @@ impl KernelFactory {
             checkpoints: None,
             file_checkpoints: None,
             post_edit_check: None,
+            record_observer: None,
             tasks: Arc::default(),
             cache_salts: Mutex::default(),
             run_scratches: Mutex::default(),
@@ -112,17 +116,21 @@ impl KernelFactory {
         self
     }
 
+    /// Note `observer`, the kernels' record observer, for the entries
+    /// copied from cloud machines.
+    #[must_use]
+    pub fn with_record_observer(mut self, observer: Option<Arc<dyn RecordObserver>>) -> Self {
+        self.record_observer = observer;
+        self
+    }
+
     /// The agent's current checkpoint with what the record holds beyond
     /// it (in `tail`, its newest entries), when the checkpoint still
     /// applies.
     fn restore(&self, agent_id: AgentId, tail: &RecordTail) -> Option<SessionCheckpoint> {
-        let mut checkpoint = self.checkpoints.as_ref()?.load_current(agent_id)?;
-        let newer = tail.model_history_since(checkpoint.record_seq)?;
-        if !is_resumable(&checkpoint.messages) {
-            checkpoint.messages.pop();
-        }
-        checkpoint.messages.extend(newer);
-        Some(checkpoint)
+        aura_agent::history::restore_with(self.checkpoints.as_ref()?, agent_id, |after_seq| {
+            tail.model_history_since(after_seq)
+        })
     }
 
     /// Open a session (kernel + gateways) for `agent`, working in `folder`

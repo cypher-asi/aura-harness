@@ -6,6 +6,7 @@
 
 mod command;
 mod event;
+mod notice;
 #[cfg(test)]
 mod tests;
 mod views;
@@ -21,8 +22,9 @@ pub use crate::flow::{FlowBench, FlowKind, FlowLane, FlowNode, FlowUsage};
 pub use crate::run_log::{
     LogField, LogRequest, LogRunView, LogSection, LogStatus, LogStepView, LogTurnView, LogView,
 };
-pub use command::{UiCommand, ERROR_PREFIX, SUCCESS_PREFIX, WARNING_PREFIX};
+pub use command::UiCommand;
 pub use event::{RewindScope, UiEvent};
+pub use notice::{ERROR_PREFIX, SUCCESS_PREFIX, WARNING_PREFIX};
 pub use views::agents::{
     empty_projects, starts_project, AgentDefinitionSummary, AgentSummary, ProjectSummary,
 };

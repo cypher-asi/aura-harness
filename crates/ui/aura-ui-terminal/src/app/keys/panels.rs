@@ -30,6 +30,7 @@ impl App {
     fn side_tab_key(&mut self, key: KeyEvent) -> KeyResult {
         match self.side.tab {
             SidePanelTab::Sandbox => return self.handle_sandbox_key(key),
+            SidePanelTab::Repo => self.handle_repo_key(key),
             SidePanelTab::Processes => self.handle_processes_key(key),
             SidePanelTab::Host => {
                 self.host_key(key);

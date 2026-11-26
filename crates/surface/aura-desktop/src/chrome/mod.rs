@@ -9,6 +9,8 @@
 //! window has an expand box left of it. A panel whose lists can show the
 //! whole project's items rather than the active agent's ends in a `*`
 //! box, filled like a shown tab while it is on, left of its expand box.
+//! A tab shown as its icon, HOST's computer, has a square box left of
+//! that, lit as the other tabs are.
 //!
 //! The dividers between panels live here too: bands over the gap between
 //! two panels and the border right of it, which drag to move the border.
@@ -171,6 +173,8 @@ struct BarLayout {
     expand: Option<(Rectangle, bool)>,
     /// The `*` box, and whether it is on
     scope: Option<(Rectangle, bool)>,
+    /// The box of the tab drawn as its icon, and the tab
+    icon_tab: Option<(Rectangle, PaneTab)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -257,17 +261,21 @@ impl Chrome {
         splits
     }
 
-    /// The middle of the box of `tab`, if it is drawn.
+    /// The middle of the box of `tab`, its label's or its icon's, if it is
+    /// drawn.
     #[cfg(test)]
     pub fn spot(&self, tab: PaneTab) -> Option<Point> {
         self.layout
             .bars
             .iter()
-            .flat_map(|bar| &bar.boxes)
-            .find_map(|boxed| {
-                (boxed.kind == Kind::Tab(tab))
-                    .then(|| Point::new(boxed.rect.center_x(), boxed.rect.center_y()))
+            .find_map(|bar| {
+                let labelled = bar.boxes.iter().find(|boxed| boxed.kind == Kind::Tab(tab));
+                labelled.map(|boxed| boxed.rect).or_else(|| {
+                    let icon = bar.icon_tab.filter(|&(_, icon)| icon == tab);
+                    icon.map(|(rect, _)| rect)
+                })
             })
+            .map(|rect| Point::new(rect.center_x(), rect.center_y()))
     }
 
     /// The close box of `pane`'s bar, if it is drawn.

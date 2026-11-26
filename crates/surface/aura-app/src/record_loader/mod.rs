@@ -27,11 +27,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::mpsc;
 use tracing::warn;
 
+pub(crate) use aura_agent::history::scan_tail;
+use aura_agent::history::{entries_past, messages_after, scan_below, HISTORY_SCAN_LIMIT};
+pub use aura_agent::history::{model_history, model_history_from, model_history_since};
+
 /// Number of entries loaded into the Record panel: as many as it holds.
 const RECORD_PANEL_LIMIT: usize = MAX_RECORDS;
-
-/// Number of trailing entries scanned when rebuilding an agent's chat.
-const HISTORY_SCAN_LIMIT: usize = 1000;
 
 /// Number of chat messages kept after rebuilding, activity blocks included
 /// (matches the UI cap).

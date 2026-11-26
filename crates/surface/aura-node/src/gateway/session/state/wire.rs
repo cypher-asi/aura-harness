@@ -5,10 +5,8 @@ use aura_context_prompts::{
     AgentIdentity as PromptAgentIdentity, ProjectInfo, SystemPromptBuilder,
 };
 use aura_core_protocol::{
-    AgentPermissionsWire, AgentPersona, CapabilityWire, ChatProjectInfoWire, IntentClassifierSpec,
-    ReasoningEffort,
+    AgentPersona, ChatProjectInfoWire, IntentClassifierSpec, ReasoningEffort,
 };
-use aura_core_types::{AgentPermissions, AgentScope, Capability};
 use aura_exec_tools::IntentClassifier;
 use aura_model::ThinkingEffort;
 use std::path::{Path, PathBuf};
@@ -98,43 +96,7 @@ pub(super) fn thinking_effort_from_wire(effort: ReasoningEffort) -> ThinkingEffo
     }
 }
 
-/// Translate the wire `AgentPermissionsWire` into the harness-core
-/// `AgentPermissions` used by tools + the kernel policy.
-pub(crate) fn agent_permissions_from_wire(wire: AgentPermissionsWire) -> AgentPermissions {
-    let capabilities = wire
-        .capabilities
-        .into_iter()
-        .filter_map(|c| match c {
-            CapabilityWire::SpawnAgent => Some(Capability::SpawnAgent),
-            CapabilityWire::ControlAgent => Some(Capability::ControlAgent),
-            CapabilityWire::ReadAgent => Some(Capability::ReadAgent),
-            CapabilityWire::ListAgents => Some(Capability::ListAgents),
-            CapabilityWire::ManageOrgMembers => Some(Capability::ManageOrgMembers),
-            CapabilityWire::ManageBilling => Some(Capability::ManageBilling),
-            CapabilityWire::InvokeProcess => Some(Capability::InvokeProcess),
-            CapabilityWire::PostToFeed => Some(Capability::PostToFeed),
-            CapabilityWire::GenerateMedia => Some(Capability::GenerateMedia),
-            CapabilityWire::ReadProject { id } => Some(Capability::ReadProject { id }),
-            CapabilityWire::WriteProject { id } => Some(Capability::WriteProject { id }),
-            CapabilityWire::ReadAllProjects => Some(Capability::ReadAllProjects),
-            CapabilityWire::WriteAllProjects => Some(Capability::WriteAllProjects),
-            CapabilityWire::Unknown => None,
-        })
-        .collect();
-    let permissions = AgentPermissions {
-        scope: AgentScope {
-            orgs: wire.scope.orgs,
-            projects: wire.scope.projects,
-            agent_ids: wire.scope.agent_ids,
-        },
-        capabilities,
-    };
-    if permissions.capabilities.is_empty() && permissions.scope.is_universe() {
-        AgentPermissions::full_access()
-    } else {
-        permissions
-    }
-}
+pub(crate) use aura_core_protocol::agent_permissions_from_wire;
 
 /// Return whether a project path points into the harness-owned Safe Workspace
 /// tree beside `workspaces/` under the node data directory.

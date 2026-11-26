@@ -32,7 +32,7 @@ mod teardown;
 mod usage;
 mod wake;
 
-pub use self::wake::WorkGuard;
+pub use self::wake::{IdleMachine, WorkGuard};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -139,6 +139,12 @@ impl VmState {
     #[must_use]
     pub const fn is_asleep(&self) -> bool {
         matches!(self, Self::Standby | Self::Hibernated)
+    }
+
+    /// Whether the machine is up and its node answers.
+    #[must_use]
+    pub const fn is_awake(&self) -> bool {
+        matches!(self, Self::Ready | Self::Busy)
     }
 }
 

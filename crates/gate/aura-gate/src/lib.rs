@@ -23,6 +23,7 @@
 //! Gate never calls a provider itself: it chooses which model a turn
 //! runs on and builds the classifier's and judge's requests, and the
 //! calls go through the agent's kernel, which records them as usual.
+#![deny(clippy::too_many_lines)]
 
 pub use aura_gate_attempts as attempts;
 pub use aura_gate_compare as compare;

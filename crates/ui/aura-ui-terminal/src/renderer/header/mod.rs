@@ -13,8 +13,9 @@ use crate::app::tab_bar::TabLayout;
 #[cfg(doc)]
 use crate::app::SideScope;
 use crate::app::{AgentsTab, ChatTab, Pane, PaneChrome, PaneTab, RecordsTab, SidePanelTab};
+use crate::renderer::text::display_width;
 use crate::{App, Theme};
-pub(super) use draw::render_panel_header;
+pub(super) use draw::{render_panel_header, tab_style};
 use ratatui::{layout::Rect, style::Color, Frame};
 
 /// Rows of a framed header bar.
@@ -42,14 +43,14 @@ const EXPAND_COLUMNS: u16 = 4;
 const EXPAND_GLYPH: &str = "⤢";
 const RESTORE_GLYPH: &str = "⤡";
 
-/// Narrowest bar with room for a scope button beside its tabs.
+/// Narrowest bar with room for a scope button or an icon tab beside its
+/// tabs.
 const SCOPE_MIN_WIDTH: u16 = 20;
 
-/// Columns of a button's cell at the end of a tabbed bar from
-/// [`bar_end`]: its one-column label with a space on each side, or the
-/// label alone when the tabs need the room.
-const PADDED_BUTTON: u16 = 3;
-const TIGHT_BUTTON: u16 = 1;
+/// Columns a button's cell at the end of a tabbed bar from [`bar_end`]
+/// adds to its label: a space on each side, or none when the tabs need
+/// the room.
+const BUTTON_PADDING: u16 = 2;
 
 /// Split a panel's area into its header bar and the body below it.
 /// `hosted` bars are the front end's to draw.
@@ -115,61 +116,71 @@ pub(super) struct BarEnd {
     /// Width to lay the tabs out in: their last divider is the one before
     /// the first button
     pub tabs: u16,
+    pub icon: Option<Rect>,
     pub scope: Option<Rect>,
     pub expand: Option<Rect>,
 }
 
-/// The buttons at the right end of a tabbed bar that asks for a scope
-/// button, an expand button or both, each a cell after a divider of its
-/// own: the expand button against the border, the scope button left of
-/// it.
+/// The buttons at the right end of a tabbed bar that asks for an icon
+/// tab, a scope button, an expand button or any of them, each a cell
+/// after a divider of its own: the expand button against the border, the
+/// scope button left of it and the icon left of that.
 ///
 /// ```text
-/// │ SBX │ PRC │TRACE│TASKS│ * │ ⤢ │
-/// │SBX │PRC │TRC │TSK│*│⤢│
+/// │ SBX │REPO │ PRC │TRACE│TASKS│ 🖥  │ * │ ⤢ │
+/// │SBX │REPO│PRC │TRC │TSK │🖥 │*│⤢│
 /// ```
 ///
 /// The cells are padded unless the tabs, laid out by `layout` for the
 /// width left to them, would not fit beside them; then they shrink to
 /// their labels, and on a bar too narrow even for that the expand button
-/// goes. A bar too narrow for the scope button alone keeps it padded and
-/// clips its tabs; under [`SCOPE_MIN_WIDTH`] it has no buttons.
+/// goes. A bar too narrow for the others alone keeps them padded and clips
+/// its tabs; under [`SCOPE_MIN_WIDTH`] it has no buttons.
 pub(super) fn bar_end<T: Copy + PartialEq>(
     bar: Rect,
-    (scope, expand): (bool, bool),
+    (icon, scope, expand): (Option<&str>, bool, bool),
     layout: impl Fn(u16) -> TabLayout<T>,
 ) -> BarEnd {
-    let scope = scope && bar.width >= SCOPE_MIN_WIDTH && bar.height > 0;
+    let room = bar.width >= SCOPE_MIN_WIDTH && bar.height > 0;
+    let icon = icon
+        .filter(|_| room)
+        .map(|icon| u16::try_from(display_width(icon)).unwrap_or(u16::MAX));
+    let scope = scope && room;
     let expand = expand && bar.width >= EXPAND_MIN_WIDTH && bar.height > 0;
-    // A padded scope button alone leaves the tabs the room of two tight
-    // buttons, so the expand button goes only once those fail too.
-    [
-        (expand, PADDED_BUTTON),
-        (expand, TIGHT_BUTTON),
-        (false, TIGHT_BUTTON),
-    ]
-    .into_iter()
-    .map(|(expand, cell)| lay_out_end(bar, (scope, expand), cell))
-    .find(|end| layout(end.tabs).fits(end.tabs))
-    .unwrap_or_else(|| lay_out_end(bar, (scope, false), PADDED_BUTTON))
+    // Padded buttons without the expand button leave the tabs about the
+    // room of tight ones with it, so the expand button goes only once
+    // those fail too.
+    [(expand, BUTTON_PADDING), (expand, 0), (false, 0)]
+        .into_iter()
+        .map(|(expand, padding)| lay_out_end(bar, (icon, scope, expand), padding))
+        .find(|end| layout(end.tabs).fits(end.tabs))
+        .unwrap_or_else(|| lay_out_end(bar, (icon, scope, false), BUTTON_PADDING))
 }
 
-/// [`BarEnd`] for the buttons asked for, in cells `cell` columns wide.
-fn lay_out_end(bar: Rect, (scope, expand): (bool, bool), cell: u16) -> BarEnd {
+/// [`BarEnd`] for the buttons asked for, the icon by its width, each
+/// `padding` columns wider than its label.
+fn lay_out_end(
+    bar: Rect,
+    (icon, scope, expand): (Option<u16>, bool, bool),
+    padding: u16,
+) -> BarEnd {
     let row = label_row(bar);
     // The column right of the next button's cell, from the right border.
     let mut right = bar.right().saturating_sub(1);
-    let mut place = |wanted: bool| {
-        wanted.then(|| {
+    let mut place = |label: Option<u16>| {
+        label.map(|label| {
+            let cell = label + padding;
             let x = right.saturating_sub(cell);
             right = x.saturating_sub(1);
             Rect::new(x, row, cell, 1)
         })
     };
-    let expand = place(expand);
-    let scope = place(scope);
+    let expand = place(expand.then_some(1));
+    let scope = place(scope.then_some(1));
+    let icon = place(icon);
     BarEnd {
         tabs: (right + 1).saturating_sub(bar.x).min(bar.width),
+        icon,
         scope,
         expand,
     }
@@ -202,6 +213,18 @@ pub(super) struct ExpandButton {
 pub(super) struct ScopeButton {
     pub on: bool,
     pub hovered: bool,
+    /// Where it is drawn, from [`bar_end`]; `None` on a bar too narrow
+    /// for it
+    pub cell: Option<Rect>,
+}
+
+/// A tab a bar draws as its icon, after its other tabs: lit as they are
+/// when shown or under the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct IconTab<T> {
+    pub tab: T,
+    /// Two columns, the second blank (see [`SidePanelTab::icon`])
+    pub icon: &'static str,
     /// Where it is drawn, from [`bar_end`]; `None` on a bar too narrow
     /// for it
     pub cell: Option<Rect>,
@@ -244,6 +267,8 @@ pub(super) struct PanelHeader<'a, T> {
     /// A scope button at the right end of a tabbed bar, left of any
     /// expand button; the bar lays out its tabs in [`bar_end`]'s columns.
     pub scope: Option<ScopeButton>,
+    /// A tab drawn as its icon, left of any scope button
+    pub icon_tab: Option<IconTab<T>>,
     pub focused: bool,
     /// Whether the front end draws the bar: the grid keeps only its frame
     pub hosted: bool,
@@ -297,6 +322,7 @@ impl<T: HostTab> PanelHeader<'_, T> {
                 .iter()
                 .filter_map(|cell| cell.tab.pane_tab())
                 .collect(),
+            icon_tab: self.icon_tab.and_then(|icon| icon.tab.pane_tab()),
             active: self.active.and_then(HostTab::pane_tab),
             title: self.title.map(str::to_string),
             info: self.info.as_ref().map(|info| info.text.clone()),

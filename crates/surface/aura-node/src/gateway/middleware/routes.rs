@@ -326,7 +326,8 @@ pub(super) fn process_routes() -> Router<RouterState> {
 /// Routes a cloud node serves its hub and peers; they answer `404` on
 /// other nodes. See [`cloud`].
 pub(super) fn cloud_routes() -> Router<RouterState> {
-    // Record pages for an agent's hand-off can be large.
+    // Record pages and session checkpoints for an agent's hand-off can be
+    // large.
     let import_limit = DefaultBodyLimit::max(64 * 1024 * 1024);
     Router::new()
         .route("/v1/host", get(cloud::host_handler))
@@ -335,6 +336,16 @@ pub(super) fn cloud_routes() -> Router<RouterState> {
             post(cloud::sync_import_handler).route_layer(import_limit),
         )
         .route("/v1/sync/seal/:agent_id", post(cloud::sync_seal_handler))
+        .route(
+            "/v1/sync/session/:agent_id",
+            put(cloud::sync_session_put_handler)
+                .get(cloud::sync_session_get_handler)
+                .route_layer(import_limit),
+        )
+        .route(
+            "/v1/sync/session/:agent_id/new",
+            post(cloud::sync_session_new_handler),
+        )
         .route("/v1/sync/traces", get(cloud::sync_traces_handler))
         .route("/v1/workspace/patch", get(cloud::workspace_patch_handler))
         .route("/v1/mesh/mail", post(cloud::mesh_mail_handler))

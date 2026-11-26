@@ -11,11 +11,9 @@ use super::agents::AgentSession;
 use super::attachments::{expand_mentions_in, mentioned_paths};
 use super::gate;
 use super::gate::turn::{Ending, GateTurn, Routing};
-use super::handlers::{handle_agent_success, run_agent_turn, system_message};
-use super::plan_mode::open_plan;
+use super::handlers::{handle_agent_success, run_agent_turn, system_message, TurnControls};
 use super::run_command::run_user_command;
 use super::steering::{SteerSource, Steering};
-use super::tasks::{request_state, summary_of};
 use crate::long_run::LongRunSettings;
 use aura_agent::{AgentError, AgentLoop, AgentLoopResult, CompactHistoryError};
 use aura_agent_trace::RunRecorder;
@@ -30,10 +28,12 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+mod board;
 mod compact;
 mod messages;
 mod record;
 
+use board::{begin_task, end_request};
 use compact::run_compact;
 pub(super) use messages::{begin_files, model_message};
 pub(crate) use record::{drain_stale_inbox, record_prompt};
@@ -110,6 +110,18 @@ impl Prompt {
             mentions: false,
             images: Vec::new(),
             request: Request::Resume,
+            preamble: None,
+        }
+    }
+
+    /// A message from another agent's inbox (see [`super::inbox`]): a
+    /// [`Request::New`] for work handed out, else a [`Request::Resume`].
+    pub(super) const fn inbox(text: String, request: Request) -> Self {
+        Self {
+            text,
+            mentions: false,
+            images: Vec::new(),
+            request,
             preamble: None,
         }
     }
@@ -286,11 +298,13 @@ impl TurnParts<'_> {
             session,
             &self.agent_loop,
             self.tools.clone(),
-            self.ui,
-            self.cancel,
-            self.steering,
-            self.limits,
-            self.recorder.clone(),
+            TurnControls {
+                ui: self.ui,
+                cancel: self.cancel,
+                steering: self.steering,
+                limits: self.limits,
+                recorder: self.recorder.clone(),
+            },
         )
         .await
     }
@@ -337,50 +351,6 @@ async fn run_prompt(
         }
     };
     finish(session, ran, &turn).await
-}
-
-/// Put the turn answering `prompt` on the task board: a new request, or,
-/// for a harness notice, the agent's latest task again. `planning` is
-/// whether the agent is in plan mode; [`request_plan`] says which plan
-/// the request works on.
-async fn begin_task(session: &AgentSession, prompt: &Prompt, planning: bool) {
-    let agent_id = session.agent_id();
-    let workspace = session.kernel.agent_workspace();
-    match prompt.request {
-        Request::Resume => session.tasks.resume_request(agent_id, &workspace).await,
-        Request::New | Request::Build => {
-            let (plan, builds) = request_plan(session, planning);
-            session.tasks.begin_request(
-                agent_id,
-                workspace,
-                &session.identity.name,
-                &prompt.text,
-                plan,
-                builds,
-            );
-        }
-    }
-}
-
-/// The plan a new request of `session` works on, and whether the request
-/// is that plan's own. In plan mode (`planning`) a request revises the
-/// agent's open plan ([`open_plan`]), so it files under that plan as a
-/// task of its own. While the agent builds its plan every request is the
-/// plan's, as the first one was: follow-ups such as "keep going" carry
-/// the same todo list, which the plan's todos already show.
-fn request_plan(session: &AgentSession, planning: bool) -> (Option<String>, bool) {
-    if planning {
-        let workspace = session.kernel.agent_workspace();
-        let plan = session
-            .active_plan
-            .clone()
-            .filter(|path| open_plan(&workspace, Some(path)).is_some());
-        return (plan, false);
-    }
-    if session.building_plan {
-        return (session.active_plan.clone(), true);
-    }
-    (None, false)
 }
 
 /// Run the turn of `prompt` on `model`, which the user pinned: the prompt
@@ -473,26 +443,4 @@ fn keep(session: &mut AgentSession, forwarded: &ForwarderState) {
         session.active_plan = Some(path.clone());
         session.building_plan = false;
     }
-}
-
-/// Close the task board's request of the turn that ended with `result`,
-/// which the user stopped when `cancelled`.
-async fn end_request(
-    session: &AgentSession,
-    result: &Result<AgentLoopResult, AgentError>,
-    cancelled: bool,
-) {
-    let summary = result
-        .as_ref()
-        .ok()
-        .and_then(|result| summary_of(&result.total_text));
-    let failed = result.is_err() && !cancelled;
-    session
-        .tasks
-        .end_request(
-            session.agent_id(),
-            |items| request_state(cancelled, failed, items),
-            summary,
-        )
-        .await;
 }

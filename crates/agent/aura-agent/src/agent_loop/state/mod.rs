@@ -174,22 +174,24 @@ impl LoopState {
     }
 
     /// Apply every `todo_write` call in `response` to the tracked list,
-    /// give the todo of every `task` call to its agent, and tell the
-    /// client about the new list.
+    /// give the todo of every `task` or `assign` call to its agent, and
+    /// tell the client about the new list.
     pub(super) fn observe_todo_writes(
         &mut self,
         response: &aura_model::ModelResponse,
         event_tx: Option<&tokio::sync::mpsc::Sender<crate::events::AgentLoopEvent>>,
     ) {
         use aura_exec_tools::agents::task::TASK_TOOL_NAME;
-        use aura_exec_tools::todo::{apply_todo_write, assign_task, TODO_WRITE_TOOL_NAME};
+        use aura_exec_tools::todo::{
+            apply_todo_write, assign_task, ASSIGN_TOOL_NAME, TODO_WRITE_TOOL_NAME,
+        };
         let mut changed = self.observe_task_reports();
         for block in &response.message.content {
             let aura_model::ContentBlock::ToolUse { name, input, .. } = block else {
                 continue;
             };
-            if name == TASK_TOOL_NAME {
-                if let Some(next) = assign_task(&self.result.todos, input) {
+            if name == TASK_TOOL_NAME || name == ASSIGN_TOOL_NAME {
+                if let Some(next) = assign_task(&self.result.todos, name, input) {
                     self.result.todos = next;
                     changed = true;
                 }
@@ -220,17 +222,13 @@ impl LoopState {
         results: &[crate::types::ToolCallResult],
         event_tx: Option<&tokio::sync::mpsc::Sender<crate::events::AgentLoopEvent>>,
     ) {
-        use aura_exec_tools::agents::task::TASK_TOOL_NAME;
         use aura_exec_tools::todo::{report_task, task_todo};
         let mut changed = false;
         for result in results {
-            let Some(call) = calls
-                .iter()
-                .find(|call| call.id == result.tool_use_id && call.name == TASK_TOOL_NAME)
-            else {
+            let Some(call) = calls.iter().find(|call| call.id == result.tool_use_id) else {
                 continue;
             };
-            let Some((id, true)) = task_todo(&call.input) else {
+            let Some((id, true)) = task_todo(&call.name, &call.input) else {
                 continue;
             };
             if let Some(next) = report_task(&self.result.todos, id, !result.is_error) {

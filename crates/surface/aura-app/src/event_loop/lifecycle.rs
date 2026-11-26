@@ -4,7 +4,7 @@ use super::agent_events::AgentUi;
 use super::delivery::{prompt_work, start_next};
 use super::start_work::local_model_unavailable;
 use super::turns::WorkDone;
-use super::{agents, channels, notices, processes, LoopState, SHUTDOWN_GRACE};
+use super::{agents, channels, inbox, notices, processes, LoopState, SHUTDOWN_GRACE};
 use aura_core_types::{AgentId, Transaction};
 use aura_ui::events::ProcessStatus;
 use aura_ui::UiCommand;
@@ -105,7 +105,7 @@ pub(super) async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) 
     if let Some(session) = session {
         state.idle.insert(agent_id, session);
     }
-    finish_turn(state, agent_id, failure.is_some()).await;
+    finish_turn(state, agent_id, failure.as_deref()).await;
 
     if let Some(problem) = failure {
         let ui = AgentUi::new(state.commands.clone(), agent_id);
@@ -120,10 +120,12 @@ pub(super) async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) 
     agents::send_agent_list(state).await;
 }
 
-/// Mark the turn of `agent_id` ended in the Processes tab and settle its
-/// channel replies.
-async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failed: bool) {
+/// Mark the turn of `agent_id`, which ended with `failure` if any, ended
+/// in the Processes tab, and settle its channel replies and what it owed
+/// through its inbox.
+async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failure: Option<&str>) {
     let cancelled = state.hub.stop_running(agent_id);
+    let failed = failure.is_some();
     let status = if failed {
         ProcessStatus::Failed
     } else if cancelled {
@@ -136,7 +138,9 @@ async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failed: bool)
         .finish(&processes::turn_id(agent_id), status);
     if !failed && !cancelled {
         channels::post_replies(state, agent_id).await;
+        inbox::answer(state, agent_id);
     } else {
         channels::drop_unanswered(state, agent_id);
+        inbox::give_up(state, agent_id, failure.unwrap_or("it was stopped"));
     }
 }

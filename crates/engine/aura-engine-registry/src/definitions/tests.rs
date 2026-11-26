@@ -153,29 +153,58 @@ fn filter_tools_honors_the_allow_list_and_hides_task_by_default() {
     assert_eq!(names(&def), ["read_file", "task"]);
 }
 
-#[test]
-fn coordinator_can_delegate_but_not_edit() {
-    let content = SEED_DEFINITIONS
+fn seed_content(name: &str) -> &'static str {
+    SEED_DEFINITIONS
         .iter()
-        .find(|(name, _)| *name == COORDINATOR_DEFINITION)
+        .find(|(seed, _)| *seed == name)
         .map(|(_, content)| *content)
-        .unwrap();
+        .unwrap()
+}
+
+#[test]
+fn coordinator_seed_lists_only_coordination_tools() {
+    let content = seed_content(COORDINATOR_DEFINITION);
     let def = AgentDefinition::parse(content, Path::new("coordinator.md")).unwrap();
     assert!(def.is_coordinator());
-    let tools = [
-        tool("read_file"),
-        tool("search_code"),
-        tool("write_file"),
-        tool("edit_file"),
-        tool("run_command"),
-        tool("task"),
-    ];
-    let names: Vec<String> = def
-        .filter_tools(&tools)
-        .into_iter()
-        .map(|t| t.name)
-        .collect();
-    assert_eq!(names, ["read_file", "search_code", "task"]);
+    let listed = def.tools.unwrap();
+    assert!(listed.iter().any(|tool| tool == ASSIGN_TOOL_NAME));
+    assert!(
+        listed
+            .iter()
+            .all(|tool| COORDINATOR_TOOLS.contains(&tool.as_str())),
+        "{listed:?}"
+    );
+}
+
+#[test]
+fn refreshes_an_unedited_retired_seed_and_keeps_an_edited_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("coordinator.md");
+    let old = "---\nname: coordinator\n---\nDo the work yourself.\n";
+    fs::write(&path, old).unwrap();
+    let hash = blake3::hash(old.as_bytes()).to_hex().to_string();
+    let retired = [(COORDINATOR_DEFINITION, hash.as_str())];
+
+    let refreshed = refresh_retired(dir.path(), &retired).unwrap();
+    assert_eq!(refreshed, [COORDINATOR_DEFINITION]);
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        seed_content(COORDINATOR_DEFINITION)
+    );
+
+    let edited = format!("{old}Keep it short.\n");
+    fs::write(&path, &edited).unwrap();
+    assert!(refresh_retired(dir.path(), &retired).unwrap().is_empty());
+    assert_eq!(fs::read_to_string(&path).unwrap(), edited);
+}
+
+#[test]
+fn retired_seeds_name_built_ins_but_never_their_current_content() {
+    for (name, hash) in RETIRED_SEEDS {
+        let current = blake3::hash(seed_content(name).as_bytes()).to_hex();
+        assert_eq!(hash.len(), 64, "{name}");
+        assert_ne!(current.as_str(), *hash, "{name}'s current seed is retired");
+    }
 }
 
 #[test]

@@ -120,20 +120,9 @@ async fn pump_streams_tool_input_while_the_block_is_open() {
     assert_eq!(full["content"], "<h1></h1>");
 }
 
-/// Regression: thinking (and text) must stream to the client
-/// *incrementally* — one `ThinkingDelta` per wire delta as it
-/// arrives — not a single coarse delta at block close. Feeds a
-/// multi-delta thinking block through the real
-/// `response_stream_from_event_stream` adapter (the production lift
-/// path) and asserts each chunk surfaces on its own, the per-chunk
-/// order is preserved, the block is NOT re-emitted whole at close,
-/// and a single `ThinkingComplete` marks the end.
-#[tokio::test(start_paused = true)]
-async fn pump_streams_thinking_incrementally_not_just_at_block_close() {
-    let executor = CountingExecutor::default();
-    let config = AgentLoopConfig::for_agent("claude-test-model");
-
-    let wire: Vec<Result<StreamEvent, aura_model::ReasonerError>> = vec![
+/// A reply streamed as three thinking deltas, then the text `Done.`.
+fn thinking_then_text() -> Vec<Result<StreamEvent, aura_model::ReasonerError>> {
+    vec![
         Ok(StreamEvent::MessageStart {
             message_id: "msg".into(),
             model: "test".into(),
@@ -171,7 +160,31 @@ async fn pump_streams_thinking_incrementally_not_just_at_block_close() {
             cache_read_input_tokens: None,
         }),
         Ok(StreamEvent::MessageStop),
-    ];
+    ]
+}
+
+/// The deltas `pick` takes out of `events`, in order.
+fn deltas<'a>(
+    events: &'a [AgentLoopEvent],
+    pick: impl Fn(&'a AgentLoopEvent) -> Option<&'a str>,
+) -> Vec<&'a str> {
+    events.iter().filter_map(pick).collect()
+}
+
+/// Regression: thinking (and text) must stream to the client
+/// *incrementally* — one `ThinkingDelta` per wire delta as it
+/// arrives — not a single coarse delta at block close. Feeds a
+/// multi-delta thinking block through the real
+/// `response_stream_from_event_stream` adapter (the production lift
+/// path) and asserts each chunk surfaces on its own, the per-chunk
+/// order is preserved, the block is NOT re-emitted whole at close,
+/// and a single `ThinkingComplete` marks the end.
+#[tokio::test(start_paused = true)]
+async fn pump_streams_thinking_incrementally_not_just_at_block_close() {
+    let executor = CountingExecutor::default();
+    let config = AgentLoopConfig::for_agent("claude-test-model");
+
+    let wire = thinking_then_text();
     let underlying: StreamEventStream = Box::pin(futures_util::stream::iter(wire));
     let stream = response_stream_from_event_stream(underlying);
 
@@ -180,13 +193,10 @@ async fn pump_streams_thinking_incrementally_not_just_at_block_close() {
     // Each thinking chunk must surface on its own, in order — proof
     // that the client sees the reasoning stream live instead of one
     // block-close dump.
-    let thinking: Vec<&str> = events
-        .iter()
-        .filter_map(|e| match e {
-            AgentLoopEvent::ThinkingDelta(t) => Some(t.as_str()),
-            _ => None,
-        })
-        .collect();
+    let thinking = deltas(&events, |e| match e {
+        AgentLoopEvent::ThinkingDelta(t) => Some(t.as_str()),
+        _ => None,
+    });
     assert_eq!(
         thinking,
         vec!["Let me ", "check the ", "files."],
@@ -205,13 +215,10 @@ async fn pump_streams_thinking_incrementally_not_just_at_block_close() {
 
     // Text streams the same way; the incremental delta is NOT
     // re-emitted whole at block close (dedup), so "Done." appears once.
-    let text: Vec<&str> = events
-        .iter()
-        .filter_map(|e| match e {
-            AgentLoopEvent::TextDelta(t) => Some(t.as_str()),
-            _ => None,
-        })
-        .collect();
+    let text = deltas(&events, |e| match e {
+        AgentLoopEvent::TextDelta(t) => Some(t.as_str()),
+        _ => None,
+    });
     assert_eq!(
         text,
         vec!["Done."],

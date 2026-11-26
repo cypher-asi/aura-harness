@@ -5,7 +5,6 @@
 //! fake providers and `start_paused = true` time control without
 //! pulling the full sampling driver into scope.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -110,6 +109,30 @@ fn completed(end_turn: bool) -> ResponseEvent {
         stop_reason: None,
         end_turn: Some(end_turn),
         usage: Usage::new(1, 1),
+    }
+}
+
+/// A response calling tool `name` (call `id`), then `fast` (call
+/// `toolu_fast`), not ending the turn.
+fn first_then_fast(id: &str, name: &str) -> ResponseEventStream {
+    mk_stream(vec![
+        mk_call(id, name),
+        mk_call("toolu_fast", "fast"),
+        completed(false),
+    ])
+}
+
+/// Cancels `cancel` once the `fast` call reports its result on `rx`.
+async fn cancel_when_fast_reports(
+    rx: &mut tokio::sync::mpsc::Receiver<AgentLoopEvent>,
+    cancel: &CancellationToken,
+) {
+    while let Some(event) = rx.recv().await {
+        if matches!(event, AgentLoopEvent::ToolResult { ref tool_use_id, .. } if tool_use_id == "toolu_fast")
+        {
+            cancel.cancel();
+            return;
+        }
     }
 }
 
@@ -236,15 +259,7 @@ impl AgentToolExecutor for SlowEditExecutor {
 /// Cancels once `fast` reports, while `edit_file` is still in flight.
 async fn cancel_with_edit_in_flight(executor: &SlowEditExecutor) -> Vec<(String, String)> {
     let config = AgentLoopConfig::for_agent("claude-test-model");
-    let stream = mk_stream(vec![
-        mk_call("toolu_edit", "edit_file"),
-        mk_call("toolu_fast", "fast"),
-        ResponseEvent::Completed {
-            stop_reason: None,
-            end_turn: Some(false),
-            usage: Usage::new(1, 1),
-        },
-    ]);
+    let stream = first_then_fast("toolu_edit", "edit_file");
     let mut state = super::super::LoopState::new_for_tests(&config, Vec::new());
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let cancel = CancellationToken::new();
@@ -258,17 +273,8 @@ async fn cancel_with_edit_in_flight(executor: &SlowEditExecutor) -> Vec<(String,
         &mut state,
         "test-model",
     );
-    let cancel_after_fast = async {
-        while let Some(event) = rx.recv().await {
-            if matches!(event, AgentLoopEvent::ToolResult { ref tool_use_id, .. } if tool_use_id == "toolu_fast")
-            {
-                cancel.cancel();
-                return;
-            }
-        }
-    };
     let (outcome, ()) = tokio::time::timeout(Duration::from_secs(30), async {
-        tokio::join!(drive, cancel_after_fast)
+        tokio::join!(drive, cancel_when_fast_reports(&mut rx, &cancel))
     })
     .await
     .expect("cancel must end the drain");

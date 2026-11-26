@@ -114,6 +114,10 @@ pub(super) async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId
     if state.queued.len(agent_id) == 0 {
         return;
     }
+    if state.cloud.cancel(agent_id) {
+        info!(%agent_id, "Sending queued work now; stopping the cloud turn");
+        return;
+    }
     if !state.hub.is_running(agent_id) {
         start_next(state, agent_id).await;
         return;
@@ -127,6 +131,10 @@ pub(super) async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId
 
 /// Start the oldest work waiting for `agent_id`, if any.
 pub(super) async fn start_next(state: &mut LoopState<'_>, agent_id: AgentId) {
+    if state.cloud.is_cloud(agent_id) {
+        cloud::start_queued(state, agent_id).await;
+        return;
+    }
     if state.queued.len(agent_id) == 0 {
         return;
     }

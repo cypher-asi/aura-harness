@@ -21,11 +21,23 @@
 //! - The claim's GitHub token reaches git and `gh` only as its boxd
 //!   placeholder, in files only the machine's user can read
 //!   ([`write_git_files`]).
+//! - The agent's session checkpoints stay in the node's data directory
+//!   ([`CloudNode::sessions`]), so its conversation survives standby,
+//!   hibernation, a stopped machine and node restarts.
+//! - The hub is told whenever a hosted agent's record grows
+//!   ([`CloudNode::hosted`]); the hint carries no entries, the hub reads
+//!   and checks them itself.
+//! - Each agent's conversation is traced as one run across the node runs
+//!   the hub starts for it ([`CloudNode::trace`]); the hub copies the
+//!   runs back ([`CloudNode::runs_of`]).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
+use aura_agent::checkpoint::Checkpoints;
+use aura_agent_trace::db::RunCopy;
+use aura_agent_trace::{RunMeta, RunRecorder};
 use aura_core_protocol::cloud::{GitClaim, HostStats, NodeClaim, NodeClaimed};
 use aura_core_types::AgentId;
 use aura_engine_cloud::host::HostSampler;
@@ -74,10 +86,17 @@ pub struct CloudNode {
     /// The claim's git settings, without the placeholder.
     git: RwLock<Option<GitClaim>>,
     sealed: RwLock<HashSet<AgentId>>,
+    /// Agents this node took a record or a run for since it started.
+    hosted: RwLock<HashSet<AgentId>>,
     workspace: Option<PathBuf>,
     /// Where git and `gh` look for their settings; `None` off the cloud.
     home: Option<PathBuf>,
     sampler: Arc<Mutex<HostSampler>>,
+    sessions: Checkpoints,
+    /// Where run bundles go: the data directory, kept with the sessions.
+    trace_home: PathBuf,
+    /// Each agent's open run.
+    traces: Mutex<HashMap<AgentId, Arc<RunRecorder>>>,
 }
 
 impl std::fmt::Debug for CloudNode {
@@ -108,9 +127,13 @@ impl CloudNode {
             claim: RwLock::new(None),
             git: RwLock::new(None),
             sealed: RwLock::new(HashSet::new()),
+            hosted: RwLock::new(HashSet::new()),
             workspace,
             home: config.cloud_node.then(dirs::home_dir).flatten(),
             sampler: Arc::new(Mutex::new(HostSampler::new(disk_path, manifest))),
+            sessions: Checkpoints::new(&config.data_dir),
+            trace_home: config.data_dir.clone(),
+            traces: Mutex::new(HashMap::new()),
         })
     }
 
@@ -123,6 +146,69 @@ impl CloudNode {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map(|git| git.branch.clone())
+    }
+
+    /// Where a cloud node keeps its agents' session checkpoints; `None`
+    /// on other nodes, whose callers bring the conversation.
+    #[must_use]
+    pub fn sessions(&self) -> Option<&Checkpoints> {
+        self.enabled.then_some(&self.sessions)
+    }
+
+    /// The run tracing `agent`'s conversation, started with `meta` on
+    /// first use. `None` on other nodes, or when tracing is off.
+    #[must_use]
+    pub fn trace(&self, agent: AgentId, mut meta: RunMeta) -> Option<Arc<RunRecorder>> {
+        if !self.enabled {
+            return None;
+        }
+        let mut traces = self.traces.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(recorder) = traces.get(&agent) {
+            return Some(Arc::clone(recorder));
+        }
+        meta.agent_id = Some(agent.to_hex());
+        let recorder = match RunRecorder::start(&self.trace_home, meta, aura_config::trace().level)
+        {
+            Ok(recorder) => recorder?,
+            Err(e) => {
+                tracing::warn!(error = %e, "cloud run trace disabled: could not create bundle");
+                return None;
+            }
+        };
+        traces.insert(agent, Arc::clone(&recorder));
+        Some(recorder)
+    }
+
+    /// Finish `agent`'s run, so its next conversation is a run of its own.
+    pub fn end_trace(&self, agent: AgentId) {
+        let recorder = self
+            .traces
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&agent);
+        if let Some(recorder) = recorder {
+            recorder.finish();
+        }
+    }
+
+    /// `agent`'s newest `limit` runs here, whole and newest first. Its
+    /// open run is flushed first, so the copy has every step so far.
+    /// Blocks on file reads.
+    #[must_use]
+    pub fn runs_of(&self, agent: AgentId, limit: usize) -> Vec<RunCopy> {
+        let open = self
+            .traces
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&agent)
+            .cloned();
+        if let Some(recorder) = open {
+            recorder.flush();
+        }
+        aura_agent_trace::bundle::runs_of(&self.trace_home, &agent.to_hex(), limit)
+            .iter()
+            .filter_map(|bundle| RunCopy::read(bundle).ok())
+            .collect()
     }
 
     /// Fill `plans` from every claim from now on (the node's model client
@@ -245,6 +331,33 @@ impl CloudNode {
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(agent);
+    }
+
+    /// Note that this node holds `agent`'s record: the hub hears when it
+    /// grows. A no-op off a cloud machine.
+    pub fn host(&self, agent: AgentId) {
+        if self.enabled {
+            self.hosted
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(agent);
+        }
+    }
+
+    /// The agents whose records this node writes: those it took a record
+    /// or a run for, less the sealed ones. Forgotten at a restart until
+    /// the hub's next import or run; the hub copies on reconnecting
+    /// anyway.
+    #[must_use]
+    pub fn hosted(&self) -> Vec<AgentId> {
+        let sealed = self.sealed.read().unwrap_or_else(PoisonError::into_inner);
+        self.hosted
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|agent| !sealed.contains(agent))
+            .copied()
+            .collect()
     }
 
     /// Sample this machine.

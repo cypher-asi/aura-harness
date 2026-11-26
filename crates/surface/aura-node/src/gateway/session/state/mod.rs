@@ -71,6 +71,9 @@ pub struct Session {
     /// hard-pins the agent loop's thinking effort (see
     /// `AgentLoopConfig::user_thinking_effort`).
     pub(crate) user_thinking_effort: Option<aura_model::ThinkingEffort>,
+    /// Model that titles the chat from the next turn's prompt, from
+    /// `ModelSelection::title_model`; taken by that turn.
+    pub(crate) title_model: Option<String>,
     /// Maximum agentic steps per turn.
     pub(crate) max_turns: u32,
     /// Installed tools registered for this session.
@@ -79,14 +82,8 @@ pub struct Session {
     pub(crate) installed_integrations: Vec<InstalledIntegrationDefinition>,
     /// Conversation history (accumulated across turns).
     pub(crate) messages: Vec<Message>,
-    /// Cumulative input tokens across all turns.
-    pub(crate) cumulative_input_tokens: u64,
-    /// Cumulative output tokens across all turns.
-    pub(crate) cumulative_output_tokens: u64,
-    /// Cumulative cache creation input tokens across all turns.
-    pub(crate) cumulative_cache_creation_input_tokens: u64,
-    /// Cumulative cache read input tokens across all turns.
-    pub(crate) cumulative_cache_read_input_tokens: u64,
+    /// Token counts summed across all turns.
+    pub(crate) cumulative: CumulativeTokens,
     /// Workspace directory for this session (sandboxed fallback).
     pub(crate) workspace: PathBuf,
     /// Base directory that workspace must reside under.
@@ -153,6 +150,31 @@ pub struct Session {
     pub(crate) agent_mailbox: Arc<super::agent_inbox::AgentMailbox>,
     /// Run trace of this conversation, started on its first turn.
     pub(crate) trace: Option<Arc<aura_agent_trace::RunRecorder>>,
+    /// Where each turn's end is checkpointed; set on a cloud node, where
+    /// the node holds the agent's conversation between runs.
+    pub(crate) checkpoints: Option<aura_agent::checkpoint::Checkpoints>,
+    /// Whether this run continues the conversation the agent's record
+    /// already holds, so it starts no new session there.
+    pub(crate) continues: bool,
+    /// When the conversation started; names its checkpoint.
+    pub(crate) started_ms: u64,
+    /// Model calls and tokens of the conversation, across runs.
+    pub(crate) usage: aura_agent::checkpoint::SessionUsage,
+    /// The agent's todo list, carried from turn to turn.
+    pub(crate) todos: Vec<aura_exec_tools::todo::TodoItem>,
+}
+
+/// A [`Session`]'s token counts summed across all its turns.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct CumulativeTokens {
+    /// Cumulative input tokens across all turns.
+    pub(crate) input_tokens: u64,
+    /// Cumulative output tokens across all turns.
+    pub(crate) output_tokens: u64,
+    /// Cumulative cache creation input tokens across all turns.
+    pub(crate) cache_creation_input_tokens: u64,
+    /// Cumulative cache read input tokens across all turns.
+    pub(crate) cache_read_input_tokens: u64,
 }
 
 impl Session {
@@ -170,14 +192,12 @@ impl Session {
             provider_override: None,
             temperature: None,
             user_thinking_effort: None,
+            title_model: None,
             max_turns: aura_core_types::MAX_TURNS,
             installed_tools: Vec::new(),
             installed_integrations: Vec::new(),
             messages: Vec::new(),
-            cumulative_input_tokens: 0,
-            cumulative_output_tokens: 0,
-            cumulative_cache_creation_input_tokens: 0,
-            cumulative_cache_read_input_tokens: 0,
+            cumulative: CumulativeTokens::default(),
             workspace: default_workspace.clone(),
             workspace_base: default_workspace,
             project_path: None,
@@ -203,6 +223,11 @@ impl Session {
             mode: aura_core_types::AgentMode::Agent,
             agent_mailbox: Arc::default(),
             trace: None,
+            checkpoints: None,
+            continues: false,
+            started_ms: aura_agent::checkpoint::now_ms(),
+            usage: aura_agent::checkpoint::SessionUsage::default(),
+            todos: Vec::new(),
         }
     }
 
@@ -307,6 +332,7 @@ impl Session {
             intent_classifier_manifest: self.intent_classifier_manifest.clone(),
             prompt_cache_key: self.prompt_cache_key.clone(),
             prompt_cache_retention: self.prompt_cache_retention.clone(),
+            initial_todos: self.todos.clone(),
             ..AgentLoopConfig::for_agent(self.model.clone())
         }
     }

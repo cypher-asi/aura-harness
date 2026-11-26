@@ -1,6 +1,5 @@
 use super::*;
 
-
 pub(in crate::event_loop) struct Fixture {
     pub(in crate::event_loop) hub: Arc<AgentHub>,
     pub(in crate::event_loop) dispatcher: Arc<dyn SubagentDispatchHook>,

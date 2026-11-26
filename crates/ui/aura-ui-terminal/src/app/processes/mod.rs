@@ -35,6 +35,11 @@ impl App {
         self.areas.side_tabs = Some(area);
     }
 
+    /// Record where that bar drew HOST's icon this frame, if it did.
+    pub fn set_side_icon_tab_area(&mut self, area: Option<Rect>) {
+        self.areas.side_icon_tab = area;
+    }
+
     /// Record where the process rows were drawn this frame and which row
     /// is at the top.
     pub fn set_process_rows_area(&mut self, area: Rect, scroll: usize) {
@@ -146,8 +151,8 @@ impl App {
 
     /// Keys of the side panel's lists that would otherwise go to the input,
     /// used while it is empty: Home/End jump, Space folds in the trees, and
-    /// each tab's letters (`o`/`k`/`l` on Processes, `g` on Trace, `p`/`t`
-    /// on Tasks).
+    /// each tab's letters (`[`/`]`/`o`/`r` on Repo, `o`/`k`/`l` on
+    /// Processes, `g` on Trace, `p`/`t` on Tasks).
     pub(super) fn handle_side_list_shortcut(&mut self, key: KeyEvent) -> bool {
         if key
             .modifiers
@@ -164,6 +169,7 @@ impl App {
                 };
                 match self.side.tab {
                     SidePanelTab::Sandbox => self.sandbox.select(index),
+                    SidePanelTab::Repo => self.select_repo_row(index),
                     SidePanelTab::Processes => self.select_process(index),
                     SidePanelTab::Host => {
                         self.host_key(key);
@@ -175,6 +181,11 @@ impl App {
                 }
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
+            (SidePanelTab::Repo, KeyCode::Char(' ')) => self.toggle_repo_changes(),
+            (SidePanelTab::Repo, KeyCode::Char('[')) => self.step_repo_filter(false),
+            (SidePanelTab::Repo, KeyCode::Char(']')) => self.step_repo_filter(true),
+            (SidePanelTab::Repo, KeyCode::Char('o')) => self.open_selected_repo_page(),
+            (SidePanelTab::Repo, KeyCode::Char('r')) => self.request_repo(true),
             (SidePanelTab::Tasks, KeyCode::Char(' ')) => self.task_list.toggle_selected(),
             (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_row_plan(),
             (SidePanelTab::Tasks, KeyCode::Char('t')) => self.jump_to_todo_task(),
@@ -281,8 +292,9 @@ impl App {
     /// Clicking a tab shows it. Clicking a row highlights it and opens it
     /// over the chat panel at once, the same in every tab: a file, a
     /// process's details, a trace step, a plan (at the clicked todo), a
-    /// task's agent. Directories have nothing to open, so a click folds
-    /// them; plans and tasks fold when their fold glyph is clicked.
+    /// task's agent; a REPO row's diff goes in the chat. Directories have
+    /// nothing to open, so a click folds them; plans and tasks fold when
+    /// their fold glyph is clicked.
     pub(super) fn click_side_panel(&mut self, column: u16, row: u16) {
         if self.side_scope_at(column, row) {
             self.toggle_side_scope();
@@ -304,6 +316,7 @@ impl App {
                     self.activate_selected_sandbox_row();
                 }
             }
+            SidePanelTab::Repo => self.click_repo(column, row),
             SidePanelTab::Processes => {
                 if let Some(index) = self.process_row_at(column, row) {
                     self.select_process(index);
@@ -323,8 +336,12 @@ impl App {
         }
     }
 
+    /// The tab whose label or icon is at a screen cell.
     fn side_tab_at(&self, column: u16, row: u16) -> Option<SidePanelTab> {
         let channel_open = self.channel_open();
+        if contains(self.areas.side_icon_tab, column, row) {
+            return SidePanelTab::icon_tab(channel_open);
+        }
         tab_at(self.areas.side_tabs, column, row, |width| {
             SidePanelTab::layout(width, channel_open)
         })
@@ -373,6 +390,7 @@ impl App {
             SidePanelTab::Sandbox => self
                 .sandbox_row_at(column, row)
                 .map(HoverTarget::SandboxRow),
+            SidePanelTab::Repo => self.hovered_repo(column, row),
             SidePanelTab::Processes => self
                 .process_row_at(column, row)
                 .map(HoverTarget::ProcessRow),

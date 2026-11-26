@@ -357,6 +357,11 @@ pub struct ModelSelection {
     /// harness's env-default router config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_overrides: Option<SessionModelOverrides>,
+    /// Model that titles the chat from the next turn's prompt, beside the
+    /// turn and through the agent's kernel. The title comes back as
+    /// `chat_title`. Absent when the chat needs no title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_model: Option<String>,
 }
 
 /// "Where the agent runs."

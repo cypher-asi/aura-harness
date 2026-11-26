@@ -432,5 +432,6 @@ fn placed_agent(
         branch: Some(branch),
         repo,
         fetched_tip: None,
+        children: Vec::new(),
     }
 }

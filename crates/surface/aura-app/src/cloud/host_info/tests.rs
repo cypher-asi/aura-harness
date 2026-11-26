@@ -1,4 +1,5 @@
 use super::*;
+use crate::cloud::hub::SyncStatus;
 use aura_core_protocol::cloud::HostAddress;
 use aura_engine_cloud::fleet::VmState;
 use aura_engine_cloud::{MachineInfo, MachineStatus};
@@ -142,6 +143,58 @@ fn a_sleeping_machine_shows_its_last_facts_and_offers_wake() {
     );
     assert!(view.actions.contains(&HostAction::Wake));
     assert!(view.as_of.is_some());
+}
+
+#[test]
+fn the_sync_section_flags_an_agent_that_is_behind() {
+    let mut view = cloud_view(
+        AgentId::new([1; 32]),
+        &machine_view(VmState::Ready),
+        None,
+        None,
+        &[],
+    );
+    let current = SyncStatus {
+        copied_seq: 40,
+        copied_ms: Some(1_000),
+        node_seq: Some(40),
+        children: 2,
+        session_ms: Some(61_000),
+        ..SyncStatus::default()
+    };
+    add_sync(&mut view, &current, 121_000);
+    assert_eq!(view.sections[1].title, "SYNC", "right after MACHINE");
+    assert_eq!(
+        facts(&view, "SYNC"),
+        vec![
+            "Record: 40 entries here · copied 2m ago",
+            "Spawned: 2 agents, copied with it",
+            "Session: copied 1m ago",
+            "Traces: not copied yet",
+            "Changes: saved when the machine sleeps",
+        ]
+    );
+    assert!(!view.sections[1].facts[0].warn);
+
+    let behind = SyncStatus {
+        node_seq: Some(52),
+        error: Some("node unreachable".into()),
+        ..current
+    };
+    let mut view = cloud_view(
+        AgentId::new([1; 32]),
+        &machine_view(VmState::Ready),
+        None,
+        None,
+        &[],
+    );
+    add_sync(&mut view, &behind, 121_000);
+    let record = &view.sections[1].facts[0];
+    assert!(record.warn, "a copy that is behind is flagged");
+    assert_eq!(
+        record.value,
+        "40 of 52 entries here · copied 2m ago · node unreachable"
+    );
 }
 
 #[test]

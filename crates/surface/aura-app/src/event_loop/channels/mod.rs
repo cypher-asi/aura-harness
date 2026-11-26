@@ -1,7 +1,7 @@
 //! Channels on the event loop: making a channel together with its
-//! coordinator, the project its agents work in, the `<channel>` block a
-//! coordinator's turns get, the channels list the UI shows, and the UI's
-//! channel actions.
+//! coordinator, starting the agents it hands work to, the project they
+//! work in, the `<channel>` block of the coordinator's and its agents'
+//! turns, the channels list the UI shows, and the UI's channel actions.
 //!
 //! # Invariants
 //!
@@ -9,6 +9,13 @@
 //!   ([`ChannelStore::create`]); the coordinator joins the in-memory
 //!   registry only after that batch landed, so a failed create leaves the
 //!   registry as it was.
+//! * The coordinator does no work itself. The agents it hands work to are
+//!   top-level agents of the channel, not its subagents: [`add_agent`]
+//!   writes a new one's agent row and member row in one batch, and
+//!   registers it only once that landed. The agents they spawn join as
+//!   subagents ([`join_parent_channel`]). At start-up, agents an older
+//!   coordinator spawned under itself are made top-level
+//!   ([`promote_members`]).
 //! * A channel with a project has its coordinator at the top of that
 //!   project (no folder of its own), so the coordinator and every agent
 //!   under it are listed in the Projects tree. A channel without one has
@@ -65,9 +72,9 @@ pub(crate) use create::create_channel;
 pub(super) use handlers::{
     handle_archive, handle_close, handle_create, handle_open, handle_update,
 };
-pub(crate) use join::join_or_warn;
 #[cfg(test)]
 pub(crate) use join::join_parent_channel;
+pub(crate) use join::{add_agent, join_or_warn};
 use list::project_view;
 #[cfg(test)]
 use list::MISSING_PROJECT;

@@ -72,6 +72,14 @@ pub(super) fn unpin(fixture: &Fixture, agent: AgentId, project_id: Option<String
     assert_eq!(stored_placement(fixture, agent).1, None);
 }
 
+/// Start a new member of the channel `coordinator` runs, from the
+/// permanent agent `definition`, as `assign` does.
+pub(super) fn add_member(fixture: &Fixture, coordinator: AgentId, definition: &str) -> AgentId {
+    add_agent(&fixture.hub, coordinator, definition)
+        .unwrap()
+        .agent_id()
+}
+
 pub(super) fn agent_count(fixture: &Fixture) -> usize {
     lock(&fixture.hub.registry).agents().len()
 }

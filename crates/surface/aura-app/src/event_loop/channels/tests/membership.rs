@@ -1,7 +1,9 @@
 //! Who joins a channel, how members are listed and what they keep.
 
 use super::super::*;
-use super::support::{new_channel, spawn_under, store, write_task};
+use super::support::{
+    add_member, agent_count, new_channel, placement, spawn_under, store, write_task,
+};
 use crate::event_loop::subagents::tests::fixture;
 use aura_ui::UiCommand;
 
@@ -48,6 +50,83 @@ async fn agents_spawned_in_a_channel_join_it_at_every_depth() {
     let expected: HashSet<_> = [channel.coordinator, agent, subagent].into();
     assert_eq!(*lock(&fixture.hub.channel_members), expected);
     assert_eq!(load_members(Some(store)), expected);
+}
+
+#[tokio::test]
+async fn start_up_makes_the_agents_a_coordinator_spawned_its_channels_own() {
+    let mut fixture = fixture("Looks good.");
+    let channel = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    // As coordinators used to: spawned under the coordinator itself.
+    let agent = spawn_under(&mut fixture, channel.coordinator).await;
+    let subagent = spawn_under(&mut fixture, agent).await;
+    let (project, folder) = placement(&fixture, agent);
+    assert!(!lock(&fixture.hub.registry).is_top_level_agent(agent));
+
+    for _ in 0..2 {
+        load_channels(Some(store(&fixture)), &mut lock(&fixture.hub.registry));
+    }
+
+    let registry = lock(&fixture.hub.registry);
+    let promoted = registry.find(agent).unwrap();
+    assert_eq!(promoted.parent, None);
+    assert!(registry.is_top_level_agent(agent));
+    assert_eq!(
+        (promoted.project_id.clone(), promoted.folder.clone()),
+        (project, folder)
+    );
+    assert_eq!(
+        registry.find(subagent).unwrap().parent.as_deref(),
+        Some(promoted.zns_id.as_str()),
+        "its own subagents stay under it"
+    );
+    let rows = registry.store().load().unwrap().agents;
+    let row = rows.iter().find(|row| row.agent_id == agent).unwrap();
+    assert_eq!(row.parent, None, "stored, so a restart keeps it");
+    drop(registry);
+
+    let members: Vec<_> = store(&fixture)
+        .members(&channel.id)
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.agent_id, m.role, m.parent))
+        .collect();
+    assert_eq!(
+        members,
+        [
+            (channel.coordinator, MemberRole::Coordinator, None),
+            (agent, MemberRole::Agent, Some(channel.coordinator)),
+            (subagent, MemberRole::Subagent, Some(agent)),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_new_member_lands_with_its_member_row_and_only_its_coordinator_adds_one() {
+    let fixture = fixture("unused");
+    let channel = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    let member = add_member(&fixture, channel.coordinator, "reviewer");
+
+    let rows = lock(&fixture.hub.registry).store().load().unwrap().agents;
+    assert!(rows
+        .iter()
+        .any(|row| row.agent_id == member && row.parent.is_none()));
+    assert_eq!(
+        store(&fixture).channel_of(&member).unwrap().as_deref(),
+        Some(channel.id.as_str())
+    );
+    assert!(lock(&fixture.hub.channel_members).contains(&member));
+    assert!(lock(&fixture.hub.hidden_members).contains(&member));
+
+    let before = agent_count(&fixture);
+    let outsider = lock(&fixture.hub.registry).active().agent_id();
+    for caller in [member, outsider] {
+        assert!(add_agent(&fixture.hub, caller, "reviewer").is_err());
+    }
+    assert_eq!(agent_count(&fixture), before);
 }
 
 #[tokio::test]

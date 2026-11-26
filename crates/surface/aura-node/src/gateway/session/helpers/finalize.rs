@@ -2,15 +2,16 @@
 //! terminal `AssistantMessageEnd` frame.
 
 use super::sink::send_outbound_with_backpressure;
-use crate::gateway::session::Session;
+use crate::gateway::session::{Session, WsContext};
 use crate::protocol::{
     AssistantMessageEnd, ContextBreakdown, ContextContents, ContextSegment, ErrorMsg, FileDiff,
     FilesChanged, OutboundMessage, SessionUsage,
 };
 use aura_agent::AgentLoopResult;
+use aura_agent_kernel::Kernel;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Convert agent-side context segments into their wire equivalents.
 fn convert_context_segments(
@@ -71,24 +72,37 @@ pub(super) fn summarize_files_changed(loop_result: &AgentLoopResult) -> FilesCha
     files_changed
 }
 
-/// Run trace of `session`, started on first use. `None` unless the
-/// operator set `AURA_TRACE`, or when the bundle can't be created.
+/// Run trace of `session`, started on first use. On a cloud node it is
+/// the agent's conversation run, kept across the runs the hub starts and
+/// copied back by it; elsewhere `None` unless the operator set
+/// `AURA_TRACE`. Also `None` when the bundle can't be created.
 pub(in crate::gateway::session) fn trace_recorder(
     session: &mut Session,
+    ctx: &WsContext,
     model: &str,
 ) -> Option<Arc<aura_agent_trace::RunRecorder>> {
-    if session.trace.is_none() && aura_config::trace().explicit {
-        let mut meta = aura_agent_trace::RunMeta::new(model, aura_agent_trace::RunSource::Gateway);
-        meta.workspace = session.workspace.display().to_string();
-        meta.mode = format!("{:?}", session.mode).to_lowercase();
-        meta.task_id = Some(
-            session
-                .aura_session_id
-                .clone()
-                .unwrap_or_else(|| session.session_id.clone()),
-        );
-        session.trace = aura_agent_trace::RunRecorder::start_default(meta);
+    if session.trace.is_some() {
+        return session.trace.clone();
     }
+    let cloud = ctx.cloud.as_ref().filter(|_| session.checkpoints.is_some());
+    if cloud.is_none() && !aura_config::trace().explicit {
+        return None;
+    }
+    let mut meta = aura_agent_trace::RunMeta::new(model, aura_agent_trace::RunSource::Gateway);
+    meta.workspace = session.workspace.display().to_string();
+    meta.mode = format!("{:?}", session.mode).to_lowercase();
+    session.trace = match cloud {
+        Some(cloud) => cloud.trace(session.agent_id, meta),
+        None => {
+            meta.task_id = Some(
+                session
+                    .aura_session_id
+                    .clone()
+                    .unwrap_or_else(|| session.session_id.clone()),
+            );
+            aura_agent_trace::RunRecorder::start_default(meta)
+        }
+    };
     session.trace.clone()
 }
 
@@ -118,6 +132,7 @@ pub(in crate::gateway::session) async fn finalize_turn(
     join_result: Result<anyhow::Result<AgentLoopResult>, tokio::task::JoinError>,
     message_id: &str,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
+    kernel: Option<&Kernel>,
 ) {
     record_turn_end(session, &join_result);
     let result = match join_result {
@@ -131,7 +146,7 @@ pub(in crate::gateway::session) async fn finalize_turn(
 
     match result {
         Ok(loop_result) => {
-            apply_turn_result(session, &loop_result, message_id, outbound_tx).await;
+            apply_turn_result(session, &loop_result, message_id, outbound_tx, kernel).await;
         }
         Err(e) => {
             error!(session_id = %session.session_id, error = %e, "Turn processing failed");
@@ -175,19 +190,34 @@ async fn send_turn_error(outbound_tx: &mpsc::Sender<OutboundMessage>, message_id
     )
     .await;
 }
+
+/// Take a finished turn into `session` and tell the client it ended.
+///
+/// With the turn's `kernel`, the reply is recorded in the agent's record
+/// first and, on a cloud node, the conversation checkpointed, both before
+/// `AssistantMessageEnd` goes out: the hub copies the record when the turn
+/// ends, and its next run starts from the checkpoint.
 pub(in crate::gateway::session) async fn apply_turn_result(
     session: &mut Session,
     loop_result: &AgentLoopResult,
     message_id: &str,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
+    kernel: Option<&Kernel>,
 ) {
+    if let Some(kernel) = kernel {
+        record_reply(kernel, session, &loop_result.total_text).await;
+    }
     session.messages.clone_from(&loop_result.messages);
     // Defense-in-depth: cap oversized tool_use inputs / tool_result content
     // so one large blob does not ride along with every subsequent prompt.
     aura_context_compaction::compact_for_storage(&mut session.messages);
+    session.todos.clone_from(&loop_result.todos);
     let files_changed = summarize_files_changed(loop_result);
 
     accumulate_turn_usage(session, loop_result);
+    if let Some(kernel) = kernel {
+        save_checkpoint(session, kernel).await;
+    }
     let stop_reason = turn_stop_reason(loop_result);
     let usage = turn_session_usage(session, loop_result);
 
@@ -213,11 +243,70 @@ pub(in crate::gateway::session) async fn apply_turn_result(
     );
 }
 
+/// Record the turn's reply `text` in the agent's record, as the terminal
+/// and the scheduler's worker do: chats rebuilt from the record show it,
+/// and a run that rebuilds the conversation from the record has it.
+async fn record_reply(kernel: &Kernel, session: &Session, text: &str) {
+    let tx = aura_core_types::Transaction::new_chained(
+        session.agent_id,
+        aura_core_types::TransactionType::AgentMsg,
+        text.as_bytes().to_vec(),
+        None,
+    );
+    if let Err(e) = kernel.process_direct(tx).await {
+        error!(
+            session_id = %session.session_id,
+            error = %e,
+            "Failed to record the reply through the kernel"
+        );
+    }
+}
+
+/// Checkpoint the conversation as of the head of the agent's record, when
+/// the session keeps checkpoints (on a cloud node). A failure is logged;
+/// the record still has the prompts and replies.
+async fn save_checkpoint(session: &Session, kernel: &Kernel) {
+    let Some(checkpoints) = &session.checkpoints else {
+        return;
+    };
+    let record_seq = match kernel.store().get_head_seq(session.agent_id) {
+        Ok(seq) => seq,
+        Err(e) => {
+            warn!(session_id = %session.session_id, error = %e, "Skipping checkpoint: record head unknown");
+            return;
+        }
+    };
+    let checkpoint = aura_agent::checkpoint::SessionCheckpoint::new(
+        session.started_ms,
+        record_seq,
+        session.messages.clone(),
+        session.todos.clone(),
+        session.usage.clone(),
+    );
+    if let Err(e) = checkpoints.save(session.agent_id, &checkpoint).await {
+        warn!(session_id = %session.session_id, error = %e, "Failed to save the session checkpoint");
+    }
+}
+
 fn accumulate_turn_usage(session: &mut Session, loop_result: &AgentLoopResult) {
-    session.cumulative_input_tokens += loop_result.total_input_tokens;
-    session.cumulative_output_tokens += loop_result.total_output_tokens;
-    session.cumulative_cache_creation_input_tokens += loop_result.total_cache_creation_input_tokens;
-    session.cumulative_cache_read_input_tokens += loop_result.total_cache_read_input_tokens;
+    let cumulative = &mut session.cumulative;
+    cumulative.input_tokens += loop_result.total_input_tokens;
+    cumulative.output_tokens += loop_result.total_output_tokens;
+    cumulative.cache_creation_input_tokens += loop_result.total_cache_creation_input_tokens;
+    cumulative.cache_read_input_tokens += loop_result.total_cache_read_input_tokens;
+    session.usage.add(&aura_agent::checkpoint::SessionUsage {
+        calls: u32::try_from(loop_result.iterations).unwrap_or(u32::MAX),
+        input_tokens: loop_result.total_input_tokens,
+        cache_read_tokens: loop_result.total_cache_read_input_tokens,
+        cache_write_tokens: loop_result.total_cache_creation_input_tokens,
+        output_tokens: loop_result.total_output_tokens,
+        context_tokens: loop_result.estimated_context_tokens,
+        models: (!session.model.is_empty())
+            .then(|| session.model.clone())
+            .into_iter()
+            .collect(),
+        ..aura_agent::checkpoint::SessionUsage::default()
+    });
 }
 
 fn turn_stop_reason(loop_result: &AgentLoopResult) -> &'static str {
@@ -253,10 +342,10 @@ fn turn_session_usage(session: &Session, loop_result: &AgentLoopResult) -> Sessi
         estimated_context_tokens,
         cache_creation_input_tokens: loop_result.total_cache_creation_input_tokens,
         cache_read_input_tokens: loop_result.total_cache_read_input_tokens,
-        cumulative_input_tokens: session.cumulative_input_tokens,
-        cumulative_output_tokens: session.cumulative_output_tokens,
-        cumulative_cache_creation_input_tokens: session.cumulative_cache_creation_input_tokens,
-        cumulative_cache_read_input_tokens: session.cumulative_cache_read_input_tokens,
+        cumulative_input_tokens: session.cumulative.input_tokens,
+        cumulative_output_tokens: session.cumulative.output_tokens,
+        cumulative_cache_creation_input_tokens: session.cumulative.cache_creation_input_tokens,
+        cumulative_cache_read_input_tokens: session.cumulative.cache_read_input_tokens,
         context_utilization,
         model: session.model.clone(),
         provider: session.provider_name.clone(),

@@ -141,7 +141,21 @@ impl App {
 
     pub(super) fn cmd_set_placement(&mut self, agent_id: String, state: PlacementState) {
         self.host.cloud.cloud_ready = state.cloud_ready;
+        let woke = !state.asleep && agent_id == self.active_agent_id && self.machine_asleep();
+        if woke && self.sandbox.is_remote() {
+            self.ticks.sandbox_stale = true;
+        }
         self.host.cloud.placements.insert(agent_id, state);
+    }
+
+    /// Whether the agent on screen has a cloud machine that is asleep, so
+    /// nothing is read from it.
+    pub(crate) fn machine_asleep(&self) -> bool {
+        self.host
+            .cloud
+            .placements
+            .get(&self.active_agent_id)
+            .is_some_and(|placement| placement.asleep)
     }
 
     pub(super) fn cmd_set_host(&mut self, view: HostView) {

@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use super::remote_files::PendingFile;
 use super::{PendingApproval, WorkspaceMove};
 
 /// Things waiting on the user or the host.
@@ -37,4 +38,6 @@ pub(crate) struct Pending {
     pub(crate) kill: Option<String>,
     /// Node to select once the requested graph loads.
     pub(crate) graph_node: Option<String>,
+    /// A file asked of the active agent's machine, shown once read
+    pub(crate) file: Option<PendingFile>,
 }

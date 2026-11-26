@@ -23,13 +23,13 @@ use aura_agent::{
     CheckNotifier, CheckOutcome, CheckReport, CheckSource, KernelModelGateway, KernelToolGateway,
     PostEditCheck, PostEditCheckConfig,
 };
-use aura_agent_kernel::Kernel;
+use aura_agent_kernel::{Kernel, RecordObserver};
 use aura_core_types::time::now_ms;
 use aura_core_types::{AgentId, Identity};
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::todo::{
     apply_todo_write, assign_task, report_task, task_reports, task_todo, TodoItem,
-    TODO_WRITE_TOOL_NAME,
+    ASSIGN_TOOL_NAME, TODO_WRITE_TOOL_NAME,
 };
 use aura_exec_tools::RunScratch;
 use aura_model::{ContentBlock, Message, Role};
@@ -156,21 +156,23 @@ impl AgentSession {
 }
 
 /// The todo list left by the `todo_write` calls in `messages`, with the
-/// todos `task` calls gave to agents assigned and, once the agents
-/// reported back (in the call's result, or a detached task's notice),
-/// closed: the list the agent loop kept as the turns ran.
+/// todos `task` and `assign` calls gave to agents assigned and, once the
+/// agents reported back (in the call's result, or a later notice or inbox
+/// reply), closed: the list the agent loop kept as the turns ran.
 pub(crate) fn todos_from_history(messages: &[Message]) -> Vec<TodoItem> {
     let mut todos = Vec::new();
-    let mut tasks: HashMap<&str, &serde_json::Value> = HashMap::new();
+    let mut tasks: HashMap<&str, (&str, &serde_json::Value)> = HashMap::new();
     for message in messages {
         for block in &message.content {
             let next = match block {
                 ContentBlock::ToolUse { name, input, .. } if name == TODO_WRITE_TOOL_NAME => {
                     apply_todo_write(&todos, input).ok()
                 }
-                ContentBlock::ToolUse { id, name, input } if name == TASK_TOOL_NAME => {
-                    tasks.insert(id, input);
-                    assign_task(&todos, input)
+                ContentBlock::ToolUse { id, name, input }
+                    if name == TASK_TOOL_NAME || name == ASSIGN_TOOL_NAME =>
+                {
+                    tasks.insert(id, (name, input));
+                    assign_task(&todos, name, input)
                 }
                 ContentBlock::ToolResult {
                     tool_use_id,
@@ -178,7 +180,7 @@ pub(crate) fn todos_from_history(messages: &[Message]) -> Vec<TodoItem> {
                     ..
                 } => tasks
                     .get(tool_use_id.as_str())
-                    .and_then(|input| task_todo(input))
+                    .and_then(|(name, input)| task_todo(name, input))
                     .filter(|(_, reports)| *reports)
                     .and_then(|(id, _)| report_task(&todos, id, !is_error)),
                 ContentBlock::Text { text } if message.role == Role::User => {

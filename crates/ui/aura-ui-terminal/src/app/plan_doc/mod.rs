@@ -160,7 +160,7 @@ impl PlanDoc {
     }
 
     /// Open at `focus`, scrolling to it on the next frame.
-    fn focus_on(&mut self, focus: TodoFocus<'_>) {
+    pub(super) fn focus_on(&mut self, focus: TodoFocus<'_>) {
         self.focus = self.todo_index(focus);
         self.scroll_to_focus = self.focus.is_some();
     }
@@ -213,6 +213,10 @@ impl App {
     /// Show the plan at `file` as a document over the chat panel, at
     /// `todo` when given; its raw text when it cannot be read as text.
     pub(super) fn open_plan_doc(&mut self, file: &Path, todo: Option<TodoFocus<'_>>) {
+        if self.sandbox.is_remote() {
+            self.read_remote_file(file, Some(todo));
+            return;
+        }
         match PlanDoc::load(file, self.sandbox.root()) {
             Ok(mut doc) => {
                 if let Some(todo) = todo {
@@ -230,6 +234,11 @@ impl App {
         let Some(DetailView::Plan(doc)) = self.detail.view.as_ref() else {
             return;
         };
+        if self.sandbox.is_remote() {
+            let file = doc.file.clone();
+            self.read_remote_file(&file, None);
+            return;
+        }
         let mut view = FileView::load(&doc.file, self.sandbox.root());
         let focused = doc
             .focus

@@ -43,30 +43,7 @@ fn position(text: &str, needle: &str) -> usize {
 #[test]
 fn files_load_from_general_to_specific_and_stop_below_home() {
     let tree = tree();
-    let rules = tree.repo.join(".cursor").join("rules");
-    write(&tree.home.join(".aura").join("AGENTS.md"), "USER rule");
-    write(&tree.home.join("AGENTS.md"), "HOME rule");
-    write(&tree.home.join("code").join("AGENTS.md"), "PARENT rule");
-    write(&tree.repo.join("AGENTS.md"), "REPO agents");
-    write(&tree.repo.join("CLAUDE.md"), "REPO claude");
-    write(&tree.repo.join(".cursor").join("rules.md"), "LEGACY rules");
-    write(
-        &rules.join("b-scoped.mdc"),
-        "---\ndescription: Rust\nglobs: **/*.rs, *.toml\nalwaysApply: false\n---\nSCOPED rule\n",
-    );
-    write(
-        &rules.join("a-always.mdc"),
-        "---\nalwaysApply: true\n---\nALWAYS rule\n",
-    );
-    write(
-        &rules.join("c-on-request.mdc"),
-        "---\ndescription: Database migrations\nalwaysApply: false\n---\nMIGRATION rule\n",
-    );
-    write(
-        &rules.join("d-manual.mdc"),
-        "---\nalwaysApply: false\n---\nMANUAL rule\n",
-    );
-    write(&rules.join("notes.txt"), "NOT a rule");
+    write_every_kind(&tree);
 
     let loaded =
         ProjectInstructions::new(settings(&tree, DEFAULT_MAX_BYTES)).for_workspace(&tree.repo);
@@ -95,6 +72,43 @@ fn files_load_from_general_to_specific_and_stop_below_home() {
         assert!(!text.contains(absent), "{absent:?} included:\n{text}");
     }
 
+    assert_file_entries(&loaded);
+}
+
+/// Instructions of every kind around `tree`'s project: the user's file,
+/// files in the home folder and the folder above the project, the
+/// project's own files, a `.cursor/rules` rule of each kind and a file
+/// there that is no rule.
+fn write_every_kind(tree: &Tree) {
+    let rules = tree.repo.join(".cursor").join("rules");
+    write(&tree.home.join(".aura").join("AGENTS.md"), "USER rule");
+    write(&tree.home.join("AGENTS.md"), "HOME rule");
+    write(&tree.home.join("code").join("AGENTS.md"), "PARENT rule");
+    write(&tree.repo.join("AGENTS.md"), "REPO agents");
+    write(&tree.repo.join("CLAUDE.md"), "REPO claude");
+    write(&tree.repo.join(".cursor").join("rules.md"), "LEGACY rules");
+    write(
+        &rules.join("b-scoped.mdc"),
+        "---\ndescription: Rust\nglobs: **/*.rs, *.toml\nalwaysApply: false\n---\nSCOPED rule\n",
+    );
+    write(
+        &rules.join("a-always.mdc"),
+        "---\nalwaysApply: true\n---\nALWAYS rule\n",
+    );
+    write(
+        &rules.join("c-on-request.mdc"),
+        "---\ndescription: Database migrations\nalwaysApply: false\n---\nMIGRATION rule\n",
+    );
+    write(
+        &rules.join("d-manual.mdc"),
+        "---\nalwaysApply: false\n---\nMANUAL rule\n",
+    );
+    write(&rules.join("notes.txt"), "NOT a rule");
+}
+
+/// `loaded` lists the user's file first, then the folder above the
+/// project, and keeps each rule's kind and globs.
+fn assert_file_entries(loaded: &LoadedInstructions) {
     let labels: Vec<&str> = loaded.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(labels[0], "~/.aura/AGENTS.md");
     assert_eq!(labels[1], "~/code/AGENTS.md");

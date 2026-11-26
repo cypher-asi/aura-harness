@@ -21,6 +21,9 @@ use ratatui::{
 
 /// Hint of the SANDBOX tab.
 pub(super) const SANDBOX_HINT: &str = "⏎ open  ←→ fold  ⇧←→ tabs";
+/// Hint of the REPO tab, and of it on a PR, which has a page to open.
+pub(super) const REPO_HINT: &str = "⏎ open  [] filter  r refresh  ⇧←→ tabs";
+pub(super) const REPO_PR_HINT: &str = "⏎ open  o web  [] filter  ⇧←→ tabs";
 /// Hint of the PROCESSES tab.
 pub(super) const PROCESSES_HINT: &str = "⏎ open  o agent  k kill  l log  ⇧←→ tabs";
 /// Hint of the TRACE tab.
@@ -45,6 +48,7 @@ pub(super) const INBOX_HINT: &str = "↑↓ move  ←→ fold  ⏎ open  ⇧←�
 /// | tab       | `Active` (foreground)                    | `Settled` (muted)                            |
 /// |-----------|------------------------------------------|----------------------------------------------|
 /// | SANDBOX   | files and folders                        | dot entries, "more" rows                     |
+/// | REPO      | changes, commits, open PRs, branches     | merged and closed PRs, gone branches, notes  |
 /// | PROCESSES | running, idle, paused                    | exited, failed, killed                       |
 /// | TRACE     | steps still pending                      | finished steps                               |
 /// | TASKS     | open plans and todos, running/open tasks | done plans, closed todos, done/failed tasks  |
@@ -115,6 +119,8 @@ mod tests {
     fn hints_share_one_format() {
         for hint in [
             SANDBOX_HINT,
+            REPO_HINT,
+            REPO_PR_HINT,
             PROCESSES_HINT,
             TRACE_HINT,
             TASKS_HINT,

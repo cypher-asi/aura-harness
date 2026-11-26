@@ -135,7 +135,11 @@ impl Layout<'_> {
         if let Some(reply) = block.place.meta {
             push_footer(&mut lines, reply, self.width, self.theme);
         }
-        let user = !self.terminal && members.len() == 1 && members[0].role() == MessageRole::User;
+        let folded = members[0].inbox_fold().is_some() && !members[0].is_expanded();
+        let user = !self.terminal
+            && members.len() == 1
+            && members[0].role() == MessageRole::User
+            && !folded;
         if user {
             frame_user_block(
                 &mut lines,

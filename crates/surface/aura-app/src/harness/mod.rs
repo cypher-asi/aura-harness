@@ -11,13 +11,10 @@ use crate::session_helpers;
 
 use anyhow::Context;
 use aura_agent::{ProcessManager, ProcessManagerConfig};
-use aura_agent_kernel::{
-    ExecutorRouter, Kernel, KernelConfig, RecordObserver, ToolApprovalPrompter,
-};
+use aura_agent_kernel::{KernelConfig, RecordObserver, ToolApprovalPrompter};
 use aura_context_skills::{SkillLoader, SkillManager};
-use aura_core_types::{AgentId, AgentPermissions, Transaction};
-use aura_exec_tools::todo::TodoWriteTool;
-use aura_exec_tools::{BackgroundProcessHook, SubagentDispatchHook, ToolConfig, ToolExecutor};
+use aura_core_types::Transaction;
+use aura_exec_tools::{BackgroundProcessHook, ToolConfig};
 use aura_gate::live::GateLive;
 use aura_model::ModelProvider;
 use aura_ui::{ApprovalLevel, PermissionMode, UiCommand};
@@ -25,6 +22,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+
+mod kernel;
+
+use kernel::KernelParts;
 
 /// How long a background command may run before it is killed. Long
 /// enough for a dev server to outlive a working day.
@@ -331,6 +332,8 @@ fn wire_agents(setup: &mut HubSetup, gate: Arc<GateLive>, kernel_config: KernelC
 fn assemble_hub(setup: HubSetup, wiring: Wiring) -> Harness {
     let background = wiring.background;
     let checkpoints = crate::session_checkpoint::Checkpoints::new(&setup.data_dir);
+    let hub_link = event_loop::HubLink::default();
+    let copied_observer = wiring.kernel_config.record_observer.clone();
     let kernels = KernelParts {
         store: setup.store.clone() as Arc<dyn aura_store_db::Store>,
         provider: setup.provider,
@@ -342,6 +345,7 @@ fn assemble_hub(setup: HubSetup, wiring: Wiring) -> Harness {
         agents: wiring.agents.clone(),
         approvals: setup.approvals.clone(),
         web_tools: setup.web_tools,
+        hub: hub_link.clone(),
     };
     let check_commands = setup.commands.clone();
     let skills = SkillLoader::with_defaults(Some(setup.workspace_root), None);
@@ -369,88 +373,11 @@ fn assemble_hub(setup: HubSetup, wiring: Wiring) -> Harness {
                 .into_factory(setup.store, dispatcher)
                 .with_checkpoints(checkpoints)
                 .with_post_edit_check(setup.post_edit_check, check_commands)
+                .with_record_observer(copied_observer)
         },
     );
+    hub_link.set(&hub);
     Harness { hub, background }
-}
-
-/// What the kernel factory builds each agent's kernel from.
-struct KernelParts {
-    store: Arc<dyn aura_store_db::Store>,
-    provider: Arc<dyn ModelProvider + Send + Sync>,
-    config: KernelConfig,
-    tool_config: ToolConfig,
-    background: Arc<dyn BackgroundProcessHook>,
-    files: FileCheckpoints,
-    commands: mpsc::Sender<UiCommand>,
-    agents: Option<event_loop::TerminalAgents>,
-    approvals: Option<Arc<event_loop::TerminalApprovals>>,
-    web_tools: WebTools,
-}
-
-impl KernelParts {
-    /// The kernel factory over `store`, whose kernels hand their `task`
-    /// calls to `dispatcher`.
-    fn into_factory(
-        self,
-        store: Arc<aura_store_db::RocksStore>,
-        dispatcher: Arc<dyn SubagentDispatchHook>,
-    ) -> event_loop::KernelFactory {
-        let files = self.files.clone();
-        let build = Box::new(move |agent_id, parent_chain, folder| {
-            self.kernel(&dispatcher, agent_id, parent_chain, folder)
-        });
-        event_loop::KernelFactory::new(store, build).with_file_checkpoints(files)
-    }
-
-    /// The kernel for `agent_id`, spawned by `parent_chain` (nearest
-    /// first), with its tools run in `folder` (`None`: the launch folder).
-    fn kernel(
-        &self,
-        dispatcher: &Arc<dyn SubagentDispatchHook>,
-        agent_id: AgentId,
-        parent_chain: Vec<AgentId>,
-        folder: Option<PathBuf>,
-    ) -> anyhow::Result<Kernel> {
-        let chain = std::iter::once(agent_id)
-            .chain(parent_chain.iter().copied())
-            .collect();
-        let file_hook = self.files.hook(chain, Some(self.commands.clone()));
-        let command_output =
-            event_loop::TerminalCommandOutput::new(self.commands.clone(), agent_id);
-        let mut executor = ToolExecutor::new(self.tool_config.clone())
-            .with_caller_permissions(AgentPermissions::full_access())
-            .with_parent_chain(parent_chain)
-            .with_subagent_dispatch_hook(Arc::clone(dispatcher))
-            .with_background_process_hook(Arc::clone(&self.background))
-            .with_file_change_hook(file_hook)
-            .with_command_output_hook(Arc::new(command_output));
-        if let Some(agents) = &self.agents {
-            let hooks = agents.hooks_for(agent_id);
-            executor = executor
-                .with_spawn_hook(hooks.clone())
-                .with_agent_control_hook(hooks.clone())
-                .with_agent_read_hook(hooks);
-        }
-        executor.register(Box::new(TodoWriteTool));
-        self.web_tools.register(&mut executor);
-        let mut executor_router = ExecutorRouter::new();
-        executor_router.add_executor(Arc::new(executor));
-        let mut config = self.config.clone();
-        if let Some(folder) = folder {
-            config.workspace_base = folder;
-        }
-        if let Some(approvals) = &self.approvals {
-            approvals.set_folder(agent_id, config.workspace_base.clone());
-        }
-        Ok(Kernel::new(
-            Arc::clone(&self.store),
-            Arc::clone(&self.provider),
-            executor_router,
-            config,
-            agent_id,
-        )?)
-    }
 }
 
 /// The permission mode terminal agents start in: `--mode`, else

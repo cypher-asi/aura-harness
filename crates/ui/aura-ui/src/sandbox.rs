@@ -3,8 +3,12 @@
 //! Directories are read only when expanded, so large trees cost nothing
 //! until opened. Symlinks are listed but never followed, which keeps the
 //! traversal inside the sandbox root.
+//!
+//! A cloud agent's sandbox is on its machine: the tree is then remote
+//! ([`SandboxTree::set_remote_root`]) and shows the listings the app sends
+//! for the directories it asks about ([`SandboxTree::wanted`]).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Entries listed per directory before the rest collapse into a "more" row.
@@ -38,6 +42,28 @@ pub struct SandboxRow {
     pub expanded: bool,
 }
 
+/// One entry of a directory listed on another machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteEntry {
+    /// File name
+    pub name: String,
+    /// Whether it is a directory
+    pub is_dir: bool,
+}
+
+/// What a remote tree knows of the other machine's directories.
+#[derive(Debug, Default)]
+struct Remote {
+    /// Each listed directory's entries, by its path there
+    listings: HashMap<PathBuf, Vec<RemoteEntry>>,
+    /// Directories whose listing (or failure to list) is current
+    fresh: HashSet<PathBuf>,
+    /// Directories asked about and not answered yet
+    asked: HashSet<PathBuf>,
+    /// Why the root could not be listed, the last time it was asked
+    failed: Option<String>,
+}
+
 /// Expandable file tree rooted at the agent's sandbox directory.
 #[derive(Debug, Default)]
 pub struct SandboxTree {
@@ -45,25 +71,108 @@ pub struct SandboxTree {
     expanded: HashSet<PathBuf>,
     rows: Vec<SandboxRow>,
     selected: usize,
+    /// Set while the tree shows another machine's files
+    remote: Option<Remote>,
 }
 
 impl SandboxTree {
     /// Point the tree at `root`. Switching to a different root collapses
     /// everything and moves the selection to the top.
     pub fn set_root(&mut self, root: PathBuf) {
-        if self.root.as_ref() != Some(&root) {
-            self.expanded.clear();
-            self.selected = 0;
-            self.rows.clear();
-            self.root = Some(root);
+        if self.root.as_ref() != Some(&root) || self.remote.is_some() {
+            self.reset(root);
         }
         self.refresh();
+    }
+
+    /// Point the tree at `root` on another machine, whose directories are
+    /// listed by asking ([`Self::wanted`]) rather than read here.
+    /// Switching to a different root collapses everything and moves the
+    /// selection to the top.
+    pub fn set_remote_root(&mut self, root: PathBuf) {
+        if self.root.as_ref() != Some(&root) || self.remote.is_none() {
+            self.reset(root);
+            self.remote = Some(Remote::default());
+        }
+        self.refresh();
+    }
+
+    fn reset(&mut self, root: PathBuf) {
+        self.expanded.clear();
+        self.selected = 0;
+        self.rows.clear();
+        self.root = Some(root);
+        self.remote = None;
     }
 
     /// Sandbox root, once the backend has reported it.
     #[must_use]
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
+    }
+
+    /// Whether the tree shows another machine's files.
+    #[must_use]
+    pub const fn is_remote(&self) -> bool {
+        self.remote.is_some()
+    }
+
+    /// Whether a remote tree's root has no listing yet, and why the last
+    /// ask failed when it did. `None` for a local tree or a listed root.
+    #[must_use]
+    pub fn unlisted(&self) -> Option<Option<&str>> {
+        let remote = self.remote.as_ref()?;
+        let root = self.root.as_ref()?;
+        (!remote.listings.contains_key(root)).then_some(remote.failed.as_deref())
+    }
+
+    /// The directories a remote tree needs listed: its root and every
+    /// open directory, unless current or asked about already. Mark each
+    /// one asked for with [`Self::asked`].
+    #[must_use]
+    pub fn wanted(&self) -> Vec<PathBuf> {
+        let (Some(remote), Some(root)) = (&self.remote, &self.root) else {
+            return Vec::new();
+        };
+        std::iter::once(root)
+            .chain(&self.expanded)
+            .filter(|dir| !remote.fresh.contains(*dir) && !remote.asked.contains(*dir))
+            .cloned()
+            .collect()
+    }
+
+    /// `dir` was asked about; it is not wanted again until answered.
+    pub fn asked(&mut self, dir: PathBuf) {
+        if let Some(remote) = &mut self.remote {
+            remote.asked.insert(dir);
+        }
+    }
+
+    /// Show `entries` as what `dir` holds on the other machine.
+    pub fn set_listing(&mut self, dir: PathBuf, entries: Vec<RemoteEntry>) {
+        let Some(remote) = &mut self.remote else {
+            return;
+        };
+        if self.root.as_ref() == Some(&dir) {
+            remote.failed = None;
+        }
+        remote.asked.remove(&dir);
+        remote.fresh.insert(dir.clone());
+        remote.listings.insert(dir, entries);
+        self.rebuild();
+    }
+
+    /// `dir` could not be listed, for `reason`: what shows of it stays,
+    /// and it is asked about again on the next [`Self::refresh`].
+    pub fn listing_failed(&mut self, dir: PathBuf, reason: String) {
+        let Some(remote) = &mut self.remote else {
+            return;
+        };
+        if self.root.as_ref() == Some(&dir) {
+            remote.failed = Some(reason);
+        }
+        remote.asked.remove(&dir);
+        remote.fresh.insert(dir);
     }
 
     /// Visible rows, in display order.
@@ -79,13 +188,29 @@ impl SandboxTree {
     }
 
     /// Re-read the root and every expanded directory, keeping the
-    /// selection on the same path when it still exists.
+    /// selection on the same path when it still exists. A remote tree
+    /// keeps showing what it has until every directory is listed again.
     pub fn refresh(&mut self) {
+        if let Some(remote) = &mut self.remote {
+            remote.fresh.clear();
+            remote.asked.clear();
+        }
+        self.rebuild();
+    }
+
+    /// Lay the rows out again from the disk, or a remote tree's listings.
+    fn rebuild(&mut self) {
         let selected_path = self.rows.get(self.selected).map(|r| r.path.clone());
         self.rows.clear();
         if let Some(root) = self.root.clone() {
-            self.expanded.retain(|p| p.is_dir());
-            push_dir(&root, 0, &self.expanded, &mut self.rows);
+            let source = match &self.remote {
+                Some(remote) => Source::Listed(&remote.listings),
+                None => {
+                    self.expanded.retain(|p| p.is_dir());
+                    Source::Disk
+                }
+            };
+            push_dir(&source, &root, 0, &self.expanded, &mut self.rows);
         }
         self.selected = selected_path
             .and_then(|path| self.rows.iter().position(|r| r.path == path))
@@ -126,7 +251,7 @@ impl SandboxTree {
         if !self.expanded.remove(&path) {
             self.expanded.insert(path);
         }
-        self.refresh();
+        self.rebuild();
     }
 
     /// Collapse the highlighted directory, or move to its parent when it is
@@ -151,25 +276,67 @@ impl SandboxTree {
     }
 }
 
-fn push_dir(dir: &Path, depth: usize, expanded: &HashSet<PathBuf>, rows: &mut Vec<SandboxRow>) {
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
+/// Where a tree's directories are read from.
+enum Source<'a> {
+    /// This computer's disk
+    Disk,
+    /// Listings of another machine's directories, by path there
+    Listed(&'a HashMap<PathBuf, Vec<RemoteEntry>>),
+}
+
+impl Source<'_> {
+    /// The name, path and kind of each entry of `dir`; `None` when it
+    /// can't be read or has no listing.
+    fn entries(&self, dir: &Path) -> Option<Vec<(String, PathBuf, SandboxEntryKind)>> {
+        match self {
+            Self::Disk => {
+                let read_dir = std::fs::read_dir(dir).ok()?;
+                Some(
+                    read_dir
+                        .filter_map(Result::ok)
+                        .map(|entry| {
+                            let kind = match entry.file_type() {
+                                Ok(ft) if ft.is_symlink() => SandboxEntryKind::Symlink,
+                                Ok(ft) if ft.is_dir() => SandboxEntryKind::Dir,
+                                _ => SandboxEntryKind::File,
+                            };
+                            (
+                                entry.file_name().to_string_lossy().into_owned(),
+                                entry.path(),
+                                kind,
+                            )
+                        })
+                        .collect(),
+                )
+            }
+            Self::Listed(listings) => Some(
+                listings
+                    .get(dir)?
+                    .iter()
+                    .map(|entry| {
+                        let kind = if entry.is_dir {
+                            SandboxEntryKind::Dir
+                        } else {
+                            SandboxEntryKind::File
+                        };
+                        (entry.name.clone(), dir.join(&entry.name), kind)
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+fn push_dir(
+    source: &Source<'_>,
+    dir: &Path,
+    depth: usize,
+    expanded: &HashSet<PathBuf>,
+    rows: &mut Vec<SandboxRow>,
+) {
+    let Some(mut entries) = source.entries(dir) else {
         return;
     };
-    let mut entries: Vec<(String, PathBuf, SandboxEntryKind)> = read_dir
-        .filter_map(Result::ok)
-        .map(|entry| {
-            let kind = match entry.file_type() {
-                Ok(ft) if ft.is_symlink() => SandboxEntryKind::Symlink,
-                Ok(ft) if ft.is_dir() => SandboxEntryKind::Dir,
-                _ => SandboxEntryKind::File,
-            };
-            (
-                entry.file_name().to_string_lossy().into_owned(),
-                entry.path(),
-                kind,
-            )
-        })
-        .collect();
     entries.sort_by(|a, b| {
         (a.2 != SandboxEntryKind::Dir)
             .cmp(&(b.2 != SandboxEntryKind::Dir))
@@ -187,7 +354,7 @@ fn push_dir(dir: &Path, depth: usize, expanded: &HashSet<PathBuf>, rows: &mut Ve
             expanded: is_open,
         });
         if is_open {
-            push_dir(&path, depth + 1, expanded, rows);
+            push_dir(source, &path, depth + 1, expanded, rows);
         }
     }
     if total > MAX_ENTRIES_PER_DIR {
@@ -203,123 +370,4 @@ fn push_dir(dir: &Path, depth: usize, expanded: &HashSet<PathBuf>, rows: &mut Ve
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    fn names(tree: &SandboxTree) -> Vec<String> {
-        tree.rows()
-            .iter()
-            .map(|r| format!("{}{}", "  ".repeat(r.depth), r.name))
-            .collect()
-    }
-
-    fn sample() -> (tempfile::TempDir, SandboxTree) {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("src/nested")).unwrap();
-        fs::write(dir.path().join("src/main.rs"), "").unwrap();
-        fs::write(dir.path().join("src/nested/deep.rs"), "").unwrap();
-        fs::create_dir(dir.path().join("Docs")).unwrap();
-        fs::write(dir.path().join("README.md"), "").unwrap();
-        fs::write(dir.path().join(".env"), "").unwrap();
-        let mut tree = SandboxTree::default();
-        tree.set_root(dir.path().to_path_buf());
-        (dir, tree)
-    }
-
-    #[test]
-    fn lists_directories_first_case_insensitive() {
-        let (_dir, tree) = sample();
-        assert_eq!(names(&tree), ["Docs", "src", ".env", "README.md"]);
-        assert_eq!(tree.rows()[0].kind, SandboxEntryKind::Dir);
-        assert_eq!(tree.rows()[3].kind, SandboxEntryKind::File);
-    }
-
-    #[test]
-    fn expand_and_collapse() {
-        let (_dir, mut tree) = sample();
-        tree.move_by(1);
-        tree.toggle_selected();
-        assert_eq!(
-            names(&tree),
-            ["Docs", "src", "  nested", "  main.rs", ".env", "README.md"]
-        );
-        assert!(tree.rows()[1].expanded);
-
-        tree.toggle_selected();
-        assert_eq!(names(&tree), ["Docs", "src", ".env", "README.md"]);
-    }
-
-    #[test]
-    fn toggle_on_file_does_nothing() {
-        let (_dir, mut tree) = sample();
-        tree.select_last();
-        tree.toggle_selected();
-        assert_eq!(names(&tree).len(), 4);
-    }
-
-    #[test]
-    fn left_collapses_then_jumps_to_parent() {
-        let (_dir, mut tree) = sample();
-        tree.move_by(1);
-        tree.toggle_selected();
-        tree.move_by(1);
-        tree.toggle_selected();
-        tree.move_by(1);
-        assert_eq!(tree.rows()[tree.selected()].name, "deep.rs");
-
-        tree.collapse_or_parent();
-        assert_eq!(tree.rows()[tree.selected()].name, "nested");
-        tree.collapse_or_parent();
-        assert!(!tree.rows()[tree.selected()].expanded);
-        tree.collapse_or_parent();
-        assert_eq!(tree.rows()[tree.selected()].name, "src");
-    }
-
-    #[test]
-    fn refresh_keeps_selection_and_picks_up_new_files() {
-        let (dir, mut tree) = sample();
-        tree.select_last();
-        fs::write(dir.path().join("a.txt"), "").unwrap();
-        tree.refresh();
-        assert_eq!(tree.rows()[tree.selected()].name, "README.md");
-        assert!(names(&tree).contains(&"a.txt".to_string()));
-    }
-
-    #[test]
-    fn new_root_resets_expansion() {
-        let (_dir, mut tree) = sample();
-        tree.move_by(1);
-        tree.toggle_selected();
-        let other = tempfile::tempdir().unwrap();
-        tree.set_root(other.path().to_path_buf());
-        assert!(tree.rows().is_empty());
-        assert_eq!(tree.selected(), 0);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlinked_directory_is_not_expanded() {
-        let (dir, mut tree) = sample();
-        std::os::unix::fs::symlink(dir.path().join("src"), dir.path().join("link")).unwrap();
-        tree.refresh();
-        let link = tree.rows().iter().position(|r| r.name == "link").unwrap();
-        assert_eq!(tree.rows()[link].kind, SandboxEntryKind::Symlink);
-        tree.move_by(isize::try_from(link).unwrap());
-        tree.toggle_selected();
-        assert!(!tree.rows()[link].expanded);
-        assert_eq!(names(&tree).len(), 5);
-    }
-
-    #[test]
-    fn caps_large_directories() {
-        let dir = tempfile::tempdir().unwrap();
-        for i in 0..MAX_ENTRIES_PER_DIR + 3 {
-            fs::write(dir.path().join(format!("f{i:04}")), "").unwrap();
-        }
-        let mut tree = SandboxTree::default();
-        tree.set_root(dir.path().to_path_buf());
-        assert_eq!(tree.rows().len(), MAX_ENTRIES_PER_DIR + 1);
-        assert_eq!(tree.rows().last().unwrap().kind, SandboxEntryKind::More(3));
-    }
-}
+mod tests;

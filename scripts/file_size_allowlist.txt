@@ -1,7 +1,3 @@
 # Rust files over the 500-line limit when scripts/check_file_size.sh landed.
 # This list may only shrink: remove a file when it is split under the limit.
-crates/engine/aura-engine-cloud/src/boxd.rs
-crates/engine/aura-engine-cloud/src/fake.rs
-crates/engine/aura-engine-cloud/src/github.rs
-crates/engine/aura-engine-cloud/src/snapshots.rs
 evals/polyglot/rust-xorcism/checks/.gate_checks/xorcism.rs

@@ -359,11 +359,15 @@ impl NodeConfig {
         Ok(canonical_candidate)
     }
 
-    /// Return the root directory for file browsing (project_base or workspaces).
+    /// Return the root directory for file browsing: `project_base`, else
+    /// a cloud machine's project directory (`workspace`), else the
+    /// workspaces.
     #[must_use]
     pub fn file_root(&self) -> PathBuf {
         if let Some(ref base) = self.project_base {
             base.clone()
+        } else if let Some(ref workspace) = self.workspace {
+            workspace.clone()
         } else {
             self.workspaces_path()
         }

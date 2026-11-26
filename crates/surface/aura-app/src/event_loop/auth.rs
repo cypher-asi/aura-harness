@@ -39,6 +39,9 @@ async fn record_auth_change(state: &LoopState<'_>, payload: serde_json::Value) {
         warn!("Failed to serialize auth change payload");
         return;
     };
+    if state.cloud.node_writes(state.active) {
+        return;
+    }
     let Some(kernel) = state.kernel_for(state.active) else {
         warn!("No open kernel to record the auth change on");
         return;

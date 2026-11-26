@@ -127,7 +127,7 @@ fn order(nested: &[AgentSummary]) -> Vec<(&str, usize)> {
 }
 
 #[test]
-fn nest_members_puts_the_coordinator_first_then_children_depth_first() {
+fn nest_members_puts_the_coordinators_agents_beside_it_with_subagents_below() {
     let nested = nest_members(
         "co",
         vec![
@@ -144,18 +144,18 @@ fn nest_members_puts_the_coordinator_first_then_children_depth_first() {
         order(&nested),
         vec![
             ("co", 0),
-            ("a", 1),
-            ("a1", 2),
-            ("a1x", 3),
-            ("a2", 2),
-            ("b", 1),
-            ("b1", 2),
+            ("a", 0),
+            ("a1", 1),
+            ("a1x", 2),
+            ("a2", 1),
+            ("b", 0),
+            ("b1", 1),
         ]
     );
 }
 
 #[test]
-fn nest_members_puts_orphans_under_the_coordinator() {
+fn nest_members_counts_orphans_as_the_coordinators_agents() {
     let nested = nest_members(
         "co",
         vec![
@@ -167,7 +167,7 @@ fn nest_members_puts_orphans_under_the_coordinator() {
     );
     assert_eq!(
         order(&nested),
-        vec![("co", 0), ("x", 1), ("x1", 2), ("y", 1)]
+        vec![("co", 0), ("x", 0), ("x1", 1), ("y", 0)]
     );
 }
 
@@ -184,7 +184,7 @@ fn nest_members_keeps_members_without_a_coordinator_or_in_a_cycle() {
     );
     assert_eq!(
         order(&nested),
-        vec![("a", 1), ("a1", 2), ("p", 1), ("q", 2)]
+        vec![("a", 0), ("a1", 1), ("p", 0), ("q", 1)]
     );
     assert!(nest_members("co", Vec::new()).is_empty());
 }

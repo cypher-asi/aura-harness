@@ -200,6 +200,7 @@ async fn tool_rejects_workspace_escape_via_config() {
     use crate::ToolConfig;
 
     let parent = TempDir::new().unwrap();
+    fence(parent.path());
     let escape_target = parent.path().join("escape");
     std::fs::create_dir(&escape_target).unwrap();
     init_repo(&escape_target).await;

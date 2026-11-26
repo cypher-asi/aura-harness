@@ -13,11 +13,7 @@ use aura_core_types::{VmEvent, VmPayload, VmSource};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use super::claim::{claim_facts, claim_waits_on};
-use super::{
-    Entry, MachineView, ProvisionRequest, VmFleet, VmState, AUTO_HIBERNATE_BACKSTOP_SECS,
-    CLAIM_TIMEOUT,
-};
+use super::{Entry, MachineView, ProvisionRequest, VmFleet, VmState, AUTO_HIBERNATE_BACKSTOP_SECS};
 
 /// What boxd says about a machine it just made, as boot facts.
 pub(super) fn machine_facts(boot: &BootReporter, machine: &MachineInfo, networks: &[String]) {
@@ -72,6 +68,33 @@ pub(super) fn machine_facts(boot: &BootReporter, machine: &MachineInfo, networks
     }
 }
 
+/// Refuse a secret `request` lists that isn't its owner's to list.
+fn check_secrets(request: &ProvisionRequest) -> CloudResult<()> {
+    if let Some(foreign) = request
+        .secrets
+        .iter()
+        .find(|name| !names::is_plan_secret_of(name, &request.owner))
+    {
+        return Err(CloudError::BadState {
+            machine: request.name.clone(),
+            state: format!("asked for secret {foreign}"),
+            op: "list a secret that is not its owner's plan",
+        });
+    }
+    if let Some(foreign) = request
+        .repo_secret
+        .as_deref()
+        .filter(|name| !names::is_repo_secret(name))
+    {
+        return Err(CloudError::BadState {
+            machine: request.name.clone(),
+            state: format!("asked for secret {foreign}"),
+            op: "list a repository secret that is not one",
+        });
+    }
+    Ok(())
+}
+
 impl VmFleet {
     /// Create, configure and claim a machine for an agent.
     ///
@@ -95,6 +118,38 @@ impl VmFleet {
         request: ProvisionRequest,
         boot: &BootReporter,
     ) -> CloudResult<MachineView> {
+        self.check_quota(boot).await?;
+        self.check_request(&request)?;
+        let ledger = names::machine_ledger(&request.agent_zns);
+        let spec = self.machine_spec(&request);
+        let machine = self.create_machine(&spec, &request.origin, boot).await?;
+        self.created_row(&request.origin, &machine, &ledger);
+        self.keep_claiming(&request, &machine, &ledger);
+        self.configure(&machine, boot).await?;
+        if let Err(err) = self
+            .claim_reported(&request.agent, &machine.name, &request.seal, boot)
+            .await
+        {
+            self.row(
+                &ledger,
+                &VmPayload {
+                    reason: Some(err.to_string()),
+                    ..Self::base_row(VmEvent::Error, &machine)
+                },
+            );
+            let _ = self.provider.destroy(&machine.name).await;
+            self.machines.lock().remove(&request.agent);
+            return Err(err);
+        }
+        self.view(&request.agent).ok_or(CloudError::NotFound {
+            what: "machine",
+            name: machine.name,
+        })
+    }
+
+    /// Make sure the org has room for one more machine, as the
+    /// [`BootStage::Quota`] stage.
+    async fn check_quota(&self, boot: &BootReporter) -> CloudResult<()> {
         let limit = boot
             .run(BootStage::Quota, async {
                 let limit = boot
@@ -119,6 +174,12 @@ impl VmFleet {
             "quota",
             format!("{} of {} machines in use", limit.count, limit.max),
         );
+        Ok(())
+    }
+
+    /// Refuse a request that crosses owners: a fork of another user's
+    /// machine, or a secret that isn't the owner's.
+    fn check_request(&self, request: &ProvisionRequest) -> CloudResult<()> {
         if let MachineOrigin::Fork(parent) = &request.origin {
             // A fork inherits its parent's secrets, so never across owners.
             let parent_owner = self
@@ -135,36 +196,20 @@ impl VmFleet {
                 });
             }
         }
-        if let Some(foreign) = request
-            .secrets
-            .iter()
-            .find(|name| !names::is_plan_secret_of(name, &request.owner))
-        {
-            return Err(CloudError::BadState {
-                machine: request.name.clone(),
-                state: format!("asked for secret {foreign}"),
-                op: "list a secret that is not its owner's plan",
-            });
-        }
-        if let Some(foreign) = request
-            .repo_secret
-            .as_deref()
-            .filter(|name| !names::is_repo_secret(name))
-        {
-            return Err(CloudError::BadState {
-                machine: request.name.clone(),
-                state: format!("asked for secret {foreign}"),
-                op: "list a repository secret that is not one",
-            });
-        }
-        let ledger = names::machine_ledger(&request.agent_zns);
+        check_secrets(request)
+    }
+
+    /// The machine `request` asks for: labelled with its owner, agent and
+    /// project, on the project's network unless isolated, listing the
+    /// owner's plan secrets and the project's repository secret.
+    fn machine_spec(&self, request: &ProvisionRequest) -> NewMachine {
         let mut labels = BTreeMap::new();
         labels.insert(LABEL_OWNER.to_string(), request.owner.clone());
         labels.insert(LABEL_INSTALL.to_string(), self.settings.install.clone());
         labels.insert(LABEL_AGENT.to_string(), request.agent.clone());
         labels.insert(LABEL_PROJECT.to_string(), request.project.clone());
         labels.insert(LABEL_ROLE.to_string(), ROLE_AGENT.to_string());
-        let spec = NewMachine {
+        NewMachine {
             name: request.name.clone(),
             size: self.settings.size,
             isolated: self.settings.isolated,
@@ -183,8 +228,18 @@ impl VmFleet {
                 .cloned()
                 .chain(request.repo_secret.clone())
                 .collect(),
-        };
-        let creating = match &request.origin {
+        }
+    }
+
+    /// Create `spec`'s machine from `origin` as the [`BootStage::Create`]
+    /// stage, showing what boxd reports about it.
+    async fn create_machine(
+        &self,
+        spec: &NewMachine,
+        origin: &MachineOrigin,
+        boot: &BootReporter,
+    ) -> CloudResult<MachineInfo> {
+        let creating = match origin {
             MachineOrigin::Snapshot(snapshot) => {
                 format!("boxd is creating {} from snapshot {snapshot}", spec.name)
             }
@@ -198,16 +253,22 @@ impl VmFleet {
                     BootStage::Create,
                     creating,
                     Some(CREATE_TIMEOUT),
-                    self.provider.create(&spec, &request.origin),
+                    self.provider.create(spec, origin),
                 ),
             )
             .await?;
         machine_facts(boot, &machine, &spec.networks);
-        let event = match request.origin {
+        Ok(machine)
+    }
+
+    /// The `created` (or `forked`) row of `machine`, made from `origin`,
+    /// on `ledger`.
+    fn created_row(&self, origin: &MachineOrigin, machine: &MachineInfo, ledger: &str) {
+        let event = match origin {
             MachineOrigin::Fork(_) => VmEvent::Forked,
             _ => VmEvent::Created,
         };
-        let source = match &request.origin {
+        let source = match origin {
             MachineOrigin::Snapshot(name) => Some(VmSource::Snapshot {
                 name: name.clone(),
                 version: None,
@@ -218,13 +279,17 @@ impl VmFleet {
             MachineOrigin::Fresh => machine.source.clone(),
         };
         self.row(
-            &ledger,
+            ledger,
             &VmPayload {
                 source: machine.source.clone().or(source),
                 boot_ms: Some(machine.boot_ms),
-                ..Self::base_row(event, &machine)
+                ..Self::base_row(event, machine)
             },
         );
+    }
+
+    /// Keep `machine` as `request`'s agent's, claiming.
+    fn keep_claiming(&self, request: &ProvisionRequest, machine: &MachineInfo, ledger: &str) {
         self.machines.lock().insert(
             request.agent.clone(),
             Entry {
@@ -232,7 +297,7 @@ impl VmFleet {
                 plans: request.plans.clone(),
                 git: request.git.clone(),
                 project: request.project.clone(),
-                ledger: ledger.clone(),
+                ledger: ledger.to_string(),
                 machine: machine.clone(),
                 state: VmState::Claiming,
                 busy: 0,
@@ -242,81 +307,73 @@ impl VmFleet {
                 seen_ms: now_ms(),
             },
         );
+    }
+
+    /// Set a new machine up as the [`BootStage::Configure`] stage: bot
+    /// protection off and boxd's hibernation backstop on, each shown and
+    /// never fatal.
+    async fn configure(&self, machine: &MachineInfo, boot: &BootReporter) -> CloudResult<()> {
         boot.run(BootStage::Configure, async {
-            // boxd's bot check would answer API calls with a 503.
-            let bot = boot
-                .wait(
-                    BootStage::Configure,
-                    "boxd is turning bot protection off",
-                    Some(CALL_TIMEOUT),
-                    self.provider.set_bot_protection(&machine.name, false),
-                )
-                .await;
-            if let Err(err) = bot {
-                tracing::warn!(machine = %machine.name, error = %err, "could not turn bot protection off");
-                boot.log(BootStage::Configure, true, format!("bot protection stays on: {err}"));
-            } else {
-                boot.log(BootStage::Configure, false, "bot protection off for the node API");
-            }
-            match boot
-                .wait(
-                    BootStage::Configure,
-                    "boxd is setting the hibernation backstop",
-                    Some(CALL_TIMEOUT),
-                    self.provider
-                        .set_auto_hibernate(&machine.name, AUTO_HIBERNATE_BACKSTOP_SECS),
-                )
-                .await
-            {
-                Ok(()) => boot.log(
-                    BootStage::Configure,
-                    false,
-                    format!(
-                        "boxd hibernates it after {} min idle",
-                        AUTO_HIBERNATE_BACKSTOP_SECS / 60
-                    ),
-                ),
-                Err(err) => {
-                    tracing::warn!(machine = %machine.name, error = %err, "could not set the hibernation backstop");
-                    boot.log(
-                        BootStage::Configure,
-                        true,
-                        format!("no hibernation backstop: {err}"),
-                    );
-                }
-            }
+            self.bot_protection_off(machine, boot).await;
+            self.hibernation_backstop(machine, boot).await;
             Ok::<_, CloudError>(())
         })
-        .await?;
-        let claimed = boot
-            .run(
-                BootStage::Claim,
-                boot.wait(
-                    BootStage::Claim,
-                    claim_waits_on(&machine.name),
-                    Some(CLAIM_TIMEOUT),
-                    self.claim(&request.agent, &request.seal),
-                ),
+        .await
+    }
+
+    async fn bot_protection_off(&self, machine: &MachineInfo, boot: &BootReporter) {
+        // boxd's bot check would answer API calls with a 503.
+        let bot = boot
+            .wait(
+                BootStage::Configure,
+                "boxd is turning bot protection off",
+                Some(CALL_TIMEOUT),
+                self.provider.set_bot_protection(&machine.name, false),
             )
             .await;
-        if let Ok(claimed) = &claimed {
-            claim_facts(boot, claimed);
-        }
-        if let Err(err) = claimed {
-            self.row(
-                &ledger,
-                &VmPayload {
-                    reason: Some(err.to_string()),
-                    ..Self::base_row(VmEvent::Error, &machine)
-                },
+        if let Err(err) = bot {
+            tracing::warn!(machine = %machine.name, error = %err, "could not turn bot protection off");
+            boot.log(
+                BootStage::Configure,
+                true,
+                format!("bot protection stays on: {err}"),
             );
-            let _ = self.provider.destroy(&machine.name).await;
-            self.machines.lock().remove(&request.agent);
-            return Err(err);
+        } else {
+            boot.log(
+                BootStage::Configure,
+                false,
+                "bot protection off for the node API",
+            );
         }
-        self.view(&request.agent).ok_or(CloudError::NotFound {
-            what: "machine",
-            name: machine.name,
-        })
+    }
+
+    async fn hibernation_backstop(&self, machine: &MachineInfo, boot: &BootReporter) {
+        match boot
+            .wait(
+                BootStage::Configure,
+                "boxd is setting the hibernation backstop",
+                Some(CALL_TIMEOUT),
+                self.provider
+                    .set_auto_hibernate(&machine.name, AUTO_HIBERNATE_BACKSTOP_SECS),
+            )
+            .await
+        {
+            Ok(()) => boot.log(
+                BootStage::Configure,
+                false,
+                format!(
+                    "boxd hibernates it after {} min idle",
+                    AUTO_HIBERNATE_BACKSTOP_SECS / 60
+                ),
+            ),
+            Err(err) => {
+                tracing::warn!(machine = %machine.name, error = %err, "could not set the hibernation backstop");
+                boot.log(
+                    BootStage::Configure,
+                    true,
+                    format!("no hibernation backstop: {err}"),
+                );
+            }
+        }
     }
 }

@@ -31,8 +31,8 @@ use super::agent_events::AgentUi;
 use super::agents::{AgentSession, KernelFactory};
 use super::approvals::TerminalApprovals;
 use super::gate::subtask::{explicit_model, Judgement, SubtaskEnd, SubtaskGate, SubtaskLabel};
-use super::handlers::{handle_agent_success, run_agent_turn, system_message};
-use super::host::{agent_tool_definitions, TerminalAgents};
+use super::handlers::{handle_agent_success, run_agent_turn, system_message, TurnControls};
+use super::host::{host_tool_definitions, inbox_tool_definitions, is_inbox_tool, TerminalAgents};
 use super::mail::{MailItem, MailSender, Mailbox, TaskMail};
 use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
@@ -43,7 +43,7 @@ use super::task_check;
 use super::tasks::{Spawned, TaskBoard};
 use super::trace::Traces;
 use super::GateBase;
-use crate::agent_definitions::{AgentDefinition, AgentDefinitions};
+use crate::agent_definitions::{AgentDefinition, AgentDefinitions, COORDINATOR_TOOLS};
 use crate::agent_registry::AgentRegistry;
 use crate::event_loop::gate::followup::ended_signal;
 use crate::file_checkpoints::AttemptFiles;
@@ -65,7 +65,7 @@ use aura_core_types::{
 };
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
-use aura_exec_tools::todo::{task_report_line, TODO_WRITE_TOOL_NAME};
+use aura_exec_tools::todo::{task_report_line, ASSIGN_TOOL_NAME, TODO_WRITE_TOOL_NAME};
 use aura_exec_tools::SubagentDispatchHook;
 use aura_gate::compare::{tally, PlanReading};
 use aura_gate::followup;
@@ -98,10 +98,12 @@ mod spawn;
 mod subtask;
 mod task_run;
 mod task_tool;
+mod task_turn;
 
 use task_run::*;
-pub use task_tool::task_tool_definition;
 use task_tool::*;
+pub use task_tool::{assign_tool_definition, task_tool_definition};
+use task_turn::*;
 
 /// Record entries read per scan when adding up an agent's model calls.
 const SCAN_BATCH: usize = 500;
@@ -390,6 +392,8 @@ pub struct AgentHub {
     pub(crate) hidden_members: Mutex<HashSet<AgentId>>,
     /// Replies the channels wait for and what each coordinator has seen.
     pub(crate) channel_chat: super::channels::ChannelChat,
+    /// What agents owe each other through their inboxes.
+    pub(crate) inbox: super::inbox::Inbox,
     /// The chats of the agents shown last, as read from their records
     pub(super) shown_chats: Mutex<crate::record_loader::ByHead<Vec<MessageData>>>,
     /// The Record panel rows of the agents shown last

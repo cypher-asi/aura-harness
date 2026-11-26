@@ -169,6 +169,7 @@ async fn adopt_machine(
         branch: branch.map(str::to_string),
         repo: None,
         fetched_tip: None,
+        children: Vec::new(),
     };
     hub.placements
         .lock()

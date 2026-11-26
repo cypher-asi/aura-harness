@@ -5,7 +5,10 @@
 //! | `GET /v1/host` | hub | this machine's [`HostStats`] |
 //! | `POST /v1/sync/import` | hub | seed an agent's record before it runs here |
 //! | `POST /v1/sync/seal/:agent_id` | hub | stop writing for an agent, report its final head |
-//! | `GET /v1/sync/traces` | hub | trace runs since a cursor |
+//! | `PUT /v1/sync/session/:agent_id` | hub | the conversation the agent's first run here continues |
+//! | `GET /v1/sync/session/:agent_id` | hub | the agent's current session checkpoint, to keep a copy |
+//! | `POST /v1/sync/session/:agent_id/new` | hub | start a new session (`/new`) |
+//! | `GET /v1/sync/traces?agent=` | hub | the agent's newest trace runs, whole |
 //! | `GET /v1/workspace/patch` | hub | the agent's work as a patch |
 //! | `POST /v1/mesh/mail` | hub, peers | one message for an agent here |
 //! | `WS /v1/mesh` | hub | mail both ways, directory, host stats, keep-alive |
@@ -19,12 +22,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
+use aura_agent::checkpoint::{SessionCheckpoint, CHECKPOINT_VERSION};
+use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_core_protocol::cloud::{
-    MeshFrame, MeshMail, MeshMailKind, MeshPeer, SealResponse, SyncImport, SyncImported, TracePage,
-    WorkspacePatch, MESH_PROTOCOL,
+    MeshFrame, MeshMail, MeshMailKind, MeshPeer, MeshProcess, SealResponse, SessionSaved,
+    SessionStarted, SyncImport, SyncImported, TracePage, WorkspacePatch, MESH_PROCESS_AGENT,
+    MESH_PROTOCOL,
 };
-use aura_core_types::AgentId;
-use aura_engine::agents::{MessageKind, RemoteMail, RemoteRouter, ThreadId};
+use aura_core_types::{AgentId, Transaction};
+use aura_engine::agents::{AgentInfo, AgentState, MessageKind, RemoteMail, RemoteRouter, ThreadId};
 use aura_engine_cloud::mesh::{global_thread, MailBook};
 use aura_engine_cloud::replica::verify_page;
 use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
@@ -45,11 +51,13 @@ mod patch;
 mod sync;
 #[cfg(test)]
 mod tests;
+mod watch;
 
 pub(in crate::gateway) use mesh::{mesh_mail_handler, mesh_ws_handler};
 pub(in crate::gateway) use patch::workspace_patch_handler;
 pub(in crate::gateway) use sync::{
-    host_handler, sync_import_handler, sync_seal_handler, sync_traces_handler,
+    host_handler, sync_import_handler, sync_seal_handler, sync_session_get_handler,
+    sync_session_new_handler, sync_session_put_handler, sync_traces_handler,
 };
 
 /// Largest patch served.
@@ -61,8 +69,17 @@ const SEAL_DRAIN: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How often host stats go up the hub socket.
 const HOST_STATS_EVERY: Duration = Duration::from_secs(5);
+/// How often the hosted agents' heads are compared with what the hub
+/// was last told.
+const HEAD_WATCH_EVERY: Duration = Duration::from_secs(1);
+/// How often the hosted agents' turns and spawned agents are compared
+/// with what the hub was last told.
+const PROCESS_WATCH_EVERY: Duration = Duration::from_secs(1);
 /// Limit on a direct send to a peer node.
 const PEER_TIMEOUT: Duration = Duration::from_secs(15);
+/// Runs of an agent served per traces call: its open run and the ones
+/// before it, which may have changed since the hub's last copy.
+const TRACE_RUNS_SERVED: usize = 3;
 /// Most frames kept for the hub while its socket is down.
 const MAX_PENDING: usize = 1024;
 
@@ -78,6 +95,49 @@ fn bad(message: impl Into<String>) -> (StatusCode, String) {
 
 fn parse_agent(hex: &str) -> ApiResult<AgentId> {
     AgentId::from_hex(hex.trim()).map_err(|err| bad(format!("invalid agent id: {err}")))
+}
+
+fn sealed(agent: AgentId) -> (StatusCode, String) {
+    (
+        StatusCode::CONFLICT,
+        format!("agent {agent} is sealed on this node"),
+    )
+}
+
+fn storage(e: &aura_store_db::StoreError) -> (StatusCode, String) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("storage error: {e}"),
+    )
+}
+
+/// Stop every chat run and wait (up to [`SEAL_DRAIN`]) for them to end. A
+/// cloud node only runs its hub's agent.
+async fn end_chat_runs(state: &RouterState) {
+    for run in state.chat_runs.iter() {
+        run.shutdown.cancel();
+    }
+    let deadline = tokio::time::Instant::now() + SEAL_DRAIN;
+    while !state.chat_runs.is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Wait (up to [`SEAL_DRAIN`]) for a turn the scheduler runs for `agent`
+/// (mail) to end, and hold its claim so none starts.
+async fn hold_claim(
+    state: &RouterState,
+    agent: AgentId,
+) -> ApiResult<aura_engine::scheduler::ProcessingClaim> {
+    tokio::time::timeout(SEAL_DRAIN, state.scheduler.processing_claim(agent))
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::CONFLICT,
+                format!("agent {agent} is still writing; try again"),
+            )
+        })?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("claim: {e}")))
 }
 
 /// The node's half of the mesh: the hub socket, the peer directory and

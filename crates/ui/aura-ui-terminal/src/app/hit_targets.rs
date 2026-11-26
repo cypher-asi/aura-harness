@@ -43,7 +43,7 @@ pub(crate) enum HoverTarget {
     MemberRow(usize),
     /// A row in the Record panel's INBOX tab.
     InboxRow(usize),
-    /// A label in the side panel's tab bar.
+    /// A label or icon in the side panel's tab bar.
     SideTab(SidePanelTab),
     /// The `*` button at the right end of the side panel's tab bar.
     SideScope,
@@ -59,6 +59,10 @@ pub(crate) enum HoverTarget {
     TraceRow(usize),
     /// A row in the Tasks tab.
     TaskRow(usize),
+    /// A filter at the top of the REPO tab.
+    RepoFilter(repo_tab::RepoFilter),
+    /// A row in the REPO tab.
+    RepoRow(usize),
     /// A chat row that expands or collapses agent activity.
     Activity(ToggleTarget),
     /// An image thumbnail in the chat: message id, which of its images.

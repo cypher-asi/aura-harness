@@ -2,6 +2,7 @@
 //! instances of definitions and the headless agent.
 
 use anyhow::Context;
+use aura_core_types::AgentId;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 
@@ -183,6 +184,14 @@ impl AgentRegistry {
         })
     }
 
+    /// [`Self::is_top_level`] for the agent `agent_id`; one that isn't
+    /// registered, like a headless run's, is top level too.
+    #[must_use]
+    pub fn is_top_level_agent(&self, agent_id: AgentId) -> bool {
+        self.find(agent_id)
+            .is_none_or(|agent| self.is_top_level(agent))
+    }
+
     /// Register an instance of the permanent agent `definition`, named
     /// `<definition> #<n>`, spawned by the agent with ZNS id `parent` (in
     /// its project), or else in the launch directory's project.
@@ -232,7 +241,7 @@ impl AgentRegistry {
     /// was ever given, so neither a name nor a code is reused after an
     /// instance is dropped, even the highest-numbered one, and [`code::assign`]
     /// gives the instance the code with the same number.
-    fn new_instance(&self, definition: &str) -> RegisteredAgent {
+    pub(super) fn new_instance(&self, definition: &str) -> RegisteredAgent {
         let highest_named = self
             .file
             .agents

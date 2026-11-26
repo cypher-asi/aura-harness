@@ -8,7 +8,7 @@ use crate::event_loop::turns::{Prompt, Work};
 use crate::event_loop::LoopState;
 use crate::project_instructions::agents_md_in;
 use crate::record_loader::chat_from_messages;
-use crate::session_checkpoint::SessionListing;
+use crate::session_checkpoint::{Checkpoints, SessionCheckpoint, SessionListing};
 use aura_context_prompts::model_messages::init_project::init_project_prompt;
 use aura_core_types::AgentId;
 use aura_core_types::{RecordEntry, Transaction};
@@ -20,19 +20,27 @@ use tracing::{debug, error, info};
 pub(in crate::event_loop) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
     debug!("New session requested");
     let agent_id = state.active;
-    let Some(session) = state.idle.get_mut(&agent_id) else {
-        let _ = state
-            .commands
-            .send(UiCommand::ShowWarning(
-                "Wait for this agent to finish (or press Esc) before starting a new session"
-                    .to_string(),
-            ))
-            .await;
-        return false;
-    };
-
-    mark_session_start(session).await;
-    session.reset();
+    if state.cloud.node_writes(agent_id) {
+        if !crate::event_loop::cloud::new_session(state, agent_id).await {
+            return false;
+        }
+        if let Some(session) = state.idle.get_mut(&agent_id) {
+            session.reset();
+        }
+    } else {
+        let Some(session) = state.idle.get_mut(&agent_id) else {
+            let _ = state
+                .commands
+                .send(UiCommand::ShowWarning(
+                    "Wait for this agent to finish (or press Esc) before starting a new session"
+                        .to_string(),
+                ))
+                .await;
+            return false;
+        };
+        mark_session_start(session).await;
+        session.reset();
+    }
     state.hub.traces.close(agent_id);
     let ui =
         AgentUi::new(state.commands.clone(), agent_id).with_shown(state.hub.record_panel.clone());
@@ -82,7 +90,7 @@ pub(crate) async fn mark_session_start(
 /// continue from the checkpoint and save it as current.
 pub(crate) async fn resume_checkpoint(
     session: &mut AgentSession,
-    checkpoint: crate::session_checkpoint::SessionCheckpoint,
+    checkpoint: SessionCheckpoint,
 ) -> Option<(Transaction, RecordEntry)> {
     let marked = mark_session_start(session).await;
     session.restore(checkpoint);
@@ -98,6 +106,14 @@ pub(in crate::event_loop) async fn handle_resume(
     index: Option<usize>,
 ) {
     let ui = AgentUi::new(state.commands.clone(), agent_id);
+    if state.cloud.node_writes(agent_id) {
+        ui.send(UiCommand::ShowWarning(
+            "Earlier sessions resume on this machine: bring the agent back (/local) first"
+                .to_string(),
+        ))
+        .await;
+        return;
+    }
     let Some(session) = state.idle.get_mut(&agent_id) else {
         ui.send(UiCommand::ShowWarning(
             "Wait for this agent to finish before resuming a session".to_string(),
@@ -117,19 +133,12 @@ pub(in crate::event_loop) async fn handle_resume(
         ui.send(system_message(session_list(&sessions))).await;
         return;
     };
-    let Some(listing) = index.checked_sub(1).and_then(|i| sessions.get(i)) else {
-        ui.send(UiCommand::ShowWarning(format!(
-            "No session {index}; /resume lists them"
-        )))
-        .await;
-        return;
-    };
-    let Some(checkpoint) = checkpoints.load(agent_id, listing.started_ms) else {
-        ui.send(UiCommand::ShowWarning(
-            "Could not read that session".to_string(),
-        ))
-        .await;
-        return;
+    let (listing, checkpoint) = match pick_session(&checkpoints, agent_id, &sessions, index) {
+        Ok(picked) => picked,
+        Err(warning) => {
+            ui.send(UiCommand::ShowWarning(warning)).await;
+            return;
+        }
     };
 
     info!(%agent_id, started_ms = listing.started_ms, "Resuming an earlier session");
@@ -144,6 +153,24 @@ pub(in crate::event_loop) async fn handle_resume(
         listing.title
     )))
     .await;
+}
+
+/// The session at 1-based `index` in `sessions` and its checkpoint, or
+/// the warning to show when there is none or it can't be read.
+fn pick_session<'a>(
+    checkpoints: &Checkpoints,
+    agent_id: AgentId,
+    sessions: &'a [SessionListing],
+    index: usize,
+) -> Result<(&'a SessionListing, SessionCheckpoint), String> {
+    let listing = index
+        .checked_sub(1)
+        .and_then(|i| sessions.get(i))
+        .ok_or_else(|| format!("No session {index}; /resume lists them"))?;
+    let checkpoint = checkpoints
+        .load(agent_id, listing.started_ms)
+        .ok_or_else(|| "Could not read that session".to_string())?;
+    Ok((listing, checkpoint))
 }
 
 /// `/init`: ask `agent_id` to study its project and write the `AGENTS.md`

@@ -79,17 +79,53 @@ impl AgentRegistry {
     ) -> anyhow::Result<T> {
         let mut changed = Vec::with_capacity(placements.len());
         for placement in placements {
-            let index = self
-                .position(placement.agent_id)
-                .with_context(|| format!("{} is not registered", placement.agent_id.to_hex()))?;
-            let Some(agent) = self.file.agents.get(index) else {
-                anyhow::bail!("{} is not registered", placement.agent_id.to_hex());
-            };
-            let mut agent = agent.clone();
+            let (index, mut agent) = self.registered(placement.agent_id)?;
             agent.project_id.clone_from(&placement.project_id);
             agent.folder.clone_from(&placement.folder);
             changed.push((index, agent));
         }
+        self.write_changed(changed, write)
+    }
+
+    /// Make the agents `agents` top level: no longer under the agents
+    /// that spawned them, each keeping the folder it works in now as its
+    /// own. Their rows are written by `write`, and memory changes only
+    /// once it succeeded, as in [`Self::place_agents`].
+    ///
+    /// # Errors
+    /// Returns an error if an agent is not registered (nothing is
+    /// written), or `write`'s error (nothing changes in memory).
+    pub fn promote_agents<T>(
+        &mut self,
+        agents: &[AgentId],
+        write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let mut changed = Vec::with_capacity(agents.len());
+        for &agent_id in agents {
+            let folder = self.project_folder(agent_id);
+            let (index, mut agent) = self.registered(agent_id)?;
+            agent.parent = None;
+            agent.folder = agent.folder.or(folder);
+            changed.push((index, agent));
+        }
+        self.write_changed(changed, write)
+    }
+
+    /// Where `agent_id` is in the registry, and a copy of it to change.
+    fn registered(&self, agent_id: AgentId) -> anyhow::Result<(usize, RegisteredAgent)> {
+        self.position(agent_id)
+            .and_then(|index| Some((index, self.file.agents.get(index)?.clone())))
+            .with_context(|| format!("{} is not registered", agent_id.to_hex()))
+    }
+
+    /// Have `write` store the rows of the `changed` agents (index and
+    /// agent as it will be), then put them in the registry; see
+    /// [`Self::place_agents`].
+    fn write_changed<T>(
+        &mut self,
+        changed: Vec<(usize, RegisteredAgent)>,
+        write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
         let rows = persist::rows_at(&self.file, &changed);
         let written = write(&self.store, rows.clone())?;
         for (index, agent) in changed {
@@ -108,12 +144,42 @@ impl AgentRegistry {
         Ok(written)
     }
 
+    /// A fresh instance of `definition` joining the channel the agent
+    /// `coordinator` runs, not yet registered: at the top of the
+    /// coordinator's project, working in the folder the coordinator works
+    /// in now, pinned as its own so a later move of the channel leaves its
+    /// work where it is. Registered by [`Self::add_with`].
+    pub fn member_draft(&self, definition: &str, coordinator: AgentId) -> RegisteredAgent {
+        RegisteredAgent {
+            project_id: self.find(coordinator).and_then(|c| c.project_id.clone()),
+            folder: self.project_folder(coordinator),
+            ..self.new_instance(definition)
+        }
+    }
+
+    /// Register `agent`, not yet registered, with its row written by
+    /// `write` (given the registry's store and the row) so a caller can
+    /// commit it in one batch with rows of another store. The agent joins
+    /// the registry ([`Self::adopt`]) only once `write` succeeded.
+    ///
+    /// # Errors
+    /// `write`'s error; the registry is left as it was.
+    pub fn add_with<T>(
+        &mut self,
+        agent: RegisteredAgent,
+        write: impl FnOnce(&AgentStore, aura_store_db::AgentRecord) -> anyhow::Result<T>,
+    ) -> anyhow::Result<(RegisteredAgent, T)> {
+        let row = self.record_for(&agent);
+        let written = write(&self.store, row)?;
+        Ok((self.adopt(agent), written))
+    }
+
     /// Register `agent`, whose row is already stored (as a channel's
-    /// coordinator is), giving it its code, and save the code. A failed
-    /// save is only logged: the agent is registered, its row is in the
-    /// store already, and the code goes out with the next save. Failing
-    /// here would leave a stored channel whose coordinator the app does
-    /// not know until a restart.
+    /// coordinator or new member is), giving it its code, and save the
+    /// code. A failed save is only logged: the agent is registered, its
+    /// row is in the store already, and the code goes out with the next
+    /// save. Failing here would leave a stored channel or member the app
+    /// does not know until a restart.
     pub fn adopt(&mut self, mut agent: RegisteredAgent) -> RegisteredAgent {
         if agent.code.is_none() {
             agent.code = Some(code::assign(
@@ -128,7 +194,7 @@ impl AgentRegistry {
             tracing::warn!(
                 agent = %agent.agent_id().to_hex(),
                 error = %format!("{error:#}"),
-                "could not save the code of a new coordinator; saved with the next write"
+                "could not save the code of a new agent; saved with the next write"
             );
         }
         agent

@@ -6,9 +6,11 @@
 use std::time::Duration;
 
 use crate::{CloudError, CloudResult};
+use aura_agent::checkpoint::SessionCheckpoint;
 use aura_config::BoxdToken;
 use aura_core_protocol::cloud::{
-    HostStats, MeshMail, SealResponse, SyncImport, SyncImported, WorkspacePatch,
+    HostStats, MeshMail, SealResponse, SessionSaved, SessionStarted, SyncImport, SyncImported,
+    TracePage, WorkspacePatch,
 };
 use aura_core_types::{AgentId, RecordEntry};
 use serde::de::DeserializeOwned;
@@ -40,6 +42,25 @@ impl std::fmt::Debug for NodeClient {
 #[derive(Deserialize)]
 struct Head {
     head_seq: u64,
+}
+
+/// One entry of a directory listed on a node (`GET /api/files`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FileEntry {
+    /// File name
+    pub name: String,
+    /// Whether it is a directory
+    pub is_dir: bool,
+}
+
+#[derive(Deserialize)]
+struct Listing {
+    entries: Vec<FileEntry>,
+}
+
+#[derive(Deserialize)]
+struct FileText {
+    content: String,
 }
 
 impl NodeClient {
@@ -177,6 +198,72 @@ impl NodeClient {
         .await
     }
 
+    /// Make `checkpoint` `agent`'s current session on the node, so its
+    /// next run there continues it.
+    ///
+    /// # Errors
+    ///
+    /// When the node refuses it (sealed, or past the node's record).
+    pub async fn put_session(
+        &self,
+        agent: AgentId,
+        checkpoint: &SessionCheckpoint,
+    ) -> CloudResult<SessionSaved> {
+        self.read(
+            "session",
+            self.http
+                .put(format!("{}/v1/sync/session/{}", self.base, agent.to_hex()))
+                .json(checkpoint),
+        )
+        .await
+    }
+
+    /// `agent`'s current session on the node, if it has one.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails.
+    pub async fn session(&self, agent: AgentId) -> CloudResult<Option<SessionCheckpoint>> {
+        self.read(
+            "session",
+            self.http
+                .get(format!("{}/v1/sync/session/{}", self.base, agent.to_hex())),
+        )
+        .await
+    }
+
+    /// `agent`'s newest trace runs on the node, whole.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails.
+    pub async fn traces(&self, agent: AgentId) -> CloudResult<TracePage> {
+        self.read(
+            "traces",
+            self.http
+                .get(format!("{}/v1/sync/traces", self.base))
+                .query(&[("agent", agent.to_hex())]),
+        )
+        .await
+    }
+
+    /// Start a new session for `agent` on the node.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails.
+    pub async fn new_session(&self, agent: AgentId) -> CloudResult<SessionStarted> {
+        self.read(
+            "new session",
+            self.http.post(format!(
+                "{}/v1/sync/session/{}/new",
+                self.base,
+                agent.to_hex()
+            )),
+        )
+        .await
+    }
+
     /// The node's host stats.
     ///
     /// # Errors
@@ -185,6 +272,57 @@ impl NodeClient {
     pub async fn host(&self) -> CloudResult<HostStats> {
         self.read("host", self.http.get(format!("{}/v1/host", self.base)))
             .await
+    }
+
+    /// What directory `dir` holds on the node; nothing when it is gone.
+    /// Dot entries and build output directories are left out.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails or the node refuses the path.
+    pub async fn list_files(&self, dir: &str) -> CloudResult<Vec<FileEntry>> {
+        let request = self
+            .http
+            .get(format!("{}/api/files", self.base))
+            .query(&[("path", dir), ("depth", "1")])
+            .bearer_auth(self.token.expose());
+        let response = request
+            .send()
+            .await
+            .map_err(|err| self.fail("list files", err))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(self.fail(
+                "list files",
+                format!("{status}: {}", body.chars().take(300).collect::<String>()),
+            ));
+        }
+        let listing: Listing = response
+            .json()
+            .await
+            .map_err(|err| self.fail("list files", err))?;
+        Ok(listing.entries)
+    }
+
+    /// The text of file `path` on the node.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails, or the file is missing or too large.
+    pub async fn read_file(&self, path: &str) -> CloudResult<String> {
+        let text: FileText = self
+            .read(
+                "read file",
+                self.http
+                    .get(format!("{}/api/read-file", self.base))
+                    .query(&[("path", path)]),
+            )
+            .await?;
+        Ok(text.content)
     }
 
     /// The agent's work as a patch.

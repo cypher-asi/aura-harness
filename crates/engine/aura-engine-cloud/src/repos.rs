@@ -104,6 +104,27 @@ fn hash(value: &str) -> [u8; 32] {
     *blake3::hash(value.as_bytes()).as_bytes()
 }
 
+/// What a mint sets a repository's secret to, and how it went.
+struct Minted {
+    value: zeroize::Zeroizing<String>,
+    expires_at_ms: Option<u64>,
+    /// Why there is no token, when there is none.
+    error: Option<String>,
+    install_url: Option<String>,
+}
+
+impl Minted {
+    /// [`UNLINKED`], for `error`.
+    fn unlinked(error: String, install_url: Option<String>) -> Self {
+        Self {
+            value: zeroize::Zeroizing::new(UNLINKED.to_string()),
+            expires_at_ms: None,
+            error: Some(error),
+            install_url,
+        }
+    }
+}
+
 impl RepoSync {
     /// Repository sync for this install's machines, minting with
     /// `tokens` (`None`: no App configured).
@@ -231,39 +252,14 @@ impl RepoSync {
             self.note(repo, Some(NOT_CONFIGURED.to_string()), None, false);
             return Ok(());
         };
-        let (value, expires_at_ms, error, install_url) = match tokens.mint(repo).await {
-            Ok(token) => (token.token, Some(token.expires_at_ms), None, None),
-            Err(err @ GithubError::NotInstalled { .. }) => {
-                let install_url = match &err {
-                    GithubError::NotInstalled { install_url, .. } => install_url.clone(),
-                    _ => None,
-                };
-                (
-                    zeroize::Zeroizing::new(UNLINKED.to_string()),
-                    None,
-                    Some(err.to_string()),
-                    install_url,
-                )
-            }
-            Err(err) => {
-                // Keep whatever the secret holds; a token that is still
-                // valid there keeps working.
-                let known = self
-                    .repos
-                    .lock()
-                    .get(repo)
-                    .is_some_and(|s| s.hash.is_some());
-                self.fail(repo, err.to_string(), None);
-                if known {
-                    return Ok(());
-                }
-                (
-                    zeroize::Zeroizing::new(UNLINKED.to_string()),
-                    None,
-                    Some(err.to_string()),
-                    None,
-                )
-            }
+        let Some(Minted {
+            value,
+            expires_at_ms,
+            error,
+            install_url,
+        }) = self.mint(tokens.as_ref(), repo).await
+        else {
+            return Ok(());
         };
         if let Err(err) = self.set(repo, &value, expires_at_ms).await {
             self.fail(repo, err.to_string(), install_url);
@@ -275,6 +271,38 @@ impl RepoSync {
         let linked = error.is_none();
         self.note(repo, error, install_url, linked);
         Ok(())
+    }
+
+    /// Mint `repo`'s token with `tokens`: what its secret is set to, or
+    /// `None` to keep what it holds (the mint failed, and the secret was
+    /// set before).
+    async fn mint(&self, tokens: &dyn RepoTokens, repo: &RepoRef) -> Option<Minted> {
+        match tokens.mint(repo).await {
+            Ok(token) => Some(Minted {
+                value: token.token,
+                expires_at_ms: Some(token.expires_at_ms),
+                error: None,
+                install_url: None,
+            }),
+            Err(err @ GithubError::NotInstalled { .. }) => {
+                let install_url = match &err {
+                    GithubError::NotInstalled { install_url, .. } => install_url.clone(),
+                    _ => None,
+                };
+                Some(Minted::unlinked(err.to_string(), install_url))
+            }
+            Err(err) => {
+                // Keep whatever the secret holds; a token that is still
+                // valid there keeps working.
+                let known = self
+                    .repos
+                    .lock()
+                    .get(repo)
+                    .is_some_and(|s| s.hash.is_some());
+                self.fail(repo, err.to_string(), None);
+                (!known).then(|| Minted::unlinked(err.to_string(), None))
+            }
+        }
     }
 
     /// Record how the last sync of `repo` went. A sync that gave no token
@@ -355,141 +383,4 @@ impl RepoSync {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::fake::FakeProvider;
-    use crate::github::FakeRepoTokens;
-
-    fn repo(name: &str) -> RepoRef {
-        RepoRef {
-            owner: "acme".into(),
-            name: name.into(),
-        }
-    }
-
-    fn sync() -> (RepoSync, FakeProvider, Arc<FakeRepoTokens>) {
-        let fake = FakeProvider::new();
-        let tokens = Arc::new(FakeRepoTokens::new("aura-agents"));
-        let sync = RepoSync::new(Arc::new(fake.clone()), Some(tokens.clone()), "inst01abcdef");
-        (sync, fake, tokens)
-    }
-
-    fn in_minutes(minutes: u64) -> u64 {
-        now_ms() + minutes * 60 * 1000
-    }
-
-    #[tokio::test]
-    async fn a_repo_gets_one_secret_bound_to_github_headers() {
-        let (sync, fake, tokens) = sync();
-        tokens.install(&repo("app"), "ghs_one", in_minutes(60));
-        let status = sync.ensure(&repo("app")).await.expect("ensure");
-        assert!(status.linked);
-        assert_eq!(status.error, None);
-        assert!(names::is_repo_secret(&status.secret));
-        assert!(
-            status.secret.starts_with("AURA_GH_INST01_"),
-            "{}",
-            status.secret
-        );
-        assert_eq!(
-            fake.secret_value(&status.secret).as_deref(),
-            Some("ghs_one")
-        );
-        let secret = &fake.secrets()[&status.secret];
-        assert_eq!(secret.domains, ["github.com", "api.github.com"]);
-        assert_eq!(secret.replace_in, ["headers"]);
-        assert!(!format!("{sync:?}{status:?}").contains("ghs_"));
-    }
-
-    #[tokio::test]
-    async fn tokens_are_reminted_only_inside_the_margin() {
-        let (sync, fake, tokens) = sync();
-        tokens.install(&repo("app"), "ghs_one", in_minutes(60));
-        let name = sync.ensure(&repo("app")).await.expect("ensure").secret;
-        sync.tick(&[repo("app")]).await;
-        assert_eq!(tokens.mints(&repo("app")), 1, "an hour left: no mint");
-
-        // Ten minutes left: inside the 15-minute margin.
-        sync.repos
-            .lock()
-            .get_mut(&repo("app"))
-            .expect("state")
-            .expires_at_ms = Some(in_minutes(10));
-        tokens.install(&repo("app"), "ghs_two", in_minutes(60));
-        sync.tick(&[repo("app")]).await;
-        assert_eq!(tokens.mints(&repo("app")), 2);
-        assert_eq!(fake.secret_value(&name).as_deref(), Some("ghs_two"));
-        assert_eq!(
-            fake.calls_matching("SetSecret(").len(),
-            2,
-            "rotation keeps the name"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_repo_without_the_app_holds_unlinked_with_the_install_link() {
-        let (sync, fake, tokens) = sync();
-        let status = sync.ensure(&repo("private")).await.expect("ensure");
-        assert!(!status.linked);
-        assert_eq!(fake.secret_value(&status.secret).as_deref(), Some(UNLINKED));
-        assert_eq!(
-            status.install_url.as_deref(),
-            Some("https://github.com/apps/aura-agents/installations/new")
-        );
-        assert!(status.error.is_some_and(|e| e.contains("isn't installed")));
-
-        // Backing off: the next tick doesn't ask GitHub again.
-        sync.tick(&[repo("private")]).await;
-        assert_eq!(tokens.mints(&repo("private")), 1);
-
-        // Installed later: a placement (strict) picks it up at once.
-        tokens.install(&repo("private"), "ghs_now", in_minutes(60));
-        let status = sync.ensure(&repo("private")).await.expect("ensure");
-        assert!(status.linked);
-        assert_eq!(status.install_url, None);
-        assert_eq!(
-            fake.secret_value(&status.secret).as_deref(),
-            Some("ghs_now")
-        );
-    }
-
-    #[tokio::test]
-    async fn a_failing_mint_keeps_the_old_token_and_backs_off_alone() {
-        let (sync, fake, tokens) = sync();
-        tokens.install(&repo("a"), "ghs_a1", in_minutes(10));
-        tokens.install(&repo("b"), "ghs_b1", in_minutes(10));
-        let a = sync.ensure(&repo("a")).await.expect("a").secret;
-        let b = sync.ensure(&repo("b")).await.expect("b").secret;
-        tokens.fail(
-            &repo("a"),
-            GithubError::Transport {
-                op: "token mint",
-                message: "timed out".into(),
-            },
-        );
-        tokens.install(&repo("b"), "ghs_b2", in_minutes(60));
-        sync.tick(&[repo("a"), repo("b")]).await;
-        assert_eq!(fake.secret_value(&a).as_deref(), Some("ghs_a1"), "kept");
-        assert_eq!(fake.secret_value(&b).as_deref(), Some("ghs_b2"));
-        assert!(sync
-            .status(&repo("a"))
-            .and_then(|s| s.error)
-            .is_some_and(|e| e.contains("timed out")));
-        sync.tick(&[repo("a")]).await;
-        assert_eq!(tokens.mints(&repo("a")), 2, "backing off");
-    }
-
-    #[tokio::test]
-    async fn without_an_app_every_repo_holds_unlinked() {
-        let fake = FakeProvider::new();
-        let sync = RepoSync::new(Arc::new(fake.clone()), None, "inst01");
-        assert!(!sync.configured());
-        let status = sync.ensure(&repo("app")).await.expect("ensure");
-        assert!(!status.linked);
-        assert!(status
-            .error
-            .is_some_and(|e| e.contains("AURA_GITHUB_APP_ID")));
-        assert_eq!(fake.secret_value(&status.secret).as_deref(), Some(UNLINKED));
-        assert_eq!(sync.identity().await, None);
-    }
-}
+mod tests;

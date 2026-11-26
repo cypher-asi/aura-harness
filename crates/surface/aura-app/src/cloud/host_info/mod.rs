@@ -21,8 +21,10 @@ use aura_ui::host::{
 };
 
 mod sections;
+mod sync;
 
 use sections::resource_sections;
+pub use sync::add_sync;
 
 /// The view of this machine, for a local agent.
 #[must_use]
@@ -459,5 +461,6 @@ pub fn project_total(costs: &[CostEstimate]) -> Option<String> {
         format_money(total, &first.currency)
     ))
 }
+
 #[cfg(test)]
 mod tests;

@@ -31,24 +31,38 @@ use aura_ui::UiCommand;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-/// Run one turn of `session` on `agent_loop` with `tools`, streaming it
-/// into `ui`. `cancel` stops it early, `steering` feeds it messages while
-/// it runs, and `limits` may stop it for time or cost. `recorder` traces
-/// the turn's events into its conversation's run.
-#[allow(clippy::too_many_arguments)]
+/// How a turn runs, besides its session, agent loop and tools.
+pub(super) struct TurnControls<'a> {
+    /// Where the turn streams
+    pub ui: &'a AgentUi,
+    /// Stops the turn early
+    pub cancel: &'a CancellationToken,
+    /// Feeds the turn messages while it runs
+    pub steering: &'a Steering,
+    /// May stop the turn for time or cost
+    pub limits: LongRunSettings,
+    /// Traces the turn's events into its conversation's run
+    pub recorder: Option<std::sync::Arc<aura_agent_trace::RunRecorder>>,
+}
+
+/// Run one turn of `session` on `agent_loop` with `tools`, under
+/// `controls`.
 pub(super) async fn run_agent_turn(
     session: &AgentSession,
     agent_loop: &aura_agent::AgentLoop,
     tools: Vec<aura_model::ToolDefinition>,
-    ui: &AgentUi,
-    cancel: &CancellationToken,
-    steering: &Steering,
-    limits: LongRunSettings,
-    recorder: Option<std::sync::Arc<aura_agent_trace::RunRecorder>>,
+    controls: TurnControls<'_>,
 ) -> (
     Result<aura_agent::AgentLoopResult, aura_agent::AgentError>,
     ForwarderState,
 ) {
+    let TurnControls {
+        ui,
+        cancel,
+        steering,
+        limits,
+        recorder,
+    } = controls;
     let (agent_event_tx, agent_event_rx) = tokio::sync::mpsc::channel::<AgentLoopEvent>(1024);
     // A timeout or cost stop ends the turn without it counting as
     // cancelled by the user.

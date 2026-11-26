@@ -329,6 +329,10 @@ pub(crate) async fn handle_add_definition_to_project(state: &mut LoopState<'_>, 
     }
 }
 
+/// Why a coordinator can't be started from AGENTS.
+pub(super) const COORDINATOR_START_HINT: &str =
+    "Coordinators run channels: make a channel to start one";
+
 /// Register an instance of the permanent agent `name` at `placement` and
 /// switch to it. Reports failures itself and returns `None`.
 pub(super) async fn start_instance(
@@ -338,11 +342,17 @@ pub(super) async fn start_instance(
 ) -> Option<RegisteredAgent> {
     let definition = lock(&state.hub.definitions)
         .get(name)
-        .filter(|d| !d.is_coordinator())
-        .map(|d| d.name.clone());
-    let Some(definition) = definition else {
-        show_error(state, format!("No permanent agent named {name}")).await;
-        return None;
+        .map(|d| (d.name.clone(), d.is_coordinator()));
+    let definition = match definition {
+        Some((definition, false)) => definition,
+        Some((_, true)) => {
+            show_error(state, COORDINATOR_START_HINT.to_string()).await;
+            return None;
+        }
+        None => {
+            show_error(state, format!("No permanent agent named {name}")).await;
+            return None;
+        }
     };
     let created = {
         let mut registry = lock(&state.hub.registry);

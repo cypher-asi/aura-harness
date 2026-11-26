@@ -13,7 +13,7 @@ use crate::event_loop::compare::run::context::{elapsed_ms, STOPPED};
 use crate::event_loop::compare::run::live::LiveRoute;
 use crate::event_loop::compare::run::turn::RunParts;
 use crate::event_loop::gate::followup::{ended_signal, failure_text, Before, Followed, Following};
-use crate::event_loop::handlers::{handle_agent_success, run_agent_turn};
+use crate::event_loop::handlers::{handle_agent_success, run_agent_turn, TurnControls};
 use crate::event_loop::steering::Steering;
 use crate::event_loop::trace;
 use aura_agent::{AgentError, AgentLoop, AgentLoopConfig, AgentLoopResult};
@@ -194,11 +194,13 @@ impl<'a, 'p> Attempting<'a, 'p> {
             self.session,
             &agent_loop,
             self.tools.clone(),
-            &parts.ui,
-            &parts.cancel,
-            &steering,
-            parts.ctx.hub.long_run,
-            parts.recorder.clone(),
+            TurnControls {
+                ui: &parts.ui,
+                cancel: &parts.cancel,
+                steering: &steering,
+                limits: parts.ctx.hub.long_run,
+                recorder: parts.recorder.clone(),
+            },
         )
         .await;
         steering.finish(&[]);

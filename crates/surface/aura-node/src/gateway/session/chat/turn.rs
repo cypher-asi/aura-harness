@@ -2,7 +2,7 @@
 //! config, then spawning the agent loop.
 
 use super::attachments::build_user_message;
-use super::AgentTurn;
+use super::{AgentTurn, TitleTask};
 use crate::gateway::session::helpers;
 use crate::gateway::session::{Session, WsContext};
 use crate::protocol::{AssistantMessageStart, ErrorMsg, OutboundMessage, UserMessage};
@@ -49,10 +49,12 @@ pub(in crate::gateway::session) fn populate_tool_definitions(
 struct PreparedTurn {
     model_gateway: KernelModelGateway,
     tool_gateway: KernelToolGateway,
+    kernel: Arc<Kernel>,
     config: AgentLoopConfig,
     messages: Vec<Message>,
     tools: Vec<aura_model::ToolDefinition>,
     recorder: Option<Arc<aura_agent_trace::RunRecorder>>,
+    title: Option<TitleTask>,
 }
 
 /// Prepare and spawn an agent-loop turn as a background task.
@@ -137,13 +139,26 @@ async fn prepare_turn_context(
     record_user_prompt(&kernel, session, &msg.content).await?;
 
     let model_gateway = KernelModelGateway::new(kernel.clone());
-    let tool_gateway = KernelToolGateway::new(kernel);
+    let tool_gateway = KernelToolGateway::new(kernel.clone());
 
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
     if let Some(branch) = ctx.tool_config.push_branch.as_deref() {
         config.system_prompt.push_str(&cloud_git_note(branch));
     }
+
+    // Through the turn's own kernel: a second kernel for the agent would
+    // claim the same sequence numbers as this one while the turn writes.
+    let title = session.title_model.take().map(|model| {
+        TitleTask::spawn(
+            KernelModelGateway::new(kernel.clone()),
+            config.clone(),
+            model,
+            msg.content.clone(),
+            outbound_tx.clone(),
+        )
+    });
+
     apply_subagent_surface(&mut config);
 
     // Resolve active skill names before creating the memory observer so we can
@@ -156,7 +171,7 @@ async fn prepare_turn_context(
     let tools = session.tool_definitions.clone();
     let messages = session.messages.clone();
 
-    let recorder = helpers::trace_recorder(session, &config.model);
+    let recorder = helpers::trace_recorder(session, ctx, &config.model);
     if let Some(rec) = &recorder {
         rec.begin_turn(&msg.content);
         config.trace_blobs = rec.blob_store();
@@ -165,10 +180,12 @@ async fn prepare_turn_context(
     Ok(PreparedTurn {
         model_gateway,
         tool_gateway,
+        kernel,
         config,
         messages,
         tools,
         recorder,
+        title,
     })
 }
 
@@ -377,10 +394,12 @@ fn dispatch_turn_to_agent(
     let PreparedTurn {
         model_gateway,
         tool_gateway,
+        kernel,
         config,
         messages,
         tools,
         recorder,
+        title,
     } = prepared;
     let agent_loop = AgentLoop::new(config);
 
@@ -422,6 +441,8 @@ fn dispatch_turn_to_agent(
         join_handle,
         stream_forward_handle,
         message_id,
+        kernel,
+        title,
     }
 }
 

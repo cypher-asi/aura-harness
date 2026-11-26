@@ -35,6 +35,7 @@ mod policies;
 mod processes;
 mod queue_panel;
 mod record_panel;
+mod repo_tab;
 mod run_log;
 mod sandbox;
 mod segments;

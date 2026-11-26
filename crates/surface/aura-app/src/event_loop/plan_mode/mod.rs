@@ -73,6 +73,39 @@ fn plan_file(workspace: &Path, path: &str) -> Option<PlanFile> {
         .ok()
 }
 
+/// A cloud agent's Plans tab and plan strip, from the plans read on its
+/// machine (path and text, in the order shown) with the tasks its board
+/// in `workspace` links to them. The strip shows `active`, the plan its
+/// record last wrote, unless that plan is finished.
+pub(crate) fn machine_plan_views(
+    workspace: &Path,
+    plans: &[(String, String)],
+    active: Option<&str>,
+) -> (Vec<PlanView>, Option<PlanView>) {
+    let mut views = Vec::with_capacity(plans.len());
+    let mut strip = None;
+    let tasks = PlanTasks::load(workspace);
+    for (path, text) in plans {
+        if !is_plan_path(path) {
+            continue;
+        }
+        let plan = match PlanFile::parse(text) {
+            Ok(plan) => plan,
+            Err(e) => {
+                warn!(%path, error = %e, "Could not read plan");
+                continue;
+            }
+        };
+        let finished = is_finished(&plan);
+        let view = view_of(path, plan, &tasks);
+        if active == Some(path.as_str()) && !finished {
+            strip = Some(view.clone());
+        }
+        views.push(view);
+    }
+    (views, strip)
+}
+
 /// Every readable plan in `workspace`, most recently changed first.
 pub(crate) fn plan_views(workspace: &Path) -> Vec<PlanView> {
     let Ok(entries) = std::fs::read_dir(workspace.join(PLANS_DIR)) else {
@@ -191,7 +224,12 @@ pub(crate) fn open_plan(workspace: &Path, active_plan: Option<&str>) -> Option<P
 
 /// Show `agent_id` its plan, or hide its plan strip when it has none.
 /// Nothing is sent while the agent works: its turn keeps the strip live.
+/// A cloud agent's comes from its machine with its plans
+/// ([`super::cloud::MachinePlans`]).
 pub(super) async fn send_plan_of(state: &LoopState<'_>, agent_id: AgentId) {
+    if state.cloud.is_cloud(agent_id) {
+        return;
+    }
     let Some(session) = state.idle.get(&agent_id) else {
         return;
     };
@@ -349,10 +387,12 @@ pub(crate) fn unfinished_todos(todos: Vec<TodoItem>) -> Vec<TodoItem> {
 /// loads, has todos, and every one of them is closed. A plan with no
 /// todos yet is still being written.
 pub(crate) fn is_finished_plan(workspace: &Path, path: &str) -> bool {
-    is_plan_path(path)
-        && PlanFile::load(&workspace.join(path)).is_ok_and(|plan| {
-            !plan.meta.todos.is_empty() && plan.meta.todos.iter().all(|t| t.status.is_closed())
-        })
+    is_plan_path(path) && PlanFile::load(&workspace.join(path)).is_ok_and(|plan| is_finished(&plan))
+}
+
+/// Whether `plan` has todos and every one is closed.
+fn is_finished(plan: &PlanFile) -> bool {
+    !plan.meta.todos.is_empty() && plan.meta.todos.iter().all(|t| t.status.is_closed())
 }
 
 /// Close out `session`'s todo list once every item on it is closed. The

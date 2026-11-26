@@ -1,4 +1,4 @@
-//! UI events for channels and where agents run.
+//! UI events for channels, where agents run and cloud machines' files.
 
 use crate::event_loop::{channels, cloud, LoopState};
 use aura_ui::UiEvent;
@@ -14,6 +14,8 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
             cloud::handle_host_action(state, &agent_id, action).await;
         }
         UiEvent::CloudSetup => cloud::handle_setup(state).await,
+        UiEvent::ListSandbox(dir) => cloud::list_sandbox(state, dir),
+        UiEvent::ReadSandboxFile(path) => cloud::read_sandbox_file(state, path),
         UiEvent::CreateChannel {
             slug,
             title,

@@ -72,6 +72,11 @@ walkdir = { workspace = true }
 aura-gate = { path = "../../gate/aura-gate", features = ["test-support"] }
 # `test-support` lets the app's tests read the registry's store.
 aura-engine-registry = { path = "../../engine/aura-engine-registry", features = ["test-support"] }
+# `test-support` lets the hub's end-to-end tests reach into the hub.
+aura-engine-cloud = { path = "../../engine/aura-engine-cloud", features = ["test-support"] }
+# `test-support` serves a claimed cloud node in-process for the hub's
+# client tests.
+aura-node = { path = "../aura-node", features = ["test-support"] }
 tower = { workspace = true }
 # `test-util` enables tokio's paused-clock test helpers
 # (`#[tokio::test(start_paused = true)]`), so the shutdown-grace tests of

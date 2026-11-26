@@ -87,7 +87,9 @@ pub trait ReplicaSink: Send + Sync {
     fn append_verified(&self, agent: AgentId, entries: &[RecordEntry]) -> CloudResult<()>;
 }
 
-/// Whether `entry`'s hash matches its payload, chained to `prev` or not.
+/// Whether `entry`'s hash matches its payload, chained to `prev`, to the
+/// transaction it references (a policy decision chains to its proposal,
+/// which other entries may sit after), or to nothing.
 #[must_use]
 pub fn hash_holds(entry: &RecordEntry, prev: Option<&Hash>) -> bool {
     let tx = &entry.tx;
@@ -95,8 +97,10 @@ pub fn hash_holds(entry: &RecordEntry, prev: Option<&Hash>) -> bool {
     if tx.hash == Hash::default() {
         return true;
     }
+    let chained_to = |link: &Hash| tx.hash == Hash::from_content_chained(&tx.payload, Some(link));
     tx.hash == Hash::from_content_chained(&tx.payload, None)
-        || prev.is_some_and(|prev| tx.hash == Hash::from_content_chained(&tx.payload, Some(prev)))
+        || prev.is_some_and(chained_to)
+        || tx.reference_tx_hash.as_ref().is_some_and(chained_to)
 }
 
 /// Check `entries` against the local head and the hash of the entry at
@@ -274,6 +278,31 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn a_decision_chained_to_an_earlier_proposal_verifies() {
+        let agent = AgentId::new([1; 32]);
+        let mut page = entries(agent, 1..=3, true);
+        let proposal = page[0].tx.hash;
+        let mut decision = Transaction::new_chained(
+            agent,
+            TransactionType::PolicyDecision,
+            b"{\"verdict\":\"allow\"}".to_vec(),
+            Some(&proposal),
+        );
+        decision.reference_tx_hash = Some(proposal);
+        page.push(RecordEntry::builder(4, decision).build());
+        assert_eq!(verify_page(agent, 0, None, &page).expect("ok").len(), 4);
+
+        page[3].tx.reference_tx_hash = Some(page[2].tx.hash);
+        assert!(
+            matches!(
+                verify_page(agent, 0, None, &page),
+                Err(ReplicaError::BadHash { seq: 4, .. })
+            ),
+            "the hash still has to match what it names"
+        );
     }
 
     #[test]

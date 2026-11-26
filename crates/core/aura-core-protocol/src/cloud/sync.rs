@@ -5,7 +5,10 @@
 //! |---|---|---|
 //! | `POST /v1/sync/import` | [`SyncImport`] | [`SyncImported`] |
 //! | `POST /v1/sync/seal/:agent_id` | none | [`SealResponse`] |
-//! | `GET /v1/sync/traces?since=` | none | [`TracePage`] |
+//! | `PUT /v1/sync/session/:agent_id` | the agent's session checkpoint | [`SessionSaved`] |
+//! | `GET /v1/sync/session/:agent_id` | none | the agent's session checkpoint, or `null` |
+//! | `POST /v1/sync/session/:agent_id/new` | none | [`SessionStarted`] |
+//! | `GET /v1/sync/traces?agent=` | none | [`TracePage`] |
 //! | `GET /v1/workspace/patch?base=` | none | [`WorkspacePatch`] |
 //! | `aura node claim --stdin` (over `Exec`) | [`NodeClaim`] | [`NodeClaimed`] |
 //!
@@ -47,6 +50,24 @@ pub struct SealResponse {
     pub head_seq: u64,
 }
 
+/// Answer to a session checkpoint upload: the agent's next run on the node
+/// continues from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSaved {
+    /// Record entry the checkpoint was taken at.
+    pub record_seq: u64,
+    /// Messages it holds.
+    pub messages: u64,
+}
+
+/// Answer to a new session: the agent's record starts one at `head_seq`,
+/// and its next run on the node starts with an empty conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionStarted {
+    /// The agent's head, its `SessionStart` entry.
+    pub head_seq: u64,
+}
+
 /// One page of an agent's record, as `GET /agents/:id/record` answers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordPage {
@@ -57,10 +78,10 @@ pub struct RecordPage {
     pub head_seq: u64,
 }
 
-/// Trace runs written on a node since a point, opaque to the wire.
+/// An agent's trace runs on a node, opaque to the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TracePage {
-    /// Serialized trace runs, oldest first.
+    /// Whole runs, newest first.
     pub runs: Vec<serde_json::Value>,
     /// Pass as `since` for the next page.
     pub next_since: u64,

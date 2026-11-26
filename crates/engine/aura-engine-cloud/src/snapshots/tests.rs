@@ -1,6 +1,12 @@
+use super::build::step_waits_on;
 use super::*;
+use crate::boot::{BootEvent, BootReporter};
+use crate::error::CloudError;
 use crate::fake::FakeProvider;
 use crate::fleet::MemoryLedger;
+use crate::glibc::{GlibcVersion, MACHINE_GLIBC};
+use aura_core_types::VmEvent;
+use std::path::Path;
 
 #[test]
 fn a_build_step_says_what_it_waits_on() {
@@ -64,11 +70,13 @@ fn builder_with(
     let builder = SnapshotBuilder::new(
         Arc::new(fake.clone()),
         ledger.clone(),
-        "inst-1",
-        MachineSize::S4x16,
-        true,
-        "0.1.0",
-        binary,
+        SnapshotSettings {
+            install: "inst-1".to_string(),
+            size: MachineSize::S4x16,
+            isolated: true,
+            aura_version: "0.1.0".to_string(),
+            binary,
+        },
         home.join("cloud"),
     );
     (builder, ledger)
@@ -271,11 +279,39 @@ async fn a_failed_step_destroys_the_builder_and_records_the_error() {
     assert_eq!(ledger.events("0://cloud/project/p1"), vec![VmEvent::Error]);
 }
 
-#[tokio::test]
-async fn a_build_shows_its_commands_and_their_output() {
-    use crate::boot::BootEvent;
-    let dir = project();
-    let home = tempfile::tempdir().expect("home");
+/// What a build showed on its boot console.
+#[derive(Default)]
+struct Shown {
+    lines: Vec<String>,
+    facts: Vec<(String, String)>,
+    waits: Vec<Option<String>>,
+    progressed: bool,
+}
+
+impl Shown {
+    /// Everything `rx` has received so far.
+    fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<BootEvent>) -> Self {
+        let mut shown = Self::default();
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                BootEvent::Log { line, .. } => shown.lines.push(line),
+                BootEvent::Fact { key, value } => shown.facts.push((key, value)),
+                BootEvent::Progress { .. } => shown.progressed = true,
+                BootEvent::Waiting { what, .. } => shown.waits.push(what),
+                BootEvent::Stage { .. } | BootEvent::Plan(_) => {}
+            }
+        }
+        shown
+    }
+
+    /// Whether a `snapshot` fact passes `test`.
+    fn snapshot_fact(&self, test: impl Fn(&str) -> bool) -> bool {
+        self.facts.iter().any(|(k, v)| k == "snapshot" && test(v))
+    }
+}
+
+/// A fake whose `cargo fetch` prints compiler output.
+fn compiling_fake() -> FakeProvider {
     let fake = FakeProvider::new();
     fake.on_exec(Arc::new(|_, command, _| crate::ExecOutput {
         exit_code: 0,
@@ -286,32 +322,30 @@ async fn a_build_shows_its_commands_and_their_output() {
         },
         stderr: Vec::new(),
     }));
+    fake
+}
+
+#[tokio::test]
+async fn a_build_shows_its_commands_and_their_output() {
+    let dir = project();
+    let home = tempfile::tempdir().expect("home");
+    let fake = compiling_fake();
     let (builder, _) = builder(&fake, home.path());
     let (boot, mut rx) = BootReporter::channel();
     builder
         .ensure_project_reported("p1", dir.path(), None, false, &boot)
         .await
         .expect("build");
-    let mut lines = Vec::new();
-    let mut facts = Vec::new();
-    let mut waits = Vec::new();
-    let mut progressed = false;
-    while let Ok(event) = rx.try_recv() {
-        match event {
-            BootEvent::Log { line, .. } => lines.push(line),
-            BootEvent::Fact { key, value } => facts.push((key, value)),
-            BootEvent::Progress { .. } => progressed = true,
-            BootEvent::Waiting { what, .. } => waits.push(what),
-            BootEvent::Stage { .. } | BootEvent::Plan(_) => {}
-        }
-    }
-    assert!(progressed);
+    let shown = Shown::drain(&mut rx);
+    assert!(shown.progressed);
+    let waits = &shown.waits;
     let said = |text: &str| waits.iter().flatten().any(|what| what.contains(text));
     assert!(said("first boot (cloud-init)"), "{waits:?}");
     assert!(said("boxd is creating builder machine"), "{waits:?}");
     assert!(said("cargo fetch"), "{waits:?}");
     assert!(said("ready"), "{waits:?}");
     assert_eq!(waits.last(), Some(&None), "the last wait is cleared");
+    let lines = &shown.lines;
     assert!(lines
         .iter()
         .any(|l| l.starts_with("$ ") && l.contains("cargo fetch")));
@@ -320,25 +354,27 @@ async fn a_build_shows_its_commands_and_their_output() {
         "{lines:?}"
     );
     assert!(lines.iter().any(|l| l == "saving snapshot aura-proj-p1"));
-    assert!(facts
-        .iter()
-        .any(|(k, v)| k == "snapshot" && v.contains("first build")));
-    assert!(facts
-        .iter()
-        .any(|(k, v)| k == "snapshot" && v.ends_with("(built)")));
+    assert!(shown.snapshot_fact(|v| v.contains("first build")));
+    assert!(shown.snapshot_fact(|v| v.ends_with("(built)")));
+}
+
+#[tokio::test]
+async fn a_reused_project_snapshot_shows_as_cached() {
+    let dir = project();
+    let home = tempfile::tempdir().expect("home");
+    let fake = compiling_fake();
+    let (builder, _) = builder(&fake, home.path());
+    builder
+        .ensure_project_reported("p1", dir.path(), None, false, &BootReporter::none())
+        .await
+        .expect("build");
 
     let (boot, mut rx) = BootReporter::channel();
     builder
         .ensure_project_reported("p1", dir.path(), None, false, &boot)
         .await
         .expect("reuse");
-    let mut cached = false;
-    while let Ok(event) = rx.try_recv() {
-        if let BootEvent::Fact { key, value } = event {
-            cached |= key == "snapshot" && value.ends_with("(cached)");
-        }
-    }
-    assert!(cached);
+    assert!(Shown::drain(&mut rx).snapshot_fact(|v| v.ends_with("(cached)")));
 }
 
 #[tokio::test]

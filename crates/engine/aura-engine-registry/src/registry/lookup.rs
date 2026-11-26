@@ -1,7 +1,6 @@
 //! Read access: the agents, projects and the active agent.
 
 use aura_core_types::AgentId;
-use aura_store_db::AgentStore;
 use std::path::{Path, PathBuf};
 
 use super::{persist, AgentRegistry, Project, RegisteredAgent};
@@ -113,7 +112,7 @@ impl AgentRegistry {
     /// The store the registry is kept in. Writers outside the registry
     /// get it through [`Self::place_agents`].
     #[cfg(any(test, feature = "test-support"))]
-    pub fn store(&self) -> &AgentStore {
+    pub fn store(&self) -> &aura_store_db::AgentStore {
         &self.store
     }
 }

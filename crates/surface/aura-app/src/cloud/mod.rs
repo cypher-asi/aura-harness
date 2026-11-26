@@ -18,6 +18,12 @@
 //! cloud.
 
 pub mod host_info;
+#[cfg(test)]
+mod hub_e2e_tests;
+#[cfg(test)]
+mod node_client_tests;
+#[cfg(test)]
+pub(crate) mod test_node;
 
 pub use aura_engine_cloud::hub;
 pub use aura_engine_cloud::hub::{node_client, plans, setup, store};

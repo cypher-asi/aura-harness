@@ -38,6 +38,7 @@ impl CloudHub {
             // The machine keeps working; the next pull starts from what
             // this one took.
             self.mark_pulled(&hex, tree.as_deref()).await;
+            self.saved_patch_pulled(agent);
         }
         let commits = self.fetch_commits(&hex, &placed).await;
         Ok(PullOutcome {

@@ -12,7 +12,9 @@
 //! - after an "always allow" answer adds a project rule,
 //! - and when the UI asks for it (`UiEvent::RequestPolicies`).
 //!
-//! An agent with no open kernel has no policy to show and gets nothing.
+//! A cloud agent is shown the policy its node enforces, built the way the
+//! node builds it. An agent with no open kernel here and no machine has no
+//! policy to show and gets nothing.
 
 use super::agent_events::AgentUi;
 use super::modes::{self, Permissions};
@@ -22,7 +24,7 @@ use aura_core_types::{
     AgentId, AgentPermissions, AgentScope, InstalledIntegrationDefinition, ToolState,
 };
 use aura_ui::events::{PolicyView, ToolPolicyState, ToolPolicyView};
-use aura_ui::UiCommand;
+use aura_ui::{PermissionMode, UiCommand};
 use tracing::debug;
 
 /// How the terminal answers an agent's `ask` calls, which the policy
@@ -84,9 +86,18 @@ pub(crate) fn policy_view(
     }
 }
 
-/// Send `agent_id` the policy its kernel enforces now. Sends nothing when
-/// it has no open kernel.
+/// Send `agent_id` the policy its kernel enforces now, or for a cloud
+/// agent the one its node enforces. Sends nothing when it has no open
+/// kernel.
 pub(super) async fn send_policies_of(state: &LoopState<'_>, agent_id: AgentId) {
+    if state.cloud.is_cloud(agent_id) {
+        AgentUi::new(state.commands.clone(), agent_id)
+            .send(UiCommand::SetPolicies(cloud_policy_view(
+                &state.hub.tool_names(),
+            )))
+            .await;
+        return;
+    }
     let Some(kernel) = state.kernel_for(agent_id) else {
         debug!(%agent_id, "No open kernel to show the policy of");
         return;
@@ -106,6 +117,14 @@ pub(super) async fn send_policies_of(state: &LoopState<'_>, agent_id: AgentId) {
     AgentUi::new(state.commands.clone(), agent_id)
         .send(UiCommand::SetPolicies(view))
         .await;
+}
+
+/// The POLICIES view of what a cloud agent's node enforces, for `tools`.
+/// Nothing here can answer the node's `ask` calls or change its policy.
+fn cloud_policy_view(tools: &[String]) -> PolicyView {
+    let policy = Policy::new(crate::cloud::hub::cloud_policy());
+    let permissions = Permissions::new(PermissionMode::Agent, policy.config().approval);
+    policy_view(&policy, permissions, tools, LiveApprovals::default())
 }
 
 /// How each of `tools` resolves under `policy`, deduplicated and in name
@@ -193,7 +212,7 @@ fn integration_label(integration: &InstalledIntegrationDefinition) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aura_ui::{ApprovalLevel, PermissionMode};
+    use aura_ui::ApprovalLevel;
     use std::collections::HashMap;
 
     fn tools() -> Vec<String> {
@@ -314,5 +333,25 @@ mod tests {
             "GitHub (github oauth)"
         );
         assert_eq!(integration_label(&integration("", "", "")), "int-1");
+    }
+
+    #[test]
+    fn a_cloud_agent_s_policies_are_the_ones_its_node_enforces() {
+        let view = cloud_policy_view(&tools());
+        assert_eq!(view.mode, PermissionMode::Agent);
+        assert!(
+            view.capabilities.iter().any(|c| c == "SpawnAgent"),
+            "{:?}",
+            view.capabilities
+        );
+        assert!(
+            !view.capabilities.iter().any(|c| c == "ComputerUse"),
+            "a cloud machine has no screen: {:?}",
+            view.capabilities
+        );
+        assert!(view.capabilities.len() < view.capability_total);
+        assert!(!view.live_prompts, "nothing here answers the node's asks");
+        assert!(view.always_allow.is_empty());
+        assert_eq!(view.tools.len(), 3);
     }
 }

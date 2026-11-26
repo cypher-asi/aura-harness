@@ -30,6 +30,8 @@ mod subagent_stream;
 mod tests;
 
 #[cfg(test)]
+mod continuity_tests;
+#[cfg(test)]
 mod execution_profile_tests;
 mod tool_approval;
 mod tool_policy;
@@ -109,6 +111,13 @@ pub(crate) struct WsContext {
     pub(crate) run_id: Option<String>,
     /// Node-wide agent host; sessions register as root agents.
     pub(crate) agent_host: aura_engine::AgentHost,
+    /// Session checkpoints on a cloud node, where a run continues the
+    /// agent's conversation (see [`helpers::prepare_chat_session`]).
+    /// `None` elsewhere: those callers send the conversation.
+    pub(crate) sessions: Option<aura_agent::checkpoint::Checkpoints>,
+    /// The cloud node, which traces each agent's conversation as one run
+    /// across runs; `None` on other nodes.
+    pub(crate) cloud: Option<Arc<crate::cloud_node::CloudNode>>,
 }
 
 impl WsContext {
@@ -142,6 +151,8 @@ impl WsContext {
             chat_runs: state.chat_runs.clone(),
             run_id: None,
             agent_host: state.agent_host.clone(),
+            sessions: state.cloud.sessions().cloned(),
+            cloud: state.cloud.enabled().then(|| Arc::clone(&state.cloud)),
         }
     }
 }

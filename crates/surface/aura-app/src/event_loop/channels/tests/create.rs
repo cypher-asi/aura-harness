@@ -1,9 +1,9 @@
 //! Creating channels, their coordinators and what coordinators may do.
 
 use super::super::*;
-use super::support::{agent_count, new_channel, store};
-use crate::event_loop::subagents::task_tool_definition;
-use crate::event_loop::subagents::tests::fixture;
+use super::support::{add_member, agent_count, new_channel, spawn_under, store};
+use crate::event_loop::subagents::tests::{fixture, Fixture};
+use crate::event_loop::subagents::{assign_tool_definition, task_tool_definition};
 
 #[tokio::test]
 async fn create_channel_writes_the_channel_and_its_coordinator_together() {
@@ -69,59 +69,171 @@ async fn invalid_and_taken_slugs_are_rejected_without_registering_anyone() {
     assert_eq!(store(&fixture).list().unwrap().len(), 1);
 }
 
+/// The code of `agent`.
+fn code_of(fixture: &Fixture, agent: AgentId) -> String {
+    lock(&fixture.hub.registry)
+        .find(agent)
+        .and_then(|a| a.code.clone())
+        .unwrap()
+}
+
 #[tokio::test]
-async fn channel_prompt_describes_the_channel_to_its_coordinator_only() {
+async fn channel_prompt_gives_the_coordinator_the_channel_and_how_it_works() {
     let fixture = fixture("unused");
     let channel = create_channel(&fixture.hub, new_channel("site"))
         .await
         .unwrap();
-    let code = lock(&fixture.hub.registry)
-        .find(channel.coordinator)
-        .and_then(|a| a.code.clone())
-        .unwrap();
+    let code = code_of(&fixture, channel.coordinator);
+    let member = add_member(&fixture, channel.coordinator, "reviewer");
 
     let prompt = channel_prompt(&fixture.hub, channel.coordinator).unwrap();
-    assert!(prompt.starts_with("<channel>"), "{prompt}");
-    assert!(prompt.contains("#site"), "{prompt}");
-    assert!(prompt.contains("Website relaunch"), "{prompt}");
+    assert!(prompt.starts_with("<channel>\nYou coordinate the channel #site: Website relaunch\n"));
     assert!(prompt.contains("Ship the new marketing site."), "{prompt}");
-    assert!(prompt.contains(&format!("- {code} ")), "{prompt}");
-    assert!(prompt.contains("(coordinator)"), "{prompt}");
+    assert!(
+        prompt.contains(&format!("- {code} #site coordinator (you)\n")),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains(&format!("- {} reviewer", code_of(&fixture, member))),
+        "{prompt}"
+    );
+    assert!(prompt.contains(": free\n"), "{prompt}");
+    for rule in [
+        "You don't do the work",
+        "with `assign`",
+        "never how to do it",
+        "subagents included, is its own call",
+        "at most three short lines",
+    ] {
+        assert!(prompt.contains(rule), "{rule}: {prompt}");
+    }
+    assert!(prompt.ends_with("</channel>"));
 
     let outsider = lock(&fixture.hub.registry).active().agent_id();
     assert_eq!(channel_prompt(&fixture.hub, outsider), None);
 }
 
-#[test]
-fn the_task_tool_never_offers_the_coordinator() {
-    let fixture = fixture("unused");
-    let definitions = lock(&fixture.hub.definitions);
-    assert!(definitions.get(COORDINATOR_DEFINITION).is_some());
-    let tool = task_tool_definition(&definitions).unwrap();
-    let names = &tool.input_schema["properties"]["subagent_type"]["enum"];
+#[tokio::test]
+async fn channel_prompt_tells_a_member_how_members_work_together() {
+    let mut fixture = fixture("Looks good.");
+    let channel = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    let lead = code_of(&fixture, channel.coordinator);
+    let member = add_member(&fixture, channel.coordinator, "reviewer");
+    let other = add_member(&fixture, channel.coordinator, "tests");
+    let subagent = spawn_under(&mut fixture, member).await;
+
+    let prompt = channel_prompt(&fixture.hub, member).unwrap();
     assert!(
-        !names
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|name| name == COORDINATOR_DEFINITION),
-        "{names}"
+        prompt.starts_with(&format!(
+            "<channel>\nYou are {} reviewer #",
+            code_of(&fixture, member)
+        )),
+        "{prompt}"
     );
-    drop(definitions);
-    assert!(fixture
-        .hub
-        .definition_summaries()
-        .iter()
-        .all(|summary| summary.name != COORDINATOR_DEFINITION));
+    assert!(
+        prompt.contains(&format!(
+            "a member of the channel #site: Website relaunch, which {lead} coordinates."
+        )),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains(&format!(
+            "Other members: {} tests",
+            code_of(&fixture, other)
+        )),
+        "{prompt}"
+    );
+    assert!(prompt.contains("whether to hand parts of it to subagents with `task`"));
+    assert!(prompt.contains("with `send_to_agent`"));
+    assert!(prompt.contains(&format!("Keep {lead} to results, blockers and decisions.")));
+    assert_eq!(
+        channel_prompt(&fixture.hub, subagent),
+        None,
+        "a subagent hears from the agent that spawned it"
+    );
 }
 
 #[test]
-fn coordinator_turns_can_delegate_but_not_edit() {
+fn the_coordinator_is_listed_but_never_spawned_or_assigned() {
+    let fixture = fixture("unused");
+    let definitions = lock(&fixture.hub.definitions);
+    assert!(definitions.get(COORDINATOR_DEFINITION).is_some());
+    let task = task_tool_definition(&definitions).unwrap();
+    let assign = assign_tool_definition(&definitions).unwrap();
+    for names in [
+        &task.input_schema["properties"]["subagent_type"]["enum"],
+        &assign.input_schema["properties"]["agent"]["enum"],
+    ] {
+        let names = names.as_array().unwrap();
+        assert!(names.iter().any(|name| name == "reviewer"), "{names:?}");
+        assert!(
+            names.iter().all(|name| name != COORDINATOR_DEFINITION),
+            "{names:?}"
+        );
+    }
+    drop(definitions);
+    assert!(
+        fixture
+            .hub
+            .definition_summaries()
+            .iter()
+            .any(|summary| summary.name == COORDINATOR_DEFINITION),
+        "the AGENTS tab shows the coordinator, to edit it"
+    );
+}
+
+#[test]
+fn coordinator_turns_only_assign_and_check_in() {
     let fixture = fixture("unused");
     let workspace = lock(&fixture.hub.registry).data_dir().to_path_buf();
     let (_, tools) = fixture.hub.turn(Some(COORDINATOR_DEFINITION), &workspace);
-    assert!(tools.iter().any(|t| t.name == "task"));
-    assert!(tools
+    let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        [
+            "assign",
+            "get_agent_state",
+            "list_agents",
+            "send_to_agent",
+            "todo_write"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn members_always_keep_task_and_their_inbox_but_subagents_get_what_they_list() {
+    let mut fixture = fixture("Looks good.");
+    let channel = create_channel(&fixture.hub, new_channel("site"))
+        .await
+        .unwrap();
+    let member = add_member(&fixture, channel.coordinator, "reviewer");
+    let subagent = spawn_under(&mut fixture, member).await;
+    let workspace = lock(&fixture.hub.registry).data_dir().to_path_buf();
+    let names = |agent: AgentId| -> Vec<String> {
+        let (_, tools) = fixture.hub.agent_turn(agent, Some("reviewer"), &workspace);
+        tools.into_iter().map(|t| t.name).collect()
+    };
+
+    let top = names(member);
+    for tool in [
+        "task",
+        "send_to_agent",
+        "list_agents",
+        "get_agent_state",
+        "read_file",
+    ] {
+        assert!(top.iter().any(|name| name == tool), "{tool}: {top:?}");
+    }
+    assert!(top
         .iter()
-        .all(|t| t.name != "write_file" && t.name != "edit_file" && t.name != "run_command"));
+        .all(|name| name != "write_file" && name != "assign"));
+
+    let below = names(subagent);
+    assert!(below.iter().any(|name| name == "read_file"), "{below:?}");
+    for tool in ["task", "send_to_agent", "list_agents", "assign"] {
+        assert!(below.iter().all(|name| name != tool), "{tool}: {below:?}");
+    }
 }

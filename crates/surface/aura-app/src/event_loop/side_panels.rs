@@ -10,6 +10,7 @@
 //! that agent comes back.
 
 use super::agent_events::AgentUi;
+use super::cloud::MachinePlans;
 use super::plan_mode::{plan_view_among, plan_views};
 use super::subagents::AgentHub;
 use super::LoopState;
@@ -28,20 +29,29 @@ impl LoopState<'_> {
     /// own.
     pub(super) fn fill_side_panels(&mut self, agent_id: AgentId) {
         self.stop_side_panels();
+        let machine_plans = MachinePlans::of(self, agent_id);
         let panels = SidePanels {
             hub: Arc::clone(&self.hub),
             commands: self.commands.clone(),
             agent_id,
-            workspace: self
-                .kernel_for(agent_id)
-                .map(|kernel| kernel.agent_workspace()),
+            workspace: match &machine_plans {
+                Some(plans) => Some(plans.workspace().to_path_buf()),
+                None => self
+                    .kernel_for(agent_id)
+                    .map(|kernel| kernel.agent_workspace()),
+            },
             // A busy agent's turn shows its plan in the strip.
-            strip: self.idle.get(&agent_id).map(|session| {
-                (
-                    session.kernel.agent_workspace(),
-                    session.active_plan.clone(),
-                )
-            }),
+            strip: self
+                .idle
+                .get(&agent_id)
+                .filter(|_| machine_plans.is_none())
+                .map(|session| {
+                    (
+                        session.kernel.agent_workspace(),
+                        session.active_plan.clone(),
+                    )
+                }),
+            machine_plans,
         };
         self.side_panels = Some(tokio::spawn(panels.fill()));
     }
@@ -59,11 +69,14 @@ struct SidePanels {
     hub: Arc<AgentHub>,
     commands: mpsc::Sender<UiCommand>,
     agent_id: AgentId,
-    /// Where its plans and tasks are kept, when its kernel is here
+    /// Where its plans and tasks are kept, when its kernel is here; a
+    /// cloud agent's tasks only
     workspace: Option<PathBuf>,
     /// Its idle session's workspace and plan, for the plan strip; `None`
     /// leaves the strip as it is
     strip: Option<(PathBuf, Option<String>)>,
+    /// A cloud agent's plans and plan strip, read on its machine
+    machine_plans: Option<MachinePlans>,
 }
 
 impl SidePanels {
@@ -90,6 +103,11 @@ impl SidePanels {
 
     /// The Plans tab, and the plan strip of an idle agent.
     async fn send_plans(&self) {
+        if let Some(plans) = &self.machine_plans {
+            let ui = AgentUi::new(self.commands.clone(), self.agent_id);
+            plans.send(&ui).await;
+            return;
+        }
         let (workspace, strip) = (self.workspace.clone(), self.strip.clone());
         if workspace.is_none() && strip.is_none() {
             return;

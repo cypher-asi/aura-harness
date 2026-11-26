@@ -66,7 +66,7 @@ async fn exhausted_truncation_is_reported_to_ui_as_max_tokens() {
     let directory = tempfile::tempdir().unwrap();
     let mut session = Session::new(directory.path().to_path_buf());
     let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
-    super::helpers::apply_turn_result(&mut session, &result, "probe", &sender).await;
+    super::helpers::apply_turn_result(&mut session, &result, "probe", &sender, None).await;
     let event = receiver.recv().await.unwrap();
     match event {
         aura_core_protocol::OutboundMessage::AssistantMessageEnd(end) => {

@@ -7,12 +7,13 @@ use crate::gateway::session::{Session, WsContext};
 use crate::protocol::{
     tool_info_from_definition_with_state, OutboundMessage, SessionReady, SkillInfo, ToolInfo,
 };
+use aura_agent_kernel::Kernel;
 use aura_core_types::{resolve_effective_permission, ToolState, UserToolDefaults};
 use aura_engine::capabilities;
 use aura_model::ModelProvider;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub(in crate::gateway::session) fn session_user_defaults(
     session: &Session,
@@ -86,7 +87,60 @@ pub(crate) async fn prepare_chat_session(
 
     populate_tool_definitions(&mut session, ctx);
 
+    if let Some(checkpoints) = &ctx.sessions {
+        continue_conversation(&mut session, checkpoints, ctx.store.as_ref());
+    }
+
     Ok(session)
+}
+
+/// On a cloud node, pick up the agent's conversation where its last run
+/// left it, unless the request brought one: its checkpoint and the
+/// prompts and replies recorded after it, else what the record holds
+/// since its last session start. Each turn's end is checkpointed again.
+fn continue_conversation(
+    session: &mut Session,
+    checkpoints: &aura_agent::checkpoint::Checkpoints,
+    store: &dyn aura_store_db::Store,
+) {
+    session.checkpoints = Some(checkpoints.clone());
+    if !session.messages.is_empty() {
+        return;
+    }
+    match store.get_head_seq(session.agent_id) {
+        Ok(0) => return,
+        Ok(_) => {}
+        Err(e) => {
+            warn!(session_id = %session.session_id, error = %e, "Could not read the agent's record; starting a new conversation");
+            return;
+        }
+    }
+    session.continues = true;
+    if let Some(saved) = aura_agent::history::restore(store, checkpoints, session.agent_id) {
+        info!(
+            session_id = %session.session_id,
+            messages = saved.messages.len(),
+            "Continuing the agent's conversation from its checkpoint"
+        );
+        session.started_ms = saved.started_ms;
+        session.messages = saved.messages;
+        session.todos = saved.todos;
+        session.usage = saved.usage;
+        return;
+    }
+    match aura_agent::history::model_history(store, session.agent_id) {
+        Ok(messages) => {
+            info!(
+                session_id = %session.session_id,
+                messages = messages.len(),
+                "Continuing the agent's conversation from its record"
+            );
+            session.messages = messages;
+        }
+        Err(e) => {
+            warn!(session_id = %session.session_id, error = %e, "Could not rebuild the agent's conversation from its record");
+        }
+    }
 }
 
 /// Resolve the request's provider overrides into a provider, if any.
@@ -238,10 +292,14 @@ fn session_skill_infos(session: &Session, ctx: &WsContext) -> Vec<SkillInfo> {
 ///    start is itself a state change that must be recorded and that
 ///    resets the kernel's session-scoped approval cache. Emit the
 ///    transaction before anything else on this kernel so the record
-///    reflects session boundaries for replay.
-/// 2. `record_runtime_capabilities` — bundles the `installed_tools` /
+///    reflects session boundaries for replay. A run that continues the
+///    agent's conversation ([`Session::continues`], on a cloud node)
+///    starts no session: rebuilding the conversation stops at the last
+///    `SessionStart`.
+/// 2. `record_capability_install` — bundles the `installed_tools` /
 ///    `installed_integrations` snapshot into a single `System` record
 ///    entry so downstream replay knows what surface the LLM was given.
+///    Written only when it differs from the latest one in the session.
 ///
 /// Failures only log; we deliberately don't surface them to the caller
 /// because a kernel build / capability-recording failure must NOT
@@ -250,34 +308,10 @@ fn session_skill_infos(session: &Session, ctx: &WsContext) -> Vec<SkillInfo> {
 async fn bootstrap_session(session: &Session, ctx: &WsContext) {
     match build_kernel_with_config(session, ctx, &ctx.tool_config, None, None).await {
         Ok(kernel) => {
-            if let Err(e) = kernel
-                .process_direct(aura_core_types::Transaction::session_start(
-                    session.agent_id,
-                ))
-                .await
-            {
-                error!(
-                    session_id = %session.session_id,
-                    error = %e,
-                    "Failed to record SessionStart transaction through kernel"
-                );
+            if !session.continues {
+                record_session_start(&kernel, session).await;
             }
-
-            if let Err(e) = capabilities::record_runtime_capabilities(
-                &kernel,
-                "session",
-                Some(&session.session_id),
-                &session.installed_tools,
-                &session.installed_integrations,
-            )
-            .await
-            {
-                error!(
-                    session_id = %session.session_id,
-                    error = %e,
-                    "Failed to record runtime capability install through kernel during session init"
-                );
-            }
+            record_capabilities_if_changed(&kernel, session, ctx).await;
         }
         Err(e) => {
             error!(
@@ -286,5 +320,55 @@ async fn bootstrap_session(session: &Session, ctx: &WsContext) {
                 "Failed to build kernel for session capability recording"
             );
         }
+    }
+}
+
+/// Step 1 of [`bootstrap_session`]: the `SessionStart` transaction.
+async fn record_session_start(kernel: &Kernel, session: &Session) {
+    if let Err(e) = kernel
+        .process_direct(aura_core_types::Transaction::session_start(
+            session.agent_id,
+        ))
+        .await
+    {
+        error!(
+            session_id = %session.session_id,
+            error = %e,
+            "Failed to record SessionStart transaction through kernel"
+        );
+    }
+}
+
+/// Step 2 of [`bootstrap_session`]: the capability install record, skipped
+/// when it matches the latest one in the agent's record.
+async fn record_capabilities_if_changed(kernel: &Kernel, session: &Session, ctx: &WsContext) {
+    let latest = match ctx.store.get_runtime_capabilities(session.agent_id) {
+        Ok(latest) => latest,
+        Err(e) => {
+            warn!(session_id = %session.session_id, error = %e, "Could not read the agent's latest capability install; recording it again");
+            None
+        }
+    };
+    if !capabilities::capabilities_changed(
+        latest.as_ref(),
+        &session.installed_tools,
+        &session.installed_integrations,
+    ) {
+        return;
+    }
+    if let Err(e) = capabilities::record_capability_install(
+        kernel,
+        "session",
+        Some(&session.session_id),
+        &session.installed_tools,
+        &session.installed_integrations,
+    )
+    .await
+    {
+        error!(
+            session_id = %session.session_id,
+            error = %e,
+            "Failed to record runtime capability install through kernel during session init"
+        );
     }
 }

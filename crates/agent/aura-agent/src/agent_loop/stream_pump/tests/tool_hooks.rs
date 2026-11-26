@@ -18,16 +18,11 @@ async fn pump_cache_hit_short_circuits_tool_spawn() {
         .exact
         .insert(cache_key, "cached-payload".to_string());
 
-    let events = vec![
+    let stream = mk_stream(vec![
         mk_call("toolu_cached", "read_file"),
         mk_call("toolu_fresh", "run_command"),
-        ResponseEvent::Completed {
-            stop_reason: None,
-            end_turn: Some(false),
-            usage: Usage::new(1, 1),
-        },
-    ];
-    let stream = mk_stream(events);
+        completed(false),
+    ]);
 
     let outcome = drive_stream(
         test_ctx(&config, &executor),
@@ -36,6 +31,24 @@ async fn pump_cache_hit_short_circuits_tool_spawn() {
         "test-model",
     )
     .await;
+    assert_cached_then_fresh(outcome);
+    let invocations = executor.invocations.lock().await;
+    let invoked_ids: Vec<_> = invocations.iter().map(|c| c.id.clone()).collect();
+    assert_eq!(
+        invoked_ids,
+        vec!["toolu_fresh".to_string()],
+        "executor must be invoked ONLY for the uncached tool; cache hits short-circuit spawn"
+    );
+    assert_eq!(
+        executor.presets(),
+        vec![("toolu_cached".to_string(), "cache")],
+        "a cache hit must still reach the executor as a preset"
+    );
+}
+
+/// The cached call's memoised result, then the fresh call's, in the
+/// order they were submitted.
+fn assert_cached_then_fresh(outcome: StreamPumpOutcome) {
     match outcome {
         StreamPumpOutcome::Completed { tool_results, .. } => {
             let ids: Vec<_> = tool_results.iter().map(|(c, _)| c.id.clone()).collect();
@@ -56,18 +69,6 @@ async fn pump_cache_hit_short_circuits_tool_spawn() {
         }
         other => panic!("expected Completed, got {other:?}"),
     }
-    let invocations = executor.invocations.lock().await;
-    let invoked_ids: Vec<_> = invocations.iter().map(|c| c.id.clone()).collect();
-    assert_eq!(
-        invoked_ids,
-        vec!["toolu_fresh".to_string()],
-        "executor must be invoked ONLY for the uncached tool; cache hits short-circuit spawn"
-    );
-    assert_eq!(
-        executor.presets(),
-        vec![("toolu_cached".to_string(), "cache")],
-        "a cache hit must still reach the executor as a preset"
-    );
 }
 
 #[derive(Default)]

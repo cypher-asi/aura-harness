@@ -311,4 +311,3 @@ async fn apply_subtitle_names_only_spawned_instances_once() {
     );
     assert_eq!(row(spawned.agent_id()).name, format!("{code}: Fix parser"));
 }
-

@@ -122,6 +122,38 @@ fn plan_views_perf() {
 }
 
 #[test]
+fn plans_read_on_a_machine_are_viewed_from_their_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = |name: &str, status: &str| {
+        format!(
+            "---\nname: {name}\ntodos:\n  - id: a\n    content: First\n    status: {status}\n---\n"
+        )
+    };
+    let open = ".aura/plans/open_00000001.plan.md";
+    let done = ".aura/plans/done_00000002.plan.md";
+    let plans = [
+        (open.to_string(), plan("Open", "in_progress")),
+        (done.to_string(), plan("Done", "completed")),
+        (
+            ".aura/plans/broken_00000003.plan.md".to_string(),
+            "no frontmatter".to_string(),
+        ),
+        (".aura/plans/notes.md".to_string(), plan("Notes", "pending")),
+    ];
+
+    let (views, strip) = machine_plan_views(dir.path(), &plans, Some(open));
+    let names: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
+    assert_eq!(names, ["Open", "Done"]);
+    assert_eq!(views[0].todos[0].state, TodoState::InProgress);
+    assert_eq!(strip.map(|v| v.path), Some(open.to_string()));
+
+    let (_, strip) = machine_plan_views(dir.path(), &plans, Some(done));
+    assert!(strip.is_none(), "a finished plan is not the agent's plan");
+    let (_, strip) = machine_plan_views(dir.path(), &plans, None);
+    assert!(strip.is_none());
+}
+
+#[test]
 fn only_a_bare_build_phrase_typed_with_a_plan_to_build_builds_it() {
     let plan = Some(".aura/plans/p_00000001.plan.md");
     let typed = |text: &str| Prompt::typed(text.to_string(), Vec::new());

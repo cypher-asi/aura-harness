@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use aura_core_types::{ToolDefinition, ToolResult};
 use serde::{Deserialize, Serialize};
 
+use crate::agents::task::TASK_TOOL_NAME;
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
 
@@ -140,28 +141,44 @@ pub fn apply_todo_write(
     Ok(next)
 }
 
-/// The todo a `task` call with `args` does (its `todo_id`), and whether
-/// the call's result is the agent's report: `false` for a detached task,
-/// whose report arrives later in a notice.
+/// The tool a channel coordinator hands work to another agent with. Like
+/// `task` it can name the todo it does; the agent's report arrives later,
+/// in the coordinator's inbox.
+pub const ASSIGN_TOOL_NAME: &str = "assign";
+
+/// The todo a `task` or `assign` call to `tool` with `args` does (its
+/// `todo_id`), and whether the call's result is the agent's report:
+/// `false` for a detached task or an assignment, whose report arrives
+/// later. `None` for other tools and calls that name no todo.
 #[must_use]
-pub fn task_todo(args: &serde_json::Value) -> Option<(&str, bool)> {
+pub fn task_todo<'a>(tool: &str, args: &'a serde_json::Value) -> Option<(&'a str, bool)> {
+    if tool != TASK_TOOL_NAME && tool != ASSIGN_TOOL_NAME {
+        return None;
+    }
     let id = args
         .get("todo_id")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|id| !id.is_empty())?;
     let detached = args.get("spawn_mode").and_then(serde_json::Value::as_str) == Some("detached");
-    Some((id, !detached))
+    Some((id, tool == TASK_TOOL_NAME && !detached))
 }
 
-/// `current` with the todo a `task` call with `args` does given to its
-/// agent and in progress, or `None` when the call names no listed todo.
+/// `current` with the todo a `task` or `assign` call to `tool` with
+/// `args` does given to its agent and in progress, or `None` when the
+/// call names no listed todo.
 #[must_use]
-pub fn assign_task(current: &[TodoItem], args: &serde_json::Value) -> Option<Vec<TodoItem>> {
-    let (id, _) = task_todo(args)?;
-    let agent = args
-        .get("subagent_type")
-        .and_then(serde_json::Value::as_str)
+pub fn assign_task(
+    current: &[TodoItem],
+    tool: &str,
+    args: &serde_json::Value,
+) -> Option<Vec<TodoItem>> {
+    let (id, _) = task_todo(tool, args)?;
+    let agent = ["subagent_type", "to", "agent"]
+        .iter()
+        .filter_map(|key| args.get(key).and_then(serde_json::Value::as_str))
+        .map(str::trim)
+        .find(|agent| !agent.is_empty())
         .unwrap_or_default();
     let mut next = current.to_vec();
     let item = next.iter_mut().find(|item| item.id == id)?;
@@ -343,8 +360,9 @@ mod tests {
             item("2", "edit", TodoStatus::Pending),
         ];
         let args = json!({"subagent_type": "explorer", "prompt": "p", "todo_id": "1"});
-        assert_eq!(task_todo(&args), Some(("1", true)));
-        let assigned = assign_task(&current, &args).unwrap();
+        assert_eq!(task_todo("task", &args), Some(("1", true)));
+        assert_eq!(task_todo("read_file", &args), None);
+        let assigned = assign_task(&current, "task", &args).unwrap();
         assert_eq!(assigned[0].status, TodoStatus::InProgress);
         assert_eq!(assigned[0].assignee.as_deref(), Some("explorer"));
 
@@ -358,14 +376,29 @@ mod tests {
         assert_eq!(failed[0].status, TodoStatus::Pending);
         assert_eq!(failed[0].assignee.as_deref(), Some("explorer"));
 
-        assert!(assign_task(&current, &json!({"subagent_type": "x", "todo_id": "9"})).is_none());
-        assert!(assign_task(&current, &json!({"subagent_type": "x"})).is_none());
+        let unlisted = json!({"subagent_type": "x", "todo_id": "9"});
+        assert!(assign_task(&current, "task", &unlisted).is_none());
+        assert!(assign_task(&current, "task", &json!({"subagent_type": "x"})).is_none());
+    }
+
+    #[test]
+    fn an_assignment_gives_its_todo_to_the_agent_and_reports_later() {
+        let current = vec![item("1", "fix the parser", TodoStatus::Pending)];
+        let to_member = json!({"to": "REN4", "prompt": "p", "todo_id": "1"});
+        assert_eq!(task_todo(ASSIGN_TOOL_NAME, &to_member), Some(("1", false)));
+        let assigned = assign_task(&current, ASSIGN_TOOL_NAME, &to_member).unwrap();
+        assert_eq!(assigned[0].status, TodoStatus::InProgress);
+        assert_eq!(assigned[0].assignee.as_deref(), Some("REN4"));
+
+        let to_new = json!({"agent": "rust-engineer", "to": " ", "todo_id": "1"});
+        let assigned = assign_task(&current, ASSIGN_TOOL_NAME, &to_new).unwrap();
+        assert_eq!(assigned[0].assignee.as_deref(), Some("rust-engineer"));
     }
 
     #[test]
     fn a_detached_task_reports_in_a_line_of_its_notice() {
         let args = json!({"subagent_type": "tests", "todo_id": "t", "spawn_mode": "detached"});
-        assert_eq!(task_todo(&args), Some(("t", false)));
+        assert_eq!(task_todo("task", &args), Some(("t", false)));
         let text = format!(
             "tests finished.\n{}\n{}",
             task_report_line("t", true),

@@ -53,7 +53,7 @@ impl AgentHub {
     /// Show `view` in the INBOX tab, if mail is collected. A `task`
     /// thread is titled when its subtask is named ([`Self::name_subtask`]),
     /// so its mail asks for no subject.
-    pub(super) fn post_mail(&self, view: MailView) {
+    pub(crate) fn post_mail(&self, view: MailView) {
         if let Some(mail) = lock(&self.mail).as_ref() {
             // A closed channel means the event loop ended; nobody is left
             // to show it.

@@ -53,16 +53,16 @@ fn test_side_panel_header_matches_the_agents_header() {
     let rows = render_rows(&mut app, 150);
     let (tabs, widths) = header_bar(&rows, "SBX");
     assert!(
-        rows[tabs].contains("PRC") && rows[tabs].contains("│ * │ ⤢ │"),
-        "the tabs, then the * and ⤢ buttons: {}",
+        rows[tabs].contains("PRC") && rows[tabs].contains("│ 🖥  │ * │ ⤢ │"),
+        "the tabs, then HOST's icon and the * and ⤢ buttons: {}",
         rows[tabs]
     );
     assert_eq!(
         widths.len(),
-        7,
-        "the tabs and the two buttons fill the bar: {widths:?}"
+        8,
+        "the tabs, the icon and the two buttons fill the bar: {widths:?}"
     );
-    assert_eq!(widths[5..], [3, 3]);
+    assert_eq!(widths[5..], [4, 3, 3]);
     assert!(
         widths[..5].iter().all(|w| w.abs_diff(widths[0]) <= 1),
         "{widths:?}"
@@ -78,11 +78,12 @@ fn test_side_panel_header_matches_the_agents_header() {
         "top bars line up"
     );
 
-    let rows = render_rows(&mut app, 260);
+    let rows = render_rows(&mut app, 300);
     let (tabs, widths) = header_bar(&rows, "SANDBOX");
+    assert!(rows[tabs].contains("REPO"), "{}", rows[tabs]);
     assert!(rows[tabs].contains("PROCESSES"), "{}", rows[tabs]);
-    assert!(rows[tabs].contains("HOST"), "{}", rows[tabs]);
-    assert_eq!(widths.len(), 7, "{widths:?}");
+    assert!(!rows[tabs].contains("HOST"), "an icon: {}", rows[tabs]);
+    assert_eq!(widths.len(), 8, "{widths:?}");
 }
 
 #[test]
@@ -216,13 +217,13 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
     ]));
 
     let theme = test_theme();
-    let buffer = render_buffer(&mut app, 260);
+    let buffer = render_buffer(&mut app, 300);
     let row = row_of(&buffer, "PROCESSES");
     let (label, label_style) = find_cell(&buffer, row, "SANDBOX").unwrap();
     assert!(label_style.add_modifier.contains(Modifier::BOLD));
     assert_eq!(label_style.bg, Some(Color::Reset), "active, unfocused");
     assert_eq!(label_style.fg, Some(theme.colors.foreground));
-    let screen = render_rows(&mut app, 260).join("\n");
+    let screen = render_rows(&mut app, 300).join("\n");
     assert!(!screen.contains("FILES"), "{screen}");
 
     let (processes, process_style) = find_cell(&buffer, row, "PROCESSES").unwrap();
@@ -240,6 +241,6 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
         });
     }
     assert_eq!(app.side_tab(), SidePanelTab::Processes);
-    let screen = render_rows(&mut app, 260).join("\n");
+    let screen = render_rows(&mut app, 300).join("\n");
     assert!(!screen.contains("LIVE"), "{screen}");
 }

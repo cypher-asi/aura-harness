@@ -27,7 +27,10 @@ fn test_processes_tab_lists_processes() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    let _ = app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    // Sandbox, then on past REPO to PROCESSES.
+    for _ in 0..2 {
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    }
     let screen = render_rows(&mut app, 175).join("\n");
     let row = screen.lines().find(|r| r.contains("cargo build")).unwrap();
     assert!(row.contains("command"), "{row}");
@@ -67,8 +70,8 @@ fn test_trace_tab_lists_live_steps() {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    // Sandbox, then back past TASKS to TRACE.
-    for _ in 0..2 {
+    // Sandbox, then back past HOST and TASKS to TRACE.
+    for _ in 0..3 {
         let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     }
     let screen = render_rows(&mut app, 160).join("\n");
@@ -165,7 +168,10 @@ fn tasks_tab() -> (crate::App, Vec<String>) {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    // Sandbox, then back past HOST to TASKS.
+    for _ in 0..2 {
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    }
     let rows = render_rows(&mut app, 160);
     (app, rows)
 }

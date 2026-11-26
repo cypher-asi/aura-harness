@@ -255,6 +255,15 @@ pub enum UiEvent {
     /// hex id: send the policy its kernel enforces now
     RequestPolicies(String),
 
+    /// The Sandbox panel, showing the active agent's machine
+    /// ([`UiCommand::SetSandboxRemote`]), needs this directory listed:
+    /// answer with [`UiCommand::SandboxListing`]
+    ListSandbox(PathBuf),
+
+    /// User opened this file of the active agent's machine: answer with
+    /// [`UiCommand::SandboxFile`]
+    ReadSandboxFile(PathBuf),
+
     /// User labeled a recorded step (`seq`) or the whole run (`None`);
     /// positive is good
     LabelStep {
@@ -339,6 +348,13 @@ pub enum UiEvent {
         /// Agent the chat showed (hex id)
         agent_id: String,
         request: LogRequest,
+    },
+
+    /// The REPO tab asked for something
+    Repo {
+        /// Agent whose repo the tab shows (hex id)
+        agent_id: String,
+        request: crate::repo::RepoRequest,
     },
 
     /// Move an agent between this machine and its own cloud machine (the

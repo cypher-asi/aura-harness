@@ -1,7 +1,12 @@
+//! Prompts, commands and `/new` for cloud agents.
+
+use super::forward::{forward, title_sink, Titles, TurnExtras};
 use super::*;
+use crate::event_loop::turns::Prompt;
 
 /// Prompts and commands for a cloud agent, or for one being moved.
-/// Returns `false` when `work` is for the local kernel after all.
+/// Returns the work when it is for the local kernel after all. Work for
+/// a cloud agent with a turn running waits in its queue.
 pub(in crate::event_loop) async fn submit(
     state: &mut LoopState<'_>,
     agent: AgentId,
@@ -27,6 +32,34 @@ pub(in crate::event_loop) async fn submit(
         system(state, agent, refusal).await;
         return None;
     }
+    if state.cloud.is_running(agent) {
+        info!(%agent, "Cloud agent is busy; queueing work");
+        state.queued.push_back(agent, work);
+        crate::event_loop::hud::send_queued(state, agent).await;
+        return None;
+    }
+    run(state, hub, agent, work).await;
+    None
+}
+
+/// Start the work queued for cloud agent `agent`, an item at a time while
+/// it has no turn running: one that starts none (a command, a refusal)
+/// leaves the next free to.
+pub(in crate::event_loop) async fn start_queued(state: &mut LoopState<'_>, agent: AgentId) {
+    while !state.cloud.is_running(agent) {
+        let Some(work) = state.queued.pop_front(agent) else {
+            return;
+        };
+        crate::event_loop::hud::send_queued(state, agent).await;
+        if let Some(work) = submit(state, agent, work).await {
+            crate::event_loop::start_work::start_work(state, agent, work).await;
+            return;
+        }
+    }
+}
+
+/// Run `work` on cloud agent `agent`, which has no turn running.
+async fn run(state: &mut LoopState<'_>, hub: Arc<CloudHub>, agent: AgentId, work: Work) {
     match work {
         Work::Prompt { prompt, shown } => run_prompt(state, hub, agent, prompt, shown).await,
         Work::Command { command, .. } => run_command(state, hub, agent, command),
@@ -34,27 +67,17 @@ pub(in crate::event_loop) async fn submit(
             system(state, agent, "Cloud agents summarize and build plans on their own machine; send it as a message instead.").await;
         }
     }
-    None
 }
 
-/// Send `prompt` to cloud agent `agent` as a turn, unless one is running
-/// or its model's plan is not linked here.
+/// Send `prompt` to cloud agent `agent` as a turn, unless its model's plan
+/// is not linked here.
 async fn run_prompt(
     state: &mut LoopState<'_>,
     hub: Arc<CloudHub>,
     agent: AgentId,
-    prompt: crate::event_loop::turns::Prompt,
+    prompt: Prompt,
     shown: bool,
 ) {
-    if state.cloud.shared.running.lock().contains_key(&agent) {
-        system(
-            state,
-            agent,
-            "The cloud agent is still working; wait or stop it first.",
-        )
-        .await;
-        return;
-    }
     let ui = AgentUi::new(state.commands.clone(), agent);
     if !shown {
         ui.send(UiCommand::ShowMessage(MessageData::new(
@@ -72,13 +95,55 @@ async fn run_prompt(
         .await;
     }
     let current = state.models.current().to_string();
-    if let Some(note) = plan_refusal(state, &current) {
+    let linked = state.auth.linked_plans(&state.auth.owner());
+    if let Some(note) = plan_refusal(&current, &linked) {
         system(state, agent, note).await;
         return;
     }
     let model = (!current.is_empty() && current != "gate" && !current.starts_with("local/"))
         .then_some(current);
-    let jwt = zos_token(state);
+    let (title_model, titles) = turn_titles(state, &hub, agent, &prompt, &linked).await;
+    let turn = CloudTurn {
+        text: prompt.text,
+        jwt: zos_token(state),
+        title_model,
+        extras: TurnExtras {
+            titles,
+            context_limit: model.as_deref().map(aura_engine::context_window_for_model),
+        },
+        model,
+    };
+    start_turn(state, &hub, agent, ui, turn);
+}
+
+/// What a cloud turn asks its machine for, and what it shows besides its
+/// chat's stream.
+struct CloudTurn {
+    text: String,
+    model: Option<String>,
+    title_model: Option<String>,
+    jwt: Option<String>,
+    extras: TurnExtras,
+}
+
+/// Start `turn` on cloud agent `agent`'s machine and show it in `ui`'s
+/// chat. The agent counts as working until the hub has copied the
+/// turn's session here.
+fn start_turn(
+    state: &LoopState<'_>,
+    hub: &Arc<CloudHub>,
+    agent: AgentId,
+    ui: AgentUi,
+    turn: CloudTurn,
+) {
+    let CloudTurn {
+        text,
+        model,
+        title_model,
+        jwt,
+        mut extras,
+    } = turn;
+    // Stopped from the chat or its PROCESSES row alike.
     let cancel = CancellationToken::new();
     state
         .cloud
@@ -86,12 +151,134 @@ async fn run_prompt(
         .running
         .lock()
         .insert(agent, cancel.clone());
-    let rx = hub.run_turn(agent, prompt.text, model, jwt, cancel);
+    let mut row = crate::event_loop::handlers::turn_summary(
+        agent,
+        &text,
+        model.as_deref().unwrap_or_default(),
+    );
+    row.model.clone_from(&model);
+    state.processes.start(row, Some(cancel.clone()));
+    let mut rx = hub.run_turn(agent, text, model, title_model, jwt, cancel.clone());
     let shared = Arc::clone(&state.cloud.shared);
+    let processes = Arc::clone(&state.processes);
+    let sessions = state.hub.factory.checkpoints.clone();
     tokio::spawn(async move {
-        forward(ui, rx).await;
-        shared.running.lock().remove(&agent);
+        let end = forward(&ui, &mut rx, &mut extras, &cancel).await;
+        processes.finish(
+            &crate::event_loop::processes::turn_id(agent),
+            end.status(cancel.is_cancelled()),
+        );
+        // The hub copies the turn's session here before it lets go
+        // of the channel; the totals come from that copy.
+        while rx.recv().await.is_some() {}
+        if let Some(sessions) = sessions {
+            let copied = tokio::task::spawn_blocking(move || sessions.load_current(agent)).await;
+            if let Ok(Some(checkpoint)) = copied {
+                ui.send(UiCommand::SetSessionTotals(
+                    crate::event_loop::hud::session_totals(&checkpoint.usage),
+                ))
+                .await;
+            }
+        }
+        shared.end_turn(agent);
     });
+}
+
+/// The model `agent`'s machine titles its chat with on this turn, if any,
+/// and where the title goes.
+async fn turn_titles(
+    state: &LoopState<'_>,
+    hub: &Arc<CloudHub>,
+    agent: AgentId,
+    prompt: &Prompt,
+    linked: &[aura_core_auth::ProviderKind],
+) -> (Option<String>, Option<Titles>) {
+    // Titled like a local agent: on a typed prompt, while it still
+    // has a placeholder name. Its machine makes the call, since only
+    // the machine writes the agent's record while it is placed.
+    let wants_title = state.hub.titles_turn(agent, prompt.mentions);
+    let title_model = wants_title
+        .then(|| crate::event_loop::titles::title_model(state.models.classifier_model()))
+        .filter(|model| runs_on_machine(model, linked));
+    let mut titles = wants_title.then(|| {
+        Titles::new(
+            title_sink(Arc::clone(&state.hub), Arc::clone(hub), agent),
+            &prompt.text,
+        )
+    });
+    if title_model.is_none() {
+        if let Some(titles) = titles.as_mut() {
+            titles.finish().await;
+        }
+    }
+    (title_model, titles)
+}
+
+/// `/new` for a cloud agent: its node writes the `SessionStart`, waking
+/// the machine if it sleeps, and the hub copies it here. Returns whether
+/// the node was asked; a failure is said in the agent's chat.
+pub(in crate::event_loop) async fn new_session(state: &mut LoopState<'_>, agent: AgentId) -> bool {
+    if state.cloud.is_moving(agent) {
+        system(
+            state,
+            agent,
+            "This agent is moving between machines; start a new session when the move is done.",
+        )
+        .await;
+        return false;
+    }
+    let Some(hub) = state.cloud.hub() else {
+        return false;
+    };
+    if let Some(refusal) = foreign_owner(state, &hub, agent) {
+        system(state, agent, refusal).await;
+        return false;
+    }
+    if state.cloud.is_running(agent) {
+        system(
+            state,
+            agent,
+            "The cloud agent is still working; wait or stop it first.",
+        )
+        .await;
+        return false;
+    }
+    start_new_session(state, hub, agent);
+    true
+}
+
+/// Ask `agent`'s node for a new session. Prompts wait while it starts
+/// one, so none runs in the old one.
+fn start_new_session(state: &LoopState<'_>, hub: Arc<CloudHub>, agent: AgentId) {
+    state
+        .cloud
+        .shared
+        .running
+        .lock()
+        .insert(agent, CancellationToken::new());
+    let shared = Arc::clone(&state.cloud.shared);
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    tokio::spawn(async move {
+        let result = hub.new_session(agent).await;
+        shared.end_turn(agent);
+        if let Err(err) = result {
+            warn!(%agent, error = %err, "the cloud node did not start a new session");
+            ui.send(UiCommand::ShowMessage(MessageData::new(
+                MessageRole::System,
+                format!("Could not start a new session on the cloud machine; the agent keeps its conversation: {err}"),
+            )))
+            .await;
+        }
+    });
+}
+
+/// Whether `model` can run on a cloud machine: not Gate or a model on
+/// this computer, and a plan model only when its plan is `linked`.
+pub(super) fn runs_on_machine(model: &str, linked: &[aura_core_auth::ProviderKind]) -> bool {
+    !model.is_empty()
+        && model != "gate"
+        && !model.starts_with("local/")
+        && plan_of_model(model).is_none_or(|kind| linked.contains(&kind))
 }
 
 /// The access token of the zOS session signed in here, if any.
@@ -103,10 +290,11 @@ fn zos_token(state: &LoopState<'_>) -> Option<String> {
 }
 
 /// Why `model` can't be used from cloud agents yet: a plan model runs on
-/// the owner's plan, through the boxd secret their machine holds.
-fn plan_refusal(state: &LoopState<'_>, model: &str) -> Option<String> {
+/// the owner's plan, through the boxd secret their machine holds, so its
+/// plan must be `linked` here.
+fn plan_refusal(model: &str, linked: &[aura_core_auth::ProviderKind]) -> Option<String> {
     let kind = plan_of_model(model)?;
-    (!state.auth.linked_plans(&state.auth.owner()).contains(&kind)).then(|| {
+    (!linked.contains(&kind)).then(|| {
         format!(
             "Sign in to {} (`/login {}`) to use it from cloud agents.",
             kind.label(),
@@ -134,172 +322,4 @@ fn run_command(state: &LoopState<'_>, hub: Arc<CloudHub>, agent: AgentId, comman
         )))
         .await;
     });
-}
-
-/// Show a cloud turn's events in its agent's chat.
-pub(super) async fn forward(ui: AgentUi, mut rx: tokio::sync::mpsc::Receiver<RemoteEvent>) {
-    let mut chat = TurnChat {
-        ui,
-        streaming: false,
-        thinking: false,
-        waking: None,
-    };
-    while let Some(event) = rx.recv().await {
-        if let RemoteEvent::Boot(event) = event {
-            chat.show_boot(event).await;
-            continue;
-        }
-        chat.end_wake(&event).await;
-        chat.close_open(&event).await;
-        if !chat.show(event).await {
-            break;
-        }
-    }
-    chat.finish().await;
-}
-
-/// What a cloud turn has open in its chat.
-struct TurnChat {
-    ui: AgentUi,
-    streaming: bool,
-    thinking: bool,
-    /// A sleeping machine's wake, shown until the turn's first event.
-    waking: Option<BootConsoleUi>,
-}
-
-impl TurnChat {
-    async fn show_boot(&mut self, event: BootEvent) {
-        let ui = &self.ui;
-        self.waking
-            .get_or_insert_with(|| BootConsoleUi::new(ui.clone(), "Waking cloud machine"))
-            .show(vec![event])
-            .await;
-    }
-
-    /// The turn's first event ends the wake's console.
-    async fn end_wake(&mut self, event: &RemoteEvent) {
-        if let Some(console) = self.waking.take() {
-            match event {
-                RemoteEvent::Failed(err) => {
-                    console
-                        .end(false, format!("Could not wake the machine: {err}"))
-                        .await;
-                }
-                _ => {
-                    console
-                        .end(true, "Awake; the turn runs on it.".to_string())
-                        .await;
-                }
-            }
-        }
-    }
-
-    /// Close the thinking or streaming block `event` does not continue.
-    async fn close_open(&mut self, event: &RemoteEvent) {
-        if self.thinking && !matches!(event, RemoteEvent::Thinking(_)) {
-            self.ui.send(UiCommand::FinishThinking).await;
-            self.thinking = false;
-        }
-        if self.streaming && !matches!(event, RemoteEvent::Text(_)) {
-            self.ui.send(UiCommand::FinishStreaming).await;
-            self.streaming = false;
-        }
-    }
-
-    /// Show `event`. Returns `false` when the turn is over.
-    async fn show(&mut self, event: RemoteEvent) -> bool {
-        let ui = &self.ui;
-        match event {
-            RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
-            RemoteEvent::Boot(_) => {}
-            RemoteEvent::Text(text) => {
-                if !self.streaming {
-                    ui.send(UiCommand::StartStreaming).await;
-                    self.streaming = true;
-                }
-                ui.send(UiCommand::AppendText(text)).await;
-            }
-            RemoteEvent::Thinking(text) => {
-                if !self.thinking {
-                    ui.send(UiCommand::StartThinking).await;
-                    self.thinking = true;
-                }
-                ui.send(UiCommand::AppendThinking(text)).await;
-            }
-            event @ (RemoteEvent::ToolStart { .. }
-            | RemoteEvent::ToolInput { .. }
-            | RemoteEvent::ToolResult { .. }) => show_tool(ui, event).await,
-            RemoteEvent::Done { .. } => return false,
-            RemoteEvent::Failed(err) => {
-                ui.send(UiCommand::ShowError(format!(
-                    "cloud turn failed: {err}{}",
-                    failure_hint(&err)
-                )))
-                .await;
-                return false;
-            }
-        }
-        true
-    }
-
-    /// Close what the turn left open and complete the chat.
-    async fn finish(self) {
-        if let Some(console) = self.waking {
-            console
-                .end(false, "The turn ended while the machine woke.".to_string())
-                .await;
-        }
-        if self.thinking {
-            self.ui.send(UiCommand::FinishThinking).await;
-        }
-        if self.streaming {
-            self.ui.send(UiCommand::FinishStreaming).await;
-        }
-        // The chat entered Processing when the prompt was sent. Status text
-        // alone leaves it there, so the working line keeps saying Thinking
-        // after the turn is over.
-        self.ui.send(UiCommand::Complete).await;
-    }
-}
-
-/// Show a tool call's start, input or result.
-async fn show_tool(ui: &AgentUi, event: RemoteEvent) {
-    match event {
-        RemoteEvent::ToolStart { id, name } => {
-            ui.send(UiCommand::ShowTool(ToolData {
-                id,
-                name,
-                args: String::new(),
-            }))
-            .await;
-        }
-        RemoteEvent::ToolInput { id, input } => {
-            ui.send(UiCommand::UpdateToolArgs { id, args: input }).await;
-        }
-        RemoteEvent::ToolResult {
-            id,
-            result,
-            is_error,
-        } => {
-            ui.send(UiCommand::CompleteTool {
-                id,
-                result,
-                success: !is_error,
-            })
-            .await;
-        }
-        _ => {}
-    }
-}
-
-/// What to add to a failed turn's error: a refused plan token needs a
-/// new sign-in here.
-fn failure_hint(err: &str) -> &'static str {
-    let lower = err.to_ascii_lowercase();
-    if lower.contains("401") || lower.contains("unauthorized") {
-        " The plan refused the machine's token: check the plan is linked here \
-         (`/login <plan>`); the machine picks up a new sign-in within two minutes."
-    } else {
-        ""
-    }
 }

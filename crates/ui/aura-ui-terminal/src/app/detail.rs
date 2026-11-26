@@ -65,8 +65,8 @@ impl App {
                 self.open_plan_doc(&path, None);
             }
             SandboxEntryKind::File | SandboxEntryKind::Symlink => {
-                let view = FileView::load(&row.path, self.sandbox.root());
-                self.open_detail(DetailView::File(Box::new(view)));
+                let path = row.path.clone();
+                self.open_file(&path);
             }
             SandboxEntryKind::Dir => self.sandbox.toggle_selected(),
             SandboxEntryKind::More(_) => {}

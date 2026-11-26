@@ -79,6 +79,9 @@ pub struct PaneChrome {
     /// The title bar's rows, framed and empty on the grid
     pub bar: Rect,
     pub tabs: Vec<PaneTab>,
+    /// A tab drawn as its icon at the bar's end, left of the scope and
+    /// expand buttons: HOST's computer
+    pub icon_tab: Option<PaneTab>,
     pub active: Option<PaneTab>,
     /// Shown first, for panels without tabs
     pub title: Option<String>,

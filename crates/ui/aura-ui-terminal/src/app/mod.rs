@@ -50,6 +50,8 @@ mod project_list;
 mod prose;
 pub(crate) mod queue_panel;
 mod record_list;
+mod remote_files;
+pub(crate) mod repo_tab;
 pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
@@ -312,6 +314,8 @@ pub struct App {
     pub(super) trace_feed: trace_feed::TraceFeed,
     /// Plans and tasks of the TASKS tab
     pub(super) task_list: tasks::TaskList,
+    /// The REPO tab's view, filter and rows
+    pub(super) repo: repo_tab::RepoTab,
     /// Flow between agents shown by the chat panel's GRAPH tab
     pub(super) flow: flow::FlowState,
     /// Benchmarks, and the one shown in the BENCH tab

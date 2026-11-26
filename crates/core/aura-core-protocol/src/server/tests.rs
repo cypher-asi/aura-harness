@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn a_chat_title_is_its_own_message_on_the_turn_s_stream() {
+    let json = serde_json::to_string(&OutboundMessage::ChatTitle(ChatTitle {
+        title: "Build fix".to_string(),
+    }))
+    .expect("serialize");
+    assert_eq!(json, r#"{"type":"chat_title","title":"Build fix"}"#);
+    let back: OutboundMessage = serde_json::from_str(&json).expect("deserialize");
+    assert!(matches!(back, OutboundMessage::ChatTitle(t) if t.title == "Build fix"));
+}
+
+#[test]
 fn tool_result_without_image_omits_image_fields() {
     // The string-only path must serialize byte-identically to the
     // pre-image contract: no `image_base64` / `image_media_type`

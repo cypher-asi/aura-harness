@@ -90,7 +90,6 @@ fn turn_puts_project_instructions_in_the_stable_prompt_prefix() {
     );
 }
 
-
 #[test]
 fn task_tool_offers_detached_spawns() {
     let fixture = fixture("unused");
@@ -100,4 +99,3 @@ fn task_tool_offers_detached_spawns() {
         serde_json::json!(["wait", "detached"])
     );
 }
-

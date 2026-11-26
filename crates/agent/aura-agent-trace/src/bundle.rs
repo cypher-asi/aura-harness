@@ -373,6 +373,26 @@ pub fn list_runs(home: &Path) -> Vec<(RunMeta, Option<RunScorecard>)> {
         .collect()
 }
 
+/// The newest `limit` runs under `home` that belong to the agent with hex
+/// id `agent` ([`crate::db::owner_of`]), newest first.
+#[must_use]
+pub fn runs_of(home: &Path, agent: &str, limit: usize) -> Vec<RunBundle> {
+    list_run_dirs(home)
+        .into_iter()
+        .rev()
+        .map(RunBundle::at)
+        .filter(|bundle| {
+            bundle
+                .read_meta()
+                .ok()
+                .and_then(|meta| crate::db::owner_of(&meta))
+                .as_deref()
+                == Some(agent)
+        })
+        .take(limit)
+        .collect()
+}
+
 /// Metadata of the runs spawned by run `run_id`, oldest first. Run ids
 /// sort by start time, so only later runs are read.
 #[must_use]

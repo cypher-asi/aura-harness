@@ -50,6 +50,7 @@ impl App {
             graph: graph::GraphState::default(),
             trace_feed: trace_feed::TraceFeed::default(),
             task_list: tasks::TaskList::default(),
+            repo: repo_tab::RepoTab::default(),
             flow: flow::FlowState::default(),
             bench: BenchState::default(),
             log: run_log::LogState::default(),

@@ -12,6 +12,9 @@ use aura_ui::events::{
 };
 use aura_ui::host::{HostAction, HostFact, HostSection, HostView, PlacementState, PlacementView};
 use aura_ui::mode_command::PermissionMode;
+use aura_ui::repo::{
+    ChangeKind, EventKind, EventState, PrState, RepoChange, RepoEvent, RepoTarget, RepoView,
+};
 use aura_ui::ApprovalLevel;
 use aura_ui_terminal::{AgentsTab, ChatTab, PaneTab, RecordsTab, SidePanelTab};
 
@@ -245,6 +248,116 @@ fn policies_read_like_the_host_tab_below_them() {
         assert!(screen.contains(text), "{text:?} in {screen}");
     }
     snapshot("policies_over_host", &mut h);
+}
+
+#[test]
+fn the_repo_tab_lists_the_branch_its_changes_and_what_happened() {
+    let mut h = stage();
+    session(&mut h);
+    let view = repo_view(chrono::Utc::now().timestamp());
+    h.apply([UiCommand::SetRepo(Box::new(view))]);
+    let repo = PaneTab::Side(SidePanelTab::Repo);
+    let tab = h.shell.chrome.spot(repo).expect("the tab is drawn");
+    h.drag(tab, tab);
+    assert_eq!(h.shell.tabs.front().tui.side_tab(), SidePanelTab::Repo);
+    let screen = h.screen();
+    for text in [
+        " All  Changes  Commits ",
+        "main",
+        "?  src/repo.rs",
+        "Add the REPO tab",
+        "#42 REPO tab",
+        "Pushed 3",
+    ] {
+        assert!(screen.contains(text), "{text:?} in {screen}");
+    }
+    snapshot("repo", &mut h);
+}
+
+/// Agent `a1`'s repository at `now` (Unix seconds): on `main`, a commit
+/// ahead of `origin/main`, with an untracked file and four events.
+fn repo_view(now: i64) -> RepoView {
+    RepoView {
+        agent_id: "a1".into(),
+        branch: Some("main".into()),
+        head: "9984d116".into(),
+        upstream: Some("origin/main".into()),
+        ahead: 1,
+        changes: vec![RepoChange {
+            path: "src/repo.rs".into(),
+            from: None,
+            kind: ChangeKind::Untracked,
+            staged: false,
+            unstaged: true,
+        }],
+        events: repo_events(now),
+        prs: PrState::Listed,
+        ..RepoView::default()
+    }
+}
+
+/// A pending commit, an open PR, a push and a merge, newest first.
+fn repo_events(now: i64) -> Vec<RepoEvent> {
+    let range = |from: &str, to: &str| RepoTarget::Range {
+        from: Some(from.into()),
+        to: to.into(),
+    };
+    vec![
+        repo_event(
+            EventKind::Commit,
+            EventState::Pending,
+            now - 600,
+            "Add the REPO tab",
+            "9984d116",
+            RepoTarget::Commit {
+                sha: "9984d116".into(),
+            },
+        ),
+        repo_event(
+            EventKind::Pr,
+            EventState::Open,
+            now - 3 * 3600,
+            "#42 REPO tab and host icon",
+            "repo-tab → main",
+            RepoTarget::Pr { number: 42 },
+        ),
+        repo_event(
+            EventKind::Push,
+            EventState::Done,
+            now - 5 * 3600,
+            "Pushed 3 commits to origin/main",
+            "5dc08c27",
+            range("2b1c3d4e", "5dc08c27"),
+        ),
+        repo_event(
+            EventKind::Merge,
+            EventState::Done,
+            now - 6 * 3600,
+            "Merged channel-projects",
+            "f5bc5cd4",
+            range("edbd61b4", "f5bc5cd4"),
+        ),
+    ]
+}
+
+/// A REPO tab event at `at` (Unix seconds).
+fn repo_event(
+    kind: EventKind,
+    state: EventState,
+    at: i64,
+    title: &str,
+    detail: &str,
+    target: RepoTarget,
+) -> RepoEvent {
+    RepoEvent {
+        kind,
+        state,
+        at,
+        title: title.into(),
+        detail: detail.into(),
+        target,
+        url: None,
+    }
 }
 
 #[test]

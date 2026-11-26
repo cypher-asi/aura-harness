@@ -117,6 +117,7 @@ fn render_detail_bar(
         close: Some(app.hover() == Some(HoverTarget::CloseDetail)),
         expand,
         scope: None,
+        icon_tab: None,
         focused: true,
         hosted,
     };
@@ -165,6 +166,7 @@ fn render_tab_bar(
         close: None,
         expand,
         scope: None,
+        icon_tab: None,
         focused: is_focused,
         hosted,
     };

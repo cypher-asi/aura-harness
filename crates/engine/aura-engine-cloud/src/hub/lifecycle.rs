@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Weak};
 
 use crate::cost::CostModel;
@@ -11,7 +12,7 @@ use crate::github::{BotIdentity, GithubApp, RepoTokens};
 use crate::mesh::{Directory, MailBook};
 use crate::plans::SYNC_EVERY;
 use crate::repos::RepoSync;
-use crate::snapshots::{AuraBinary, SnapshotBuilder};
+use crate::snapshots::{AuraBinary, SnapshotBuilder, SnapshotSettings};
 use crate::{boxd, BootReporter, BootStage, CloudResult, VmProvider};
 use aura_config::CloudConfig;
 use aura_core_auth::Owner;
@@ -23,7 +24,7 @@ use super::store::StoreLedger;
 
 use super::{
     choose_binary, io, load_placements, CloudHub, PlacedAgent, PlacementFile, POLL_EVERY,
-    TICK_EVERY, USAGE_EVERY,
+    SWEEP_EVERY, TICK_EVERY, USAGE_EVERY,
 };
 
 impl CloudHub {
@@ -42,35 +43,14 @@ impl CloudHub {
     ) -> CloudResult<Arc<Self>> {
         let placements = open_placements(&home)?;
         let ledger = Arc::new(StoreLedger::new(Arc::clone(&store)));
-        let settings =
-            crate::fleet::FleetSettings::from_config(&config, placements.install.clone());
-        let fleet = Arc::new(VmFleet::new(
-            Arc::clone(&provider),
-            Arc::clone(&ledger) as Arc<dyn crate::fleet::VmLedger>,
-            settings,
-        ));
-        let repos = Arc::new(RepoSync::new(
-            Arc::clone(&provider),
-            github_tokens(&config),
-            placements.install.clone(),
-        ));
-        let snapshots = SnapshotBuilder::new(
-            provider,
-            Arc::clone(&ledger) as Arc<dyn crate::fleet::VmLedger>,
-            placements.install.clone(),
-            config.size,
-            config.isolated,
-            env!("CARGO_PKG_VERSION"),
-            binary,
-            home.clone(),
-        );
+        let parts = MachineParts::new(&config, &ledger, provider, binary, &home, &placements);
         let hub = Arc::new(Self {
             costs: CostModel::from_config(&config),
             config,
             store,
             ledger,
-            fleet,
-            snapshots,
+            fleet: parts.fleet,
+            snapshots: parts.snapshots,
             directory: Directory::new(),
             mail: MailBook::new(),
             home,
@@ -79,9 +59,19 @@ impl CloudHub {
             links: Mutex::new(HashMap::new()),
             tracks: Mutex::new(HashMap::new()),
             mirrors: Mutex::new(HashMap::new()),
+            copies: Mutex::new(HashMap::new()),
+            observer: Mutex::new(None),
+            copied: AtomicBool::new(false),
+            trace_store: Mutex::new(None),
+            run_marks: Mutex::new(HashMap::new()),
+            traces_copied: Mutex::new(HashSet::new()),
+            sync: Mutex::new(HashMap::new()),
             plans: Mutex::new(None),
-            repos: Mutex::new(repos),
+            repos: Mutex::new(parts.repos),
+            sessions: Mutex::new(None),
             current_owner: Mutex::new(Owner::Local),
+            work: Mutex::new(HashMap::new()),
+            streaming: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
         });
         hub.save_placements();
@@ -256,6 +246,54 @@ impl CloudHub {
     }
 }
 
+/// The parts of a hub that make and keep this install's machines, all
+/// writing their rows through one ledger.
+struct MachineParts {
+    fleet: Arc<VmFleet>,
+    repos: Arc<RepoSync>,
+    snapshots: SnapshotBuilder,
+}
+
+impl MachineParts {
+    fn new(
+        config: &CloudConfig,
+        ledger: &Arc<StoreLedger>,
+        provider: Arc<dyn VmProvider>,
+        binary: AuraBinary,
+        home: &Path,
+        placements: &PlacementFile,
+    ) -> Self {
+        let settings = crate::fleet::FleetSettings::from_config(config, placements.install.clone());
+        let fleet = Arc::new(VmFleet::new(
+            Arc::clone(&provider),
+            Arc::clone(ledger) as Arc<dyn crate::fleet::VmLedger>,
+            settings,
+        ));
+        let repos = Arc::new(RepoSync::new(
+            Arc::clone(&provider),
+            github_tokens(config),
+            placements.install.clone(),
+        ));
+        let snapshots = SnapshotBuilder::new(
+            provider,
+            Arc::clone(ledger) as Arc<dyn crate::fleet::VmLedger>,
+            SnapshotSettings {
+                install: placements.install.clone(),
+                size: config.size,
+                isolated: config.isolated,
+                aura_version: env!("CARGO_PKG_VERSION").to_string(),
+                binary,
+            },
+            home.to_path_buf(),
+        );
+        Self {
+            fleet,
+            repos,
+            snapshots,
+        }
+    }
+}
+
 /// The placements file in `home`, created with this install's id when
 /// there is none.
 fn open_placements(home: &Path) -> CloudResult<PlacementFile> {
@@ -285,17 +323,17 @@ async fn maintain(hub: Weak<CloudHub>, stop: CancellationToken) {
     let mut poll = tokio::time::interval(POLL_EVERY);
     let mut usage = tokio::time::interval(USAGE_EVERY);
     let mut plans = tokio::time::interval(SYNC_EVERY);
+    let mut sweep = tokio::time::interval(SWEEP_EVERY);
     loop {
         tokio::select! {
             () = stop.cancelled() => return,
             _ = tick.tick() => {
                 let Some(hub) = hub.upgrade() else { return };
-                let slept = hub.fleet.tick().await;
-                for agent in slept {
-                    if let Some(link) = hub.links.lock().get(&agent) {
-                        link.stop.cancel();
-                    }
-                }
+                hub.sleep_idle_machines().await;
+            }
+            _ = sweep.tick() => {
+                let Some(hub) = hub.upgrade() else { return };
+                hub.sweep();
             }
             _ = poll.tick() => {
                 let Some(hub) = hub.upgrade() else { return };

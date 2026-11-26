@@ -1,0 +1,295 @@
+//! A cloud turn's stream in its agent's chat, and the chat title the turn
+//! gives it.
+
+use super::*;
+
+/// Applies a cloud chat's title.
+pub(super) type TitleSink = Box<dyn Fn(String) -> BoxFuture<'static, ()> + Send + Sync>;
+
+/// Titles `agent` in the agents list and, when that took, on its placement,
+/// which names it in mail.
+pub(super) fn title_sink(agents: Arc<AgentHub>, hub: Arc<CloudHub>, agent: AgentId) -> TitleSink {
+    Box::new(move |title| {
+        let agents = Arc::clone(&agents);
+        let hub = Arc::clone(&hub);
+        Box::pin(async move {
+            if agents.apply_title(agent, &title).await {
+                hub.rename(agent, &title);
+            }
+        })
+    })
+}
+
+/// Where a cloud chat's title goes, with the title made from its prompt
+/// for when the machine sends none.
+pub(super) struct Titles {
+    sink: TitleSink,
+    fallback: Option<String>,
+}
+
+impl Titles {
+    pub(super) fn new(sink: TitleSink, prompt: &str) -> Self {
+        Self {
+            sink,
+            fallback: Some(aura_agent::titles::fallback_title(prompt)),
+        }
+    }
+
+    async fn apply(&mut self, title: String) {
+        self.fallback = None;
+        (self.sink)(title).await;
+    }
+
+    /// Apply the title made from the prompt, unless one was applied.
+    pub(super) async fn finish(&mut self) {
+        if let Some(title) = self.fallback.take() {
+            (self.sink)(title).await;
+        }
+    }
+}
+
+/// What a cloud turn shows outside its chat's stream.
+#[derive(Default)]
+pub(super) struct TurnExtras {
+    /// Where the chat's title goes; `None` when it needs none.
+    pub(super) titles: Option<Titles>,
+    /// The context window of the model the turn asked for.
+    pub(super) context_limit: Option<u64>,
+}
+
+/// How a cloud turn's stream ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TurnEnd {
+    /// The reply ended.
+    Done,
+    /// The turn failed, or its stream closed first.
+    Failed,
+}
+
+impl TurnEnd {
+    /// The PROCESSES status of a turn that ended so, when the user
+    /// `stopped` it or not.
+    pub(super) fn status(self, stopped: bool) -> ProcessStatus {
+        match (self, stopped) {
+            (_, true) => ProcessStatus::Killed,
+            (Self::Done, false) => ProcessStatus::Exited,
+            (Self::Failed, false) => ProcessStatus::Failed,
+        }
+    }
+}
+
+/// Show a cloud turn's events in its agent's chat, until the turn ends.
+/// A turn ended by `cancel` says so, without an error.
+pub(super) async fn forward(
+    ui: &AgentUi,
+    rx: &mut tokio::sync::mpsc::Receiver<RemoteEvent>,
+    extras: &mut TurnExtras,
+    cancel: &CancellationToken,
+) -> TurnEnd {
+    let mut chat = TurnChat {
+        ui,
+        cancel,
+        streaming: false,
+        thinking: false,
+        waking: None,
+    };
+    let mut end = TurnEnd::Failed;
+    while let Some(event) = rx.recv().await {
+        if let RemoteEvent::Boot(event) = event {
+            chat.show_boot(event).await;
+            continue;
+        }
+        // Arrives mid-reply; the reply streams on around it.
+        if let RemoteEvent::Title(title) = event {
+            if let Some(titles) = extras.titles.as_mut() {
+                titles.apply(title).await;
+            }
+            continue;
+        }
+        chat.end_wake(&event).await;
+        chat.close_open(&event).await;
+        if let Some(ended) = chat.show(event, extras.context_limit).await {
+            end = ended;
+            break;
+        }
+    }
+    chat.finish(extras).await;
+    end
+}
+
+/// What a cloud turn has open in its chat.
+struct TurnChat<'a> {
+    ui: &'a AgentUi,
+    cancel: &'a CancellationToken,
+    streaming: bool,
+    thinking: bool,
+    /// A sleeping machine's wake, shown until the turn's first event.
+    waking: Option<BootConsoleUi>,
+}
+
+impl TurnChat<'_> {
+    async fn show_boot(&mut self, event: BootEvent) {
+        let ui = self.ui;
+        self.waking
+            .get_or_insert_with(|| BootConsoleUi::new(ui.clone(), "Waking cloud machine"))
+            .show(vec![event])
+            .await;
+    }
+
+    /// The turn's first event ends the wake's console.
+    async fn end_wake(&mut self, event: &RemoteEvent) {
+        let Some(console) = self.waking.take() else {
+            return;
+        };
+        match event {
+            RemoteEvent::Failed(_) if self.cancel.is_cancelled() => {
+                console
+                    .end(false, "The turn was stopped.".to_string())
+                    .await;
+            }
+            RemoteEvent::Failed(err) => {
+                console
+                    .end(false, format!("Could not wake the machine: {err}"))
+                    .await;
+            }
+            _ => {
+                console
+                    .end(true, "Awake; the turn runs on it.".to_string())
+                    .await;
+            }
+        }
+    }
+
+    /// Close the thinking or streaming block `event` does not continue.
+    async fn close_open(&mut self, event: &RemoteEvent) {
+        if self.thinking && !matches!(event, RemoteEvent::Thinking(_)) {
+            self.ui.send(UiCommand::FinishThinking).await;
+            self.thinking = false;
+        }
+        if self.streaming && !matches!(event, RemoteEvent::Text(_)) {
+            self.ui.send(UiCommand::FinishStreaming).await;
+            self.streaming = false;
+        }
+    }
+
+    /// Show `event`. Returns how the turn ended, once it has.
+    async fn show(&mut self, event: RemoteEvent, context_limit: Option<u64>) -> Option<TurnEnd> {
+        let ui = self.ui;
+        match event {
+            RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
+            RemoteEvent::Boot(_) | RemoteEvent::Title(_) => {}
+            RemoteEvent::Text(text) => self.append_text(text).await,
+            RemoteEvent::Thinking(text) => self.append_thinking(text).await,
+            event @ (RemoteEvent::ToolStart { .. }
+            | RemoteEvent::ToolInput { .. }
+            | RemoteEvent::ToolResult { .. }) => show_tool(ui, event).await,
+            RemoteEvent::Done(usage) => {
+                let limit = context_limit.or_else(|| {
+                    (!usage.model.is_empty())
+                        .then(|| aura_engine::context_window_for_model(&usage.model))
+                });
+                ui.send(UiCommand::SetContext(
+                    crate::event_loop::hud::remote_context_view(&usage, limit),
+                ))
+                .await;
+                return Some(TurnEnd::Done);
+            }
+            RemoteEvent::Failed(err) if self.cancel.is_cancelled() => {
+                info!(error = %err, "Cancelled cloud turn ended with an error");
+                ui.send(UiCommand::ShowWarning("Turn cancelled".to_string()))
+                    .await;
+                return Some(TurnEnd::Failed);
+            }
+            RemoteEvent::Failed(err) => {
+                ui.send(UiCommand::ShowError(format!(
+                    "cloud turn failed: {err}{}",
+                    failure_hint(&err)
+                )))
+                .await;
+                return Some(TurnEnd::Failed);
+            }
+        }
+        None
+    }
+
+    async fn append_text(&mut self, text: String) {
+        if !self.streaming {
+            self.ui.send(UiCommand::StartStreaming).await;
+            self.streaming = true;
+        }
+        self.ui.send(UiCommand::AppendText(text)).await;
+    }
+
+    async fn append_thinking(&mut self, text: String) {
+        if !self.thinking {
+            self.ui.send(UiCommand::StartThinking).await;
+            self.thinking = true;
+        }
+        self.ui.send(UiCommand::AppendThinking(text)).await;
+    }
+
+    /// Close what the turn left open, title the chat if the machine did
+    /// not, and complete the chat.
+    async fn finish(self, extras: &mut TurnExtras) {
+        if let Some(console) = self.waking {
+            console
+                .end(false, "The turn ended while the machine woke.".to_string())
+                .await;
+        }
+        if let Some(titles) = extras.titles.as_mut() {
+            titles.finish().await;
+        }
+        if self.thinking {
+            self.ui.send(UiCommand::FinishThinking).await;
+        }
+        if self.streaming {
+            self.ui.send(UiCommand::FinishStreaming).await;
+        }
+        // The chat entered Processing when the prompt was sent. Status text
+        // alone leaves it there, so the working line keeps saying Thinking
+        // after the turn is over.
+        self.ui.send(UiCommand::Complete).await;
+    }
+}
+
+/// Show a tool call's start, input or result.
+async fn show_tool(ui: &AgentUi, event: RemoteEvent) {
+    match event {
+        RemoteEvent::ToolStart { id, name } => {
+            ui.send(UiCommand::ShowTool(ToolData {
+                id,
+                name,
+                args: String::new(),
+            }))
+            .await;
+        }
+        RemoteEvent::ToolInput { id, input } => {
+            ui.send(UiCommand::UpdateToolArgs { id, args: input }).await;
+        }
+        RemoteEvent::ToolResult {
+            id,
+            result,
+            is_error,
+        } => {
+            ui.send(UiCommand::CompleteTool {
+                id,
+                result,
+                success: !is_error,
+            })
+            .await;
+        }
+        _ => {}
+    }
+}
+
+/// What to add to a failed turn's error: a refused plan token needs a
+/// new sign-in here.
+fn failure_hint(err: &str) -> &'static str {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("401") || lower.contains("unauthorized") {
+        " The plan refused the machine's token: check the plan is linked here \
+         (`/login <plan>`); the machine picks up a new sign-in within two minutes."
+    } else {
+        ""
+    }
+}

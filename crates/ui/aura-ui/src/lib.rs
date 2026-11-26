@@ -18,7 +18,9 @@ pub mod flow;
 pub mod format;
 pub mod history;
 pub mod host;
+pub mod inbox;
 pub mod mode_command;
+pub mod repo;
 pub mod run_log;
 pub mod sandbox;
 

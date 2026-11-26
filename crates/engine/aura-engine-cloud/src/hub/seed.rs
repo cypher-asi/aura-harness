@@ -225,7 +225,7 @@ impl CloudHub {
     }
 
     /// Give the machine's node the agent's record, page by page.
-    async fn import_record(
+    pub(super) async fn import_record(
         &self,
         request: &PlaceRequest,
         view: &MachineView,
@@ -271,10 +271,13 @@ impl CloudHub {
             .await?;
             if done {
                 boot.progress(BootStage::ImportRecord, head, head);
-                return Ok(());
+                break;
             }
             from += count;
         }
+        self.upload_session(&node, request.agent, head, &view.machine.name, boot)
+            .await;
+        Ok(())
     }
 
     fn local_head(&self, agent: AgentId) -> CloudResult<u64> {

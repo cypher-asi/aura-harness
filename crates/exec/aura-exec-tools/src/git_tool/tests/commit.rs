@@ -55,8 +55,11 @@ async fn commit_surfaces_nonzero_exit_from_add() {
     }
     // A non-git directory: `git add -A` fails with a non-zero exit
     // that we must surface as NonZeroExit.
-    let dir = TempDir::new().unwrap();
-    let err = git_commit_impl(dir.path(), "should fail", Duration::from_secs(10))
+    let parent = TempDir::new().unwrap();
+    fence(parent.path());
+    let dir = parent.path().join("work");
+    std::fs::create_dir(&dir).unwrap();
+    let err = git_commit_impl(&dir, "should fail", Duration::from_secs(10))
         .await
         .expect_err("non-repo should fail");
     match err {

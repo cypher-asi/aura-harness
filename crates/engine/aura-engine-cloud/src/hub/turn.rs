@@ -7,7 +7,8 @@ use crate::{BootEvent, BootReporter, CloudError, CloudResult};
 use aura_config::BoxdToken;
 use aura_core_protocol::{
     AgentCapabilities, AgentIdentity, AgentPermissionsWire, InboundMessage, ModelSelection,
-    OutboundMessage, RuntimeRequest, RuntimeRequestType, UserMessage, WorkspaceLocation,
+    OutboundMessage, RuntimeRequest, RuntimeRequestType, SessionUsage, UserMessage,
+    WorkspaceLocation,
 };
 use aura_core_types::AgentId;
 use futures_util::{SinkExt, StreamExt};
@@ -53,15 +54,10 @@ pub enum RemoteEvent {
         /// Whether it failed.
         is_error: bool,
     },
-    /// The turn ended.
-    Done {
-        /// Model used.
-        model: String,
-        /// Input tokens of the turn.
-        input_tokens: u64,
-        /// Output tokens of the turn.
-        output_tokens: u64,
-    },
+    /// The chat's title, written on the machine from the turn's prompt.
+    Title(String),
+    /// The turn ended, with the session's usage and context so far.
+    Done(Box<SessionUsage>),
     /// The turn failed.
     Failed(String),
 }
@@ -92,13 +88,15 @@ impl CloudHub {
 
     /// Run one prompt on `agent`'s node and stream what it shows. The
     /// node writes the turn; the hub mirrors it as it runs and when it
-    /// ends.
+    /// ends. With `title_model`, the node also titles the chat from
+    /// `prompt`, sent as [`RemoteEvent::Title`].
     #[must_use]
     pub fn run_turn(
         self: &Arc<Self>,
         agent: AgentId,
         prompt: String,
         model: Option<String>,
+        title_model: Option<String>,
         auth_jwt: Option<String>,
         cancel: CancellationToken,
     ) -> mpsc::Receiver<RemoteEvent> {
@@ -125,8 +123,7 @@ impl CloudHub {
                     TurnPrompt {
                         agent,
                         prompt,
-                        model,
-                        auth_jwt,
+                        request: chat_request(agent, model, title_model, auth_jwt),
                     },
                     &tx,
                     cancel,
@@ -139,6 +136,13 @@ impl CloudHub {
             }));
             if let Err(err) = hub.mirror_from(&node, agent).await {
                 tracing::warn!(agent = %hex, error = %err, "could not copy the turn's record");
+            }
+            // The machine stays awake for these: the guard is still held.
+            if let Err(err) = hub.copy_session(&node, agent).await {
+                tracing::debug!(agent = %hex, error = %err, "could not copy the session checkpoint");
+            }
+            if let Err(err) = hub.copy_traces(&node, agent).await {
+                tracing::debug!(agent = %hex, error = %err, "could not copy the trace runs");
             }
             drop(guard);
             if let Err(err) = turn {
@@ -153,6 +157,7 @@ impl CloudHub {
 pub(super) fn chat_request(
     agent: AgentId,
     model: Option<String>,
+    title_model: Option<String>,
     auth_jwt: Option<String>,
 ) -> RuntimeRequest {
     RuntimeRequest {
@@ -165,6 +170,7 @@ pub(super) fn chat_request(
         },
         model: ModelSelection {
             id: model,
+            title_model,
             ..ModelSelection::default()
         },
         workspace: WorkspaceLocation {
@@ -199,6 +205,22 @@ fn cloud_agent_permissions() -> AgentPermissionsWire {
         ],
         ..AgentPermissionsWire::default()
     }
+}
+
+/// The policy a cloud agent's node enforces on its turns: the permissions
+/// [`chat_request`] sends, over the node's defaults (the `Agent` mode, no
+/// per-tool settings), as the node builds it for a chat run.
+#[must_use]
+pub fn cloud_policy() -> aura_agent_kernel::PolicyConfig {
+    aura_agent_kernel::PolicyConfig {
+        agent_permissions: aura_core_protocol::agent_permissions_from_wire(
+            cloud_agent_permissions(),
+        ),
+        ..aura_agent_kernel::PolicyConfig::default()
+    }
+    .with_user_default(aura_core_types::UserToolDefaults::default())
+    .with_agent_override(None)
+    .with_mode(aura_core_types::AgentMode::Agent)
 }
 
 /// `https://x` → `wss://x`.
@@ -240,15 +262,15 @@ pub(super) type NodeSink = futures_util::stream::SplitSink<NodeSocket, Message>;
 /// The receiving half of a [`NodeSocket`].
 pub(super) type NodeStream = futures_util::stream::SplitStream<NodeSocket>;
 
-/// One prompt for a cloud agent's node.
+/// One prompt for a cloud agent's node, with the chat run that carries it.
 struct TurnPrompt {
     agent: AgentId,
     prompt: String,
-    model: Option<String>,
-    auth_jwt: Option<String>,
+    request: RuntimeRequest,
 }
 
-/// One turn: start the chat run, send the prompt, map the stream.
+/// One turn: start the chat run `turn.request` asks for, send the prompt,
+/// map the stream.
 async fn stream_turn(
     hub: &CloudHub,
     node: &NodeClient,
@@ -256,9 +278,11 @@ async fn stream_turn(
     tx: &mpsc::Sender<RemoteEvent>,
     cancel: CancellationToken,
 ) -> CloudResult<()> {
-    let started = node
-        .start_run(&chat_request(turn.agent, turn.model, turn.auth_jwt))
-        .await?;
+    let started = node.start_run(&turn.request).await?;
+    let _streamed = started
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .map(|run| hub.streaming_turn(&turn.agent.to_hex(), run.to_string()));
     let path = stream_path(&started)?;
     let url = ws_url(node.base(), &path);
     let (socket, _) = tokio_tungstenite::connect_async(ws_request(&url, node.token())?)
@@ -399,11 +423,8 @@ pub fn map_outbound(message: OutboundMessage) -> Option<RemoteEvent> {
             result: result.result,
             is_error: result.is_error,
         },
-        OutboundMessage::AssistantMessageEnd(end) => RemoteEvent::Done {
-            model: end.usage.model.clone(),
-            input_tokens: end.usage.input_tokens,
-            output_tokens: end.usage.output_tokens,
-        },
+        OutboundMessage::AssistantMessageEnd(end) => RemoteEvent::Done(Box::new(end.usage)),
+        OutboundMessage::ChatTitle(title) => RemoteEvent::Title(title.title),
         OutboundMessage::Error(err) if !err.recoverable => RemoteEvent::Failed(err.message),
         _ => return None,
     })

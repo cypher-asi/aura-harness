@@ -9,30 +9,36 @@
 //! ## Invariants
 //!
 //! - **One writer per agent.** A moving agent takes no work: its prompts
-//!   are refused until the move ends. A cloud agent's prompts go to its
-//!   node, never to the local kernel, and a recalled agent's local
-//!   session is reopened from the record (which now holds what the node
-//!   wrote) before its next local turn.
+//!   are refused until the move ends. A cloud agent's prompts and `/new`
+//!   go to its node, never to the local kernel ([`CloudState::node_writes`]
+//!   keeps `/resume`, `/rewind` and auth notes off its local record), and
+//!   a recalled agent's local session is reopened from the record (which
+//!   now holds what the node wrote) before its next local turn.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use aura_core_protocol::cloud::MeshProcess;
 use aura_core_types::{AgentId, Placement};
 use aura_engine_cloud::{BootEvent, BootReporter, BootStage, StageState};
 use aura_store_db::Store;
 use aura_ui::events::{
-    BootLogLine, BootPlanStep, BootStageState, BootUpdate, MessageData, MessageRole, ToolData,
+    BootLogLine, BootPlanStep, BootStageState, BootUpdate, MessageData, MessageRole, ProcessKind,
+    ProcessStatus, ProcessSummary, ToolData,
 };
 use aura_ui::host::{HostAction, HostRow, HostView, PlacementState, PlacementView};
+use aura_ui::sandbox::RemoteEntry;
 use aura_ui::UiCommand;
+use futures_util::future::BoxFuture;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::agent_events::AgentUi;
+use super::processes::RemoteRows;
 use super::subagents::{lock, AgentHub};
 use super::turns::Work;
 use super::LoopState;
@@ -41,19 +47,23 @@ use crate::cloud::hub::zns_agent;
 use crate::cloud::{CloudHub, PlaceRequest, RemoteEvent};
 
 mod boot;
+mod forward;
+mod machine;
 mod placement;
+mod publish;
 mod submit;
 #[cfg(test)]
 mod tests;
 mod view;
 
 use boot::BootConsoleUi;
+use machine::MachineRows;
+pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
 pub(super) use placement::{handle_host_action, handle_set_placement, handle_setup, on_archive};
-pub(super) use submit::submit;
+pub(super) use publish::start;
+use publish::start_publisher;
+pub(super) use submit::{new_session, start_queued, submit};
 use view::{build_view, placement_state};
-
-/// How often the HOST tab and the footer switch are refreshed.
-const PUBLISH_EVERY: Duration = Duration::from_secs(3);
 
 /// Shared between the loop and its tasks.
 #[derive(Default)]
@@ -65,6 +75,28 @@ struct Shared {
     running: Mutex<std::collections::HashMap<AgentId, CancellationToken>>,
     /// Agents whose local session is older than their record.
     stale: Mutex<HashSet<AgentId>>,
+    /// Where an ended turn is said, once the loop listens
+    /// ([`CloudState::take_ended`]).
+    ended: Mutex<Option<tokio::sync::mpsc::UnboundedSender<AgentId>>>,
+    /// The plans last read from each cloud agent's machine (path and
+    /// text), shown while it sleeps.
+    plans: Mutex<std::collections::HashMap<AgentId, Vec<(String, String)>>>,
+}
+
+impl Shared {
+    /// `agent`'s cloud turn (or `/new`) is over. The loop frees it and
+    /// starts what it queued meanwhile, so nothing sent while the turn
+    /// ended overtakes that; with no loop listening it is freed here.
+    fn end_turn(&self, agent: AgentId) {
+        let told = self
+            .ended
+            .lock()
+            .as_ref()
+            .is_some_and(|ended| ended.send(agent).is_ok());
+        if !told {
+            self.running.lock().remove(&agent);
+        }
+    }
 }
 
 /// The loop's cloud state.
@@ -99,9 +131,20 @@ impl CloudState {
         self.shared.moving.lock().contains(&agent)
     }
 
+    /// Whether the local kernel must leave `agent`'s record alone: it
+    /// runs on a cloud machine, whose node writes it, or is being moved.
+    pub(super) fn node_writes(&self, agent: AgentId) -> bool {
+        self.is_cloud(agent) || self.is_moving(agent)
+    }
+
     /// Forget `agent`'s local session if it is older than its record.
     pub(super) fn take_stale(&self, agent: AgentId) -> bool {
         self.shared.stale.lock().remove(&agent)
+    }
+
+    /// Whether `agent` has a cloud turn (or `/new`) under way.
+    pub(super) fn is_running(&self, agent: AgentId) -> bool {
+        self.shared.running.lock().contains_key(&agent)
     }
 
     /// Stop `agent`'s cloud turn. Returns whether one was running.
@@ -112,6 +155,19 @@ impl CloudState {
             .get(&agent)
             .map(CancellationToken::cancel)
             .is_some()
+    }
+
+    /// The agents whose cloud turn (or `/new`) ended, each to be freed
+    /// with [`Self::free`].
+    pub(super) fn take_ended(&self) -> tokio::sync::mpsc::UnboundedReceiver<AgentId> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        *self.shared.ended.lock() = Some(tx);
+        rx
+    }
+
+    /// Let `agent`, whose cloud turn ended, take work again.
+    pub(super) fn free(&self, agent: AgentId) {
+        self.shared.running.lock().remove(&agent);
     }
 
     fn hub(&self) -> Option<Arc<CloudHub>> {
@@ -168,23 +224,42 @@ async fn ensure_hub(
         .clone()
         .ok_or_else(|| "cloud agents need the main store".to_string())?;
     let hub = CloudHub::from_config(config, store, cloud_home()).map_err(|err| err.to_string())?;
-    if let Some(agents) = &state.hub.agents {
-        hub.attach_host(agents.host());
-    }
+    attach_app(state, &hub);
     let keep: HashSet<String> = lock(&state.hub.registry)
         .agents()
         .iter()
         .filter(|agent| !agent.archived && !agent.removed)
         .map(|agent| agent.agent_id().to_hex())
         .collect();
+    hub.start_reported(&keep, boot).await;
+    *state.cloud.shared.hub.lock() = Some(Arc::clone(&hub));
+    state
+        .processes
+        .set_remote(Arc::new(MachineRows(Arc::downgrade(&hub))));
+    start_publisher(state);
+    Ok(hub)
+}
+
+/// Give a new `hub` what it shares with the app: the agent host, the
+/// session checkpoints, the record observer, the trace store, the
+/// current owner and the users' plan credentials.
+fn attach_app(state: &LoopState<'_>, hub: &Arc<CloudHub>) {
+    if let Some(agents) = &state.hub.agents {
+        hub.attach_host(agents.host());
+    }
+    if let Some(checkpoints) = &state.hub.factory.checkpoints {
+        hub.attach_sessions(checkpoints.clone());
+    }
+    if let Some(observer) = &state.hub.factory.record_observer {
+        hub.attach_observer(Arc::clone(observer));
+    }
+    if let Some(traces) = state.hub.traces.store() {
+        hub.attach_traces(traces);
+    }
     hub.set_current_owner(state.auth.owner());
     hub.set_plan_credentials(Arc::new(crate::cloud::plans::VaultPlans(Arc::clone(
         &state.auth,
     ))));
-    hub.start_reported(&keep, boot).await;
-    *state.cloud.shared.hub.lock() = Some(Arc::clone(&hub));
-    start_publisher(state);
-    Ok(hub)
 }
 
 /// The hub, started if need be. With a `console`, it shows at once, the
@@ -275,70 +350,6 @@ pub(super) fn on_auth_change(state: &LoopState<'_>) {
     let owner = state.auth.owner();
     hub.set_current_owner(owner.clone());
     tokio::spawn(async move { hub.sync_plans(&owner).await });
-}
-
-/// Bring the hub up at start when a key is set, so placed agents keep
-/// running in the cloud; otherwise just publish local host facts.
-pub(super) async fn start(state: &mut LoopState<'_>) {
-    let configured = aura_config::cloud().is_configured();
-    if configured {
-        if let Err(err) = ensure_hub(state, &BootReporter::none()).await {
-            warn!(error = %err, "cloud agents unavailable");
-        }
-    }
-    if state.cloud.publisher.is_none() {
-        start_publisher(state);
-    }
-}
-
-fn start_publisher(state: &mut LoopState<'_>) {
-    if let Some(old) = state.cloud.publisher.take() {
-        old.abort();
-    }
-    let shared = Arc::clone(&state.cloud.shared);
-    let hub = Arc::clone(&state.hub);
-    let commands = state.commands.clone();
-    let auth = Arc::clone(&state.auth);
-    state.cloud.publisher = Some(tokio::spawn(async move {
-        let mut sampler: Option<aura_engine_cloud::host::HostSampler> = None;
-        let mut interval = tokio::time::interval(PUBLISH_EVERY);
-        loop {
-            interval.tick().await;
-            let Some(agent) = hub.record_panel.get() else {
-                continue;
-            };
-            let cloud = shared.hub.lock().clone();
-            let current = auth.owner();
-            let view =
-                build_view(&hub, cloud.as_ref(), &shared, agent, &current, &mut sampler).await;
-            // Every placed agent, for the projects list's cloud marks, and
-            // the agent on screen, for its footer switch.
-            let mut agents: Vec<AgentId> = cloud
-                .as_ref()
-                .map(|c| {
-                    c.placed()
-                        .iter()
-                        .filter_map(|(hex, _)| AgentId::from_hex(hex).ok())
-                        .collect()
-                })
-                .unwrap_or_default();
-            if !agents.contains(&agent) {
-                agents.push(agent);
-            }
-            for id in agents {
-                let placement = placement_state(cloud.as_ref(), &shared, id, &current);
-                let _ = commands
-                    .send(UiCommand::SetPlacement {
-                        agent_id: id.to_hex(),
-                        state: placement,
-                    })
-                    .await;
-            }
-            if let Some(view) = view {
-                let _ = commands.send(UiCommand::SetHost(Box::new(view))).await;
-            }
-        }
-    }));
 }
 
 impl Drop for CloudState {

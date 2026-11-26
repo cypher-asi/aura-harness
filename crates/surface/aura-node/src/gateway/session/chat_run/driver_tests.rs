@@ -1,3 +1,4 @@
+use super::attach::AttachGuard;
 use super::*;
 use crate::gateway::session::{prepare_chat_session, WsContext};
 use crate::protocol::{InboundMessage, OutboundMessage, UserMessage};
@@ -53,6 +54,8 @@ fn driver_ctx() -> WsContext {
         chat_runs: Arc::new(DashMap::new()),
         run_id: None,
         agent_host,
+        sessions: None,
+        cloud: None,
     }
 }
 

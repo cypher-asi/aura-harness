@@ -29,6 +29,7 @@ pub(super) fn placement_state(
 ) -> PlacementState {
     let moving = shared.moving.lock().contains(&agent);
     let placement = cloud.map_or(Placement::Local, |hub| hub.placement_of(agent));
+    let machine = cloud.and_then(|hub| hub.fleet().view(&agent.to_hex()));
     PlacementState {
         placement: match placement {
             Placement::Local => PlacementView::Local,
@@ -38,9 +39,9 @@ pub(super) fn placement_state(
             Placement::Local => "moving to cloud".to_string(),
             Placement::Cloud => "bringing back".to_string(),
         }),
-        machine_state: cloud
-            .and_then(|hub| hub.fleet().view(&agent.to_hex()))
-            .map(|view| view.state.label().to_string()),
+        asleep: placement == Placement::Cloud
+            && machine.as_ref().is_some_and(|view| !view.state.is_awake()),
+        machine_state: machine.map(|view| view.state.label().to_string()),
         cloud_ready: cloud.is_some() || aura_config::cloud().is_configured(),
         owner: foreign_label(cloud, agent, current),
     }
@@ -101,6 +102,9 @@ fn cloud_agent_view(
         &cloud.plan_status(&owner),
         now,
     );
+    if let Some(sync) = cloud.sync_status(agent) {
+        host_info::add_sync(&mut view, &sync, now);
+    }
     if let Some(placed) = cloud.placed_agent(agent) {
         if let Some(branch) = placed.branch.as_deref() {
             let token = placed

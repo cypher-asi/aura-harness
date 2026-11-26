@@ -17,7 +17,12 @@
 //! - **The local store is the main copy.** Every page a node commits is
 //!   checked ([`crate::replica::verify_page`]) and appended
 //!   verbatim; a bad page stops the mirror for that agent and is never
-//!   written.
+//!   written. Agents it spawned on its machine are copied too, but only
+//!   ones named by a `spawn_agent` row of a record already verified.
+//! - **Nothing that matters stays only on a machine.** The session
+//!   checkpoint, the trace runs and, before each sleep, a patch of the
+//!   machine's changes are copied here too; [`CloudHub::sync_status`]
+//!   says how current each copy is.
 //! - **The boxd key never leaves the hub.** Machines get the env
 //!   allowlist of [`crate::machine_env`] and their tokens over
 //!   boxd's authenticated `Exec`.
@@ -29,6 +34,8 @@
 //!   next attempt.
 //! - A patch that doesn't apply is saved under
 //!   `AURA_HOME/cloud/<agent>/` and reported, never dropped.
+//! - A machine deleted outside aura: Bring back applies the patch saved
+//!   at its last sleep; work done since that sleep is lost.
 //!
 //! ## Submodules
 //!
@@ -42,24 +49,33 @@
 
 mod lifecycle;
 mod links;
+mod machine_files;
+mod machine_work;
 mod machines;
+mod mirror;
 pub mod node_client;
 mod outcomes;
+mod persist;
 mod place;
 pub mod plans;
 mod pull;
 mod recall;
 mod seed;
+mod session;
 pub mod setup;
 mod state;
 pub mod store;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 mod turn;
 
 pub use self::outcomes::{CommitsOutcome, PatchOutcome, PullOutcome};
-pub use self::turn::{map_outbound, RemoteEvent};
+pub use self::persist::SyncStatus;
+pub use self::turn::{cloud_policy, map_outbound, RemoteEvent};
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -71,6 +87,8 @@ use crate::plans::PlanSync;
 use crate::repos::RepoSync;
 use crate::snapshots::{AuraBinary, SnapshotBuilder};
 use crate::CloudError;
+use aura_agent::checkpoint::Checkpoints;
+use aura_agent_kernel::RecordObserver;
 use aura_config::CloudConfig;
 pub use aura_core_auth::Owner;
 use aura_core_protocol::cloud::{HostStats, MeshFrame};
@@ -92,6 +110,12 @@ const POLL_EVERY: Duration = Duration::from_secs(30);
 const USAGE_EVERY: Duration = Duration::from_secs(300);
 /// How often a running agent's record is mirrored while a turn runs.
 const MIRROR_EVERY: Duration = Duration::from_secs(5);
+/// How often every awake machine's record is copied, for the hints a
+/// dropped socket lost.
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
+/// Limit on the copies made before a machine sleeps (records, session,
+/// traces and the patch of its changes).
+const COPY_BEFORE_SLEEP: Duration = Duration::from_secs(90);
 /// Cost samples kept per machine.
 const MAX_SAMPLES: usize = 720;
 /// Longest a turn may run on a node before the hub gives up on it.
@@ -191,6 +215,10 @@ pub struct PlacedAgent {
     /// The branch's tip last fetched here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetched_tip: Option<String>,
+    /// Agents it spawned on its machine (hex ids), named in its record
+    /// or a spawned agent's; their records are copied with its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<String>,
 }
 
 impl PlacedAgent {
@@ -243,14 +271,39 @@ pub struct CloudHub {
     host: Mutex<Option<AgentHost>>,
     links: Mutex<HashMap<String, Link>>,
     tracks: Mutex<HashMap<String, HostTrack>>,
+    /// One copy per agent at a time: its record, session or runs.
     mirrors: Mutex<HashMap<AgentId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Agents with a background copy running, and whether another hint
+    /// came in while it ran ([`Self::copy_soon`]).
+    copies: Mutex<HashMap<AgentId, bool>>,
+    /// Sees every entry copied here, as it sees what local kernels write.
+    observer: Mutex<Option<Arc<dyn RecordObserver>>>,
+    /// Set when a copy brought entries, until the app looks
+    /// ([`Self::take_copied`]).
+    copied: AtomicBool,
+    /// The main trace store, where cloud agents' runs are copied.
+    trace_store: Mutex<Option<Arc<aura_store_db::TraceStore>>>,
+    /// What each copied run held when stored, by run id.
+    run_marks: Mutex<HashMap<String, persist::RunMark>>,
+    /// The agents whose trace runs were copied since the app last looked
+    /// ([`Self::take_traces_copied`]).
+    traces_copied: Mutex<HashSet<AgentId>>,
+    /// How current each placed agent's copy is.
+    sync: Mutex<HashMap<AgentId, SyncStatus>>,
     /// Users' plan tokens as boxd secrets; `None` until the app hands
     /// the hub its credentials.
     plans: Mutex<Option<Arc<PlanSync>>>,
     /// Projects' GitHub tokens as boxd secrets.
     repos: Mutex<Arc<RepoSync>>,
+    /// The app's session checkpoints: a placed agent's node continues
+    /// the conversation its local session had.
+    sessions: Mutex<Option<Checkpoints>>,
     /// The user signed in here: local agents act as this user.
     current_owner: Mutex<Owner>,
+    /// What each link's node has under way for its agent, by agent hex.
+    work: Mutex<HashMap<String, machine_work::MachineWork>>,
+    /// The chat run each agent's turn is streamed from, by agent hex.
+    streaming: Mutex<HashMap<String, String>>,
     stop: CancellationToken,
 }
 

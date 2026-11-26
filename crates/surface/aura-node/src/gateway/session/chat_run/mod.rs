@@ -34,7 +34,11 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::{Session, WsContext};
-use crate::protocol::{ErrorMsg, InboundMessage, OutboundMessage};
+use crate::protocol::{InboundMessage, OutboundMessage};
+
+mod attach;
+
+pub(crate) use attach::handle_chat_ws_attach;
 
 /// Live broadcast ring capacity. A slow attached client that lags past
 /// this many buffered messages observes `RecvError::Lagged`; the WS
@@ -173,6 +177,52 @@ pub(crate) struct RunLinkage {
     pub(crate) parent_chain: Vec<String>,
 }
 
+/// The turn a chat run is taking, for the PROCESSES tab of the computer
+/// that placed its agent here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TurnUnderWay {
+    /// What it is: its prompt's first line.
+    pub(crate) label: String,
+    /// When it started, Unix milliseconds.
+    pub(crate) started_ms: u64,
+}
+
+/// The turn a run's driver has under way, if any.
+#[derive(Debug, Default)]
+pub(crate) struct RunActivity(Mutex<Option<TurnUnderWay>>);
+
+impl RunActivity {
+    pub(crate) fn begin(&self, label: String) {
+        *self.slot() = Some(TurnUnderWay {
+            label,
+            started_ms: aura_agent::checkpoint::now_ms(),
+        });
+    }
+
+    pub(crate) fn end(&self) {
+        *self.slot() = None;
+    }
+
+    pub(crate) fn current(&self) -> Option<TurnUnderWay> {
+        self.slot().clone()
+    }
+
+    fn slot(&self) -> std::sync::MutexGuard<'_, Option<TurnUnderWay>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// What a run's driver shares with its registry entry besides events:
+/// the attached clients it may not reap under, the stop signal, and the
+/// turn it has under way.
+pub(crate) struct RunControl {
+    pub(crate) attach_count: Arc<AtomicUsize>,
+    pub(crate) shutdown: CancellationToken,
+    pub(crate) activity: Arc<RunActivity>,
+}
+
 /// Registry entry for a live chat run. Shared between the registry
 /// (`RouterState::chat_runs`), the driver task, and every attached WS
 /// adapter.
@@ -194,6 +244,10 @@ pub(crate) struct ChatRunHandle {
     /// Parent-linkage metadata. `None` for a top-level run, `Some` for a
     /// child subagent run.
     pub(crate) linkage: Option<RunLinkage>,
+    /// The agent whose session a top-level run drives.
+    pub(crate) agent: Option<aura_core_types::AgentId>,
+    /// The turn a top-level run has under way.
+    pub(crate) activity: Arc<RunActivity>,
 }
 
 /// `run_id` → live chat run.
@@ -211,6 +265,8 @@ pub(crate) struct RunRegistration {
     pub(crate) attach_count: Arc<AtomicUsize>,
     pub(crate) shutdown: CancellationToken,
     pub(crate) linkage: Option<RunLinkage>,
+    pub(crate) agent: Option<aura_core_types::AgentId>,
+    pub(crate) activity: Arc<RunActivity>,
 }
 
 /// Build a [`ChatRunHandle`] from `reg` and insert it into `registry`
@@ -227,30 +283,11 @@ pub(crate) fn register_run(
         attach_count: reg.attach_count,
         shutdown: reg.shutdown,
         linkage: reg.linkage,
+        agent: reg.agent,
+        activity: reg.activity,
     });
     registry.insert(run_id, handle.clone());
     handle
-}
-
-/// RAII guard that tracks one WS attach against a run's `attach_count`.
-/// Incremented on construction, decremented on drop, so the driver's
-/// idle-reaper sees an accurate live-attach count even if the adapter
-/// task unwinds.
-pub(crate) struct AttachGuard {
-    count: Arc<AtomicUsize>,
-}
-
-impl AttachGuard {
-    pub(crate) fn new(count: Arc<AtomicUsize>) -> Self {
-        count.fetch_add(1, Ordering::AcqRel);
-        Self { count }
-    }
-}
-
-impl Drop for AttachGuard {
-    fn drop(&mut self) {
-        self.count.fetch_sub(1, Ordering::AcqRel);
-    }
 }
 
 /// Spawn a [`super::chat::run_chat_driver`] task that owns `session`
@@ -273,6 +310,7 @@ pub(crate) fn spawn_chat_run(
     let (commands_tx, commands_rx) = mpsc::channel::<InboundMessage>(256);
     let attach_count = Arc::new(AtomicUsize::new(0));
     let shutdown = CancellationToken::new();
+    let activity = Arc::new(RunActivity::default());
 
     let handle = register_run(
         &registry,
@@ -284,6 +322,8 @@ pub(crate) fn spawn_chat_run(
             shutdown: shutdown.clone(),
             // Top-level run: no parent linkage.
             linkage: None,
+            agent: Some(session.agent_id),
+            activity: Arc::clone(&activity),
         },
     );
 
@@ -295,8 +335,11 @@ pub(crate) fn spawn_chat_run(
             events,
             outbound_tx,
             commands_rx,
-            attach_count,
-            shutdown,
+            RunControl {
+                attach_count,
+                shutdown,
+                activity,
+            },
         )
         .await;
         // Driver stopped: drop the registry entry so no new attach finds
@@ -306,188 +349,6 @@ pub(crate) fn spawn_chat_run(
     });
 
     handle
-}
-
-/// Thin WS adapter for a chat run: replay the run's history, then
-/// stream live events, while forwarding inbound frames to the driver's
-/// command channel. Multiple concurrent attaches to the same run are
-/// allowed. A WS close ends only this attach — it never cancels the
-/// turn (plan Part C).
-pub(crate) async fn handle_chat_ws_attach(
-    socket: axum::extract::ws::WebSocket,
-    handle: Arc<ChatRunHandle>,
-    run_id: String,
-) {
-    use futures_util::StreamExt;
-
-    let (mut ws_tx, ws_rx) = socket.split();
-    // Track this attach for the driver's idle-reaper.
-    let _attach = AttachGuard::new(handle.attach_count.clone());
-    let ChatEventSubscription {
-        history,
-        mut live,
-        already_done,
-    } = handle.events.subscribe();
-
-    tracing::info!(
-        run_id = %run_id,
-        history_len = history.len(),
-        already_done,
-        "Chat run WS attached"
-    );
-
-    // Per-attach control channel: lets the reader push frames addressed
-    // to *this* socket only (e.g. a `parse_error` for malformed inbound
-    // JSON) without broadcasting them into the run's shared replay
-    // history, which every other attached client would otherwise see.
-    let (ctrl_tx, mut ctrl_rx) = mpsc::channel::<OutboundMessage>(8);
-
-    // Reader task: forward inbound frames to the driver. On WS close it
-    // signals `attach_closed` (so the writer stops) but does NOT cancel
-    // the turn.
-    let attach_closed = CancellationToken::new();
-    let reader = tokio::spawn(run_attach_reader(
-        ws_rx,
-        handle.commands.clone(),
-        ctrl_tx,
-        attach_closed.clone(),
-        run_id.clone(),
-    ));
-
-    // Writer: replay history first (exactly the messages an early
-    // attach would have seen), then live until the WS closes or the run
-    // terminates.
-    let mut closed = false;
-    for msg in history {
-        if send_outbound_frame(&mut ws_tx, &msg).await.is_err() {
-            closed = true;
-            break;
-        }
-    }
-
-    if !closed && !already_done {
-        write_live(&mut ws_tx, &attach_closed, &mut ctrl_rx, &mut live).await;
-    }
-
-    reader.abort();
-    tracing::info!(run_id = %run_id, "Chat run WS attach ended");
-}
-
-/// Forward inbound WS frames to the driver's command channel until the
-/// socket closes or the driver goes away, then cancel `attach_closed`.
-async fn run_attach_reader(
-    mut ws_rx: futures_util::stream::SplitStream<axum::extract::ws::WebSocket>,
-    commands: mpsc::Sender<InboundMessage>,
-    ctrl_tx: mpsc::Sender<OutboundMessage>,
-    attach_closed: CancellationToken,
-    run_id: String,
-) {
-    use axum::extract::ws::Message as WsMessage;
-    use futures_util::StreamExt;
-    while let Some(frame) = ws_rx.next().await {
-        match frame {
-            Ok(WsMessage::Text(text)) => {
-                let keep_going = match serde_json::from_str::<InboundMessage>(&text) {
-                    // Driver gone; nothing left to forward.
-                    Ok(inbound) => commands.send(inbound).await.is_ok(),
-                    Err(e) => reject_inbound_frame(&ctrl_tx, &run_id, &e).await,
-                };
-                if !keep_going {
-                    break;
-                }
-            }
-            Ok(WsMessage::Close(_)) | Err(_) => break,
-            _ => {}
-        }
-    }
-    attach_closed.cancel();
-}
-
-/// Log a malformed inbound frame and tell *this* client it was
-/// rejected. Returns `false` when the writer is gone.
-async fn reject_inbound_frame(
-    ctrl_tx: &mpsc::Sender<OutboundMessage>,
-    run_id: &str,
-    e: &serde_json::Error,
-) -> bool {
-    crate::inbound_console::ws_rejection_line(
-        "framing",
-        "parse_error",
-        Some(&format!("run_id={run_id} {e}")),
-    );
-    // Recoverable: the socket stays open so the client can resend a
-    // well-formed message.
-    ctrl_tx
-        .send(OutboundMessage::Error(ErrorMsg {
-            code: "parse_error".into(),
-            message: format!("failed to parse inbound message: {e}"),
-            recoverable: true,
-            support_id: None,
-        }))
-        .await
-        .is_ok()
-}
-
-/// Stream per-attach control frames and live broadcast traffic to the
-/// socket until the attach closes, the socket fails or the run ends.
-async fn write_live<S>(
-    ws_tx: &mut S,
-    attach_closed: &CancellationToken,
-    ctrl_rx: &mut mpsc::Receiver<OutboundMessage>,
-    live: &mut broadcast::Receiver<OutboundMessage>,
-) where
-    S: futures_util::Sink<axum::extract::ws::Message> + Unpin,
-{
-    loop {
-        tokio::select! {
-            biased;
-            () = attach_closed.cancelled() => break,
-            // Per-attach control frames (e.g. `parse_error`) go only
-            // to this socket, ahead of live broadcast traffic.
-            Some(ctrl) = ctrl_rx.recv() => {
-                if send_outbound_frame(ws_tx, &ctrl).await.is_err() {
-                    break;
-                }
-            }
-            recv = live.recv() => match recv {
-                Ok(msg) => {
-                    if send_outbound_frame(ws_tx, &msg).await.is_err() {
-                        break;
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    let warn = OutboundMessage::Progress(crate::protocol::ProgressMsg {
-                        stage: "lagged".into(),
-                        tool_name: None,
-                        elapsed_ms: None,
-                        message: Some(format!("dropped {n} messages (client too slow)")),
-                        reset_text_bytes: None,
-                        reset_thinking_bytes: None,
-                    });
-                    let _ = send_outbound_frame(ws_tx, &warn).await;
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            },
-        }
-    }
-}
-
-/// Serialize and send one outbound message over the WS sink. Returns
-/// `Err(())` only when the socket itself failed (so the writer should
-/// stop); a serialization failure is logged and skipped.
-async fn send_outbound_frame<S>(sink: &mut S, msg: &OutboundMessage) -> Result<(), ()>
-where
-    S: futures_util::Sink<axum::extract::ws::Message> + Unpin,
-{
-    use axum::extract::ws::Message as WsMessage;
-    use futures_util::SinkExt;
-    match serde_json::to_string(msg) {
-        Ok(json) => sink.send(WsMessage::Text(json)).await.map_err(|_| ()),
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to serialize outbound chat message");
-            Ok(())
-        }
-    }
 }
 
 #[cfg(test)]

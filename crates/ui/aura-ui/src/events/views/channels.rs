@@ -21,9 +21,9 @@ pub struct ChannelSummary {
     /// The project the channel's agents work in
     #[serde(default)]
     pub project: Option<ChannelProjectView>,
-    /// Coordinator first, then the agents it spawned, each followed by its
-    /// subagents (depth-first by parent); `depth` is set relative to the
-    /// coordinator (0). See [`nest_members`].
+    /// Coordinator first, then its agents, each followed by its subagents
+    /// (depth-first by parent); the coordinator and its agents are at
+    /// depth 0. See [`nest_members`].
     #[serde(default)]
     pub members: Vec<AgentSummary>,
     /// Whether it was archived
@@ -121,14 +121,16 @@ pub fn merge_timeline<'a>(
 }
 
 /// Orders a channel's members for display: the coordinator first, then
-/// each agent followed by the agents it spawned, depth-first. Siblings keep
-/// their order in `members`. Each member comes with the hex id of the agent
-/// that spawned it; members whose parent is not among `members` go under
-/// the coordinator. `depth` is set relative to the coordinator (0).
+/// its agents beside it, each followed by the agents it spawned,
+/// depth-first. Siblings keep their order in `members`. Each member comes
+/// with the hex id of the agent that brought it in; members whose parent
+/// is not among `members` count as the coordinator's agents. `depth` is 0
+/// for the coordinator and its agents, and one more for each level of
+/// subagents below them.
 ///
-/// A coordinator missing from `members` is left out; its children still
-/// start at depth 1. Members caught in a parent cycle, unreachable from the
-/// coordinator, are put under it too so none is dropped.
+/// A coordinator missing from `members` is left out; its agents still
+/// start at depth 0. Members caught in a parent cycle, unreachable from
+/// the coordinator, are put at the top level too so none is dropped.
 #[must_use]
 pub fn nest_members(
     coordinator_id: &str,
@@ -138,11 +140,12 @@ pub fn nest_members(
     let slots: Vec<Option<AgentSummary>> =
         members.into_iter().map(|(agent, _)| Some(agent)).collect();
     let mut walk = MemberWalk {
+        coordinator_id,
         out: Vec::with_capacity(slots.len()),
         parents,
         slots,
     };
-    walk.visit_from_coordinator(coordinator_id);
+    walk.visit_from_coordinator();
     walk.visit_unreached();
     walk.out
 }
@@ -173,14 +176,16 @@ fn tree_parents(
 
 /// State of [`nest_members`]' walk: members not placed yet stay in
 /// `slots`, placed ones are in `out` in display order.
-struct MemberWalk {
+struct MemberWalk<'a> {
+    /// The channel's coordinator, whose agents sit beside it
+    coordinator_id: &'a str,
     /// Parent of each member as placed in the tree ([`tree_parents`])
     parents: Vec<Option<String>>,
     slots: Vec<Option<AgentSummary>>,
     out: Vec<AgentSummary>,
 }
 
-impl MemberWalk {
+impl MemberWalk<'_> {
     /// Depth-first walk with an explicit stack of (index, depth).
     fn visit(&mut self, root: usize, depth: usize) {
         let mut stack = vec![(root, depth)];
@@ -193,8 +198,13 @@ impl MemberWalk {
                     self.slots[i].is_some() && self.parents[i].as_deref() == Some(&agent.id)
                 })
                 .collect();
+            let below = if agent.id == self.coordinator_id {
+                depth
+            } else {
+                depth + 1
+            };
             // Reversed so the first sibling is popped first.
-            stack.extend(children.into_iter().rev().map(|i| (i, depth + 1)));
+            stack.extend(children.into_iter().rev().map(|i| (i, below)));
             agent.depth = depth;
             self.out.push(agent);
         }
@@ -202,7 +212,8 @@ impl MemberWalk {
 
     /// Walks from the coordinator, or from its children when it is not a
     /// member.
-    fn visit_from_coordinator(&mut self, coordinator_id: &str) {
+    fn visit_from_coordinator(&mut self) {
+        let coordinator_id = self.coordinator_id;
         let coordinator = self
             .slots
             .iter()
@@ -214,7 +225,7 @@ impl MemberWalk {
                 .filter(|&i| self.parents[i].as_deref() == Some(coordinator_id))
                 .collect();
             for index in roots {
-                self.visit(index, 1);
+                self.visit(index, 0);
             }
         }
     }
@@ -223,7 +234,7 @@ impl MemberWalk {
     fn visit_unreached(&mut self) {
         for index in 0..self.slots.len() {
             if self.slots[index].is_some() {
-                self.visit(index, 1);
+                self.visit(index, 0);
             }
         }
     }

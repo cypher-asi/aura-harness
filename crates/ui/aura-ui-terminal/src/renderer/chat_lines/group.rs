@@ -4,16 +4,17 @@ use super::message::message_lines;
 use super::stream::Laid;
 use super::{StepLines, TurnPlace};
 use crate::app::{ToggleRow, ToggleTarget};
-use crate::components::{Activity, Message};
+use crate::components::{truncate_line, Activity, Message};
 use crate::renderer::activity::{
     activity_lines, collapsed_hint, group_header_of, records_link, GroupView, Shown, StepNumber,
     Tally,
 };
 use crate::renderer::boot::boot_fold_rows;
-use crate::renderer::text::Measure;
+use crate::renderer::text::{display_width, Measure};
 use crate::renderer::MoreRows;
 use crate::Theme;
-use ratatui::text::Line;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use std::collections::HashMap;
 
 /// How much of a group to show: what the user chose, else everything under
@@ -192,6 +193,9 @@ pub(super) fn single_lines(
     kept: Option<&mut KeptSteps>,
 ) -> (Laid, Vec<ToggleRow>) {
     let Some(step) = message.activity_step() else {
+        if let Some(folded) = message.inbox_fold() {
+            return inbox_lines(message, folded.summary, (width, measure), theme, spinner);
+        }
         let (laid, more) = message_lines(message, (width, measure), theme, spinner);
         // A boot console still going shows everything; once done it
         // folds, and opens or closes on its header, its outcome and the
@@ -235,6 +239,40 @@ pub(super) fn single_lines(
         (width, theme),
     );
     ((lines, Vec::new(), Vec::new()), toggles)
+}
+
+/// Before an inbox message folded to its `summary`.
+const INBOX_PROMPT: &str = "✉ ";
+
+/// A message another agent sent through the inbox: one row, `✉ ` and its
+/// `summary` (who sent it, what about), until opened in full. It opens
+/// and closes on its first row.
+fn inbox_lines(
+    message: &Message,
+    summary: &str,
+    (width, measure): (usize, Measure),
+    theme: &Theme,
+    spinner: &str,
+) -> (Laid, Vec<ToggleRow>) {
+    let toggle = ToggleRow {
+        line: 0,
+        target: ToggleTarget::Step(message.version().0),
+        open: message.is_expanded(),
+    };
+    if message.is_expanded() {
+        let (laid, more) = message_lines(message, (width, measure), theme, spinner);
+        let toggles = std::iter::once(toggle)
+            .chain(more_toggles(message, more, 0))
+            .collect();
+        return (laid, toggles);
+    }
+    let muted = Style::default().fg(theme.colors.muted);
+    let room = width.saturating_sub(display_width(INBOX_PROMPT));
+    let line = Line::from(vec![
+        Span::styled(INBOX_PROMPT, muted),
+        Span::styled(truncate_line(summary, room), muted),
+    ]);
+    ((vec![line], Vec::new(), Vec::new()), vec![toggle])
 }
 
 /// The rows of `message` that show more of a part cut short, `offset`

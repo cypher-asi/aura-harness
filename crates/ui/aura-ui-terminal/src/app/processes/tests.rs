@@ -40,17 +40,21 @@ fn shift_arrows_switch_tabs_and_plain_arrows_stay_in_the_list() {
     let mut app = App::new();
     app.focus = PanelFocus::Sandbox;
     app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-    assert_eq!(app.side_tab(), SidePanelTab::Processes);
+    assert_eq!(app.side_tab(), SidePanelTab::Repo);
     app.handle_key(key(KeyCode::Left));
-    assert_eq!(app.side_tab(), SidePanelTab::Processes);
+    assert_eq!(app.side_tab(), SidePanelTab::Repo);
     app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
+    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    assert_eq!(
+        app.side_tab(),
+        SidePanelTab::Host,
+        "HOST's icon is the bar's last tab"
+    );
     app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     assert_eq!(app.side_tab(), SidePanelTab::Tasks);
     app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     assert_eq!(app.side_tab(), SidePanelTab::Trace);
-    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-    assert_eq!(app.side_tab(), SidePanelTab::Host);
     app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     assert_eq!(app.side_tab(), SidePanelTab::Processes);
     app.handle_key(key(KeyCode::Right));
@@ -150,6 +154,15 @@ fn clicking_tabs_and_rows() {
     app.close_detail();
     app.handle_mouse(click(82, 11));
     assert_eq!(app.side_tab(), SidePanelTab::Sandbox);
+
+    app.areas.side_icon_tab = Some(Rect::new(104, 11, 4, 1));
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Moved,
+        ..click(105, 11)
+    });
+    assert_eq!(app.hover(), Some(HoverTarget::SideTab(SidePanelTab::Host)));
+    app.handle_mouse(click(105, 11));
+    assert_eq!(app.side_tab(), SidePanelTab::Host, "HOST's icon is its tab");
 }
 
 #[test]

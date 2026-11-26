@@ -9,6 +9,7 @@ fn pane(which: Pane, area: Rect, tabs: Vec<PaneTab>) -> PaneChrome {
         bar: Rect::new(area.x, area.y, area.width, 2),
         active: tabs.first().copied(),
         tabs,
+        icon_tab: None,
         title: None,
         info: None,
         info_short: None,
@@ -249,6 +250,37 @@ fn the_side_bar_ends_in_a_star_box_then_an_expand_box() {
     let hit = |rect: Rectangle| layout.hit(Point::new(rect.center_x(), rect.center_y()));
     assert_eq!(hit(scope), Some(Hit::Scope(Pane::Side)));
     assert_eq!(hit(expand), Some(Hit::Expand(Pane::Side)));
+}
+
+#[test]
+fn hosts_icon_is_a_square_tab_box_left_of_the_star_box() {
+    let host = PaneTab::Side(SidePanelTab::Host);
+    let mut model = four_panes();
+    model.panes[3].scope = Some(false);
+    model.panes[3].expand = Some(false);
+    model.panes[3].icon_tab = Some(host);
+    let layout = Layout::of(&model);
+    let bar = &layout.bars[3];
+    let (icon, tab) = bar.icon_tab.expect("room for the icon box");
+    assert_eq!(tab, host);
+    assert!(
+        (icon.width - icon.height).abs() < f32::EPSILON,
+        "square: {icon:?}"
+    );
+    let (scope, _) = bar.scope.expect("room for the * box");
+    assert!(icon.x + icon.width < scope.x, "{icon:?} {scope:?}");
+    let last = bar.boxes.last().expect("the tabs are drawn");
+    assert!(last.rect.x + last.rect.width < icon.x);
+    assert!(
+        bar.boxes.iter().all(|boxed| boxed.kind != Kind::Tab(host)),
+        "it has no label's box"
+    );
+    let middle = Point::new(icon.center_x(), icon.center_y());
+    assert_eq!(layout.hit(middle), Some(Hit::Tab(host)));
+
+    let mut chrome = Chrome::default();
+    chrome.update(model, None);
+    assert_eq!(chrome.spot(host), Some(middle));
 }
 
 #[test]

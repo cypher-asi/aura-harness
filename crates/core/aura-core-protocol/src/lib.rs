@@ -68,8 +68,9 @@ pub use client::{
 pub use common::{ToolApprovalDecision, ToolApprovalRemember, ToolStateWire};
 pub use context::{ContextContents, ContextSegment};
 pub use conversions::{
-    agent_tool_permissions_from_wire, installed_integration_to_core, installed_tool_to_core,
-    tool_policy_decision_from_entry, tool_state_from_wire, tool_state_to_wire,
+    agent_permissions_from_wire, agent_tool_permissions_from_wire, installed_integration_to_core,
+    installed_tool_to_core, tool_policy_decision_from_entry, tool_state_from_wire,
+    tool_state_to_wire,
 };
 pub use installed::{
     InstalledIntegration, InstalledTool, InstalledToolIntegrationRequirement,
@@ -85,8 +86,8 @@ pub use runtime_request::{
     RuntimeRunResponse, WorkspaceLocation,
 };
 pub use server::{
-    AssistantMessageEnd, AssistantMessageStart, ContextBreakdown, ErrorMsg, FileDiff, FileOp,
-    FilesChanged, GenerationCompleted, GenerationErrorMsg, GenerationPartialImage,
+    AssistantMessageEnd, AssistantMessageStart, ChatTitle, ContextBreakdown, ErrorMsg, FileDiff,
+    FileOp, FilesChanged, GenerationCompleted, GenerationErrorMsg, GenerationPartialImage,
     GenerationProgressMsg, GenerationStart, OutboundMessage, PolicyCheckWire, PolicyRuleWire,
     ProgressMsg, SessionReady, SessionUsage, SkillInfo, SubagentSpawned, SubagentStatus, TextDelta,
     ThinkingDelta, ToolApprovalPrompt, ToolCallSnapshot, ToolInfo, ToolPolicyDecision,

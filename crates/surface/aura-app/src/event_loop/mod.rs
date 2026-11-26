@@ -27,6 +27,7 @@ pub(crate) mod gate;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
+pub(crate) mod inbox;
 mod lifecycle;
 mod log_view;
 pub(crate) mod mail;
@@ -39,6 +40,7 @@ pub(crate) mod policies;
 pub(crate) mod processes;
 mod queue;
 pub(crate) mod record_ui;
+pub(crate) mod repo;
 mod rewind;
 pub(crate) mod run_command;
 mod side_panels;
@@ -60,6 +62,7 @@ pub(crate) use delivery::deliver_with_images;
 pub use flow::{FlowFeed, FlowInbox};
 pub use gate::subtask::GateBase;
 pub use host::{TerminalAgents, TerminalChildKernels};
+pub use inbox::{AssignTool, HubLink, PeerHooks};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
@@ -336,10 +339,19 @@ async fn send_startup(state: &mut LoopState<'_>, active: AgentId) {
 /// Handle what arrives until the UI quits or goes away.
 async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
     let hub = Arc::clone(&state.hub);
+    let mut cloud_ended = state.cloud.take_ended();
     loop {
         tokio::select! {
             Some(done) = inbox.done_rx.recv() => {
                 handle_work_done(state, done).await;
+            }
+            Some(agent_id) = cloud_ended.recv() => {
+                state.cloud.free(agent_id);
+                // The turn may have written or worked through a plan.
+                if agent_id == state.active {
+                    cloud::refresh_machine_plans(state, agent_id);
+                }
+                start_next(state, agent_id).await;
             }
             () = hub.spawn_finished.notified() => {
                 state.park_finished_spawns().await;
@@ -377,10 +389,7 @@ async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
 
 // Names the tests use through `use super::*`.
 #[cfg(test)]
-use {
-    crate::agent_registry::RegisteredAgent, aura_core_types::RouteReason,
-    aura_model::ToolDefinition, steering::SteerSource,
-};
+use {aura_core_types::RouteReason, aura_model::ToolDefinition, steering::SteerSource};
 
 #[cfg(test)]
 mod tests;

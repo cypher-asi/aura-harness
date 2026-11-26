@@ -37,10 +37,13 @@
 pub mod alerts;
 pub use aura_ui::events;
 pub use aura_ui::host;
+pub use aura_ui::inbox;
 pub use aura_ui_widgets::{animation, ansi, components, themes};
 pub mod input;
+pub use aura_ui::repo;
 pub mod layout;
 pub use aura_ui::mode_command;
+pub use aura_ui::sandbox;
 
 mod app;
 mod input_wrap;

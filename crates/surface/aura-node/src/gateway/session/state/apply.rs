@@ -132,6 +132,7 @@ impl Session {
         if let Some(max_turns) = model.max_turns {
             self.max_turns = max_turns;
         }
+        self.title_model = model.title_model.filter(|m| !m.trim().is_empty());
     }
 
     fn apply_capabilities(&mut self, agent_capabilities: AgentCapabilities) {

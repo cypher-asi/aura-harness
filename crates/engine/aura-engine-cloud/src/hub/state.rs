@@ -1,6 +1,8 @@
 //! The hub's placements, owners, plan and repo credentials, and the nodes
 //! of placed agents.
 
+use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::fleet::{MachineView, VmFleet};
@@ -9,6 +11,8 @@ use crate::mesh::{Holder, HUB_NODE};
 use crate::plans::{PlanCredentials, PlanStatus, PlanSync};
 use crate::repos::{RepoStatus, RepoSync};
 use crate::{names, BootReporter, CloudError, CloudResult};
+use aura_agent::checkpoint::Checkpoints;
+use aura_agent_kernel::RecordObserver;
 use aura_config::CloudConfig;
 use aura_core_auth::Owner;
 use aura_core_types::{AgentId, Placement};
@@ -39,6 +43,30 @@ impl CloudHub {
         }
     }
 
+    /// Hand placed agents' nodes the app's session checkpoints, kept in
+    /// `sessions`.
+    pub fn attach_sessions(&self, sessions: Checkpoints) {
+        *self.sessions.lock() = Some(sessions);
+    }
+
+    /// Show `observer` every entry copied from a node, so a cloud agent's
+    /// KERNEL tab and Gate follow it as they follow a local agent.
+    pub fn attach_observer(&self, observer: Arc<dyn RecordObserver>) {
+        *self.observer.lock() = Some(observer);
+    }
+
+    /// Whether a copy brought entries since the last call; the app then
+    /// lists the agents again.
+    pub fn take_copied(&self) -> bool {
+        self.copied.swap(false, Ordering::AcqRel)
+    }
+
+    /// The agents whose trace runs were copied since the last call; the
+    /// app then shows their latest run again.
+    pub fn take_traces_copied(&self) -> HashSet<AgentId> {
+        std::mem::take(&mut *self.traces_copied.lock())
+    }
+
     /// Note that `agent` (hex) of `project`, named `name`, runs here, so
     /// cloud agents can mail it.
     pub fn note_local(&self, agent: AgentId, name: &str, project: &str) {
@@ -54,6 +82,29 @@ impl CloudHub {
             },
         );
         self.send_directories(project);
+    }
+
+    /// Call placed `agent` `name` from now on: in its placement, and in the
+    /// directory its machine and other agents' mail name it by.
+    pub fn rename(&self, agent: AgentId, name: &str) {
+        let hex = agent.to_hex();
+        let project = {
+            let mut placements = self.placements.lock();
+            let Some(placed) = placements.agents.get_mut(&hex) else {
+                return;
+            };
+            if placed.name == name {
+                return;
+            }
+            name.clone_into(&mut placed.name);
+            placed.project.clone()
+        };
+        self.save_placements();
+        if let Some(mut holder) = self.directory.holder(&hex) {
+            name.clone_into(&mut holder.name);
+            self.directory.place(&hex, holder);
+        }
+        self.send_directories(&project);
     }
 
     /// Whether `agent` runs on a cloud machine.

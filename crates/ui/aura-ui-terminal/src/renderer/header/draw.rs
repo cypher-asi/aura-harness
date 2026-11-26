@@ -55,7 +55,7 @@ struct BarParts {
 }
 
 impl BarParts {
-    fn new<T>(bar: Rect, header: &PanelHeader<'_, T>) -> Self {
+    fn new<T: Copy>(bar: Rect, header: &PanelHeader<'_, T>) -> Self {
         let framed = bar.height >= FRAMED_HEIGHT;
         let middle = if framed { bar.y + 1 } else { bar.y };
         let last = bar.width - 1;
@@ -64,17 +64,22 @@ impl BarParts {
         let expand = header
             .expand
             .and_then(|button| Some((button, button.cell?)));
+        let icon_tab = header.icon_tab.and_then(|icon| Some((icon, icon.cell?)));
         // A tabbed bar's buttons each sit after a divider of their own, and
         // its tabs stop at the first of those.
         let button_dividers: Vec<u16> = if header.layout.cells.is_empty() {
             Vec::new()
         } else {
-            [scope.map(|(_, cell)| cell), expand.map(|(_, cell)| cell)]
-                .into_iter()
-                .flatten()
-                .map(|cell| cell.x.saturating_sub(bar.x).saturating_sub(1))
-                .filter(|&column| column > 0 && column < last)
-                .collect()
+            [
+                icon_tab.map(|(_, cell)| cell),
+                scope.map(|(_, cell)| cell),
+                expand.map(|(_, cell)| cell),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|cell| cell.x.saturating_sub(bar.x).saturating_sub(1))
+            .filter(|&column| column > 0 && column < last)
+            .collect()
         };
         let limit = button_dividers.iter().copied().min().unwrap_or(last);
         let dividers: Vec<u16> = header
@@ -127,7 +132,8 @@ fn draw_frame(buf: &mut Buffer, parts: &BarParts, frame_style: Style) {
     }
 }
 
-/// The tabs, cut at the first button's divider, and the scope button.
+/// The tabs, cut at the first button's divider, then the icon tab and the
+/// scope button.
 fn draw_tabs<T: Copy + PartialEq>(
     buf: &mut Buffer,
     parts: &BarParts,
@@ -149,10 +155,33 @@ fn draw_tabs<T: Copy + PartialEq>(
         let area = Rect::new(parts.bar.x + cell.start, parts.middle, width, 1);
         draw_centered(buf, area, cell.label, style);
     }
+    draw_icon_tab(buf, header, theme);
     if let Some((button, cell)) = parts.scope {
         let style = tab_style(button.on, button.hovered, header.focused, theme);
         draw_centered(buf, cell, SideScope::BUTTON, style);
     }
+}
+
+/// The tab drawn as its icon, lit as the labelled tabs are.
+fn draw_icon_tab<T: Copy + PartialEq>(
+    buf: &mut Buffer,
+    header: &PanelHeader<'_, T>,
+    theme: &Theme,
+) {
+    let Some((icon, cell)) = header.icon_tab.and_then(|icon| Some((icon, icon.cell?))) else {
+        return;
+    };
+    let style = tab_style(
+        header.active == Some(icon.tab),
+        header.hovered == Some(icon.tab),
+        header.focused,
+        theme,
+    );
+    buf.set_style(cell, style);
+    // Both of the icon's columns centered, the blank one included.
+    let width = u16::try_from(display_width(icon.icon)).unwrap_or(u16::MAX);
+    let x = cell.x + cell.width.saturating_sub(width) / 2;
+    buf.set_string(x, cell.y, icon.icon, style);
 }
 
 /// The info cell, less the columns of the buttons beside it.
@@ -200,7 +229,12 @@ fn draw_buttons(buf: &mut Buffer, parts: &BarParts, theme: &Theme) {
 
 /// A tab cell's style: the shown tab is bold, filled with the selection
 /// color while its panel has focus; a tab under the pointer is shaded.
-fn tab_style(active: bool, hovered: bool, focused: bool, theme: &Theme) -> Style {
+pub(in crate::renderer) fn tab_style(
+    active: bool,
+    hovered: bool,
+    focused: bool,
+    theme: &Theme,
+) -> Style {
     let colors = &theme.colors;
     if active {
         let style = Style::default()

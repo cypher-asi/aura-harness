@@ -98,9 +98,11 @@ pub struct PanelAreas {
     pub sandbox_rows: Option<Rect>,
     /// Tree row shown at the top of `sandbox_rows`
     pub sandbox_scroll: usize,
-    /// Header bar of the panel below the Record panel, up to its `*`
-    /// button
+    /// Header bar of the panel below the Record panel, up to its HOST
+    /// icon
     pub side_tabs: Option<Rect>,
+    /// HOST's icon, left of the bar's `*` button
+    pub side_icon_tab: Option<Rect>,
     /// Button at the right end of that bar that shows the whole
     /// project's items in its lists, or the active agent's
     pub side_scope: Option<Rect>,
@@ -122,6 +124,10 @@ pub struct PanelAreas {
     pub task_rows: Option<Rect>,
     /// Tasks row shown at the top of `task_rows`
     pub tasks_scroll: usize,
+    /// Rows of the REPO tab inside the panel, below its filters
+    pub repo_rows: Option<Rect>,
+    /// REPO row shown at the top of `repo_rows`
+    pub repo_scroll: usize,
     /// Scrollbar on the chat panel's right border, when its list
     /// overflows
     pub(crate) scrollbar: Option<scrollbar::ScrollbarArea>,

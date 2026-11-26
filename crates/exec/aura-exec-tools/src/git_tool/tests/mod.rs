@@ -37,6 +37,14 @@ fn git_available() -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+/// Ends git's search for a repository at `dir`. Git stops at the first
+/// `.git` it finds and this one points nowhere, so commands below `dir`
+/// fail as "not a git repository" instead of reaching a checkout that
+/// holds the temp directory and committing its uncommitted work.
+fn fence(dir: &Path) {
+    std::fs::write(dir.join(".git"), "gitdir: nowhere\n").unwrap();
+}
+
 async fn init_repo(dir: &Path) {
     let status = Command::new("git")
         .arg("init")

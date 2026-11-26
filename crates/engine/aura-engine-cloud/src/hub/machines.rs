@@ -22,6 +22,9 @@ impl CloudHub {
             what: "machine",
             name: hex.clone(),
         })?;
+        if !view.state.is_asleep() {
+            self.copy_before_sleep(agent).await;
+        }
         if let Some(link) = self.links.lock().remove(&hex) {
             link.stop.cancel();
         }

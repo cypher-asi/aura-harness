@@ -90,7 +90,7 @@ fn patch_outcomes_describe_themselves() {
 
 #[test]
 fn cloud_turns_never_offer_computer_use() {
-    let request = chat_request(AgentId::new([1; 32]), None, None);
+    let request = chat_request(AgentId::new([1; 32]), None, None, None);
     let json = serde_json::to_value(&request.agent_permissions).expect("json");
     let text = json.to_string();
     assert!(!text.contains("computer"), "{text}");

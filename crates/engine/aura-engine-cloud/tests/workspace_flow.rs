@@ -181,14 +181,15 @@ fn bring_back(s: &Setup, branch: &str, fetched: Option<&str>) -> Option<BranchFe
     }
 }
 
-#[test]
-fn a_machine_gets_history_a_branch_and_a_base_that_hides_the_hubs_changes() {
-    let s = setup();
-    let first = git(&s.hub, &["rev-list", "--max-parents=0", "HEAD"]);
-    let snap = snapshot(&s);
+/// The agent's branch in the scenario below.
+const BRANCH: &str = "aura/reviewer-re36";
+
+/// A snapshot holds the whole history, and what origin has, but no
+/// origin.
+fn check_snapshot_history(s: &Setup, first: &str, snap: &str) {
     assert_eq!(git(&s.machine, &["rev-parse", "HEAD"]), snap);
     assert!(
-        git(&s.machine, &["log", "--format=%H"]).contains(&first),
+        git(&s.machine, &["log", "--format=%H"]).contains(first),
         "the whole history"
     );
     assert_eq!(git(&s.machine, &["remote"]), "", "no origin in a snapshot");
@@ -197,16 +198,23 @@ fn a_machine_gets_history_a_branch_and_a_base_that_hides_the_hubs_changes() {
         snap,
         "what origin has travels along"
     );
+}
 
-    // The hub moves on: an unpushed commit, and uncommitted work.
+/// The hub moves on: an unpushed commit, and uncommitted work. Returns
+/// the new HEAD.
+fn move_the_hub_on(s: &Setup) -> String {
     let head = commit(&s.hub, "c.rs", "three", "third");
     write(&s.hub.join("a.rs"), "one, edited");
     write(&s.hub.join("new.rs"), "untracked");
     write(&s.hub.join(".env"), "SECRET=1");
-    assert_eq!(place(&s, &snap, "aura/reviewer-re36"), head);
+    head
+}
 
+/// A placed agent's branch is at the hub's HEAD, unpushed commits
+/// included, with the project's origin.
+fn check_branch_has_the_hubs_commits(s: &Setup, head: &str) {
     let m = &s.machine;
-    assert_eq!(git(m, &["branch", "--show-current"]), "aura/reviewer-re36");
+    assert_eq!(git(m, &["branch", "--show-current"]), BRANCH);
     assert_eq!(
         git(m, &["rev-parse", "HEAD"]),
         head,
@@ -224,6 +232,12 @@ fn a_machine_gets_history_a_branch_and_a_base_that_hides_the_hubs_changes() {
         "third",
         "pushes know what origin already has"
     );
+}
+
+/// The hub's uncommitted changes arrive uncommitted (never `.env`), in
+/// the base and not in the index.
+fn check_hub_changes_stay_uncommitted(s: &Setup) {
+    let m = &s.machine;
     assert_eq!(
         std::fs::read_to_string(m.join("a.rs")).expect("read"),
         "one, edited"
@@ -246,65 +260,84 @@ fn a_machine_gets_history_a_branch_and_a_base_that_hides_the_hubs_changes() {
         "",
         "the index is untouched"
     );
+}
 
-    // The agent works and commits; only its own work is past the base.
+/// The agent works and commits; only its own work is past the base.
+/// Returns its commit.
+fn check_agent_work_is_past_the_base(s: &Setup) -> String {
+    let m = &s.machine;
     write(&m.join("b.rs"), "two, by the agent");
     let tip = commit(m, "d.rs", "agent", "agent commit");
     assert_eq!(
         git(m, &["diff", "--name-only", BASE_REF, &worktree(&s.root, m)]),
         "b.rs\nd.rs"
     );
+    tip
+}
 
-    // Its commits land on the hub as a branch of the same name.
+/// The agent's commits land on the hub as a branch of the same name.
+fn check_commits_come_back(s: &Setup, tip: &str) {
     assert_eq!(
-        bring_back(&s, "aura/reviewer-re36", None),
-        Some(BranchFetch::Updated { tip: tip.clone() })
+        bring_back(s, BRANCH, None),
+        Some(BranchFetch::Updated {
+            tip: tip.to_string()
+        })
     );
-    assert_eq!(git(&s.hub, &["rev-parse", "aura/reviewer-re36"]), tip);
-    assert_eq!(bring_back(&s, "aura/reviewer-re36", Some(&tip)), None);
+    assert_eq!(git(&s.hub, &["rev-parse", BRANCH]), tip);
+    assert_eq!(bring_back(s, BRANCH, Some(tip)), None);
+}
 
-    // Pull: the base moves to the tree the hub took.
+/// Pull: the base moves to the tree the hub took.
+fn check_pull_moves_the_base(s: &Setup) {
+    let m = &s.machine;
     let tree = git(m, &["rev-parse", "HEAD^{tree}"]);
     sh(&s.root, m, &workspace::mark_pulled(&tree).expect("script"));
     assert_eq!(
         git(m, &["rev-parse", &format!("{BASE_REF}^{{tree}}")]),
         tree
     );
+}
 
-    // A branch checked out on the hub is never moved under the user.
-    let next = commit(m, "e.rs", "more", "second agent commit");
+/// A branch checked out on the hub is never moved under the user.
+fn check_checked_out_branch_is_kept(s: &Setup, tip: &str) {
+    let next = commit(&s.machine, "e.rs", "more", "second agent commit");
     git(&s.hub, &["stash", "-q", "-u"]);
-    git(&s.hub, &["checkout", "-q", "aura/reviewer-re36"]);
+    git(&s.hub, &["checkout", "-q", BRANCH]);
     assert_eq!(
-        bring_back(&s, "aura/reviewer-re36", Some(&tip)),
+        bring_back(s, BRANCH, Some(tip)),
         Some(BranchFetch::CheckedOut)
     );
     git(&s.hub, &["checkout", "-q", "main"]);
     assert_eq!(
-        bring_back(&s, "aura/reviewer-re36", Some(&tip)),
+        bring_back(s, BRANCH, Some(tip)),
         Some(BranchFetch::Updated { tip: next })
     );
+}
 
-    // Nor one the user moved elsewhere.
+/// Nor one the user moved elsewhere.
+fn check_moved_branch_is_kept(s: &Setup, first: &str, tip: &str) {
     let theirs = git(
         &s.hub,
         &[
             "commit-tree",
             "-p",
-            &first,
+            first,
             "-m",
             "the user's own",
             &format!("{first}^{{tree}}"),
         ],
     );
-    git(&s.hub, &["branch", "-f", "aura/reviewer-re36", &theirs]);
-    commit(m, "f.rs", "again", "third agent commit");
+    git(&s.hub, &["branch", "-f", BRANCH, &theirs]);
+    commit(&s.machine, "f.rs", "again", "third agent commit");
     assert_eq!(
-        bring_back(&s, "aura/reviewer-re36", Some(&tip)),
+        bring_back(s, BRANCH, Some(tip)),
         Some(BranchFetch::Diverged)
     );
+}
 
-    // A fork moves to a branch of its own and keeps the work.
+/// A fork moves to a branch of its own and keeps the work.
+fn check_fork_gets_its_own_branch(s: &Setup) {
+    let m = &s.machine;
     let parent_tip = git(m, &["rev-parse", "HEAD"]);
     sh(
         &s.root,
@@ -319,6 +352,26 @@ fn a_machine_gets_history_a_branch_and_a_base_that_hides_the_hubs_changes() {
             .all(|r| r.starts_with("refs/heads/aura/")),
         "the machine has only agent branches"
     );
+}
+
+#[test]
+fn a_machine_gets_history_a_branch_and_a_base_that_hides_the_hubs_changes() {
+    let s = setup();
+    let first = git(&s.hub, &["rev-list", "--max-parents=0", "HEAD"]);
+    let snap = snapshot(&s);
+    check_snapshot_history(&s, &first, &snap);
+
+    let head = move_the_hub_on(&s);
+    assert_eq!(place(&s, &snap, BRANCH), head);
+    check_branch_has_the_hubs_commits(&s, &head);
+    check_hub_changes_stay_uncommitted(&s);
+
+    let tip = check_agent_work_is_past_the_base(&s);
+    check_commits_come_back(&s, &tip);
+    check_pull_moves_the_base(&s);
+    check_checked_out_branch_is_kept(&s, &tip);
+    check_moved_branch_is_kept(&s, &first, &tip);
+    check_fork_gets_its_own_branch(&s);
 }
 
 #[test]

@@ -334,7 +334,10 @@ fn tasks_tab_rows() -> Vec<String> {
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
-    let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    // Sandbox, then back past HOST to TASKS.
+    for _ in 0..2 {
+        let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    }
     render_rows(&mut app, 200)
 }
 

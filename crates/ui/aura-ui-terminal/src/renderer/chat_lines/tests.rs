@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::ToggleTarget;
 use crate::components::MessageRole;
 
 /// `turns` prompts, each answered with a tool call, a notice and a
@@ -253,4 +254,60 @@ fn a_running_tool_drawn_from_its_kept_parts_matches_one_laid_out_afresh() {
             "frame {frame}: the spinner turns on the running step\n{kept:#?}"
         );
     }
+}
+
+#[test]
+fn a_message_from_another_agents_inbox_folds_to_one_line_until_opened() {
+    let theme = Theme::cyber();
+    let open = HashMap::new();
+    let groups = GroupState {
+        open: &open,
+        expand_all: false,
+        turn_live: false,
+    };
+    let header = crate::inbox::header(
+        crate::inbox::InboxKind::Assignment,
+        "3f9a",
+        "PRC1",
+        "#site coordinator",
+        "Fix the tokenizer",
+    );
+    let text = format!("{header}\n\nThe last token is dropped.\nDone is a passing test.");
+    let mut chat = VecDeque::from([Message::new(MessageRole::User, &text)]);
+    let drawn = |chat: &VecDeque<Message>| {
+        let mut cache = ChatLineCache::default();
+        cache.update((chat, &[]), (60, Measure::GRID), &theme, "*", &groups);
+        cache
+            .blocks()
+            .map(|block| {
+                let lines: Vec<String> = block.lines.iter().map(ToString::to_string).collect();
+                let opens = block
+                    .toggles
+                    .iter()
+                    .any(|toggle| matches!(toggle.target, ToggleTarget::Step(_)));
+                (block.user, lines, opens)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        drawn(&chat),
+        vec![(false, vec!["✉ PRC1: Fix the tokenizer".to_string()], true)]
+    );
+
+    if let Some(message) = chat.front_mut() {
+        message.set_expanded(true);
+    }
+    let opened = drawn(&chat);
+    let [(user, lines, opens)] = opened.as_slice() else {
+        panic!("one block: {opened:#?}");
+    };
+    assert!(*user, "framed as a prompt once open");
+    assert!(*opens, "it closes again");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Done is a passing test.")),
+        "{lines:#?}"
+    );
 }

@@ -69,6 +69,36 @@ async fn idle_machines_hibernate_and_busy_ones_do_not() {
 }
 
 #[tokio::test]
+async fn a_listed_machine_that_gets_work_stays_awake() {
+    let (fleet, fake, _) = fleet(Duration::from_millis(1));
+    fleet
+        .provision(request("aa", MachineOrigin::Fresh))
+        .await
+        .expect("aa");
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let due = fleet.idle_machines();
+    assert_eq!(
+        due,
+        vec![IdleMachine {
+            agent: "aa".into(),
+            hibernate: true,
+            awake: true,
+        }]
+    );
+    let guard = fleet.begin_work("aa");
+    assert!(!fleet.sleep_idle(&due[0]).await, "work came in");
+    assert_eq!(
+        fake.machine("aura-re36-aa").expect("aa").status,
+        MachineStatus::Running
+    );
+    drop(guard);
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    assert!(fleet.sleep_idle(&due[0]).await);
+    assert_eq!(fleet.view("aa").expect("aa").state, VmState::Hibernated);
+    assert!(fleet.idle_machines().is_empty(), "asleep already");
+}
+
+#[tokio::test]
 async fn work_for_a_sleeping_machine_wakes_it_first() {
     let (fleet, fake, ledger) = fleet(Duration::from_millis(1));
     fleet
@@ -103,6 +133,15 @@ async fn a_machine_woken_by_a_peer_is_noticed() {
     assert_eq!(fleet.view("aa").expect("aa").state, VmState::Ready);
 }
 
+/// A meter reading of `cost_micro`, final when `complete`.
+fn reading(cost_micro: i64, complete: bool) -> VmUsage {
+    VmUsage {
+        cost_micro,
+        complete,
+        ..VmUsage::default()
+    }
+}
+
 #[tokio::test]
 async fn destroying_records_the_last_reading_then_the_final_one() {
     let (fleet, fake, ledger) = fleet(Duration::from_secs(300));
@@ -110,13 +149,7 @@ async fn destroying_records_the_last_reading_then_the_final_one() {
         .provision(request("aa", MachineOrigin::Fresh))
         .await
         .expect("aa");
-    fake.set_usage(
-        "aura-re36-aa",
-        VmUsage {
-            cost_micro: 410_000,
-            ..VmUsage::default()
-        },
-    );
+    fake.set_usage("aura-re36-aa", reading(410_000, false));
     fleet.record_usage().await;
     assert_eq!(
         fleet
@@ -131,14 +164,7 @@ async fn destroying_records_the_last_reading_then_the_final_one() {
         .expect("destroy")
         .expect("had one");
     assert!(fake.machine("aura-re36-aa").is_none());
-    fake.set_usage(
-        "aura-re36-aa",
-        VmUsage {
-            cost_micro: 450_000,
-            complete: true,
-            ..VmUsage::default()
-        },
-    );
+    fake.set_usage("aura-re36-aa", reading(450_000, true));
     fleet
         .settle_usage(
             &id,

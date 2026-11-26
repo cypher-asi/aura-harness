@@ -27,16 +27,19 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 mod agent_loop;
 mod budget;
 pub(crate) mod build;
+pub mod checkpoint;
 pub mod console;
 pub(crate) mod dup_audit;
 pub(crate) mod events;
 pub(crate) mod file_ops;
 pub mod git;
 pub mod helpers;
+pub mod history;
 mod kernel_domain_gateway;
 mod kernel_gateway;
 pub(crate) mod planning;
@@ -45,6 +48,7 @@ pub(crate) mod prompt_resolve;
 mod recording_stream;
 mod sanitize;
 pub(crate) mod self_review;
+pub mod titles;
 pub(crate) mod turn_config;
 pub mod types;
 pub(crate) mod verify;
@@ -226,5 +230,7 @@ impl From<aura_agent_kernel::KernelError> for AgentError {
 
 #[cfg(test)]
 mod event_sequence_tests;
+#[cfg(test)]
+mod history_tests;
 #[cfg(test)]
 mod store_migration_tests;

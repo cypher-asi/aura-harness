@@ -36,6 +36,7 @@ pub(crate) fn load_channels(
         Err(error) => warn!(%error, "Could not move the legacy channel project links"),
     }
     reconcile_projects(store, registry);
+    promote_members(store, registry);
     let members = load_members(Some(store));
     let hidden = load_hidden(store, registry).unwrap_or_else(|error| {
         warn!(%error, "Could not read which channels have a project; hiding every member");
@@ -135,6 +136,71 @@ fn reconcile_projects(store: &ChannelStore, registry: &mut AgentRegistry) {
             ),
         }
     }
+}
+
+/// Make the agents coordinators spawned (members with the agent role
+/// whose parent is still the coordinator) top-level members of their
+/// channels, keeping the folders they work in: a coordinator hands work
+/// to agents of the channel's own, never to agents under it. Idempotent:
+/// a channel without such members is left alone. One that cannot be read
+/// or written is left as it is (logged).
+fn promote_members(store: &ChannelStore, registry: &mut AgentRegistry) {
+    let channels = match store.list() {
+        Ok(channels) => channels,
+        Err(error) => {
+            warn!(%error, "Could not read the channels to promote their agents");
+            return;
+        }
+    };
+    for channel in channels {
+        match promote_channel_members(store, registry, &channel) {
+            Ok(0) => {}
+            Ok(agents) => info!(
+                channel_id = %channel.id,
+                agents,
+                "Made the agents a coordinator spawned members of its channel"
+            ),
+            Err(error) => warn!(
+                channel_id = %channel.id,
+                error = %format!("{error:#}"),
+                "Could not make the agents a coordinator spawned members of its channel"
+            ),
+        }
+    }
+}
+
+/// [`promote_members`] for one channel; returns how many agents became
+/// its members.
+fn promote_channel_members(
+    store: &ChannelStore,
+    registry: &mut AgentRegistry,
+    channel: &ChannelRecord,
+) -> anyhow::Result<usize> {
+    let members = store
+        .members(&channel.id)
+        .with_context(|| format!("reading the members of channel {}", channel.id))?;
+    let Some(coordinator) = registry.find(channel.coordinator).map(|c| c.zns_id.clone()) else {
+        return Ok(0);
+    };
+    let agents: Vec<AgentId> = members
+        .iter()
+        .filter(|member| member.role == MemberRole::Agent)
+        .filter(|member| {
+            registry
+                .find(member.agent_id)
+                .is_some_and(|a| a.parent.as_deref() == Some(coordinator.as_str()))
+        })
+        .map(|member| member.agent_id)
+        .collect();
+    if agents.is_empty() {
+        return Ok(0);
+    }
+    registry.promote_agents(&agents, |agent_store, rows| {
+        let mut batch = WriteBatch::default();
+        stage_rows(agent_store, rows, &mut batch)?;
+        store.write(batch).context("writing the promoted agents")
+    })?;
+    Ok(agents.len())
 }
 
 /// Stage the agent `rows` into `batch`.

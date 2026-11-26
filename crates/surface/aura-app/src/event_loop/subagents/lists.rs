@@ -12,11 +12,9 @@ impl AgentHub {
     /// order (see [`AgentRegistry::reserve_prefixes`]); when that cannot
     /// be saved the roster still shows them, and the next save keeps them.
     pub fn definition_summaries(&self) -> Vec<AgentDefinitionSummary> {
-        // Only channels create coordinators, so the roster never offers one.
         let mut summaries: Vec<AgentDefinitionSummary> = lock(&self.definitions)
             .all()
             .iter()
-            .filter(|d| !d.is_coordinator())
             .map(|d| AgentDefinitionSummary {
                 name: d.name.clone(),
                 description: d.description.clone(),
@@ -86,9 +84,20 @@ impl AgentHub {
         )
     }
 
+    /// Whether a turn on `agent` titles its chat: one whose prompt someone
+    /// `typed` (not a notice or a plan build), while the agent still has a
+    /// placeholder name.
+    pub(in crate::event_loop) fn titles_turn(&self, agent: AgentId, typed: bool) -> bool {
+        typed
+            && lock(&self.registry)
+                .find(agent)
+                .is_some_and(crate::agent_registry::RegisteredAgent::needs_title)
+    }
+
     /// Give `agent` the chat title `title` and show it in the Agents panel
     /// right away, unless the agent got a name or title in the meantime.
-    pub(in crate::event_loop) async fn apply_title(&self, agent: AgentId, title: &str) {
+    /// Returns whether the title was saved.
+    pub(in crate::event_loop) async fn apply_title(&self, agent: AgentId, title: &str) -> bool {
         let applied = {
             let mut registry = lock(&self.registry);
             let wanted = registry
@@ -106,6 +115,7 @@ impl AgentHub {
         if applied {
             self.send_agent_list().await;
         }
+        applied
     }
 
     /// Name `agent` after its subtask, `subtitle`, and show it in the
@@ -273,6 +283,18 @@ impl AgentHub {
     /// shows.
     pub(in crate::event_loop) async fn send_switch_lists(&self, lists: AgentLists) {
         self.send_lists(lists, false).await;
+    }
+
+    /// The lists again after records changed off the event loop (entries
+    /// copied from a cloud machine), leaving the agent on screen as is.
+    /// They are built on a blocking thread, as for a switch.
+    pub(crate) async fn refresh_agent_list(self: &Arc<Self>) {
+        let hub = Arc::clone(self);
+        let lists = tokio::task::spawn_blocking(move || hub.agent_lists_with_active()).await;
+        match lists {
+            Ok(lists) => self.send_lists(lists, false).await,
+            Err(e) => warn!(error = %e, "Could not build the agent lists"),
+        }
     }
 
     pub(super) async fn send_lists(&self, lists: AgentLists, with_active: bool) {

@@ -79,6 +79,87 @@ fn killing_a_turn_cancels_it_and_keeps_it_as_killed() {
     assert!(table.kill(&turn_id(agent)).is_err());
 }
 
+/// Rows from another machine, as last set.
+struct Remote(Mutex<Vec<ProcessSummary>>);
+
+impl RemoteRows for Remote {
+    fn rows(&self) -> Vec<ProcessSummary> {
+        lock(&self.0).clone()
+    }
+}
+
+#[test]
+fn work_on_another_machine_nests_under_its_agent_and_is_never_killed_here() {
+    let table = ProcessTable::without_os_scan(None, None);
+    let cloud = AgentId::generate();
+    let (helper, scout) = (AgentId::generate(), AgentId::generate());
+    table.name_agent(cloud, "Builder");
+    let remote = Arc::new(Remote(Mutex::new(remote_rows(cloud, helper, scout))));
+    table.set_remote(remote.clone());
+
+    let rows = table.snapshot();
+    assert_eq!(
+        ids(&rows),
+        vec![
+            ("machine:turn:r1:5".to_string(), 0),
+            (agent_row_id(helper), 1),
+            (agent_row_id(scout), 2)
+        ]
+    );
+    assert!(rows.iter().all(|row| !row.killable));
+    assert_eq!(rows[0].owner_name, "Builder", "named as here");
+    assert_eq!(rows[2].owner_name, "helper", "named as on its machine");
+    assert!(table
+        .kill(&agent_row_id(helper))
+        .unwrap_err()
+        .contains("can't be killed"));
+
+    lock(&remote.0).retain(|row| row.kind != ProcessKind::Turn);
+    let rows = table.snapshot();
+    let turn = rows
+        .iter()
+        .find(|row| row.id == "machine:turn:r1:5")
+        .expect("kept once it ended there");
+    assert_eq!(turn.status, ProcessStatus::Exited);
+    assert!(turn.ended_ms.is_some());
+}
+
+/// `cloud`'s rows on its machine: a turn, its spawn `helper` and the
+/// helper's own spawn `scout`.
+fn remote_rows(cloud: AgentId, helper: AgentId, scout: AgentId) -> Vec<ProcessSummary> {
+    vec![
+        ProcessSummary {
+            id: "machine:turn:r1:5".into(),
+            kind: ProcessKind::Turn,
+            label: "answer the mail".into(),
+            status: ProcessStatus::Running,
+            owner_agent_id: cloud.to_hex(),
+            started_ms: 5,
+            ..ProcessSummary::default()
+        },
+        ProcessSummary {
+            id: agent_row_id(helper),
+            kind: ProcessKind::Agent,
+            label: "helper (coder)".into(),
+            status: ProcessStatus::Running,
+            owner_agent_id: cloud.to_hex(),
+            started_ms: 6,
+            ..ProcessSummary::default()
+        },
+        ProcessSummary {
+            id: agent_row_id(scout),
+            kind: ProcessKind::Agent,
+            label: "scout (explorer)".into(),
+            status: ProcessStatus::Idle,
+            owner_agent_id: helper.to_hex(),
+            owner_name: "helper".into(),
+            parent_chain: vec![cloud.to_hex()],
+            started_ms: 7,
+            ..ProcessSummary::default()
+        },
+    ]
+}
+
 #[test]
 fn finished_rows_are_capped_newest_first() {
     let table = ProcessTable::without_os_scan(None, None);

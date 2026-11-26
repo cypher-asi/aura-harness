@@ -29,7 +29,7 @@ mod cells;
 mod view;
 
 use cells::{half_block_lines, octant_lines};
-pub use view::ImageView;
+pub use view::{open_with_system, ImageView};
 
 /// Process-wide counter for assigning unique ids to `ImagePreview` instances.
 ///

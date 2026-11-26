@@ -5,7 +5,7 @@ use super::{Band, BarLayout, Boxed, Divider, Hit, Info, Kind, Layout, Model, SID
 use crate::geom::{Point, Rectangle, Size};
 use crate::grid;
 use crate::tab_bar::{self, unit};
-use aura_ui_terminal::{Pane, PaneChrome, SideScope};
+use aura_ui_terminal::{Pane, PaneChrome, PaneTab, SideScope};
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
@@ -140,6 +140,9 @@ impl Layout {
         if bar.scope.is_some_and(|(scope, _)| scope.contains(at)) {
             return Some(Hit::Scope(bar.pane));
         }
+        if let Some((_, tab)) = bar.icon_tab.filter(|(icon, _)| icon.contains(at)) {
+            return Some(Hit::Tab(tab));
+        }
         let tab = bar.boxes.iter().find_map(|boxed| match boxed.kind {
             Kind::Tab(tab) if boxed.rect.contains(at) => Some(tab),
             _ => None,
@@ -206,6 +209,19 @@ impl Row {
             );
             self.end = rect.x - self.gap;
             (rect, on)
+        })
+    }
+
+    /// The square box of `tab`, drawn as its icon, at the right end,
+    /// when there is room.
+    fn icon_tab(&mut self, tab: PaneTab) -> Option<(Rectangle, PaneTab)> {
+        (self.end - self.start >= 4.0 * self.height).then(|| {
+            let rect = Rectangle::new(
+                Point::new(self.end - self.height, self.top),
+                Size::new(self.height, self.height),
+            );
+            self.end = rect.x - self.gap;
+            (rect, tab)
         })
     }
 }
@@ -311,6 +327,7 @@ pub(super) fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
         .expand
         .and_then(|expanded| Some((row.square(true)?, expanded)));
     let scope = pane.scope.and_then(|on| row.scope(on));
+    let icon_tab = pane.icon_tab.and_then(|tab| row.icon_tab(tab));
     let (boxes, x) = label_boxes(&row, pane);
     let after = if boxes.is_empty() {
         row.start
@@ -328,5 +345,6 @@ pub(super) fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
         close,
         expand,
         scope,
+        icon_tab,
     }
 }
