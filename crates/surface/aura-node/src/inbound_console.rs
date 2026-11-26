@@ -23,31 +23,20 @@
 //! Mirrors the outbound modules: row helper computes column widths,
 //! borders / labels are dimmed, header carries a status-family color,
 //! `colored` auto-disables when stdout is not a TTY and honors
-//! `NO_COLOR`. The `wrap_row` / `human_*` helpers are a deliberate
-//! third copy — the existing two copies (in `aura-agent::console` and
-//! `aura-reasoner::console`) live next to their callers. A follow-up
-//! can consolidate all three into a shared submodule of
-//! [`crate::console_format`] once the surface settles.
+//! `NO_COLOR`. The `wrap_row` / `human_*` / `collapse_for_row` helpers
+//! are shared with the outbound modules via
+//! [`aura_model::console::layout`].
 
 use std::net::SocketAddr;
 
+use aura_model::console::layout::{collapse_for_row, human_bytes, human_duration_ms, wrap_row};
 use colored::Colorize;
 use tracing::info;
 
 /// Tracing target the runtime's custom formatter renders verbatim.
-/// Must stay in sync with [`crate::console_format::CONSOLE_TARGETS`]
-/// and the matching constants in `aura-agent` / `aura-reasoner`.
-pub const CONSOLE_TARGET: &str = "aura::console";
-
-/// Width of the padded label column in [`wrap_row`].
-const LABEL_WIDTH: usize = 14;
-
-/// `│` (1) + three spaces (3) + padded label (14) + separator space (1) = 19.
-const ROW_INDENT_COLS: usize = 1 + 3 + LABEL_WIDTH + 1;
-
-/// Below this width fall back to single-line rendering rather than
-/// emit a wrap that's mostly continuation prefix.
-const MIN_VALUE_ROOM: usize = 16;
+/// Must stay in sync with [`crate::console_format::CONSOLE_TARGETS`];
+/// re-exported from `aura-model` so all three transcripts share it.
+pub use aura_model::console::CONSOLE_TARGET;
 
 /// View into an inbound HTTP request — populated by the failure
 /// observer middleware right before it emits the paired `→`/`←`
@@ -168,8 +157,8 @@ pub fn reason_for_status(status: u16) -> &'static str {
 }
 
 // ----------------------------------------------------------------------
-// Formatting primitives — duplicated from the sibling modules; see the
-// module docs for why.
+// Formatting primitives — row / value helpers come from
+// `aura_model::console::layout`; only the peer tag is inbound-specific.
 // ----------------------------------------------------------------------
 
 fn peer_tag(peer: Option<SocketAddr>) -> String {
@@ -178,134 +167,6 @@ fn peer_tag(peer: Option<SocketAddr>) -> String {
         None => String::from("[-]"),
     };
     body.cyan().dimmed().to_string()
-}
-
-fn wrap_row(label: &str, value: &str) -> String {
-    let padded_label = format!("{label:<LABEL_WIDTH$}");
-    let first_prefix = format!("{}   {} ", "│".dimmed(), padded_label.bold());
-    let cont_prefix = format!("{}{}", "│".dimmed(), " ".repeat(ROW_INDENT_COLS - 1));
-
-    let Some(term_width) = detect_term_width() else {
-        return format!("{first_prefix}{value}\n");
-    };
-    if term_width <= ROW_INDENT_COLS + MIN_VALUE_ROOM {
-        return format!("{first_prefix}{value}\n");
-    }
-    let value_room = term_width - ROW_INDENT_COLS;
-
-    if value.chars().count() <= value_room {
-        return format!("{first_prefix}{value}\n");
-    }
-
-    let chunks = wrap_value_chunks(value, value_room);
-    let mut out = String::new();
-    for (i, chunk) in chunks.iter().enumerate() {
-        if i == 0 {
-            out.push_str(&first_prefix);
-        } else {
-            out.push_str(&cont_prefix);
-        }
-        out.push_str(chunk);
-        out.push('\n');
-    }
-    out
-}
-
-fn detect_term_width() -> Option<usize> {
-    use std::io::IsTerminal;
-    if !std::io::stdout().is_terminal() {
-        return None;
-    }
-    terminal_size::terminal_size().map(|(terminal_size::Width(w), _)| w as usize)
-}
-
-fn wrap_value_chunks(value: &str, max: usize) -> Vec<String> {
-    if max == 0 {
-        return vec![value.to_string()];
-    }
-    let chars: Vec<char> = value.chars().collect();
-    let mut chunks: Vec<String> = Vec::new();
-    let mut start = 0usize;
-    while start < chars.len() {
-        let remaining = chars.len() - start;
-        if remaining <= max {
-            chunks.push(chars[start..].iter().collect());
-            break;
-        }
-        let window_end = start + max;
-        let split_at = chars[start..window_end]
-            .iter()
-            .rposition(|c| *c == ',')
-            .map(|pos| start + pos + 1)
-            .or_else(|| {
-                chars[start..window_end]
-                    .iter()
-                    .rposition(|c| c.is_whitespace())
-                    .map(|pos| start + pos + 1)
-            })
-            .unwrap_or(window_end);
-        let split_at = split_at.max(start + 1);
-        let chunk: String = chars[start..split_at].iter().collect();
-        chunks.push(chunk.trim_end().to_string());
-        let mut next = split_at;
-        while next < chars.len() && chars[next].is_whitespace() {
-            next += 1;
-        }
-        start = next;
-    }
-    chunks
-}
-
-// Lossy `usize`/`u64` → `f64` casts are intentional: this helper
-// only formats orders of magnitude on the inbound transcript. The
-// observable output rounds to 1–2 decimals so a sub-mantissa
-// rounding error on truly enormous values is indistinguishable.
-#[allow(clippy::cast_precision_loss)]
-fn human_bytes(n: usize) -> String {
-    if n < 1024 {
-        format!("{n} B")
-    } else if n < 1024 * 1024 {
-        let kb = n as f64 / 1024.0;
-        format!("{kb:.1} KB")
-    } else {
-        let mb = n as f64 / (1024.0 * 1024.0);
-        format!("{mb:.2} MB")
-    }
-}
-
-// Same precision-loss rationale as `human_bytes` above; durations
-// formatted here are bounded by request timeouts so the cast is
-// observably exact in practice.
-#[allow(clippy::cast_precision_loss)]
-fn human_duration_ms(ms: u64) -> String {
-    if ms < 1000 {
-        format!("{ms} ms")
-    } else if ms < 60_000 {
-        let s = ms as f64 / 1000.0;
-        format!("{s:.2} s")
-    } else {
-        let m = ms / 60_000;
-        let s = (ms % 60_000) as f64 / 1000.0;
-        format!("{m}m {s:.1}s")
-    }
-}
-
-fn collapse_for_row(content: &str, limit: usize) -> String {
-    let collapsed: String = content
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let trimmed = collapsed
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace('"', "'");
-    if trimmed.chars().count() <= limit {
-        trimmed
-    } else {
-        let head: String = trimmed.chars().take(limit).collect();
-        format!("{head}…")
-    }
 }
 
 #[cfg(test)]
@@ -404,22 +265,5 @@ mod tests {
         );
         ws_rejection_line("framing", "transport_error", None);
         ws_rejection_line("framing", "not_initialized", None);
-    }
-
-    #[test]
-    fn collapse_for_row_strips_control_and_whitespace() {
-        let raw = "line1\nline2\r\nline3 ";
-        let collapsed = collapse_for_row(raw, 200);
-        assert!(!collapsed.contains('\n'));
-        assert!(!collapsed.contains('\r'));
-        assert_eq!(collapsed, "line1 line2 line3");
-    }
-
-    #[test]
-    fn collapse_for_row_truncates_with_ellipsis() {
-        let raw = "x".repeat(200);
-        let collapsed = collapse_for_row(&raw, 50);
-        assert!(collapsed.ends_with('…'));
-        assert_eq!(collapsed.chars().count(), 51);
     }
 }

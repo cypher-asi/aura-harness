@@ -21,7 +21,8 @@
 //! to column 0. The wrap is gated on TTY detection — when stdout is
 //! not a terminal (e.g. piped to a file) the helper falls back to a
 //! single-line render so log files stay byte-identical to the pre-
-//! wrap layout.
+//! wrap layout. The row / value helpers are shared with the model and
+//! inbound transcripts via [`aura_model::console::layout`].
 //!
 //! ## Colors
 //!
@@ -34,6 +35,9 @@
 
 use std::time::Duration;
 
+use aura_model::console::layout::{
+    collapse_for_row, destination_tag, human_bytes, human_duration_ms, wrap_row,
+};
 use aura_model::StreamPhase;
 use colored::Colorize;
 use tracing::info;
@@ -41,19 +45,7 @@ use tracing::info;
 use crate::types::{ToolCallInfo, ToolCallResult};
 
 /// Tracing target the custom formatter recognises and renders verbatim.
-pub const CONSOLE_TARGET: &str = "aura::console";
-
-/// Width of the padded label column in [`wrap_row`].
-const LABEL_WIDTH: usize = 14;
-
-/// Display columns before the value chunk starts:
-/// `│` (1) + three spaces (3) + padded label (14) + separator space (1) = 19.
-const ROW_INDENT_COLS: usize = 1 + 3 + LABEL_WIDTH + 1;
-
-/// Minimum value column room before wrap is even attempted. If the
-/// terminal is narrower than this, fall back to single-line rendering
-/// rather than emit a wrap that's mostly continuation prefix.
-const MIN_VALUE_ROOM: usize = 16;
+pub use aura_model::console::CONSOLE_TARGET;
 
 /// Render `─── task <8> turn N sampling I ───` as a separator at the
 /// top of every sampling request. Emitted by
@@ -98,7 +90,7 @@ pub fn tools_block(
         let len_str = result.map_or_else(String::new, |r| human_bytes(r.content.len()));
         let error_note = result
             .filter(|r| r.is_error)
-            .map(|r| format!("  {}", truncate_inline(&r.content, 140).red()))
+            .map(|r| format!("  {}", collapse_for_row(&r.content, 140).red()))
             .unwrap_or_default();
         out.push_str(&format!(
             "{}   {} {name:<14} [{short_id}]  {len:>8}{error_note}\n",
@@ -111,7 +103,7 @@ pub fn tools_block(
             out.push_str(&format!(
                 "{}      {}\n",
                 "│".dimmed(),
-                truncate_inline(&summary, 160).bright_black(),
+                collapse_for_row(&summary, 160).bright_black(),
             ));
         }
     }
@@ -213,145 +205,6 @@ pub fn task_start_banner(task_id: &str, max_turns: u32, max_iterations_per_task:
 // Formatting primitives
 // ----------------------------------------------------------------------
 
-/// Render `[destination · host]` (host optional) styled as dim cyan
-/// so it sits subtly next to the bold header text without fighting
-/// the status-family color.
-fn destination_tag(destination: &str, host: Option<&str>) -> String {
-    let body = match host {
-        Some(h) if !h.is_empty() => format!("[{destination} · {h}]"),
-        _ => format!("[{destination}]"),
-    };
-    body.cyan().dimmed().to_string()
-}
-
-/// Render a labeled row, wrapping long values so continuation lines
-/// stay indented under the value column (column [`ROW_INDENT_COLS`]).
-///
-/// When stdout is not a TTY (or [`terminal_size`] reports nothing),
-/// this falls back to the original single-line behaviour so log files
-/// stay byte-identical to the pre-wrap layout.
-fn wrap_row(label: &str, value: &str) -> String {
-    let padded_label = format!("{label:<LABEL_WIDTH$}");
-    let first_prefix = format!("{}   {} ", "│".dimmed(), padded_label.bold());
-    let cont_prefix = format!("{}{}", "│".dimmed(), " ".repeat(ROW_INDENT_COLS - 1));
-
-    let Some(term_width) = detect_term_width() else {
-        return format!("{first_prefix}{value}\n");
-    };
-    if term_width <= ROW_INDENT_COLS + MIN_VALUE_ROOM {
-        return format!("{first_prefix}{value}\n");
-    }
-    let value_room = term_width - ROW_INDENT_COLS;
-
-    if value.chars().count() <= value_room {
-        return format!("{first_prefix}{value}\n");
-    }
-
-    let chunks = wrap_value_chunks(value, value_room);
-    let mut out = String::new();
-    for (i, chunk) in chunks.iter().enumerate() {
-        if i == 0 {
-            out.push_str(&first_prefix);
-        } else {
-            out.push_str(&cont_prefix);
-        }
-        out.push_str(chunk);
-        out.push('\n');
-    }
-    out
-}
-
-/// Detect terminal width in columns. Returns `None` when stdout is
-/// not a TTY (e.g. piped to a file) so callers can skip wrapping.
-fn detect_term_width() -> Option<usize> {
-    use std::io::IsTerminal;
-    if !std::io::stdout().is_terminal() {
-        return None;
-    }
-    terminal_size::terminal_size().map(|(terminal_size::Width(w), _)| w as usize)
-}
-
-/// Split `value` into chunks of at most `max` chars, preferring to
-/// break after the last comma or whitespace in the window so that
-/// comma-separated lists (e.g. the `headers` row) wrap cleanly
-/// between items. Falls back to a hard split when no preferred
-/// break point is found.
-fn wrap_value_chunks(value: &str, max: usize) -> Vec<String> {
-    if max == 0 {
-        return vec![value.to_string()];
-    }
-    let chars: Vec<char> = value.chars().collect();
-    let mut chunks: Vec<String> = Vec::new();
-    let mut start = 0usize;
-    while start < chars.len() {
-        let remaining = chars.len() - start;
-        if remaining <= max {
-            chunks.push(chars[start..].iter().collect());
-            break;
-        }
-        let window_end = start + max;
-        // Prefer last comma inside the window (split *after* the comma
-        // so the punctuation stays attached to the preceding token).
-        let split_at = chars[start..window_end]
-            .iter()
-            .rposition(|c| *c == ',')
-            .map(|pos| start + pos + 1)
-            .or_else(|| {
-                chars[start..window_end]
-                    .iter()
-                    .rposition(|c| c.is_whitespace())
-                    .map(|pos| start + pos + 1)
-            })
-            .unwrap_or(window_end);
-        // Defensive: never make zero progress.
-        let split_at = split_at.max(start + 1);
-        let chunk: String = chars[start..split_at].iter().collect();
-        chunks.push(chunk.trim_end().to_string());
-        // Skip any whitespace at the start of the next chunk so the
-        // continuation lines up cleanly under the value column.
-        let mut next = split_at;
-        while next < chars.len() && chars[next].is_whitespace() {
-            next += 1;
-        }
-        start = next;
-    }
-    chunks
-}
-
-/// Converts a count to `f64` for rounded display.
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "values past 2^53 lose precision the rounded output cannot show"
-)]
-fn display_f64(n: u64) -> f64 {
-    n as f64
-}
-
-fn human_bytes(n: usize) -> String {
-    if n < 1024 {
-        format!("{n} B")
-    } else if n < 1024 * 1024 {
-        let kb = display_f64(n as u64) / 1024.0;
-        format!("{kb:.1} KB")
-    } else {
-        let mb = display_f64(n as u64) / (1024.0 * 1024.0);
-        format!("{mb:.2} MB")
-    }
-}
-
-fn human_duration_ms(ms: u64) -> String {
-    if ms < 1000 {
-        format!("{ms} ms")
-    } else if ms < 60_000 {
-        let s = display_f64(ms) / 1000.0;
-        format!("{s:.2} s")
-    } else {
-        let m = ms / 60_000;
-        let s = display_f64(ms % 60_000) / 1000.0;
-        format!("{m}m {s:.1}s")
-    }
-}
-
 /// Render the first 8 hex chars of a task UUID (the prefix is
 /// universally enough to disambiguate concurrent tasks in a single
 /// log file). Accepts any string; if it's too short, the original
@@ -415,26 +268,6 @@ fn run_command_summary(input: &serde_json::Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Collapse control chars / whitespace / quotes into a single inline
-/// preview for error messages embedded in a block row.
-fn truncate_inline(content: &str, limit: usize) -> String {
-    let collapsed: String = content
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let trimmed = collapsed
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace('"', "'");
-    if trimmed.chars().count() <= limit {
-        trimmed
-    } else {
-        let head: String = trimmed.chars().take(limit).collect();
-        format!("{head}…")
-    }
-}
-
 // ----------------------------------------------------------------------
 // Tests
 // ----------------------------------------------------------------------
@@ -443,20 +276,6 @@ fn truncate_inline(content: &str, limit: usize) -> String {
 mod tests {
     use super::*;
     use std::collections::HashSet;
-
-    #[test]
-    fn human_bytes_units() {
-        assert_eq!(human_bytes(512), "512 B");
-        assert_eq!(human_bytes(1536), "1.5 KB");
-        assert_eq!(human_bytes(2 * 1024 * 1024), "2.00 MB");
-    }
-
-    #[test]
-    fn human_duration_units() {
-        assert_eq!(human_duration_ms(250), "250 ms");
-        assert_eq!(human_duration_ms(4200), "4.20 s");
-        assert_eq!(human_duration_ms(61_500), "1m 1.5s");
-    }
 
     #[test]
     fn short_task_id_takes_first_eight() {
@@ -471,77 +290,6 @@ mod tests {
             "toolu_…R56d"
         );
         assert_eq!(short_tool_use_id("toolu_short"), "toolu_short");
-    }
-
-    #[test]
-    fn truncate_inline_collapses_and_clips() {
-        let s = "hello\n  world  \"quoted\" extra extra extra extra extra extra";
-        let out = truncate_inline(s, 30);
-        assert!(out.starts_with("hello world 'quoted'"));
-        assert!(out.ends_with('…') || out.len() <= 30);
-    }
-
-    #[test]
-    fn wrap_value_breaks_on_comma_preference() {
-        // Width 30 forces a wrap; expect breaks AFTER commas, not
-        // mid-token.
-        let chunks = wrap_value_chunks("aaa,bbb,ccc,ddd,eee,fff,ggg", 12);
-        // Every non-final chunk should end with a comma (proves the
-        // preferred break point was used).
-        for chunk in &chunks[..chunks.len() - 1] {
-            assert!(
-                chunk.ends_with(','),
-                "expected comma-terminated chunk, got {chunk:?}"
-            );
-        }
-        assert_eq!(chunks.join(""), "aaa,bbb,ccc,ddd,eee,fff,ggg");
-    }
-
-    #[test]
-    fn wrap_value_breaks_on_whitespace_when_no_comma() {
-        let chunks = wrap_value_chunks("alpha beta gamma delta epsilon zeta", 12);
-        assert!(chunks.len() > 1, "expected wrap, got {chunks:?}");
-        for chunk in &chunks {
-            assert!(chunk.chars().count() <= 12, "chunk over budget: {chunk:?}");
-        }
-        // Leading whitespace is consumed at chunk boundaries.
-        for chunk in &chunks {
-            assert!(
-                !chunk.starts_with(' '),
-                "leading whitespace not trimmed: {chunk:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn wrap_value_hard_splits_when_no_break() {
-        let chunks = wrap_value_chunks("aaaaaaaaaaaaaaaaa", 5);
-        for chunk in &chunks {
-            assert!(chunk.chars().count() <= 5);
-        }
-        assert_eq!(chunks.concat(), "aaaaaaaaaaaaaaaaa");
-    }
-
-    #[test]
-    fn wrap_row_no_tty_returns_single_line() {
-        // In `cargo test` stdout is captured (not a TTY), so
-        // `detect_term_width` returns None and we get the legacy
-        // single-line layout — with colors disabled so the assertion
-        // can match plain bytes.
-        colored::control::set_override(false);
-        let out = wrap_row("model", "claude-opus-4-6");
-        assert_eq!(out, "│   model          claude-opus-4-6\n");
-        colored::control::unset_override();
-    }
-
-    #[test]
-    fn destination_tag_renders_host_when_present() {
-        colored::control::set_override(false);
-        let tag = destination_tag("aura-network", Some("aura-router.onrender.com"));
-        assert_eq!(tag, "[aura-network · aura-router.onrender.com]");
-        let tag = destination_tag("aura-network", None);
-        assert_eq!(tag, "[aura-network]");
-        colored::control::unset_override();
     }
 
     #[test]

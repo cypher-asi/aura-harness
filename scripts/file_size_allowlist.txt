@@ -17,7 +17,6 @@ crates/agent/aura-agent/src/agent_loop/tool_execution_tests.rs
 crates/agent/aura-agent/src/agent_loop/tool_pipeline.rs
 crates/agent/aura-agent/src/agent_loop/turn.rs
 crates/agent/aura-agent/src/agent_runner/mod.rs
-crates/agent/aura-agent/src/console.rs
 crates/agent/aura-agent/src/kernel_gateway.rs
 crates/agent/aura-agent/src/post_edit_check.rs
 crates/agent/aura-agent/src/recording_stream.rs
@@ -102,7 +101,6 @@ crates/model/aura-model/src/anthropic/convert.rs
 crates/model/aura-model/src/anthropic/provider.rs
 crates/model/aura-model/src/anthropic/sse/tests.rs
 crates/model/aura-model/src/anthropic/tests.rs
-crates/model/aura-model/src/console.rs
 crates/model/aura-model/src/model_alias.rs
 crates/model/aura-model/src/model_catalog.rs
 crates/model/aura-model/src/response_stream.rs
