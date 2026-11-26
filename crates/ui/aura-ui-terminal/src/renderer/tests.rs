@@ -6627,10 +6627,7 @@ fn test_agents_app_without_an_instance_says_so_and_hides_the_right_column() {
     ]));
     app.select_pane_tab(PaneTab::Agents(AgentsTab::Roster));
     let screen = render_rows(&mut app, 140).join("\n");
-    assert!(
-        screen.contains("No explorer agent has run yet"),
-        "{screen}"
-    );
+    assert!(screen.contains("No explorer agent has run yet"), "{screen}");
     for agent_feature in ["SANDBOX", "KERNEL", "GRAPH"] {
         assert!(
             !screen.contains(agent_feature),

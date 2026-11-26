@@ -839,36 +839,6 @@ impl App {
         KeyResult::continue_running()
     }
 
-    /// Handle key when the agents panel shows Projects. Moving the
-    /// highlight onto an agent switches to it; project headers are skipped.
-    /// Space folds the highlighted agent over its spawns, or its project
-    /// when it has none; Shift+Space folds its project either way. Enter
-    /// on "+ New project" creates one.
-    fn handle_swarm_key(&mut self, key: KeyEvent) -> KeyResult {
-        match key.code {
-            KeyCode::Left | KeyCode::Right => self.shift_agents_tab(key.code),
-            KeyCode::Up => self.select_agent_row(self.selected_agent.saturating_sub(1)),
-            KeyCode::Down => self.select_agent_row(self.selected_agent + 1),
-            KeyCode::Enter => self.activate_agent_row(),
-            KeyCode::PageUp => self.select_agent_row(self.selected_agent.saturating_sub(5)),
-            KeyCode::PageDown => self.select_agent_row(self.selected_agent + 5),
-            KeyCode::Home => self.select_agent_row(0),
-            KeyCode::End => self.select_last_agent_row(),
-            KeyCode::Char(c) => {
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += 1;
-            }
-            KeyCode::Backspace => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos -= 1;
-                    self.input.remove(self.cursor_pos);
-                }
-            }
-            _ => {}
-        }
-        KeyResult::continue_running()
-    }
-
     /// Submit the current input.
     pub(super) fn submit_input(&mut self) -> KeyResult {
         // An app showing nothing has nobody to send to; the draft stays
