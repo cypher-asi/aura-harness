@@ -9,6 +9,7 @@
 //! builds on it and it compiles alongside the rest of the workspace.
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 pub mod animation;
 pub mod ansi;

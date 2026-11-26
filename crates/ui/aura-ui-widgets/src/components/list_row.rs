@@ -209,6 +209,31 @@ fn indented_row<'a>(
             + display_width(&time)
             + display_width(&code),
     );
+    let icon_color = cell.icon.unwrap_or(icon.color);
+    let mut spans = vec![
+        indent,
+        Span::styled(icon.glyph, fill.fg(icon_color)),
+        Span::styled(" ".repeat(icon_pad), fill),
+    ];
+    spans.extend(label_spans(label, text_width, cell, fill));
+    spans.extend(buttons);
+    spans.push(Span::styled(time, fill.fg(cell.time)));
+    // The code keeps the time's color on the row's fill, so it stays on
+    // selected and hovered rows. No span at all without a code column.
+    if !code.is_empty() {
+        spans.push(Span::styled(code, fill.fg(cell.time)));
+    }
+    Line::from(spans)
+}
+
+/// A row's name, badge, detail and padding, filling the `text_width`
+/// columns between its icon and its buttons.
+fn label_spans<'a>(
+    label: RowLabel<'_>,
+    text_width: usize,
+    cell: CellStyle,
+    fill: Style,
+) -> Vec<Span<'a>> {
     // The badge's columns come out of the name's, so a long name is cut
     // and the badge still shows; a row too narrow for both drops it. A row
     // narrower than its fixed parts has no name columns at all.
@@ -225,13 +250,7 @@ fn indented_row<'a>(
         .map(|detail| format!("  {}", truncate_record_info(detail, rest - 2)))
         .unwrap_or_default();
     let padding = rest.saturating_sub(display_width(&detail));
-    let icon_color = cell.icon.unwrap_or(icon.color);
-    let mut spans = vec![
-        indent,
-        Span::styled(icon.glyph, fill.fg(icon_color)),
-        Span::styled(" ".repeat(icon_pad), fill),
-        Span::styled(name, fill.patch(cell.text)),
-    ];
+    let mut spans = vec![Span::styled(name, fill.patch(cell.text))];
     if let Some(badge) = badge {
         spans.push(Span::styled(badge.text.to_string(), fill.fg(badge.color)));
     }
@@ -239,14 +258,7 @@ fn indented_row<'a>(
         Span::styled(detail, fill.fg(cell.time)),
         Span::styled(" ".repeat(padding), fill),
     ]);
-    spans.extend(buttons);
-    spans.push(Span::styled(time, fill.fg(cell.time)));
-    // The code keeps the time's color on the row's fill, so it stays on
-    // selected and hovered rows. No span at all without a code column.
-    if !code.is_empty() {
-        spans.push(Span::styled(code, fill.fg(cell.time)));
-    }
-    Line::from(spans)
+    spans
 }
 
 /// How a list cell is drawn, from strongest to weakest.
