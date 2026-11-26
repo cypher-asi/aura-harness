@@ -311,6 +311,16 @@ under a fold arrow, then the timeline, newest first.
   and what the agent has used in `muted`, separated by `faint` dots,
   with the status at the right, on the screen's last row. Parts that
   don't fit drop from the right.
+- **Placement switch**: the footer's right end, `⌂ local` in `muted` or
+  `☁  cloud` in `primary`, with the machine's state when it isn't ready
+  and the owner for another user's agent. Under the pointer it lights
+  like a button: a `surface_hover` fill one column past each side of the
+  label, which reads in `foreground`. It doesn't light while it shows a
+  move or on another user's agent. A click shows the move at once: a
+  `success` `◐` turning a quarter at a time, then `moving to cloud` or
+  `bringing back` with the chat's working shimmer. When the move lands,
+  one `success` band crosses the new label. With spinners off, a move
+  reads all in `success` and nothing sweeps.
 
 ### Plan Documents
 

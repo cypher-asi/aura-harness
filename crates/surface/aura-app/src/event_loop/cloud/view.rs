@@ -28,18 +28,15 @@ pub(super) fn placement_state(
     current: &aura_core_auth::Owner,
 ) -> PlacementState {
     let moving = shared.moving.lock().contains(&agent);
-    let placement = cloud.map_or(Placement::Local, |hub| hub.placement_of(agent));
+    let placement = match cloud.map_or(Placement::Local, |hub| hub.placement_of(agent)) {
+        Placement::Local => PlacementView::Local,
+        Placement::Cloud => PlacementView::Cloud,
+    };
     let machine = cloud.and_then(|hub| hub.fleet().view(&agent.to_hex()));
     PlacementState {
-        placement: match placement {
-            Placement::Local => PlacementView::Local,
-            Placement::Cloud => PlacementView::Cloud,
-        },
-        moving: moving.then(|| match placement {
-            Placement::Local => "moving to cloud".to_string(),
-            Placement::Cloud => "bringing back".to_string(),
-        }),
-        asleep: placement == Placement::Cloud
+        placement,
+        moving: moving.then(|| placement.moving_label().to_string()),
+        asleep: placement == PlacementView::Cloud
             && machine.as_ref().is_some_and(|view| !view.state.is_awake()),
         machine_state: machine.map(|view| view.state.label().to_string()),
         cloud_ready: cloud.is_some() || aura_config::cloud().is_configured(),

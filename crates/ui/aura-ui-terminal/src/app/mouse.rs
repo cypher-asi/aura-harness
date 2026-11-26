@@ -416,6 +416,9 @@ impl App {
         if contains(self.areas.input_stop, column, row) {
             return Some(HoverTarget::StopTurn);
         }
+        if self.on_placement_switch(column, row) {
+            return Some(HoverTarget::PlacementSwitch);
+        }
         if contains(self.areas.side_toggle, column, row) {
             return Some(HoverTarget::SideToggle);
         }

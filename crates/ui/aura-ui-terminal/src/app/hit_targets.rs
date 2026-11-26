@@ -15,6 +15,8 @@ pub(crate) enum HoverTarget {
     ExpandChat,
     /// The stop button in the input box, shown while a turn runs.
     StopTurn,
+    /// The placement switch at the right end of the footer.
+    PlacementSwitch,
     /// A row in the projects list, including "+ New project".
     ProjectRow(usize),
     /// The "+" at the right end of a project's row in the projects list.

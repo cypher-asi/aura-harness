@@ -133,7 +133,7 @@ impl App {
     /// Whether the screen changes from tick to tick: a spinner turns for
     /// an agent, task or process at work, a notification scrolls, a
     /// selection held past the chat's edge scrolls it, or the chat, the
-    /// LOG tab or BENCH animates.
+    /// LOG tab, BENCH or the placement switch animates.
     #[must_use]
     pub fn animating(&self) -> bool {
         self.animates_every_tick() || self.spinners_turning()
@@ -141,7 +141,8 @@ impl App {
 
     /// Whether what changes from tick to tick is more than spinner glyphs:
     /// the agent on screen at work, a notification, a selection scrolling
-    /// the chat, or the chat, the LOG tab or BENCH animating.
+    /// the chat, or the chat, the LOG tab, BENCH or the placement switch
+    /// animating.
     pub(super) fn animates_every_tick(&self) -> bool {
         self.is_busy()
             || self.notifications.current.is_some()
@@ -149,6 +150,7 @@ impl App {
             || self.bench_animating()
             || self.log_animating()
             || self.chat_animating()
+            || self.placement_switch_animating()
     }
 
     /// Whether a spinner turns for an agent, task or process at work.
