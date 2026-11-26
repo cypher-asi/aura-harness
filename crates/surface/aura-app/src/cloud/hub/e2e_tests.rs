@@ -7,8 +7,8 @@ use crate::cloud::test_node::TestNode;
 use aura_agent::checkpoint::{SessionCheckpoint, SessionUsage};
 use aura_core_types::{RecordEntry, Transaction, TransactionType};
 use aura_engine_cloud::{FakeProvider, MachineInfo, MachineStatus};
-use aura_model::{Message, Role};
-use aura_store_db::RocksStore;
+use aura_model::{ContentBlock, Message, Role, ToolResultContent};
+use aura_store_db::{RocksStore, TraceStore};
 
 const MACHINE: &str = "aura-re36-0001";
 const ZNS: &str = "0://terminal/re36";
@@ -82,6 +82,7 @@ async fn placed(config: CloudConfig) -> Placed {
             branch: None,
             repo: None,
             fetched_tip: None,
+            children: Vec::new(),
         },
     );
     Placed {
@@ -144,6 +145,78 @@ impl Placed {
         }
         false
     }
+
+    /// The node's session checkpoint, taken at `record_seq`.
+    async fn save_on_node(&self, record_seq: u64, messages: Vec<Message>) {
+        Checkpoints::new(self.node_dir.path())
+            .save(
+                self.agent,
+                &SessionCheckpoint::new(
+                    1_000,
+                    record_seq,
+                    messages,
+                    Vec::new(),
+                    SessionUsage::default(),
+                ),
+            )
+            .await
+            .expect("saved");
+    }
+
+    fn head_of(&self, agent: AgentId) -> u64 {
+        self.hub.store.get_head_seq(agent).expect("head")
+    }
+}
+
+/// `parent`'s record row for spawning `child`, as its kernel writes it.
+fn spawned(parent: AgentId, child: AgentId) -> Transaction {
+    let payload = serde_json::json!({
+        "kind": "spawn_agent",
+        "parent_agent_id": parent,
+        "child_agent_id": child,
+        "name": "helper",
+    });
+    Transaction::new_chained(
+        parent,
+        TransactionType::System,
+        serde_json::to_vec(&payload).expect("payload"),
+        None,
+    )
+}
+
+/// A git repository at `dir` with `notes.txt` holding `text`, committed.
+fn repo(dir: &Path, text: &str) {
+    std::fs::create_dir_all(dir).expect("dir");
+    git(dir, &["init", "-q"]);
+    std::fs::write(dir.join("notes.txt"), text).expect("notes");
+    git(dir, &["add", "."]);
+    git(
+        dir,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "-m",
+            "base",
+        ],
+    );
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .status()
+        .expect("git");
+    assert!(status.success(), "git {args:?}");
 }
 
 fn append(store: &dyn Store, seq: u64, tx: Transaction) {
@@ -351,4 +424,234 @@ async fn bringing_an_agent_back_keeps_what_it_said_on_its_machine() {
             (Role::Assistant, "it lists three tasks".to_string()),
         ]
     );
+}
+
+#[tokio::test]
+async fn the_session_is_kept_here_before_sleep_unless_it_is_ahead_of_the_record() {
+    let p = placed(CloudConfig::defaults()).await;
+    let sessions = Checkpoints::new(p.hub_dir.path());
+    p.hub.attach_sessions(sessions.clone());
+    p.write_on_node(1, 2);
+    p.save_on_node(3, vec![Message::user("p1")]).await;
+
+    p.hub.copy_before_sleep(p.agent).await;
+
+    assert_eq!(p.local_head(), 2);
+    assert!(
+        sessions.load_current(p.agent).is_none(),
+        "it counts entries the record here doesn't hold"
+    );
+
+    p.save_on_node(2, vec![Message::user("p1"), Message::user("p2")])
+        .await;
+    p.hub.sleep(p.agent).await.expect("slept");
+
+    let kept = sessions
+        .load_current(p.agent)
+        .expect("kept before the machine slept");
+    assert_eq!((kept.record_seq, kept.messages.len()), (2, 2));
+    let status = p.hub.sync_status(p.agent).expect("placed");
+    assert_eq!(status.copied_seq, 2);
+    assert!(status.session_ms.is_some());
+    assert!(!status.behind());
+}
+
+#[tokio::test]
+async fn after_bring_back_the_session_resumes_with_its_tool_calls() {
+    let p = placed(CloudConfig::defaults()).await;
+    let sessions = Checkpoints::new(p.hub_dir.path());
+    p.hub.attach_sessions(sessions.clone());
+    p.import().await;
+    append(
+        p.node.store.as_ref(),
+        1,
+        Transaction::user_prompt(p.agent, "read notes.txt"),
+    );
+    append(
+        p.node.store.as_ref(),
+        2,
+        reply(p.agent, "it lists three tasks"),
+    );
+    p.save_on_node(
+        2,
+        vec![
+            Message::user("read notes.txt"),
+            Message::new(
+                Role::Assistant,
+                vec![ContentBlock::tool_use(
+                    "t1",
+                    "read_file",
+                    serde_json::json!({ "path": "notes.txt" }),
+                )],
+            ),
+            Message::tool_results(vec![(
+                "t1".into(),
+                ToolResultContent::Text("three tasks".into()),
+                false,
+            )]),
+            Message::assistant("it lists three tasks"),
+        ],
+    )
+    .await;
+    append(
+        p.node.store.as_ref(),
+        3,
+        Transaction::user_prompt(p.agent, "and the first?"),
+    );
+
+    p.hub
+        .recall(p.agent, "test", &BootReporter::none())
+        .await
+        .expect("brought back");
+
+    let resumed = aura_agent::history::restore(p.hub.store.as_ref(), &sessions, p.agent)
+        .expect("resumes from the copied session");
+    assert!(resumed.messages[1].has_tool_use(), "with its tool call");
+    assert!(
+        texts(&resumed.messages).contains(&(Role::User, "and the first?".to_string())),
+        "and what the record holds past it"
+    );
+}
+
+#[tokio::test]
+async fn spawned_agents_are_copied_only_when_the_record_names_them() {
+    let p = placed(CloudConfig::defaults()).await;
+    let child = AgentId::new([7; 32]);
+    let stranger = AgentId::new([8; 32]);
+    let known = AgentId::new([9; 32]);
+    append(
+        p.hub.store.as_ref(),
+        1,
+        Transaction::user_prompt(known, "mine"),
+    );
+    append(
+        p.node.store.as_ref(),
+        1,
+        Transaction::user_prompt(p.agent, "split the work"),
+    );
+    append(p.node.store.as_ref(), 2, spawned(p.agent, child));
+    append(p.node.store.as_ref(), 3, spawned(p.agent, known));
+    for agent in [child, stranger, known] {
+        for seq in 1..=2 {
+            append(
+                p.node.store.as_ref(),
+                seq,
+                Transaction::user_prompt(agent, format!("p{seq}")),
+            );
+        }
+    }
+
+    assert_eq!(p.hub.mirror(p.agent).await.expect("copied"), 5);
+
+    assert_eq!(p.head_of(child), 2, "named by the record: copied");
+    assert_eq!(p.head_of(stranger), 0, "never named: left on the machine");
+    assert_eq!(p.head_of(known), 1, "already has a record here: not taken");
+    assert_eq!(p.hub.sync_status(p.agent).expect("placed").children, 1);
+    let saved = std::fs::read_to_string(p.hub_dir.path().join("cloud/placements.json"))
+        .expect("placements");
+    assert!(saved.contains(&child.to_hex()) && !saved.contains(&known.to_hex()));
+
+    append(
+        p.node.store.as_ref(),
+        3,
+        Transaction::user_prompt(child, "p3"),
+    );
+    assert_eq!(p.hub.mirror(p.agent).await.expect("copied"), 1);
+    assert_eq!(p.head_of(child), 3, "and kept up with");
+}
+
+#[tokio::test]
+async fn a_turn_s_run_is_copied_into_the_main_trace_store() {
+    let p = placed(CloudConfig::defaults()).await;
+    let db = RocksStore::open(p.hub_dir.path().join("traces"), false).expect("open");
+    let traces = Arc::new(TraceStore::for_store(&db));
+    p.hub.attach_traces(Arc::clone(&traces));
+    p.import().await;
+
+    let mut events = p.hub.run_turn(
+        p.agent,
+        "hello".into(),
+        Some("mock-model".into()),
+        None,
+        CancellationToken::new(),
+    );
+    while let Some(event) = events.recv().await {
+        if let RemoteEvent::Failed(err) = event {
+            panic!("the turn failed: {err}");
+        }
+    }
+
+    let run = aura_agent_trace::db::latest_of(&traces, &p.agent.to_hex())
+        .expect("read")
+        .expect("the turn's run is here");
+    assert_eq!(
+        run.meta.agent_id.as_deref(),
+        Some(p.agent.to_hex().as_str())
+    );
+    assert!(!run.steps.is_empty(), "with its steps");
+    assert!(p.hub.take_traces_copied());
+    assert!(p
+        .hub
+        .sync_status(p.agent)
+        .expect("placed")
+        .traces_ms
+        .is_some());
+}
+
+#[tokio::test]
+async fn bring_back_uses_the_changes_saved_at_sleep_when_the_machine_is_gone() {
+    let p = placed(CloudConfig::defaults()).await;
+    let project = p.hub_dir.path().join("project");
+    let workspace = p.node_dir.path().join("ws");
+    repo(&project, "one\n");
+    repo(&workspace, "one\n");
+    std::fs::write(workspace.join("notes.txt"), "one\ntwo\n").expect("changed");
+
+    p.hub.sleep(p.agent).await.expect("slept");
+    let hex = p.agent.to_hex();
+    assert!(p.hub.saved_patch(&hex).is_some(), "saved before it slept");
+    p.hub.fleet.destroy(&hex, "lost").await.expect("destroyed");
+    assert!(p.hub.fleet.view(&hex).is_none());
+
+    let outcome = p
+        .hub
+        .recall(p.agent, "test", &BootReporter::none())
+        .await
+        .expect("brought back");
+
+    assert!(
+        matches!(&outcome.patch, PatchOutcome::Applied { files } if files == &["notes.txt"]),
+        "{:?}",
+        outcome.patch
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("notes.txt")).expect("notes"),
+        "one\ntwo\n"
+    );
+    assert!(!p.hub.is_placed(p.agent));
+    assert!(p.hub.saved_patch(&hex).is_none(), "dropped once used");
+}
+
+#[tokio::test]
+async fn a_pull_drops_the_changes_saved_at_sleep() {
+    let p = placed(CloudConfig::defaults()).await;
+    let project = p.hub_dir.path().join("project");
+    let workspace = p.node_dir.path().join("ws");
+    repo(&project, "one\n");
+    repo(&workspace, "one\n");
+    std::fs::write(workspace.join("notes.txt"), "one\ntwo\n").expect("changed");
+    p.hub.sleep(p.agent).await.expect("slept");
+    let hex = p.agent.to_hex();
+    assert!(p.hub.saved_patch(&hex).is_some(), "saved before it slept");
+
+    let outcome = p.hub.pull(p.agent).await.expect("pulled");
+
+    assert!(
+        matches!(&outcome.patch, PatchOutcome::Applied { .. }),
+        "{:?}",
+        outcome.patch
+    );
+    assert!(p.hub.saved_patch(&hex).is_none(), "in the project now");
+    let sync = p.hub.sync_status(p.agent).expect("placed");
+    assert!(sync.patch_ms.is_none(), "the next sleep saves a new one");
 }

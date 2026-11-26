@@ -115,6 +115,9 @@ pub(crate) struct WsContext {
     /// agent's conversation (see [`helpers::prepare_chat_session`]).
     /// `None` elsewhere: those callers send the conversation.
     pub(crate) sessions: Option<aura_agent::checkpoint::Checkpoints>,
+    /// The cloud node, which traces each agent's conversation as one run
+    /// across runs; `None` on other nodes.
+    pub(crate) cloud: Option<Arc<crate::cloud_node::CloudNode>>,
 }
 
 impl WsContext {
@@ -149,6 +152,7 @@ impl WsContext {
             run_id: None,
             agent_host: state.agent_host.clone(),
             sessions: state.cloud.sessions().cloned(),
+            cloud: state.cloud.enabled().then(|| Arc::clone(&state.cloud)),
         }
     }
 }

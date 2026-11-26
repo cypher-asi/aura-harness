@@ -17,7 +17,12 @@
 //! - **The local store is the main copy.** Every page a node commits is
 //!   checked ([`aura_engine_cloud::replica::verify_page`]) and appended
 //!   verbatim; a bad page stops the mirror for that agent and is never
-//!   written.
+//!   written. Agents it spawned on its machine are copied too, but only
+//!   ones named by a `spawn_agent` row of a record already verified.
+//! - **Nothing that matters stays only on a machine.** The session
+//!   checkpoint, the trace runs and, before each sleep, a patch of the
+//!   machine's changes are copied here too; [`CloudHub::sync_status`]
+//!   says how current each copy is.
 //! - **The boxd key never leaves the hub.** Machines get the env
 //!   allowlist of [`aura_engine_cloud::machine_env`] and their tokens over
 //!   boxd's authenticated `Exec`.
@@ -29,6 +34,8 @@
 //!   next attempt.
 //! - A patch that doesn't apply is saved under
 //!   `AURA_HOME/cloud/<agent>/` and reported, never dropped.
+//! - A machine deleted outside aura: Bring back applies the patch saved
+//!   at its last sleep; work done since that sleep is lost.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -74,6 +81,9 @@ use tokio_util::sync::CancellationToken;
 use super::node_client::{NodeClient, NODE_TIMEOUT};
 use super::store::{agent_id_of, record_placement, StoreLedger, StoreSink};
 
+mod persist;
+pub use persist::SyncStatus;
+
 /// How often idle machines are checked for sleep.
 const TICK_EVERY: Duration = Duration::from_secs(5);
 /// How often every machine is re-read from boxd.
@@ -85,8 +95,9 @@ const MIRROR_EVERY: Duration = Duration::from_secs(5);
 /// How often every awake machine's record is copied, for the hints a
 /// dropped socket lost.
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
-/// Limit on the copy made before a machine sleeps.
-const COPY_BEFORE_SLEEP: Duration = Duration::from_secs(30);
+/// Limit on the copies made before a machine sleeps (records, session,
+/// traces and the patch of its changes).
+const COPY_BEFORE_SLEEP: Duration = Duration::from_secs(90);
 /// Cost samples kept per machine.
 const MAX_SAMPLES: usize = 720;
 /// Longest a turn may run on a node before the hub gives up on it.
@@ -336,6 +347,10 @@ pub struct PlacedAgent {
     /// The branch's tip last fetched here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetched_tip: Option<String>,
+    /// Agents it spawned on its machine (hex ids), named in its record
+    /// or a spawned agent's; their records are copied with its own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<String>,
 }
 
 impl PlacedAgent {
@@ -388,6 +403,7 @@ pub struct CloudHub {
     host: Mutex<Option<AgentHost>>,
     links: Mutex<HashMap<String, Link>>,
     tracks: Mutex<HashMap<String, HostTrack>>,
+    /// One copy per agent at a time: its record, session or runs.
     mirrors: Mutex<HashMap<AgentId, Arc<tokio::sync::Mutex<()>>>>,
     /// Agents with a background copy running, and whether another hint
     /// came in while it ran ([`Self::copy_soon`]).
@@ -397,6 +413,15 @@ pub struct CloudHub {
     /// Set when a copy brought entries, until the app looks
     /// ([`Self::take_copied`]).
     copied: AtomicBool,
+    /// The main trace store, where cloud agents' runs are copied.
+    trace_store: Mutex<Option<Arc<aura_store_db::TraceStore>>>,
+    /// What each copied run held when stored, by run id.
+    run_marks: Mutex<HashMap<String, persist::RunMark>>,
+    /// Set when trace runs were copied, until the app looks
+    /// ([`Self::take_traces_copied`]).
+    traces_copied: AtomicBool,
+    /// How current each placed agent's copy is.
+    sync: Mutex<HashMap<AgentId, SyncStatus>>,
     /// Users' plan tokens as boxd secrets; `None` until the app hands
     /// the hub its credentials.
     plans: Mutex<Option<Arc<PlanSync>>>,
@@ -525,6 +550,10 @@ impl CloudHub {
             copies: Mutex::new(HashMap::new()),
             observer: Mutex::new(None),
             copied: AtomicBool::new(false),
+            trace_store: Mutex::new(None),
+            run_marks: Mutex::new(HashMap::new()),
+            traces_copied: AtomicBool::new(false),
+            sync: Mutex::new(HashMap::new()),
             plans: Mutex::new(None),
             repos: Mutex::new(repos),
             sessions: Mutex::new(None),
@@ -603,6 +632,12 @@ impl CloudHub {
     /// lists the agents again.
     pub fn take_copied(&self) -> bool {
         self.copied.swap(false, Ordering::AcqRel)
+    }
+
+    /// Whether trace runs were copied since the last call; the app then
+    /// shows the on-screen agent's latest run again.
+    pub fn take_traces_copied(&self) -> bool {
+        self.traces_copied.swap(false, Ordering::AcqRel)
     }
 
     /// Note that `agent` (hex) of `project`, named `name`, runs here, so
@@ -1118,6 +1153,7 @@ impl CloudHub {
             branch: Some(branch),
             repo: github.repo,
             fetched_tip: None,
+            children: Vec::new(),
         };
         record_placement(
             &self.ledger,
@@ -1611,18 +1647,55 @@ impl CloudHub {
         Ok(started.head_seq)
     }
 
-    /// Copy what `agent`'s node committed since the local head. Returns
-    /// the entries copied.
+    /// Copy what `agent`'s node committed since the local head, and what
+    /// the agents it spawned there committed. Returns the entries copied.
     ///
     /// # Errors
     ///
-    /// When the node can't be read or a page fails its checks.
+    /// When the node can't be read or a page of `agent`'s record fails
+    /// its checks.
     pub async fn mirror(&self, agent: AgentId) -> CloudResult<usize> {
         let node = self.node(&agent.to_hex())?;
         self.mirror_from(&node, agent).await
     }
 
+    /// Copy `agent`'s record from `node`, then the records of the agents
+    /// it spawned there. Returns the entries copied.
     async fn mirror_from(&self, node: &NodeClient, agent: AgentId) -> CloudResult<usize> {
+        let hex = agent.to_hex();
+        let result = self.mirror_record(node, &hex, agent).await;
+        self.note_copy(agent, &result);
+        let mut copied = result?;
+        let mut done = HashSet::from([agent]);
+        loop {
+            let next: Vec<AgentId> = self
+                .children_of(&hex)
+                .into_iter()
+                .filter(|child| done.insert(*child))
+                .collect();
+            if next.is_empty() {
+                return Ok(copied);
+            }
+            for child in next {
+                match self.mirror_record(node, &hex, child).await {
+                    Ok(count) => copied += count,
+                    Err(err) => {
+                        tracing::debug!(%agent, %child, error = %err, "could not copy a spawned agent's record");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Copy what `node` committed for `agent` since the local head. Agents
+    /// a copied page names as spawned by `agent` are copied with placed
+    /// agent `root` from then on. Returns the entries copied.
+    async fn mirror_record(
+        &self,
+        node: &NodeClient,
+        root: &str,
+        agent: AgentId,
+    ) -> CloudResult<usize> {
         // One mirror per agent at a time: two racing copies of the same
         // page would have the loser refused by the store.
         let gate = Arc::clone(self.mirrors.lock().entry(agent).or_default());
@@ -1646,7 +1719,10 @@ impl CloudHub {
             }
             match replica::apply_page(&sink, agent, &page) {
                 Ok(0) => break Ok(copied),
-                Ok(applied) => copied += applied,
+                Ok(applied) => {
+                    copied += applied;
+                    self.adopt(root, persist::spawned_by(agent, &page));
+                }
                 Err(err) => break Err(err),
             }
         };
@@ -1725,19 +1801,23 @@ impl CloudHub {
         }
     }
 
-    /// Copy `agent`'s record before its machine sleeps, so a machine that
-    /// never wakes again leaves nothing behind. A copy that fails is
-    /// only logged: the entries stay on the machine's disk and are copied
-    /// when it next wakes.
+    /// Copy what `agent`'s machine holds before it sleeps, so a machine
+    /// that never wakes again leaves little behind. A copy that fails is
+    /// only logged: it all stays on the machine's disk and is copied when
+    /// it next wakes.
     async fn copy_before_sleep(&self, agent: AgentId) {
-        match tokio::time::timeout(COPY_BEFORE_SLEEP, self.mirror(agent)).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(err)) => {
-                tracing::warn!(%agent, error = %err, "could not copy the record before the machine slept");
+        let node = match self.node(&agent.to_hex()) {
+            Ok(node) => node,
+            Err(err) => {
+                tracing::warn!(%agent, error = %err, "could not reach the machine to copy it before it slept");
+                return;
             }
-            Err(_) => {
-                tracing::warn!(%agent, "copying the record before the machine slept took too long");
-            }
+        };
+        if tokio::time::timeout(COPY_BEFORE_SLEEP, self.persist(&node, agent))
+            .await
+            .is_err()
+        {
+            tracing::warn!(%agent, "copying before the machine slept took too long");
         }
     }
 
@@ -1762,16 +1842,38 @@ impl CloudHub {
         boot.fact("machine", placed.machine.clone());
         boot.fact("project folder", placed.project_dir.display().to_string());
         if self.fleet.view(&hex).is_none() {
-            // The machine is gone (deleted outside aura): the record the
-            // mirror already holds is all there is.
+            // The machine is gone (deleted outside aura): what was copied
+            // already is all there is, with the changes saved at its last
+            // sleep.
+            let outcome = match self.saved_patch(&hex) {
+                Some(saved) => {
+                    boot.fact(
+                        "changes from",
+                        format!(
+                            "its last sleep, {} ago",
+                            aura_ui_terminal::host::format_duration(
+                                now_ms().saturating_sub(saved.saved_ms) / 1000
+                            )
+                        ),
+                    );
+                    self.apply_patch(
+                        &hex,
+                        &placed.project_dir,
+                        &saved.patch.patch,
+                        saved.patch.files,
+                    )
+                    .await
+                }
+                None => PatchOutcome::Saved {
+                    path: self.home.join(&hex),
+                    reason: format!(
+                        "machine {} no longer exists; its unsynced work is lost",
+                        placed.machine
+                    ),
+                },
+            };
             self.forget_placement(&hex, &placed.project);
-            return Ok(PullOutcome::patch_only(PatchOutcome::Saved {
-                path: self.home.join(&hex),
-                reason: format!(
-                    "machine {} no longer exists; its unsynced work is lost",
-                    placed.machine
-                ),
-            }));
+            return Ok(PullOutcome::patch_only(outcome));
         }
         boot.plan(&[
             BootStage::Seal,
@@ -1800,6 +1902,18 @@ impl CloudHub {
                     op: "recall",
                     message: format!("copied up to {local} of {} entries", sealed.head_seq),
                 });
+            }
+            // The whole session and its runs, so the agent resumes here
+            // with its tool calls; without them it resumes from the record.
+            match self.copy_session(&node, agent).await {
+                Ok(true) => boot.fact("session", "copied"),
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::warn!(agent = %hex, error = %err, "could not copy the session checkpoint");
+                }
+            }
+            if let Err(err) = self.copy_traces(&node, agent).await {
+                tracing::warn!(agent = %hex, error = %err, "could not copy the trace runs");
             }
             Ok(())
         })
@@ -1873,6 +1987,10 @@ impl CloudHub {
     fn forget_placement(&self, hex: &str, project: &str) {
         self.placements.lock().agents.remove(hex);
         self.save_placements();
+        self.forget_saved_patch(hex);
+        if let Ok(agent) = AgentId::from_hex(hex) {
+            self.sync.lock().remove(&agent);
+        }
         self.directory.remove(hex);
         self.send_directories(project);
         if let Some(link) = self.links.lock().remove(hex) {
@@ -1903,6 +2021,7 @@ impl CloudHub {
             // The machine keeps working; the next pull starts from what
             // this one took.
             self.mark_pulled(&hex, tree.as_deref()).await;
+            self.saved_patch_pulled(agent);
         }
         let commits = self.fetch_commits(&hex, &placed).await;
         Ok(PullOutcome {
@@ -2180,6 +2299,13 @@ impl CloudHub {
             }));
             if let Err(err) = hub.mirror_from(&node, agent).await {
                 tracing::warn!(agent = %hex, error = %err, "could not copy the turn's record");
+            }
+            // The machine stays awake for these: the guard is still held.
+            if let Err(err) = hub.copy_session(&node, agent).await {
+                tracing::debug!(agent = %hex, error = %err, "could not copy the session checkpoint");
+            }
+            if let Err(err) = hub.copy_traces(&node, agent).await {
+                tracing::debug!(agent = %hex, error = %err, "could not copy the trace runs");
             }
             drop(guard);
             if let Err(err) = turn {
@@ -2770,9 +2896,18 @@ async fn run_link_socket(
                             let _ = sink.send(Message::Text(ack.to_text().into())).await;
                         }
                         MeshFrame::HostStats(stats) => hub.track(hex, stats),
-                        // Only the link's agent is copied from its node.
-                        MeshFrame::RecordCommitted { agent_id, .. } if agent_id == hex => {
-                            if let Ok(agent) = AgentId::from_hex(hex) {
+                        // Only the link's agent, and the agents it spawned
+                        // there, are copied from its node.
+                        MeshFrame::RecordCommitted { agent_id, head_seq } => {
+                            let Ok(agent) = AgentId::from_hex(hex) else { continue };
+                            if agent_id == hex {
+                                hub.note_head(agent, head_seq);
+                                hub.copy_soon(agent);
+                            } else if hub
+                                .children_of(hex)
+                                .iter()
+                                .any(|child| child.to_hex() == agent_id)
+                            {
                                 hub.copy_soon(agent);
                             }
                         }
@@ -3247,6 +3382,7 @@ mod tests {
             branch: branch.map(str::to_string),
             repo: None,
             fetched_tip: None,
+            children: Vec::new(),
         };
         hub.placements
             .lock()

@@ -9,7 +9,7 @@ use aura_agent::checkpoint::SessionCheckpoint;
 use aura_config::BoxdToken;
 use aura_core_protocol::cloud::{
     HostStats, MeshMail, SealResponse, SessionSaved, SessionStarted, SyncImport, SyncImported,
-    WorkspacePatch,
+    TracePage, WorkspacePatch,
 };
 use aura_core_types::{AgentId, RecordEntry};
 use aura_engine_cloud::{CloudError, CloudResult};
@@ -195,6 +195,35 @@ impl NodeClient {
             self.http
                 .put(format!("{}/v1/sync/session/{}", self.base, agent.to_hex()))
                 .json(checkpoint),
+        )
+        .await
+    }
+
+    /// `agent`'s current session on the node, if it has one.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails.
+    pub async fn session(&self, agent: AgentId) -> CloudResult<Option<SessionCheckpoint>> {
+        self.read(
+            "session",
+            self.http
+                .get(format!("{}/v1/sync/session/{}", self.base, agent.to_hex())),
+        )
+        .await
+    }
+
+    /// `agent`'s newest trace runs on the node, whole.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails.
+    pub async fn traces(&self, agent: AgentId) -> CloudResult<TracePage> {
+        self.read(
+            "traces",
+            self.http
+                .get(format!("{}/v1/sync/traces", self.base))
+                .query(&[("agent", agent.to_hex())]),
         )
         .await
     }

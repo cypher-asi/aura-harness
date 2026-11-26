@@ -6,8 +6,9 @@
 //! | `POST /v1/sync/import` | [`SyncImport`] | [`SyncImported`] |
 //! | `POST /v1/sync/seal/:agent_id` | none | [`SealResponse`] |
 //! | `PUT /v1/sync/session/:agent_id` | the agent's session checkpoint | [`SessionSaved`] |
+//! | `GET /v1/sync/session/:agent_id` | none | the agent's session checkpoint, or `null` |
 //! | `POST /v1/sync/session/:agent_id/new` | none | [`SessionStarted`] |
-//! | `GET /v1/sync/traces?since=` | none | [`TracePage`] |
+//! | `GET /v1/sync/traces?agent=` | none | [`TracePage`] |
 //! | `GET /v1/workspace/patch?base=` | none | [`WorkspacePatch`] |
 //! | `aura node claim --stdin` (over `Exec`) | [`NodeClaim`] | [`NodeClaimed`] |
 //!
@@ -77,10 +78,10 @@ pub struct RecordPage {
     pub head_seq: u64,
 }
 
-/// Trace runs written on a node since a point, opaque to the wire.
+/// An agent's trace runs on a node, opaque to the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TracePage {
-    /// Serialized trace runs, oldest first.
+    /// Whole runs, newest first.
     pub runs: Vec<serde_json::Value>,
     /// Pass as `since` for the next page.
     pub next_since: u64,

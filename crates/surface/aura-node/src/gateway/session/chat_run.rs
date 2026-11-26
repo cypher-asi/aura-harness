@@ -663,6 +663,7 @@ mod driver_tests {
             run_id: None,
             agent_host,
             sessions: None,
+            cloud: None,
         }
     }
 

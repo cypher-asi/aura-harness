@@ -164,6 +164,64 @@ pub fn summary(store: &TraceStore, run_id: &str) -> Result<Option<RunScorecard>,
         .and_then(|bytes| serde_json::from_slice(&bytes).ok()))
 }
 
+/// A whole run as one machine hands it to another (a cloud agent's
+/// machine to the hub): what [`load`] reads, plus the scorecard.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct RunCopy {
+    pub meta: RunMeta,
+    #[serde(default)]
+    pub steps: Vec<Step>,
+    #[serde(default)]
+    pub rewards: Vec<Reward>,
+    #[serde(default)]
+    pub records: Vec<RecordRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<RunScorecard>,
+}
+
+impl RunCopy {
+    /// Read `bundle` whole.
+    ///
+    /// # Errors
+    ///
+    /// The bundle's files can't be read.
+    pub fn read(bundle: &RunBundle) -> Result<Self, TraceError> {
+        Ok(Self {
+            meta: bundle.read_meta()?,
+            steps: bundle.read_steps()?,
+            rewards: bundle.read_rewards()?,
+            records: bundle.read_records()?,
+            summary: bundle.read_summary(),
+        })
+    }
+}
+
+/// Make `copy` what `store` holds for its run: an earlier copy of the
+/// same run is replaced, not added to.
+///
+/// # Errors
+///
+/// The earlier copy can't be removed.
+pub fn replace(store: &Arc<TraceStore>, copy: &RunCopy) -> Result<(), TraceError> {
+    let run_id = copy.meta.run_id.as_str();
+    store.delete_run(run_id)?;
+    let sink = DbSink::new(Arc::clone(store));
+    sink.meta(&copy.meta);
+    if !copy.steps.is_empty() {
+        sink.steps(run_id, &copy.steps);
+    }
+    if !copy.rewards.is_empty() {
+        sink.rewards(run_id, &copy.rewards);
+    }
+    if !copy.records.is_empty() {
+        sink.records(run_id, &copy.records);
+    }
+    if let Some(card) = &copy.summary {
+        sink.summary(run_id, card);
+    }
+    Ok(())
+}
+
 /// Copy `bundle` into `store`, returning the run as loaded.
 ///
 /// # Errors
@@ -253,5 +311,49 @@ mod tests {
         let loaded = latest_of(&store, "feed").unwrap().unwrap();
         assert_eq!(loaded.meta.run_id, rec.run_id());
         assert_eq!(loaded.steps.len(), 1);
+    }
+
+    #[test]
+    fn a_copied_run_replaces_its_earlier_copy() {
+        let home = tempfile::tempdir().unwrap();
+        let db = tempfile::tempdir().unwrap();
+        let store = store(db.path());
+        let mut meta = RunMeta::new("m", RunSource::Gateway);
+        meta.agent_id = Some("cloudy".into());
+        let rec = RunRecorder::start(home.path(), meta, TraceLevel::Decisions)
+            .unwrap()
+            .unwrap();
+        rec.begin_turn("first");
+        rec.on_record(&RecordRow {
+            seq: 1,
+            tx_type: "agent_msg".into(),
+            at_ms: 1,
+            tool_use_id: None,
+            tool: None,
+            verdict: None,
+            approver: None,
+            rule: None,
+            reason: None,
+            call: None,
+            route: None,
+        });
+        rec.end_turn(&AgentLoopResult::default());
+        rec.finish();
+
+        let wire = |copy: &RunCopy| -> RunCopy {
+            serde_json::from_value(serde_json::to_value(copy).unwrap()).unwrap()
+        };
+        replace(&store, &wire(&RunCopy::read(rec.bundle()).unwrap())).unwrap();
+        rec.begin_turn("second");
+        rec.end_turn(&AgentLoopResult::default());
+        rec.finish();
+        let copy = wire(&RunCopy::read(rec.bundle()).unwrap());
+        replace(&store, &copy).unwrap();
+
+        let loaded = latest_of(&store, "cloudy").unwrap().unwrap();
+        assert_eq!(loaded.meta.run_id, rec.run_id());
+        assert_eq!(loaded.steps.len(), 4);
+        assert_eq!(loaded.records.len(), 1, "rows are not added twice");
+        assert!(summary(&store, &rec.run_id()).unwrap().is_some());
     }
 }

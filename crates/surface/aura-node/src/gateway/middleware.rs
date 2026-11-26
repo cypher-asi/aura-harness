@@ -113,7 +113,9 @@ fn cloud_routes() -> Router<RouterState> {
         .route("/v1/sync/seal/:agent_id", post(cloud::sync_seal_handler))
         .route(
             "/v1/sync/session/:agent_id",
-            put(cloud::sync_session_put_handler).route_layer(import_limit),
+            put(cloud::sync_session_put_handler)
+                .get(cloud::sync_session_get_handler)
+                .route_layer(import_limit),
         )
         .route(
             "/v1/sync/session/:agent_id/new",

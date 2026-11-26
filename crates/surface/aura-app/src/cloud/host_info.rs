@@ -20,6 +20,8 @@ use aura_ui_terminal::host::{
     HostView, PlacementView,
 };
 
+use super::hub::SyncStatus;
+
 /// Facts every host has, from one sample.
 fn resource_sections(stats: &HostStats) -> Vec<HostSection> {
     let mut machine = HostSection {
@@ -423,6 +425,57 @@ pub fn add_git(view: &mut HostView, git: &GitFacts<'_>, now_ms: u64) {
     );
 }
 
+/// Add how current this computer's copy of a cloud agent is to its view,
+/// after its machine; a copy that is behind or failing is flagged.
+pub fn add_sync(view: &mut HostView, sync: &SyncStatus, now_ms: u64) {
+    let ago = |at: u64| format_duration(now_ms.saturating_sub(at) / 1000);
+    let copied = |at: Option<u64>| {
+        at.map_or_else(
+            || "not copied yet".to_string(),
+            |at| format!("copied {} ago", ago(at)),
+        )
+    };
+    let mut record = match sync.node_seq {
+        Some(node) if node > sync.copied_seq => {
+            format!("{} of {node} entries here", sync.copied_seq)
+        }
+        _ => format!("{} entries here", sync.copied_seq),
+    };
+    if sync.copied_ms.is_some() {
+        record.push_str(&format!(" · {}", copied(sync.copied_ms)));
+    }
+    if let Some(error) = &sync.error {
+        record.push_str(&format!(" · {error}"));
+    }
+    let mut facts = vec![HostFact {
+        warn: sync.behind(),
+        ..HostFact::new("Record", record)
+    }];
+    if sync.children > 0 {
+        facts.push(HostFact::new(
+            "Spawned",
+            format!("{} agents, copied with it", sync.children),
+        ));
+    }
+    facts.push(HostFact::new("Session", copied(sync.session_ms)));
+    facts.push(HostFact::new("Traces", copied(sync.traces_ms)));
+    facts.push(HostFact::new(
+        "Changes",
+        sync.patch_ms.map_or_else(
+            || "saved when the machine sleeps".to_string(),
+            |at| format!("saved at its last sleep, {} ago", ago(at)),
+        ),
+    ));
+    let at = view.sections.len().min(1);
+    view.sections.insert(
+        at,
+        HostSection {
+            title: "SYNC".into(),
+            facts,
+        },
+    );
+}
+
 /// One project row for a cloud agent; `owner` names the user it belongs
 /// to when the project has several.
 #[must_use]
@@ -653,6 +706,58 @@ mod tests {
         );
         assert!(view.actions.contains(&HostAction::Wake));
         assert!(view.as_of.is_some());
+    }
+
+    #[test]
+    fn the_sync_section_flags_an_agent_that_is_behind() {
+        let mut view = cloud_view(
+            AgentId::new([1; 32]),
+            &machine_view(VmState::Ready),
+            None,
+            None,
+            &[],
+        );
+        let current = SyncStatus {
+            copied_seq: 40,
+            copied_ms: Some(1_000),
+            node_seq: Some(40),
+            children: 2,
+            session_ms: Some(61_000),
+            ..SyncStatus::default()
+        };
+        add_sync(&mut view, &current, 121_000);
+        assert_eq!(view.sections[1].title, "SYNC", "right after MACHINE");
+        assert_eq!(
+            facts(&view, "SYNC"),
+            vec![
+                "Record: 40 entries here · copied 2m ago",
+                "Spawned: 2 agents, copied with it",
+                "Session: copied 1m ago",
+                "Traces: not copied yet",
+                "Changes: saved when the machine sleeps",
+            ]
+        );
+        assert!(!view.sections[1].facts[0].warn);
+
+        let behind = SyncStatus {
+            node_seq: Some(52),
+            error: Some("node unreachable".into()),
+            ..current
+        };
+        let mut view = cloud_view(
+            AgentId::new([1; 32]),
+            &machine_view(VmState::Ready),
+            None,
+            None,
+            &[],
+        );
+        add_sync(&mut view, &behind, 121_000);
+        let record = &view.sections[1].facts[0];
+        assert!(record.warn, "a copy that is behind is flagged");
+        assert_eq!(
+            record.value,
+            "40 of 52 entries here · copied 2m ago · node unreachable"
+        );
     }
 
     #[test]

@@ -168,6 +168,11 @@ impl Traces {
             .map(|run| Arc::clone(&run.recorder))
     }
 
+    /// The database runs are mirrored into, if any.
+    pub(crate) fn store(&self) -> Option<Arc<TraceStore>> {
+        self.store.clone()
+    }
+
     /// Finish the run of `agent`, so its next turn starts a new run.
     pub(crate) fn close(&self, agent: AgentId) {
         let run = lock(&self.live).remove(&agent);

@@ -797,7 +797,7 @@ async fn prepare_turn_context(
     let tools = session.tool_definitions.clone();
     let messages = session.messages.clone();
 
-    let recorder = helpers::trace_recorder(session, &config.model);
+    let recorder = helpers::trace_recorder(session, ctx, &config.model);
     if let Some(rec) = &recorder {
         rec.begin_turn(&msg.content);
         config.trace_blobs = rec.blob_store();
@@ -963,6 +963,7 @@ mod tests {
             run_id: None,
             agent_host,
             sessions: None,
+            cloud: None,
         }
     }
 

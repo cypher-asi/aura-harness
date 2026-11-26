@@ -303,6 +303,9 @@ async fn ensure_hub(
     if let Some(observer) = &state.hub.factory.record_observer {
         hub.attach_observer(Arc::clone(observer));
     }
+    if let Some(traces) = state.hub.traces.store() {
+        hub.attach_traces(traces);
+    }
     let keep: HashSet<String> = lock(&state.hub.registry)
         .agents()
         .iter()
@@ -561,6 +564,9 @@ async fn build_view(
                 &cloud.plan_status(&owner),
                 now,
             );
+            if let Some(sync) = cloud.sync_status(agent) {
+                host_info::add_sync(&mut view, &sync, now);
+            }
             if let Some(placed) = cloud.placed_agent(agent) {
                 if let Some(branch) = placed.branch.as_deref() {
                     let token = placed
@@ -692,8 +698,10 @@ pub(super) async fn handle_set_placement(
                 hub.set_project_default(project, Placement::Cloud);
             }
             state.cloud.shared.moving.lock().insert(agent);
-            // The local kernel must not write for it from here on.
+            // The local kernel must not write for it from here on, and
+            // its machine traces the conversation as a run of its own.
             state.idle.remove(&agent);
+            state.hub.traces.close(agent);
             let shared = Arc::clone(&state.cloud.shared);
             tokio::spawn(async move {
                 let (boot, events) = BootReporter::channel();

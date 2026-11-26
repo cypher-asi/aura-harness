@@ -986,24 +986,37 @@ pub(super) async fn forward_and_record(
     sink.flush_pending_delta().await;
 }
 
-/// Run trace of `session`, started on first use. `None` unless the
-/// operator set `AURA_TRACE`, or when the bundle can't be created.
+/// Run trace of `session`, started on first use. On a cloud node it is
+/// the agent's conversation run, kept across the runs the hub starts and
+/// copied back by it; elsewhere `None` unless the operator set
+/// `AURA_TRACE`. Also `None` when the bundle can't be created.
 pub(super) fn trace_recorder(
     session: &mut Session,
+    ctx: &WsContext,
     model: &str,
 ) -> Option<Arc<aura_agent_trace::RunRecorder>> {
-    if session.trace.is_none() && aura_config::trace().explicit {
-        let mut meta = aura_agent_trace::RunMeta::new(model, aura_agent_trace::RunSource::Gateway);
-        meta.workspace = session.workspace.display().to_string();
-        meta.mode = format!("{:?}", session.mode).to_lowercase();
-        meta.task_id = Some(
-            session
-                .aura_session_id
-                .clone()
-                .unwrap_or_else(|| session.session_id.clone()),
-        );
-        session.trace = aura_agent_trace::RunRecorder::start_default(meta);
+    if session.trace.is_some() {
+        return session.trace.clone();
     }
+    let cloud = ctx.cloud.as_ref().filter(|_| session.checkpoints.is_some());
+    if cloud.is_none() && !aura_config::trace().explicit {
+        return None;
+    }
+    let mut meta = aura_agent_trace::RunMeta::new(model, aura_agent_trace::RunSource::Gateway);
+    meta.workspace = session.workspace.display().to_string();
+    meta.mode = format!("{:?}", session.mode).to_lowercase();
+    session.trace = match cloud {
+        Some(cloud) => cloud.trace(session.agent_id, meta),
+        None => {
+            meta.task_id = Some(
+                session
+                    .aura_session_id
+                    .clone()
+                    .unwrap_or_else(|| session.session_id.clone()),
+            );
+            aura_agent_trace::RunRecorder::start_default(meta)
+        }
+    };
     session.trace.clone()
 }
 
@@ -1326,6 +1339,7 @@ mod tests {
             run_id: None,
             agent_host,
             sessions: None,
+            cloud: None,
         }
     }
 

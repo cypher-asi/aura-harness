@@ -6,8 +6,9 @@
 //! | `POST /v1/sync/import` | hub | seed an agent's record before it runs here |
 //! | `POST /v1/sync/seal/:agent_id` | hub | stop writing for an agent, report its final head |
 //! | `PUT /v1/sync/session/:agent_id` | hub | the conversation the agent's first run here continues |
+//! | `GET /v1/sync/session/:agent_id` | hub | the agent's current session checkpoint, to keep a copy |
 //! | `POST /v1/sync/session/:agent_id/new` | hub | start a new session (`/new`) |
-//! | `GET /v1/sync/traces` | hub | trace runs since a cursor |
+//! | `GET /v1/sync/traces?agent=` | hub | the agent's newest trace runs, whole |
 //! | `GET /v1/workspace/patch` | hub | the agent's work as a patch |
 //! | `POST /v1/mesh/mail` | hub, peers | one message for an agent here |
 //! | `WS /v1/mesh` | hub | mail both ways, directory, host stats, keep-alive |
@@ -58,6 +59,9 @@ const HOST_STATS_EVERY: Duration = Duration::from_secs(5);
 const HEAD_WATCH_EVERY: Duration = Duration::from_secs(1);
 /// Limit on a direct send to a peer node.
 const PEER_TIMEOUT: Duration = Duration::from_secs(15);
+/// Runs of an agent served per traces call: its open run and the ones
+/// before it, which may have changed since the hub's last copy.
+const TRACE_RUNS_SERVED: usize = 3;
 /// Most frames kept for the hub while its socket is down.
 const MAX_PENDING: usize = 1024;
 
@@ -355,7 +359,38 @@ pub(in crate::gateway) async fn sync_seal_handler(
     let claim = hold_claim(&state, agent).await?;
     let head_seq = state.store.get_head_seq(agent).map_err(storage)?;
     drop(claim);
+    // Its run is complete now; finishing it gives the hub's last copy
+    // the scorecard.
+    end_trace(&state, agent).await;
     Ok(Json(SealResponse { head_seq }))
+}
+
+/// Finish `agent`'s conversation run (file writes, off the runtime).
+async fn end_trace(state: &RouterState, agent: AgentId) {
+    let cloud = Arc::clone(&state.cloud);
+    let _ = tokio::task::spawn_blocking(move || cloud.end_trace(agent)).await;
+}
+
+/// `GET /v1/sync/session/:agent_id`: the agent's current session
+/// checkpoint here, or `null`; the hub keeps a copy in case the machine
+/// is lost. Served after a seal too, for Bring back.
+pub(in crate::gateway) async fn sync_session_get_handler(
+    State(state): State<RouterState>,
+    AxumPath(agent_hex): AxumPath<String>,
+) -> ApiResult<impl IntoResponse> {
+    let Some(sessions) = state.cloud.sessions().cloned() else {
+        return Err(not_cloud());
+    };
+    let agent = parse_agent(&agent_hex)?;
+    let checkpoint = tokio::task::spawn_blocking(move || sessions.load_current(agent))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not read the checkpoint: {e}"),
+            )
+        })?;
+    Ok(Json(checkpoint))
 }
 
 /// `PUT /v1/sync/session/:agent_id`: make `checkpoint` the agent's current
@@ -437,29 +472,51 @@ pub(in crate::gateway) async fn sync_session_new_handler(
             )
         })?;
     drop(claim);
+    end_trace(&state, agent).await;
     Ok(Json(SessionStarted {
         head_seq: started.entry.seq,
     }))
 }
 
 #[derive(Debug, Deserialize)]
-pub(in crate::gateway) struct SinceQuery {
+pub(in crate::gateway) struct TracesQuery {
     #[serde(default)]
     since: u64,
+    /// Whose runs; without it the page is empty.
+    #[serde(default)]
+    agent: Option<String>,
 }
 
-/// `GET /v1/sync/traces?since=`: trace runs are mirrored by the hub from
-/// the agents' records today, so this page is empty; the cursor is kept
-/// so the hub's loop needs no change when runs are served here.
+/// `GET /v1/sync/traces?agent=`: the agent's newest runs here, whole
+/// ([`aura_agent_trace::db::RunCopy`]), newest first. The hub replaces
+/// its copy of each, so a run that grew is sent again in full.
 pub(in crate::gateway) async fn sync_traces_handler(
     State(state): State<RouterState>,
-    Query(query): Query<SinceQuery>,
+    Query(query): Query<TracesQuery>,
 ) -> ApiResult<impl IntoResponse> {
     if !state.cloud.enabled() {
         return Err(not_cloud());
     }
+    let runs = match query.agent.as_deref() {
+        Some(hex) => {
+            let agent = parse_agent(hex)?;
+            let cloud = Arc::clone(&state.cloud);
+            tokio::task::spawn_blocking(move || cloud.runs_of(agent, TRACE_RUNS_SERVED))
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("could not read the runs: {e}"),
+                    )
+                })?
+                .iter()
+                .filter_map(|run| serde_json::to_value(run).ok())
+                .collect()
+        }
+        None => Vec::new(),
+    };
     Ok(Json(TracePage {
-        runs: Vec::new(),
+        runs,
         next_since: query.since,
     }))
 }
@@ -1223,6 +1280,67 @@ mod tests {
         .await;
         let (status, _) = call(&state, "POST", &uri, Some(NODE_TOKEN), None).await;
         assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn the_hub_gets_the_session_and_the_runs_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = cloud_state(dir.path());
+        claim(&state);
+        let agent = AgentId::new([12; 32]);
+        let uri = format!("/v1/sync/session/{}", agent.to_hex());
+        let (status, body) = call(&state, "GET", &uri, Some(NODE_TOKEN), None).await;
+        assert_eq!((status, body), (StatusCode::OK, serde_json::Value::Null));
+        import(&state, agent, 2).await;
+        let (status, _) = call(
+            &state,
+            "PUT",
+            &uri,
+            Some(NODE_TOKEN),
+            Some(json(&checkpoint(2))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let traces = |who: AgentId| format!("/v1/sync/traces?agent={}", who.to_hex());
+        let run = state
+            .cloud
+            .trace(
+                agent,
+                aura_agent_trace::RunMeta::new("m", aura_agent_trace::RunSource::Gateway),
+            )
+            .expect("run");
+        run.begin_turn("p1");
+        let (status, body) = call(&state, "GET", &traces(agent), Some(NODE_TOKEN), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let runs = body["runs"].as_array().cloned().unwrap_or_default();
+        assert_eq!(runs.len(), 1, "{body}");
+        assert_eq!(runs[0]["meta"]["agent_id"], agent.to_hex());
+        assert_eq!(
+            runs[0]["steps"].as_array().map(Vec::len),
+            Some(1),
+            "the open run is flushed first"
+        );
+        let other = traces(AgentId::new([13; 32]));
+        let (_, body) = call(&state, "GET", &other, Some(NODE_TOKEN), None).await;
+        assert_eq!(body["runs"], serde_json::json!([]));
+
+        call(
+            &state,
+            "POST",
+            &format!("/v1/sync/seal/{}", agent.to_hex()),
+            Some(NODE_TOKEN),
+            None,
+        )
+        .await;
+        let (status, body) = call(&state, "GET", &uri, Some(NODE_TOKEN), None).await;
+        assert_eq!(status, StatusCode::OK, "served after a seal: {body}");
+        assert_eq!(body["record_seq"], 2);
+        let (_, body) = call(&state, "GET", &traces(agent), Some(NODE_TOKEN), None).await;
+        assert!(
+            body["runs"][0]["summary"].is_object(),
+            "the sealed run is finished: {body}"
+        );
     }
 
     /// The next record hint the watcher sends within five seconds.

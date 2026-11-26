@@ -1,5 +1,6 @@
 //! A cloud node served in-process for the hub's tests: the real router
-//! over a store of its own, claimed the way a machine's node is.
+//! over a store of its own, claimed the way a machine's node is. Its
+//! workspace is `ws` in its folder.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -50,6 +51,7 @@ impl TestNode {
             config: NodeConfig {
                 cloud_node: true,
                 data_dir: dir.to_path_buf(),
+                workspace: Some(dir.join("ws")),
                 ..NodeConfig::default()
             },
             provider,

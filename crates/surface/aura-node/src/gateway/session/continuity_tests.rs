@@ -109,6 +109,7 @@ fn node(data_dir: &Path, store: &Arc<RocksStore>, provider: &Arc<Recording>) -> 
         run_id: None,
         agent_host,
         sessions: Some(Checkpoints::new(data_dir)),
+        cloud: None,
     }
 }
 
