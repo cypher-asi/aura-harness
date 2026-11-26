@@ -1029,6 +1029,18 @@ impl AgentHub {
         self.send_lists(lists, false).await;
     }
 
+    /// The lists again after records changed off the event loop (entries
+    /// copied from a cloud machine), leaving the agent on screen as is.
+    /// They are built on a blocking thread, as for a switch.
+    pub(crate) async fn refresh_agent_list(self: &Arc<Self>) {
+        let hub = Arc::clone(self);
+        let lists = tokio::task::spawn_blocking(move || hub.agent_lists_with_active()).await;
+        match lists {
+            Ok(lists) => self.send_lists(lists, false).await,
+            Err(e) => warn!(error = %e, "Could not build the agent lists"),
+        }
+    }
+
     async fn send_lists(&self, lists: AgentLists, with_active: bool) {
         for list in lists.commands {
             let _ = self.commands.send(list).await;

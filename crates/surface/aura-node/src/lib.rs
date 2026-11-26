@@ -197,9 +197,13 @@ pub mod test_support {
     pub use aura_engine::scheduler::Scheduler;
 
     /// Claim `state`'s cloud node with `claim`, as its claim socket does
-    /// at boot.
-    pub fn claim(state: &RouterState, claim: aura_core_protocol::cloud::NodeClaim, port: u16) {
-        state.cloud.apply_claim(claim, port);
+    /// at boot, answering as the socket answers.
+    pub fn claim(
+        state: &RouterState,
+        claim: aura_core_protocol::cloud::NodeClaim,
+        port: u16,
+    ) -> aura_core_protocol::cloud::NodeClaimed {
+        state.cloud.apply_claim(claim, port)
     }
 }
 

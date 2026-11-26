@@ -300,6 +300,9 @@ async fn ensure_hub(
     if let Some(checkpoints) = &state.hub.factory.checkpoints {
         hub.attach_sessions(checkpoints.clone());
     }
+    if let Some(observer) = &state.hub.factory.record_observer {
+        hub.attach_observer(Arc::clone(observer));
+    }
     let keep: HashSet<String> = lock(&state.hub.registry)
         .agents()
         .iter()
@@ -433,10 +436,13 @@ fn start_publisher(state: &mut LoopState<'_>) {
         let mut interval = tokio::time::interval(PUBLISH_EVERY);
         loop {
             interval.tick().await;
+            let cloud = shared.hub.lock().clone();
+            if cloud.as_ref().is_some_and(|cloud| cloud.take_copied()) {
+                hub.refresh_agent_list().await;
+            }
             let Some(agent) = hub.record_panel.get() else {
                 continue;
             };
-            let cloud = shared.hub.lock().clone();
             let current = auth.owner();
             let view =
                 build_view(&hub, cloud.as_ref(), &shared, agent, &current, &mut sampler).await;

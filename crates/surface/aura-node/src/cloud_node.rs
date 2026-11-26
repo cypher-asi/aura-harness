@@ -24,6 +24,9 @@
 //! - The agent's session checkpoints stay in the node's data directory
 //!   ([`CloudNode::sessions`]), so its conversation survives standby,
 //!   hibernation, a stopped machine and node restarts.
+//! - The hub is told whenever a hosted agent's record grows
+//!   ([`CloudNode::hosted`]); the hint carries no entries, the hub reads
+//!   and checks them itself.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -69,6 +72,8 @@ pub struct CloudNode {
     /// The claim's git settings, without the placeholder.
     git: RwLock<Option<GitClaim>>,
     sealed: RwLock<HashSet<AgentId>>,
+    /// Agents this node took a record or a run for since it started.
+    hosted: RwLock<HashSet<AgentId>>,
     workspace: Option<PathBuf>,
     /// Where git and `gh` look for their settings; `None` off the cloud.
     home: Option<PathBuf>,
@@ -104,6 +109,7 @@ impl CloudNode {
             claim: RwLock::new(None),
             git: RwLock::new(None),
             sealed: RwLock::new(HashSet::new()),
+            hosted: RwLock::new(HashSet::new()),
             workspace,
             home: config.cloud_node.then(dirs::home_dir).flatten(),
             sampler: Arc::new(Mutex::new(HostSampler::new(disk_path, manifest))),
@@ -249,6 +255,33 @@ impl CloudNode {
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(agent);
+    }
+
+    /// Note that this node holds `agent`'s record: the hub hears when it
+    /// grows. A no-op off a cloud machine.
+    pub fn host(&self, agent: AgentId) {
+        if self.enabled {
+            self.hosted
+                .write()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(agent);
+        }
+    }
+
+    /// The agents whose records this node writes: those it took a record
+    /// or a run for, less the sealed ones. Forgotten at a restart until
+    /// the hub's next import or run; the hub copies on reconnecting
+    /// anyway.
+    #[must_use]
+    pub fn hosted(&self) -> Vec<AgentId> {
+        let sealed = self.sealed.read().unwrap_or_else(PoisonError::into_inner);
+        self.hosted
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|agent| !sealed.contains(agent))
+            .copied()
+            .collect()
     }
 
     /// Sample this machine.

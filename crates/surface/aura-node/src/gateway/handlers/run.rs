@@ -35,14 +35,16 @@ pub(in crate::gateway) async fn run_start_handler(
         .partition_id
         .as_deref()
         .and_then(|id| aura_core_types::AgentId::from_hex(id).ok())
-        .filter(|agent| state.cloud.is_sealed(agent))
     {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("agent {agent} was handed back to its hub; this node no longer runs it"),
-            })),
-        ));
+        if state.cloud.is_sealed(&agent) {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("agent {agent} was handed back to its hub; this node no longer runs it"),
+                })),
+            ));
+        }
+        state.cloud.host(agent);
     }
     let auth_token =
         resolve_run_auth_token(req.auth_jwt.clone(), &headers, state.config.require_auth);

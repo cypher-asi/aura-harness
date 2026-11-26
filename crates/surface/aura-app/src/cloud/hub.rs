@@ -32,10 +32,12 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use aura_agent::checkpoint::Checkpoints;
+use aura_agent_kernel::RecordObserver;
 use aura_config::{BoxdToken, CloudConfig};
 pub use aura_core_auth::Owner;
 use aura_core_protocol::cloud::{
@@ -80,6 +82,11 @@ const POLL_EVERY: Duration = Duration::from_secs(30);
 const USAGE_EVERY: Duration = Duration::from_secs(300);
 /// How often a running agent's record is mirrored while a turn runs.
 const MIRROR_EVERY: Duration = Duration::from_secs(5);
+/// How often every awake machine's record is copied, for the hints a
+/// dropped socket lost.
+const SWEEP_EVERY: Duration = Duration::from_secs(60);
+/// Limit on the copy made before a machine sleeps.
+const COPY_BEFORE_SLEEP: Duration = Duration::from_secs(30);
 /// Cost samples kept per machine.
 const MAX_SAMPLES: usize = 720;
 /// Longest a turn may run on a node before the hub gives up on it.
@@ -382,6 +389,14 @@ pub struct CloudHub {
     links: Mutex<HashMap<String, Link>>,
     tracks: Mutex<HashMap<String, HostTrack>>,
     mirrors: Mutex<HashMap<AgentId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Agents with a background copy running, and whether another hint
+    /// came in while it ran ([`Self::copy_soon`]).
+    copies: Mutex<HashMap<AgentId, bool>>,
+    /// Sees every entry copied here, as it sees what local kernels write.
+    observer: Mutex<Option<Arc<dyn RecordObserver>>>,
+    /// Set when a copy brought entries, until the app looks
+    /// ([`Self::take_copied`]).
+    copied: AtomicBool,
     /// Users' plan tokens as boxd secrets; `None` until the app hands
     /// the hub its credentials.
     plans: Mutex<Option<Arc<PlanSync>>>,
@@ -507,6 +522,9 @@ impl CloudHub {
             links: Mutex::new(HashMap::new()),
             tracks: Mutex::new(HashMap::new()),
             mirrors: Mutex::new(HashMap::new()),
+            copies: Mutex::new(HashMap::new()),
+            observer: Mutex::new(None),
+            copied: AtomicBool::new(false),
             plans: Mutex::new(None),
             repos: Mutex::new(repos),
             sessions: Mutex::new(None),
@@ -573,6 +591,18 @@ impl CloudHub {
     /// `sessions`.
     pub fn attach_sessions(&self, sessions: Checkpoints) {
         *self.sessions.lock() = Some(sessions);
+    }
+
+    /// Show `observer` every entry copied from a node, so a cloud agent's
+    /// KERNEL tab and Gate follow it as they follow a local agent.
+    pub fn attach_observer(&self, observer: Arc<dyn RecordObserver>) {
+        *self.observer.lock() = Some(observer);
+    }
+
+    /// Whether a copy brought entries since the last call; the app then
+    /// lists the agents again.
+    pub fn take_copied(&self) -> bool {
+        self.copied.swap(false, Ordering::AcqRel)
     }
 
     /// Note that `agent` (hex) of `project`, named `name`, runs here, so
@@ -1597,18 +1627,116 @@ impl CloudHub {
         // page would have the loser refused by the store.
         let gate = Arc::clone(self.mirrors.lock().entry(agent).or_default());
         let _one = gate.lock().await;
-        let sink = StoreSink(Arc::clone(&self.store));
+        let sink = StoreSink {
+            store: Arc::clone(&self.store),
+            observer: self.observer.lock().clone(),
+        };
         let mut copied = 0;
-        loop {
-            let head = replica::ReplicaSink::head(&sink, agent)?;
-            let page = node.record(agent, head + 1).await?;
+        let result = loop {
+            let head = match replica::ReplicaSink::head(&sink, agent) {
+                Ok(head) => head,
+                Err(err) => break Err(err),
+            };
+            let page = match node.record(agent, head + 1).await {
+                Ok(page) => page,
+                Err(err) => break Err(err),
+            };
             if page.is_empty() {
-                return Ok(copied);
+                break Ok(copied);
             }
-            let applied = replica::apply_page(&sink, agent, &page)?;
-            copied += applied;
-            if applied == 0 {
-                return Ok(copied);
+            match replica::apply_page(&sink, agent, &page) {
+                Ok(0) => break Ok(copied),
+                Ok(applied) => copied += applied,
+                Err(err) => break Err(err),
+            }
+        };
+        if copied > 0 {
+            self.copied.store(true, Ordering::Release);
+        }
+        result
+    }
+
+    /// Copy `agent`'s record in the background. Hints that come in while
+    /// a copy runs fold into one more copy after it, so a busy node costs
+    /// at most two copies in flight per agent, and the caller (the mesh
+    /// socket) never waits on one.
+    fn copy_soon(self: &Arc<Self>, agent: AgentId) {
+        {
+            let mut copies = self.copies.lock();
+            if let Some(again) = copies.get_mut(&agent) {
+                *again = true;
+                return;
+            }
+            copies.insert(agent, false);
+        }
+        let hub = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                let Some(strong) = hub.upgrade() else { return };
+                if let Err(err) = strong.mirror(agent).await {
+                    tracing::debug!(%agent, error = %err, "could not copy a cloud agent's record");
+                }
+                let mut copies = strong.copies.lock();
+                match copies.get_mut(&agent) {
+                    Some(again) if *again => *again = false,
+                    _ => {
+                        copies.remove(&agent);
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Put the idle machines to sleep, copying each awake one's record
+    /// first; a machine that got work meanwhile stays up.
+    async fn sleep_idle_machines(&self) {
+        for due in self.fleet.idle_machines() {
+            if due.awake {
+                if let Ok(agent) = AgentId::from_hex(&due.agent) {
+                    self.copy_before_sleep(agent).await;
+                }
+            }
+            if self.fleet.sleep_idle(&due).await {
+                if let Some(link) = self.links.lock().get(&due.agent) {
+                    link.stop.cancel();
+                }
+            }
+        }
+    }
+
+    /// Copy every awake machine's record: hints are lost when a socket
+    /// drops, and an old node image sends none.
+    fn sweep(self: &Arc<Self>) {
+        let awake: Vec<String> = self
+            .placed()
+            .into_iter()
+            .map(|(hex, _)| hex)
+            .filter(|hex| {
+                self.fleet
+                    .view(hex)
+                    .is_some_and(|view| !view.state.is_asleep())
+            })
+            .collect();
+        for hex in awake {
+            if let Ok(agent) = AgentId::from_hex(&hex) {
+                self.copy_soon(agent);
+            }
+        }
+    }
+
+    /// Copy `agent`'s record before its machine sleeps, so a machine that
+    /// never wakes again leaves nothing behind. A copy that fails is
+    /// only logged: the entries stay on the machine's disk and are copied
+    /// when it next wakes.
+    async fn copy_before_sleep(&self, agent: AgentId) {
+        match tokio::time::timeout(COPY_BEFORE_SLEEP, self.mirror(agent)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(err)) => {
+                tracing::warn!(%agent, error = %err, "could not copy the record before the machine slept");
+            }
+            Err(_) => {
+                tracing::warn!(%agent, "copying the record before the machine slept took too long");
             }
         }
     }
@@ -2072,6 +2200,9 @@ impl CloudHub {
             what: "machine",
             name: hex.clone(),
         })?;
+        if !view.state.is_asleep() {
+            self.copy_before_sleep(agent).await;
+        }
         if let Some(link) = self.links.lock().remove(&hex) {
             link.stop.cancel();
         }
@@ -2512,17 +2643,17 @@ async fn maintain(hub: Weak<CloudHub>, stop: CancellationToken) {
     let mut poll = tokio::time::interval(POLL_EVERY);
     let mut usage = tokio::time::interval(USAGE_EVERY);
     let mut plans = tokio::time::interval(SYNC_EVERY);
+    let mut sweep = tokio::time::interval(SWEEP_EVERY);
     loop {
         tokio::select! {
             () = stop.cancelled() => return,
             _ = tick.tick() => {
                 let Some(hub) = hub.upgrade() else { return };
-                let slept = hub.fleet.tick().await;
-                for agent in slept {
-                    if let Some(link) = hub.links.lock().get(&agent) {
-                        link.stop.cancel();
-                    }
-                }
+                hub.sleep_idle_machines().await;
+            }
+            _ = sweep.tick() => {
+                let Some(hub) = hub.upgrade() else { return };
+                hub.sweep();
             }
             _ = poll.tick() => {
                 let Some(hub) = hub.upgrade() else { return };
@@ -2613,6 +2744,11 @@ async fn run_link_socket(
             let frame = hub.directory.frame_for(node.node(), project);
             let _ = sink.send(Message::Text(frame.to_text().into())).await;
         }
+        // What the node wrote while no socket was open (a wake, a
+        // reconnect) has no hint coming.
+        if let (Some(hub), Ok(agent)) = (hub.upgrade(), AgentId::from_hex(hex)) {
+            hub.copy_soon(agent);
+        }
         loop {
             tokio::select! {
                 () = stop.cancelled() => return,
@@ -2634,9 +2770,10 @@ async fn run_link_socket(
                             let _ = sink.send(Message::Text(ack.to_text().into())).await;
                         }
                         MeshFrame::HostStats(stats) => hub.track(hex, stats),
-                        MeshFrame::RecordCommitted { .. } => {
+                        // Only the link's agent is copied from its node.
+                        MeshFrame::RecordCommitted { agent_id, .. } if agent_id == hex => {
                             if let Ok(agent) = AgentId::from_hex(hex) {
-                                let _ = hub.mirror(agent).await;
+                                hub.copy_soon(agent);
                             }
                         }
                         MeshFrame::Ping { ms } => {
@@ -2719,6 +2856,9 @@ impl RemoteRouter for HubRouter {
 pub fn zns_agent(zns: &str) -> AgentId {
     agent_id_of(zns)
 }
+
+#[cfg(test)]
+mod e2e_tests;
 
 #[cfg(test)]
 mod tests {

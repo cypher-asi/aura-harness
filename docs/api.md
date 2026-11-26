@@ -137,7 +137,7 @@ Served only by a node started with `AURA_CLOUD_NODE=1` on a boxd machine (other 
 | GET | `/v1/sync/traces` | Trace runs since a cursor. |
 | GET | `/v1/workspace/patch` | The working tree's changes since the hub last pulled (`refs/aura/base`; `HEAD` on a machine without it) as a `WorkspacePatch`: `base_commit`, the binary `patch`, the changed `files`, and the `tree` it was taken from, which the hub marks as pulled once the patch applies. The agent's own index is not touched. |
 | POST | `/v1/mesh/mail` | One message for an agent on this node (from the hub or a peer). |
-| WS | `/v1/mesh` | The hub's socket: mail both ways, the project's directory, host stats, keep-alive. |
+| WS | `/v1/mesh` | The hub's socket: mail both ways, the project's directory, host stats, a hint when a hosted agent's record grows (`RecordCommitted`, which the hub answers by reading the record), keep-alive. |
 
 ## Limits
 

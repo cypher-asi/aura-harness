@@ -279,79 +279,19 @@ impl NodeClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cloud::test_node::TestNode;
     use aura_agent::checkpoint::SessionUsage;
-    use aura_core_protocol::cloud::NodeClaim;
     use aura_core_types::Transaction;
-    use aura_exec_tools::{ToolCatalog, ToolConfig};
-    use aura_model::{Message, MockProvider, ModelProvider};
-    use aura_node::test_support::{
-        claim, create_router, RouterState, RouterStateConfig, Scheduler,
-    };
-    use aura_node::NodeConfig;
-    use aura_store_db::{RocksStore, Store};
-    use std::sync::Arc;
+    use aura_model::Message;
 
     const NODE_TOKEN: &str = "node-token-for-tests-0123";
 
     /// A cloud node served in-process, claimed for a hub holding
     /// [`NODE_TOKEN`], and a client for it.
     async fn serve_node(dir: &std::path::Path) -> NodeClient {
-        let store: Arc<dyn Store> =
-            Arc::new(RocksStore::open(dir.join("db"), false).expect("store"));
-        let provider: Arc<dyn ModelProvider + Send + Sync> =
-            Arc::new(MockProvider::simple_response("ok"));
-        let scheduler = Arc::new(Scheduler::new(
-            store.clone(),
-            provider.clone(),
-            Vec::new(),
-            Vec::new(),
-            dir.join("ws"),
-            None,
-        ));
-        let state = RouterState::new(RouterStateConfig {
-            store,
-            scheduler,
-            config: NodeConfig {
-                cloud_node: true,
-                data_dir: dir.to_path_buf(),
-                ..NodeConfig::default()
-            },
-            provider,
-            tool_config: ToolConfig::default(),
-            catalog: Arc::new(ToolCatalog::new()),
-            domain_api: None,
-            automaton_controller: None,
-            automaton_bridge: None,
-            memory_manager: None,
-            skill_manager: None,
-            secrets_vault: None,
-            process_store: None,
-            trigger_registrar: None,
-            router_url: None,
-        });
-        claim(
-            &state,
-            NodeClaim {
-                node_id: "aura-test-0001".into(),
-                node_token: NODE_TOKEN.into(),
-                mesh_token: "mesh-token-for-tests-0123".into(),
-                seal: Vec::new(),
-                owner: None,
-                plans: Vec::new(),
-                git: None,
-            },
-            0,
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let base = format!("http://{}", listener.local_addr().expect("address"));
-        let app =
-            create_router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        NodeClient::new("aura-test-0001", base, BoxdToken::new(NODE_TOKEN))
+        let node = TestNode::serve(dir, "ok").await;
+        node.claim_for(NODE_TOKEN);
+        node.client(NODE_TOKEN)
     }
 
     fn checkpoint(record_seq: u64) -> SessionCheckpoint {

@@ -947,76 +947,106 @@ impl VmFleet {
     /// Put idle machines to sleep. Returns the agents whose machines
     /// went to sleep. Call it every few seconds.
     pub async fn tick(&self) -> Vec<String> {
-        let now = Instant::now();
-        let mut due: Vec<(String, MachineInfo, String, bool)> = Vec::new();
-        {
-            let machines = self.machines.lock();
-            for (agent, entry) in machines.iter() {
-                if entry.busy > 0 {
-                    continue;
-                }
-                let idle = now.saturating_duration_since(entry.idle_since);
-                let standby = !self.settings.idle_standby.is_zero()
-                    && entry.state == VmState::Ready
-                    && idle >= self.settings.idle_standby
-                    && (self.settings.idle_hibernate.is_zero()
-                        || idle < self.settings.idle_hibernate);
-                let hibernate = !self.settings.idle_hibernate.is_zero()
-                    && matches!(entry.state, VmState::Ready | VmState::Standby)
-                    && idle >= self.settings.idle_hibernate;
-                if hibernate || standby {
-                    due.push((
-                        agent.clone(),
-                        entry.machine.clone(),
-                        entry.ledger.clone(),
-                        hibernate,
-                    ));
-                }
-            }
-        }
         let mut slept = Vec::new();
-        for (agent, machine, ledger, hibernate) in due {
-            let (result, state, event, status) = if hibernate {
-                (
-                    self.provider.hibernate(&machine.name).await,
-                    VmState::Hibernated,
-                    VmEvent::Hibernated,
-                    MachineStatus::Hibernated,
-                )
-            } else {
-                (
-                    self.provider.standby(&machine.name).await,
-                    VmState::Standby,
-                    VmEvent::Standby,
-                    MachineStatus::Standby,
-                )
-            };
-            match result {
-                Ok(()) => {
-                    let mut info = machine.clone();
-                    info.status = status.clone();
-                    self.row(
-                        &ledger,
-                        &VmPayload {
-                            reason: Some("idle".into()),
-                            ..Self::base_row(event, &info)
-                        },
-                    );
-                    if let Some(entry) = self.machines.lock().get_mut(&agent) {
-                        // Work may have started while the call ran.
-                        if entry.busy == 0 {
-                            entry.state = state;
-                            entry.machine.status = status;
-                        }
-                    }
-                    slept.push(agent);
-                }
-                Err(err) => {
-                    tracing::warn!(machine = %machine.name, error = %err, "could not put an idle machine to sleep");
-                }
+        for due in self.idle_machines() {
+            if self.sleep_idle(&due).await {
+                slept.push(due.agent);
             }
         }
         slept
+    }
+
+    /// How `entry` should sleep now, if it should: `Some(true)` to
+    /// hibernate, `Some(false)` for standby.
+    fn sleep_due(&self, entry: &Entry, now: Instant) -> Option<bool> {
+        if entry.busy > 0 {
+            return None;
+        }
+        let idle = now.saturating_duration_since(entry.idle_since);
+        let hibernate = !self.settings.idle_hibernate.is_zero()
+            && matches!(entry.state, VmState::Ready | VmState::Standby)
+            && idle >= self.settings.idle_hibernate;
+        let standby = !self.settings.idle_standby.is_zero()
+            && entry.state == VmState::Ready
+            && idle >= self.settings.idle_standby
+            && !hibernate;
+        (hibernate || standby).then_some(hibernate)
+    }
+
+    /// The machines idle long enough to sleep now. Nothing changes until
+    /// [`Self::sleep_idle`], so the caller can save what they hold first.
+    #[must_use]
+    pub fn idle_machines(&self) -> Vec<IdleMachine> {
+        let now = Instant::now();
+        let machines = self.machines.lock();
+        let mut due: Vec<IdleMachine> = machines
+            .iter()
+            .filter_map(|(agent, entry)| {
+                self.sleep_due(entry, now).map(|hibernate| IdleMachine {
+                    agent: agent.clone(),
+                    hibernate,
+                    awake: entry.state == VmState::Ready,
+                })
+            })
+            .collect();
+        due.sort_by(|a, b| a.agent.cmp(&b.agent));
+        due
+    }
+
+    /// Put `due` to sleep, unless it is no longer idle (work came in
+    /// since [`Self::idle_machines`] listed it). Returns whether it went
+    /// to sleep.
+    pub async fn sleep_idle(&self, due: &IdleMachine) -> bool {
+        let (machine, ledger) = {
+            let machines = self.machines.lock();
+            let Some(entry) = machines.get(&due.agent) else {
+                return false;
+            };
+            if self.sleep_due(entry, Instant::now()) != Some(due.hibernate) {
+                return false;
+            }
+            (entry.machine.clone(), entry.ledger.clone())
+        };
+        let (result, state, event, status) = if due.hibernate {
+            (
+                self.provider.hibernate(&machine.name).await,
+                VmState::Hibernated,
+                VmEvent::Hibernated,
+                MachineStatus::Hibernated,
+            )
+        } else {
+            (
+                self.provider.standby(&machine.name).await,
+                VmState::Standby,
+                VmEvent::Standby,
+                MachineStatus::Standby,
+            )
+        };
+        match result {
+            Ok(()) => {
+                let mut info = machine.clone();
+                info.status = status.clone();
+                self.row(
+                    &ledger,
+                    &VmPayload {
+                        reason: Some("idle".into()),
+                        ..Self::base_row(event, &info)
+                    },
+                );
+                if let Some(entry) = self.machines.lock().get_mut(&due.agent) {
+                    // Work may have started while the call ran.
+                    if entry.busy == 0 {
+                        entry.state = state;
+                        entry.machine.status = status;
+                    }
+                }
+                true
+            }
+            Err(err) => {
+                tracing::warn!(machine = %machine.name, error = %err, "could not put an idle machine to sleep");
+                false
+            }
+        }
     }
 
     /// Re-read every machine from boxd: notice machines woken by a peer
@@ -1267,6 +1297,17 @@ impl VmFleet {
     pub fn has(&self, agent: &str) -> bool {
         self.machines.lock().contains_key(agent)
     }
+}
+
+/// A machine idle long enough to sleep ([`VmFleet::idle_machines`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdleMachine {
+    /// Agent, hex.
+    pub agent: String,
+    /// Hibernate rather than stand by.
+    pub hibernate: bool,
+    /// Awake now: what it wrote since its last copy is still only on it.
+    pub awake: bool,
 }
 
 /// Keeps a machine awake while work runs on it.
@@ -1705,6 +1746,36 @@ mod tests {
         drop(guard);
         tokio::time::sleep(Duration::from_millis(5)).await;
         assert_eq!(fleet.tick().await, vec!["bb".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_listed_machine_that_gets_work_stays_awake() {
+        let (fleet, fake, _) = fleet(Duration::from_millis(1));
+        fleet
+            .provision(request("aa", MachineOrigin::Fresh))
+            .await
+            .expect("aa");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let due = fleet.idle_machines();
+        assert_eq!(
+            due,
+            vec![IdleMachine {
+                agent: "aa".into(),
+                hibernate: true,
+                awake: true,
+            }]
+        );
+        let guard = fleet.begin_work("aa");
+        assert!(!fleet.sleep_idle(&due[0]).await, "work came in");
+        assert_eq!(
+            fake.machine("aura-re36-aa").expect("aa").status,
+            MachineStatus::Running
+        );
+        drop(guard);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(fleet.sleep_idle(&due[0]).await);
+        assert_eq!(fleet.view("aa").expect("aa").state, VmState::Hibernated);
+        assert!(fleet.idle_machines().is_empty(), "asleep already");
     }
 
     #[tokio::test]

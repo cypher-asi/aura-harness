@@ -24,7 +24,7 @@ use aura_agent::{
     CheckNotifier, CheckOutcome, CheckReport, CheckSource, KernelModelGateway, KernelToolGateway,
     PostEditCheck, PostEditCheckConfig,
 };
-use aura_agent_kernel::Kernel;
+use aura_agent_kernel::{Kernel, RecordObserver};
 use aura_core_types::{AgentId, Identity};
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::todo::{
@@ -204,6 +204,9 @@ pub struct KernelFactory {
     pub(super) checkpoints: Option<Checkpoints>,
     pub(super) file_checkpoints: Option<FileCheckpoints>,
     post_edit_check: Option<(PostEditCheckConfig, mpsc::Sender<UiCommand>)>,
+    /// What the kernels' record observer is; entries copied from cloud
+    /// machines go to it too
+    pub(super) record_observer: Option<Arc<dyn RecordObserver>>,
     /// Every agent's current task; the hub gives it a way to show them
     pub(crate) tasks: Arc<TaskBoard>,
     /// Prompt-cache scope of each agent whose kernel is scoped: a
@@ -223,6 +226,7 @@ impl KernelFactory {
             checkpoints: None,
             file_checkpoints: None,
             post_edit_check: None,
+            record_observer: None,
             tasks: Arc::default(),
             cache_salts: Mutex::default(),
             run_scratches: Mutex::default(),
@@ -298,6 +302,14 @@ impl KernelFactory {
     #[must_use]
     pub fn with_checkpoints(mut self, checkpoints: Checkpoints) -> Self {
         self.checkpoints = Some(checkpoints);
+        self
+    }
+
+    /// Note `observer`, the kernels' record observer, for the entries
+    /// copied from cloud machines.
+    #[must_use]
+    pub fn with_record_observer(mut self, observer: Option<Arc<dyn RecordObserver>>) -> Self {
+        self.record_observer = observer;
         self
     }
 

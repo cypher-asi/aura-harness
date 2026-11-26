@@ -53,6 +53,9 @@ const SEAL_DRAIN: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How often host stats go up the hub socket.
 const HOST_STATS_EVERY: Duration = Duration::from_secs(5);
+/// How often the hosted agents' heads are compared with what the hub
+/// was last told.
+const HEAD_WATCH_EVERY: Duration = Duration::from_secs(1);
 /// Limit on a direct send to a peer node.
 const PEER_TIMEOUT: Duration = Duration::from_secs(15);
 /// Most frames kept for the hub while its socket is down.
@@ -324,6 +327,7 @@ pub(in crate::gateway) async fn sync_import_handler(
             .append_replica_batch(agent, head + 1, fresh)
             .map_err(storage)?;
     }
+    state.cloud.host(agent);
     let head_seq = state.store.get_head_seq(agent).map_err(storage)?;
     Ok(Json(SyncImported { head_seq }))
 }
@@ -679,6 +683,11 @@ async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
             }
         })
     };
+    let heads = {
+        let tx = tx.clone();
+        let state = state.clone();
+        tokio::spawn(async move { watch_heads(&state, &tx).await })
+    };
 
     while let Some(Ok(message)) = stream.next().await {
         let WsMessage::Text(text) = message else {
@@ -711,6 +720,7 @@ async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
             _ => {}
         }
     }
+    heads.abort();
     stats.abort();
     writer.abort();
     let mut uplink = mesh.uplink.lock();
@@ -719,6 +729,32 @@ async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
         .is_some_and(|current| current.same_channel(&tx))
     {
         *uplink = None;
+    }
+}
+
+/// Tell the hub on `tx` whenever a hosted agent's record grows, so it
+/// copies the new entries while the machine is awake. The first look
+/// reports every head, which covers what was written while no socket
+/// was open.
+async fn watch_heads(state: &RouterState, tx: &mpsc::UnboundedSender<MeshFrame>) {
+    let mut told: HashMap<AgentId, u64> = HashMap::new();
+    loop {
+        for agent in state.cloud.hosted() {
+            let Ok(head) = state.store.get_head_seq(agent) else {
+                continue;
+            };
+            if told.insert(agent, head) == Some(head) {
+                continue;
+            }
+            let hint = MeshFrame::RecordCommitted {
+                agent_id: agent.to_hex(),
+                head_seq: head,
+            };
+            if tx.send(hint).is_err() {
+                return;
+            }
+        }
+        tokio::time::sleep(HEAD_WATCH_EVERY).await;
     }
 }
 
@@ -1187,6 +1223,43 @@ mod tests {
         .await;
         let (status, _) = call(&state, "POST", &uri, Some(NODE_TOKEN), None).await;
         assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    /// The next record hint the watcher sends within five seconds.
+    async fn next_hint(rx: &mut mpsc::UnboundedReceiver<MeshFrame>) -> Option<(String, u64)> {
+        match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+            Ok(Some(MeshFrame::RecordCommitted { agent_id, head_seq })) => {
+                Some((agent_id, head_seq))
+            }
+            _ => None,
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_hub_hears_when_a_hosted_record_grows() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = cloud_state(dir.path());
+        claim(&state);
+        let agent = AgentId::new([7; 32]);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let watcher = {
+            let state = state.clone();
+            tokio::spawn(async move { watch_heads(&state, &tx).await })
+        };
+        assert_eq!(next_hint(&mut rx).await, None, "nothing hosted yet");
+
+        import(&state, agent, 2).await;
+        assert_eq!(next_hint(&mut rx).await, Some((agent.to_hex(), 2)));
+        assert_eq!(next_hint(&mut rx).await, None, "said once per head");
+        import(&state, agent, 3).await;
+        assert_eq!(next_hint(&mut rx).await, Some((agent.to_hex(), 3)));
+
+        state.cloud.seal(agent);
+        assert!(
+            state.cloud.hosted().is_empty(),
+            "a sealed agent is not watched"
+        );
+        watcher.abort();
     }
 
     #[tokio::test]

@@ -18,5 +18,7 @@ pub mod node_client;
 pub mod plans;
 pub mod setup;
 pub mod store;
+#[cfg(test)]
+pub(crate) mod test_node;
 
 pub use hub::{CloudHub, CommitsOutcome, PatchOutcome, PlaceRequest, PullOutcome, RemoteEvent};

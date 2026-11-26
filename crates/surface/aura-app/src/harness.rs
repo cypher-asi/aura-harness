@@ -305,6 +305,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
 
     let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
     let file_checkpoints = crate::file_checkpoints::FileCheckpoints::new(&data_dir);
+    let copied_observer = record_observer.clone();
     let factory_files = file_checkpoints.clone();
     let diff_commands = commands.clone();
     let check_commands = commands.clone();
@@ -374,6 +375,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
             .with_checkpoints(checkpoints)
             .with_file_checkpoints(file_checkpoints)
             .with_post_edit_check(post_edit_check, check_commands)
+            .with_record_observer(copied_observer)
         },
     );
     Harness { hub, background }
