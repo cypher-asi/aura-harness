@@ -67,7 +67,7 @@ const RESTORE_CURSOR: &[u8] = b"\x1b8";
 /// Invariant: the value is determined by [`detect`] and never changes at
 /// runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Protocol {
+pub enum Protocol {
     /// Kitty graphics protocol (APC `\x1b_G…\x1b\\`).
     Kitty,
     /// No graphics protocol; use the half-block Unicode fallback.
@@ -76,7 +76,7 @@ pub(crate) enum Protocol {
 
 impl Protocol {
     /// Whether this is [`Protocol::Kitty`].
-    pub(crate) fn is_kitty(self) -> bool {
+    pub fn is_kitty(self) -> bool {
         matches!(self, Self::Kitty)
     }
 }
@@ -107,7 +107,7 @@ impl Protocol {
 /// the protocol (Konsole, Rio, …) are not verified for both and could
 /// leave corrupted or stacked images, so they are left out; foot only
 /// supports sixel. `AURA_IMAGE_PROTOCOL=kitty` still turns it on for them.
-pub(crate) fn detect(vars: impl Fn(&str) -> Option<String>) -> Protocol {
+pub fn detect(vars: impl Fn(&str) -> Option<String>) -> Protocol {
     // Explicit overrides always win.
     match vars("AURA_IMAGE_PROTOCOL").as_deref() {
         Some("kitty") => return Protocol::Kitty,
@@ -146,7 +146,7 @@ pub(crate) fn detect(vars: impl Fn(&str) -> Option<String>) -> Protocol {
 /// placement, so one image shown in two slots at once is two placements
 /// that never replace each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum PlacementSlot {
+pub enum PlacementSlot {
     /// A thumbnail under a chat message.
     ChatThumbnail,
     /// A thumbnail in the strip of images waiting in the input.
@@ -169,7 +169,7 @@ impl PlacementSlot {
 
 /// One image wanted on screen this frame.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Placement<'a> {
+pub struct Placement<'a> {
     /// Stable per-image identifier (from `ImagePreview::id`).
     pub image_id: u32,
     /// Where in the UI the image is shown.
@@ -259,7 +259,7 @@ pub(crate) fn transmit(id: u32, placement: u32, png: &[u8], cols: u16, rows: u16
 ///   [`GraphicsState::sync`] it is diffed against `wanted` to decide what
 ///   to delete, re-place, or transmit+display.
 /// - Both are empty when [`Protocol::None`]; `sync` is a no-op.
-pub(crate) struct GraphicsState {
+pub struct GraphicsState {
     protocol: Protocol,
     /// Image ids whose PNG data the terminal has already received.
     transmitted: HashSet<u32>,
@@ -269,7 +269,7 @@ pub(crate) struct GraphicsState {
 
 impl GraphicsState {
     /// Create a new state using the given protocol.
-    pub(crate) fn new(protocol: Protocol) -> Self {
+    pub fn new(protocol: Protocol) -> Self {
         Self {
             protocol,
             transmitted: HashSet::new(),
@@ -278,7 +278,7 @@ impl GraphicsState {
     }
 
     /// Protocol this state was created for.
-    pub(crate) fn protocol(&self) -> Protocol {
+    pub fn protocol(&self) -> Protocol {
         self.protocol
     }
 
@@ -303,11 +303,7 @@ impl GraphicsState {
     /// The cursor is saved before and restored after any output, so the
     /// caret stays where ratatui put it. When `Protocol::None` this method
     /// returns immediately without writing anything.
-    pub(crate) fn sync(
-        &mut self,
-        out: &mut impl Write,
-        wanted: &[Placement<'_>],
-    ) -> io::Result<()> {
+    pub fn sync(&mut self, out: &mut impl Write, wanted: &[Placement<'_>]) -> io::Result<()> {
         if !self.protocol.is_kitty() {
             return Ok(());
         }

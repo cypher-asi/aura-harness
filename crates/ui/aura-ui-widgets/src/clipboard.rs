@@ -19,7 +19,7 @@ const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/we
 
 /// What the clipboard holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Clipboard {
+pub enum Clipboard {
     /// Image bytes, as the clipboard tool gave them
     Image(Vec<u8>),
     /// Text
@@ -32,7 +32,7 @@ pub(crate) enum Clipboard {
 ///
 /// # Errors
 /// Returns an error when no clipboard tool is available or it fails.
-pub(crate) fn read() -> io::Result<Clipboard> {
+pub fn read() -> io::Result<Clipboard> {
     if let Some(image) = read_image()? {
         return Ok(Clipboard::Image(image));
     }
@@ -226,7 +226,7 @@ fn capture(program: &str, args: &[&str]) -> io::Result<Vec<u8>> {
 ///
 /// # Errors
 /// Returns the error from writing the escape to `out`.
-pub(crate) fn copy(out: &mut impl Write, text: &str) -> io::Result<()> {
+pub fn copy(out: &mut impl Write, text: &str) -> io::Result<()> {
     out.write_all(osc52(text).as_bytes())?;
     out.flush()?;
     copy_with_system_tool(text);

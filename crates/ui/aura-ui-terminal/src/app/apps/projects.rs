@@ -345,7 +345,7 @@ impl App {
             return Some(HoverTarget::AddToProject(index));
         }
         if let Some((button, _)) = self.agent_button_hit(index, column) {
-            return Some(button.target(index));
+            return Some(HoverTarget::agent_button(button, index));
         }
         Some(HoverTarget::ProjectRow(index))
     }

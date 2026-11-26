@@ -253,7 +253,7 @@ fn alias(token: &str) -> &str {
 
 /// The syntax for a language name or file extension (`rust`, `rs`,
 /// `typescript`, `tsx`, `yml`, `zsh`, ...), if one is known.
-pub(crate) fn syntax_for_token(token: &str) -> Option<&'static SyntaxReference> {
+pub fn syntax_for_token(token: &str) -> Option<&'static SyntaxReference> {
     let token = token.trim();
     if token.is_empty() {
         return None;
@@ -268,7 +268,7 @@ pub(crate) fn syntax_for_token(token: &str) -> Option<&'static SyntaxReference> 
 /// `.bashrc`), then its extension, then the part of the name before the
 /// first dot (`Dockerfile.dev`), then its first line (shebang, `<?xml`).
 /// Unknown files get plain text.
-pub(crate) fn syntax_for_path(path: &Path, first_line: &str) -> &'static SyntaxReference {
+pub fn syntax_for_path(path: &Path, first_line: &str) -> &'static SyntaxReference {
     let set = syntax_set();
     let name = path
         .file_name()
@@ -369,14 +369,14 @@ pub(crate) fn token_spans(tokens: &[Token], theme: &Theme) -> Vec<Span<'static>>
 /// Highlights consecutive lines of one source, carrying state (block
 /// comments, multi-line strings, embedded languages) from line to line.
 #[derive(Debug, Clone)]
-pub(crate) struct LineHighlighter {
+pub struct LineHighlighter {
     /// `None` for plain text, which skips parsing.
     state: Option<LineState>,
 }
 
 impl LineHighlighter {
     /// A highlighter at the start of a `syntax` source.
-    pub(crate) fn new(syntax: &SyntaxReference) -> Self {
+    pub fn new(syntax: &SyntaxReference) -> Self {
         Self {
             state: (!is_plain(syntax)).then(|| LineState::new(syntax)),
         }
@@ -392,17 +392,13 @@ impl LineHighlighter {
     }
 
     /// The spans of the next line under `theme`.
-    pub(crate) fn spans(&mut self, line: &str, theme: &Theme) -> Vec<Span<'static>> {
+    pub fn spans(&mut self, line: &str, theme: &Theme) -> Vec<Span<'static>> {
         token_spans(&self.tokens(line), theme)
     }
 }
 
 /// Highlight one line of `syntax` on its own, without earlier context.
-pub(crate) fn highlight_line(
-    syntax: &SyntaxReference,
-    line: &str,
-    theme: &Theme,
-) -> Vec<Span<'static>> {
+pub fn highlight_line(syntax: &SyntaxReference, line: &str, theme: &Theme) -> Vec<Span<'static>> {
     LineHighlighter::new(syntax).spans(line, theme)
 }
 
@@ -417,7 +413,7 @@ pub(crate) fn highlight_line(
 /// The cache is keyed by the syntax and line count it was built for and
 /// resets itself when asked about anything else.
 #[derive(Default)]
-pub(crate) struct HighlightCache {
+pub struct HighlightCache {
     inner: Option<CacheState>,
 }
 
@@ -435,7 +431,7 @@ impl HighlightCache {
     /// Spans of `lines[range]`, highlighted as `syntax` in the context of
     /// every line above them. `prepare` turns a raw line into the text to
     /// highlight (e.g. tab expansion); the spans concatenate to it.
-    pub(crate) fn spans(
+    pub fn spans(
         &mut self,
         syntax: &'static SyntaxReference,
         lines: &[&str],

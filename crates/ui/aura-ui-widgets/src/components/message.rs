@@ -10,9 +10,9 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::image_preview::ImagePreview;
+use super::image_preview::ImagePreview;
 use crate::components::{Activity, BootConsole, LiveOutput};
-use crate::events::{CallUsage, FileDiffData, MessageRole, SourceUsage};
+use aura_ui::events::{CallUsage, FileDiffData, MessageRole, SourceUsage};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -164,7 +164,7 @@ impl Message {
     /// keeps the lines laid out for it; `revision` says what it was built
     /// from.
     #[must_use]
-    pub(crate) fn post(
+    pub fn post(
         (id, revision): (u64, u64),
         role: MessageRole,
         author: String,

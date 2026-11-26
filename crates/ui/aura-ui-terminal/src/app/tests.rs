@@ -1,5 +1,7 @@
 use super::*;
-use crate::components::{Activity, Message, MessageRole, ToolStatus, ToolStep};
+use crate::components::{
+    agent_button_offset, Activity, Message, MessageRole, ToolStatus, ToolStep,
+};
 use crate::events::{ActivityData, CallUsage, MessageData, ModelOptionView, UiCommand, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;

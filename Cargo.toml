@@ -72,6 +72,7 @@ members = [
     "crates/engine/aura-engine-registry",
     "crates/engine/aura-engine",
     "crates/ui/aura-ui",
+    "crates/ui/aura-ui-widgets",
     "crates/ui/aura-ui-terminal",
     "crates/surface/aura-app",
     "crates/surface/aura-node",
@@ -95,6 +96,9 @@ opt-level = 2
 opt-level = 1
 
 [profile.dev.package.aura-ui]
+opt-level = 1
+
+[profile.dev.package.aura-ui-widgets]
 opt-level = 1
 
 # Opening an agent decodes up to a thousand of its newest record entries

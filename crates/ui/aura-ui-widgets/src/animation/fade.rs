@@ -5,7 +5,7 @@
 //! read the cells' text before the fade (prose rows, copy) stays valid.
 
 use super::{mix, rgb};
-use crate::Theme;
+use crate::themes::Theme;
 use ratatui::{buffer::Buffer, layout::Rect, style::Color, text::Line};
 
 /// `color` drawn `part / whole` of the way from `from` to it. Colours with
@@ -16,7 +16,7 @@ fn toward(from: (u8, u8, u8), color: Color, (part, whole): (usize, usize)) -> Co
 
 /// `lines` drawn `progress` (`part / whole`) of the way from the
 /// background to their colours.
-pub(crate) fn fade_in(lines: &mut [Line<'static>], progress: (usize, usize), theme: &Theme) {
+pub fn fade_in(lines: &mut [Line<'static>], progress: (usize, usize), theme: &Theme) {
     let Some(from) = rgb(theme.colors.background) else {
         return;
     };
@@ -31,7 +31,7 @@ pub(crate) fn fade_in(lines: &mut [Line<'static>], progress: (usize, usize), the
 /// The cells of `area` in `buf` drawn `progress` (`part / whole`) of the
 /// way from the background to their colours, for content already drawn.
 /// Cells outside the buffer are skipped.
-pub(crate) fn fade_area(buf: &mut Buffer, area: Rect, progress: (usize, usize), theme: &Theme) {
+pub fn fade_area(buf: &mut Buffer, area: Rect, progress: (usize, usize), theme: &Theme) {
     let Some(from) = rgb(theme.colors.background) else {
         return;
     };

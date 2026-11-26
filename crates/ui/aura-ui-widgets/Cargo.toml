@@ -1,0 +1,38 @@
+[package]
+name = "aura-ui-widgets"
+description = "Terminal widgets, themes, graphics and animation for the AURA terminal UI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+aura-ui = { path = "../aura-ui" }
+
+# TUI Framework
+ratatui = { workspace = true }
+
+# Serialization (for themes)
+serde = { workspace = true }
+
+# Time handling
+chrono = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+
+# Unicode display width
+unicode-width = { workspace = true }
+
+# Syntax highlighting (pure-Rust regex engine)
+syntect = { workspace = true }
+two-face = { workspace = true }
+similar = "2"
+base64 = { workspace = true }
+image = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

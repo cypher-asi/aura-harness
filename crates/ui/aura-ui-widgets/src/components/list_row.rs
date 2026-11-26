@@ -2,9 +2,9 @@
 //! optional badge and detail, and a time or code at the right end, on
 //! the row's selected, hovered or plain colors.
 
+use super::{AgentButton, AgentRowEnd};
 use crate::animation::AURA_WIDTH;
-use crate::app::{AgentButton, AgentRowEnd};
-use crate::Theme;
+use crate::themes::Theme;
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -16,13 +16,13 @@ fn display_width(text: &str) -> usize {
 }
 
 /// What sits in the icon column of a projects-list row.
-pub(crate) struct StatusIcon {
+pub struct StatusIcon {
     glyph: String,
     color: Color,
 }
 
 impl StatusIcon {
-    pub(crate) fn new(glyph: &str, color: Color) -> Self {
+    pub fn new(glyph: &str, color: Color) -> Self {
         Self {
             glyph: glyph.to_string(),
             color,
@@ -34,7 +34,7 @@ impl StatusIcon {
 /// one) from one panel border to the other. The icon column is wide enough
 /// for the aura ring, so names line up whatever icon a row shows. `depth`
 /// indents the row two columns per level.
-pub(crate) fn list_row<'a>(
+pub fn list_row<'a>(
     width: usize,
     depth: usize,
     icon: StatusIcon,
@@ -48,7 +48,7 @@ pub(crate) fn list_row<'a>(
 /// [`list_row`] with an optional `detail` drawn muted after the name. The
 /// detail is cut first when the row is too narrow, and dropped when fewer
 /// than four columns are left for it.
-pub(crate) fn list_row_with_detail<'a>(
+pub fn list_row_with_detail<'a>(
     width: usize,
     depth: usize,
     icon: StatusIcon,
@@ -68,7 +68,7 @@ pub(crate) fn list_row_with_detail<'a>(
 
 /// [`list_row_with_detail`] ending in `end` instead of a time, as roster
 /// rows end in their abbreviation.
-pub(crate) fn list_row_ending<'a>(
+pub fn list_row_ending<'a>(
     width: usize,
     depth: usize,
     icon: StatusIcon,
@@ -91,7 +91,7 @@ pub(crate) fn list_row_ending<'a>(
 /// [`list_row_with_detail`] led by `fold`, a fold arrow or a blank, drawn
 /// in its own color before the icon, as the benchmark timeline leads its
 /// rows: ` ▾ ✓  name  detail   time `.
-pub(crate) fn fold_row<'a>(
+pub fn fold_row<'a>(
     width: usize,
     (fold, color): (&str, Color),
     icon: StatusIcon,
@@ -124,8 +124,8 @@ pub(crate) fn fold_row<'a>(
 /// spawn with no icon has its elbow run on through the icon column. The
 /// `badge`, if any, is drawn right after the name (see [`RowBadge`]). The
 /// `buttons`, each with its color, are drawn left of `end`, the time,
-/// where `app::agent_button_offset` says they are.
-pub(crate) fn tree_row<'a>(
+/// where `agent_button_offset` says they are.
+pub fn tree_row<'a>(
     width: usize,
     (guides, color): (&str, Color),
     icon: StatusIcon,
@@ -153,7 +153,7 @@ pub(crate) fn tree_row<'a>(
 }
 
 /// What an agent row says after its name when the agent is in plan mode.
-pub(crate) const PLAN_BADGE: &str = " (P)";
+pub const PLAN_BADGE: &str = " (P)";
 
 /// The fewest name columns a row keeps beside its badge; narrower rows
 /// drop the badge instead.
@@ -163,9 +163,9 @@ const MIN_NAME_BESIDE_BADGE: usize = 2;
 /// it keeps on selected and hovered rows. The name is cut to make room for
 /// it, so it stays visible after a long name.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RowBadge<'a> {
-    pub(crate) text: &'a str,
-    pub(crate) color: Color,
+pub struct RowBadge<'a> {
+    pub text: &'a str,
+    pub color: Color,
 }
 
 /// The text of a projects-list row: its name, then an optional badge and
@@ -192,7 +192,7 @@ fn indented_row<'a>(
     let icon_width = display_width(&icon.glyph);
     let icon_pad = AURA_WIDTH.saturating_sub(icon_width) + 1;
     // Buttons sit just left of the time and code, laid out from the same
-    // pieces as `app::agent_button_offset`. Rows without buttons keep the
+    // pieces as `agent_button_offset`. Rows without buttons keep the
     // same time and code, so neither moves when the pointer comes.
     let time = end.time_cell(!buttons.is_empty());
     let code = end.code_cell();
@@ -251,7 +251,7 @@ fn indented_row<'a>(
 
 /// How a list cell is drawn, from strongest to weakest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CellState {
+pub enum CellState {
     /// The keyboard cursor while the panel is focused, otherwise the agent
     /// shown in the chat.
     Selected,
@@ -261,7 +261,7 @@ pub(crate) enum CellState {
 }
 
 impl CellState {
-    pub(crate) const fn of(selected: bool, hovered: bool) -> Self {
+    pub const fn of(selected: bool, hovered: bool) -> Self {
         if selected {
             Self::Selected
         } else if hovered {
@@ -274,16 +274,16 @@ impl CellState {
 
 /// Colors for one list row. `icon` overrides the icon's own color.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct CellStyle {
-    pub(crate) bg: Option<Color>,
-    pub(crate) text: Style,
+pub struct CellStyle {
+    pub bg: Option<Color>,
+    pub text: Style,
     icon: Option<Color>,
-    pub(crate) time: Color,
+    pub time: Color,
 }
 
 /// Rows sit on the panel background, turn a subtle gray under the pointer,
 /// and turn the selection color with dark text when selected. `text` is the row's name style when nothing else applies.
-pub(crate) fn cell_style(theme: &Theme, state: CellState, text: Style) -> CellStyle {
+pub fn cell_style(theme: &Theme, state: CellState, text: Style) -> CellStyle {
     let colors = &theme.colors;
     let plain = |text: Style| CellStyle {
         bg: None,
@@ -307,7 +307,7 @@ pub(crate) fn cell_style(theme: &Theme, state: CellState, text: Style) -> CellSt
 }
 
 /// `now`, `5m`, `3h`, `2d`, `6w`: how long before `now_ms` `then_ms` was.
-pub(crate) fn format_ago(then_ms: u64, now_ms: u64) -> String {
+pub fn format_ago(then_ms: u64, now_ms: u64) -> String {
     const MINUTE: u64 = 60;
     const HOUR: u64 = 60 * MINUTE;
     const DAY: u64 = 24 * HOUR;
@@ -350,7 +350,7 @@ fn truncate_agent_name(name: &str, max_width: usize) -> String {
 /// Control characters (including newlines) are folded into spaces so a
 /// row can never spill onto a second line, and truncation is measured in
 /// display width so wide (CJK/emoji) characters never split mid-glyph.
-pub(crate) fn truncate_record_info(info: &str, max_width: usize) -> String {
+pub fn truncate_record_info(info: &str, max_width: usize) -> String {
     let mut single_line = String::with_capacity(info.len());
     let mut last_was_space = true;
     for c in info.chars() {

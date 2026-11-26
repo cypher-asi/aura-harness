@@ -34,22 +34,19 @@
 #![forbid(unsafe_code)]
 
 pub mod alerts;
-pub mod animation;
-pub mod ansi;
-pub mod components;
 pub use aura_ui::events;
 pub use aura_ui::host;
+pub use aura_ui_widgets::{animation, ansi, components, themes};
 pub mod input;
 pub mod layout;
 pub use aura_ui::mode_command;
-pub mod themes;
 
 mod app;
-mod clipboard;
-mod graphics;
 mod input_wrap;
 mod renderer;
 mod terminal;
+
+use aura_ui_widgets::{clipboard, graphics};
 
 // Re-exports for convenience
 pub use alerts::AlertSettings;

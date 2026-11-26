@@ -98,7 +98,7 @@ impl CodeBlock {
     /// Returns the lines and the columns the button takes on the first of
     /// them, counted from the box's left edge, when it was drawn.
     #[must_use]
-    pub(crate) fn render_copyable(
+    pub fn render_copyable(
         &self,
         theme: &Theme,
         max_width: usize,
@@ -175,7 +175,7 @@ impl CodeBlock {
 }
 
 /// The button a copyable code block draws in its top border.
-pub(crate) const COPY_BUTTON: &str = " ⧉ Copy ";
+pub const COPY_BUTTON: &str = " ⧉ Copy ";
 
 /// A `box_width` wide top border: `╭─ Label ───╮`, with the
 /// [`COPY_BUTTON`] before its right corner when `copyable` and there is
@@ -257,7 +257,7 @@ enum Edge<'a> {
 /// The first and last rows may be cut short by where the selection starts
 /// and ends, so either may miss one side of its frame.
 #[must_use]
-pub(crate) fn unframe_code(rows: &[String]) -> Vec<String> {
+pub fn unframe_code(rows: &[String]) -> Vec<String> {
     let last = rows.len().saturating_sub(1);
     let edges: Vec<Option<Edge<'_>>> = rows
         .iter()

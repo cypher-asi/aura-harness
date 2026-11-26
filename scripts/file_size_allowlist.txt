@@ -206,7 +206,6 @@ crates/ui/aura-ui-terminal/src/app/flow/tests.rs
 crates/ui/aura-ui-terminal/src/app/flow/timeline.rs
 crates/ui/aura-ui-terminal/src/app/graph.rs
 crates/ui/aura-ui-terminal/src/app/hud.rs
-crates/ui/aura-ui-terminal/src/app/image_preview.rs
 crates/ui/aura-ui-terminal/src/app/images.rs
 crates/ui/aura-ui-terminal/src/app/inbox.rs
 crates/ui/aura-ui-terminal/src/app/keys.rs
@@ -224,12 +223,6 @@ crates/ui/aura-ui-terminal/src/app/slash.rs
 crates/ui/aura-ui-terminal/src/app/tasks.rs
 crates/ui/aura-ui-terminal/src/app/tests.rs
 crates/ui/aura-ui-terminal/src/app/vim.rs
-crates/ui/aura-ui-terminal/src/components/boot.rs
-crates/ui/aura-ui-terminal/src/components/code_block.rs
-crates/ui/aura-ui-terminal/src/components/info.rs
-crates/ui/aura-ui-terminal/src/components/message.rs
-crates/ui/aura-ui-terminal/src/components/syntax.rs
-crates/ui/aura-ui-terminal/src/graphics.rs
 crates/ui/aura-ui-terminal/src/renderer/activity.rs
 crates/ui/aura-ui-terminal/src/renderer/benchmarks.rs
 crates/ui/aura-ui-terminal/src/renderer/bench_panel.rs
@@ -251,6 +244,13 @@ crates/ui/aura-ui-terminal/src/renderer/run_log.rs
 crates/ui/aura-ui-terminal/src/renderer/tests.rs
 crates/ui/aura-ui-terminal/src/terminal.rs
 crates/ui/aura-ui-terminal/tests/chat_load_perf.rs
+crates/ui/aura-ui-widgets/src/components/boot.rs
+crates/ui/aura-ui-widgets/src/components/code_block.rs
+crates/ui/aura-ui-widgets/src/components/image_preview.rs
+crates/ui/aura-ui-widgets/src/components/info.rs
+crates/ui/aura-ui-widgets/src/components/message.rs
+crates/ui/aura-ui-widgets/src/components/syntax.rs
+crates/ui/aura-ui-widgets/src/graphics.rs
 evals/polyglot/rust-xorcism/checks/.gate_checks/xorcism.rs
 tests/async_process_tests.rs
 tests/common/mod.rs

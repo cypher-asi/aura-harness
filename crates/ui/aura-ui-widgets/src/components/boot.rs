@@ -1,7 +1,7 @@
 //! A boot console in the chat: a machine coming up, or an agent moving
 //! between machines, as it happens.
 
-use crate::events::{BootHistory, BootLogLine, BootStageState, BootUpdate};
+use aura_ui::events::{BootHistory, BootLogLine, BootStageState, BootUpdate};
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::fs::File;
@@ -608,7 +608,7 @@ impl BootConsole {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::BootPlanStep;
+    use aura_ui::events::BootPlanStep;
 
     fn stage(key: &str, state: BootStageState) -> BootUpdate {
         BootUpdate::Stage {

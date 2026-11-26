@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-ui = { path = "../aura-ui" }
+aura-ui-widgets = { path = "../aura-ui-widgets" }
 
 # TUI Framework
 ratatui = { workspace = true }

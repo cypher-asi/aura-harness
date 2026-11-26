@@ -140,7 +140,8 @@ fn build_swarm_lines<'a>(
         };
         let add_hovered =
             matches!(app.hover(), Some(HoverTarget::AddToProject(index)) if index == row_index);
-        let button_hovered = |button: AgentButton| app.hover() == Some(button.target(row_index));
+        let button_hovered =
+            |button: AgentButton| app.hover() == Some(HoverTarget::agent_button(button, row_index));
         let pointer_on_row = AgentButton::ALL.into_iter().any(button_hovered)
             || matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
         let menu_on = match (row, menu_target) {

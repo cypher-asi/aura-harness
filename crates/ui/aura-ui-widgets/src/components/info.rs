@@ -21,7 +21,7 @@
 //! what failed ([`Value::Error`]). Nothing else is colored: section titles
 //! never take the accent.
 
-use crate::Theme;
+use crate::themes::Theme;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -39,7 +39,7 @@ const MIN_DETAIL: usize = 4;
 
 /// How a fact's value is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Value {
+pub enum Value {
     /// `foreground`: most values.
     Plain,
     /// `muted`: ids, hashes and `none`.
@@ -52,7 +52,7 @@ pub(crate) enum Value {
 
 impl Value {
     /// [`Self::Flag`] when `flag`, else [`Self::Plain`].
-    pub(crate) const fn flag_if(flag: bool) -> Self {
+    pub const fn flag_if(flag: bool) -> Self {
         if flag {
             Self::Flag
         } else {
@@ -71,7 +71,7 @@ impl Value {
 }
 
 /// The lines of an info body `width` columns wide, built top to bottom.
-pub(crate) struct Info<'t> {
+pub struct Info<'t> {
     width: usize,
     label_width: usize,
     wrap_values: bool,
@@ -80,7 +80,7 @@ pub(crate) struct Info<'t> {
 }
 
 impl<'t> Info<'t> {
-    pub(crate) const fn new(width: usize, theme: &'t Theme) -> Self {
+    pub const fn new(width: usize, theme: &'t Theme) -> Self {
         Self {
             width,
             label_width: LABEL_WIDTH,
@@ -92,7 +92,7 @@ impl<'t> Info<'t> {
 
     /// Labels `columns` wide, for a document whose labels are longer.
     #[must_use]
-    pub(crate) const fn label_width(mut self, columns: usize) -> Self {
+    pub const fn label_width(mut self, columns: usize) -> Self {
         self.label_width = columns;
         self
     }
@@ -100,13 +100,13 @@ impl<'t> Info<'t> {
     /// Wrap long values under themselves instead of cutting them, for a
     /// view that shows the whole of what it describes.
     #[must_use]
-    pub(crate) const fn wrap_values(mut self) -> Self {
+    pub const fn wrap_values(mut self) -> Self {
         self.wrap_values = true;
         self
     }
 
     /// What the document describes, at its top: bold `foreground`.
-    pub(crate) fn title(&mut self, text: &str) {
+    pub fn title(&mut self, text: &str) {
         let style = Style::default()
             .fg(self.theme.colors.foreground)
             .add_modifier(Modifier::BOLD);
@@ -114,12 +114,12 @@ impl<'t> Info<'t> {
     }
 
     /// How the thing is doing, under its title: the accent.
-    pub(crate) fn status(&mut self, text: &str) {
+    pub fn status(&mut self, text: &str) {
         self.flush(text, Style::default().fg(self.theme.colors.success));
     }
 
     /// A muted remark at the left edge, wrapped.
-    pub(crate) fn note(&mut self, text: &str) {
+    pub fn note(&mut self, text: &str) {
         let style = self.muted();
         for line in wrap(text, self.width) {
             self.lines.push(Line::from(Span::styled(line, style)));
@@ -128,7 +128,7 @@ impl<'t> Info<'t> {
 
     /// A section's title, after a blank row unless it opens the document,
     /// then its muted `note`.
-    pub(crate) fn section(&mut self, title: &str, note: Option<&str>) {
+    pub fn section(&mut self, title: &str, note: Option<&str>) {
         if !self.lines.is_empty() {
             self.blank();
         }
@@ -150,7 +150,7 @@ impl<'t> Info<'t> {
     /// `  label     value`: the muted label in its column, then the value,
     /// cut to fit (or wrapped under itself, see [`Self::wrap_values`]). A
     /// fact without a value shows a muted `—`.
-    pub(crate) fn fact(&mut self, label: &str, value: &str, kind: Value) {
+    pub fn fact(&mut self, label: &str, value: &str, kind: Value) {
         let (value, kind) = if value.trim().is_empty() {
             ("—", Value::Quiet)
         } else {
@@ -181,7 +181,7 @@ impl<'t> Info<'t> {
     }
 
     /// A [`Self::fact`] about a use: a bar `percent` full before the value.
-    pub(crate) fn bar(&mut self, label: &str, percent: u8, value: &str, kind: Value) {
+    pub fn bar(&mut self, label: &str, percent: u8, value: &str, kind: Value) {
         let filled = (usize::from(percent) * BAR_WIDTH)
             .div_ceil(100)
             .min(BAR_WIDTH);
@@ -207,7 +207,7 @@ impl<'t> Info<'t> {
 
     /// `  text  detail`: one thing a section lists, then an optional muted
     /// detail, which is cut first and dropped when there is no room.
-    pub(crate) fn item(&mut self, text: &str, detail: Option<&str>) {
+    pub fn item(&mut self, text: &str, detail: Option<&str>) {
         let room = self.width.saturating_sub(INDENT.len());
         let text = truncate_line(text, room);
         let left = room.saturating_sub(text.width() + 2);
@@ -222,7 +222,7 @@ impl<'t> Info<'t> {
     }
 
     /// Each of `items` as an [`Self::item`], or `none`.
-    pub(crate) fn items(&mut self, items: &[String]) {
+    pub fn items(&mut self, items: &[String]) {
         if items.is_empty() {
             self.none();
         }
@@ -232,13 +232,13 @@ impl<'t> Info<'t> {
     }
 
     /// `  none`, muted: a section with nothing in it.
-    pub(crate) fn none(&mut self) {
+    pub fn none(&mut self) {
         self.text("none", Value::Quiet);
     }
 
     /// Prose in a section, indented like its facts and wrapped. Blank
     /// lines in `text` are kept.
-    pub(crate) fn text(&mut self, text: &str, kind: Value) {
+    pub fn text(&mut self, text: &str, kind: Value) {
         let room = self.width.saturating_sub(INDENT.len());
         let style = kind.style(self.theme);
         for paragraph in text.lines() {
@@ -258,7 +258,7 @@ impl<'t> Info<'t> {
     /// `  ✓ name      detail`: an item marked by a glyph in `color`, the
     /// one colored cell, with a muted detail. Names are padded to
     /// `name_width` so the details line up.
-    pub(crate) fn marked(
+    pub fn marked(
         &mut self,
         (glyph, color): (&str, Color),
         (name, name_width): (&str, usize),
@@ -280,7 +280,7 @@ impl<'t> Info<'t> {
 
     /// `[p] pull changes  [s] sleep`: the keys that work the thing, after
     /// a blank row, each key `primary` and its label muted.
-    pub(crate) fn actions(&mut self, actions: &[(char, &str)]) {
+    pub fn actions(&mut self, actions: &[(char, &str)]) {
         if actions.is_empty() {
             return;
         }
@@ -303,7 +303,7 @@ impl<'t> Info<'t> {
 
     /// Lines drawn elsewhere, indented like a section's facts; they were
     /// laid out [`INDENT`] narrower than the document.
-    pub(crate) fn indented(&mut self, lines: impl IntoIterator<Item = Line<'static>>) {
+    pub fn indented(&mut self, lines: impl IntoIterator<Item = Line<'static>>) {
         for mut line in lines {
             line.spans.insert(0, Span::raw(INDENT));
             self.lines.push(line);
@@ -311,15 +311,15 @@ impl<'t> Info<'t> {
     }
 
     /// Columns left for lines passed to [`Self::indented`].
-    pub(crate) const fn indented_width(&self) -> usize {
+    pub const fn indented_width(&self) -> usize {
         self.width.saturating_sub(INDENT.len())
     }
 
-    pub(crate) fn blank(&mut self) {
+    pub fn blank(&mut self) {
         self.lines.push(Line::default());
     }
 
-    pub(crate) fn into_lines(self) -> Vec<Line<'static>> {
+    pub fn into_lines(self) -> Vec<Line<'static>> {
         self.lines
     }
 
@@ -348,7 +348,7 @@ impl<'t> Info<'t> {
 /// Line breaks and other control characters turn into spaces, but unlike
 /// [`super::truncate_record_info`] runs of spaces are kept, so text spaced
 /// into columns stays in them.
-pub(crate) fn truncate_line(text: &str, width: usize) -> String {
+pub fn truncate_line(text: &str, width: usize) -> String {
     let line: String = text
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })

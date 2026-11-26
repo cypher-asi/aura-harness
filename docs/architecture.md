@@ -38,7 +38,7 @@ Within a layer, crates are listed leaves first.
 | gate     | Gate, the router behind the `gate` model id: routing, evidence, follow-ups, judges, the attempt log, `/compare` arithmetic, the lead's limits, and Gate while the app runs. | `aura-gate-evidence`, `aura-gate-route`, `aura-gate-followup`, `aura-gate-judge`, `aura-gate-attempts`, `aura-gate-compare`, `aura-gate-lead`, `aura-gate-live`, `aura-gate` |
 | auth     | Sign-in: zOS identity, linked ChatGPT and Claude plans, linked OpenRouter account, credential storage. | `aura-auth-kit`, `aura-auth-zos`, `aura-auth-chatgpt`, `aura-auth-claude`, `aura-auth-openrouter`, `aura-auth` |
 | engine   | Many agents: scheduler, workers, agent host, automatons, cloud machines, the agent registry. | `aura-engine-automaton`, `aura-engine-cloud`, `aura-engine-registry`, `aura-engine` |
-| ui       | Renderer-agnostic UI protocol and the ratatui terminal UI. | `aura-ui`, `aura-ui-terminal` |
+| ui       | Renderer-agnostic UI protocol, terminal widgets, and the ratatui terminal UI. | `aura-ui`, `aura-ui-widgets`, `aura-ui-terminal` |
 | surface  | What you run: the session host, the HTTP/WS node, the CLI, the desktop app. | `aura-app`, `aura-node`, `aura-cli`, `aura-desktop` |
 
 ### Dependency rules
@@ -60,7 +60,7 @@ Each box is a layer. Arrows point in the only allowed dependency direction: **do
                                  │
    ┌─────────────────────────────▼──────────────────────────────────┐
    │  ui — renderer-agnostic UI protocol · ratatui terminal UI      │
-   │  aura-ui, aura-ui-terminal                                     │
+   │  aura-ui, aura-ui-widgets, aura-ui-terminal                    │
    └─────────────────────────────┬──────────────────────────────────┘
                                  │
    ┌─────────────────────────────▼──────────────────────────────────┐
@@ -559,9 +559,13 @@ Everything a frontend needs except the window it draws in.
 
 What every frontend shares, independent of how it draws: the `UiEvent` / `UiCommand` protocol between a UI and the agent event loop, input history, tool-call formatting, the sandbox file tree and the `/mode` parser.
 
+#### [`aura-ui-widgets`](../crates/ui/aura-ui-widgets)
+
+What the terminal UI draws with, independent of its state: themes, components (`HeaderBar`, `InputField`, `Message`, `ToolCard`, `StatusBar`, `ProgressBar`, `DiffView`, agent rows, image previews), syntax highlighting, terminal graphics protocols, animation, ANSI styling and the clipboard. A crate of its own so it builds in parallel with the terminal UI; `aura-ui-terminal` re-exports its modules at their old paths.
+
 #### [`aura-ui-terminal`](../crates/ui/aura-ui-terminal)
 
-Ratatui-based terminal UI library: themed rendering, components (`HeaderBar`, `InputField`, `Message`, `ToolCard`, `StatusBar`, `ProgressBar`, `DiffView`), input handling, layout. `App` is the UI state machine; `UiEvent` and `UiCommand` are the bridge to the agent loop. `mode_command.rs` holds `PermissionMode` (`agent`, `plan`, `read-only`, `debug`) and the `/mode` and `/approval` parsers; the app sends `UiEvent::SetMode { agent_id, mode }` (`/mode`, `/plan`), `UiEvent::SetApproval` (`/approval`) and `UiEvent::CycleApproval` (Shift+Tab), and shows the level and mode badges before the model name once `UiCommand::SetMode` / `UiCommand::SetApproval` confirm them, and `/build` sends `UiEvent::BuildPlan`. `renderer/plan.rs` draws the active plan's todos above the input while any are open; `renderer/processes.rs` draws the PROCESSES tab. `alerts.rs` rings the bell and sends optional desktop notifications.
+Ratatui-based terminal UI library: rendering with the widgets above, input handling, layout. `App` is the UI state machine; `UiEvent` and `UiCommand` are the bridge to the agent loop. `mode_command.rs` holds `PermissionMode` (`agent`, `plan`, `read-only`, `debug`) and the `/mode` and `/approval` parsers; the app sends `UiEvent::SetMode { agent_id, mode }` (`/mode`, `/plan`), `UiEvent::SetApproval` (`/approval`) and `UiEvent::CycleApproval` (Shift+Tab), and shows the level and mode badges before the model name once `UiCommand::SetMode` / `UiCommand::SetApproval` confirm them, and `/build` sends `UiEvent::BuildPlan`. `renderer/plan.rs` draws the active plan's todos above the input while any are open; `renderer/processes.rs` draws the PROCESSES tab. `alerts.rs` rings the bell and sends optional desktop notifications.
 
 ---
 

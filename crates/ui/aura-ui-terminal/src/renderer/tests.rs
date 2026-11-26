@@ -6116,7 +6116,8 @@ fn no_agent_row_shows_a_code_at_the_right_edge() {
 
 #[test]
 fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_the_time() {
-    use crate::app::{agent_button_offset, AgentButton, AgentRowEnd, HoverTarget};
+    use crate::app::{AgentButton, AgentRowEnd, HoverTarget};
+    use crate::components::agent_button_offset;
     use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
     let moved = |column: usize, row: usize| MouseEvent {
         kind: MouseEventKind::Moved,

@@ -1,7 +1,7 @@
 //! What the agent did on its way to a reply: a thinking block or a tool call.
 
 use crate::components::{quiet_for, LiveOutput, ToolStatus};
-use crate::events::ActivityData;
+use aura_ui::events::ActivityData;
 use std::time::{Duration, Instant};
 
 /// One step of agent activity shown in the chat as a collapsible block.
@@ -167,7 +167,7 @@ impl From<&ActivityData> for Activity {
                 },
                 result: result
                     .as_deref()
-                    .map(|r| crate::app::format::format_tool_result(name, r)),
+                    .map(|r| aura_ui::format::format_tool_result(name, r)),
                 retry: None,
                 started: None,
                 duration_ms: *duration_ms,
@@ -181,7 +181,7 @@ impl From<&ActivityData> for Activity {
 }
 
 /// Milliseconds since `started`.
-pub(crate) fn elapsed_ms(started: Option<Instant>) -> Option<u64> {
+pub fn elapsed_ms(started: Option<Instant>) -> Option<u64> {
     started.map(|s| u64::try_from(s.elapsed().as_millis()).unwrap_or(u64::MAX))
 }
 

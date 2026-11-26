@@ -1273,6 +1273,7 @@ version = "0.1.0"
 dependencies = [
  "aura-core-types",
  "aura-ui",
+ "aura-ui-widgets",
  "base64 0.22.1",
  "chrono",
  "crossterm 0.28.1",
@@ -1287,6 +1288,24 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "two-face",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "aura-ui-widgets"
+version = "0.1.0"
+dependencies = [
+ "aura-ui",
+ "base64 0.22.1",
+ "chrono",
+ "image",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "similar",
+ "syntect",
  "tracing",
  "two-face",
  "unicode-width 0.2.0",
