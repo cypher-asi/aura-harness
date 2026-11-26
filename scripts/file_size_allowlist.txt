@@ -59,7 +59,6 @@ crates/model/aura-model/src/anthropic/provider/retry_tests.rs
 crates/model/aura-model/src/anthropic/sse/tests.rs
 crates/model/aura-model/src/anthropic/tests.rs
 crates/model/aura-model/src/model_alias/tests.rs
-crates/model/aura-model/src/model_catalog/mod.rs
 crates/model/aura-model/src/model_catalog/tests.rs
 crates/model/aura-model/src/response_stream/mod.rs
 crates/model/aura-model/src/types/request/mod.rs
