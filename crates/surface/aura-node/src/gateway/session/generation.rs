@@ -62,7 +62,7 @@ impl RouterRequestSummary {
 
 pub(super) fn start_generation(
     session: &Session,
-    req: GenerationRequest,
+    req: &GenerationRequest,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
     router_url: &str,
 ) -> Option<GenerationTurn> {
@@ -84,7 +84,7 @@ pub(super) fn start_generation(
     let mode = req.mode.clone();
     let auth_token = session.auth_token.clone().unwrap_or_default();
 
-    let (url, body) = match build_router_request(router_url, &req) {
+    let (url, body) = match build_router_request(router_url, req) {
         Ok(pair) => pair,
         Err(msg) => {
             warn!(
@@ -108,7 +108,7 @@ pub(super) fn start_generation(
     let outbound = outbound_tx.clone();
     let session_id = session.session_id.clone();
     let request_id = Uuid::new_v4().to_string();
-    let summary = RouterRequestSummary::from_request(&req, &body);
+    let summary = RouterRequestSummary::from_request(req, &body);
 
     info!(
         %session_id,
@@ -310,25 +310,22 @@ async fn run_generation_proxy(ctx: GenerationProxyCtx<'_>) {
         }
         result = tokio::time::timeout(GENERATION_REQUEST_TIMEOUT, send_fut) => result,
     };
-    let resp = match resp {
-        Ok(inner) => inner,
-        Err(_) => {
-            error!(
-                %session_id,
-                %request_id,
-                %mode,
-                timeout_secs = GENERATION_REQUEST_TIMEOUT.as_secs(),
-                "Generation proxy: upstream request timed out during handshake"
-            );
-            let _ = outbound.try_send(OutboundMessage::GenerationError(GenerationErrorMsg {
-                code: "UPSTREAM_TIMEOUT".into(),
-                message: format!(
-                    "upstream did not respond within {}s",
-                    GENERATION_REQUEST_TIMEOUT.as_secs()
-                ),
-            }));
-            return;
-        }
+    let Ok(resp) = resp else {
+        error!(
+            %session_id,
+            %request_id,
+            %mode,
+            timeout_secs = GENERATION_REQUEST_TIMEOUT.as_secs(),
+            "Generation proxy: upstream request timed out during handshake"
+        );
+        let _ = outbound.try_send(OutboundMessage::GenerationError(GenerationErrorMsg {
+            code: "UPSTREAM_TIMEOUT".into(),
+            message: format!(
+                "upstream did not respond within {}s",
+                GENERATION_REQUEST_TIMEOUT.as_secs()
+            ),
+        }));
+        return;
     };
     let resp = match resp {
         Ok(r) => r,

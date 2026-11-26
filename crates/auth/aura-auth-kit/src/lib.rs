@@ -8,7 +8,6 @@
 //! provider-specific endpoints.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod browser;
 pub mod http;

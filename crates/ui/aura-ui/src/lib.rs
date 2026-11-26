@@ -9,7 +9,6 @@
 //! native desktop app (`aura-desktop`) both build on it.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 pub mod benchmarks;
 pub mod events;

@@ -233,7 +233,7 @@ impl SpecGenAutomaton {
                     &cfg.project_id,
                     &spec.title,
                     &spec.content,
-                    idx as u32,
+                    u32::try_from(idx).unwrap_or(u32::MAX),
                     None,
                 )
                 .await

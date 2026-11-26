@@ -40,26 +40,6 @@
 //! it from there now.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
-#![allow(
-    clippy::doc_markdown,
-    clippy::must_use_candidate,
-    clippy::match_same_arms,
-    clippy::single_match,
-    clippy::single_match_else,
-    clippy::option_if_let_else,
-    clippy::missing_panics_doc,
-    clippy::needless_pass_by_value,
-    clippy::unnecessary_map_or,
-    clippy::wildcard_imports,
-    clippy::manual_let_else,
-    clippy::ignored_unit_patterns,
-    clippy::significant_drop_tightening,
-    clippy::missing_errors_doc,
-    clippy::missing_const_for_fn,
-    clippy::unused_self,
-    clippy::struct_field_names
-)]
 
 pub mod agents;
 pub mod automaton;

@@ -34,7 +34,6 @@
 //! `aura-*` deps.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod capability;
 mod effective;

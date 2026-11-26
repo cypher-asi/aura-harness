@@ -33,7 +33,6 @@
 //!   input.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod error;
 pub mod hash;

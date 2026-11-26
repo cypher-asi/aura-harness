@@ -109,15 +109,13 @@ impl CloudState {
 
 fn cloud_home() -> PathBuf {
     aura_config::AuraHome::resolve()
-        .map(|home| home.path)
-        .unwrap_or_else(|_| PathBuf::from("aura_data"))
+        .map_or_else(|_| PathBuf::from("aura_data"), |home| home.path)
         .join("cloud")
 }
 
 fn env_file() -> PathBuf {
     aura_config::AuraHome::resolve()
-        .map(|home| home.path)
-        .unwrap_or_else(|_| PathBuf::from("aura_data"))
+        .map_or_else(|_| PathBuf::from("aura_data"), |home| home.path)
         .join(".env")
 }
 

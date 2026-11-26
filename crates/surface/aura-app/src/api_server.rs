@@ -321,15 +321,12 @@ async fn api_list_files_handler(
         Err(e) => return sandbox_error_response(&e),
     };
 
-    let meta = match tokio::fs::metadata(&target).await {
-        Ok(m) => m,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "ok": false, "error": "path not found" })),
-            )
-                .into_response();
-        }
+    let Ok(meta) = tokio::fs::metadata(&target).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "ok": false, "error": "path not found" })),
+        )
+            .into_response();
     };
     if !meta.is_dir() {
         return (
@@ -369,15 +366,12 @@ async fn api_read_file_handler(
         Err(e) => return sandbox_error_response(&e),
     };
 
-    let meta = match tokio::fs::metadata(&target).await {
-        Ok(m) => m,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "ok": false, "error": "path not found" })),
-            )
-                .into_response();
-        }
+    let Ok(meta) = tokio::fs::metadata(&target).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "ok": false, "error": "path not found" })),
+        )
+            .into_response();
     };
     if !meta.is_file() {
         return (

@@ -31,13 +31,6 @@
 //! a typed `DomainError` once the trait migrates off `anyhow`.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
-#![allow(
-    clippy::doc_markdown,
-    clippy::must_use_candidate,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc
-)]
 
 mod http;
 mod jwt;

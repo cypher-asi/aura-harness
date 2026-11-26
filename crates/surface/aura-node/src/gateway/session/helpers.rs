@@ -1661,9 +1661,8 @@ mod tests {
         );
 
         let outcome = prepare_chat_session(invalid_request, &ctx).await;
-        let err = match outcome {
-            Ok(_) => panic!("workspace outside base must reject"),
-            Err(e) => e,
+        let Err(err) = outcome else {
+            panic!("workspace outside base must reject")
         };
         assert_eq!(err.code, "invalid_workspace");
 

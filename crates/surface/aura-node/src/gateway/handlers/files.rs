@@ -265,18 +265,16 @@ pub(in crate::gateway) async fn write_file_handler(
             .into_response();
     }
 
-    let content = match base64::engine::general_purpose::STANDARD.decode(request.content_base64) {
-        Ok(content) => content,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "ok": false,
-                    "error": "content_base64 must contain valid base64",
-                })),
-            )
-                .into_response();
-        }
+    let Ok(content) = base64::engine::general_purpose::STANDARD.decode(request.content_base64)
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": "content_base64 must contain valid base64",
+            })),
+        )
+            .into_response();
     };
     if content.len() > MAX_WRITE_BYTES {
         return (
@@ -678,9 +676,8 @@ pub(in crate::gateway) async fn delete_workspace_handler(
     State(state): State<RouterState>,
     Path(workspace_key): Path<String>,
 ) -> impl IntoResponse {
-    let workspace_key = match validate_workspace_key(&workspace_key) {
-        Ok(workspace_key) => workspace_key,
-        Err(_) => return StatusCode::BAD_REQUEST,
+    let Ok(workspace_key) = validate_workspace_key(&workspace_key) else {
+        return StatusCode::BAD_REQUEST;
     };
     let workspace = state.config.resolve_workspace_for_project(workspace_key);
     match tokio::fs::symlink_metadata(&workspace).await {

@@ -145,17 +145,17 @@ fn print_owners(placements: &str) {
             let name = placed
                 .get("owner_name")
                 .and_then(|n| n.as_str())
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    match placed
+                .map_or_else(
+                    || match placed
                         .get("owner")
                         .and_then(|o| o.get("kind"))
                         .and_then(|k| k.as_str())
                     {
                         Some("zos") => "a zOS user".to_string(),
                         _ => "local profile".to_string(),
-                    }
-                });
+                    },
+                    str::to_string,
+                );
             let machine = placed
                 .get("machine")
                 .and_then(|m| m.as_str())

@@ -250,18 +250,15 @@ pub(super) async fn start_build(
         return None;
     };
     let workspace = session.kernel.agent_workspace();
-    let plan = match is_plan_path(&path)
+    let Ok(Some(plan)) = is_plan_path(&path)
         .then(|| PlanFile::load(&workspace.join(&path)))
         .transpose()
-    {
-        Ok(Some(plan)) => plan,
-        Ok(None) | Err(_) => {
-            ui.send(UiCommand::ShowError(format!(
-                "Could not read plan {path} (plans live in .aura/plans/*.plan.md)"
-            )))
-            .await;
-            return None;
-        }
+    else {
+        ui.send(UiCommand::ShowError(format!(
+            "Could not read plan {path} (plans live in .aura/plans/*.plan.md)"
+        )))
+        .await;
+        return None;
     };
     let mode = state.hub.build_mode(agent_id);
     if !modes::switch_mode(state, agent_id, &session.kernel, mode).await {

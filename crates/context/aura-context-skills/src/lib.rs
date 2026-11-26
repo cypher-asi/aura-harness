@@ -44,8 +44,6 @@
 //! once plugins are introduced) can be threaded through without
 //! breaking the public API at that boundary.
 
-#![allow(clippy::module_name_repetitions)]
-
 pub mod activation;
 pub mod error;
 pub mod install;

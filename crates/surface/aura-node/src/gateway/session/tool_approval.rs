@@ -48,7 +48,7 @@ impl ToolApprovalBroker {
     }
 
     pub(crate) fn respond(&self, response: ProtocolResponse) -> Result<(), String> {
-        let request_id = response.request_id.clone();
+        let request_id = response.request_id;
         let response = ToolApprovalResponse {
             decision: match response.decision {
                 ProtocolDecision::On => ToolState::Allow,

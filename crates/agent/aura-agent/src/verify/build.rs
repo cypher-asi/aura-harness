@@ -171,21 +171,19 @@ pub async fn verify_and_fix_build(
     fix_provider: &dyn FixProvider,
     event_tx: Option<&tokio::sync::mpsc::UnboundedSender<VerifyEvent>>,
 ) -> anyhow::Result<BuildVerifyResult> {
-    let mut build_cmd =
-        match resolve_build_command(params.project_root, params.build_command, event_tx) {
-            Some(cmd) => cmd,
-            None => {
-                return Ok(BuildVerifyResult {
-                    fix_ops: vec![],
-                    build_passed: true,
-                    attempts_used: 0,
-                    duplicate_bailouts: 0,
-                    fix_input_tokens: 0,
-                    fix_output_tokens: 0,
-                    last_stderr: String::new(),
-                });
-            }
-        };
+    let Some(mut build_cmd) =
+        resolve_build_command(params.project_root, params.build_command, event_tx)
+    else {
+        return Ok(BuildVerifyResult {
+            fix_ops: vec![],
+            build_passed: true,
+            attempts_used: 0,
+            duplicate_bailouts: 0,
+            fix_input_tokens: 0,
+            fix_output_tokens: 0,
+            last_stderr: String::new(),
+        });
+    };
 
     let base_path = params.project_root;
     let pre_fix_snapshots = snapshot_modified_files(base_path, params.initial_file_ops);

@@ -46,7 +46,11 @@ impl Driving<'_> {
         if outcome.stop.is_some() && !outcome.can_go_on {
             return None;
         }
-        self.take_over(outcome, raw, joined(found.harness.take(), review))
+        self.take_over(
+            outcome,
+            raw,
+            joined(found.harness.take(), review).as_deref(),
+        )
     }
 
     /// Follow up the turn that ended as `outcome` as Gate's settings
@@ -178,11 +182,11 @@ impl Driving<'_> {
         &self,
         outcome: &TurnOutcome,
         raw: Option<OutcomeSignal>,
-        found: Option<String>,
+        found: Option<&str>,
     ) -> Option<Next> {
         let (decision, ended) = self.stronger(outcome.ended.as_ref())?;
         let signal = raw.unwrap_or(ended.signal);
-        let takeover = Takeover::new(&ended.model, decision, signal, found.as_deref());
+        let takeover = Takeover::new(&ended.model, decision, signal, found);
         let text = with_unseen(takeover.text, &outcome.unseen);
         self.run.output.event(&StreamEvent::Notice { text: &text });
         let carry = Carry::Escalate(takeover.next, ended.category, outcome.terms);

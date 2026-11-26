@@ -1488,12 +1488,14 @@ pub(crate) fn format_local_time(ts_ms: u64) -> String {
     i64::try_from(ts_ms)
         .ok()
         .and_then(chrono::DateTime::from_timestamp_millis)
-        .map(|dt| {
-            dt.with_timezone(&chrono::Local)
-                .format("%H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|| "??:??:??".to_string())
+        .map_or_else(
+            || "??:??:??".to_string(),
+            |dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%H:%M:%S")
+                    .to_string()
+            },
+        )
 }
 
 /// Map a transaction type to its display label and sender name.

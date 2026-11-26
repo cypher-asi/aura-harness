@@ -131,7 +131,7 @@ impl AutomatonBridge {
         channels.insert(automaton_id.clone(), channel.clone());
 
         let channel_for_task = channel.clone();
-        let id_for_task = automaton_id.clone();
+        let id_for_task = automaton_id;
         tokio::spawn(async move {
             let mut done_observed_at: Option<tokio::time::Instant> = None;
             loop {

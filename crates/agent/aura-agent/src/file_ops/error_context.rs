@@ -90,9 +90,8 @@ pub fn resolve_error_source_files(
         if validate_path(base_path, &full).is_err() {
             continue;
         }
-        let content = match std::fs::read_to_string(&full) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let Ok(content) = std::fs::read_to_string(&full) else {
+            continue;
         };
         let section = format!("--- {file} ---\n{content}\n\n");
         if section.len() > remaining {
@@ -151,9 +150,8 @@ fn walk_for_type_sources(
         return;
     }
 
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
 
     let patterns: Vec<String> = ["struct", "impl", "trait", "enum"]

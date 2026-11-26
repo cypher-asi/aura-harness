@@ -16,15 +16,6 @@
 //! Command execution is disabled by default and requires explicit allowlisting.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::missing_const_for_fn,
-    clippy::must_use_candidate,
-    clippy::unnecessary_literal_bound,
-    clippy::option_if_let_else,
-    clippy::doc_markdown
-)]
 
 pub mod agents;
 pub mod automaton_tools;

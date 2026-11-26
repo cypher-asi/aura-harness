@@ -81,12 +81,13 @@ impl CompareState {
 
     /// Copies under `AURA_HOME/compare`, else under `data_dir`.
     pub(crate) fn in_aura_home(data_dir: &Path) -> Self {
-        let root = aura_config::AuraHome::resolve()
-            .map(|home| home.path.join("compare"))
-            .unwrap_or_else(|e| {
+        let root = aura_config::AuraHome::resolve().map_or_else(
+            |e| {
                 warn!(error = %e, "AURA_HOME unresolved; /compare copies go in the data directory");
                 data_dir.join("compare")
-            });
+            },
+            |home| home.path.join("compare"),
+        );
         Self::new(root, DEFAULT_CONCURRENCY)
     }
 

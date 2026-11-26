@@ -43,7 +43,6 @@
 //!   compilation for every aggregation site (intentional).
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 pub mod context;
 pub mod ctx;

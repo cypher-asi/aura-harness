@@ -2106,14 +2106,14 @@ impl CloudHub {
     }
 
     /// Mail from a node, for an agent here or on another node.
-    fn take_mail(&self, mail: MeshMail) -> MeshFrame {
+    fn take_mail(&self, mail: &MeshMail) -> MeshFrame {
         let ack = |delivered: bool, error: Option<String>| MeshFrame::MailAck {
             from_node: mail.from_node.clone(),
             id: mail.id,
             delivered,
             error,
         };
-        if !self.mail.first_sight(&mail) {
+        if !self.mail.first_sight(mail) {
             return ack(true, None);
         }
         // Mail never crosses users: the sender's machine owner must own
@@ -2125,7 +2125,7 @@ impl CloudHub {
             .owner_of(&mail.to)
             .unwrap_or_else(|| names::owner_tag(&self.current_owner()));
         if sender.as_deref() != Some(recipient.as_str()) {
-            self.mail.forget(&mail);
+            self.mail.forget(mail);
             return ack(
                 false,
                 Some(format!("agent {} belongs to another user", mail.to)),
@@ -2142,7 +2142,7 @@ impl CloudHub {
             }
             _ => {
                 let host = self.host.lock().clone();
-                let delivered = match (host, remote_mail(&mail)) {
+                let delivered = match (host, remote_mail(mail)) {
                     (Some(host), Ok(remote)) => host.deliver_remote(remote),
                     (None, _) => Err("the hub has no agents".to_string()),
                     (_, Err(err)) => Err(err),
@@ -2151,7 +2151,7 @@ impl CloudHub {
                     Ok(()) => ack(true, None),
                     Err(err) => {
                         // A resend may succeed (the agent restarted).
-                        self.mail.forget(&mail);
+                        self.mail.forget(mail);
                         ack(false, Some(err))
                     }
                 }
@@ -2551,7 +2551,7 @@ async fn run_link_socket(
                     match frame {
                         MeshFrame::Mail(mail) => {
                             hub.fleet.touch(hex);
-                            let ack = hub.take_mail(mail);
+                            let ack = hub.take_mail(&mail);
                             let _ = sink.send(Message::Text(ack.to_text().into())).await;
                         }
                         MeshFrame::HostStats(stats) => hub.track(hex, stats),
@@ -2789,11 +2789,11 @@ mod tests {
             text: "hi".into(),
             sent_ms: 0,
         };
-        let MeshFrame::MailAck { delivered, .. } = hub.take_mail(mail.clone()) else {
+        let MeshFrame::MailAck { delivered, .. } = hub.take_mail(&mail) else {
             panic!("not an ack");
         };
         assert!(!delivered);
-        let MeshFrame::MailAck { delivered, .. } = hub.take_mail(mail) else {
+        let MeshFrame::MailAck { delivered, .. } = hub.take_mail(&mail) else {
             panic!("not an ack");
         };
         assert!(
@@ -3157,13 +3157,13 @@ mod tests {
         place_cloud(&hub, bob_cloud, "aura-bob", &bob());
 
         // Bob's machine can't mail Alice's local agent or her cloud agent.
-        let err = ack_error(hub.take_mail(mail_to(bob_cloud, "aura-bob", local, 1)));
+        let err = ack_error(hub.take_mail(&mail_to(bob_cloud, "aura-bob", local, 1)));
         assert!(err.is_some_and(|e| e.contains("another user")));
-        let err = ack_error(hub.take_mail(mail_to(bob_cloud, "aura-bob", alice_cloud, 2)));
+        let err = ack_error(hub.take_mail(&mail_to(bob_cloud, "aura-bob", alice_cloud, 2)));
         assert!(err.is_some_and(|e| e.contains("another user")));
         // Alice's machine reaches her local agent (no host here: refused
         // for that reason, not for ownership).
-        let err = ack_error(hub.take_mail(mail_to(alice_cloud, "aura-alice", local, 3)));
+        let err = ack_error(hub.take_mail(&mail_to(alice_cloud, "aura-alice", local, 3)));
         assert!(err.is_some_and(|e| !e.contains("another user")));
 
         // Local agents act as Alice: Bob's cloud agent is unknown to them.

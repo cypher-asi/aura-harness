@@ -121,8 +121,8 @@ impl AutomatonBridge {
                 Some(project_id),
                 ws_path,
                 effective_workspace.is_some(),
-                installed_tools.clone(),
-                installed_integrations.clone(),
+                &installed_tools,
+                &installed_integrations,
                 agent_permissions,
             )
             .map_err(|e| format!("failed to build {} kernel: {e}", labels.kernel))?;

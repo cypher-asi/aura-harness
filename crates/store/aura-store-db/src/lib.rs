@@ -16,7 +16,6 @@
 //!   [`aura_store_record::RecordLog`] trait for layered consumers.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 pub mod agents;
 pub mod channels;

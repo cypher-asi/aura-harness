@@ -114,12 +114,17 @@ impl SealingConfig {
     /// [`ENV_AGENT_ID`]) is present (swarm agents never run plaintext).
     pub fn from_env() -> anyhow::Result<Self> {
         let env_present = |name: &str| std::env::var(name).is_ok_and(|v| !v.trim().is_empty());
+        let encryption = std::env::var(ENV_STATE_ENCRYPTION).ok();
+        let key_id = std::env::var(ENV_STATE_KEY_ID).ok();
+        let key_file = std::env::var(ENV_STATE_KEY_FILE).ok();
+        let cdh_url = std::env::var(ENV_CDH_URL).ok();
+        let timeout_secs = std::env::var(ENV_DEK_FETCH_TIMEOUT_SECS).ok();
         Self::resolve(
-            std::env::var(ENV_STATE_ENCRYPTION).ok(),
-            std::env::var(ENV_STATE_KEY_ID).ok(),
-            std::env::var(ENV_STATE_KEY_FILE).ok(),
-            std::env::var(ENV_CDH_URL).ok(),
-            std::env::var(ENV_DEK_FETCH_TIMEOUT_SECS).ok(),
+            encryption.as_deref(),
+            key_id.as_deref(),
+            key_file.as_deref(),
+            cdh_url.as_deref(),
+            timeout_secs.as_deref(),
             env_present(ENV_CONTROL_PLANE_URL) || env_present(ENV_AGENT_ID),
         )
     }
@@ -135,14 +140,14 @@ impl SealingConfig {
     /// # Errors
     /// See [`Self::from_env`].
     pub fn resolve(
-        encryption: Option<String>,
-        key_id: Option<String>,
-        key_file: Option<String>,
-        cdh_url: Option<String>,
-        timeout_secs: Option<String>,
+        encryption: Option<&str>,
+        key_id: Option<&str>,
+        key_file: Option<&str>,
+        cdh_url: Option<&str>,
+        timeout_secs: Option<&str>,
         swarm_env: bool,
     ) -> anyhow::Result<Self> {
-        let enabled = match encryption.as_deref().map(str::trim) {
+        let enabled = match encryption.map(str::trim) {
             None | Some("") => {
                 if swarm_env {
                     info!(
@@ -170,7 +175,7 @@ impl SealingConfig {
             ),
         };
 
-        let fetch_timeout = match timeout_secs.as_deref().map(str::trim) {
+        let fetch_timeout = match timeout_secs.map(str::trim) {
             None | Some("") => Duration::from_secs(DEFAULT_DEK_FETCH_TIMEOUT_SECS),
             Some(raw) => Duration::from_secs(
                 raw.parse::<u64>()
@@ -654,8 +659,7 @@ mod tests {
     #[test]
     fn resolve_sealed_enables_and_is_case_insensitive() {
         for v in ["sealed", "SEALED", " Sealed "] {
-            let cfg =
-                SealingConfig::resolve(Some(v.to_string()), None, None, None, None, false).unwrap();
+            let cfg = SealingConfig::resolve(Some(v), None, None, None, None, false).unwrap();
             assert!(cfg.enabled, "`{v}` must enable sealed mode");
         }
     }
@@ -663,8 +667,7 @@ mod tests {
     #[test]
     fn resolve_plaintext_spellings_disable_without_swarm_env() {
         for v in ["plaintext", "none", ""] {
-            let cfg =
-                SealingConfig::resolve(Some(v.to_string()), None, None, None, None, false).unwrap();
+            let cfg = SealingConfig::resolve(Some(v), None, None, None, None, false).unwrap();
             assert!(!cfg.enabled);
         }
     }
@@ -673,19 +676,18 @@ mod tests {
     /// plaintext when the operator asked for encryption.
     #[test]
     fn resolve_rejects_unknown_mode() {
-        let err = SealingConfig::resolve(Some("seald".to_string()), None, None, None, None, false)
-            .unwrap_err();
+        let err = SealingConfig::resolve(Some("seald"), None, None, None, None, false).unwrap_err();
         assert!(err.to_string().contains("seald"));
     }
 
     #[test]
     fn resolve_normalizes_cdh_url_and_timeout() {
         let cfg = SealingConfig::resolve(
-            Some("sealed".to_string()),
-            Some("swarm/agents/x/state-key".to_string()),
+            Some("sealed"),
+            Some("swarm/agents/x/state-key"),
             None,
-            Some("http://cdh.local:8006/".to_string()),
-            Some("7".to_string()),
+            Some("http://cdh.local:8006/"),
+            Some("7"),
             false,
         )
         .unwrap();
@@ -701,10 +703,10 @@ mod tests {
     /// `AURA_STATE_ENCRYPTION` defaults to sealed instead of plaintext.
     #[test]
     fn resolve_swarm_env_defaults_to_sealed() {
-        for unset in [None, Some(String::new()), Some("  ".to_string())] {
+        for unset in [None, Some(""), Some("  ")] {
             let cfg = SealingConfig::resolve(
                 unset,
-                Some("swarm/agents/x/state-key".to_string()),
+                Some("swarm/agents/x/state-key"),
                 None,
                 None,
                 None,
@@ -720,8 +722,7 @@ mod tests {
     #[test]
     fn resolve_swarm_env_refuses_explicit_plaintext() {
         for v in ["plaintext", "none", "PLAINTEXT"] {
-            let err = SealingConfig::resolve(Some(v.to_string()), None, None, None, None, true)
-                .unwrap_err();
+            let err = SealingConfig::resolve(Some(v), None, None, None, None, true).unwrap_err();
             let msg = err.to_string();
             assert!(
                 msg.contains("never run with plaintext"),
@@ -734,8 +735,8 @@ mod tests {
     #[test]
     fn resolve_swarm_env_sealed_is_sealed() {
         let cfg = SealingConfig::resolve(
-            Some("sealed".to_string()),
-            Some("swarm/agents/x/state-key".to_string()),
+            Some("sealed"),
+            Some("swarm/agents/x/state-key"),
             None,
             None,
             None,
@@ -770,9 +771,8 @@ mod tests {
     fn provider_selection_requires_key_id_without_key_file() {
         let mut cfg = sealed_config();
         cfg.key_id = None;
-        let err = match cfg.build_provider() {
-            Ok(_) => panic!("sealed mode without key id or key file must be rejected"),
-            Err(e) => e,
+        let Err(err) = cfg.build_provider() else {
+            panic!("sealed mode without key id or key file must be rejected")
         };
         assert!(err.to_string().contains(ENV_STATE_KEY_ID));
     }

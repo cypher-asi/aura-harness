@@ -26,7 +26,6 @@
 //!   variants on top via `#[from]`.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod oauth;
 mod provider;

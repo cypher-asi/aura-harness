@@ -50,7 +50,6 @@
 //!   next sequence; this is a logic bug, never a transient condition.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod error;
 mod kind;

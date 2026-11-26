@@ -421,14 +421,23 @@ fn wrap_value_chunks(value: &str, max: usize) -> Vec<String> {
     chunks
 }
 
+/// Converts a count to `f64` for rounded display.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "values past 2^53 lose precision the rounded output cannot show"
+)]
+fn display_f64(n: u64) -> f64 {
+    n as f64
+}
+
 fn human_bytes(n: usize) -> String {
     if n < 1024 {
         format!("{n} B")
     } else if n < 1024 * 1024 {
-        let kb = n as f64 / 1024.0;
+        let kb = display_f64(n as u64) / 1024.0;
         format!("{kb:.1} KB")
     } else {
-        let mb = n as f64 / (1024.0 * 1024.0);
+        let mb = display_f64(n as u64) / (1024.0 * 1024.0);
         format!("{mb:.2} MB")
     }
 }
@@ -437,11 +446,11 @@ fn human_duration_ms(ms: u64) -> String {
     if ms < 1000 {
         format!("{ms} ms")
     } else if ms < 60_000 {
-        let s = ms as f64 / 1000.0;
+        let s = display_f64(ms) / 1000.0;
         format!("{s:.2} s")
     } else {
         let m = ms / 60_000;
-        let s = (ms % 60_000) as f64 / 1000.0;
+        let s = display_f64(ms % 60_000) / 1000.0;
         format!("{m}m {s:.1}s")
     }
 }

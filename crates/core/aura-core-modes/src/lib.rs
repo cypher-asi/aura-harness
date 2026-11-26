@@ -45,7 +45,6 @@
 //!   enum.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod approval;
 mod capability_profile;

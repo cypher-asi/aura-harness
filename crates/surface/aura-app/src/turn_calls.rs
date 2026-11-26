@@ -117,10 +117,10 @@ impl TurnCalls {
                     purpose,
                     Some(ModelCallPurpose::Classify | ModelCallPurpose::Criteria)
                 ) {
-                    self.next.add(call);
+                    self.next.add(&call);
                     return Seen::Other;
                 }
-                self.current.add(call);
+                self.current.add(&call);
                 Seen::Call
             }
             _ => Seen::Other,
@@ -207,7 +207,7 @@ impl Spent {
 }
 
 impl Tally {
-    fn add(&mut self, call: Call<'_>) {
+    fn add(&mut self, call: &Call<'_>) {
         let name = upstream_model_name(call.model);
         match self
             .models

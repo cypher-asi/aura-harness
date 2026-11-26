@@ -27,23 +27,6 @@
 //! ```
 
 #![forbid(unsafe_code)]
-#![allow(clippy::module_name_repetitions)]
-// Line/column numbers and small counters never exceed i32::MAX or lose f64 precision
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_possible_wrap)]
-#![allow(clippy::cast_precision_loss)]
-// Internal crate — error docs for pub(crate) functions add noise
-#![allow(clippy::missing_errors_doc)]
-// Prompt-building code uses push_str(&format!()) extensively for clarity
-#![allow(clippy::format_push_string)]
-// Many match-to-let-else refactors would reduce readability in complex control flow
-#![allow(clippy::manual_let_else)]
-// Mutex guard drop timing is correct; tightening adds complexity for marginal benefit
-#![allow(clippy::significant_drop_tightening)]
-// Result wrappers kept for forward-compatibility (functions may gain error paths)
-#![allow(clippy::unnecessary_wraps)]
-// if-let-else is often more readable than map_or/map_or_else closures
-#![allow(clippy::option_if_let_else)]
 
 mod agent_loop;
 mod budget;

@@ -10,9 +10,8 @@ pub fn extract_struct_fields(content: &str, type_name: &str) -> Option<String> {
         let after = trimmed
             .strip_prefix(&struct_prefix_pub)
             .or_else(|| trimmed.strip_prefix(&struct_prefix));
-        let after = match after {
-            Some(rest) => rest,
-            None => continue,
+        let Some(after) = after else {
+            continue;
         };
         match after.chars().next() {
             Some('{' | ' ' | '<') | None => {}
@@ -106,9 +105,8 @@ pub fn extract_definition_block(content: &str, type_name: &str) -> Option<String
             let after = trimmed
                 .strip_prefix(prefix_pub.as_str())
                 .or_else(|| trimmed.strip_prefix(prefix_plain.as_str()));
-            let after = match after {
-                Some(rest) => rest,
-                None => continue,
+            let Some(after) = after else {
+                continue;
             };
             match after.chars().next() {
                 Some('{' | ' ' | '<' | ':') | None => {}

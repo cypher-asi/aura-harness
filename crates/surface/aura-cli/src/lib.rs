@@ -31,15 +31,6 @@
 //!   binaries had.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
-#![allow(
-    clippy::manual_let_else,
-    clippy::map_unwrap_or,
-    clippy::cast_possible_wrap,
-    clippy::ref_option,
-    clippy::needless_pass_by_value,
-    clippy::unnecessary_wraps
-)]
 
 use aura_core_modes::{AgentMode, ApprovalLevel};
 use clap::ValueEnum;

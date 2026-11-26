@@ -246,15 +246,12 @@ impl TaskToolExecutor {
     /// `task_done` completions.
     pub(super) async fn run_test_suite_warning(&self) {
         let project_root = Path::new(&self.project_folder);
-        let (cmd, source) = match self.resolve_test_command(project_root) {
-            Some(resolved) => resolved,
-            None => {
-                tracing::debug!(
-                    project = %self.project_folder,
-                    "no test_command configured — skipping post-task_done test run"
-                );
-                return;
-            }
+        let Some((cmd, source)) = self.resolve_test_command(project_root) else {
+            tracing::debug!(
+                project = %self.project_folder,
+                "no test_command configured — skipping post-task_done test run"
+            );
+            return;
         };
 
         self.emit_text(test_warning::post_task_done_starting_line(&cmd, source));

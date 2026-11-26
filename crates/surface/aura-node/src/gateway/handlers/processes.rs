@@ -437,7 +437,7 @@ async fn run_outcome(handle: &Arc<ChatRunHandle>) -> RunOutcome {
     let sub = handle.events.subscribe();
     for msg in &sub.history {
         if let Some(terminal) = inspect_frame(msg, &mut summary) {
-            return finalize(terminal, summary);
+            return finalize(terminal, &summary);
         }
     }
     if sub.already_done {
@@ -448,7 +448,7 @@ async fn run_outcome(handle: &Arc<ChatRunHandle>) -> RunOutcome {
         match live.recv().await {
             Ok(msg) => {
                 if let Some(terminal) = inspect_frame(&msg, &mut summary) {
-                    return finalize(terminal, summary);
+                    return finalize(terminal, &summary);
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
@@ -460,7 +460,7 @@ async fn run_outcome(handle: &Arc<ChatRunHandle>) -> RunOutcome {
 }
 
 /// Attach the accumulated text summary to a success outcome.
-fn finalize(terminal: TerminalFrame, summary: String) -> RunOutcome {
+fn finalize(terminal: TerminalFrame, summary: &str) -> RunOutcome {
     match terminal {
         TerminalFrame::Success => {
             let trimmed = summary.trim();

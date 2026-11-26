@@ -58,8 +58,8 @@ impl AutomatonBridge {
         project_id: Option<&str>,
         workspace: &std::path::Path,
         use_workspace_base_as_root: bool,
-        installed_tools: Vec<InstalledToolDefinition>,
-        installed_integrations: Vec<InstalledIntegrationDefinition>,
+        installed_tools: &[InstalledToolDefinition],
+        installed_integrations: &[InstalledIntegrationDefinition],
         agent_permissions: AgentPermissions,
     ) -> Result<Arc<Kernel>, String> {
         let domain_exec = Arc::new(DomainToolExecutor::with_session_context(
@@ -72,12 +72,12 @@ impl AutomatonBridge {
             &self.tool_config,
             Some(domain_exec.clone()),
         )
-        .with_installed_tools(installed_tools.clone());
+        .with_installed_tools(installed_tools.to_vec());
         let router = executor::build_executor_router(resolver);
         let agent_id = AgentId::generate();
         let policy = automaton_policy_config(
-            &installed_tools,
-            &installed_integrations,
+            installed_tools,
+            installed_integrations,
             agent_permissions.clone(),
         );
         let config = KernelConfig {
@@ -99,7 +99,7 @@ impl AutomatonBridge {
                 warn!(error = %e, "Kernel::new failed, falling back to fresh agent id");
                 let fallback_router = executor::build_executor_router(
                     executor::build_tool_resolver(&self.catalog, &self.tool_config, None)
-                        .with_installed_tools(installed_tools.clone()),
+                        .with_installed_tools(installed_tools.to_vec()),
                 );
                 // Retry with a fresh `AgentId` and the same config; the only
                 // failure mode left for `Kernel::new` is store corruption, in
@@ -112,8 +112,8 @@ impl AutomatonBridge {
                         workspace_base: workspace.to_path_buf(),
                         use_workspace_base_as_root,
                         policy: automaton_policy_config(
-                            &installed_tools,
-                            &installed_integrations,
+                            installed_tools,
+                            installed_integrations,
                             agent_permissions,
                         ),
                         ..KernelConfig::default()

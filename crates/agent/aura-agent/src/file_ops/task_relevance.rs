@@ -56,9 +56,8 @@ pub fn retrieve_task_relevant_files(
     max_bytes: usize,
 ) -> Result<String, FileOpsError> {
     let root = Path::new(project_root);
-    let ctx = match build_workspace_context_from_disk(root) {
-        Some(ctx) => ctx,
-        None => return super::read_relevant_files(project_root, max_bytes),
+    let Some(ctx) = build_workspace_context_from_disk(root) else {
+        return super::read_relevant_files(project_root, max_bytes);
     };
 
     let target_crates =
@@ -79,11 +78,10 @@ pub fn resolve_crate_api_context(
     project_root: &str,
     target_crate: &str,
     max_bytes: usize,
-) -> Result<String, FileOpsError> {
+) -> String {
     let root = Path::new(project_root);
-    let ctx = match build_workspace_context_from_disk(root) {
-        Some(ctx) => ctx,
-        None => return Ok(String::new()),
+    let Some(ctx) = build_workspace_context_from_disk(root) else {
+        return String::new();
     };
 
     let target_path = if ctx.members.contains(&target_crate.to_string()) {
@@ -91,17 +89,17 @@ pub fn resolve_crate_api_context(
     } else if let Some(path) = ctx.name_to_path.get(target_crate) {
         path.clone()
     } else {
-        return Ok(String::new());
+        return String::new();
     };
 
-    Ok(resolve_dependency_signatures_bfs(
+    resolve_dependency_signatures_bfs(
         root,
         &target_path,
         &ctx.crate_names,
         &ctx.crate_deps,
         &ctx.name_to_path,
         max_bytes,
-    ))
+    )
 }
 
 /// Identify target crates from task description and resolve their dependency APIs.
@@ -110,17 +108,16 @@ pub fn resolve_task_dep_api_context(
     task_title: &str,
     task_description: &str,
     max_bytes: usize,
-) -> Result<String, FileOpsError> {
+) -> String {
     let root = Path::new(project_root);
     let root_cargo = root.join("Cargo.toml");
-    let cargo_content = match std::fs::read_to_string(&root_cargo) {
-        Ok(c) => c,
-        Err(_) => return Ok(String::new()),
+    let Ok(cargo_content) = std::fs::read_to_string(&root_cargo) else {
+        return String::new();
     };
 
     let members = parse_workspace_members(&cargo_content);
     if members.is_empty() {
-        return Ok(String::new());
+        return String::new();
     }
 
     let mut crate_names: HashMap<String, String> = HashMap::new();
@@ -134,7 +131,7 @@ pub fn resolve_task_dep_api_context(
 
     let targets = identify_target_crates(task_title, task_description, &members, &crate_names);
     if targets.is_empty() {
-        return Ok(String::new());
+        return String::new();
     }
 
     let mut output = String::new();
@@ -144,14 +141,14 @@ pub fn resolve_task_dep_api_context(
         if remaining == 0 {
             break;
         }
-        let section = resolve_crate_api_context(project_root, target, remaining)?;
+        let section = resolve_crate_api_context(project_root, target, remaining);
         if !section.is_empty() {
             remaining = remaining.saturating_sub(section.len());
             output.push_str(&section);
         }
     }
 
-    Ok(output)
+    output
 }
 
 /// Like `retrieve_task_relevant_files` but uses a pre-built `WorkspaceCache`.
@@ -230,7 +227,7 @@ pub async fn resolve_task_dep_api_context_cached(
         )
     })
     .await
-    .map_err(|e| FileOpsError::Io(format!("spawn_blocking: {e}")))?
+    .map_err(|e| FileOpsError::Io(format!("spawn_blocking: {e}")))
 }
 
 fn resolve_task_dep_api_context_cached_sync(
@@ -239,9 +236,9 @@ fn resolve_task_dep_api_context_cached_sync(
     task_description: &str,
     max_bytes: usize,
     cache: &WorkspaceCache,
-) -> Result<String, FileOpsError> {
+) -> String {
     if cache.members.is_empty() {
-        return Ok(String::new());
+        return String::new();
     }
 
     let targets = identify_target_crates(
@@ -251,7 +248,7 @@ fn resolve_task_dep_api_context_cached_sync(
         &cache.crate_names,
     );
     if targets.is_empty() {
-        return Ok(String::new());
+        return String::new();
     }
 
     let root = Path::new(project_root);
@@ -286,5 +283,5 @@ fn resolve_task_dep_api_context_cached_sync(
         }
     }
 
-    Ok(output)
+    output
 }

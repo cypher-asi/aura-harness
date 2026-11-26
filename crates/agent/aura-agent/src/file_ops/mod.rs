@@ -1,4 +1,3 @@
-#![allow(clippy::module_name_repetitions)]
 // TODO(phase5, 2026-04-22): most of the file_ops helpers (walkers,
 // workspace_map, task_keywords, task_relevance, type_resolution,
 // validation, and the apply module) are WIP plumbing that is not yet

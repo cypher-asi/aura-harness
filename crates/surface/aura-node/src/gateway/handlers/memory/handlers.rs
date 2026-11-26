@@ -69,6 +69,10 @@ fn memory_store(
         })
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "used as a `map_err` callback, which passes the error by value"
+)]
 fn store_err(e: aura_context_memory::MemoryError) -> (StatusCode, Json<serde_json::Value>) {
     let msg = e.to_string();
     let status = if msg.contains("not found") {

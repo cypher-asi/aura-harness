@@ -371,11 +371,12 @@ async fn dispatch_idle_message(
                 "Generation request received"
             );
             match ctx.router_url {
-                Some(ref url) => match generation::start_generation(session, req, outbound_tx, url)
-                {
-                    Some(turn) => IdleAction::StartTurn(ActiveTurn::Generation(turn)),
-                    None => IdleAction::Continue,
-                },
+                Some(ref url) => {
+                    match generation::start_generation(session, &req, outbound_tx, url) {
+                        Some(turn) => IdleAction::StartTurn(ActiveTurn::Generation(turn)),
+                        None => IdleAction::Continue,
+                    }
+                }
                 None => {
                     warn!(
                         session_id = %session.session_id,

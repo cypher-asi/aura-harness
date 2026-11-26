@@ -145,8 +145,11 @@ pub async fn run_cli(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
         Some(Commands::Login(args)) => auth_commands::cmd_login(args).await,
         Some(Commands::Logout(args)) => auth_commands::cmd_logout(args).await,
         Some(Commands::Whoami) => auth_commands::cmd_whoami().await,
-        Some(Commands::Auth(args)) => auth_commands::cmd_auth(args),
-        Some(Commands::Migrate(args)) => cmd_migrate(args),
+        Some(Commands::Auth(args)) => auth_commands::cmd_auth(&args),
+        Some(Commands::Migrate(args)) => {
+            cmd_migrate(&args);
+            Ok(())
+        }
         Some(Commands::Plugins(args)) => cmd_plugins(args),
         Some(Commands::Runs(args)) => crate::trace_commands::cmd_runs(args).await,
         Some(Commands::Dataset(args)) => crate::trace_commands::cmd_dataset(args),
@@ -171,12 +174,11 @@ pub async fn run_cli(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
 /// session history). Documented in the plan
 /// (`phase-4a-config-aura-home`) so the CLI surface is stable when
 /// later phases land the real migration logic.
-fn cmd_migrate(args: MigrateArgs) -> anyhow::Result<()> {
+fn cmd_migrate(args: &MigrateArgs) {
     eprintln!(
         "aura migrate stub - Phase 4a placeholder; no migration actions performed (dry_run={})",
         args.dry_run
     );
-    Ok(())
 }
 
 /// `aura plugins` (Phase 4b).

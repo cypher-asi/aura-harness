@@ -63,13 +63,6 @@
 //!   rejections, auto-build feedback, post-task_done test warning).
 
 #![forbid(unsafe_code)]
-#![allow(clippy::module_name_repetitions)]
-// Prompt-building code uses push_str(&format!()) and format! liberally
-// for clarity; tightening these would harm readability.
-#![allow(clippy::format_push_string)]
-// Internal sub-modules tag many free helpers; documenting every
-// `# Errors` clause adds noise without reader value here.
-#![allow(clippy::missing_errors_doc)]
 
 pub mod auxiliary;
 pub mod bootstrap;

@@ -13,7 +13,6 @@
 //! header lives in this crate so it can be updated in one place.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod provider;
 

@@ -79,7 +79,7 @@ impl ModelProvider for StreamingMockProvider {
         }));
 
         for (idx, block) in response.message.content.iter().enumerate() {
-            let index = idx as u32;
+            let index = u32::try_from(idx).expect("content block index fits in u32");
             match block {
                 ContentBlock::Text { text } => {
                     events.push(Ok(StreamEvent::ContentBlockStart {

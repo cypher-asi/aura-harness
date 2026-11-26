@@ -287,7 +287,7 @@ pub(crate) fn spawn_chat_run(
         },
     );
 
-    let registry_for_task = registry.clone();
+    let registry_for_task = registry;
     tokio::spawn(async move {
         super::chat::run_chat_driver(
             session,

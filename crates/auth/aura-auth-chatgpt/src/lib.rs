@@ -12,7 +12,6 @@
 //! caller persists [`aura_core_auth::LinkedAccount`] and tokens.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod host;
 mod identity;

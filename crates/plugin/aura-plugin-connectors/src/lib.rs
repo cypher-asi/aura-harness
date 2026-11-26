@@ -28,7 +28,6 @@
 //!   an existing entry and returns the displaced connector for audit logs.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 pub mod error;
 pub mod registry;

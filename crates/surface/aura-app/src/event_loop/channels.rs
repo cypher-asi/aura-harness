@@ -876,7 +876,7 @@ pub(crate) async fn update_channel(
     let project_id = trimmed_project(project_id);
     let hub = Arc::clone(hub);
     let id = channel_id.to_string();
-    tokio::task::spawn_blocking(move || apply_update(&hub, &id, update, project_id))
+    tokio::task::spawn_blocking(move || apply_update(&hub, &id, update, project_id.as_deref()))
         .await
         .context("channel update task failed")?
 }
@@ -899,14 +899,14 @@ fn apply_update(
     hub: &AgentHub,
     channel_id: &str,
     mut update: ChannelUpdate,
-    project_id: Option<String>,
+    project_id: Option<&str>,
 ) -> anyhow::Result<ChannelUpdated> {
     let store = store_of(hub)?;
     // A channel's slug and coordinator never change, so the busy check
     // and the folder a cleared project needs can come before the lock.
     // Turns start from the event loop, which waits for this update.
     let before = open_record(store, channel_id)?;
-    if before.project_id != project_id && hub.is_running(before.coordinator) {
+    if before.project_id.as_deref() != project_id && hub.is_running(before.coordinator) {
         return Err(CoordinatorBusy { slug: before.slug }.into());
     }
     let folder = match project_id {
@@ -925,16 +925,16 @@ fn apply_update(
         coordinator: channel.coordinator,
         moved: false,
     };
-    if channel.project_id == project_id {
+    if channel.project_id.as_deref() == project_id {
         store
             .update(channel_id, update, chrono::Utc::now())
             .with_context(|| format!("updating channel {channel_id}"))?;
         return Ok(unchanged);
     }
-    let home = match (&project_id, folder) {
+    let home = match (project_id, folder) {
         (Some(project_id), _) => {
             check_project(&registry, project_id)?;
-            CoordinatorHome::Project(project_id.clone())
+            CoordinatorHome::Project(project_id.to_string())
         }
         (None, Some(folder)) => CoordinatorHome::Folder(folder),
         // Unreachable: the folder is made whenever there is no project.
@@ -944,7 +944,7 @@ fn apply_update(
         .members(&channel.id)
         .with_context(|| format!("reading the members of channel {channel_id}"))?;
     let placements = move_placements(&mut registry, channel.coordinator, &members, home)?;
-    update.project_id = Some(project_id.clone());
+    update.project_id = Some(project_id.map(str::to_string));
     registry.place_agents(&placements, |agents, rows| {
         let mut batch = WriteBatch::default();
         store
@@ -970,7 +970,7 @@ fn apply_update(
         channel_id = %channel.id,
         slug = %channel.slug,
         from = channel.project_id.as_deref().unwrap_or(""),
-        project_id = project_id.as_deref().unwrap_or(""),
+        project_id = project_id.unwrap_or(""),
         members = members.len(),
         moved = placements.len(),
         "Changed the channel's project"

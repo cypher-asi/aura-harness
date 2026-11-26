@@ -19,8 +19,6 @@
 //! fails on any `aura-context-memory -> aura-agent` edge.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
-#![allow(clippy::option_if_let_else)]
 
 /// Low-cost Anthropic model used for always-on memory extraction and
 /// consolidation unless the runtime explicitly configures another model.

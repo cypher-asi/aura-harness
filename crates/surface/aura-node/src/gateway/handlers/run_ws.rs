@@ -97,16 +97,13 @@ pub(in crate::gateway) async fn run_ws_handler(
             .into_response();
     }
 
-    let bridge = match state.automaton_bridge.clone() {
-        Some(b) => b,
-        None => {
-            crate::inbound_console::ws_rejection_line(
-                "upgrade.run",
-                "not_found",
-                Some(&format!("run_id={run_id}")),
-            );
-            return StatusCode::NOT_FOUND.into_response();
-        }
+    let Some(bridge) = state.automaton_bridge.clone() else {
+        crate::inbound_console::ws_rejection_line(
+            "upgrade.run",
+            "not_found",
+            Some(&format!("run_id={run_id}")),
+        );
+        return StatusCode::NOT_FOUND.into_response();
     };
 
     ws.on_upgrade(move |socket| async move {
@@ -126,13 +123,10 @@ async fn handle_automaton_ws(
 
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    let subscription = match bridge.subscribe_events(&automaton_id) {
-        Some(sub) => sub,
-        None => {
-            let msg = serde_json::json!({"type": "error", "message": format!("run {automaton_id} not found or already finished")}).to_string();
-            let _: Result<(), _> = ws_tx.send(WsMessage::Text(msg)).await;
-            return;
-        }
+    let Some(subscription) = bridge.subscribe_events(&automaton_id) else {
+        let msg = serde_json::json!({"type": "error", "message": format!("run {automaton_id} not found or already finished")}).to_string();
+        let _: Result<(), _> = ws_tx.send(WsMessage::Text(msg)).await;
+        return;
     };
     info!(
         automaton_id = %automaton_id,

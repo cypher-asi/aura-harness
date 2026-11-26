@@ -206,9 +206,7 @@ async fn prepare(
 /// Where the terminal started in `workspace_root` keeps its agents and
 /// records: `AURA_DATA_DIR`, else `aura_data` there.
 fn data_dir(workspace_root: &std::path::Path) -> PathBuf {
-    std::env::var("AURA_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| workspace_root.join("aura_data"))
+    std::env::var("AURA_DATA_DIR").map_or_else(|_| workspace_root.join("aura_data"), PathBuf::from)
 }
 
 /// The harness `aura eval run` runs tasks on under `gate`: `aura -p`'s

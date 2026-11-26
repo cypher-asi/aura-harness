@@ -227,7 +227,7 @@ async fn start_dev_loop_run(
             Some(model),
         )
         .await
-        .map_err(run_start_error_response)?;
+        .map_err(|e| run_start_error_response(&e))?;
 
     let event_stream_url = format!("/stream/{automaton_id}");
     Ok((
@@ -261,13 +261,13 @@ async fn start_task_run(
     } = req;
     require_agent_mode(mode, "task-run")?;
 
-    let (task_id, prior_failure, work_log) = match r#type {
-        RuntimeRequestType::TaskRun {
-            task_id,
-            prior_failure,
-            work_log,
-        } => (task_id, prior_failure, work_log),
-        _ => unreachable!("dispatched to task_run for non-TaskRun variant"),
+    let RuntimeRequestType::TaskRun {
+        task_id,
+        prior_failure,
+        work_log,
+    } = r#type
+    else {
+        unreachable!("dispatched to task_run for non-TaskRun variant")
     };
 
     let project_ctx = project.ok_or_else(|| {
@@ -318,7 +318,7 @@ async fn start_task_run(
             Some(model),
         )
         .await
-        .map_err(run_start_error_response)?;
+        .map_err(|e| run_start_error_response(&e))?;
 
     let event_stream_url = format!("/stream/{automaton_id}");
     Ok((
@@ -372,7 +372,7 @@ fn bad_request(message: &str) -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
-fn run_start_error_response(e: String) -> (StatusCode, Json<serde_json::Value>) {
+fn run_start_error_response(e: &str) -> (StatusCode, Json<serde_json::Value>) {
     let lowered = e.to_ascii_lowercase();
     let status = if lowered.contains("already running") {
         StatusCode::CONFLICT

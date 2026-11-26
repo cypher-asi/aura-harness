@@ -13,7 +13,6 @@
 //! place.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod provider;
 

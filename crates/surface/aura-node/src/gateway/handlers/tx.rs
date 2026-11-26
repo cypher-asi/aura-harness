@@ -127,9 +127,8 @@ fn carries_agent_permissions_mutation(payload: &[u8]) -> bool {
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(payload) else {
         return false;
     };
-    let obj = match value {
-        serde_json::Value::Object(obj) => obj,
-        _ => return false,
+    let serde_json::Value::Object(obj) = value else {
+        return false;
     };
     if let Some(kind) = obj.get("kind").and_then(|v| v.as_str()) {
         if kind == "agent_permissions" || kind == "set_agent_permissions" {

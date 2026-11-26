@@ -743,13 +743,13 @@ async fn inbound_failure_observer_mw(req: Request<Body>, next: Next) -> Response
         .map_or_else(|| status.to_string(), str::to_string);
     let reason = reason_for_status(status_code);
 
-    inbound_console::inbound_request_summary_block(InboundRequestView {
+    inbound_console::inbound_request_summary_block(&InboundRequestView {
         method: method.as_str(),
         path: &path,
         peer,
         body_bytes,
     });
-    inbound_console::inbound_failure_block(InboundFailureView {
+    inbound_console::inbound_failure_block(&InboundFailureView {
         status_code,
         status_text: &status_text,
         reason,

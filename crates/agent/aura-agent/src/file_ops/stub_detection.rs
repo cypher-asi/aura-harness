@@ -77,9 +77,8 @@ pub fn detect_stub_patterns(base_path: &Path, file_ops: &[FileOp]) -> Vec<StubRe
         if validate_path(base_path, &full_path).is_err() {
             continue;
         }
-        let content = match std::fs::read_to_string(&full_path) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let Ok(content) = std::fs::read_to_string(&full_path) else {
+            continue;
         };
 
         detect_stubs_in_content(path, &content, &mut reports);
@@ -149,9 +148,7 @@ fn detect_hollow_functions(path: &str, lines: &[&str], reports: &mut Vec<StubRep
             continue;
         }
 
-        let caps = if let Some(c) = fn_re.captures(trimmed) {
-            c
-        } else {
+        let Some(caps) = fn_re.captures(trimmed) else {
             i += 1;
             continue;
         };

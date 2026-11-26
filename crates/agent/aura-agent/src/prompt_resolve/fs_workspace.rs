@@ -110,9 +110,8 @@ fn grep_one(root: &Path, symbol: &str, max_hits: usize) -> Vec<SymbolHit> {
         r"\b(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|unsafe\s+|const\s+)*(?:fn|struct|trait|enum|type|impl|const|static|mod)\s+{}\b",
         regex::escape(symbol)
     );
-    let re = match Regex::new(&pattern) {
-        Ok(re) => re,
-        Err(_) => return Vec::new(),
+    let Ok(re) = Regex::new(&pattern) else {
+        return Vec::new();
     };
     let mut hits = Vec::new();
     for entry in WalkDir::new(root)

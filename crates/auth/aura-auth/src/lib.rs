@@ -25,7 +25,6 @@
 //! back in restores them.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 mod credentials;
 mod error;

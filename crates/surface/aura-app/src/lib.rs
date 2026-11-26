@@ -15,15 +15,6 @@
 //! [`session::SessionOptions`] or [`headless::HeadlessOptions`].
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
-#![allow(
-    clippy::manual_let_else,
-    clippy::map_unwrap_or,
-    clippy::cast_possible_wrap,
-    clippy::ref_option,
-    clippy::needless_pass_by_value,
-    clippy::unnecessary_wraps
-)]
 
 pub mod agent_definitions;
 pub mod agent_registry;

@@ -24,9 +24,8 @@ fn parse_workspace_metadata(root: &Path) -> Option<WorkspaceMetadata> {
     let mut crate_docs = HashMap::new();
 
     for member in &members {
-        let content = match std::fs::read_to_string(root.join(member).join("Cargo.toml")) {
-            Ok(c) => c,
-            Err(_) => continue,
+        let Ok(content) = std::fs::read_to_string(root.join(member).join("Cargo.toml")) else {
+            continue;
         };
         let name = parse_package_name(&content).unwrap_or_else(|| member.clone());
         crate_names.insert(member.clone(), name);
@@ -80,18 +79,17 @@ fn format_workspace_map(
 /// Parse the root `Cargo.toml` for `[workspace].members`, resolve each
 /// member's internal dependencies, and produce a compact structural summary
 /// (~2K tokens) suitable for prompt injection.
-pub fn generate_workspace_map(project_root: &str) -> Result<String, FileOpsError> {
+pub fn generate_workspace_map(project_root: &str) -> String {
     let root = Path::new(project_root);
-    let meta = match parse_workspace_metadata(root) {
-        Some(m) => m,
-        None => return Ok(String::new()),
+    let Some(meta) = parse_workspace_metadata(root) else {
+        return String::new();
     };
     let name_to_path: HashMap<String, String> = meta
         .crate_names
         .iter()
         .map(|(p, n)| (n.clone(), p.clone()))
         .collect();
-    Ok(format_workspace_map(&meta, &name_to_path))
+    format_workspace_map(&meta, &name_to_path)
 }
 
 pub fn parse_workspace_members(cargo_content: &str) -> Vec<String> {
@@ -219,9 +217,8 @@ fn read_crate_doc_comment(project_root: &Path, member: &str) -> String {
         return String::new();
     };
 
-    let content = match std::fs::read_to_string(&entry_file) {
-        Ok(c) => c,
-        Err(_) => return String::new(),
+    let Ok(content) = std::fs::read_to_string(&entry_file) else {
+        return String::new();
     };
 
     let mut doc_parts = Vec::new();
@@ -260,11 +257,10 @@ pub struct WorkspaceCache {
 }
 
 impl WorkspaceCache {
-    pub fn build(project_root: &str) -> Result<Self, FileOpsError> {
+    pub fn build(project_root: &str) -> Self {
         let root = Path::new(project_root);
-        let meta = match parse_workspace_metadata(root) {
-            Some(m) => m,
-            None => return Ok(Self::empty()),
+        let Some(meta) = parse_workspace_metadata(root) else {
+            return Self::empty();
         };
         let name_to_path: HashMap<String, String> = meta
             .crate_names
@@ -273,21 +269,21 @@ impl WorkspaceCache {
             .collect();
         let workspace_map_text = format_workspace_map(&meta, &name_to_path);
         let member_count = meta.members.len();
-        Ok(Self {
+        Self {
             members: meta.members,
             crate_names: meta.crate_names,
             crate_deps: meta.crate_deps,
             name_to_path,
             workspace_map_text,
             member_count,
-        })
+        }
     }
 
     pub async fn build_async(project_root: &str) -> Result<Self, FileOpsError> {
         let root = project_root.to_string();
         tokio::task::spawn_blocking(move || Self::build(&root))
             .await
-            .map_err(|e| FileOpsError::Io(format!("spawn_blocking: {e}")))?
+            .map_err(|e| FileOpsError::Io(format!("spawn_blocking: {e}")))
     }
 
     pub fn empty() -> Self {

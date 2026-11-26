@@ -14,7 +14,7 @@ use aura_core_types::{AgentId, Hash, SystemKind, Transaction, TransactionType};
 use aura_model::{Message, Role};
 use aura_ui_terminal::events::RewindScope;
 use aura_ui_terminal::UiCommand;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 /// Said wherever files are put back: the harness only sees file tools.
@@ -159,9 +159,10 @@ pub(super) async fn handle_diff(state: &LoopState<'_>, agent_id: AgentId, sessio
         return;
     };
     let workspace = state.kernel_for(agent_id).map(|k| k.agent_workspace());
-    let shown = blocking(move || session_diff(&files, agent_id, started_ms, session, workspace))
-        .await
-        .flatten();
+    let shown =
+        blocking(move || session_diff(&files, agent_id, started_ms, session, workspace.as_deref()))
+            .await
+            .flatten();
     let command = match shown {
         Some((title, diffs)) if diffs.is_empty() => system_message(format!("{title}: no files")),
         Some((title, diffs)) => UiCommand::ShowDiff {
@@ -180,9 +181,8 @@ fn session_diff(
     agent_id: AgentId,
     started_ms: u64,
     whole_session: bool,
-    workspace: Option<PathBuf>,
+    workspace: Option<&Path>,
 ) -> Option<(String, Vec<aura_ui_terminal::events::FileDiffData>)> {
-    let workspace = workspace.as_deref();
     if whole_session {
         let manifests = files.session_manifests(agent_id, started_ms);
         if manifests.is_empty() {

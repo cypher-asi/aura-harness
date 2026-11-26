@@ -162,8 +162,7 @@ fn impl_has_pub_methods(lines: &[&str], start: usize, is_trait_impl: bool) -> bo
         }
 
         if in_fn_body {
-            fn_body_depth += trimmed.chars().filter(|&c| c == '{').count() as i32;
-            fn_body_depth -= trimmed.chars().filter(|&c| c == '}').count() as i32;
+            fn_body_depth += brace_delta(trimmed);
             if fn_body_depth <= 0 {
                 in_fn_body = false;
             }
@@ -180,8 +179,7 @@ fn impl_has_pub_methods(lines: &[&str], start: usize, is_trait_impl: bool) -> bo
                     return true;
                 }
                 if trimmed.contains('{') {
-                    fn_body_depth = trimmed.chars().filter(|&c| c == '{').count() as i32
-                        - trimmed.chars().filter(|&c| c == '}').count() as i32;
+                    fn_body_depth = brace_delta(trimmed);
                     if fn_body_depth > 0 {
                         in_fn_body = true;
                     }
@@ -209,9 +207,18 @@ fn format_method_entry(trimmed: &str) -> (String, i32) {
         formatted.push_str(trimmed);
         formatted.push('\n');
     }
-    let body_depth = trimmed.chars().filter(|&c| c == '{').count() as i32
-        - trimmed.chars().filter(|&c| c == '}').count() as i32;
-    (formatted, body_depth)
+    (formatted, brace_delta(trimmed))
+}
+
+/// Net brace depth change of a line: `{` count minus `}` count.
+fn brace_delta(line: &str) -> i32 {
+    line.chars()
+        .map(|c| match c {
+            '{' => 1,
+            '}' => -1,
+            _ => 0,
+        })
+        .sum()
 }
 
 fn is_impl_noise(trimmed: &str, header: &str) -> bool {
@@ -254,8 +261,7 @@ fn extract_method_signatures(
         }
 
         if in_fn_body {
-            fn_body_depth += trimmed.chars().filter(|&c| c == '{').count() as i32;
-            fn_body_depth -= trimmed.chars().filter(|&c| c == '}').count() as i32;
+            fn_body_depth += brace_delta(trimmed);
             if fn_body_depth <= 0 {
                 in_fn_body = false;
             }

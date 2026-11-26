@@ -81,7 +81,7 @@ pub struct InboundFailureView<'a> {
 
 /// Render the request half of an inbound rejection as a multi-line
 /// block. Only emitted when the response was non-2xx.
-pub fn inbound_request_summary_block(view: InboundRequestView<'_>) {
+pub fn inbound_request_summary_block(view: &InboundRequestView<'_>) {
     let mut out = String::new();
     let header = format!("→ {} {}", view.method, view.path).cyan().bold();
     let tag = peer_tag(view.peer);
@@ -95,7 +95,7 @@ pub fn inbound_request_summary_block(view: InboundRequestView<'_>) {
 
 /// Render the response half of an inbound rejection. Header is
 /// red-bold so a 401 / 429 / 5xx jumps out of the transcript.
-pub fn inbound_failure_block(view: InboundFailureView<'_>) {
+pub fn inbound_failure_block(view: &InboundFailureView<'_>) {
     let mut out = String::new();
     let header = format!("← {} {}", view.status_code, view.reason)
         .red()
@@ -331,13 +331,13 @@ mod tests {
 
     #[test]
     fn inbound_request_summary_block_renders_without_panic() {
-        inbound_request_summary_block(InboundRequestView {
+        inbound_request_summary_block(&InboundRequestView {
             method: "GET",
             path: "/api/files",
             peer: Some(loopback()),
             body_bytes: None,
         });
-        inbound_request_summary_block(InboundRequestView {
+        inbound_request_summary_block(&InboundRequestView {
             method: "POST",
             path: "/tx",
             peer: Some(loopback()),
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn inbound_failure_block_renders_each_status_family() {
-        inbound_failure_block(InboundFailureView {
+        inbound_failure_block(&InboundFailureView {
             status_code: 401,
             status_text: "Unauthorized",
             reason: "unauthorized",
@@ -355,7 +355,7 @@ mod tests {
             peer: Some(loopback()),
             body_preview: None,
         });
-        inbound_failure_block(InboundFailureView {
+        inbound_failure_block(&InboundFailureView {
             status_code: 429,
             status_text: "Too Many Requests",
             reason: "rate_limited",
@@ -363,7 +363,7 @@ mod tests {
             peer: Some(loopback()),
             body_preview: None,
         });
-        inbound_failure_block(InboundFailureView {
+        inbound_failure_block(&InboundFailureView {
             status_code: 413,
             status_text: "Payload Too Large",
             reason: "body_too_large",
@@ -371,7 +371,7 @@ mod tests {
             peer: Some(loopback()),
             body_preview: Some("body too large"),
         });
-        inbound_failure_block(InboundFailureView {
+        inbound_failure_block(&InboundFailureView {
             status_code: 408,
             status_text: "Request Timeout",
             reason: "timeout",
@@ -379,7 +379,7 @@ mod tests {
             peer: Some(loopback()),
             body_preview: None,
         });
-        inbound_failure_block(InboundFailureView {
+        inbound_failure_block(&InboundFailureView {
             status_code: 502,
             status_text: "Bad Gateway",
             reason: "upstream_5xx",

@@ -88,6 +88,10 @@ impl StoreLedger {
     }
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "used as a `map_err` callback, which passes the error by value"
+)]
 fn store_error(err: aura_store_db::StoreError) -> CloudError {
     CloudError::io("cloud ledger", std::io::Error::other(err.to_string()))
 }

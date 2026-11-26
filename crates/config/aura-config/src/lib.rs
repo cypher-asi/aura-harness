@@ -148,7 +148,6 @@
 //! access from existing call sites.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 pub mod agent;
 pub mod aura_home;

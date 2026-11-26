@@ -12,7 +12,6 @@
 //! without depending on each other.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 pub mod domain;
 mod executor;

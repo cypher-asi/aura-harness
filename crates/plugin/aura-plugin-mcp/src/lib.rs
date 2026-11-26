@@ -42,7 +42,6 @@
 //!   child is killed before [`McpError::TimedOut`] is returned.
 
 #![forbid(unsafe_code)]
-#![warn(clippy::all)]
 
 pub mod client;
 pub mod config;

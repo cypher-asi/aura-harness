@@ -137,12 +137,9 @@ pub async fn walk_directory(
             continue;
         }
 
-        let mut read_dir = match tokio::fs::read_dir(&path).await {
-            Ok(rd) => rd,
-            Err(_) => {
-                warn!(path = %path.display(), "failed to read directory during walk");
-                continue;
-            }
+        let Ok(mut read_dir) = tokio::fs::read_dir(&path).await else {
+            warn!(path = %path.display(), "failed to read directory during walk");
+            continue;
         };
 
         let mut dirs: Vec<(String, PathBuf)> = Vec::new();

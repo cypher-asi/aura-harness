@@ -212,7 +212,7 @@ async fn the_reviewers_answer_goes_to_the_log_marked_as_replayed() {
 }
 
 /// A writer that answers once, calling the criteria tool with `items`.
-fn writer_of(items: serde_json::Value) -> Arc<dyn ModelProvider + Send + Sync> {
+fn writer_of(items: &serde_json::Value) -> Arc<dyn ModelProvider + Send + Sync> {
     let reply = aura_model::MockResponse::tool_use(
         "toolu_1",
         criteria::CRITERIA_TOOL,
@@ -238,7 +238,7 @@ async fn each_request_gets_its_criteria_written_once_and_kept() {
 
     // Two attempts at one request: its criteria are written once, and
     // kept for the next replay.
-    let writer = writer_of(two_criteria());
+    let writer = writer_of(&two_criteria());
     let mut written = Written::in_data_dir(dir.path());
     let twice = vec![ready.clone(), ready.clone()];
     let (held, cost_usd) = hold_to_criteria(twice, &mut written, SONNET, (&writer, None))
@@ -264,7 +264,7 @@ async fn each_request_gets_its_criteria_written_once_and_kept() {
     );
 
     // A request the writer gives no criteria for is left out.
-    let silent = writer_of(json!([]));
+    let silent = writer_of(&json!([]));
     let mut none = Written::in_data_dir(&dir.path().join("elsewhere"));
     let (held, _) = hold_to_criteria(vec![ready], &mut none, SONNET, (&silent, None))
         .await
@@ -278,7 +278,7 @@ async fn held_to_criteria_the_review_goes_through_them() {
     let Some(ready) = kept_attempt(&dir).await else {
         return;
     };
-    let writer = writer_of(two_criteria());
+    let writer = writer_of(&two_criteria());
     let mut written = Written::in_data_dir(dir.path());
     let (held, _) = hold_to_criteria(vec![ready], &mut written, SONNET, (&writer, None))
         .await

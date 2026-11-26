@@ -13,9 +13,8 @@ pub fn collect_rs_files_recursive(
     max_bytes: usize,
     included: &mut std::collections::HashSet<String>,
 ) -> Result<(), FileOpsError> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
     };
     let mut entries: Vec<_> = entries.filter_map(std::result::Result::ok).collect();
     entries.sort_by_key(std::fs::DirEntry::file_name);
@@ -61,9 +60,8 @@ pub fn collect_keyword_matching_files(
     results: &mut Vec<(String, std::path::PathBuf)>,
     already_included: &std::collections::HashSet<String>,
 ) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
     for entry in entries.filter_map(std::result::Result::ok) {
         let path = entry.path();

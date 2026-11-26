@@ -58,7 +58,7 @@ pub async fn run_full_test_suite(
     }
     let start = Instant::now();
     let result = runner::run_build_command(project_root, test_command, None, None).await?;
-    let duration_ms = start.elapsed().as_millis() as u64;
+    let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let (tests, summary) =
         runner::parse_test_output(&result.stdout, &result.stderr, result.success);
@@ -106,7 +106,7 @@ pub async fn run_and_handle_tests(
 
     let test_start = Instant::now();
     let test_result = runner::run_build_command(base_path, test_command, None, None).await?;
-    let dur = test_start.elapsed().as_millis() as u64;
+    let dur = u64::try_from(test_start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let (tests, summary) = runner::parse_test_output(
         &test_result.stdout,

@@ -367,7 +367,7 @@ fn run_shadow(
     }
 }
 
-fn stdout_trimmed(output: Output) -> String {
+fn stdout_trimmed(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
@@ -441,7 +441,7 @@ fn checkpoint_tip(metadata: &WorkspaceMetadata) -> Result<Option<String>, SafeWo
         ],
         true,
     )?;
-    Ok(output.status.success().then(|| stdout_trimmed(output)))
+    Ok(output.status.success().then(|| stdout_trimmed(&output)))
 }
 
 fn take_checkpoint(
@@ -480,10 +480,10 @@ fn take_checkpoint(
     }
 
     run_shadow(metadata, &["add", "-A", "--", "."], false)?;
-    let tree = stdout_trimmed(run_shadow(metadata, &["write-tree"], false)?);
+    let tree = stdout_trimmed(&run_shadow(metadata, &["write-tree"], false)?);
 
     if let Some(parent) = parent.as_deref() {
-        let parent_tree = stdout_trimmed(run_shadow(
+        let parent_tree = stdout_trimmed(&run_shadow(
             metadata,
             &["rev-parse", &format!("{parent}^{{tree}}")],
             false,
@@ -497,7 +497,7 @@ fn take_checkpoint(
     if let Some(parent) = parent.as_deref() {
         args.splice(2..2, ["-p", parent]);
     }
-    let commit = stdout_trimmed(run_shadow(metadata, &args, false)?);
+    let commit = stdout_trimmed(&run_shadow(metadata, &args, false)?);
     let mut update_args = vec!["update-ref", CHECKPOINT_REF, commit.as_str()];
     if let Some(parent) = parent.as_deref() {
         update_args.push(parent);
@@ -597,7 +597,7 @@ fn prepare_workspace_blocking(
     let source_path = source_path.canonicalize().map_err(|error| {
         SafeWorkspaceError::Unsupported(format!("{} ({error})", source_path.display()))
     })?;
-    let source_repo = PathBuf::from(stdout_trimmed(run_git(
+    let source_repo = PathBuf::from(stdout_trimmed(&run_git(
         &source_path,
         &["rev-parse", "--show-toplevel"],
     )?))
@@ -614,7 +614,7 @@ fn prepare_workspace_blocking(
         ));
     }
 
-    let base_commit = stdout_trimmed(run_git(&source_repo, &["rev-parse", "HEAD"])?);
+    let base_commit = stdout_trimmed(&run_git(&source_repo, &["rev-parse", "HEAD"])?);
     let workspace_root = root.join(WORKTREE_DIR);
     clean_incomplete_workspace(&source_repo, &root, &workspace_root)?;
     let workspace_arg = workspace_root.to_string_lossy().to_string();
@@ -708,7 +708,7 @@ fn validate_checkpoint_id(
         ],
         false,
     )?;
-    let resolved = stdout_trimmed(resolved);
+    let resolved = stdout_trimmed(&resolved);
     let ancestor = run_shadow(
         metadata,
         &["merge-base", "--is-ancestor", &resolved, CHECKPOINT_REF],
@@ -728,7 +728,7 @@ fn checkpoint_diff_blocking(
 ) -> Result<SafeWorkspaceDiff, SafeWorkspaceError> {
     let checkpoint_id = validate_checkpoint_id(metadata, checkpoint_id)?;
     run_shadow(metadata, &["add", "-A", "--", "."], false)?;
-    let stat = stdout_trimmed(run_shadow(
+    let stat = stdout_trimmed(&run_shadow(
         metadata,
         &["diff", "--cached", "--stat", &checkpoint_id],
         false,
@@ -784,7 +784,7 @@ fn first_checkpoint(metadata: &WorkspaceMetadata) -> Result<String, SafeWorkspac
         &["rev-list", "--max-parents=0", CHECKPOINT_REF],
         false,
     )?;
-    stdout_trimmed(output)
+    stdout_trimmed(&output)
         .lines()
         .last()
         .map(str::to_string)
@@ -804,7 +804,7 @@ fn apply_to_source_blocking(root: &Path) -> Result<SafeWorkspaceApplyResult, Saf
         Some(id) => validate_checkpoint_id(&metadata, id)?,
         None => first_checkpoint(&metadata)?,
     };
-    let stat = stdout_trimmed(run_shadow(
+    let stat = stdout_trimmed(&run_shadow(
         &metadata,
         &["diff", "--stat", &baseline, &checkpoint_id],
         false,
@@ -949,7 +949,7 @@ fn ensure_source_git_repository(source_path: &Path) -> Result<(), SafeWorkspaceE
     Ok(())
 }
 
-fn workspace_error_response(error: SafeWorkspaceError) -> Response {
+fn workspace_error_response(error: &SafeWorkspaceError) -> Response {
     let status = match error {
         SafeWorkspaceError::Unsupported(_) | SafeWorkspaceError::InvalidMetadata(_) => {
             StatusCode::BAD_REQUEST
@@ -981,11 +981,11 @@ pub(in crate::gateway) async fn prepare_safe_workspace_handler(
 ) -> Response {
     let workspace_key = match validate_key(&workspace_key, "workspace key") {
         Ok(value) => value.to_string(),
-        Err(error) => return workspace_error_response(error),
+        Err(error) => return workspace_error_response(&error),
     };
     let session_id = match validate_key(&session_id, "session id") {
         Ok(value) => value.to_string(),
-        Err(error) => return workspace_error_response(error),
+        Err(error) => return workspace_error_response(&error),
     };
     let data_dir = state.config.data_dir.clone();
     let source_path = state.config.resolve_workspace_for_project(&workspace_key);
@@ -1002,8 +1002,8 @@ pub(in crate::gateway) async fn prepare_safe_workspace_handler(
     .await
     {
         Ok(Ok(result)) => Json(result).into_response(),
-        Ok(Err(error)) => workspace_error_response(error),
-        Err(error) => workspace_error_response(SafeWorkspaceError::Io(std::io::Error::other(
+        Ok(Err(error)) => workspace_error_response(&error),
+        Err(error) => workspace_error_response(&SafeWorkspaceError::Io(std::io::Error::other(
             format!("safe workspace task failed: {error}"),
         ))),
     }
@@ -1015,11 +1015,11 @@ pub(in crate::gateway) async fn safe_workspace_status_handler(
 ) -> Response {
     let workspace_key = match validate_key(&workspace_key, "workspace key") {
         Ok(value) => value.to_string(),
-        Err(error) => return workspace_error_response(error),
+        Err(error) => return workspace_error_response(&error),
     };
     let session_id = match validate_key(&session_id, "session id") {
         Ok(value) => value.to_string(),
-        Err(error) => return workspace_error_response(error),
+        Err(error) => return workspace_error_response(&error),
     };
     let data_dir = state.config.data_dir.clone();
     let root = match find_existing_session_root(&data_dir, &workspace_key, &session_id) {
@@ -1035,7 +1035,7 @@ pub(in crate::gateway) async fn safe_workspace_status_handler(
             })
             .into_response();
         }
-        Err(error) => return workspace_error_response(error),
+        Err(error) => return workspace_error_response(&error),
     };
     match tokio::task::spawn_blocking(move || {
         let metadata = read_metadata(&root)?;
@@ -1058,8 +1058,8 @@ pub(in crate::gateway) async fn safe_workspace_status_handler(
     .await
     {
         Ok(Ok(status)) => Json(status).into_response(),
-        Ok(Err(error)) => workspace_error_response(error),
-        Err(error) => workspace_error_response(SafeWorkspaceError::Io(std::io::Error::other(
+        Ok(Err(error)) => workspace_error_response(&error),
+        Err(error) => workspace_error_response(&SafeWorkspaceError::Io(std::io::Error::other(
             format!("safe workspace task failed: {error}"),
         ))),
     }
@@ -1072,13 +1072,13 @@ pub(in crate::gateway) async fn safe_workspace_diff_handler(
     if let Err(error) = validate_key(&workspace_key, "workspace key")
         .and_then(|_| validate_key(&session_id, "session id"))
     {
-        return workspace_error_response(error);
+        return workspace_error_response(&error);
     }
     let root = match find_existing_session_root(&state.config.data_dir, &workspace_key, &session_id)
     {
         Ok(Some(root)) => root,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(error) => return workspace_error_response(error),
+        Err(error) => return workspace_error_response(&error),
     };
     match tokio::task::spawn_blocking(move || {
         let _lock = WorkspaceLock::acquire(&root)?;
@@ -1088,8 +1088,8 @@ pub(in crate::gateway) async fn safe_workspace_diff_handler(
     .await
     {
         Ok(Ok(diff)) => Json(diff).into_response(),
-        Ok(Err(error)) => workspace_error_response(error),
-        Err(error) => workspace_error_response(SafeWorkspaceError::Io(std::io::Error::other(
+        Ok(Err(error)) => workspace_error_response(&error),
+        Err(error) => workspace_error_response(&SafeWorkspaceError::Io(std::io::Error::other(
             format!("safe workspace task failed: {error}"),
         ))),
     }
@@ -1102,20 +1102,20 @@ pub(in crate::gateway) async fn restore_safe_workspace_handler(
     if let Err(error) = validate_key(&workspace_key, "workspace key")
         .and_then(|_| validate_key(&session_id, "session id"))
     {
-        return workspace_error_response(error);
+        return workspace_error_response(&error);
     }
     let root = match find_existing_session_root(&state.config.data_dir, &workspace_key, &session_id)
     {
         Ok(Some(root)) => root,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(error) => return workspace_error_response(error),
+        Err(error) => return workspace_error_response(&error),
     };
     match tokio::task::spawn_blocking(move || restore_checkpoint_blocking(&root, &checkpoint_id))
         .await
     {
         Ok(Ok(result)) => Json(result).into_response(),
-        Ok(Err(error)) => workspace_error_response(error),
-        Err(error) => workspace_error_response(SafeWorkspaceError::Io(std::io::Error::other(
+        Ok(Err(error)) => workspace_error_response(&error),
+        Err(error) => workspace_error_response(&SafeWorkspaceError::Io(std::io::Error::other(
             format!("safe workspace task failed: {error}"),
         ))),
     }
@@ -1128,18 +1128,18 @@ pub(in crate::gateway) async fn apply_safe_workspace_handler(
     if let Err(error) = validate_key(&workspace_key, "workspace key")
         .and_then(|_| validate_key(&session_id, "session id"))
     {
-        return workspace_error_response(error);
+        return workspace_error_response(&error);
     }
     let root = match find_existing_session_root(&state.config.data_dir, &workspace_key, &session_id)
     {
         Ok(Some(root)) => root,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(error) => return workspace_error_response(error),
+        Err(error) => return workspace_error_response(&error),
     };
     match tokio::task::spawn_blocking(move || apply_to_source_blocking(&root)).await {
         Ok(Ok(result)) => Json(result).into_response(),
-        Ok(Err(error)) => workspace_error_response(error),
-        Err(error) => workspace_error_response(SafeWorkspaceError::Io(std::io::Error::other(
+        Ok(Err(error)) => workspace_error_response(&error),
+        Err(error) => workspace_error_response(&SafeWorkspaceError::Io(std::io::Error::other(
             format!("safe workspace task failed: {error}"),
         ))),
     }

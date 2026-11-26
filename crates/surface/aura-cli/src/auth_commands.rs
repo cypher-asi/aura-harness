@@ -188,7 +188,7 @@ pub(crate) async fn cmd_whoami() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn cmd_auth(command: AuthCommand) -> anyhow::Result<()> {
+pub(crate) fn cmd_auth(command: &AuthCommand) -> anyhow::Result<()> {
     match command.action {
         AuthSubcommand::Move { to_zos: _ } => {
             let auth = manager()?;

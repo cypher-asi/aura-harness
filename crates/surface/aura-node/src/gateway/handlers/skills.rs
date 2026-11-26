@@ -15,6 +15,10 @@ use std::sync::{Arc, RwLock};
 
 type ApiResult<T> = Result<Json<T>, (StatusCode, Json<serde_json::Value>)>;
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "used as a `map_err` callback, which passes the error by value"
+)]
 fn skill_err(e: aura_context_skills::SkillError) -> (StatusCode, Json<serde_json::Value>) {
     let status = if e.is_not_found() {
         StatusCode::NOT_FOUND
