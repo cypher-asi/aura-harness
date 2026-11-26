@@ -16,7 +16,7 @@ impl App {
             .unwrap_or_else(|| PathBuf::from("/"));
         match FolderPicker::open(start) {
             Ok(picker) => {
-                self.folder_picker = Some(picker);
+                self.project_list.folder_picker = Some(picker);
                 self.state = AppState::SelectingFolder;
                 self.status = "Project folder".to_string();
             }
@@ -36,7 +36,7 @@ impl App {
 
     /// Close the folder browser and open the folder as a project.
     pub(in crate::app) fn choose_project_folder(&mut self, folder: PathBuf) {
-        self.folder_picker = None;
+        self.project_list.folder_picker = None;
         self.state = AppState::Idle;
         self.status = "Ready".to_string();
         if let Some(tx) = &self.event_tx {
@@ -46,7 +46,7 @@ impl App {
 
     /// Close the folder browser without creating a project.
     pub(in crate::app) fn cancel_folder_picker(&mut self) {
-        self.folder_picker = None;
+        self.project_list.folder_picker = None;
         self.state = AppState::Idle;
         self.status = "Ready".to_string();
         self.notifications.current = Some(("Cancelled".to_string(), NotificationType::Warning));
@@ -83,13 +83,14 @@ impl App {
     /// Folder browser for a new project, while it is open.
     #[must_use]
     pub const fn folder_picker(&self) -> Option<&FolderPicker> {
-        self.folder_picker.as_ref()
+        self.project_list.folder_picker.as_ref()
     }
 
     /// Keep the folder browser's highlight inside a list `visible_rows`
     /// tall, returning the first row to show.
     pub fn sync_folder_picker_scroll(&mut self, visible_rows: usize) -> usize {
-        self.folder_picker
+        self.project_list
+            .folder_picker
             .as_mut()
             .map_or(0, |picker| picker.sync_scroll(visible_rows))
     }
@@ -97,7 +98,7 @@ impl App {
     /// Listed projects, in list order.
     #[must_use]
     pub fn projects(&self) -> &[ProjectSummary] {
-        &self.projects
+        &self.project_list.projects
     }
 
     /// The project whose details are shown, while they are.
@@ -106,20 +107,28 @@ impl App {
         if self.state != AppState::ShowingProjectInfo {
             return None;
         }
-        let key = self.project_info.as_deref()?;
-        self.projects.iter().find(|project| project.id == key)
+        let key = self.project_list.project_info.as_deref()?;
+        self.project_list
+            .projects
+            .iter()
+            .find(|project| project.id == key)
     }
 
     /// Show the details of the project with key `key`.
     pub(in crate::app) fn show_project_info(&mut self, key: &str) {
-        if !self.projects.iter().any(|project| project.id == key) {
+        if !self
+            .project_list
+            .projects
+            .iter()
+            .any(|project| project.id == key)
+        {
             self.notifications.current = Some((
                 "No details for that project".to_string(),
                 NotificationType::Warning,
             ));
             return;
         }
-        self.project_info = Some(key.to_string());
+        self.project_list.project_info = Some(key.to_string());
         self.state = AppState::ShowingProjectInfo;
     }
 
@@ -136,7 +145,7 @@ impl App {
 
     /// Close the project details.
     pub(in crate::app) fn close_project_info(&mut self) {
-        self.project_info = None;
+        self.project_list.project_info = None;
         self.state = AppState::Idle;
     }
 }

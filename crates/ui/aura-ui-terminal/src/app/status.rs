@@ -184,15 +184,15 @@ impl App {
     /// Whether new activity blocks start expanded.
     #[must_use]
     pub const fn activity_expanded(&self) -> bool {
-        self.activity_expanded
+        self.chat.activity_expanded
     }
 
     /// Expand every activity block, or collapse them all if they were
     /// expanded. New blocks follow suit.
     pub fn toggle_all_activity(&mut self) {
-        self.activity_expanded = !self.activity_expanded;
-        let expanded = self.activity_expanded;
-        self.group_open.clear();
+        self.chat.activity_expanded = !self.chat.activity_expanded;
+        let expanded = self.chat.activity_expanded;
+        self.chat.group_open.clear();
         for message in &mut self.messages {
             message.set_expanded(expanded);
         }

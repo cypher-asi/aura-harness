@@ -298,7 +298,7 @@ impl App {
         let Some(target) = field.picker_target() else {
             return;
         };
-        if self.models.is_empty() {
+        if self.account.models.is_empty() {
             self.notifications.current = Some((
                 "Model list not loaded yet".to_string(),
                 NotificationType::Warning,
@@ -311,8 +311,9 @@ impl App {
             .row_model(field)
             .unwrap_or_default()
             .to_string();
-        self.model_picker
-            .open_for(&self.models, &current, target, filter);
+        self.account
+            .model_picker
+            .open_for(&self.account.models, &current, target, filter);
         self.state = AppState::SelectingModel;
     }
 
@@ -320,19 +321,24 @@ impl App {
     /// `field`, and go on to the next row. A model that can't run yet is
     /// refused with what it needs, and the selector stays open.
     pub(in crate::app) fn pick_bench_model(&mut self, field: FormField, id: &str) {
-        let needs = self.models.iter().find(|m| m.id == id).and_then(|m| {
-            if m.local && !m.installed {
-                Some(format!("{} is not pulled yet", m.label))
-            } else if !m.available {
-                let login = match m.provider.as_deref() {
-                    Some(provider) if provider != "zos" => format!("/login {provider}"),
-                    _ => "/login".to_string(),
-                };
-                Some(format!("{} needs a sign-in first: {login}", m.label))
-            } else {
-                None
-            }
-        });
+        let needs = self
+            .account
+            .models
+            .iter()
+            .find(|m| m.id == id)
+            .and_then(|m| {
+                if m.local && !m.installed {
+                    Some(format!("{} is not pulled yet", m.label))
+                } else if !m.available {
+                    let login = match m.provider.as_deref() {
+                        Some(provider) if provider != "zos" => format!("/login {provider}"),
+                        _ => "/login".to_string(),
+                    };
+                    Some(format!("{} needs a sign-in first: {login}", m.label))
+                } else {
+                    None
+                }
+            });
         if let Some(needs) = needs {
             self.notifications.current = Some((needs, NotificationType::Warning));
             return;
@@ -352,8 +358,8 @@ impl App {
     /// benchmark row's it was opened for.
     #[must_use]
     pub fn picker_marked(&self) -> &str {
-        match FormField::of_picker(self.model_picker.target()) {
-            None => &self.current_model,
+        match FormField::of_picker(self.account.model_picker.target()) {
+            None => &self.account.current_model,
             Some(field) => self.bench.form.row_model(field).unwrap_or_default(),
         }
     }

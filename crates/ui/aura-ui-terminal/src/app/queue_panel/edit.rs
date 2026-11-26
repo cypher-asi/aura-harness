@@ -131,7 +131,12 @@ impl App {
     /// Keep the previews of a queued message under its new text, so the
     /// chat still finds them when the message runs.
     pub(super) fn rename_queued_previews(&mut self, old: &str, new: &str) {
-        if let Some(entry) = self.queued_images.iter_mut().find(|(text, _)| text == old) {
+        if let Some(entry) = self
+            .chat
+            .queued_images
+            .iter_mut()
+            .find(|(text, _)| text == old)
+        {
             new.clone_into(&mut entry.0);
         }
     }
@@ -150,8 +155,8 @@ impl App {
             Some(at) => self.queue_panel.renames.remove(at).old,
             None => text.to_string(),
         };
-        if let Some(at) = self.queued_images.iter().position(|(t, _)| *t == text) {
-            self.queued_images.remove(at);
+        if let Some(at) = self.chat.queued_images.iter().position(|(t, _)| *t == text) {
+            self.chat.queued_images.remove(at);
         }
     }
 }

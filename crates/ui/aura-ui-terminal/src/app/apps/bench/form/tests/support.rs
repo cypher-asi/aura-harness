@@ -66,7 +66,7 @@ pub(super) const OPUS_5_5: &str = "claude/claude-opus-5-5";
 /// names.
 pub(super) fn app_with_models(ids: &[(&str, &str)]) -> App {
     let mut app = App::new();
-    app.models = ids
+    app.account.models = ids
         .iter()
         .map(|(id, label)| crate::events::ModelOptionView {
             id: (*id).to_string(),

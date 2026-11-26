@@ -133,14 +133,14 @@ fn test_clicking_a_group_summary_flips_what_it_shows() {
 
     app.set_chat_layout(vec![group(false)], 0);
     click(&mut app);
-    assert_eq!(app.group_open.get(&7), Some(&true));
+    assert_eq!(app.chat.group_open.get(&7), Some(&true));
 
     app.set_chat_layout(vec![group(true)], 0);
     click(&mut app);
-    assert_eq!(app.group_open.get(&7), Some(&false));
+    assert_eq!(app.chat.group_open.get(&7), Some(&false));
 
     app.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
-    assert!(app.group_open.is_empty());
+    assert!(app.chat.group_open.is_empty());
 }
 
 #[test]

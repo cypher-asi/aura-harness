@@ -7,8 +7,8 @@ impl App {
     /// of each one, and `first_line` is the chat line at the top of the
     /// view.
     pub(crate) fn set_chat_layout(&mut self, rows: Vec<ToggleRow>, first_line: usize) {
-        self.toggle_rows = rows;
-        self.chat_first_line = first_line;
+        self.chat.toggle_rows = rows;
+        self.chat.first_line = first_line;
     }
 
     /// The activity row at a screen cell, using the layout of the last frame.
@@ -17,13 +17,17 @@ impl App {
             .areas
             .chat_text
             .filter(|area| contains(Some(*area), column, row))?;
-        let line = self.chat_first_line + usize::from(row - area.y);
-        self.toggle_rows.iter().find(|r| r.line == line).copied()
+        let line = self.chat.first_line + usize::from(row - area.y);
+        self.chat
+            .toggle_rows
+            .iter()
+            .find(|r| r.line == line)
+            .copied()
     }
 
     /// Record where the chat drew code blocks' copy buttons this frame.
     pub(crate) fn set_chat_code_copies(&mut self, hits: Vec<CodeCopyHit>) {
-        self.code_copy_hits = hits;
+        self.chat.code_copy_hits = hits;
     }
 
     /// The code block copy button at a screen cell, using the last frame.
@@ -36,9 +40,10 @@ impl App {
             .areas
             .chat_text
             .filter(|area| contains(Some(*area), column, row))?;
-        let line = self.chat_first_line + usize::from(row - area.y);
+        let line = self.chat.first_line + usize::from(row - area.y);
         let x = column - area.x;
-        self.code_copy_hits
+        self.chat
+            .code_copy_hits
             .iter()
             .find(|hit| hit.line == line && (hit.x..hit.x + hit.width).contains(&x))
     }
@@ -47,11 +52,11 @@ impl App {
     /// on what covers one does not copy.
     pub(crate) fn drop_covered_code_copies(&mut self, buffer: &Buffer) {
         let Some(area) = self.areas.chat_text else {
-            self.code_copy_hits.clear();
+            self.chat.code_copy_hits.clear();
             return;
         };
-        let first = self.chat_first_line;
-        self.code_copy_hits.retain(|hit| {
+        let first = self.chat.first_line;
+        self.chat.code_copy_hits.retain(|hit| {
             let Some(y) = hit
                 .line
                 .checked_sub(first)
@@ -103,7 +108,7 @@ impl App {
         };
         match toggle.target {
             ToggleTarget::Group(id) => {
-                self.group_open.insert(id, !toggle.open);
+                self.chat.group_open.insert(id, !toggle.open);
             }
             ToggleTarget::Step(id) => {
                 if self.open_tool_step(id) {

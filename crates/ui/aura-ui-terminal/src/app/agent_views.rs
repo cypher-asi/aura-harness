@@ -126,12 +126,15 @@ impl App {
     /// Exchange the chat on screen with `view`.
     fn swap_chat(&mut self, view: &mut AgentView) {
         mem::swap(&mut self.messages, &mut view.messages);
-        mem::swap(&mut self.streaming_content, &mut view.streaming_content);
+        mem::swap(
+            &mut self.chat.streaming_content,
+            &mut view.streaming_content,
+        );
         mem::swap(&mut self.status, &mut view.status);
         mem::swap(&mut self.ticks.processing_since, &mut view.processing_since);
         mem::swap(&mut self.scroll_offset, &mut view.scroll_offset);
-        mem::swap(&mut self.group_open, &mut view.group_open);
-        mem::swap(&mut self.chat_lines, &mut view.chat_lines);
+        mem::swap(&mut self.chat.group_open, &mut view.group_open);
+        mem::swap(&mut self.chat.chat_lines, &mut view.chat_lines);
         mem::swap(&mut self.pending.approvals, &mut view.pending_approvals);
         mem::swap(&mut self.hud, &mut view.hud);
         mem::swap(&mut self.switching.chat_loaded, &mut view.loaded);

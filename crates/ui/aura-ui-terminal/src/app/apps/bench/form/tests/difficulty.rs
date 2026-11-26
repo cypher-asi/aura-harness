@@ -28,7 +28,7 @@ fn difficulty_rows_show_only_for_a_by_difficulty_arm() {
 #[test]
 fn a_difficulty_row_cycles_models_and_enter_opens_the_model_selector() {
     let mut app = three_models();
-    let session = app.current_model.clone();
+    let session = app.account.current_model.clone();
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     app.event_tx = Some(tx);
     app.bench.mode = Some(BenchMode::Form);
@@ -46,7 +46,7 @@ fn a_difficulty_row_cycles_models_and_enter_opens_the_model_selector() {
     assert!(app.bench_form_key(key(KeyCode::Enter)));
     assert_eq!(app.state, AppState::SelectingModel);
     assert_eq!(
-        app.model_picker.target(),
+        app.account.model_picker.target(),
         PickerTarget::BenchDifficulty {
             arm: 0,
             difficulty: 0
@@ -61,7 +61,7 @@ fn a_difficulty_row_cycles_models_and_enter_opens_the_model_selector() {
     assert_eq!(app.bench.form.a_models[0], DEEPSEEK);
     assert_eq!(app.bench.form.field, FormField::AMedium, "on to the next");
     assert_eq!(
-        app.current_model, session,
+        app.account.current_model, session,
         "the session's model is untouched"
     );
     assert!(
@@ -80,7 +80,7 @@ fn typing_on_a_difficulty_row_opens_the_selector_filtered() {
     app.input.text = "gpt".to_string();
     assert!(app.bench_fill_field());
     assert_eq!(app.state, AppState::SelectingModel);
-    assert_eq!(app.model_picker.filter(), "gpt");
+    assert_eq!(app.account.model_picker.filter(), "gpt");
     assert!(app.input.text.is_empty());
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.bench.form.b_models[2], "chatgpt/gpt-5.4");
@@ -89,7 +89,7 @@ fn typing_on_a_difficulty_row_opens_the_selector_filtered() {
 #[test]
 fn the_selector_refuses_a_model_that_needs_a_sign_in_for_a_row() {
     let mut app = three_models();
-    app.models.push(crate::events::ModelOptionView {
+    app.account.models.push(crate::events::ModelOptionView {
         id: "openrouter/qwen/qwen3-coder".to_string(),
         label: "Qwen3 Coder".to_string(),
         local: false,

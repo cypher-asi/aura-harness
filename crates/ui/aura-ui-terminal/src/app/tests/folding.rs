@@ -60,29 +60,29 @@ fn folding_an_agent_hides_what_it_spawned_and_nested_folds_survive() {
 fn folding_an_agent_parks_a_hidden_highlight_on_it() {
     let (mut app, _rx) = app_with_spawn_tree();
     let cc = app.row_of_agent(2).expect("cc shown");
-    app.selected_agent = cc;
+    app.project_list.selected = cc;
     app.toggle_agent(1);
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 1 }
     );
     app.toggle_agent(1);
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 1 },
         "opening keeps the same row"
     );
 
     // A highlight below the fold follows its row up and back down.
-    app.selected_agent = app.row_of_agent(3).expect("dd shown");
+    app.project_list.selected = app.row_of_agent(3).expect("dd shown");
     app.toggle_agent(1);
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 3 }
     );
     app.toggle_agent(1);
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 3 }
     );
 }
@@ -91,14 +91,14 @@ fn folding_an_agent_parks_a_hidden_highlight_on_it() {
 fn space_folds_an_agent_with_spawns_and_a_leaf_folds_its_project() {
     let (mut app, mut rx) = app_with_spawn_tree();
     app.focus = PanelFocus::Swarm;
-    app.selected_agent = app.row_of_agent(1).expect("bb shown");
+    app.project_list.selected = app.row_of_agent(1).expect("bb shown");
     app.handle_key(key(KeyCode::Char(' ')));
     assert!(app.agent_folded(1));
     assert_eq!(shown_agents(&app), [0, 1, 3, 4], "the project stays open");
     app.handle_key(key(KeyCode::Char(' ')));
     assert!(!app.agent_folded(1));
 
-    app.selected_agent = app.row_of_agent(3).expect("dd shown");
+    app.project_list.selected = app.row_of_agent(3).expect("dd shown");
     app.handle_key(key(KeyCode::Char(' ')));
     assert!(matches!(
         app.project_rows()[0],
@@ -153,7 +153,7 @@ fn switching_to_a_hidden_subagent_opens_the_agents_above_it() {
     app.process_command(UiCommand::SetActiveAgent("cc".to_string()));
     assert_eq!(shown_agents(&app), [0, 1, 2, 3, 4]);
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 2 }
     );
 
@@ -163,7 +163,7 @@ fn switching_to_a_hidden_subagent_opens_the_agents_above_it() {
     app.switch_agent_by(1);
     assert!(!app.agent_folded(0));
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 1 }
     );
 }
@@ -175,7 +175,7 @@ fn a_folded_agents_hidden_active_spawn_parks_the_highlight_on_it() {
     app.toggle_agent(1);
     app.select_visible_active();
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 1 }
     );
 }
@@ -185,7 +185,7 @@ fn set_agents_drops_folds_of_agents_gone_or_without_spawns() {
     let (mut app, _rx) = app_with_spawn_tree();
     app.toggle_agent(1);
     app.toggle_agent(0);
-    assert_eq!(app.collapsed_agents.len(), 2);
+    assert_eq!(app.project_list.collapsed_agents.len(), 2);
 
     let spawned = |id: &str| crate::events::AgentSummary {
         depth: 1,
@@ -199,13 +199,13 @@ fn set_agents_drops_folds_of_agents_gone_or_without_spawns() {
         agent("ee", "EE"),
     ]));
     assert_eq!(
-        app.collapsed_agents,
-        HashSet::from(["aa".to_string()]),
+        app.project_list.collapsed_agents,
+        std::collections::HashSet::from(["aa".to_string()]),
         "aa still folds over bb and dd"
     );
 
     app.process_command(UiCommand::SetAgents(vec![agent("ee", "EE")]));
-    assert!(app.collapsed_agents.is_empty());
+    assert!(app.project_list.collapsed_agents.is_empty());
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn shift_space_folds_the_project_from_any_agent() {
     app.focus = PanelFocus::Swarm;
     let shift_space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::SHIFT);
     for agent in [0, 1] {
-        app.selected_agent = app.row_of_agent(agent).expect("shown");
+        app.project_list.selected = app.row_of_agent(agent).expect("shown");
         app.handle_key(shift_space);
         assert!(!app.agent_folded(agent), "the agent itself stays open");
         assert!(
@@ -298,27 +298,27 @@ fn a_busy_agents_ring_is_its_fold_button() {
 fn opening_a_fold_brings_a_parked_highlight_back_to_the_active_spawn() {
     let (mut app, _rx) = app_with_spawn_tree();
     app.process_command(UiCommand::SetActiveAgent("cc".to_string()));
-    app.selected_agent = app.row_of_agent(2).expect("cc shown");
+    app.project_list.selected = app.row_of_agent(2).expect("cc shown");
     app.toggle_agent(0);
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 0 },
         "parked on aa"
     );
     app.toggle_agent(0);
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 2 },
         "back on cc"
     );
 
     // With the active agent outside the fold, the highlight stays put.
     app.process_command(UiCommand::SetActiveAgent("ee".to_string()));
-    app.selected_agent = app.row_of_agent(1).expect("bb shown");
+    app.project_list.selected = app.row_of_agent(1).expect("bb shown");
     app.toggle_agent(1);
     app.toggle_agent(1);
     assert_eq!(
-        app.project_rows()[app.selected_agent],
+        app.project_rows()[app.project_list.selected],
         ProjectListRow::Agent { index: 1 }
     );
 }

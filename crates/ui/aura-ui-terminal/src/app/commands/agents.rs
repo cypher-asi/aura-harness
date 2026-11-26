@@ -28,13 +28,14 @@ impl App {
     }
 
     fn cmd_set_projects(&mut self, projects: Vec<ProjectSummary>) {
-        self.projects = projects;
+        self.project_list.projects = projects;
         self.projects_changed_under_channel_form();
     }
 
     fn cmd_set_agents(&mut self, agents: Vec<AgentSummary>) {
         self.agents = agents;
-        self.collapsed_projects
+        self.project_list
+            .collapsed_projects
             .retain(|key| self.agents.iter().any(|agent| agent.project_key() == key));
         // An agent that lost its spawns drops its fold, so a new spawn
         // under it later shows up instead of hiding.
@@ -42,7 +43,8 @@ impl App {
             .filter(|&i| self.agent_has_spawns(i))
             .map(|i| self.agents[i].id.as_str())
             .collect();
-        self.collapsed_agents
+        self.project_list
+            .collapsed_agents
             .retain(|id| foldable.contains(id.as_str()));
         self.select_visible_active();
         self.refresh_side_scope();

@@ -27,7 +27,7 @@ impl App {
             // An exact id or label maps to its id here; any other
             // name (`opus`, `deepseek`) goes as typed and the event
             // loop resolves it as an alias.
-            let id = model_picker::exact_match(&self.models, arg)
+            let id = model_picker::exact_match(&self.account.models, arg)
                 .map_or_else(|| arg.to_string(), |m| m.id.clone());
             self.choose_model(&id);
         }
@@ -83,7 +83,7 @@ impl App {
     /// Enter the email/password login flow.
     pub(in crate::app) fn start_login(&mut self) {
         self.state = AppState::LoginEmail;
-        self.login_email.clear();
+        self.account.login_email.clear();
         self.input.text.clear();
         self.input.cursor_pos = 0;
         self.status = "Login — enter email".to_string();
@@ -91,14 +91,16 @@ impl App {
 
     /// Open the model selector with the current model highlighted.
     pub(in crate::app) fn open_model_selector(&mut self) {
-        if self.models.is_empty() {
+        if self.account.models.is_empty() {
             self.notifications.current = Some((
                 "Model list not loaded yet".to_string(),
                 NotificationType::Warning,
             ));
             return;
         }
-        self.model_picker.open(&self.models, &self.current_model);
+        self.account
+            .model_picker
+            .open(&self.account.models, &self.account.current_model);
         self.state = AppState::SelectingModel;
     }
 
@@ -106,6 +108,7 @@ impl App {
     /// start that sign-in first and are selected once it succeeds.
     pub(in crate::app) fn choose_model(&mut self, id: &str) {
         let missing = self
+            .account
             .models
             .iter()
             .find(|m| m.id == id && !m.available)
@@ -125,7 +128,7 @@ impl App {
             return;
         }
         self.state = AppState::Idle;
-        if id != self.current_model {
+        if id != self.account.current_model {
             if let Some(tx) = &self.event_tx {
                 let _ = tx.try_send(UiEvent::SelectModel(id.to_string()));
             }
@@ -137,7 +140,7 @@ impl App {
     /// model pick its own.
     fn handle_thinking_command(&mut self, arg: &str) {
         if arg.is_empty() {
-            let current = self.thinking.as_deref().unwrap_or("auto");
+            let current = self.account.thinking.as_deref().unwrap_or("auto");
             let mut report = format!("Thinking: {current}");
             for (level, description) in THINKING_LEVELS {
                 report.push_str(&format!("\n  {level:<10}{description}"));
@@ -158,7 +161,7 @@ impl App {
             return;
         };
         let level = (*level != "auto").then(|| (*level).to_string());
-        if level == self.thinking {
+        if level == self.account.thinking {
             self.notifications.current = Some((
                 format!("Thinking is already {}", level.as_deref().unwrap_or("auto")),
                 NotificationType::Warning,
@@ -172,7 +175,7 @@ impl App {
 
     /// Ask for the thinking level after the current one (Alt+T).
     pub(in crate::app) fn cycle_thinking(&mut self) {
-        let current = self.thinking.as_deref().unwrap_or("auto");
+        let current = self.account.thinking.as_deref().unwrap_or("auto");
         let at = THINKING_LEVELS
             .iter()
             .position(|(level, _)| *level == current)

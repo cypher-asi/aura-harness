@@ -51,7 +51,7 @@ fn arm_b_starts_on_the_runnable_opus_5_5_and_cycles_from_it() {
 #[test]
 fn with_no_model_list_the_default_arm_b_is_sent_as_the_strongest_opus() {
     let mut app = App::new();
-    app.models.clear();
+    app.account.models.clear();
     app.open_bench_form();
     assert_eq!(app.bench.form.b, DEFAULT_AGAINST, "kept until models load");
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);

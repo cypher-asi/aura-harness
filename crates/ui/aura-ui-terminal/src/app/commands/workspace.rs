@@ -40,7 +40,7 @@ impl App {
     }
 
     fn cmd_set_plan(&mut self, plan: Option<PlanView>) {
-        let current = self.active_plan.as_ref().map(|p| p.path.as_str());
+        let current = self.account.active_plan.as_ref().map(|p| p.path.as_str());
         if plan
             .as_ref()
             .is_some_and(|p| Some(p.path.as_str()) != current)
@@ -48,6 +48,6 @@ impl App {
             self.show_side_tab(SidePanelTab::Tasks);
         }
         self.task_list.set_current_plan(plan.as_ref());
-        self.active_plan = plan;
+        self.account.active_plan = plan;
     }
 }

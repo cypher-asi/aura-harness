@@ -135,7 +135,7 @@ impl App {
         self.archived
             .items
             .get(index)
-            .is_some_and(|agent| !self.opened_archived.contains(&agent.id))
+            .is_some_and(|agent| !self.project_list.opened_archived.contains(&agent.id))
             && self.archived_has_spawns(index)
     }
 
@@ -181,8 +181,8 @@ impl App {
             return;
         };
         let id = self.archived.items[index].id.clone();
-        if !self.opened_archived.remove(&id) {
-            self.opened_archived.insert(id);
+        if !self.project_list.opened_archived.remove(&id) {
+            self.project_list.opened_archived.insert(id);
         }
         self.select_archived_row(self.archived.selected);
     }
@@ -351,7 +351,7 @@ impl App {
 
     /// Agent under the projects-list highlight, if it is on an agent.
     pub(in crate::app) fn highlighted_agent(&self) -> Option<String> {
-        match self.project_rows().get(self.selected_agent)? {
+        match self.project_rows().get(self.project_list.selected)? {
             ProjectListRow::Agent { index } => self.agents.get(*index).map(|a| a.id.clone()),
             _ => None,
         }
@@ -401,7 +401,7 @@ impl App {
                 .filter(|name| !name.is_empty())
                 .map(str::to_string)
         };
-        let summary = self.projects.iter().find(|p| p.id == key);
+        let summary = self.project_list.projects.iter().find(|p| p.id == key);
         let head = self
             .project_root_of_key(&key)
             .map(|root| &self.agents[root]);

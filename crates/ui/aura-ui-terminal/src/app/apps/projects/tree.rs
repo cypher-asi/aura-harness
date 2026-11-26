@@ -21,7 +21,7 @@ impl App {
                 rows.push(ProjectListRow::Gap);
             }
         };
-        let mut empty = empty_projects(&self.projects, &self.agents)
+        let mut empty = empty_projects(&self.project_list.projects, &self.agents)
             .into_iter()
             .peekable();
         let mut rows = Vec::new();
@@ -36,6 +36,7 @@ impl App {
                 gap(&mut rows);
                 let end = self.project_end(root);
                 let expanded = !self
+                    .project_list
                     .collapsed_projects
                     .contains(self.agents[root].project_key());
                 rows.push(ProjectListRow::Project { root, expanded });
@@ -93,7 +94,7 @@ impl App {
             .project_root(index)
             .and_then(|root| self.project_key(root))
         {
-            self.collapsed_projects.remove(&key);
+            self.project_list.collapsed_projects.remove(&key);
         }
         self.open_ancestors(index);
     }
@@ -103,7 +104,9 @@ impl App {
         let ancestors: Vec<usize> =
             std::iter::successors(self.parent_of(index), |&i| self.parent_of(i)).collect();
         for ancestor in ancestors {
-            self.collapsed_agents.remove(&self.agents[ancestor].id);
+            self.project_list
+                .collapsed_agents
+                .remove(&self.agents[ancestor].id);
         }
     }
 
@@ -146,7 +149,7 @@ impl App {
     pub(crate) fn agent_folded(&self, index: usize) -> bool {
         self.agents
             .get(index)
-            .is_some_and(|agent| self.collapsed_agents.contains(&agent.id))
+            .is_some_and(|agent| self.project_list.collapsed_agents.contains(&agent.id))
             && self.agent_has_spawns(index)
     }
 
@@ -171,10 +174,10 @@ impl App {
         }
         let id = self.agents[index].id.clone();
         let spawns = index + 1..self.spawn_end(index);
-        let before = self.project_rows().get(self.selected_agent).copied();
-        let opened = self.collapsed_agents.remove(&id);
+        let before = self.project_rows().get(self.project_list.selected).copied();
+        let opened = self.project_list.collapsed_agents.remove(&id);
         if !opened {
-            self.collapsed_agents.insert(id);
+            self.project_list.collapsed_agents.insert(id);
         }
         let on_agent = before == Some(ProjectListRow::Agent { index });
         let hidden = matches!(before, Some(ProjectListRow::Agent { index: found }) if spawns.contains(&found))
@@ -194,10 +197,10 @@ impl App {
             before.and_then(|before| rows.iter().position(|row| *row == before))
         };
         if let Some(pos) = kept {
-            self.selected_agent = pos;
+            self.project_list.selected = pos;
         }
         let len = self.project_rows().len();
-        self.selected_agent = self.selected_agent.min(len.saturating_sub(1));
+        self.project_list.selected = self.project_list.selected.min(len.saturating_sub(1));
     }
 
     /// Whether `agent` is thinking: it runs, or it is the agent on screen
@@ -251,7 +254,7 @@ impl App {
             return;
         };
         let span = root..self.project_end(root);
-        let before = self.project_rows().get(self.selected_agent).copied();
+        let before = self.project_rows().get(self.project_list.selected).copied();
         let selected_inside = before.is_some_and(|row| match row {
             ProjectListRow::Project { root: found, .. } => found == root,
             ProjectListRow::Agent { index } => span.contains(&index),
@@ -259,9 +262,9 @@ impl App {
             | ProjectListRow::NewProject
             | ProjectListRow::Gap => false,
         });
-        let opened = self.collapsed_projects.remove(&id);
+        let opened = self.project_list.collapsed_projects.remove(&id);
         if !opened {
-            self.collapsed_projects.insert(id);
+            self.project_list.collapsed_projects.insert(id);
         }
         let rows = self.project_rows();
         let active_row = || {
@@ -279,10 +282,10 @@ impl App {
             before.and_then(|before| rows.iter().position(|row| *row == before))
         };
         if let Some(pos) = kept {
-            self.selected_agent = pos;
+            self.project_list.selected = pos;
         }
         let len = self.project_rows().len();
-        self.selected_agent = self.selected_agent.min(len.saturating_sub(1));
+        self.project_list.selected = self.project_list.selected.min(len.saturating_sub(1));
     }
 
     /// Move the highlight to the active agent, to the folded agent it is
@@ -292,7 +295,7 @@ impl App {
             .shown_active_agent()
             .and_then(|index| self.row_of_agent(index))
         {
-            self.selected_agent = row;
+            self.project_list.selected = row;
             return;
         }
         if let Some(index) = self
@@ -304,12 +307,12 @@ impl App {
                 if let Some(row) = self.project_rows().iter().position(|row| {
                     matches!(row, ProjectListRow::Project { root: found, .. } if *found == root)
                 }) {
-                    self.selected_agent = row;
+                    self.project_list.selected = row;
                     return;
                 }
             }
         }
         let len = self.project_rows().len();
-        self.selected_agent = self.selected_agent.min(len.saturating_sub(1));
+        self.project_list.selected = self.project_list.selected.min(len.saturating_sub(1));
     }
 }

@@ -38,11 +38,11 @@ impl App {
     /// [`Self::chat_row_below`]), for a front end that scrolls it by
     /// pixels.
     pub fn set_smooth_scroll(&mut self, on: bool) {
-        self.smooth.on = on;
+        self.chat.smooth.on = on;
     }
 
     pub(crate) const fn smooth_scroll(&self) -> bool {
-        self.smooth.on
+        self.chat.smooth.on
     }
 
     /// Where the chat's rows were in the last frame, when nothing covered
@@ -53,14 +53,17 @@ impl App {
         let plain = self.detail.is_none()
             && !self.flow.is_open()
             && matches!(self.state, AppState::Idle | AppState::Processing);
-        self.smooth.view.filter(|_| plain)
+        self.chat.smooth.view.filter(|_| plain)
     }
 
     /// The chat's row below its body in the last frame, its cells as wide
     /// as the screen, and its prose.
     #[must_use]
     pub fn chat_row_below(&self) -> (&[Cell], Option<&ProseRow>) {
-        (&self.smooth.next.content, self.smooth.next_prose.as_ref())
+        (
+            &self.chat.smooth.next.content,
+            self.chat.smooth.next_prose.as_ref(),
+        )
     }
 
     /// Scroll the chat `rows` up, or down when negative, as the wheel
@@ -77,7 +80,7 @@ impl App {
 
     /// Forget the last frame's chat until the chat is drawn again.
     pub(crate) fn clear_chat_scroll(&mut self) {
-        self.smooth.view = None;
+        self.chat.smooth.view = None;
     }
 
     /// The chat was drawn `view`, with `next` and `prose` its row below.
@@ -87,17 +90,17 @@ impl App {
         buffer: &Buffer,
         (next, prose): (Buffer, Option<ProseRow>),
     ) {
-        self.smooth.view = Some(view);
-        self.smooth.next = next;
-        self.smooth.next_prose = prose;
-        self.smooth.print = print(buffer, view.body);
+        self.chat.smooth.view = Some(view);
+        self.chat.smooth.next = next;
+        self.chat.smooth.next_prose = prose;
+        self.chat.smooth.print = print(buffer, view.body);
     }
 
     /// Forget the chat's rows when something was drawn over its body.
     pub(crate) fn drop_covered_chat(&mut self, buffer: &Buffer) {
-        if let Some(view) = self.smooth.view {
-            if print(buffer, view.body) != self.smooth.print {
-                self.smooth.view = None;
+        if let Some(view) = self.chat.smooth.view {
+            if print(buffer, view.body) != self.chat.smooth.print {
+                self.chat.smooth.view = None;
             }
         }
     }

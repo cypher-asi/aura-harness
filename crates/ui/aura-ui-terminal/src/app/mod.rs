@@ -3,6 +3,7 @@
 //! Manages the overall application state, conversation history,
 //! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
+mod account;
 mod agent_switch;
 mod agent_views;
 mod approval;
@@ -43,12 +44,14 @@ pub mod plans;
 mod policies;
 mod processes;
 mod project_drag;
+mod project_list;
 mod prose;
 pub(crate) mod queue_panel;
 pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
 mod chat_hits;
+mod chat_view;
 mod detail;
 mod hit_targets;
 mod init;
@@ -87,10 +90,11 @@ use crate::{
     components::{quiet_for, Activity, Message, MoreSection, ShellRun, ToolStep},
     events::{
         AgentDefinitionSummary, AgentSummary, ChannelPostView, ModelOptionView, PlanView,
-        ProcessSummary, ProjectSummary, RecordSummary, UiCommand, UiEvent,
+        ProcessSummary, RecordSummary, UiCommand, UiEvent,
     },
     renderer::{ChatLineCache, GroupState},
 };
+use account::Account;
 use agent_switch::AgentSwitch;
 pub use approval::PendingApproval;
 pub use apps::{
@@ -98,11 +102,11 @@ pub use apps::{
     AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
 pub use chat_tabs::ChatTab;
+use chat_view::ChatView;
 pub(crate) use context_menu::{MenuTarget, SubmenuEntry};
 pub use context_menu::{WorkspaceMove, WorkspaceTarget};
 pub use detail::DetailView;
 use file_view::FileView;
-use folder_picker::FolderPicker;
 pub(crate) use hit_targets::{
     CodeCopyHit, CopyText, HoverTarget, ImageHit, ProjectListRow, ToggleRow, ToggleTarget,
 };
@@ -122,6 +126,7 @@ pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 use pending::Pending;
 pub(crate) use plan_doc::PlanDoc;
 pub use processes::SidePanelTab;
+use project_list::ProjectList;
 pub use prose::{ProseMeasure, ProseRow};
 use ratatui::{buffer::Buffer, layout::Rect};
 use sandbox::{SandboxEntryKind, SandboxTree};
@@ -129,7 +134,7 @@ pub use selection::Selection;
 use selection_state::SelectionState;
 pub use side_scope::SideScope;
 pub use smooth::ChatScroll;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use ticks::Ticks;
 use tokio::sync::mpsc;
@@ -204,10 +209,6 @@ pub enum AppState {
 pub struct App {
     /// Current application state
     pub(super) state: AppState,
-    /// Listed projects, in list order
-    pub(super) projects: Vec<ProjectSummary>,
-    /// Key of the project whose details are shown
-    pub(super) project_info: Option<String>,
     /// Conversation messages
     pub(super) messages: VecDeque<Message>,
     /// The input box: its text, cursor, histories, menus, images and
@@ -220,28 +221,12 @@ pub struct App {
     pub(super) pending: Pending,
     /// Chat lines below the bottom of the chat view (0 = following the end)
     pub(super) scroll_offset: usize,
-    /// Rendered lines of each message, reused between frames
-    pub(super) chat_lines: ChatLineCache,
-    /// Rendered lines of each shell command, for the terminal pane
-    pub(super) terminal_lines: ChatLineCache,
-    /// Total chat lines in the last frame
-    pub(super) chat_line_count: usize,
-    /// Chat rows of the last frame that expand or collapse a group of
-    /// steps or one step when clicked
-    pub(super) toggle_rows: Vec<ToggleRow>,
-    /// First chat line shown in the last frame
-    pub(super) chat_first_line: usize,
-    /// Whether new activity blocks start expanded (`Ctrl+O` toggles)
-    pub(super) activity_expanded: bool,
-    /// Groups of steps the user opened (`true`) or closed, by the id of
-    /// their first message
-    pub(super) group_open: HashMap<u64, bool>,
+    /// The chat as last drawn: rendered lines, rows, images and buttons
+    pub(super) chat: ChatView,
     /// Event sender (for sending events to kernel)
     pub(super) event_tx: Option<mpsc::Sender<UiEvent>>,
     /// Command receiver (for receiving commands from kernel)
     pub(super) command_rx: Option<mpsc::Receiver<UiCommand>>,
-    /// Current streaming message (being built)
-    pub(super) streaming_content: String,
     /// The corner notification and its timer
     pub(super) notifications: Notifications,
     /// Which panel has focus
@@ -274,58 +259,18 @@ pub struct App {
     pub(super) detail_shown: usize,
     /// List of agents in the swarm
     pub(super) agents: Vec<AgentSummary>,
-    /// Highlighted row of the projects list (headers, agents, "+ New project")
-    pub(super) selected_agent: usize,
-    /// Root-agent ids whose project row is folded shut
-    pub(super) collapsed_projects: HashSet<String>,
-    /// Ids of agents folded shut, hiding the agents they spawned
-    pub(super) collapsed_agents: HashSet<String>,
-    /// The left button is down on a project's header: a click folds it, a
-    /// drag moves it
-    pub(super) project_press: Option<project_drag::ProjectPress>,
-    /// Times a drag has reordered the projects, so the screen is redrawn
-    pub(super) project_moves: usize,
+    /// The projects list: projects, highlight, scroll, folds and drags
+    pub(super) project_list: ProjectList,
     /// Currently active agent ID
     pub(super) active_agent_id: String,
     /// Switching which agent is on screen
     pub(super) switching: AgentSwitch,
-    /// Whether the API is currently active
-    pub(super) api_active: bool,
-    /// Stored email during login flow (between email and password steps)
-    pub(super) login_email: String,
-    /// Models offered by the selector
-    pub(super) models: Vec<ModelOptionView>,
-    /// Id of the selected model (`gate` when Gate picks it)
-    pub(super) current_model: String,
-    /// The model and route Gate sends the next turn to
-    pub(super) model_route: Option<String>,
-    /// Thinking level pinned for every turn; `None` when each model picks
-    pub(super) thinking: Option<String>,
-    /// Logged-in user's display name (`None` = guest)
-    pub(super) user: Option<String>,
-    /// Labels of the usable linked plans
-    pub(super) plans: Vec<String>,
-    /// The active agent's current plan
-    pub(super) active_plan: Option<PlanView>,
-    /// Model selector state: tab, filter and highlighted row
-    pub(super) model_picker: ModelPicker,
-    /// Where the model selector's rows were drawn, for clicks
-    pub(super) model_picker_layout: PickerLayout,
-    /// First visible row of the agents list
-    pub(super) agents_scroll: usize,
-    /// The wheel moved the agents list away from the highlight; it stays
-    /// there until a key or click moves the highlight again
-    pub(super) agents_scroll_detached: bool,
+    /// The signed-in user, plans and models
+    pub(super) account: Account,
     /// First visible row of the sandbox tree
     pub(super) sandbox_scroll: usize,
     /// Screen areas from the last frame, for mouse hit-testing
     pub(super) areas: PanelAreas,
-    /// The chat's prose rows from the last frame
-    prose_rows: Vec<ProseRow>,
-    /// How wide prose is in the front end's proportional face, if it has one
-    prose_measure: Option<ProseMeasure>,
-    /// The chat as last drawn, for a front end that scrolls it by pixels
-    smooth: smooth::SmoothScroll,
     /// Whether the front end draws the panels' title bars itself
     host_chrome: bool,
     /// Whether the front end draws the GRAPH tab's canvas itself
@@ -339,24 +284,10 @@ pub struct App {
     hover: Option<HoverTarget>,
     /// `[user@host dir]$ ` shown before the input line at the terminal prompt
     pub(super) shell_prompt: String,
-    /// Width of the chat text area in the last frame (0 before the first)
-    pub(super) chat_width: u16,
     /// Whether the chat panel's TERMINAL tab is open (`$` opens it): the
     /// panel shows the session's shell commands, and Enter runs the line
     /// as one
     pub(super) terminal_mode: bool,
-    /// Images of messages sent to a busy agent, by message text, until
-    /// the chat shows the message
-    pub(super) queued_images: VecDeque<(String, Vec<std::sync::Arc<image_preview::ImagePreview>>)>,
-    /// Image thumbnails in the chat in the last frame
-    pub(super) image_hits: Vec<ImageHit>,
-    /// Copy buttons of code blocks in the chat in the last frame
-    pub(super) code_copy_hits: Vec<CodeCopyHit>,
-    /// Thumbnails of the images waiting in the input, in the last frame
-    pub(super) pending_image_areas: Vec<(Rect, usize)>,
-    /// Absolute cell rect where the detail-view image was drawn in the last
-    /// frame; `None` when no image detail view is open or nothing was drawn.
-    pub(super) detail_image_rect: Option<Rect>,
     /// Text selected with the mouse, the chat scrollbar's grab and what
     /// waits to be copied
     pub(super) select: SelectionState,
@@ -372,11 +303,6 @@ pub struct App {
     /// Archived agents, each followed by the agents under it; the
     /// highlighted one, and the first visible row of the Archive
     pub(super) archived: ListState<AgentSummary>,
-    /// Archived agents opened over the agents under them; every other one
-    /// with agents under it is folded. Kept while another app is in front.
-    pub(super) opened_archived: HashSet<String>,
-    /// Folder browser for a new project, while it is open
-    pub(super) folder_picker: Option<FolderPicker>,
     /// The new-channel form, while it is open
     pub(super) channel_form: Option<channel_form::ChannelForm>,
     /// Menu a right click opened on the projects list

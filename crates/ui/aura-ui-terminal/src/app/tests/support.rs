@@ -64,7 +64,8 @@ pub(super) fn app_with_definitions() -> (App, mpsc::Receiver<UiEvent>) {
 pub(super) fn open_folder_picker(app: &mut App, dir: &std::path::Path) {
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
     assert_eq!(app.state(), AppState::SelectingFolder);
-    app.folder_picker = Some(FolderPicker::open(dir.to_path_buf()).unwrap());
+    app.project_list.folder_picker =
+        Some(folder_picker::FolderPicker::open(dir.to_path_buf()).unwrap());
 }
 
 pub(super) fn mouse(kind: crossterm::event::MouseEventKind, column: u16, row: u16) -> MouseEvent {

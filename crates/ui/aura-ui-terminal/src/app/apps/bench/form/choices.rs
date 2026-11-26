@@ -144,7 +144,8 @@ impl App {
     /// cycles through.
     #[must_use]
     pub fn bench_model_choices(&self) -> Vec<String> {
-        self.models
+        self.account
+            .models
             .iter()
             .filter(|m| m.available && m.id != "gate" && (!m.local || m.installed))
             .map(|m| m.id.clone())
@@ -181,7 +182,7 @@ impl App {
     /// Put the runnable Opus 5.5 in place of arm B's [`DEFAULT_AGAINST`],
     /// once the model list is in; an arm the user chose is left alone.
     pub(super) fn settle_bench_against(&mut self) {
-        if self.bench.form.b == DEFAULT_AGAINST && !self.models.is_empty() {
+        if self.bench.form.b == DEFAULT_AGAINST && !self.account.models.is_empty() {
             self.bench.form.b = self.default_bench_against();
         }
     }

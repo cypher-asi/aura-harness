@@ -106,7 +106,7 @@ impl App {
                 app.hover,
                 ends(app),
                 menu(app),
-                app.project_moves,
+                app.project_list.project_moves,
                 app.project_drag_hit(),
                 app.queue_pointer_state(),
                 (app.scrollbar_held(), app.scroll_offset, app.detail_scroll),
@@ -151,7 +151,7 @@ impl App {
         if selecting || (self.state != AppState::Idle && self.state != AppState::Processing) {
             self.hover = None;
             self.context_menu = None;
-            self.project_press = None;
+            self.project_list.project_press = None;
             self.select.scrollbar_grab = None;
             self.drop_queue_press();
             return true;

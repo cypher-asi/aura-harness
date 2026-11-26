@@ -30,8 +30,8 @@ impl App {
             MenuItem::Info => "Project info",
             MenuItem::Fold => {
                 let folded = match &menu.target {
-                    MenuTarget::Project(id) => self.collapsed_projects.contains(id),
-                    MenuTarget::Agent(id) => self.collapsed_agents.contains(id),
+                    MenuTarget::Project(id) => self.project_list.collapsed_projects.contains(id),
+                    MenuTarget::Agent(id) => self.project_list.collapsed_agents.contains(id),
                     MenuTarget::Archived(_) | MenuTarget::Channel(_) => false,
                 };
                 if folded {
@@ -92,8 +92,8 @@ impl App {
         };
         let items = self.with_workspace_item(&target, items);
         self.focus = PanelFocus::Swarm;
-        self.selected_agent = index;
-        self.agents_scroll_detached = false;
+        self.project_list.selected = index;
+        self.project_list.scroll_detached = false;
         self.context_menu = Some(ContextMenu::new(target, items, Position::new(column, row)));
         true
     }

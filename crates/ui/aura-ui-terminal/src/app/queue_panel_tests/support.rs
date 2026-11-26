@@ -99,5 +99,9 @@ pub(super) fn events(rx: &mut mpsc::Receiver<UiEvent>) -> Vec<UiEvent> {
 }
 
 pub(super) fn preview_texts(app: &App) -> Vec<&str> {
-    app.queued_images.iter().map(|(t, _)| t.as_str()).collect()
+    app.chat
+        .queued_images
+        .iter()
+        .map(|(t, _)| t.as_str())
+        .collect()
 }

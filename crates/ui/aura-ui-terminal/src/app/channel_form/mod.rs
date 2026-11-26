@@ -357,7 +357,10 @@ impl App {
     /// the agent on screen before CHANNELS chosen.
     pub(crate) fn start_new_channel(&mut self) {
         let project = self.project_before_channels();
-        self.open_channel_form(ChannelForm::create(&self.projects, project), "New channel");
+        self.open_channel_form(
+            ChannelForm::create(&self.project_list.projects, project),
+            "New channel",
+        );
     }
 
     /// Open the form on listed channel `channel_id`, filled with its
@@ -367,7 +370,7 @@ impl App {
         let Some(channel) = self.channels().iter().find(|c| c.id == channel_id) else {
             return;
         };
-        let form = ChannelForm::edit(channel, &self.projects);
+        let form = ChannelForm::edit(channel, &self.project_list.projects);
         let status = format!("Edit #{}", channel.slug);
         self.open_channel_form(form, &status);
     }
@@ -390,7 +393,8 @@ impl App {
             .find(|agent| agent.id == agent_id)?
             .project_id
             .clone()?;
-        self.projects
+        self.project_list
+            .projects
             .iter()
             .any(|listed| listed.id == project)
             .then_some(project)
@@ -399,7 +403,7 @@ impl App {
     /// The projects list changed: let the open form offer the new one.
     pub(super) fn projects_changed_under_channel_form(&mut self) {
         if let Some(form) = self.channel_form.as_mut() {
-            form.set_projects(&self.projects);
+            form.set_projects(&self.project_list.projects);
         }
     }
 

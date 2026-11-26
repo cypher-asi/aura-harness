@@ -47,14 +47,14 @@ impl App {
         if let Some(last_msg) = self.messages.back_mut() {
             if last_msg.is_streaming() {
                 last_msg.set_streaming(false);
-                if !self.streaming_content.is_empty() {
-                    last_msg.set_content(&self.streaming_content);
+                if !self.chat.streaming_content.is_empty() {
+                    last_msg.set_content(&self.chat.streaming_content);
                 } else if last_msg.content().is_empty() {
                     self.messages.pop_back();
                 }
             }
         }
-        self.streaming_content.clear();
+        self.chat.streaming_content.clear();
         self.finish_live_activity();
         self.state = AppState::Idle;
         self.status = "Ready".to_string();
@@ -83,12 +83,12 @@ impl App {
 
     fn cmd_load_conversation(&mut self, history: Vec<MessageData>) {
         self.cmd_clear_conversation();
-        self.streaming_content.clear();
+        self.chat.streaming_content.clear();
         for data in history {
             let mut msg = if let Some(boot) = &data.boot {
                 Message::boot(BootConsole::replay(boot, data.timestamp_ms))
             } else if let Some(activity) = &data.activity {
-                Message::activity(Activity::from(activity), self.activity_expanded)
+                Message::activity(Activity::from(activity), self.chat.activity_expanded)
             } else if let Some(command) = data.command.as_deref() {
                 let mut msg = Message::shell(command);
                 msg.finish_shell("", None);

@@ -28,7 +28,7 @@ impl App {
     }
 
     fn cmd_start_streaming(&mut self) {
-        self.streaming_content.clear();
+        self.chat.streaming_content.clear();
         if self
             .messages
             .back()
@@ -42,8 +42,8 @@ impl App {
     }
 
     fn cmd_append_text(&mut self, text: &str) {
-        let before = self.streaming_content.len();
-        self.streaming_content.push_str(text);
+        let before = self.chat.streaming_content.len();
+        self.chat.streaming_content.push_str(text);
         if let Some(last_msg) = self.messages.back_mut() {
             if !last_msg.is_streaming() {
                 return;
@@ -52,7 +52,7 @@ impl App {
             if last_msg.content().len() == before {
                 last_msg.append(text);
             } else {
-                last_msg.set_content(&self.streaming_content);
+                last_msg.set_content(&self.chat.streaming_content);
             }
         }
     }
@@ -61,14 +61,14 @@ impl App {
         if let Some(last_msg) = self.messages.back_mut() {
             if last_msg.is_streaming() {
                 last_msg.set_streaming(false);
-                if self.streaming_content.is_empty() {
+                if self.chat.streaming_content.is_empty() {
                     self.messages.pop_back();
                 } else {
-                    last_msg.set_content(&self.streaming_content);
+                    last_msg.set_content(&self.chat.streaming_content);
                 }
             }
         }
-        self.streaming_content.clear();
+        self.chat.streaming_content.clear();
     }
 
     /// Each turn's split of tokens by sign-in, as its last reply's
@@ -121,7 +121,7 @@ impl App {
     }
 
     pub(super) fn add_activity(&mut self, activity: Activity) {
-        self.add_message(Message::activity(activity, self.activity_expanded));
+        self.add_message(Message::activity(activity, self.chat.activity_expanded));
     }
 
     /// The last thinking block still streaming.

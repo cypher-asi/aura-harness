@@ -196,18 +196,21 @@ impl App {
         if previews.is_empty() {
             return;
         }
-        self.queued_images.push_back((text.to_string(), previews));
-        while self.queued_images.len() > MAX_QUEUED_MESSAGES {
-            self.queued_images.pop_front();
+        self.chat
+            .queued_images
+            .push_back((text.to_string(), previews));
+        while self.chat.queued_images.len() > MAX_QUEUED_MESSAGES {
+            self.chat.queued_images.pop_front();
         }
     }
 
     /// The previews queued for a message reading `text`, once.
     pub(super) fn take_queued_previews(&mut self, text: &str) -> Vec<Arc<ImagePreview>> {
-        self.queued_images
+        self.chat
+            .queued_images
             .iter()
             .position(|(queued, _)| queued == text)
-            .and_then(|at| self.queued_images.remove(at))
+            .and_then(|at| self.chat.queued_images.remove(at))
             .map(|(_, previews)| previews)
             .unwrap_or_default()
     }
@@ -224,9 +227,10 @@ impl App {
         if !super::contains(Some(area), column, row) {
             return None;
         }
-        let line = self.chat_first_line + usize::from(row - area.y);
+        let line = self.chat.first_line + usize::from(row - area.y);
         let x = column - area.x;
-        self.image_hits
+        self.chat
+            .image_hits
             .iter()
             .find(|hit| {
                 (hit.line..hit.line + hit.rows).contains(&line)
@@ -239,6 +243,7 @@ impl App {
     /// above the input. Returns whether one was opened.
     pub(super) fn open_image_at(&mut self, column: u16, row: u16) -> bool {
         if let Some(&(_, label)) = self
+            .chat
             .pending_image_areas
             .iter()
             .find(|(area, _)| super::contains(Some(*area), column, row))
@@ -278,6 +283,7 @@ impl App {
     /// The thumbnail at a screen cell, for the hover highlight.
     pub(super) fn image_at(&self, column: u16, row: u16) -> Option<super::HoverTarget> {
         if let Some(&(_, label)) = self
+            .chat
             .pending_image_areas
             .iter()
             .find(|(area, _)| super::contains(Some(*area), column, row))

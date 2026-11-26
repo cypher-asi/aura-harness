@@ -53,15 +53,18 @@ fn enter_on_the_classifier_row_picks_it_in_the_selector_and_backspace_resets_it(
     app.bench.form.field = FormField::Classifier;
     assert!(app.bench_form_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
     assert_eq!(app.state, AppState::SelectingModel);
-    assert_eq!(app.model_picker.target(), PickerTarget::BenchClassifier);
+    assert_eq!(
+        app.account.model_picker.target(),
+        PickerTarget::BenchClassifier
+    );
 
     app.pick_bench_model(FormField::Classifier, DEEPSEEK);
     assert_eq!(app.state, AppState::Idle);
     assert_eq!(app.bench.form.classifier, DEEPSEEK);
     assert_eq!(app.bench.form.field, FormField::Repeats, "on to the next");
     assert_eq!(
-        app.current_model,
-        App::new().current_model,
+        app.account.current_model,
+        App::new().account.current_model,
         "session unchanged"
     );
 

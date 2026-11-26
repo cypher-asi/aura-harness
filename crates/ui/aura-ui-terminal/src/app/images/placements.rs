@@ -13,17 +13,17 @@ type Placement = (PlacementSlot, Rect, Arc<ImagePreview>);
 impl App {
     /// Record where the chat drew image thumbnails this frame.
     pub(crate) fn set_chat_images(&mut self, hits: Vec<ImageHit>) {
-        self.image_hits = hits;
+        self.chat.image_hits = hits;
     }
 
     /// Record where the thumbnails above the input were drawn this frame.
     pub(crate) fn set_pending_image_areas(&mut self, areas: Vec<(Rect, usize)>) {
-        self.pending_image_areas = areas;
+        self.chat.pending_image_areas = areas;
     }
 
     /// Record where the full-size image was drawn in the detail view this frame.
     pub(crate) fn set_detail_image_rect(&mut self, rect: Option<Rect>) {
-        self.detail_image_rect = rect;
+        self.chat.detail_image_rect = rect;
     }
 
     /// All image placements visible this frame, for the Kitty graphics
@@ -53,9 +53,9 @@ impl App {
         let Some(area) = self.areas.chat_text else {
             return out;
         };
-        let first = self.chat_first_line;
+        let first = self.chat.first_line;
         let last = first + usize::from(area.height);
-        for hit in &self.image_hits {
+        for hit in &self.chat.image_hits {
             let Some(preview) = self
                 .messages
                 .iter()
@@ -88,7 +88,7 @@ impl App {
     /// Thumbnails of the images waiting in the input.
     fn pending_thumbnail_placements(&self) -> Vec<Placement> {
         let mut out = Vec::new();
-        for &(tile, label) in &self.pending_image_areas {
+        for &(tile, label) in &self.chat.pending_image_areas {
             let Some(preview) = self
                 .input
                 .images
@@ -115,7 +115,8 @@ impl App {
 
     /// The full-size image of the detail view, when one is open.
     fn detail_image_placement(&self) -> Option<Placement> {
-        if let (Some(rect), Some(DetailView::Image(view))) = (self.detail_image_rect, &self.detail)
+        if let (Some(rect), Some(DetailView::Image(view))) =
+            (self.chat.detail_image_rect, &self.detail)
         {
             if !rect.is_empty() && view.preview.graphics_png().is_some() {
                 return Some((PlacementSlot::Detail, rect, Arc::clone(&view.preview)));

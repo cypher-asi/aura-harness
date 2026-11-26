@@ -77,7 +77,7 @@ impl App {
             return;
         }
         let path = (!arg.is_empty()).then(|| arg.to_string());
-        if path.is_none() && self.active_plan.is_none() {
+        if path.is_none() && self.account.active_plan.is_none() {
             self.notifications.current = Some((
                 "No plan to build yet. Switch to plan mode with /plan and ask for one.".to_string(),
                 NotificationType::Warning,
@@ -111,7 +111,7 @@ impl App {
             "do it",
             "proceed",
         ];
-        if self.hud.mode != Some(PermissionMode::Plan) || self.active_plan.is_none() {
+        if self.hud.mode != Some(PermissionMode::Plan) || self.account.active_plan.is_none() {
             return false;
         }
         let text = text

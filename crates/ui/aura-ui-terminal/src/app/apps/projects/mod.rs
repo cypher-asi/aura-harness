@@ -17,10 +17,10 @@ impl App {
     /// and gaps are stepped over in the direction of travel, or the other
     /// way at the end of the list.
     pub(in crate::app) fn select_agent_row(&mut self, row: usize) {
-        self.agents_scroll_detached = false;
+        self.project_list.scroll_detached = false;
         let rows = self.project_rows();
         if rows.is_empty() {
-            self.selected_agent = 0;
+            self.project_list.selected = 0;
             return;
         }
         let target = row.min(rows.len() - 1);
@@ -30,7 +30,7 @@ impl App {
                 ProjectListRow::Agent { .. } | ProjectListRow::NewProject
             )
         };
-        let found = if target < self.selected_agent {
+        let found = if target < self.project_list.selected {
             (0..=target)
                 .rev()
                 .find(takes_highlight)
@@ -43,8 +43,8 @@ impl App {
         let Some(row) = found else {
             return;
         };
-        self.selected_agent = row;
-        if let Some(ProjectListRow::Agent { index }) = rows.get(self.selected_agent) {
+        self.project_list.selected = row;
+        if let Some(ProjectListRow::Agent { index }) = rows.get(self.project_list.selected) {
             let agent_id = self.agents[*index].id.clone();
             self.request_agent_switch(agent_id);
         }
@@ -53,8 +53,8 @@ impl App {
     /// Act on the highlighted projects-list row: fold a project, switch to
     /// an agent, or create one from "+ New project".
     pub(in crate::app) fn activate_agent_row(&mut self) {
-        self.agents_scroll_detached = false;
-        match self.project_rows().get(self.selected_agent).copied() {
+        self.project_list.scroll_detached = false;
+        match self.project_rows().get(self.project_list.selected).copied() {
             Some(ProjectListRow::Project { root, .. }) => self.toggle_project(root),
             Some(ProjectListRow::Agent { index }) => {
                 let agent_id = self.agents[index].id.clone();
@@ -80,8 +80,8 @@ impl App {
     /// folds over them, any other agent row folds the project that
     /// contains it, as does a project's header.
     pub(in crate::app) fn toggle_selected_fold(&mut self) {
-        self.agents_scroll_detached = false;
-        let root = match self.project_rows().get(self.selected_agent).copied() {
+        self.project_list.scroll_detached = false;
+        let root = match self.project_rows().get(self.project_list.selected).copied() {
             Some(ProjectListRow::Project { root, .. }) => Some(root),
             Some(ProjectListRow::Agent { index }) if self.agent_has_spawns(index) => {
                 self.toggle_agent(index);
@@ -104,8 +104,8 @@ impl App {
     /// any agent in it or its header, even an agent that could fold over
     /// its own spawns.
     pub(in crate::app) fn toggle_selected_project(&mut self) {
-        self.agents_scroll_detached = false;
-        let root = match self.project_rows().get(self.selected_agent).copied() {
+        self.project_list.scroll_detached = false;
+        let root = match self.project_rows().get(self.project_list.selected).copied() {
             Some(ProjectListRow::Project { root, .. }) => Some(root),
             Some(ProjectListRow::Agent { index }) => self.project_root(index),
             Some(
@@ -140,7 +140,7 @@ impl App {
     /// First visible line of the agents list.
     #[must_use]
     pub const fn agents_scroll(&self) -> usize {
-        self.agents_scroll
+        self.project_list.scroll
     }
 
     /// Keep the highlighted projects-list row inside a list `visible_rows`
@@ -150,10 +150,15 @@ impl App {
     pub fn sync_agents_scroll(&mut self, visible_rows: usize) {
         let total = self.listed_project_rows();
         let visible = visible_rows.max(1);
-        self.agents_scroll = if self.agents_scroll_detached {
-            self.agents_scroll.min(total.saturating_sub(visible))
+        self.project_list.scroll = if self.project_list.scroll_detached {
+            self.project_list.scroll.min(total.saturating_sub(visible))
         } else {
-            follow_selection(self.agents_scroll, self.selected_agent, visible, total)
+            follow_selection(
+                self.project_list.scroll,
+                self.project_list.selected,
+                visible,
+                total,
+            )
         };
     }
 
@@ -190,8 +195,8 @@ impl App {
     /// Scroll the projects list `delta` rows, leaving the highlight where
     /// it is; down stops at the last row.
     pub(in crate::app) fn scroll_project_rows(&mut self, delta: isize) {
-        let scroll = self.agents_scroll.saturating_add_signed(delta);
-        self.agents_scroll = if delta > 0 {
+        let scroll = self.project_list.scroll.saturating_add_signed(delta);
+        self.project_list.scroll = if delta > 0 {
             let visible = self
                 .areas
                 .agent_rows
@@ -200,13 +205,13 @@ impl App {
         } else {
             scroll
         };
-        self.agents_scroll_detached = true;
+        self.project_list.scroll_detached = true;
     }
 
     /// Get the selected agent index.
     #[must_use]
     pub const fn selected_agent(&self) -> usize {
-        self.selected_agent
+        self.project_list.selected
     }
 
     /// Handle key when the agents panel shows Projects. Moving the
@@ -217,11 +222,11 @@ impl App {
     pub(in crate::app) fn handle_swarm_key(&mut self, key: KeyEvent) -> KeyResult {
         match key.code {
             KeyCode::Left | KeyCode::Right => self.shift_agents_tab(key.code),
-            KeyCode::Up => self.select_agent_row(self.selected_agent.saturating_sub(1)),
-            KeyCode::Down => self.select_agent_row(self.selected_agent + 1),
+            KeyCode::Up => self.select_agent_row(self.project_list.selected.saturating_sub(1)),
+            KeyCode::Down => self.select_agent_row(self.project_list.selected + 1),
             KeyCode::Enter => self.activate_agent_row(),
-            KeyCode::PageUp => self.select_agent_row(self.selected_agent.saturating_sub(5)),
-            KeyCode::PageDown => self.select_agent_row(self.selected_agent + 5),
+            KeyCode::PageUp => self.select_agent_row(self.project_list.selected.saturating_sub(5)),
+            KeyCode::PageDown => self.select_agent_row(self.project_list.selected + 5),
             KeyCode::Home => self.select_agent_row(0),
             KeyCode::End => self.select_last_agent_row(),
             KeyCode::Char(c) => {

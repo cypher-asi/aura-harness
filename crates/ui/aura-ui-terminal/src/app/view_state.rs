@@ -32,15 +32,15 @@ impl App {
         GroupState<'_>,
     ) {
         let groups = GroupState {
-            open: &self.group_open,
-            expand_all: self.activity_expanded,
+            open: &self.chat.group_open,
+            expand_all: self.chat.activity_expanded,
             turn_live: self.state == AppState::Processing,
         };
         let cache = if self.terminal_mode {
-            self.terminal_lines.set_prompt(&self.shell_prompt);
-            &mut self.terminal_lines
+            self.chat.terminal_lines.set_prompt(&self.shell_prompt);
+            &mut self.chat.terminal_lines
         } else {
-            &mut self.chat_lines
+            &mut self.chat.chat_lines
         };
         let posts = self.channels.coordinator_posts(&self.active_agent_id);
         ((&self.messages, posts), cache, groups)

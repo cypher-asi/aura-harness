@@ -4,19 +4,19 @@ use super::*;
 fn test_agents_scroll_keeps_selection_visible() {
     // Rows: project 0, agent 1, gap 2, project 3, agent 4.
     let (mut app, _rx) = app_with_agents();
-    app.selected_agent = 1;
+    app.project_list.selected = 1;
     app.sync_agents_scroll(2);
     assert_eq!(app.agents_scroll(), 0);
 
-    app.selected_agent = 4;
+    app.project_list.selected = 4;
     app.sync_agents_scroll(2);
     assert_eq!(app.agents_scroll(), 3);
 
-    app.selected_agent = 3;
+    app.project_list.selected = 3;
     app.sync_agents_scroll(2);
     assert_eq!(app.agents_scroll(), 3);
 
-    app.selected_agent = 0;
+    app.project_list.selected = 0;
     app.sync_agents_scroll(2);
     assert_eq!(app.agents_scroll(), 0);
 }

@@ -31,7 +31,7 @@ impl App {
         if !contains(Some(list), column, row) {
             return None;
         }
-        let index = self.agents_scroll + usize::from(row - list.y);
+        let index = self.project_list.scroll + usize::from(row - list.y);
         matches!(
             rows[..new_project].get(index)?,
             ProjectListRow::Project { .. }
@@ -45,9 +45,11 @@ impl App {
     pub(in crate::app) fn header_key(&self, row: ProjectListRow) -> Option<String> {
         match row {
             ProjectListRow::Project { root, .. } => self.project_key(root),
-            ProjectListRow::EmptyProject { project } => {
-                self.projects.get(project).map(|p| p.id.clone())
-            }
+            ProjectListRow::EmptyProject { project } => self
+                .project_list
+                .projects
+                .get(project)
+                .map(|p| p.id.clone()),
             ProjectListRow::Agent { .. } | ProjectListRow::NewProject | ProjectListRow::Gap => None,
         }
     }
@@ -86,7 +88,7 @@ impl App {
 
     /// Unfold the project with key `key` and ask for a new agent in it.
     pub(in crate::app) fn add_agent_to_project(&mut self, key: &str) {
-        self.collapsed_projects.remove(key);
+        self.project_list.collapsed_projects.remove(key);
         if let Some(tx) = &self.event_tx {
             let _ = tx.try_send(UiEvent::AddAgentToProject(key.to_string()));
         }
@@ -115,7 +117,7 @@ impl App {
         } else if let Some(ProjectListRow::EmptyProject { .. }) = self.project_rows().get(index) {
             // Nothing to fold or open.
         } else {
-            self.selected_agent = index;
+            self.project_list.selected = index;
             self.activate_agent_row();
         }
     }

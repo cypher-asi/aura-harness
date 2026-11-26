@@ -67,9 +67,9 @@ impl App {
             self.scroll_offset = self
                 .scroll_offset
                 .saturating_add(total_lines)
-                .saturating_sub(self.chat_line_count);
+                .saturating_sub(self.chat.line_count);
         }
-        self.chat_line_count = total_lines;
+        self.chat.line_count = total_lines;
         let bottom_start = total_lines.saturating_sub(visible_rows);
         self.scroll_offset = self.scroll_offset.min(bottom_start);
         bottom_start - self.scroll_offset

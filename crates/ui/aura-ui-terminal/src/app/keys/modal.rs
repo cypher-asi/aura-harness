@@ -11,7 +11,7 @@ use std::{io, path::PathBuf};
 impl App {
     /// Handle key while the new-project folder browser is open.
     pub(super) fn handle_folder_picker_key(&mut self, key: KeyEvent) -> KeyResult {
-        let Some(picker) = self.folder_picker.as_mut() else {
+        let Some(picker) = self.project_list.folder_picker.as_mut() else {
             self.state = AppState::Idle;
             return KeyResult::continue_running();
         };
@@ -90,7 +90,7 @@ impl App {
         self.status = "Ready".to_string();
         self.input.text.clear();
         self.input.cursor_pos = 0;
-        self.login_email.clear();
+        self.account.login_email.clear();
         self.pending.model = None;
         self.notifications.current =
             Some(("Login cancelled".to_string(), NotificationType::Warning));
@@ -110,12 +110,12 @@ impl App {
 
         match self.state {
             AppState::LoginEmail => {
-                self.login_email = value.trim().to_string();
+                self.account.login_email = value.trim().to_string();
                 self.state = AppState::LoginPassword;
                 self.status = "Login — enter password".to_string();
             }
             AppState::LoginPassword => {
-                let email = std::mem::take(&mut self.login_email);
+                let email = std::mem::take(&mut self.account.login_email);
                 self.state = AppState::Processing;
                 self.status = "Authenticating...".to_string();
                 if let Some(tx) = &self.event_tx {
@@ -138,8 +138,8 @@ impl App {
 
     /// Handle key while the model selector is open.
     pub(super) fn handle_model_selector_key(&mut self, key: KeyEvent) -> KeyResult {
-        let models = &self.models;
-        let picker = &mut self.model_picker;
+        let models = &self.account.models;
+        let picker = &mut self.account.model_picker;
         match key.code {
             KeyCode::Esc => {
                 if !picker.clear_filter() {
@@ -173,8 +173,8 @@ impl App {
     /// for: the session's model, or a benchmark row's. With nothing
     /// highlighted and nothing typed it closes.
     fn pick_in_model_selector(&mut self) {
-        let picker = &self.model_picker;
-        let picked = picker.selected(&self.models).map(|m| m.id.clone());
+        let picker = &self.account.model_picker;
+        let picked = picker.selected(&self.account.models).map(|m| m.id.clone());
         match (picked, picker.target()) {
             (Some(id), PickerTarget::Session) => self.choose_model(&id),
             (Some(id), target) => {
@@ -196,18 +196,22 @@ impl App {
         column: u16,
         row: u16,
     ) {
-        let layout = &self.model_picker_layout;
+        let layout = &self.account.model_picker_layout;
         let inside = crate::app::contains(Some(layout.modal), column, row);
         match kind {
             MouseEventKind::Down(MouseButton::Left) if !inside => self.state = AppState::Idle,
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(index) = layout.model_at(row) {
-                    self.model_picker.select(&self.models, index);
+                    self.account
+                        .model_picker
+                        .select(&self.account.models, index);
                     self.pick_in_model_selector();
                 }
             }
-            MouseEventKind::ScrollUp => self.model_picker.move_by(&self.models, -1),
-            MouseEventKind::ScrollDown => self.model_picker.move_by(&self.models, 1),
+            MouseEventKind::ScrollUp => self.account.model_picker.move_by(&self.account.models, -1),
+            MouseEventKind::ScrollDown => {
+                self.account.model_picker.move_by(&self.account.models, 1);
+            }
             _ => {}
         }
     }

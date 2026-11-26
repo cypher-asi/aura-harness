@@ -24,18 +24,19 @@ impl App {
         plans: Vec<String>,
         thinking: Option<String>,
     ) {
-        self.models = options;
-        self.current_model = current;
-        self.model_route = route;
-        self.thinking = thinking;
-        self.user = user;
-        self.plans = plans;
-        self.model_picker.clamp(&self.models);
-        let pending_ready = self
-            .pending
-            .model
-            .as_deref()
-            .is_some_and(|id| self.models.iter().any(|m| m.id == id && m.available));
+        self.account.models = options;
+        self.account.current_model = current;
+        self.account.model_route = route;
+        self.account.thinking = thinking;
+        self.account.user = user;
+        self.account.plans = plans;
+        self.account.model_picker.clamp(&self.account.models);
+        let pending_ready = self.pending.model.as_deref().is_some_and(|id| {
+            self.account
+                .models
+                .iter()
+                .any(|m| m.id == id && m.available)
+        });
         if pending_ready {
             if let Some(id) = self.pending.model.take() {
                 self.choose_model(&id);
@@ -65,7 +66,7 @@ impl App {
     fn lists_nothing_new(&self, cmd: &UiCommand) -> bool {
         match cmd {
             UiCommand::SetAgents(agents) => *agents == self.agents,
-            UiCommand::SetProjects(projects) => *projects == self.projects,
+            UiCommand::SetProjects(projects) => *projects == self.project_list.projects,
             UiCommand::SetProcesses(processes) => *processes == self.all_processes,
             _ => false,
         }
@@ -141,7 +142,7 @@ impl App {
     fn account_ui_command(&mut self, cmd: UiCommand) {
         match cmd {
             UiCommand::SetApiStatus { active, .. } => {
-                self.api_active = active;
+                self.account.api_active = active;
             }
             UiCommand::SetModels {
                 options,

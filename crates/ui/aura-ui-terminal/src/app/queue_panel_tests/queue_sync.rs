@@ -61,9 +61,11 @@ fn queued_image_previews_move_to_an_edit_once_the_event_loop_has_it() {
         item(1, "look [image 1]", true),
         item(2, "and [image 1]", true),
     ]);
-    app.queued_images
+    app.chat
+        .queued_images
         .push_back(("look [image 1]".to_string(), Vec::new()));
-    app.queued_images
+    app.chat
+        .queued_images
         .push_back(("and [image 1]".to_string(), Vec::new()));
 
     app.start_queue_edit(1);
@@ -101,7 +103,8 @@ fn queued_image_previews_move_to_an_edit_once_the_event_loop_has_it() {
 #[test]
 fn an_edit_the_event_loop_never_applied_keeps_the_previews_for_the_text_that_runs() {
     let (mut app, _rx) = app_with_queue(vec![item(1, "look [image 1]", true)]);
-    app.queued_images
+    app.chat
+        .queued_images
         .push_back(("look [image 1]".to_string(), Vec::new()));
 
     app.start_queue_edit(1);
@@ -119,7 +122,8 @@ fn an_edit_the_event_loop_never_applied_keeps_the_previews_for_the_text_that_run
 #[test]
 fn removing_an_unconfirmed_edit_forgets_the_previews_under_the_old_text() {
     let (mut app, _rx) = app_with_queue(vec![item(1, "look [image 1]", true)]);
-    app.queued_images
+    app.chat
+        .queued_images
         .push_back(("look [image 1]".to_string(), Vec::new()));
     app.start_queue_edit(1);
     type_text(&mut app, " here");

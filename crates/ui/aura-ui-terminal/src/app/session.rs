@@ -18,51 +18,54 @@ impl App {
     /// Check if the API is active.
     #[must_use]
     pub const fn api_active(&self) -> bool {
-        self.api_active
+        self.account.api_active
     }
 
     /// Models offered by the selector.
     #[must_use]
     pub fn models(&self) -> &[ModelOptionView] {
-        &self.models
+        &self.account.models
     }
 
     /// Id of the model used for the next turn (empty until the kernel reports it).
     #[must_use]
     pub fn current_model(&self) -> &str {
-        &self.current_model
+        &self.account.current_model
     }
 
     /// The model and route Gate sends the next turn to, `None` for a
     /// pinned model.
     #[must_use]
     pub fn model_route(&self) -> Option<&str> {
-        self.model_route.as_deref()
+        self.account.model_route.as_deref()
     }
 
     /// Thinking level pinned for every turn (`high`, `off`, ...), `None`
     /// when each model picks its own.
     #[must_use]
     pub fn thinking(&self) -> Option<&str> {
-        self.thinking.as_deref()
+        self.account.thinking.as_deref()
     }
 
     /// Selector entry for the current model, if listed.
     #[must_use]
     pub fn current_model_option(&self) -> Option<&ModelOptionView> {
-        self.models.iter().find(|m| m.id == self.current_model)
+        self.account
+            .models
+            .iter()
+            .find(|m| m.id == self.account.current_model)
     }
 
     /// Logged-in user's display name (`None` = guest).
     #[must_use]
     pub fn user(&self) -> Option<&str> {
-        self.user.as_deref()
+        self.account.user.as_deref()
     }
 
     /// Labels of the usable linked plans (e.g. "Claude").
     #[must_use]
     pub fn plans(&self) -> &[String] {
-        &self.plans
+        &self.account.plans
     }
 
     /// Work mode of the agent on screen.
@@ -81,7 +84,7 @@ impl App {
     /// The active agent's current plan.
     #[must_use]
     pub const fn active_plan(&self) -> Option<&PlanView> {
-        self.active_plan.as_ref()
+        self.account.active_plan.as_ref()
     }
 
     /// Bash-style `[user@host dir]$ ` prompt shown before the input line at
@@ -114,32 +117,32 @@ impl App {
 
     /// Record the width of the chat text area drawn this frame.
     pub fn set_chat_width(&mut self, width: u16) {
-        self.chat_width = width;
+        self.chat.width = width;
     }
 
     /// Width of the chat text area drawn last frame.
     #[cfg(test)]
     pub(crate) const fn chat_width(&self) -> u16 {
-        self.chat_width
+        self.chat.width
     }
 
     /// Terminal width for a command, matching where its output is drawn.
     pub(crate) fn command_columns(&self) -> u16 {
-        if self.chat_width == 0 {
+        if self.chat.width == 0 {
             return DEFAULT_COMMAND_COLUMNS;
         }
-        self.chat_width.max(MIN_COMMAND_COLUMNS)
+        self.chat.width.max(MIN_COMMAND_COLUMNS)
     }
 
     /// Model selector state (tab, filter, highlighted row).
     #[must_use]
     pub const fn model_picker(&self) -> &ModelPicker {
-        &self.model_picker
+        &self.account.model_picker
     }
 
     /// Where the model selector and its rows were drawn this frame.
     pub fn set_model_picker_layout(&mut self, layout: PickerLayout) {
-        self.model_picker_layout = layout;
+        self.account.model_picker_layout = layout;
     }
 
     /// Get the current spinner character for animations.

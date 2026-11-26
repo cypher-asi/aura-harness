@@ -78,7 +78,7 @@ impl App {
     fn new_session_command(&mut self) {
         self.messages.clear();
         self.scroll_offset = 0;
-        self.streaming_content.clear();
+        self.chat.streaming_content.clear();
         let jobs = std::mem::take(&mut self.hud.jobs);
         let instructions = self.hud.instructions.take();
         self.hud = hud::Hud {
