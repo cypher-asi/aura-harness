@@ -76,9 +76,10 @@ fn a_forced_tool_goes_as_auto_to_a_model_that_takes_none() {
     );
 }
 
-#[test]
-fn summarize_anthropic_request_extracts_safe_fingerprint() {
-    let body = serde_json::to_vec(&json!({
+/// A streaming request with history, two tools, enabled thinking and an
+/// output config.
+fn full_request_body() -> Vec<u8> {
+    serde_json::to_vec(&json!({
         "model": "aura-claude-opus-4-7",
         "system": [
             {"type": "text", "text": "system prompt"}
@@ -114,7 +115,12 @@ fn summarize_anthropic_request_extracts_safe_fingerprint() {
         "thinking": {"type": "enabled", "budget_tokens": 1024},
         "output_config": {"type": "json"}
     }))
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn summarize_anthropic_request_extracts_safe_fingerprint() {
+    let body = full_request_body();
 
     let summary = summarize_anthropic_request(&body);
 

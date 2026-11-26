@@ -53,10 +53,10 @@ async fn response_stream_from_response_emits_items_then_completed() {
     ));
 }
 
-#[tokio::test]
-async fn response_stream_from_event_stream_aggregates_blocks() {
+/// A full message: a two-delta text block, then a `read_file` tool use.
+fn text_then_tool_use_events() -> Vec<Result<StreamEvent, ReasonerError>> {
     use crate::types::StreamContentType;
-    let events: Vec<Result<StreamEvent, ReasonerError>> = vec![
+    vec![
         Ok(StreamEvent::MessageStart {
             message_id: "msg".into(),
             model: "test".into(),
@@ -94,7 +94,12 @@ async fn response_stream_from_event_stream_aggregates_blocks() {
             cache_read_input_tokens: None,
         }),
         Ok(StreamEvent::MessageStop),
-    ];
+    ]
+}
+
+#[tokio::test]
+async fn response_stream_from_event_stream_aggregates_blocks() {
+    let events = text_then_tool_use_events();
     let underlying: StreamEventStream = Box::pin(futures_util::stream::iter(events));
     let mut stream = response_stream_from_event_stream(underlying);
     let mut collected = Vec::new();

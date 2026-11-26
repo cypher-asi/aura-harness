@@ -36,8 +36,9 @@ fn reasoning_signature() -> String {
     .unwrap()
 }
 
-#[test]
-fn body_follows_chatgpt_contract() {
+/// A tool-loop turn: user prompt, assistant reasoning + text + tool call,
+/// then the tool result and a follow-up user text.
+fn tool_loop_request() -> ModelRequest {
     let assistant = Message {
         role: Role::Assistant,
         content: vec![
@@ -74,7 +75,12 @@ fn body_follows_chatgpt_contract() {
     };
     let mut req = request(vec![Message::user("read a.rs"), assistant, results]);
     req.tool_choice = ToolChoice::Auto;
-    let body = convert::request_body(&req);
+    req
+}
+
+#[test]
+fn body_follows_chatgpt_contract() {
+    let body = convert::request_body(&tool_loop_request());
 
     assert_eq!(body["model"], "gpt-5.4");
     assert_eq!(body["instructions"], "be helpful");
@@ -92,6 +98,11 @@ fn body_follows_chatgpt_contract() {
     assert_eq!(body["tools"][0]["type"], "namespace");
     assert_eq!(body["tools"][0]["name"], TOOL_NAMESPACE);
     assert_eq!(body["tools"][0]["tools"][0]["parameters"]["type"], "object");
+}
+
+#[test]
+fn body_input_maps_history_to_responses_items() {
+    let body = convert::request_body(&tool_loop_request());
 
     let input = body["input"].as_array().unwrap();
     let kinds: Vec<&str> = input

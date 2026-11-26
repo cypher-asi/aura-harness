@@ -21,6 +21,7 @@
 //! - Testing with mock providers
 
 #![forbid(unsafe_code)]
+#![deny(clippy::too_many_lines)]
 
 pub mod anthropic;
 mod cache_scope;

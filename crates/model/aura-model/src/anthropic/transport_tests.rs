@@ -41,57 +41,11 @@ impl FaultServer {
             let mut replies = replies.into_iter();
             loop {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let mut bytes = Vec::new();
-                let body_start = loop {
-                    let mut chunk = [0; 4096];
-                    let n = socket.read(&mut chunk).await.unwrap();
-                    assert!(n > 0);
-                    bytes.extend_from_slice(&chunk[..n]);
-                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-                        break end + 4;
-                    }
-                };
-                let headers = String::from_utf8_lossy(&bytes[..body_start]);
-                let len: usize = headers
-                    .lines()
-                    .find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        name.eq_ignore_ascii_case("content-length")
-                            .then(|| value.trim().parse().unwrap())
-                    })
-                    .unwrap();
-                while bytes.len() < body_start + len {
-                    let mut chunk = [0; 4096];
-                    let n = socket.read(&mut chunk).await.unwrap();
-                    assert!(n > 0);
-                    bytes.extend_from_slice(&chunk[..n]);
-                }
-                captured
-                    .lock()
-                    .unwrap()
-                    .push(serde_json::from_slice(&bytes[body_start..body_start + len]).unwrap());
-                let response = match replies.next().unwrap_or(Reply::Disconnect) {
-                    Reply::Disconnect => continue,
-                    Reply::DelayedDisconnect => {
-                        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-                        continue;
-                    }
-                    Reply::CompleteStream => {
-                        let body = concat!(
-                            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_ok\",\"model\":\"claude-test\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
-                            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"recovered\"}}\n\n",
-                            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
-                        );
-                        format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
-                    },
-                    Reply::TruncatedBody => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 9999\r\nConnection: close\r\n\r\n{\"id\":\"partial".to_string(),
-                    Reply::Http(status, body) => format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
-                    Reply::PartialStream => concat!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 9999\r\nConnection: close\r\n\r\n",
-                        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_partial\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-test\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
-                        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
-                        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial output\"}}\n\n"
-                    ).to_string(),
+                let request = read_json_request(&mut socket).await;
+                captured.lock().unwrap().push(request);
+                let reply = replies.next().unwrap_or(Reply::Disconnect);
+                let Some(response) = reply.into_response().await else {
+                    continue;
                 };
                 socket.write_all(response.as_bytes()).await.unwrap();
                 socket.shutdown().await.unwrap();
@@ -119,6 +73,66 @@ impl FaultServer {
             cloudflare_max_retries: 0,
         })
         .unwrap()
+    }
+}
+
+/// Reads one HTTP request off `socket` and parses its body as JSON.
+async fn read_json_request(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
+    let mut bytes = Vec::new();
+    let body_start = loop {
+        let mut chunk = [0; 4096];
+        let n = socket.read(&mut chunk).await.unwrap();
+        assert!(n > 0);
+        bytes.extend_from_slice(&chunk[..n]);
+        if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+            break end + 4;
+        }
+    };
+    let headers = String::from_utf8_lossy(&bytes[..body_start]);
+    let len: usize = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse().unwrap())
+        })
+        .unwrap();
+    while bytes.len() < body_start + len {
+        let mut chunk = [0; 4096];
+        let n = socket.read(&mut chunk).await.unwrap();
+        assert!(n > 0);
+        bytes.extend_from_slice(&chunk[..n]);
+    }
+    serde_json::from_slice(&bytes[body_start..body_start + len]).unwrap()
+}
+
+impl Reply {
+    /// The raw HTTP response to write, or `None` to drop the connection.
+    async fn into_response(self) -> Option<String> {
+        let response = match self {
+            Reply::Disconnect => return None,
+            Reply::DelayedDisconnect => {
+                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+                return None;
+            }
+            Reply::CompleteStream => {
+                let body = concat!(
+                    "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_ok\",\"model\":\"claude-test\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+                    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"recovered\"}}\n\n",
+                    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+                );
+                format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+            },
+            Reply::TruncatedBody => "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 9999\r\nConnection: close\r\n\r\n{\"id\":\"partial".to_string(),
+            Reply::Http(status, body) => format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()),
+            Reply::PartialStream => concat!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 9999\r\nConnection: close\r\n\r\n",
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_partial\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-test\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial output\"}}\n\n"
+            ).to_string(),
+        };
+        Some(response)
     }
 }
 
