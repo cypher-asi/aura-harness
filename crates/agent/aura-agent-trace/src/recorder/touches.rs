@@ -37,13 +37,3 @@ pub fn file_touches(tool: &str, input: &Value, is_error: bool) -> Vec<FileTouch>
         removed,
     }]
 }
-
-/// First `max` characters of `text`, with an ellipsis when cut.
-#[must_use]
-pub fn excerpt(text: &str, max: usize) -> String {
-    let mut out: String = text.chars().take(max).collect();
-    if text.chars().nth(max).is_some() {
-        out.push('…');
-    }
-    out
-}

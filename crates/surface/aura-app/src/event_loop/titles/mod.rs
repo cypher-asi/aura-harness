@@ -17,13 +17,14 @@
 
 use super::subagents::AgentHub;
 use aura_agent::titles::{
-    cut_at_word, fallback_title, sanitize, shorten, MAX_SIDE_CHARS, MAX_TITLE_CHARS, TITLE_TIMEOUT,
+    cut_at_word, fallback_title, sanitize, MAX_SIDE_CHARS, MAX_TITLE_CHARS, TITLE_TIMEOUT,
 };
 use aura_agent::{AgentLoopConfig, KernelModelGateway};
 use aura_context_prompts::auxiliary::chat_title::{
     chat_title_user_prompt, mail_subject_user_prompt, subtask_title_user_prompt,
     CHAT_TITLE_SYSTEM_PROMPT, MAIL_SUBJECT_SYSTEM_PROMPT, SUBTASK_TITLE_SYSTEM_PROMPT,
 };
+use aura_core_types::text::truncate_with_ellipsis;
 use aura_core_types::{AgentId, BenchSource};
 use aura_model::{Message, ModelProvider, Role};
 use aura_ui::UiCommand;
@@ -242,8 +243,8 @@ async fn ask(
         model,
         kind.system_prompt(),
         kind.user_prompt(
-            &shorten(prompt, MAX_SIDE_CHARS),
-            &shorten(&reply, MAX_SIDE_CHARS),
+            &truncate_with_ellipsis(prompt, MAX_SIDE_CHARS),
+            &truncate_with_ellipsis(&reply, MAX_SIDE_CHARS),
         ),
         config,
     );

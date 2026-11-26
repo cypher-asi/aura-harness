@@ -12,7 +12,7 @@ use super::{
     args_summary, decision_detail, first_line, intent_mix, secs, tokens, EdgeKind, GraphNode,
     NodeKind, NodeStatus, RunGraph,
 };
-use crate::recorder::excerpt;
+use aura_core_types::text::truncate_with_ellipsis;
 
 /// Token and cost figures of one model call.
 struct CallFigures {
@@ -66,7 +66,7 @@ impl RunGraph {
             kind: NodeKind::Decision,
             parent: Some(parent),
             label: "follow_up".into(),
-            detail: excerpt(first_line(text), 60),
+            detail: truncate_with_ellipsis(first_line(text), 60),
             status: NodeStatus::Warn,
             seq: Some(step.seq),
             meta,
@@ -83,7 +83,11 @@ impl RunGraph {
             id: id.clone(),
             kind: NodeKind::Turn,
             parent: Some("run".into()),
-            label: format!("T{} \"{}\"", step.turn, excerpt(first_line(text), 60)),
+            label: format!(
+                "T{} \"{}\"",
+                step.turn,
+                truncate_with_ellipsis(first_line(text), 60)
+            ),
             detail: String::new(),
             status: NodeStatus::Pending,
             seq: Some(step.seq),
@@ -356,10 +360,13 @@ fn model_meta(step: &Step, action: &ModelAction, figures: &CallFigures) -> Map<S
     if !action.thinking_text.is_empty() {
         meta.insert(
             "thinking".into(),
-            json!(excerpt(&action.thinking_text, 4000)),
+            json!(truncate_with_ellipsis(&action.thinking_text, 4000)),
         );
     }
-    meta.insert("text".into(), json!(excerpt(&action.text, 2000)));
+    meta.insert(
+        "text".into(),
+        json!(truncate_with_ellipsis(&action.text, 2000)),
+    );
     meta.insert("intents".into(), json!(figures.intents));
     if let Observation::Model(obs) = &step.observation {
         meta.insert("observation".into(), json!(obs));
@@ -378,7 +385,7 @@ fn model_meta(step: &Step, action: &ModelAction, figures: &CallFigures) -> Map<S
 
 fn model_detail(step: &Step, action: &ModelAction, figures: &CallFigures) -> String {
     match &action.error {
-        Some(error) => excerpt(first_line(error), 60),
+        Some(error) => truncate_with_ellipsis(first_line(error), 60),
         None => format!(
             "{}/{}  {}  {}{}",
             tokens(figures.prompt_tokens),

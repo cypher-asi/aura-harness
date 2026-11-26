@@ -6,8 +6,8 @@ use serde_json::{json, Map, Value};
 
 use super::{first_line, EdgeKind, GraphNode, NodeKind, NodeStatus, RunGraph};
 use crate::bundle::RunMeta;
-use crate::recorder::excerpt;
 use crate::records::RecordRow;
+use aura_core_types::text::truncate_with_ellipsis;
 
 impl RunGraph {
     /// Add a reward. Outcome and human rewards become nodes; derived
@@ -163,7 +163,7 @@ impl RunGraph {
                     .get("input")
                     .and_then(|i| i.get("prompt"))
                     .and_then(Value::as_str)
-                    .is_some_and(|p| excerpt(first_line(p), 80) == child.title)
+                    .is_some_and(|p| truncate_with_ellipsis(first_line(p), 80) == child.title)
         };
         self.nodes
             .iter()

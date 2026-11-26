@@ -9,6 +9,7 @@
 //! their time.
 
 use aura_core_protocol::cloud::HostStats;
+use aura_core_types::time::format_duration;
 use aura_core_types::{AgentId, VmPayload};
 use aura_engine_cloud::cost::CostEstimate;
 use aura_engine_cloud::fleet::MachineView;
@@ -16,8 +17,7 @@ use aura_engine_cloud::github::RepoRef;
 use aura_engine_cloud::plans::PlanStatus;
 use aura_engine_cloud::repos::RepoStatus;
 use aura_ui::host::{
-    format_bytes, format_duration, format_money, HostAction, HostFact, HostRow, HostSection,
-    HostView, PlacementView,
+    format_bytes, format_money, HostAction, HostFact, HostRow, HostSection, HostView, PlacementView,
 };
 
 mod sections;

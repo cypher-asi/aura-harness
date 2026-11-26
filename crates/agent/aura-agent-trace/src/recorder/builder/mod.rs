@@ -12,7 +12,8 @@ use aura_core_types::trace::{
 use aura_store_snapshot::FsSnapshotStore;
 use serde_json::{json, Value};
 
-use super::touches::{excerpt, file_touches};
+use super::touches::file_touches;
+use aura_core_types::text::truncate_with_ellipsis;
 
 mod record_steps;
 
@@ -352,7 +353,7 @@ impl StepBuilder {
                 is_error,
                 source: source.to_string(),
                 content_chars: content.chars().count(),
-                excerpt: excerpt(content, EXCERPT_CHARS),
+                excerpt: truncate_with_ellipsis(content, EXCERPT_CHARS),
                 content: content_blob,
                 files: files.clone(),
             },

@@ -1,6 +1,7 @@
 //! The SYNC section: how current this computer's copy of a cloud agent is.
 
-use aura_ui::host::{format_duration, HostFact, HostSection, HostView};
+use aura_core_types::time::format_duration;
+use aura_ui::host::{HostFact, HostSection, HostView};
 
 use crate::cloud::hub::SyncStatus;
 

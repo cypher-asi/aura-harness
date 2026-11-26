@@ -1,7 +1,8 @@
 //! The resource sections every host has, from one [`HostStats`] sample.
 
 use aura_core_protocol::cloud::HostStats;
-use aura_ui::host::{format_bytes, format_duration, HostFact, HostSection};
+use aura_core_types::time::format_duration;
+use aura_ui::host::{format_bytes, HostFact, HostSection};
 
 /// Facts every host has, from one sample.
 pub(super) fn resource_sections(stats: &HostStats) -> Vec<HostSection> {

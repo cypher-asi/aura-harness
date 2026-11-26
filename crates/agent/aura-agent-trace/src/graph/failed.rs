@@ -4,7 +4,7 @@ use aura_core_types::trace::Step;
 use serde_json::{json, Map, Value};
 
 use super::{first_line, EdgeKind, GraphNode, NodeKind, NodeStatus, RunGraph};
-use crate::recorder::excerpt;
+use aura_core_types::text::truncate_with_ellipsis;
 
 impl RunGraph {
     pub(super) fn failed_call(&mut self, turn: &str, step: &Step, error: &str) {
@@ -27,7 +27,7 @@ impl RunGraph {
             kind: NodeKind::Iteration,
             parent: Some(turn.to_string()),
             label: format!("I{} failed", calls + 1),
-            detail: excerpt(first_line(error), 60),
+            detail: truncate_with_ellipsis(first_line(error), 60),
             status: NodeStatus::Error,
             seq: None,
             meta,

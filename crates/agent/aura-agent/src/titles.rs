@@ -9,6 +9,7 @@ use crate::{AgentLoopConfig, KernelModelGateway};
 use aura_context_prompts::auxiliary::chat_title::{
     chat_title_user_prompt, CHAT_TITLE_SYSTEM_PROMPT,
 };
+use aura_core_types::text::truncate_with_ellipsis;
 use aura_model::{
     Message, ModelCallPurpose, ModelRequest, ModelRequestKind, ReasonerError, ThinkingEffort,
     ToolChoice,
@@ -70,7 +71,7 @@ pub async fn chat_title(
     model: &str,
     prompt: &str,
 ) -> Option<String> {
-    let user = chat_title_user_prompt(&shorten(prompt, MAX_SIDE_CHARS), "");
+    let user = chat_title_user_prompt(&truncate_with_ellipsis(prompt, MAX_SIDE_CHARS), "");
     let request = match request(model, CHAT_TITLE_SYSTEM_PROMPT, user, config) {
         Ok(request) => request,
         Err(e) => {
@@ -136,17 +137,6 @@ pub fn cut_at_word(text: &str, max: usize) -> String {
         _ => cut.as_str(),
     };
     cut.trim_end_matches([' ', ',', ';', ':', '-']).to_string()
-}
-
-/// `text` cut to at most `max` characters, marked when cut.
-#[must_use]
-pub fn shorten(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut cut: String = text.chars().take(max).collect();
-    cut.push('…');
-    cut
 }
 
 #[cfg(test)]

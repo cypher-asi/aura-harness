@@ -22,3 +22,16 @@ pub fn format_duration(secs: u64) -> String {
         format!("{secs}s")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::format_duration;
+
+    #[test]
+    fn durations_show_their_two_largest_units() {
+        assert_eq!(format_duration(35), "35s");
+        assert_eq!(format_duration(240), "4m");
+        assert_eq!(format_duration(8040), "2h 14m");
+        assert_eq!(format_duration(3 * 86_400 + 7200), "3d 2h");
+    }
+}

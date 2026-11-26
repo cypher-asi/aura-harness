@@ -28,7 +28,7 @@ mod builder;
 mod touches;
 
 pub use builder::{StepBuilder, EXCERPT_CHARS};
-pub use touches::{excerpt, file_touches};
+pub use touches::file_touches;
 
 enum WriteOp {
     Step(Box<Step>),
@@ -284,7 +284,10 @@ impl RunRecorder {
             let mut meta = lock(&self.meta);
             let untitled = meta.title.is_empty();
             if untitled {
-                meta.title = crate::recorder::excerpt(prompt.lines().next().unwrap_or(""), 80);
+                meta.title = aura_core_types::text::truncate_with_ellipsis(
+                    prompt.lines().next().unwrap_or(""),
+                    80,
+                );
                 if let Err(e) = self.bundle.write_meta(&meta) {
                     tracing::debug!(error = %e, "trace meta write failed");
                 }

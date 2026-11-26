@@ -224,21 +224,6 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Seconds as `2h 14m`, `4m`, `35s`, `3d 2h`.
-#[must_use]
-pub fn format_duration(secs: u64) -> String {
-    let (d, h, m) = (secs / 86_400, (secs % 86_400) / 3600, (secs % 3600) / 60);
-    if d > 0 {
-        format!("{d}d {h}h")
-    } else if h > 0 {
-        format!("{h}h {m}m")
-    } else if m > 0 {
-        format!("{m}m")
-    } else {
-        format!("{secs}s")
-    }
-}
-
 /// An amount with its currency: `€0.42`, `$1.20`, `0.42 GBP`.
 #[must_use]
 pub fn format_money(amount: f64, currency: &str) -> String {
@@ -258,9 +243,6 @@ mod tests {
     fn formats() {
         assert_eq!(format_bytes(512), "512 B");
         assert_eq!(format_bytes(16 * 1024 * 1024 * 1024), "16.0 GiB");
-        assert_eq!(format_duration(35), "35s");
-        assert_eq!(format_duration(8040), "2h 14m");
-        assert_eq!(format_duration(3 * 86_400 + 7200), "3d 2h");
         assert_eq!(format_money(0.42, "eur"), "€0.42");
         assert_eq!(format_money(0.0016, "eur"), "€0.0016");
         assert_eq!(format_money(1.2, "usd"), "$1.20");

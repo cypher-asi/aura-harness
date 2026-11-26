@@ -5,6 +5,7 @@
 #[cfg(test)]
 mod tests;
 
+use aura_core_types::text::truncate_with_ellipsis;
 use aura_model::{ContentBlock, Message, Role};
 use std::path::{Path, PathBuf};
 
@@ -40,12 +41,7 @@ pub fn prompts(messages: &[Message], is_named: impl Fn(&str) -> bool) -> Vec<Str
 #[must_use]
 pub fn title(prompt: &str) -> String {
     let line = prompt.lines().next().unwrap_or_default().trim();
-    let mut chars = line.chars();
-    let mut title: String = chars.by_ref().take(TITLE_CHARS).collect();
-    if chars.next().is_some() {
-        title.push('…');
-    }
-    title
+    truncate_with_ellipsis(line, TITLE_CHARS)
 }
 
 /// `path` relative to `workspace`, when inside it as given or once the

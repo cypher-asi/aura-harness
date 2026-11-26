@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::bundle::RunMeta;
-use crate::recorder::excerpt;
+use aura_core_types::text::truncate_with_ellipsis;
 
 mod annotate;
 mod failed;
@@ -301,7 +301,7 @@ fn decision_detail(action: &HarnessAction) -> String {
     match action {
         HarnessAction::Nudge { kind } => format!("nudge {kind}"),
         HarnessAction::Block { tool, reason, .. } => {
-            format!("block {tool} {}", excerpt(reason, 40))
+            format!("block {tool} {}", truncate_with_ellipsis(reason, 40))
         }
         HarnessAction::Allow => "allow".into(),
         HarnessAction::Compact {
@@ -317,7 +317,7 @@ fn decision_detail(action: &HarnessAction) -> String {
         HarnessAction::Retry {
             attempt, reason, ..
         } => format!("retry #{attempt} {reason}"),
-        HarnessAction::Warn { message } => format!("warn {}", excerpt(message, 40)),
+        HarnessAction::Warn { message } => format!("warn {}", truncate_with_ellipsis(message, 40)),
         HarnessAction::Build {
             success,
             error_count,
@@ -358,7 +358,7 @@ fn args_summary(input: &Value) -> String {
         "prompt",
     ] {
         if let Some(v) = input.get(key).and_then(Value::as_str) {
-            return excerpt(first_line(v), 50);
+            return truncate_with_ellipsis(first_line(v), 50);
         }
     }
     String::new()
