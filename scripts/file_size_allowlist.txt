@@ -60,9 +60,6 @@ crates/model/aura-model/src/anthropic/sse/tests.rs
 crates/model/aura-model/src/anthropic/tests.rs
 crates/model/aura-model/src/model_alias/tests.rs
 crates/model/aura-model/src/model_catalog/tests.rs
-crates/model/aura-model/src/response_stream/mod.rs
-crates/model/aura-model/src/types/request/mod.rs
-crates/model/aura-model/src/types/streaming/mod.rs
 crates/model/aura-model/src/types/tests_streaming.rs
 crates/surface/aura-app/src/api_server.rs
 crates/surface/aura-app/src/cloud/host_info.rs

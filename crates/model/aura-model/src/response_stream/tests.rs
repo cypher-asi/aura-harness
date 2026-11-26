@@ -1,6 +1,9 @@
 use super::*;
 use crate::error::ReasonerError;
+use crate::types::StreamEvent;
 use crate::types::{Message, ProviderTrace, Role, StopReason, Usage};
+use crate::StreamEventStream;
+use futures_util::StreamExt;
 
 fn mk_response() -> ModelResponse {
     ModelResponse::new(

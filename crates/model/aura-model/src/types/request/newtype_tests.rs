@@ -1,4 +1,5 @@
 use super::*;
+use crate::error::ReasonerError;
 
 #[test]
 fn model_name_rejects_empty() {
