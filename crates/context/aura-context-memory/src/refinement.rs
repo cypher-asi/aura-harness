@@ -5,11 +5,14 @@
 
 use crate::error::MemoryError;
 use crate::extraction::ConversationTurn;
-use crate::types::{CandidateType, MemoryCandidate, MemoryScope, RefinedCandidate};
+use crate::types::{CandidateType, MemoryCandidate, RefinedCandidate};
 use crate::DEFAULT_MEMORY_MODEL;
 use aura_model::{Message, ModelProvider, ModelRequest, ThinkingEffort};
 use std::fmt::Write;
 use std::sync::Arc;
+
+mod parse;
+use parse::{kept_by_default, parse_candidate_refinement, parse_fact_line, parse_procedure_line};
 
 const MAX_TURN_TEXT_LEN: usize = 3000;
 
@@ -174,71 +177,12 @@ impl LlmRefiner {
         active_skills: &[String],
     ) -> String {
         let mut prompt = String::new();
-
         if let Some(turn) = turn {
-            prompt.push_str("## Conversation turn\n\n");
-            prompt.push_str("User: ");
-            let user_msg = truncate(&turn.user_message, MAX_TURN_TEXT_LEN);
-            prompt.push_str(&user_msg);
-            prompt.push_str("\n\nAssistant: ");
-            let assistant_msg = truncate(&turn.assistant_text, MAX_TURN_TEXT_LEN);
-            prompt.push_str(&assistant_msg);
-            prompt.push_str("\n\n");
+            push_turn_section(&mut prompt, turn);
         }
-
-        if !active_skills.is_empty() {
-            prompt.push_str("## Active skills\n\n");
-            for skill in active_skills {
-                let _ = writeln!(prompt, "- {skill}");
-            }
-            prompt.push('\n');
-        }
-
-        if !candidates.is_empty() {
-            prompt.push_str("## Pre-extracted candidates\n\n");
-            for (i, c) in candidates.iter().enumerate() {
-                let type_str = match c.candidate_type {
-                    CandidateType::Fact => "fact",
-                    CandidateType::Event => "event",
-                    CandidateType::Procedure => "procedure",
-                };
-                let key_str = c.key.as_deref().unwrap_or("(none)");
-                let summary_str = c.summary.as_deref().unwrap_or("");
-                let _ = writeln!(
-                    prompt,
-                    "{}. {}: key={}, value={}, source={} {}",
-                    i + 1,
-                    type_str,
-                    key_str,
-                    c.value,
-                    c.source_hint,
-                    summary_str
-                );
-            }
-            prompt.push('\n');
-        }
-
-        prompt.push_str("## Instructions\n\n");
-
-        if !candidates.is_empty() {
-            prompt.push_str(
-                "For each pre-extracted candidate, respond with one line:\n\
-                 N. KEEP|DROP key=\"refined_key\" scope=agent|project|user confidence=0.X importance=0.X\n\n",
-            );
-        }
-
-        prompt.push_str(
-            "If the conversation contains facts worth remembering long-term, \
-             output additional lines:\n\
-             FACT key=\"snake_case_key\" value=\"the fact\" scope=agent|project|user confidence=0.X importance=0.X\n\n\
-             If the user states a standing instruction, workflow preference, or \
-             \"always do X when Y\" rule, output:\n\
-             PROCEDURE name=\"snake_case_name\" trigger=\"when this happens\" \
-             steps=\"step1;step2\" skill=\"skill_name_or_none\" scope=agent|project|user \
-             confidence=0.X importance=0.X\n\n\
-             If there are no new facts or procedures to extract, output nothing extra.",
-        );
-
+        push_skills_section(&mut prompt, active_skills);
+        push_candidates_section(&mut prompt, candidates);
+        push_instructions(&mut prompt, !candidates.is_empty());
         prompt
     }
 
@@ -266,59 +210,16 @@ impl LlmRefiner {
                 }
             }
 
-            // Try parsing as a numbered candidate refinement (N. KEEP|DROP ...)
-            let parts: Vec<&str> = line.splitn(2, ". ").collect();
-            if parts.len() != 2 {
-                continue;
+            if let Some((idx, candidate)) = parse_candidate_refinement(line, candidates) {
+                seen_indices.push(idx);
+                refined.push(candidate);
             }
-            let idx: usize = match parts[0].trim().parse::<usize>() {
-                Ok(n) if n >= 1 && n <= candidates.len() => n - 1,
-                _ => continue,
-            };
-
-            let rest = parts[1];
-            let keep = rest.starts_with("KEEP");
-
-            let confidence = extract_float(rest, "confidence=")
-                .unwrap_or(candidates[idx].preliminary_confidence);
-            let importance = extract_float(rest, "importance=")
-                .unwrap_or(candidates[idx].preliminary_importance);
-            let key = extract_quoted(rest, "key=")
-                .unwrap_or_else(|| candidates[idx].key.clone().unwrap_or_default());
-            let scope = extract_scope(rest);
-
-            seen_indices.push(idx);
-            refined.push(RefinedCandidate {
-                candidate_type: candidates[idx].candidate_type.clone(),
-                key,
-                value: candidates[idx].value.clone(),
-                summary: candidates[idx].summary.clone(),
-                confidence,
-                importance,
-                keep,
-                scope,
-                trigger: None,
-                steps: None,
-                skill_name: None,
-            });
         }
 
         // Candidates not addressed by the LLM are kept by default
         for (i, c) in candidates.iter().enumerate() {
             if !seen_indices.contains(&i) {
-                refined.push(RefinedCandidate {
-                    candidate_type: c.candidate_type.clone(),
-                    key: c.key.clone().unwrap_or_default(),
-                    value: c.value.clone(),
-                    summary: c.summary.clone(),
-                    confidence: c.preliminary_confidence,
-                    importance: c.preliminary_importance,
-                    keep: true,
-                    scope: MemoryScope::Agent,
-                    trigger: None,
-                    steps: None,
-                    skill_name: None,
-                });
+                refined.push(kept_by_default(c));
             }
         }
 
@@ -326,103 +227,76 @@ impl LlmRefiner {
     }
 }
 
-fn parse_fact_line(line: &str) -> Option<RefinedCandidate> {
-    let key = extract_quoted(line, "key=")?;
-    let value = extract_quoted(line, "value=")?;
-    let confidence = extract_float(line, "confidence=").unwrap_or(0.8);
-    let importance = extract_float(line, "importance=").unwrap_or(0.5);
-    let scope = extract_scope(line);
-
-    Some(RefinedCandidate {
-        candidate_type: CandidateType::Fact,
-        key,
-        value: serde_json::Value::String(value),
-        summary: None,
-        confidence,
-        importance,
-        keep: true,
-        scope,
-        trigger: None,
-        steps: None,
-        skill_name: None,
-    })
+fn push_turn_section(prompt: &mut String, turn: &ConversationTurn) {
+    prompt.push_str("## Conversation turn\n\n");
+    prompt.push_str("User: ");
+    let user_msg = truncate(&turn.user_message, MAX_TURN_TEXT_LEN);
+    prompt.push_str(&user_msg);
+    prompt.push_str("\n\nAssistant: ");
+    let assistant_msg = truncate(&turn.assistant_text, MAX_TURN_TEXT_LEN);
+    prompt.push_str(&assistant_msg);
+    prompt.push_str("\n\n");
 }
 
-fn parse_procedure_line(line: &str) -> Option<RefinedCandidate> {
-    let name = extract_quoted(line, "name=")?;
-    let trigger = extract_quoted(line, "trigger=")?;
-    let steps_raw = extract_quoted(line, "steps=").unwrap_or_default();
-    let skill = extract_quoted(line, "skill=").unwrap_or_else(|| "none".to_string());
-    let confidence = extract_float(line, "confidence=").unwrap_or(0.8);
-    let importance = extract_float(line, "importance=").unwrap_or(0.7);
-    let scope = extract_scope(line);
-
-    let steps: Vec<String> = steps_raw
-        .split(';')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    let skill_name = if skill.eq_ignore_ascii_case("none") || skill.is_empty() {
-        None
-    } else {
-        Some(skill)
-    };
-
-    Some(RefinedCandidate {
-        candidate_type: CandidateType::Procedure,
-        key: name,
-        value: serde_json::json!({ "trigger": trigger, "steps": steps }),
-        summary: Some(trigger.clone()),
-        confidence,
-        importance,
-        keep: true,
-        scope,
-        trigger: Some(trigger),
-        steps: Some(steps),
-        skill_name,
-    })
-}
-
-fn extract_scope(text: &str) -> MemoryScope {
-    match extract_unquoted(text, "scope=")
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "user" | "personal" => MemoryScope::User,
-        "project" | "workspace" | "shared" => MemoryScope::Project,
-        _ => MemoryScope::Agent,
+fn push_skills_section(prompt: &mut String, active_skills: &[String]) {
+    if active_skills.is_empty() {
+        return;
     }
-}
-
-fn extract_unquoted(text: &str, prefix: &str) -> Option<String> {
-    let start = text.find(prefix)? + prefix.len();
-    let rest = &text[start..];
-    let end = rest
-        .find(|character: char| character.is_whitespace())
-        .unwrap_or(rest.len());
-    Some(rest[..end].trim_matches(['"', '\'']).to_string())
-}
-
-fn extract_float(text: &str, prefix: &str) -> Option<f32> {
-    let start = text.find(prefix)? + prefix.len();
-    let end = text[start..]
-        .find(|c: char| !c.is_ascii_digit() && c != '.')
-        .map_or(text.len(), |e| start + e);
-    text[start..end].parse().ok()
-}
-
-fn extract_quoted(text: &str, prefix: &str) -> Option<String> {
-    let start = text.find(prefix)? + prefix.len();
-    let rest = &text[start..];
-    if let Some(stripped) = rest.strip_prefix('"') {
-        let end = stripped.find('"')?;
-        Some(stripped[..end].to_string())
-    } else {
-        let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
-        Some(rest[..end].to_string())
+    prompt.push_str("## Active skills\n\n");
+    for skill in active_skills {
+        let _ = writeln!(prompt, "- {skill}");
     }
+    prompt.push('\n');
+}
+
+fn push_candidates_section(prompt: &mut String, candidates: &[MemoryCandidate]) {
+    if candidates.is_empty() {
+        return;
+    }
+    prompt.push_str("## Pre-extracted candidates\n\n");
+    for (i, c) in candidates.iter().enumerate() {
+        let type_str = match c.candidate_type {
+            CandidateType::Fact => "fact",
+            CandidateType::Event => "event",
+            CandidateType::Procedure => "procedure",
+        };
+        let key_str = c.key.as_deref().unwrap_or("(none)");
+        let summary_str = c.summary.as_deref().unwrap_or("");
+        let _ = writeln!(
+            prompt,
+            "{}. {}: key={}, value={}, source={} {}",
+            i + 1,
+            type_str,
+            key_str,
+            c.value,
+            c.source_hint,
+            summary_str
+        );
+    }
+    prompt.push('\n');
+}
+
+fn push_instructions(prompt: &mut String, has_candidates: bool) {
+    prompt.push_str("## Instructions\n\n");
+
+    if has_candidates {
+        prompt.push_str(
+            "For each pre-extracted candidate, respond with one line:\n\
+             N. KEEP|DROP key=\"refined_key\" scope=agent|project|user confidence=0.X importance=0.X\n\n",
+        );
+    }
+
+    prompt.push_str(
+        "If the conversation contains facts worth remembering long-term, \
+         output additional lines:\n\
+         FACT key=\"snake_case_key\" value=\"the fact\" scope=agent|project|user confidence=0.X importance=0.X\n\n\
+         If the user states a standing instruction, workflow preference, or \
+         \"always do X when Y\" rule, output:\n\
+         PROCEDURE name=\"snake_case_name\" trigger=\"when this happens\" \
+         steps=\"step1;step2\" skill=\"skill_name_or_none\" scope=agent|project|user \
+         confidence=0.X importance=0.X\n\n\
+         If there are no new facts or procedures to extract, output nothing extra.",
+    );
 }
 
 fn truncate(s: &str, max_len: usize) -> String {

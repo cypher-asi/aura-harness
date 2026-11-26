@@ -26,11 +26,9 @@ crates/agent/aura-agent/src/verify/runner.rs
 crates/auth/aura-auth/src/manager.rs
 crates/auth/aura-auth/src/manager/tests.rs
 crates/context/aura-context-memory/examples/continuity_eval.rs
-crates/context/aura-context-memory/src/consolidation.rs
 crates/context/aura-context-memory/src/retriever_tests.rs
-crates/context/aura-context-memory/src/store.rs
 crates/context/aura-context-memory/src/store_tests.rs
-crates/context/aura-context-memory/src/write_pipeline.rs
+crates/context/aura-context-memory/src/write_pipeline/mod.rs
 crates/context/aura-context-memory/tests/turn_summary_roundtrip.rs
 crates/engine/aura-engine-automaton/src/builtins/dev_loop/tests.rs
 crates/engine/aura-engine-automaton/src/builtins/task_refinement/tests.rs

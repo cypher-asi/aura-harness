@@ -320,65 +320,76 @@ impl MemoryPacket {
         let mut out = String::from(
             "\n<agent_memory>\nOnly use memories that are relevant to the current request. Memory IDs are local provenance references.\n",
         );
-
-        if !self.facts.is_empty() {
-            out.push_str("<facts>\n");
-            for fact in &self.facts {
-                let val = match &fact.value {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                let _ = writeln!(
-                    out,
-                    "- [memory:{}] {}: {} (confidence: {:.2}, scope: {:?})",
-                    fact.fact_id.to_hex(),
-                    fact.key,
-                    val,
-                    fact.confidence,
-                    fact.continuity.scope
-                );
-            }
-            out.push_str("</facts>\n");
-        }
-
-        if !self.events.is_empty() {
-            out.push_str("<recent_events>\n");
-            for event in &self.events {
-                let _ = writeln!(
-                    out,
-                    "- [memory:{}] [{}] {}: {}",
-                    event.event_id.to_hex(),
-                    event.timestamp.format("%Y-%m-%d"),
-                    event.event_type,
-                    event.summary
-                );
-            }
-            out.push_str("</recent_events>\n");
-        }
-
-        if !self.procedures.is_empty() {
-            out.push_str("<procedures>\n");
-            for proc in &self.procedures {
-                let steps = proc.steps.join(" -> ");
-                let skill_tag = proc
-                    .skill_name
-                    .as_deref()
-                    .map(|s| format!(" [skill: {s}]"))
-                    .unwrap_or_default();
-                let _ = writeln!(
-                    out,
-                    "- [memory:{}] \"{}\": {} (success: {:.0}%){skill_tag}",
-                    proc.procedure_id.to_hex(),
-                    proc.name,
-                    steps,
-                    proc.success_rate * 100.0
-                );
-            }
-            out.push_str("</procedures>\n");
-        }
-
+        self.push_facts_section(&mut out);
+        self.push_events_section(&mut out);
+        self.push_procedures_section(&mut out);
         out.push_str("</agent_memory>");
         out
+    }
+
+    fn push_facts_section(&self, out: &mut String) {
+        if self.facts.is_empty() {
+            return;
+        }
+        out.push_str("<facts>\n");
+        for fact in &self.facts {
+            let val = match &fact.value {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let _ = writeln!(
+                out,
+                "- [memory:{}] {}: {} (confidence: {:.2}, scope: {:?})",
+                fact.fact_id.to_hex(),
+                fact.key,
+                val,
+                fact.confidence,
+                fact.continuity.scope
+            );
+        }
+        out.push_str("</facts>\n");
+    }
+
+    fn push_events_section(&self, out: &mut String) {
+        if self.events.is_empty() {
+            return;
+        }
+        out.push_str("<recent_events>\n");
+        for event in &self.events {
+            let _ = writeln!(
+                out,
+                "- [memory:{}] [{}] {}: {}",
+                event.event_id.to_hex(),
+                event.timestamp.format("%Y-%m-%d"),
+                event.event_type,
+                event.summary
+            );
+        }
+        out.push_str("</recent_events>\n");
+    }
+
+    fn push_procedures_section(&self, out: &mut String) {
+        if self.procedures.is_empty() {
+            return;
+        }
+        out.push_str("<procedures>\n");
+        for proc in &self.procedures {
+            let steps = proc.steps.join(" -> ");
+            let skill_tag = proc
+                .skill_name
+                .as_deref()
+                .map(|s| format!(" [skill: {s}]"))
+                .unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "- [memory:{}] \"{}\": {} (success: {:.0}%){skill_tag}",
+                proc.procedure_id.to_hex(),
+                proc.name,
+                steps,
+                proc.success_rate * 100.0
+            );
+        }
+        out.push_str("</procedures>\n");
     }
 }
 
