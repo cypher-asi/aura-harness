@@ -8,7 +8,7 @@
 //! remote-tracking branches, so none of it asks the network. PRs come
 //! from GitHub, through [`super::prs`].
 
-use super::github::{Pr, PrStatus};
+use super::github::{self, Pr, PrStatus};
 use super::parse::{self, Commit, HeadMove, Moved, Ref, RemoteMove};
 use super::{git, github_repo, keep, prs, CACHE};
 use crate::event_loop::subagents::lock;
@@ -198,7 +198,7 @@ async fn read(folder: &Path, force: bool) -> Result<(RepoView, Option<JoinHandle
     let (prs, reading) = match github_repo(&root, remote.as_deref()).await {
         None => (PrState::NotGitHub, None),
         Some(slug) => {
-            let (answer, reading) = prs(&slug, force).await;
+            let (answer, reading) = prs(&slug, force, github::sources).await;
             let state = match answer {
                 None => PrState::Note(READING_PRS.to_string()),
                 Some(Err(problem)) => PrState::Note(problem),

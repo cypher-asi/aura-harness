@@ -36,6 +36,10 @@ const REFRESH_EVERY: Duration = Duration::from_secs(5);
 /// How long an unanswered ask holds back the next one.
 const ANSWER_WAIT: Duration = Duration::from_secs(10);
 
+/// What `o` may open: pages on github.com, nothing the system's opener
+/// would read from disk or run.
+const GITHUB_PAGES: &str = "https://github.com/";
+
 /// What the REPO tab's list shows, picked in the strip at its top.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum RepoFilter {
@@ -658,15 +662,18 @@ impl App {
         }
     }
 
+    /// The page `o` opens for the highlighted row: a PR's, on github.com.
+    fn selected_repo_page(&self) -> Option<String> {
+        let Some(&RepoRow::Event(i)) = self.repo_rows().get(self.repo.selected) else {
+            return None;
+        };
+        let url = self.repo_view()?.events.get(i)?.url.clone()?;
+        url.starts_with(GITHUB_PAGES).then_some(url)
+    }
+
     /// `o`: open the highlighted PR's page on GitHub.
     pub(super) fn open_selected_repo_page(&mut self) {
-        let url = match (self.repo_view(), self.repo_rows().get(self.repo.selected)) {
-            (Some(view), Some(&RepoRow::Event(i))) => {
-                view.events.get(i).and_then(|e| e.url.clone())
-            }
-            _ => None,
-        };
-        let Some(url) = url else {
+        let Some(url) = self.selected_repo_page() else {
             self.notification = Some((
                 "Only a PR has a page to open".to_string(),
                 NotificationType::Warning,
@@ -963,6 +970,40 @@ mod tests {
     }
 
     #[test]
+    fn o_opens_a_prs_page_on_github_alone() {
+        let (mut app, _rx) = app();
+        let with_pr = |url: &str| {
+            let mut view = view("aa");
+            let pr = RepoTarget::Pr { number: 7 };
+            view.events.insert(
+                0,
+                RepoEvent {
+                    url: Some(url.into()),
+                    ..event(EventKind::Pr, 60, "#7 Add REPO", pr)
+                },
+            );
+            Box::new(view)
+        };
+        let page = "https://github.com/acme/aura/pull/7";
+        app.process_command(UiCommand::SetRepo(with_pr(page)));
+        let pr = app
+            .repo_rows()
+            .iter()
+            .position(|&row| row == RepoRow::Event(0));
+        app.select_repo_row(pr.unwrap());
+        assert_eq!(app.selected_repo_page().as_deref(), Some(page));
+
+        app.process_command(UiCommand::SetRepo(with_pr("file:///etc/passwd")));
+        assert_eq!(app.repo_rows()[app.repo_selected()], RepoRow::Event(0));
+        assert_eq!(app.selected_repo_page(), None);
+        app.handle_key(key(KeyCode::Char('o')));
+        assert!(app.notification().is_some(), "o says why it opens nothing");
+
+        app.select_repo_row(0);
+        assert_eq!(app.selected_repo_page(), None, "the sync row has no page");
+    }
+
+    #[test]
     fn another_agents_view_is_not_shown_or_opened() {
         let (mut app, mut rx) = app();
         app.process_command(UiCommand::SetRepo(Box::new(view("bb"))));
@@ -995,6 +1036,10 @@ mod tests {
         assert_eq!(asked(&mut rx), 1);
         app.refresh_repo_tab();
         assert_eq!(asked(&mut rx), 0, "the ask is out");
+        let unanswered = Instant::now().checked_sub(ANSWER_WAIT).unwrap();
+        app.repo.asked = Some(("aa".into(), unanswered));
+        app.refresh_repo_tab();
+        assert_eq!(asked(&mut rx), 1, "an ask never answered is made again");
         app.process_command(UiCommand::SetRepo(Box::new(view("aa"))));
         app.refresh_repo_tab();
         assert_eq!(asked(&mut rx), 0, "answered just now");

@@ -1,11 +1,15 @@
+use super::github::{self, Failure, Pr, PrStatus, Slug, Source};
 use super::parse::{self, Entry, HeadMove, Moved, RemoteMove};
-use super::{load, open};
+use super::{load, lock, open, prs, CACHE, PRS_FOR};
+use async_trait::async_trait;
 use aura_core_types::AgentId;
 use aura_ui_terminal::repo::{
     ChangeKind, EventKind, EventState, PrState, RepoEvent, RepoTarget, RepoView,
 };
 use aura_ui_terminal::UiCommand;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 #[test]
 fn status_reads_the_branch_and_its_changes() {
@@ -131,6 +135,29 @@ fn head_moves_fold_a_rebase_and_leave_commits_to_the_log() {
             moved(HeadMove::Pull, "z", "a"),
         ],
         "the amend is a commit, and the reset to where HEAD was moved nothing"
+    );
+}
+
+#[test]
+fn merges_move_head_with_a_commit_or_without() {
+    let entries = [
+        entry("c", 30, "merge feature: Merge made by the 'ort' strategy."),
+        entry("b", 20, "merge fix: Fast-forward"),
+        entry("a", 10, "commit (initial): Start"),
+    ];
+    let moves: Vec<(HeadMove, Option<String>, String)> = parse::head_moves(&entries)
+        .into_iter()
+        .map(|m| (m.what, m.from, m.to))
+        .collect();
+    let merged = |branch: &str, from: &str, to: &str| {
+        let what = HeadMove::Merge {
+            branch: branch.into(),
+        };
+        (what, Some(from.to_string()), to.to_string())
+    };
+    assert_eq!(
+        moves,
+        [merged("feature", "b", "c"), merged("fix", "a", "b")]
     );
 }
 
@@ -414,4 +441,66 @@ async fn a_folder_outside_any_repo_says_so() {
     let dir = tempfile::tempdir().unwrap();
     let (view, _) = load::view(dir.path(), AgentId::new([4; 32]), false).await;
     assert_eq!(view.problem.as_deref(), Some("Not a git repository."));
+}
+
+/// How many times [`Counted`] was asked for PRs.
+static ASKED: AtomicUsize = AtomicUsize::new(0);
+
+/// A source that lists one PR and counts how often it is asked.
+struct Counted;
+
+#[async_trait]
+impl Source for Counted {
+    async fn list(&self, _: &Slug) -> Result<Vec<Pr>, Failure> {
+        ASKED.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![one_pr()])
+    }
+    async fn diff(&self, _: &Slug, _: u64) -> Result<String, Failure> {
+        Err(Failure::Unavailable)
+    }
+}
+
+fn counted() -> Vec<Box<dyn Source>> {
+    vec![Box::new(Counted)]
+}
+
+fn one_pr() -> Pr {
+    Pr {
+        number: 1,
+        title: "One".into(),
+        status: PrStatus::Open,
+        head: "one".into(),
+        base: "main".into(),
+        created: 1,
+        merged: None,
+        closed: None,
+        url: String::new(),
+    }
+}
+
+#[tokio::test]
+async fn prs_are_asked_for_a_minute_at_a_time_unless_forced() {
+    let slug = github::slug("git@github.com:acme/cached").unwrap();
+    let asked = || ASKED.load(Ordering::SeqCst);
+
+    let (answer, reading) = prs(&slug, false, counted).await;
+    assert_eq!(answer, None, "a load doesn't wait for GitHub");
+    let (_, again) = prs(&slug, false, counted).await;
+    assert!(again.is_none(), "one ask at a time");
+    reading.expect("GitHub is asked").await.unwrap();
+    assert_eq!(asked(), 1);
+
+    let (answer, reading) = prs(&slug, false, counted).await;
+    assert_eq!(answer, Some(Ok(vec![one_pr()])));
+    assert!(reading.is_none(), "a minute hasn't gone by");
+
+    let (answer, reading) = prs(&slug, true, counted).await;
+    assert_eq!(answer, Some(Ok(vec![one_pr()])));
+    assert!(reading.is_none(), "forced, it waits for the answer");
+    assert_eq!(asked(), 2);
+
+    lock(&CACHE.prs).get_mut(&slug).unwrap().asked = Instant::now().checked_sub(PRS_FOR);
+    let (_, reading) = prs(&slug, false, counted).await;
+    reading.expect("a minute on, it asks again").await.unwrap();
+    assert_eq!(asked(), 3);
 }

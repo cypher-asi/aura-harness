@@ -391,7 +391,6 @@ fn time(text: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     #[test]
     fn github_remotes_give_their_repo() {
@@ -449,33 +448,25 @@ mod tests {
         assert_eq!(gh[1].at(), gh[1].merged.unwrap());
     }
 
-    /// A source that answers as told and counts what it was asked.
-    struct Fake {
-        answer: Result<Vec<Pr>, Failure>,
-        asked: Mutex<usize>,
-    }
+    /// A source that answers as told.
+    struct Fake(Result<Vec<Pr>, Failure>);
 
     #[async_trait]
     impl Source for Fake {
         async fn list(&self, _: &Slug) -> Result<Vec<Pr>, Failure> {
-            *self.asked.lock().unwrap() += 1;
-            self.answer.clone()
+            self.0.clone()
         }
         async fn diff(&self, _: &Slug, number: u64) -> Result<String, Failure> {
-            *self.asked.lock().unwrap() += 1;
-            self.answer.clone().map(|_| format!("diff of #{number}"))
+            self.0.clone().map(|_| format!("diff of #{number}"))
         }
     }
 
     fn fake(answer: Result<Vec<Pr>, Failure>) -> Box<dyn Source> {
-        Box::new(Fake {
-            answer,
-            asked: Mutex::new(0),
-        })
+        Box::new(Fake(answer))
     }
 
     #[tokio::test]
-    async fn a_source_that_cannot_be_used_falls_through_to_the_next() {
+    async fn prs_come_from_the_first_source_that_can_read_them() {
         let slug = slug("git@github.com:a/b").unwrap();
         let pr = Pr {
             number: 1,
@@ -488,6 +479,16 @@ mod tests {
             closed: None,
             url: String::new(),
         };
+        let signed_in = [
+            fake(Ok(vec![pr.clone()])),
+            fake(Err(Failure::Failed("asked".into()))),
+        ];
+        assert_eq!(
+            list(&signed_in, &slug).await,
+            Ok(vec![pr.clone()]),
+            "gh, signed in, is the only one asked"
+        );
+
         let both = [fake(Err(Failure::Unavailable)), fake(Ok(vec![pr.clone()]))];
         assert_eq!(list(&both, &slug).await, Ok(vec![pr]));
         assert_eq!(diff(&both, &slug, 4).await.as_deref(), Ok("diff of #4"));

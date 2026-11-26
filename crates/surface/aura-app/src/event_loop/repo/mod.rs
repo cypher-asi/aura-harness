@@ -25,7 +25,7 @@ use aura_agent::git::read_only;
 use aura_core_types::AgentId;
 use aura_ui_terminal::repo::{RepoRequest, RepoView};
 use aura_ui_terminal::UiCommand;
-use github::{Pr, Slug};
+use github::{Pr, Slug, Source};
 use parse::{Moved, RemoteMove};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -134,15 +134,16 @@ fn keep<K: std::hash::Hash + Eq, V>(map: &mut HashMap<K, V>, key: K, value: V) {
     map.insert(key, value);
 }
 
-/// `slug`'s PRs as last read. When they are a minute old GitHub is asked
-/// again, in a job whose handle comes back with them; `force` asks at
-/// once and waits for the answer.
+/// `slug`'s PRs as last read from `sources`. When they are a minute old
+/// they are asked for again, in a job whose handle comes back with them;
+/// `force` asks at once and waits for the answer.
 async fn prs(
     slug: &Slug,
     force: bool,
+    sources: fn() -> Vec<Box<dyn Source>>,
 ) -> (Option<Result<Vec<Pr>, String>>, Option<JoinHandle<()>>) {
     if force {
-        let answer = github::list(&github::sources(), slug).await;
+        let answer = github::list(&sources(), slug).await;
         store_prs(slug, answer.clone());
         return (Some(answer), None);
     }
@@ -162,7 +163,7 @@ async fn prs(
     let reading = ask.then(|| {
         let slug = slug.clone();
         tokio::spawn(async move {
-            let answer = github::list(&github::sources(), &slug).await;
+            let answer = github::list(&sources(), &slug).await;
             store_prs(&slug, answer);
         })
     });
