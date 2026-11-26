@@ -29,6 +29,14 @@ fn git_available() -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+/// Ends git's search for a repository at `dir`. Git stops at the first
+/// `.git` it finds and this one points nowhere, so commands below `dir`
+/// fail as "not a git repository" instead of reaching a checkout that
+/// holds the temp directory and committing its uncommitted work.
+fn fence(dir: &Path) {
+    std::fs::write(dir.join(".git"), "gitdir: nowhere\n").unwrap();
+}
+
 async fn init_repo(dir: &Path) {
     let status = Command::new("git")
         .arg("init")
@@ -148,8 +156,11 @@ async fn commit_surfaces_nonzero_exit_from_add() {
     }
     // A non-git directory: `git add -A` fails with a non-zero exit
     // that we must surface as NonZeroExit.
-    let dir = TempDir::new().unwrap();
-    let err = git_commit_impl(dir.path(), "should fail", Duration::from_secs(10))
+    let parent = TempDir::new().unwrap();
+    fence(parent.path());
+    let dir = parent.path().join("work");
+    std::fs::create_dir(&dir).unwrap();
+    let err = git_commit_impl(&dir, "should fail", Duration::from_secs(10))
         .await
         .expect_err("non-repo should fail");
     match err {
@@ -715,6 +726,7 @@ async fn tool_rejects_workspace_escape_via_config() {
     use crate::ToolConfig;
 
     let parent = TempDir::new().unwrap();
+    fence(parent.path());
     let escape_target = parent.path().join("escape");
     std::fs::create_dir(&escape_target).unwrap();
     init_repo(&escape_target).await;
