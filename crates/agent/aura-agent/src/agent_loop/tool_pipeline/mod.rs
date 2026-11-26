@@ -27,121 +27,27 @@
 //! [`super::transport::SamplingCtx`] one layer up.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
-use crate::build;
-use crate::console;
-use crate::dup_audit;
 use crate::events::AgentLoopEvent;
-use crate::helpers;
-use crate::types::{AgentToolExecutor, BuildBaseline, ToolCallInfo, ToolCallResult};
-use aura_config::{TOOL_ERROR_PREVIEW_LIMIT, TOOL_RESULT_MAX_BYTES};
-use aura_model::{ContentBlock, Message, ModelResponse, Role, ToolResultContent};
+use crate::types::{AgentToolExecutor, ToolCallInfo, ToolCallResult};
+use aura_model::{ContentBlock, ModelResponse};
 use tokio::sync::mpsc::Sender;
-use tokio::task::JoinHandle;
-use tracing::{debug, warn};
+use tracing::warn;
 
 use super::event_sink::emit as emit_event;
-use super::tool_execution::truncate_preview;
-use super::{AgentLoop, AgentLoopConfig, LoopState};
+use super::{AgentLoop, LoopState};
 
-/// Resolved heartbeat cadence. Reads
-/// `aura_config::agent().tools.heartbeat_interval` (which is
-/// `AURA_TURN_TOOL_HEARTBEAT_INTERVAL_SECS`, clamped at
-/// `aura_config` boundaries). Same value the aura-os side reads, so
-/// the harness emits a heartbeat well inside the server's
-/// sliding-idle window (`AURA_TURN_MAX_TIMEOUT_SECS`, default 180s).
-///
-/// Phase 7 dropped the only production caller (the buffered
-/// transport's `prepare_live_batch`); the heartbeat infrastructure
-/// is kept for the buffered-style helpers' unit-test coverage and
-/// for any future transport (e.g. cassette replay) that needs
-/// inline executor calls.
-pub(crate) fn tool_heartbeat_interval() -> Duration {
-    aura_config::agent().tools.heartbeat_interval
-}
+mod effects;
+mod heartbeat;
+mod results;
+mod stop_dispatch;
 
-/// Spawn a background task that emits an
-/// [`AgentLoopEvent::Progress`] heartbeat every
-/// [`tool_heartbeat_interval`] while a batch of tool calls is in
-/// flight. Returns a [`HeartbeatGuard`] whose `Drop` aborts the task
-/// — callers get cancel-on-completion semantics for free without
-/// having to wire `tokio::select!` around every executor call.
-///
-/// The first heartbeat fires after the first interval tick (i.e. the
-/// "cool" 0..interval window stays silent), so a tool that completes
-/// inside the interval never emits one. After that the cadence is
-/// strictly periodic; each tick reports `tool_running`,
-/// `tool_name=<first-tool-of-batch>`, `elapsed_ms` since batch start.
-///
-/// `event_tx` is `None` for the headless code path (no event channel,
-/// e.g. unit tests in non-streaming mode); the spawn is skipped and
-/// the returned guard is a no-op so the call site stays branch-free.
-pub(super) fn spawn_tool_heartbeat(
-    event_tx: Option<&Sender<AgentLoopEvent>>,
-    to_execute: &[ToolCallInfo],
-    interval: Duration,
-) -> HeartbeatGuard {
-    let Some(tx) = event_tx.cloned() else {
-        return HeartbeatGuard { handle: None };
-    };
-    if to_execute.is_empty() {
-        return HeartbeatGuard { handle: None };
-    }
-    // Most batches contain a single tool call; when the model emits
-    // multiple in one turn we report the first one's name on the
-    // heartbeat. The server-side watchdog only cares about *some*
-    // forward-progress event arriving, and the chat client renders
-    // the stage label, so a single representative name is enough to
-    // keep the UI honest without generating one heartbeat per tool.
-    let tool_name = to_execute[0].name.clone();
-    let started_at = Instant::now();
-    let handle = tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(interval);
-        // The first tick fires immediately; consume it so the heartbeat
-        // only emits after the configured wall-clock window has
-        // elapsed (matching the documented "long tool calls > 10s"
-        // contract).
-        ticker.tick().await;
-        loop {
-            ticker.tick().await;
-            let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-            let event = AgentLoopEvent::Progress {
-                stage: "tool_running".to_string(),
-                tool_name: Some(tool_name.clone()),
-                elapsed_ms: Some(elapsed_ms),
-                message: None,
-            };
-            // `send` (with backpressure) over `try_send` so a
-            // momentarily-full broadcast doesn't drop a heartbeat —
-            // dropping one defeats the watchdog-friendliness contract.
-            if tx.send(event).await.is_err() {
-                // Receiver gone (turn already finalized): stop ticking.
-                break;
-            }
-        }
-    });
-    HeartbeatGuard {
-        handle: Some(handle),
-    }
-}
-
-/// RAII guard for [`spawn_tool_heartbeat`]. Aborts the heartbeat task
-/// on drop so a panicking executor or an early `?`-return at the
-/// caller doesn't leak the periodic emission past the tool's
-/// lifetime.
-pub(super) struct HeartbeatGuard {
-    handle: Option<JoinHandle<()>>,
-}
-
-impl Drop for HeartbeatGuard {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
-        }
-    }
-}
+use effects::{run_auto_build, track_tool_effects};
+pub(super) use heartbeat::{spawn_tool_heartbeat, tool_heartbeat_interval};
+use results::emit_and_log_results;
+pub(super) use results::push_tool_result_message;
+pub(crate) use stop_dispatch::dispatch;
+pub(super) use stop_dispatch::partition_circling_duplicate_reads;
 
 /// One batch of tool calls handed to [`process_tool_results`].
 ///
@@ -297,32 +203,7 @@ pub(crate) async fn process_tool_results(
         cached_ids,
     } = prepared;
 
-    // Phase 8 + Phase 10 carve-out 5a: `PreToolUse` mid-flight
-    // cancellation now lives in the kernel's
-    // `aura_agent_kernel::kernel::tools::{single,batch}` pre-
-    // dispatch site — a `HookOutcome::Block` there aborts the
-    // executor and surfaces a synthetic failed effect tagged
-    // `tool_call_blocked_by_hook`. The streaming pump's
-    // `process_tool_results` runs AFTER the executor (PreExecuted
-    // batch), so re-firing `PreToolUse` here would double-fire
-    // the hook and is intentionally OMITTED.
-    //
-    // `PostToolUse` continues to fire here (observer-only) because
-    // it is by definition post-dispatch and the streaming pump
-    // owns the batch of `(call, result)` pairs at this site.
-    if let Some(host) = agent.config.plugin_hooks.as_ref() {
-        if !host.is_empty(aura_plugin_hooks::HookEvent::PostToolUse) {
-            for r in &all_results {
-                let tc_name = tool_calls
-                    .iter()
-                    .find(|t| t.id == r.tool_use_id)
-                    .map_or("", |t| t.name.as_str());
-                let status = if r.is_error { "error" } else { "ok" };
-                let summary: String = r.content.chars().take(256).collect();
-                host.fire_post_tool_use(tc_name, &r.tool_use_id, status, &summary);
-            }
-        }
-    }
+    fire_post_tool_use_hooks(agent, &tool_calls, &all_results);
 
     // Cumulative tracking (steering registry, file-change journal,
     // session-read cache, read-after-write allowances). The Live
@@ -350,22 +231,7 @@ pub(crate) async fn process_tool_results(
     state.observe_task_results(&tool_calls, &all_results, ctx.event_tx);
 
     if any_write_success && state.build_cooldown == 0 {
-        let changed: Vec<String> = all_results
-            .iter()
-            .flat_map(|r| r.file_changes.iter().map(|c| c.path.clone()))
-            .collect();
-        if let Some(build_text) = run_auto_build(
-            &agent.config,
-            ctx.executor,
-            &mut state.build_cooldown,
-            state.build_baseline.as_ref(),
-            &changed,
-            &mut state.decisions,
-        )
-        .await
-        {
-            side_messages.push(build_text);
-        }
+        auto_build_after_writes(state, agent, ctx.executor, &all_results, &mut side_messages).await;
     }
 
     // Phase B latch: any successful write flips both `had_any_write`
@@ -387,27 +253,8 @@ pub(crate) async fn process_tool_results(
         &reported,
     );
 
-    let task_done_success = tool_calls.iter().any(|tc| {
-        tc.name == "task_done"
-            && all_results
-                .iter()
-                .any(|r| r.tool_use_id == tc.id && !r.is_error && r.stop_loop)
-    });
-    if task_done_success {
-        state.task_done_completed = true;
-    }
-
-    for result in all_results
-        .iter()
-        .filter(|r| r.kind == aura_core_types::ToolResultKind::CompactionStructural)
-    {
-        warn!(
-            target: "compaction",
-            tool_use_id = %result.tool_use_id,
-            result_len = result.content.len(),
-            "Rejected compacted/redacted tool input without incrementing consecutive errors"
-        );
-    }
+    mark_task_done(state, &tool_calls, &all_results);
+    warn_compaction_structural(&all_results);
 
     let should_stop = repeated_edit_failure.is_some() || all_results.iter().any(|r| r.stop_loop);
 
@@ -419,19 +266,115 @@ pub(crate) async fn process_tool_results(
     push_tool_result_message(&mut state.messages, pushed_results, side_messages);
 
     if let Some(message) = repeated_edit_failure {
-        state.result.stalled = true;
-        state.result.llm_error = Some(message.clone());
-        emit_event(
-            ctx.event_tx,
-            AgentLoopEvent::Error {
-                code: "tool_no_progress".to_string(),
-                message,
-                recoverable: true,
-            },
-        );
+        report_repeated_edit_failure(state, ctx.event_tx, message);
     }
 
     ProcessedToolResults { should_stop }
+}
+
+// Phase 8 + Phase 10 carve-out 5a: `PreToolUse` mid-flight
+// cancellation now lives in the kernel's
+// `aura_agent_kernel::kernel::tools::{single,batch}` pre-
+// dispatch site — a `HookOutcome::Block` there aborts the
+// executor and surfaces a synthetic failed effect tagged
+// `tool_call_blocked_by_hook`. The streaming pump's
+// `process_tool_results` runs AFTER the executor (PreExecuted
+// batch), so re-firing `PreToolUse` here would double-fire
+// the hook and is intentionally OMITTED.
+//
+// `PostToolUse` continues to fire here (observer-only) because
+// it is by definition post-dispatch and the streaming pump
+// owns the batch of `(call, result)` pairs at this site.
+fn fire_post_tool_use_hooks(
+    agent: &AgentLoop,
+    tool_calls: &[ToolCallInfo],
+    all_results: &[ToolCallResult],
+) {
+    if let Some(host) = agent.config.plugin_hooks.as_ref() {
+        if !host.is_empty(aura_plugin_hooks::HookEvent::PostToolUse) {
+            for r in all_results {
+                let tc_name = tool_calls
+                    .iter()
+                    .find(|t| t.id == r.tool_use_id)
+                    .map_or("", |t| t.name.as_str());
+                let status = if r.is_error { "error" } else { "ok" };
+                let summary: String = r.content.chars().take(256).collect();
+                host.fire_post_tool_use(tc_name, &r.tool_use_id, status, &summary);
+            }
+        }
+    }
+}
+
+async fn auto_build_after_writes(
+    state: &mut LoopState,
+    agent: &AgentLoop,
+    executor: &dyn AgentToolExecutor,
+    all_results: &[ToolCallResult],
+    side_messages: &mut Vec<String>,
+) {
+    let changed: Vec<String> = all_results
+        .iter()
+        .flat_map(|r| r.file_changes.iter().map(|c| c.path.clone()))
+        .collect();
+    if let Some(build_text) = run_auto_build(
+        &agent.config,
+        executor,
+        &mut state.build_cooldown,
+        state.build_baseline.as_ref(),
+        &changed,
+        &mut state.decisions,
+    )
+    .await
+    {
+        side_messages.push(build_text);
+    }
+}
+
+fn mark_task_done(
+    state: &mut LoopState,
+    tool_calls: &[ToolCallInfo],
+    all_results: &[ToolCallResult],
+) {
+    let task_done_success = tool_calls.iter().any(|tc| {
+        tc.name == "task_done"
+            && all_results
+                .iter()
+                .any(|r| r.tool_use_id == tc.id && !r.is_error && r.stop_loop)
+    });
+    if task_done_success {
+        state.task_done_completed = true;
+    }
+}
+
+fn warn_compaction_structural(all_results: &[ToolCallResult]) {
+    for result in all_results
+        .iter()
+        .filter(|r| r.kind == aura_core_types::ToolResultKind::CompactionStructural)
+    {
+        warn!(
+            target: "compaction",
+            tool_use_id = %result.tool_use_id,
+            result_len = result.content.len(),
+            "Rejected compacted/redacted tool input without incrementing consecutive errors"
+        );
+    }
+}
+
+fn report_repeated_edit_failure(
+    state: &mut LoopState,
+    event_tx: Option<&Sender<AgentLoopEvent>>,
+    message: String,
+) {
+    state.result.stalled = true;
+    state.result.llm_error = Some(message.clone());
+    emit_event(
+        event_tx,
+        AgentLoopEvent::Error {
+            code: "tool_no_progress".to_string(),
+            message,
+            recoverable: true,
+        },
+    );
 }
 
 /// Reads between retries do not make a failed edit new. A successful mutation
@@ -506,428 +449,6 @@ fn prepare_pre_executed_batch(pairs: Vec<(ToolCallInfo, ToolCallResult)>) -> Pre
         blocked_ids: HashSet::new(),
         cached_ids: HashSet::new(),
     }
-}
-
-/// Console + tracing + event emission for a finished tool batch.
-///
-/// Phase 4: merged from `tool_execution::emit_and_log_results` so
-/// both Live and PreExecuted batches go through one log policy. The
-/// pump path previously emitted ToolCallCompleted/ToolResult inline
-/// in `handle_streamed_tool_use` without the surrounding
-/// `console::tools_block` summary; the unified pipeline restores
-/// that summary on both transports.
-fn emit_and_log_results(
-    event_tx: Option<&Sender<AgentLoopEvent>>,
-    tool_calls: &[ToolCallInfo],
-    all_results: &[ToolCallResult],
-    cached_ids: &HashSet<String>,
-    blocked_ids: &HashSet<String>,
-    reported: &HashSet<String>,
-) {
-    console::tools_block(tool_calls, all_results, cached_ids, blocked_ids);
-
-    for r in all_results {
-        let tool_name = tool_calls
-            .iter()
-            .find(|t| t.id == r.tool_use_id)
-            .map_or("unknown", |t| t.name.as_str());
-        let source = if cached_ids.contains(&r.tool_use_id) {
-            "cache"
-        } else if blocked_ids.contains(&r.tool_use_id) {
-            "blocked"
-        } else {
-            "executor"
-        };
-        if r.is_error {
-            let preview = truncate_preview(&r.content, TOOL_ERROR_PREVIEW_LIMIT);
-            debug!(
-                tool_use_id = %r.tool_use_id,
-                tool_name = tool_name,
-                is_write = helpers::is_write_tool(tool_name),
-                is_error = r.is_error,
-                stop_loop = r.stop_loop,
-                source = source,
-                result_len = r.content.len(),
-                result_preview = preview.as_str(),
-                "Tool call completed"
-            );
-        } else {
-            debug!(
-                tool_use_id = %r.tool_use_id,
-                tool_name = tool_name,
-                is_write = helpers::is_write_tool(tool_name),
-                is_error = r.is_error,
-                stop_loop = r.stop_loop,
-                source = source,
-                result_len = r.content.len(),
-                "Tool call completed"
-            );
-        }
-    }
-
-    for r in all_results
-        .iter()
-        .filter(|r| !reported.contains(&r.tool_use_id))
-    {
-        let info = tool_calls.iter().find(|t| t.id == r.tool_use_id);
-        let tool_name = info.map_or_else(String::new, |t| t.name.clone());
-        emit_event(
-            event_tx,
-            AgentLoopEvent::ToolCallCompleted {
-                tool_use_id: r.tool_use_id.clone(),
-                tool_name: tool_name.clone(),
-                input: info.map_or(serde_json::Value::Null, |t| t.input.clone()),
-                is_error: r.is_error,
-            },
-        );
-        emit_event(
-            event_tx,
-            AgentLoopEvent::ToolResult {
-                tool_use_id: r.tool_use_id.clone(),
-                tool_name,
-                content: r.content.clone(),
-                is_error: r.is_error,
-                image: r.image.clone(),
-            },
-        );
-    }
-}
-
-/// Push the trailing `Role::User` message carrying every
-/// `tool_result` block (and any side-message text blocks).
-///
-/// Phase 4: absorbed from `tool_execution::push_tool_result_message_with_context`
-/// so [`process_tool_results`] owns the entire dup_audit window.
-/// Tool-result blocks are emitted before text blocks so the
-/// Anthropic `tool_use ↔ tool_result` adjacency rule stays trivially
-/// satisfied even when side messages (chunk-guard warnings,
-/// auto-build output) ride along.
-pub(super) fn push_tool_result_message(
-    messages: &mut Vec<Message>,
-    results: Vec<ToolCallResult>,
-    context_texts: Vec<String>,
-) {
-    let mut blocks: Vec<ContentBlock> = Vec::new();
-    // Images ride along as standalone `Image` blocks appended after the
-    // `tool_result` blocks (Anthropic allows additional content after
-    // tool_result blocks in the same user turn; text side-messages
-    // already use this pattern below). The screenshot from a
-    // computer-use action therefore reaches the model on the very next
-    // iteration of the same turn. We deliberately do NOT nest the image
-    // inside the tool_result content array here — aura-os's history
-    // replay path reconstructs the nested form from the persisted
-    // `image_base64`/`image_media_type` wire fields.
-    let mut image_blocks: Vec<ContentBlock> = Vec::new();
-    for r in results {
-        if let Some(image) = &r.image {
-            image_blocks.push(ContentBlock::Image {
-                source: aura_model::ImageSource {
-                    source_type: "base64".to_string(),
-                    media_type: image.media_type.clone(),
-                    data: image.base64.clone(),
-                },
-            });
-        }
-        blocks.push(ContentBlock::tool_result(
-            &r.tool_use_id,
-            ToolResultContent::text(cap_tool_result(r.content)),
-            r.is_error,
-        ));
-    }
-    blocks.append(&mut image_blocks);
-    for text in context_texts {
-        blocks.push(ContentBlock::Text { text });
-    }
-
-    if !blocks.is_empty() {
-        dup_audit::audit_tool_result_duplicates(messages, "push_tool_result.pre");
-        messages.push(Message::new(Role::User, blocks));
-        dup_audit::audit_tool_result_duplicates(messages, "push_tool_result.post");
-    }
-}
-
-/// `content` cut to [`TOOL_RESULT_MAX_BYTES`], keeping its start and end
-/// around a marker that says how much is missing.
-fn cap_tool_result(content: String) -> String {
-    if content.len() <= TOOL_RESULT_MAX_BYTES || aura_config::agent().compaction.disabled {
-        return content;
-    }
-    let mut head = TOOL_RESULT_MAX_BYTES / 2;
-    while !content.is_char_boundary(head) {
-        head -= 1;
-    }
-    let mut tail = content.len() - TOOL_RESULT_MAX_BYTES / 2;
-    while !content.is_char_boundary(tail) {
-        tail += 1;
-    }
-    format!(
-        "{}\n\n[... {} of {} bytes cut from the middle: tool results over {} KB keep only \
-         their start and end. Ask for a narrower slice, such as read_file with \
-         start_line/end_line or a more specific search, to see the rest ...]\n\n{}",
-        &content[..head],
-        tail - head,
-        content.len(),
-        TOOL_RESULT_MAX_BYTES / 1024,
-        &content[tail..],
-    )
-}
-
-/// What a response that ran out of room before it made a tool call is
-/// told: nothing in it was carried out, and the next one reasons less,
-/// which it is to spend acting.
-pub(crate) const CUT_OFF_BEFORE_ACTING: &str = "Your response reached the output-token limit \
-     before it made a tool call, so none of it was carried out. The next response reasons at a \
-     lower effort. Don't plan again what you already decided: make the next tool call now. \
-     Write a large file in parts: create it with the first part, then add the rest with \
-     further edits.";
-
-/// Unified stop-reason dispatch.
-///
-/// Phase 4: collapses the buffered-path `AgentLoop::dispatch_stop_reason`
-/// and the pump-path `stream_pump::dispatch::dispatch_streamed_response`
-/// into a single function fed by [`ToolBatch`]. Returns `true` when
-/// the sampling loop should break.
-pub(crate) async fn dispatch(
-    agent: &AgentLoop,
-    state: &mut LoopState,
-    response: &ModelResponse,
-    batch: ToolBatch,
-    ctx: ToolEffectCtx<'_>,
-) -> bool {
-    use aura_model::StopReason;
-    let event_tx = ctx.event_tx;
-    state.result.output_truncated = response.stop_reason == StopReason::MaxTokens;
-    if !state.result.output_truncated {
-        state.output_limit_recoveries = 0;
-    }
-    match response.stop_reason {
-        StopReason::EndTurn | StopReason::StopSequence => true,
-        StopReason::MaxTokens => {
-            // The pump has already executed complete calls. Commit their real
-            // results before continuing; never replace successful writes with
-            // synthetic failures or replay the entire sample.
-            let acted = !tool_calls(response).is_empty();
-            if acted
-                && process_tool_results(state, agent, batch, ctx)
-                    .await
-                    .should_stop
-            {
-                return true;
-            }
-            const MAX_OUTPUT_LIMIT_RECOVERIES: usize = 2;
-            if state.output_limit_recoveries >= MAX_OUTPUT_LIMIT_RECOVERIES {
-                emit_event(event_tx, AgentLoopEvent::Error {
-                    code: "output_limit".into(),
-                    message: "The response is incomplete: output-token limit reached after bounded continuation. Completed tool actions were preserved.".into(),
-                    recoverable: false,
-                });
-                return true;
-            }
-            state.output_limit_recoveries += 1;
-            if acted {
-                state.messages.push(Message::user(
-                    "Your response reached the output-token limit. Continue from the interruption without repeating prior text or completed tools. Use smaller complete tool calls if needed; finish the requested work and clearly report any remaining limitation."
-                ));
-            } else {
-                state.reason_less();
-                state.messages.push(Message::user(CUT_OFF_BEFORE_ACTING));
-            }
-            false
-        }
-        StopReason::ToolUse => {
-            process_tool_results(state, agent, batch, ctx)
-                .await
-                .should_stop
-        }
-    }
-}
-
-/// Pre-dispatch exploration block (on by default).
-///
-/// When `aura_config::agent().steering.implement_now_hard_block` is `true`
-/// (set by `AURA_AGENT_IMPLEMENT_NOW_BLOCK`) and the loop has injected the
-/// one-shot `implement_now` steering without any cumulative file writes,
-/// further read/search tool calls are short-circuited with a synthetic error
-/// result.
-pub(super) fn partition_circling_duplicate_reads(
-    tool_calls: &[ToolCallInfo],
-    state: &super::LoopState,
-) -> (Vec<ToolCallResult>, Vec<ToolCallInfo>) {
-    let block_enabled = aura_config::agent().steering.implement_now_hard_block;
-    if !block_enabled || !state.implement_now_injected || state.had_any_file_write {
-        return (Vec::new(), tool_calls.to_vec());
-    }
-
-    let mut blocked = Vec::new();
-    let mut remaining = Vec::with_capacity(tool_calls.len());
-    for tool in tool_calls {
-        if helpers::is_exploration_tool(&tool.name) {
-            blocked.push(ToolCallResult {
-                tool_use_id: tool.id.clone(),
-                content: aura_context_prompts::model_messages::implement_now::IMPLEMENT_NOW_HARD_BLOCK_BODY
-                    .to_string(),
-                is_error: true,
-                kind: aura_core_types::ToolResultKind::AgentError,
-                stop_loop: false,
-                file_changes: Vec::new(),
-                image: None,
-            });
-        } else {
-            remaining.push(tool.clone());
-        }
-    }
-    (blocked, remaining)
-}
-
-// Phase 8: the previously-threaded seven `&mut` field borrows
-// (`result`, `exploration_state`, `had_any_write`, `turn_diff`,
-// `steering`, `session_read_paths`, `read_after_write_allowances`)
-// collapse into a single `state: &mut LoopState` borrow. Every
-// borrow this function takes is a disjoint field on `LoopState`, so
-// the field-projection pattern keeps the borrow checker happy
-// without sacrificing the "this is the per-batch effect surface"
-// boundary. Phase 5 already collapsed the steering trackers into
-// `state.steering`; Phase 8 finishes the consolidation by removing
-// the last six explicit `&mut` field arguments at the call site.
-fn track_tool_effects(
-    to_execute: &[ToolCallInfo],
-    executed: &[ToolCallResult],
-    state: &mut LoopState,
-) -> bool {
-    use super::turn_diff::TurnDiff;
-    use crate::types::FileChangeKind;
-
-    fn record_into_turn_diff(turn_diff: &mut TurnDiff, change: &crate::types::FileChange) {
-        let path = std::path::PathBuf::from(&change.path);
-        match change.kind {
-            FileChangeKind::Create => turn_diff.record_create(path),
-            FileChangeKind::Modify => {
-                // No raw byte count is plumbed through `FileChange`
-                // today; the codex tracker uses an approximation too.
-                // Use `lines_added` as a cheap proxy so the count is
-                // monotonic and non-zero for typical edits.
-                let bytes = change.lines_added as usize;
-                turn_diff.record_modify(path, bytes);
-            }
-            FileChangeKind::Delete => turn_diff.record_delete(path),
-        }
-    }
-
-    let mut any_write_success = false;
-
-    for exec_result in executed {
-        let Some(tool) = to_execute.iter().find(|t| t.id == exec_result.tool_use_id) else {
-            continue;
-        };
-
-        // Phase 5: fan `(tool, exec_result)` out to every installed
-        // steering source. Each source decides for itself whether
-        // the pair is interesting (`RepeatedReadTracker` only cares
-        // about successful `read_file`; `ImplementNowSteering`
-        // tracks exploration/write deltas; `EarlyTestOracle` drives
-        // its state machine on tool names). The buffered and pump
-        // transports both reach `track_tool_effects` so this single
-        // call site keeps the registry behaviour identical across
-        // transports — the contract pinned by `transport_parity`.
-        state.steering.observe_tool(tool, exec_result);
-
-        if helpers::is_exploration_tool(&tool.name) {
-            state.exploration_state.count += 1;
-            if !exec_result.is_error {
-                if let Some(path) = tool.input.get("path").and_then(|v| v.as_str()) {
-                    let path_buf = PathBuf::from(path);
-                    state.turn_diff.record_read(path_buf.clone());
-                    state.session_read_paths.insert(path_buf);
-                    let key = PathBuf::from(path);
-                    let mut exhausted = false;
-                    if let Some(remaining) = state.read_after_write_allowances.get_mut(&key) {
-                        *remaining = remaining.saturating_sub(1);
-                        exhausted = *remaining == 0;
-                    }
-                    if exhausted {
-                        state.read_after_write_allowances.remove(&key);
-                    }
-                }
-            }
-        }
-
-        if helpers::is_write_tool(&tool.name) {
-            // Skip failed write attempts entirely: the tool layer
-            // already returned an error to the model, and the
-            // codex-parity loop no longer harvests per-iteration
-            // failed-write telemetry for continuation injection.
-            if exec_result.is_error {
-                continue;
-            }
-
-            let path_arg = tool.input.get("path").and_then(|v| v.as_str());
-            if let Some(path) = path_arg {
-                let path_buf = PathBuf::from(path);
-                state.session_read_paths.remove(&path_buf);
-                state.read_after_write_allowances.insert(
-                    path_buf,
-                    aura_config::agent().tools.reads_after_write_allowance,
-                );
-                any_write_success = true;
-                state.had_any_write = true;
-                for change in &exec_result.file_changes {
-                    state.result.record_file_change(change.clone());
-                    record_into_turn_diff(&mut state.turn_diff, change);
-                }
-            } else if !exec_result.file_changes.is_empty() {
-                // Multi-file write fallback: the tool has no single
-                // `path` argument but the result carries one
-                // `FileChange` per touched file. Each change is
-                // treated as a successful write so the file-change
-                // journal and Phase B's `had_any_file_write` latch
-                // light up the same way they do for the granular
-                // write tools.
-                for change in &exec_result.file_changes {
-                    let path_buf = PathBuf::from(&change.path);
-                    state.session_read_paths.remove(&path_buf);
-                    state.read_after_write_allowances.insert(
-                        path_buf,
-                        aura_config::agent().tools.reads_after_write_allowance,
-                    );
-                    state.result.record_file_change(change.clone());
-                    record_into_turn_diff(&mut state.turn_diff, change);
-                }
-                any_write_success = true;
-                state.had_any_write = true;
-            }
-        }
-    }
-
-    any_write_success
-}
-
-async fn run_auto_build(
-    config: &AgentLoopConfig,
-    executor: &dyn AgentToolExecutor,
-    build_cooldown: &mut usize,
-    build_baseline: Option<&BuildBaseline>,
-    changed_files: &[String],
-    decisions: &mut Vec<aura_core_types::trace::HarnessDecision>,
-) -> Option<String> {
-    if let Some(build_result) = executor.auto_build_check().await {
-        *build_cooldown = config.auto_build_cooldown;
-        decisions.push(super::decisions::auto_build(
-            build_result.success,
-            build_result.error_count,
-            changed_files,
-        ));
-        if !build_result.success {
-            let annotated = build_baseline.map_or_else(
-                || build_result.output.clone(),
-                |baseline| build::annotate_build_output(&build_result.output, baseline),
-            );
-            return Some(format!(
-                "Build check failed with {} error(s):\n\n{annotated}",
-                build_result.error_count
-            ));
-        }
-    }
-    None
 }
 
 #[cfg(test)]

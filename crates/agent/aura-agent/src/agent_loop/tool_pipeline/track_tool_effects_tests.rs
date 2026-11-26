@@ -1,5 +1,7 @@
+use super::super::AgentLoopConfig;
 use super::*;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 /// Serialize tests that swap the installed `aura_config` via

@@ -145,31 +145,9 @@ where
         AgentLoopEvent::ToolInputSnapshot { id, name, input } => {
             sink.on_tool_input_snapshot(id, name, input).await;
         }
-        AgentLoopEvent::ToolResult {
-            tool_use_id,
-            tool_name,
-            content,
-            is_error,
-            image,
-        } => {
-            sink.on_tool_result(tool_use_id, tool_name, content, is_error, image)
-                .await;
-        }
-        AgentLoopEvent::ToolComplete {
-            name,
-            args,
-            result,
-            is_error,
-        } => sink.on_tool_complete(name, args, result, is_error).await,
-        AgentLoopEvent::ToolCallCompleted {
-            tool_use_id,
-            tool_name,
-            input,
-            is_error,
-        } => {
-            sink.on_tool_call_completed(tool_use_id, tool_name, input, is_error)
-                .await;
-        }
+        event @ (AgentLoopEvent::ToolResult { .. }
+        | AgentLoopEvent::ToolComplete { .. }
+        | AgentLoopEvent::ToolCallCompleted { .. }) => map_tool_result_event(event, sink).await,
         AgentLoopEvent::IterationComplete {
             iteration,
             input_tokens,
@@ -202,6 +180,56 @@ where
             sink.on_progress(stage, tool_name, elapsed_ms, message)
                 .await;
         }
+        event @ (AgentLoopEvent::ToolCallRetrying { .. }
+        | AgentLoopEvent::ToolCallFailed { .. }
+        | AgentLoopEvent::TestSuiteWarning { .. }) => map_tool_status_event(event, sink).await,
+        AgentLoopEvent::Debug(event) => sink.on_debug(event).await,
+    }
+}
+
+/// Tool-result variants of [`map_agent_loop_event`]; other variants are
+/// routed elsewhere by that function's exhaustive match.
+async fn map_tool_result_event<S>(event: AgentLoopEvent, sink: &mut S)
+where
+    S: TurnEventSink + ?Sized,
+{
+    match event {
+        AgentLoopEvent::ToolResult {
+            tool_use_id,
+            tool_name,
+            content,
+            is_error,
+            image,
+        } => {
+            sink.on_tool_result(tool_use_id, tool_name, content, is_error, image)
+                .await;
+        }
+        AgentLoopEvent::ToolComplete {
+            name,
+            args,
+            result,
+            is_error,
+        } => sink.on_tool_complete(name, args, result, is_error).await,
+        AgentLoopEvent::ToolCallCompleted {
+            tool_use_id,
+            tool_name,
+            input,
+            is_error,
+        } => {
+            sink.on_tool_call_completed(tool_use_id, tool_name, input, is_error)
+                .await;
+        }
+        _ => {}
+    }
+}
+
+/// Tool-call status variants of [`map_agent_loop_event`]; other variants
+/// are routed elsewhere by that function's exhaustive match.
+async fn map_tool_status_event<S>(event: AgentLoopEvent, sink: &mut S)
+where
+    S: TurnEventSink + ?Sized,
+{
+    match event {
         AgentLoopEvent::ToolCallRetrying {
             tool_use_id,
             tool_name,
@@ -236,7 +264,7 @@ where
             sink.on_test_suite_warning(passed, summary, failed_tests)
                 .await;
         }
-        AgentLoopEvent::Debug(event) => sink.on_debug(event).await,
+        _ => {}
     }
 }
 

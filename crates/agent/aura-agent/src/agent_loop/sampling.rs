@@ -116,20 +116,52 @@ pub(crate) async fn run_sampling_request(
     iteration: usize,
 ) -> SamplingRequestResult {
     let run = ctx.run;
-    let tools = ctx.tools;
     if is_cancelled(run.cancellation_token) {
         debug!("Cancellation requested before sampling, stopping loop");
-        return SamplingRequestResult {
-            needs_follow_up: false,
-            broke_for_error: true,
-            produced_visible_output: false,
-            scrubbed_tool_markup: false,
-        };
+        return SamplingRequestResult::bailed();
     }
 
     state.begin_iteration(&run.agent.config, iteration);
     let iteration_started_at = Instant::now();
 
+    compact_before_call(ctx, state, iteration).await;
+
+    let request = match state.build_request(&run.agent.config, ctx.tools, iteration) {
+        Ok(r) => r,
+        Err(e) => {
+            iteration::LlmCallError::Fatal(e.to_string()).apply(&mut state.result, run.event_tx);
+            return SamplingRequestResult::bailed();
+        }
+    };
+
+    record_thinking_effort(ctx, state, &request);
+    decisions::flush(state, run.event_tx, iteration);
+
+    let (response, batch) =
+        match sample_model(ctx, state, iteration, request, iteration_started_at).await {
+            Ok(pair) => pair,
+            Err(bailed) => return bailed,
+        };
+    finish_sampling(ctx, state, iteration, &response, batch).await
+}
+
+impl SamplingRequestResult {
+    /// The outcome for a sampling request that must break the turn
+    /// loop before producing any output.
+    fn bailed() -> Self {
+        Self {
+            needs_follow_up: false,
+            broke_for_error: true,
+            produced_visible_output: false,
+            scrubbed_tool_markup: false,
+        }
+    }
+}
+
+/// Run the pre-call compaction pass.
+async fn compact_before_call(ctx: &TurnCtx<'_>, state: &mut LoopState, iteration: usize) {
+    let run = ctx.run;
+    let tools = ctx.tools;
     match context::compact_if_needed(&run.agent.config, state, tools, iteration) {
         context::CompactionOutcome::NeedsSummary(input) => {
             run.agent
@@ -148,34 +180,41 @@ pub(crate) async fn run_sampling_request(
         }
         context::CompactionOutcome::None => {}
     }
+}
 
-    let request = match state.build_request(&run.agent.config, tools, iteration) {
-        Ok(r) => r,
-        Err(e) => {
-            iteration::LlmCallError::Fatal(e.to_string()).apply(&mut state.result, run.event_tx);
-            return SamplingRequestResult {
-                needs_follow_up: false,
-                broke_for_error: true,
-                produced_visible_output: false,
-                scrubbed_tool_markup: false,
-            };
-        }
-    };
-
+/// Record a thinking-effort decision when the request's effort differs
+/// from the previous sampling request's.
+fn record_thinking_effort(
+    ctx: &TurnCtx<'_>,
+    state: &mut LoopState,
+    request: &aura_model::ModelRequest,
+) {
     if let Some(effort) = request.thinking_effort {
         let next = decisions::effort_name(effort);
         if state.last_thinking_effort.as_deref() != Some(next.as_str()) {
             let decision = decisions::thinking_effort(
                 state.last_thinking_effort.as_deref(),
                 &next,
-                run.agent.config.user_thinking_effort.is_some(),
+                ctx.run.agent.config.user_thinking_effort.is_some(),
                 state,
             );
             state.decide(decision);
             state.last_thinking_effort = Some(next);
         }
     }
-    decisions::flush(state, run.event_tx, iteration);
+}
+
+/// Send `request` through the active transport and emit the exchange
+/// for its response. `Err` carries the outcome to return when the
+/// sampling request must bail.
+async fn sample_model(
+    ctx: &TurnCtx<'_>,
+    state: &mut LoopState,
+    iteration: usize,
+    request: aura_model::ModelRequest,
+    iteration_started_at: Instant,
+) -> Result<(aura_model::ModelResponse, ToolBatch), SamplingRequestResult> {
+    let run = ctx.run;
     let trace_blobs = run.agent.config.trace_blobs.as_ref();
     let observation = exchange::observe(&request, trace_blobs);
     let model_name = request.model.to_string();
@@ -224,42 +263,50 @@ pub(crate) async fn run_sampling_request(
         Ok(o) => o,
         Err(e) => {
             e.apply(&mut state.result, run.event_tx);
-            return SamplingRequestResult {
-                needs_follow_up: false,
-                broke_for_error: true,
-                produced_visible_output: false,
-                scrubbed_tool_markup: false,
-            };
+            return Err(SamplingRequestResult::bailed());
         }
     };
 
-    let (response, batch) = match outcome {
+    let (response, batch) = flatten_outcome(outcome).ok_or_else(SamplingRequestResult::bailed)?;
+    emit_exchange(&response);
+    Ok((response, batch))
+}
+
+/// Flatten a [`TransportOutcome`] into its `(ModelResponse, ToolBatch)`
+/// pair, or `None` when the transport observed cancellation.
+fn flatten_outcome(outcome: TransportOutcome) -> Option<(aura_model::ModelResponse, ToolBatch)> {
+    match outcome {
         TransportOutcome::Streamed(streamed) => {
             let crate::agent_loop::transport::StreamedOutcome {
                 response,
                 pre_executed,
             } = *streamed;
-            (response, ToolBatch::PreExecuted(pre_executed))
+            Some((response, ToolBatch::PreExecuted(pre_executed)))
         }
         TransportOutcome::Cancelled => {
             debug!("transport observed cancellation; bailing the sampling request");
-            return SamplingRequestResult {
-                needs_follow_up: false,
-                broke_for_error: true,
-                produced_visible_output: false,
-                scrubbed_tool_markup: false,
-            };
+            None
         }
-    };
+    }
+}
 
-    emit_exchange(&response);
+/// Post-sample tail: accumulate the response, then dispatch its tool
+/// batch unless cancellation already fired with nothing in flight.
+async fn finish_sampling(
+    ctx: &TurnCtx<'_>,
+    state: &mut LoopState,
+    iteration: usize,
+    response: &aura_model::ModelResponse,
+    batch: ToolBatch,
+) -> SamplingRequestResult {
+    let run = ctx.run;
     decisions::flush(state, run.event_tx, iteration);
 
-    let produced_visible_output = response_has_visible_output(&response);
+    let produced_visible_output = response_has_visible_output(response);
 
     let scrubbed_tool_markup =
-        iteration::accumulate_response(&run.agent.config, state, &response, iteration);
-    state.observe_todo_writes(&response, run.event_tx);
+        iteration::accumulate_response(&run.agent.config, state, response, iteration);
+    state.observe_todo_writes(response, run.event_tx);
     state.result.iterations = iteration + 1;
 
     // Stop fired during or right after sampling: bail before
@@ -285,7 +332,7 @@ pub(crate) async fn run_sampling_request(
         event_tx: run.event_tx,
     };
     let dispatch_says_break =
-        tool_pipeline::dispatch(run.agent, state, &response, batch, tool_ctx).await;
+        tool_pipeline::dispatch(run.agent, state, response, batch, tool_ctx).await;
     decisions::flush(state, run.event_tx, iteration);
 
     SamplingRequestResult {

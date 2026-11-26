@@ -32,19 +32,27 @@
 //! the turn-scoped identity (task_id, turn_index, iteration_offset,
 //! input_queue, tools) that the loop body needs.
 
+mod heuristics;
+mod input;
+mod recovery;
+
+#[cfg(test)]
 use aura_model::Message;
 use tokio::sync::mpsc::Sender;
 use tracing::instrument;
 
 use crate::console;
 use crate::events::AgentLoopEvent;
-use crate::session::input_queue::InputQueue;
-use crate::session::UserInput;
-use crate::{helpers, AgentError};
+use crate::AgentError;
 
 use super::cx::TurnCtx;
 use super::sampling::{run_sampling_request, SamplingRequestResult};
-use super::{context, decisions, streaming, LoopState};
+use super::{context, decisions, LoopState};
+use heuristics::is_planning_request;
+pub(super) use input::apply_user_inputs_to_messages;
+use input::{drain_pending_input, DrainOutcome};
+#[cfg(test)]
+use recovery::open_todo_nudge;
 
 /// Hard cap on how many "you produced nothing visible" nudges one
 /// turn may inject before it terminates anyway. One is enough to
@@ -53,20 +61,6 @@ use super::{context, decisions, streaming, LoopState};
 /// if the nudged retry is *also* a no-op the budget is spent and the
 /// turn ends.
 pub(super) const MAX_NO_OP_TURN_NUDGES: u32 = 1;
-
-/// Steering text injected when a turn ends having produced no
-/// user-visible output. Kept terse and non-prescriptive: it nudges
-/// the model to either act or respond without assuming which the
-/// user wanted.
-const NO_OP_TURN_NUDGE: &str =
-    "Your previous turn ended without sending a response to the user or \
-making any changes. If the request needs action, continue and complete it now; otherwise reply to \
-the user directly.";
-
-const UNFINISHED_ACTION_NUDGE: &str =
-    "You ended your response by promising an immediate action, but ended the turn before \
-performing it. Use the available tools to carry out the authorized request now. If you are blocked \
-or need a decision, explain that clearly instead of promising work that will not run.";
 
 /// Hard cap on how many "you wrote a tool call as text" nudges one
 /// turn may inject. One is enough: the model leaked tool-call markup
@@ -77,16 +71,9 @@ or need a decision, explain that clearly instead of promising work that will not
 /// than re-prompting forever.
 pub(super) const MAX_LEAKED_MARKUP_NUDGES: u32 = 1;
 
-/// Steering text injected when a turn is about to end because the
-/// model emitted tool-call syntax as assistant *text* instead of a
-/// native `tool_use` block. The harness scrubbed the markup before it
-/// entered history, so no tool executed — this tells the model to
-/// re-issue the call through the real tool-calling mechanism.
-const LEAKED_TOOL_MARKUP_NUDGE: &str =
-    "Your previous message wrote tool-call syntax as plain text, \
-so no tool actually ran and the work is unfinished. Re-issue the tool call using the native \
-tool-calling mechanism — do not write tool invocations (such as <function_calls>, <invoke>, or \
-[tool_use ...]) as text.";
+/// How many open-todo nudges in a row may leave the todo list
+/// unchanged before the turn is allowed to end anyway.
+pub(super) const MAX_STALLED_TODO_NUDGES: u32 = 2;
 
 /// Result of a single turn.
 ///
@@ -149,25 +136,80 @@ pub(crate) async fn run_turn(
     ctx: &TurnCtx<'_>,
     state: &mut LoopState,
 ) -> Result<TurnOutcome, AgentError> {
-    let mut sampling_count: u32 = 0;
-    let mut terminated_cleanly = false;
-    let mut broke_for_error = false;
+    let mut turn = TurnLoop::new(ctx, state);
+    let end = loop {
+        let iteration = usize::try_from(ctx.iteration_offset.saturating_add(turn.sampling_count))
+            .unwrap_or(usize::MAX);
+        match turn.step(ctx, state, iteration).await? {
+            TurnStep::Continue => {}
+            end => break end,
+        }
+    };
+
+    let last_iteration = usize::try_from(
+        ctx.iteration_offset
+            .saturating_add(turn.sampling_count.saturating_sub(1)),
+    )
+    .unwrap_or(usize::MAX);
+    decisions::flush(state, ctx.run.event_tx, last_iteration);
+
+    Ok(TurnOutcome {
+        terminated_cleanly: matches!(end, TurnStep::Clean),
+        broke_for_error: matches!(end, TurnStep::BrokeForError),
+        sampling_count: turn.sampling_count,
+    })
+}
+
+/// What the turn loop does after one iteration.
+enum TurnStep {
+    /// Run another sampling request.
+    Continue,
+    /// The model signalled stop and nothing asked for a follow-up.
+    Clean,
+    /// Cancellation, a fatal model error or a stop hook ended the turn.
+    BrokeForError,
+    /// The turn ended without either flag (exhausted output-limit
+    /// recovery).
+    Stopped,
+}
+
+/// Per-turn loop state carried across sampling iterations.
+struct TurnLoop {
+    sampling_count: u32,
     // Never-silent / no-op handling: track whether this turn produced
     // anything the user can see, and how many recovery nudges we have
     // already spent.
-    let mut turn_had_visible_output = false;
-    let mut no_op_nudges_used: u32 = 0;
+    turn_had_visible_output: bool,
+    no_op_nudges_used: u32,
     // Leaked-tool-markup recovery: how many "you wrote a tool call as
     // text" nudges this turn has spent. The per-iteration signal is
-    // read straight off `sampling_result` in the stop branch below.
-    let mut markup_nudges_used: u32 = 0;
-    let mut unfinished_action_nudges_used = 0;
-    let recover_promised_actions = !ctx.tools.is_empty() && !is_planning_request(&state.messages);
+    // read straight off the sampling result in the stop branch.
+    markup_nudges_used: u32,
+    unfinished_action_nudges_used: u32,
+    recover_promised_actions: bool,
+}
 
-    loop {
-        let iteration = usize::try_from(ctx.iteration_offset.saturating_add(sampling_count))
-            .unwrap_or(usize::MAX);
+impl TurnLoop {
+    fn new(ctx: &TurnCtx<'_>, state: &LoopState) -> Self {
+        Self {
+            sampling_count: 0,
+            turn_had_visible_output: false,
+            no_op_nudges_used: 0,
+            markup_nudges_used: 0,
+            unfinished_action_nudges_used: 0,
+            recover_promised_actions: !ctx.tools.is_empty()
+                && !is_planning_request(&state.messages),
+        }
+    }
 
+    /// One iteration: drain input, check the budget, sample, then
+    /// decide whether to follow up.
+    async fn step(
+        &mut self,
+        ctx: &TurnCtx<'_>,
+        state: &mut LoopState,
+        iteration: usize,
+    ) -> Result<TurnStep, AgentError> {
         // Drain pending user input BEFORE the budget check so the
         // cancel branch of the biased select! unwinds without
         // counting against the per-task ceilings. Cancellation
@@ -179,27 +221,11 @@ pub(crate) async fn run_turn(
                         apply_user_inputs_to_messages(&mut state.messages, inputs);
                     }
                 }
-                DrainOutcome::Cancelled => {
-                    broke_for_error = true;
-                    break;
-                }
+                DrainOutcome::Cancelled => return Ok(TurnStep::BrokeForError),
             }
         }
 
-        // Hard ceiling: max_iterations is the global cap (default
-        // `usize::MAX`). Trip it BEFORE the next sampling so we never
-        // pay for one more model call past the budget.
-        if ctx.run.agent.config.max_iterations != usize::MAX
-            && iteration >= ctx.run.agent.config.max_iterations
-        {
-            let decision = decisions::stop("iteration_budget_exceeded", "max_iterations", state);
-            state.decide(decision);
-            decisions::flush(state, ctx.run.event_tx, iteration);
-            return Err(AgentError::IterationBudgetExceeded {
-                task_id: ctx.task_id,
-                limit: ctx.run.agent.config.max_iterations,
-            });
-        }
+        check_iteration_budget(ctx, state, iteration)?;
 
         // Visual separator at the top of each sampling iteration so
         // operators can scan a single log file and immediately see
@@ -209,12 +235,11 @@ pub(crate) async fn run_turn(
         let sampling_result: SamplingRequestResult =
             run_sampling_request(ctx, state, iteration).await;
 
-        sampling_count = sampling_count.saturating_add(1);
-        turn_had_visible_output |= sampling_result.produced_visible_output;
+        self.sampling_count = self.sampling_count.saturating_add(1);
+        self.turn_had_visible_output |= sampling_result.produced_visible_output;
 
         if sampling_result.broke_for_error {
-            broke_for_error = true;
-            break;
+            return Ok(TurnStep::BrokeForError);
         }
 
         // Codex shape: `needs_follow_up` defaults to "continue". When
@@ -226,434 +251,35 @@ pub(crate) async fn run_turn(
                 run_turn_stop_hooks(&ctx.run.agent.config, ctx.run.event_tx, state, iteration)
                     .await?;
             if stop_outcome.should_break {
-                broke_for_error = true;
-                break;
+                return Ok(TurnStep::BrokeForError);
             }
-            continue;
+            return Ok(TurnStep::Continue);
         }
 
-        // The model signalled stop, but pending user input keeps the
-        // turn loop alive — the next iteration's drain will pull the
-        // queued context into `state.messages` and feed it to a
-        // fresh sampling request.
-        if ctx.input_queue.is_some_and(InputQueue::has_pending) {
-            continue;
-        }
-        if state.result.output_truncated {
-            // Bounded output-limit recovery was exhausted. Do not turn it into
-            // another implicit retry through the normal no-op/action guards.
-            break;
-        }
-
-        // A visible sentence such as "I'll read the file now" used to bypass
-        // the no-op guard even though nothing continues after EndTurn. Recover
-        // this narrow case once; real answers, blockers and plans still stop.
-        if recover_promised_actions
-            && !state.task_done_completed
-            && ends_with_unfinished_action(&state.messages)
-        {
-            if ctx.run.agent.config.auto_continue_no_op_turns
-                && unfinished_action_nudges_used < MAX_NO_OP_TURN_NUDGES
-            {
-                unfinished_action_nudges_used += 1;
-                let decision = decisions::turn_nudge("unfinished_action", state);
-                state.decide(decision);
-                emit_no_op_progress(ctx.run.event_tx, "turn_unfinished_action_retry");
-                apply_user_inputs_to_messages(
-                    &mut state.messages,
-                    vec![UserInput::Steer {
-                        instruction: UNFINISHED_ACTION_NUDGE.to_string(),
-                    }],
-                );
-                continue;
-            }
-            emit_no_op_progress(ctx.run.event_tx, "turn_ended_unfinished_action");
-        }
-
-        // Leaked-tool-markup recovery: the model signalled stop, but
-        // the last response had tool-call markup scrubbed from its
-        // text (it wrote a tool call as prose, so nothing executed).
-        // The scrubbed leftover still counts as visible output, so the
-        // no-op nudge below would not fire — handle it explicitly here
-        // by re-prompting once to re-issue the call as a native
-        // `tool_use`, instead of ending the turn after a single
-        // message on unfinished work.
-        if sampling_result.scrubbed_tool_markup {
-            if ctx.run.agent.config.auto_continue_no_op_turns
-                && markup_nudges_used < MAX_LEAKED_MARKUP_NUDGES
-            {
-                markup_nudges_used = markup_nudges_used.saturating_add(1);
-                let decision = decisions::turn_nudge("leaked_tool_markup", state);
-                state.decide(decision);
-                emit_no_op_progress(ctx.run.event_tx, "turn_tool_markup_retry");
-                apply_user_inputs_to_messages(
-                    &mut state.messages,
-                    vec![UserInput::Steer {
-                        instruction: LEAKED_TOOL_MARKUP_NUDGE.to_string(),
-                    }],
-                );
-                continue;
-            }
-            emit_no_op_progress(ctx.run.event_tx, "turn_ended_tool_markup");
-        }
-
-        // Never-silent + premature-`EndTurn` recovery: the model
-        // signalled stop with no pending input. If the whole turn
-        // produced nothing the user can see (empty or thinking-only
-        // response), surface a clear progress signal so the client
-        // never reads the stop as a silent hang — and, when enabled
-        // and within budget, inject one nudge and re-sample instead
-        // of ending on a no-op.
-        if !turn_had_visible_output && !state.had_any_write && !state.task_done_completed {
-            if ctx.run.agent.config.auto_continue_no_op_turns
-                && no_op_nudges_used < MAX_NO_OP_TURN_NUDGES
-            {
-                no_op_nudges_used = no_op_nudges_used.saturating_add(1);
-                let decision = decisions::turn_nudge("no_op_turn", state);
-                state.decide(decision);
-                emit_no_op_progress(ctx.run.event_tx, "turn_no_action_retry");
-                apply_user_inputs_to_messages(
-                    &mut state.messages,
-                    vec![UserInput::Steer {
-                        instruction: NO_OP_TURN_NUDGE.to_string(),
-                    }],
-                );
-                continue;
-            }
-            emit_no_op_progress(ctx.run.event_tx, "turn_ended_no_action");
-        }
-
-        if ctx.run.agent.config.continue_open_todos {
-            if let Some(instruction) = open_todo_nudge(state) {
-                emit_no_op_progress(ctx.run.event_tx, "turn_open_todos_retry");
-                apply_user_inputs_to_messages(
-                    &mut state.messages,
-                    vec![UserInput::Steer { instruction }],
-                );
-                continue;
-            }
-        }
-
-        terminated_cleanly = true;
-        break;
+        Ok(self.after_model_stop(ctx, state, sampling_result.scrubbed_tool_markup))
     }
-
-    let last_iteration = usize::try_from(
-        ctx.iteration_offset
-            .saturating_add(sampling_count.saturating_sub(1)),
-    )
-    .unwrap_or(usize::MAX);
-    decisions::flush(state, ctx.run.event_tx, last_iteration);
-
-    Ok(TurnOutcome {
-        terminated_cleanly,
-        broke_for_error,
-        sampling_count,
-    })
 }
 
-/// How many open-todo nudges in a row may leave the todo list
-/// unchanged before the turn is allowed to end anyway.
-pub(super) const MAX_STALLED_TODO_NUDGES: u32 = 2;
-
-/// Steering text that sends the model back to its open todo items, or
-/// `None` when the turn should really end: nothing is open, the model
-/// is waiting on the user, or recent nudges changed nothing.
-fn open_todo_nudge(state: &mut LoopState) -> Option<String> {
-    use aura_exec_tools::todo::TodoStatus;
-    let todos = &state.result.todos;
-    let next = todos
-        .iter()
-        .find(|item| item.status == TodoStatus::InProgress)
-        .or_else(|| todos.iter().find(|item| item.status == TodoStatus::Pending))?;
-    if waits_on_user(&state.messages) {
-        return None;
-    }
-    if state.todos_at_last_nudge.as_ref() == Some(todos) {
-        state.stalled_todo_nudges = state.stalled_todo_nudges.saturating_add(1);
-    } else {
-        state.stalled_todo_nudges = 0;
-    }
-    if state.stalled_todo_nudges >= MAX_STALLED_TODO_NUDGES {
-        return None;
-    }
-    let instruction = format!(
-        "Your todo list still has open items. Continue with \"{}\" (id: {}). Mark items \
-completed with todo_write as you finish them and cancel ones that are no longer needed. If you \
-are blocked or need a decision from the user, say so plainly and stop.",
-        next.content, next.id
-    );
-    state.todos_at_last_nudge = Some(todos.clone());
-    Some(instruction)
-}
-
-/// Whether the last assistant message asks the user something or says
-/// it is blocked, in which case ending the turn is the right call.
-fn waits_on_user(messages: &[Message]) -> bool {
-    use aura_model::{ContentBlock, Role};
-    let Some(message) = messages.iter().rev().find(|m| m.role == Role::Assistant) else {
-        return false;
-    };
-    let text = message
-        .content
-        .iter()
-        .filter_map(|b| match b {
-            ContentBlock::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_ascii_lowercase();
-    text.trim_end().ends_with('?')
-        || [
-            "blocked",
-            "need your",
-            "waiting for",
-            "approval",
-            "permission",
-            "let me know",
-            "would you like",
-            "should i",
-        ]
-        .iter()
-        .any(|marker| text.contains(marker))
-}
-
-fn is_planning_request(messages: &[Message]) -> bool {
-    use aura_model::{ContentBlock, Role};
-    let text = messages
-        .iter()
-        .rev()
-        .find(|m| m.role == Role::User)
-        .map(|m| {
-            m.content
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    [
-        "plan",
-        "outline",
-        "explain",
-        "how ",
-        "what ",
-        "draft a plan",
-        "can you explain",
-    ]
-    .iter()
-    .any(|prefix| text.trim_start().starts_with(prefix))
-        || [
-            "don't implement",
-            "do not implement",
-            "planning only",
-            "plan only",
-        ]
-        .iter()
-        .any(|marker| text.contains(marker))
-}
-
-fn ends_with_unfinished_action(messages: &[Message]) -> bool {
-    use aura_model::{ContentBlock, Role};
-    let Some(message) = messages.iter().rev().find(|m| m.role == Role::Assistant) else {
-        return false;
-    };
-    let text = message
-        .content
-        .iter()
-        .filter_map(|b| match b {
-            ContentBlock::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_ascii_lowercase();
-    if text.contains('?')
-        || [
-            "please ",
-            "blocked",
-            "cannot ",
-            "can't ",
-            "need your",
-            "waiting for",
-            "tomorrow",
-            "later",
-            "next build",
-            "if you",
-            "once you",
-            "when you",
-            "after you",
-            "approval",
-            "permission",
-        ]
-        .iter()
-        .any(|marker| text.contains(marker))
+/// Hard ceiling: max_iterations is the global cap (default
+/// `usize::MAX`). Trip it BEFORE the next sampling so we never
+/// pay for one more model call past the budget.
+fn check_iteration_budget(
+    ctx: &TurnCtx<'_>,
+    state: &mut LoopState,
+    iteration: usize,
+) -> Result<(), AgentError> {
+    if ctx.run.agent.config.max_iterations != usize::MAX
+        && iteration >= ctx.run.agent.config.max_iterations
     {
-        return false;
+        let decision = decisions::stop("iteration_budget_exceeded", "max_iterations", state);
+        state.decide(decision);
+        decisions::flush(state, ctx.run.event_tx, iteration);
+        return Err(AgentError::IterationBudgetExceeded {
+            task_id: ctx.task_id,
+            limit: ctx.run.agent.config.max_iterations,
+        });
     }
-    let sentence = text
-        .trim()
-        .trim_end_matches(['.', '!'])
-        .rsplit(['\n'])
-        .next()
-        .unwrap_or("")
-        .rsplit(". ")
-        .next()
-        .unwrap_or("")
-        .trim();
-    if sentence == "doing it now" {
-        return true;
-    }
-    let Some(action) = ["i'll ", "i’ll ", "i will "]
-        .iter()
-        .find_map(|prefix| sentence.strip_prefix(prefix))
-    else {
-        return false;
-    };
-    [
-        "read ",
-        "check ",
-        "find ",
-        "locate ",
-        "run ",
-        "test ",
-        "verify ",
-        "edit ",
-        "write ",
-        "patch ",
-        "fix ",
-        "remove ",
-        "delete ",
-        "update ",
-        "implement ",
-        "search ",
-    ]
-    .iter()
-    .any(|verb| action.starts_with(verb))
-}
-
-/// Outcome of a single biased-select drain at the top of the turn
-/// loop. Separates "queue had inputs to apply" from "external (or
-/// in-band) cancellation fired during the drain" so the caller can
-/// branch on each path without a flag-passing chain.
-enum DrainOutcome {
-    Drained(Vec<UserInput>),
-    Cancelled,
-}
-
-/// Atomically drain `queue` with cancellation precedence (Rule 6.3).
-///
-/// The `select!` is `biased;` so a cancellation that fired before
-/// (or alongside) the drain always wins; only a clean drain reaches
-/// the caller's message-append step. Atomicity of the message
-/// append is preserved because the drain consumes the buffer in one
-/// step before any `state.messages` mutation runs — there is no
-/// half-write window even if cancellation fires immediately after
-/// this returns. When no cancellation token is supplied, the drain
-/// runs unconditionally (no select! at all).
-async fn drain_pending_input(
-    queue: &InputQueue,
-    cancellation_token: Option<&tokio_util::sync::CancellationToken>,
-) -> DrainOutcome {
-    match cancellation_token {
-        Some(token) => {
-            tokio::select! {
-                biased;
-                () = token.cancelled() => DrainOutcome::Cancelled,
-                inputs = queue.drain() => DrainOutcome::Drained(inputs),
-            }
-        }
-        None => DrainOutcome::Drained(queue.drain().await),
-    }
-}
-
-/// Apply a FIFO-ordered batch of [`UserInput`] entries to the
-/// conversation message history.
-///
-/// - [`UserInput::Message`] entries are appended via
-///   [`helpers::append_warning`] so the trailing-user-message merge
-///   rule (required for Anthropic `tool_use`/`tool_result` adjacency)
-///   is preserved.
-/// - [`UserInput::Steer`] entries are wrapped in a
-///   `<harness_steer>` envelope so the model can distinguish a
-///   user-typed message from a harness-on-behalf directive (the
-///   wrapper is unindented free text — no XML escaping needed for
-///   the model surface).
-/// - [`UserInput::Cancel`] entries are dropped because the
-///   cancellation token was already fired by
-///   [`InputQueue::push`]; the in-band variant is only enqueued for
-///   the tracing paper trail and that paper trail has already been
-///   served by the queue itself.
-///
-/// Exposed as `pub(super)` so the stream pump
-/// ([`super::sampling`]) can call it after a per-`OutputItemDone`
-/// drain without duplicating the merge / envelope logic.
-pub(super) fn apply_user_inputs_to_messages(messages: &mut Vec<Message>, inputs: Vec<UserInput>) {
-    for input in inputs {
-        match input {
-            UserInput::Message(text) => {
-                helpers::append_warning(messages, &text);
-            }
-            UserInput::Steer { instruction } => {
-                let body = format!("<harness_steer>\n{instruction}\n</harness_steer>");
-                helpers::append_warning(messages, &body);
-            }
-            UserInput::Cancel => {}
-        }
-    }
-}
-
-/// Emit a `Progress` event describing a turn that ended (or is about
-/// to be re-prompted) without making real progress, so the client
-/// always shows *why* the stream went quiet instead of appearing to
-/// hang. Recognised `stage` values:
-///
-/// - `"turn_no_action_retry"` — no visible output; about to re-prompt.
-/// - `"turn_ended_no_action"` — no visible output; turn terminating.
-/// - `"turn_tool_markup_retry"` — model wrote a tool call as text;
-///   about to re-prompt to re-issue it natively.
-/// - `"turn_ended_tool_markup"` — model wrote a tool call as text and
-///   the re-prompt budget is spent; turn terminating.
-///
-/// The WS sink forwards `Progress` verbatim and the chat client
-/// renders unknown stages as their label, so no coordinated client
-/// release is needed.
-fn emit_no_op_progress(event_tx: Option<&Sender<AgentLoopEvent>>, stage: &str) {
-    let message = match stage {
-        "turn_unfinished_action_retry" => {
-            "Model promised an action and ended early — re-prompting once to perform it."
-        }
-        "turn_ended_unfinished_action" => {
-            "Model ended with unfinished work after the recovery attempt."
-        }
-        "turn_no_action_retry" => {
-            "Model ended its turn without responding or acting — re-prompting once."
-        }
-        "turn_tool_markup_retry" => {
-            "Model wrote a tool call as text, so nothing ran — re-prompting once to retry it."
-        }
-        "turn_ended_tool_markup" => {
-            "Model wrote a tool call as text, so nothing ran, and the retry budget is spent."
-        }
-        "turn_open_todos_retry" => {
-            "Model stopped with todo items still open — steering it to the next one."
-        }
-        _ => "Model ended its turn without responding or taking any action.",
-    };
-    streaming::emit(
-        event_tx,
-        AgentLoopEvent::Progress {
-            stage: stage.to_string(),
-            tool_name: None,
-            elapsed_ms: None,
-            message: Some(message.to_string()),
-        },
-    );
+    Ok(())
 }
 
 /// Run the post-sampling stop hooks for a single turn iteration.

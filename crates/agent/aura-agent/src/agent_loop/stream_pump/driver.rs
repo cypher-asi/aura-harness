@@ -15,10 +15,14 @@
 //! for `write_file`) is visible while it streams. The executable call
 //! still waits for the block to close.
 
+use std::ops::ControlFlow;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
-use aura_model::{OutputItem, ResponseEvent, ResponseEventStream, StreamError, StreamPhase, Usage};
+use aura_model::{
+    ModelResponse, OutputItem, ResponseEvent, ResponseEventStream, StopReason, StreamError,
+    StreamPhase, Usage,
+};
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use tokio::time::timeout;
@@ -122,19 +126,43 @@ pub(super) async fn drive_stream(
     state: &mut super::super::LoopState,
     model_name: &str,
 ) -> StreamPumpOutcome {
-    let super::StreamPumpCtx {
-        config,
-        executor,
-        cancellation_token,
-        event_tx,
-        on_response,
-        ..
-    } = ctx;
-    let mut in_flight: FuturesUnordered<ToolFuture<'_>> = FuturesUnordered::new();
-    let mut text_chunks: Vec<String> = Vec::new();
-    let mut thinking_chunks: Vec<(String, Option<String>)> = Vec::new();
-    let mut text_bytes = 0;
-    let mut thinking_bytes = 0;
+    let mut drive = StreamDrive::new(ctx);
+    let stop_reason = match drive.pump_events(&mut stream, state, model_name).await {
+        Ok(stop_reason) => stop_reason,
+        Err(outcome) => return outcome,
+    };
+    let response = drive.synthesize(stop_reason, model_name);
+
+    // While draining potentially long-running tool calls, emit a
+    // periodic `tool_running` progress heartbeat. The spawned tool
+    // futures only make progress as `FuturesUnordered` is polled in the
+    // drain loop, so this window is the main silent stretch of a
+    // turn. The heartbeat keeps the aura-os server's sliding-idle
+    // watchdog (`AURA_TURN_MAX_TIMEOUT_SECS`) resetting so only a
+    // genuinely hung tool trips `turn_timeout`. No-op when there are no
+    // tools (`tool_calls_seen` empty) or no event channel. The guard
+    // aborts the ticker as soon as the drain loop ends.
+    let _tool_heartbeat = super::super::tool_pipeline::spawn_tool_heartbeat(
+        ctx.event_tx,
+        &drive.tool_calls_seen,
+        super::super::tool_pipeline::tool_heartbeat_interval(),
+    );
+    let spawned_pairs = match drive.drain_in_flight(state, model_name).await {
+        Ok(pairs) => pairs,
+        Err(outcome) => return outcome,
+    };
+    drive.finish(state, response, spawned_pairs)
+}
+
+/// Loop state of one [`drive_stream`] attempt: the accumulated blocks,
+/// the submitted tool calls and their in-flight futures.
+struct StreamDrive<'a> {
+    ctx: super::StreamPumpCtx<'a>,
+    in_flight: FuturesUnordered<ToolFuture<'a>>,
+    text_chunks: Vec<String>,
+    thinking_chunks: Vec<(String, Option<String>)>,
+    text_bytes: usize,
+    thinking_bytes: usize,
     // Per-block dedup flags: set when an incremental `OutputTextDelta`
     // / `OutputThinkingDelta` has already been streamed for the block
     // currently accumulating, so the block-close `OutputItemDone` arm
@@ -144,360 +172,440 @@ pub(super) async fn drive_stream(
     // (`response_stream_from_response`), which emits only
     // `OutputItemDone` and no deltas — there the flag stays `false` so
     // the close arm still emits the whole block.
-    let mut streamed_text_in_block = false;
-    let mut streamed_thinking_in_block = false;
-    let mut tool_calls_seen: Vec<ToolCallInfo> = Vec::new();
+    streamed_text_in_block: bool,
+    streamed_thinking_in_block: bool,
+    tool_calls_seen: Vec<ToolCallInfo>,
     // Submission index of every future pushed into `in_flight`, in
     // push order. `tool_calls_seen.len()` after the push is the
     // canonical index for each new call.
-    let mut spawned_indices: Vec<usize> = Vec::new();
+    spawned_indices: Vec<usize>,
     // Calls whose result the loop already had (cache hit, steering
     // block, invalid tool use). They still go through the executor so
     // the kernel records and gates them, but they must not refresh the
     // per-run cache.
-    let mut preset_indices: Vec<usize> = Vec::new();
-    let mut end_turn: Option<bool> = None;
-    let stop_reason;
-    let mut usage = Usage::default();
-    let stream_event_timeout = config.stream_event_timeout;
-    let per_tool_timeout = config.per_tool_timeout;
-    let mut liveness = Liveness::new();
-    let mut open_tool: Option<OpenToolCall> = None;
+    preset_indices: Vec<usize>,
+    end_turn: Option<bool>,
+    usage: Usage,
+    liveness: Liveness,
+    open_tool: Option<OpenToolCall>,
+}
 
-    loop {
-        let next_step =
-            next_stream_step(&mut stream, stream_event_timeout, cancellation_token).await;
-        match next_step {
-            StreamStep::Cancelled => {
-                // Mid-stream cancellation. If the model has already
-                // emitted any `tool_use` blocks we MUST synthesise
-                // paired `[CANCELLED]` tool_results so the downstream
-                // `dispatch_streamed_response` →
-                // `push_tool_result_message_with_context` step can
-                // close the Anthropic `tool_use ↔ tool_result`
-                // adjacency contract before the loop breaks. Pre-fix
-                // this returned a bare `Cancelled` and the conversation
-                // history ended with an orphaned assistant `tool_use`
-                // block — invalid on the next sampling call.
-                // See `pipeline_cancellation_mid_tool_execution_aborts_loop`.
-                if tool_calls_seen.is_empty() {
-                    return StreamPumpOutcome::Cancelled;
+impl<'a> StreamDrive<'a> {
+    fn new(ctx: super::StreamPumpCtx<'a>) -> Self {
+        Self {
+            ctx,
+            in_flight: FuturesUnordered::new(),
+            text_chunks: Vec::new(),
+            thinking_chunks: Vec::new(),
+            text_bytes: 0,
+            thinking_bytes: 0,
+            streamed_text_in_block: false,
+            streamed_thinking_in_block: false,
+            tool_calls_seen: Vec::new(),
+            spawned_indices: Vec::new(),
+            preset_indices: Vec::new(),
+            end_turn: None,
+            usage: Usage::default(),
+            liveness: Liveness::new(),
+            open_tool: None,
+        }
+    }
+
+    /// Pull events until `Completed` (returns its stop reason) or a
+    /// short-circuit outcome.
+    async fn pump_events(
+        &mut self,
+        stream: &mut ResponseEventStream,
+        state: &mut super::super::LoopState,
+        model_name: &str,
+    ) -> Result<Option<StopReason>, StreamPumpOutcome> {
+        let stream_event_timeout = self.ctx.config.stream_event_timeout;
+        loop {
+            let next_step =
+                next_stream_step(stream, stream_event_timeout, self.ctx.cancellation_token).await;
+            match next_step {
+                StreamStep::Cancelled => return Err(self.cancelled_mid_stream(model_name)),
+                StreamStep::TimedOut => return Err(self.timed_out(stream_event_timeout)),
+                StreamStep::TransportErr(err) => return Err(self.interrupted(err)),
+                StreamStep::End => {
+                    return Err(self.interrupted(StreamError::TransportClosed {
+                        context: "missing completed event".into(),
+                    }))
                 }
-                let snap = CancelledSnapshot {
-                    text_chunks: &text_chunks,
-                    thinking_chunks: &thinking_chunks,
-                    tool_calls_seen: &tool_calls_seen,
-                    spawned_indices: &spawned_indices,
-                    end_turn,
-                    usage: &usage,
-                    model_name,
-                };
-                // Tool futures are only polled in the drain below, so none has run yet.
-                return cancelled_outcome(&snap, Vec::new(), false);
+                StreamStep::Event(event) => {
+                    if let ControlFlow::Break(done) = self.on_event(event, state).await {
+                        return done;
+                    }
+                }
             }
-            StreamStep::TimedOut => {
-                let elapsed_ms = stream_event_timeout
-                    .as_millis()
-                    .try_into()
-                    .unwrap_or(u64::MAX);
-                // Turn the previously-silent stall into an actionable
-                // box: which phase the stream died in and how much
-                // content had streamed before it went quiet.
-                let thinking_bytes = thinking_chunks.iter().map(|(t, _)| t.len()).sum();
-                let text_bytes = text_chunks.iter().map(String::len).sum();
-                console::stream_timeout_block(&console::StreamTimeoutView {
-                    elapsed_ms,
-                    last_phase: liveness.logged_phase,
-                    thinking_bytes,
-                    text_bytes,
-                });
-                return StreamPumpOutcome::Error(AgentError::StreamTimeout { elapsed_ms });
+        }
+    }
+
+    /// Mid-stream cancellation. If the model has already emitted any
+    /// `tool_use` blocks we MUST synthesise paired `[CANCELLED]`
+    /// tool_results so the downstream `dispatch_streamed_response` →
+    /// `push_tool_result_message_with_context` step can close the
+    /// Anthropic `tool_use ↔ tool_result` adjacency contract before the
+    /// loop breaks. Pre-fix this returned a bare `Cancelled` and the
+    /// conversation history ended with an orphaned assistant `tool_use`
+    /// block — invalid on the next sampling call.
+    /// See `pipeline_cancellation_mid_tool_execution_aborts_loop`.
+    fn cancelled_mid_stream(&self, model_name: &str) -> StreamPumpOutcome {
+        if self.tool_calls_seen.is_empty() {
+            return StreamPumpOutcome::Cancelled;
+        }
+        // Tool futures are only polled in the drain, so none has run yet.
+        cancelled_outcome(&self.snapshot(model_name), Vec::new(), false)
+    }
+
+    fn snapshot<'s>(&'s self, model_name: &'s str) -> CancelledSnapshot<'s> {
+        CancelledSnapshot {
+            text_chunks: &self.text_chunks,
+            thinking_chunks: &self.thinking_chunks,
+            tool_calls_seen: &self.tool_calls_seen,
+            spawned_indices: &self.spawned_indices,
+            end_turn: self.end_turn,
+            usage: &self.usage,
+            model_name,
+        }
+    }
+
+    fn timed_out(&self, stream_event_timeout: Duration) -> StreamPumpOutcome {
+        let elapsed_ms = stream_event_timeout
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        // Turn the previously-silent stall into an actionable
+        // box: which phase the stream died in and how much
+        // content had streamed before it went quiet.
+        let thinking_bytes = self.thinking_chunks.iter().map(|(t, _)| t.len()).sum();
+        let text_bytes = self.text_chunks.iter().map(String::len).sum();
+        console::stream_timeout_block(&console::StreamTimeoutView {
+            elapsed_ms,
+            last_phase: self.liveness.logged_phase,
+            thinking_bytes,
+            text_bytes,
+        });
+        StreamPumpOutcome::Error(AgentError::StreamTimeout { elapsed_ms })
+    }
+
+    fn interrupted(&self, err: StreamError) -> StreamPumpOutcome {
+        interrupted_outcome(
+            err,
+            self.tool_calls_seen.is_empty(),
+            self.text_bytes,
+            self.thinking_bytes,
+        )
+    }
+
+    /// Fold one stream event into the loop state; `Break` ends the
+    /// event loop with the stop reason or a short-circuit outcome.
+    async fn on_event(
+        &mut self,
+        event: ResponseEvent,
+        state: &mut super::super::LoopState,
+    ) -> ControlFlow<Result<Option<StopReason>, StreamPumpOutcome>> {
+        match event {
+            ResponseEvent::OutputItemDone(OutputItem::InvalidToolUse { id, name, reason }) => {
+                self.on_invalid_tool_use(id, name, reason);
             }
-            StreamStep::TransportErr(err) => {
-                return interrupted_outcome(
-                    err,
-                    tool_calls_seen.is_empty(),
-                    text_bytes,
-                    thinking_bytes,
+            ResponseEvent::OutputItemDone(OutputItem::ToolUse { id, name, input }) => {
+                if let Some(err) = self
+                    .on_tool_use(ToolCallInfo { id, name, input }, state)
+                    .await
+                {
+                    return ControlFlow::Break(Err(err));
+                }
+            }
+            ResponseEvent::OutputTextDelta(chunk) => self.on_text_delta(chunk),
+            ResponseEvent::OutputThinkingDelta(chunk) => self.on_thinking_delta(chunk),
+            ResponseEvent::OutputItemDone(OutputItem::Message { text }) => {
+                self.on_message_done(text);
+            }
+            ResponseEvent::OutputItemDone(OutputItem::Thinking {
+                thinking,
+                signature,
+            }) => self.on_thinking_done(thinking, signature),
+            ResponseEvent::Completed {
+                end_turn,
+                stop_reason,
+                usage,
+            } => {
+                self.end_turn = end_turn;
+                self.usage = usage;
+                return ControlFlow::Break(Ok(stop_reason));
+            }
+            ResponseEvent::Error(err) => return ControlFlow::Break(Err(self.interrupted(err))),
+            ResponseEvent::OutputToolUseStart { id, name } => self.on_tool_use_start(id, name),
+            ResponseEvent::OutputToolInputDelta(chunk) => self.on_tool_input_delta(&chunk),
+            ResponseEvent::Keepalive(phase) => {
+                // A ping or intra-block delta. Reaching this arm
+                // already reset the per-event liveness timeout
+                // (the stream yielded an item, so the loop
+                // re-enters `next_stream_step` with a fresh
+                // window).
+                self.liveness.beat(phase, self.ctx.event_tx);
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn on_invalid_tool_use(&mut self, id: String, name: String, reason: String) {
+        self.open_tool = None;
+        let call = ToolCallInfo {
+            id: id.clone(),
+            name,
+            input: serde_json::json!({}),
+        };
+        let index = self.tool_calls_seen.len();
+        self.tool_calls_seen.push(call.clone());
+        self.spawned_indices.push(index);
+        self.preset_indices.push(index);
+        self.in_flight.push(spawn_tool_with_timeout(
+            index,
+            self.ctx.executor,
+            call,
+            Some(("invalid_tool_use", ToolCallResult::error(id, reason))),
+            self.ctx.config.per_tool_timeout,
+            self.ctx.event_tx,
+        ));
+    }
+
+    async fn on_tool_use(
+        &mut self,
+        call: ToolCallInfo,
+        state: &mut super::super::LoopState,
+    ) -> Option<StreamPumpOutcome> {
+        let announced = self.open_tool.take().is_some_and(|tool| tool.id == call.id);
+        handle_tool_use_event(
+            self.ctx,
+            call,
+            announced,
+            DriveLocals {
+                tool_calls_seen: &mut self.tool_calls_seen,
+                preset_indices: &mut self.preset_indices,
+                spawned_indices: &mut self.spawned_indices,
+                in_flight: &mut self.in_flight,
+            },
+            self.ctx.config.per_tool_timeout,
+            state,
+        )
+        .await
+    }
+
+    fn on_text_delta(&mut self, chunk: String) {
+        self.text_bytes += chunk.len();
+        // Incremental assistant text: stream it to the
+        // client the moment it arrives so a long writing
+        // phase is never a silent gap. The full block is
+        // still accumulated at `OutputItemDone(Message)`
+        // for final-response synthesis.
+        self.streamed_text_in_block = true;
+        emit_event(self.ctx.event_tx, AgentLoopEvent::TextDelta(chunk));
+    }
+
+    fn on_thinking_delta(&mut self, chunk: String) {
+        self.thinking_bytes += chunk.len();
+        // Incremental extended-thinking: stream it live so
+        // the client can render the current thinking block
+        // instead of waiting out a multi-second think.
+        self.streamed_thinking_in_block = true;
+        emit_event(self.ctx.event_tx, AgentLoopEvent::ThinkingDelta(chunk));
+    }
+
+    fn on_message_done(&mut self, text: String) {
+        // Block close. Only emit the whole block as a delta
+        // when nothing was streamed incrementally for it
+        // (the buffered/synthesised fallback stream, which
+        // emits no `OutputTextDelta`); otherwise the client
+        // already has the text and a re-emit would double
+        // it. Always accumulate for `synthesize_response`.
+        if !self.streamed_text_in_block {
+            self.text_bytes += text.len();
+            emit_event(self.ctx.event_tx, AgentLoopEvent::TextDelta(text.clone()));
+        }
+        self.streamed_text_in_block = false;
+        self.text_chunks.push(text);
+    }
+
+    fn on_thinking_done(&mut self, thinking: String, signature: Option<String>) {
+        // Same dedup rationale as the Message arm. Always
+        // emit the `ThinkingComplete` marker so consumers
+        // that pattern-match on the end-of-thinking event
+        // (e.g. the chat client's "Thought for Xs" pill)
+        // still see the close signal.
+        if !self.streamed_thinking_in_block {
+            self.thinking_bytes += thinking.len();
+            emit_event(
+                self.ctx.event_tx,
+                AgentLoopEvent::ThinkingDelta(thinking.clone()),
+            );
+        }
+        self.streamed_thinking_in_block = false;
+        emit_event(self.ctx.event_tx, AgentLoopEvent::ThinkingComplete);
+        self.thinking_chunks.push((thinking, signature));
+    }
+
+    fn on_tool_use_start(&mut self, id: String, name: String) {
+        self.liveness
+            .beat(StreamPhase::ToolInput, self.ctx.event_tx);
+        emit_event(
+            self.ctx.event_tx,
+            AgentLoopEvent::ToolStart {
+                id: id.clone(),
+                name: name.clone(),
+            },
+        );
+        self.open_tool = Some(OpenToolCall {
+            id,
+            name,
+            input_json: String::new(),
+            last_snapshot: tokio::time::Instant::now(),
+        });
+    }
+
+    fn on_tool_input_delta(&mut self, chunk: &str) {
+        self.liveness
+            .beat(StreamPhase::ToolInput, self.ctx.event_tx);
+        if let Some(tool) = self.open_tool.as_mut() {
+            tool.input_json.push_str(chunk);
+            if tool.last_snapshot.elapsed() >= TOOL_INPUT_SNAPSHOT_INTERVAL {
+                tool.last_snapshot = tokio::time::Instant::now();
+                emit_event(
+                    self.ctx.event_tx,
+                    AgentLoopEvent::ToolInputSnapshot {
+                        id: tool.id.clone(),
+                        name: tool.name.clone(),
+                        input: tool.input_json.clone(),
+                    },
                 );
             }
-            StreamStep::End => {
-                return interrupted_outcome(
-                    StreamError::TransportClosed {
-                        context: "missing completed event".into(),
-                    },
-                    tool_calls_seen.is_empty(),
-                    text_bytes,
-                    thinking_bytes,
-                )
-            }
-            StreamStep::Event(event) => match event {
-                ResponseEvent::OutputItemDone(OutputItem::InvalidToolUse { id, name, reason }) => {
-                    open_tool = None;
-                    let call = ToolCallInfo {
-                        id: id.clone(),
-                        name,
-                        input: serde_json::json!({}),
-                    };
-                    let index = tool_calls_seen.len();
-                    tool_calls_seen.push(call.clone());
-                    spawned_indices.push(index);
-                    preset_indices.push(index);
-                    in_flight.push(spawn_tool_with_timeout(
-                        index,
-                        executor,
-                        call,
-                        Some(("invalid_tool_use", ToolCallResult::error(id, reason))),
-                        per_tool_timeout,
-                        event_tx,
-                    ));
-                }
-                ResponseEvent::OutputItemDone(OutputItem::ToolUse { id, name, input }) => {
-                    let announced = open_tool.take().is_some_and(|tool| tool.id == id);
-                    if let Some(err) = handle_tool_use_event(
-                        ctx,
-                        ToolCallInfo { id, name, input },
-                        announced,
-                        DriveLocals {
-                            tool_calls_seen: &mut tool_calls_seen,
-                            preset_indices: &mut preset_indices,
-                            spawned_indices: &mut spawned_indices,
-                            in_flight: &mut in_flight,
-                        },
-                        per_tool_timeout,
-                        state,
-                    )
-                    .await
-                    {
-                        return err;
-                    }
-                }
-                ResponseEvent::OutputTextDelta(chunk) => {
-                    text_bytes += chunk.len();
-                    // Incremental assistant text: stream it to the
-                    // client the moment it arrives so a long writing
-                    // phase is never a silent gap. The full block is
-                    // still accumulated at `OutputItemDone(Message)`
-                    // below for final-response synthesis.
-                    streamed_text_in_block = true;
-                    emit_event(event_tx, AgentLoopEvent::TextDelta(chunk));
-                }
-                ResponseEvent::OutputThinkingDelta(chunk) => {
-                    thinking_bytes += chunk.len();
-                    // Incremental extended-thinking: stream it live so
-                    // the client can render the current thinking block
-                    // instead of waiting out a multi-second think.
-                    streamed_thinking_in_block = true;
-                    emit_event(event_tx, AgentLoopEvent::ThinkingDelta(chunk));
-                }
-                ResponseEvent::OutputItemDone(OutputItem::Message { text }) => {
-                    // Block close. Only emit the whole block as a delta
-                    // when nothing was streamed incrementally for it
-                    // (the buffered/synthesised fallback stream, which
-                    // emits no `OutputTextDelta`); otherwise the client
-                    // already has the text and a re-emit would double
-                    // it. Always accumulate for `synthesize_response`.
-                    if !streamed_text_in_block {
-                        text_bytes += text.len();
-                        emit_event(event_tx, AgentLoopEvent::TextDelta(text.clone()));
-                    }
-                    streamed_text_in_block = false;
-                    text_chunks.push(text);
-                }
-                ResponseEvent::OutputItemDone(OutputItem::Thinking {
-                    thinking,
-                    signature,
-                }) => {
-                    // Same dedup rationale as the Message arm. Always
-                    // emit the `ThinkingComplete` marker so consumers
-                    // that pattern-match on the end-of-thinking event
-                    // (e.g. the chat client's "Thought for Xs" pill)
-                    // still see the close signal.
-                    if !streamed_thinking_in_block {
-                        thinking_bytes += thinking.len();
-                        emit_event(event_tx, AgentLoopEvent::ThinkingDelta(thinking.clone()));
-                    }
-                    streamed_thinking_in_block = false;
-                    emit_event(event_tx, AgentLoopEvent::ThinkingComplete);
-                    thinking_chunks.push((thinking, signature));
-                }
-                ResponseEvent::Completed {
-                    end_turn: et,
-                    stop_reason: sr,
-                    usage: u,
-                } => {
-                    end_turn = et;
-                    stop_reason = sr;
-                    usage = u;
-                    break;
-                }
-                ResponseEvent::Error(err) => {
-                    return interrupted_outcome(
-                        err,
-                        tool_calls_seen.is_empty(),
-                        text_bytes,
-                        thinking_bytes,
-                    );
-                }
-                ResponseEvent::OutputToolUseStart { id, name } => {
-                    liveness.beat(StreamPhase::ToolInput, event_tx);
-                    emit_event(
-                        event_tx,
-                        AgentLoopEvent::ToolStart {
-                            id: id.clone(),
-                            name: name.clone(),
-                        },
-                    );
-                    open_tool = Some(OpenToolCall {
-                        id,
-                        name,
-                        input_json: String::new(),
-                        last_snapshot: tokio::time::Instant::now(),
-                    });
-                }
-                ResponseEvent::OutputToolInputDelta(chunk) => {
-                    liveness.beat(StreamPhase::ToolInput, event_tx);
-                    if let Some(tool) = open_tool.as_mut() {
-                        tool.input_json.push_str(&chunk);
-                        if tool.last_snapshot.elapsed() >= TOOL_INPUT_SNAPSHOT_INTERVAL {
-                            tool.last_snapshot = tokio::time::Instant::now();
-                            emit_event(
-                                event_tx,
-                                AgentLoopEvent::ToolInputSnapshot {
-                                    id: tool.id.clone(),
-                                    name: tool.name.clone(),
-                                    input: tool.input_json.clone(),
-                                },
-                            );
-                        }
-                    }
-                }
-                ResponseEvent::Keepalive(phase) => {
-                    // A ping or intra-block delta. Reaching this arm
-                    // already reset the per-event liveness timeout
-                    // (the stream yielded an item, so the loop
-                    // re-enters `next_stream_step` with a fresh
-                    // window).
-                    liveness.beat(phase, event_tx);
-                }
-            },
         }
     }
 
-    let response = synthesize_response(
-        &text_chunks,
-        &thinking_chunks,
-        &tool_calls_seen,
-        end_turn,
-        stop_reason,
-        &usage,
-        model_name,
-    );
-    if let Some(on_response) = on_response {
-        on_response(&response);
+    fn synthesize(&self, stop_reason: Option<StopReason>, model_name: &str) -> ModelResponse {
+        let response = synthesize_response(
+            &self.text_chunks,
+            &self.thinking_chunks,
+            &self.tool_calls_seen,
+            self.end_turn,
+            stop_reason,
+            &self.usage,
+            model_name,
+        );
+        if let Some(on_response) = self.ctx.on_response {
+            on_response(&response);
+        }
+        response
     }
 
-    // Drain the in-flight calls (codex `drain_in_flight`). Honours
-    // cancellation: a token fired during drain still aborts before we
-    // mutate `state.messages` in the caller.
-    //
-    // Calls are collected as they finish, each tagged with its
-    // submission index, and sorted afterwards so the final
-    // `tool_results` vec mirrors the order the model emitted the
-    // corresponding `OutputItemDone(tool_use)` events. Collecting out of
-    // order matters on cancel: a call that already ran (an edit that
-    // landed) keeps its real result even when an earlier call is still
-    // waiting, e.g. on an approval.
-    // While draining potentially long-running tool calls, emit a
-    // periodic `tool_running` progress heartbeat. The spawned tool
-    // futures only make progress as `FuturesUnordered` is polled in the
-    // drain loop below, so this window is the main silent stretch of a
-    // turn. The heartbeat keeps the aura-os server's sliding-idle
-    // watchdog (`AURA_TURN_MAX_TIMEOUT_SECS`) resetting so only a
-    // genuinely hung tool trips `turn_timeout`. No-op when there are no
-    // tools (`tool_calls_seen` empty) or no event channel. The guard
-    // aborts the ticker as soon as the drain loop ends.
-    let _tool_heartbeat = super::super::tool_pipeline::spawn_tool_heartbeat(
-        event_tx,
-        &tool_calls_seen,
-        super::super::tool_pipeline::tool_heartbeat_interval(),
-    );
-
-    let mut spawned_pairs: Vec<(usize, (ToolCallInfo, ToolCallResult))> = Vec::new();
-    loop {
-        let maybe_next = drain_next(&mut in_flight, cancellation_token).await;
-        match maybe_next {
-            DrainStep::Cancelled => {
-                // Mid-drain cancellation. Drop the still-pending
-                // `in_flight` futures (cancellation-safe — they were
-                // wrapped in `tokio::time::timeout` and the executor
-                // borrow ends here) and synthesise `[CANCELLED]`
-                // tool_results for every `tool_calls_seen` entry that
-                // has NOT yet produced a paired result. The downstream
-                // dispatch tail (`dispatch_streamed_response` →
-                // `push_tool_result_message_with_context`) then closes
-                // the Anthropic `tool_use ↔ tool_result` adjacency
-                // contract before the loop breaks on the synthesised
-                // `stop_loop = true` flag. Pre-fix this returned a
-                // bare `Cancelled` and let `executor.execute(...)` run
-                // to natural completion — the regression contract is
-                // `pipeline_cancellation_mid_tool_execution_aborts_loop`.
-                settle_pending_writes(
-                    &mut in_flight,
-                    &tool_calls_seen,
-                    &spawned_indices,
-                    &mut spawned_pairs,
-                    WRITE_SETTLE_GRACE,
-                )
-                .await;
-                let snap = CancelledSnapshot {
-                    text_chunks: &text_chunks,
-                    thinking_chunks: &thinking_chunks,
-                    tool_calls_seen: &tool_calls_seen,
-                    spawned_indices: &spawned_indices,
-                    end_turn,
-                    usage: &usage,
-                    model_name,
-                };
-                note_reported(state, event_tx, &spawned_pairs);
-                return cancelled_outcome(&snap, spawned_pairs, true);
+    /// Drain the in-flight calls (codex `drain_in_flight`). Honours
+    /// cancellation: a token fired during drain still aborts before we
+    /// mutate `state.messages` in the caller.
+    ///
+    /// Calls are collected as they finish, each tagged with its
+    /// submission index, and sorted afterwards so the final
+    /// `tool_results` vec mirrors the order the model emitted the
+    /// corresponding `OutputItemDone(tool_use)` events. Collecting out of
+    /// order matters on cancel: a call that already ran (an edit that
+    /// landed) keeps its real result even when an earlier call is still
+    /// waiting, e.g. on an approval.
+    async fn drain_in_flight(
+        &mut self,
+        state: &mut super::super::LoopState,
+        model_name: &str,
+    ) -> Result<Vec<IndexedResult>, StreamPumpOutcome> {
+        let mut spawned_pairs: Vec<IndexedResult> = Vec::new();
+        loop {
+            let maybe_next = drain_next(&mut self.in_flight, self.ctx.cancellation_token).await;
+            match maybe_next {
+                DrainStep::Cancelled => {
+                    return Err(self
+                        .cancelled_mid_drain(state, model_name, spawned_pairs)
+                        .await)
+                }
+                DrainStep::Done => return Ok(spawned_pairs),
+                DrainStep::Result(indexed) => spawned_pairs.push(*indexed),
             }
-            DrainStep::Done => break,
-            DrainStep::Result(indexed) => spawned_pairs.push(*indexed),
         }
     }
 
-    note_reported(state, event_tx, &spawned_pairs);
-    spawned_pairs.sort_by_key(|(idx, _)| *idx);
-    let tool_results: Vec<(ToolCallInfo, ToolCallResult)> =
-        spawned_pairs.into_iter().map(|(_, pair)| pair).collect();
+    /// Mid-drain cancellation. Drop the still-pending `in_flight`
+    /// futures (cancellation-safe — they were wrapped in
+    /// `tokio::time::timeout` and the executor borrow ends here) and
+    /// synthesise `[CANCELLED]` tool_results for every `tool_calls_seen`
+    /// entry that has NOT yet produced a paired result. The downstream
+    /// dispatch tail (`dispatch_streamed_response` →
+    /// `push_tool_result_message_with_context`) then closes the
+    /// Anthropic `tool_use ↔ tool_result` adjacency contract before the
+    /// loop breaks on the synthesised `stop_loop = true` flag. Pre-fix
+    /// this returned a bare `Cancelled` and let `executor.execute(...)`
+    /// run to natural completion — the regression contract is
+    /// `pipeline_cancellation_mid_tool_execution_aborts_loop`.
+    async fn cancelled_mid_drain(
+        &mut self,
+        state: &mut super::super::LoopState,
+        model_name: &str,
+        mut spawned_pairs: Vec<IndexedResult>,
+    ) -> StreamPumpOutcome {
+        settle_pending_writes(
+            &mut self.in_flight,
+            &self.tool_calls_seen,
+            &self.spawned_indices,
+            &mut spawned_pairs,
+            WRITE_SETTLE_GRACE,
+        )
+        .await;
+        let snap = self.snapshot(model_name);
+        note_reported(state, self.ctx.event_tx, &spawned_pairs);
+        cancelled_outcome(&snap, spawned_pairs, true)
+    }
 
-    // Layer E.4: refresh the per-run cache with any newly-executed
-    // results. Mirrors the buffered path's
-    // `tool_execution::handle_tool_use` → `update_cache` step so the
-    // pump path participates in the same memoization /
-    // invalidate-on-write contract. The "uncached" set is the tools
-    // the executor actually ran (preset results were already known at
-    // submission time).
-    let spawned_calls: Vec<ToolCallInfo> = spawned_indices
-        .iter()
-        .filter(|i| !preset_indices.contains(i))
-        .filter_map(|i| tool_calls_seen.get(*i).cloned())
-        .collect();
-    let spawned_results: Vec<ToolCallResult> = tool_results
-        .iter()
-        .filter(|(c, _)| spawned_calls.iter().any(|sc| sc.id == c.id))
-        .map(|(_, r)| r.clone())
-        .collect();
-    super::super::tool_execution::update_cache(
-        &mut state.tool_cache,
-        &spawned_calls,
-        &spawned_results,
-    );
+    fn finish(
+        self,
+        state: &mut super::super::LoopState,
+        response: ModelResponse,
+        mut spawned_pairs: Vec<IndexedResult>,
+    ) -> StreamPumpOutcome {
+        note_reported(state, self.ctx.event_tx, &spawned_pairs);
+        spawned_pairs.sort_by_key(|(idx, _)| *idx);
+        let tool_results: Vec<(ToolCallInfo, ToolCallResult)> =
+            spawned_pairs.into_iter().map(|(_, pair)| pair).collect();
+        self.refresh_cache(state, &tool_results);
+        StreamPumpOutcome::Completed {
+            response,
+            tool_results,
+        }
+    }
 
-    StreamPumpOutcome::Completed {
-        response,
-        tool_results,
+    /// Layer E.4: refresh the per-run cache with any newly-executed
+    /// results. Mirrors the buffered path's
+    /// `tool_execution::handle_tool_use` → `update_cache` step so the
+    /// pump path participates in the same memoization /
+    /// invalidate-on-write contract. The "uncached" set is the tools
+    /// the executor actually ran (preset results were already known at
+    /// submission time).
+    fn refresh_cache(
+        &self,
+        state: &mut super::super::LoopState,
+        tool_results: &[(ToolCallInfo, ToolCallResult)],
+    ) {
+        let spawned_calls: Vec<ToolCallInfo> = self
+            .spawned_indices
+            .iter()
+            .filter(|i| !self.preset_indices.contains(i))
+            .filter_map(|i| self.tool_calls_seen.get(*i).cloned())
+            .collect();
+        let spawned_results: Vec<ToolCallResult> = tool_results
+            .iter()
+            .filter(|(c, _)| spawned_calls.iter().any(|sc| sc.id == c.id))
+            .map(|(_, r)| r.clone())
+            .collect();
+        super::super::tool_execution::update_cache(
+            &mut state.tool_cache,
+            &spawned_calls,
+            &spawned_results,
+        );
     }
 }
 

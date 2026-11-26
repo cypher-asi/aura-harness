@@ -12,8 +12,6 @@ crates/agent/aura-agent/src/agent_loop/streaming.rs
 crates/agent/aura-agent/src/agent_loop/streaming_tests.rs
 crates/agent/aura-agent/src/agent_loop/tests.rs
 crates/agent/aura-agent/src/agent_loop/tool_execution_tests.rs
-crates/agent/aura-agent/src/agent_loop/tool_pipeline.rs
-crates/agent/aura-agent/src/agent_loop/turn.rs
 crates/agent/aura-agent/src/agent_runner/mod.rs
 crates/agent/aura-agent/src/task_executor/mod.rs
 crates/agent/aura-agent/src/task_executor/tests.rs

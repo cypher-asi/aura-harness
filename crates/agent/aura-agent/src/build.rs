@@ -93,6 +93,33 @@ pub enum ErrorCategory {
 pub fn classify_build_errors(stderr: &str) -> Vec<ErrorCategory> {
     let mut categories = Vec::new();
 
+    push_rust_syntax_categories(stderr, &mut categories);
+    push_rust_semantic_categories(stderr, &mut categories);
+
+    if stderr.contains("Cannot find module") || stderr.contains("ENOENT") {
+        categories.push(ErrorCategory::NpmDependency);
+    }
+
+    if stderr.contains("TS2304") || stderr.contains("TS2345") || stderr.contains("TS2322") {
+        categories.push(ErrorCategory::NpmTypeScript);
+    }
+
+    if categories.is_empty()
+        && (stderr.contains("expected")
+            || stderr.contains("syntax error")
+            || stderr.contains("parse error"))
+    {
+        categories.push(ErrorCategory::GenericSyntax);
+    }
+
+    if categories.is_empty() {
+        categories.push(ErrorCategory::Unknown);
+    }
+    categories
+}
+
+/// Rust token, module, import and method-resolution categories.
+fn push_rust_syntax_categories(stderr: &str, categories: &mut Vec<ErrorCategory>) {
     let rust_string_patterns = [
         "unknown start of token",
         "prefix `",
@@ -121,7 +148,10 @@ pub fn classify_build_errors(stderr: &str) -> Vec<ErrorCategory> {
     if stderr.contains("no method named") || stderr.contains("E0599") {
         categories.push(ErrorCategory::RustMissingMethod);
     }
+}
 
+/// Rust struct-field, type and borrow-check categories.
+fn push_rust_semantic_categories(stderr: &str, categories: &mut Vec<ErrorCategory>) {
     if stderr.contains("missing field")
         || stderr.contains("E0063")
         || stderr.contains("has no field named")
@@ -141,105 +171,22 @@ pub fn classify_build_errors(stderr: &str) -> Vec<ErrorCategory> {
     if stderr.contains("cannot borrow") || stderr.contains("E0502") || stderr.contains("E0505") {
         categories.push(ErrorCategory::RustBorrowCheck);
     }
-
-    if stderr.contains("Cannot find module") || stderr.contains("ENOENT") {
-        categories.push(ErrorCategory::NpmDependency);
-    }
-
-    if stderr.contains("TS2304") || stderr.contains("TS2345") || stderr.contains("TS2322") {
-        categories.push(ErrorCategory::NpmTypeScript);
-    }
-
-    if categories.is_empty()
-        && (stderr.contains("expected")
-            || stderr.contains("syntax error")
-            || stderr.contains("parse error"))
-    {
-        categories.push(ErrorCategory::GenericSyntax);
-    }
-
-    if categories.is_empty() {
-        categories.push(ErrorCategory::Unknown);
-    }
-    categories
 }
 
 pub fn error_category_guidance(categories: &[ErrorCategory]) -> String {
     let mut guidance = String::new();
     for cat in categories {
         let advice: &str = match cat {
-            ErrorCategory::RustStringLiteral => concat!(
-                "DIAGNOSIS: Rust string literal / token errors detected.\n",
-                "ROOT CAUSE: This almost always means JSON or text with special characters ",
-                "was placed directly in Rust source code without proper string escaping.\n",
-                "MANDATORY FIX:\n",
-                "- For test fixtures or multi-line strings containing JSON, quotes, backslashes, ",
-                "or special chars: use Rust RAW STRING LITERALS (r followed by # then quote to open, ",
-                "quote then # to close; add more # symbols if the content itself contains that pattern).\n",
-                "- For programmatic JSON construction: use serde_json::json!() macro instead of string literals.\n",
-                "- NEVER put literal backslash-n (two characters) inside a Rust string to represent a newline; ",
-                "use actual newlines inside raw strings, or proper escape sequences inside regular strings.\n",
-                "- NEVER use non-ASCII characters (em dashes, smart quotes, etc.) in Rust string literals; ",
-                "replace with ASCII equivalents.\n",
-                "- Check ALL string literals in the file, not just the ones the compiler flagged -- ",
-                "the same mistake is likely repeated.",
-            ),
-            ErrorCategory::RustMissingModule => concat!(
-                "DIAGNOSIS: Missing Rust module file.\n",
-                "FIX: If mod.rs or lib.rs declares `pub mod foo;`, the file `foo.rs` ",
-                "(or `foo/mod.rs`) MUST exist. Either create the file or remove the module declaration.",
-            ),
-            ErrorCategory::RustMissingMethod => concat!(
-                "DIAGNOSIS: Method not found on type.\n",
-                "FIX: Check the actual public API of the type (read its source file). ",
-                "Do not invent methods. If the method does not exist, either implement it ",
-                "or use an existing method that provides the same functionality.",
-            ),
-            ErrorCategory::RustTypeError => concat!(
-                "DIAGNOSIS: Type mismatch or missing trait implementation.\n",
-                "FIX: Read the function signatures carefully. Check generic type parameters. ",
-                "Provide explicit type annotations where the compiler asks for them. ",
-                "Do not use `[u8]` where `Vec<u8>` or `&[u8]` is needed.",
-            ),
-            ErrorCategory::RustBorrowCheck => concat!(
-                "DIAGNOSIS: Borrow checker violation.\n",
-                "FIX: Check ownership and lifetimes. Consider cloning, using references, ",
-                "or restructuring to avoid simultaneous mutable/immutable borrows.",
-            ),
-            ErrorCategory::RustStructFieldMismatch => concat!(
-                "DIAGNOSIS: Struct field mismatch -- fields were added, removed, or renamed.\n",
-                "FIX: Read the actual struct definition in the 'Actual API Reference' section below. ",
-                "Update every initializer and field access to match the current struct fields exactly. ",
-                "Add any new required fields (use Default/None for Option types), remove fields that ",
-                "no longer exist, and rename fields that were renamed.\n",
-            ),
-            ErrorCategory::RustMissingImport => concat!(
-                "DIAGNOSIS: Missing import or undeclared type/value (E0425/E0433).\n",
-                "FIX: Add the missing `use` statement. The compiler help message usually shows the exact ",
-                "import path. Common cases:\n",
-                "- Standard library types: `use std::path::{Path, PathBuf};`, `use std::collections::HashMap;`\n",
-                "- Crate-local items: `use crate::module::Item;`\n",
-                "- Items in test modules: if a type/function exists in another module's `#[cfg(test)]` block, ",
-                "it is NOT accessible from outside. Use the public API or duplicate the helper.\n",
-                "- If the item genuinely doesn't exist on the type (method not found), check whether tests ",
-                "are calling functions from the wrong module -- e.g. `Struct::func()` when `func` is a ",
-                "free function in `crate::other_module`.",
-            ),
-            ErrorCategory::NpmDependency => concat!(
-                "DIAGNOSIS: Missing npm package or module.\n",
-                "FIX: Ensure the dependency exists in package.json and has been installed. ",
-                "Check import paths for typos.",
-            ),
-            ErrorCategory::NpmTypeScript => concat!(
-                "DIAGNOSIS: TypeScript type errors.\n",
-                "FIX: Check that types align with the library's actual API. ",
-                "Read type definitions if needed.",
-            ),
-            ErrorCategory::GenericSyntax => concat!(
-                "DIAGNOSIS: Syntax error.\n",
-                "FIX: Look at the exact line/column the compiler indicates. ",
-                "Check for missing semicolons, unbalanced braces, or misplaced tokens.",
-            ),
+            ErrorCategory::RustStringLiteral => RUST_STRING_LITERAL_ADVICE,
+            ErrorCategory::RustMissingModule => RUST_MISSING_MODULE_ADVICE,
+            ErrorCategory::RustMissingMethod => RUST_MISSING_METHOD_ADVICE,
+            ErrorCategory::RustTypeError => RUST_TYPE_ERROR_ADVICE,
+            ErrorCategory::RustBorrowCheck => RUST_BORROW_CHECK_ADVICE,
+            ErrorCategory::RustStructFieldMismatch => RUST_STRUCT_FIELD_MISMATCH_ADVICE,
+            ErrorCategory::RustMissingImport => RUST_MISSING_IMPORT_ADVICE,
+            ErrorCategory::NpmDependency => NPM_DEPENDENCY_ADVICE,
+            ErrorCategory::NpmTypeScript => NPM_TYPE_SCRIPT_ADVICE,
+            ErrorCategory::GenericSyntax => GENERIC_SYNTAX_ADVICE,
             ErrorCategory::Unknown => "",
         };
         if !advice.is_empty() {
@@ -249,6 +196,88 @@ pub fn error_category_guidance(categories: &[ErrorCategory]) -> String {
     }
     guidance
 }
+
+const RUST_STRING_LITERAL_ADVICE: &str = concat!(
+    "DIAGNOSIS: Rust string literal / token errors detected.\n",
+    "ROOT CAUSE: This almost always means JSON or text with special characters ",
+    "was placed directly in Rust source code without proper string escaping.\n",
+    "MANDATORY FIX:\n",
+    "- For test fixtures or multi-line strings containing JSON, quotes, backslashes, ",
+    "or special chars: use Rust RAW STRING LITERALS (r followed by # then quote to open, ",
+    "quote then # to close; add more # symbols if the content itself contains that pattern).\n",
+    "- For programmatic JSON construction: use serde_json::json!() macro instead of string literals.\n",
+    "- NEVER put literal backslash-n (two characters) inside a Rust string to represent a newline; ",
+    "use actual newlines inside raw strings, or proper escape sequences inside regular strings.\n",
+    "- NEVER use non-ASCII characters (em dashes, smart quotes, etc.) in Rust string literals; ",
+    "replace with ASCII equivalents.\n",
+    "- Check ALL string literals in the file, not just the ones the compiler flagged -- ",
+    "the same mistake is likely repeated.",
+);
+
+const RUST_MISSING_MODULE_ADVICE: &str = concat!(
+    "DIAGNOSIS: Missing Rust module file.\n",
+    "FIX: If mod.rs or lib.rs declares `pub mod foo;`, the file `foo.rs` ",
+    "(or `foo/mod.rs`) MUST exist. Either create the file or remove the module declaration.",
+);
+
+const RUST_MISSING_METHOD_ADVICE: &str = concat!(
+    "DIAGNOSIS: Method not found on type.\n",
+    "FIX: Check the actual public API of the type (read its source file). ",
+    "Do not invent methods. If the method does not exist, either implement it ",
+    "or use an existing method that provides the same functionality.",
+);
+
+const RUST_TYPE_ERROR_ADVICE: &str = concat!(
+    "DIAGNOSIS: Type mismatch or missing trait implementation.\n",
+    "FIX: Read the function signatures carefully. Check generic type parameters. ",
+    "Provide explicit type annotations where the compiler asks for them. ",
+    "Do not use `[u8]` where `Vec<u8>` or `&[u8]` is needed.",
+);
+
+const RUST_BORROW_CHECK_ADVICE: &str = concat!(
+    "DIAGNOSIS: Borrow checker violation.\n",
+    "FIX: Check ownership and lifetimes. Consider cloning, using references, ",
+    "or restructuring to avoid simultaneous mutable/immutable borrows.",
+);
+
+const RUST_STRUCT_FIELD_MISMATCH_ADVICE: &str = concat!(
+    "DIAGNOSIS: Struct field mismatch -- fields were added, removed, or renamed.\n",
+    "FIX: Read the actual struct definition in the 'Actual API Reference' section below. ",
+    "Update every initializer and field access to match the current struct fields exactly. ",
+    "Add any new required fields (use Default/None for Option types), remove fields that ",
+    "no longer exist, and rename fields that were renamed.\n",
+);
+
+const RUST_MISSING_IMPORT_ADVICE: &str = concat!(
+    "DIAGNOSIS: Missing import or undeclared type/value (E0425/E0433).\n",
+    "FIX: Add the missing `use` statement. The compiler help message usually shows the exact ",
+    "import path. Common cases:\n",
+    "- Standard library types: `use std::path::{Path, PathBuf};`, `use std::collections::HashMap;`\n",
+    "- Crate-local items: `use crate::module::Item;`\n",
+    "- Items in test modules: if a type/function exists in another module's `#[cfg(test)]` block, ",
+    "it is NOT accessible from outside. Use the public API or duplicate the helper.\n",
+    "- If the item genuinely doesn't exist on the type (method not found), check whether tests ",
+    "are calling functions from the wrong module -- e.g. `Struct::func()` when `func` is a ",
+    "free function in `crate::other_module`.",
+);
+
+const NPM_DEPENDENCY_ADVICE: &str = concat!(
+    "DIAGNOSIS: Missing npm package or module.\n",
+    "FIX: Ensure the dependency exists in package.json and has been installed. ",
+    "Check import paths for typos.",
+);
+
+const NPM_TYPE_SCRIPT_ADVICE: &str = concat!(
+    "DIAGNOSIS: TypeScript type errors.\n",
+    "FIX: Check that types align with the library's actual API. ",
+    "Read type definitions if needed.",
+);
+
+const GENERIC_SYNTAX_ADVICE: &str = concat!(
+    "DIAGNOSIS: Syntax error.\n",
+    "FIX: Look at the exact line/column the compiler indicates. ",
+    "Check for missing semicolons, unbalanced braces, or misplaced tokens.",
+);
 
 #[cfg(test)]
 mod tests {
