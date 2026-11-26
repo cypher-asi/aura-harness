@@ -29,6 +29,7 @@ mod compare_runs;
 mod delegation;
 mod escalation;
 mod flow;
+mod inbox;
 mod open_plan;
 mod queue_edits;
 mod subtasks;

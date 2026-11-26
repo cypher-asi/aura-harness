@@ -71,8 +71,9 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
         | "update_project"
         | "computer" => C::Network,
 
-        "spawn_agent" | "task" | "delegate_task" | "send_to_agent" | "agent_lifecycle"
-        | "run_task" | "start_dev_loop" | "pause_dev_loop" | "stop_dev_loop" => C::Spawn,
+        "spawn_agent" | "task" | "assign" | "delegate_task" | "send_to_agent"
+        | "agent_lifecycle" | "run_task" | "start_dev_loop" | "pause_dev_loop"
+        | "stop_dev_loop" => C::Spawn,
 
         "list_specs"
         | "get_spec"

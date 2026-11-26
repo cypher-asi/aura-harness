@@ -37,7 +37,8 @@ pub struct Message {
     shell: Option<ShellRun>,
     /// Set when the message is a step the agent took (thinking, a tool call)
     activity: Option<Activity>,
-    /// Whether an activity block shows its full detail
+    /// Whether an activity block, a boot console or a message from
+    /// another agent's inbox shows its full detail
     expanded: bool,
     /// Pages shown past the cut of each [`MoreSection`]
     more: [usize; MoreSection::COUNT],
@@ -276,18 +277,31 @@ impl Message {
         self.activity.as_ref().is_some_and(Activity::is_running)
     }
 
-    /// Whether an activity block shows its full detail.
+    /// Whether an activity block, a boot console or an inbox message
+    /// shows its full detail.
     #[must_use]
     pub const fn is_expanded(&self) -> bool {
         self.expanded
     }
 
-    /// Show or hide an activity block's full detail.
+    /// Show or hide the full detail of an activity block, a boot console
+    /// or an inbox message ([`Self::inbox_fold`]).
     pub fn set_expanded(&mut self, expanded: bool) {
-        if (self.activity.is_some() || self.boot.is_some()) && self.expanded != expanded {
+        let folds = self.activity.is_some() || self.boot.is_some() || self.inbox_fold().is_some();
+        if folds && self.expanded != expanded {
             self.expanded = expanded;
             self.touch();
         }
+    }
+
+    /// What this message folds to when another agent sent it through the
+    /// inbox (see [`crate::inbox::fold`]); `None` for any other message.
+    #[must_use]
+    pub fn inbox_fold(&self) -> Option<crate::inbox::Folded<'_>> {
+        if self.role != MessageRole::User || self.shell.is_some() || self.author.is_some() {
+            return None;
+        }
+        crate::inbox::fold(&self.content)
     }
 
     /// Lines shown of `section` past where it is cut.

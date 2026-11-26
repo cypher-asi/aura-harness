@@ -104,6 +104,18 @@ impl Prompt {
             preamble: None,
         }
     }
+
+    /// A message from another agent's inbox (see [`super::inbox`]): a
+    /// [`Request::New`] for work handed out, else a [`Request::Resume`].
+    pub(super) const fn inbox(text: String, request: Request) -> Self {
+        Self {
+            text,
+            mentions: false,
+            images: Vec::new(),
+            request,
+            preamble: None,
+        }
+    }
 }
 
 /// Something the user asked an agent to do.

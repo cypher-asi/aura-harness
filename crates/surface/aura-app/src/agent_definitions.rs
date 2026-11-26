@@ -11,12 +11,16 @@
 use anyhow::{bail, Context};
 use aura_context_skills::prompt::{inject_full_skills, SkillPromptEntry};
 use aura_context_skills::SkillManager;
+use aura_exec_tools::agents::get_agent_state::GET_AGENT_STATE_TOOL_NAME;
+use aura_exec_tools::agents::list_agents::LIST_AGENTS_TOOL_NAME;
+use aura_exec_tools::agents::send_to_agent::SEND_TO_AGENT_TOOL_NAME;
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
+use aura_exec_tools::todo::{ASSIGN_TOOL_NAME, TODO_WRITE_TOOL_NAME};
 use aura_model::ToolDefinition;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::warn;
+use tracing::{info, warn};
 
 const DEFINITIONS_DIR: &str = "agent_defs";
 const MAX_NAME_LEN: usize = 40;
@@ -24,8 +28,19 @@ const MAX_FILE_BYTES: u64 = 64 * 1024;
 const NEW_DEFINITION_NAME: &str = "new-agent";
 
 /// The definition channel coordinators run. Only channels create its
-/// instances: it is never offered to `task` or as a new agent's role.
+/// instances: it can't be started on its own and is never offered to
+/// `task` or `assign`.
 pub const COORDINATOR_DEFINITION: &str = "coordinator";
+
+/// The tools a coordinator's turns offer, whatever its definition lists:
+/// it hands work out and checks on it, and does none of it itself.
+pub const COORDINATOR_TOOLS: &[&str] = &[
+    ASSIGN_TOOL_NAME,
+    SEND_TO_AGENT_TOOL_NAME,
+    LIST_AGENTS_TOOL_NAME,
+    GET_AGENT_STATE_TOOL_NAME,
+    TODO_WRITE_TOOL_NAME,
+];
 
 /// Names of the seeded definitions already added once, one per line.
 const SEEDED_FILE: &str = ".seeded";
@@ -66,6 +81,20 @@ const SEED_DEFINITIONS: &[(&str, &str)] = &[
 
 /// Seeds written by versions that seeded only when creating the directory.
 const LEGACY_SEEDS: &[&str] = &["explorer", "reviewer"];
+
+/// Built-in definitions as earlier versions wrote them: name and blake3
+/// hash of the file. A file still byte for byte like one was never edited,
+/// so loading writes the current built-in over it.
+const RETIRED_SEEDS: &[(&str, &str)] = &[
+    (
+        COORDINATOR_DEFINITION,
+        "6576782db9578ef2edeb45ccdba0983f9a9a74f1999112f010e5fa14d85216e3",
+    ),
+    (
+        COORDINATOR_DEFINITION,
+        "a861b09a8d8705ef2a184ee24f6f16b9ba4880a8302f7d4f61d34fc50c4eae31",
+    ),
+];
 
 #[derive(Debug, Deserialize)]
 struct Frontmatter {
@@ -228,7 +257,8 @@ pub struct AgentDefinitions {
 impl AgentDefinitions {
     /// Load the definitions, first adding each built-in definition this
     /// directory has never had. One whose name is already taken is skipped
-    /// for good.
+    /// for good. A built-in still exactly as an earlier version wrote it
+    /// (see [`RETIRED_SEEDS`]) is brought up to date.
     ///
     /// # Errors
     /// Returns an error if the directory cannot be created or seeded.
@@ -263,6 +293,12 @@ impl AgentDefinitions {
             let mut list = seeded.join("\n");
             list.push('\n');
             fs::write(&path, list).with_context(|| format!("writing {}", path.display()))?;
+        }
+        for name in refresh_retired(&definitions.dir, RETIRED_SEEDS)? {
+            info!(
+                definition = name,
+                "Updated a built-in agent definition nobody edited"
+            );
         }
 
         for problem in definitions.reload() {
@@ -397,6 +433,29 @@ fn read_seeded(dir: &Path) -> Vec<String> {
             .collect(),
         Err(_) => LEGACY_SEEDS.iter().map(|s| (*s).to_string()).collect(),
     }
+}
+
+/// Write the current built-in over each seed file in `dir` that is byte
+/// for byte one of the `retired` versions (name and blake3 hash), and
+/// return the names written. A file that can't be read is left alone.
+fn refresh_retired(dir: &Path, retired: &[(&str, &str)]) -> anyhow::Result<Vec<&'static str>> {
+    let mut refreshed = Vec::new();
+    for (name, content) in SEED_DEFINITIONS {
+        if !retired.iter().any(|(retired, _)| retired == name) {
+            continue;
+        }
+        let path = dir.join(format!("{name}.md"));
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let hash = blake3::hash(&bytes).to_hex();
+        if !retired.contains(&(*name, hash.as_str())) {
+            continue;
+        }
+        fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
+        refreshed.push(*name);
+    }
+    Ok(refreshed)
 }
 
 fn read_definition(path: &Path) -> anyhow::Result<AgentDefinition> {
@@ -579,29 +638,58 @@ mod tests {
         assert_eq!(names(&def), ["read_file", "task"]);
     }
 
-    #[test]
-    fn coordinator_can_delegate_but_not_edit() {
-        let content = SEED_DEFINITIONS
+    fn seed_content(name: &str) -> &'static str {
+        SEED_DEFINITIONS
             .iter()
-            .find(|(name, _)| *name == COORDINATOR_DEFINITION)
+            .find(|(seed, _)| *seed == name)
             .map(|(_, content)| *content)
-            .unwrap();
+            .unwrap()
+    }
+
+    #[test]
+    fn coordinator_seed_lists_only_coordination_tools() {
+        let content = seed_content(COORDINATOR_DEFINITION);
         let def = AgentDefinition::parse(content, Path::new("coordinator.md")).unwrap();
         assert!(def.is_coordinator());
-        let tools = [
-            tool("read_file"),
-            tool("search_code"),
-            tool("write_file"),
-            tool("edit_file"),
-            tool("run_command"),
-            tool("task"),
-        ];
-        let names: Vec<String> = def
-            .filter_tools(&tools)
-            .into_iter()
-            .map(|t| t.name)
-            .collect();
-        assert_eq!(names, ["read_file", "search_code", "task"]);
+        let listed = def.tools.unwrap();
+        assert!(listed.iter().any(|tool| tool == ASSIGN_TOOL_NAME));
+        assert!(
+            listed
+                .iter()
+                .all(|tool| COORDINATOR_TOOLS.contains(&tool.as_str())),
+            "{listed:?}"
+        );
+    }
+
+    #[test]
+    fn refreshes_an_unedited_retired_seed_and_keeps_an_edited_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("coordinator.md");
+        let old = "---\nname: coordinator\n---\nDo the work yourself.\n";
+        fs::write(&path, old).unwrap();
+        let hash = blake3::hash(old.as_bytes()).to_hex().to_string();
+        let retired = [(COORDINATOR_DEFINITION, hash.as_str())];
+
+        let refreshed = refresh_retired(dir.path(), &retired).unwrap();
+        assert_eq!(refreshed, [COORDINATOR_DEFINITION]);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            seed_content(COORDINATOR_DEFINITION)
+        );
+
+        let edited = format!("{old}Keep it short.\n");
+        fs::write(&path, &edited).unwrap();
+        assert!(refresh_retired(dir.path(), &retired).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(&path).unwrap(), edited);
+    }
+
+    #[test]
+    fn retired_seeds_name_built_ins_but_never_their_current_content() {
+        for (name, hash) in RETIRED_SEEDS {
+            let current = blake3::hash(seed_content(name).as_bytes()).to_hex();
+            assert_eq!(hash.len(), 64, "{name}");
+            assert_ne!(current.as_str(), *hash, "{name}'s current seed is retired");
+        }
     }
 
     #[test]

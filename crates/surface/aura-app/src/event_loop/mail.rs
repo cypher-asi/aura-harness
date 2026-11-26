@@ -9,6 +9,8 @@
 //! - The terminal's permanent-agent `task` calls run outside the host, so
 //!   [`TaskMail`] posts the request and its result itself, in a thread of
 //!   its own named `task:<child hex>` (the Processes tab's row id).
+//! - Messages between agents' inboxes (see [`super::inbox`]) are posted
+//!   by the inbox, in threads named `inbox:<hash>`.
 //!
 //! Agent ids are hex ([`AgentId::to_hex`]), the same form the process
 //! table uses, so the UI can match mail to the agents of a run.
@@ -34,12 +36,19 @@ pub struct MailItem {
     pub title_from: Option<AgentId>,
 }
 
-/// The first id [`TaskMail`] gives a message. The host numbers its own
-/// messages from 1, so starting this high keeps the two apart.
+/// The first id the terminal gives mail it posts itself. The host numbers
+/// its own messages from 1, so starting this high keeps the two apart.
 const FIRST_TASK_MAIL_ID: u64 = 1 << 40;
 
-/// The next id [`TaskMail`] gives a message, shared by the process.
+/// The next id the terminal gives mail it posts itself, shared by the
+/// process.
 static NEXT_TASK_MAIL_ID: AtomicU64 = AtomicU64::new(FIRST_TASK_MAIL_ID);
+
+/// A new id for mail the terminal posts itself ([`TaskMail`] and inbox
+/// messages), never one the host gives.
+pub(crate) fn next_mail_id() -> u64 {
+    NEXT_TASK_MAIL_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Longest subject taken from a `task` prompt, in characters.
 const SUBJECT_CHARS: usize = 60;
@@ -122,7 +131,7 @@ impl TaskMail {
             parent_name,
             child,
             child_name,
-            subject: task_subject(prompt),
+            subject: subject_of(prompt),
         }
     }
 
@@ -166,7 +175,7 @@ impl TaskMail {
         text: String,
     ) -> MailView {
         MailView {
-            id: NEXT_TASK_MAIL_ID.fetch_add(1, Ordering::Relaxed),
+            id: next_mail_id(),
             thread_id: task_id(self.child),
             subject: self.subject.clone(),
             from_id: from.to_hex(),
@@ -181,8 +190,9 @@ impl TaskMail {
 }
 
 /// The first non-empty line of `prompt`, whitespace collapsed, cut to
-/// [`SUBJECT_CHARS`] characters with `…` when cut.
-fn task_subject(prompt: &str) -> String {
+/// [`SUBJECT_CHARS`] characters with `…` when cut: the subject of a
+/// message that names none.
+pub(crate) fn subject_of(prompt: &str) -> String {
     let Some(line) = prompt.lines().map(str::trim).find(|line| !line.is_empty()) else {
         return EMPTY_SUBJECT.to_string();
     };
@@ -351,10 +361,10 @@ mod tests {
 
     #[test]
     fn task_subjects_are_cut_on_char_boundaries() {
-        let cut = task_subject(&"é".repeat(80));
+        let cut = subject_of(&"é".repeat(80));
         assert_eq!(cut.chars().count(), SUBJECT_CHARS + 1);
         assert!(cut.ends_with('…'));
-        assert_eq!(task_subject(&"a".repeat(60)), "a".repeat(60));
-        assert_eq!(task_subject(" \n\t"), EMPTY_SUBJECT);
+        assert_eq!(subject_of(&"a".repeat(60)), "a".repeat(60));
+        assert_eq!(subject_of(" \n\t"), EMPTY_SUBJECT);
     }
 }

@@ -26,6 +26,7 @@ pub(crate) mod gate;
 pub(crate) mod handlers;
 pub(crate) mod host;
 pub(crate) mod hud;
+pub(crate) mod inbox;
 mod log_view;
 pub(crate) mod mail;
 pub(crate) mod modes;
@@ -56,6 +57,7 @@ pub use command_output::TerminalCommandOutput;
 pub use flow::{FlowFeed, FlowInbox};
 pub use gate::subtask::GateBase;
 pub use host::{TerminalAgents, TerminalChildKernels};
+pub use inbox::{AssignTool, HubLink, PeerHooks};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
@@ -1123,8 +1125,14 @@ async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) {
         .finish(&processes::turn_id(agent_id), status);
     if failure.is_none() && !cancelled {
         channels::post_replies(state, agent_id).await;
+        inbox::answer(state, agent_id);
     } else {
         channels::drop_unanswered(state, agent_id);
+        inbox::give_up(
+            state,
+            agent_id,
+            failure.as_deref().unwrap_or("it was stopped"),
+        );
     }
 
     if let Some(problem) = failure {

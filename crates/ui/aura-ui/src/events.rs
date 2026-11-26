@@ -1067,9 +1067,9 @@ pub struct ChannelSummary {
     /// The project the channel's agents work in
     #[serde(default)]
     pub project: Option<ChannelProjectView>,
-    /// Coordinator first, then the agents it spawned, each followed by its
-    /// subagents (depth-first by parent); `depth` is set relative to the
-    /// coordinator (0). See [`nest_members`].
+    /// Coordinator first, then its agents, each followed by its subagents
+    /// (depth-first by parent); the coordinator and its agents are at
+    /// depth 0. See [`nest_members`].
     #[serde(default)]
     pub members: Vec<AgentSummary>,
     /// Whether it was archived
@@ -1167,14 +1167,16 @@ pub fn merge_timeline<'a>(
 }
 
 /// Orders a channel's members for display: the coordinator first, then
-/// each agent followed by the agents it spawned, depth-first. Siblings keep
-/// their order in `members`. Each member comes with the hex id of the agent
-/// that spawned it; members whose parent is not among `members` go under
-/// the coordinator. `depth` is set relative to the coordinator (0).
+/// its agents beside it, each followed by the agents it spawned,
+/// depth-first. Siblings keep their order in `members`. Each member comes
+/// with the hex id of the agent that brought it in; members whose parent
+/// is not among `members` count as the coordinator's agents. `depth` is 0
+/// for the coordinator and its agents, and one more for each level of
+/// subagents below them.
 ///
-/// A coordinator missing from `members` is left out; its children still
-/// start at depth 1. Members caught in a parent cycle, unreachable from the
-/// coordinator, are put under it too so none is dropped.
+/// A coordinator missing from `members` is left out; its agents still
+/// start at depth 0. Members caught in a parent cycle, unreachable from
+/// the coordinator, are put at the top level too so none is dropped.
 #[must_use]
 pub fn nest_members(
     coordinator_id: &str,
@@ -1213,8 +1215,13 @@ pub fn nest_members(
             let children: Vec<usize> = (0..slots.len())
                 .filter(|&i| slots[i].is_some() && parents[i].as_deref() == Some(&agent.id))
                 .collect();
+            let below = if agent.id == coordinator_id {
+                depth
+            } else {
+                depth + 1
+            };
             // Reversed so the first sibling is popped first.
-            stack.extend(children.into_iter().rev().map(|i| (i, depth + 1)));
+            stack.extend(children.into_iter().rev().map(|i| (i, below)));
             agent.depth = depth;
             out.push(agent);
         }
@@ -1230,13 +1237,13 @@ pub fn nest_members(
             .filter(|&i| parents[i].as_deref() == Some(coordinator_id))
             .collect();
         for index in roots {
-            visit(index, 1, &mut slots);
+            visit(index, 0, &mut slots);
         }
     }
     // Members in a parent cycle never reached from the coordinator.
     for index in 0..slots.len() {
         if slots[index].is_some() {
-            visit(index, 1, &mut slots);
+            visit(index, 0, &mut slots);
         }
     }
     out
@@ -2343,7 +2350,7 @@ mod tests {
     }
 
     #[test]
-    fn nest_members_puts_the_coordinator_first_then_children_depth_first() {
+    fn nest_members_puts_the_coordinators_agents_beside_it_with_subagents_below() {
         let nested = nest_members(
             "co",
             vec![
@@ -2360,18 +2367,18 @@ mod tests {
             order(&nested),
             vec![
                 ("co", 0),
-                ("a", 1),
-                ("a1", 2),
-                ("a1x", 3),
-                ("a2", 2),
-                ("b", 1),
-                ("b1", 2),
+                ("a", 0),
+                ("a1", 1),
+                ("a1x", 2),
+                ("a2", 1),
+                ("b", 0),
+                ("b1", 1),
             ]
         );
     }
 
     #[test]
-    fn nest_members_puts_orphans_under_the_coordinator() {
+    fn nest_members_counts_orphans_as_the_coordinators_agents() {
         let nested = nest_members(
             "co",
             vec![
@@ -2383,7 +2390,7 @@ mod tests {
         );
         assert_eq!(
             order(&nested),
-            vec![("co", 0), ("x", 1), ("x1", 2), ("y", 1)]
+            vec![("co", 0), ("x", 0), ("x1", 1), ("y", 0)]
         );
     }
 
@@ -2400,7 +2407,7 @@ mod tests {
         );
         assert_eq!(
             order(&nested),
-            vec![("a", 1), ("a1", 2), ("p", 1), ("q", 2)]
+            vec![("a", 0), ("a1", 1), ("p", 0), ("q", 1)]
         );
         assert!(nest_members("co", Vec::new()).is_empty());
     }

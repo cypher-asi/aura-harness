@@ -95,7 +95,11 @@ impl Headless {
         let workspace = session.kernel.agent_workspace();
         // A turn that leads has fewer tools; which turns do is only known
         // once their prompt is classified.
-        let (_, tools) = self.hub.turn(session.definition.as_deref(), &workspace);
+        let (_, tools) = self.hub.agent_turn(
+            session.agent_id(),
+            session.definition.as_deref(),
+            &workspace,
+        );
         let tools = self.tool_filter.filter(tools);
         let session_id = session_id(session.agent_id(), session.started_ms);
         let agent_hex = session.agent_id().to_hex();

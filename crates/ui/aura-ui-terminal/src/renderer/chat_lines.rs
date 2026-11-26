@@ -17,7 +17,7 @@ use super::segments::{
 use super::text::Measure;
 use super::MoreRows;
 use crate::app::{CodeCopyHit, ImageHit, ToggleRow, ToggleTarget};
-use crate::components::{Activity, Message, MessageRole, MoreSection};
+use crate::components::{truncate_line, Activity, Message, MessageRole, MoreSection};
 use crate::events::{
     merge_timeline, ChannelPostAuthor, ChannelPostView, MessageData, TimelineItem,
 };
@@ -496,7 +496,9 @@ impl Layout<'_> {
         if let Some(reply) = block.place.meta {
             push_footer(&mut lines, reply, width, theme);
         }
-        let user = !terminal && members.len() == 1 && members[0].role() == MessageRole::User;
+        let folded = members[0].inbox_fold().is_some() && !members[0].is_expanded();
+        let user =
+            !terminal && members.len() == 1 && members[0].role() == MessageRole::User && !folded;
         if user {
             frame_user_block(
                 &mut lines,
@@ -919,6 +921,9 @@ fn single_lines(
     kept: Option<&mut KeptSteps>,
 ) -> (Laid, Vec<ToggleRow>) {
     let Some(step) = message.activity_step() else {
+        if let Some(folded) = message.inbox_fold() {
+            return inbox_lines(message, folded.summary, (width, measure), theme, spinner);
+        }
         let (laid, more) = message_lines(message, (width, measure), theme, spinner);
         // A boot console still going shows everything; once done it
         // folds, and opens or closes on its header, its outcome and the
@@ -962,6 +967,40 @@ fn single_lines(
         (width, theme),
     );
     ((lines, Vec::new(), Vec::new()), toggles)
+}
+
+/// Before an inbox message folded to its `summary`.
+const INBOX_PROMPT: &str = "✉ ";
+
+/// A message another agent sent through the inbox: one row, `✉ ` and its
+/// `summary` (who sent it, what about), until opened in full. It opens
+/// and closes on its first row.
+fn inbox_lines(
+    message: &Message,
+    summary: &str,
+    (width, measure): (usize, Measure),
+    theme: &Theme,
+    spinner: &str,
+) -> (Laid, Vec<ToggleRow>) {
+    let toggle = ToggleRow {
+        line: 0,
+        target: ToggleTarget::Step(message.version().0),
+        open: message.is_expanded(),
+    };
+    if message.is_expanded() {
+        let (laid, more) = message_lines(message, (width, measure), theme, spinner);
+        let toggles = std::iter::once(toggle)
+            .chain(more_toggles(message, more, 0))
+            .collect();
+        return (laid, toggles);
+    }
+    let muted = Style::default().fg(theme.colors.muted);
+    let room = width.saturating_sub(super::text::display_width(INBOX_PROMPT));
+    let line = Line::from(vec![
+        Span::styled(INBOX_PROMPT, muted),
+        Span::styled(truncate_line(summary, room), muted),
+    ]);
+    ((vec![line], Vec::new(), Vec::new()), vec![toggle])
 }
 
 /// The rows of `message` that show more of a part cut short, `offset`
@@ -1331,5 +1370,61 @@ mod tests {
                 "frame {frame}: the spinner turns on the running step\n{kept:#?}"
             );
         }
+    }
+
+    #[test]
+    fn a_message_from_another_agents_inbox_folds_to_one_line_until_opened() {
+        let theme = Theme::cyber();
+        let open = HashMap::new();
+        let groups = GroupState {
+            open: &open,
+            expand_all: false,
+            turn_live: false,
+        };
+        let header = crate::inbox::header(
+            crate::inbox::InboxKind::Assignment,
+            "3f9a",
+            "PRC1",
+            "#site coordinator",
+            "Fix the tokenizer",
+        );
+        let text = format!("{header}\n\nThe last token is dropped.\nDone is a passing test.");
+        let mut chat = VecDeque::from([Message::new(MessageRole::User, &text)]);
+        let drawn = |chat: &VecDeque<Message>| {
+            let mut cache = ChatLineCache::default();
+            cache.update((chat, &[]), (60, Measure::GRID), &theme, "*", &groups);
+            cache
+                .blocks()
+                .map(|block| {
+                    let lines: Vec<String> = block.lines.iter().map(ToString::to_string).collect();
+                    let opens = block
+                        .toggles
+                        .iter()
+                        .any(|toggle| matches!(toggle.target, ToggleTarget::Step(_)));
+                    (block.user, lines, opens)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            drawn(&chat),
+            vec![(false, vec!["✉ PRC1: Fix the tokenizer".to_string()], true)]
+        );
+
+        if let Some(message) = chat.front_mut() {
+            message.set_expanded(true);
+        }
+        let opened = drawn(&chat);
+        let [(user, lines, opens)] = opened.as_slice() else {
+            panic!("one block: {opened:#?}");
+        };
+        assert!(*user, "framed as a prompt once open");
+        assert!(*opens, "it closes again");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Done is a passing test.")),
+            "{lines:#?}"
+        );
     }
 }

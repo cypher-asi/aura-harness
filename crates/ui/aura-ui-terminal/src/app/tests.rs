@@ -6448,8 +6448,8 @@ fn app_in_channel(active: &str) -> (tempfile::TempDir, App) {
         coordinator_id: "co".to_string(),
         members: vec![
             member("co", "CO1", "Lead", 0),
-            member("re", "RE36", "Reviewer", 1),
-            member("sb", "SUB2", "Scout", 2),
+            member("re", "RE36", "Reviewer", 0),
+            member("sb", "SUB2", "Scout", 1),
         ],
         ..ChannelSummary::default()
     }]));

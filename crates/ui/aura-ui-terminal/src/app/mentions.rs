@@ -53,10 +53,14 @@ pub struct MentionMember {
     pub role: &'static str,
 }
 
-/// The members of a channel whose code or name starts with `query`,
-/// ignoring case, in the channel's order. A member without a code cannot
-/// be mentioned, so is left out.
-fn member_matches(members: &[AgentSummary], query: &str) -> Vec<MentionCandidate> {
+/// The members of a channel coordinated by `coordinator_id` whose code or
+/// name starts with `query`, ignoring case, in the channel's order. A
+/// member without a code cannot be mentioned, so is left out.
+fn member_matches(
+    members: &[AgentSummary],
+    coordinator_id: &str,
+    query: &str,
+) -> Vec<MentionCandidate> {
     let query = query.to_lowercase();
     members
         .iter()
@@ -69,19 +73,22 @@ fn member_matches(members: &[AgentSummary], query: &str) -> Vec<MentionCandidate
                 is_dir: false,
                 member: Some(MentionMember {
                     name: member.name.clone(),
-                    role: member_role(member.depth),
+                    role: member_role(member, coordinator_id),
                 }),
             })
         })
         .collect()
 }
 
-/// What a member at `depth` in its channel's tree is.
-const fn member_role(depth: usize) -> &'static str {
-    match depth {
-        0 => "coordinator",
-        1 => "agent",
-        _ => "subagent",
+/// What `member` is in a channel coordinated by `coordinator_id`: its
+/// agents sit beside the coordinator at depth 0, subagents below them.
+fn member_role(member: &AgentSummary, coordinator_id: &str) -> &'static str {
+    if member.id == coordinator_id {
+        "coordinator"
+    } else if member.depth == 0 {
+        "agent"
+    } else {
+        "subagent"
     }
 }
 
@@ -376,10 +383,12 @@ impl App {
             self.mentions.dismissed = None;
         }
         let word = word.filter(|(start, _, _)| self.mentions.dismissed != Some(*start));
-        let members = self
+        let (coordinator_id, members) = self
             .channels
             .coordinated_by(&self.active_agent_id)
-            .map_or(&[][..], |channel| channel.members.as_slice());
+            .map_or(("", &[][..]), |channel| {
+                (channel.coordinator_id.as_str(), channel.members.as_slice())
+            });
         // A cloud agent's files are on its machine, not here.
         let root = self.sandbox.root().filter(|_| !self.sandbox.is_remote());
         let Some((start, _, query)) = word.filter(|_| root.is_some() || !members.is_empty()) else {
@@ -395,7 +404,7 @@ impl App {
         {
             return;
         }
-        let mut matches = member_matches(members, query);
+        let mut matches = member_matches(members, coordinator_id, query);
         if let Some(root) = root {
             // A new `@` word walks the tree again so files created since
             // show up; typing within one word reuses the walk.

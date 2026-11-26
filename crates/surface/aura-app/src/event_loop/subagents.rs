@@ -32,7 +32,7 @@ use super::agents::{AgentSession, KernelFactory};
 use super::approvals::TerminalApprovals;
 use super::gate::subtask::{explicit_model, Judgement, SubtaskEnd, SubtaskGate, SubtaskLabel};
 use super::handlers::{handle_agent_success, run_agent_turn, system_message};
-use super::host::{agent_tool_definitions, TerminalAgents};
+use super::host::{host_tool_definitions, inbox_tool_definitions, is_inbox_tool, TerminalAgents};
 use super::mail::{MailItem, MailSender, Mailbox, TaskMail};
 use super::modes::Permissions;
 use super::notices::{Notice, NoticeSender};
@@ -43,7 +43,7 @@ use super::task_check;
 use super::tasks::{Spawned, TaskBoard};
 use super::trace::Traces;
 use super::GateBase;
-use crate::agent_definitions::{AgentDefinition, AgentDefinitions};
+use crate::agent_definitions::{AgentDefinition, AgentDefinitions, COORDINATOR_TOOLS};
 use crate::agent_registry::AgentRegistry;
 use crate::event_loop::gate::followup::ended_signal;
 use crate::file_checkpoints::AttemptFiles;
@@ -64,7 +64,7 @@ use aura_core_types::{
 };
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::jobs::{JOB_KILL_TOOL_NAME, JOB_OUTPUT_TOOL_NAME};
-use aura_exec_tools::todo::{task_report_line, TODO_WRITE_TOOL_NAME};
+use aura_exec_tools::todo::{task_report_line, ASSIGN_TOOL_NAME, TODO_WRITE_TOOL_NAME};
 use aura_exec_tools::SubagentDispatchHook;
 use aura_gate::compare::{tally, PlanReading};
 use aura_gate::followup;
@@ -376,6 +376,8 @@ pub struct AgentHub {
     pub(crate) hidden_members: Mutex<HashSet<AgentId>>,
     /// Replies the channels wait for and what each coordinator has seen.
     pub(crate) channel_chat: super::channels::ChannelChat,
+    /// What agents owe each other through their inboxes.
+    pub(crate) inbox: super::inbox::Inbox,
     /// The chats of the agents shown last, as read from their records
     pub(super) shown_chats: Mutex<crate::record_loader::ByHead<Vec<MessageData>>>,
     /// The Record panel rows of the agents shown last
@@ -486,6 +488,7 @@ impl AgentHub {
                 hidden_members: Mutex::new(channel_sets.hidden),
                 channels: parts.channels,
                 channel_chat: super::channels::ChannelChat::default(),
+                inbox: super::inbox::Inbox::default(),
                 shown_chats: Mutex::default(),
                 shown_records: Mutex::default(),
             }
@@ -598,21 +601,36 @@ impl AgentHub {
             .map(|tool| tool.name.clone())
             .collect();
         names.push(TASK_TOOL_NAME.to_string());
+        names.push(ASSIGN_TOOL_NAME.to_string());
+        names.extend(inbox_tool_definitions().into_iter().map(|tool| tool.name));
         if self.agents.is_some() {
-            names.extend(agent_tool_definitions().into_iter().map(|tool| tool.name));
+            names.extend(host_tool_definitions().into_iter().map(|tool| tool.name));
         }
         names
     }
 
-    /// Config and tools for a turn of an agent working in `workspace`,
-    /// applying the permanent agent `definition` when it names one.
+    /// Config and tools for a turn of an instance of the permanent agent
+    /// `definition` that another agent spawned, or of a user's own agent
+    /// when `None`, working in `workspace`. [`Self::agent_turn`] is the
+    /// turn of a given agent.
     pub fn turn(
         &self,
         definition: Option<&str>,
         workspace: &Path,
     ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
+        self.ranked_turn(definition, workspace, definition.is_none())
+    }
+
+    /// [`Self::turn`] of a top-level agent, which nobody spawned, or of a
+    /// subagent.
+    fn ranked_turn(
+        &self,
+        definition: Option<&str>,
+        workspace: &Path,
+        top_level: bool,
+    ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
         let instructions = self.instructions.for_workspace(workspace);
-        let (mut config, tools) = self.definition_turn(definition, &instructions.text);
+        let (mut config, tools) = self.definition_turn(definition, &instructions.text, top_level);
         self.long_run.apply(&mut config);
         (config, tools)
     }
@@ -669,24 +687,24 @@ impl AgentHub {
                 .system_prompt
                 .push_str(&aura_context_prompts::system::sections::coordinator::render());
         }
-        if super::channels::is_coordinator(definition.as_deref()) {
-            if let Some(channel) = super::channels::channel_prompt(self, agent_id) {
-                config.system_prompt.push_str("\n\n");
-                config.system_prompt.push_str(&channel);
-            }
+        if let Some(channel) = super::channels::channel_prompt(self, agent_id) {
+            config.system_prompt.push_str("\n\n");
+            config.system_prompt.push_str(&channel);
         }
         (config, tools, lead)
     }
 
-    /// [`Self::turn`] for `agent_id`, with the plan-mode instructions when
-    /// the agent is in plan mode.
+    /// [`Self::turn`] for `agent_id`, top level unless another agent
+    /// spawned it, with the plan-mode instructions when the agent is in
+    /// plan mode.
     pub(crate) fn agent_turn(
         &self,
         agent_id: AgentId,
         definition: Option<&str>,
         workspace: &Path,
     ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
-        let (mut config, tools) = self.turn(definition, workspace);
+        let top_level = lock(&self.registry).is_top_level_agent(agent_id);
+        let (mut config, tools) = self.ranked_turn(definition, workspace, top_level);
         if self.mode_of(agent_id) == PermissionMode::Plan {
             config.system_prompt.push_str("\n\n");
             config
@@ -705,10 +723,15 @@ impl AgentHub {
             .await;
     }
 
+    /// The config and tools of a turn of an instance of `definition`, or
+    /// of a user's own agent when `None`. A coordinator's tools are
+    /// [`COORDINATOR_TOOLS`] whatever its file says, even when the file is
+    /// gone.
     fn definition_turn(
         &self,
         definition: Option<&str>,
         instructions: &str,
+        top_level: bool,
     ) -> (AgentLoopConfig, Vec<ToolDefinition>) {
         let base = lock(&self.base);
         let definitions = lock(&self.definitions);
@@ -720,11 +743,19 @@ impl AgentHub {
             config.system_prompt.push_str(instructions);
         }
         let mut tools = base.tools.clone();
-        if let Some(task) = task_tool_definition(&definitions) {
-            tools.push(task);
-        }
-        if self.agents.is_some() {
-            tools.extend(agent_tool_definitions());
+        let coordinator = super::channels::is_coordinator(definition);
+        if coordinator {
+            tools.extend(assign_tool_definition(&definitions));
+            tools.extend(inbox_tool_definitions());
+            tools.retain(|tool| COORDINATOR_TOOLS.contains(&tool.name.as_str()));
+        } else {
+            tools.extend(task_tool_definition(&definitions));
+            if top_level || self.agents.is_some() {
+                tools.extend(inbox_tool_definitions());
+            }
+            if self.agents.is_some() {
+                tools.extend(host_tool_definitions());
+            }
         }
         let Some(name) = definition else {
             return (config, tools);
@@ -736,21 +767,9 @@ impl AgentHub {
             );
             return (config, tools);
         };
-        let filtered = definition.filter_tools(&tools);
-        // Planning and job tools only touch the agent's own state, so a
-        // permanent agent's tool list never needs to name them.
-        let keep_harness_tool = |tool: &ToolDefinition| {
-            tool.name == TODO_WRITE_TOOL_NAME
-                || ((tool.name == JOB_OUTPUT_TOOL_NAME || tool.name == JOB_KILL_TOOL_NAME)
-                    && filtered.iter().any(|t| t.name == "run_command"))
-        };
-        let harness: Vec<ToolDefinition> = tools
-            .iter()
-            .filter(|tool| keep_harness_tool(tool) && !filtered.iter().any(|t| t.name == tool.name))
-            .cloned()
-            .collect();
-        tools = filtered;
-        tools.extend(harness);
+        if !coordinator {
+            tools = definition_tools(definition, &tools, top_level);
+        }
         definition.extend_system_prompt(&mut config.system_prompt, &lock(&self.skills));
         if let Some(model) = &definition.model {
             base.limits.configure(&mut config, model);
@@ -769,11 +788,9 @@ impl AgentHub {
     /// order (see [`AgentRegistry::reserve_prefixes`]); when that cannot
     /// be saved the roster still shows them, and the next save keeps them.
     pub fn definition_summaries(&self) -> Vec<AgentDefinitionSummary> {
-        // Only channels create coordinators, so the roster never offers one.
         let mut summaries: Vec<AgentDefinitionSummary> = lock(&self.definitions)
             .all()
             .iter()
-            .filter(|d| !d.is_coordinator())
             .map(|d| AgentDefinitionSummary {
                 name: d.name.clone(),
                 description: d.description.clone(),
@@ -1118,7 +1135,7 @@ impl AgentHub {
     /// Show `view` in the INBOX tab, if mail is collected. A `task`
     /// thread is titled when its subtask is named ([`Self::name_subtask`]),
     /// so its mail asks for no subject.
-    fn post_mail(&self, view: MailView) {
+    pub(crate) fn post_mail(&self, view: MailView) {
         if let Some(mail) = lock(&self.mail).as_ref() {
             // A closed channel means the event loop ended; nobody is left
             // to show it.
@@ -2413,6 +2430,7 @@ fn task_notice(
                 "{name} finished the task you gave it in the background. Its reply:\n\n{reply}{}",
                 report(true)
             ),
+            inbox: None,
         },
         Err(reason) => Notice {
             to: parent,
@@ -2421,6 +2439,7 @@ fn task_notice(
                 "{name} did not finish the task you gave it in the background: {reason}{}",
                 report(false)
             ),
+            inbox: None,
         },
     }
 }
@@ -2503,6 +2522,90 @@ fn catalog_entry(definition: &AgentDefinition) -> String {
         entry.push_str(&format!(" ({})", facts.join("; ")));
     }
     entry
+}
+
+/// `assign` tool schema for a channel coordinator, listing the permanent
+/// agents a new member can be an instance of, or `None` when there are
+/// none.
+#[must_use]
+pub fn assign_tool_definition(definitions: &AgentDefinitions) -> Option<ToolDefinition> {
+    let roles: Vec<&AgentDefinition> = definitions
+        .all()
+        .iter()
+        .filter(|d| !d.is_coordinator())
+        .collect();
+    if roles.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = roles.iter().map(|d| d.name.as_str()).collect();
+    let catalog: Vec<String> = roles.iter().map(|d| catalog_entry(d)).collect();
+    Some(ToolDefinition::new(
+        ASSIGN_TOOL_NAME,
+        format!(
+            "Hand a piece of the channel's work to an agent: a member of the channel \
+             in `to`, by its code, or a new member started from a permanent agent in \
+             `agent` when no member fits or is free. The call returns at once; the agent \
+             works on its own and its report arrives in your inbox when it finishes. \
+             Brief the goal, the context and what done looks like. How the agent works, \
+             subagents included, is its call.\n\
+             Permanent agents:\n{}",
+            catalog.join("\n")
+        ),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "Code of the member to give the work to, such as `REN4`."
+                },
+                "agent": {
+                    "type": "string",
+                    "enum": names,
+                    "description": "Permanent agent to start a new member from."
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "A few words naming the work, shown in inboxes and the channel."
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "The brief: the goal, the context and what done looks like."
+                },
+                "todo_id": {
+                    "type": "string",
+                    "description": "Id of the todo this work does. The todo shows the agent and goes in progress now; the agent's report marks it done, or pending again when the work failed."
+                }
+            },
+            "required": ["subject", "prompt"]
+        }),
+    ))
+}
+
+/// The tools out of `tools` an instance of `definition` gets: the ones
+/// its file allows, and the ones it never needs to name. Planning and job
+/// tools only touch the agent's own state. A top-level agent also keeps
+/// `task` and its inbox: whether it hands work to subagents or settles
+/// details with its peers is its own call.
+fn definition_tools(
+    definition: &AgentDefinition,
+    tools: &[ToolDefinition],
+    top_level: bool,
+) -> Vec<ToolDefinition> {
+    let mut kept = definition.filter_tools(tools);
+    let runs_commands = kept.iter().any(|t| t.name == "run_command");
+    let always = |tool: &ToolDefinition| {
+        tool.name == TODO_WRITE_TOOL_NAME
+            || (runs_commands
+                && (tool.name == JOB_OUTPUT_TOOL_NAME || tool.name == JOB_KILL_TOOL_NAME))
+            || (top_level && (tool.name == TASK_TOOL_NAME || is_inbox_tool(&tool.name)))
+    };
+    let extra: Vec<ToolDefinition> = tools
+        .iter()
+        .filter(|tool| always(tool) && !kept.iter().any(|t| t.name == tool.name))
+        .cloned()
+        .collect();
+    kept.extend(extra);
+    kept
 }
 
 /// Processes tab row for the `task` spawn running as `child`, asked

@@ -7,6 +7,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Channel coordinators hand work to agents
+
+##### Changed
+
+- A channel's coordinator is the `coordinator` agent of AGENTS, where
+  it can be read and edited. Each channel runs an instance of its own,
+  and it can't be started any other way. A `coordinator.md` an earlier
+  version wrote and nobody edited is replaced with the new one.
+- The coordinator does no work itself: its tools are `assign`,
+  `send_to_agent`, `list_agents`, `get_agent_state` and `todo_write`.
+  `assign` hands a piece of work to a member by its code, or to a new
+  member started from a permanent agent. Members are top-level agents
+  of the channel and its project, not the coordinator's subagents.
+- The coordinator briefs the goal, the context and what done looks
+  like, never how to do it. Whether to use subagents is the member's
+  call: every top-level agent has `task`, whatever its definition
+  lists.
+- What the coordinator writes to the channel is only results, blockers
+  and decisions to make, in at most three short lines.
+- Members settle details with each other directly with
+  `send_to_agent`: a member reaches the channel's other members, its
+  coordinator and the top-level agents of its project. A request or an
+  assignment is answered when the turn that saw it ends, with the
+  agent's last words, and every message also goes to the INBOX tab.
+  Two agents can send each other at most 8 requests about one subject.
+- A chat shows a message from another agent as one line, `✉` with who
+  sent it and what about, which expands like a step.
+- A channel's member list shows the coordinator's agents beside it,
+  with their subagents below them. At start-up, agents an earlier
+  coordinator started as its subagents become top-level members of its
+  channel.
+
 ### A REPO tab shows the agent's repo, and HOST is an icon
 
 ##### Added

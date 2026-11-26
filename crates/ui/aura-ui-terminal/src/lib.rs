@@ -40,6 +40,7 @@ pub mod ansi;
 pub mod components;
 pub use aura_ui::events;
 pub use aura_ui::host;
+pub use aura_ui::inbox;
 pub mod input;
 pub use aura_ui::repo;
 pub mod layout;

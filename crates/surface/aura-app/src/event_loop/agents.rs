@@ -29,7 +29,7 @@ use aura_core_types::{AgentId, Identity};
 use aura_exec_tools::agents::task::TASK_TOOL_NAME;
 use aura_exec_tools::todo::{
     apply_todo_write, assign_task, report_task, task_reports, task_todo, TodoItem,
-    TODO_WRITE_TOOL_NAME,
+    ASSIGN_TOOL_NAME, TODO_WRITE_TOOL_NAME,
 };
 use aura_exec_tools::RunScratch;
 use aura_model::{ContentBlock, Message, Role};
@@ -146,21 +146,23 @@ impl AgentSession {
 }
 
 /// The todo list left by the `todo_write` calls in `messages`, with the
-/// todos `task` calls gave to agents assigned and, once the agents
-/// reported back (in the call's result, or a detached task's notice),
-/// closed: the list the agent loop kept as the turns ran.
+/// todos `task` and `assign` calls gave to agents assigned and, once the
+/// agents reported back (in the call's result, or a later notice or inbox
+/// reply), closed: the list the agent loop kept as the turns ran.
 pub(crate) fn todos_from_history(messages: &[Message]) -> Vec<TodoItem> {
     let mut todos = Vec::new();
-    let mut tasks: HashMap<&str, &serde_json::Value> = HashMap::new();
+    let mut tasks: HashMap<&str, (&str, &serde_json::Value)> = HashMap::new();
     for message in messages {
         for block in &message.content {
             let next = match block {
                 ContentBlock::ToolUse { name, input, .. } if name == TODO_WRITE_TOOL_NAME => {
                     apply_todo_write(&todos, input).ok()
                 }
-                ContentBlock::ToolUse { id, name, input } if name == TASK_TOOL_NAME => {
-                    tasks.insert(id, input);
-                    assign_task(&todos, input)
+                ContentBlock::ToolUse { id, name, input }
+                    if name == TASK_TOOL_NAME || name == ASSIGN_TOOL_NAME =>
+                {
+                    tasks.insert(id, (name, input));
+                    assign_task(&todos, name, input)
                 }
                 ContentBlock::ToolResult {
                     tool_use_id,
@@ -168,7 +170,7 @@ pub(crate) fn todos_from_history(messages: &[Message]) -> Vec<TodoItem> {
                     ..
                 } => tasks
                     .get(tool_use_id.as_str())
-                    .and_then(|input| task_todo(input))
+                    .and_then(|(name, input)| task_todo(name, input))
                     .filter(|(_, reports)| *reports)
                     .and_then(|(id, _)| report_task(&todos, id, !is_error)),
                 ContentBlock::Text { text } if message.role == Role::User => {
@@ -788,6 +790,10 @@ pub(super) async fn handle_add_definition_to_project(state: &mut LoopState<'_>, 
     }
 }
 
+/// Why a coordinator can't be started from AGENTS.
+pub(super) const COORDINATOR_START_HINT: &str =
+    "Coordinators run channels: make a channel to start one";
+
 /// Register an instance of the permanent agent `name` at `placement` and
 /// switch to it. Reports failures itself and returns `None`.
 async fn start_instance(
@@ -797,11 +803,17 @@ async fn start_instance(
 ) -> Option<RegisteredAgent> {
     let definition = lock(&state.hub.definitions)
         .get(name)
-        .filter(|d| !d.is_coordinator())
-        .map(|d| d.name.clone());
-    let Some(definition) = definition else {
-        show_error(state, format!("No permanent agent named {name}")).await;
-        return None;
+        .map(|d| (d.name.clone(), d.is_coordinator()));
+    let definition = match definition {
+        Some((definition, false)) => definition,
+        Some((_, true)) => {
+            show_error(state, COORDINATOR_START_HINT.to_string()).await;
+            return None;
+        }
+        None => {
+            show_error(state, format!("No permanent agent named {name}")).await;
+            return None;
+        }
     };
     let created = {
         let mut registry = lock(&state.hub.registry);

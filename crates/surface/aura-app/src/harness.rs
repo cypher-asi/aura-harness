@@ -302,6 +302,8 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
     });
     let kernel_agents = agents.clone();
     let kernel_background = Arc::clone(&background);
+    let hub_link = event_loop::HubLink::default();
+    let kernel_hub = hub_link.clone();
 
     let checkpoints = crate::session_checkpoint::Checkpoints::new(&data_dir);
     let file_checkpoints = crate::file_checkpoints::FileCheckpoints::new(&data_dir);
@@ -345,14 +347,22 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
                         .with_background_process_hook(Arc::clone(&kernel_background))
                         .with_file_change_hook(file_hook)
                         .with_command_output_hook(Arc::new(command_output));
-                    if let Some(agents) = &kernel_agents {
-                        let hooks = agents.hooks_for(agent_id);
-                        executor = executor
-                            .with_spawn_hook(hooks.clone())
-                            .with_agent_control_hook(hooks.clone())
-                            .with_agent_read_hook(hooks);
+                    let host_hooks = kernel_agents
+                        .as_ref()
+                        .map(|agents| agents.hooks_for(agent_id));
+                    if let Some(hooks) = &host_hooks {
+                        executor = executor.with_spawn_hook(hooks.clone());
                     }
+                    let peers = Arc::new(event_loop::PeerHooks::new(
+                        kernel_hub.clone(),
+                        agent_id,
+                        host_hooks,
+                    ));
+                    executor = executor
+                        .with_agent_control_hook(peers.clone())
+                        .with_agent_read_hook(peers);
                     executor.register(Box::new(TodoWriteTool));
+                    executor.register(Box::new(event_loop::AssignTool::new(kernel_hub.clone())));
                     web_tools.register(&mut executor);
                     let mut executor_router = ExecutorRouter::new();
                     executor_router.add_executor(Arc::new(executor));
@@ -378,6 +388,7 @@ pub(crate) fn build_hub(setup: HubSetup) -> Harness {
             .with_record_observer(copied_observer)
         },
     );
+    hub_link.set(&hub);
     Harness { hub, background }
 }
 
