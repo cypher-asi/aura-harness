@@ -78,7 +78,10 @@ pub(super) fn scrub_tool_markup(text: &str) -> (String, bool) {
                 continue;
             }
         }
-        let ch = rest.chars().next().expect("non-empty rest has a char");
+        // `i < text.len()` on a char boundary, so `rest` always has a char.
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
         out.push(ch);
         i += ch.len_utf8();
     }

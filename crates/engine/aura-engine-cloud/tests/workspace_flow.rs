@@ -2,6 +2,9 @@
 //! a "hub" repository (with a bare `origin`), and a "machine" workspace
 //! made from its bundles by the scripts machines run.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

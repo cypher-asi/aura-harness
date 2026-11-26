@@ -1,3 +1,0 @@
-# How long a function in Gate's crates may be, in lines of code
-# (`clippy::too_many_lines`, which each gate crate denies).
-too-many-lines-threshold = 50

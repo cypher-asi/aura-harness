@@ -7,6 +7,9 @@
 //! here indicates that a new code path bypasses the kernel's recording
 //! seam — a §1 / §3 regression.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

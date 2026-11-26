@@ -24,6 +24,9 @@
 //! `toml` or `cargo_toml` crates as test-only dev deps to keep this
 //! test self-contained.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -22,6 +22,9 @@
 //! The PreToolUse hook script writes a deterministic side-effect
 //! file so the assertion is robust on both Unix and Windows.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

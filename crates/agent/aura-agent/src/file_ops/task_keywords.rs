@@ -5,10 +5,22 @@ use regex::Regex;
 
 // INVARIANT: All patterns are compile-time constants; `lazy_regex_compiles`
 // below forces every `LazyLock` so a broken pattern surfaces at test time.
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static PASCAL_CASE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b([A-Z][a-zA-Z0-9]+)\b").expect("static regex"));
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static CRATE_NAME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(aura[_-]\w+)\b").expect("static regex"));
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static MODULE_NAME_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b([a-z][a-z0-9_]{2,})\b").expect("static regex"));
 

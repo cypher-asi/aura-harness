@@ -173,50 +173,51 @@ fn lane_work(list: &[usize], nodes: &[FlowNode]) -> LaneWork {
             routing.push(at);
             continue;
         }
-        if node.kind == FlowKind::Prompt || work.spans.is_empty() {
-            let start = routing
-                .first()
-                .map_or(node.at_ms, |&gate| nodes[gate].at_ms.min(node.at_ms));
-            let status = match node.kind {
-                FlowKind::Prompt => node.status,
-                _ => TraceNodeStatus::Ok,
-            };
-            let mut span = TurnSpan {
-                start_ms: start,
-                end_ms: node.at_ms,
-                head: at,
-                status,
-                marks: Vec::new(),
-                calls: 0,
-            };
+        let current = match node.kind {
+            FlowKind::Prompt => None,
+            _ => work.spans.last_mut(),
+        };
+        if let Some(span) = current {
             for gate in routing.drain(..) {
-                add(&mut span, &nodes[gate]);
+                add(span, &nodes[gate]);
             }
-            add(&mut span, node);
-            work.spans.push(span);
+            add(span, node);
             continue;
         }
-        let span = work.spans.last_mut().expect("a turn was started");
+        let start = routing
+            .first()
+            .map_or(node.at_ms, |&gate| nodes[gate].at_ms.min(node.at_ms));
+        let status = match node.kind {
+            FlowKind::Prompt => node.status,
+            _ => TraceNodeStatus::Ok,
+        };
+        let mut span = TurnSpan {
+            start_ms: start,
+            end_ms: node.at_ms,
+            head: at,
+            status,
+            marks: Vec::new(),
+            calls: 0,
+        };
         for gate in routing.drain(..) {
-            add(span, &nodes[gate]);
+            add(&mut span, &nodes[gate]);
         }
-        add(span, node);
+        add(&mut span, node);
+        work.spans.push(span);
     }
     if let Some(&head) = routing.first() {
-        if work.spans.is_empty() {
-            work.spans.push(TurnSpan {
-                start_ms: nodes[head].at_ms,
-                end_ms: nodes[head].at_ms,
-                head,
-                status: TraceNodeStatus::Ok,
-                marks: Vec::new(),
-                calls: 0,
-            });
-        }
-        let span = work.spans.last_mut().expect("a turn was started");
+        let mut span = work.spans.pop().unwrap_or_else(|| TurnSpan {
+            start_ms: nodes[head].at_ms,
+            end_ms: nodes[head].at_ms,
+            head,
+            status: TraceNodeStatus::Ok,
+            marks: Vec::new(),
+            calls: 0,
+        });
         for gate in routing {
-            add(span, &nodes[gate]);
+            add(&mut span, &nodes[gate]);
         }
+        work.spans.push(span);
     }
     work.facts.turns = work.spans.len();
     work.facts.calls = work.spans.iter().map(|span| span.calls).sum();
@@ -460,20 +461,19 @@ fn add_lane(
         children: Vec::new(),
         folded_by_default: it.bench.is_some() && !children[lane].is_empty(),
     });
-    let mut runs: Vec<usize> = Vec::new();
+    let mut runs = Vec::new();
     let mut plain: Vec<usize> = Vec::new();
     for &child in &children[lane] {
         if lanes[child].bench_arm {
             visited[child] = true;
             for &grandchild in &children[child] {
-                if lanes[grandchild].bench.is_some() {
-                    runs.push(grandchild);
-                } else {
-                    plain.push(grandchild);
+                match lanes[grandchild].bench.as_ref() {
+                    Some(bench) => runs.push((grandchild, bench)),
+                    None => plain.push(grandchild),
                 }
             }
-        } else if lanes[child].bench.is_some() && it.bench.is_none() {
-            runs.push(child);
+        } else if let Some(bench) = lanes[child].bench.as_ref().filter(|_| it.bench.is_none()) {
+            runs.push((child, bench));
         } else {
             plain.push(child);
         }
@@ -482,11 +482,10 @@ fn add_lane(
         .into_iter()
         .filter_map(|child| add_lane(child, lanes, children, visited, items))
         .collect();
-    let bench = |lane: usize| lanes[lane].bench.as_ref().expect("a run");
-    runs.sort_by_key(|&run| (run_number(&bench(run).run), bench(run).arm));
+    runs.sort_by_key(|&(_, bench)| (run_number(&bench.run), bench.arm));
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-    for run in runs {
-        let group = &bench(run).group;
+    for (run, bench) in runs {
+        let group = &bench.group;
         match groups.iter_mut().find(|(name, _)| name == group) {
             Some((_, list)) => list.push(run),
             None => groups.push((group.clone(), vec![run])),

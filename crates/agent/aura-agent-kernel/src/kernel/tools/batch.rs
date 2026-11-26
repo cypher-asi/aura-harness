@@ -122,13 +122,18 @@ pub(super) async fn process_many<'a>(
 
     let mut results = Vec::with_capacity(total);
     for (slot, effect) in authorized.into_iter().zip(per_slot_effect) {
-        let executed = match slot.action.clone() {
-            Some(action) => {
-                let (effect, duration_ms) =
-                    effect.expect("allowed verdict must have produced an effect");
+        let executed = match (slot.action.clone(), effect) {
+            (Some(action), Some((effect, duration_ms))) => {
                 Some(kernel.record_tool_execution(&slot, action, effect, duration_ms)?)
             }
-            None => None,
+            // Every allowed slot gets an effect above: a hook block, a
+            // preset, or a dispatched future.
+            (Some(_), None) => {
+                return Err(crate::KernelError::Internal(
+                    "allowed verdict did not produce an effect".into(),
+                ))
+            }
+            (None, _) => None,
         };
         results.push(finish_tool_call(slot, executed));
     }

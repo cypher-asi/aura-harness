@@ -59,7 +59,9 @@ fn redact_home_dirs(s: &str) -> String {
         // corrupt multi-byte characters. `chars().next()` on `s[i..]`
         // is safe because `i` sat on a char boundary before entering
         // this branch.
-        let c = s[i..].chars().next().expect("bytes remain => char");
+        let Some(c) = s[i..].chars().next() else {
+            break;
+        };
         let step = c.len_utf8();
         out.push_str(&s[i..i + step]);
         i += step;
@@ -133,7 +135,10 @@ fn redact_uuids(s: &str) -> String {
             i = end;
             continue;
         }
-        let c = s[i..].chars().next().expect("bytes remain => char");
+        // Bytes remain and `i` is on a char boundary, so a char follows.
+        let Some(c) = s[i..].chars().next() else {
+            break;
+        };
         let step = c.len_utf8();
         out.push_str(&s[i..i + step]);
         i += step;
@@ -183,7 +188,10 @@ fn redact_long_hex(s: &str) -> String {
                 out.push_str(&s[run_start..i]);
             }
         } else {
-            let c = s[i..].chars().next().expect("bytes remain => char");
+            // Bytes remain and `i` is on a char boundary, so a char follows.
+            let Some(c) = s[i..].chars().next() else {
+                break;
+            };
             let step = c.len_utf8();
             out.push_str(&s[i..i + step]);
             i += step;

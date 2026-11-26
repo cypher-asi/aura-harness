@@ -11,6 +11,9 @@
 //! deliberately named `plugin_cache_verify.rs` rather than
 //! `install_test.rs` to keep `install` out of the binary name.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::fs;
 
 use aura_plugin::{

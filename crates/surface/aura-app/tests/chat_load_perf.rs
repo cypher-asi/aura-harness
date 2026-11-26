@@ -16,6 +16,9 @@
 //! `send_channels_with`, `member_rows`) the nearest public entry is timed
 //! and the line says so.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use aura_app::agent_registry::AgentRegistry;
 use aura_app::record_loader::{
     agent_summaries, archived_summaries, conversation_from, conversation_history, latest_plan_path,

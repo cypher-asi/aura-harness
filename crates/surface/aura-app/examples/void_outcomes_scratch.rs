@@ -2,6 +2,9 @@
 //! the same prompt, as the judge does. Usage:
 //! `void_outcomes_scratch <db> <agent_hex>:<seq>... [--write]`
 
+// Example code: it may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use aura_agent_kernel::{Kernel, KernelConfig};
 use aura_core_types::{AgentId, OutcomeSignal, Transaction};
 use aura_model::{MockProvider, ModelProvider};

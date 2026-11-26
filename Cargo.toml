@@ -353,6 +353,11 @@ cast_possible_truncation = "warn"
 cast_possible_wrap = "warn"
 cast_precision_loss = "warn"
 cast_sign_loss = "warn"
+# No `unwrap()` / `expect()` in production code (CI denies warnings).
+# `#[test]` fns and `#[cfg(test)]` modules are exempt via `clippy.toml`;
+# integration-test, example and build-script crates opt out at their root.
+unwrap_used = "warn"
+expect_used = "warn"
 
 [lints]
 workspace = true

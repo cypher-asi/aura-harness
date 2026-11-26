@@ -25,6 +25,9 @@
 //! connectors are registered, no skill roots are added, and no
 //! per-plugin load failure entries are produced.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::PathBuf;
 
 use aura_config::PluginsConfig;

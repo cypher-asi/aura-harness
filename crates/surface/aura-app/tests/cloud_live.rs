@@ -11,6 +11,9 @@
 //! base snapshot; it must run on the machines' Ubuntu (glibc 2.39).
 //! `scripts/build-cloud-binary.sh` builds one and prints where it put it.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;

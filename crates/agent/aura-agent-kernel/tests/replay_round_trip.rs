@@ -33,6 +33,9 @@
 //!    [`FsSnapshotStore`], replay against that store resolves the
 //!    summary instead.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

@@ -15,6 +15,7 @@ use crate::geom::{rgba, Color};
 use aura_ui_terminal::ProseRow;
 use ratatui::buffer::Cell;
 use rustc_hash::{FxHashMap, FxHasher};
+use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
@@ -257,26 +258,23 @@ impl RowCache {
         let key = hasher.finish();
 
         let frame = self.frame;
-        let hit = self
-            .rows
-            .get(&key)
-            .is_some_and(|row| row.holds(start, cells, prose));
-        if !hit {
-            let mut quads = Layers::default();
-            build(&mut quads);
-            self.built += 1;
-            self.rows.insert(
-                key,
-                CachedRow {
-                    start,
-                    cells: cells.to_vec(),
-                    flow: prose.map(Flow::of),
-                    quads,
-                    used: frame,
-                },
-            );
-        }
-        let row = self.rows.get_mut(&key).expect("just looked up or stored");
+        let row = match self.rows.entry(key) {
+            Entry::Occupied(entry) if entry.get().holds(start, cells, prose) => entry.into_mut(),
+            entry => {
+                let mut quads = Layers::default();
+                build(&mut quads);
+                self.built += 1;
+                entry
+                    .insert_entry(CachedRow {
+                        start,
+                        cells: cells.to_vec(),
+                        flow: prose.map(Flow::of),
+                        quads,
+                        used: frame,
+                    })
+                    .into_mut()
+            }
+        };
         row.used = frame;
         &row.quads
     }

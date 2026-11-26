@@ -46,6 +46,8 @@ pub struct Tab {
 impl Tab {
     pub fn new(id: u64, settings: Settings) -> Self {
         let (sender, events) = mpsc::channel(EVENT_QUEUE);
+        // The grid backend's error type is `Infallible`.
+        let Ok(terminal) = ratatui::Terminal::new(GridBackend::new(1, 1));
         let mut tui = aura_ui_terminal::App::new()
             .with_event_sender(sender)
             .with_alert_settings(settings.alerts);
@@ -59,8 +61,7 @@ impl Tab {
         Self {
             id,
             tui,
-            terminal: ratatui::Terminal::new(GridBackend::new(1, 1))
-                .expect("the grid backend never fails"),
+            terminal,
             watch: None,
             projects: Vec::new(),
             events,

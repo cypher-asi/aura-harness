@@ -8,6 +8,9 @@
 //! `AURA_LOAD_STEPS` the tool steps in each agent's turn (default `20`) and
 //! `AURA_LOAD_RESULT_BYTES` the size of each tool result (default `2000`).
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use async_trait::async_trait;
 use aura_agent::{AgentLoop, AgentLoopConfig, KernelModelGateway, KernelToolGateway};
 use aura_agent_kernel::{

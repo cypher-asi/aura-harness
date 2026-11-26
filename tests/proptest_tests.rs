@@ -2,6 +2,9 @@
 //!
 //! These tests verify invariants using randomly generated inputs.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use proptest::prelude::*;
 
 // ============================================================================

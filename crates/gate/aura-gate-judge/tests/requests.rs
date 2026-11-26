@@ -8,6 +8,8 @@
 //! purpose, run these tests with `UPDATE_PINS=1` to write what they build
 //! over the files, and review the difference.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 #![deny(clippy::too_many_lines)]
 
 use std::fmt::Debug;

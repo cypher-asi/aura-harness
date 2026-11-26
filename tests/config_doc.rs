@@ -7,6 +7,9 @@
 //! `pub` field declarations rather than introspecting at runtime — so
 //! it surfaces gaps without requiring a procedural-macro detour.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

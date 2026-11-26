@@ -13,6 +13,9 @@
 //!    `CODEX_PARENT_ID`, `CODEX_EVENT`) are present and mirror the
 //!    Aura values.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;

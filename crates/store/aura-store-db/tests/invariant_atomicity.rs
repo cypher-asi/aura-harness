@@ -18,6 +18,8 @@
 //! Enforcement targets: Invariant §7 (monotonic sequencing, atomic
 //! inbox+record commit) and Invariant §10 (sealed `WriteStore`).
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 #![cfg(feature = "test-support")]
 
 use aura_core_types::{AgentId, Decision, ProposalSet, RecordEntry, Transaction};

@@ -636,16 +636,15 @@ type GovernorCfg = tower_governor::governor::GovernorConfig<
 ///
 /// INVARIANT: both `per_millisecond` and `burst_size` are hard-coded
 /// non-zero integer literals, so `GovernorConfigBuilder::finish()`
-/// cannot fail here; the `.expect(...)` below is a
-/// provably-infallible-at-compile-time assertion. Covered by
-/// `gateway::tests::test_global_governor_config_is_valid`.
+/// cannot return `None` here and the library-default fallback is never
+/// taken.
 fn build_global_governor() -> Arc<GovernorCfg> {
     Arc::new(
         GovernorConfigBuilder::default()
             .per_millisecond(1000 / 30) // ≈30 req/sec sustained
             .burst_size(60)
             .finish()
-            .expect("global governor config should be valid"),
+            .unwrap_or_default(),
     )
 }
 
@@ -653,15 +652,14 @@ fn build_global_governor() -> Arc<GovernorCfg> {
 /// `:id/pause`, `:id/stop`). 5/sec burst 10.
 ///
 /// INVARIANT: same reasoning as [`build_global_governor`] — hard-coded
-/// non-zero integer literals make the `.expect(...)` infallible by
-/// construction.
+/// non-zero integer literals mean the fallback is never taken.
 fn build_strict_governor() -> Arc<GovernorCfg> {
     Arc::new(
         GovernorConfigBuilder::default()
             .per_millisecond(200) // 5 req/sec sustained
             .burst_size(10)
             .finish()
-            .expect("strict governor config should be valid"),
+            .unwrap_or_default(),
     )
 }
 

@@ -24,6 +24,9 @@
 //! Two acceptance tests cover the single-proposal path (most
 //! common) and the batch path (multi-tool turn).
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;

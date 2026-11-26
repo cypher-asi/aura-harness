@@ -9,10 +9,18 @@ use super::{validate_path, FileOp};
 // on a syntax error, and `lazy_regex_compiles` below forces each lazy to
 // guarantee that failure becomes a test-time panic rather than a production
 // panic (rules §4.1 allows this form of documented `expect`).
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static FN_SIGNATURE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*(?:pub(?:\(crate\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*\(([^)]*)\)")
         .expect("static regex")
 });
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static RETURN_TYPE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"->\s*(.+?)\s*\{?\s*$").expect("static regex"));
 

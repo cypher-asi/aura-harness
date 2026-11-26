@@ -7,6 +7,9 @@
 //! with `BOXD_API_KEY` set (a `.env` works). `read_only_calls_succeed`
 //! creates nothing and costs nothing.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use aura_engine_cloud::{BoxdProvider, VmProvider};
 
 fn provider() -> BoxdProvider {

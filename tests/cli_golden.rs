@@ -16,6 +16,9 @@
 //! recording. Every other line — flags, summary text, subcommand
 //! listings, value enums — must match byte-identically.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::process::Command;
 
 fn sanitise(raw: &str) -> String {

@@ -93,6 +93,19 @@ struct WorkspaceMetadata {
     applied_checkpoint: Option<String>,
 }
 
+impl WorkspaceMetadata {
+    /// The session folder the managed worktree sits in, which also holds
+    /// the checkpoint store.
+    fn session_dir(&self) -> Result<&Path, SafeWorkspaceError> {
+        self.workspace_root.parent().ok_or_else(|| {
+            SafeWorkspaceError::InvalidMetadata(format!(
+                "workspace root {} has no session folder",
+                self.workspace_root.display()
+            ))
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SafeWorkspaceCheckpoint {
@@ -328,10 +341,7 @@ fn shadow_command(
     metadata: &WorkspaceMetadata,
     args: &[&str],
 ) -> Result<Command, SafeWorkspaceError> {
-    let root = metadata
-        .workspace_root
-        .parent()
-        .expect("managed worktree always has a session root");
+    let root = metadata.session_dir()?;
     let mut command = local_git_command(&metadata.workspace_root, args)?;
     command
         .env("GIT_DIR", root.join(CHECKPOINT_STORE_DIR))
@@ -462,11 +472,7 @@ fn take_checkpoint(
     }
 
     let parent = checkpoint_tip(metadata)?;
-    let index_path = metadata
-        .workspace_root
-        .parent()
-        .expect("managed worktree always has a session root")
-        .join(CHECKPOINT_INDEX_FILE);
+    let index_path = metadata.session_dir()?.join(CHECKPOINT_INDEX_FILE);
     if let Some(parent) = parent.as_deref() {
         run_shadow(metadata, &["read-tree", parent], false)?;
     } else if index_path.exists() {

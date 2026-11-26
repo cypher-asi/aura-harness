@@ -1,5 +1,7 @@
 //! Deterministic Agent Continuity benchmark and cross-agent report adapter.
 
+// Example code: it may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 // Scenario and selection counts are deliberately tiny and exactly representable
 // as f64; the casts keep the emitted report schema straightforward.
 #![allow(clippy::cast_precision_loss)]

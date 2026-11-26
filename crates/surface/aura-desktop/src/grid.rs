@@ -11,7 +11,7 @@ use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size as GridSize};
 use ratatui::style::Color as TermColor;
-use std::io;
+use std::convert::Infallible;
 
 /// Space kept clear around the grid, in pixels of a plain display.
 pub const PAD: f32 = 6.0;
@@ -59,9 +59,10 @@ fn pixel_dimension(v: f32) -> u16 {
 }
 
 impl Backend for GridBackend {
-    type Error = io::Error;
+    // Drawing into memory cannot fail.
+    type Error = Infallible;
 
-    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Infallible>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
     {
@@ -73,49 +74,49 @@ impl Backend for GridBackend {
         Ok(())
     }
 
-    fn hide_cursor(&mut self) -> io::Result<()> {
+    fn hide_cursor(&mut self) -> Result<(), Infallible> {
         self.cursor_visible = false;
         Ok(())
     }
 
-    fn show_cursor(&mut self) -> io::Result<()> {
+    fn show_cursor(&mut self) -> Result<(), Infallible> {
         self.cursor_visible = true;
         Ok(())
     }
 
-    fn get_cursor_position(&mut self) -> io::Result<Position> {
+    fn get_cursor_position(&mut self) -> Result<Position, Infallible> {
         Ok(self.cursor)
     }
 
-    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Infallible> {
         self.cursor = position.into();
         Ok(())
     }
 
-    fn clear(&mut self) -> io::Result<()> {
+    fn clear(&mut self) -> Result<(), Infallible> {
         self.buffer.reset();
         Ok(())
     }
 
-    fn clear_region(&mut self, _region: ClearType) -> io::Result<()> {
+    fn clear_region(&mut self, _region: ClearType) -> Result<(), Infallible> {
         // Only inline viewports clear partial regions; the window is always
         // a full-screen viewport.
         self.buffer.reset();
         Ok(())
     }
 
-    fn size(&self) -> io::Result<GridSize> {
+    fn size(&self) -> Result<GridSize, Infallible> {
         Ok(self.buffer.area.as_size())
     }
 
-    fn window_size(&mut self) -> io::Result<WindowSize> {
+    fn window_size(&mut self) -> Result<WindowSize, Infallible> {
         Ok(WindowSize {
             columns_rows: self.buffer.area.as_size(),
             pixels: self.pixels,
         })
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> Result<(), Infallible> {
         Ok(())
     }
 }

@@ -493,27 +493,22 @@ impl Shell {
         let (tui, tui_theme) = (&mut tab.tui, &self.tui_theme);
         // This frame shows whatever changed so far.
         tui.take_redraw();
-        match tab
+        // The grid backend's error type is `Infallible`.
+        let Ok(frame) = tab
             .terminal
-            .draw(|frame| aura_ui_terminal::render(frame, tui, tui_theme))
-        {
-            Ok(frame) => {
-                if let Some(text) = tui.take_copy_text(frame.buffer) {
-                    self.effects.push(Effect::Copy(text));
-                }
-                self.cells.clone_from(&frame.buffer.content);
-                (self.cols, self.rows) = (cols, rows);
-                tui.prose_rows().clone_into(&mut self.prose);
-                self.panes.clear();
-                self.panes
-                    .extend(tui.pane_chrome().iter().map(|chrome| chrome.area));
-                let at = (self.metrics.origin(area, cols), self.metrics, self.palette);
-                let model =
-                    chrome::Model::new(tui.pane_chrome(), tui.side_toggle_area(), frame.buffer, at);
-                self.chrome.update(model, self.pointer.on_grid);
-            }
-            Err(e) => tracing::warn!(error = %e, "render failed"),
+            .draw(|frame| aura_ui_terminal::render(frame, tui, tui_theme));
+        if let Some(text) = tui.take_copy_text(frame.buffer) {
+            self.effects.push(Effect::Copy(text));
         }
+        self.cells.clone_from(&frame.buffer.content);
+        (self.cols, self.rows) = (cols, rows);
+        tui.prose_rows().clone_into(&mut self.prose);
+        self.panes.clear();
+        self.panes
+            .extend(tui.pane_chrome().iter().map(|chrome| chrome.area));
+        let at = (self.metrics.origin(area, cols), self.metrics, self.palette);
+        let model = chrome::Model::new(tui.pane_chrome(), tui.side_toggle_area(), frame.buffer, at);
+        self.chrome.update(model, self.pointer.on_grid);
         self.cursor = tab.terminal.backend().cursor();
 
         for tab in self.tabs.iter_mut() {

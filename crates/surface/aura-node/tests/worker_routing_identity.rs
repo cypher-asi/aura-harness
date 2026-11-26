@@ -33,6 +33,9 @@
 //!   `Default`, so future regressions that re-add a silent default
 //!   are caught at compile time inside this file.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use async_trait::async_trait;
 use aura_agent::agent_runner::AgentRunnerConfig;
 use aura_agent::AgentLoopConfig;

@@ -18,11 +18,13 @@ use regex::Regex;
 use super::super::types::ContextHints;
 use super::ordered_unique;
 
+#[allow(clippy::expect_used, reason = "literal pattern, so it always compiles")]
 fn cf_regex() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| Regex::new(r"(?i)\b(?:cf|column\s*family)\b").expect("cf regex"))
 }
 
+#[allow(clippy::expect_used, reason = "literal pattern, so it always compiles")]
 fn module_keyword_regex() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {

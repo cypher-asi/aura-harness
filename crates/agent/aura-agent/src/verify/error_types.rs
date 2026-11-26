@@ -9,23 +9,51 @@ use crate::file_ops::ErrorReferences;
 // INVARIANT: All patterns below are compile-time constants;
 // `lazy_regex_compiles` in this file's test module forces every `LazyLock`
 // so a broken pattern fails the test suite rather than at runtime.
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static TYPE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"found for (?:struct|enum|trait|union) `(\w+)").expect("static regex")
 });
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static INIT_TYPE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"in initializer of `(?:\w+::)*(\w+)`").expect("static regex"));
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static METHOD_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"no method named `(\w+)` found for (?:\w+ )?`(?:&(?:mut )?)?(\w+)")
         .expect("static regex")
 });
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"missing field `(\w+)` in initializer of `(?:\w+::)*(\w+)`").expect("static regex")
 });
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static NO_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"struct `(?:\w+::)*(\w+)` has no field named `(\w+)`").expect("static regex")
 });
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static LOC_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"-->\s*([\w\\/._-]+):(\d+):\d+").expect("static regex"));
+#[allow(
+    clippy::expect_used,
+    reason = "literal pattern; `lazy_regex_compiles` forces it in tests"
+)]
 static ARG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"takes (\d+) arguments? but (\d+)").expect("static regex"));
 

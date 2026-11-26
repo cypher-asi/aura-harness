@@ -10,6 +10,8 @@
 //! run id — collapsing the previous "open WS + send init frame + wait
 //! SessionReady" three-step dance into a single call.
 
+// Shared test helpers: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(dead_code)]
 
 use std::net::SocketAddr;

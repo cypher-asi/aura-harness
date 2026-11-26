@@ -635,7 +635,11 @@ pub(super) fn build_layout(
                 routing.push(at);
                 continue;
             }
-            if node.kind == FlowKind::Prompt || drafts.len() == first {
+            let current = match node.kind {
+                FlowKind::Prompt => None,
+                _ => drafts.get_mut(first..).and_then(<[TurnDraft]>::last_mut),
+            };
+            let Some(turn) = current else {
                 drafts.push(TurnDraft {
                     head: at,
                     rows: Vec::new(),
@@ -644,8 +648,7 @@ pub(super) fn build_layout(
                     key: (clock, lane, node.seq),
                 });
                 continue;
-            }
-            let turn = drafts.last_mut().expect("a turn was started");
+            };
             match node.kind {
                 FlowKind::Reply => turn.rows.push(at),
                 kind if kind.is_model_call() => turn.subs.push(call(at)),

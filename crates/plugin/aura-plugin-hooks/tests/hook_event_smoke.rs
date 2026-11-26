@@ -11,6 +11,9 @@
 //! / stdout adds OS-dependent shell quoting fragility. The unit tests
 //! in [`aura_plugin_hooks::context`] cover the env shape directly.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

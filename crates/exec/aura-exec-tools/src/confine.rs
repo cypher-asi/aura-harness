@@ -262,7 +262,10 @@ mod imp {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+// Two attributes rather than `cfg(all(test, ...))`: clippy only treats a
+// plain `cfg(test)` module as test code.
+#[cfg(test)]
+#[cfg(target_os = "linux")]
 mod tests {
     use super::*;
     use std::process::Command;

@@ -4,6 +4,9 @@
 //! Gate's code is its crates under `crates/gate`, its settings and
 //! record types, and the app's modules that run it (see `GATE_DIRS`).
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

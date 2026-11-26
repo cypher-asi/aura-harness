@@ -19,6 +19,9 @@
 //!    falls through to the interactive prompter; the fake records
 //!    exactly one invocation.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;

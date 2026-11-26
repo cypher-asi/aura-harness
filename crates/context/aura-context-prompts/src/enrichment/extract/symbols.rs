@@ -15,6 +15,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+#[allow(clippy::expect_used, reason = "literal pattern, so it always compiles")]
 fn rust_path_camel_regex() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -23,6 +24,7 @@ fn rust_path_camel_regex() -> &'static Regex {
     })
 }
 
+#[allow(clippy::expect_used, reason = "literal pattern, so it always compiles")]
 fn rust_path_snake_regex() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -31,6 +33,7 @@ fn rust_path_snake_regex() -> &'static Regex {
     })
 }
 
+#[allow(clippy::expect_used, reason = "literal pattern, so it always compiles")]
 fn backtick_ident_regex() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -38,6 +41,7 @@ fn backtick_ident_regex() -> &'static Regex {
     })
 }
 
+#[allow(clippy::expect_used, reason = "literal pattern, so it always compiles")]
 fn bare_camel_regex() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {

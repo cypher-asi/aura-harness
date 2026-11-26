@@ -2,6 +2,9 @@
 //! must continue the local head with contiguous seqs, and a refused
 //! batch writes nothing.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use aura_core_types::{AgentId, RecordEntry, Transaction};
 use aura_store_db::{ReadStore, RocksStore, StoreError, WriteStore};
 use tempfile::TempDir;

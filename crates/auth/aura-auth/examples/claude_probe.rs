@@ -1,6 +1,9 @@
 //! Temporary diagnostic: send minimal Claude-plan requests in a few shapes
 //! and print status + rate-limit headers. Never prints the token.
 
+// Example code: it may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use aura_auth::AuthManager;
 use aura_core_auth::{CredentialResolver, ProviderKind};
 use serde_json::json;

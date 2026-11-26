@@ -3,6 +3,9 @@
 //! `evals/codebases` and `evals/swe_bench_pro_hard`, as
 //! `$OUT_DIR/bench_pack.rs` (see `src/bench_pack.rs`).
 
+// Build script: a panic is how it reports failure, so it may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 

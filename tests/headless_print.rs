@@ -1,6 +1,9 @@
 //! `aura -p` end to end: the real binary with the mock provider, run in a
 //! scratch project with its own data directory and `AURA_HOME`.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use serde_json::Value;
 use std::path::Path;
 use std::process::{Command, Output};

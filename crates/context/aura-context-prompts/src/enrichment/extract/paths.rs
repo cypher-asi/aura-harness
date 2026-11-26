@@ -14,6 +14,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+#[allow(clippy::expect_used, reason = "literal pattern, so it always compiles")]
 fn path_top_level_regex() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -32,6 +33,7 @@ fn path_top_level_regex() -> &'static Regex {
     })
 }
 
+#[allow(clippy::expect_used, reason = "literal pattern, so it always compiles")]
 fn quoted_path_regex() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {

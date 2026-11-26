@@ -9,6 +9,9 @@
 //! (`append_entry_atomic` / `append_entry_direct` / `append_entries_batch`)
 //! stays confined to `aura-kernel` per Invariant §10.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use aura_agent::{AgentLoop, AgentLoopConfig, KernelToolGateway};
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_core_types::{AgentId, Transaction, TransactionType};

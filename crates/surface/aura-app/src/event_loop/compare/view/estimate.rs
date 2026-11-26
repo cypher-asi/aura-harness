@@ -180,17 +180,18 @@ pub(super) fn row(out: &mut String, label: &str, value: &str) {
 /// `text` split at spaces into lines of at most `width` characters; a
 /// word longer than that keeps a line of its own.
 pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
-    let mut lines = vec![String::new()];
+    let mut lines = Vec::new();
+    let mut line = String::new();
     for word in text.split(' ') {
-        let line = lines.last_mut().expect("there is always a line");
         if line.is_empty() {
             line.push_str(word);
         } else if line.chars().count() + 1 + word.chars().count() <= width {
             line.push(' ');
             line.push_str(word);
         } else {
-            lines.push(word.to_string());
+            lines.push(std::mem::replace(&mut line, word.to_string()));
         }
     }
+    lines.push(line);
     lines
 }

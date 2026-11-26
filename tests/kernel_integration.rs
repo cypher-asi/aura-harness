@@ -3,6 +3,9 @@
 //! Verifies the full flow: process → reason → process_tools → reason → process,
 //! checking all invariants hold.
 
+// Integration-test crate: test code may unwrap/expect.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_core_types::{AgentId, TransactionType};
 use aura_model::{Message, MockProvider, ModelRequest};
