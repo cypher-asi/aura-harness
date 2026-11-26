@@ -92,7 +92,7 @@ impl App {
                 self.status = "Project folder".to_string();
             }
             Err(e) => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("Cannot browse folders: {e}"),
                     NotificationType::Error,
                 ));
@@ -120,7 +120,7 @@ impl App {
         self.folder_picker = None;
         self.state = AppState::Idle;
         self.status = "Ready".to_string();
-        self.notification = Some(("Cancelled".to_string(), NotificationType::Warning));
+        self.notifications.current = Some(("Cancelled".to_string(), NotificationType::Warning));
     }
 
     /// A path was dropped on the window. A folder becomes a project named
@@ -129,7 +129,7 @@ impl App {
     /// for.
     pub fn drop_path(&mut self, path: &std::path::Path) -> bool {
         if !path.is_dir() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Drop a folder to start a project".to_string(),
                 NotificationType::Warning,
             ));
@@ -142,7 +142,7 @@ impl App {
             folder: path.to_path_buf(),
         };
         if tx.try_send(event).is_err() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Cannot add the project right now".to_string(),
                 NotificationType::Error,
             ));
@@ -184,7 +184,7 @@ impl App {
     /// Show the details of the project with key `key`.
     pub(in crate::app) fn show_project_info(&mut self, key: &str) {
         if !self.projects.iter().any(|project| project.id == key) {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "No details for that project".to_string(),
                 NotificationType::Warning,
             ));
@@ -199,7 +199,7 @@ impl App {
         match self.project_key_of_agent(&self.active_agent_id) {
             Some(key) => self.show_project_info(&key),
             None => {
-                self.notification =
+                self.notifications.current =
                     Some(("No project is open".to_string(), NotificationType::Warning));
             }
         }

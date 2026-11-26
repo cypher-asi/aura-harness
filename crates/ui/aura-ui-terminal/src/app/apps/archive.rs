@@ -332,7 +332,7 @@ impl App {
         if self.archived.items.iter().any(|agent| agent.id == id) {
             self.restore_agent(id);
         } else {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "This agent is not archived".to_string(),
                 NotificationType::Warning,
             ));
@@ -411,7 +411,7 @@ impl App {
         else {
             return;
         };
-        self.notification = Some((
+        self.notifications.current = Some((
             format!(
                 "Remove project {name} and its agents from the list? Its files and records \
                  stay. Press y to confirm"
@@ -430,7 +430,7 @@ impl App {
         if matches!(key.code, KeyCode::Char('y' | 'Y')) {
             self.send_event(UiEvent::RemoveProject(id));
         } else {
-            self.notification = Some(("Cancelled".to_string(), NotificationType::Warning));
+            self.notifications.current = Some(("Cancelled".to_string(), NotificationType::Warning));
         }
         true
     }

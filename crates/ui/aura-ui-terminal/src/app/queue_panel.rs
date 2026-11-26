@@ -560,7 +560,7 @@ impl App {
             agent_id: self.active_agent_id.clone(),
             id,
         });
-        self.notification = Some((
+        self.notifications.current = Some((
             "Sending the queued message now".to_string(),
             NotificationType::Success,
         ));
@@ -573,7 +573,7 @@ impl App {
             return;
         };
         if !item.editable {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Only queued messages can be edited".to_string(),
                 NotificationType::Warning,
             ));
@@ -634,7 +634,7 @@ impl App {
     /// the draft waits until then.
     fn finish_queue_edit(&mut self) {
         if self.input.text.trim().is_empty() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "A queued message can't be empty; Esc cancels the edit".to_string(),
                 NotificationType::Warning,
             ));
@@ -645,7 +645,7 @@ impl App {
         };
         let Some(item) = self.hud.queue.iter_mut().find(|item| item.id == edit.id) else {
             self.queue_panel.parked = Some(edit.draft);
-            self.notification = Some((
+            self.notifications.current = Some((
                 "That message already left the queue; Enter sends this as a new one, \
                  then your draft comes back (Esc brings it back now)"
                     .to_string(),

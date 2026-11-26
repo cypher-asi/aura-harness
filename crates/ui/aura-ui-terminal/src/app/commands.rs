@@ -513,7 +513,7 @@ impl App {
 
     fn cmd_notification(&mut self, msg: &str, prefix: &str, kind: NotificationType) {
         self.add_message(Message::new(MessageRole::System, &format!("{prefix}{msg}")));
-        self.notification = Some((msg.to_string(), kind));
+        self.notifications.current = Some((msg.to_string(), kind));
     }
 
     fn cmd_complete(&mut self) {

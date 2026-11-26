@@ -1464,7 +1464,7 @@ impl App {
             return;
         }
         if task.agent_id == self.active_agent_id {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("{} is already open", task.agent_name),
                 NotificationType::Success,
             ));
@@ -1546,7 +1546,7 @@ impl App {
 
     /// Show `message` as a warning.
     fn warn(&mut self, message: impl Into<String>) {
-        self.notification = Some((message.into(), NotificationType::Warning));
+        self.notifications.current = Some((message.into(), NotificationType::Warning));
     }
 
     /// Clicking a row's fold glyph folds or opens what is under it;

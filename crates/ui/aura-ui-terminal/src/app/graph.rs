@@ -463,7 +463,7 @@ impl App {
         let id = node.id.clone();
         let seq = if node.kind == "run" { None } else { node.seq };
         if node.kind != "run" && seq.is_none() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "This node has no step to label".into(),
                 NotificationType::Warning,
             ));
@@ -493,13 +493,13 @@ impl App {
             .find_map(|seq| self.records.iter().position(|r| r.seq == *seq));
         match (seqs.first(), found) {
             (None, _) => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     "No kernel record linked to this node".into(),
                     NotificationType::Warning,
                 ));
             }
             (Some(seq), None) => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("Record #{seq} is not in the Record panel (another agent or session)"),
                     NotificationType::Warning,
                 ));
@@ -539,7 +539,7 @@ impl App {
             })
         });
         let Some(path) = path else {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "No file linked to this node".into(),
                 NotificationType::Warning,
             ));

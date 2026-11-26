@@ -182,7 +182,7 @@ impl App {
                     Some(provider) => UiEvent::Unlink(provider.to_string()),
                     None if arg.is_empty() || arg.eq_ignore_ascii_case("zos") => UiEvent::Logout,
                     None => {
-                        self.notification = Some((
+                        self.notifications.current = Some((
                             format!(
                                 "Unknown provider: {arg}. Use zos, claude, chatgpt or openrouter."
                             ),
@@ -218,7 +218,7 @@ impl App {
             "todos" | "todo" => {
                 if self.hud.todos.is_empty() {
                     self.todos_open = false;
-                    self.notification = Some((
+                    self.notifications.current = Some((
                         "The agent has no todo list".to_string(),
                         NotificationType::Warning,
                     ));
@@ -274,11 +274,11 @@ impl App {
                 if let Some(tx) = &self.event_tx {
                     let _ = tx.try_send(UiEvent::NewSession);
                 }
-                self.notification =
+                self.notifications.current =
                     Some(("New session started".to_string(), NotificationType::Success));
             }
             _ => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("Unknown command: /{cmd}. Type /help for available commands."),
                     NotificationType::Warning,
                 ));
@@ -299,7 +299,7 @@ impl App {
         } else if let Some(provider) = plan_provider(target) {
             self.start_link(provider, paste);
         } else {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("Unknown provider: {target}. Use zos, claude, chatgpt or openrouter."),
                 NotificationType::Warning,
             ));
@@ -330,7 +330,7 @@ impl App {
     /// Open the model selector with the current model highlighted.
     pub(super) fn open_model_selector(&mut self) {
         if self.models.is_empty() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Model list not loaded yet".to_string(),
                 NotificationType::Warning,
             ));
@@ -354,7 +354,7 @@ impl App {
                 Some(plan) => self.start_link(plan, false),
                 None => {
                     self.start_login();
-                    self.notification = Some((
+                    self.notifications.current = Some((
                         "Cloud models need a login — enter email (Esc to stay local)".to_string(),
                         NotificationType::Warning,
                     ));
@@ -389,7 +389,7 @@ impl App {
             .find(|(level, _)| level.eq_ignore_ascii_case(arg))
         else {
             let names: Vec<&str> = THINKING_LEVELS.iter().map(|(level, _)| *level).collect();
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("Unknown thinking level: {arg}. Use {}.", names.join(", ")),
                 NotificationType::Warning,
             ));
@@ -397,7 +397,7 @@ impl App {
         };
         let level = (*level != "auto").then(|| (*level).to_string());
         if level == self.thinking {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("Thinking is already {}", level.as_deref().unwrap_or("auto")),
                 NotificationType::Warning,
             ));
@@ -439,7 +439,7 @@ impl App {
             return;
         }
         if arg.is_empty() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Usage: /agent new [name] | /agent <number|name>".to_string(),
                 NotificationType::Warning,
             ));
@@ -459,7 +459,7 @@ impl App {
         match target {
             Some(agent_id) => self.request_agent_switch(agent_id),
             None => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("No agent matching '{arg}'"),
                     NotificationType::Warning,
                 ));
@@ -502,7 +502,7 @@ impl App {
     /// back.
     pub(super) fn request_mode(&mut self, mode: PermissionMode) {
         if self.hud.mode == Some(mode) {
-            self.notification =
+            self.notifications.current =
                 Some((format!("Already in {mode} mode"), NotificationType::Warning));
             return;
         }
@@ -517,7 +517,7 @@ impl App {
     /// Handle `/build [path]`: run the given plan, or the latest one.
     pub(super) fn request_build(&mut self, arg: &str) {
         if self.turn_running() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Wait for the current turn to finish before building".to_string(),
                 NotificationType::Warning,
             ));
@@ -525,7 +525,7 @@ impl App {
         }
         let path = (!arg.is_empty()).then(|| arg.to_string());
         if path.is_none() && self.active_plan.is_none() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "No plan to build yet. Switch to plan mode with /plan and ask for one.".to_string(),
                 NotificationType::Warning,
             ));
@@ -588,7 +588,7 @@ impl App {
                     .iter()
                     .map(|d| d.name.as_str())
                     .collect();
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("Usage: /spawn <permanent agent> ({})", available.join(", ")),
                     NotificationType::Warning,
                 ));
@@ -603,7 +603,7 @@ impl App {
         } else if let Some(n) = arg.parse::<usize>().ok().filter(|n| *n > 0) {
             Some(n)
         } else {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Usage: /resume [n] (n from the list /resume shows)".to_string(),
                 NotificationType::Warning,
             ));
@@ -639,7 +639,7 @@ impl App {
         match SlashModeCommand::parse(arg) {
             Ok(command) => self.request_mode(command.requested),
             Err(e) => {
-                self.notification = Some((e.to_string(), NotificationType::Warning));
+                self.notifications.current = Some((e.to_string(), NotificationType::Warning));
             }
         }
     }
@@ -664,7 +664,7 @@ impl App {
         match parse_approval_command(arg) {
             Ok(level) => self.request_approval(level),
             Err(e) => {
-                self.notification = Some((e.to_string(), NotificationType::Warning));
+                self.notifications.current = Some((e.to_string(), NotificationType::Warning));
             }
         }
     }
@@ -674,7 +674,7 @@ impl App {
     /// comes back.
     pub(super) fn request_approval(&mut self, level: ApprovalLevel) {
         if self.hud.approval == Some(level) {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("Already at approval level {level}"),
                 NotificationType::Warning,
             ));
@@ -701,7 +701,7 @@ impl App {
             (Some(Some(n)), None, None) => (Some(n), RewindScope::default()),
             (Some(Some(n)), Some(Ok(scope)), None) => (Some(n), scope),
             _ => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     "Usage: /rewind [n] [code|chat|both] (n from the list /rewind shows)"
                         .to_string(),
                     NotificationType::Warning,
@@ -725,7 +725,7 @@ impl App {
             "" | "turn" | "last" => false,
             "session" | "all" => true,
             _ => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     "Usage: /diff [session]".to_string(),
                     NotificationType::Warning,
                 ));
@@ -754,7 +754,7 @@ impl App {
             return;
         }
         if self.agent_busy(&self.active_agent_id) {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Queued: the history is summarized when the current work ends".to_string(),
                 NotificationType::Success,
             ));
@@ -778,7 +778,7 @@ impl App {
             return;
         }
         if self.agent_busy(&self.active_agent_id) {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Queued: AGENTS.md is written when the current work ends".to_string(),
                 NotificationType::Success,
             ));

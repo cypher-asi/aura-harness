@@ -26,7 +26,7 @@ impl App {
     pub(super) fn show_turn_records(&mut self, started_ms: u64) {
         let since = started_ms.saturating_sub(RECORD_CLOCK_SLACK_MS);
         let Some(index) = self.records.iter().position(|r| r.ts_ms >= since) else {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "No kernel records for this turn yet".to_string(),
                 NotificationType::Warning,
             ));

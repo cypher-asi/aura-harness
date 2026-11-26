@@ -3124,7 +3124,7 @@ fn test_notification_sits_under_the_right_column_leaving_the_panels_alone() {
 
 fn long_warning(app: &mut crate::App) {
     let words: Vec<String> = (0..40).map(|i| format!("w{i}")).collect();
-    app.notification = Some((words.join(" "), crate::app::NotificationType::Warning));
+    app.notifications.current = Some((words.join(" "), crate::app::NotificationType::Warning));
     app.tick();
 }
 
@@ -3165,15 +3165,15 @@ fn test_wrapped_notification_scrolls_up_to_its_end_and_stays_until_read() {
     assert!(notice(&rows).contains("! w0 "), "{rows:?}");
     assert!(!notice(&rows).contains("w39"), "{rows:?}");
 
-    let (_, until) = app.notification_shown.as_ref().unwrap();
-    let since = app.notification_since.unwrap();
+    let (_, until) = app.notifications.shown.as_ref().unwrap();
+    let since = app.notifications.since.unwrap();
     assert!(
         *until > since + std::time::Duration::from_secs(5),
         "held for the scroll"
     );
 
     let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
-    app.notification_since = Some(long_ago);
+    app.notifications.since = Some(long_ago);
     let rows = render_rows(&mut app, 120);
     let shown = notice(&rows);
     assert!(shown.contains("w39"), "ends at the end: {shown}");
@@ -3192,15 +3192,15 @@ fn test_long_notification_scrolls_along_the_footer_without_a_right_column() {
     assert!(last.contains("! w0 w1 w2"), "starts at the start: {last:?}");
     assert!(!last.contains("w39"), "{last:?}");
 
-    let (_, until) = app.notification_shown.as_ref().unwrap();
-    let since = app.notification_since.unwrap();
+    let (_, until) = app.notifications.shown.as_ref().unwrap();
+    let since = app.notifications.since.unwrap();
     assert!(
         *until > since + std::time::Duration::from_secs(5),
         "held for the scroll"
     );
 
     let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
-    app.notification_since = Some(long_ago);
+    app.notifications.since = Some(long_ago);
     let rows = render_rows(&mut app, 120);
     let last = rows.last().unwrap();
     assert!(

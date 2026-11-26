@@ -1559,7 +1559,7 @@ impl App {
             KeyCode::Enter => self.open_flow_node(),
             KeyCode::Char('f') => {
                 if !self.flow.follow_link() {
-                    self.notification = Some((
+                    self.notifications.current = Some((
                         "This step has no link to another step".to_string(),
                         NotificationType::Warning,
                     ));
@@ -1826,7 +1826,7 @@ impl App {
                 self.flow.lane_name(&agent_id)
             )
         };
-        self.notification = Some((message, NotificationType::Warning));
+        self.notifications.current = Some((message, NotificationType::Warning));
     }
 
     /// Switch to the agent whose lane the selected node is in. It comes
@@ -1842,12 +1842,12 @@ impl App {
     fn open_agent(&mut self, agent_id: String) {
         let name = self.flow.lane_name(&agent_id).to_string();
         if agent_id == self.active_agent_id {
-            self.notification =
+            self.notifications.current =
                 Some((format!("{name} is already open"), NotificationType::Success));
         } else if self.agents.iter().any(|agent| agent.id == agent_id) {
             self.request_agent_switch(agent_id);
         } else {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("{name} is a background agent with no chat to open"),
                 NotificationType::Warning,
             ));

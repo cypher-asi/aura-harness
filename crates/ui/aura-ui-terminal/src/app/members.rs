@@ -516,7 +516,7 @@ impl App {
         match row.process.clone() {
             Some(process) => self.open_detail(DetailView::Process(Box::new(process))),
             None => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("{} leads this run and is not working now", row.label),
                     NotificationType::Success,
                 ));
@@ -538,7 +538,7 @@ impl App {
         });
         match target {
             _ if row.kind.is_none() => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("{} is already open", row.label),
                     NotificationType::Success,
                 ));
@@ -547,7 +547,7 @@ impl App {
             // tree, which is this run's lead or another member.
             Some(target) if target == row.agent_id => self.request_agent_switch(target),
             _ => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("{} has no chat of its own", row.label),
                     NotificationType::Warning,
                 ));

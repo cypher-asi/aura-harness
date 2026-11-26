@@ -380,7 +380,7 @@ impl App {
     /// Say why the agent panels (`/kernel`, `/files`, `/inbox`, ...) are
     /// not shown: the channel app has only its chat and its own panel.
     pub(in crate::app) fn notify_channel_owns_column(&mut self) {
-        self.notification = Some((
+        self.notifications.current = Some((
             "Channels have only a chat; switch to PROJECTS for agent panels".to_string(),
             NotificationType::Warning,
         ));
@@ -523,7 +523,7 @@ impl App {
         let Some(slug) = self.channels.find(&id).map(|channel| channel.slug.clone()) else {
             return;
         };
-        self.notification = Some((
+        self.notifications.current = Some((
             format!("Archive channel #{slug}? Press y to confirm"),
             NotificationType::Warning,
         ));
@@ -539,7 +539,7 @@ impl App {
         if matches!(key.code, KeyCode::Char('y' | 'Y')) {
             self.try_send_event(UiEvent::ArchiveChannel(id));
         } else {
-            self.notification = Some(("Cancelled".to_string(), NotificationType::Warning));
+            self.notifications.current = Some(("Cancelled".to_string(), NotificationType::Warning));
         }
         true
     }

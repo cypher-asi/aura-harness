@@ -37,7 +37,7 @@ impl App {
                 self.editor_request = Some(path);
             }
             Err(e) => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("Cannot create a file for the editor: {e}"),
                     NotificationType::Error,
                 ));
@@ -69,7 +69,7 @@ impl App {
                 self.sync_mentions();
             }
             Err(e) => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("Kept the input; the editor failed: {e}"),
                     NotificationType::Error,
                 ));

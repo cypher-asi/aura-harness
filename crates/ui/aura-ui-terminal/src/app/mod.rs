@@ -32,6 +32,7 @@ mod members;
 pub mod mentions;
 mod model_picker;
 mod mouse;
+mod notifications;
 mod panes;
 mod plan_doc;
 pub mod plans;
@@ -92,6 +93,7 @@ use input_state::InputState;
 use list_state::ListState;
 pub use members::{MemberRow, RecordsTab};
 pub use model_picker::{ModelPicker, ModelTab, PickerLayout, PickerTarget};
+use notifications::Notifications;
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 pub(crate) use plan_doc::PlanDoc;
 pub use processes::SidePanelTab;
@@ -116,16 +118,6 @@ const DEFAULT_COMMAND_COLUMNS: u16 = 80;
 
 /// Narrowest terminal a command is given.
 const MIN_COMMAND_COLUMNS: u16 = 20;
-
-/// How long a notification stays in the corner.
-const NOTIFICATION_TTL: Duration = Duration::from_secs(4);
-
-/// How long an error stays in the corner.
-const ERROR_NOTIFICATION_TTL: Duration = Duration::from_secs(6);
-
-/// How long a notification too long for its row stays once it has
-/// scrolled to its end.
-const NOTIFICATION_TAIL: Duration = Duration::from_secs(2);
 
 // Maximum number of records to keep in the list, shared with the loader.
 use crate::events::MAX_RECORDS;
@@ -242,12 +234,8 @@ pub struct App {
     pub(super) command_rx: Option<mpsc::Receiver<UiCommand>>,
     /// Current streaming message (being built)
     pub(super) streaming_content: String,
-    /// Notification message (ephemeral)
-    pub(super) notification: Option<(String, NotificationType)>,
-    /// The notification on screen and when it goes away.
-    pub(super) notification_shown: Option<((String, NotificationType), Instant)>,
-    /// When the notification on screen first showed.
-    pub(super) notification_since: Option<Instant>,
+    /// The corner notification and its timer
+    pub(super) notifications: Notifications,
     /// Which panel has focus
     pub(super) focus: PanelFocus,
     /// Whether the Record panel is visible
@@ -887,9 +875,7 @@ impl App {
             event_tx: None,
             command_rx: None,
             streaming_content: String::new(),
-            notification: None,
-            notification_shown: None,
-            notification_since: None,
+            notifications: Notifications::default(),
             focus: PanelFocus::default(),
             record_panel_visible: true,
             swarm_panel_visible: true,
@@ -1442,7 +1428,7 @@ impl App {
         self.redraw = true;
         let what = self.select.copy_label.take();
         self.log.copy_finished(result.is_ok());
-        self.notification = Some(match result {
+        self.notifications.current = Some(match result {
             Ok(()) => (
                 match what {
                     Some(what) => format!("Copied {what} ({chars} characters)"),
@@ -1472,7 +1458,7 @@ impl App {
     /// Get the current notification.
     #[must_use]
     pub const fn notification(&self) -> Option<&(String, NotificationType)> {
-        self.notification.as_ref()
+        self.notifications.current.as_ref()
     }
 
     /// Get which panel has focus.
@@ -1899,53 +1885,20 @@ impl App {
 
     /// Clear the current notification.
     pub fn clear_notification(&mut self) {
-        self.notification = None;
-    }
-
-    /// Start the timer of a notification seen for the first time, and drop
-    /// one whose time is up.
-    fn expire_notification(&mut self) {
-        let Some(current) = &self.notification else {
-            self.notification_shown = None;
-            self.notification_since = None;
-            return;
-        };
-        let now = Instant::now();
-        match &self.notification_shown {
-            Some((shown, until)) if shown == current => {
-                if now >= *until {
-                    self.notification = None;
-                    self.notification_shown = None;
-                    self.notification_since = None;
-                }
-            }
-            _ => {
-                let ttl = match current.1 {
-                    NotificationType::Error => ERROR_NOTIFICATION_TTL,
-                    NotificationType::Success | NotificationType::Warning => NOTIFICATION_TTL,
-                };
-                self.notification_shown = Some((current.clone(), now + ttl));
-                self.notification_since = Some(now);
-            }
-        }
+        self.notifications.current = None;
     }
 
     /// How long the notification on screen has been showing; zero before
     /// its timer starts.
     #[must_use]
     pub(crate) fn notification_age(&self) -> Duration {
-        self.notification_since
-            .map_or(Duration::ZERO, |since| since.elapsed())
+        self.notifications.age()
     }
 
     /// Keep the notification on screen until it has scrolled for `read`,
     /// and a moment after.
     pub(crate) fn hold_notification_for(&mut self, read: Duration) {
-        if let (Some((_, until)), Some(since)) =
-            (&mut self.notification_shown, self.notification_since)
-        {
-            *until = (*until).max(since + read + NOTIFICATION_TAIL);
-        }
+        self.notifications.hold_for(read);
     }
 
     /// Cancel the turn of the agent on screen.
@@ -1990,8 +1943,8 @@ impl App {
     /// Process pending updates from the command channel, and scroll the
     /// chat under a selection held past its top or bottom.
     pub fn tick(&mut self) {
-        let shown = self.notification.is_some();
-        self.expire_notification();
+        let shown = self.notifications.current.is_some();
+        self.notifications.expire();
         if !self.selection_scrolling() {
             self.select.selection_scrolled = None;
         } else if self
@@ -2068,7 +2021,7 @@ impl App {
     /// the chat, or the chat, the LOG tab or BENCH animating.
     fn animates_every_tick(&self) -> bool {
         self.is_busy()
-            || self.notification.is_some()
+            || self.notifications.current.is_some()
             || self.selection_scrolling()
             || self.bench_animating()
             || self.log_animating()

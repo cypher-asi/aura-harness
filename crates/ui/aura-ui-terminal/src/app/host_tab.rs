@@ -79,7 +79,7 @@ pub fn switch_rect(row: Rect, label: &str) -> Option<Rect> {
 
 impl App {
     fn notify(&mut self, text: &str, kind: NotificationType) {
-        self.notification = Some((text.to_string(), kind));
+        self.notifications.current = Some((text.to_string(), kind));
     }
 
     /// Where the agent on screen runs, for the footer switch.
@@ -339,7 +339,8 @@ mod tests {
         app.handle_command("/local");
         assert!(rx.try_recv().is_err(), "only Alice can bring it back");
         assert!(app
-            .notification
+            .notifications
+            .current
             .as_ref()
             .is_some_and(|(text, _)| text.contains("Placed by Alice")));
     }

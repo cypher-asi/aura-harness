@@ -495,7 +495,7 @@ impl App {
     /// Say why the agent panels are not shown ([`Self::agent_panels_hidden`]).
     pub(super) fn notify_no_agent_panels(&mut self) {
         if self.bench_app() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "BENCH shows no agent here; pick one of a benchmark's for agent panels".to_string(),
                 NotificationType::Warning,
             ));

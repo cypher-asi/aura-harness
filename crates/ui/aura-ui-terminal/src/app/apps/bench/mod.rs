@@ -449,7 +449,7 @@ impl App {
                 self.bench.show_started = false;
             }
         }
-        self.notification = Some(match notice {
+        self.notifications.current = Some(match notice {
             Ok(text) => (text, NotificationType::Success),
             Err(problem) => (problem, NotificationType::Warning),
         });
@@ -512,7 +512,7 @@ impl App {
             }
             KeyCode::Char('d') if has_copies => self.show_bench_diff(&root, id, run),
             KeyCode::Char('y') if has_copies && examples => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     "Example tasks ran in their own fixtures; there is nothing to apply"
                         .to_string(),
                     NotificationType::Warning,
@@ -521,7 +521,7 @@ impl App {
             KeyCode::Char('y') if has_copies => match run {
                 Some(run) => self.send_bench(BenchRequest::Apply { id, run }),
                 None => {
-                    self.notification = Some((
+                    self.notifications.current = Some((
                         "Pick a run with ←/→ first, then y applies it".to_string(),
                         NotificationType::Warning,
                     ));
@@ -532,7 +532,7 @@ impl App {
             KeyCode::Char('L') => match log_of {
                 Some(agent) => self.show_bench_log(id, agent),
                 None => {
-                    self.notification = Some((
+                    self.notifications.current = Some((
                         "This run has no log; pick a run with ←/→ first".to_string(),
                         NotificationType::Warning,
                     ));
@@ -828,7 +828,7 @@ mod tests {
         app.input.cursor_pos = 5;
         app.handle_key(key(KeyCode::Enter));
         assert_eq!(app.input(), "hello", "the draft stays");
-        let (text, _) = app.notification.clone().expect("a refusal");
+        let (text, _) = app.notifications.current.clone().expect("a refusal");
         assert!(text.contains("BENCH has no chat"), "{text}");
         assert!(std::iter::from_fn(|| rx.try_recv().ok())
             .all(|event| !matches!(event, UiEvent::UserMessage { .. })));

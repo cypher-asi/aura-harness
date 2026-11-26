@@ -324,7 +324,7 @@ impl App {
             return;
         }
         if target == self.active_agent_id {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("{} is already open", process.owner_name),
                 NotificationType::Success,
             ));
@@ -339,7 +339,7 @@ impl App {
             .selected_process_data()
             .and_then(|p| p.log_path.clone())
         else {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Only background commands have a log".to_string(),
                 NotificationType::Warning,
             ));
@@ -355,20 +355,20 @@ impl App {
             return;
         };
         if !process.status.is_live() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("{} already {}", process.label, process.status.label()),
                 NotificationType::Warning,
             ));
             return;
         }
         if !process.killable {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("{} can't be killed from here", process.label),
                 NotificationType::Warning,
             ));
             return;
         }
-        self.notification = Some((
+        self.notifications.current = Some((
             format!(
                 "Kill {} {}? Press y to confirm",
                 process.kind.label(),

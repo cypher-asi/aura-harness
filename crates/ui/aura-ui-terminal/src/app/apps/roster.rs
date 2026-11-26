@@ -70,7 +70,7 @@ impl App {
             return;
         }
         if let Err(e) = result {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("Could not open editor: {e}"),
                 NotificationType::Error,
             ));
@@ -125,7 +125,7 @@ impl App {
         let Some(name) = self.selected_definition_name() else {
             return;
         };
-        self.notification = Some((
+        self.notifications.current = Some((
             format!("Delete permanent agent {name}? Press y to confirm"),
             NotificationType::Warning,
         ));

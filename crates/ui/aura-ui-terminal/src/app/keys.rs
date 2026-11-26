@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventK
 impl App {
     /// Handle a key event.
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
-        self.notification = None;
+        self.notifications.current = None;
         self.clear_selection();
         let just_queued = self.just_queued.take();
 
@@ -134,7 +134,7 @@ impl App {
                 KeyCode::Esc => picker.cancel_new_folder(),
                 KeyCode::Enter => {
                     if let Err(problem) = picker.create_new_folder() {
-                        self.notification = Some((problem, NotificationType::Warning));
+                        self.notifications.current = Some((problem, NotificationType::Warning));
                     }
                 }
                 KeyCode::Backspace => picker.pop_new_folder_char(),
@@ -194,7 +194,7 @@ impl App {
             Ok(Some(folder)) => self.choose_project_folder(folder),
             Ok(None) => {}
             Err(e) => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("Cannot open folder: {e}"),
                     NotificationType::Warning,
                 ));
@@ -247,7 +247,7 @@ impl App {
                 self.input.cursor_pos = 0;
                 self.login_email.clear();
                 self.pending_model = None;
-                self.notification =
+                self.notifications.current =
                     Some(("Login cancelled".to_string(), NotificationType::Warning));
             }
             KeyCode::Enter => {
@@ -255,7 +255,7 @@ impl App {
                 self.input.cursor_pos = 0;
 
                 if value.trim().is_empty() {
-                    self.notification =
+                    self.notifications.current =
                         Some(("Cannot be empty".to_string(), NotificationType::Warning));
                     return KeyResult::continue_running();
                 }
@@ -800,7 +800,7 @@ impl App {
         // With no agent on screen there is nobody to send to; the draft
         // stays for when one is. Commands still run.
         if self.no_agent_on_screen() && !self.input.text.trim_start().starts_with('/') {
-            self.notification = Some((self.app_send_refusal(), NotificationType::Warning));
+            self.notifications.current = Some((self.app_send_refusal(), NotificationType::Warning));
             return KeyResult::continue_running();
         }
         let text = std::mem::take(&mut self.input.text);
@@ -818,7 +818,7 @@ impl App {
             if busy {
                 self.input.text = text;
                 self.input.cursor_pos = self.input.text.len();
-                self.notification = Some((
+                self.notifications.current = Some((
                     "Wait for this agent's turn to finish before running a command".to_string(),
                     NotificationType::Warning,
                 ));
@@ -868,7 +868,7 @@ impl App {
         // it to the channel, which shows it here, and the members answer.
         // Nothing waits for the coordinator, busy or not.
         if let Some(codes) = self.routed_members(&text) {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("Sent to {}", codes.join(", ")),
                 NotificationType::Success,
             ));
@@ -888,12 +888,12 @@ impl App {
         // in order with the reply still streaming.
         if busy && !images.is_empty() {
             self.queue_image_previews(&text, previews);
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Queued: the agent gets the images when its current work ends".to_string(),
                 NotificationType::Success,
             ));
         } else if busy {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Queued: sent when the current work ends. Enter on an empty prompt sends it now"
                     .to_string(),
                 NotificationType::Success,
@@ -927,7 +927,7 @@ impl App {
         if let Some(tx) = &self.event_tx {
             let _ = tx.try_send(UiEvent::SendQueuedNow(self.active_agent_id.clone()));
         }
-        self.notification = Some((
+        self.notifications.current = Some((
             "Sending the queued message now".to_string(),
             NotificationType::Success,
         ));

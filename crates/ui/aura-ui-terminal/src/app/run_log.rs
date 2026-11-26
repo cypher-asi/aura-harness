@@ -701,7 +701,7 @@ impl App {
                 self.log.copying = true;
             }
             None => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     "There is no log to copy yet".to_string(),
                     NotificationType::Warning,
                 ));

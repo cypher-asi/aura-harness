@@ -2525,7 +2525,7 @@ fn test_copy_notice_sits_then_expires() {
     app.tick();
     assert!(app.notification().is_some());
 
-    let (_, until) = app.notification_shown.as_mut().unwrap();
+    let (_, until) = app.notifications.shown.as_mut().unwrap();
     *until = std::time::Instant::now() - std::time::Duration::from_millis(1);
     app.tick();
     assert!(app.notification().is_none());
@@ -2542,18 +2542,18 @@ fn test_keypress_clears_copy_notice() {
 #[test]
 fn test_notification_expires_and_a_new_one_starts_its_own_timer() {
     let mut app = App::new();
-    app.notification = Some(("first".to_string(), NotificationType::Warning));
+    app.notifications.current = Some(("first".to_string(), NotificationType::Warning));
     app.tick();
-    let (_, until) = app.notification_shown.as_mut().unwrap();
+    let (_, until) = app.notifications.shown.as_mut().unwrap();
     *until = std::time::Instant::now() - std::time::Duration::from_millis(1);
 
-    app.notification = Some(("second".to_string(), NotificationType::Error));
+    app.notifications.current = Some(("second".to_string(), NotificationType::Error));
     app.tick();
     assert_eq!(app.notification().unwrap().0, "second");
-    let (_, until) = app.notification_shown.as_ref().unwrap();
+    let (_, until) = app.notifications.shown.as_ref().unwrap();
     assert!(*until > std::time::Instant::now() + std::time::Duration::from_secs(5));
 
-    let (_, until) = app.notification_shown.as_mut().unwrap();
+    let (_, until) = app.notifications.shown.as_mut().unwrap();
     *until = std::time::Instant::now() - std::time::Duration::from_millis(1);
     app.tick();
     assert!(app.notification().is_none());
@@ -6393,7 +6393,8 @@ fn test_channels_with_nothing_open_hide_the_right_column_and_refuse_to_send() {
     assert_eq!(app.input(), "hello", "the draft is kept");
     assert!(rx.try_recv().is_err(), "nothing is sent");
     assert!(app
-        .notification
+        .notifications
+        .current
         .as_ref()
         .is_some_and(|(text, _)| text.contains("Pick a channel")));
 
@@ -6576,11 +6577,12 @@ fn test_a_message_to_members_does_not_wait_on_the_coordinator() {
     assert_ne!(app.state, AppState::Processing);
     assert!(app.just_queued.is_none());
     assert!(
-        app.notification
+        app.notifications
+            .current
             .as_ref()
             .is_some_and(|(text, _)| text == "Sent to RE36"),
         "{:?}",
-        app.notification
+        app.notifications.current
     );
 }
 

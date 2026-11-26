@@ -674,7 +674,7 @@ impl App {
             return;
         };
         if self.models.is_empty() {
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Model list not loaded yet".to_string(),
                 NotificationType::Warning,
             ));
@@ -709,7 +709,7 @@ impl App {
             }
         });
         if let Some(needs) = needs {
-            self.notification = Some((needs, NotificationType::Warning));
+            self.notifications.current = Some((needs, NotificationType::Warning));
             return;
         }
         let form = &mut self.bench.form;
@@ -1010,7 +1010,7 @@ impl App {
         };
         let Some(work) = work else {
             self.bench.form.field = FormField::Prompt;
-            self.notification = Some((
+            self.notifications.current = Some((
                 "Type the prompt in the input line and press Enter".to_string(),
                 NotificationType::Warning,
             ));
@@ -1021,7 +1021,7 @@ impl App {
             text => match text.parse::<f64>() {
                 Ok(usd) if usd > 0.0 => Some(usd),
                 _ => {
-                    self.notification = Some((
+                    self.notifications.current = Some((
                         format!("Budget {text:?} is not an amount in USD"),
                         NotificationType::Warning,
                     ));
@@ -1038,7 +1038,7 @@ impl App {
                         .difficulty()
                         .map_or("", |(_, difficulty)| DIFFICULTIES[difficulty]);
                     self.bench.form.field = missing;
-                    self.notification = Some((
+                    self.notifications.current = Some((
                         format!(
                             "Pick a model for {difficulty} work of arm {}",
                             if arm == 0 { "A" } else { "B" }
@@ -1643,7 +1643,7 @@ mod tests {
         app.pick_bench_model(FormField::AMedium, "openrouter/qwen/qwen3-coder");
         assert_eq!(app.state, AppState::SelectingModel, "stays open");
         assert!(app.bench.form.a_models[1].is_empty());
-        assert!(app.notification.as_ref().is_some_and(|(text, _)| {
+        assert!(app.notifications.current.as_ref().is_some_and(|(text, _)| {
             text == "Qwen3 Coder needs a sign-in first: /login openrouter"
         }));
 
@@ -1663,7 +1663,8 @@ mod tests {
         app.submit_bench_form();
         assert_eq!(app.bench.form.field, FormField::BMedium);
         assert!(app
-            .notification
+            .notifications
+            .current
             .as_ref()
             .is_some_and(|(text, _)| text == "Pick a model for medium work of arm B"));
 

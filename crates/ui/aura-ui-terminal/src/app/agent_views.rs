@@ -368,7 +368,7 @@ impl App {
 
         let mut view = self.views.remove(agent_id).unwrap_or_default();
         let state = self.state;
-        let notification = self.notification.take();
+        let notification = self.notifications.current.take();
         let redraw = self.redraw;
         let was_busy = view.busy;
         self.swap_chat(&mut view);
@@ -382,7 +382,7 @@ impl App {
         } else {
             self.processing_since = None;
         }
-        let note = self.notification.take();
+        let note = self.notifications.current.take();
         self.state = state;
         self.swap_chat(&mut view);
         view.busy = busy;
@@ -403,10 +403,10 @@ impl App {
         };
         match noticed {
             Some(noticed) => {
-                self.notification = Some(noticed);
+                self.notifications.current = Some(noticed);
                 self.redraw = true;
             }
-            None => self.notification = notification,
+            None => self.notifications.current = notification,
         }
     }
 

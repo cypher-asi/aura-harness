@@ -400,7 +400,7 @@ impl App {
         let Some(super::DetailView::Image(view)) = &self.detail else {
             return;
         };
-        self.notification = Some(match view.open_externally() {
+        self.notifications.current = Some(match view.open_externally() {
             Ok(path) => (
                 format!("Opened {}", path.display()),
                 NotificationType::Success,
@@ -457,18 +457,18 @@ impl App {
         match clipboard {
             Ok(Clipboard::Image(bytes)) => {
                 if let Err(problem) = self.attach_image(&bytes) {
-                    self.notification = Some((problem, NotificationType::Warning));
+                    self.notifications.current = Some((problem, NotificationType::Warning));
                 }
             }
             Ok(Clipboard::Text(text)) => self.handle_paste(&text),
             Ok(Clipboard::Empty) => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     "The clipboard is empty".to_string(),
                     NotificationType::Warning,
                 ));
             }
             Err(e) => {
-                self.notification = Some((
+                self.notifications.current = Some((
                     format!("Cannot read the clipboard: {e}"),
                     NotificationType::Error,
                 ));
@@ -484,7 +484,7 @@ impl App {
         if self.detail.is_some() {
             return;
         }
-        self.notification = None;
+        self.notifications.current = None;
         self.clear_selection();
         match self.state {
             AppState::Idle | AppState::Processing => {
@@ -523,7 +523,7 @@ impl App {
                 .and_then(|bytes| self.attach_image(&bytes)),
         };
         if let Err(problem) = result {
-            self.notification = Some((problem, NotificationType::Warning));
+            self.notifications.current = Some((problem, NotificationType::Warning));
         }
     }
 
