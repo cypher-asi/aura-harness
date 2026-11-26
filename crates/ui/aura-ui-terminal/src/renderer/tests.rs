@@ -4203,8 +4203,6 @@ fn test_a_selection_dragged_past_a_benchmark_scrolls_it() {
 
     let mut app = crate::App::new();
     app.process_command(UiCommand::BenchList {
-        agent_id: String::new(),
-        root: String::new(),
         benches: vec![BenchView {
             id: "ab".to_string(),
             name: "Compare #1".to_string(),

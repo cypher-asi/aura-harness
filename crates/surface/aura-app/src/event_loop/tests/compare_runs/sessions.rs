@@ -38,16 +38,15 @@ async fn two_models_replay_a_session_from_its_start_prompt_by_prompt() {
     let updated_root = assert_the_bench_tab_followed(&mut commands);
 
     bench(&mut state, &links, BenchRequest::List).await;
-    let (listed, root) = bench_list(&mut commands).unwrap();
+    let listed = bench_list(&mut commands).unwrap();
     assert_eq!(listed.len(), 1);
-    assert_eq!(root, first.to_hex());
-    assert_eq!(listed[0].root, root);
-    assert_eq!(updated_root, root, "updates name the tree too");
+    assert_eq!(listed[0].root, first.to_hex());
+    assert_eq!(updated_root, listed[0].root, "updates name the tree too");
 
     state.active = fixture.second;
     bench(&mut state, &links, BenchRequest::List).await;
-    let (elsewhere, _) = bench_list(&mut commands).unwrap();
-    assert!(elsewhere.is_empty(), "another agent's tree has none");
+    let elsewhere = bench_list(&mut commands).unwrap();
+    assert_eq!(elsewhere, listed, "another tree's agent lists it too");
     state.active = first;
 
     let id = listed[0].id.clone();

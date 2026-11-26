@@ -323,8 +323,8 @@ impl Tabs {
                 self.send_agents();
             }
             // Each tab's GRAPH shows the flow of its own agent and ignores
-            // the others'; so does its BENCH with sessions and estimates,
-            // and it lists only the benchmarks of its agent's tree.
+            // the others'; so does its BENCH with sessions and estimates.
+            // Every tab lists every benchmark.
             UiCommand::GraphUpsert { .. }
             | UiCommand::FlowLoad { .. }
             | UiCommand::FlowUpsert { .. }
@@ -1512,10 +1512,8 @@ mod tests {
         });
         assert!(tabs.iter().all(|tab| tab.tui.api_active()));
 
-        // Benchmarks: the tab whose agent's tree they are in lists them.
+        // Benchmarks: every tab lists every one, whichever tree it is in.
         tabs.apply(UiCommand::BenchList {
-            agent_id: "a1".into(),
-            root: "a1".into(),
             benches: Vec::new(),
         });
         tabs.apply(UiCommand::BenchUpsert(Box::new(
@@ -1529,7 +1527,7 @@ mod tests {
             .iter()
             .map(|tab| tab.tui.bench().benches.len())
             .collect();
-        assert_eq!(listed, [1, 0]);
+        assert_eq!(listed, [1, 1]);
     }
 
     #[test]

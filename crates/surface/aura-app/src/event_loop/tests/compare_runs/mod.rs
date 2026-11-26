@@ -153,11 +153,10 @@ fn bench_estimate(commands: &mut mpsc::Receiver<UiCommand>) -> Option<Result<Str
     })
 }
 
-/// The benchmarks the BENCH tab was sent and the root of their tree, once
-/// `commands` are drained.
-fn bench_list(commands: &mut mpsc::Receiver<UiCommand>) -> Option<(Vec<BenchView>, String)> {
+/// The benchmarks the BENCH tab was sent, once `commands` are drained.
+fn bench_list(commands: &mut mpsc::Receiver<UiCommand>) -> Option<Vec<BenchView>> {
     drain(commands).into_iter().find_map(|(_, c)| match c {
-        UiCommand::BenchList { benches, root, .. } => Some((benches, root)),
+        UiCommand::BenchList { benches } => Some(benches),
         _ => None,
     })
 }

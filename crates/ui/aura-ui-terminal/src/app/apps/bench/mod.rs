@@ -34,9 +34,7 @@ pub struct BenchState {
     open: bool,
     /// Whether the list asked for has arrived
     loaded: bool,
-    /// Hex id of the agent at the top of the tree whose benchmarks it lists
-    root: Option<String>,
-    /// Benchmarks of that tree, newest first
+    /// Every benchmark, of every tree, newest first
     pub benches: Vec<BenchView>,
     /// Sessions of the agent on screen, to replay
     pub sessions: Vec<BenchSession>,
@@ -80,12 +78,7 @@ impl BenchState {
         }
     }
 
-    fn list(&mut self, root: String, mut benches: Vec<BenchView>) {
-        if self.root.as_ref() != Some(&root) {
-            self.selected = 0;
-            self.run = None;
-            self.scroll = 0;
-        }
+    fn list(&mut self, mut benches: Vec<BenchView>) {
         benches.reverse();
         // The list is built from records, which know nothing of the runs
         // under way: keep those last heard until the next report.
@@ -96,7 +89,6 @@ impl BenchState {
                 }
             }
         }
-        self.root = Some(root);
         self.benches = benches;
         self.loaded = true;
         self.selected = self.selected.min(self.benches.len().saturating_sub(1));
@@ -108,9 +100,6 @@ impl BenchState {
     }
 
     fn upsert(&mut self, view: BenchView) {
-        if self.root.as_ref() != Some(&view.root) {
-            return;
-        }
         match self.benches.iter_mut().find(|b| b.id == view.id) {
             Some(known) => *known = view,
             None => {
@@ -181,8 +170,8 @@ impl App {
         }
     }
 
-    /// Ask for the benchmarks of the tree of the agent on screen and for
-    /// its sessions.
+    /// Ask for every benchmark, and for the sessions of the agent on
+    /// screen.
     pub(in crate::app) fn request_benchmarks(&mut self) {
         self.send_bench(BenchRequest::List);
         self.send_bench(BenchRequest::Sessions);
@@ -203,18 +192,11 @@ impl App {
         tab || self.bench_panel_shown().is_some_and(running)
     }
 
-    pub(in crate::app) fn cmd_bench_list(
-        &mut self,
-        agent_id: &str,
-        root: String,
-        benches: Vec<BenchView>,
-    ) {
-        if agent_id == self.active_agent_id {
-            for view in &benches {
-                self.bench_panel.heard(view);
-            }
-            self.bench.list(root, benches);
+    pub(in crate::app) fn cmd_bench_list(&mut self, benches: Vec<BenchView>) {
+        for view in &benches {
+            self.bench_panel.heard(view);
         }
+        self.bench.list(benches);
     }
 
     pub(in crate::app) fn cmd_bench_upsert(&mut self, view: BenchView) {
@@ -359,7 +341,7 @@ mod tests {
     #[test]
     fn the_list_is_newest_first_and_upserts_replace_in_place() {
         let mut state = BenchState::default();
-        state.list("root".to_string(), vec![view("1"), view("2")]);
+        state.list(vec![view("1"), view("2")]);
         assert_eq!(state.benches[0].id, "2");
         assert!(state.loaded());
         let mut changed = view("1");
@@ -372,31 +354,28 @@ mod tests {
     }
 
     #[test]
-    fn each_tree_lists_its_own_benchmarks() {
+    fn every_tree_s_benchmarks_are_listed_whoever_is_on_screen() {
         let mut app = App::new();
         app.active_agent_id = "user".to_string();
-        app.cmd_bench_list("user", "root".to_string(), vec![view("1")]);
-        app.bench.mode = BenchMode::Detail("1".to_string());
-
         let mut elsewhere = view("2");
         elsewhere.root = "other".to_string();
-        app.cmd_bench_upsert(elsewhere.clone());
-        assert_eq!(app.bench.benches.len(), 1, "another tree's benchmark");
-
-        app.cmd_bench_list("someone else", "other".to_string(), vec![elsewhere.clone()]);
-        assert_eq!(app.bench.benches[0].id, "1", "a list for another agent");
+        app.cmd_bench_list(vec![view("1"), elsewhere]);
+        assert_eq!(app.bench.benches.len(), 2);
+        app.bench.mode = BenchMode::Detail("2".to_string());
 
         app.active_agent_id = "other".to_string();
-        app.cmd_bench_list("other", "other".to_string(), vec![elsewhere]);
-        assert_eq!(app.bench.benches.len(), 1);
-        assert_eq!(app.bench.benches[0].id, "2");
+        let mut third = view("3");
+        third.root = "third".to_string();
+        app.cmd_bench_upsert(third);
+        assert_eq!(app.bench.benches[0].id, "3", "any tree's new benchmark");
+        assert_eq!(app.bench.benches.len(), 3);
+
+        app.cmd_bench_list(vec![view("1")]);
         assert_eq!(
             app.bench.mode,
             BenchMode::List,
-            "the benchmark shown is not in this tree"
+            "the benchmark shown is gone"
         );
-        app.cmd_bench_upsert(view("3"));
-        assert_eq!(app.bench.benches.len(), 1, "the first tree's benchmark");
     }
 
     #[test]

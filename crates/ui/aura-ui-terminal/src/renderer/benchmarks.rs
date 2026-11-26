@@ -2058,8 +2058,6 @@ mod tests {
     fn the_tab_draws_its_list_and_opens_a_benchmark() {
         let mut app = App::new();
         app.process_command(UiCommand::BenchList {
-            agent_id: String::new(),
-            root: String::new(),
             benches: vec![view()],
         });
         let theme = Theme::default();

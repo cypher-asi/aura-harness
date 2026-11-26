@@ -886,17 +886,12 @@ pub enum UiCommand {
         nodes: Vec<FlowNode>,
     },
 
-    /// Replace the BENCH tab's list with the benchmarks of the tree
-    /// `agent_id` is in, whose top agent is `root`, oldest first. Ignored
-    /// by a UI showing another agent.
-    BenchList {
-        agent_id: String,
-        root: String,
-        benches: Vec<BenchView>,
-    },
+    /// Replace the BENCH tab's list with every benchmark, of every tree,
+    /// oldest first
+    BenchList { benches: Vec<BenchView> },
 
     /// A benchmark started or changed; add it to the BENCH tab or replace
-    /// it there. Ignored by a UI listing another tree's benchmarks.
+    /// it there
     BenchUpsert(Box<BenchView>),
 
     /// The sessions of `agent_id` the BENCH tab can replay, newest first,

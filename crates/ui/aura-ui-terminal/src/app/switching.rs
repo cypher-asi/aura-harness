@@ -148,8 +148,7 @@ impl App {
             self.request_flow();
         }
         if self.bench.is_open() {
-            // It lists the benchmarks of the tree on screen, and its form
-            // offers the sessions of the agent on screen.
+            // Its form offers the sessions of the agent on screen.
             self.request_benchmarks();
         }
         self.mark_active_agent();
