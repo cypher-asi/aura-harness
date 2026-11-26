@@ -166,82 +166,14 @@ pub(crate) fn response_output_shape(response: &ModelResponse) -> ResponseOutputS
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream {
     let content_block_count = response.message.content.len();
-    let mut text_delta_count = 0usize;
-    let mut thinking_delta_count = 0usize;
-    let mut tool_use_count = 0usize;
-    let mut text_bytes = 0usize;
-    let mut thinking_bytes = 0usize;
+    let mut counts = SynthesizedCounts::default();
 
-    // Prepend the synthetic `HttpMeta` frame so consumers that
-    // uniformly seed their accumulator from this event (streaming +
-    // non-streaming fallback + mock paths) always see a single,
-    // well-defined preamble. The value comes from the non-streaming
-    // `complete()` path's header capture — `None` for mock / test
-    // producers.
-    let mut events: Vec<Result<StreamEvent, ReasonerError>> = vec![
-        Ok(StreamEvent::HttpMeta {
-            request_id: response.trace.provider_request_id.clone(),
-            plan_usage: response.trace.plan_usage.clone(),
-        }),
-        Ok(StreamEvent::MessageStart {
-            message_id: response.trace.message_id.clone().unwrap_or_default(),
-            model: response.trace.model.clone(),
-            input_tokens: Some(response.usage.input_tokens),
-            cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
-            cache_read_input_tokens: response.usage.cache_read_input_tokens,
-        }),
-    ];
+    let mut events = synthesized_preamble(&response);
 
     for (index, block) in response.message.content.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]
         let idx = index as u32;
-        match block {
-            ContentBlock::Text { text } => {
-                text_delta_count += 1;
-                text_bytes += text.len();
-                events.push(Ok(StreamEvent::ContentBlockStart {
-                    index: idx,
-                    content_type: StreamContentType::Text,
-                }));
-                events.push(Ok(StreamEvent::TextDelta { text: text.clone() }));
-                events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
-            }
-            ContentBlock::Thinking {
-                thinking,
-                signature,
-            } => {
-                thinking_delta_count += 1;
-                thinking_bytes += thinking.len();
-                events.push(Ok(StreamEvent::ContentBlockStart {
-                    index: idx,
-                    content_type: StreamContentType::Thinking,
-                }));
-                events.push(Ok(StreamEvent::ThinkingDelta {
-                    thinking: thinking.clone(),
-                }));
-                if let Some(sig) = signature {
-                    events.push(Ok(StreamEvent::SignatureDelta {
-                        signature: sig.clone(),
-                    }));
-                }
-                events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
-            }
-            ContentBlock::ToolUse { id, name, input } => {
-                tool_use_count += 1;
-                events.push(Ok(StreamEvent::ContentBlockStart {
-                    index: idx,
-                    content_type: StreamContentType::ToolUse {
-                        id: id.clone(),
-                        name: name.clone(),
-                    },
-                }));
-                events.push(Ok(StreamEvent::InputJsonDelta {
-                    partial_json: input.to_string(),
-                }));
-                events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
-            }
-            _ => {}
-        }
+        counts.push_block_events(&mut events, idx, block);
     }
 
     events.push(Ok(StreamEvent::MessageDelta {
@@ -255,6 +187,13 @@ pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream
     }));
     events.push(Ok(StreamEvent::MessageStop));
 
+    let SynthesizedCounts {
+        text_delta_count,
+        thinking_delta_count,
+        tool_use_count,
+        text_bytes,
+        thinking_bytes,
+    } = counts;
     debug!(
         model = %response.trace.model,
         content_block_count,
@@ -267,6 +206,96 @@ pub(crate) fn stream_from_response(response: ModelResponse) -> StreamEventStream
     );
 
     Box::pin(futures_util::stream::iter(events))
+}
+
+type SynthesizedEvents = Vec<Result<StreamEvent, ReasonerError>>;
+
+/// Prepend the synthetic `HttpMeta` frame so consumers that
+/// uniformly seed their accumulator from this event (streaming +
+/// non-streaming fallback + mock paths) always see a single,
+/// well-defined preamble. The value comes from the non-streaming
+/// `complete()` path's header capture — `None` for mock / test
+/// producers.
+fn synthesized_preamble(response: &ModelResponse) -> SynthesizedEvents {
+    vec![
+        Ok(StreamEvent::HttpMeta {
+            request_id: response.trace.provider_request_id.clone(),
+            plan_usage: response.trace.plan_usage.clone(),
+        }),
+        Ok(StreamEvent::MessageStart {
+            message_id: response.trace.message_id.clone().unwrap_or_default(),
+            model: response.trace.model.clone(),
+            input_tokens: Some(response.usage.input_tokens),
+            cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+            cache_read_input_tokens: response.usage.cache_read_input_tokens,
+        }),
+    ]
+}
+
+/// Per-kind tallies logged by [`stream_from_response`].
+#[derive(Default)]
+struct SynthesizedCounts {
+    text_delta_count: usize,
+    thinking_delta_count: usize,
+    tool_use_count: usize,
+    text_bytes: usize,
+    thinking_bytes: usize,
+}
+
+impl SynthesizedCounts {
+    /// Push the start / delta / stop events for one content block.
+    fn push_block_events(
+        &mut self,
+        events: &mut SynthesizedEvents,
+        idx: u32,
+        block: &ContentBlock,
+    ) {
+        match block {
+            ContentBlock::Text { text } => {
+                self.text_delta_count += 1;
+                self.text_bytes += text.len();
+                events.push(Ok(StreamEvent::ContentBlockStart {
+                    index: idx,
+                    content_type: StreamContentType::Text,
+                }));
+                events.push(Ok(StreamEvent::TextDelta { text: text.clone() }));
+            }
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
+                self.thinking_delta_count += 1;
+                self.thinking_bytes += thinking.len();
+                events.push(Ok(StreamEvent::ContentBlockStart {
+                    index: idx,
+                    content_type: StreamContentType::Thinking,
+                }));
+                events.push(Ok(StreamEvent::ThinkingDelta {
+                    thinking: thinking.clone(),
+                }));
+                if let Some(sig) = signature {
+                    events.push(Ok(StreamEvent::SignatureDelta {
+                        signature: sig.clone(),
+                    }));
+                }
+            }
+            ContentBlock::ToolUse { id, name, input } => {
+                self.tool_use_count += 1;
+                events.push(Ok(StreamEvent::ContentBlockStart {
+                    index: idx,
+                    content_type: StreamContentType::ToolUse {
+                        id: id.clone(),
+                        name: name.clone(),
+                    },
+                }));
+                events.push(Ok(StreamEvent::InputJsonDelta {
+                    partial_json: input.to_string(),
+                }));
+            }
+            _ => return,
+        }
+        events.push(Ok(StreamEvent::ContentBlockStop { index: idx }));
+    }
 }
 
 /// Provider-agnostic interface for model completions.

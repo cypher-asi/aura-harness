@@ -127,13 +127,7 @@ where
         // `StreamAccumulator`) never has to race against the first
         // `message_start`.
         if !self.emitted_http_meta {
-            self.emitted_http_meta = true;
-            let request_id = self.request_id.clone();
-            let plan_usage = std::mem::take(&mut self.plan_usage);
-            return Poll::Ready(Some(Ok(StreamEvent::HttpMeta {
-                request_id,
-                plan_usage,
-            })));
+            return Poll::Ready(Some(Ok(self.take_http_meta())));
         }
 
         loop {
@@ -146,25 +140,8 @@ where
 
             match Pin::new(&mut self.inner).poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    if let Some((duration, timer)) = self.idle_timer.as_mut() {
-                        timer
-                            .as_mut()
-                            .reset(tokio::time::Instant::now() + *duration);
-                    }
-                    match std::str::from_utf8(&bytes) {
-                        Ok(s) => self.buffer.push_str(s),
-                        Err(e) => {
-                            return Poll::Ready(Some(Ok(StreamEvent::Error {
-                                message: format!("invalid UTF-8 in SSE stream: {e}"),
-                                request_id: None,
-                            })));
-                        }
-                    }
-                    if self.buffer.len() > MAX_SSE_BUFFER_SIZE {
-                        self.finished = true;
-                        return Poll::Ready(Some(Err(ReasonerError::Internal(format!(
-                            "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes"
-                        )))));
+                    if let Some(item) = self.push_chunk(&bytes) {
+                        return Poll::Ready(Some(item));
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
@@ -177,21 +154,66 @@ where
                     self.finished = true;
                     return Poll::Ready(None);
                 }
-                Poll::Pending => {
-                    if let Some((_, timer)) = self.idle_timer.as_mut() {
-                        if timer.as_mut().poll(cx).is_ready() {
-                            self.finished = true;
-                            return Poll::Ready(Some(Err(ReasonerError::Timeout)));
-                        }
-                    }
-                    return Poll::Pending;
-                }
+                Poll::Pending => return self.poll_idle_timer(cx),
             }
         }
     }
 }
 
 impl<S> SseStream<S> {
+    /// Build the one-shot synthetic `HttpMeta` event and mark it emitted.
+    fn take_http_meta(&mut self) -> StreamEvent {
+        self.emitted_http_meta = true;
+        let request_id = self.request_id.clone();
+        let plan_usage = std::mem::take(&mut self.plan_usage);
+        StreamEvent::HttpMeta {
+            request_id,
+            plan_usage,
+        }
+    }
+
+    /// Reset the idle deadline and append `bytes` to the buffer.
+    /// Returns the item to yield when the chunk is invalid UTF-8 or
+    /// overflows the buffer; `None` means keep parsing.
+    fn push_chunk(&mut self, bytes: &[u8]) -> Option<Result<StreamEvent, ReasonerError>> {
+        if let Some((duration, timer)) = self.idle_timer.as_mut() {
+            timer
+                .as_mut()
+                .reset(tokio::time::Instant::now() + *duration);
+        }
+        match std::str::from_utf8(bytes) {
+            Ok(s) => self.buffer.push_str(s),
+            Err(e) => {
+                return Some(Ok(StreamEvent::Error {
+                    message: format!("invalid UTF-8 in SSE stream: {e}"),
+                    request_id: None,
+                }));
+            }
+        }
+        if self.buffer.len() > MAX_SSE_BUFFER_SIZE {
+            self.finished = true;
+            return Some(Err(ReasonerError::Internal(format!(
+                "SSE buffer exceeded {MAX_SSE_BUFFER_SIZE} bytes"
+            ))));
+        }
+        None
+    }
+
+    /// Upstream is pending: fail with a timeout once the idle deadline
+    /// has elapsed, otherwise stay pending.
+    fn poll_idle_timer(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<StreamEvent, ReasonerError>>> {
+        if let Some((_, timer)) = self.idle_timer.as_mut() {
+            if timer.as_mut().poll(cx).is_ready() {
+                self.finished = true;
+                return Poll::Ready(Some(Err(ReasonerError::Timeout)));
+            }
+        }
+        Poll::Pending
+    }
+
     /// Pop one complete event block from the internal buffer and
     /// translate it into a [`StreamEvent`]. Returns `None` when the
     /// buffer doesn't yet hold a complete block.

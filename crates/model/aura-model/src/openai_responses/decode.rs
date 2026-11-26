@@ -76,23 +76,9 @@ impl Decoder {
                     self.open_item(index, item, &mut out);
                 }
             }
-            "response.output_text.delta" => {
-                let delta = event.get("delta").and_then(Value::as_str).unwrap_or("");
-                if !self.open.contains(&index) {
-                    self.open_block(index, StreamContentType::Text, &mut out);
-                }
-                out.push(StreamEvent::TextDelta {
-                    text: delta.to_string(),
-                });
-            }
+            "response.output_text.delta" => self.text_delta(index, event, &mut out),
             "response.function_call_arguments.delta" => {
-                if self.open.contains(&index) {
-                    let delta = event.get("delta").and_then(Value::as_str).unwrap_or("");
-                    self.streamed_args.insert(index);
-                    out.push(StreamEvent::InputJsonDelta {
-                        partial_json: delta.to_string(),
-                    });
-                }
+                self.arguments_delta(index, event, &mut out);
             }
             "response.output_item.done" => {
                 if let Some(item) = event.get("item") {
@@ -104,27 +90,50 @@ impl Decoder {
                 self.finish(response, &mut out);
             }
             "response.failed" => {
-                self.finished = true;
                 let message = event
                     .pointer("/response/error/message")
                     .and_then(Value::as_str)
                     .unwrap_or("response failed");
-                out.push(error(message));
+                self.fail(message, &mut out);
             }
             "error" => {
-                self.finished = true;
                 let message = event
                     .get("message")
                     .or_else(|| event.pointer("/error/message"))
                     .and_then(Value::as_str)
                     .unwrap_or("stream error");
-                out.push(error(message));
+                self.fail(message, &mut out);
             }
             // Reasoning summaries, content-part bookkeeping and other
             // progress frames still prove the stream is alive.
             _ => out.push(StreamEvent::Ping),
         }
         out
+    }
+
+    fn text_delta(&mut self, index: u32, event: &Value, out: &mut Vec<StreamEvent>) {
+        let delta = event.get("delta").and_then(Value::as_str).unwrap_or("");
+        if !self.open.contains(&index) {
+            self.open_block(index, StreamContentType::Text, out);
+        }
+        out.push(StreamEvent::TextDelta {
+            text: delta.to_string(),
+        });
+    }
+
+    fn arguments_delta(&mut self, index: u32, event: &Value, out: &mut Vec<StreamEvent>) {
+        if self.open.contains(&index) {
+            let delta = event.get("delta").and_then(Value::as_str).unwrap_or("");
+            self.streamed_args.insert(index);
+            out.push(StreamEvent::InputJsonDelta {
+                partial_json: delta.to_string(),
+            });
+        }
+    }
+
+    fn fail(&mut self, message: &str, out: &mut Vec<StreamEvent>) {
+        self.finished = true;
+        out.push(error(message));
     }
 
     fn start(&mut self, response: &Value, out: &mut Vec<StreamEvent>) {
@@ -229,12 +238,23 @@ impl Decoder {
             return;
         }
         self.finished = true;
+        self.close_all(out);
+        self.push_reasoning_block(out);
+        self.push_final_usage(response, out);
+        out.push(StreamEvent::MessageStop);
+    }
+
+    /// Close every still-open block in index order.
+    fn close_all(&mut self, out: &mut Vec<StreamEvent>) {
         let mut open: Vec<u32> = self.open.iter().copied().collect();
         open.sort_unstable();
         for index in open {
             self.close(index, out);
         }
+    }
 
+    /// Emit the collected reasoning items as one thinking block.
+    fn push_reasoning_block(&self, out: &mut Vec<StreamEvent>) {
         if let Some(signature) = encode_reasoning(&self.reasoning) {
             out.push(StreamEvent::ContentBlockStart {
                 index: REASONING_INDEX,
@@ -253,7 +273,9 @@ impl Decoder {
                 index: REASONING_INDEX,
             });
         }
+    }
 
+    fn push_final_usage(&self, response: &Value, out: &mut Vec<StreamEvent>) {
         let usage = response.get("usage");
         let tokens = |pointer: &str| {
             usage
@@ -271,26 +293,27 @@ impl Decoder {
             cache_creation_input_tokens: None,
             cache_read_input_tokens: tokens("/input_tokens_details/cached_tokens"),
         });
-
-        let incomplete_reason = response
-            .pointer("/incomplete_details/reason")
-            .and_then(Value::as_str);
-        let stop_reason = if self.saw_tool_call {
-            StopReason::ToolUse
-        } else if incomplete_reason == Some("max_output_tokens") {
-            StopReason::MaxTokens
-        } else {
-            StopReason::EndTurn
-        };
         out.push(StreamEvent::MessageDelta {
-            stop_reason: Some(stop_reason),
+            stop_reason: Some(self.stop_reason(response)),
             output_tokens: tokens("/output_tokens").unwrap_or(0),
             // Input / cache totals ride on the start frame above.
             input_tokens: None,
             cache_creation_input_tokens: None,
             cache_read_input_tokens: None,
         });
-        out.push(StreamEvent::MessageStop);
+    }
+
+    fn stop_reason(&self, response: &Value) -> StopReason {
+        let incomplete_reason = response
+            .pointer("/incomplete_details/reason")
+            .and_then(Value::as_str);
+        if self.saw_tool_call {
+            StopReason::ToolUse
+        } else if incomplete_reason == Some("max_output_tokens") {
+            StopReason::MaxTokens
+        } else {
+            StopReason::EndTurn
+        }
     }
 }
 

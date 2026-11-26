@@ -102,61 +102,20 @@ pub struct ModelContentProfile {
 impl ModelContentProfile {
     #[must_use]
     pub fn from_request(request: &ModelRequest) -> Self {
-        let has_aura_project_id = has_stable_value(request.aura_project_id.as_deref());
-        let has_aura_agent_id = has_stable_value(request.aura_agent_id.as_deref());
-        let has_aura_session_id = has_stable_value(request.aura_session_id.as_deref());
-        let has_aura_org_id = has_stable_value(request.aura_org_id.as_deref());
-        let mut messages_text_bytes = 0usize;
-        let mut last_user_text_bytes = 0usize;
-        let mut max_tool_result_bytes = 0usize;
-
-        for message in &*request.messages {
-            let mut message_text_bytes = 0usize;
-            for block in &message.content {
-                match block {
-                    ContentBlock::Text { text } => {
-                        messages_text_bytes += text.len();
-                        message_text_bytes += text.len();
-                    }
-                    ContentBlock::ToolResult { content, .. } => {
-                        let len = tool_result_len(content);
-                        messages_text_bytes += len;
-                        message_text_bytes += len;
-                        max_tool_result_bytes = max_tool_result_bytes.max(len);
-                    }
-                    ContentBlock::Thinking { thinking, .. } => {
-                        messages_text_bytes += thinking.len();
-                        message_text_bytes += thinking.len();
-                    }
-                    ContentBlock::ToolUse { input, .. } => {
-                        let len = serde_json::to_string(input).map_or(0, |s| s.len());
-                        messages_text_bytes += len;
-                        message_text_bytes += len;
-                    }
-                    ContentBlock::Image { source } => {
-                        messages_text_bytes += source.data.len();
-                        message_text_bytes += source.data.len();
-                    }
-                }
-            }
-            if message.role == Role::User {
-                last_user_text_bytes = message_text_bytes;
-            }
-        }
-
+        let sizes = TextSizes::measure(request);
         let tool_names = request.tools.iter().map(|tool| tool.name.clone()).collect();
         let mut profile = Self {
             kind: infer_request_kind(request),
             verdict: ModelContractVerdict::Accept,
             reasons: Vec::new(),
-            has_aura_project_id,
-            has_aura_agent_id,
-            has_aura_session_id,
-            has_aura_org_id,
+            has_aura_project_id: has_stable_value(request.aura_project_id.as_deref()),
+            has_aura_agent_id: has_stable_value(request.aura_agent_id.as_deref()),
+            has_aura_session_id: has_stable_value(request.aura_session_id.as_deref()),
+            has_aura_org_id: has_stable_value(request.aura_org_id.as_deref()),
             system_bytes: request.system.len(),
-            messages_text_bytes,
-            last_user_text_bytes,
-            max_tool_result_bytes,
+            messages_text_bytes: sizes.messages_text_bytes,
+            last_user_text_bytes: sizes.last_user_text_bytes,
+            max_tool_result_bytes: sizes.max_tool_result_bytes,
             tool_count: request.tools.len(),
             tool_names,
             content_signature: content_signature(request),
@@ -257,6 +216,46 @@ impl ModelContentProfile {
 impl std::fmt::Display for ModelRequestContractViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
+    }
+}
+
+/// Byte sizes of a request's message content.
+#[derive(Default)]
+struct TextSizes {
+    messages_text_bytes: usize,
+    /// Bytes of the last user message.
+    last_user_text_bytes: usize,
+    max_tool_result_bytes: usize,
+}
+
+impl TextSizes {
+    fn measure(request: &ModelRequest) -> Self {
+        let mut sizes = Self::default();
+        for message in &*request.messages {
+            let mut message_text_bytes = 0usize;
+            for block in &message.content {
+                let len = block_text_bytes(block);
+                if matches!(block, ContentBlock::ToolResult { .. }) {
+                    sizes.max_tool_result_bytes = sizes.max_tool_result_bytes.max(len);
+                }
+                sizes.messages_text_bytes += len;
+                message_text_bytes += len;
+            }
+            if message.role == Role::User {
+                sizes.last_user_text_bytes = message_text_bytes;
+            }
+        }
+        sizes
+    }
+}
+
+fn block_text_bytes(block: &ContentBlock) -> usize {
+    match block {
+        ContentBlock::Text { text } => text.len(),
+        ContentBlock::ToolResult { content, .. } => tool_result_len(content),
+        ContentBlock::Thinking { thinking, .. } => thinking.len(),
+        ContentBlock::ToolUse { input, .. } => serde_json::to_string(input).map_or(0, |s| s.len()),
+        ContentBlock::Image { source } => source.data.len(),
     }
 }
 

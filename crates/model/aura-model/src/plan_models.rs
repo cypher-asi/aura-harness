@@ -3,7 +3,8 @@
 
 use std::time::Duration;
 
-use aura_core_auth::{CredentialResolver, ProviderKind};
+use aura_core_auth::{CredentialResolver, InferenceCredential, ProviderKind};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 use crate::anthropic::anthropic_api_base;
@@ -51,17 +52,8 @@ async fn fetch_claude_models_from(
     resolver: &dyn CredentialResolver,
     base_url: &str,
 ) -> Result<Vec<ModelOption>, ReasonerError> {
-    let credential = resolver
-        .inference_credential(ProviderKind::Claude)
-        .await
-        .map_err(|e| ReasonerError::Api {
-            status: 401,
-            message: e.to_string(),
-        })?;
-    let client = reqwest::Client::builder()
-        .timeout(LIST_TIMEOUT)
-        .build()
-        .map_err(|e| ReasonerError::Internal(format!("http client: {e}")))?;
+    let credential = plan_credential(resolver, ProviderKind::Claude).await?;
+    let client = list_client()?;
     let base = base_url.trim_end_matches('/');
 
     let mut options = Vec::new();
@@ -75,47 +67,83 @@ async fn fetch_claude_models_from(
         if let Some(after) = &after {
             request = request.query(&[("after_id", after.as_str())]);
         }
-        for (name, value) in &credential.headers {
-            request = request.header(name.as_str(), value.as_str());
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| ReasonerError::Request(e.without_url().to_string()))?;
-        let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(ReasonerError::Api {
-                status: status.as_u16(),
-                message: format!(
-                    "Claude models list: {}",
-                    crate::truncate_body(body.trim(), 300)
-                ),
-            });
-        }
-        let page: ModelPage = response
-            .json()
-            .await
-            .map_err(|e| ReasonerError::Parse(format!("Claude models list: {e}")))?;
-        options.extend(page.data.into_iter().map(|m| {
-            let id = format!("{CLAUDE_PREFIX}{}", m.id);
-            ModelOption {
-                label: m
-                    .display_name
-                    .filter(|n| !n.is_empty())
-                    .unwrap_or_else(|| m.id.clone()),
-                tier: infer_tier(&id),
-                id,
-                backend: ModelBackend::Claude,
-                installed: true,
-            }
-        }));
+        let request = with_credential_headers(request, &credential);
+        let page: ModelPage = fetch_list(request, "Claude models list").await?;
+        options.extend(page.data.into_iter().map(claude_option));
         match page.last_id {
             Some(last) if page.has_more => after = Some(last),
             _ => break,
         }
     }
     Ok(options)
+}
+
+fn claude_option(model: ModelEntry) -> ModelOption {
+    let id = format!("{CLAUDE_PREFIX}{}", model.id);
+    ModelOption {
+        label: model
+            .display_name
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| model.id.clone()),
+        tier: infer_tier(&id),
+        id,
+        backend: ModelBackend::Claude,
+        installed: true,
+    }
+}
+
+async fn plan_credential(
+    resolver: &dyn CredentialResolver,
+    provider: ProviderKind,
+) -> Result<InferenceCredential, ReasonerError> {
+    resolver
+        .inference_credential(provider)
+        .await
+        .map_err(|e| ReasonerError::Api {
+            status: 401,
+            message: e.to_string(),
+        })
+}
+
+fn list_client() -> Result<reqwest::Client, ReasonerError> {
+    reqwest::Client::builder()
+        .timeout(LIST_TIMEOUT)
+        .build()
+        .map_err(|e| ReasonerError::Internal(format!("http client: {e}")))
+}
+
+fn with_credential_headers(
+    mut request: reqwest::RequestBuilder,
+    credential: &InferenceCredential,
+) -> reqwest::RequestBuilder {
+    for (name, value) in &credential.headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    request
+}
+
+/// Send a models-list request and decode its JSON body; `label` prefixes
+/// error messages (e.g. `"Claude models list"`).
+async fn fetch_list<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    label: &str,
+) -> Result<T, ReasonerError> {
+    let response = request
+        .send()
+        .await
+        .map_err(|e| ReasonerError::Request(e.without_url().to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(ReasonerError::Api {
+            status: status.as_u16(),
+            message: format!("{label}: {}", crate::truncate_body(body.trim(), 300)),
+        });
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| ReasonerError::Parse(format!("{label}: {e}")))
 }
 
 #[derive(Deserialize)]
@@ -176,44 +204,15 @@ async fn fetch_openrouter_models_from(
     resolver: &dyn CredentialResolver,
     base_url: &str,
 ) -> Result<Vec<(ModelOption, LiveModelInfo)>, ReasonerError> {
-    let credential = resolver
-        .inference_credential(ProviderKind::OpenRouter)
-        .await
-        .map_err(|e| ReasonerError::Api {
-            status: 401,
-            message: e.to_string(),
-        })?;
-    let client = reqwest::Client::builder()
-        .timeout(LIST_TIMEOUT)
-        .build()
-        .map_err(|e| ReasonerError::Internal(format!("http client: {e}")))?;
+    let credential = plan_credential(resolver, ProviderKind::OpenRouter).await?;
+    let client = list_client()?;
     let base = base_url.trim_end_matches('/');
 
-    let mut request = client
+    let request = client
         .get(format!("{base}/v1/models"))
         .bearer_auth(&credential.bearer);
-    for (name, value) in &credential.headers {
-        request = request.header(name.as_str(), value.as_str());
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|e| ReasonerError::Request(e.without_url().to_string()))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(ReasonerError::Api {
-            status: status.as_u16(),
-            message: format!(
-                "OpenRouter models list: {}",
-                crate::truncate_body(body.trim(), 300)
-            ),
-        });
-    }
-    let list: OpenRouterList = response
-        .json()
-        .await
-        .map_err(|e| ReasonerError::Parse(format!("OpenRouter models list: {e}")))?;
+    let request = with_credential_headers(request, &credential);
+    let list: OpenRouterList = fetch_list(request, "OpenRouter models list").await?;
     Ok(list
         .data
         .into_iter()
@@ -270,8 +269,34 @@ fn per_million(per_token: Option<&str>) -> Option<f64> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use aura_core_auth::{AuthError, InferenceCredential};
+    use aura_core_auth::AuthError;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Answer one HTTP request with `body` as JSON; the handle yields the
+    /// lowercased raw request.
+    async fn serve_json_once(
+        body: &'static str,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase()
+        });
+        (addr, server)
+    }
 
     struct Linked;
 
@@ -292,28 +317,11 @@ mod tests {
 
     #[tokio::test]
     async fn lists_plan_models_with_the_plan_credential() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
         let body = r#"{"data":[
             {"type":"model","id":"claude-opus-5-5","display_name":"Claude Opus 5.5"},
             {"type":"model","id":"claude-sonnet-5","display_name":""}
         ],"has_more":false,"last_id":"claude-sonnet-5"}"#;
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = vec![0u8; 8192];
-            let n = socket.read(&mut buf).await.unwrap();
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase()
-        });
+        let (addr, server) = serve_json_once(body).await;
 
         let models = fetch_claude_models_from(&Linked, &format!("http://{addr}"))
             .await
@@ -332,8 +340,6 @@ mod tests {
 
     #[tokio::test]
     async fn lists_tool_capable_openrouter_models_with_limits_and_prices() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
         let body = r#"{"data":[
             {"id":"anthropic/claude-sonnet-4.6","name":"Anthropic: Claude Sonnet 4.6",
              "context_length":200000,
@@ -345,22 +351,7 @@ mod tests {
             {"id":"meta-llama/llama-4:free","pricing":{"prompt":"-1","completion":"0"},
              "supported_parameters":["tools"]}
         ]}"#;
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = vec![0u8; 8192];
-            let n = socket.read(&mut buf).await.unwrap();
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase()
-        });
+        let (addr, server) = serve_json_once(body).await;
 
         let models = fetch_openrouter_models_from(&Linked, &format!("http://{addr}/"))
             .await

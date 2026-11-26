@@ -151,6 +151,84 @@ mod tests {
         )
     }
 
+    /// Frame each JSON event as `event: <type>\ndata: <json>\n\n`.
+    fn sse_body(events: &[&str]) -> String {
+        events
+            .iter()
+            .map(|data| {
+                let kind = serde_json::from_str::<serde_json::Value>(data).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                format!("event: {kind}\ndata: {data}\n\n")
+            })
+            .collect()
+    }
+
+    /// A start / delta / stop stream with no content blocks.
+    fn minimal_sse_body(model: &str) -> String {
+        let start = format!(
+            r#"{{"type":"message_start","message":{{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"{model}","stop_reason":null,"usage":{{"input_tokens":3,"output_tokens":0}}}}}}"#
+        );
+        sse_body(&[
+            &start,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+            r#"{"type":"message_stop"}"#,
+        ])
+    }
+
+    /// Read one whole HTTP request: headers plus a `Content-Length` body.
+    async fn read_request(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        use tokio::io::AsyncReadExt;
+
+        let mut raw = Vec::new();
+        let mut buf = vec![0u8; 65536];
+        loop {
+            let n = socket.read(&mut buf).await.unwrap();
+            raw.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&raw).to_ascii_lowercase();
+            if let Some(end) = text.find("\r\n\r\n") {
+                let length = text[..end]
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+                if raw.len() >= end + 4 + length || n == 0 {
+                    break;
+                }
+            }
+        }
+        raw
+    }
+
+    /// Answer one request with `body` as an SSE stream, adding
+    /// `extra_headers` (each ending in `\r\n`); the handle yields the raw
+    /// request.
+    async fn serve_sse_once(
+        body: String,
+        extra_headers: &'static str,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<String>) {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let raw = read_request(&mut socket).await;
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n{extra_headers}Content-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&raw).to_string()
+        });
+        (addr, server)
+    }
+
     #[test]
     fn local_requests_strip_prefix_and_jwt() {
         let provider = routed();
@@ -173,10 +251,7 @@ mod tests {
     async fn local_model_streams_sse_from_anthropic_compatible_server() {
         use crate::{AnthropicConfig, AnthropicProvider, StreamEvent};
         use futures_util::StreamExt;
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
         let events = [
             r#"{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"qwen3:4b","stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}"#,
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
@@ -185,33 +260,7 @@ mod tests {
             r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
             r#"{"type":"message_stop"}"#,
         ];
-        let body: String = events
-            .iter()
-            .map(|data| {
-                let kind = serde_json::from_str::<serde_json::Value>(data).unwrap()["type"]
-                    .as_str()
-                    .unwrap()
-                    .to_string();
-                format!("event: {kind}\ndata: {data}\n\n")
-            })
-            .collect();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = vec![0u8; 65536];
-            let n = socket.read(&mut buf).await.unwrap();
-            let request = String::from_utf8_lossy(&buf[..n]).to_string();
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            request
-        });
+        let (addr, server) = serve_sse_once(sse_body(&events), "").await;
 
         let local_cfg = AnthropicConfig {
             base_url: format!("http://{addr}"),
@@ -246,53 +295,18 @@ mod tests {
         assert!(!raw_request.contains("cache_control"));
     }
 
+    /// Plan-usage headers a Claude plan response carries.
+    const RATE_LIMIT_HEADERS: &str = "anthropic-ratelimit-unified-5h-utilization: 0.07\r\n\
+                                      anthropic-ratelimit-unified-5h-reset: 1774933200\r\n\
+                                      anthropic-ratelimit-unified-7d-utilization: 0.53\r\n";
+
     #[tokio::test]
     async fn direct_claude_requests_omit_router_only_fields() {
         use crate::{AnthropicConfig, AnthropicProvider, ThinkingEffort};
         use futures_util::StreamExt;
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let body = concat!(
-            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-opus-4-7\",\"stop_reason\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n",
-            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
-            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
-        );
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut raw = Vec::new();
-            let mut buf = vec![0u8; 65536];
-            loop {
-                let n = socket.read(&mut buf).await.unwrap();
-                raw.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&raw).to_ascii_lowercase();
-                if let Some(end) = text.find("\r\n\r\n") {
-                    let length = text[..end]
-                        .lines()
-                        .find_map(|l| l.strip_prefix("content-length:"))
-                        .map_or(0, |v| v.trim().parse::<usize>().unwrap());
-                    if raw.len() >= end + 4 + length || n == 0 {
-                        break;
-                    }
-                }
-            }
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
-                         anthropic-ratelimit-unified-5h-utilization: 0.07\r\n\
-                         anthropic-ratelimit-unified-5h-reset: 1774933200\r\n\
-                         anthropic-ratelimit-unified-7d-utilization: 0.53\r\n\
-                         Content-Length: {}\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            String::from_utf8_lossy(&raw).to_string()
-        });
+        let body = minimal_sse_body("claude-opus-4-7");
+        let (addr, server) = serve_sse_once(body, RATE_LIMIT_HEADERS).await;
 
         let config = AnthropicConfig {
             base_url: format!("http://{addr}"),
@@ -402,45 +416,9 @@ mod tests {
         use crate::credentialed::CredentialedProvider;
         use crate::{AnthropicConfig, AnthropicProvider};
         use futures_util::StreamExt;
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let body = concat!(
-            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic/claude-sonnet-4.6\",\"stop_reason\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n",
-            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
-            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
-        );
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut raw = Vec::new();
-            let mut buf = vec![0u8; 65536];
-            loop {
-                let n = socket.read(&mut buf).await.unwrap();
-                raw.extend_from_slice(&buf[..n]);
-                let text = String::from_utf8_lossy(&raw).to_ascii_lowercase();
-                if let Some(end) = text.find("\r\n\r\n") {
-                    let length = text[..end]
-                        .lines()
-                        .find_map(|l| l.strip_prefix("content-length:"))
-                        .map_or(0, |v| v.trim().parse::<usize>().unwrap());
-                    if raw.len() >= end + 4 + length || n == 0 {
-                        break;
-                    }
-                }
-            }
-            socket
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            String::from_utf8_lossy(&raw).to_string()
-        });
+        let body = minimal_sse_body("anthropic/claude-sonnet-4.6");
+        let (addr, server) = serve_sse_once(body, "").await;
 
         let config = AnthropicConfig {
             base_url: format!("http://{addr}"),
