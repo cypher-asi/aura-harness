@@ -54,11 +54,9 @@ fn test_chat_panel_tabs_switch_between_chat_and_terminal() {
     assert!(app.selection().is_none());
 }
 
-#[test]
-fn test_hovered_agent_row_shows_an_archive_button_left_of_its_time() {
-    use crate::app::HoverTarget;
+/// Two agents: one active three minutes ago, one with no time.
+fn archive_button_app() -> crate::App {
     use crate::events::{AgentSummary, UiCommand};
-    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 
     let mut app = crate::App::new();
     app.process_command(UiCommand::SetAgents(vec![
@@ -74,20 +72,69 @@ fn test_hovered_agent_row_shows_an_archive_button_left_of_its_time() {
             ..Default::default()
         },
     ]));
-    let char_col = |row: &str, needle: &str| {
-        let i = row
-            .find(needle)
-            .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"));
-        row[..i].chars().count()
-    };
-    let glyph_at = |row: &str, column: usize| row.chars().nth(column);
-    let moved = |column: usize, row: usize| MouseEvent {
-        kind: MouseEventKind::Moved,
+    app
+}
+
+fn char_col(row: &str, needle: &str) -> usize {
+    let i = row
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"));
+    row[..i].chars().count()
+}
+
+fn glyph_at(row: &str, column: usize) -> Option<char> {
+    row.chars().nth(column)
+}
+
+fn moved(column: usize, row: usize) -> crossterm::event::MouseEvent {
+    crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Moved,
         column: u16::try_from(column).unwrap(),
         row: u16::try_from(row).unwrap(),
-        modifiers: KeyModifiers::empty(),
-    };
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    }
+}
 
+/// An agent with no time has its archive button one column in from the
+/// edge; returns that agent's row.
+fn check_archive_button_with_no_time(app: &mut crate::App, before: &[String]) -> usize {
+    use crate::app::HoverTarget;
+
+    let other = before
+        .iter()
+        .position(|r| r.contains("Researcher"))
+        .expect("agent row");
+    let right = char_col(&before[other], "Researcher") + "Researcher".len();
+    let edge = before[other][..]
+        .chars()
+        .enumerate()
+        .skip(right)
+        .find(|&(_, c)| c == '│')
+        .map(|(i, _)| i)
+        .expect("panel border");
+    app.handle_mouse(moved(edge - 4, other));
+    assert!(matches!(app.hover(), Some(HoverTarget::ProjectRow(_))));
+    // Off the button it stays muted like the time; on it, it lights up.
+    let colors = test_theme().colors;
+    let row = u16::try_from(other).unwrap();
+    let buffer = render_buffer(app, 120);
+    let (_, archive) = find_cell(&buffer, row, "✕").expect("archive button");
+    assert_eq!(archive.fg, Some(colors.muted));
+    app.handle_mouse(moved(edge - 2, other));
+    assert!(matches!(app.hover(), Some(HoverTarget::ArchiveAgent(_))));
+    let no_time = render_rows(app, 120);
+    assert_eq!(glyph_at(&no_time[other], edge - 2), Some('✕'));
+    let buffer = render_buffer(app, 120);
+    let (_, archive) = find_cell(&buffer, row, "✕").expect("archive button");
+    assert_eq!(archive.fg, Some(colors.foreground));
+    other
+}
+
+#[test]
+fn test_hovered_agent_row_shows_an_archive_button_left_of_its_time() {
+    use crate::app::HoverTarget;
+
+    let mut app = archive_button_app();
     let before = render_rows(&mut app, 120);
     let line = before
         .iter()
@@ -120,35 +167,7 @@ fn test_hovered_agent_row_shows_an_archive_button_left_of_its_time() {
     app.handle_mouse(moved(time - 4, line));
     assert_eq!(app.hover(), Some(HoverTarget::ProjectRow(row_index)));
 
-    // An agent with no time has its archive button one column in from
-    // the edge.
-    let other = before
-        .iter()
-        .position(|r| r.contains("Researcher"))
-        .expect("agent row");
-    let right = char_col(&before[other], "Researcher") + "Researcher".len();
-    let edge = before[other][..]
-        .chars()
-        .enumerate()
-        .skip(right)
-        .find(|&(_, c)| c == '│')
-        .map(|(i, _)| i)
-        .expect("panel border");
-    app.handle_mouse(moved(edge - 4, other));
-    assert!(matches!(app.hover(), Some(HoverTarget::ProjectRow(_))));
-    // Off the button it stays muted like the time; on it, it lights up.
-    let colors = test_theme().colors;
-    let row = u16::try_from(other).unwrap();
-    let buffer = render_buffer(&mut app, 120);
-    let (_, archive) = find_cell(&buffer, row, "✕").expect("archive button");
-    assert_eq!(archive.fg, Some(colors.muted));
-    app.handle_mouse(moved(edge - 2, other));
-    assert!(matches!(app.hover(), Some(HoverTarget::ArchiveAgent(_))));
-    let no_time = render_rows(&mut app, 120);
-    assert_eq!(glyph_at(&no_time[other], edge - 2), Some('✕'));
-    let buffer = render_buffer(&mut app, 120);
-    let (_, archive) = find_cell(&buffer, row, "✕").expect("archive button");
-    assert_eq!(archive.fg, Some(colors.foreground));
+    let other = check_archive_button_with_no_time(&mut app, &before);
 
     // Off the rows, they look as they did.
     app.handle_mouse(moved(60, 0));
@@ -253,7 +272,7 @@ fn side_panel(rows: &[String]) -> (usize, usize, usize) {
 #[test]
 fn test_expand_button_maximizes_the_side_panel_over_the_record_panel() {
     use crate::app::{HoverTarget, PanelFocus};
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crossterm::event::{MouseButton, MouseEventKind};
 
     let mut app = crate::App::new();
     let rows = render_rows(&mut app, 120);
@@ -267,18 +286,13 @@ fn test_expand_button_maximizes_the_side_panel_over_the_record_panel() {
     let row = u16::try_from(tabs).unwrap();
     let (expand, idle) = find_cell(&buffer, row, "⤢").expect("the expand button is drawn");
     assert_eq!(idle.fg, Some(test_theme().colors.muted));
-    let mouse = |kind| MouseEvent {
-        kind,
-        column: expand,
-        row,
-        modifiers: KeyModifiers::empty(),
-    };
-    app.handle_mouse(mouse(MouseEventKind::Moved));
+    mouse_at(&mut app, MouseEventKind::Moved, (expand, row));
     assert_eq!(app.hover(), Some(HoverTarget::ExpandSide));
     let buffer = render_buffer(&mut app, 120);
     let lit = buffer[(expand, row)].style();
     assert_eq!(lit.bg, Some(test_theme().colors.surface_hover));
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+    let click = MouseEventKind::Down(MouseButton::Left);
+    mouse_at(&mut app, click, (expand, row));
     assert!(app.side_expanded());
     assert_eq!(app.focus(), PanelFocus::Sandbox);
 
@@ -297,12 +311,7 @@ fn test_expand_button_maximizes_the_side_panel_over_the_record_panel() {
         "the button now restores"
     );
     let (restore, _) = find_cell(&buffer, row, "⤡").unwrap();
-    app.handle_mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: restore,
-        row,
-        modifiers: KeyModifiers::empty(),
-    });
+    mouse_at(&mut app, click, (restore, row));
     assert!(!app.side_expanded());
     let rows = render_rows(&mut app, 120);
     assert_eq!(header_bar(&rows, "KRN").0, kernel);

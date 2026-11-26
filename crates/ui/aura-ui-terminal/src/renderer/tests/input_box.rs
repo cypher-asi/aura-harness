@@ -219,13 +219,7 @@ fn test_shift_enter_on_an_empty_prompt_grows_the_box() {
                 assert!(app.is_busy());
             }
             render_with_cursor(&mut app, 120);
-            for _ in 0..4 {
-                if app.focus() == focus {
-                    break;
-                }
-                app.handle_key(KeyEvent::from(KeyCode::Tab));
-            }
-            assert_eq!(app.focus(), focus);
+            tab_to(&mut app, focus);
             assert_eq!(super::super::input::input_rows(area, &app, 20), 1);
             let (before, _) = render_with_cursor(&mut app, 120);
 
@@ -240,12 +234,6 @@ fn test_shift_enter_on_an_empty_prompt_grows_the_box() {
             assert_eq!(super::super::input::input_rows(area, &app, 20), 3);
 
             let (rows, (_, y)) = render_with_cursor(&mut app, 120);
-            let divider_row = |rows: &[String]| {
-                let (_, chat_left, _) = chat_panel(rows);
-                rows.iter()
-                    .rposition(|row| row.chars().nth(chat_left) == Some('├'))
-                    .unwrap()
-            };
             assert_eq!(
                 divider_row(&before) - divider_row(&rows),
                 2,
@@ -259,6 +247,27 @@ fn test_shift_enter_on_an_empty_prompt_grows_the_box() {
             assert!(!rows.join("\n").contains("Ask anything"));
         }
     }
+}
+
+/// Press Tab until `focus` has the focus.
+fn tab_to(app: &mut crate::App, focus: crate::app::PanelFocus) {
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    for _ in 0..4 {
+        if app.focus() == focus {
+            break;
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+    }
+    assert_eq!(app.focus(), focus);
+}
+
+/// The row of the divider above the prompt box.
+fn divider_row(rows: &[String]) -> usize {
+    let (_, chat_left, _) = chat_panel(rows);
+    rows.iter()
+        .rposition(|row| row.chars().nth(chat_left) == Some('├'))
+        .unwrap()
 }
 
 /// Draw `app` and return the screen rows and where the cursor is.

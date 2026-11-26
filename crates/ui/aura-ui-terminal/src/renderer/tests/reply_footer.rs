@@ -173,7 +173,7 @@ fn test_working_indicator_names_running_tool() {
 
 #[test]
 fn test_reply_footer_says_who_paid_for_the_tokens() {
-    use crate::events::{SourceUsage, UiCommand};
+    use crate::events::UiCommand;
 
     let mut app = crate::App::new();
     submit_message(&mut app, "hi");
@@ -181,25 +181,8 @@ fn test_reply_footer_says_who_paid_for_the_tokens() {
     app.process_command(UiCommand::AppendText("hello".to_string()));
     app.process_command(UiCommand::SetReplyModel {
         model: "claude-sonnet-4-6 · claude-haiku-4.5".to_string(),
-        usage: Some(CallUsage {
-            tokens: 27_900,
-            cost_usd: Some(0.004),
-            unpriced_calls: 0,
-        }),
-        sources: vec![
-            SourceUsage {
-                label: "Claude plan".to_string(),
-                tokens: 25_100,
-                cost_usd: None,
-                unpriced_calls: 0,
-            },
-            SourceUsage {
-                label: "OpenRouter".to_string(),
-                tokens: 2_800,
-                cost_usd: Some(0.004),
-                unpriced_calls: 0,
-            },
-        ],
+        usage: Some(split_usage()),
+        sources: split_sources().to_vec(),
     });
     app.process_command(UiCommand::Complete);
 
@@ -218,25 +201,14 @@ fn test_reply_footer_says_who_paid_for_the_tokens() {
         "the footer is one line: {:?}",
         &rows[footer..]
     );
-    let sources = [
-        SourceUsage {
-            label: "Claude plan".to_string(),
-            tokens: 25_100,
-            cost_usd: None,
-            unpriced_calls: 0,
-        },
-        SourceUsage {
-            label: "OpenRouter".to_string(),
-            tokens: 2_800,
-            cost_usd: Some(0.004),
-            unpriced_calls: 0,
-        },
-    ];
-    let usage = CallUsage {
-        tokens: 27_900,
-        cost_usd: Some(0.004),
-        unpriced_calls: 0,
-    };
+}
+
+#[test]
+fn test_reply_meta_lists_each_sign_ins_share() {
+    use crate::events::SourceUsage;
+
+    let sources = split_sources();
+    let usage = split_usage();
     assert_eq!(
         super::super::segments::reply_meta(Some("m"), Some(usage), &sources).join(" · "),
         "m · via Claude plan 25.1k tok · OpenRouter 2.8k tok <$0.01"
@@ -252,6 +224,35 @@ fn test_reply_footer_says_who_paid_for_the_tokens() {
         super::super::segments::reply_meta(Some("m"), Some(usage), &partly).join(" · "),
         "m · via Claude plan 25.1k tok · OpenRouter 2.8k tok <$0.01+?"
     );
+}
+
+/// A reply's 27.9k tokens, paid partly by a plan and partly by OpenRouter.
+fn split_usage() -> CallUsage {
+    CallUsage {
+        tokens: 27_900,
+        cost_usd: Some(0.004),
+        unpriced_calls: 0,
+    }
+}
+
+/// The shares of [`split_usage`] by sign-in.
+fn split_sources() -> [crate::events::SourceUsage; 2] {
+    use crate::events::SourceUsage;
+
+    [
+        SourceUsage {
+            label: "Claude plan".to_string(),
+            tokens: 25_100,
+            cost_usd: None,
+            unpriced_calls: 0,
+        },
+        SourceUsage {
+            label: "OpenRouter".to_string(),
+            tokens: 2_800,
+            cost_usd: Some(0.004),
+            unpriced_calls: 0,
+        },
+    ]
 }
 
 #[test]

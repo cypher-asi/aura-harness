@@ -135,8 +135,10 @@ fn test_load_conversation_replaces_messages() {
     assert_eq!(app.scroll_offset(), 0);
 }
 
-#[test]
-fn test_reply_model_sets_the_turn_so_far_on_replies_since_last_user_message() {
+/// An app whose turn since the last user message streamed two replies,
+/// tagged with one model and then the turn so far, and the usage of that
+/// last tag.
+fn two_reply_turn() -> (App, CallUsage) {
     let mut app = App::new();
     app.add_message(Message::new(MessageRole::Assistant, "earlier reply"));
     app.add_message(Message::new(MessageRole::User, "question"));
@@ -166,6 +168,12 @@ fn test_reply_model_sets_the_turn_so_far_on_replies_since_last_user_message() {
         usage: Some(opus),
         sources: Vec::new(),
     });
+    (app, opus)
+}
+
+#[test]
+fn test_reply_model_sets_the_turn_so_far_on_replies_since_last_user_message() {
+    let (app, opus) = two_reply_turn();
 
     let models: Vec<(&str, Option<&str>, Option<u64>)> = app
         .messages()

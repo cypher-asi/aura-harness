@@ -295,8 +295,9 @@ fn test_spawn_guides_join_each_agent_to_its_parent() {
     );
 }
 
-#[test]
-fn test_tasks_tab_lists_requests_items_not_what_was_asked() {
+/// The Tasks tab, drawn for a request with two items and one part doing
+/// none of them.
+fn tasks_tab_rows() -> Vec<String> {
     use crate::app::PanelFocus;
     use crate::events::{TaskState, TaskView, TodoState, TodoView, UiCommand};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -334,7 +335,22 @@ fn test_tasks_tab_lists_requests_items_not_what_was_asked() {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
     let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
-    let rows = render_rows(&mut app, 200);
+    render_rows(&mut app, 200)
+}
+
+/// The column of the last `glyph` in `rows[row]`.
+fn last_column(rows: &[String], row: usize, glyph: char) -> usize {
+    rows[row]
+        .chars()
+        .enumerate()
+        .filter_map(|(i, c)| (c == glyph).then_some(i))
+        .last()
+        .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
+}
+
+#[test]
+fn test_tasks_tab_lists_requests_items_not_what_was_asked() {
+    let rows = tasks_tab_rows();
     let row_with = |text: &str| {
         rows.iter()
             .position(|r| r.contains(text))
@@ -360,18 +376,10 @@ fn test_tasks_tab_lists_requests_items_not_what_was_asked() {
     let part = row_with("Parse the source  → coder");
     assert_eq!(part, no_plan + 3, "the part doing no item follows them");
     // Every icon sits right under the header's fold arrow.
-    let last_column = |row: usize, glyph: char| {
-        rows[row]
-            .chars()
-            .enumerate()
-            .filter_map(|(i, c)| (c == glyph).then_some(i))
-            .last()
-            .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
-    };
-    let arrow = last_column(no_plan, '▾');
-    assert_eq!(last_column(no_plan + 1, '☒'), arrow);
-    assert_eq!(last_column(no_plan + 2, '☐'), arrow);
-    assert_eq!(last_column(part, '✓'), arrow);
+    let arrow = last_column(&rows, no_plan, '▾');
+    assert_eq!(last_column(&rows, no_plan + 1, '☒'), arrow);
+    assert_eq!(last_column(&rows, no_plan + 2, '☐'), arrow);
+    assert_eq!(last_column(&rows, part, '✓'), arrow);
     assert!(
         rows.iter().any(|r| r.contains("p plan")),
         "the hint names the plan key"

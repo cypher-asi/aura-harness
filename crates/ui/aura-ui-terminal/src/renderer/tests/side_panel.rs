@@ -88,43 +88,9 @@ fn test_side_panel_header_matches_the_agents_header() {
 #[test]
 fn test_side_panel_star_button_lists_the_whole_project() {
     use crate::app::SideScope;
-    use crate::events::{AgentSummary, ProcessSummary, UiCommand};
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crate::events::UiCommand;
 
-    let mut app = crate::App::new();
-    let agent = |id: &str| AgentSummary {
-        id: id.into(),
-        name: id.to_uppercase(),
-        project_id: Some("site".into()),
-        ..AgentSummary::default()
-    };
-    app.process_command(UiCommand::SetAgents(vec![agent("a"), agent("b")]));
-    app.process_command(UiCommand::SetActiveAgent("a".into()));
-    let process = |id: &str, owner: &str| ProcessSummary {
-        id: id.into(),
-        label: format!("job-{id}"),
-        owner_agent_id: owner.into(),
-        jump_agent_id: owner.into(),
-        ..ProcessSummary::default()
-    };
-    app.process_command(UiCommand::SetProcesses(vec![
-        process("a1", "a"),
-        process("b1", "b"),
-    ]));
-    let click = |app: &mut crate::App, column, row| {
-        for kind in [
-            MouseEventKind::Down(MouseButton::Left),
-            MouseEventKind::Up(MouseButton::Left),
-        ] {
-            app.handle_mouse(MouseEvent {
-                kind,
-                column,
-                row,
-                modifiers: KeyModifiers::empty(),
-            });
-        }
-    };
-
+    let mut app = two_agents_with_a_process_each();
     let buffer = render_buffer(&mut app, 150);
     let row = row_of(&buffer, "│ * │");
     let (prc, _) = find_cell(&buffer, row, "PRC").unwrap();
@@ -155,6 +121,44 @@ fn test_side_panel_star_button_lists_the_whole_project() {
     let screen = render_rows(&mut app, 150).join("\n");
     assert!(screen.contains("job-b1"), "{screen}");
     assert!(!screen.contains("job-a1"), "{screen}");
+}
+
+/// Agents `a` (active) and `b` of one project, each owning one process.
+fn two_agents_with_a_process_each() -> crate::App {
+    use crate::events::{AgentSummary, ProcessSummary, UiCommand};
+
+    let mut app = crate::App::new();
+    let agent = |id: &str| AgentSummary {
+        id: id.into(),
+        name: id.to_uppercase(),
+        project_id: Some("site".into()),
+        ..AgentSummary::default()
+    };
+    app.process_command(UiCommand::SetAgents(vec![agent("a"), agent("b")]));
+    app.process_command(UiCommand::SetActiveAgent("a".into()));
+    let process = |id: &str, owner: &str| ProcessSummary {
+        id: id.into(),
+        label: format!("job-{id}"),
+        owner_agent_id: owner.into(),
+        jump_agent_id: owner.into(),
+        ..ProcessSummary::default()
+    };
+    app.process_command(UiCommand::SetProcesses(vec![
+        process("a1", "a"),
+        process("b1", "b"),
+    ]));
+    app
+}
+
+fn click(app: &mut crate::App, column: u16, row: u16) {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        mouse_at(app, kind, (column, row));
+    }
 }
 
 #[test]

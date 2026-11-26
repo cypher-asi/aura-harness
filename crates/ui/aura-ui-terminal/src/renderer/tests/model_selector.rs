@@ -1,12 +1,11 @@
 use super::*;
 
-#[test]
-fn test_clicking_a_difficulty_row_then_a_model_picks_it_from_the_selector() {
-    use crate::app::{AppState, PickerTarget, BY_DIFFICULTY};
+/// An app with three models whose bench form is open on arm B set to
+/// pick a model by difficulty, none picked yet.
+fn bench_by_difficulty_app() -> crate::App {
+    use crate::app::BY_DIFFICULTY;
     use crate::events::{ModelOptionView, UiCommand};
-    use crossterm::event::{
-        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
-    };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let model = |id: &str, label: &str, group: &str| ModelOptionView {
         id: id.to_string(),
@@ -47,20 +46,25 @@ fn test_clicking_a_difficulty_row_then_a_model_picks_it_from_the_selector() {
     assert_eq!(app.bench().mode, Some(crate::app::BenchMode::Form));
     app.bench_mut().form.b = BY_DIFFICULTY.to_string();
     app.bench_mut().form.b_models = Default::default();
-    let click = |app: &mut crate::App, column: u16, row: u16| {
-        for kind in [
-            MouseEventKind::Down(MouseButton::Left),
-            MouseEventKind::Up(MouseButton::Left),
-        ] {
-            app.handle_mouse(MouseEvent {
-                kind,
-                column,
-                row,
-                modifiers: KeyModifiers::NONE,
-            });
-        }
-    };
+    app
+}
 
+fn click(app: &mut crate::App, column: u16, row: u16) {
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        mouse_at(app, kind, (column, row));
+    }
+}
+
+#[test]
+fn test_clicking_a_difficulty_row_then_a_model_picks_it_from_the_selector() {
+    use crate::app::{AppState, PickerTarget};
+
+    let mut app = bench_by_difficulty_app();
     let buffer = render_buffer(&mut app, 160);
     let row = row_of(&buffer, "  Medium");
     let (column, _) = find_cell(&buffer, row, "Medium").unwrap();

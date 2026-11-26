@@ -99,23 +99,17 @@ fn test_files_command_toggles_sandbox_panel() {
     assert!(!screen.contains("KRN"));
 }
 
-#[test]
-fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
-    use crate::app::PanelFocus;
-    use crate::events::{PlanView, TaskState, TaskView, TodoState, TodoView, UiCommand};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+/// The auth plan's path, which the build task points at.
+const AUTH_PLAN: &str = ".aura/plans/auth_00000001.plan.md";
 
-    let todo = |content: &str, state| TodoView {
-        content: content.into(),
-        state,
-        assignee: None,
-        task: None,
-    };
-    let auth_path = ".aura/plans/auth_00000001.plan.md";
-    let mut app = crate::App::new();
-    app.process_command(UiCommand::SetPlans(vec![
+/// Two plans: Auth rework, a todo done and one in progress by the
+/// `handler` task, and Parser cleanup, all done.
+fn auth_and_parser_plans() -> Vec<crate::events::PlanView> {
+    use crate::events::{PlanView, TodoState, TodoView};
+
+    vec![
         PlanView {
-            path: auth_path.into(),
+            path: AUTH_PLAN.into(),
             name: "Auth rework".into(),
             todos: vec![
                 todo("Add session table", TodoState::Completed),
@@ -130,8 +124,14 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
             name: "Parser cleanup".into(),
             todos: vec![todo("Split the lexer", TodoState::Completed)],
         },
-    ]));
-    app.process_command(UiCommand::SetTasks(vec![
+    ]
+}
+
+/// The auth plan's build and the handler task under it.
+fn auth_tasks() -> Vec<crate::events::TaskView> {
+    use crate::events::{TaskState, TaskView};
+
+    vec![
         TaskView {
             id: "handler".into(),
             title: "Write the handler".into(),
@@ -145,28 +145,58 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
             title: "Build the auth".into(),
             state: TaskState::Open,
             agent_name: "Lead".into(),
-            plan: Some(auth_path.into()),
+            plan: Some(AUTH_PLAN.into()),
             builds: true,
             ..TaskView::default()
         },
-    ]));
+    ]
+}
+
+/// An app with the plans and tasks above, its TASKS tab open in the
+/// focused side panel, and that screen drawn 160 wide.
+fn tasks_tab() -> (crate::App, Vec<String>) {
+    use crate::app::PanelFocus;
+    use crate::events::UiCommand;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let mut app = crate::App::new();
+    app.process_command(UiCommand::SetPlans(auth_and_parser_plans()));
+    app.process_command(UiCommand::SetTasks(auth_tasks()));
     while app.focus() != PanelFocus::Sandbox {
         let _ = app.handle_key(KeyEvent::from(KeyCode::Tab));
     }
     let _ = app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     let rows = render_rows(&mut app, 160);
-    let row_with = |text: &str| {
-        rows.iter()
-            .position(|r| r.contains(text))
-            .unwrap_or_else(|| panic!("no {text} in:\n{}", rows.join("\n")))
-    };
-    let auth = row_with("Auth rework");
+    (app, rows)
+}
+
+/// Index of the first of `rows` that contains `text`.
+fn row_with(rows: &[String], text: &str) -> usize {
+    rows.iter()
+        .position(|r| r.contains(text))
+        .unwrap_or_else(|| panic!("no {text} in:\n{}", rows.join("\n")))
+}
+
+/// Character column of the last `glyph` in `rows[row]`.
+fn last_column(rows: &[String], row: usize, glyph: char) -> usize {
+    rows[row]
+        .chars()
+        .enumerate()
+        .filter_map(|(i, c)| (c == glyph).then_some(i))
+        .last()
+        .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
+}
+
+#[test]
+fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
+    let (_app, rows) = tasks_tab();
+    let auth = row_with(&rows, "Auth rework");
     assert!(
         rows[auth].contains('▾') && rows[auth].contains("1/2"),
         "{}",
         rows[auth]
     );
-    assert_eq!(row_with("Add session table"), auth + 1);
+    assert_eq!(row_with(&rows, "Add session table"), auth + 1);
     assert!(rows[auth + 1].contains('☒'));
     assert!(
         rows[auth + 2].contains("▣  Write the login handler"),
@@ -178,23 +208,8 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
         "the task doing a todo sits under it, titled by the todo: {}",
         rows[auth + 3]
     );
-    // The todos' boxes sit right under the plan's fold arrow; only the
-    // task under a todo is indented, one level.
-    let last_column = |row: usize, glyph: char| {
-        rows[row]
-            .chars()
-            .enumerate()
-            .filter_map(|(i, c)| (c == glyph).then_some(i))
-            .last()
-            .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
-    };
-    let arrow = last_column(auth, '▾');
-    assert_eq!(last_column(auth + 1, '☒'), arrow);
-    assert_eq!(last_column(auth + 2, '▣'), arrow);
-    assert_eq!(last_column(auth + 3, '✓'), arrow + 2);
-    let parser = row_with("Parser cleanup");
+    let parser = row_with(&rows, "Parser cleanup");
     assert_eq!(parser, auth + 4);
-    assert_eq!(last_column(parser, '▸'), arrow, "plan headers line up");
     assert!(
         rows[parser].contains("✓ 1/1"),
         "a finished plan is marked done: {}",
@@ -214,7 +229,32 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
         !screen.contains("Build the auth") && !screen.contains("No Plan"),
         "the build is the plan's header: {screen}"
     );
+}
 
+#[test]
+fn test_tasks_tab_lines_todos_up_under_their_plans_fold_arrow() {
+    let (_app, rows) = tasks_tab();
+    let auth = row_with(&rows, "Auth rework");
+    // The todos' boxes sit right under the plan's fold arrow; only the
+    // task under a todo is indented, one level.
+    let arrow = last_column(&rows, auth, '▾');
+    assert_eq!(last_column(&rows, auth + 1, '☒'), arrow);
+    assert_eq!(last_column(&rows, auth + 2, '▣'), arrow);
+    assert_eq!(last_column(&rows, auth + 3, '✓'), arrow + 2);
+    let parser = row_with(&rows, "Parser cleanup");
+    assert_eq!(
+        last_column(&rows, parser, '▸'),
+        arrow,
+        "plan headers line up"
+    );
+}
+
+#[test]
+fn test_tasks_tab_colors_plans_and_todos_by_their_state() {
+    use crate::app::PanelFocus;
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let (mut app, _rows) = tasks_tab();
     // Plans: open ones white, settled ones gray. Todos look as in the
     // checklist that follows the conversation: done ones faint, the one in
     // progress bold white. Unfocused, so no row wears the selection colors.

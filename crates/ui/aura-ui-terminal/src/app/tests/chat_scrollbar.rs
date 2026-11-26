@@ -76,7 +76,8 @@ fn clicking_the_more_lines_row_of_a_tool_result_shows_the_rest() {
 
 #[test]
 fn test_dragging_the_chat_scrollbar_scrolls_without_selecting() {
-    use crossterm::event::{MouseButton, MouseEventKind};
+    use crossterm::event::MouseButton::Left;
+    use crossterm::event::MouseEventKind::{Down, Drag, Up};
 
     let (mut app, mut terminal) = overflowing_chat();
     draw(&mut app, &mut terminal);
@@ -88,20 +89,13 @@ fn test_dragging_the_chat_scrollbar_scrolls_without_selecting() {
 
     // The thumb sits at the bottom; take it there and drag it to the top.
     let (column, bottom) = (bar.track.x, bar.track.bottom() - 1);
-    app.handle_mouse(mouse(
-        MouseEventKind::Down(MouseButton::Left),
-        column,
-        bottom,
-    ));
+    let press = |app: &mut App, kind, row| app.handle_mouse(mouse(kind, column, row));
+    press(&mut app, Down(Left), bottom);
     assert!(app.selection().is_none(), "no text selection starts");
     assert!(app.select.selecting.is_none());
     assert_eq!(app.scroll_offset(), 0, "pressing the thumb leaves it");
 
-    let moved = app.handle_mouse(mouse(
-        MouseEventKind::Drag(MouseButton::Left),
-        column,
-        bar.track.y,
-    ));
+    let moved = press(&mut app, Drag(Left), bar.track.y);
     assert!(moved, "the chat scrolled, so there is a frame to draw");
     assert_eq!(app.scroll_offset(), bar.total - bar.visible, "at the top");
     draw(&mut app, &mut terminal);
@@ -109,11 +103,7 @@ fn test_dragging_the_chat_scrollbar_scrolls_without_selecting() {
 
     // Halfway down the track is halfway through the conversation.
     let middle = bar.track.y + bar.track.height / 2;
-    app.handle_mouse(mouse(
-        MouseEventKind::Drag(MouseButton::Left),
-        column,
-        middle,
-    ));
+    press(&mut app, Drag(Left), middle);
     let first = (bar.total - bar.visible) - app.scroll_offset();
     let half = bar.total / 2;
     assert!(
@@ -121,27 +111,19 @@ fn test_dragging_the_chat_scrollbar_scrolls_without_selecting() {
         "{first} of {}",
         bar.total
     );
-    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), column, middle));
+    press(&mut app, Up(Left), middle);
     assert!(app.selection().is_none());
 
     // Released, a drag over the chat is the selection's again.
     let offset = app.scroll_offset();
-    app.handle_mouse(mouse(
-        MouseEventKind::Drag(MouseButton::Left),
-        column,
-        bottom,
-    ));
+    press(&mut app, Drag(Left), bottom);
     assert_eq!(app.scroll_offset(), offset);
 
     // A press on the track away from the thumb jumps it there.
     draw(&mut app, &mut terminal);
-    app.handle_mouse(mouse(
-        MouseEventKind::Down(MouseButton::Left),
-        column,
-        bottom,
-    ));
+    press(&mut app, Down(Left), bottom);
     assert_eq!(app.scroll_offset(), 0, "back at the bottom");
-    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), column, bottom));
+    press(&mut app, Up(Left), bottom);
     assert!(app.selection().is_none());
 }
 

@@ -4,17 +4,22 @@ use super::*;
 // Layout
 // ========================================================================
 
-#[test]
-fn test_default_layout_shows_agents_column() {
-    use crate::events::{AgentDefinitionSummary, AgentSummary, UiCommand};
-
-    let now_ms = u64::try_from(
+fn now_ms() -> u64 {
+    u64::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis(),
     )
-    .unwrap();
+    .unwrap()
+}
+
+/// The default layout's app: Terminal Agent (active, idle), Researcher
+/// (thinking) with its spawn `reviewer #1`, and a `reviewer` definition.
+fn layout_app() -> crate::App {
+    use crate::events::{AgentDefinitionSummary, AgentSummary, UiCommand};
+
+    let now_ms = now_ms();
     let mut app = crate::App::new();
     app.process_command(UiCommand::SetAgents(vec![
         AgentSummary {
@@ -54,8 +59,61 @@ fn test_default_layout_shows_agents_column() {
             ..Default::default()
         },
     ]));
+    app
+}
 
+/// The default layout's app and its rows, drawn 200 wide.
+fn drawn_layout() -> (crate::App, Vec<String>) {
+    let mut app = layout_app();
     let rows = render_rows(&mut app, 200);
+    (app, rows)
+}
+
+/// Indices of the rows that contain `needle`.
+fn rows_with(rows: &[String], needle: &str) -> Vec<usize> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, r)| r.contains(needle))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// The rows of the default layout's projects list.
+struct LayoutRows {
+    terminal_project: usize,
+    terminal_agent: usize,
+    researcher_project: usize,
+    researcher_agent: usize,
+    new_project: usize,
+}
+
+fn layout_rows(rows: &[String]) -> LayoutRows {
+    // A project row shows its first agent's name in capitals.
+    let [terminal_project] = rows_with(rows, "TERMINAL AGENT")[..] else {
+        panic!("expected one project row for Terminal Agent");
+    };
+    let [terminal_agent] = rows_with(rows, "Terminal Agent")[..] else {
+        panic!("expected one agent row for Terminal Agent");
+    };
+    let [researcher_project] = rows_with(rows, "RESEARCHER")[..] else {
+        panic!("expected one project row for Researcher");
+    };
+    let [researcher_agent] = rows_with(rows, "Researcher")[..] else {
+        panic!("expected one agent row for Researcher");
+    };
+    let new_project = rows_with(rows, "New project")[0];
+    LayoutRows {
+        terminal_project,
+        terminal_agent,
+        researcher_project,
+        researcher_agent,
+        new_project,
+    }
+}
+
+#[test]
+fn test_default_layout_shows_agents_column() {
+    let (_app, rows) = drawn_layout();
     let screen = rows.join("\n");
     assert!(!screen.contains("┌ AGENTS"));
     assert!(screen.contains("CHAT"));
@@ -64,58 +122,40 @@ fn test_default_layout_shows_agents_column() {
         .iter()
         .any(|r| r.contains("PROJECTS") && r.contains("AGENTS")));
     assert!(!screen.contains("←→"));
-    let char_col = |row: &str, needle: &str| {
-        let i = row
-            .find(needle)
-            .unwrap_or_else(|| panic!("{needle:?} not in {row:?}"));
-        row[..i].chars().count()
-    };
-    let rows_with = |needle: &str| -> Vec<usize> {
-        rows.iter()
-            .enumerate()
-            .filter(|(_, r)| r.contains(needle))
-            .map(|(i, _)| i)
-            .collect()
-    };
-    // A project row shows its first agent's name in capitals.
-    let [terminal_project] = rows_with("TERMINAL AGENT")[..] else {
-        panic!("expected one project row for Terminal Agent");
-    };
-    let [terminal_agent] = rows_with("Terminal Agent")[..] else {
-        panic!("expected one agent row for Terminal Agent");
-    };
-    let [researcher_project] = rows_with("RESEARCHER")[..] else {
-        panic!("expected one project row for Researcher");
-    };
-    let [researcher_agent] = rows_with("Researcher")[..] else {
-        panic!("expected one agent row for Researcher");
-    };
-    let new_project = rows_with("New project")[0];
-    assert!(rows[terminal_project].contains("🗁  TERMINAL AGENT"));
+    let _ = layout_rows(&rows);
+    assert!(!screen.contains("12│"));
+    let above_footer = rows[..rows.len() - 1].join("\n");
+    assert!(!above_footer.contains("# ") && !above_footer.contains("@ "));
+    assert!(!screen.contains('↳') && !screen.contains('▸'));
+    assert!(!screen.contains("space fold") && !screen.contains("^N new"));
+    assert!(!screen.contains("Reviews"));
+}
+
+#[test]
+fn test_default_layout_project_rows_show_their_agents() {
+    let (_app, rows) = drawn_layout();
+    let r = layout_rows(&rows);
+    assert!(rows[r.terminal_project].contains("🗁  TERMINAL AGENT"));
     // An idle agent leaves the icon column blank, even when it is active.
-    let agent_panel: String = rows[terminal_agent].chars().take(30).collect();
+    let agent_panel: String = rows[r.terminal_agent].chars().take(30).collect();
     assert!(
         !agent_panel.contains('●') && !agent_panel.contains('·'),
         "{agent_panel:?}"
     );
     assert_eq!(
-        char_col(&rows[terminal_agent], "Terminal Agent"),
-        char_col(&rows[terminal_project], "TERMINAL AGENT")
+        char_column(&rows[r.terminal_agent], "Terminal Agent"),
+        char_column(&rows[r.terminal_project], "TERMINAL AGENT")
     );
-    assert!(rows[terminal_agent].contains(" 3m "));
-    assert!(rows[researcher_project].contains("🗁  RESEARCHER"));
-    assert!(!screen.contains("12│"));
-    let above_footer = rows[..rows.len() - 1].join("\n");
-    assert!(!above_footer.contains("# ") && !above_footer.contains("@ "));
-    assert!(!screen.contains('↳') && !screen.contains('▸'));
+    assert!(rows[r.terminal_agent].contains(" 3m "));
+    assert!(rows[r.researcher_project].contains("🗁  RESEARCHER"));
     // Only Researcher has a spawn, and it is thinking: its ring stands in
     // for the open marker.
-    assert!(rows_with("▾").is_empty());
-    assert!(!rows[researcher_agent].contains('▾'));
+    assert!(rows_with(&rows, "▾").is_empty());
+    assert!(!rows[r.researcher_agent].contains('▾'));
 
     // A thinking agent shows the chat's braille spinner in the icon column.
-    let ring_col = char_col(&rows[terminal_project], "🗁");
-    let ring: String = rows[researcher_agent]
+    let ring_col = char_column(&rows[r.terminal_project], "🗁");
+    let ring: String = rows[r.researcher_agent]
         .chars()
         .skip(ring_col)
         .take(crate::animation::AURA_WIDTH)
@@ -124,61 +164,103 @@ fn test_default_layout_shows_agents_column() {
         is_aura_ring(&ring),
         "expected the braille spinner, got {ring:?}"
     );
+}
 
+#[test]
+fn test_default_layout_lines_up_icons_and_names() {
+    let (_app, rows) = drawn_layout();
+    let r = layout_rows(&rows);
+    let ring_col = char_column(&rows[r.terminal_project], "🗁");
     // Icons and names line up down the list, with a blank row between projects.
     assert_eq!(
-        char_col(&rows[terminal_project], "🗁"),
-        char_col(&rows[new_project], "+")
+        char_column(&rows[r.terminal_project], "🗁"),
+        char_column(&rows[r.new_project], "+")
     );
-    assert_eq!(ring_col, char_col(&rows[terminal_project], "🗁"));
+    assert_eq!(ring_col, char_column(&rows[r.terminal_project], "🗁"));
     assert_eq!(
-        char_col(&rows[new_project], "New project"),
-        char_col(&rows[researcher_project], "RESEARCHER")
+        char_column(&rows[r.new_project], "New project"),
+        char_column(&rows[r.researcher_project], "RESEARCHER")
     );
     // Projects and agents are one line each, with one blank line between projects.
-    assert_eq!(terminal_agent, terminal_project + 1);
-    assert_eq!(researcher_project, terminal_agent + 2);
+    assert_eq!(r.terminal_agent, r.terminal_project + 1);
+    assert_eq!(r.researcher_project, r.terminal_agent + 2);
     let panel_text = |row: usize| rows[row].chars().skip(2).take(20).collect::<String>();
-    assert_eq!(panel_text(terminal_agent + 1).trim(), "");
-    assert_eq!(researcher_agent, researcher_project + 1);
+    assert_eq!(panel_text(r.terminal_agent + 1).trim(), "");
+    assert_eq!(r.researcher_agent, r.researcher_project + 1);
+}
+
+#[test]
+fn test_default_layout_puts_new_project_on_the_panels_last_row() {
+    let (_app, rows) = drawn_layout();
+    let new_project = layout_rows(&rows).new_project;
     // "+ New project" takes the panel's bottom row in place of a key hint.
-    assert!(!screen.contains("space fold") && !screen.contains("^N new"));
     assert!(
         rows[new_project + 1].starts_with(" └"),
         "New project should sit on the panel's last row: {:?}",
         &rows[new_project..=new_project + 1]
     );
-    assert!(new_project > rows_with("reviewer #1")[0] + 1);
+    assert!(new_project > rows_with(&rows, "reviewer #1")[0] + 1);
+}
+
+#[test]
+fn test_default_layout_draws_spawns_under_their_parent() {
+    let (_app, rows) = drawn_layout();
+    let researcher_agent = layout_rows(&rows).researcher_agent;
     // Spawned agents sit further in than the project's first agent.
     assert!(
-        char_col(&rows[rows_with("reviewer #1")[0]], "reviewer #1")
-            > char_col(&rows[researcher_agent], "Researcher")
+        char_column(&rows[rows_with(&rows, "reviewer #1")[0]], "reviewer #1")
+            > char_column(&rows[researcher_agent], "Researcher")
     );
     // The spawn's tree line drops from under its parent's name and runs
     // through the empty icon column into the spawn's name.
-    let reviewer = &rows[rows_with("reviewer #1")[0]];
-    let elbow = char_col(reviewer, "└──");
-    assert_eq!(elbow, char_col(&rows[researcher_agent], "Researcher"));
-    assert_eq!(char_col(reviewer, "reviewer #1"), elbow + 4, "{reviewer:?}");
-    assert!(!screen.contains("Reviews"));
+    let reviewer = &rows[rows_with(&rows, "reviewer #1")[0]];
+    let elbow = char_column(reviewer, "└──");
+    assert_eq!(elbow, char_column(&rows[researcher_agent], "Researcher"));
+    assert_eq!(
+        char_column(reviewer, "reviewer #1"),
+        elbow + 4,
+        "{reviewer:?}"
+    );
+}
 
-    // Tab to the agents panel. Neither the selected row nor any other
-    // shows a cursor arrow.
+/// Tabs to the agents panel and draws it 200 wide.
+fn tab_to_agents_panel(app: &mut crate::App) -> Vec<String> {
     for _ in 0..3 {
         app.handle_key(crossterm::event::KeyEvent::from(
             crossterm::event::KeyCode::Tab,
         ));
     }
-    let rows = render_rows(&mut app, 200);
+    render_rows(app, 200)
+}
+
+/// The default layout with the agents panel's roster tab open, drawn
+/// 120 wide.
+fn roster_tab() -> (crate::App, Vec<String>) {
+    let (mut app, _rows) = drawn_layout();
+    tab_to_agents_panel(&mut app);
+    app.handle_key(crossterm::event::KeyEvent::from(
+        crossterm::event::KeyCode::Right,
+    ));
+    let rows = render_rows(&mut app, 120);
+    (app, rows)
+}
+
+#[test]
+fn test_default_layout_agents_panel_shows_no_cursor_arrow() {
+    let (mut app, _rows) = drawn_layout();
+    // Tab to the agents panel. Neither the selected row nor any other
+    // shows a cursor arrow.
+    let rows = tab_to_agents_panel(&mut app);
     let panel: Vec<String> = rows.iter().map(|r| r.chars().take(30).collect()).collect();
     assert!(
         panel.iter().all(|r| !r.contains('>')),
         "projects list should not show a cursor arrow: {panel:#?}"
     );
-    app.handle_key(crossterm::event::KeyEvent::from(
-        crossterm::event::KeyCode::Right,
-    ));
-    let rows = render_rows(&mut app, 120);
+}
+
+#[test]
+fn test_default_layout_roster_tab_lists_definitions_and_new_agent() {
+    let (_app, rows) = roster_tab();
     let screen = rows.join("\n");
     assert!(screen.contains("@  reviewer"));
     assert!(!screen.contains("Reviews"));
@@ -190,6 +272,21 @@ fn test_default_layout_shows_agents_column() {
     };
     assert_eq!(column_of("@"), column_of("+"));
     assert_eq!(column_of("reviewer"), column_of("New agent"));
+    assert!(!screen.contains("spawn") && !screen.contains(" del"));
+    assert!(!screen.contains("Researcher"));
+    // "+ New agent" takes the panel's bottom row, like "+ New project".
+    let new_agent = rows.iter().position(|r| r.contains("New agent")).unwrap();
+    assert!(
+        rows[new_agent + 1].starts_with(" └"),
+        "New agent should sit on the panel's last row: {:?}",
+        &rows[new_agent..=new_agent + 1]
+    );
+    assert!(new_agent > rows.iter().position(|r| r.contains("@  reviewer")).unwrap() + 1);
+}
+
+#[test]
+fn test_default_layout_roster_at_sign_is_gray_and_name_white() {
+    let (mut app, _rows) = roster_tab();
     // The roster `@` is gray; the agent name stays white. Selection paints
     // both in the selection text color, so step off the row first.
     app.handle_key(crossterm::event::KeyEvent::from(
@@ -205,16 +302,6 @@ fn test_default_layout_shows_agents_column() {
     app.handle_key(crossterm::event::KeyEvent::from(
         crossterm::event::KeyCode::Up,
     ));
-    assert!(!screen.contains("spawn") && !screen.contains(" del"));
-    assert!(!screen.contains("Researcher"));
-    // "+ New agent" takes the panel's bottom row, like "+ New project".
-    let new_agent = rows.iter().position(|r| r.contains("New agent")).unwrap();
-    assert!(
-        rows[new_agent + 1].starts_with(" └"),
-        "New agent should sit on the panel's last row: {:?}",
-        &rows[new_agent..=new_agent + 1]
-    );
-    assert!(new_agent > rows.iter().position(|r| r.contains("@  reviewer")).unwrap() + 1);
 }
 
 /// An app showing the roster of `definitions`, each a name and its

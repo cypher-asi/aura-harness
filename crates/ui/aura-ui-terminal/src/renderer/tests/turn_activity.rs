@@ -60,22 +60,12 @@ fn test_turn_activity_renders_inline_between_prompt_and_reply() {
 
 #[test]
 fn test_step_group_runs_open_then_collapses_and_clicks_open() {
-    use crate::events::{ToolData, UiCommand};
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crate::events::UiCommand;
 
     let mut app = crate::App::new();
     submit_message(&mut app, "look around");
     for (id, path) in [("t1", "src/main.rs"), ("t2", "src/lib.rs")] {
-        app.process_command(UiCommand::ShowTool(ToolData {
-            id: id.to_string(),
-            name: "read_file".to_string(),
-            args: format!(r#"{{"path":"{path}"}}"#),
-        }));
-        app.process_command(UiCommand::CompleteTool {
-            id: id.to_string(),
-            result: "fn main() {}".to_string(),
-            success: true,
-        });
+        read_tool(&mut app, id, path);
     }
     let live = render_rows(&mut app, 120).join("\n");
     assert!(live.contains("Exploring 2 files"), "{live}");
@@ -93,29 +83,13 @@ fn test_step_group_runs_open_then_collapses_and_clicks_open() {
     assert!(done.contains("▸ Explored 2 files"), "{done}");
     assert!(!done.contains("Read main.rs"), "{done}");
 
-    let click = |app: &mut crate::App, needle: &str| {
-        let buffer = render_buffer(app, 120);
-        let row = row_of(&buffer, needle);
-        let (column, _) = find_cell(&buffer, row, needle).unwrap();
-        for kind in [
-            MouseEventKind::Down(MouseButton::Left),
-            MouseEventKind::Up(MouseButton::Left),
-        ] {
-            app.handle_mouse(MouseEvent {
-                kind,
-                column,
-                row,
-                modifiers: KeyModifiers::empty(),
-            });
-        }
-    };
-    click(&mut app, "Explored");
+    click_text(&mut app, "Explored");
     let open = render_rows(&mut app, 120).join("\n");
     assert!(open.contains("▾ Explored 2 files"), "{open}");
     assert!(open.contains("Read lib.rs"), "{open}");
     assert!(!open.contains("│ fn main() {}"), "{open}");
 
-    click(&mut app, "lib.rs");
+    click_text(&mut app, "lib.rs");
     let view = render_rows(&mut app, 120).join("\n");
     assert!(
         matches!(app.detail_view(), Some(crate::app::DetailView::File(_))),

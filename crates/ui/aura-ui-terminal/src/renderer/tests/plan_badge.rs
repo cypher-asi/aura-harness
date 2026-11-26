@@ -199,12 +199,6 @@ fn a_tree_row_keeps_its_width_with_the_plan_badge_and_drops_it_when_too_narrow()
             &[],
         )
     };
-    let text = |line: &ratatui::text::Line<'_>| -> String {
-        line.spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect()
-    };
     // ` `, the icon column and its pad, then the name, then ` 3m `.
     let around = 1 + crate::animation::AURA_WIDTH + 1 + 4;
     for width in around + 1..=around + 20 {
@@ -215,19 +209,7 @@ fn a_tree_row_keeps_its_width_with_the_plan_badge_and_drops_it_when_too_narrow()
         let name_room = width - around;
         let marked_text = text(&marked);
         if name_room >= PLAN_BADGE_WIDTH + 2 {
-            let badge_span = marked
-                .spans
-                .iter()
-                .find(|span| span.content == PLAN_BADGE)
-                .unwrap_or_else(|| panic!("no badge at width {width}: {marked_text:?}"));
-            assert_eq!(badge_span.style.fg, Some(theme.colors.success));
-            let name = marked_text.trim_start().split(PLAN_BADGE).next().unwrap();
-            assert!(!name.is_empty(), "width {width}: {marked_text:?}");
-            if name_room - PLAN_BADGE_WIDTH < "Researcher".len() {
-                assert!(name.ends_with('…'), "width {width}: {marked_text:?}");
-            } else {
-                assert_eq!(name, "Researcher", "width {width}");
-            }
+            assert_badge_after_name(&marked, &theme, width, name_room);
         } else {
             assert!(
                 !marked_text.contains("(P)"),
@@ -235,5 +217,38 @@ fn a_tree_row_keeps_its_width_with_the_plan_badge_and_drops_it_when_too_narrow()
             );
             assert_eq!(marked_text, text(&plain), "width {width}");
         }
+    }
+}
+
+fn text(line: &ratatui::text::Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+/// A row with room for the badge shows it, in the success color, after the
+/// (maybe shortened) name.
+fn assert_badge_after_name(
+    marked: &ratatui::text::Line<'_>,
+    theme: &Theme,
+    width: usize,
+    name_room: usize,
+) {
+    use crate::components::PLAN_BADGE;
+
+    let marked_text = text(marked);
+    let badge_span = marked
+        .spans
+        .iter()
+        .find(|span| span.content == PLAN_BADGE)
+        .unwrap_or_else(|| panic!("no badge at width {width}: {marked_text:?}"));
+    assert_eq!(badge_span.style.fg, Some(theme.colors.success));
+    let name = marked_text.trim_start().split(PLAN_BADGE).next().unwrap();
+    assert!(!name.is_empty(), "width {width}: {marked_text:?}");
+    if name_room - PLAN_BADGE_WIDTH < "Researcher".len() {
+        assert!(name.ends_with('…'), "width {width}: {marked_text:?}");
+    } else {
+        assert_eq!(name, "Researcher", "width {width}");
     }
 }

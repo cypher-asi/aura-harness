@@ -250,14 +250,7 @@ fn test_chat_reads_like_a_terminal_from_the_left_edge() {
         .draw(|frame| super::super::render(frame, &mut app, &test_theme()))
         .unwrap();
 
-    let buffer = terminal.backend().buffer();
-    let rows: Vec<String> = (0..buffer.area.height)
-        .map(|y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect()
-        })
-        .collect();
+    let rows = buffer_rows(terminal.backend().buffer());
     let col = |row: &str, needle: &str| {
         let i = row
             .find(needle)
@@ -278,15 +271,7 @@ fn test_chat_reads_like_a_terminal_from_the_left_edge() {
     let text_col = col(&rows[user], "→ hi");
     // Measured on the reply's row: the prompt's row has its frame's own
     // side borders.
-    let border = rows[reply][..rows[reply].find("The task").unwrap()]
-        .chars()
-        .collect::<Vec<_>>()
-        .iter()
-        .rposition(|&c| c == '│')
-        .unwrap();
-    let chars: Vec<char> = rows[reply].chars().collect();
-    let right_border = border + 1 + chars[border + 1..].iter().position(|&c| c == '│').unwrap();
-    let inner = right_border - border - 1;
+    let (border, inner) = panel_around(&rows[reply], "The task");
     let base = (inner - 4).min(110);
     let width = (base * 83 + 50) / 100;
     assert_eq!(
@@ -295,6 +280,31 @@ fn test_chat_reads_like_a_terminal_from_the_left_edge() {
         "centered with equal padding on both sides: {screen}"
     );
     assert_eq!(col(&rows[reply], "The task"), text_col);
+}
+
+fn buffer_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect()
+}
+
+/// The column of the panel border left of `needle` on `row`, and the
+/// panel's inner width up to the next border.
+fn panel_around(row: &str, needle: &str) -> (usize, usize) {
+    let border = row[..row.find(needle).unwrap()]
+        .chars()
+        .collect::<Vec<_>>()
+        .iter()
+        .rposition(|&c| c == '│')
+        .unwrap();
+    let chars: Vec<char> = row.chars().collect();
+    let right_border = border + 1 + chars[border + 1..].iter().position(|&c| c == '│').unwrap();
+    let inner = right_border - border - 1;
+    (border, inner)
 }
 
 #[test]
