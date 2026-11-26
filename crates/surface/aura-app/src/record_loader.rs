@@ -546,8 +546,8 @@ pub(crate) struct ListRows {
     pub(crate) projects: Vec<ProjectSummary>,
     pub(crate) listed: Vec<(AgentId, AgentSummary)>,
     pub(crate) archived: Vec<(AgentId, AgentSummary)>,
-    /// Rows of channel members, taken out of `listed` by
-    /// [`ListRows::split_members`] for the channels list
+    /// Rows of channel members, copied (or, for hidden ones, taken) out of
+    /// `listed` by [`ListRows::split_members`] for the channels list
     pub(crate) members: Vec<(AgentId, AgentSummary)>,
     /// The agent the rows mark active
     pub(crate) active: AgentId,
@@ -594,32 +594,44 @@ impl ListRows {
         }
     }
 
-    /// Move the agents in `members` (channel members) out of the agents
-    /// column into [`ListRows::members`], and leave the projects that only
-    /// they were listed in out of the projects list. A project's archived
-    /// count is left as it is.
-    pub(crate) fn split_members(&mut self, members: &HashSet<AgentId>) {
-        if members.is_empty() {
+    /// Copy the rows of the agents in `members` (channel members) into
+    /// [`ListRows::members`], for the channels list, and move those also in
+    /// `hidden` (members of channels without a project) out of the agents
+    /// column, taking them off their project's listed count. Members of a
+    /// channel with a project stay in the agents column under it. A
+    /// project's archived count is left as it is.
+    ///
+    /// Every project stays on the projects list, even one whose every
+    /// listed row was hidden: any listed project is one a channel can be
+    /// given, so clearing a channel's project (which puts its members,
+    /// hidden, in the launch project) never takes a project off the list.
+    pub(crate) fn split_members(&mut self, members: &HashSet<AgentId>, hidden: &HashSet<AgentId>) {
+        if members.is_empty() && hidden.is_empty() {
             return;
         }
         let mut removed: HashMap<String, usize> = HashMap::new();
-        let (taken, kept) = std::mem::take(&mut self.listed)
-            .into_iter()
-            .partition(|(agent_id, _)| members.contains(agent_id));
-        self.listed = kept;
-        for (_, row) in &taken {
-            if let Some(project) = &row.project_id {
-                *removed.entry(project.clone()).or_default() += 1;
+        let mut taken = Vec::new();
+        let mut kept = Vec::with_capacity(self.listed.len());
+        for (agent_id, row) in std::mem::take(&mut self.listed) {
+            if hidden.contains(&agent_id) {
+                if let Some(project) = &row.project_id {
+                    *removed.entry(project.clone()).or_default() += 1;
+                }
+                taken.push((agent_id, row));
+            } else {
+                if members.contains(&agent_id) {
+                    taken.push((agent_id, row.clone()));
+                }
+                kept.push((agent_id, row));
             }
         }
+        self.listed = kept;
         self.members = taken;
-        self.projects.retain_mut(|project| {
-            let Some(&gone) = removed.get(&project.id) else {
-                return true;
-            };
-            project.listed_agents = project.listed_agents.saturating_sub(gone);
-            project.listed_agents > 0
-        });
+        for project in &mut self.projects {
+            if let Some(&gone) = removed.get(&project.id) {
+                project.listed_agents = project.listed_agents.saturating_sub(gone);
+            }
+        }
     }
 
     /// Fill in each row's record count and last activity from `store`,

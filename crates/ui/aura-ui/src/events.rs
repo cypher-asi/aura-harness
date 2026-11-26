@@ -379,6 +379,8 @@ pub enum UiEvent {
         title: String,
         /// What it is for
         description: String,
+        /// Project its agents work in (`None`: no project)
+        project_id: Option<String>,
     },
 
     /// User opened a channel (channel id)
@@ -387,7 +389,7 @@ pub enum UiEvent {
     /// User left the channel that was open
     CloseChannel,
 
-    /// User changed a channel's title or description
+    /// User edited a channel: title, description and project
     UpdateChannel {
         /// Channel id
         channel_id: String,
@@ -395,22 +397,9 @@ pub enum UiEvent {
         title: String,
         /// New description
         description: String,
-    },
-
-    /// User linked a project to a channel
-    LinkProject {
-        /// Channel id
-        channel_id: String,
-        /// Project id
-        project_id: String,
-    },
-
-    /// User unlinked a project from a channel
-    UnlinkProject {
-        /// Channel id
-        channel_id: String,
-        /// Project id
-        project_id: String,
+        /// Project its agents work in; the edit form always sends the full
+        /// state, so `None` clears the project
+        project_id: Option<String>,
     },
 
     /// User archived a channel (channel id)
@@ -1011,7 +1000,7 @@ pub enum UiCommand {
 }
 
 /// A channel: a shared conversation between the user and a coordinator
-/// agent, the agents it spawned, and the projects they work on.
+/// agent, the agents it spawned, and the project they work in.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelSummary {
     /// Channel id
@@ -1025,9 +1014,9 @@ pub struct ChannelSummary {
     pub description: String,
     /// Agent that coordinates the channel (hex id)
     pub coordinator_id: String,
-    /// Projects linked to it, in the order they were linked
+    /// The project the channel's agents work in
     #[serde(default)]
-    pub projects: Vec<ChannelProjectView>,
+    pub project: Option<ChannelProjectView>,
     /// Coordinator first, then the agents it spawned, each followed by its
     /// subagents (depth-first by parent); `depth` is set relative to the
     /// coordinator (0). See [`nest_members`].
@@ -1038,7 +1027,7 @@ pub struct ChannelSummary {
     pub archived: bool,
 }
 
-/// A project linked to a channel.
+/// The project of a channel.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelProjectView {
     /// Project id
@@ -2328,11 +2317,11 @@ mod tests {
             title: "Release".into(),
             description: "Ship 1.0".into(),
             coordinator_id: "co".into(),
-            projects: vec![ChannelProjectView {
+            project: Some(ChannelProjectView {
                 id: "p1".into(),
                 name: "aura".into(),
                 folder: "/code/aura".into(),
-            }],
+            }),
             members: nest_members("co", vec![member("co", None), member("a", Some("co"))]),
             archived: false,
         };

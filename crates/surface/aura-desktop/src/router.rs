@@ -1256,8 +1256,14 @@ mod tests {
             ));
         tabs.forward_events();
         let asked = sent(&mut events);
-        assert!(asked.contains(&r#"SelectAgent("c1")"#.to_string()), "{asked:?}");
-        assert!(asked.contains(&r#"OpenChannel("ch")"#.to_string()), "{asked:?}");
+        assert!(
+            asked.contains(&r#"SelectAgent("c1")"#.to_string()),
+            "{asked:?}"
+        );
+        assert!(
+            asked.contains(&r#"OpenChannel("ch")"#.to_string()),
+            "{asked:?}"
+        );
         assert_eq!(shown(&tabs), ["a1", "c1"]);
         assert!(tabs.front().tui.chat_loading());
 
@@ -1275,7 +1281,10 @@ mod tests {
             )])),
         });
         assert_eq!(shown(&tabs), ["a1", "c1"]);
-        assert!(!tabs.front().tui.chat_loading(), "the chat is not held back");
+        assert!(
+            !tabs.front().tui.chat_loading(),
+            "the chat is not held back"
+        );
         assert_eq!(tabs.front().tui.messages().len(), 1);
     }
 

@@ -6565,37 +6565,169 @@ fn test_an_open_channel_keeps_the_list_and_lists_its_members_on_the_right() {
     }
 }
 
-#[test]
-fn test_channel_info_tab_shows_what_the_channel_is() {
+/// `channels_app` with `#zode` open on its INFO tab, `#zode` working in
+/// `project` when given.
+fn channel_info_app(project: Option<crate::events::ChannelProjectView>) -> crate::App {
     use crate::app::{PaneTab, SidePanelTab};
-    use crate::events::{ChannelProjectView, UiCommand};
+    use crate::events::UiCommand;
     let mut app = channels_app();
     let mut channels = app.channels().to_vec();
-    channels[0].projects = vec![ChannelProjectView {
-        id: "p1".to_string(),
-        name: "zodeproj".to_string(),
-        folder: "/src/zodeproj".to_string(),
-    }];
+    channels[0].project = project;
     app.process_command(UiCommand::SetChannels(channels));
     app.open_channel_by_id("c1");
     app.select_pane_tab(PaneTab::Side(SidePanelTab::ChannelInfo));
     assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
+    app
+}
 
+/// The first of `rows` containing `needle` and not `PROJECTS`, which
+/// the left panel may show.
+fn info_row(rows: &[String], needle: &str) -> usize {
+    rows.iter()
+        .position(|row| row.contains(needle) && !row.contains("PROJECTS"))
+        .unwrap_or_else(|| panic!("no {needle:?} in:\n{}", rows.join("\n")))
+}
+
+#[test]
+fn test_channel_info_tab_shows_what_the_channel_is() {
+    use crate::events::ChannelProjectView;
+    let mut app = channel_info_app(Some(ChannelProjectView {
+        id: "p1".to_string(),
+        name: "zodeproj".to_string(),
+        folder: "/src/zodeproj".to_string(),
+    }));
+    let rows = render_rows(&mut app, 140);
+    let description = info_row(&rows, "Ship it");
+    let coordinator = info_row(&rows, "COORDINATOR");
+    let members = info_row(&rows, "2 agents");
+    let heading = info_row(&rows, "PROJECT");
+    let project = info_row(&rows, "zodeproj");
+    assert!(rows[project].contains("/src/zodeproj"), "{}", rows[project]);
+    let order = [description, coordinator, members, heading, project];
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+    let screen = rows.join("\n");
+    assert!(!screen.contains("LINKED PROJECTS"), "{screen}");
+    assert!(!screen.contains("No project"), "{screen}");
+}
+
+#[test]
+fn test_channel_info_without_a_project_says_where_agents_work_and_how_to_set_one() {
+    let mut app = channel_info_app(None);
+    let rows = render_rows(&mut app, 140);
+    let heading = info_row(&rows, "PROJECT");
+    let none = info_row(&rows, "No project —");
+    let hint = info_row(&rows, "Right-click › Edit channel…");
+    assert!(heading < none && none < hint, "{heading} {none} {hint}");
+    let info: String = rows[none..]
+        .iter()
+        .filter_map(|row| row.split('│').nth(5))
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(" ");
+    for text in [
+        "No project — agents work in the channel's folder",
+        "Right-click › Edit channel… to set one",
+    ] {
+        assert!(info.contains(text), "{text:?} in {info:?}");
+    }
+    assert!(!info.contains("……"), "wrapped, not cut: {info:?}");
+}
+
+#[test]
+fn test_channel_info_shows_a_missing_project_by_name_without_a_folder() {
+    use crate::events::ChannelProjectView;
+    let mut app = channel_info_app(Some(ChannelProjectView {
+        id: "gone".to_string(),
+        name: "(missing project)".to_string(),
+        folder: String::new(),
+    }));
+    let rows = render_rows(&mut app, 140);
+    let heading = info_row(&rows, "PROJECT");
+    let project = info_row(&rows, "(missing project)");
+    assert!(heading < project, "{heading} {project}");
+    let cell = rows[project]
+        .split('│')
+        .nth(5)
+        .map(str::trim)
+        .unwrap_or_default();
+    assert_eq!(cell, "(missing project)", "{}", rows[project]);
+    assert!(!rows.join("\n").contains("No project"));
+}
+
+/// `channels_app` listing projects `alpha` and `beta`.
+fn channels_app_with_projects() -> crate::App {
+    use crate::events::{ProjectSummary, UiCommand};
+    let project = |id: &str, name: &str| ProjectSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        folder: format!("/src/{name}"),
+        ..ProjectSummary::default()
+    };
+    let mut app = channels_app();
+    app.process_command(UiCommand::SetProjects(vec![
+        project("p1", "alpha"),
+        project("p2", "beta"),
+    ]));
+    app
+}
+
+#[test]
+fn test_the_new_channel_form_draws_the_project_chooser() {
+    let mut app = channels_app_with_projects();
+    app.start_new_channel();
     let rows = render_rows(&mut app, 140);
     let screen = rows.join("\n");
-    let row_with = |needle: &str| {
-        rows.iter()
-            .position(|row| row.contains(needle))
-            .unwrap_or_else(|| panic!("no {needle:?} in:\n{screen}"))
-    };
-    let description = row_with("Ship it");
-    let coordinator = row_with("COORDINATOR");
-    let members = row_with("2 agents");
-    let linked = row_with("LINKED PROJECTS");
-    let project = row_with("zodeproj");
-    assert!(rows[project].contains("/src/zodeproj"), "{}", rows[project]);
-    let order = [description, coordinator, members, linked, project];
-    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+    assert!(screen.contains("┌ New channel ─"), "{screen}");
+    let label = info_row(&rows, "Project");
+    let chooser = info_row(&rows, "‹ None ›");
+    let hint = info_row(&rows, "None — agents work in the channel's own folder");
+    assert!(
+        label < chooser && chooser < hint,
+        "{label} {chooser} {hint}"
+    );
+    for keys in [
+        "←→ choose project",
+        "submits on Project",
+        "Ctrl+Enter submit",
+    ] {
+        assert!(screen.contains(keys), "{keys}:\n{screen}");
+    }
+}
+
+#[test]
+fn test_the_form_shows_a_chosen_project_and_its_folder() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    let mut app = channels_app_with_projects();
+    app.start_new_channel();
+    app.handle_key(KeyEvent::from(KeyCode::BackTab));
+    app.handle_key(KeyEvent::from(KeyCode::Right));
+    let rows = render_rows(&mut app, 140);
+    let chooser = info_row(&rows, "‹ alpha ›");
+    assert!(
+        rows[chooser + 1].contains("/src/alpha"),
+        "{}",
+        rows[chooser + 1]
+    );
+}
+
+#[test]
+fn test_the_edit_form_is_titled_by_the_slug_and_shows_the_channels_project() {
+    use crate::events::ChannelProjectView;
+    let mut app = channel_info_app(Some(ChannelProjectView {
+        id: "p9".to_string(),
+        name: "zodeproj".to_string(),
+        folder: "/src/zodeproj".to_string(),
+    }));
+    app.start_edit_channel("c1");
+    let rows = render_rows(&mut app, 140);
+    let screen = rows.join("\n");
+    assert!(screen.contains("┌ Edit #zode ─"), "{screen}");
+    assert!(!screen.contains("┌ New channel ─"), "{screen}");
+    assert!(screen.contains("‹ zodeproj ›"), "{screen}");
+    assert!(
+        !screen.contains(crate::app::channel_form::SLUG_HINT),
+        "{screen}"
+    );
 }
 
 #[test]
@@ -6627,10 +6759,7 @@ fn test_agents_app_without_an_instance_says_so_and_hides_the_right_column() {
     ]));
     app.select_pane_tab(PaneTab::Agents(AgentsTab::Roster));
     let screen = render_rows(&mut app, 140).join("\n");
-    assert!(
-        screen.contains("No explorer agent has run yet"),
-        "{screen}"
-    );
+    assert!(screen.contains("No explorer agent has run yet"), "{screen}");
     for agent_feature in ["SANDBOX", "KERNEL", "GRAPH"] {
         assert!(
             !screen.contains(agent_feature),

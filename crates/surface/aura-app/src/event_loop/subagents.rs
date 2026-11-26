@@ -367,9 +367,13 @@ pub struct AgentHub {
     last_active: Mutex<crate::record_loader::LastActive>,
     /// Channels and their members; `None` where there is no database.
     pub(crate) channels: Option<ChannelStore>,
-    /// Every agent in a channel, kept beside the channel store so the
-    /// Projects tree can leave them out without reading the store.
+    /// Every agent in a channel, kept beside the channel store so chat
+    /// membership and the channels list don't read the store.
     pub(crate) channel_members: Mutex<HashSet<AgentId>>,
+    /// The members of channels without a project: the Projects tree
+    /// leaves them out. Members of a channel with a project are listed
+    /// under it.
+    pub(crate) hidden_members: Mutex<HashSet<AgentId>>,
     /// Replies the channels wait for and what each coordinator has seen.
     pub(crate) channel_chat: super::channels::ChannelChat,
     /// The chats of the agents shown last, as read from their records
@@ -440,9 +444,9 @@ impl AgentHub {
             parts.commands.clone(),
             parts.record_panel.clone(),
         ));
-        let channel_members = super::channels::load_members(parts.channels.as_ref());
         let mut registry = parts.registry;
-        registry.mark_channel_members(channel_members.iter().copied());
+        let channel_sets = super::channels::load_channels(parts.channels.as_ref(), &mut registry);
+        registry.mark_channel_members(channel_sets.members.iter().copied());
         Arc::new_cyclic(|hub: &Weak<Self>| {
             let dispatcher: Arc<dyn SubagentDispatchHook> =
                 Arc::new(TerminalSubagentDispatcher { hub: hub.clone() });
@@ -478,7 +482,8 @@ impl AgentHub {
                 write_locks: Mutex::new(HashMap::new()),
                 writing: Mutex::new(HashSet::new()),
                 last_active: Mutex::default(),
-                channel_members: Mutex::new(channel_members),
+                channel_members: Mutex::new(channel_sets.members),
+                hidden_members: Mutex::new(channel_sets.hidden),
                 channels: parts.channels,
                 channel_chat: super::channels::ChannelChat::default(),
                 shown_chats: Mutex::default(),
@@ -795,7 +800,8 @@ impl AgentHub {
         summaries
     }
 
-    /// Rows for the Agents panel, without channel members.
+    /// Rows for the Agents panel, without the members of channels that
+    /// have no project.
     pub fn agent_summaries(&self) -> Vec<AgentSummary> {
         let registry = lock(&self.registry);
         let running: HashSet<AgentId> = lock(&self.running).keys().copied().collect();
@@ -806,9 +812,9 @@ impl AgentHub {
             &running,
         );
         drop(registry);
-        let members = lock(&self.channel_members);
-        rows.retain(|row| AgentId::from_hex(&row.id).map_or(true, |id| !members.contains(&id)));
-        drop(members);
+        let hidden = lock(&self.hidden_members);
+        rows.retain(|row| AgentId::from_hex(&row.id).map_or(true, |id| !hidden.contains(&id)));
+        drop(hidden);
         for row in &mut rows {
             if let Ok(agent_id) = AgentId::from_hex(&row.id) {
                 self.mark_plan_mode(agent_id, row);
@@ -946,16 +952,15 @@ impl AgentHub {
             );
             crate::record_loader::ListRows::build(&registry, &running)
         };
-        rows.split_members(&lock(&self.channel_members));
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
-        for (agent_id, row) in rows
-            .listed
-            .iter_mut()
-            .chain(rows.archived.iter_mut())
-            .chain(rows.members.iter_mut())
-        {
+        for (agent_id, row) in rows.listed.iter_mut().chain(rows.archived.iter_mut()) {
             self.mark_plan_mode(*agent_id, row);
         }
+        // After the rows are complete, so the members' copies carry the
+        // same activity and mode. The member set is copied out so the two
+        // sets are never locked together.
+        let members = lock(&self.channel_members).clone();
+        rows.split_members(&members, &lock(&self.hidden_members));
         let active = rows.active;
         let members = std::mem::take(&mut rows.members).into_iter().collect();
         AgentLists {

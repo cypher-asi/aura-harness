@@ -55,6 +55,27 @@ const COMPARE_ZNS_PREFIX: &str = "0://terminal/compare/";
 /// ZNS id prefix of the agents that group one arm's runs of a `/compare`.
 const COMPARE_ARM_ZNS_PREFIX: &str = "0://terminal/compare-arm/";
 
+/// Where a channel's coordinator lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CoordinatorHome {
+    /// At the top of the project with this id, working in its folder.
+    Project(String),
+    /// In the launch directory's project, working in this folder (the
+    /// channel's own, for a channel without a project).
+    Folder(PathBuf),
+}
+
+/// The project and own folder an agent is moved to by
+/// [`AgentRegistry::place_agents`]. `folder: None` has it work where the
+/// agents that spawned it, or else its project, do (see
+/// [`AgentRegistry::project_folder`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentPlacement {
+    pub(crate) agent_id: AgentId,
+    pub(crate) project_id: Option<String>,
+    pub(crate) folder: Option<PathBuf>,
+}
+
 /// A folder the agents of the terminal UI work in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
@@ -1657,20 +1678,101 @@ impl AgentRegistry {
         self.channel_members.extend(members);
     }
 
-    /// A fresh coordinator for the channel `slug`, working in `folder`,
-    /// not yet registered: an instance of
+    /// A fresh coordinator for the channel `slug`, working in `home`, not
+    /// yet registered: an instance of
     /// [`crate::agent_definitions::COORDINATOR_DEFINITION`] named
-    /// `#<slug> coordinator` in the launch directory's project. Its code is
-    /// given by [`Self::adopt`]. The launch project is made in memory when
-    /// missing, as for other new agents, and saved with the next write.
-    pub(crate) fn coordinator_draft(&mut self, slug: &str, folder: PathBuf) -> RegisteredAgent {
-        let project_id = self.launch_project();
+    /// `#<slug> coordinator`. Its code is given by [`Self::adopt`]. For a
+    /// [`CoordinatorHome::Folder`] the launch project is made in memory
+    /// when missing, as for other new agents, and saved with the next
+    /// write. A [`CoordinatorHome::Project`] is not checked here: the
+    /// caller makes sure the project is listed.
+    pub(crate) fn coordinator_draft(
+        &mut self,
+        slug: &str,
+        home: CoordinatorHome,
+    ) -> RegisteredAgent {
+        let placed = self.home_of(home);
         RegisteredAgent {
             definition: Some(crate::agent_definitions::COORDINATOR_DEFINITION.to_string()),
-            project_id: Some(project_id),
-            folder: Some(folder),
+            project_id: placed.0,
+            folder: placed.1,
             ..Self::new_agent(format!("#{slug} coordinator"))
         }
+    }
+
+    /// Where the coordinator `agent_id` goes to live in `home`, for
+    /// [`Self::place_agents`]. As in [`Self::coordinator_draft`], a
+    /// [`CoordinatorHome::Folder`] may make the launch project in memory.
+    pub(crate) fn coordinator_placement(
+        &mut self,
+        agent_id: AgentId,
+        home: CoordinatorHome,
+    ) -> AgentPlacement {
+        let (project_id, folder) = self.home_of(home);
+        AgentPlacement {
+            agent_id,
+            project_id,
+            folder,
+        }
+    }
+
+    /// The project and own folder of an agent living in `home`.
+    fn home_of(&mut self, home: CoordinatorHome) -> (Option<String>, Option<PathBuf>) {
+        match home {
+            CoordinatorHome::Project(project_id) => (Some(project_id), None),
+            CoordinatorHome::Folder(folder) => (Some(self.launch_project()), Some(folder)),
+        }
+    }
+
+    /// Move the agents `placements` name to their project and folder, with
+    /// their rows written by `write` (given the registry's store and the
+    /// rows as they will be) rather than by the registry, so a caller can
+    /// commit them in one batch with rows of another store.
+    ///
+    /// Memory changes only once `write` succeeded: the rows are computed
+    /// from copies first. Then the rows are remembered as stored, so the
+    /// next save does not write them again, and whatever else is unsaved
+    /// (such as a launch project [`Self::coordinator_placement`] made) is
+    /// saved; a failure of that save is only logged, as the placements
+    /// are in the store and the rest goes out with the next save.
+    ///
+    /// # Errors
+    /// Returns an error if an agent is not registered (nothing is
+    /// written), or `write`'s error (nothing changes in memory).
+    pub(crate) fn place_agents<T>(
+        &mut self,
+        placements: &[AgentPlacement],
+        write: impl FnOnce(&AgentStore, Vec<aura_store_db::AgentRecord>) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let mut changed = Vec::with_capacity(placements.len());
+        for placement in placements {
+            let index = self
+                .position(placement.agent_id)
+                .with_context(|| format!("{} is not registered", placement.agent_id.to_hex()))?;
+            let Some(agent) = self.file.agents.get(index) else {
+                anyhow::bail!("{} is not registered", placement.agent_id.to_hex());
+            };
+            let mut agent = agent.clone();
+            agent.project_id.clone_from(&placement.project_id);
+            agent.folder.clone_from(&placement.folder);
+            changed.push((index, agent));
+        }
+        let rows = persist::rows_at(&self.file, &changed);
+        let written = write(&self.store, rows.clone())?;
+        for (index, agent) in changed {
+            if let Some(slot) = self.file.agents.get_mut(index) {
+                *slot = agent;
+            }
+        }
+        self.persisted.mark_agents(&rows);
+        if let Err(error) = self.persist() {
+            tracing::warn!(
+                agents = rows.len(),
+                error = %format!("{error:#}"),
+                "could not save the registry after placing agents; saved with the next write"
+            );
+        }
+        Ok(written)
     }
 
     /// The row `agent`, not yet registered, has once [`Self::adopt`]
@@ -1705,13 +1807,9 @@ impl AgentRegistry {
         agent
     }
 
-    /// The stored row of the registered agent `agent_id`, as the registry
-    /// last saved it.
-    pub(crate) fn row_of(&self, agent_id: AgentId) -> Option<aura_store_db::AgentRecord> {
-        persist::registered_row(&self.file, agent_id)
-    }
-
-    /// The store the registry is kept in.
+    /// The store the registry is kept in. Writers outside the registry
+    /// get it through [`Self::place_agents`].
+    #[cfg(test)]
     pub(crate) fn store(&self) -> &AgentStore {
         &self.store
     }

@@ -14,6 +14,7 @@ async fn channel_with_member(fixture: &Fixture) -> (ChannelRecord, String) {
             slug: "site".to_string(),
             title: "Website relaunch".to_string(),
             description: "Ship the new marketing site.".to_string(),
+            project_id: None,
         },
     )
     .await

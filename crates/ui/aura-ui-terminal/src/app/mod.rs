@@ -176,8 +176,8 @@ pub enum AppState {
     SelectingFolder,
     /// A project's details are shown over the screen
     ShowingProjectInfo,
-    /// The new-channel form is open
-    NewChannel,
+    /// The channel form is open, making or editing a channel
+    ChannelForm,
 }
 
 /// Pending approval request.
@@ -3477,7 +3477,7 @@ impl App {
                     | AppState::LoginPassword
                     | AppState::LinkCode
                     | AppState::SelectingFolder
-                    | AppState::NewChannel
+                    | AppState::ChannelForm
             )
     }
 

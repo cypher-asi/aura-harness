@@ -491,7 +491,7 @@ impl App {
             AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode => {
                 self.insert_text(text.trim().replace(['\r', '\n'], "").as_str());
             }
-            AppState::NewChannel => self.paste_into_channel_form(text),
+            AppState::ChannelForm => self.paste_into_channel_form(text),
             AppState::AwaitingApproval
             | AppState::ShowingHelp
             | AppState::ShowingProjectInfo

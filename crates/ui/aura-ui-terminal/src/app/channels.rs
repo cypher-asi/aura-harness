@@ -514,32 +514,13 @@ impl App {
         Some(id)
     }
 
-    /// Listed projects channel `id` is not linked to, as `(id, name)`.
-    pub(super) fn linkable_projects(&self, id: &str) -> Vec<(String, String)> {
-        let Some(channel) = self.channels.find(id) else {
-            return Vec::new();
-        };
-        self.projects
-            .iter()
-            .filter(|project| {
-                !channel
-                    .projects
-                    .iter()
-                    .any(|linked| linked.id == project.id)
-            })
-            .map(|project| (project.id.clone(), project.name.clone()))
-            .collect()
-    }
-
-    /// Projects channel `id` is linked to, as `(id, name)`.
-    pub(super) fn linked_projects(&self, id: &str) -> Vec<(String, String)> {
-        self.channels.find(id).map_or_else(Vec::new, |channel| {
-            channel
-                .projects
-                .iter()
-                .map(|project| (project.id.clone(), project.name.clone()))
-                .collect()
-        })
+    /// The agent on screen when the user came to CHANNELS, else the one
+    /// on screen now (empty when none is).
+    pub(super) fn agent_before_channels(&self) -> &str {
+        self.channels
+            .chat_tab_before
+            .as_ref()
+            .map_or(self.active_agent_id.as_str(), |(agent, _)| agent.as_str())
     }
 
     /// Ask to confirm archiving channel `id`, as deleting a permanent

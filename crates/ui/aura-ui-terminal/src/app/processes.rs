@@ -19,7 +19,7 @@ pub enum SidePanelTab {
     /// The open channel's members: its coordinator and the agents it
     /// spawned. Listed only while a channel is open, first.
     ChannelMembers,
-    /// The open channel's description, coordinator and linked projects.
+    /// The open channel's description, coordinator and project.
     /// Listed only while a channel is open.
     ChannelInfo,
     /// File tree of the active agent's workspace.

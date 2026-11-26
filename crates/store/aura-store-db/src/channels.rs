@@ -4,10 +4,17 @@
 //! # Key formats
 //!
 //! * [`crate::cf::CHANNELS`]:
-//!   * `c/{channel_id}`: a JSON [`ChannelRecord`].
+//!   * `c/{channel_id}`: a JSON [`ChannelRecord`]. Its optional
+//!     `project_id` is the one project the channel's agents work in.
 //!   * `s/{slug}`: the JSON string of the id of the channel owning the
 //!     slug (unique slug index).
-//!   * `p/{channel_id}/{project_id}`: a JSON [`ProjectLink`].
+//!   * `p/{channel_id}/{project_id}`: legacy, a JSON [`ProjectLink`] from
+//!     when a channel could link many projects. Only
+//!     [`ChannelStore::migrate_links`] (and the legacy
+//!     [`ChannelStore::link_project`], [`ChannelStore::unlink_project`]
+//!     and [`ChannelStore::projects`], kept until their callers move)
+//!     touch these rows; the migration folds them into the `c/` record
+//!     and deletes them.
 //!   * `l/{channel_id}`: when the channel's coordinator last read its
 //!     activity, JSON Unix milliseconds.
 //! * [`crate::cf::CHANNEL_MEMBERS`]:
@@ -36,7 +43,16 @@
 //!   themselves ([`ChannelStore::stage_member`]) must check
 //!   [`ChannelStore::channel_of`] under their own serialization.
 //! * A channel and its coordinator (agent row, member row, reverse index)
-//!   are committed together in one batch by [`ChannelStore::create`].
+//!   are committed together in one batch by [`ChannelStore::create`],
+//!   the channel's project included.
+//! * A channel has at most one project, held on its `c/` record. A
+//!   stored project id is never empty or all whitespace. `c/` rows
+//!   written before the field existed decode with no project.
+//! * After [`ChannelStore::migrate_links`] a channel has no `p/` rows
+//!   (unless its migration failed, or a legacy
+//!   [`ChannelStore::link_project`] call adds one); each channel's
+//!   migration is one batch, so its project is set and its `p/` rows
+//!   deleted together.
 //! * Post sequence numbers are unique across the database and grow with
 //!   each append: the counter is seeded once from the highest sequence
 //!   stored and appends are serialized, so sequence order is commit
@@ -54,6 +70,14 @@
 //!   entry pointing at a missing channel.
 //! * Sequence numbers above `9_999_999_999` still get unique keys, but
 //!   two such posts with the same `at_ms` no longer sort by sequence.
+//! * [`ChannelStore::stage_update`] takes no lock: an `update` or
+//!   `archive` committed between staging and the caller's write is
+//!   overwritten by the staged record. Callers serialize their channel
+//!   changes, as with [`ChannelStore::stage_member`].
+//! * [`ChannelStore::migrate_links`] logs a channel whose links cannot be
+//!   migrated and carries on with the others; that channel keeps its rows
+//!   and a rerun tries it again. Link rows with a malformed key are
+//!   skipped (logged) and left in place.
 
 use crate::agents::{AgentRecord, AgentStore, AgentStoreError, RegistryDiff};
 use crate::cf;
@@ -65,8 +89,9 @@ use rocksdb::{
     WriteOptions,
 };
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 type Db = DBWithThreadMode<MultiThreaded>;
@@ -115,8 +140,8 @@ pub enum ChannelError {
     /// A channel id that can't be a key: empty or containing `/`.
     #[error("invalid channel id {0:?}: must be non-empty and contain no '/'")]
     InvalidId(String),
-    /// A project id that can't be a key: empty.
-    #[error("invalid project id {0:?}: must be non-empty")]
+    /// A project id that is empty or all whitespace.
+    #[error("invalid project id {0:?}: must not be empty or blank")]
     InvalidProjectId(String),
     /// The database was opened without a column family this store needs.
     #[error("{0} column family not found")]
@@ -172,11 +197,17 @@ pub struct ChannelRecord {
     pub coordinator: AgentId,
     /// When the channel was created.
     pub created_at: DateTime<Utc>,
-    /// When the title, description or archived flag last changed.
+    /// When the title, description, project or archived flag last
+    /// changed through [`ChannelStore::update`] or
+    /// [`ChannelStore::archive`].
     pub updated_at: DateTime<Utc>,
     /// Moved to the Archive; still holds its slug.
     #[serde(default)]
     pub archived: bool,
+    /// The project the channel's agents work in; `None` for none. Absent
+    /// in rows written before channels had a project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 /// What [`ChannelStore::create`] needs to make a channel.
@@ -188,6 +219,10 @@ pub struct NewChannel {
     pub title: String,
     /// What the channel is for.
     pub description: String,
+    /// The project the channel's agents work in, if any; must not be
+    /// empty or blank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 /// Fields [`ChannelStore::update`] changes; `None` leaves one as it is.
@@ -197,10 +232,30 @@ pub struct ChannelUpdate {
     pub title: Option<String>,
     /// New description.
     pub description: Option<String>,
+    /// New project: `Some(None)` clears it, `Some(Some(id))` sets it (the
+    /// id must not be empty or blank). In JSON an absent field is `None`
+    /// and `null` is `Some(None)`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_option"
+    )]
+    pub project_id: Option<Option<String>>,
 }
 
-/// A project linked to a channel, the value of a
-/// `p/{channel_id}/{project_id}` row.
+/// Deserialize a field that is present (possibly `null`) as `Some`, so
+/// together with `#[serde(default)]` an absent field stays `None` and
+/// `null` becomes `Some(None)`.
+fn present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// A project linked to a channel, the value of a legacy
+/// `p/{channel_id}/{project_id}` row; see [`ChannelStore::migrate_links`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectLink {
     /// The linked project.
@@ -282,7 +337,7 @@ pub struct NewPost {
     pub at_ms: u64,
 }
 
-/// Channels, their members, linked projects and posts in the shared
+/// Channels, their members, projects and posts in the shared
 /// agent-state `RocksDB`.
 ///
 /// Every method is synchronous and blocking; async callers run them on
@@ -327,10 +382,31 @@ fn validate_id(id: &str) -> Result<(), ChannelError> {
 }
 
 fn validate_project_id(project_id: &str) -> Result<(), ChannelError> {
-    if project_id.is_empty() {
+    if project_id.trim().is_empty() {
         return Err(ChannelError::InvalidProjectId(project_id.to_string()));
     }
     Ok(())
+}
+
+/// Check the project id an update would set, if any.
+fn validate_update(update: &ChannelUpdate) -> Result<(), ChannelError> {
+    match &update.project_id {
+        Some(Some(project_id)) => validate_project_id(project_id),
+        Some(None) | None => Ok(()),
+    }
+}
+
+/// Apply the fields `update` sets to `record`.
+fn apply_update(record: &mut ChannelRecord, update: ChannelUpdate) {
+    if let Some(title) = update.title {
+        record.title = title;
+    }
+    if let Some(description) = update.description {
+        record.description = description;
+    }
+    if let Some(project_id) = update.project_id {
+        record.project_id = project_id;
+    }
 }
 
 fn channel_key(id: &str) -> Vec<u8> {
@@ -351,6 +427,16 @@ fn link_prefix(channel_id: &str) -> Vec<u8> {
 
 fn link_key(channel_id: &str, project_id: &str) -> Vec<u8> {
     [link_prefix(channel_id), project_id.as_bytes().to_vec()].concat()
+}
+
+/// The channel id of a `p/{channel_id}/{project_id}` key, if the key has
+/// that shape and the id is valid.
+fn link_key_channel(key: &[u8]) -> Option<&str> {
+    let rest = key.strip_prefix(LINK_PREFIX.as_bytes())?;
+    let end = rest.iter().position(|&b| b == b'/')?;
+    let channel_id = std::str::from_utf8(rest.get(..end)?).ok()?;
+    validate_id(channel_id).ok()?;
+    Some(channel_id)
 }
 
 fn member_prefix(channel_id: &str) -> Vec<u8> {
@@ -498,12 +584,14 @@ impl ChannelStore {
             .ok_or_else(|| ChannelError::UnknownChannel(id.to_string()))
     }
 
-    /// Create a channel run by `coordinator`, committing the channel, its
-    /// slug, the coordinator's agent row and its membership in one batch.
+    /// Create a channel run by `coordinator`, committing the channel (and
+    /// its project, if any), its slug, the coordinator's agent row and
+    /// its membership in one batch.
     ///
     /// # Errors
     /// [`ChannelError::InvalidSlug`], [`ChannelError::SlugTaken`],
-    /// [`ChannelError::AlreadyMember`] when the coordinator is in a
+    /// [`ChannelError::InvalidProjectId`] for an empty or blank project
+    /// id, [`ChannelError::AlreadyMember`] when the coordinator is in a
     /// channel, [`ChannelError::Agent`] when its record breaks the agent
     /// key invariants; store, sealing and encoding failures. Nothing is
     /// written on error.
@@ -535,6 +623,9 @@ impl ChannelStore {
         if !valid_slug(&new.slug) {
             return Err(ChannelError::InvalidSlug(new.slug));
         }
+        if let Some(project_id) = &new.project_id {
+            validate_project_id(project_id)?;
+        }
         let slugs = self.cf(cf::CHANNELS)?;
         let taken = self
             .db
@@ -562,6 +653,7 @@ impl ChannelStore {
             created_at: now,
             updated_at: now,
             archived: false,
+            project_id: new.project_id,
         };
         let member = MemberRecord {
             agent_id: agent,
@@ -642,25 +734,53 @@ impl ChannelStore {
         Ok(channels)
     }
 
-    /// Change the title and/or description of channel `id`.
+    /// Change the title, description and/or project of channel `id`,
+    /// stamping `updated_at` with `now`.
     ///
     /// # Errors
-    /// [`ChannelError::UnknownChannel`]; store, sealing and encoding
-    /// failures.
+    /// [`ChannelError::InvalidProjectId`] for an empty or blank project
+    /// id, [`ChannelError::InvalidId`], [`ChannelError::UnknownChannel`];
+    /// store, sealing and encoding failures. Nothing is written on error.
     pub fn update(
         &self,
         id: &str,
         update: ChannelUpdate,
         now: DateTime<Utc>,
     ) -> Result<ChannelRecord, ChannelError> {
-        self.modify(id, now, |record| {
-            if let Some(title) = update.title {
-                record.title = title;
-            }
-            if let Some(description) = update.description {
-                record.description = description;
-            }
-        })
+        validate_update(&update)?;
+        self.modify(id, now, |record| apply_update(record, update))
+    }
+
+    /// Apply `update` to channel `channel_id` as [`Self::update`] does,
+    /// but put the changed `c/` row into `batch` instead of writing it,
+    /// for a caller committing it together with rows of another store
+    /// (e.g. the coordinator's agent row), then [`Self::write`]. Returns
+    /// the record as it will be once `batch` is written.
+    ///
+    /// Takes no lock, like [`Self::stage_member`]: the record is read now
+    /// and written whenever the caller commits, so an [`Self::update`] or
+    /// [`Self::archive`] committed in between is overwritten. The caller
+    /// must serialize its channel changes (aura-app runs them one at a
+    /// time from its event loop). Holding the store's write lock here
+    /// would not help, since it can't be held until the caller's write.
+    /// On error `batch` is left as it was.
+    ///
+    /// # Errors
+    /// As [`Self::update`].
+    pub fn stage_update(
+        &self,
+        channel_id: &str,
+        update: ChannelUpdate,
+        now: DateTime<Utc>,
+        batch: &mut WriteBatch,
+    ) -> Result<ChannelRecord, ChannelError> {
+        validate_update(&update)?;
+        self.stage_change(
+            channel_id,
+            now,
+            |record| apply_update(record, update),
+            batch,
+        )
     }
 
     /// Move channel `id` to the Archive. It keeps its slug and members.
@@ -672,6 +792,7 @@ impl ChannelStore {
         self.modify(id, now, |record| record.archived = true)
     }
 
+    /// Read channel `id`, `change` it and commit it, under the write lock.
     fn modify(
         &self,
         id: &str,
@@ -679,19 +800,148 @@ impl ChannelStore {
         change: impl FnOnce(&mut ChannelRecord),
     ) -> Result<ChannelRecord, ChannelError> {
         let _guard = lock(&self.write_lock);
-        let mut record = self.require_channel(id)?;
-        change(&mut record);
-        record.updated_at = now;
-        let what = format!("channel {id}");
-        let value = self.encode(&record, &what)?;
         let mut batch = WriteBatch::default();
-        batch.put_cf(&self.cf(cf::CHANNELS)?, channel_key(id), value);
-        self.commit(batch, &what)?;
+        let record = self.stage_change(id, now, change, &mut batch)?;
+        self.commit(batch, &format!("channel {id}"))?;
         Ok(record)
     }
 
-    /// Link `project_id` to channel `channel_id`; relinking refreshes
-    /// `linked_at`.
+    /// Read channel `id`, `change` it, stamp `updated_at` and put it into
+    /// `batch`. Takes no lock; `batch` is untouched on error.
+    fn stage_change(
+        &self,
+        id: &str,
+        now: DateTime<Utc>,
+        change: impl FnOnce(&mut ChannelRecord),
+        batch: &mut WriteBatch,
+    ) -> Result<ChannelRecord, ChannelError> {
+        let mut record = self.require_channel(id)?;
+        change(&mut record);
+        record.updated_at = now;
+        let value = self.encode(&record, &format!("channel {id}"))?;
+        let channels = self.cf(cf::CHANNELS)?;
+        batch.put_cf(&channels, channel_key(id), value);
+        Ok(record)
+    }
+
+    /// Fold the legacy `p/` link rows into the channels' `project_id`,
+    /// returning how many channels changed.
+    ///
+    /// For each channel with link rows, in one batch: when it has no
+    /// project, it takes the link with the earliest `linked_at` (ties:
+    /// the lowest project id) among those whose project `is_known`
+    /// accepts (blank ids are never taken); when none is known it keeps
+    /// no project. Then all of its link rows are deleted, including when
+    /// it already had a project, which it keeps. `updated_at` is left
+    /// alone: this is not a user change. Every such channel counts as
+    /// changed, so a second call returns 0. Links of a channel that no
+    /// longer exists are deleted too (logged, not counted); rows with a
+    /// malformed key are skipped (logged) and left in place.
+    ///
+    /// A channel whose rows cannot be migrated (a link that fails to
+    /// unseal or decode, a failed write) is logged with `warn!` and left
+    /// as it was, rows included, and the others are still migrated; it
+    /// is not counted, and a rerun tries it again.
+    ///
+    /// Runs under the write lock, so it does not interleave with
+    /// [`Self::update`], [`Self::archive`] or [`Self::link_project`].
+    ///
+    /// # Errors
+    /// Store, unsealing and decoding failures of the scan of the link
+    /// rows; nothing is migrated then.
+    pub fn migrate_links(&self, is_known: impl Fn(&str) -> bool) -> Result<usize, ChannelError> {
+        let _guard = lock(&self.write_lock);
+        let prefix = LINK_PREFIX.as_bytes();
+        let rows = self.scan(cf::CHANNELS, prefix, prefix, "project links")?;
+        let mut by_channel: BTreeMap<String, Vec<Row>> = BTreeMap::new();
+        for (key, value) in rows {
+            let Some(channel_id) = link_key_channel(&key) else {
+                tracing::warn!(
+                    key_len = key.len(),
+                    "skipping project link row with a malformed key"
+                );
+                continue;
+            };
+            by_channel
+                .entry(channel_id.to_string())
+                .or_default()
+                .push((key, value));
+        }
+        let mut changed = 0;
+        for (channel_id, rows) in by_channel {
+            match self.migrate_channel_links(&channel_id, &rows, &is_known) {
+                Ok(true) => changed += 1,
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    channel_id = %channel_id,
+                    %error,
+                    "could not migrate the project links of a channel; left for the next run"
+                ),
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Migrate the link `rows` of channel `channel_id` in one batch;
+    /// whether the channel exists (and so changed).
+    fn migrate_channel_links(
+        &self,
+        channel_id: &str,
+        rows: &[Row],
+        is_known: &impl Fn(&str) -> bool,
+    ) -> Result<bool, ChannelError> {
+        let what = format!("project links of channel {channel_id}");
+        let links = rows
+            .iter()
+            .map(|(_, value)| self.decode::<ProjectLink>(value, &what))
+            .collect::<Result<Vec<_>, _>>()?;
+        let channels = self.cf(cf::CHANNELS)?;
+        let mut batch = WriteBatch::default();
+        for (key, _) in rows {
+            batch.delete_cf(&channels, key);
+        }
+        let Some(mut record) = self.get(channel_id)? else {
+            self.commit(batch, &what)?;
+            tracing::warn!(
+                channel_id,
+                dropped = links.len(),
+                "deleted project links of a missing channel"
+            );
+            return Ok(false);
+        };
+        let mut dropped = links.len();
+        if record.project_id.is_none() {
+            let earliest = links
+                .iter()
+                .filter(|link| {
+                    validate_project_id(&link.project_id).is_ok() && is_known(&link.project_id)
+                })
+                .min_by(|a, b| {
+                    a.linked_at
+                        .cmp(&b.linked_at)
+                        .then_with(|| a.project_id.cmp(&b.project_id))
+                });
+            if let Some(link) = earliest {
+                record.project_id = Some(link.project_id.clone());
+                dropped -= 1;
+                let value = self.encode(&record, &format!("channel {channel_id}"))?;
+                batch.put_cf(&channels, channel_key(channel_id), value);
+            }
+        }
+        self.commit(batch, &what)?;
+        tracing::info!(
+            channel_id,
+            kept_project = record.project_id.as_deref().unwrap_or(""),
+            dropped,
+            "migrated legacy project links"
+        );
+        Ok(true)
+    }
+
+    /// Legacy: link `project_id` to channel `channel_id`; relinking
+    /// refreshes `linked_at`. A channel's project now lives on its record
+    /// (see [`Self::update`]); kept until its callers move, and its rows
+    /// are folded in by [`Self::migrate_links`].
     ///
     /// # Errors
     /// [`ChannelError::InvalidId`], [`ChannelError::InvalidProjectId`],
@@ -722,8 +972,9 @@ impl ChannelStore {
         Ok(link)
     }
 
-    /// Unlink `project_id` from channel `channel_id`. Unlinking a project
-    /// that isn't linked is a no-op.
+    /// Legacy: unlink `project_id` from channel `channel_id`. Unlinking a
+    /// project that isn't linked is a no-op. Kept until its callers move
+    /// to the record's `project_id`.
     ///
     /// # Errors
     /// [`ChannelError::InvalidId`], [`ChannelError::InvalidProjectId`];
@@ -767,8 +1018,10 @@ impl ChannelStore {
         self.commit(batch, &what)
     }
 
-    /// Projects linked to channel `channel_id`, in key order (by project
-    /// id).
+    /// Legacy: projects linked to channel `channel_id` by `p/` rows, in
+    /// key order (by project id). Empty once [`Self::migrate_links`] ran;
+    /// the channel's project is [`ChannelRecord::project_id`]. Kept until
+    /// its callers move.
     ///
     /// # Errors
     /// [`ChannelError::InvalidId`]; store, unsealing and decoding

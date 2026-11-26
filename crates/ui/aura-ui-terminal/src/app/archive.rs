@@ -895,7 +895,11 @@ mod tests {
         ]));
         app.process_command(UiCommand::SetActiveAgent("ff".into()));
         app.show_agents_tab(AgentsTab::Archive);
-        assert_eq!(app.active_agent_id(), "ff", "the Archive keeps it on screen");
+        assert_eq!(
+            app.active_agent_id(),
+            "ff",
+            "the Archive keeps it on screen"
+        );
         assert_eq!(app.shown_active_archived(), Some(0));
         assert_eq!(app.selected_archived(), 0);
         app.toggle_archived(0);

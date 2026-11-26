@@ -693,6 +693,24 @@ pub(super) async fn handle_remove_project(state: &mut LoopState<'_>, project_id:
         show_error(state, "Unknown project".to_string()).await;
         return;
     };
+    match super::channels::channel_in_project(&state.hub, project_id).await {
+        Ok(None) => {}
+        Ok(Some(channel)) => {
+            show_error(
+                state,
+                format!(
+                    "Cannot remove {project}: #{} works in this project; edit the channel to change its project first",
+                    channel.slug
+                ),
+            )
+            .await;
+            return;
+        }
+        Err(e) => {
+            show_error(state, format!("Cannot remove {project}: {e:#}")).await;
+            return;
+        }
+    }
     if let Some(busy) = busy_agent(state, &agents) {
         show_error(
             state,

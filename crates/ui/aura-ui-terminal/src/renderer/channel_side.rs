@@ -11,8 +11,9 @@
 //! ```
 //!
 //! INFO is what the channel is: its slug, title and description, who
-//! coordinates it, how many members it has, and the projects linked to
-//! it. A right click anywhere in it opens the channel's menu.
+//! coordinates it, how many members it has, and the project its agents
+//! work in. A right click anywhere in it opens the channel's menu, whose
+//! "Edit channel…" sets or clears the project.
 //!
 //! ```text
 //!  #zode
@@ -24,8 +25,16 @@
 //!
 //!  MEMBERS  2 agents
 //!
-//!  LINKED PROJECTS
+//!  PROJECT
 //!     Zode  ~/code/zode
+//! ```
+//!
+//! Without a project, PROJECT says so, wrapped to the column:
+//!
+//! ```text
+//!  PROJECT
+//!   No project — agents work in the channel's folder
+//!   Right-click › Edit channel… to set one
 //! ```
 
 use super::panels::{
@@ -33,7 +42,9 @@ use super::panels::{
     truncate_record_info, working_icon, CellState, ScrollView, StatusIcon,
 };
 use super::policies::heading;
-use super::side_list::{empty_line, render_empty, render_hint, split_hint, CHANNEL_MEMBERS_HINT};
+use super::side_list::{
+    empty_line, render_empty, render_hint, split_hint, CHANNEL_MEMBERS_HINT, EMPTY_INDENT,
+};
 use super::text::{display_width, wrap_words};
 use crate::app::{AgentRowEnd, HoverTarget, PanelFocus};
 use crate::events::{AgentSummary, ChannelSummary};
@@ -222,19 +233,41 @@ fn info_lines(
     lines.push(heading("MEMBERS", Some(format!("{count} {unit}")), theme));
     lines.push(Line::default());
 
-    lines.push(heading("LINKED PROJECTS", None, theme));
-    if channel.projects.is_empty() {
-        lines.push(empty_line("No linked projects", width, theme));
-    }
-    lines.extend(channel.projects.iter().map(|project| {
-        list_row_with_detail(
+    lines.push(heading("PROJECT", None, theme));
+    match &channel.project {
+        // A project the app no longer lists comes without a folder.
+        Some(project) => lines.push(list_row_with_detail(
             columns,
             0,
             StatusIcon::new("", theme.colors.muted),
-            (&project.name, Some(&project.folder)),
+            (
+                &project.name,
+                Some(project.folder.as_str()).filter(|folder| !folder.is_empty()),
+            ),
             plain,
             None,
-        )
-    }));
+        )),
+        None => {
+            for text in [NO_PROJECT, SET_PROJECT_HINT] {
+                lines.extend(wrapped_muted(text, columns, theme));
+            }
+        }
+    }
     lines
 }
+
+/// `text` wrapped to `columns`, muted and indented as an empty state is.
+fn wrapped_muted(text: &str, columns: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let indent = " ".repeat(EMPTY_INDENT);
+    let muted = Style::default().fg(theme.colors.muted);
+    wrap_words(text, columns.saturating_sub(EMPTY_INDENT))
+        .into_iter()
+        .map(|line| Line::from(Span::styled(format!("{indent}{line}"), muted)))
+        .collect()
+}
+
+/// What INFO says of a channel without a project.
+const NO_PROJECT: &str = "No project — agents work in the channel's folder";
+
+/// How INFO says to give a channel a project.
+const SET_PROJECT_HINT: &str = "Right-click › Edit channel… to set one";

@@ -5,8 +5,7 @@
 //! whole row.
 //!
 //! An item with a submenu ends in `›`. Its submenu, the workspaces to move
-//! a project to or the projects to link to or unlink from a channel, is a
-//! second box with its first entry on the item's row,
+//! a project to, is a second box with its first entry on the item's row,
 //! right of the menu, or left of it when there is no room on the right,
 //! and moved up to stay on screen.
 
@@ -163,14 +162,10 @@ fn render_submenu(frame: &mut Frame, app: &mut App, theme: &Theme, menu: Rect, r
     app.set_context_submenu_area(area);
 }
 
-/// What a submenu entry reads: `Workspace 2  NOTES / CC`, `New
-/// workspace`, or a project's name. Workspaces are numbered from 1, as
-/// the tab bar shows them.
+/// What a submenu entry reads: `Workspace 2  NOTES / CC` or `New
+/// workspace`. Workspaces are numbered from 1, as the tab bar shows them.
 fn entry_label(titles: &[String], entry: &SubmenuEntry) -> String {
-    let target = match entry {
-        SubmenuEntry::Workspace(target) => *target,
-        SubmenuEntry::Project { name, .. } => return truncate(name, MAX_TITLE),
-    };
+    let SubmenuEntry::Workspace(target) = *entry;
     match target {
         WorkspaceTarget::New => "New workspace".to_string(),
         WorkspaceTarget::Existing(index) => {

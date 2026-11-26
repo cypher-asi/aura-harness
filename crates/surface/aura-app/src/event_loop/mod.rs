@@ -658,11 +658,13 @@ async fn handle_ui_event(
             slug,
             title,
             description,
+            project_id,
         } => {
             let new = aura_store_db::NewChannel {
                 slug,
                 title,
                 description,
+                project_id,
             };
             channels::handle_create(state, new).await;
         }
@@ -672,24 +674,9 @@ async fn handle_ui_event(
             channel_id,
             title,
             description,
-        } => {
-            let updated =
-                channels::update_channel(&state.hub, &channel_id, &title, &description).await;
-            channels::after_change(state, "update the channel", updated).await;
-        }
-        UiEvent::LinkProject {
-            channel_id,
             project_id,
         } => {
-            let linked = channels::link_project(&state.hub, &channel_id, &project_id).await;
-            channels::after_change(state, "link the project", linked).await;
-        }
-        UiEvent::UnlinkProject {
-            channel_id,
-            project_id,
-        } => {
-            let unlinked = channels::unlink_project(&state.hub, &channel_id, &project_id).await;
-            channels::after_change(state, "unlink the project", unlinked).await;
+            channels::handle_update(state, &channel_id, &title, &description, project_id).await;
         }
         UiEvent::ArchiveChannel(channel_id) => channels::handle_archive(state, &channel_id).await,
         UiEvent::RestoreAgent(agent) => agents::handle_restore_agent(state, &agent).await,

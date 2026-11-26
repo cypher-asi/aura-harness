@@ -67,7 +67,7 @@ impl App {
             }
             AppState::SelectingModel => self.handle_model_selector_key(key),
             AppState::SelectingFolder => self.handle_folder_picker_key(key),
-            AppState::NewChannel => {
+            AppState::ChannelForm => {
                 self.handle_channel_form_key(key);
                 KeyResult::continue_running()
             }

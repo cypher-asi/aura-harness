@@ -19,13 +19,11 @@
 //! because a workspace holds projects, not single agents.
 //!
 //! On the CHANNELS tab the menu opens on a channel row of the list, or
-//! anywhere in the open channel's INFO side tab, and offers "Link project"
-//! and "Unlink project", whose submenus list the projects the channel is not
-//! linked to and those it is (each item is left out when its list would
-//! be empty), and "Archive channel…", which asks for `y` first.
+//! anywhere in the open channel's INFO side tab, and offers "Edit
+//! channel…", which opens the channel form on it (title, description and
+//! project), and "Archive channel…", which asks for `y` first.
 
 use super::{contains, AgentsTab, App, AppState, PanelFocus, ProjectListRow};
-use crate::events::UiEvent;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
 
@@ -79,17 +77,10 @@ impl Workspaces {
 pub(crate) enum SubmenuEntry {
     /// Where "Move to workspace" sends the project
     Workspace(WorkspaceTarget),
-    /// A project "Link project" or "Unlink project" acts on
-    Project {
-        /// Project id
-        id: String,
-        /// What it is called
-        name: String,
-    },
 }
 
 /// The list an item with a submenu opens beside the menu: workspaces for
-/// "Move to workspace", projects for "Link project" and "Unlink project".
+/// "Move to workspace".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Submenu {
     pub entries: Vec<SubmenuEntry>,
@@ -166,20 +157,15 @@ pub(crate) enum MenuItem {
     MoveToWorkspace,
     RemoveProject,
     Restore,
-    /// Opens the submenu of projects the channel is not linked to
-    LinkProject,
-    /// Opens the submenu of projects the channel is linked to
-    UnlinkProject,
+    /// Opens the channel form on the channel
+    EditChannel,
     ArchiveChannel,
 }
 
 impl MenuItem {
     /// Whether the item opens a submenu rather than running.
     pub(crate) fn has_submenu(self) -> bool {
-        matches!(
-            self,
-            Self::MoveToWorkspace | Self::LinkProject | Self::UnlinkProject
-        )
+        matches!(self, Self::MoveToWorkspace)
     }
 }
 
@@ -319,23 +305,12 @@ impl App {
 
     /// What the highlighted item's submenu lists.
     fn submenu_entries(&self, menu: &ContextMenu) -> Vec<SubmenuEntry> {
-        let projects = |list: Vec<(String, String)>| {
-            list.into_iter()
-                .map(|(id, name)| SubmenuEntry::Project { id, name })
-                .collect()
-        };
-        match (menu.items.get(menu.selected), &menu.target) {
-            (Some(MenuItem::MoveToWorkspace), target) => self
-                .workspace_targets(target)
+        match menu.items.get(menu.selected) {
+            Some(MenuItem::MoveToWorkspace) => self
+                .workspace_targets(&menu.target)
                 .into_iter()
                 .map(SubmenuEntry::Workspace)
                 .collect(),
-            (Some(MenuItem::LinkProject), MenuTarget::Channel(id)) => {
-                projects(self.linkable_projects(id))
-            }
-            (Some(MenuItem::UnlinkProject), MenuTarget::Channel(id)) => {
-                projects(self.linked_projects(id))
-            }
             _ => Vec::new(),
         }
     }
@@ -376,8 +351,7 @@ impl App {
             MenuItem::MoveToWorkspace => "Move to workspace",
             MenuItem::RemoveProject => "Remove project…",
             MenuItem::Restore => "Unarchive",
-            MenuItem::LinkProject => "Link project",
-            MenuItem::UnlinkProject => "Unlink project",
+            MenuItem::EditChannel => "Edit channel…",
             MenuItem::ArchiveChannel => "Archive channel…",
         }
     }
@@ -494,14 +468,7 @@ impl App {
 
     /// Open channel `id`'s menu at `column`, `row`.
     fn open_menu_of_channel(&mut self, id: String, column: u16, row: u16) -> bool {
-        let mut items = Vec::new();
-        if !self.linkable_projects(&id).is_empty() {
-            items.push(MenuItem::LinkProject);
-        }
-        if !self.linked_projects(&id).is_empty() {
-            items.push(MenuItem::UnlinkProject);
-        }
-        items.push(MenuItem::ArchiveChannel);
+        let items = vec![MenuItem::EditChannel, MenuItem::ArchiveChannel];
         self.focus = PanelFocus::Swarm;
         self.context_menu = Some(ContextMenu::new(
             MenuTarget::Channel(id),
@@ -664,44 +631,24 @@ impl App {
 
     /// Close the menu and run the highlighted entry of its submenu: ask
     /// the host to move the project it was opened on (or its agent's
-    /// project) to that workspace, or link or unlink that project.
+    /// project) to that workspace.
     fn run_submenu_entry(&mut self) {
         let Some(menu) = self.context_menu.take() else {
             return;
         };
-        let item = menu.items.get(menu.selected).copied();
-        let Some(entry) = menu
+        let Some(SubmenuEntry::Workspace(to)) = menu
             .submenu
             .and_then(|submenu| submenu.entries.into_iter().nth(submenu.selected))
         else {
             return;
         };
-        match (entry, menu.target) {
-            (SubmenuEntry::Workspace(to), target) => {
-                let project = match target {
-                    MenuTarget::Project(key) => Some(key),
-                    MenuTarget::Agent(id) => self.project_key_of_agent(&id),
-                    MenuTarget::Archived(_) | MenuTarget::Channel(_) => None,
-                };
-                if let Some(project) = project {
-                    self.workspace_move = Some(WorkspaceMove { project, to });
-                }
-            }
-            (SubmenuEntry::Project { id: project_id, .. }, MenuTarget::Channel(channel_id)) => {
-                let event = match item {
-                    Some(MenuItem::LinkProject) => UiEvent::LinkProject {
-                        channel_id,
-                        project_id,
-                    },
-                    Some(MenuItem::UnlinkProject) => UiEvent::UnlinkProject {
-                        channel_id,
-                        project_id,
-                    },
-                    _ => return,
-                };
-                self.try_send_event(event);
-            }
-            (SubmenuEntry::Project { .. }, _) => {}
+        let project = match menu.target {
+            MenuTarget::Project(key) => Some(key),
+            MenuTarget::Agent(id) => self.project_key_of_agent(&id),
+            MenuTarget::Archived(_) | MenuTarget::Channel(_) => None,
+        };
+        if let Some(project) = project {
+            self.workspace_move = Some(WorkspaceMove { project, to });
         }
     }
 
@@ -719,12 +666,18 @@ impl App {
                     self.restore_agent(id);
                 }
             }
-            MenuTarget::Channel(id) => {
-                // Link and Unlink open their submenus instead of running.
-                if item == MenuItem::ArchiveChannel {
-                    self.request_archive_channel(id);
-                }
-            }
+            MenuTarget::Channel(id) => match item {
+                MenuItem::EditChannel => self.start_edit_channel(&id),
+                MenuItem::ArchiveChannel => self.request_archive_channel(id),
+                MenuItem::AddAgent
+                | MenuItem::Info
+                | MenuItem::Fold
+                | MenuItem::Open
+                | MenuItem::Archive
+                | MenuItem::MoveToWorkspace
+                | MenuItem::RemoveProject
+                | MenuItem::Restore => {}
+            },
             MenuTarget::Project(key) => match item {
                 MenuItem::AddAgent => self.add_agent_to_project(&key),
                 MenuItem::Fold => {
@@ -739,8 +692,7 @@ impl App {
                 | MenuItem::Archive
                 | MenuItem::MoveToWorkspace
                 | MenuItem::Restore
-                | MenuItem::LinkProject
-                | MenuItem::UnlinkProject
+                | MenuItem::EditChannel
                 | MenuItem::ArchiveChannel => {}
             },
             MenuTarget::Agent(id) => {
@@ -756,8 +708,7 @@ impl App {
                     MenuItem::AddAgent
                     | MenuItem::Info
                     | MenuItem::MoveToWorkspace
-                    | MenuItem::LinkProject
-                    | MenuItem::UnlinkProject
+                    | MenuItem::EditChannel
                     | MenuItem::ArchiveChannel => {}
                 }
             }

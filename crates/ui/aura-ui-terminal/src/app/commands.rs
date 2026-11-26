@@ -1012,7 +1012,10 @@ impl App {
             }
             UiCommand::ClearConversation => self.cmd_clear_conversation(),
             UiCommand::NewRecord(record) => self.cmd_new_record(record),
-            UiCommand::SetProjects(projects) => self.projects = projects,
+            UiCommand::SetProjects(projects) => {
+                self.projects = projects;
+                self.projects_changed_under_channel_form();
+            }
             UiCommand::SetAgents(agents) => self.cmd_set_agents(agents),
             UiCommand::SetArchivedAgents(agents) => self.set_archived(agents),
             UiCommand::SetActiveAgent(agent_id) => self.cmd_set_active_agent(&agent_id),

@@ -92,11 +92,18 @@ pub(super) fn appended_row(file: &RegistryFile, agent: &RegisteredAgent) -> Agen
     agent_row(agent, file.agents.len(), &ids_by_zns(file))
 }
 
-/// The row of the agent `agent_id` already in `file`, if it is there.
-pub(super) fn registered_row(file: &RegistryFile, agent_id: AgentId) -> Option<AgentRecord> {
-    let index = file.agents.iter().position(|a| a.agent_id() == agent_id)?;
-    let agent = file.agents.get(index)?;
-    Some(agent_row(agent, index, &ids_by_zns(file)))
+/// The rows `changed` (agents at their index in `file`, as they will be
+/// once put back there) have in `file`. Parents are resolved against
+/// `file`'s agents, so `changed` must keep the ZNS ids they have there.
+pub(super) fn rows_at(
+    file: &RegistryFile,
+    changed: &[(usize, RegisteredAgent)],
+) -> Vec<AgentRecord> {
+    let by_zns = ids_by_zns(file);
+    changed
+        .iter()
+        .map(|(index, agent)| agent_row(agent, *index, &by_zns))
+        .collect()
 }
 
 /// `file` as rows, in its list order.
@@ -217,6 +224,15 @@ impl Persisted {
                 .map(|project| (project.id.clone(), encoded(project)))
                 .collect(),
             meta: Some(encoded(&rows.meta)),
+        }
+    }
+
+    /// Remember `rows`, written to the store by someone else (in a batch
+    /// with rows of another store), as stored, so the next diff does not
+    /// write them again.
+    pub(super) fn mark_agents(&mut self, rows: &[AgentRecord]) {
+        for row in rows {
+            self.agents.insert(row.agent_id, encoded(row));
         }
     }
 

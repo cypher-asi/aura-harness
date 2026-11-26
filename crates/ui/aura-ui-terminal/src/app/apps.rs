@@ -184,12 +184,9 @@ impl App {
         let Some(name) = self.apps.roster.as_deref() else {
             return false;
         };
-        self.agents
-            .iter()
-            .chain(self.archived.iter())
-            .any(|agent| {
-                agent.id == self.active_agent_id && agent.definition.as_deref() == Some(name)
-            })
+        self.agents.iter().chain(self.archived.iter()).any(|agent| {
+            agent.id == self.active_agent_id && agent.definition.as_deref() == Some(name)
+        })
     }
 
     /// Whether the app in front has nothing to show: no channel open, no

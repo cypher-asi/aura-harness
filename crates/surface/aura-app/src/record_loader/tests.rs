@@ -1185,3 +1185,55 @@ fn list_rows_match_the_registry_for_compares_and_the_archive() {
         );
     }
 }
+
+#[test]
+fn hiding_every_listed_row_of_a_project_keeps_it_on_the_projects_list() {
+    let (only_hidden, member, visible) = (
+        AgentId::new([1; 32]),
+        AgentId::new([2; 32]),
+        AgentId::new([3; 32]),
+    );
+    let row = |id: AgentId, project: &str| {
+        (
+            id,
+            AgentSummary {
+                id: id.to_hex(),
+                project_id: Some(project.to_string()),
+                ..AgentSummary::default()
+            },
+        )
+    };
+    let project = |id: &str, listed_agents: usize| ProjectSummary {
+        id: id.to_string(),
+        listed_agents,
+        ..ProjectSummary::default()
+    };
+    let mut rows = ListRows {
+        projects: vec![project("launch", 1), project("shared", 2)],
+        listed: vec![
+            row(only_hidden, "launch"),
+            row(member, "shared"),
+            row(visible, "shared"),
+        ],
+        archived: Vec::new(),
+        members: Vec::new(),
+        active: visible,
+    };
+    rows.split_members(
+        &HashSet::from([only_hidden, member]),
+        &HashSet::from([only_hidden]),
+    );
+
+    let listed: Vec<AgentId> = rows.listed.iter().map(|(id, _)| *id).collect();
+    assert_eq!(listed, [member, visible]);
+    let members: Vec<AgentId> = rows.members.iter().map(|(id, _)| *id).collect();
+    assert_eq!(members, [only_hidden, member]);
+    // The launch project, holding only a hidden member, is still listed
+    // (a channel can still be given it), counting no agent.
+    let counts: Vec<(&str, usize)> = rows
+        .projects
+        .iter()
+        .map(|p| (p.id.as_str(), p.listed_agents))
+        .collect();
+    assert_eq!(counts, [("launch", 0), ("shared", 2)]);
+}
