@@ -12,17 +12,9 @@ aura-core-permissions = { path = "../../core/aura-core-permissions" }
 aura-core-types = { path = "../../core/aura-core-types" }
 serde = { workspace = true }
 thiserror = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
-
-# Phase 9: `aura-core-types` and `uuid` are pulled in for the
-# Phase-7b override surface that lands in subsequent migration
-# work; the type names are referenced via re-export rather than
-# directly in this crate's lib.rs.
-[package.metadata.cargo-machete]
-ignored = ["aura-core-types", "uuid"]
 
 [lints]
 workspace = true

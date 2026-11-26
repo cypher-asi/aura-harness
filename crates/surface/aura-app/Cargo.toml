@@ -18,7 +18,6 @@ aura-store-snapshot = { path = "../../store/aura-store-snapshot" }
 aura-model = { path = "../../model/aura-model" }
 aura-exec-tools = { path = "../../exec/aura-exec-tools" }
 aura-agent = { path = "../../agent/aura-agent" }
-aura-context-compaction = { path = "../../context/aura-context-compaction" }
 aura-agent-trace = { path = "../../agent/aura-agent-trace" }
 aura-gate = { path = "../../gate/aura-gate" }
 aura-context-memory = { path = "../../context/aura-context-memory" }

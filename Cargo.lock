@@ -400,7 +400,6 @@ dependencies = [
  "proptest",
  "serde",
  "thiserror 1.0.69",
- "uuid",
 ]
 
 [[package]]
@@ -440,7 +439,6 @@ dependencies = [
  "aura-auth",
  "aura-auth-kit",
  "aura-config",
- "aura-context-compaction",
  "aura-context-memory",
  "aura-context-prompts",
  "aura-context-skills",
@@ -1288,13 +1286,11 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "similar",
  "syntect",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "two-face",
  "unicode-width 0.2.0",
 ]
 

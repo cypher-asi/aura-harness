@@ -58,5 +58,10 @@ test-support = []
 [dev-dependencies]
 axum = { workspace = true }
 
+# Only the gRPC client tonic-build generates into OUT_DIR uses prost,
+# and cargo-machete reads only the crate's own sources.
+[package.metadata.cargo-machete]
+ignored = ["prost"]
+
 [lints]
 workspace = true
