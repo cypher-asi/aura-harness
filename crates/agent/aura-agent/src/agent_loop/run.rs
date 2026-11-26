@@ -141,60 +141,8 @@ impl AgentLoop {
             cancellation_token,
             handle,
         } = options;
-        // Phase 8: fire UserPromptSubmit hook for the most recent
-        // user message in the input history. Handlers may return
-        // `Replace { new_value }` to mutate the prompt before it
-        // enters the model context, or `Block { reason }` to drop
-        // the turn entirely. The `is_empty(event)` short-circuit
-        // guarantees zero overhead when no plugins are enabled.
-        if let Some(host) = self.config.plugin_hooks.as_ref() {
-            if !host.is_empty(HookEvent::UserPromptSubmit) {
-                if let Some(idx) = messages
-                    .iter()
-                    .rposition(|m| matches!(m.role, aura_model::Role::User))
-                {
-                    let prompt_text = messages[idx].text_content();
-                    let outcome =
-                        host.fire_user_prompt_submit(&prompt_text, Utc::now().to_rfc3339());
-                    match &outcome.decision {
-                        aura_plugin_hooks::HookOutcome::Replace { new_value } => {
-                            messages[idx] = aura_model::Message::user(new_value);
-                        }
-                        aura_plugin_hooks::HookOutcome::Block { reason } => {
-                            tracing::info!(
-                                hook_reason = %reason,
-                                "UserPromptSubmit hook blocked prompt; returning empty result"
-                            );
-                            return Ok(AgentLoopResult {
-                                output_truncated: false,
-                                task_done_completed: false,
-                                timed_out: false,
-                                budget_exhausted: false,
-                                insufficient_credits: false,
-                                stalled: false,
-                                llm_error: Some(format!("prompt blocked by plugin hook: {reason}")),
-                                llm_unavailable: false,
-                                total_text: String::new(),
-                                final_text: String::new(),
-                                total_thinking: String::new(),
-                                total_input_tokens: 0,
-                                total_output_tokens: 0,
-                                total_cache_creation_input_tokens: 0,
-                                total_cache_read_input_tokens: 0,
-                                estimated_context_tokens: 0,
-                                context_breakdown: Default::default(),
-                                context_contents: Default::default(),
-                                file_changes: Vec::new(),
-                                iterations: 0,
-                                messages,
-                                todos: self.config.initial_todos.clone(),
-                                summary_compactions: 0,
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-            }
+        if let Some(llm_error) = self.fire_user_prompt_submit(&mut messages) {
+            return Ok(self.prompt_blocked_result(messages, llm_error));
         }
         let started_at = Instant::now();
         // ALWAYS instantiate an internal [`Session`] so the agent
@@ -214,28 +162,7 @@ impl AgentLoop {
             ),
         };
         let session = Arc::new(session);
-        // Route provider-level `debug.retry` observations back into the
-        // `event_tx` channel by installing a task-local observer for
-        // the duration of this turn. The observer forwards through the
-        // same channel as UI events so downstream consumers see all
-        // `debug.*` frames inline with the streaming text.
-        let observer: Option<aura_model::RetryObserver> = event_tx.as_ref().map(|tx| {
-            let tx = tx.clone();
-            Arc::new(move |info: aura_model::RetryInfo| {
-                let event = AgentLoopEvent::Debug(DebugEvent::Retry {
-                    timestamp: Utc::now(),
-                    reason: info.reason,
-                    attempt: info.attempt,
-                    wait_ms: info.wait_ms,
-                    provider: Some(info.provider),
-                    model: Some(info.model),
-                    task_id: None,
-                });
-                if let Err(e) = tx.try_send(event) {
-                    tracing::warn!("debug.retry channel full or closed: {e}");
-                }
-            }) as aura_model::RetryObserver
-        });
+        let observer = retry_observer(event_tx.as_ref());
 
         let ctx = RunCtx {
             agent: self,
@@ -250,27 +177,94 @@ impl AgentLoop {
             Some(obs) => aura_model::DEBUG_RETRY_OBSERVER.scope(obs, fut).await,
             None => fut.await,
         };
-        // Phase 8: fire `Stop` when the agent loop completes
-        // *cleanly* (i.e. `Ok(_)`). The hook is observer-only —
-        // its outcome cannot mutate the result. Errors and
-        // cancellations bypass the hook (those are not natural
-        // stops). The `is_empty(event)` short-circuit guarantees
-        // zero overhead when no plugins are enabled.
         if let Ok(ref agent_result) = result {
-            if let Some(host) = self.config.plugin_hooks.as_ref() {
-                if !host.is_empty(HookEvent::Stop) {
-                    let duration_ms =
-                        u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    host.fire_stop(
-                        u32::try_from(agent_result.iterations).unwrap_or(u32::MAX),
-                        agent_result.total_input_tokens,
-                        agent_result.total_output_tokens,
-                        duration_ms,
-                    );
-                }
-            }
+            self.fire_stop(agent_result, started_at);
         }
         result
+    }
+
+    /// Phase 8: fire UserPromptSubmit hook for the most recent
+    /// user message in the input history. Handlers may return
+    /// `Replace { new_value }` to mutate the prompt before it
+    /// enters the model context, or `Block { reason }` to drop
+    /// the turn entirely. The `is_empty(event)` short-circuit
+    /// guarantees zero overhead when no plugins are enabled.
+    ///
+    /// Returns the `llm_error` text when the hook blocked the prompt.
+    fn fire_user_prompt_submit(&self, messages: &mut [Message]) -> Option<String> {
+        let host = self.config.plugin_hooks.as_ref()?;
+        if host.is_empty(HookEvent::UserPromptSubmit) {
+            return None;
+        }
+        let idx = messages
+            .iter()
+            .rposition(|m| matches!(m.role, aura_model::Role::User))?;
+        let prompt_text = messages[idx].text_content();
+        let outcome = host.fire_user_prompt_submit(&prompt_text, Utc::now().to_rfc3339());
+        match &outcome.decision {
+            aura_plugin_hooks::HookOutcome::Replace { new_value } => {
+                messages[idx] = aura_model::Message::user(new_value);
+                None
+            }
+            aura_plugin_hooks::HookOutcome::Block { reason } => {
+                tracing::info!(
+                    hook_reason = %reason,
+                    "UserPromptSubmit hook blocked prompt; returning empty result"
+                );
+                Some(format!("prompt blocked by plugin hook: {reason}"))
+            }
+            _ => None,
+        }
+    }
+
+    /// The empty result returned when the UserPromptSubmit hook blocks the prompt.
+    fn prompt_blocked_result(&self, messages: Vec<Message>, llm_error: String) -> AgentLoopResult {
+        AgentLoopResult {
+            output_truncated: false,
+            task_done_completed: false,
+            timed_out: false,
+            budget_exhausted: false,
+            insufficient_credits: false,
+            stalled: false,
+            llm_error: Some(llm_error),
+            llm_unavailable: false,
+            total_text: String::new(),
+            final_text: String::new(),
+            total_thinking: String::new(),
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            total_cache_creation_input_tokens: 0,
+            total_cache_read_input_tokens: 0,
+            estimated_context_tokens: 0,
+            context_breakdown: Default::default(),
+            context_contents: Default::default(),
+            file_changes: Vec::new(),
+            iterations: 0,
+            messages,
+            todos: self.config.initial_todos.clone(),
+            summary_compactions: 0,
+        }
+    }
+
+    /// Phase 8: fire `Stop` when the agent loop completes
+    /// *cleanly* (i.e. `Ok(_)`). The hook is observer-only —
+    /// its outcome cannot mutate the result. Errors and
+    /// cancellations bypass the hook (those are not natural
+    /// stops). The `is_empty(event)` short-circuit guarantees
+    /// zero overhead when no plugins are enabled.
+    fn fire_stop(&self, agent_result: &AgentLoopResult, started_at: Instant) {
+        if let Some(host) = self.config.plugin_hooks.as_ref() {
+            if !host.is_empty(HookEvent::Stop) {
+                let duration_ms =
+                    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                host.fire_stop(
+                    u32::try_from(agent_result.iterations).unwrap_or(u32::MAX),
+                    agent_result.total_input_tokens,
+                    agent_result.total_output_tokens,
+                    duration_ms,
+                );
+            }
+        }
     }
 
     async fn run_inner(
@@ -295,4 +289,29 @@ impl AgentLoop {
 /// and the pre-E.1 entry points all share one branch-free probe.
 pub(crate) fn is_cancelled(token: Option<&CancellationToken>) -> bool {
     token.is_some_and(CancellationToken::is_cancelled)
+}
+
+/// Route provider-level `debug.retry` observations back into the
+/// `event_tx` channel by installing a task-local observer for
+/// the duration of this turn. The observer forwards through the
+/// same channel as UI events so downstream consumers see all
+/// `debug.*` frames inline with the streaming text.
+fn retry_observer(event_tx: Option<&Sender<AgentLoopEvent>>) -> Option<aura_model::RetryObserver> {
+    event_tx.map(|tx| {
+        let tx = tx.clone();
+        Arc::new(move |info: aura_model::RetryInfo| {
+            let event = AgentLoopEvent::Debug(DebugEvent::Retry {
+                timestamp: Utc::now(),
+                reason: info.reason,
+                attempt: info.attempt,
+                wait_ms: info.wait_ms,
+                provider: Some(info.provider),
+                model: Some(info.model),
+                task_id: None,
+            });
+            if let Err(e) = tx.try_send(event) {
+                tracing::warn!("debug.retry channel full or closed: {e}");
+            }
+        }) as aura_model::RetryObserver
+    })
 }

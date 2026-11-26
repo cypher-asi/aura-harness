@@ -11,22 +11,29 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use aura_model::{Message, ModelProvider, ModelRequestKind, ToolDefinition};
+use aura_model::{Message, ModelProvider, ToolDefinition};
 
 use crate::agent_loop::{AgentLoop, AgentLoopConfig};
 use crate::events::AgentLoopEvent;
 use crate::planning::{TaskPhase, TaskPlan};
-use aura_context_prompts::bootstrap::build_agentic_task_context;
 use aura_context_prompts::{
     agentic_execution_system_prompt, build_chat_system_prompt, AgentInfo, ProjectInfo, SessionInfo,
     SpecInfo, TaskInfo,
 };
 
-use crate::prompt_resolve::{default_caps, extract_hints, resolve_hints, FsWorkspace};
 use crate::task_context;
 use crate::task_executor::TaskToolExecutor;
-use crate::turn_config::{classify_task_complexity, resolve_simple_model, TaskComplexity};
+use crate::turn_config::classify_task_complexity;
 use crate::types::{AgentLoopResult, AgentToolExecutor};
+
+mod config;
+mod loop_setup;
+
+pub use config::AgentRunnerConfig;
+pub use loop_setup::configure_loop_config;
+use loop_setup::{
+    build_full_task_ctx, early_test_oracle_config, ensure_loop_completed, finalize_loop_result,
+};
 
 // ---------------------------------------------------------------------------
 // Internal call-shape helpers
@@ -113,131 +120,6 @@ pub struct TaskExecutionResult {
 pub struct FollowUpSuggestion {
     pub title: String,
     pub description: String,
-}
-
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-/// Configuration for the `AgentRunner`.
-#[derive(Debug, Clone)]
-pub struct AgentRunnerConfig {
-    pub max_agentic_iterations: usize,
-    /// Explicit selected effort, independent of the response token allowance.
-    pub reasoning_effort: Option<aura_model::ThinkingEffort>,
-    pub stream_timeout_secs: u64,
-    pub max_context_tokens: u64,
-    pub max_task_credits: Option<u64>,
-    pub default_model: String,
-    pub simple_model: String,
-    /// JWT auth token for proxy-mode LLM routing.
-    pub auth_token: Option<String>,
-    /// Org UUID forwarded as the `X-Aura-Org-Id` header on outbound
-    /// `/v1/messages` calls so `aura-router` can bucket per-org rate
-    /// limits / billing on automaton runs the same way it does for
-    /// interactive chat (where `SessionState::aura_org_id` already
-    /// flows through `AgentLoopConfig::aura_org_id`). Without this
-    /// header `aura-router` falls back to per-IP buckets, which is
-    /// what makes burst-y eval automation traffic trip Cloudflare on
-    /// `aura-router.onrender.com` even when chat from the same
-    /// account does not.
-    pub aura_org_id: Option<String>,
-    /// Storage session UUID forwarded as the `X-Aura-Session-Id`
-    /// header on outbound `/v1/messages` calls. Mirrors the chat
-    /// path's `SessionState::aura_session_id`, generated per
-    /// automaton-start so concurrent runs of the same agent get
-    /// distinct billing/observability partitions.
-    pub aura_session_id: Option<String>,
-    /// Template agent UUID forwarded as the `X-Aura-Agent-Id` header
-    /// on outbound `/v1/messages` calls. Mirrors the chat path's
-    /// `SessionState::aura_agent_id` (populated from
-    /// `RuntimeRequest.project.aura_agent_id`). Without this, automaton runs
-    /// hit `aura-router` without an agent identity and Cloudflare's
-    /// WAF treats them as unsanctioned API traffic, returning the
-    /// HTML challenge page (status 403) that's been stalling SWE-bench.
-    pub aura_agent_id: Option<String>,
-    /// Project UUID forwarded as the `X-Aura-Project-Id` header on
-    /// outbound `/v1/messages` calls. Mirrors the chat / task-extract
-    /// paths' `SessionState::project_id` -> `aura_project_id`
-    /// projection. Same WAF-bucketing rationale as
-    /// [`Self::aura_agent_id`].
-    pub aura_project_id: Option<String>,
-    /// Stable `prompt_cache_key` forwarded to OpenAI-family routing
-    /// via [`AgentLoopConfig::prompt_cache_key`]. The dev-loop and
-    /// task-run paths set this to `Some(format!("devloop:{project_id}"))`
-    /// so cross-task agent invocations land on the same OpenAI cache
-    /// bucket. Anthropic caching does not need a key — the provider's
-    /// ephemeral `cache_control` breakpoints in
-    /// `aura_model::anthropic::convert` handle prefix reuse.
-    pub prompt_cache_key: Option<String>,
-    /// Phase 5: per-task switch for the early test-gate oracle.
-    ///
-    /// `TaskRunAutomaton` (and any future task-shaped automaton) sets
-    /// this `true` to install
-    /// [`aura_agent_steering::EarlyTestOracle`] into the
-    /// per-run `SteeringRegistry` for every task this runner
-    /// executes; chat / shell / generic callers leave it `false` and
-    /// the oracle never fires.
-    ///
-    /// The wired-through path is:
-    /// `TaskRunConfig.early_test_oracle` →
-    /// `AgentRunnerConfig.early_test_oracle` →
-    /// `AgentLoopConfig.early_test_oracle: Option<EarlyTestOracleConfig>`
-    /// → `LoopState::steering`.
-    pub early_test_oracle: bool,
-}
-
-impl AgentRunnerConfig {
-    /// Construct an [`AgentRunnerConfig`] for an explicit, caller-supplied
-    /// model. **There is no `Default` impl on purpose**: silently
-    /// substituting a constant is exactly what shipped the wrong
-    /// upstream model in production (the worker path took
-    /// `AgentRunnerConfig::default()` and routed every dev-loop / task-run
-    /// turn at `claude-opus-4-6` even when the user had selected
-    /// `claude-opus-4-7`).
-    ///
-    /// `simple_model` defaults to `model` so callers that don't have a
-    /// distinct cheap-tier model still get a sane starting point; pass
-    /// it through [`Self::with_simple_model`] when a separate model
-    /// should drive the trivial-task path.
-    #[must_use]
-    pub fn for_agent(model: impl Into<String>) -> Self {
-        let model = model.into();
-        Self {
-            max_agentic_iterations: aura_core_types::MAX_TURNS as usize,
-            reasoning_effort: None,
-            // Matches the reasoner's default reqwest request timeout
-            // (300s / `AURA_MODEL_TIMEOUT_MS`) so the outer `timeout()`
-            // guard in `AgentLoop::call_model` does not preempt an
-            // in-flight provider request. See the comment on
-            // `AgentLoopConfig::stream_timeout`.
-            stream_timeout_secs: 300,
-            max_context_tokens: 200_000,
-            max_task_credits: None,
-            simple_model: model.clone(),
-            default_model: model,
-            auth_token: None,
-            aura_org_id: None,
-            aura_session_id: None,
-            aura_agent_id: None,
-            aura_project_id: None,
-            prompt_cache_key: None,
-            // Phase 5: default off so chat / generic runners do not
-            // pay for the oracle's hint generation. Task-shaped
-            // automatons flip this on per-construction.
-            early_test_oracle: false,
-        }
-    }
-
-    /// Override the simple-task model used for trivial classifications
-    /// (see [`crate::turn_config::resolve_simple_model`]). Callers that
-    /// don't care fall through to [`Self::for_agent`]'s default of
-    /// echoing the primary model.
-    #[must_use]
-    pub fn with_simple_model(mut self, simple: impl Into<String>) -> Self {
-        self.simple_model = simple.into();
-        self
-    }
 }
 
 /// Parameters for running an agentic task.
@@ -393,19 +275,7 @@ impl AgentRunner {
         // disarmed when the project declares no `test_command`, so
         // we only attach the config when both `enabled` AND a
         // non-blank command are present.
-        loop_config.early_test_oracle = if early_test_oracle {
-            let test_command = params
-                .project
-                .test_command
-                .map(str::to_string)
-                .filter(|s| !s.trim().is_empty());
-            test_command.map(|cmd| aura_config::EarlyTestOracleConfig {
-                enabled: true,
-                test_command: Some(cmd),
-            })
-        } else {
-            None
-        };
+        loop_config.early_test_oracle = early_test_oracle_config(early_test_oracle, params);
 
         let agent_loop = AgentLoop::new(loop_config);
         let messages = vec![Message::user(&task_ctx)];
@@ -421,29 +291,7 @@ impl AgentRunner {
             )
             .await?;
 
-        if let Some(ref llm_err) = result.llm_error {
-            return Err(crate::AgentError::Internal(format!("LLM error: {llm_err}")));
-        }
-        if result.iterations == 0 {
-            return Err(crate::AgentError::Internal(
-                "Agent loop completed zero iterations — LLM may not be configured correctly".into(),
-            ));
-        }
-
-        if result.output_truncated
-            || result.timed_out
-            || result.insufficient_credits
-            || result.stalled
-        {
-            return Err(crate::AgentError::Internal(
-                "Task execution stopped before completion".into(),
-            ));
-        }
-        if require_task_done && !result.task_done_completed {
-            return Err(crate::AgentError::Internal(
-                "Task ended without an accepted task_done completion".into(),
-            ));
-        }
+        ensure_loop_completed(&result, require_task_done)?;
         Ok(finalize_loop_result(result))
     }
 
@@ -594,156 +442,6 @@ impl AgentRunner {
         agent_loop
             .run_with_events(provider, executor, messages, tools, event_tx, cancel)
             .await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Build an [`AgentLoopConfig`] from task complexity and runner config.
-#[must_use]
-pub fn configure_loop_config(
-    complexity: TaskComplexity,
-    config: &AgentRunnerConfig,
-    _member_count: usize,
-    system_prompt: String,
-) -> AgentLoopConfig {
-    let max_iterations = match complexity {
-        TaskComplexity::Simple => config.max_agentic_iterations.min(15),
-        _ => config.max_agentic_iterations,
-    };
-    let model = match complexity {
-        TaskComplexity::Simple => resolve_simple_model(&config.simple_model),
-        _ => config.default_model.clone(),
-    };
-
-    // Phase 5: the `early_test_oracle` field on the returned
-    // `AgentLoopConfig` is populated later inside `execute_task_inner`
-    // because that's where `params.project.test_command` is in
-    // scope. The struct field defaults to `None` here.
-    AgentLoopConfig {
-        max_iterations,
-        user_thinking_effort: config.reasoning_effort,
-        stream_timeout: Duration::from_secs(config.stream_timeout_secs),
-        billing_reason: "aura_task".to_string(),
-        max_context_tokens: Some(config.max_context_tokens),
-        credit_budget: config.max_task_credits,
-        auto_build_cooldown: 1,
-        auth_token: config.auth_token.clone(),
-        system_prompt,
-        // Forward the router/billing identifiers populated by the
-        // automaton bridge so outbound `/v1/messages` calls carry
-        // `X-Aura-Org-Id` / `X-Aura-Session-Id`. Same pattern as the
-        // interactive-chat path (`SessionState`) — the loop builder
-        // at line ~676 of `agent_loop/mod.rs` calls
-        // `.aura_org_id(config.aura_org_id.clone())` /
-        // `.aura_session_id(...)` on the `ModelRequest`, so we just
-        // need to make sure the `AgentLoopConfig` we hand it is
-        // populated.
-        aura_org_id: config.aura_org_id.clone(),
-        aura_session_id: config.aura_session_id.clone(),
-        aura_agent_id: config.aura_agent_id.clone(),
-        aura_project_id: config.aura_project_id.clone(),
-        prompt_cache_key: config.prompt_cache_key.clone(),
-        request_kind: ModelRequestKind::DevLoopBootstrap,
-        // Temporary (2026-05): the dev-loop policy pins reasoning
-        // effort to `Medium` across every iteration. This flag is
-        // the "this is a dev-loop run" signal that
-        // `LoopState::compute_thinking_effort` reads to bypass the
-        // codex-style `Off → Medium → Low` taper still used by chat
-        // and other generic callers. The historical iteration-0
-        // `max_tokens` clamp that used to ride on this flag has been
-        // removed (see `AgentLoopConfig::disable_thinking_iteration_0`).
-        disable_thinking_iteration_0: true,
-        ..AgentLoopConfig::for_agent(model)
-    }
-}
-
-/// Build the task-context bundle that backs both the initial user
-/// message and the `get_task_context` tool response.
-///
-/// Stripped (2026-05): historically this returned the full
-/// project/spec/task header plus a 160 KB bundle of workspace map,
-/// type defs, codebase snapshot, and dep-API surface (capped via
-/// `aura_config::MAX_TASK_CONTEXT_CHARS`). On every `get_task_context`
-/// call the agent received ~40 K tokens of pre-bundled material; once
-/// compaction redacted the older copy the model called the tool again
-/// and the conversation thrashed. The agent already has
-/// `read_file` / `search_code` / `list_files` — give it the task text
-/// and let it pull the rest on demand.
-///
-/// On `params.attempt == 0` this resolves the Phase 4 enrichment block
-/// (paths + symbols extracted from the task description, looked up on
-/// disk) and splices it into the returned context. Each per-call IO is
-/// wrapped in a 2-second timeout (see [`default_caps`]), so a slow
-/// filesystem or grep can NEVER block context construction — the worst
-/// case is that the enrichment block is omitted and the agent gets the
-/// pre-Phase-4 prompt. On retries the resolve is skipped entirely.
-async fn build_full_task_ctx(params: &AgenticTaskParams<'_>) -> String {
-    let work_log_summary = task_context::build_work_log_summary(params.work_log);
-    let enrichment_block = resolve_enrichment_block(params).await;
-    build_agentic_task_context(
-        params.project,
-        params.spec,
-        params.task,
-        params.session,
-        params.completed_deps,
-        &work_log_summary,
-        params.attempt,
-        enrichment_block.as_deref(),
-    )
-}
-
-/// Phase 4: extract candidate paths & symbols from the task description
-/// and resolve them against the project folder. Returns `None` (and
-/// emits nothing in the task context) when:
-/// - `attempt > 0` (retries skip enrichment — see Phase 5),
-/// - the description has no resolvable hints,
-/// - the project `folder_path` is empty / nonexistent,
-/// - or every resolve call timed out / hit a missing file.
-async fn resolve_enrichment_block(params: &AgenticTaskParams<'_>) -> Option<String> {
-    if params.attempt != 0 {
-        return None;
-    }
-    let text = format!("{} {}", params.task.title, params.task.description);
-    let hints = extract_hints(&text);
-    if !hints.is_meaningful() {
-        return None;
-    }
-    let folder = params.project.folder_path;
-    if folder.is_empty() {
-        return None;
-    }
-    let workspace = FsWorkspace::new(folder);
-    let resolved = resolve_hints(&hints, &workspace, default_caps()).await;
-    if resolved.is_empty() {
-        return None;
-    }
-    Some(resolved.into_block())
-}
-
-/// Process an [`AgentLoopResult`] into a [`TaskExecutionResult`].
-fn finalize_loop_result(result: AgentLoopResult) -> TaskExecutionResult {
-    let AgentLoopResult {
-        total_text,
-        total_input_tokens,
-        total_output_tokens,
-        messages,
-        ..
-    } = result;
-    let notes = if total_text.is_empty() {
-        "Task completed via agentic tool-use loop".to_string()
-    } else {
-        total_text
-    };
-    TaskExecutionResult {
-        notes,
-        follow_up_tasks: Vec::new(),
-        input_tokens: total_input_tokens,
-        output_tokens: total_output_tokens,
-        files_already_applied: true,
-        messages,
     }
 }
 
