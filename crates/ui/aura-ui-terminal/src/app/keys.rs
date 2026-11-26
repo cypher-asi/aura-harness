@@ -4,7 +4,7 @@ use super::model_picker::PAGE_STEP;
 use super::processes::SIDE_PAGE;
 use super::{
     line_edit::{is_newline_key, LineEdit},
-    AgentsTab, App, AppState, ChatTab, NotificationType, PanelFocus, RecordsTab, SidePanelTab,
+    App, AppState, ChatTab, NotificationType, PanelFocus, RecordsTab, SidePanelTab,
 };
 use crate::{events::UiEvent, input::InputHistory, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
@@ -440,6 +440,12 @@ impl App {
                     self.cycle_thinking();
                     return KeyResult::continue_running();
                 }
+                KeyCode::Char(digit) => {
+                    if let Some(tab) = super::AgentsTab::numbered(digit) {
+                        self.show_agents_tab(tab);
+                        return KeyResult::continue_running();
+                    }
+                }
                 _ => {}
             }
         }
@@ -448,51 +454,8 @@ impl App {
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Roster
             && self.input.is_empty()
-            && !word_motion
-            && self.handle_definitions_shortcut(key)
-        {
-            return KeyResult::continue_running();
-        }
-        if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Projects
-            && self.input.is_empty()
-            && !word_motion
-            && key.code == KeyCode::Char(' ')
-        {
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                self.toggle_selected_project();
-            } else {
-                self.toggle_selected_fold();
-            }
-            return KeyResult::continue_running();
-        }
-        if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Projects
-            && self.input.is_empty()
-            && key.code == KeyCode::Delete
-        {
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                self.remove_selected_project();
-            } else {
-                self.archive_selected_agent();
-            }
-            return KeyResult::continue_running();
-        }
-        if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Channels
-            && self.input.is_empty()
-            && !word_motion
-            && self.handle_channels_key(key)
-        {
-            return KeyResult::continue_running();
-        }
-        if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Archive
-            && self.input.is_empty()
-            && !word_motion
-            && self.handle_archive_key(key)
+            && self.agents_panel_shortcut(key, word_motion)
         {
             return KeyResult::continue_running();
         }
@@ -577,21 +540,7 @@ impl App {
                     KeyResult::continue_running()
                 }
             },
-            PanelFocus::Swarm => match self.agents_tab {
-                AgentsTab::Channels => {
-                    self.handle_channels_key(key);
-                    KeyResult::continue_running()
-                }
-                AgentsTab::Projects => self.handle_swarm_key(key),
-                AgentsTab::Roster => {
-                    self.handle_definitions_key(key);
-                    KeyResult::continue_running()
-                }
-                AgentsTab::Archive => {
-                    self.handle_archive_key(key);
-                    KeyResult::continue_running()
-                }
-            },
+            PanelFocus::Swarm => self.handle_agents_panel_key(key),
             PanelFocus::Sandbox => match self.side_tab {
                 SidePanelTab::Sandbox => self.handle_sandbox_key(key),
                 SidePanelTab::Processes => {
@@ -839,36 +788,6 @@ impl App {
         KeyResult::continue_running()
     }
 
-    /// Handle key when the agents panel shows Projects. Moving the
-    /// highlight onto an agent switches to it; project headers are skipped.
-    /// Space folds the highlighted agent over its spawns, or its project
-    /// when it has none; Shift+Space folds its project either way. Enter
-    /// on "+ New project" creates one.
-    fn handle_swarm_key(&mut self, key: KeyEvent) -> KeyResult {
-        match key.code {
-            KeyCode::Left | KeyCode::Right => self.shift_agents_tab(key.code),
-            KeyCode::Up => self.select_agent_row(self.selected_agent.saturating_sub(1)),
-            KeyCode::Down => self.select_agent_row(self.selected_agent + 1),
-            KeyCode::Enter => self.activate_agent_row(),
-            KeyCode::PageUp => self.select_agent_row(self.selected_agent.saturating_sub(5)),
-            KeyCode::PageDown => self.select_agent_row(self.selected_agent + 5),
-            KeyCode::Home => self.select_agent_row(0),
-            KeyCode::End => self.select_last_agent_row(),
-            KeyCode::Char(c) => {
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += 1;
-            }
-            KeyCode::Backspace => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos -= 1;
-                    self.input.remove(self.cursor_pos);
-                }
-            }
-            _ => {}
-        }
-        KeyResult::continue_running()
-    }
-
     /// Submit the current input.
     pub(super) fn submit_input(&mut self) -> KeyResult {
         // An app showing nothing has nobody to send to; the draft stays
@@ -912,7 +831,7 @@ impl App {
             return KeyResult::continue_running();
         }
 
-        if let Some(message) = super::commands::strip_plan(&text) {
+        if let Some(message) = super::slash::strip_plan(&text) {
             // A `/plan` word anywhere sends the rest in plan mode, never
             // as a build request ("/plan implement auth" asks for a plan).
             // On its own it enters or leaves plan mode.

@@ -35,8 +35,10 @@
 //! nothing to show beside the list: the right column hides, and the chat
 //! asks for a channel to be picked.
 
-use super::processes::SIDE_PAGE;
-use super::{contains, follow_selection, AgentsTab, App, ChatTab, NotificationType, SidePanelTab};
+use crate::app::processes::SIDE_PAGE;
+use crate::app::{
+    contains, follow_selection, AgentsTab, App, ChatTab, NotificationType, SidePanelTab,
+};
 use crate::events::{ChannelPostView, ChannelSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -62,9 +64,6 @@ pub(crate) struct ChannelState {
     rows_area: Option<Rect>,
     /// Where "+ New channel" was drawn this frame
     new_channel_area: Option<Rect>,
-    /// The channel open when the user last left CHANNELS, opened again
-    /// on coming back
-    last_open: Option<String>,
     /// The agent on screen when the user came to CHANNELS and the chat
     /// panel's tab it was on, which CHANNELS turned to CHAT: given back
     /// on leaving
@@ -95,14 +94,14 @@ impl ChannelState {
     }
 
     /// The open channel, when `agent_id` is its coordinator.
-    pub(super) fn coordinated_by(&self, agent_id: &str) -> Option<&ChannelSummary> {
+    pub(in crate::app) fn coordinated_by(&self, agent_id: &str) -> Option<&ChannelSummary> {
         self.open_channel()
             .filter(|channel| channel.coordinator_id == agent_id)
     }
 
     /// Posts of the open channel, oldest first, when `agent_id` is its
     /// coordinator: its chat shows them. Empty otherwise.
-    pub(super) fn coordinator_posts(&self, agent_id: &str) -> &[ChannelPostView] {
+    pub(in crate::app) fn coordinator_posts(&self, agent_id: &str) -> &[ChannelPostView] {
         self.coordinated_by(agent_id)
             .and_then(|channel| self.posts.get(&channel.id))
             .map_or(&[], Vec::as_slice)
@@ -261,19 +260,16 @@ impl App {
     /// The user came to the channel app from another tab: remember the
     /// chat tab of the agent on screen, to give back on leaving, and show
     /// CHAT, the only view a channel has.
-    pub(super) fn enter_channel_app(&mut self) {
+    pub(in crate::app) fn enter_channel_app(&mut self) {
         self.channels.chat_tab_before = (!self.active_agent_id.is_empty())
             .then(|| (self.active_agent_id.clone(), self.chat_tab()));
         self.show_channel_chat();
     }
 
-    /// The user left the channel app for another tab: close the open
-    /// channel, remembering it for coming back, and give the agent that
-    /// was on screen before back the chat tab it was on.
-    pub(super) fn leave_channel_app(&mut self) {
-        if let Some(open) = self.channels.open.clone() {
-            self.channels.last_open = Some(open);
-        }
+    /// The user left the channel app for another tab, which remembered
+    /// the open channel: close it, and give the agent that was on screen
+    /// before back the chat tab it was on.
+    pub(in crate::app) fn leave_channel_app(&mut self) {
         self.close_channel();
         if let Some((agent, tab)) = self.channels.chat_tab_before.take() {
             self.give_chat_tab_back(&agent, tab);
@@ -282,16 +278,16 @@ impl App {
 
     /// The channel open when the user last left CHANNELS, if it is still
     /// listed.
-    pub(super) fn channel_to_reopen(&self) -> Option<String> {
-        self.channels
-            .last_open
+    pub(in crate::app) fn channel_to_reopen(&self) -> Option<String> {
+        self.apps
+            .channel
             .clone()
             .filter(|id| self.channels.find(id).is_some())
     }
 
     /// The channel CHANNELS opens on coming to it: the one it was left
     /// on, else the highlighted one, else the first.
-    pub(super) fn channel_to_show(&self) -> Option<String> {
+    pub(in crate::app) fn channel_to_show(&self) -> Option<String> {
         let list = &self.channels.list;
         self.channel_to_reopen()
             .or_else(|| list.get(self.channels.selected).map(|c| c.id.clone()))
@@ -321,10 +317,12 @@ impl App {
             self.channels.side_tab_before = Some(self.side_tab);
         }
         self.channels.open = Some(id.to_string());
-        self.channels.last_open = Some(id.to_string());
+        if self.apps.channel.as_deref() != Some(id) {
+            self.channels.member_selected = 0;
+            self.channels.member_scroll = 0;
+        }
+        self.apps.channel = Some(id.to_string());
         self.channels.selected = row;
-        self.channels.member_selected = 0;
-        self.channels.member_scroll = 0;
         self.channels.forget_areas();
         self.show_side_tab(SidePanelTab::ChannelMembers);
         self.show_channel_chat();
@@ -365,7 +363,7 @@ impl App {
     /// a member coming ends the wait for the coordinator; any other agent,
     /// once that wait is over, means the user went to it, so the agent app
     /// listing it comes to the front with it on screen.
-    pub(super) fn follow_active_agent_out_of_channel(&mut self) {
+    pub(in crate::app) fn follow_active_agent_out_of_channel(&mut self) {
         let coordinated = self
             .channels
             .list
@@ -393,7 +391,7 @@ impl App {
 
     /// Say why the agent panels (`/kernel`, `/files`, `/inbox`, ...) are
     /// not shown: the channel app has only its chat and its own panel.
-    pub(super) fn notify_channel_owns_column(&mut self) {
+    pub(in crate::app) fn notify_channel_owns_column(&mut self) {
         self.notification = Some((
             "Channels have only a chat; switch to PROJECTS for agent panels".to_string(),
             NotificationType::Warning,
@@ -431,7 +429,7 @@ impl App {
         self.channels.new_channel_area = Some(area);
     }
 
-    pub(super) fn set_channels(&mut self, list: Vec<ChannelSummary>) {
+    pub(in crate::app) fn set_channels(&mut self, list: Vec<ChannelSummary>) {
         self.channels.list = list;
         let gone = self
             .channels
@@ -443,7 +441,7 @@ impl App {
             self.left_channel();
         }
         if self.channel_to_reopen().is_none() {
-            self.channels.last_open = None;
+            self.apps.channel = None;
         }
         if let Some(row) = self.open_channel_row() {
             self.channels.selected = row;
@@ -459,12 +457,16 @@ impl App {
         }
     }
 
-    pub(super) fn set_channel_posts(&mut self, channel_id: String, posts: Vec<ChannelPostView>) {
+    pub(in crate::app) fn set_channel_posts(
+        &mut self,
+        channel_id: String,
+        posts: Vec<ChannelPostView>,
+    ) {
         self.channels.posts.insert(channel_id, posts);
     }
 
     /// Add `post` to its channel, or replace the post with its `seq`.
-    pub(super) fn add_channel_post(&mut self, channel_id: String, post: ChannelPostView) {
+    pub(in crate::app) fn add_channel_post(&mut self, channel_id: String, post: ChannelPostView) {
         let posts = self.channels.posts.entry(channel_id).or_default();
         match posts.binary_search_by_key(&post.seq, |known| known.seq) {
             Ok(at) => {
@@ -478,7 +480,7 @@ impl App {
 
     /// Row of the list drawn at a screen cell: a channel, or
     /// "+ New channel" (`channels().len()`).
-    pub(super) fn channel_row_at(&self, column: u16, row: u16) -> Option<usize> {
+    pub(in crate::app) fn channel_row_at(&self, column: u16, row: u16) -> Option<usize> {
         let state = &self.channels;
         if contains(state.new_channel_area, column, row) {
             return Some(state.list.len());
@@ -491,7 +493,7 @@ impl App {
     }
 
     /// Clicking a row highlights it and acts on it, as Enter does.
-    pub(super) fn click_channel_row(&mut self, column: u16, row: u16) {
+    pub(in crate::app) fn click_channel_row(&mut self, column: u16, row: u16) {
         let Some(index) = self.channel_row_at(column, row) else {
             return;
         };
@@ -500,14 +502,18 @@ impl App {
     }
 
     /// Move the highlight `delta` rows, as the wheel does.
-    pub(super) fn move_channel_highlight(&mut self, delta: isize) {
+    pub(in crate::app) fn move_channel_highlight(&mut self, delta: isize) {
         let row = self.channels.selected.saturating_add_signed(delta);
         self.channels.set_selected(row);
     }
 
     /// The channel row of the list a right click at a screen cell is on,
     /// which it highlights. `None` on "+ New channel" or empty space.
-    pub(super) fn channel_menu_target_at(&mut self, column: u16, row: u16) -> Option<String> {
+    pub(in crate::app) fn channel_menu_target_at(
+        &mut self,
+        column: u16,
+        row: u16,
+    ) -> Option<String> {
         let index = self.channel_row_at(column, row)?;
         let id = self.channels.list.get(index)?.id.clone();
         self.channels.set_selected(index);
@@ -516,7 +522,7 @@ impl App {
 
     /// The agent on screen when the user came to CHANNELS, else the one
     /// on screen now (empty when none is).
-    pub(super) fn agent_before_channels(&self) -> &str {
+    pub(in crate::app) fn agent_before_channels(&self) -> &str {
         self.channels
             .chat_tab_before
             .as_ref()
@@ -525,7 +531,7 @@ impl App {
 
     /// Ask to confirm archiving channel `id`, as deleting a permanent
     /// agent asks: the next key is `y` to go ahead, anything else cancels.
-    pub(super) fn request_archive_channel(&mut self, id: String) {
+    pub(in crate::app) fn request_archive_channel(&mut self, id: String) {
         let Some(slug) = self.channels.find(&id).map(|channel| channel.slug.clone()) else {
             return;
         };
@@ -538,7 +544,7 @@ impl App {
 
     /// Resolve a pending channel archive with `key`. Returns `false` when
     /// nothing was pending.
-    pub(super) fn handle_pending_archive_channel(&mut self, key: KeyEvent) -> bool {
+    pub(in crate::app) fn handle_pending_archive_channel(&mut self, key: KeyEvent) -> bool {
         let Some(id) = self.pending_archive_channel.take() else {
             return false;
         };
@@ -551,7 +557,7 @@ impl App {
     }
 
     /// Keys of the CHANNELS tab. Returns whether the key was used.
-    pub(super) fn handle_channels_key(&mut self, key: KeyEvent) -> bool {
+    pub(in crate::app) fn handle_channels_key(&mut self, key: KeyEvent) -> bool {
         let current = self.channels.selected;
         match key.code {
             KeyCode::Up => self.channels.set_selected(current.saturating_sub(1)),
@@ -606,7 +612,7 @@ impl App {
     }
 
     /// Member row of the MEMBERS side tab drawn at a screen cell.
-    pub(super) fn channel_member_row_at(&self, column: u16, row: u16) -> Option<usize> {
+    pub(in crate::app) fn channel_member_row_at(&self, column: u16, row: u16) -> Option<usize> {
         let state = &self.channels;
         let rows = state
             .member_rows_area
@@ -617,25 +623,25 @@ impl App {
 
     /// Highlight member row `index` (clamped). Members only show; going
     /// to a member's own chat would leave the channel app.
-    pub(super) fn select_channel_member(&mut self, index: usize) {
+    pub(in crate::app) fn select_channel_member(&mut self, index: usize) {
         self.channels.set_member_selected(index);
     }
 
     /// Move the MEMBERS highlight `delta` rows, as the wheel does.
-    pub(super) fn move_channel_member(&mut self, delta: isize) {
+    pub(in crate::app) fn move_channel_member(&mut self, delta: isize) {
         let row = self.channels.member_selected.saturating_add_signed(delta);
         self.channels.set_member_selected(row);
     }
 
     /// Clicking a member row highlights it.
-    pub(super) fn click_channel_member(&mut self, column: u16, row: u16) {
+    pub(in crate::app) fn click_channel_member(&mut self, column: u16, row: u16) {
         if let Some(index) = self.channel_member_row_at(column, row) {
             self.select_channel_member(index);
         }
     }
 
     /// Keys of the MEMBERS side tab, which move its highlight.
-    pub(super) fn handle_channel_members_key(&mut self, key: KeyEvent) {
+    pub(in crate::app) fn handle_channel_members_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Up => self.move_channel_member(-1),
             KeyCode::Down => self.move_channel_member(1),

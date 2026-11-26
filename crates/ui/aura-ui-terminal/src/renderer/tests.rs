@@ -1,6 +1,6 @@
 use super::markdown::{parse_content_segments, ContentSegment};
-use super::panels::truncate_record_info;
 use super::text::{centered_rect, display_width, wrap_words};
+use crate::components::truncate_record_info;
 use crate::events::CallUsage;
 use crate::Theme;
 use ratatui::{
@@ -499,7 +499,7 @@ fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
     let around = 1 + AURA_WIDTH + 1 + 5;
     for width in around..=around + 20 {
         let inner = Rect::new(0, 0, u16::try_from(width).unwrap(), 10);
-        let lines = super::panels::build_definition_lines(&app, inner, &theme);
+        let lines = super::agents::roster::build_definition_lines(&app, inner, &theme);
         let texts = line_texts(&lines);
         for (line, text) in lines.iter().zip(&texts) {
             assert_eq!(line.width(), width, "width {width}: {text:?}");
@@ -526,7 +526,7 @@ fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
     // Roster rows without an abbreviation keep the plain layout.
     let plain = roster_app(&[("reviewer", None)]);
     let inner = Rect::new(0, 0, 24, 10);
-    let texts = line_texts(&super::panels::build_definition_lines(
+    let texts = line_texts(&super::agents::roster::build_definition_lines(
         &plain, inner, &theme,
     ));
     let lead = " ".repeat(AURA_WIDTH);
@@ -537,7 +537,7 @@ fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
 
 #[test]
 fn test_format_ago_steps_up_at_each_unit() {
-    use super::panels::format_ago;
+    use crate::components::format_ago;
     const MIN: u64 = 60_000;
     let now = 100 * 7 * 24 * 60 * MIN;
     let ago = |ms: u64| format_ago(now - ms, now);
@@ -3417,7 +3417,7 @@ fn test_truncate_record_info_wide_chars_no_panic() {
 
 #[test]
 fn test_format_elapsed() {
-    use super::panels::format_elapsed;
+    use super::chat_panel::format_elapsed;
     use std::time::Duration;
 
     assert_eq!(format_elapsed(Duration::from_secs(7)), "7s");
@@ -4497,7 +4497,7 @@ fn test_chat_bottom_leaves_room_below_latest_prompt() {
 /// Blank rows the chat keeps below its last line, as it was last drawn.
 fn chat_room(app: &crate::App) -> usize {
     let text = app.areas.chat_text.expect("the chat is drawn");
-    super::panels::breathing_room(usize::from(text.height))
+    super::chat_panel::breathing_room(usize::from(text.height))
 }
 
 /// The row of `needle` in `rows`, and how many blank rows lie between it
@@ -5380,7 +5380,7 @@ fn test_context_command_lists_project_instructions() {
 
 #[test]
 fn test_spawn_guides_join_each_agent_to_its_parent() {
-    use super::panels::spawn_guides;
+    use super::agents::projects::spawn_guides;
     use crate::events::AgentSummary;
 
     let agents: Vec<AgentSummary> = [0, 1, 2, 1, 2, 0, 1]
@@ -5890,7 +5890,7 @@ fn the_plan_badge_follows_mode_switches_live() {
 fn a_long_name_in_plan_mode_is_cut_and_keeps_its_plan_badge() {
     use crate::events::{AgentSummary, UiCommand};
     let name = "An agent with a very long name that never ends";
-    let three_minutes_ago = super::panels::now_ms() - 3 * 60 * 1000;
+    let three_minutes_ago = crate::components::now_ms() - 3 * 60 * 1000;
     let mut app = crate::App::new();
     app.process_command(UiCommand::SetAgents(vec![AgentSummary {
         id: "aa".to_string(),
@@ -5939,12 +5939,12 @@ fn a_long_name_in_plan_mode_is_cut_and_keeps_its_plan_badge() {
     assert_eq!(right_border(row), right_border(&rows[at - 1]));
 }
 
-/// Columns of [`super::panels::PLAN_BADGE`].
+/// Columns of [`crate::components::PLAN_BADGE`].
 const PLAN_BADGE_WIDTH: usize = 4;
 
 #[test]
 fn a_tree_row_keeps_its_width_with_the_plan_badge_and_drops_it_when_too_narrow() {
-    use super::panels::{cell_style, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE};
+    use crate::components::{cell_style, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE};
     let theme = test_theme();
     assert_eq!(display_width(PLAN_BADGE), PLAN_BADGE_WIDTH);
     let badge = RowBadge {
@@ -6116,8 +6116,8 @@ fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_the_time
 
 #[test]
 fn a_tree_row_keeps_its_whole_width_at_narrow_widths() {
-    use super::panels::{cell_style, tree_row, CellState, StatusIcon};
     use crate::app::{AgentButton, AgentRowEnd};
+    use crate::components::{cell_style, tree_row, CellState, StatusIcon};
     let theme = test_theme();
     let text = |line: &ratatui::text::Line<'_>| -> String {
         line.spans
@@ -6158,9 +6158,9 @@ fn a_tree_row_keeps_its_whole_width_at_narrow_widths() {
 
 #[test]
 fn agent_rows_without_codes_are_laid_out_as_before() {
-    use super::panels::{cell_style, tree_row, CellState, StatusIcon};
     use crate::animation::AURA_WIDTH;
     use crate::app::{AgentButton, AgentRowEnd};
+    use crate::components::{cell_style, tree_row, CellState, StatusIcon};
     let theme = test_theme();
     let text = |line: &ratatui::text::Line<'_>| -> String {
         line.spans

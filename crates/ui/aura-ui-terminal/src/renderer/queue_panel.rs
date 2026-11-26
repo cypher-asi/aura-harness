@@ -21,9 +21,10 @@
 //! The panel records where it drew its header, rows and actions on the
 //! [`App`] for the mouse.
 
+use super::agents::projects::DROP_RAIL;
+use super::chrome::border_color;
 use super::hud::truncate;
 use super::input::join_divider;
-use super::panels::{border_color, DROP_RAIL};
 use super::text::display_width;
 use crate::app::queue_panel::{QueueAreas, QueuePart, QueueRowArea, QueueSpot, MAX_VISIBLE_ROWS};
 use crate::app::PanelFocus;

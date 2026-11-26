@@ -1,14 +1,14 @@
 //! Processes tab: every agent turn, spawned agent and background command,
 //! and the detail view of one of them.
 
-use super::panels::{
-    aura_icon, cell_style, list_row, now_ms, render_scrollbar, CellState, ScrollView, StatusIcon,
-};
+use super::agents::aura_icon;
+use super::chrome::{render_scrollbar, ScrollView};
 use super::side_list::{
     name_style, render_empty, render_hidden, render_hint, split_hint, Tone, PROCESSES_HINT,
 };
 use super::text::wrap_words;
 use crate::app::{HoverTarget, PanelFocus};
+use crate::components::{cell_style, list_row, now_ms, CellState, StatusIcon};
 use crate::events::{ProcessStatus, ProcessSummary};
 use crate::{App, Theme};
 use ratatui::{

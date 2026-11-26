@@ -9,7 +9,7 @@
 //! is ever drawn.
 
 use super::benchmarks::fit;
-use super::panels::body_block;
+use super::chrome::body_block;
 use super::text::{display_width, wrap_words};
 use crate::animation::fade_in;
 use crate::app::run_log::{LogPanel, LogRow, LogState};

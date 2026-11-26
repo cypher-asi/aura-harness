@@ -4,12 +4,11 @@
 //! line, and hard-wraps long lines so code keeps its indentation. A file
 //! has a vim cursor the view follows.
 
+use super::chat_panel::chat_scrollbar;
+use super::chrome::{body_block, render_scrollbar, ScrollView};
 use super::header::HeaderInfo;
 use super::inbox::thread_lines;
 use super::overlays::{record_detail_lines, record_status};
-use super::panels::{
-    body_block, chat_scrollbar, render_scrollbar, truncate_record_info, ScrollView,
-};
 use super::processes::{process_detail_lines, status_glyph};
 use super::text::display_width;
 use crate::app::file_view::{FileBody, FileView};
@@ -19,6 +18,7 @@ use crate::app::vim::{Align, Vim};
 use crate::app::DetailView;
 use crate::components::highlight_code_line;
 use crate::components::syntax::{highlight_line, syntax_for_path};
+use crate::components::truncate_record_info;
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,

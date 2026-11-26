@@ -1,7 +1,7 @@
 use super::*;
 use crate::components::{Activity, Message, MessageRole, ToolStatus, ToolStep};
 use crate::events::{ActivityData, CallUsage, MessageData, ModelOptionView, UiCommand, UiEvent};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
@@ -1031,6 +1031,112 @@ fn test_records_of_background_agents_are_not_listed() {
     app.process_command(UiCommand::NewRecord(record("aa")));
 
     assert_eq!(app.records().len(), 1);
+}
+
+fn record_of(agent_id: &str, seq: u64) -> crate::events::RecordSummary {
+    crate::events::RecordSummary {
+        seq,
+        timestamp: String::new(),
+        full_hash: format!("hash{seq}"),
+        hash_suffix: String::new(),
+        tx_kind: "UserPrompt".to_string(),
+        sender: String::new(),
+        message: String::new(),
+        action_count: 0,
+        effect_status: String::new(),
+        status: crate::events::RecordStatus::Ok,
+        info: String::new(),
+        what: String::new(),
+        group: String::new(),
+        detail: String::new(),
+        error_details: String::new(),
+        tx_id: String::new(),
+        agent_id: agent_id.to_string(),
+        ts_ms: 0,
+        policy: None,
+    }
+}
+
+#[test]
+fn test_an_agent_comes_back_with_its_records_and_files_where_it_left_them() {
+    let (mut app, _rx) = app_with_agents();
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    std::fs::create_dir_all(dir_a.path().join("src")).unwrap();
+    std::fs::write(dir_a.path().join("src/main.rs"), "").unwrap();
+    std::fs::write(dir_b.path().join("notes.md"), "").unwrap();
+    let records_a: Vec<_> = (1..=5).map(|seq| record_of("aa", seq)).collect();
+    app.process_command(UiCommand::SetRecords(records_a.clone()));
+    app.process_command(UiCommand::SetSandboxRoot(dir_a.path().to_path_buf()));
+    app.selected_record = 1;
+    app.records_scroll = 1;
+    app.sandbox.toggle_selected();
+    app.sandbox.select(1);
+    app.sandbox_scroll = 1;
+    let file = dir_a.path().join("src/main.rs");
+    assert_eq!(app.sandbox.rows()[1].path, file);
+
+    // The session sends each agent's records and workspace as it comes
+    // on screen.
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    app.process_command(UiCommand::SetRecords(vec![record_of("bb", 1)]));
+    app.process_command(UiCommand::SetSandboxRoot(dir_b.path().to_path_buf()));
+    assert_eq!(app.records().len(), 1);
+    assert_eq!(app.sandbox.root(), Some(dir_b.path()));
+    assert_eq!((app.records_scroll, app.sandbox_scroll), (0, 0));
+
+    std::fs::write(dir_a.path().join("src/lib.rs"), "").unwrap();
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    assert_eq!(
+        app.records().len(),
+        5,
+        "back from memory before the session answers"
+    );
+    app.process_command(UiCommand::SetRecords(records_a));
+    app.process_command(UiCommand::SetSandboxRoot(dir_a.path().to_path_buf()));
+    assert_eq!((app.selected_record, app.records_scroll), (1, 1));
+    assert_eq!(app.sandbox.rows()[app.sandbox.selected()].path, file);
+    assert_eq!(app.sandbox_scroll, 1);
+
+    // The tree is read again on the next tick, keeping its folds.
+    app.tick();
+    let names: Vec<&str> = app.sandbox.rows().iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["src", "lib.rs", "main.rs"]);
+    assert_eq!(app.sandbox.rows()[app.sandbox.selected()].path, file);
+}
+
+#[test]
+fn test_alt_digits_bring_each_app_to_the_front() {
+    let (mut app, _rx) = app_with_agents();
+    app.focus = PanelFocus::Chat;
+    for (digit, tab) in ['1', '2', '3', '4'].into_iter().zip(AgentsTab::ALL) {
+        app.handle_key(KeyEvent::new(KeyCode::Char(digit), KeyModifiers::ALT));
+        assert_eq!(app.agents_tab(), tab);
+    }
+    assert!(app.input().is_empty(), "the digits are not typed");
+    app.handle_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT));
+    assert_eq!(app.agents_tab(), AgentsTab::Archive);
+}
+
+#[test]
+fn test_new_records_keep_the_highlight_on_its_record() {
+    let (mut app, _rx) = app_with_agents();
+    app.process_command(UiCommand::SetRecords(
+        (1..=3).map(|s| record_of("aa", s)).collect(),
+    ));
+    assert_eq!(app.selected_record, 2, "on the newest");
+    app.process_command(UiCommand::SetRecords(
+        (1..=4).map(|s| record_of("aa", s)).collect(),
+    ));
+    assert_eq!(app.selected_record, 3, "following the newest");
+    app.selected_record = 1;
+    app.process_command(UiCommand::SetRecords(
+        (1..=5).map(|s| record_of("aa", s)).collect(),
+    ));
+    assert_eq!(app.selected_record, 1, "left on its record");
+
+    // Records sent for an agent the screen has left since change nothing.
+    app.process_command(UiCommand::SetRecords(vec![record_of("bb", 1)]));
+    assert_eq!(app.records().len(), 5);
 }
 
 #[test]
@@ -4423,7 +4529,7 @@ fn test_plan_with_a_message_sends_it_in_plan_mode() {
 
 #[test]
 fn test_plan_message_parsing() {
-    use super::commands::{plan_ranges, strip_plan};
+    use super::slash::{plan_ranges, strip_plan};
     let ranges = |text: &str| -> Vec<(usize, usize)> {
         plan_ranges(text).iter().map(|r| (r.start, r.end)).collect()
     };
@@ -5060,6 +5166,48 @@ fn clicking_the_earlier_lines_row_of_a_boot_console_loads_them() {
         console.earlier.front().map(|l| l.text.as_str()),
         Some("build line 0")
     );
+}
+
+#[test]
+fn clicking_a_finished_boot_consoles_fold_opens_and_closes_it() {
+    use crate::components::BootConsole;
+    use crate::events::{BootLogLine, BootStageState, BootUpdate};
+
+    let mut console = BootConsole::new("boot-1", "Moving to the cloud");
+    console.apply(BootUpdate::Stage {
+        key: "create".into(),
+        label: "Creating machine".into(),
+        state: BootStageState::Done { ms: 1200 },
+    });
+    console.apply(BootUpdate::Log(vec![BootLogLine {
+        stderr: false,
+        text: "booted line".into(),
+    }]));
+    console.apply(BootUpdate::End {
+        ok: true,
+        summary: "Now running in the cloud.".into(),
+    });
+    let mut app = App::new();
+    app.add_message(Message::boot(console));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 30)).unwrap();
+    draw(&mut app, &mut terminal);
+    assert!(cell_of(&terminal, "booted line").is_none(), "folded");
+
+    let hint = cell_of(&terminal, "click to show the boot log").expect("the hint is on screen");
+    click_at(&mut app, hint);
+    assert!(app.messages()[0].is_expanded(), "the hint opens it");
+    draw(&mut app, &mut terminal);
+    assert!(cell_of(&terminal, "booted line").is_some());
+    assert!(cell_of(&terminal, "Creating machine").is_some());
+
+    let summary = cell_of(&terminal, "Now running in the cloud.").expect("summary on screen");
+    click_at(&mut app, summary);
+    assert!(!app.messages()[0].is_expanded(), "the outcome closes it");
+    draw(&mut app, &mut terminal);
+
+    let header = cell_of(&terminal, "Moving to the cloud").expect("header on screen");
+    click_at(&mut app, header);
+    assert!(app.messages()[0].is_expanded(), "the header opens it");
 }
 
 #[test]
@@ -6322,6 +6470,7 @@ fn test_at_outside_a_coordinator_chat_lists_only_files() {
 
     app.switch_app(AgentsTab::Projects);
     app.process_command(UiCommand::SetActiveAgent("co".to_string()));
+    app.process_command(UiCommand::SetSandboxRoot(_dir.path().to_path_buf()));
     app.input.clear();
     app.cursor_pos = 0;
     type_keys(&mut app, "@RE");

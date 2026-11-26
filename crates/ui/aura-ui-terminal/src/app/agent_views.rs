@@ -9,6 +9,13 @@
 //! typed on the input line stays with its agent too: leaving an agent puts
 //! its draft aside, and coming back to it puts the draft back.
 //!
+//! The right column comes back with its agent as well: the Record panel's
+//! records and the Sandbox tree are held in the view, highlight, scroll
+//! and opened folders included, and the PROCESSES, TRACE and TASKS lists
+//! put their highlight back on the row it was on once they are filtered
+//! for the agent again. What the session sends on the switch only brings
+//! them up to date.
+//!
 //! A chat that holds its agent's history (`loaded`) comes back on screen
 //! at once. One that doesn't waits for it blank, says it is loading after
 //! [`LOADING_DELAY`], and fades in over [`FADE_IN`](super::run_log::FADE_IN)
@@ -19,10 +26,12 @@
 //! wait.
 
 use super::run_log::{fade_progress, LOADING_DELAY};
+use super::sandbox::SandboxTree;
+use super::side_scope::ListPlaces;
 use super::{hud::Hud, App, AppState, ChatTab, NotificationType, PendingApproval, SidePanelTab};
 use crate::{
     components::Message,
-    events::UiCommand,
+    events::{RecordSummary, UiCommand},
     renderer::{format_elapsed, ChatLineCache},
     PermissionMode,
 };
@@ -53,6 +62,15 @@ pub(crate) struct AgentView {
     loading_since: Option<Instant>,
     /// When the history it waited for arrived, to fade it in
     revealed_at: Option<Instant>,
+    /// The Record panel's records, highlight and scroll
+    records: VecDeque<RecordSummary>,
+    selected_record: usize,
+    records_scroll: usize,
+    /// The Sandbox tree, with its opened folders and highlight, and scroll
+    sandbox: SandboxTree,
+    sandbox_scroll: usize,
+    /// Where the side panel's lists were, once the agent was on screen
+    list_places: Option<ListPlaces>,
 }
 
 impl Default for AgentView {
@@ -72,6 +90,12 @@ impl Default for AgentView {
             loaded: false,
             loading_since: None,
             revealed_at: None,
+            records: VecDeque::new(),
+            selected_record: 0,
+            records_scroll: 0,
+            sandbox: SandboxTree::default(),
+            sandbox_scroll: 0,
+            list_places: None,
         }
     }
 }
@@ -113,6 +137,11 @@ impl App {
         mem::swap(&mut self.chat_loaded, &mut view.loaded);
         mem::swap(&mut self.chat_loading_since, &mut view.loading_since);
         mem::swap(&mut self.chat_revealed_at, &mut view.revealed_at);
+        mem::swap(&mut self.records, &mut view.records);
+        mem::swap(&mut self.selected_record, &mut view.selected_record);
+        mem::swap(&mut self.records_scroll, &mut view.records_scroll);
+        mem::swap(&mut self.sandbox, &mut view.sandbox);
+        mem::swap(&mut self.sandbox_scroll, &mut view.sandbox_scroll);
     }
 
     /// Have the chat on screen wait for its history when it doesn't hold
@@ -193,6 +222,7 @@ impl App {
         let mut view = self.views.remove(agent_id).unwrap_or_default();
         let busy = view.busy;
         let tab = mem::replace(&mut view.chat_tab, self.chat_tab());
+        self.list_places_due = view.list_places.replace(self.list_places());
         self.swap_chat(&mut view);
         view.busy = is_busy(self.state);
         self.views.insert(previous, view);

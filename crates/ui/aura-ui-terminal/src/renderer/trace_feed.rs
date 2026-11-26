@@ -1,13 +1,12 @@
 //! TRACE tab: live feed of recorded steps and harness decisions.
 
+use super::chrome::{render_scrollbar, ScrollView};
 use super::graph::status_glyph;
-use super::panels::{
-    cell_style, list_row_with_detail, render_scrollbar, CellState, ScrollView, StatusIcon,
-};
 use super::side_list::{
     name_style, render_empty, render_hidden, render_hint, split_hint, Tone, TRACE_HINT,
 };
 use crate::app::{HoverTarget, PanelFocus};
+use crate::components::{cell_style, list_row_with_detail, CellState, StatusIcon};
 use crate::events::TraceNodeStatus;
 use crate::{App, Theme};
 use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};

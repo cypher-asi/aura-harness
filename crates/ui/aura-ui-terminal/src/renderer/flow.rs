@@ -18,14 +18,15 @@
 //! more per frame than a short one. A front end that draws the canvas
 //! itself ([`crate::App::set_host_canvas`]) gets the cells left blank.
 
+use super::chrome::{body_block, render_scrollbar, ScrollView};
 use super::flow_minimap::render_minimap;
 use super::flow_timeline::render_timeline;
 use super::graph::status_glyph;
-use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollView};
 use super::side_list::render_empty;
 use super::text::display_width;
 use crate::app::flow::layout::{FlowLayout, Wire, WireKind, CARD_WIDTH};
 use crate::app::flow::{FlowMode, FlowState, FlowView};
+use crate::components::truncate_record_info;
 use crate::events::{FlowKind, TraceNodeStatus};
 use crate::{App, Theme};
 use ratatui::{

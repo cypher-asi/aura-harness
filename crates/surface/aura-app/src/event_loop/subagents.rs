@@ -999,14 +999,27 @@ impl AgentHub {
     /// active agent to the UI, then the channels, whose member rows show
     /// the same names and activity.
     pub async fn send_agent_list(&self) {
+        self.send_lists(true).await;
+    }
+
+    /// [`Self::send_agent_list`] for a switch, which has just sent the
+    /// active agent: sent again, the UI would put it on screen a second
+    /// time, asking again for the LOG, GRAPH and BENCH it shows.
+    pub(crate) async fn send_agent_list_after_switch(&self) {
+        self.send_lists(false).await;
+    }
+
+    async fn send_lists(&self, with_active: bool) {
         let lists = self.agent_lists_with_active();
         for list in lists.commands {
             let _ = self.commands.send(list).await;
         }
-        let _ = self
-            .commands
-            .send(UiCommand::SetActiveAgent(lists.active.to_hex()))
-            .await;
+        if with_active {
+            let _ = self
+                .commands
+                .send(UiCommand::SetActiveAgent(lists.active.to_hex()))
+                .await;
+        }
         super::channels::send_channels_with(self, lists.members, false).await;
     }
 

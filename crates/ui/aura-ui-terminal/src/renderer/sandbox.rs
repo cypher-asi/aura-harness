@@ -8,13 +8,12 @@
 //! agent's, then a ⤢ button that maximizes the panel over the Record
 //! panel, or restores it.
 
+use super::chrome::{render_body_block, render_scrollbar, ScrollView};
 use super::header::{self, PanelHeader};
-use super::panels::{
-    cell_style, list_row, render_body_block, render_scrollbar, CellState, ScrollView, StatusIcon,
-};
 use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, SANDBOX_HINT};
 use crate::app::sandbox::{SandboxEntryKind, SandboxRow};
 use crate::app::{HoverTarget, Pane, PanelFocus, SidePanelTab, SideScope};
+use crate::components::{cell_style, list_row, CellState, StatusIcon};
 use crate::{App, Theme};
 use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 

@@ -48,6 +48,27 @@ pub(super) fn boot_copy(console: &BootConsole, width: usize) -> Option<CodeCopyH
     })
 }
 
+/// The outcome summary as drawn `width` columns wide.
+fn summary_rows(summary: &str, width: usize) -> Vec<String> {
+    wrap_words(summary, width.saturating_sub(BODY.len()).max(10))
+}
+
+/// The lines of a finished `console`, drawn `width` columns wide, that
+/// open or close it on a click: its header and outcome, and while folded
+/// the row inviting the click. Empty while it runs, as it then shows
+/// everything.
+pub(super) fn boot_fold_rows(
+    console: &BootConsole,
+    expanded: bool,
+    width: usize,
+) -> std::ops::Range<usize> {
+    let Some(outcome) = &console.outcome else {
+        return 0..0;
+    };
+    let hint = usize::from(!expanded);
+    0..1 + summary_rows(&outcome.summary, width).len() + hint
+}
+
 /// The header, with the copy button at its right end when there is room.
 fn header_line(
     console: &BootConsole,
@@ -135,7 +156,7 @@ pub(super) fn boot_lines(
         } else {
             theme.colors.error
         };
-        for row in wrap_words(&outcome.summary, width.saturating_sub(BODY.len()).max(10)) {
+        for row in summary_rows(&outcome.summary, width) {
             lines.push(Line::from(vec![
                 Span::raw(BODY),
                 Span::styled(row, Style::default().fg(color)),
@@ -670,6 +691,30 @@ mod tests {
             [("Compiling went fine".to_string(), Some(theme.colors.muted))]
         );
         assert_eq!(colors("  Note this").len(), 1);
+    }
+
+    #[test]
+    fn a_finished_console_folds_and_opens_on_its_header_outcome_and_hint() {
+        let theme = Theme::cyber();
+        let mut console = console();
+        assert!(boot_fold_rows(&console, false, 80).is_empty(), "running");
+        console.apply(BootUpdate::End {
+            ok: true,
+            summary: "Now running in the cloud on aura-age1301-acaa (4 vCPU). Its record \
+                      syncs back here; `/local` brings it back."
+                .into(),
+        });
+        let folded = boot_lines(&console, false, "⠋", 80, &theme);
+        let rows = boot_fold_rows(&console, false, 80);
+        assert_eq!(rows, 0..4, "header, two summary rows, hint");
+        assert!(text(&folded[rows.end - 1..rows.end]).contains("click to show the boot log"));
+        assert_eq!(rows.end, folded.len());
+
+        let open = boot_lines(&console, true, "⠋", 80, &theme);
+        let rows = boot_fold_rows(&console, true, 80);
+        assert_eq!(rows, 0..3, "header and summary");
+        assert!(text(&open[1..3]).contains("`/local` brings it back."));
+        assert!(!text(&open[rows]).contains("Step quota"));
     }
 
     #[test]

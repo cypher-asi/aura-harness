@@ -3,11 +3,11 @@
 //! hint the same way.
 //!
 //! Every tab follows the same rules: rows are drawn with
-//! [`super::panels::list_row`], a status color only ever sits on a row's
+//! [`crate::components::list_row`], a status color only ever sits on a row's
 //! icon, the name is `foreground` (or `muted` once the item is finished),
 //! and the hint at the bottom reads `⏎ open  <extras>  ⇧←→ tabs`.
 
-use super::panels::truncate_record_info;
+use crate::components::truncate_record_info;
 use crate::{SideScope, Theme};
 use ratatui::{
     layout::Rect,

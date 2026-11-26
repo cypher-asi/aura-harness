@@ -1,13 +1,15 @@
 //! Simple IRC-style renderer for the terminal UI.
 
 mod activity;
+mod agents;
 mod bench_panel;
 mod benchmarks;
 mod boot;
 mod channel_form;
 mod channel_side;
-mod channels;
 mod chat_lines;
+mod chat_panel;
+mod chrome;
 mod command;
 mod context_menu;
 mod detail;
@@ -26,12 +28,12 @@ mod markdown;
 mod members;
 mod mention_menu;
 mod overlays;
-mod panels;
 mod plan_doc;
 mod plans;
 mod policies;
 mod processes;
 mod queue_panel;
+mod record_panel;
 mod run_log;
 mod sandbox;
 mod segments;
@@ -46,8 +48,9 @@ mod bench;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use crate::components::{format_ago, now_ms};
 pub(crate) use chat_lines::{ChatLineCache, GroupState};
-pub(crate) use panels::{format_ago, format_elapsed, now_ms};
+pub(crate) use chat_panel::format_elapsed;
 
 use crate::mode_command::ApprovalLevel;
 use crate::{app::PanelAreas, App, Theme};
@@ -209,13 +212,13 @@ fn render_content_panels(
     app.set_panel_areas(areas);
 
     if let Some(swarm) = areas.swarm {
-        panels::render_agents_panel(frame, swarm, app, theme);
+        agents::render_agents_panel(frame, swarm, app, theme);
     }
     if let Some(chat) = areas.chat {
-        panels::render_chat_panel(frame, chat, app, theme);
+        chat_panel::render_chat_panel(frame, chat, app, theme);
     }
     if let Some(records) = areas.records {
-        panels::render_record_panel(frame, records, app, theme);
+        record_panel::render_record_panel(frame, records, app, theme);
     }
     if let Some(sandbox) = areas.sandbox {
         sandbox::render_sandbox_panel(frame, sandbox, app, theme);

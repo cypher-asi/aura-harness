@@ -6,7 +6,7 @@ use super::activity::{
     activity_lines, collapsed_hint, group_header_of, records_link, running_tool_lines, GroupView,
     Shown, StepNumber, StepTally, Tally, ToolParts,
 };
-use super::boot::{boot_copy, boot_lines};
+use super::boot::{boot_copy, boot_fold_rows, boot_lines};
 use super::command::shell_lines;
 use super::diff::diff_message_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
@@ -789,7 +789,7 @@ fn group_progress(steps: &[&Activity], place: &TurnPlace<'_>) -> String {
         .filter(|elapsed| elapsed.as_secs() > 0)
     {
         progress.push_str(" · ");
-        progress.push_str(&super::panels::format_elapsed(elapsed));
+        progress.push_str(&super::chat_panel::format_elapsed(elapsed));
     }
     progress
 }
@@ -921,16 +921,19 @@ fn single_lines(
     let Some(step) = message.activity_step() else {
         let (laid, more) = message_lines(message, (width, measure), theme, spinner);
         // A boot console still going shows everything; once done it
-        // folds and opens on its header.
+        // folds, and opens or closes on its header, its outcome and the
+        // row inviting the click.
+        let id = message.version().0;
         let toggles = message
             .boot_console()
-            .filter(|console| !console.is_running())
-            .map(|_| ToggleRow {
-                line: 0,
-                target: ToggleTarget::Step(message.version().0),
+            .map_or(0..0, |console| {
+                boot_fold_rows(console, message.is_expanded(), width)
+            })
+            .map(|line| ToggleRow {
+                line,
+                target: ToggleTarget::Step(id),
                 open: message.is_expanded(),
             })
-            .into_iter()
             .chain(more_toggles(message, more, 0))
             .collect();
         return (laid, toggles);

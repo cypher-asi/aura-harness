@@ -14,14 +14,14 @@
 //! panel is focused the keyboard's row is lit; otherwise the open
 //! channel's row is, as PROJECTS lights the agent on screen.
 
-use super::panels::{
-    cell_style, list_row, render_scrollbar, working_icon, CellState, ScrollView, StatusIcon,
-};
-use super::side_list::empty_line;
+use super::{draw_list, split_pinned, working_icon};
 use crate::app::{HoverTarget, PanelFocus};
+use crate::components::{cell_style, list_row, CellState, StatusIcon};
 use crate::events::ChannelSummary;
+use crate::renderer::chrome::ScrollView;
+use crate::renderer::side_list::empty_line;
 use crate::{App, Theme};
-use ratatui::{layout::Rect, style::Style, text::Line, widgets::Paragraph, Frame};
+use ratatui::{layout::Rect, style::Style, text::Line, Frame};
 
 /// What the list says when there are no channels.
 const NO_CHANNELS: &str = "No channels yet.";
@@ -36,15 +36,7 @@ pub(super) fn render_channels(
     theme: &Theme,
 ) {
     let is_focused = app.focus() == PanelFocus::Swarm;
-    let rows_area = Rect {
-        height: body.height.saturating_sub(1),
-        ..body
-    };
-    let bottom_row = Rect {
-        y: body.y + rows_area.height,
-        height: body.height.min(1),
-        ..body
-    };
+    let (rows_area, bottom_row) = split_pinned(body);
     let visible = usize::from(rows_area.height);
     app.set_channel_rows_area(rows_area);
     app.set_new_channel_area(bottom_row);
@@ -83,9 +75,16 @@ pub(super) fn render_channels(
         visible,
         first,
     };
-    frame.render_widget(Paragraph::new(lines), rows_area);
-    frame.render_widget(Paragraph::new(new_channel), bottom_row);
-    render_scrollbar(frame, area, rows_area, view, is_focused, theme);
+    let pinned = Some((bottom_row, new_channel));
+    draw_list(
+        frame,
+        (area, rows_area),
+        lines,
+        pinned,
+        view,
+        theme,
+        is_focused,
+    );
 }
 
 /// Whether row `index` is lit, by the keyboard or as the open channel,

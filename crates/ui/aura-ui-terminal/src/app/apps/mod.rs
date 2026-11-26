@@ -18,8 +18,85 @@
 //! app in front does not show (a notification jumping to it, say) is the
 //! user going to that agent: PROJECTS comes to the front with it, or
 //! ARCHIVE for an archived one.
+//!
+//! Each app lives in its own module; what the agents panel does with a
+//! key, a click, a hover or the wheel is handed to the app in front here.
 
-use super::{AgentsTab, App};
+mod archive;
+mod channels;
+mod projects;
+mod roster;
+
+pub use archive::ArchiveRow;
+pub(super) use channels::ChannelState;
+
+use super::{contains, tab_at, tab_bar::TabLayout, App, HoverTarget};
+use crate::terminal::KeyResult;
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::Rect;
+
+/// Views of the agents panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentsTab {
+    /// Channels: shared conversations with a coordinator and its agents.
+    Channels,
+    /// Live agents: the ones the user talks to and the instances they spawned.
+    #[default]
+    Projects,
+    /// The roster of permanent agents that can be spawned by name.
+    Roster,
+    /// Agents moved out of the projects list, until restored.
+    Archive,
+}
+
+impl AgentsTab {
+    pub const ALL: [Self; 4] = [Self::Channels, Self::Projects, Self::Roster, Self::Archive];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Channels => "CHANNELS",
+            Self::Projects => "PROJECTS",
+            Self::Roster => "AGENTS",
+            Self::Archive => "ARCHIVE",
+        }
+    }
+
+    /// Label for header bars too narrow for `label`.
+    #[must_use]
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::Channels => "CHN",
+            Self::Projects => "PRJ",
+            Self::Roster => "AGT",
+            Self::Archive => "ARC",
+        }
+    }
+
+    /// The next tab (`forward`) or the one before, wrapping, for Left / Right.
+    const fn shifted(self, forward: bool) -> Self {
+        match (self, forward) {
+            (Self::Channels, true) | (Self::Roster, false) => Self::Projects,
+            (Self::Projects, true) | (Self::Archive, false) => Self::Roster,
+            (Self::Roster, true) | (Self::Channels, false) => Self::Archive,
+            (Self::Archive, true) | (Self::Projects, false) => Self::Channels,
+        }
+    }
+
+    /// The tab Alt+`digit` brings to the front: 1 to 4, in header order.
+    #[must_use]
+    pub fn numbered(digit: char) -> Option<Self> {
+        let index = digit.to_digit(10)?.checked_sub(1)?;
+        Self::ALL.get(usize::try_from(index).ok()?).copied()
+    }
+
+    /// The tabs' cells in a header bar `width` columns wide. The renderer
+    /// draws the bar with this layout and clicks are mapped back through it.
+    #[must_use]
+    pub fn layout(width: u16) -> TabLayout<Self> {
+        TabLayout::new(Self::ALL, Self::label, Self::short_label, width)
+    }
+}
 
 /// What each agent app showed, to show again when it comes back.
 #[derive(Debug, Default)]
@@ -30,9 +107,123 @@ pub(super) struct AppMemory {
     archive: Option<String>,
     /// The permanent agent whose latest instance AGENTS shows
     roster: Option<String>,
+    /// The channel CHANNELS has open, or had when it was left
+    channel: Option<String>,
 }
 
 impl App {
+    /// Which list the agents panel shows.
+    #[must_use]
+    pub const fn agents_tab(&self) -> AgentsTab {
+        self.agents_tab
+    }
+
+    /// Record where the agents panel's header bar was drawn this frame.
+    pub fn set_agent_tabs_area(&mut self, area: Rect) {
+        self.areas.agent_tabs = Some(area);
+    }
+
+    /// Left shows the tab before, Right the one after.
+    pub(super) fn shift_agents_tab(&mut self, key: KeyCode) {
+        self.show_agents_tab(self.agents_tab.shifted(key == KeyCode::Right));
+    }
+
+    /// Clicking a tab shows it; clicking a row acts on the visible list.
+    pub(super) fn click_agents_panel(&mut self, column: u16, row: u16) {
+        if contains(self.areas.agent_tabs, column, row) {
+            if let Some(tab) = tab_at(self.areas.agent_tabs, column, row, AgentsTab::layout) {
+                self.show_agents_tab(tab);
+            }
+            return;
+        }
+        match self.agents_tab {
+            AgentsTab::Channels => self.click_channel_row(column, row),
+            AgentsTab::Projects => self.click_agent_row(column, row),
+            AgentsTab::Roster => self.click_definition_row(column, row),
+            AgentsTab::Archive => self.click_archived_row(column, row),
+        }
+    }
+
+    /// The app in front's own keys, taken before the input sees them
+    /// while it is empty: letters, Space, Delete. Ctrl and Alt keys
+    /// (`word_motion`) stay the input's, except Delete in PROJECTS.
+    /// Returns whether the app took `key`.
+    pub(super) fn agents_panel_shortcut(&mut self, key: KeyEvent, word_motion: bool) -> bool {
+        match self.agents_tab {
+            AgentsTab::Projects => self.projects_shortcut(key, word_motion),
+            _ if word_motion => false,
+            AgentsTab::Channels => self.handle_channels_key(key),
+            AgentsTab::Roster => self.handle_definitions_shortcut(key),
+            AgentsTab::Archive => self.handle_archive_key(key),
+        }
+    }
+
+    /// A key for the agents panel the input did not take.
+    pub(super) fn handle_agents_panel_key(&mut self, key: KeyEvent) -> KeyResult {
+        match self.agents_tab {
+            AgentsTab::Projects => return self.handle_swarm_key(key),
+            AgentsTab::Channels => {
+                self.handle_channels_key(key);
+            }
+            AgentsTab::Roster => self.handle_definitions_key(key),
+            AgentsTab::Archive => {
+                self.handle_archive_key(key);
+            }
+        }
+        KeyResult::continue_running()
+    }
+
+    /// The wheel over the agents panel, `delta` rows: PROJECTS scrolls its
+    /// list, the others move their highlight.
+    pub(super) fn scroll_agents_panel(&mut self, delta: isize) {
+        match self.agents_tab {
+            AgentsTab::Channels => self.move_channel_highlight(delta),
+            AgentsTab::Projects => self.scroll_project_rows(delta),
+            AgentsTab::Roster => {
+                self.select_definition_row(self.selected_definition.saturating_add_signed(delta));
+            }
+            AgentsTab::Archive => self.move_archived_by(delta),
+        }
+    }
+
+    /// Rows one wheel notch moves in the agents panel: one for the apps
+    /// whose wheel moves the highlight, three for scrolling PROJECTS.
+    pub(super) const fn agents_panel_wheel_step(&self) -> usize {
+        match self.agents_tab {
+            AgentsTab::Projects => 3,
+            _ => 1,
+        }
+    }
+
+    /// What the pointer is over in the app in front's list.
+    pub(super) fn hovered_agents_panel(&self, column: u16, row: u16) -> Option<HoverTarget> {
+        match self.agents_tab {
+            AgentsTab::Projects => self.hovered_project_row(column, row),
+            AgentsTab::Channels => self
+                .channel_row_at(column, row)
+                .map(HoverTarget::ChannelRow),
+            AgentsTab::Roster => self
+                .definition_row_at(column, row)
+                .map(HoverTarget::DefinitionRow),
+            AgentsTab::Archive => self
+                .archived_row_at(column, row)
+                .map(HoverTarget::ArchivedRow),
+        }
+    }
+
+    /// A right click on the agents panel: the menu of the row under the
+    /// pointer in the app in front, if it has one. Returns whether a menu
+    /// opened.
+    pub(super) fn open_context_menu(&mut self, column: u16, row: u16) -> bool {
+        self.context_menu = None;
+        match self.agents_tab {
+            AgentsTab::Projects => self.open_project_menu(column, row),
+            AgentsTab::Archive => self.open_archive_menu(column, row),
+            AgentsTab::Channels => self.open_channel_menu(column, row),
+            AgentsTab::Roster => false,
+        }
+    }
+
     /// Show `tab`, as the user picking it: the app it replaces is
     /// remembered, and `tab` puts back what it showed.
     pub(super) fn show_agents_tab(&mut self, tab: AgentsTab) {
@@ -74,9 +265,6 @@ impl App {
             return false;
         }
         self.remember_app(was);
-        if tab == AgentsTab::Archive {
-            self.fold_all_archived();
-        }
         if was == AgentsTab::Channels {
             self.leave_channel_app();
         }
@@ -104,6 +292,11 @@ impl App {
             }
             AgentsTab::Archive if self.is_archived_agent(&on_screen) => {
                 self.apps.archive = Some(on_screen);
+            }
+            AgentsTab::Channels => {
+                if let Some(open) = self.open_channel().map(|channel| channel.id.clone()) {
+                    self.apps.channel = Some(open);
+                }
             }
             _ => {}
         }

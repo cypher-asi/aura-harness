@@ -14,11 +14,12 @@
 //! at the right. The messages of an unfolded thread follow it, indented,
 //! as `from → to`, a preview and the time each was sent.
 
-use super::panels::{cell_style, render_scrollbar, truncate_record_info, CellState, ScrollView};
+use super::chrome::{render_scrollbar, ScrollView};
 use super::side_list::{name_style, render_empty, render_hint, split_hint, Tone, INBOX_HINT};
 use super::text::display_width;
 use crate::app::ThreadView;
 use crate::app::{HoverTarget, InboxRow, PanelFocus};
+use crate::components::{cell_style, truncate_record_info, CellState};
 use crate::events::MailView;
 use crate::{App, Theme};
 use ratatui::style::{Modifier, Style};

@@ -515,7 +515,7 @@ impl App {
 
 /// Whether `column` falls on the icon of a side-panel row drawn at
 /// `depth` in rows starting at `rows_x`: the icon column of
-/// `renderer::panels::list_row`, one leading space and two per level in.
+/// `components::list_row`, one leading space and two per level in.
 pub(super) fn on_row_icon(column: u16, rows_x: u16, depth: usize) -> bool {
     let start = 1 + 2 * depth;
     let offset = usize::from(column.saturating_sub(rows_x));

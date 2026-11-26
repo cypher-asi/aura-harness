@@ -37,16 +37,18 @@
 //!   Right-click › Edit channel… to set one
 //! ```
 
-use super::panels::{
-    cell_style, list_row_with_detail, render_scrollbar, spawn_guides, tree_row,
-    truncate_record_info, working_icon, CellState, ScrollView, StatusIcon,
-};
+use super::agents::projects::spawn_guides;
+use super::agents::working_icon;
+use super::chrome::{render_scrollbar, ScrollView};
 use super::policies::heading;
 use super::side_list::{
     empty_line, render_empty, render_hint, split_hint, CHANNEL_MEMBERS_HINT, EMPTY_INDENT,
 };
 use super::text::{display_width, wrap_words};
 use crate::app::{AgentRowEnd, HoverTarget, PanelFocus};
+use crate::components::{
+    cell_style, list_row_with_detail, tree_row, truncate_record_info, CellState, StatusIcon,
+};
 use crate::events::{AgentSummary, ChannelSummary};
 use crate::{App, Theme};
 use ratatui::{

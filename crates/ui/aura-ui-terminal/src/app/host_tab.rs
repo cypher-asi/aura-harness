@@ -45,7 +45,7 @@ pub fn switch_label(state: &PlacementState) -> String {
         .as_deref()
         .filter(|_| state.placement == PlacementView::Cloud)
     {
-        return format!("☁ {owner}");
+        return format!("{} {owner}", PlacementView::Cloud.mark());
     }
     let mut label = format!("{} {}", state.placement.mark(), state.placement.label());
     if let Some(machine) = state
@@ -94,14 +94,15 @@ impl App {
             })
     }
 
-    /// The projects-list badge of `agent_id`: ` ☁` for a cloud agent,
-    /// ` ☁ alice` for another user's, with whether it is someone else's.
+    /// The projects-list badge of `agent_id`: ` ☁ ` for a cloud agent,
+    /// ` ☁  alice` for another user's, with whether it is someone else's.
     #[must_use]
     pub fn cloud_badge(&self, agent_id: &str) -> Option<(String, bool)> {
         let state = self.cloud.placements.get(agent_id)?;
+        let mark = PlacementView::Cloud.mark();
         (state.placement == PlacementView::Cloud).then(|| match &state.owner {
-            Some(owner) => (format!(" ☁ {owner}"), true),
-            None => (" ☁".to_string(), false),
+            Some(owner) => (format!(" {mark} {owner}"), true),
+            None => (format!(" {mark}"), false),
         })
     }
 
@@ -315,7 +316,7 @@ mod tests {
             machine_state: Some("asleep".into()),
             ..PlacementState::default()
         };
-        assert_eq!(switch_label(&cloud), "☁ cloud · asleep");
+        assert_eq!(switch_label(&cloud), "☁  cloud · asleep");
         let moving = PlacementState {
             moving: Some("moving to cloud".into()),
             ..PlacementState::default()
@@ -326,7 +327,7 @@ mod tests {
             owner: Some("Alice".into()),
             ..PlacementState::default()
         };
-        assert_eq!(switch_label(&foreign), "☁ Alice");
+        assert_eq!(switch_label(&foreign), "☁  Alice");
     }
 
     #[test]
@@ -347,8 +348,8 @@ mod tests {
                 ..PlacementState::default()
             },
         });
-        assert_eq!(app.cloud_badge("aa"), Some((" ☁ Alice".into(), true)));
-        assert_eq!(app.cloud_badge("bb"), Some((" ☁".into(), false)));
+        assert_eq!(app.cloud_badge("aa"), Some((" ☁  Alice".into(), true)));
+        assert_eq!(app.cloud_badge("bb"), Some((" ☁ ".into(), false)));
         assert_eq!(app.cloud_badge("cc"), None);
         app.handle_command("/local");
         assert!(rx.try_recv().is_err(), "only Alice can bring it back");

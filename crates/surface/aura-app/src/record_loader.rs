@@ -23,6 +23,7 @@ use aura_ui_terminal::{
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -697,16 +698,58 @@ impl<T: Clone> ByHead<T> {
         let Ok(head) = store.get_head_seq(agent_id) else {
             return read();
         };
-        if let Some(at) = self.0.iter().position(|(id, _, _)| *id == agent_id) {
-            if let Some(kept) = self.0.remove(at).filter(|(_, seen, _)| *seen == head) {
-                let value = kept.2.clone();
-                self.0.push_front(kept);
-                return Ok(value);
-            }
+        if let Some(value) = self.kept(agent_id, head) {
+            return Ok(value);
         }
         let value = read()?;
-        self.0.push_front((agent_id, head, value.clone()));
+        self.keep(agent_id, head, value.clone());
+        Ok(value)
+    }
+
+    /// What was read for `agent_id` when its record's head was `head`, if
+    /// it is kept. A read at another head is dropped: it is out of date.
+    pub fn kept(&mut self, agent_id: AgentId, head: u64) -> Option<T> {
+        let at = self.0.iter().position(|(id, _, _)| *id == agent_id)?;
+        let kept = self.0.remove(at).filter(|(_, seen, _)| *seen == head)?;
+        let value = kept.2.clone();
+        self.0.push_front(kept);
+        Some(value)
+    }
+
+    /// Keep `value`, read from `agent_id`'s record at `head`.
+    pub fn keep(&mut self, agent_id: AgentId, head: u64, value: T) {
+        self.0.retain(|(id, _, _)| *id != agent_id);
+        self.0.push_front((agent_id, head, value));
         self.0.truncate(READS_KEPT);
+    }
+}
+
+impl<T: Clone + Send + 'static> ByHead<T> {
+    /// [`Self::get_or_read`] for the event loop: a read that is not kept
+    /// runs on a blocking thread, so the runtime's worker goes on with the
+    /// agents' turns while the record is scanned. `head` is read first, so
+    /// a record that grows meanwhile is read again next time.
+    ///
+    /// # Errors
+    /// Returns what `read` fails with; failures are not kept.
+    pub async fn get_or_read_off_loop(
+        cache: &Mutex<Self>,
+        store: &Arc<dyn ReadStore>,
+        agent_id: AgentId,
+        read: fn(&dyn ReadStore, AgentId) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let lock = || cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let head = store.get_head_seq(agent_id).ok();
+        if let Some(value) = head.and_then(|head| lock().kept(agent_id, head)) {
+            return Ok(value);
+        }
+        let reader = Arc::clone(store);
+        let value = tokio::task::spawn_blocking(move || read(reader.as_ref(), agent_id))
+            .await
+            .map_err(|e| StoreError::Backend(Box::new(e)))??;
+        if let Some(head) = head {
+            lock().keep(agent_id, head, value.clone());
+        }
         Ok(value)
     }
 }

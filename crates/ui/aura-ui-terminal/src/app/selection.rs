@@ -9,6 +9,8 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::{App, PanelFocus, SELECTION_SCROLL_MOST};
+
 /// A drag selection inside one panel. Like a terminal selection it runs
 /// from the anchor to the head in reading order, so rows between the two
 /// are selected edge to edge.
@@ -195,6 +197,115 @@ fn clamp(bounds: Rect, at: Position) -> Position {
     let max_x = bounds.right().saturating_sub(1).max(bounds.x);
     let max_y = bounds.bottom().saturating_sub(1).max(bounds.y);
     Position::new(at.x.clamp(bounds.x, max_x), at.y.clamp(bounds.y, max_y))
+}
+
+impl App {
+    /// Cells of `panel` that hold text: inside its border, and for the chat
+    /// only the rows its body scrolls through, or its message area. The
+    /// agents panel on the left is navigation, so its text is never
+    /// selected.
+    pub(super) fn selectable_area(&self, panel: PanelFocus) -> Option<Rect> {
+        let area = match panel {
+            PanelFocus::Chat if self.areas.chat_rows.is_some() => return self.areas.chat_rows,
+            PanelFocus::Chat if self.detail.is_some() => self.areas.chat,
+            PanelFocus::Chat => return self.areas.chat_text.or(self.areas.chat),
+            PanelFocus::Swarm => return None,
+            PanelFocus::Records => self.areas.records,
+            PanelFocus::Sandbox => self.areas.sandbox,
+        }?;
+        Some(Rect {
+            x: area.x.saturating_add(1),
+            y: area.y.saturating_add(1),
+            width: area.width.saturating_sub(2),
+            height: area.height.saturating_sub(2),
+        })
+    }
+
+    /// Text selected with the mouse, if any.
+    #[must_use]
+    pub const fn selection(&self) -> Option<&Selection> {
+        self.selection.as_ref()
+    }
+
+    /// Drop the mouse selection.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.selecting = None;
+        self.selection_scrolled = None;
+        self.copy_requested = false;
+    }
+
+    /// Whether the selection is in the rows the chat panel's body scrolls
+    /// through, as drawn in the last frame.
+    fn selection_in_chat_rows(&self) -> bool {
+        self.selection_scrolls
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|s| self.areas.chat_rows == Some(s.bounds()))
+    }
+
+    /// Whether the wheel over `panel` scrolls a selection along with its
+    /// text rather than dropping it.
+    pub(super) fn wheel_keeps_selection(&self, panel: PanelFocus) -> bool {
+        panel == PanelFocus::Chat && self.selection_in_chat_rows()
+    }
+
+    /// Fit the selection to the frame just drawn into `buffer`: follow the
+    /// chat body's scroll, move the held end to the pointer, and keep the
+    /// rows in view for copying once they scroll away.
+    pub(crate) fn track_selection(&mut self, buffer: &Buffer) {
+        if !self.selection_in_chat_rows() {
+            return;
+        }
+        let Some(selection) = self.selection.as_mut() else {
+            return;
+        };
+        selection.scroll_to(self.areas.chat_rows_top);
+        if let Some(at) = self.selecting {
+            selection.extend_to(at);
+        }
+        selection.keep(buffer);
+    }
+
+    /// How the chat should scroll for a selection being dragged past its
+    /// top (`true`) or bottom, and by how many rows.
+    fn selection_scroll(&self) -> Option<(bool, usize)> {
+        let at = self.selecting?;
+        let bounds = self.selection.as_ref()?.bounds();
+        if !self.selection_in_chat_rows() {
+            return None;
+        }
+        let (up, past) = if at.y < bounds.top() {
+            (true, bounds.top() - at.y)
+        } else if at.y >= bounds.bottom() {
+            (false, at.y + 1 - bounds.bottom())
+        } else {
+            return None;
+        };
+        Some((up, usize::from(past.min(SELECTION_SCROLL_MOST))))
+    }
+
+    /// Whether a selection is held past the chat's top or bottom, so the
+    /// chat keeps scrolling under it while time passes.
+    #[must_use]
+    pub fn selection_scrolling(&self) -> bool {
+        self.selection_scroll().is_some()
+    }
+
+    /// Scroll the chat one step under a selection dragged past its top or
+    /// bottom. The selection's held end follows on the next frame.
+    pub(crate) fn scroll_selection(&mut self) {
+        let Some((up, rows)) = self.selection_scroll() else {
+            return;
+        };
+        match (self.detail.is_some(), up) {
+            (true, true) => self.scroll_detail_up(rows),
+            (true, false) => self.scroll_detail_down(rows),
+            (false, true) => self.scroll_panel_up(PanelFocus::Chat, rows),
+            (false, false) => self.scroll_panel_down(PanelFocus::Chat, rows),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -10,9 +10,9 @@
 //! and moved up to stay on screen.
 
 use super::hud::truncate;
-use super::panels::{cell_style, CellState};
 use super::text::display_width;
 use crate::app::{AppState, SubmenuEntry, WorkspaceTarget};
+use crate::components::{cell_style, CellState};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,

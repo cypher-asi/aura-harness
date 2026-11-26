@@ -13,7 +13,9 @@ use super::tasks::TaskBoard;
 use super::LoopState;
 use crate::agent_registry::{Opened, RegisteredAgent};
 use crate::file_checkpoints::FileCheckpoints;
-use crate::record_loader::{conversation_history, latest_plan_path, recent_record_summaries};
+use crate::record_loader::{
+    conversation_history, latest_plan_path, recent_record_summaries, ByHead,
+};
 use crate::session_checkpoint::{
     is_resumable, now_ms, Checkpoints, SessionCheckpoint, SessionUsage,
 };
@@ -910,7 +912,7 @@ async fn activate_agent(state: &mut LoopState<'_>, agent_id: AgentId, chat: Chat
                 .commands
                 .send(UiCommand::SetActiveAgent(agent_id.to_hex()))
                 .await;
-            state.hub.send_agent_list().await;
+            state.hub.send_agent_list_after_switch().await;
         }
         return;
     }
@@ -952,7 +954,7 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
         .await;
     // The lists go first: a new or restored agent shows up in them, and an
     // archived one leaves them, before its history has been read.
-    state.hub.send_agent_list().await;
+    state.hub.send_agent_list_after_switch().await;
     // The chat next: it is what the UI waits on, blank, while the rest
     // (records, traces) can fill in after it.
     if chat == Chat::Reload {
@@ -967,12 +969,17 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
                 .send(UiCommand::ChatReady)
                 .await;
         } else {
-            let history = lock(&state.hub.shown_chats)
-                .get_or_read(store, agent_id, || conversation_history(store, agent_id))
-                .unwrap_or_else(|e| {
-                    warn!(error = %e, "Failed to rebuild conversation from record");
-                    Vec::new()
-                });
+            let history = ByHead::get_or_read_off_loop(
+                &state.hub.shown_chats,
+                &state.hub.factory.store,
+                agent_id,
+                conversation_history,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Failed to rebuild conversation from record");
+                Vec::new()
+            });
             let history = crate::chat_notes::with_notes(agent_id, history);
             AgentUi::new(state.commands.clone(), agent_id)
                 .send(UiCommand::LoadConversation(history))
@@ -982,8 +989,13 @@ pub(super) async fn show_active_agent(state: &LoopState<'_>, chat: Chat) {
     }
     // One replace-all command: clears the previous agent's records even
     // when this agent's history can't be read.
-    let read = lock(&state.hub.shown_records)
-        .get_or_read(store, agent_id, || recent_record_summaries(store, agent_id));
+    let read = ByHead::get_or_read_off_loop(
+        &state.hub.shown_records,
+        &state.hub.factory.store,
+        agent_id,
+        recent_record_summaries,
+    )
+    .await;
     let (records, problem) = match read {
         Ok(summaries) => (summaries, None),
         Err(e) => (Vec::new(), Some(e)),

@@ -21,7 +21,7 @@
 //! its agents from the list for good (their records and folder stay on
 //! disk), so it waits for `y`: Shift+Delete, or `/remove-project`.
 
-use super::{contains, follow_selection, App, NotificationType, ProjectListRow};
+use crate::app::{contains, follow_selection, App, NotificationType, ProjectListRow};
 use crate::events::{AgentSummary, UiEvent};
 use chrono::{DateTime, Local};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -162,17 +162,10 @@ impl App {
         Some(self.shown_as(index))
     }
 
-    /// Fold every archived agent over the agents under it, as on entering
-    /// the Archive. A highlight inside a folded agent moves onto it.
-    pub(super) fn fold_all_archived(&mut self) {
-        self.opened_archived.clear();
-        self.select_archived_row(self.selected_archived);
-    }
-
     /// Fold or open archived agent `index`. One with nothing under it
     /// folds the agent it sits under instead. A highlight left inside a
     /// folded agent moves onto it.
-    pub(super) fn toggle_archived(&mut self, index: usize) {
+    pub(in crate::app) fn toggle_archived(&mut self, index: usize) {
         let Some(index) = (if self.archived_has_spawns(index) {
             Some(index)
         } else {
@@ -189,7 +182,7 @@ impl App {
 
     /// Move the highlight `delta` drawn agent rows down (up when
     /// negative), stopping at either end.
-    pub(super) fn move_archived_by(&mut self, delta: isize) {
+    pub(in crate::app) fn move_archived_by(&mut self, delta: isize) {
         let shown = self.shown_archived();
         let Some(at) = shown.iter().position(|&i| i == self.selected_archived) else {
             self.select_archived_row(self.selected_archived);
@@ -245,7 +238,7 @@ impl App {
 
     /// Take a new Archive. The highlight stays on the agent it was on;
     /// with none before, it goes to the agent on screen if archived.
-    pub(super) fn set_archived(&mut self, archived: Vec<AgentSummary>) {
+    pub(in crate::app) fn set_archived(&mut self, archived: Vec<AgentSummary>) {
         let highlighted = self
             .archived
             .get(self.selected_archived)
@@ -260,13 +253,13 @@ impl App {
 
     /// Highlight archived agent `index`, clamped to the Archive; when it
     /// is folded away, the folded agent it is under.
-    pub(super) fn select_archived_row(&mut self, index: usize) {
+    pub(in crate::app) fn select_archived_row(&mut self, index: usize) {
         let index = index.min(self.archived.len().saturating_sub(1));
         self.selected_archived = self.shown_as(index);
     }
 
     /// Archived agent drawn at a screen cell; `None` on a day header.
-    pub(super) fn archived_row_at(&self, column: u16, row: u16) -> Option<usize> {
+    pub(in crate::app) fn archived_row_at(&self, column: u16, row: u16) -> Option<usize> {
         let rows = self
             .areas
             .archived_rows
@@ -292,7 +285,7 @@ impl App {
 
     /// Clicking an archived agent's fold marker folds or opens it;
     /// clicking the rest of its row opens its chat.
-    pub(super) fn click_archived_row(&mut self, column: u16, row: u16) {
+    pub(in crate::app) fn click_archived_row(&mut self, column: u16, row: u16) {
         if let Some(index) = self.archived_row_at(column, row) {
             self.selected_archived = index;
             if self.on_archived_marker(index, column) {
@@ -304,7 +297,7 @@ impl App {
     }
 
     /// Keys of the Archive. Returns whether the key was used.
-    pub(super) fn handle_archive_key(&mut self, key: KeyEvent) -> bool {
+    pub(in crate::app) fn handle_archive_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Up => self.move_archived_by(-1),
             KeyCode::Down => self.move_archived_by(1),
@@ -334,7 +327,7 @@ impl App {
 
     /// `/unarchive`: bring the agent on screen back from the Archive, or
     /// say it is not there.
-    pub(super) fn unarchive_active_agent(&mut self) {
+    pub(in crate::app) fn unarchive_active_agent(&mut self) {
         let id = self.active_agent_id.clone();
         if self.archived.iter().any(|agent| agent.id == id) {
             self.restore_agent(id);
@@ -348,16 +341,16 @@ impl App {
 
     /// Bring the archived agent with hex id `id` back to the projects
     /// list and show that list.
-    pub(super) fn restore_agent(&mut self, id: String) {
+    pub(in crate::app) fn restore_agent(&mut self, id: String) {
         if id.is_empty() {
             return;
         }
         self.send_event(UiEvent::RestoreAgent(id));
-        self.switch_app(super::AgentsTab::Projects);
+        self.switch_app(crate::app::AgentsTab::Projects);
     }
 
     /// Agent under the projects-list highlight, if it is on an agent.
-    pub(super) fn highlighted_agent(&self) -> Option<String> {
+    pub(in crate::app) fn highlighted_agent(&self) -> Option<String> {
         match self.project_rows().get(self.selected_agent)? {
             ProjectListRow::Agent { index } => self.agents.get(*index).map(|a| a.id.clone()),
             _ => None,
@@ -365,7 +358,7 @@ impl App {
     }
 
     /// Delete in the projects list: archive the highlighted agent.
-    pub(super) fn archive_selected_agent(&mut self) {
+    pub(in crate::app) fn archive_selected_agent(&mut self) {
         if let Some(id) = self.highlighted_agent() {
             self.archive_agent(id);
         }
@@ -373,28 +366,28 @@ impl App {
 
     /// Shift+Delete in the projects list: ask to remove the highlighted
     /// agent's project.
-    pub(super) fn remove_selected_project(&mut self) {
+    pub(in crate::app) fn remove_selected_project(&mut self) {
         if let Some(id) = self.highlighted_agent() {
             self.request_remove_project_of(&id);
         }
     }
 
     /// Ask to confirm removing the project agent `id` is in.
-    pub(super) fn request_remove_project_of(&mut self, id: &str) {
+    pub(in crate::app) fn request_remove_project_of(&mut self, id: &str) {
         if let Some(key) = self.project_key_of_agent(id) {
             self.request_remove_project(key);
         }
     }
 
     /// Key of the project the listed agent `id` is in.
-    pub(super) fn project_key_of_agent(&self, id: &str) -> Option<String> {
+    pub(in crate::app) fn project_key_of_agent(&self, id: &str) -> Option<String> {
         let index = self.agents.iter().position(|a| a.id == id)?;
         self.project_key(self.project_root(index)?)
     }
 
     /// Move the agent with hex id `id`, and the agents under it, to the
     /// Archive.
-    pub(super) fn archive_agent(&mut self, id: String) {
+    pub(in crate::app) fn archive_agent(&mut self, id: String) {
         if id.is_empty() {
             return;
         }
@@ -402,7 +395,7 @@ impl App {
     }
 
     /// Ask to confirm removing the project with key `key`.
-    pub(super) fn request_remove_project(&mut self, key: String) {
+    pub(in crate::app) fn request_remove_project(&mut self, key: String) {
         let named = |name: Option<&str>| {
             name.map(str::trim)
                 .filter(|name| !name.is_empty())
@@ -430,7 +423,7 @@ impl App {
 
     /// Resolve a pending project removal with `key`. Returns `false` when
     /// nothing was pending.
-    pub(super) fn handle_pending_remove_project(&mut self, key: KeyEvent) -> bool {
+    pub(in crate::app) fn handle_pending_remove_project(&mut self, key: KeyEvent) -> bool {
         let Some(id) = self.pending_remove_project.take() else {
             return false;
         };
@@ -451,8 +444,8 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{AgentsTab, PanelFocus};
     use super::*;
+    use crate::app::{AgentsTab, PanelFocus};
     use crate::events::UiCommand;
     use crossterm::event::KeyModifiers;
     use tokio::sync::mpsc;
@@ -838,13 +831,13 @@ mod tests {
     }
 
     #[test]
-    fn entering_the_archive_folds_every_agent_over_its_subagents() {
+    fn the_archive_keeps_what_was_opened_in_it() {
         let (mut app, _rx) = nested_archive();
         assert_eq!(shown_ids(&app), ["dd", "gg", "hh"]);
         assert!(app.archived_folded(0) && app.archived_folded(4));
         assert!(!app.archived_folded(3), "gg has nothing to fold");
 
-        // Opened ones stay open while on the Archive, one level at a time.
+        // Folded at first; opened one level at a time.
         app.handle_key(key(KeyCode::Char(' ')));
         assert_eq!(shown_ids(&app), ["dd", "ee", "gg", "hh"]);
         app.handle_key(key(KeyCode::Down));
@@ -854,11 +847,12 @@ mod tests {
         app.handle_key(key(KeyCode::Right));
         assert_eq!(shown_ids(&app).len(), 5, "other tabs leave it alone");
 
-        // Coming back folds them all again.
+        // Coming back finds them as they were left, highlight included.
+        let selected = app.selected_archived();
         app.show_agents_tab(AgentsTab::Projects);
         app.show_agents_tab(AgentsTab::Archive);
-        assert_eq!(shown_ids(&app), ["dd", "gg", "hh"]);
-        assert_eq!(app.selected_archived(), 0, "the highlight moved onto dd");
+        assert_eq!(shown_ids(&app), ["dd", "ee", "ff", "gg", "hh"]);
+        assert_eq!(app.selected_archived(), selected);
     }
 
     #[test]
