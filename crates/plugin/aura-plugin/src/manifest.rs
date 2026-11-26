@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use aura_plugin_api::PluginId;
+use crate::api::PluginId;
 
 use crate::error::ManifestError;
 
@@ -248,7 +248,7 @@ pub struct ConnectorContribution {
     /// Stable connector identifier.
     pub id: String,
     /// Connector endpoint URL or identifier (format owned by the
-    /// future `aura-plugin-connectors` crate).
+    /// future `aura_plugin::connectors` module).
     pub endpoint: String,
 }
 

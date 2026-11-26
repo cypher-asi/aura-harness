@@ -22,7 +22,7 @@ pub const DEFAULT_MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerConfig {
     /// Stable MCP server identifier. The first-active-wins merge key
-    /// (see [`crate::McpConnectionManager`]).
+    /// (see [`crate::mcp::McpConnectionManager`]).
     pub server_id: String,
     /// Command binary to spawn (resolved verbatim by the OS — see
     /// `aura-plugin-hooks` for the path-resolution policy if the
@@ -37,6 +37,6 @@ pub struct ServerConfig {
     /// not leak into a third-party MCP server.
     pub env: BTreeMap<String, String>,
     /// Per-request wall-clock deadline. A timeout kills the child and
-    /// returns [`crate::McpError::TimedOut`].
+    /// returns [`crate::mcp::McpError::TimedOut`].
     pub request_timeout: Duration,
 }

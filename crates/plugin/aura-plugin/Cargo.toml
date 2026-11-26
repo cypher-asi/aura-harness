@@ -8,21 +8,38 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-aura-plugin-api = { path = "../aura-plugin-api" }
 aura-plugin-hooks = { path = "../aura-plugin-hooks" }
-aura-plugin-mcp = { path = "../aura-plugin-mcp" }
-aura-plugin-connectors = { path = "../aura-plugin-connectors" }
 aura-config = { path = "../../config/aura-config" }
 semver = { version = "1.0", features = ["serde"] }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 walkdir = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 tempfile = { workspace = true }
+
+# Tiny Rust stdio "MCP server" fixture binaries used by the
+# `tests/mcp_echo.rs` integration test. Defining them inside this
+# crate keeps the test portable across Unix and Windows (no per-OS
+# shell script fixtures) and gives the test stable
+# `CARGO_BIN_EXE_<name>` env var paths. They are test fixtures, not
+# shipped binaries: only the root `aura` package is installed.
+[[bin]]
+name = "echo_mcp_server"
+path = "src/bin/echo_mcp_server.rs"
+test = false
+doctest = false
+bench = false
+
+[[bin]]
+name = "silent_mcp_server"
+path = "src/bin/silent_mcp_server.rs"
+test = false
+doctest = false
+bench = false
 
 [lints]
 workspace = true

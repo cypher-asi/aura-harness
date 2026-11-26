@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use crate::error::ConnectorError;
+use super::error::ConnectorError;
 
 /// A single connector contribution. Mirrors the
 /// `[[contributes.connectors]]` shape from a plugin manifest, plus

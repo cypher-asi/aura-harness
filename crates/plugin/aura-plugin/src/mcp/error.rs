@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 /// MCP transport / protocol errors. Surfaced from both
-/// [`crate::McpClient`] (per-request) and [`crate::McpConnectionManager`]
+/// [`crate::mcp::McpClient`] (per-request) and [`crate::mcp::McpConnectionManager`]
 /// (registration / lookup).
 #[derive(Debug, Error)]
 pub enum McpError {

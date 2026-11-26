@@ -38,22 +38,25 @@
 //!   into [`PluginManifest`], and written back to the cache as
 //!   `.aura-plugin.toml`. The original on-disk filename is recorded
 //!   in [`install::InstalledPlugin::source_alias`] for diagnostics.
-//! - **First-party identity**: `aura-plugin-api::PluginId` is the
+//! - **First-party identity**: [`api::PluginId`] is the
 //!   shared identity newtype. We re-export it to keep the
 //!   plugin-pipeline call sites on a single type.
 
 #![forbid(unsafe_code)]
 
+pub mod api;
 pub mod cache;
+pub mod connectors;
 pub mod discover;
 pub mod error;
 pub mod install;
 pub mod manifest;
 pub mod marketplace;
+pub mod mcp;
 pub mod runtime;
 pub mod trust;
 
-pub use aura_plugin_api::{ContributionKind, PluginContributor, PluginId, PluginRoot};
+pub use api::{ContributionKind, PluginContributor, PluginId, PluginRoot};
 
 pub use cache::PluginCache;
 pub use discover::{discover_manifest, DiscoveredManifest, ManifestAlias};

@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use aura_plugin_mcp::{
+use aura_plugin::mcp::{
     McpClient, McpConnectionManager, McpError, ServerConfig, DEFAULT_MCP_REQUEST_TIMEOUT,
 };
 

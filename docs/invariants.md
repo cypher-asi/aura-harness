@@ -464,7 +464,7 @@ Sanctioned `Command::new(...)` call sites:
 | [`crates/surface/aura-app/src/isolation/changes.rs`](../crates/surface/aura-app/src/isolation/changes.rs) | `/compare` workspace copies: carry uncommitted work into a worktree (`diff`, `apply`, `ls-files`), record a baseline tree (`init`, `add`, `write-tree`), diff a run (`diff-index`), apply the chosen run's patch back (`apply`). Escalated subtasks: snapshot the workspace into a scratch index (`rev-parse`, `add`, `write-tree`, `ls-files`) and restore it (`diff-tree`, `read-tree`, `checkout-index`) | Isolation infrastructure, local subcommands only, terminal prompting disabled; no commit/fetch/push; the user's index, `HEAD`, refs and stash are never written; declared exception. Its subcommands are pinned to exactly this list by a check after the `Command::new("git")` band in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh). |
 | [`crates/surface/aura-node/src/gateway/handlers/safe_workspace.rs`](../crates/surface/aura-node/src/gateway/handlers/safe_workspace.rs) | Local worktree, imported-project baseline, shadow checkpoint, restore, and apply lifecycle for explicitly selected hosted Safe Workspaces | Control-plane isolation infrastructure. A closed local subcommand allowlist rejects clone/fetch/pull/push/remote operations and terminal prompting is disabled; declared exception. |
 | [`crates/plugin/aura-plugin-hooks/src/engine.rs`](../crates/plugin/aura-plugin-hooks/src/engine.rs) | Lifecycle hook scripts (PreToolUse, PostToolUse, PermissionRequest, …) | Scrubbed env per §14; never touches `append_entry_*` or `ModelProvider`. |
-| [`crates/plugin/aura-plugin-mcp/src/client.rs`](../crates/plugin/aura-plugin-mcp/src/client.rs) | MCP server stdio JSON-RPC clients | Scrubbed env per §14; tool calls reaching models must still route through the kernel gateway. |
+| [`crates/plugin/aura-plugin/src/mcp/client.rs`](../crates/plugin/aura-plugin/src/mcp/client.rs) | MCP server stdio JSON-RPC clients | Scrubbed env per §14; tool calls reaching models must still route through the kernel gateway. |
 
 ---
 
@@ -865,9 +865,10 @@ covers live prompt and session-state behaviour.
 **Plugins run in a sandboxed external-process surface. They cannot bypass
 the kernel boundary for record writes, model calls, or domain mutations.**
 
-The plugin layer ([`aura-plugin-api`](../crates/plugin/aura-plugin-api/),
-[`-core`](../crates/plugin/aura-plugin/), [`-hooks`](../crates/plugin/aura-plugin-hooks/),
-[`-mcp`](../crates/plugin/aura-plugin-mcp/), [`-connectors`](../crates/plugin/aura-plugin-connectors/))
+The plugin layer ([`aura-plugin`](../crates/plugin/aura-plugin/) with its
+[`api`](../crates/plugin/aura-plugin/src/api.rs), [`mcp`](../crates/plugin/aura-plugin/src/mcp/)
+and [`connectors`](../crates/plugin/aura-plugin/src/connectors/) modules, and
+[`aura-plugin-hooks`](../crates/plugin/aura-plugin-hooks/))
 spawns external processes for lifecycle hooks and MCP servers. Three
 properties hold:
 
@@ -875,7 +876,7 @@ properties hold:
    `AURA_*` credentials, no host secrets). Pinned by
    [`crates/plugin/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs`](../crates/plugin/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs).
    The MCP client in
-   [`crates/plugin/aura-plugin-mcp/src/client.rs`](../crates/plugin/aura-plugin-mcp/src/client.rs)
+   [`crates/plugin/aura-plugin/src/mcp/client.rs`](../crates/plugin/aura-plugin/src/mcp/client.rs)
    applies the same env-clearing discipline.
 2. **No plugin crate touches the §1 surfaces.** No `append_entry_*` call,
    no `.complete(` call, no `DomainApi` mutating method, and no
@@ -884,7 +885,7 @@ properties hold:
    contributions reach the kernel only via the host-driven hook engine
    ([`crates/plugin/aura-plugin-hooks/src/engine.rs`](../crates/plugin/aura-plugin-hooks/src/engine.rs))
    and the connector registry
-   ([`crates/plugin/aura-plugin-connectors/src/registry.rs`](../crates/plugin/aura-plugin-connectors/src/registry.rs)).
+   ([`crates/plugin/aura-plugin/src/connectors/registry.rs`](../crates/plugin/aura-plugin/src/connectors/registry.rs)).
    Promoting this property into the CI band script is a follow-up; today it
    is verifiable by `rg "(append_entry_|\\.complete\\(|Arc<dyn .*Store>)"
    crates/plugin/*/src/` returning empty.
@@ -899,7 +900,7 @@ properties hold:
 **Enforcement:** [`crates/plugin/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs`](../crates/plugin/aura-plugin-hooks/tests/sandbox_env_scrubbing.rs),
 [`crates/surface/aura-node/tests/hook_permission_request_short_circuits.rs`](../crates/surface/aura-node/tests/hook_permission_request_short_circuits.rs),
 [`crates/surface/aura-node/tests/plugin_e2e.rs`](../crates/surface/aura-node/tests/plugin_e2e.rs),
-[`crates/plugin/aura-plugin-connectors/tests/last_wins.rs`](../crates/plugin/aura-plugin-connectors/tests/last_wins.rs).
+[`crates/plugin/aura-plugin/tests/connectors_last_wins.rs`](../crates/plugin/aura-plugin/tests/connectors_last_wins.rs).
 
 ---
 
@@ -1073,7 +1074,7 @@ The following operations intentionally do NOT route through `Kernel::process_*`:
 | Cloud agents: record mirror, machine ledger and project reads ([`crates/surface/aura-app/src/cloud/`](../crates/surface/aura-app/src/cloud/), [`crates/engine/aura-engine-cloud/`](../crates/engine/aura-engine-cloud/), [`crates/surface/aura-node/src/gateway/handlers/cloud.rs`](../crates/surface/aura-node/src/gateway/handlers/cloud.rs)) | **Principle 3 (one writer per agent)** is kept, not bypassed: while an agent runs on its cloud machine, that machine's kernel is its single writer, and routing the copy through the local kernel would make two kernels write one record. The hub mirrors the node's committed entries **verbatim** through the sealed `WriteStore::append_replica_batch`, after `aura_engine_cloud::replica::verify_page` checks agent, contiguous seqs and the hash chain; a bad page writes nothing. The node imports the hub's entries the same way (`POST /v1/sync/import`) before it takes over, and is sealed (`POST /v1/sync/seal/:id`, then `/tx` and `/v1/run` refuse the agent) before the local kernel writes again; seal cancels the node's runs and waits for the agent's processing claim, so the final head is final. Each move is a `SystemKind::Placement` row on the agent's machine ledger, never on the agent's own record, whose next seq belongs to whichever kernel writes after the move. `StoreLedger` appends those and the `SystemKind::Vm` rows to ledger agents (`0://cloud/vm/...`, `0://cloud/project/...`) that no kernel runs. The hub's `git` calls read the project (`rev-parse`, `rev-list`, `diff`, `ls-files`, `config`) and bundle its commits for a machine (`bundle create`); they write only `git apply --3way` of a cloud agent's patch into its own project and a fast-forward `fetch` of the agent's branch, from the bundle its machine made, into the project's branch of the same name (never the branch checked out there); no commit, push, or call to a remote. The node's calls take the patch of its own workspace: `diff` against `refs/aura/base`, with `add` and `write-tree` into a scratch `GIT_INDEX_FILE`, never the agent's index. The scripts the hub runs on a machine start the agent's branch, move `refs/aura/*` and bundle the branch; the agent's own commits and pushes go through its kernel's `git_tool`. Pinned by the §1, §2 and §10 bands in [`scripts/check_invariants.sh`](../scripts/check_invariants.sh) and by `crates/store/aura-store-db/tests/replica_batch.rs`. |
 | Read-only `DomainApi` calls (`list_tasks`, `get_project`, `get_spec`) | No external mutation. Only mutating calls require kernel mediation. |
 | Plugin hook subprocesses ([`crates/plugin/aura-plugin-hooks/src/engine.rs`](../crates/plugin/aura-plugin-hooks/src/engine.rs)) | Lifecycle hook scripts run with scrubbed env (§14). They never touch `append_entry_*`, `ModelProvider`, or `DomainApi`. Their only kernel-visible effect is the `PermissionRequest` carve-out 5b in §4. |
-| MCP server stdio child processes ([`crates/plugin/aura-plugin-mcp/src/client.rs`](../crates/plugin/aura-plugin-mcp/src/client.rs)) | First-active-wins JSON-RPC clients run with cleared env and per-request timeouts (§14). MCP-routed tool calls that reach a model must still pass through the kernel gateway. |
+| MCP server stdio child processes ([`crates/plugin/aura-plugin/src/mcp/client.rs`](../crates/plugin/aura-plugin/src/mcp/client.rs)) | First-active-wins JSON-RPC clients run with cleared env and per-request timeouts (§14). MCP-routed tool calls that reach a model must still pass through the kernel gateway. |
 | Generation proxy ([`crates/surface/aura-node/src/gateway/session/generation.rs`](../crates/surface/aura-node/src/gateway/session/generation.rs)) for image/video/3D requests | Pure SSE proxy to `aura-router`; the session does not mutate local state or consume LLM credits. All remote calls use bounded `reqwest` connect/read timeouts. When this surface starts spending credits or persisting artifacts locally it **must** move behind a `KernelGenerationGateway`. **Regression guard:** [`crates/surface/aura-node/tests/generation_proxy_guard.rs`](../crates/surface/aura-node/tests/generation_proxy_guard.rs) reads `gateway/session/generation.rs` from disk and fails if `RecordEntry`, `Kernel`, `ModelProvider`, or any `append_entry_*` helper appears in the source. |
 
 This list is frozen. A new entry requires a **principle-level

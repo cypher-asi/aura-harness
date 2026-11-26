@@ -6,7 +6,7 @@
 //! active-wins surface ([`ConnectorRegistry::register`]) is
 //! intentionally left in place — `replace`/`remove` are additive.
 
-use aura_plugin_connectors::{ConnectorEntry, ConnectorRegistry};
+use aura_plugin::connectors::{ConnectorEntry, ConnectorRegistry};
 
 fn entry(id: &str, plugin: &str, endpoint: &str) -> ConnectorEntry {
     ConnectorEntry {

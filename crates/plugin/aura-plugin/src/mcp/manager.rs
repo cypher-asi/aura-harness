@@ -1,4 +1,4 @@
-//! Pool of [`crate::McpClient`] connections keyed by `server_id`.
+//! Pool of [`crate::mcp::McpClient`] connections keyed by `server_id`.
 //!
 //! ## Invariants ([rules.md §13])
 //!
@@ -7,7 +7,7 @@
 //!   error with [`McpError::DuplicateServer`] (the caller may choose
 //!   to downgrade to a warn-log).
 //! - Each client is spawned with the request timeout from
-//!   [`crate::ServerConfig`]. Timeout kills the child and returns
+//!   [`crate::mcp::ServerConfig`]. Timeout kills the child and returns
 //!   [`McpError::TimedOut`] so a silent server cannot pin the pool.
 //! - `with_client` runs a caller closure against the live client
 //!   inside the same lock as the slot lookup. This keeps the
@@ -17,9 +17,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::client::McpClient;
-use crate::config::ServerConfig;
-use crate::error::McpError;
+use crate::mcp::client::McpClient;
+use crate::mcp::config::ServerConfig;
+use crate::mcp::error::McpError;
 
 /// In-process pool of MCP clients.
 #[derive(Default)]
@@ -124,7 +124,7 @@ mod tests {
             command: "this-binary-does-not-exist-aura-mcp-test".to_string(),
             args: vec![],
             env: BTreeMap::new(),
-            request_timeout: crate::DEFAULT_MCP_REQUEST_TIMEOUT,
+            request_timeout: crate::mcp::DEFAULT_MCP_REQUEST_TIMEOUT,
         }
     }
 

@@ -1,6 +1,4 @@
-//! # aura-plugin-mcp
-//!
-//! Layer: plugin
+//! # `aura_plugin::mcp`
 //!
 //! Stdio Model-Context-Protocol client + first-active-wins connection
 //! manager for first-party Aura plugins. Phase 4c delivered the
@@ -40,8 +38,6 @@
 //! - Every JSON-RPC request has a per-request timeout
 //!   ([`DEFAULT_MCP_REQUEST_TIMEOUT`] by default). On timeout the
 //!   child is killed before [`McpError::TimedOut`] is returned.
-
-#![forbid(unsafe_code)]
 
 pub mod client;
 pub mod config;

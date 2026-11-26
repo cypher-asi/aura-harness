@@ -9,7 +9,7 @@
 //!   [`McpError::Disconnected`]. Phase 4c does not auto-restart; the
 //!   manager owns that policy in Phase 8+.
 //! - The child env is explicitly cleared and re-populated from
-//!   [`crate::ServerConfig::env`]. No parent-env inheritance.
+//!   [`crate::mcp::ServerConfig::env`]. No parent-env inheritance.
 //! - Every request has a wall-clock timeout. On timeout the child is
 //!   killed so a silent server cannot wedge the manager indefinitely.
 //!
@@ -28,8 +28,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::config::DEFAULT_MCP_REQUEST_TIMEOUT;
-use crate::error::McpError;
+use crate::mcp::config::DEFAULT_MCP_REQUEST_TIMEOUT;
+use crate::mcp::error::McpError;
 
 /// Stdio JSON-RPC client. One client owns one child process.
 pub struct McpClient {

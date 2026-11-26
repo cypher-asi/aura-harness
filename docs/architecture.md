@@ -32,7 +32,7 @@ Within a layer, crates are listed leaves first.
 | store    | Durable storage: content-addressed snapshots, the record log and its read seam, RocksDB. | `aura-store-snapshot`, `aura-store-record`, `aura-store-db` |
 | model    | LLM provider trait and streaming completions. | `aura-model` |
 | context  | Read-only context assembly: prompts, compaction, skills, memory. | `aura-context-prompts`, `aura-context-compaction`, `aura-context-skills`, `aura-context-memory` |
-| plugin   | Plugin manifests and install, the in-process API, hooks, MCP, connectors. | `aura-plugin-api`, `aura-plugin-hooks`, `aura-plugin-mcp`, `aura-plugin-connectors`, `aura-plugin` |
+| plugin   | Plugin manifests and install, the in-process API, hooks, MCP, connectors. | `aura-plugin-hooks`, `aura-plugin` |
 | exec     | Tool seam traits, the HTTP `DomainApi`, the tool catalog and executor. | `aura-exec-traits`, `aura-exec-domain-http`, `aura-exec-tools` |
 | agent    | One agent: kernel, turn loop, steering, subagent derivation, run traces. | `aura-agent-subagent`, `aura-agent-steering`, `aura-agent-kernel`, `aura-agent`, `aura-agent-trace` |
 | gate     | Gate, the router behind the `gate` model id: routing, evidence, follow-ups, judges, the attempt log, `/compare` arithmetic, the lead's limits, and Gate while the app runs. | `aura-gate-evidence`, `aura-gate-route`, `aura-gate-followup`, `aura-gate-judge`, `aura-gate-attempts`, `aura-gate-compare`, `aura-gate-lead`, `aura-gate-live`, `aura-gate` |
@@ -347,25 +347,17 @@ Key types: `MemoryManager`, `MemoryStore` / `MemoryStoreApi`, `MemoryWritePipeli
 
 The plugin runtime. Splits into a contributor API surface (first-party plugins shipped in-tree), the runtime surfaces — hooks, MCP, connectors — that the agent loop calls, and the on-disk manifest / install / cache / marketplace pipeline.
 
-#### [`aura-plugin-api`](../crates/plugin/aura-plugin-api)
-
-In-process contributor trait surface for first-party plugins. `PluginContributor`, `ContributionKind`, `PluginRoot`, `PluginId`. Not a dynamic loader — plugins are compiled in and registered at startup.
-
 #### [`aura-plugin-hooks`](../crates/plugin/aura-plugin-hooks)
 
 Hook engine: closed `HookEvent` taxonomy (10 Codex/Claude-aligned lifecycle events), `HookEngine`, `HookOutcome`, and the sandboxed env scrubbing for hook commands. Hooks fire at every documented agent-loop lifecycle point; `SubagentStart` / `SubagentStop` are defined but not yet fired by the agent host.
 
-#### [`aura-plugin-mcp`](../crates/plugin/aura-plugin-mcp)
-
-Stdio MCP JSON-RPC client and a first-active-wins connection manager keyed by server id. Notable types: `McpClient`, `McpConnectionManager`, `ServerConfig`, `McpError`. The manager clears child environments before spawn and applies a per-request timeout so silent plugin-owned servers cannot pin the pool indefinitely.
-
-#### [`aura-plugin-connectors`](../crates/plugin/aura-plugin-connectors)
-
-Thread-safe registry of plugin-contributed external endpoints. `ConnectorRegistry`, `ConnectorEntry`, `ConnectorError`. Last-wins registration semantics covered by [crates/plugin/aura-plugin-connectors/tests/last_wins.rs](../crates/plugin/aura-plugin-connectors/tests/last_wins.rs).
-
 #### [`aura-plugin`](../crates/plugin/aura-plugin)
 
-Declarative manifest schema, install pipeline, cache layout under `AURA_HOME/plugins/`, and marketplace lookup. Owns `PluginManifest`, `install`, `marketplace`, and the trust-prompt flow. Consumed by `aura plugins install/list/enable/disable`.
+Declarative manifest schema, install pipeline, cache layout under `AURA_HOME/plugins/`, and marketplace lookup. Owns `PluginManifest`, `install`, `marketplace`, and the trust-prompt flow. Consumed by `aura plugins install/list/enable/disable`. It also holds the contributor API and the MCP and connector runtime surfaces as modules:
+
+- [`api`](../crates/plugin/aura-plugin/src/api.rs): in-process contributor trait surface for first-party plugins. `PluginContributor`, `ContributionKind`, `PluginRoot`, `PluginId` (re-exported at the crate root). Not a dynamic loader — plugins are compiled in and registered at startup.
+- [`mcp`](../crates/plugin/aura-plugin/src/mcp): stdio MCP JSON-RPC client and a first-active-wins connection manager keyed by server id. Notable types: `McpClient`, `McpConnectionManager`, `ServerConfig`, `McpError`. The manager clears child environments before spawn and applies a per-request timeout so silent plugin-owned servers cannot pin the pool indefinitely.
+- [`connectors`](../crates/plugin/aura-plugin/src/connectors): thread-safe registry of plugin-contributed external endpoints. `ConnectorRegistry`, `ConnectorEntry`, `ConnectorError`. Last-wins registration semantics covered by [crates/plugin/aura-plugin/tests/connectors_last_wins.rs](../crates/plugin/aura-plugin/tests/connectors_last_wins.rs).
 
 ---
 

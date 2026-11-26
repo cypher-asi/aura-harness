@@ -1,15 +1,13 @@
-//! # aura-plugin-api
-//!
-//! Layer: plugin
+//! # `aura_plugin::api`
 //!
 //! In-process contributor trait surface for first-party plugins.
 //!
-//! **Scope** (Phase 4b): This crate is NOT a dynamic plugin loader.
+//! **Scope** (Phase 4b): This module is NOT a dynamic plugin loader.
 //! It defines the Rust trait surface that first-party plugins compile
 //! against. On-disk plugin manifests (`.aura-plugin`, `.codex-plugin`,
 //! `.claude-plugin`) flow through `aura-plugin` and contribute
-//! via the runtime integration crates (`aura-plugin-hooks`,
-//! `aura-plugin-mcp`, `aura-plugin-connectors`).
+//! via the runtime integrations (`aura-plugin-hooks`,
+//! [`crate::mcp`], [`crate::connectors`]).
 //!
 //! ## Invariants ([rules.md §13])
 //!
@@ -20,11 +18,9 @@
 //!   for downstream contributors. The `closed_enum_invariant` test in
 //!   this file deliberately matches every variant without a `_`
 //!   wildcard so the compiler catches a missed case.
-//! - This crate has zero `aura-*` deps. It sits at the bottom of the
-//!   plugin layer and is consumed by `aura-plugin` for shared
-//!   identity types.
-
-#![forbid(unsafe_code)]
+//! - This module has zero `aura-*` deps. It sits at the bottom of the
+//!   plugin layer and is consumed by the rest of `aura-plugin` for
+//!   shared identity types.
 
 use std::path::PathBuf;
 

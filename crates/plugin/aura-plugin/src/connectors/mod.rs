@@ -1,6 +1,4 @@
-//! # aura-plugin-connectors
-//!
-//! Layer: plugin
+//! # `aura_plugin::connectors`
 //!
 //! Connector registry for plugin-contributed external endpoints.
 //! Phase 4c shipped registration + lookup; later phases materialise
@@ -26,8 +24,6 @@
 //!   Callers choose merge policy explicitly: [`ConnectorRegistry::register`]
 //!   rejects duplicates, while [`ConnectorRegistry::replace`] overwrites
 //!   an existing entry and returns the displaced connector for audit logs.
-
-#![forbid(unsafe_code)]
 
 pub mod error;
 pub mod registry;

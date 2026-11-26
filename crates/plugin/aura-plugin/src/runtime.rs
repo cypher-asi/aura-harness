@@ -6,10 +6,10 @@
 //!
 //! - [`aura_plugin_hooks::HookEngine`] populated with the manifest's
 //!   `[[contributes.hooks]]` entries.
-//! - [`aura_plugin_mcp::McpConnectionManager`] populated with the
+//! - [`crate::mcp::McpConnectionManager`] populated with the
 //!   manifest's `[[contributes.mcp]]` entries (first-active-wins
 //!   merge by `server_id`).
-//! - [`aura_plugin_connectors::ConnectorRegistry`] populated with
+//! - [`crate::connectors::ConnectorRegistry`] populated with
 //!   the manifest's `[[contributes.connectors]]` entries (first-
 //!   active-wins by `id`).
 //!
@@ -49,16 +49,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aura_config::PluginsConfig;
-use aura_plugin_connectors::{ConnectorEntry, ConnectorRegistry};
 use aura_plugin_hooks::{HookEngine, HookEvent, PluginLoadFailure, PluginRef, RegisteredHook};
-use aura_plugin_mcp::{
-    McpConnectionManager, ServerConfig as McpServerConfig, DEFAULT_MCP_REQUEST_TIMEOUT,
-};
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
 use crate::cache::PluginCache;
+use crate::connectors::{ConnectorEntry, ConnectorRegistry};
 use crate::manifest::PluginManifest;
+use crate::mcp::{
+    McpConnectionManager, ServerConfig as McpServerConfig, DEFAULT_MCP_REQUEST_TIMEOUT,
+};
 
 /// Result of a [`load_enabled_plugins`] call. The four subsystem
 /// handles are `Arc`-wrapped so the caller can clone them across
