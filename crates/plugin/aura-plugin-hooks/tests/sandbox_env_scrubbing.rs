@@ -97,23 +97,45 @@ fn injected(home: &std::path::Path, root: &std::path::Path) -> InjectedEnv {
     }
 }
 
+/// Representative secrets planted in the parent env; every key must be
+/// absent from the hook child's env.
+const PLANTED_SECRETS: [(&str, &str); 13] = [
+    ("AWS_SECRET_ACCESS_KEY", "akia-fake-leak"),
+    ("GCP_SERVICE_ACCOUNT", "gcp-fake-leak"),
+    ("AZURE_CLIENT_SECRET", "azure-fake-leak"),
+    ("OPENAI_API_KEY", "sk-fake-leak"),
+    ("ANTHROPIC_API_KEY", "sk-ant-fake-leak"),
+    ("GOOGLE_API_KEY", "gak-fake-leak"),
+    ("KUBECONFIG", "/etc/kube/config"),
+    ("SSH_AUTH_SOCK", "/tmp/ssh.sock"),
+    ("DOCKER_HOST", "tcp://example:1234"),
+    ("MY_GITHUB_TOKEN", "ghp-fake-leak"),
+    ("DB_HMAC_SECRET", "fake-leak"),
+    ("ROOT_PASSWORD", "fake-leak"),
+    ("APP_SIGNING_KEY", "fake-leak"),
+];
+
+fn plant_secrets() -> Vec<EnvVarGuard> {
+    PLANTED_SECRETS
+        .iter()
+        .map(|(key, value)| set_test_env(key, value))
+        .collect()
+}
+
+fn assert_env_values(observed: &BTreeMap<String, String>, expected: &[(&str, &str)]) {
+    for (key, value) in expected {
+        assert_eq!(
+            observed.get(*key).map(String::as_str),
+            Some(*value),
+            "unexpected value for {key}"
+        );
+    }
+}
+
 #[test]
 fn sandbox_env_scrubbing_removes_secrets_and_injects_canonicals() {
     let _lock = ENV_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // Plant a representative set of secrets in the parent env.
-    let _g_aws = set_test_env("AWS_SECRET_ACCESS_KEY", "akia-fake-leak");
-    let _g_gcp = set_test_env("GCP_SERVICE_ACCOUNT", "gcp-fake-leak");
-    let _g_azure = set_test_env("AZURE_CLIENT_SECRET", "azure-fake-leak");
-    let _g_openai = set_test_env("OPENAI_API_KEY", "sk-fake-leak");
-    let _g_anthropic = set_test_env("ANTHROPIC_API_KEY", "sk-ant-fake-leak");
-    let _g_google = set_test_env("GOOGLE_API_KEY", "gak-fake-leak");
-    let _g_kube = set_test_env("KUBECONFIG", "/etc/kube/config");
-    let _g_ssh = set_test_env("SSH_AUTH_SOCK", "/tmp/ssh.sock");
-    let _g_docker = set_test_env("DOCKER_HOST", "tcp://example:1234");
-    let _g_token = set_test_env("MY_GITHUB_TOKEN", "ghp-fake-leak");
-    let _g_secret = set_test_env("DB_HMAC_SECRET", "fake-leak");
-    let _g_password = set_test_env("ROOT_PASSWORD", "fake-leak");
-    let _g_key = set_test_env("APP_SIGNING_KEY", "fake-leak");
+    let _secret_guards = plant_secrets();
 
     let dir = tempfile::TempDir::new().unwrap();
     let aura_home = dir.path().join(".aura");
@@ -125,66 +147,37 @@ fn sandbox_env_scrubbing_removes_secrets_and_injects_canonicals() {
     let observed = parse_env_dump(&dump);
 
     // (a) secrets must NOT appear in the child env.
-    for forbidden in [
-        "AWS_SECRET_ACCESS_KEY",
-        "GCP_SERVICE_ACCOUNT",
-        "AZURE_CLIENT_SECRET",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY",
-        "KUBECONFIG",
-        "SSH_AUTH_SOCK",
-        "DOCKER_HOST",
-        "MY_GITHUB_TOKEN",
-        "DB_HMAC_SECRET",
-        "ROOT_PASSWORD",
-        "APP_SIGNING_KEY",
-    ] {
+    for (forbidden, _) in PLANTED_SECRETS {
         assert!(
             !observed.contains_key(forbidden),
             "secret env var '{forbidden}' leaked into hook child env"
         );
     }
 
-    // (b) canonical Aura vars present with expected values.
     let aura_home_str = aura_home.to_string_lossy().into_owned();
     let plugin_root_str = plugin_root.to_string_lossy().into_owned();
-    assert_eq!(observed.get("AURA_HOME"), Some(&aura_home_str));
-    assert_eq!(observed.get("PLUGIN_ROOT"), Some(&plugin_root_str));
-    assert_eq!(
-        observed.get("AURA_SESSION_ID").map(String::as_str),
-        Some("sess-X")
+    // (b) canonical Aura vars present with expected values.
+    assert_env_values(
+        &observed,
+        &[
+            ("AURA_HOME", &aura_home_str),
+            ("PLUGIN_ROOT", &plugin_root_str),
+            ("AURA_SESSION_ID", "sess-X"),
+            ("AURA_AGENT_ID", "agent-Y"),
+            ("AURA_PARENT_AGENT_ID", "parent-Z"),
+            ("AURA_EVENT", "pre_tool_use"),
+        ],
     );
-    assert_eq!(
-        observed.get("AURA_AGENT_ID").map(String::as_str),
-        Some("agent-Y")
-    );
-    assert_eq!(
-        observed.get("AURA_PARENT_AGENT_ID").map(String::as_str),
-        Some("parent-Z")
-    );
-    assert_eq!(
-        observed.get("AURA_EVENT").map(String::as_str),
-        Some("pre_tool_use")
-    );
-
     // (c) Codex / Claude aliases mirror the Aura values.
-    assert_eq!(observed.get("CODEX_HOME"), Some(&aura_home_str));
-    assert_eq!(observed.get("CLAUDE_PLUGIN_ROOT"), Some(&plugin_root_str));
-    assert_eq!(
-        observed.get("CODEX_SESSION_ID").map(String::as_str),
-        Some("sess-X")
-    );
-    assert_eq!(
-        observed.get("CODEX_AGENT_ID").map(String::as_str),
-        Some("agent-Y")
-    );
-    assert_eq!(
-        observed.get("CODEX_PARENT_ID").map(String::as_str),
-        Some("parent-Z")
-    );
-    assert_eq!(
-        observed.get("CODEX_EVENT").map(String::as_str),
-        Some("pre_tool_use")
+    assert_env_values(
+        &observed,
+        &[
+            ("CODEX_HOME", &aura_home_str),
+            ("CLAUDE_PLUGIN_ROOT", &plugin_root_str),
+            ("CODEX_SESSION_ID", "sess-X"),
+            ("CODEX_AGENT_ID", "agent-Y"),
+            ("CODEX_PARENT_ID", "parent-Z"),
+            ("CODEX_EVENT", "pre_tool_use"),
+        ],
     );
 }

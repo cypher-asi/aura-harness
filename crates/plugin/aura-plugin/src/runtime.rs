@@ -146,13 +146,7 @@ pub fn load_enabled_plugins(
     let cache = PluginCache::new(aura_home.join("plugins"));
     let plugin_ids = cache.list_plugins().unwrap_or_default();
 
-    let hook_engine = Arc::new(HookEngine::new());
-    let mcp = Arc::new(McpConnectionManager::new());
-    let connectors = Arc::new(ConnectorRegistry::new());
-    let mut skill_roots = Vec::new();
-    let mut enabled = Vec::new();
-    let mut failures = Vec::new();
-
+    let mut runtime = PluginRuntime::default();
     for plugin_id in plugin_ids {
         // Honour [plugins] config: a plugin must be installed,
         // enabled, and trusted to participate.
@@ -163,66 +157,35 @@ pub fn load_enabled_plugins(
             );
             continue;
         }
-
-        let active_version = match cache.active_version(&plugin_id) {
-            Ok(Some(v)) => v,
-            Ok(None) => {
-                debug!(plugin_id, "no active version pointer; skipping");
-                continue;
-            }
-            Err(err) => {
-                failures.push(PluginLoadFailure {
-                    plugin_id: plugin_id.clone(),
-                    reason: format!("read active version: {err}"),
-                });
-                continue;
-            }
-        };
-
-        let version_dir = cache.version_dir(&plugin_id, &active_version);
-        let manifest_path = version_dir.join(".aura-plugin.toml");
-        let manifest = match read_manifest(&manifest_path) {
-            Ok(m) => m,
-            Err(reason) => {
-                failures.push(PluginLoadFailure {
-                    plugin_id: plugin_id.clone(),
-                    reason,
-                });
-                continue;
-            }
-        };
-
-        let plugin_ref = PluginRef {
-            id: manifest.id.as_str().to_string(),
-            version: manifest.version.to_string(),
-        };
-
-        materialise_one(
-            &plugin_ref,
-            &manifest,
-            &version_dir,
-            &hook_engine,
-            &mcp,
-            &connectors,
-            &mut skill_roots,
-        );
-
-        info!(
-            plugin_id = %plugin_ref.id,
-            version = %plugin_ref.version,
-            "plugin materialised"
-        );
-        enabled.push(plugin_ref);
+        match locate_active_manifest(&cache, &plugin_id) {
+            Ok(Some((version_dir, manifest))) => runtime.materialise(&manifest, &version_dir),
+            Ok(None) => {}
+            Err(reason) => runtime
+                .load_failures
+                .push(PluginLoadFailure { plugin_id, reason }),
+        }
     }
+    Ok(runtime)
+}
 
-    Ok(PluginRuntime {
-        hook_engine,
-        mcp,
-        connectors,
-        skill_roots,
-        enabled,
-        load_failures: failures,
-    })
+/// Resolve a plugin's active version directory and parse its
+/// manifest. `Ok(None)` means the plugin has no active version
+/// pointer; `Err` carries the load-failure reason.
+fn locate_active_manifest(
+    cache: &PluginCache,
+    plugin_id: &str,
+) -> Result<Option<(PathBuf, PluginManifest)>, String> {
+    let active_version = match cache.active_version(plugin_id) {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            debug!(plugin_id, "no active version pointer; skipping");
+            return Ok(None);
+        }
+        Err(err) => return Err(format!("read active version: {err}")),
+    };
+    let version_dir = cache.version_dir(plugin_id, &active_version);
+    let manifest = read_manifest(&version_dir.join(".aura-plugin.toml"))?;
+    Ok(Some((version_dir, manifest)))
 }
 
 fn plugin_enabled(plugin_id: &str, cfg: &PluginsConfig) -> bool {
@@ -241,18 +204,31 @@ fn read_manifest(path: &Path) -> Result<PluginManifest, String> {
     PluginManifest::from_toml_str(&body).map_err(|e| format!("parse manifest: {e}"))
 }
 
-fn materialise_one(
-    plugin_ref: &PluginRef,
-    manifest: &PluginManifest,
-    plugin_root: &Path,
-    hook_engine: &HookEngine,
-    mcp: &McpConnectionManager,
-    connectors: &ConnectorRegistry,
-    skill_roots: &mut Vec<PathBuf>,
-) {
-    // (1) Skills: each contribution names a relative `path` under the
-    //     plugin root; the *parent* directory is what
-    //     `add_plugin_roots` discovers.
+impl PluginRuntime {
+    /// Wire one plugin's contributions into the runtime and record it
+    /// as enabled.
+    fn materialise(&mut self, manifest: &PluginManifest, plugin_root: &Path) {
+        let plugin_ref = PluginRef {
+            id: manifest.id.as_str().to_string(),
+            version: manifest.version.to_string(),
+        };
+        add_skill_roots(manifest, plugin_root, &mut self.skill_roots);
+        register_hooks(&plugin_ref, manifest, plugin_root, &self.hook_engine);
+        register_mcp_servers(&plugin_ref, manifest, plugin_root, &self.mcp);
+        register_connectors(&plugin_ref, manifest, &self.connectors);
+        info!(
+            plugin_id = %plugin_ref.id,
+            version = %plugin_ref.version,
+            "plugin materialised"
+        );
+        self.enabled.push(plugin_ref);
+    }
+}
+
+/// Skills: each contribution names a relative `path` under the
+/// plugin root; the *parent* directory is what `add_plugin_roots`
+/// discovers.
+fn add_skill_roots(manifest: &PluginManifest, plugin_root: &Path, skill_roots: &mut Vec<PathBuf>) {
     for skill in &manifest.contributes.skills {
         let abs = plugin_root.join(&skill.path);
         let parent = abs
@@ -262,10 +238,17 @@ fn materialise_one(
             skill_roots.push(parent);
         }
     }
+}
 
-    // (2) Hooks: each contribution registers a process. Unknown
-    //     event names are logged + skipped (matches Codex behaviour
-    //     referenced in the plan).
+/// Hooks: each contribution registers a process. Unknown event names
+/// are logged + skipped (matches Codex behaviour referenced in the
+/// plan).
+fn register_hooks(
+    plugin_ref: &PluginRef,
+    manifest: &PluginManifest,
+    plugin_root: &Path,
+    hook_engine: &HookEngine,
+) {
     for hook in &manifest.contributes.hooks {
         let Some(event) = parse_hook_event(&hook.event) else {
             warn!(
@@ -284,10 +267,17 @@ fn materialise_one(
             env: BTreeMap::new(),
         });
     }
+}
 
-    // (3) MCP servers: first-active-wins on `server_id`. We pre-pend
-    //     the plugin root for relative `command` paths so the spawn
-    //     resolves the bundled binary.
+/// MCP servers: first-active-wins on `server_id`. We pre-pend the
+/// plugin root for relative `command` paths so the spawn resolves the
+/// bundled binary.
+fn register_mcp_servers(
+    plugin_ref: &PluginRef,
+    manifest: &PluginManifest,
+    plugin_root: &Path,
+    mcp: &McpConnectionManager,
+) {
     for mcp_entry in &manifest.contributes.mcp {
         let cfg = McpServerConfig {
             server_id: mcp_entry.server_id.clone(),
@@ -306,13 +296,19 @@ fn materialise_one(
             // Continue — duplicates are documented as warn + skip.
         }
     }
+}
 
-    // (4) Connectors: last-wins per the Phase 8 spec, fully wired
-    //     in Phase 10. Plugin-supplied contributions replace any
-    //     existing entry under the same connector id (built-in or
-    //     earlier-plugin) via [`ConnectorRegistry::replace`]. The
-    //     displaced entry is logged at `info!` so operators can
-    //     trace where a connector slot's owner changed.
+/// Connectors: last-wins per the Phase 8 spec, fully wired in Phase
+/// 10. Plugin-supplied contributions replace any existing entry under
+/// the same connector id (built-in or earlier-plugin) via
+/// [`ConnectorRegistry::replace`]. The displaced entry is logged at
+/// `info!` so operators can trace where a connector slot's owner
+/// changed.
+fn register_connectors(
+    plugin_ref: &PluginRef,
+    manifest: &PluginManifest,
+    connectors: &ConnectorRegistry,
+) {
     for connector in &manifest.contributes.connectors {
         let entry = ConnectorEntry {
             id: connector.id.clone(),

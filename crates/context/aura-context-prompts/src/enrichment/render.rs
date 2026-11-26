@@ -61,49 +61,12 @@ pub fn render_block(
     }
 
     if !paths.is_empty() {
-        out.push_str("Files mentioned in the task that exist in the workspace:\n");
-        for (i, p) in paths.iter().enumerate() {
-            let body_kept = *path_bodies_kept.get(i).unwrap_or(&false);
-            if body_kept && p.head.is_some() {
-                let _ = writeln!(
-                    out,
-                    "- `{}` (file head, lines 1-{} below)",
-                    p.path, p.head_line_count
-                );
-            } else {
-                let _ = writeln!(out, "- `{}`", p.path);
-            }
-        }
-        out.push('\n');
-
-        for (i, p) in paths.iter().enumerate() {
-            if !*path_bodies_kept.get(i).unwrap_or(&false) {
-                continue;
-            }
-            let Some(head) = &p.head else {
-                continue;
-            };
-            let _ = writeln!(out, "### {} (lines 1-{})", p.path, p.head_line_count);
-            out.push_str("```rust\n");
-            out.push_str(head);
-            if !head.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str("```\n\n");
-        }
+        render_path_list(&mut out, paths, path_bodies_kept);
+        render_path_heads(&mut out, paths, path_bodies_kept);
     }
 
     if !symbols.is_empty() {
-        out.push_str("Symbols referenced in the task:\n");
-        for s in symbols {
-            if let Some(first) = s.hits.first() {
-                let _ = writeln!(out, "- `{}` -> {}:{}", s.symbol, first.path, first.line);
-                for extra in s.hits.iter().skip(1) {
-                    let _ = writeln!(out, "  also: {}:{}", extra.path, extra.line);
-                }
-            }
-        }
-        out.push('\n');
+        render_symbols(&mut out, symbols);
     }
 
     out.push_str(
@@ -111,4 +74,55 @@ pub fn render_block(
          directory or re-grep for these symbols.\n",
     );
     out
+}
+
+fn is_body_kept(path_bodies_kept: &[bool], index: usize) -> bool {
+    *path_bodies_kept.get(index).unwrap_or(&false)
+}
+
+fn render_path_list(out: &mut String, paths: &[ResolvedPath], path_bodies_kept: &[bool]) {
+    out.push_str("Files mentioned in the task that exist in the workspace:\n");
+    for (i, p) in paths.iter().enumerate() {
+        if is_body_kept(path_bodies_kept, i) && p.head.is_some() {
+            let _ = writeln!(
+                out,
+                "- `{}` (file head, lines 1-{} below)",
+                p.path, p.head_line_count
+            );
+        } else {
+            let _ = writeln!(out, "- `{}`", p.path);
+        }
+    }
+    out.push('\n');
+}
+
+fn render_path_heads(out: &mut String, paths: &[ResolvedPath], path_bodies_kept: &[bool]) {
+    for (i, p) in paths.iter().enumerate() {
+        if !is_body_kept(path_bodies_kept, i) {
+            continue;
+        }
+        let Some(head) = &p.head else {
+            continue;
+        };
+        let _ = writeln!(out, "### {} (lines 1-{})", p.path, p.head_line_count);
+        out.push_str("```rust\n");
+        out.push_str(head);
+        if !head.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("```\n\n");
+    }
+}
+
+fn render_symbols(out: &mut String, symbols: &[ResolvedSymbol]) {
+    out.push_str("Symbols referenced in the task:\n");
+    for s in symbols {
+        if let Some(first) = s.hits.first() {
+            let _ = writeln!(out, "- `{}` -> {}:{}", s.symbol, first.path, first.line);
+            for extra in s.hits.iter().skip(1) {
+                let _ = writeln!(out, "  also: {}:{}", extra.path, extra.line);
+            }
+        }
+    }
+    out.push('\n');
 }

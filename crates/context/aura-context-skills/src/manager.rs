@@ -373,32 +373,10 @@ impl SkillManager {
         let mut seen_cmds = std::collections::HashSet::new();
 
         for inst in &installed {
-            let (inst_paths, inst_cmds) =
-                if inst.approved_paths.is_empty() && inst.approved_commands.is_empty() {
-                    // Fall back to the skill's frontmatter declarations when the
-                    // installation record has no explicit approvals (pre-permission
-                    // installs or UI that hasn't implemented the approval prompt yet).
-                    match self.registry.get(&inst.skill_name) {
-                        Ok(skill) => (
-                            skill.frontmatter.allowed_paths.clone().unwrap_or_default(),
-                            skill
-                                .frontmatter
-                                .allowed_commands
-                                .clone()
-                                .unwrap_or_default(),
-                        ),
-                        Err(_) => (Vec::new(), Vec::new()),
-                    }
-                } else {
-                    (inst.approved_paths.clone(), inst.approved_commands.clone())
-                };
+            let (inst_paths, inst_cmds) = self.effective_permissions(inst);
 
             for p in &inst_paths {
-                let expanded = if let Some(ref h) = home {
-                    p.replace('~', &h.display().to_string())
-                } else {
-                    p.clone()
-                };
+                let expanded = expand_home(p, home.as_deref());
                 if seen_paths.insert(expanded.clone()) {
                     paths.push(std::path::PathBuf::from(expanded));
                 }
@@ -414,6 +392,38 @@ impl SkillManager {
             extra_paths: paths,
             extra_commands: commands,
         }
+    }
+
+    /// The `(paths, commands)` an installation grants: its explicit
+    /// approvals, or the skill's frontmatter declarations when it has none.
+    fn effective_permissions(&self, inst: &SkillInstallation) -> (Vec<String>, Vec<String>) {
+        if inst.approved_paths.is_empty() && inst.approved_commands.is_empty() {
+            // Fall back to the skill's frontmatter declarations when the
+            // installation record has no explicit approvals (pre-permission
+            // installs or UI that hasn't implemented the approval prompt yet).
+            match self.registry.get(&inst.skill_name) {
+                Ok(skill) => (
+                    skill.frontmatter.allowed_paths.clone().unwrap_or_default(),
+                    skill
+                        .frontmatter
+                        .allowed_commands
+                        .clone()
+                        .unwrap_or_default(),
+                ),
+                Err(_) => (Vec::new(), Vec::new()),
+            }
+        } else {
+            (inst.approved_paths.clone(), inst.approved_commands.clone())
+        }
+    }
+}
+
+/// Replace every `~` in `path` with the home directory, when known.
+fn expand_home(path: &str, home: Option<&std::path::Path>) -> String {
+    if let Some(h) = home {
+        path.replace('~', &h.display().to_string())
+    } else {
+        path.to_string()
     }
 }
 

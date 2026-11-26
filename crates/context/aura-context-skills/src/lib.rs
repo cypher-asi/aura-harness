@@ -44,6 +44,8 @@
 //! once plugins are introduced) can be threaded through without
 //! breaking the public API at that boundary.
 
+#![deny(clippy::too_many_lines)]
+
 pub mod activation;
 pub mod error;
 pub mod install;

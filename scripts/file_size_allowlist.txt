@@ -33,7 +33,6 @@ crates/context/aura-context-memory/src/store.rs
 crates/context/aura-context-memory/src/store_tests.rs
 crates/context/aura-context-memory/src/write_pipeline.rs
 crates/context/aura-context-memory/tests/turn_summary_roundtrip.rs
-crates/context/aura-context-prompts/src/system/tests.rs
 crates/engine/aura-engine-automaton/src/builtins/dev_loop/tests.rs
 crates/engine/aura-engine-automaton/src/builtins/task_refinement/tests.rs
 crates/engine/aura-engine-cloud/src/boxd.rs
@@ -73,7 +72,6 @@ crates/model/aura-model/src/response_stream.rs
 crates/model/aura-model/src/types/request.rs
 crates/model/aura-model/src/types/streaming.rs
 crates/model/aura-model/src/types/tests_streaming.rs
-crates/plugin/aura-plugin-hooks/src/engine.rs
 crates/surface/aura-app/src/api_server.rs
 crates/surface/aura-app/src/cloud/host_info.rs
 crates/surface/aura-app/src/event_loop/agent_events.rs

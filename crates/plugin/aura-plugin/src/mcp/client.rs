@@ -119,15 +119,23 @@ impl McpClient {
     /// - [`McpError::ServerError`] when the response carries an
     ///   `"error"` object.
     pub fn request(&mut self, method: &str, params: &Value) -> Result<Value, McpError> {
-        let id = {
-            let mut guard = self
-                .next_id
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let v = *guard;
-            *guard += 1;
-            v
-        };
+        let id = self.take_next_id();
+        self.write_request(id, method, params)?;
+        let buf = self.read_response_line()?;
+        parse_response(&buf)
+    }
+
+    fn take_next_id(&self) -> u64 {
+        let mut guard = self
+            .next_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let v = *guard;
+        *guard += 1;
+        v
+    }
+
+    fn write_request(&mut self, id: u64, method: &str, params: &Value) -> Result<(), McpError> {
         let req = serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -139,7 +147,12 @@ impl McpClient {
         self.writer.write_all(line.as_bytes())?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()?;
+        Ok(())
+    }
 
+    /// Read one response line on a helper thread, bounded by the
+    /// request timeout. Kills the child on timeout.
+    fn read_response_line(&mut self) -> Result<String, McpError> {
         let (tx, rx) = mpsc::channel();
         let reader = Arc::clone(&self.reader);
         std::thread::spawn(move || {
@@ -168,22 +181,7 @@ impl McpClient {
         if n == 0 {
             return Err(McpError::Disconnected);
         }
-        let resp: Value = serde_json::from_str(&buf)
-            .map_err(|e| McpError::InvalidResponse(format!("parse response: {e}")))?;
-        if let Some(err) = resp.get("error") {
-            let code = err
-                .get("code")
-                .and_then(Value::as_i64)
-                .and_then(|c| i32::try_from(c).ok())
-                .unwrap_or(-1);
-            let message = err
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            return Err(McpError::ServerError { code, message });
-        }
-        Ok(resp.get("result").cloned().unwrap_or(Value::Null))
+        Ok(buf)
     }
 
     /// Best-effort kill of the underlying child process. Called
@@ -193,6 +191,27 @@ impl McpClient {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// Decode a JSON-RPC response line into its `result`, or the
+/// server's `error` object as [`McpError::ServerError`].
+fn parse_response(buf: &str) -> Result<Value, McpError> {
+    let resp: Value = serde_json::from_str(buf)
+        .map_err(|e| McpError::InvalidResponse(format!("parse response: {e}")))?;
+    if let Some(err) = resp.get("error") {
+        let code = err
+            .get("code")
+            .and_then(Value::as_i64)
+            .and_then(|c| i32::try_from(c).ok())
+            .unwrap_or(-1);
+        let message = err
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        return Err(McpError::ServerError { code, message });
+    }
+    Ok(resp.get("result").cloned().unwrap_or(Value::Null))
 }
 
 impl Drop for McpClient {

@@ -366,9 +366,7 @@ path = "../etc/passwd"
         assert_eq!(original, back);
     }
 
-    #[test]
-    fn parses_full_contributes_section() {
-        let full = r#"
+    const FULL_CONTRIBUTES_TOML: &str = r#"
 manifest_version = "v1"
 id = "full"
 version = "1.0.0"
@@ -414,7 +412,10 @@ path = "./prompts/intro.md"
 [meta]
 authors = ["alice"]
 "#;
-        let m = PluginManifest::from_toml_str(full).expect("parse full");
+
+    #[test]
+    fn parses_full_contributes_section() {
+        let m = PluginManifest::from_toml_str(FULL_CONTRIBUTES_TOML).expect("parse full");
         assert!(m.active);
         assert_eq!(m.trust.source.as_deref(), Some("first-party"));
         assert_eq!(m.contributes.skills.len(), 1);
