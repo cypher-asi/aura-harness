@@ -210,11 +210,11 @@ impl CloudNode {
         let Some(claim) = guard.as_ref() else {
             return Err(StatusCode::SERVICE_UNAVAILABLE);
         };
-        if crate::auth::check_bearer(headers, &claim.node_token).is_ok() {
+        if aura_auth_kit::bearer::check_bearer(headers, &claim.node_token).is_ok() {
             return Ok(Caller::Hub);
         }
         if path.starts_with("/v1/mesh")
-            && crate::auth::check_bearer(headers, &claim.mesh_token).is_ok()
+            && aura_auth_kit::bearer::check_bearer(headers, &claim.mesh_token).is_ok()
         {
             return Ok(Caller::Peer);
         }

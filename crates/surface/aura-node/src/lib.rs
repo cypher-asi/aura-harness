@@ -34,15 +34,13 @@
 //! Provides:
 //! - HTTP gateway for `POST /v1/run` + management endpoints.
 //! - WS handlers attached to a [`aura_engine::Scheduler`].
-//! - Auth, config, files-api helpers shared with surface-cli.
+//! - Config helpers shared with surface-cli.
 
 #![forbid(unsafe_code)]
 
-pub mod auth;
 pub mod cloud_node;
 mod config;
 pub mod console_format;
-pub mod files_api;
 pub(crate) mod gateway;
 pub mod inbound_console;
 mod node;

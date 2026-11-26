@@ -4,11 +4,13 @@
 //!
 //! Shared plumbing for the per-provider auth crates: PKCE attempt
 //! generation, the ephemeral loopback callback listener, pasted-code
-//! parsing, a hardened HTTP client, and error redaction. Contains no
-//! provider-specific endpoints.
+//! parsing, a hardened HTTP client, error redaction, and the
+//! constant-time bearer-token check shared by the HTTP servers.
+//! Contains no provider-specific endpoints.
 
 #![forbid(unsafe_code)]
 
+pub mod bearer;
 mod browser;
 pub mod http;
 mod loopback;

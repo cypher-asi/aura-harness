@@ -1,6 +1,6 @@
 use crate::config::PathError;
-use crate::files_api::{self, ReadOutcome, WalkedEntry, MAX_READ_BYTES, MAX_WALK_DEPTH};
 use crate::gateway::RouterState;
+use aura_exec_tools::files_api::{self, ReadOutcome, WalkedEntry, MAX_READ_BYTES, MAX_WALK_DEPTH};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -39,7 +39,7 @@ fn default_files_depth() -> usize {
 /// Paths are workspace-relative and forward-slash normalised so the
 /// frontend can render them unchanged on Windows and Unix. That
 /// contract is the reason this DTO is owned by the router rather than
-/// [`crate::files_api`] — the file-API helper stays on raw absolute
+/// [`aura_exec_tools::files_api`] — the file-API helper stays on raw absolute
 /// paths and each caller (aura-node vs the TUI embedded server)
 /// handles its own serialisation shape.
 #[derive(Debug, Serialize)]

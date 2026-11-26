@@ -6,8 +6,8 @@
 //! ignore value" pattern that existed on `/stream/automaton/:id`.
 //!
 //! The canonical constant-time bearer check lives in
-//! [`crate::auth::check_bearer`] and is shared with the embedded
-//! TUI API server (`src/api_server.rs`). This file owns only the
+//! [`aura_auth_kit::bearer::check_bearer`] and is shared with the embedded
+//! TUI API server (`aura-app`'s `api_server.rs`). This file owns only the
 //! axum-flavoured middleware wrapper; the parsing, constant-time
 //! compare, and rejection contract are inherited unchanged.
 
@@ -18,7 +18,7 @@ use axum::{
 };
 
 use super::RouterState;
-use crate::auth::check_bearer_any;
+use aura_auth_kit::bearer::check_bearer_any;
 
 /// Axum middleware enforcing that every request presents the expected
 /// Bearer token in its `Authorization` header.
@@ -31,7 +31,7 @@ use crate::auth::check_bearer_any;
 /// accepted as an additional valid bearer — that is what the swarm
 /// cron service presents when firing `POST /v1/processes/:id/trigger`
 /// (Swarm TEE R2 integration fix). Both checks are constant-time via
-/// [`crate::auth::check_bearer_any`].
+/// [`aura_auth_kit::bearer::check_bearer_any`].
 ///
 /// Returns `401 UNAUTHORIZED` when neither secret matches. On success
 /// the request is forwarded to `next` unchanged.
@@ -66,7 +66,7 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue, StatusCode};
 
     // The parsing / constant-time-compare contract is exhaustively
-    // exercised in `crate::auth::tests`. These tests only verify the
+    // exercised in `aura_auth_kit::bearer::tests`. These tests only verify the
     // thin axum wrapper: that the middleware delegates to
     // `check_bearer_any` and surfaces its verdict as a `StatusCode`.
 

@@ -56,7 +56,7 @@ pub(in crate::gateway) async fn run_ws_handler(
             .authorize(&headers, "/stream")
             .map(|_| String::new())
     } else if state.config.require_auth {
-        crate::auth::check_bearer(&headers, &state.config.auth_token)
+        aura_auth_kit::bearer::check_bearer(&headers, &state.config.auth_token)
     } else {
         Ok(String::new())
     };

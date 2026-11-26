@@ -26,6 +26,7 @@ pub mod definitions;
 pub mod domain_tools;
 mod error;
 mod executor;
+pub mod files_api;
 pub(crate) mod fs_tools;
 pub mod git_tool;
 pub mod http_tool;

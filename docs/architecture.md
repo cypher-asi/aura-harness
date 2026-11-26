@@ -400,6 +400,7 @@ The `DomainApi` *trait* lives in `aura-exec-traits::domain`; only the HTTP imple
 Tool catalog, resolver, `ToolExecutor`, and sandboxed filesystem/command execution. Implements the `Executor` trait from `aura-exec-traits`. Hosts:
 
 - `sandbox.rs` — the filesystem sandbox every filesystem and command tool goes through: path canonicalisation, prefix check, symlink guard.
+- `files_api/` — shared workspace walker and capped file reader used by `aura-node`'s `/v1/files` + `/v1/read-file` and `aura-app`'s embedded API server (`api_server.rs`).
 - Built-in filesystem tools: `list_files`, `read_file`, `write_file`, `edit_file`, `stat_file`, `find_files`, `delete_file`, `search_code`, `run_command` (with sync / async threshold). `read_file` returns numbered lines, 2000 at most and 32 KB at most, ending with the `start_line` to continue from when cut. `search_code` and `find_files` walk the tree through `fs_tools/walk.rs`, which honours `.gitignore`; `search_code` can return matching lines, matching files only (`output_mode: files_with_matches`) or per-file counts. A long `run_command` output keeps its start and end.
 - Git tools under `git_tool/`: `git_commit`, `git_push`, `git_commit_push` — the *only* permitted call-site for mutating `Command::new("git")` (Invariant §1, enforced by `scripts/check_invariants.sh`).
 - Domain tools under `domain_tools/`: HTTP/API-backed handlers for network, specs, tasks, projects, storage via the `DomainApi` trait. The trait lives in `aura-exec-traits` and the HTTP implementation in [`aura-exec-domain-http`](#aura-exec-domain-http); `aura-exec-tools` owns the tool wrappers.
@@ -514,7 +515,7 @@ Each auth method is its own crate:
 
 | Crate | Provides |
 |-------|----------|
-| [`aura-auth-kit`](../crates/auth/aura-auth-kit) | Shared plumbing: PKCE attempts, the loopback callback listener, pasted-code parsing, the OAuth HTTP client and refresh-error classification, error redaction, and the browser opener. |
+| [`aura-auth-kit`](../crates/auth/aura-auth-kit) | Shared plumbing: PKCE attempts, the loopback callback listener, pasted-code parsing, the OAuth HTTP client and refresh-error classification, error redaction, the browser opener, and `bearer` (the constant-time `Authorization: Bearer` check shared by `aura-node`'s gateway and `aura-app`'s embedded API server). |
 | [`aura-auth-zos`](../crates/auth/aura-auth-zos) | `ZosClient` and `ZosIdentity` (email/password login, JWT for aura-router). |
 | [`aura-auth-chatgpt`](../crates/auth/aura-auth-chatgpt) | Sign in with ChatGPT: dynamic client id per host, `id_token` checked against the issuer's JWKS, refresh and revocation. |
 | [`aura-auth-claude`](../crates/auth/aura-auth-claude) | Claude Pro/Max through Claude Code's public OAuth client. Inference needs the `oauth-2025-04-20` beta header and the Claude Code system prompt opening. Anthropic does not publish this flow for other apps. |
@@ -588,9 +589,7 @@ Layout:
 - `main.rs` — `tokio::main` shim that calls `run_node()`.
 - `node.rs` — `Node` composition root: binds the TCP listener, opens the store, builds the `aura-engine` `Scheduler` and `AutomatonBridge`, builds the `aura-exec-domain-http::HttpDomainApi`, builds the gateway `Router`, and runs the axum server with graceful shutdown.
 - `config/` — `NodeConfig::from_env`: env loading, paths, auth-token resolution. Module path unchanged across the refactor.
-- `auth.rs` — bearer-token check shared with `aura-app`'s embedded API server.
 - `inbound_console.rs` — paired request/failure observer formatting under the `aura::console` target.
-- `files_api.rs` — shared workspace walker and capped file reader used by the node's `/v1/files` + `/v1/read-file` and the TUI-embedded `src/api_server.rs`.
 - `tool_permissions.rs` — HTTP-driven tri-state tool permission writes. The single sanctioned non-kernel `append_entry_*` call site, guarded by the per-agent scheduler claim.
 - `protocol.rs` — wire ↔ core conversion shim now reduced to a re-export adapter; the canonical conversions live in `aura-core-protocol::conversions`.
 - `gateway/` — the HTTP/WS gateway, renamed from `router/` in Phase C:

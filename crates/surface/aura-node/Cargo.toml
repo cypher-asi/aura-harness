@@ -19,6 +19,7 @@ aura-core-types = { path = "../../core/aura-core-types" }
 aura-core-protocol = { path = "../../core/aura-core-protocol" }
 aura-store-db = { path = "../../store/aura-store-db" }
 aura-exec-tools = { path = "../../exec/aura-exec-tools" }
+aura-auth-kit = { path = "../../auth/aura-auth-kit" }
 aura-model = { path = "../../model/aura-model" }
 aura-core-auth = { path = "../../core/aura-core-auth" }
 aura-agent-kernel = { path = "../../agent/aura-agent-kernel" }
