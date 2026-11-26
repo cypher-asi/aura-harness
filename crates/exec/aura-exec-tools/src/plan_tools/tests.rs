@@ -1,4 +1,9 @@
+use super::body::normalize_body;
+use super::create::slug;
 use super::*;
+use crate::error::ToolError;
+use crate::sandbox::Sandbox;
+use aura_core_types::ToolResult;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -271,7 +276,7 @@ fn the_checklist_follows_the_todo_list() {
 }
 
 #[test]
-fn normalize_body_tidies_without_reformatting() {
+fn normalize_body_unescapes_only_structural_newlines() {
     let cases = [
         ("crlf", "a\r\nb\r\n", "a\nb"),
         (
@@ -307,6 +312,15 @@ fn normalize_body_tidies_without_reformatting() {
             "C:\\\\new\\n\\n- item",
             "C:\\\\new\n\n- item",
         ),
+    ];
+    for (label, input, expected) in cases {
+        assert_eq!(normalize_body(input, "Plan Name"), expected, "{label}");
+    }
+}
+
+#[test]
+fn normalize_body_tidies_titles_blank_lines_and_fences() {
+    let cases = [
         ("duplicate title", "\n#  plan NAME \n\nText", "Text"),
         ("other title kept", "# Steps\n\nText", "# Steps\n\nText"),
         (
