@@ -2840,6 +2840,121 @@ fn test_header_hamburger_hides_and_restores_the_right_column() {
 }
 
 #[test]
+fn test_header_hamburger_hides_and_restores_the_channel_side_panel() {
+    use crate::app::{HoverTarget, PanelFocus};
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = channel_info_app(None);
+    // The agent's own layout, which the channel's button leaves alone.
+    app.record_panel_visible = true;
+    app.sandbox_panel_visible = false;
+    app.side_column_hidden = Some((true, false));
+    app.focus = PanelFocus::Sandbox;
+    let rows = render_rows(&mut app, 140);
+    assert!(rows[0].trim_end().ends_with('☰'), "{:?}", rows[0]);
+    info_row(&rows, "COORDINATOR");
+    let side = app.areas.sandbox.expect("the channel's panel");
+    let chat = app.areas.chat.expect("the chat").width;
+    let cell = app.side_toggle_area().expect("drawn");
+    let mouse = |kind| MouseEvent {
+        kind,
+        column: cell.x + 1,
+        row: cell.y,
+        modifiers: KeyModifiers::empty(),
+    };
+    app.handle_mouse(mouse(MouseEventKind::Moved));
+    assert_eq!(app.hover(), Some(HoverTarget::SideToggle));
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+    assert!(!app.side_column_shown());
+    assert_eq!(app.focus(), PanelFocus::Chat, "off the hidden panel");
+    let hidden = render_rows(&mut app, 140);
+    let screen = hidden.join("\n");
+    assert!(!screen.contains("COORDINATOR"), "{screen}");
+    assert_eq!(app.areas.sandbox, None);
+    assert!(
+        app.areas.chat.expect("the chat").width >= chat + side.width,
+        "the chat takes the panel's room"
+    );
+    assert_eq!(app.side_toggle_area(), Some(cell), "the button stays put");
+
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left)));
+    assert!(
+        app.sandbox_panel_visible(),
+        "the channel's panel comes back"
+    );
+    let shown = render_rows(&mut app, 140);
+    info_row(&shown, "COORDINATOR");
+    assert_eq!(app.areas.sandbox, Some(side));
+    assert_eq!(app.areas.chat.map(|chat| chat.width), Some(chat));
+    assert_eq!(
+        (
+            app.record_panel_visible,
+            app.sandbox_panel_visible,
+            app.side_column_hidden
+        ),
+        (true, false, Some((true, false))),
+        "the agent's layout is untouched"
+    );
+}
+
+#[test]
+fn test_header_hamburger_in_a_channel_restores_an_expanded_chat() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let mut app = channel_info_app(None);
+    app.toggle_chat_expanded();
+    render_rows(&mut app, 140);
+    assert!(!app.side_column_shown());
+    let cell = app.side_toggle_area().expect("drawn");
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: cell.x + 1,
+        row: cell.y,
+        modifiers: KeyModifiers::empty(),
+    });
+    assert!(!app.chat_expanded());
+    assert!(app.sandbox_panel_visible(), "the channel's panel shows");
+}
+
+#[test]
+fn test_a_channel_panel_the_hamburger_hid_leaves_no_member_rows_to_hover() {
+    use crate::app::{HoverTarget, SidePanelTab};
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+    let moved = |column: usize, row: usize| MouseEvent {
+        kind: MouseEventKind::Moved,
+        column: u16::try_from(column).unwrap(),
+        row: u16::try_from(row).unwrap(),
+        modifiers: KeyModifiers::empty(),
+    };
+
+    let mut app = channels_app();
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
+    let rows = render_rows(&mut app, 140);
+    let (row, column) = rows
+        .iter()
+        .enumerate()
+        .find_map(|(y, text)| text.find("Worker").map(|x| (y, text[..x].chars().count())))
+        .unwrap_or_else(|| panic!("no member row in:\n{}", rows.join("\n")));
+    app.handle_mouse(moved(column, row));
+    assert_eq!(app.hover(), Some(HoverTarget::ChannelMemberRow(1)));
+
+    app.toggle_side_column();
+    let hidden = render_rows(&mut app, 140);
+    assert!(
+        !hidden.join("\n").contains("Worker"),
+        "{}",
+        hidden.join("\n")
+    );
+    app.handle_mouse(moved(column, row));
+    assert!(
+        !matches!(app.hover(), Some(HoverTarget::ChannelMemberRow(_))),
+        "{:?}",
+        app.hover()
+    );
+}
+
+#[test]
 fn test_expand_button_fills_the_screen_with_the_chat_panel() {
     use crate::app::{ChatTab, HoverTarget};
     use crossterm::event::{
@@ -5009,8 +5124,22 @@ fn test_status_line_drops_trailing_parts_when_narrow() {
     assert!(!status.contains("call"), "{status:?}");
 }
 
+/// Row of the to-do drawer's header, the row with the count and the
+/// fold toggle at the right.
+fn todo_drawer_header(rows: &[String]) -> Option<usize> {
+    rows.iter()
+        .rposition(|row| row.contains("to-do") && (row.contains(" — │") || row.contains(" + │")))
+}
+
+/// Whether any row above `end` shows a to-do's box.
+fn todo_box_above(rows: &[String], end: usize) -> bool {
+    rows[..end]
+        .iter()
+        .any(|row| row.contains('☐') || row.contains('▣') || row.contains('☒'))
+}
+
 #[test]
-fn test_todo_checklist_and_list() {
+fn the_todo_list_shows_in_the_drawer_and_never_in_the_chat() {
     use crate::events::{TodoState, UiCommand};
 
     let mut app = crate::App::new();
@@ -5020,51 +5149,44 @@ fn test_todo_checklist_and_list() {
         todo("Run the tests", TodoState::Pending),
     ]));
 
-    let screen = render_rows(&mut app, 160).join("\n");
+    let rows = render_rows(&mut app, 160);
+    let header = todo_drawer_header(&rows)
+        .unwrap_or_else(|| panic!("no drawer while idle:\n{}", rows.join("\n")));
     assert!(
-        !screen.contains("Working on"),
-        "only while a turn runs: {screen}"
+        rows[header].contains("⬢ 3 to-dos  1/3"),
+        "{:?}",
+        rows[header]
     );
-    assert!(!screen.contains("TODOS"));
-
-    run_slash(&mut app, "/todos");
-    let screen = render_rows(&mut app, 160).join("\n");
-    assert!(screen.contains("TODOS 1/3"), "{screen}");
-    assert!(screen.contains("☒ Read the parser"));
-    assert!(screen.contains("☐ Run the tests"));
-    run_slash(&mut app, "/todos");
+    assert!(rows[header - 1].contains('├'), "{:?}", rows[header - 1]);
+    assert!(!todo_box_above(&rows, header - 1), "{}", rows.join("\n"));
+    assert!(rows[header + 2].contains("▣ Write the lexer"));
 
     submit_message(&mut app, "go on");
     let rows = render_rows(&mut app, 160);
-    let row = |needle: &str| {
-        rows.iter()
-            .position(|row| row.contains(needle))
-            .unwrap_or_else(|| panic!("{needle:?} not in:\n{}", rows.join("\n")))
-    };
-    let header = row("⬢ Working on 3 to-dos");
-    assert_eq!(row("☒ Read the parser"), header + 1);
-    assert_eq!(row("▣ Write the lexer"), header + 2);
-    assert_eq!(row("☐ Run the tests"), header + 3);
-    assert_eq!(row("⬢ Thinking…"), header + 5);
-    // The boxes line up under the header's `⬢`.
-    let column = |row: usize, glyph: char| {
-        rows[row]
-            .chars()
-            .position(|c| c == glyph)
-            .unwrap_or_else(|| panic!("no {glyph} in {:?}", rows[row]))
-    };
-    let hex = column(header, '⬢');
-    assert_eq!(column(header + 1, '☒'), hex);
-    assert_eq!(column(header + 2, '▣'), hex);
-    assert_eq!(column(header + 3, '☐'), hex);
+    let screen = rows.join("\n");
+    let header = todo_drawer_header(&rows).unwrap_or_else(|| panic!("no drawer:\n{screen}"));
+    assert!(
+        rows[header].contains("⬢ Working on 3 to-dos  1/3"),
+        "{:?}",
+        rows[header]
+    );
+    let thinking = rows
+        .iter()
+        .position(|row| row.contains("⬢ Thinking…"))
+        .unwrap_or_else(|| panic!("no working line:\n{screen}"));
+    assert!(
+        thinking < header - 1,
+        "the chat sits above the drawer:\n{screen}"
+    );
+    assert!(!todo_box_above(&rows, header - 1), "{screen}");
 
     app.process_command(UiCommand::SetTodos(Vec::new()));
-    let screen = render_rows(&mut app, 160).join("\n");
-    assert!(!screen.contains("Working on"));
+    let rows = render_rows(&mut app, 160);
+    assert!(todo_drawer_header(&rows).is_none(), "{}", rows.join("\n"));
 }
 
 #[test]
-fn a_todo_list_with_every_item_closed_leaves_the_live_tail() {
+fn a_todo_list_with_every_item_closed_hides_the_drawer() {
     use crate::events::{TodoState, UiCommand};
 
     let mut app = crate::App::new();
@@ -5073,71 +5195,85 @@ fn a_todo_list_with_every_item_closed_leaves_the_live_tail() {
         todo("Read the parser", TodoState::Completed),
         todo("Drop the old lexer", TodoState::Cancelled),
     ]));
-    let screen = render_rows(&mut app, 160).join("\n");
+    let rows = render_rows(&mut app, 160);
+    let screen = rows.join("\n");
     assert!(
-        !screen.contains("Working on") && !screen.contains("Read the parser"),
+        todo_drawer_header(&rows).is_none() && !screen.contains("Read the parser"),
         "a finished list does not show while the turn goes on: {screen}"
     );
     assert!(screen.contains("⬢ Thinking…"), "{screen}");
 
-    // New items bring the checklist back.
+    // New items bring the drawer back.
     app.process_command(UiCommand::SetTodos(vec![
         todo("Read the parser", TodoState::Completed),
         todo("Run the tests", TodoState::Pending),
     ]));
-    let screen = render_rows(&mut app, 160).join("\n");
-    assert!(screen.contains("⬢ Working on 2 to-dos"), "{screen}");
+    let rows = render_rows(&mut app, 160);
+    let header =
+        todo_drawer_header(&rows).unwrap_or_else(|| panic!("no drawer:\n{}", rows.join("\n")));
+    assert!(
+        rows[header].contains("⬢ Working on 2 to-dos"),
+        "{:?}",
+        rows[header]
+    );
 }
 
 #[test]
-fn test_clicking_the_todo_checklist_lists_every_item() {
+fn test_todos_command_folds_the_drawer_and_brings_back_a_finished_list() {
     use crate::events::{TodoState, UiCommand};
-    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
     let mut app = crate::App::new();
-    app.process_command(UiCommand::SetTodos(
-        (0..12)
-            .map(|i| todo(&format!("Step {i}"), TodoState::Pending))
-            .collect(),
-    ));
-    submit_message(&mut app, "go on");
-    let click_on = |app: &mut crate::App, needle: &str| {
-        let rows = render_rows(app, 160);
-        let row = rows
-            .iter()
-            .position(|row| row.contains(needle))
-            .unwrap_or_else(|| panic!("{needle:?} not in:\n{}", rows.join("\n")));
-        let column = rows[row]
-            .find(needle.trim())
-            .map_or(0, |at| rows[row][..at].chars().count());
-        for kind in [
-            MouseEventKind::Down(MouseButton::Left),
-            MouseEventKind::Up(MouseButton::Left),
-        ] {
-            app.handle_mouse(MouseEvent {
-                kind,
-                column: u16::try_from(column).unwrap(),
-                row: u16::try_from(row).unwrap(),
-                modifiers: KeyModifiers::empty(),
-            });
-        }
-    };
+    app.process_command(UiCommand::SetTodos(vec![
+        todo("Read the parser", TodoState::Completed),
+        todo("Write the lexer", TodoState::InProgress),
+        todo("Run the tests", TodoState::Pending),
+    ]));
 
-    let screen = render_rows(&mut app, 160).join("\n");
-    assert!(screen.contains("2 more"), "{screen}");
-    assert!(!screen.contains("Step 11"), "{screen}");
+    run_slash(&mut app, "/todos");
+    let rows = render_rows(&mut app, 160);
+    let screen = rows.join("\n");
+    let header = todo_drawer_header(&rows).unwrap_or_else(|| panic!("no drawer:\n{screen}"));
+    assert!(rows[header].contains(" + │"), "folded: {:?}", rows[header]);
+    assert!(!screen.contains("Run the tests"), "{screen}");
+    assert!(
+        rows[header + 1].contains('├'),
+        "one row: {:?}",
+        rows[header + 1]
+    );
 
-    click_on(&mut app, "2 more");
-    assert!(app.todos_expanded());
+    run_slash(&mut app, "/todos");
     let screen = render_rows(&mut app, 160).join("\n");
-    assert!(screen.contains("☐ Step 11"), "{screen}");
-    assert!(screen.contains("show less"), "{screen}");
-    assert!(!screen.contains("2 more"), "{screen}");
+    assert!(screen.contains("☐ Run the tests"), "open again: {screen}");
 
-    click_on(&mut app, "show less");
-    assert!(!app.todos_expanded());
-    let screen = render_rows(&mut app, 160).join("\n");
-    assert!(screen.contains("2 more"), "{screen}");
+    // A finished list hides the drawer; `/todos` brings its closed items
+    // back, and puts them away again.
+    app.process_command(UiCommand::SetTodos(vec![
+        todo("Read the parser", TodoState::Completed),
+        todo("Drop the old lexer", TodoState::Cancelled),
+    ]));
+    assert!(todo_drawer_header(&render_rows(&mut app, 160)).is_none());
+    run_slash(&mut app, "/todos");
+    let rows = render_rows(&mut app, 160);
+    let screen = rows.join("\n");
+    assert!(todo_drawer_header(&rows).is_some(), "{screen}");
+    assert!(screen.contains("☒ Read the parser"), "{screen}");
+    run_slash(&mut app, "/todos");
+    let rows = render_rows(&mut app, 160);
+    assert!(todo_drawer_header(&rows).is_none(), "{}", rows.join("\n"));
+
+    // A new list in progress ends the forcing: once it finishes, the
+    // drawer hides by itself again.
+    run_slash(&mut app, "/todos");
+    app.process_command(UiCommand::SetTodos(vec![todo(
+        "Run the tests",
+        TodoState::InProgress,
+    )]));
+    app.process_command(UiCommand::SetTodos(vec![todo(
+        "Run the tests",
+        TodoState::Completed,
+    )]));
+    let rows = render_rows(&mut app, 160);
+    assert!(todo_drawer_header(&rows).is_none(), "{}", rows.join("\n"));
 }
 
 #[test]
@@ -5304,7 +5440,7 @@ fn test_todos_stay_with_their_agent() {
     assert!(!screen.contains("Background work"), "{screen}");
 
     app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
-    run_slash(&mut app, "/todos");
+    // The drawer shows the agent's list by itself, no `/todos` needed.
     let screen = render_rows(&mut app, 160).join("\n");
     assert!(screen.contains("▣ Background work"), "{screen}");
 }
@@ -6533,6 +6669,52 @@ fn channels_app() -> crate::App {
     }]));
     app.select_pane_tab(PaneTab::Agents(AgentsTab::Channels));
     app
+}
+
+#[test]
+fn test_an_open_channel_shows_its_coordinators_todos_in_the_drawer() {
+    use crate::events::{TodoState, UiCommand};
+
+    let mut app = channels_app();
+    assert!(app.channel_open(), "CHANNELS opens #zode");
+    app.process_command(UiCommand::SetActiveAgent("co".to_string()));
+    app.process_command(UiCommand::ForAgent {
+        agent_id: "co".to_string(),
+        command: Box::new(UiCommand::SetTodos(vec![
+            todo("Hand the parser to the worker", TodoState::Completed),
+            todo("Review the worker's patch", TodoState::InProgress),
+        ])),
+    });
+
+    let rows = render_rows(&mut app, 160);
+    let screen = rows.join("\n");
+    let header = todo_drawer_header(&rows).unwrap_or_else(|| panic!("no drawer:\n{screen}"));
+    assert!(
+        rows[header].contains("⬢ 2 to-dos  1/2"),
+        "{:?}",
+        rows[header]
+    );
+    assert!(
+        rows[header + 2].contains("▣ Review the worker's patch"),
+        "{screen}"
+    );
+    assert!(!todo_box_above(&rows, header - 1), "{screen}");
+    let input = rows
+        .iter()
+        .position(|row| row.contains("Message #zode"))
+        .unwrap_or_else(|| panic!("no input:\n{screen}"));
+    assert!(header < input, "the drawer sits above the input: {screen}");
+
+    // It folds like anywhere else.
+    run_slash(&mut app, "/todos");
+    let rows = render_rows(&mut app, 160);
+    let header = todo_drawer_header(&rows).expect("folded drawer");
+    assert!(rows[header].contains(" + │"), "{:?}", rows[header]);
+
+    // CHANNELS with no channel open shows no agent, so no drawer.
+    app.close_channel();
+    let rows = render_rows(&mut app, 160);
+    assert!(todo_drawer_header(&rows).is_none(), "{}", rows.join("\n"));
 }
 
 #[test]

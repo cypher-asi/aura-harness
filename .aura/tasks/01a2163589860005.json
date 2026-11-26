@@ -1,0 +1,14 @@
+{
+  "id": "01a2163589860005",
+  "title": "Fix a UI bug in the Rust workspace at the workspace root (aura-harness). Do not commit.",
+  "state": "completed",
+  "agent_id": "860757d70e6ab834f2bb0214da200ca1a08aed4f9d176d528f75a24ff13aa6c1",
+  "agent_name": "rust-engineer #150",
+  "assignee": "rust-engineer",
+  "parent": "01a2163538810004",
+  "items": [],
+  "summary": "I fixed the hamburger in the channels view in `aura-ui-terminal`, and the full crate tests pass. Clippy and the desktop tests could not run, because another session's uncommitted work in `aura-app` currently fails to compile. Nothing is committed.",
+  "updated_ms": 1795669369387,
+  "created_ms": 1795668937094,
+  "tool_use_id": "toolu_017JhBQ8vzGAKpPQBWNBrhky"
+}

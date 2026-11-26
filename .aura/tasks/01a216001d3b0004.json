@@ -1,0 +1,21 @@
+{
+  "id": "01a216001d3b0004",
+  "title": "finish the tidy ups then commit",
+  "state": "open",
+  "agent_id": "565a362f42a871aadaca8106bac349179635179e74a078c2dfa8d571510ec549",
+  "agent_name": "#zode coordinator",
+  "items": [
+    {
+      "content": "Tidy-ups: merge old busy test, move project-change test under channels filter, share open_project helper",
+      "state": "pending",
+      "assignee": "explorer",
+      "task": "01a21609b1b00006"
+    },
+    {
+      "content": "Commit the channel-project test changes (only our files)",
+      "state": "pending"
+    }
+  ],
+  "updated_ms": 1795666256818,
+  "created_ms": 1795665435963
+}

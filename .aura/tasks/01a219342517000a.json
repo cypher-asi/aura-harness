@@ -1,0 +1,27 @@
+{
+  "id": "01a219342517000a",
+  "title": "spawn an agent to figure out the weather in calgary, don't code anything permanent",
+  "state": "open",
+  "agent_id": "565a362f42a871aadaca8106bac349179635179e74a078c2dfa8d571510ec549",
+  "agent_name": "#zode coordinator",
+  "items": [
+    {
+      "content": "Make header hamburger toggle the channel info panel (done; workspace-wide gates blocked by other sessions' WIP)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the hamburger change",
+      "state": "completed",
+      "assignee": "reviewer"
+    },
+    {
+      "content": "Fix review findings: code done, tests and verification blocked by another session's SetRepo WIP",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    }
+  ],
+  "summary": "ENG6 is checking the weather in Calgary. I told it not to write any code or leave any files behind.",
+  "updated_ms": 1795719224365,
+  "created_ms": 1795719177495
+}

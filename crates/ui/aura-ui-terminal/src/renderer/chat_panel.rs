@@ -11,8 +11,8 @@ use crate::{
     app::{
         scrollbar::{ScrollTarget, ScrollbarArea},
         tab_bar::TabLayout,
-        AppState, ChatScroll, ChatTab, HoverTarget, ImageHit, Pane, PanelFocus, ProseRow,
-        ToggleRow, ToggleTarget,
+        ChatScroll, ChatTab, HoverTarget, ImageHit, Pane, PanelFocus, ProseRow, ToggleRow,
+        ToggleTarget,
     },
     App, Theme,
 };
@@ -139,7 +139,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     let tail = if terminal {
         LiveTail::default()
     } else {
-        live_tail(app, padded.width as usize, theme)
+        live_tail(app, theme)
     };
     if !terminal && app.chat_loading() {
         // The agent's history is on its way: neither the welcome text nor
@@ -245,12 +245,6 @@ fn render_chat_lines(
     }
     let tail_gap = usize::from(message_rows > 0 && !tail.lines.is_empty());
     let tail_start = message_rows + tail_gap;
-    let checklist_open = app.todos_expanded();
-    toggle_rows.extend((0..tail.checklist_rows).map(|row| ToggleRow {
-        line: tail_start + row,
-        target: ToggleTarget::TodoChecklist,
-        open: checklist_open,
-    }));
     let tail_toggle = app
         .turn_started_ms()
         .zip(tail.status_row)
@@ -328,12 +322,11 @@ fn render_chat_lines(
     if tail_gap > 0 {
         push_visible(&mut visible, &mut line_index, start, rows, blank);
     }
-    let checklist_hovered = hovered_activity == Some(ToggleTarget::TodoChecklist);
     for (row, line) in tail.lines.iter().enumerate() {
         let mut line = line.clone();
         let status_hovered = tail.status_row == Some(row)
             && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target));
-        if status_hovered || (checklist_hovered && tail.is_checklist_label(row)) {
+        if status_hovered {
             apply_activity_hover(&mut line, theme);
         }
         push_visible(&mut visible, &mut line_index, start, rows, line);
@@ -804,54 +797,23 @@ const fn chat_inset(width: u16) -> u16 {
     }
 }
 
-/// What follows the conversation while a turn is in flight: the to-do
-/// checklist, then the working line.
+/// What follows the conversation while a turn is in flight: the working
+/// line. The to-do list lives in the drawer above the input, not here.
 #[derive(Default)]
 struct LiveTail {
     lines: Vec<Line<'static>>,
-    /// Rows at the top of `lines` taken by the to-do checklist, each of
-    /// which expands or collapses it when clicked.
-    checklist_rows: usize,
-    /// Whether the checklist's last row is `N more` or `show less`.
-    checklist_footer: bool,
     /// Row in `lines` of the working line, which opens the turn's records
     /// when clicked.
     status_row: Option<usize>,
 }
 
-impl LiveTail {
-    /// Whether `row` is one the mouse lights up over the checklist: the
-    /// header and the `N more` or `show less` under the items, which say
-    /// what a click does.
-    fn is_checklist_label(&self, row: usize) -> bool {
-        (row == 0 && self.checklist_rows > 0)
-            || (self.checklist_footer && row + 1 == self.checklist_rows)
-    }
-}
-
-fn live_tail(app: &App, width: usize, theme: &Theme) -> LiveTail {
-    // A list with every item closed is finished: it stops showing even
-    // while the turn goes on, and shows again once new items open.
-    let checklist = if app.state() == AppState::Processing && app.hud().has_open_todos() {
-        let frame = theme.animate_spinners.then(|| app.animation_frame());
-        super::hud::todo_checklist(app.hud(), width, theme, frame, app.todos_expanded())
-    } else {
-        super::hud::TodoChecklist::default()
-    };
-    let checklist_rows = checklist.lines.len();
-    let mut lines = checklist.lines;
-    let status_row = working_indicator_line(app, theme).map(|line| {
-        if !lines.is_empty() {
-            lines.push(Line::default());
-        }
-        lines.push(line);
-        lines.len() - 1
-    });
-    LiveTail {
-        lines,
-        checklist_rows,
-        checklist_footer: checklist.has_footer,
-        status_row,
+fn live_tail(app: &App, theme: &Theme) -> LiveTail {
+    match working_indicator_line(app, theme) {
+        Some(line) => LiveTail {
+            lines: vec![line],
+            status_row: Some(0),
+        },
+        None => LiveTail::default(),
     }
 }
 

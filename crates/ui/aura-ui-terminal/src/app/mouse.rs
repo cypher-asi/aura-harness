@@ -104,6 +104,7 @@ impl App {
                 app.project_moves,
                 app.project_drag_hit(),
                 app.queue_pointer_state(),
+                app.todo_drawer_pointer_state(),
                 (app.scrollbar_held(), app.scroll_offset, app.detail_scroll),
             )
         };
@@ -133,6 +134,7 @@ impl App {
             self.project_press = None;
             self.scrollbar_grab = None;
             self.drop_queue_press();
+            self.drop_todo_drawer_hover();
             return;
         }
         if self.context_menu_mouse(mouse.kind, mouse.column, mouse.row) {
@@ -148,6 +150,7 @@ impl App {
             return;
         }
         if self.queue_mouse(mouse.kind, mouse.column, mouse.row)
+            || self.todo_drawer_mouse(mouse.kind, mouse.column, mouse.row)
             || self.bench_panel_mouse(mouse.kind, mouse.column, mouse.row)
         {
             self.hover = None;

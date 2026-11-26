@@ -1,0 +1,13 @@
+{
+  "id": "01a21609b1b00006",
+  "title": "Read-only status check in the Rust workspace at the workspace root (aura-harness). Do not modify any files.",
+  "state": "open",
+  "agent_id": "82123d223c4536ab81d54d9d89d17b5541c2e02e2feb4d66af977d86c7e1a8ac",
+  "agent_name": "explorer #67",
+  "assignee": "explorer",
+  "parent": "01a216001d3b0004",
+  "items": [],
+  "updated_ms": 1795666063792,
+  "created_ms": 1795666063792,
+  "tool_use_id": "toolu_01NCzu58ZAQEm5W2rDYdS2DA"
+}

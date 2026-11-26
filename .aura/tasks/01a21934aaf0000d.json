@@ -1,0 +1,11 @@
+{
+  "id": "01a21934aaf0000d",
+  "title": "COO1: Finish channel ☰ fix-ups if build is unblocked",
+  "state": "completed",
+  "agent_id": "57e0452dff06b2c0ca619d41fd0cf343258320fcea5702990f8c887be474dad3",
+  "agent_name": "rust-engineer #192",
+  "items": [],
+  "summary": "The build is unblocked. Let me look at the current state.",
+  "updated_ms": 1795719555456,
+  "created_ms": 1795719211760
+}

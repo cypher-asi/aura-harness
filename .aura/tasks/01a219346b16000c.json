@@ -1,0 +1,11 @@
+{
+  "id": "01a219346b16000c",
+  "title": "make sure it works on channels as well",
+  "state": "completed",
+  "agent_id": "67557af110cbe8fae75dea200931afadd747b10baf585b74dce74293ace51c46",
+  "agent_name": "Agent 1695",
+  "items": [],
+  "summary": "I'll look at how the channel app handles to-dos and which agent's HUD it shows.",
+  "updated_ms": 1795719310023,
+  "created_ms": 1795719195414
+}

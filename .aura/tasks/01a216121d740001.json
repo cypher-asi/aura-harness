@@ -1,0 +1,14 @@
+{
+  "id": "01a216121d740001",
+  "title": "Add two missing tests for the channel-to-project feature in the Rust workspace at the workspace root (aura-harness). On…",
+  "state": "completed",
+  "agent_id": "1a2961487be93dc010eb0fc844cac503ae859d5899acee4525b67c4f3d939c57",
+  "agent_name": "tests #21",
+  "assignee": "tests",
+  "parent": "01a21611d2a80000",
+  "items": [],
+  "summary": "I added the two tests and both pass under `cargo test -p aura-app channels`. The work isn't fully verified: clippy failed on my test code, and I made a fix I haven't re-run because time ran out. No production code was changed.",
+  "updated_ms": 1795667181522,
+  "created_ms": 1795666615668,
+  "tool_use_id": "toolu_0174zHRyJ1asgrtSokdY8W6T"
+}

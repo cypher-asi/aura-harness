@@ -1,0 +1,24 @@
+{
+  "id": "01a216124e770000",
+  "title": "finish",
+  "state": "completed",
+  "agent_id": "565a362f42a871aadaca8106bac349179635179e74a078c2dfa8d571510ec549",
+  "agent_name": "#zode coordinator",
+  "items": [
+    {
+      "content": "Tidy-ups done and verified",
+      "state": "completed",
+      "assignee": "tests",
+      "task": "01a21612abc40001"
+    },
+    {
+      "content": "Committed as 9fb6bda2",
+      "state": "completed",
+      "assignee": "engineer",
+      "task": "01a2161835750002"
+    }
+  ],
+  "summary": "The tidy-ups are done and everything is committed on `main` as **`9fb6bda2`** (\"Cover channel project switching end to end\"). It's not pushed.",
+  "updated_ms": 1795667092035,
+  "created_ms": 1795666628215
+}

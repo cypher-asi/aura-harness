@@ -195,12 +195,14 @@ impl App {
                 self.add_message(Message::new(MessageRole::System, &text));
             }
             UiCommand::SetTodos(todos) => {
-                if todos.is_empty() {
-                    self.todos_open = false;
-                    // The next list starts short, whatever the last one did.
-                    self.todos_expanded = false;
-                }
                 self.hud.todos = todos;
+                if self.hud.todos.is_empty() {
+                    self.reset_todo_drawer();
+                } else if self.hud.has_open_todos() {
+                    // Work under way shows the drawer by itself; once it
+                    // finishes, the drawer hides again until `/todos`.
+                    self.unforce_todo_drawer();
+                }
             }
             UiCommand::SetJobs(jobs) => self.hud.jobs = jobs,
             UiCommand::SetQueue(queue) => self.set_queue(queue),

@@ -1,0 +1,16 @@
+{
+  "id": "01a21727d28a0017",
+  "title": "First read `.worktrees/simplify-out/BRIEF.md` and follow it (work only in `.worktrees/simplify/`, branch CARGO_TARGET_D…",
+  "state": "completed",
+  "agent_id": "bc568fe163c70618c276f4a581f5bf83b49f9c7ca7679bf49bd73e9a421331a3",
+  "agent_name": "rust-engineer #160",
+  "assignee": "rust-engineer",
+  "parent": "01a2169842dc000c",
+  "plan": ".aura/plans/codebase-simplification-500-line-files-cleaner-c_bab3130a.plan.md",
+  "plan_todo": "p3-plugin-merge",
+  "items": [],
+  "summary": "The three crates are now modules inside `aura-plugin` (`api`, `connectors`, `mcp`), with all their code and tests. Every check passes, including the same 69 tests as before. Nothing is committed.",
+  "updated_ms": 1795685038495,
+  "created_ms": 1795684815498,
+  "tool_use_id": "toolu_01WNpQFCNMEEtjWTzo3hUUix"
+}

@@ -7,6 +7,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### To-dos move to a drawer above the input
+
+##### Changed
+
+- The agent's to-do list no longer runs in the chat. It sits in a drawer
+  between the chat and the input while any item is open, during a turn
+  and between turns, with `Working on N to-dos` and `done/total` in its
+  header. In an open channel it shows the coordinator's list. Clicking
+  the header or `/todos` folds it to that row, which
+  then shows the item in progress. Long lists start at the item in
+  progress and count the rest on a `+N more` row. On a short screen the
+  drawer gives up rows before the chat, queue and benchmark panels.
+- `/todos` no longer opens a separate list over the chat, and the
+  checklist's `N more` / `show less` toggle is gone.
+
 ### Channel coordinators hand work to agents
 
 ##### Changed

@@ -325,6 +325,7 @@ impl App {
         let switched = !coordinator.is_empty() && self.switch_on_screen(&coordinator);
         self.channels.awaiting_member =
             !switched && !self.channels.is_open_member(&self.active_agent_id);
+        self.keep_channel_focus_on_screen();
         self.try_send_event(UiEvent::OpenChannel(id.to_string()));
     }
 
@@ -597,6 +598,12 @@ impl App {
     /// Record where the MEMBERS side tab's rows were drawn this frame.
     pub(crate) fn set_channel_member_rows_area(&mut self, area: Rect) {
         self.channels.member_rows_area = Some(area);
+    }
+
+    /// Drop where the MEMBERS side tab's rows were drawn, for a frame
+    /// that may not draw them.
+    pub(in crate::app) fn forget_channel_member_rows(&mut self) {
+        self.channels.member_rows_area = None;
     }
 
     /// Member row of the MEMBERS side tab drawn at a screen cell.

@@ -53,6 +53,7 @@ mod slash_menu;
 mod smooth;
 mod switching;
 pub mod tab_bar;
+pub(crate) mod todo_drawer;
 mod tool_view;
 pub mod trace_feed;
 mod trace_json;
@@ -267,6 +268,10 @@ pub struct App {
     /// Which of the Record and side panels were shown when the hamburger
     /// button hid the right column, to show again when it comes back
     pub(super) side_column_hidden: Option<(bool, bool)>,
+    /// Whether the hamburger button hid an open channel's panel. The
+    /// channel's right column ignores the agent panels' flags, so it
+    /// keeps its own.
+    pub(super) channel_side_hidden: bool,
     /// File tree of the active agent's sandbox
     pub(super) sandbox: SandboxTree,
     /// Whether a tool may have changed files since the tree was read; the
@@ -493,10 +498,8 @@ pub struct App {
     pub(super) queue_panel: queue_panel::QueuePanel,
     /// The benchmark progress panel above the input
     pub(super) bench_panel: bench_progress::BenchPanel,
-    /// Whether the full todo list is shown above the input
-    pub(super) todos_open: bool,
-    /// Whether the chat's live to-do checklist lists every item in full
-    pub(super) todos_expanded: bool,
+    /// The to-do drawer under the Chat body
+    pub(super) todo_drawer: todo_drawer::TodoDrawer,
     /// When to get the user's attention
     pub(super) alert_settings: AlertSettings,
     /// Messages for the user that the terminal should ring the bell for
@@ -781,8 +784,6 @@ pub(crate) enum ToggleTarget {
     Step(u64),
     /// The kernel records of a turn, by when its prompt was sent (Unix ms)
     TurnRecords(u64),
-    /// The live to-do checklist under the conversation
-    TodoChecklist,
     /// The `… more lines` row of a part of a message cut short, by
     /// message id
     More(u64, MoreSection),
@@ -1161,6 +1162,7 @@ impl App {
             chat_expanded: false,
             side_expanded: false,
             side_column_hidden: None,
+            channel_side_hidden: false,
             sandbox: SandboxTree::default(),
             sandbox_stale: false,
             pending_file: None,
@@ -1264,8 +1266,7 @@ impl App {
             cloud: host_tab::CloudUi::default(),
             queue_panel: queue_panel::QueuePanel::default(),
             bench_panel: bench_progress::BenchPanel::default(),
-            todos_open: false,
-            todos_expanded: false,
+            todo_drawer: todo_drawer::TodoDrawer::default(),
             alert_settings: AlertSettings::default(),
             alerts: Vec::new(),
             side_tab: SidePanelTab::default(),
@@ -1446,19 +1447,6 @@ impl App {
         &self.hud
     }
 
-    /// Whether the full todo list is shown above the input.
-    #[must_use]
-    pub const fn todos_open(&self) -> bool {
-        self.todos_open
-    }
-
-    /// Whether the chat's live to-do checklist lists every item in full,
-    /// rather than the first few cut to one row each.
-    #[must_use]
-    pub const fn todos_expanded(&self) -> bool {
-        self.todos_expanded
-    }
-
     /// Get the messages.
     #[must_use]
     pub const fn messages(&self) -> &VecDeque<Message> {
@@ -1615,7 +1603,6 @@ impl App {
                 message.set_expanded(expanded);
             }
             ToggleTarget::TurnRecords(started_ms) => self.show_turn_records(started_ms),
-            ToggleTarget::TodoChecklist => self.todos_expanded = !self.todos_expanded,
             ToggleTarget::More(id, section) => {
                 let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
                     return false;
@@ -1787,14 +1774,18 @@ impl App {
         self.swarm_panel_visible && !self.chat_expanded
     }
 
-    /// Check if the Sandbox panel is visible. It shows while a channel is
-    /// open even when the user hid it, and hides with no agent on screen,
-    /// which leaves it nothing to show.
+    /// Check if the Sandbox panel is visible. While a channel is open it
+    /// is the channel's panel, shown whatever the user did to the agent's
+    /// unless the hamburger button hid it; it hides with no agent on
+    /// screen, which leaves it nothing to show.
     #[must_use]
     pub fn sandbox_panel_visible(&self) -> bool {
-        (self.sandbox_panel_visible || self.channel_open())
-            && !self.chat_expanded
-            && !self.no_agent_on_screen()
+        let shown = if self.channel_open() {
+            !self.channel_side_hidden
+        } else {
+            self.sandbox_panel_visible
+        };
+        shown && !self.chat_expanded && !self.no_agent_on_screen()
     }
 
     /// Whether the chat panel fills the screen, the other panels hidden.
@@ -1847,7 +1838,13 @@ impl App {
     ///
     /// Only the panels' own flags change, so `/kernel`, `/files` and the
     /// tabs that open the Record panel show the column again as usual.
+    /// In a channel the button hides or shows the channel's panel alone,
+    /// leaving the agent panels' flags and what they remember as they were.
     pub fn toggle_side_column(&mut self) {
+        if self.channel_open() {
+            self.toggle_channel_side();
+            return;
+        }
         if self.side_column_shown() {
             self.side_column_hidden = Some((self.record_panel_visible, self.sandbox_panel_visible));
             self.record_panel_visible = false;
@@ -1870,6 +1867,32 @@ impl App {
         self.sandbox_panel_visible = side;
         if side {
             self.sandbox.refresh();
+        }
+    }
+
+    /// [`Self::toggle_side_column`] in a channel: hide the channel's panel,
+    /// its room going to the chat, or show it again. While the chat is
+    /// expanded the panel is not on screen, so the button restores the
+    /// chat and shows the panel, as it does for the agent's column.
+    fn toggle_channel_side(&mut self) {
+        if self.sandbox_panel_visible() {
+            self.channel_side_hidden = true;
+            self.keep_channel_focus_on_screen();
+            return;
+        }
+        self.chat_expanded = false;
+        self.channel_side_hidden = false;
+    }
+
+    /// In the channel app, move the focus to the chat when it is on a
+    /// panel not on screen: the channel's panel the hamburger button hid,
+    /// or the agent panels the app leaves away. Keys would otherwise move
+    /// a highlight or switch a tab no one sees. Called wherever the
+    /// channel's layout can change under the focus, and before each key.
+    /// The agent apps keep the focus they have.
+    pub(super) fn keep_channel_focus_on_screen(&mut self) {
+        if self.channel_app() && !self.panel_visible(self.focus) {
+            self.focus = PanelFocus::Chat;
         }
     }
 

@@ -1,10 +1,11 @@
 {
   "id": "01a215beec360006",
   "title": "finish this",
-  "state": "running",
+  "state": "cancelled",
   "agent_id": "e60170c715e9ce02418018d77585543bd03201cc00bcce74e26ba39958d37dec",
   "agent_name": "Agent 1620",
   "items": [],
-  "updated_ms": 1795661167242,
+  "summary": "Clippy on the merged workspace passed. Tests are still compiling, so I'll poll in shorter slices.",
+  "updated_ms": 1795661555061,
   "created_ms": 1795661163574
 }

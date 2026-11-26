@@ -218,13 +218,12 @@ impl App {
             }
             "todos" | "todo" => {
                 if self.hud.todos.is_empty() {
-                    self.todos_open = false;
                     self.notification = Some((
                         "The agent has no todo list".to_string(),
                         NotificationType::Warning,
                     ));
                 } else {
-                    self.todos_open = !self.todos_open;
+                    self.cycle_todo_drawer();
                 }
             }
             "compact" => self.handle_compact_command(arg),
@@ -268,7 +267,7 @@ impl App {
                     instructions,
                     ..Default::default()
                 };
-                self.todos_open = false;
+                self.reset_todo_drawer();
                 // The new conversation is a new run, which no agent has
                 // joined yet.
                 self.start_members_run();

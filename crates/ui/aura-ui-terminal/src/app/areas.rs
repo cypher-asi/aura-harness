@@ -5,9 +5,13 @@ use super::{App, InputRows, PanelAreas};
 use ratatui::layout::Rect;
 
 impl App {
-    /// Record where the panels were drawn this frame.
+    /// Record where the panels were drawn this frame. The channel's
+    /// MEMBERS rows, kept with the channel, start the frame afresh too:
+    /// a frame that does not draw them must not leave last frame's rows
+    /// to be hovered or clicked.
     pub fn set_panel_areas(&mut self, areas: PanelAreas) {
         self.areas = areas;
+        self.forget_channel_member_rows();
     }
 
     /// Record where the chat messages were drawn this frame.

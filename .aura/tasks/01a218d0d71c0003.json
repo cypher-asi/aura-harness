@@ -1,0 +1,46 @@
+{
+  "id": "01a218d0d71c0003",
+  "title": "Implement the plan in `.aura/plans/todo-drawer-above-the-input_ec7cb338.plan.md`. Read it first. Your todo list already…",
+  "state": "completed",
+  "agent_id": "67557af110cbe8fae75dea200931afadd747b10baf585b74dce74293ace51c46",
+  "agent_name": "Agent 1695",
+  "plan": ".aura/plans/todo-drawer-above-the-input_ec7cb338.plan.md",
+  "builds": true,
+  "items": [
+    {
+      "content": "Add app/todo_drawer.rs with fold state, header area, hover and mouse handling",
+      "state": "completed"
+    },
+    {
+      "content": "Add renderer/todo_drawer.rs with height() and render() modeled on queue_panel.rs",
+      "state": "completed"
+    },
+    {
+      "content": "Insert the drawer under the chat body in renderer/mod.rs and budget its height",
+      "state": "completed"
+    },
+    {
+      "content": "Route mouse events and pointer state to the drawer in app/mouse.rs",
+      "state": "completed"
+    },
+    {
+      "content": "Remove the checklist from LiveTail and the TodoChecklist toggle target",
+      "state": "completed"
+    },
+    {
+      "content": "Delete render_todo_panel and todo_checklist from hud.rs; make /todos fold the drawer",
+      "state": "completed"
+    },
+    {
+      "content": "Update slash_menu description and STYLEGUIDE.md for the drawer",
+      "state": "completed"
+    },
+    {
+      "content": "Replace checklist tests with drawer tests; run fmt, clippy and tests",
+      "state": "completed"
+    }
+  ],
+  "summary": "The agent says its checks pass. It also left a stray `target/drawer_tests.rs`, so I'll delete that and run the full checks myself.",
+  "updated_ms": 1795713971479,
+  "created_ms": 1795712669468
+}

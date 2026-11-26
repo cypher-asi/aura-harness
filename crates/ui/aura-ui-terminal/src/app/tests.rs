@@ -2959,53 +2959,27 @@ fn test_clicking_a_group_summary_flips_what_it_shows() {
 }
 
 #[test]
-fn test_clicking_the_todo_checklist_expands_and_collapses_it() {
+fn test_the_todo_drawer_folds_and_an_emptied_list_opens_it_again() {
     use crate::events::{TodoState, TodoView};
-    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
     let mut app = App::new();
-    app.areas.chat = Some(Rect::new(0, 0, 60, 20));
-    app.set_chat_text_area(Rect::new(2, 1, 56, 18));
-    let click = |app: &mut App| {
-        for kind in [
-            MouseEventKind::Down(MouseButton::Left),
-            MouseEventKind::Up(MouseButton::Left),
-        ] {
-            app.handle_mouse(MouseEvent {
-                kind,
-                column: 10,
-                row: 1,
-                modifiers: KeyModifiers::empty(),
-            });
-        }
-    };
-    let checklist = |open| ToggleRow {
-        line: 0,
-        target: ToggleTarget::TodoChecklist,
-        open,
-    };
+    assert!(!app.todo_drawer_folded());
+    app.toggle_todo_drawer();
+    assert!(app.todo_drawer_folded());
+    app.toggle_todo_drawer();
+    assert!(!app.todo_drawer_folded());
 
-    assert!(!app.todos_expanded());
-    app.set_chat_layout(vec![checklist(false)], 0);
-    click(&mut app);
-    assert!(app.todos_expanded());
-
-    app.set_chat_layout(vec![checklist(true)], 0);
-    click(&mut app);
-    assert!(!app.todos_expanded());
-
-    // An emptied list starts the next one short.
-    click(&mut app);
-    assert!(app.todos_expanded());
+    // A new list keeps the fold; an emptied one opens the next list.
+    app.toggle_todo_drawer();
     app.process_command(UiCommand::SetTodos(vec![TodoView {
         content: "next".to_string(),
         state: TodoState::Pending,
         assignee: None,
         task: None,
     }]));
-    assert!(app.todos_expanded());
+    assert!(app.todo_drawer_folded());
     app.process_command(UiCommand::SetTodos(Vec::new()));
-    assert!(!app.todos_expanded());
+    assert!(!app.todo_drawer_folded());
 }
 
 #[test]
@@ -6225,7 +6199,10 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     app.handle_key(key(KeyCode::Left));
     assert!(app.channel_open());
     assert!(!app.record_panel_visible(), "no Kernel panel in a channel");
-    assert!(app.sandbox_panel_visible(), "shown though the user hid it");
+    assert!(
+        app.sandbox_panel_visible(),
+        "shown though the agent's side panel is hidden"
+    );
     assert!(app.side_maximized());
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
     assert_eq!(
@@ -6424,6 +6401,111 @@ fn test_members_side_tab_moves_its_highlight_and_switches_nothing() {
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(app.active_agent_id(), "co", "rows only show");
     assert!(app.channel_open());
+}
+
+/// [`app_in_channel`] on `co`, with `#docs` (`c2`) listed after `#zode`.
+fn app_in_two_channels() -> (tempfile::TempDir, App) {
+    let (dir, mut app) = app_in_channel("co");
+    let mut channels = app.channels().to_vec();
+    channels.push(crate::events::ChannelSummary {
+        id: "c2".to_string(),
+        slug: "docs".to_string(),
+        coordinator_id: "dc".to_string(),
+        members: vec![agent("dc", "Docs lead")],
+        ..crate::events::ChannelSummary::default()
+    });
+    app.process_command(UiCommand::SetChannels(channels));
+    (dir, app)
+}
+
+#[test]
+fn test_keys_and_opening_a_channel_take_the_focus_off_the_hidden_channel_panel() {
+    let (_dir, mut app) = app_in_two_channels();
+    app.toggle_side_column();
+    assert!(!app.sandbox_panel_visible(), "the hamburger hid it");
+
+    // Focus left on the hidden panel: its keys go to the chat instead.
+    app.select_channel_member(1);
+    let tab = app.side_tab();
+    app.focus = PanelFocus::Sandbox;
+    app.handle_key(key(KeyCode::Down));
+    assert_eq!(app.focus(), PanelFocus::Chat);
+    app.focus = PanelFocus::Sandbox;
+    app.handle_key(key(KeyCode::Up));
+    assert_eq!(
+        app.selected_channel_member(),
+        1,
+        "no hidden highlight moves"
+    );
+    for code in [KeyCode::Right, KeyCode::Left] {
+        app.focus = PanelFocus::Sandbox;
+        app.handle_key(KeyEvent::new(code, KeyModifiers::SHIFT));
+        assert_eq!(app.side_tab(), tab, "no hidden tab switches");
+    }
+
+    // Opening another channel, its panel hidden too, moves it at once.
+    app.focus = PanelFocus::Sandbox;
+    app.open_channel_by_id("c2");
+    assert!(app.channel_open());
+    assert_eq!(app.focus(), PanelFocus::Chat);
+}
+
+#[test]
+fn test_tab_skips_the_channel_panel_the_hamburger_hid() {
+    let (_dir, mut app) = app_in_channel("co");
+    app.toggle_side_column();
+    let mut reached = Vec::new();
+    for _ in 0..4 {
+        app.handle_key(key(KeyCode::Tab));
+        reached.push(app.focus());
+    }
+    assert!(!reached.contains(&PanelFocus::Sandbox), "{reached:?}");
+    assert!(reached.contains(&PanelFocus::Swarm), "{reached:?}");
+
+    app.toggle_side_column();
+    let reached: Vec<_> = (0..4)
+        .map(|_| {
+            app.handle_key(key(KeyCode::Tab));
+            app.focus()
+        })
+        .collect();
+    assert!(
+        reached.contains(&PanelFocus::Sandbox),
+        "shown again: {reached:?}"
+    );
+}
+
+#[test]
+fn test_a_hidden_channel_panel_stays_hidden_across_channels_and_apps() {
+    let (_dir, mut app) = app_in_two_channels();
+    let agent_layout = (app.record_panel_visible, app.sandbox_panel_visible);
+    app.toggle_side_column();
+
+    app.open_channel_by_id("c2");
+    assert!(app.channel_open());
+    assert!(
+        !app.sandbox_panel_visible(),
+        "another channel keeps it hidden"
+    );
+
+    // Among the agents the agent's own layout shows, untouched.
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Right));
+    assert!(!app.channel_app());
+    assert_eq!(
+        (app.record_panel_visible, app.sandbox_panel_visible),
+        agent_layout
+    );
+    assert_eq!(app.sandbox_panel_visible(), agent_layout.1);
+
+    // Back in CHANNELS, the channel it was left on is still without it.
+    app.handle_key(key(KeyCode::Left));
+    assert!(app.channel_app());
+    assert!(app.channel_open());
+    assert!(!app.sandbox_panel_visible(), "still hidden on coming back");
+
+    app.toggle_side_column();
+    assert!(app.sandbox_panel_visible());
 }
 
 // ========================================================================

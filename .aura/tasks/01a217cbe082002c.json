@@ -1,0 +1,16 @@
+{
+  "id": "01a217cbe082002c",
+  "title": "Read `.worktrees/simplify-out/BRIEF.md` and `.worktrees/simplify-out/PHASE4.md` first and follow them. Lane: worktree `…",
+  "state": "completed",
+  "agent_id": "194e81347ae791f7d2fdf8da862320a5cdbbf3c8dc554f2f82a9bad350c40edd",
+  "agent_name": "rust-engineer #180",
+  "assignee": "rust-engineer",
+  "parent": "01a2169842dc000c",
+  "plan": ".aura/plans/codebase-simplification-500-line-files-cleaner-c_bab3130a.plan.md",
+  "plan_todo": "p4-model-context",
+  "items": [],
+  "summary": "aura-model is not finished. Four of the six oversized test files are split and every listed long test function is broken up, but `sse/tests` (531 lines) and `model_alias/tests` (551) are still over 500. Because of that I did not do step 5: no `#![deny(clippy::too_many_lines)]` in `lib.rs`, and no lines removed from `scripts/file_size_allowlist.txt`.",
+  "updated_ms": 1795695978726,
+  "created_ms": 1795695566978,
+  "tool_use_id": "toolu_01UwKHi6f1oZR24DQhGtYUAq"
+}

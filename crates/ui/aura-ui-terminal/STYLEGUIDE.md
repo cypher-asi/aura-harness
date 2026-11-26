@@ -64,10 +64,11 @@ themes keep working:
 - **Error (`✗`)**: `error`
 - **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
   `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
-  ten, the rest are counted on a `muted` `N more` row. The boxes line up
-  under the `⬢` above them. The TASKS tab draws a plan's todos and the
-  agents' todo items the same way, with their boxes right under their
-  group header's fold arrow, as the checklist's sit under its `⬢`. What the
+  ten, the rest are counted on a `muted` `+N more` row. The boxes line up
+  under the `⬢` in the to-do drawer's header. The TASKS tab draws a
+  plan's todos and the agents' todo items the same way, with their boxes
+  right under their group header's fold arrow, as the drawer's sit under
+  its `⬢`. What the
   user asked has no row: each request's items stand for it, merged per
   agent since the list carries over between requests. Only a task an
   agent handed out is indented, one level (two columns) under the todo or
@@ -80,7 +81,9 @@ themes keep working:
 - **Focused panel**: `success` border, and the input box's while the
   Chat panel has focus
 - **Unfocused panel**: `faint` border
-- **Menus and the `/todos` list**: `muted` border
+- **Menus**: `muted` border
+- **The to-do drawer, queue and benchmark panels**: the Chat panel's
+  border, focused or not, joined to it by `├`/`┤`
 - **Approval dialog**: `warning` border
 - **Code blocks and step rules**: `faint`
 - **Spacing**: panels side by side sit one blank column apart and one
@@ -258,13 +261,12 @@ under a fold arrow, then the timeline, newest first.
 │    ▸ Explored 4 files, 2 searches            │
 │      2 steps (click to expand)               │
 │                                              │
-│  ⬢ Working on 2 to-dos                       │
-│  ☒ Read the handler                          │
-│  ▣ Fix the redirect                          │
-│                                              │
 │  ⬢ Thinking… 12s                             │
-└──────────────────────────────────────────────┘
-┌──────────────────────────────────────────────┐
+├──────────────────────────────────────────────┤
+│ ⬢ Working on 2 to-dos  1/2                 — │
+│ ☒ Read the handler                           │
+│ ▣ Fix the redirect                           │
+├──────────────────────────────────────────────┤
 │ →  Add a follow-up                           │
 └──────────────────────────────────────────────┘
  qwen3:4b · 23% context used · 2 calls  ● Ready
@@ -284,10 +286,23 @@ under a fold arrow, then the timeline, newest first.
   drawn, and where the first label of a run of them comes back, a blank
   row sets the next record apart
 - **Steps**: markers `faint`, the whole line `muted`
-- **Live tail**: while a turn runs, the to-do checklist (`⬢` `faint`,
-  `Working` bold `foreground`, the count `secondary`), then the working
-  line flush with the reply: `⬢` in `success`, the label bold
-  `foreground`, the elapsed time `muted`
+- **Live tail**: while a turn runs, the working line flush with the
+  reply: `⬢` in `success`, the label bold `foreground`, the elapsed time
+  `muted`. The to-do list is never part of the conversation.
+- **To-do drawer**: while the agent on screen has a to-do item open, in
+  a turn and between turns, a drawer sits under the Chat body in the
+  same column of borders, above the benchmark and queue panels. In an
+  open channel it shows the coordinator's list. Its
+  header is `⬢` `faint`, then `Working` bold `foreground` with the count
+  `secondary` during a turn, or `N to-dos` bold `foreground` when idle,
+  then `done/total` in `muted`, and the `—`/`+` toggle at the right,
+  `muted` and `foreground` under the pointer. Clicking the header or
+  `/todos` folds it to that one row, which then also shows the item in
+  progress. Open, it lists up to ten items one row each, starting at the
+  item in progress so it stays in view, with a `muted` `+N more` row for
+  the rest. It gives up rows before the queue, the benchmark panel and
+  the chat on a short screen. A list with every item closed hides it;
+  `/todos` brings it back.
 - **Input box**: as wide as the Chat panel, bordered like it, with a
   `muted` `→ ` prompt and a `muted` placeholder (`Ask anything`, then
   `Add a follow-up`) set one column past the cursor so the cursor never
