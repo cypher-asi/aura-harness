@@ -34,27 +34,18 @@ mod wake;
 
 pub use self::wake::WorkGuard;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use aura_config::{BoxdToken, CloudConfig, MachineSize};
-use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed, PlanTemplate};
-use aura_core_types::time::now_ms;
-use aura_core_types::{VmEvent, VmPayload, VmResources, VmSource};
+use aura_core_protocol::cloud::{GitClaim, PlanTemplate};
+use aura_core_types::{VmEvent, VmPayload, VmResources};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::boot::{human_bytes, BootReporter, BootStage};
-use crate::boxd::{CALL_TIMEOUT, CREATE_TIMEOUT};
-use crate::error::{CloudError, CloudResult};
-use crate::machine_env::MachineEnv;
-use crate::names::{
-    self, LABEL_AGENT, LABEL_INSTALL, LABEL_OWNER, LABEL_PROJECT, LABEL_ROLE, ROLE_AGENT,
-};
-use crate::provider::{
-    MachineInfo, MachineOrigin, MachineStatus, NewMachine, UsageReading, VmProvider,
-};
+use crate::names::LABEL_OWNER;
+use crate::provider::{MachineInfo, MachineOrigin, UsageReading, VmProvider};
 
 /// Command a node is claimed with; reads a [`NodeClaim`] on stdin and
 /// prints a [`NodeClaimed`].

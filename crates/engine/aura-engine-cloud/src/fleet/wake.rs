@@ -1,26 +1,16 @@
 //! Waking machines, the work that keeps them awake, and idle sleep.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use aura_config::{BoxdToken, CloudConfig, MachineSize};
-use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed, PlanTemplate};
-use aura_core_types::time::now_ms;
-use aura_core_types::{VmEvent, VmPayload, VmResources, VmSource};
-use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
-use crate::boot::{human_bytes, BootReporter, BootStage};
-use crate::boxd::{CALL_TIMEOUT, CREATE_TIMEOUT};
+use crate::boot::{BootReporter, BootStage};
+use crate::boxd::CALL_TIMEOUT;
 use crate::error::{CloudError, CloudResult};
-use crate::machine_env::MachineEnv;
-use crate::names::{
-    self, LABEL_AGENT, LABEL_INSTALL, LABEL_OWNER, LABEL_PROJECT, LABEL_ROLE, ROLE_AGENT,
-};
-use crate::provider::{
-    MachineInfo, MachineOrigin, MachineStatus, NewMachine, UsageReading, VmProvider,
-};
+use crate::provider::{MachineInfo, MachineStatus};
+use aura_core_types::time::now_ms;
+use aura_core_types::{VmEvent, VmPayload};
+use std::sync::Arc;
+use std::time::Instant;
 
-use super::{AUTO_HIBERNATE_BACKSTOP_SECS, CLAIM_COMMAND, CLAIM_TIMEOUT, Entry, FleetSettings, MachineView, MemoryLedger, ProvisionRequest, VmFleet, VmLedger, VmState, mesh_key, random_token};
+use super::claim::{claim_facts, claim_waits_on};
+use super::{MachineView, VmFleet, VmState, CLAIM_TIMEOUT};
 
 impl VmFleet {
     /// Wake `agent`'s machine if it sleeps, and claim it if it has no

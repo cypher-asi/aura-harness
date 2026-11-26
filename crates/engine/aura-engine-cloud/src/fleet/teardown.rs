@@ -1,26 +1,11 @@
 //! Destroying machines: one agent's, and those no agent owns.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use aura_config::{BoxdToken, CloudConfig, MachineSize};
-use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed, PlanTemplate};
-use aura_core_types::time::now_ms;
-use aura_core_types::{VmEvent, VmPayload, VmResources, VmSource};
-use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
-use crate::boot::{human_bytes, BootReporter, BootStage};
-use crate::boxd::{CALL_TIMEOUT, CREATE_TIMEOUT};
-use crate::error::{CloudError, CloudResult};
-use crate::machine_env::MachineEnv;
-use crate::names::{
-    self, LABEL_AGENT, LABEL_INSTALL, LABEL_OWNER, LABEL_PROJECT, LABEL_ROLE, ROLE_AGENT,
-};
-use crate::provider::{
-    MachineInfo, MachineOrigin, MachineStatus, NewMachine, UsageReading, VmProvider,
-};
+use crate::error::CloudResult;
+use crate::names::{self, LABEL_AGENT, LABEL_ROLE, ROLE_AGENT};
+use aura_core_types::{VmEvent, VmPayload};
+use std::collections::HashSet;
 
-use super::{AUTO_HIBERNATE_BACKSTOP_SECS, CLAIM_COMMAND, CLAIM_TIMEOUT, Entry, FleetSettings, MachineView, MemoryLedger, ProvisionRequest, VmFleet, VmLedger, VmState, mesh_key, random_token};
+use super::{VmFleet, VmState};
 
 impl VmFleet {
     /// Destroy `agent`'s machine for `reason` and write its `destroyed`

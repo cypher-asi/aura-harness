@@ -1,27 +1,16 @@
 //! Claiming a machine's node for its agent, and taking back the machines
 //! placed agents had.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use aura_config::{BoxdToken, CloudConfig, MachineSize};
+use crate::boot::BootReporter;
+use crate::error::{CloudError, CloudResult};
+use crate::names::{self, LABEL_OWNER};
+use crate::provider::MachineStatus;
 use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed, PlanTemplate};
 use aura_core_types::time::now_ms;
-use aura_core_types::{VmEvent, VmPayload, VmResources, VmSource};
-use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
-use crate::boot::{human_bytes, BootReporter, BootStage};
-use crate::boxd::{CALL_TIMEOUT, CREATE_TIMEOUT};
-use crate::error::{CloudError, CloudResult};
-use crate::machine_env::MachineEnv;
-use crate::names::{
-    self, LABEL_AGENT, LABEL_INSTALL, LABEL_OWNER, LABEL_PROJECT, LABEL_ROLE, ROLE_AGENT,
-};
-use crate::provider::{
-    MachineInfo, MachineOrigin, MachineStatus, NewMachine, UsageReading, VmProvider,
-};
+use aura_core_types::{VmEvent, VmPayload};
+use std::time::Instant;
 
-use super::{AUTO_HIBERNATE_BACKSTOP_SECS, CLAIM_COMMAND, CLAIM_TIMEOUT, Entry, FleetSettings, MachineView, MemoryLedger, ProvisionRequest, VmFleet, VmLedger, VmState, mesh_key, random_token};
+use super::{random_token, Entry, MachineView, VmFleet, VmState, CLAIM_COMMAND, CLAIM_TIMEOUT};
 
 /// What a node answered its claim with, as boot facts.
 pub(super) fn claim_facts(boot: &BootReporter, claimed: &NodeClaimed) {
