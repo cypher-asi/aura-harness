@@ -155,6 +155,18 @@ pub struct Session {
     pub(crate) agent_mailbox: Arc<super::agent_inbox::AgentMailbox>,
     /// Run trace of this conversation, started on its first turn.
     pub(crate) trace: Option<Arc<aura_agent_trace::RunRecorder>>,
+    /// Where each turn's end is checkpointed; set on a cloud node, where
+    /// the node holds the agent's conversation between runs.
+    pub(crate) checkpoints: Option<aura_agent::checkpoint::Checkpoints>,
+    /// Whether this run continues the conversation the agent's record
+    /// already holds, so it starts no new session there.
+    pub(crate) continues: bool,
+    /// When the conversation started; names its checkpoint.
+    pub(crate) started_ms: u64,
+    /// Model calls and tokens of the conversation, across runs.
+    pub(crate) usage: aura_agent::checkpoint::SessionUsage,
+    /// The agent's todo list, carried from turn to turn.
+    pub(crate) todos: Vec<aura_exec_tools::todo::TodoItem>,
 }
 
 impl Session {
@@ -205,6 +217,11 @@ impl Session {
             mode: aura_core_types::AgentMode::Agent,
             agent_mailbox: Arc::default(),
             trace: None,
+            checkpoints: None,
+            continues: false,
+            started_ms: aura_agent::checkpoint::now_ms(),
+            usage: aura_agent::checkpoint::SessionUsage::default(),
+            todos: Vec::new(),
         }
     }
 
@@ -528,6 +545,7 @@ impl Session {
             intent_classifier_manifest: self.intent_classifier_manifest.clone(),
             prompt_cache_key: self.prompt_cache_key.clone(),
             prompt_cache_retention: self.prompt_cache_retention.clone(),
+            initial_todos: self.todos.clone(),
             ..AgentLoopConfig::for_agent(self.model.clone())
         }
     }

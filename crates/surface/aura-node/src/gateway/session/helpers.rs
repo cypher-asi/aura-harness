@@ -223,7 +223,60 @@ pub(crate) async fn prepare_chat_session(
 
     populate_tool_definitions(&mut session, ctx);
 
+    if let Some(checkpoints) = &ctx.sessions {
+        continue_conversation(&mut session, checkpoints, ctx.store.as_ref());
+    }
+
     Ok(session)
+}
+
+/// On a cloud node, pick up the agent's conversation where its last run
+/// left it, unless the request brought one: its checkpoint and the
+/// prompts and replies recorded after it, else what the record holds
+/// since its last session start. Each turn's end is checkpointed again.
+fn continue_conversation(
+    session: &mut Session,
+    checkpoints: &aura_agent::checkpoint::Checkpoints,
+    store: &dyn aura_store_db::Store,
+) {
+    session.checkpoints = Some(checkpoints.clone());
+    if !session.messages.is_empty() {
+        return;
+    }
+    match store.get_head_seq(session.agent_id) {
+        Ok(0) => return,
+        Ok(_) => {}
+        Err(e) => {
+            warn!(session_id = %session.session_id, error = %e, "Could not read the agent's record; starting a new conversation");
+            return;
+        }
+    }
+    session.continues = true;
+    if let Some(saved) = aura_agent::history::restore(store, checkpoints, session.agent_id) {
+        info!(
+            session_id = %session.session_id,
+            messages = saved.messages.len(),
+            "Continuing the agent's conversation from its checkpoint"
+        );
+        session.started_ms = saved.started_ms;
+        session.messages = saved.messages;
+        session.todos = saved.todos;
+        session.usage = saved.usage;
+        return;
+    }
+    match aura_agent::history::model_history(store, session.agent_id) {
+        Ok(messages) => {
+            info!(
+                session_id = %session.session_id,
+                messages = messages.len(),
+                "Continuing the agent's conversation from its record"
+            );
+            session.messages = messages;
+        }
+        Err(e) => {
+            warn!(session_id = %session.session_id, error = %e, "Could not rebuild the agent's conversation from its record");
+        }
+    }
 }
 
 /// Bootstrap an already-applied chat [`Session`] now that its WS is
@@ -315,10 +368,14 @@ pub(super) async fn emit_session_ready(
 ///    start is itself a state change that must be recorded and that
 ///    resets the kernel's session-scoped approval cache. Emit the
 ///    transaction before anything else on this kernel so the record
-///    reflects session boundaries for replay.
-/// 2. `record_runtime_capabilities` — bundles the `installed_tools` /
+///    reflects session boundaries for replay. A run that continues the
+///    agent's conversation ([`Session::continues`], on a cloud node)
+///    starts no session: rebuilding the conversation stops at the last
+///    `SessionStart`.
+/// 2. `record_capability_install` — bundles the `installed_tools` /
 ///    `installed_integrations` snapshot into a single `System` record
 ///    entry so downstream replay knows what surface the LLM was given.
+///    Written only when it differs from the latest one in the session.
 ///
 /// Failures only log; we deliberately don't surface them to the caller
 /// because a kernel build / capability-recording failure must NOT
@@ -327,20 +384,36 @@ pub(super) async fn emit_session_ready(
 async fn bootstrap_session(session: &Session, ctx: &WsContext) {
     match build_kernel_with_config(session, ctx, &ctx.tool_config, None, None).await {
         Ok(kernel) => {
-            if let Err(e) = kernel
-                .process_direct(aura_core_types::Transaction::session_start(
-                    session.agent_id,
-                ))
-                .await
-            {
-                error!(
-                    session_id = %session.session_id,
-                    error = %e,
-                    "Failed to record SessionStart transaction through kernel"
-                );
+            if !session.continues {
+                if let Err(e) = kernel
+                    .process_direct(aura_core_types::Transaction::session_start(
+                        session.agent_id,
+                    ))
+                    .await
+                {
+                    error!(
+                        session_id = %session.session_id,
+                        error = %e,
+                        "Failed to record SessionStart transaction through kernel"
+                    );
+                }
             }
 
-            if let Err(e) = capabilities::record_runtime_capabilities(
+            let latest = match ctx.store.get_runtime_capabilities(session.agent_id) {
+                Ok(latest) => latest,
+                Err(e) => {
+                    warn!(session_id = %session.session_id, error = %e, "Could not read the agent's latest capability install; recording it again");
+                    None
+                }
+            };
+            if !capabilities::capabilities_changed(
+                latest.as_ref(),
+                &session.installed_tools,
+                &session.installed_integrations,
+            ) {
+                return;
+            }
+            if let Err(e) = capabilities::record_capability_install(
                 &kernel,
                 "session",
                 Some(&session.session_id),
@@ -960,6 +1033,7 @@ pub(super) async fn finalize_turn(
     join_result: Result<anyhow::Result<AgentLoopResult>, tokio::task::JoinError>,
     message_id: &str,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
+    kernel: Option<&Kernel>,
 ) {
     record_turn_end(session, &join_result);
     let result = match join_result {
@@ -973,7 +1047,7 @@ pub(super) async fn finalize_turn(
 
     match result {
         Ok(loop_result) => {
-            apply_turn_result(session, &loop_result, message_id, outbound_tx).await;
+            apply_turn_result(session, &loop_result, message_id, outbound_tx, kernel).await;
         }
         Err(e) => {
             error!(session_id = %session.session_id, error = %e, "Turn processing failed");
@@ -1018,16 +1092,27 @@ async fn send_turn_error(outbound_tx: &mpsc::Sender<OutboundMessage>, message_id
     .await;
 }
 
+/// Take a finished turn into `session` and tell the client it ended.
+///
+/// With the turn's `kernel`, the reply is recorded in the agent's record
+/// first and, on a cloud node, the conversation checkpointed, both before
+/// `AssistantMessageEnd` goes out: the hub copies the record when the turn
+/// ends, and its next run starts from the checkpoint.
 pub(super) async fn apply_turn_result(
     session: &mut Session,
     loop_result: &AgentLoopResult,
     message_id: &str,
     outbound_tx: &mpsc::Sender<OutboundMessage>,
+    kernel: Option<&Kernel>,
 ) {
+    if let Some(kernel) = kernel {
+        record_reply(kernel, session, &loop_result.total_text).await;
+    }
     session.messages.clone_from(&loop_result.messages);
     // Defense-in-depth: cap oversized tool_use inputs / tool_result content
     // so one large blob does not ride along with every subsequent prompt.
     aura_context_compaction::compact_for_storage(&mut session.messages);
+    session.todos.clone_from(&loop_result.todos);
     let files_changed = summarize_files_changed(loop_result);
 
     let input_tokens = loop_result.total_input_tokens;
@@ -1039,6 +1124,22 @@ pub(super) async fn apply_turn_result(
     session.cumulative_output_tokens += output_tokens;
     session.cumulative_cache_creation_input_tokens += cache_creation_input_tokens;
     session.cumulative_cache_read_input_tokens += cache_read_input_tokens;
+    session.usage.add(&aura_agent::checkpoint::SessionUsage {
+        calls: u32::try_from(loop_result.iterations).unwrap_or(u32::MAX),
+        input_tokens,
+        cache_read_tokens: cache_read_input_tokens,
+        cache_write_tokens: cache_creation_input_tokens,
+        output_tokens,
+        context_tokens: estimated_context_tokens,
+        models: (!session.model.is_empty())
+            .then(|| session.model.clone())
+            .into_iter()
+            .collect(),
+        ..aura_agent::checkpoint::SessionUsage::default()
+    });
+    if let Some(kernel) = kernel {
+        save_checkpoint(session, kernel).await;
+    }
 
     let stop_reason = if loop_result.budget_exhausted {
         "budget"
@@ -1113,6 +1214,51 @@ pub(super) async fn apply_turn_result(
     );
 }
 
+/// Record the turn's reply `text` in the agent's record, as the terminal
+/// and the scheduler's worker do: chats rebuilt from the record show it,
+/// and a run that rebuilds the conversation from the record has it.
+async fn record_reply(kernel: &Kernel, session: &Session, text: &str) {
+    let tx = aura_core_types::Transaction::new_chained(
+        session.agent_id,
+        aura_core_types::TransactionType::AgentMsg,
+        text.as_bytes().to_vec(),
+        None,
+    );
+    if let Err(e) = kernel.process_direct(tx).await {
+        error!(
+            session_id = %session.session_id,
+            error = %e,
+            "Failed to record the reply through the kernel"
+        );
+    }
+}
+
+/// Checkpoint the conversation as of the head of the agent's record, when
+/// the session keeps checkpoints (on a cloud node). A failure is logged;
+/// the record still has the prompts and replies.
+async fn save_checkpoint(session: &Session, kernel: &Kernel) {
+    let Some(checkpoints) = &session.checkpoints else {
+        return;
+    };
+    let record_seq = match kernel.store().get_head_seq(session.agent_id) {
+        Ok(seq) => seq,
+        Err(e) => {
+            warn!(session_id = %session.session_id, error = %e, "Skipping checkpoint: record head unknown");
+            return;
+        }
+    };
+    let checkpoint = aura_agent::checkpoint::SessionCheckpoint::new(
+        session.started_ms,
+        record_seq,
+        session.messages.clone(),
+        session.todos.clone(),
+        session.usage.clone(),
+    );
+    if let Err(e) = checkpoints.save(session.agent_id, &checkpoint).await {
+        warn!(session_id = %session.session_id, error = %e, "Failed to save the session checkpoint");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1179,6 +1325,7 @@ mod tests {
             chat_runs: Arc::new(dashmap::DashMap::new()),
             run_id: None,
             agent_host,
+            sessions: None,
         }
     }
 
@@ -1353,7 +1500,7 @@ mod tests {
         let loop_result = AgentLoopResult::default();
         let apply_tx = outbound_tx.clone();
         let apply_handle = tokio::spawn(async move {
-            apply_turn_result(&mut session, &loop_result, "msg-1", &apply_tx).await;
+            apply_turn_result(&mut session, &loop_result, "msg-1", &apply_tx, None).await;
         });
 
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1568,7 +1715,7 @@ mod tests {
         let mut session = Session::new(PathBuf::from("/tmp/aura"));
         let finalize_tx = outbound_tx.clone();
         let finalize_handle = tokio::spawn(async move {
-            finalize_turn(&mut session, join_result, "msg-2", &finalize_tx).await;
+            finalize_turn(&mut session, join_result, "msg-2", &finalize_tx, None).await;
         });
 
         tokio::time::sleep(Duration::from_millis(10)).await;

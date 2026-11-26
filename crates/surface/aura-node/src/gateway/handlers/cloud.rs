@@ -5,6 +5,8 @@
 //! | `GET /v1/host` | hub | this machine's [`HostStats`] |
 //! | `POST /v1/sync/import` | hub | seed an agent's record before it runs here |
 //! | `POST /v1/sync/seal/:agent_id` | hub | stop writing for an agent, report its final head |
+//! | `PUT /v1/sync/session/:agent_id` | hub | the conversation the agent's first run here continues |
+//! | `POST /v1/sync/session/:agent_id/new` | hub | start a new session (`/new`) |
 //! | `GET /v1/sync/traces` | hub | trace runs since a cursor |
 //! | `GET /v1/workspace/patch` | hub | the agent's work as a patch |
 //! | `POST /v1/mesh/mail` | hub, peers | one message for an agent here |
@@ -19,11 +21,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
+use aura_agent::checkpoint::{SessionCheckpoint, CHECKPOINT_VERSION};
+use aura_agent_kernel::{ExecutorRouter, Kernel, KernelConfig};
 use aura_core_protocol::cloud::{
-    MeshFrame, MeshMail, MeshMailKind, MeshPeer, SealResponse, SyncImport, SyncImported, TracePage,
-    WorkspacePatch, MESH_PROTOCOL,
+    MeshFrame, MeshMail, MeshMailKind, MeshPeer, SealResponse, SessionSaved, SessionStarted,
+    SyncImport, SyncImported, TracePage, WorkspacePatch, MESH_PROTOCOL,
 };
-use aura_core_types::AgentId;
+use aura_core_types::{AgentId, Transaction};
 use aura_engine::agents::{MessageKind, RemoteMail, RemoteRouter, ThreadId};
 use aura_engine_cloud::mesh::{global_thread, MailBook};
 use aura_engine_cloud::replica::verify_page;
@@ -66,6 +70,49 @@ fn bad(message: impl Into<String>) -> (StatusCode, String) {
 
 fn parse_agent(hex: &str) -> ApiResult<AgentId> {
     AgentId::from_hex(hex.trim()).map_err(|err| bad(format!("invalid agent id: {err}")))
+}
+
+fn sealed(agent: AgentId) -> (StatusCode, String) {
+    (
+        StatusCode::CONFLICT,
+        format!("agent {agent} is sealed on this node"),
+    )
+}
+
+fn storage(e: aura_store_db::StoreError) -> (StatusCode, String) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("storage error: {e}"),
+    )
+}
+
+/// Stop every chat run and wait (up to [`SEAL_DRAIN`]) for them to end. A
+/// cloud node only runs its hub's agent.
+async fn end_chat_runs(state: &RouterState) {
+    for run in state.chat_runs.iter() {
+        run.shutdown.cancel();
+    }
+    let deadline = tokio::time::Instant::now() + SEAL_DRAIN;
+    while !state.chat_runs.is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Wait (up to [`SEAL_DRAIN`]) for a turn the scheduler runs for `agent`
+/// (mail) to end, and hold its claim so none starts.
+async fn hold_claim(
+    state: &RouterState,
+    agent: AgentId,
+) -> ApiResult<aura_engine::scheduler::ProcessingClaim> {
+    tokio::time::timeout(SEAL_DRAIN, state.scheduler.processing_claim(agent))
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::CONFLICT,
+                format!("agent {agent} is still writing; try again"),
+            )
+        })?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("claim: {e}")))
 }
 
 /// The node's half of the mesh: the hub socket, the peer directory and
@@ -254,17 +301,8 @@ pub(in crate::gateway) async fn sync_import_handler(
     }
     let agent = parse_agent(&import.agent_id)?;
     if state.cloud.is_sealed(&agent) {
-        return Err((
-            StatusCode::CONFLICT,
-            format!("agent {agent} is sealed on this node"),
-        ));
+        return Err(sealed(agent));
     }
-    let storage = |e: aura_store_db::StoreError| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("storage error: {e}"),
-        )
-    };
     let head = state.store.get_head_seq(agent).map_err(storage)?;
     let head_hash = if head == 0 {
         None
@@ -307,32 +345,97 @@ pub(in crate::gateway) async fn sync_seal_handler(
     let _ = state
         .agent_host
         .lifecycle(agent, aura_engine::agents::LifecycleAction::Stop);
-    for run in state.chat_runs.iter() {
-        run.shutdown.cancel();
-    }
-    let deadline = tokio::time::Instant::now() + SEAL_DRAIN;
-    while !state.chat_runs.is_empty() && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    end_chat_runs(&state).await;
     // A turn the scheduler runs (mail) holds the agent's claim; waiting
     // for it means no write is in flight when the head is read.
-    let claim = tokio::time::timeout(SEAL_DRAIN, state.scheduler.processing_claim(agent))
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::CONFLICT,
-                format!("agent {agent} is still writing; try the seal again"),
-            )
-        })?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("claim: {e}")))?;
-    let head_seq = state.store.get_head_seq(agent).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("storage error: {e}"),
-        )
-    })?;
+    let claim = hold_claim(&state, agent).await?;
+    let head_seq = state.store.get_head_seq(agent).map_err(storage)?;
     drop(claim);
     Ok(Json(SealResponse { head_seq }))
+}
+
+/// `PUT /v1/sync/session/:agent_id`: make `checkpoint` the agent's current
+/// session here, so its first run continues the conversation it had,
+/// tool calls included. The checkpoint must not be past the record the
+/// node holds for the agent.
+pub(in crate::gateway) async fn sync_session_put_handler(
+    State(state): State<RouterState>,
+    AxumPath(agent_hex): AxumPath<String>,
+    Json(checkpoint): Json<SessionCheckpoint>,
+) -> ApiResult<impl IntoResponse> {
+    let Some(sessions) = state.cloud.sessions() else {
+        return Err(not_cloud());
+    };
+    let agent = parse_agent(&agent_hex)?;
+    if state.cloud.is_sealed(&agent) {
+        return Err(sealed(agent));
+    }
+    if checkpoint.version != CHECKPOINT_VERSION {
+        return Err(bad(format!(
+            "unknown checkpoint version {}",
+            checkpoint.version
+        )));
+    }
+    let head = state.store.get_head_seq(agent).map_err(storage)?;
+    if checkpoint.record_seq > head {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "the checkpoint is at entry {} but the record here ends at {head}",
+                checkpoint.record_seq
+            ),
+        ));
+    }
+    sessions.save(agent, &checkpoint).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not save the checkpoint: {e}"),
+        )
+    })?;
+    Ok(Json(SessionSaved {
+        record_seq: checkpoint.record_seq,
+        messages: u64::try_from(checkpoint.messages.len()).unwrap_or(u64::MAX),
+    }))
+}
+
+/// `POST /v1/sync/session/:agent_id/new`: start a new session in the
+/// agent's record, as `/new` does for a local agent. Live chat runs hold
+/// the old conversation, so they end first; the next run finds the
+/// `SessionStart` and starts empty.
+pub(in crate::gateway) async fn sync_session_new_handler(
+    State(state): State<RouterState>,
+    AxumPath(agent_hex): AxumPath<String>,
+) -> ApiResult<impl IntoResponse> {
+    if !state.cloud.enabled() {
+        return Err(not_cloud());
+    }
+    let agent = parse_agent(&agent_hex)?;
+    if state.cloud.is_sealed(&agent) {
+        return Err(sealed(agent));
+    }
+    end_chat_runs(&state).await;
+    let claim = hold_claim(&state, agent).await?;
+    let kernel = Kernel::new(
+        state.store.clone(),
+        state.provider.clone(),
+        ExecutorRouter::new(),
+        KernelConfig::default(),
+        agent,
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("kernel: {e}")))?;
+    let started = kernel
+        .process_direct(Transaction::session_start(agent))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not record the new session: {e}"),
+            )
+        })?;
+    drop(claim);
+    Ok(Json(SessionStarted {
+        head_seq: started.entry.seq,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -904,6 +1007,185 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT);
         let tx = serde_json::json!({"agent_id": agent.to_hex(), "kind": "user_prompt", "payload": "aGk="});
         let (status, _) = call(&state, "POST", "/tx", Some(NODE_TOKEN), Some(tx)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    async fn import(state: &RouterState, agent: AgentId, prompts: u64) {
+        let entries: Vec<RecordEntry> = (1..=prompts)
+            .map(|seq| {
+                RecordEntry::builder(seq, Transaction::user_prompt(agent, format!("p{seq}")))
+                    .build()
+            })
+            .collect();
+        let import = serde_json::json!({
+            "agent_id": agent.to_hex(),
+            "name": "re36",
+            "entries": entries,
+            "done": true,
+        });
+        let (status, body) = call(
+            state,
+            "POST",
+            "/v1/sync/import",
+            Some(NODE_TOKEN),
+            Some(import),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    fn checkpoint(record_seq: u64) -> SessionCheckpoint {
+        SessionCheckpoint::new(
+            1_000,
+            record_seq,
+            vec![
+                aura_model::Message::user("p1"),
+                aura_model::Message::assistant("a1"),
+            ],
+            Vec::new(),
+            aura_agent::checkpoint::SessionUsage::default(),
+        )
+    }
+
+    fn json(checkpoint: &SessionCheckpoint) -> serde_json::Value {
+        serde_json::to_value(checkpoint).expect("json")
+    }
+
+    /// The session the node's next run for `agent` starts with.
+    async fn next_run(state: &RouterState, agent: AgentId) -> crate::gateway::session::Session {
+        let workspace = state.config.workspaces_path().join("agent");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let request = aura_core_protocol::RuntimeRequest {
+            r#type: aura_core_protocol::RuntimeRequestType::Chat {
+                conversation_messages: Vec::new(),
+            },
+            agent_identity: aura_core_protocol::AgentIdentity {
+                partition_id: Some(agent.to_hex()),
+                ..aura_core_protocol::AgentIdentity::default()
+            },
+            model: aura_core_protocol::ModelSelection::default(),
+            workspace: aura_core_protocol::WorkspaceLocation {
+                workspace: Some(workspace.display().to_string()),
+                ..aura_core_protocol::WorkspaceLocation::default()
+            },
+            project: None,
+            agent_permissions: aura_core_protocol::AgentPermissionsWire::default(),
+            tool_permissions: None,
+            agent_capabilities: aura_core_protocol::AgentCapabilities::default(),
+            auth_jwt: None,
+            user_id: "hub".to_string(),
+            mode: None,
+        };
+        let ctx = crate::gateway::session::WsContext::from_state(state, None);
+        crate::gateway::session::prepare_chat_session(request, &ctx)
+            .await
+            .expect("prepare")
+    }
+
+    #[tokio::test]
+    async fn a_session_is_taken_up_to_the_record_and_never_once_sealed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = cloud_state(dir.path());
+        claim(&state);
+        let agent = AgentId::new([9; 32]);
+        let uri = format!("/v1/sync/session/{}", agent.to_hex());
+        import(&state, agent, 2).await;
+
+        let (status, body) = call(
+            &state,
+            "PUT",
+            &uri,
+            Some(NODE_TOKEN),
+            Some(json(&checkpoint(3))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "past the record: {body}");
+        let mut unknown = checkpoint(2);
+        unknown.version = CHECKPOINT_VERSION + 1;
+        let (status, _) = call(&state, "PUT", &uri, Some(NODE_TOKEN), Some(json(&unknown))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = call(&state, "PUT", &uri, None, Some(json(&checkpoint(2)))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        let (status, body) = call(
+            &state,
+            "PUT",
+            &uri,
+            Some(NODE_TOKEN),
+            Some(json(&checkpoint(2))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            (body["record_seq"].as_u64(), body["messages"].as_u64()),
+            (Some(2), Some(2))
+        );
+        let session = next_run(&state, agent).await;
+        assert!(session.continues);
+        assert_eq!(session.started_ms, 1_000);
+        assert_eq!(session.messages.len(), 2);
+
+        call(
+            &state,
+            "POST",
+            &format!("/v1/sync/seal/{}", agent.to_hex()),
+            Some(NODE_TOKEN),
+            None,
+        )
+        .await;
+        let (status, _) = call(
+            &state,
+            "PUT",
+            &uri,
+            Some(NODE_TOKEN),
+            Some(json(&checkpoint(2))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn a_new_session_starts_on_the_node() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = cloud_state(dir.path());
+        claim(&state);
+        let agent = AgentId::new([10; 32]);
+        let uri = format!("/v1/sync/session/{}/new", agent.to_hex());
+        import(&state, agent, 2).await;
+        let (status, _) = call(
+            &state,
+            "PUT",
+            &format!("/v1/sync/session/{}", agent.to_hex()),
+            Some(NODE_TOKEN),
+            Some(json(&checkpoint(2))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = call(&state, "POST", &uri, Some(NODE_TOKEN), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["head_seq"], 3);
+        let entries = state.store.scan_record(agent, 3, 1).expect("scan");
+        assert_eq!(
+            entries[0].tx.tx_type,
+            aura_core_types::TransactionType::SessionStart
+        );
+        let session = next_run(&state, agent).await;
+        assert!(
+            session.continues,
+            "the node wrote the session start already"
+        );
+        assert!(session.messages.is_empty(), "{:?}", session.messages);
+
+        call(
+            &state,
+            "POST",
+            &format!("/v1/sync/seal/{}", agent.to_hex()),
+            Some(NODE_TOKEN),
+            None,
+        )
+        .await;
+        let (status, _) = call(&state, "POST", &uri, Some(NODE_TOKEN), None).await;
         assert_eq!(status, StatusCode::CONFLICT);
     }
 

@@ -27,11 +27,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::mpsc;
 use tracing::warn;
 
+pub(crate) use aura_agent::history::scan_tail;
+use aura_agent::history::{entries_past, messages_after, scan_below, HISTORY_SCAN_LIMIT};
+pub use aura_agent::history::{model_history, model_history_from, model_history_since};
+
 /// Number of entries loaded into the Record panel: as many as it holds.
 const RECORD_PANEL_LIMIT: usize = MAX_RECORDS;
-
-/// Number of trailing entries scanned when rebuilding an agent's chat.
-const HISTORY_SCAN_LIMIT: usize = 1000;
 
 /// Number of chat messages kept after rebuilding, activity blocks included
 /// (matches the UI cap).
@@ -139,100 +140,6 @@ impl RecordTail {
                 .iter()
                 .filter(|entry| entry.seq > after_seq && entry.seq <= self.head),
         )
-    }
-}
-
-/// Rebuild the conversation the model sees from an agent's record: its
-/// prompts and replies since the last session start, oldest first. Tool
-/// calls are left out; their `tool_use`/`tool_result` pairs can't be
-/// replayed safely, and the replies already describe what they did.
-///
-/// # Errors
-/// Returns the store error if the head sequence or scan fails.
-pub fn model_history(store: &dyn ReadStore, agent_id: AgentId) -> Result<Vec<Message>, StoreError> {
-    Ok(model_history_from(&scan_tail(
-        store,
-        agent_id,
-        HISTORY_SCAN_LIMIT,
-    )?))
-}
-
-/// [`model_history`] from `entries`, the newest of the record, oldest
-/// first.
-#[must_use]
-pub fn model_history_from(entries: &[RecordEntry]) -> Vec<Message> {
-    let mut messages = Vec::new();
-    for entry in entries {
-        push_model_message(&mut messages, &entry.tx);
-    }
-    messages
-}
-
-/// The prompts and replies recorded after `after_seq`, for replaying on
-/// top of a checkpoint taken at `after_seq`. `None` when the checkpoint
-/// no longer applies: a session started since, or too much happened to
-/// scan.
-///
-/// # Errors
-/// Returns the store error if the head sequence or scan fails.
-pub fn model_history_since(
-    store: &dyn ReadStore,
-    agent_id: AgentId,
-    after_seq: u64,
-) -> Result<Option<Vec<Message>>, StoreError> {
-    let head_seq = store.get_head_seq(agent_id)?;
-    let Some(newer) = entries_past(head_seq, after_seq) else {
-        return Ok(None);
-    };
-    if newer == 0 {
-        return Ok(Some(Vec::new()));
-    }
-    Ok(messages_after(&store.scan_record(
-        agent_id,
-        after_seq + 1,
-        newer,
-    )?))
-}
-
-/// How many entries a record with head `head_seq` holds past a checkpoint
-/// taken at `after_seq`, while the checkpoint applies: it is not ahead of
-/// the record, and what came after it is few enough to scan.
-fn entries_past(head_seq: u64, after_seq: u64) -> Option<usize> {
-    let newer = usize::try_from(head_seq.checked_sub(after_seq)?).unwrap_or(usize::MAX);
-    (newer <= HISTORY_SCAN_LIMIT).then_some(newer)
-}
-
-/// The prompts and replies in `entries`, recorded after a checkpoint;
-/// `None` when a session started among them.
-fn messages_after<'a>(entries: impl IntoIterator<Item = &'a RecordEntry>) -> Option<Vec<Message>> {
-    let mut messages = Vec::new();
-    for entry in entries {
-        if entry.tx.tx_type == TransactionType::SessionStart {
-            return None;
-        }
-        push_model_message(&mut messages, &entry.tx);
-    }
-    Some(messages)
-}
-
-/// Add what `tx` contributes to the model's view of the conversation.
-fn push_model_message(messages: &mut Vec<Message>, tx: &Transaction) {
-    let text = || String::from_utf8_lossy(&tx.payload).trim().to_string();
-    match tx.tx_type {
-        TransactionType::SessionStart => messages.clear(),
-        TransactionType::UserPrompt => {
-            let text = prompt_text(tx).trim().to_string();
-            if !text.is_empty() {
-                messages.push(Message::user(text));
-            }
-        }
-        TransactionType::AgentMsg => {
-            let text = text();
-            if !text.is_empty() {
-                messages.push(Message::assistant(text));
-            }
-        }
-        _ => {}
     }
 }
 
@@ -1022,31 +929,6 @@ fn rows(
             (agent_id, row)
         })
         .collect()
-}
-
-pub(crate) fn scan_tail(
-    store: &dyn ReadStore,
-    agent_id: AgentId,
-    limit: usize,
-) -> Result<Vec<RecordEntry>, StoreError> {
-    let head_seq = store.get_head_seq(agent_id)?;
-    scan_below(store, agent_id, head_seq, limit)
-}
-
-/// The newest `limit` entries of `agent_id`'s record up to `head_seq`,
-/// oldest first.
-fn scan_below(
-    store: &dyn ReadStore,
-    agent_id: AgentId,
-    head_seq: u64,
-    limit: usize,
-) -> Result<Vec<RecordEntry>, StoreError> {
-    if head_seq == 0 {
-        return Ok(Vec::new());
-    }
-    let window = u64::try_from(limit).unwrap_or(u64::MAX);
-    let from_seq = head_seq.saturating_sub(window.saturating_sub(1)).max(1);
-    store.scan_record(agent_id, from_seq, limit)
 }
 
 fn history_message(tx: &Transaction) -> Option<MessageData> {

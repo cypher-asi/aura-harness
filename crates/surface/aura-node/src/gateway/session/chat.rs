@@ -26,6 +26,7 @@ use crate::protocol::{
 use aura_agent::{
     AgentLoop, AgentLoopEvent, AgentLoopResult, KernelModelGateway, KernelToolGateway,
 };
+use aura_agent_kernel::Kernel;
 use aura_model::{ContentBlock, ImageSource, Message, Role};
 use base64::Engine;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,6 +48,8 @@ struct AgentTurn {
     join_handle: JoinHandle<anyhow::Result<AgentLoopResult>>,
     stream_forward_handle: JoinHandle<()>,
     message_id: String,
+    /// The turn's kernel, which records its reply when it ends.
+    kernel: Arc<Kernel>,
 }
 
 /// Drive a chat run's full turn lifecycle, decoupled from any WS.
@@ -217,7 +220,14 @@ async fn complete_agent_turn(
             "Stream forward task failed"
         );
     }
-    helpers::finalize_turn(session, join_result, &message_id, outbound_tx).await;
+    helpers::finalize_turn(
+        session,
+        join_result,
+        &message_id,
+        outbound_tx,
+        Some(agent.kernel.as_ref()),
+    )
+    .await;
 }
 
 fn log_generation_join(join_result: Result<(), tokio::task::JoinError>, session: &Session) {
@@ -459,6 +469,7 @@ pub(super) fn populate_tool_definitions(session: &mut Session, ctx: &WsContext) 
 struct PreparedTurn {
     model_gateway: KernelModelGateway,
     tool_gateway: KernelToolGateway,
+    kernel: Arc<Kernel>,
     config: aura_agent::AgentLoopConfig,
     messages: Vec<Message>,
     tools: Vec<aura_model::ToolDefinition>,
@@ -695,7 +706,7 @@ async fn prepare_turn_context(
     }
 
     let model_gateway = KernelModelGateway::new(kernel.clone());
-    let tool_gateway = KernelToolGateway::new(kernel);
+    let tool_gateway = KernelToolGateway::new(kernel.clone());
 
     let mut config = session.agent_loop_config();
     config.tool_hints = msg.tool_hints;
@@ -795,6 +806,7 @@ async fn prepare_turn_context(
     Ok(PreparedTurn {
         model_gateway,
         tool_gateway,
+        kernel,
         config,
         messages,
         tools,
@@ -819,6 +831,7 @@ fn dispatch_turn_to_agent(
     let PreparedTurn {
         model_gateway,
         tool_gateway,
+        kernel,
         config,
         messages,
         tools,
@@ -864,6 +877,7 @@ fn dispatch_turn_to_agent(
         join_handle,
         stream_forward_handle,
         message_id,
+        kernel,
     }
 }
 
@@ -948,6 +962,7 @@ mod tests {
             chat_runs: Arc::new(dashmap::DashMap::new()),
             run_id: None,
             agent_host,
+            sessions: None,
         }
     }
 

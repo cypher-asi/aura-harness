@@ -29,7 +29,44 @@ pub async fn record_runtime_capabilities(
     kernel
         .process_direct(Transaction::session_start(kernel.agent_id))
         .await?;
+    record_capability_install(
+        kernel,
+        scope,
+        session_id,
+        installed_tools,
+        installed_integrations,
+    )
+    .await
+}
 
+/// Whether `installed_tools` and `installed_integrations` differ from the
+/// latest `CapabilityInstall` the agent's record holds since its session
+/// started (a `SessionStart` clears it).
+#[must_use]
+pub fn capabilities_changed(
+    latest: Option<&RuntimeCapabilityInstall>,
+    installed_tools: &[InstalledToolDefinition],
+    installed_integrations: &[InstalledIntegrationDefinition],
+) -> bool {
+    let Some(latest) = latest else {
+        return true;
+    };
+    let tools: Vec<InstalledToolCapability> = installed_tools
+        .iter()
+        .map(InstalledToolCapability::from)
+        .collect();
+    latest.installed_tools != tools || latest.installed_integrations != installed_integrations
+}
+
+/// Record a `CapabilityInstall` system entry on the supplied kernel,
+/// within the session the agent's record is in.
+pub async fn record_capability_install(
+    kernel: &Kernel,
+    scope: &str,
+    session_id: Option<&str>,
+    installed_tools: &[InstalledToolDefinition],
+    installed_integrations: &[InstalledIntegrationDefinition],
+) -> Result<(), KernelError> {
     let payload = RuntimeCapabilityInstall {
         system_kind: SystemKind::CapabilityInstall,
         scope: scope.to_string(),

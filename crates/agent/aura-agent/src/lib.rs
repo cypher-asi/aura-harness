@@ -48,12 +48,14 @@
 mod agent_loop;
 mod budget;
 pub(crate) mod build;
+pub mod checkpoint;
 pub mod console;
 pub(crate) mod dup_audit;
 pub(crate) mod events;
 pub(crate) mod file_ops;
 pub mod git;
 pub mod helpers;
+pub mod history;
 mod kernel_domain_gateway;
 mod kernel_gateway;
 pub(crate) mod planning;
@@ -243,5 +245,7 @@ impl From<aura_agent_kernel::KernelError> for AgentError {
 
 #[cfg(test)]
 mod event_sequence_tests;
+#[cfg(test)]
+mod history_tests;
 #[cfg(test)]
 mod store_migration_tests;

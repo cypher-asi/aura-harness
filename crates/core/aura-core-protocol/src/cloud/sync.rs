@@ -5,6 +5,8 @@
 //! |---|---|---|
 //! | `POST /v1/sync/import` | [`SyncImport`] | [`SyncImported`] |
 //! | `POST /v1/sync/seal/:agent_id` | none | [`SealResponse`] |
+//! | `PUT /v1/sync/session/:agent_id` | the agent's session checkpoint | [`SessionSaved`] |
+//! | `POST /v1/sync/session/:agent_id/new` | none | [`SessionStarted`] |
 //! | `GET /v1/sync/traces?since=` | none | [`TracePage`] |
 //! | `GET /v1/workspace/patch?base=` | none | [`WorkspacePatch`] |
 //! | `aura node claim --stdin` (over `Exec`) | [`NodeClaim`] | [`NodeClaimed`] |
@@ -44,6 +46,24 @@ pub struct SyncImported {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SealResponse {
     /// Final head.
+    pub head_seq: u64,
+}
+
+/// Answer to a session checkpoint upload: the agent's next run on the node
+/// continues from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSaved {
+    /// Record entry the checkpoint was taken at.
+    pub record_seq: u64,
+    /// Messages it holds.
+    pub messages: u64,
+}
+
+/// Answer to a new session: the agent's record starts one at `head_seq`,
+/// and its next run on the node starts with an empty conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionStarted {
+    /// The agent's head, its `SessionStart` entry.
     pub head_seq: u64,
 }
 

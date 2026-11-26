@@ -35,6 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use aura_agent::checkpoint::Checkpoints;
 use aura_config::{BoxdToken, CloudConfig};
 pub use aura_core_auth::Owner;
 use aura_core_protocol::cloud::{
@@ -386,6 +387,9 @@ pub struct CloudHub {
     plans: Mutex<Option<Arc<PlanSync>>>,
     /// Projects' GitHub tokens as boxd secrets.
     repos: Mutex<Arc<RepoSync>>,
+    /// The app's session checkpoints: a placed agent's node continues
+    /// the conversation its local session had.
+    sessions: Mutex<Option<Checkpoints>>,
     /// The user signed in here: local agents act as this user.
     current_owner: Mutex<Owner>,
     stop: CancellationToken,
@@ -505,6 +509,7 @@ impl CloudHub {
             mirrors: Mutex::new(HashMap::new()),
             plans: Mutex::new(None),
             repos: Mutex::new(repos),
+            sessions: Mutex::new(None),
             current_owner: Mutex::new(Owner::Local),
             stop: CancellationToken::new(),
         });
@@ -562,6 +567,12 @@ impl CloudHub {
     pub fn attach_host(self: &Arc<Self>, host: &AgentHost) {
         *self.host.lock() = Some(host.clone());
         host.set_remote_router(Arc::new(HubRouter(Arc::downgrade(self))));
+    }
+
+    /// Hand placed agents' nodes the app's session checkpoints, kept in
+    /// `sessions`.
+    pub fn attach_sessions(&self, sessions: Checkpoints) {
+        *self.sessions.lock() = Some(sessions);
     }
 
     /// Note that `agent` (hex) of `project`, named `name`, runs here, so
@@ -1496,10 +1507,78 @@ impl CloudHub {
             .await?;
             if done {
                 boot.progress(BootStage::ImportRecord, head, head);
-                return Ok(());
+                break;
             }
             from += count;
         }
+        self.upload_session(&node, request.agent, head, &view.machine.name, boot)
+            .await;
+        Ok(())
+    }
+
+    /// Give `node` (machine `machine`) `agent`'s current local session, so
+    /// its first run there continues the conversation, tool calls
+    /// included. Without one, or when the node refuses it, the node
+    /// rebuilds the conversation from the record it was given.
+    async fn upload_session(
+        &self,
+        node: &NodeClient,
+        agent: AgentId,
+        head: u64,
+        machine: &str,
+        boot: &BootReporter,
+    ) {
+        let Some(sessions) = self.sessions.lock().clone() else {
+            return;
+        };
+        let checkpoint = tokio::task::spawn_blocking(move || sessions.load_current(agent))
+            .await
+            .ok()
+            .flatten()
+            .filter(|checkpoint| checkpoint.record_seq <= head);
+        let Some(checkpoint) = checkpoint else {
+            boot.fact("conversation", "rebuilt from the record");
+            return;
+        };
+        let saved = boot
+            .wait(
+                BootStage::ImportRecord,
+                format!("{machine} is taking the conversation"),
+                Some(NODE_TIMEOUT),
+                node.put_session(agent, &checkpoint),
+            )
+            .await;
+        match saved {
+            Ok(saved) => boot.fact(
+                "conversation",
+                format!("{} message(s) carried over", saved.messages),
+            ),
+            Err(err) => {
+                tracing::warn!(agent = %agent.to_hex(), error = %err, "could not hand the node the agent's session; it rebuilds it from the record");
+                boot.log(
+                    BootStage::ImportRecord,
+                    true,
+                    format!("the conversation is rebuilt from the record: {err}"),
+                );
+            }
+        }
+    }
+
+    /// Start a new session for `agent` on its node (`/new`), waking the
+    /// machine if it sleeps, and copy the `SessionStart` here. Returns the
+    /// agent's head.
+    ///
+    /// # Errors
+    ///
+    /// When the machine can't be woken, the node refuses, or the copy
+    /// fails.
+    pub async fn new_session(&self, agent: AgentId) -> CloudResult<u64> {
+        let hex = agent.to_hex();
+        let node = self.awake_node(&hex, &BootReporter::none()).await?;
+        let _work = self.fleet.begin_work(&hex);
+        let started = node.new_session(agent).await?;
+        self.mirror_from(&node, agent).await?;
+        Ok(started.head_seq)
     }
 
     /// Copy what `agent`'s node committed since the local head. Returns

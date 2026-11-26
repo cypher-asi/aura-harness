@@ -21,11 +21,15 @@
 //! - The claim's GitHub token reaches git and `gh` only as its boxd
 //!   placeholder, in files only the machine's user can read
 //!   ([`write_git_files`]).
+//! - The agent's session checkpoints stay in the node's data directory
+//!   ([`CloudNode::sessions`]), so its conversation survives standby,
+//!   hibernation, a stopped machine and node restarts.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
+use aura_agent::checkpoint::Checkpoints;
 use aura_core_protocol::cloud::{GitClaim, HostStats, NodeClaim, NodeClaimed};
 use aura_core_types::AgentId;
 use aura_engine_cloud::host::HostSampler;
@@ -69,6 +73,7 @@ pub struct CloudNode {
     /// Where git and `gh` look for their settings; `None` off the cloud.
     home: Option<PathBuf>,
     sampler: Arc<Mutex<HostSampler>>,
+    sessions: Checkpoints,
 }
 
 impl std::fmt::Debug for CloudNode {
@@ -102,6 +107,7 @@ impl CloudNode {
             workspace,
             home: config.cloud_node.then(dirs::home_dir).flatten(),
             sampler: Arc::new(Mutex::new(HostSampler::new(disk_path, manifest))),
+            sessions: Checkpoints::new(&config.data_dir),
         })
     }
 
@@ -114,6 +120,13 @@ impl CloudNode {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
             .map(|git| git.branch.clone())
+    }
+
+    /// Where a cloud node keeps its agents' session checkpoints; `None`
+    /// on other nodes, whose callers bring the conversation.
+    #[must_use]
+    pub fn sessions(&self) -> Option<&Checkpoints> {
+        self.enabled.then_some(&self.sessions)
     }
 
     /// Fill `plans` from every claim from now on (the node's model client

@@ -9,10 +9,11 @@
 //! ## Invariants
 //!
 //! - **One writer per agent.** A moving agent takes no work: its prompts
-//!   are refused until the move ends. A cloud agent's prompts go to its
-//!   node, never to the local kernel, and a recalled agent's local
-//!   session is reopened from the record (which now holds what the node
-//!   wrote) before its next local turn.
+//!   are refused until the move ends. A cloud agent's prompts and `/new`
+//!   go to its node, never to the local kernel ([`CloudState::node_writes`]
+//!   keeps `/resume`, `/rewind` and auth notes off its local record), and
+//!   a recalled agent's local session is reopened from the record (which
+//!   now holds what the node wrote) before its next local turn.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -85,6 +86,12 @@ impl CloudState {
     /// Whether `agent` is being moved.
     pub(super) fn is_moving(&self, agent: AgentId) -> bool {
         self.shared.moving.lock().contains(&agent)
+    }
+
+    /// Whether the local kernel must leave `agent`'s record alone: it
+    /// runs on a cloud machine, whose node writes it, or is being moved.
+    pub(super) fn node_writes(&self, agent: AgentId) -> bool {
+        self.is_cloud(agent) || self.is_moving(agent)
     }
 
     /// Forget `agent`'s local session if it is older than its record.
@@ -289,6 +296,9 @@ async fn ensure_hub(
     let hub = CloudHub::from_config(config, store, cloud_home()).map_err(|err| err.to_string())?;
     if let Some(agents) = &state.hub.agents {
         hub.attach_host(agents.host());
+    }
+    if let Some(checkpoints) = &state.hub.factory.checkpoints {
+        hub.attach_sessions(checkpoints.clone());
     }
     let keep: HashSet<String> = lock(&state.hub.registry)
         .agents()
@@ -975,6 +985,60 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent: AgentId, work: Work
         }
     }
     None
+}
+
+/// `/new` for a cloud agent: its node writes the `SessionStart`, waking
+/// the machine if it sleeps, and the hub copies it here. Returns whether
+/// the node was asked; a failure is said in the agent's chat.
+pub(super) async fn new_session(state: &mut LoopState<'_>, agent: AgentId) -> bool {
+    if state.cloud.is_moving(agent) {
+        system(
+            state,
+            agent,
+            "This agent is moving between machines; start a new session when the move is done.",
+        )
+        .await;
+        return false;
+    }
+    let Some(hub) = state.cloud.hub() else {
+        return false;
+    };
+    if let Some(refusal) = foreign_owner(state, &hub, agent) {
+        system(state, agent, refusal).await;
+        return false;
+    }
+    if state.cloud.shared.running.lock().contains_key(&agent) {
+        system(
+            state,
+            agent,
+            "The cloud agent is still working; wait or stop it first.",
+        )
+        .await;
+        return false;
+    }
+    // Prompts wait while the node starts the session, so none runs in the
+    // old one.
+    state
+        .cloud
+        .shared
+        .running
+        .lock()
+        .insert(agent, CancellationToken::new());
+    let shared = Arc::clone(&state.cloud.shared);
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    tokio::spawn(async move {
+        let result = hub.new_session(agent).await;
+        shared.running.lock().remove(&agent);
+        if let Err(err) = result {
+            warn!(%agent, error = %err, "the cloud node did not start a new session");
+            ui.send(UiCommand::ShowMessage(MessageData::new(
+                MessageRole::System,
+                format!("Could not start a new session on the cloud machine; the agent keeps its conversation: {err}"),
+            )))
+            .await;
+        }
+    });
+    true
 }
 
 /// Show a cloud turn's events in its agent's chat.

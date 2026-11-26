@@ -30,6 +30,14 @@ pub(super) async fn handle_rewind(
     scope: RewindScope,
 ) {
     let ui = AgentUi::new(state.commands.clone(), agent_id);
+    if state.cloud.node_writes(agent_id) {
+        ui.send(UiCommand::ShowWarning(
+            "A cloud agent's files are on its machine: bring it back (/local) to rewind"
+                .to_string(),
+        ))
+        .await;
+        return;
+    }
     let Some(files) = state.hub.factory.file_checkpoints.clone() else {
         ui.send(UiCommand::ShowWarning(
             "File checkpoints are off in this terminal".to_string(),

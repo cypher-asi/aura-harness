@@ -195,6 +195,12 @@ pub use aura_core_protocol::{
 pub mod test_support {
     pub use crate::gateway::{create_router, RouterState, RouterStateConfig};
     pub use aura_engine::scheduler::Scheduler;
+
+    /// Claim `state`'s cloud node with `claim`, as its claim socket does
+    /// at boot.
+    pub fn claim(state: &RouterState, claim: aura_core_protocol::cloud::NodeClaim, port: u16) {
+        state.cloud.apply_claim(claim, port);
+    }
 }
 
 /// Top-level error type for the aura-node crate.

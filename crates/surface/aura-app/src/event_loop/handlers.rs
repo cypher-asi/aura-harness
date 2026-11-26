@@ -253,19 +253,27 @@ async fn emit_response_to_ui(
 pub(super) async fn handle_new_session(state: &mut LoopState<'_>) -> bool {
     debug!("New session requested");
     let agent_id = state.active;
-    let Some(session) = state.idle.get_mut(&agent_id) else {
-        let _ = state
-            .commands
-            .send(UiCommand::ShowWarning(
-                "Wait for this agent to finish (or press Esc) before starting a new session"
-                    .to_string(),
-            ))
-            .await;
-        return false;
-    };
-
-    mark_session_start(session).await;
-    session.reset();
+    if state.cloud.node_writes(agent_id) {
+        if !super::cloud::new_session(state, agent_id).await {
+            return false;
+        }
+        if let Some(session) = state.idle.get_mut(&agent_id) {
+            session.reset();
+        }
+    } else {
+        let Some(session) = state.idle.get_mut(&agent_id) else {
+            let _ = state
+                .commands
+                .send(UiCommand::ShowWarning(
+                    "Wait for this agent to finish (or press Esc) before starting a new session"
+                        .to_string(),
+                ))
+                .await;
+            return false;
+        };
+        mark_session_start(session).await;
+        session.reset();
+    }
     state.hub.traces.close(agent_id);
     let ui =
         AgentUi::new(state.commands.clone(), agent_id).with_shown(state.hub.record_panel.clone());
@@ -331,6 +339,14 @@ pub(super) async fn handle_resume(
     index: Option<usize>,
 ) {
     let ui = AgentUi::new(state.commands.clone(), agent_id);
+    if state.cloud.node_writes(agent_id) {
+        ui.send(UiCommand::ShowWarning(
+            "Earlier sessions resume on this machine: bring the agent back (/local) first"
+                .to_string(),
+        ))
+        .await;
+        return;
+    }
     let Some(session) = state.idle.get_mut(&agent_id) else {
         ui.send(UiCommand::ShowWarning(
             "Wait for this agent to finish before resuming a session".to_string(),

@@ -29,6 +29,14 @@ pub trait SavedSessions {
     fn messages(&self, agent: AgentId) -> Option<Vec<Message>>;
 }
 
+/// A `/compare` run's messages come from the session checkpoint saved for
+/// its agent.
+impl SavedSessions for aura_agent::checkpoint::Checkpoints {
+    fn messages(&self, agent: AgentId) -> Option<Vec<Message>> {
+        self.load_current(agent).map(|saved| saved.messages)
+    }
+}
+
 /// What [`catch_up`] did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct CaughtUp {

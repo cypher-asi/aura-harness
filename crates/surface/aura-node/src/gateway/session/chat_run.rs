@@ -662,6 +662,7 @@ mod driver_tests {
             chat_runs: Arc::new(DashMap::new()),
             run_id: None,
             agent_host,
+            sessions: None,
         }
     }
 

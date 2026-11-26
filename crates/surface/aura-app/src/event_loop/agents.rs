@@ -305,13 +305,9 @@ impl KernelFactory {
     /// it (in `tail`, its newest entries), when the checkpoint still
     /// applies.
     fn restore(&self, agent_id: AgentId, tail: &RecordTail) -> Option<SessionCheckpoint> {
-        let mut checkpoint = self.checkpoints.as_ref()?.load_current(agent_id)?;
-        let newer = tail.model_history_since(checkpoint.record_seq)?;
-        if !is_resumable(&checkpoint.messages) {
-            checkpoint.messages.pop();
-        }
-        checkpoint.messages.extend(newer);
-        Some(checkpoint)
+        aura_agent::history::restore_with(self.checkpoints.as_ref()?, agent_id, |after_seq| {
+            tail.model_history_since(after_seq)
+        })
     }
 
     /// Open a session (kernel + gateways) for `agent`, working in `folder`
