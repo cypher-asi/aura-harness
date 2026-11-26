@@ -111,9 +111,24 @@ impl App {
     /// The channel list changed under a member's chat (`was_open` before
     /// it did): a member no longer in the open channel gives way to the
     /// coordinator, so the chat is never an outsider's under the
-    /// channel's name. When the request cannot go out, the coordinator
-    /// comes back on screen all the same, with what its chat holds: once
-    /// the member is gone from the list nothing would know to try again.
+    /// channel's name.
+    ///
+    /// When the switch request cannot go out, the fallback is best-effort:
+    /// the UI puts the coordinator on screen by itself, while the session
+    /// may still have the dropped member active. Until a later switch
+    /// request gets through, events that carry no agent id (`/new`,
+    /// sign-in, the gate view, cloud actions) go to the session's active
+    /// agent, the member, not the coordinator shown; messages name their
+    /// agent and reach the coordinator. A late `SetActiveAgent` for the
+    /// member can still put it back on screen, but it is no member any
+    /// more, so `follow_active_agent_out_of_channel` closes the channel:
+    /// it never shows under `#slug`. Retrying on the next list would not
+    /// do: with the member gone from it nothing knows a retry is due.
+    ///
+    /// The coordinator's chat may not be loaded, yet it does not start
+    /// loading: no request went out, so no history would answer and the
+    /// chat would wait blank for good. It shows what it holds, any wait
+    /// it was left in dropped, as [`Self::cmd_switch_failed`] does.
     pub(in crate::app) fn leave_dropped_member_chat(&mut self, was_open: bool) {
         let Some(coordinator) = self
             .open_channel()
@@ -128,6 +143,7 @@ impl App {
             && !self.switch_on_screen(&coordinator)
         {
             self.apply_active_agent(&coordinator);
+            self.switching.chat_loading_since = None;
         }
     }
 }
