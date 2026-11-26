@@ -44,6 +44,7 @@ pub mod input;
 pub use aura_ui::repo;
 pub mod layout;
 pub use aura_ui::mode_command;
+pub use aura_ui::sandbox;
 pub mod themes;
 
 mod app;

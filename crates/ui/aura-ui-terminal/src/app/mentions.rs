@@ -380,7 +380,8 @@ impl App {
             .channels
             .coordinated_by(&self.active_agent_id)
             .map_or(&[][..], |channel| channel.members.as_slice());
-        let root = self.sandbox.root();
+        // A cloud agent's files are on its machine, not here.
+        let root = self.sandbox.root().filter(|_| !self.sandbox.is_remote());
         let Some((start, _, query)) = word.filter(|_| root.is_some() || !members.is_empty()) else {
             self.mentions.query = None;
             self.mentions.matches.clear();

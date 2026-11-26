@@ -44,6 +44,25 @@ struct Head {
     head_seq: u64,
 }
 
+/// One entry of a directory listed on a node (`GET /api/files`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FileEntry {
+    /// File name
+    pub name: String,
+    /// Whether it is a directory
+    pub is_dir: bool,
+}
+
+#[derive(Deserialize)]
+struct Listing {
+    entries: Vec<FileEntry>,
+}
+
+#[derive(Deserialize)]
+struct FileText {
+    content: String,
+}
+
 impl NodeClient {
     /// A client for node `node` at `base` (`https://<name>.boxd.sh`).
     #[must_use]
@@ -253,6 +272,57 @@ impl NodeClient {
     pub async fn host(&self) -> CloudResult<HostStats> {
         self.read("host", self.http.get(format!("{}/v1/host", self.base)))
             .await
+    }
+
+    /// What directory `dir` holds on the node; nothing when it is gone.
+    /// Dot entries and build output directories are left out.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails or the node refuses the path.
+    pub async fn list_files(&self, dir: &str) -> CloudResult<Vec<FileEntry>> {
+        let request = self
+            .http
+            .get(format!("{}/api/files", self.base))
+            .query(&[("path", dir), ("depth", "1")])
+            .bearer_auth(self.token.expose());
+        let response = request
+            .send()
+            .await
+            .map_err(|err| self.fail("list files", err))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(self.fail(
+                "list files",
+                format!("{status}: {}", body.chars().take(300).collect::<String>()),
+            ));
+        }
+        let listing: Listing = response
+            .json()
+            .await
+            .map_err(|err| self.fail("list files", err))?;
+        Ok(listing.entries)
+    }
+
+    /// The text of file `path` on the node.
+    ///
+    /// # Errors
+    ///
+    /// When the call fails, or the file is missing or too large.
+    pub async fn read_file(&self, path: &str) -> CloudResult<String> {
+        let text: FileText = self
+            .read(
+                "read file",
+                self.http
+                    .get(format!("{}/api/read-file", self.base))
+                    .query(&[("path", path)]),
+            )
+            .await?;
+        Ok(text.content)
     }
 
     /// The agent's work as a patch.

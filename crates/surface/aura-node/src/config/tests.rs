@@ -276,6 +276,37 @@ fn test_custom_data_dir() {
 }
 
 #[test]
+fn a_cloud_machine_browses_its_project_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("workspace");
+    std::fs::create_dir_all(workspace.join("src")).unwrap();
+    std::fs::write(workspace.join("src/main.rs"), "fn main() {}").unwrap();
+    std::fs::create_dir_all(dir.path().join("data/workspaces")).unwrap();
+    let config = NodeConfig {
+        data_dir: dir.path().join("data"),
+        workspace: Some(workspace.clone()),
+        ..NodeConfig::default()
+    };
+
+    assert_eq!(config.file_root(), workspace);
+    let main = config
+        .resolve_allowed_path(&workspace.join("src/main.rs"))
+        .unwrap();
+    assert!(main.ends_with("workspace/src/main.rs"));
+    assert!(config.resolve_allowed_path(Path::new("src")).is_ok());
+    assert!(matches!(
+        config.resolve_allowed_path(&dir.path().join("data/workspaces")),
+        Err(PathError::Escapes(_))
+    ));
+
+    let based = NodeConfig {
+        project_base: Some(dir.path().join("base")),
+        ..config
+    };
+    assert_eq!(based.file_root(), dir.path().join("base"));
+}
+
+#[test]
 fn test_from_env_uses_defaults_when_not_set() {
     let _lock = ENV_LOCK.lock().unwrap();
     clear_node_env_vars();

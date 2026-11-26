@@ -82,6 +82,7 @@ use tokio_util::sync::CancellationToken;
 use super::node_client::{NodeClient, NODE_TIMEOUT};
 use super::store::{agent_id_of, record_placement, StoreLedger, StoreSink};
 
+mod machine_files;
 mod machine_work;
 mod persist;
 pub use persist::SyncStatus;
@@ -414,9 +415,9 @@ pub struct CloudHub {
     trace_store: Mutex<Option<Arc<aura_store_db::TraceStore>>>,
     /// What each copied run held when stored, by run id.
     run_marks: Mutex<HashMap<String, persist::RunMark>>,
-    /// Set when trace runs were copied, until the app looks
+    /// The agents whose trace runs were copied since the app last looked
     /// ([`Self::take_traces_copied`]).
-    traces_copied: AtomicBool,
+    traces_copied: Mutex<HashSet<AgentId>>,
     /// How current each placed agent's copy is.
     sync: Mutex<HashMap<AgentId, SyncStatus>>,
     /// Users' plan tokens as boxd secrets; `None` until the app hands
@@ -553,7 +554,7 @@ impl CloudHub {
             copied: AtomicBool::new(false),
             trace_store: Mutex::new(None),
             run_marks: Mutex::new(HashMap::new()),
-            traces_copied: AtomicBool::new(false),
+            traces_copied: Mutex::new(HashSet::new()),
             sync: Mutex::new(HashMap::new()),
             plans: Mutex::new(None),
             repos: Mutex::new(repos),
@@ -637,10 +638,10 @@ impl CloudHub {
         self.copied.swap(false, Ordering::AcqRel)
     }
 
-    /// Whether trace runs were copied since the last call; the app then
-    /// shows the on-screen agent's latest run again.
-    pub fn take_traces_copied(&self) -> bool {
-        self.traces_copied.swap(false, Ordering::AcqRel)
+    /// The agents whose trace runs were copied since the last call; the
+    /// app then shows their latest run again.
+    pub fn take_traces_copied(&self) -> HashSet<AgentId> {
+        std::mem::take(&mut *self.traces_copied.lock())
     }
 
     /// Note that `agent` (hex) of `project`, named `name`, runs here, so

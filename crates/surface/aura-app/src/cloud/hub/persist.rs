@@ -293,8 +293,7 @@ impl CloudHub {
         let count = stored.len();
         if count > 0 {
             self.run_marks.lock().extend(stored);
-            self.traces_copied
-                .store(true, std::sync::atomic::Ordering::Release);
+            self.traces_copied.lock().insert(agent);
         }
         self.sync_mut(agent, |status| status.traces_ms = Some(now_ms()));
         Ok(count)

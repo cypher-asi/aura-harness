@@ -100,12 +100,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
 fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
     if app.sandbox().rows().is_empty() {
-        let message = if app.sandbox().root().is_some() {
-            "Sandbox is empty."
-        } else {
-            "No sandbox yet."
-        };
-        render_empty(frame, inner, message, theme);
+        render_empty(frame, inner, &empty_message(app), theme);
         return;
     }
 
@@ -138,6 +133,27 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
     };
     app.set_sandbox_rows_area(body.rows(), scroll);
     body.draw(frame, lines, view, SANDBOX_HINT, theme);
+}
+
+/// What a tree with no rows says; a cloud machine's tree says why it has
+/// none yet.
+fn empty_message(app: &App) -> String {
+    let tree = app.sandbox();
+    if tree.is_remote() {
+        if app.machine_asleep() {
+            return "The machine is asleep; its files show when it wakes.".to_string();
+        }
+        return match tree.unlisted() {
+            Some(None) => "Reading the machine's files…".to_string(),
+            Some(Some(reason)) => format!("Could not read the machine's files: {reason}"),
+            None => "Sandbox is empty.".to_string(),
+        };
+    }
+    if tree.root().is_some() {
+        "Sandbox is empty.".to_string()
+    } else {
+        "No sandbox yet.".to_string()
+    }
 }
 
 /// A tree row: the fold glyph of a directory (none for files), then the
@@ -242,5 +258,37 @@ mod tests {
         assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▸"));
         dir.expanded = true;
         assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▾"));
+    }
+
+    #[test]
+    fn an_empty_tree_of_a_machine_says_whether_it_is_read_failed_or_asleep() {
+        use crate::events::UiCommand;
+        use crate::host::{PlacementState, PlacementView};
+        let mut app = App::new();
+        app.process_command(UiCommand::SetSandboxRemote("/workspace".into()));
+        assert_eq!(empty_message(&app), "Reading the machine's files…");
+
+        app.process_command(UiCommand::SandboxListing {
+            dir: "/workspace".into(),
+            entries: Err("refused".into()),
+        });
+        assert_eq!(
+            empty_message(&app),
+            "Could not read the machine's files: refused"
+        );
+
+        let agent_id = app.active_agent_id().to_string();
+        app.process_command(UiCommand::SetPlacement {
+            agent_id,
+            state: PlacementState {
+                placement: PlacementView::Cloud,
+                asleep: true,
+                ..PlacementState::default()
+            },
+        });
+        assert_eq!(
+            empty_message(&app),
+            "The machine is asleep; its files show when it wakes."
+        );
     }
 }

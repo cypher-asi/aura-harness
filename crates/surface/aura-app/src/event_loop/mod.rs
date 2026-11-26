@@ -300,6 +300,10 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
             }
             Some(agent_id) = cloud_ended.recv() => {
                 state.cloud.free(agent_id);
+                // The turn may have written or worked through a plan.
+                if agent_id == state.active {
+                    cloud::refresh_machine_plans(&state, agent_id);
+                }
                 start_next(&mut state, agent_id).await;
             }
             () = hub.spawn_finished.notified() => {
@@ -545,6 +549,8 @@ async fn handle_ui_event(
             let agent_id = state.agent_or_active(&agent_id);
             policies::send_policies_of(state, agent_id).await;
         }
+        UiEvent::ListSandbox(dir) => cloud::list_sandbox(state, dir),
+        UiEvent::ReadSandboxFile(path) => cloud::read_sandbox_file(state, path),
         UiEvent::Quit => {
             debug!("Quit received");
             return true;

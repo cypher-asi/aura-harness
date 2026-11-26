@@ -1123,8 +1123,14 @@ async fn show_active_agent(
 }
 
 /// Point the Sandbox panel at the active agent's workspace, creating it
-/// so the panel has something to show before the first tool call.
+/// so the panel has something to show before the first tool call. A
+/// cloud agent's workspace is on its machine, which the panel lists.
 pub(super) async fn send_sandbox_root(state: &LoopState<'_>) {
+    if state.cloud.is_cloud(state.active) {
+        let root = PathBuf::from(aura_engine_cloud::machine_env::WORKSPACE_DIR);
+        let _ = state.commands.send(UiCommand::SetSandboxRemote(root)).await;
+        return;
+    }
     let Some(kernel) = state.kernel_for(state.active) else {
         return;
     };

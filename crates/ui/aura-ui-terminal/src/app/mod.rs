@@ -38,6 +38,7 @@ mod processes;
 mod project_drag;
 mod prose;
 pub(crate) mod queue_panel;
+mod remote_files;
 pub(crate) mod repo_tab;
 pub mod run_log;
 pub mod tasks;
@@ -271,6 +272,8 @@ pub struct App {
     /// Whether a tool may have changed files since the tree was read; the
     /// next tick reads it again, once however many tools finished
     pub(super) sandbox_stale: bool,
+    /// A file asked of the active agent's machine, shown once read
+    pub(super) pending_file: Option<remote_files::PendingFile>,
     /// Animation frame counter for spinners
     pub(super) animation_frame: usize,
     /// Ticks until spinners turn again while nothing else animates
@@ -1160,6 +1163,7 @@ impl App {
             side_column_hidden: None,
             sandbox: SandboxTree::default(),
             sandbox_stale: false,
+            pending_file: None,
             animation_frame: 0,
             spinner_wait: 0,
             redraw: true,
@@ -2086,8 +2090,8 @@ impl App {
                 self.open_plan_doc(&path, None);
             }
             SandboxEntryKind::File | SandboxEntryKind::Symlink => {
-                let view = FileView::load(&row.path, self.sandbox.root());
-                self.open_detail(DetailView::File(Box::new(view)));
+                let path = row.path.clone();
+                self.open_file(&path);
             }
             SandboxEntryKind::Dir => self.sandbox.toggle_selected(),
             SandboxEntryKind::More(_) => {}
@@ -2287,6 +2291,7 @@ impl App {
             self.sandbox.refresh();
             self.redraw = true;
         }
+        self.ask_sandbox_listings();
         self.refresh_live_log();
         self.refresh_repo_tab();
 

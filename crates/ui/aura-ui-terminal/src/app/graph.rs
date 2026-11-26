@@ -550,9 +550,9 @@ impl App {
             Some(root) if std::path::Path::new(&path).is_relative() => root.join(&path),
             _ => std::path::PathBuf::from(&path),
         };
-        let view = FileView::load(&full, root.as_deref());
-        self.open_detail(DetailView::File(Box::new(view)));
-        self.graph.behind = true;
+        self.open_file(&full);
+        // A sleeping machine's file doesn't open, leaving the graph shown.
+        self.graph.behind = matches!(self.detail, Some(DetailView::File(_)));
     }
 }
 

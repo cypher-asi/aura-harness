@@ -251,6 +251,9 @@ impl App {
             UiCommand::SetRecords(records) => self.cmd_set_records(records),
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
             UiCommand::SetSandboxRoot(root) => self.set_sandbox_root(root),
+            UiCommand::SetSandboxRemote(root) => self.set_sandbox_remote(root),
+            UiCommand::SandboxListing { dir, entries } => self.set_sandbox_listing(dir, entries),
+            UiCommand::SandboxFile { path, text } => self.show_sandbox_file(&path, text),
             UiCommand::SetProcesses(processes) => self.set_processes(processes),
             UiCommand::AddMail(mail) => self.add_mail(mail),
             UiCommand::SetThreadSubject { thread_id, subject } => {
@@ -711,7 +714,7 @@ impl App {
     /// highlight and scroll, and is read again on the next tick to show
     /// what changed while it was away.
     fn set_sandbox_root(&mut self, root: std::path::PathBuf) {
-        if self.sandbox.root() == Some(root.as_path()) {
+        if !self.sandbox.is_remote() && self.sandbox.root() == Some(root.as_path()) {
             self.sandbox_stale = true;
             return;
         }

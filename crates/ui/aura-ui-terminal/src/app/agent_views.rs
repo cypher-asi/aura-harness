@@ -356,6 +356,9 @@ impl App {
                 | UiCommand::ClearRecords
                 | UiCommand::SetRecords(_)
                 | UiCommand::SetSandboxRoot(_)
+                | UiCommand::SetSandboxRemote(_)
+                | UiCommand::SandboxListing { .. }
+                | UiCommand::SandboxFile { .. }
                 | UiCommand::SetPlan(_)
                 | UiCommand::SetPlans(_)
                 | UiCommand::SetTasks(_)

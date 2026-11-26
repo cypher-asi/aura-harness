@@ -60,6 +60,10 @@ pub struct PlacementState {
     /// The machine's state when in the cloud (`ready`, `asleep`, ...).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_state: Option<String>,
+    /// Whether the agent's cloud machine is asleep: nothing is read from
+    /// it until it wakes.
+    #[serde(default)]
+    pub asleep: bool,
     /// Whether cloud mode is set up (a boxd key is loaded).
     pub cloud_ready: bool,
     /// The user who placed the agent, when it is not the one signed in

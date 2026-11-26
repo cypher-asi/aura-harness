@@ -73,6 +73,39 @@ fn plan_file(workspace: &Path, path: &str) -> Option<PlanFile> {
         .ok()
 }
 
+/// A cloud agent's Plans tab and plan strip, from the plans read on its
+/// machine (path and text, in the order shown) with the tasks its board
+/// in `workspace` links to them. The strip shows `active`, the plan its
+/// record last wrote, unless that plan is finished.
+pub(crate) fn machine_plan_views(
+    workspace: &Path,
+    plans: &[(String, String)],
+    active: Option<&str>,
+) -> (Vec<PlanView>, Option<PlanView>) {
+    let mut views = Vec::with_capacity(plans.len());
+    let mut strip = None;
+    let tasks = PlanTasks::load(workspace);
+    for (path, text) in plans {
+        if !is_plan_path(path) {
+            continue;
+        }
+        let plan = match PlanFile::parse(text) {
+            Ok(plan) => plan,
+            Err(e) => {
+                warn!(%path, error = %e, "Could not read plan");
+                continue;
+            }
+        };
+        let finished = is_finished(&plan);
+        let view = view_of(path, plan, &tasks);
+        if active == Some(path.as_str()) && !finished {
+            strip = Some(view.clone());
+        }
+        views.push(view);
+    }
+    (views, strip)
+}
+
 /// Every readable plan in `workspace`, most recently changed first.
 pub(crate) fn plan_views(workspace: &Path) -> Vec<PlanView> {
     let Ok(entries) = std::fs::read_dir(workspace.join(PLANS_DIR)) else {
@@ -191,7 +224,12 @@ pub(crate) fn open_plan(workspace: &Path, active_plan: Option<&str>) -> Option<P
 
 /// Show `agent_id` its plan, or hide its plan strip when it has none.
 /// Nothing is sent while the agent works: its turn keeps the strip live.
+/// A cloud agent's comes from its machine with its plans
+/// ([`super::cloud::MachinePlans`]).
 pub(super) async fn send_plan_of(state: &LoopState<'_>, agent_id: AgentId) {
+    if state.cloud.is_cloud(agent_id) {
+        return;
+    }
     let Some(session) = state.idle.get(&agent_id) else {
         return;
     };
@@ -352,10 +390,12 @@ pub(crate) fn unfinished_todos(todos: Vec<TodoItem>) -> Vec<TodoItem> {
 /// loads, has todos, and every one of them is closed. A plan with no
 /// todos yet is still being written.
 pub(crate) fn is_finished_plan(workspace: &Path, path: &str) -> bool {
-    is_plan_path(path)
-        && PlanFile::load(&workspace.join(path)).is_ok_and(|plan| {
-            !plan.meta.todos.is_empty() && plan.meta.todos.iter().all(|t| t.status.is_closed())
-        })
+    is_plan_path(path) && PlanFile::load(&workspace.join(path)).is_ok_and(|plan| is_finished(&plan))
+}
+
+/// Whether `plan` has todos and every one is closed.
+fn is_finished(plan: &PlanFile) -> bool {
+    !plan.meta.todos.is_empty() && plan.meta.todos.iter().all(|t| t.status.is_closed())
 }
 
 /// Close out `session`'s todo list once every item on it is closed. The
@@ -502,6 +542,36 @@ mod tests {
         assert!(plans
             .iter()
             .all(|plan| plan.todos.iter().all(|todo| todo.task.is_some())));
+    }
+
+    #[test]
+    fn plans_read_on_a_machine_are_viewed_from_their_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = |name: &str, status: &str| {
+            format!("---\nname: {name}\ntodos:\n  - id: a\n    content: First\n    status: {status}\n---\n")
+        };
+        let open = ".aura/plans/open_00000001.plan.md";
+        let done = ".aura/plans/done_00000002.plan.md";
+        let plans = [
+            (open.to_string(), plan("Open", "in_progress")),
+            (done.to_string(), plan("Done", "completed")),
+            (
+                ".aura/plans/broken_00000003.plan.md".to_string(),
+                "no frontmatter".to_string(),
+            ),
+            (".aura/plans/notes.md".to_string(), plan("Notes", "pending")),
+        ];
+
+        let (views, strip) = machine_plan_views(dir.path(), &plans, Some(open));
+        let names: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["Open", "Done"]);
+        assert_eq!(views[0].todos[0].state, TodoState::InProgress);
+        assert_eq!(strip.map(|v| v.path), Some(open.to_string()));
+
+        let (_, strip) = machine_plan_views(dir.path(), &plans, Some(done));
+        assert!(strip.is_none(), "a finished plan is not the agent's plan");
+        let (_, strip) = machine_plan_views(dir.path(), &plans, None);
+        assert!(strip.is_none());
     }
 
     #[test]

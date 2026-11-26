@@ -268,6 +268,15 @@ pub enum UiEvent {
     /// hex id: send the policy its kernel enforces now
     RequestPolicies(String),
 
+    /// The Sandbox panel, showing the active agent's machine
+    /// ([`UiCommand::SetSandboxRemote`]), needs this directory listed:
+    /// answer with [`UiCommand::SandboxListing`]
+    ListSandbox(PathBuf),
+
+    /// User opened this file of the active agent's machine: answer with
+    /// [`UiCommand::SandboxFile`]
+    ReadSandboxFile(PathBuf),
+
     /// User labeled a recorded step (`seq`) or the whole run (`None`);
     /// positive is good
     LabelStep {
@@ -850,6 +859,29 @@ pub enum UiCommand {
 
     /// Set the sandbox directory shown in the Sandbox panel (the active agent's workspace)
     SetSandboxRoot(PathBuf),
+
+    /// Show the active agent's machine in the Sandbox panel, its
+    /// workspace there at this path: directories are listed by asking
+    /// ([`UiEvent::ListSandbox`]), never read here
+    SetSandboxRemote(PathBuf),
+
+    /// What a directory of the active agent's machine holds, asked for
+    /// with [`UiEvent::ListSandbox`]
+    SandboxListing {
+        /// The directory, as asked for
+        dir: PathBuf,
+        /// Its entries, or why it could not be listed
+        entries: Result<Vec<crate::sandbox::RemoteEntry>, String>,
+    },
+
+    /// A file of the active agent's machine, asked for with
+    /// [`UiEvent::ReadSandboxFile`]
+    SandboxFile {
+        /// The file, as asked for
+        path: PathBuf,
+        /// Its text, or why it could not be read
+        text: Result<String, String>,
+    },
 
     /// Replace the Processes tab: everything running, plus recently finished work
     SetProcesses(Vec<ProcessSummary>),

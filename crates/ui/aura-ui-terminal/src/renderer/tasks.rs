@@ -65,6 +65,9 @@ pub(super) fn render_tasks(
             render_hidden(frame, inner, ("tasks", list.hidden()), theme);
         } else if list.hidden_plans() > 0 {
             render_hidden(frame, inner, ("plans", list.hidden_plans()), theme);
+        } else if app.sandbox().is_remote() && app.machine_asleep() {
+            let text = "The machine is asleep; its plans show when it wakes.";
+            render_empty(frame, inner, text, theme);
         } else {
             render_empty(frame, inner, "No tasks yet.", theme);
         }

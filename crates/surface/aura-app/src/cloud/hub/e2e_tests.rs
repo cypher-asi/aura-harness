@@ -591,7 +591,8 @@ async fn a_turn_s_run_is_copied_into_the_main_trace_store() {
         Some(p.agent.to_hex().as_str())
     );
     assert!(!run.steps.is_empty(), "with its steps");
-    assert!(p.hub.take_traces_copied());
+    assert_eq!(p.hub.take_traces_copied(), HashSet::from([p.agent]));
+    assert!(p.hub.take_traces_copied().is_empty(), "once");
     assert!(p
         .hub
         .sync_status(p.agent)
@@ -837,4 +838,78 @@ async fn work_a_machine_reports_keeps_it_awake_and_shows_only_its_agent_s() {
 
     p.hub.forget_processes(&hex);
     assert!(p.hub.machine_processes().is_empty());
+}
+
+#[tokio::test]
+async fn an_awake_machine_s_files_and_plans_are_read_and_a_sleeping_one_is_left_asleep() {
+    let p = placed(CloudConfig::defaults()).await;
+    let ws = p.node_dir.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).expect("src");
+    std::fs::write(ws.join("src/main.rs"), "fn main() {}\n").expect("main");
+    std::fs::create_dir_all(ws.join(".aura/plans")).expect("plans");
+    for (name, title) in [("a_00000001", "First"), ("b_00000002", "Second")] {
+        std::fs::write(
+            ws.join(format!(".aura/plans/{name}.plan.md")),
+            format!("---\nname: {title}\ntodos: []\n---\n"),
+        )
+        .expect("plan");
+    }
+    std::fs::write(ws.join(".aura/plans/notes.md"), "not a plan").expect("notes");
+    let root = Path::new(WORKSPACE_DIR);
+
+    let listed = p.hub.list_files(p.agent, root).await.expect("listed");
+    let names: Vec<(&str, bool)> = listed
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.is_dir))
+        .collect();
+    assert_eq!(names, [("src", true)], "dot entries are left out");
+    let src = p
+        .hub
+        .list_files(p.agent, &root.join("src"))
+        .await
+        .expect("listed");
+    assert_eq!(src.len(), 1);
+    assert_eq!(src[0].name, "main.rs");
+    assert!(p
+        .hub
+        .list_files(p.agent, &root.join("gone"))
+        .await
+        .expect("listed")
+        .is_empty());
+    assert_eq!(
+        p.hub
+            .read_file(p.agent, &root.join("src/main.rs"))
+            .await
+            .expect("read"),
+        "fn main() {}\n"
+    );
+    assert!(p
+        .hub
+        .read_file(p.agent, Path::new("/workspace/../db"))
+        .await
+        .is_err());
+
+    let plans = p
+        .hub
+        .machine_plans(p.agent, Some(".aura/plans/b_00000002.plan.md"))
+        .await
+        .expect("plans");
+    let paths: Vec<&str> = plans.iter().map(|(path, _)| path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            ".aura/plans/b_00000002.plan.md",
+            ".aura/plans/a_00000001.plan.md"
+        ]
+    );
+    assert!(plans[0].1.contains("name: Second"));
+
+    p.hub.sleep(p.agent).await.expect("slept");
+    assert!(p.hub.list_files(p.agent, root).await.is_err());
+    assert!(p.hub.machine_plans(p.agent, None).await.is_err());
+    assert_eq!(
+        p.fake.machine(MACHINE).expect("machine").status,
+        MachineStatus::Hibernated,
+        "looking never wakes it"
+    );
 }

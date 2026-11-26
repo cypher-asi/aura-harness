@@ -33,7 +33,7 @@ TypeScript bindings for the wire types are generated into [`crates/core/aura-cor
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Liveness probe. |
-| GET | `/api/files` | List files in the configured workspace root. |
+| GET | `/api/files` | List files in the workspace root: `AURA_PROJECT_BASE`, else `AURA_WORKSPACE` (a cloud machine's project directory), else the workspaces directory. |
 | GET | `/api/read-file` | Read a file from the workspace root. |
 | PUT | `/api/write-file` | Write a file under the workspace root. |
 | GET | `/workspace/resolve` | Resolve a project/workspace slug to a filesystem path. |

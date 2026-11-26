@@ -140,6 +140,12 @@ impl VmState {
     pub const fn is_asleep(&self) -> bool {
         matches!(self, Self::Standby | Self::Hibernated)
     }
+
+    /// Whether the machine is up and its node answers.
+    #[must_use]
+    pub const fn is_awake(&self) -> bool {
+        matches!(self, Self::Ready | Self::Busy)
+    }
 }
 
 /// A cloud agent's machine as the UI and the hub see it.

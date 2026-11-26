@@ -238,6 +238,12 @@ impl Traces {
         })
     }
 
+    /// Let `agent`'s latest stored run go to its TRACE tab again, as when
+    /// runs copied from its machine changed it.
+    pub(crate) fn forget_shown(&self, agent: AgentId) {
+        lock(&self.shown).remove(&agent);
+    }
+
     /// Store `reward` on run `run_id`, open or not.
     fn add_reward(&self, run_id: &str, reward: &Reward) -> Result<(), String> {
         if let Some(rec) = self.live_run(run_id) {

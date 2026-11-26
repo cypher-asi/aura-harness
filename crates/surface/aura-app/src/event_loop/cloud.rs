@@ -16,7 +16,7 @@
 //!   now holds what the node wrote) before its next local turn.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +30,7 @@ use aura_ui_terminal::events::{
     ProcessStatus, ProcessSummary, ToolData,
 };
 use aura_ui_terminal::host::{HostAction, HostRow, HostView, PlacementState, PlacementView};
+use aura_ui_terminal::sandbox::RemoteEntry;
 use aura_ui_terminal::UiCommand;
 use futures_util::future::BoxFuture;
 use parking_lot::Mutex;
@@ -61,6 +62,9 @@ struct Shared {
     /// Where an ended turn is said, once the loop listens
     /// ([`CloudState::take_ended`]).
     ended: Mutex<Option<tokio::sync::mpsc::UnboundedSender<AgentId>>>,
+    /// The plans last read from each cloud agent's machine (path and
+    /// text), shown while it sleeps.
+    plans: Mutex<std::collections::HashMap<AgentId, Vec<(String, String)>>>,
 }
 
 impl Shared {
@@ -366,6 +370,128 @@ async fn ensure_hub(
     Ok(hub)
 }
 
+/// List `dir` of the on-screen cloud agent's machine for its Sandbox
+/// panel. A sleeping machine is not read, so looking never wakes it.
+pub(super) fn list_sandbox(state: &LoopState<'_>, dir: PathBuf) {
+    let agent = state.active;
+    let Some(hub) = state.cloud.hub().filter(|_| state.cloud.is_cloud(agent)) else {
+        return;
+    };
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    tokio::spawn(async move {
+        let entries = match hub.list_files(agent, &dir).await {
+            Ok(entries) => Ok(entries
+                .into_iter()
+                .map(|entry| RemoteEntry {
+                    name: entry.name,
+                    is_dir: entry.is_dir,
+                })
+                .collect()),
+            Err(err) => {
+                tracing::debug!(%agent, error = %err, "could not list the machine's files");
+                Err(err.to_string())
+            }
+        };
+        ui.send(UiCommand::SandboxListing { dir, entries }).await;
+    });
+}
+
+/// Read `path` of the on-screen cloud agent's machine, which the user
+/// opened. A sleeping machine is not read.
+pub(super) fn read_sandbox_file(state: &LoopState<'_>, path: PathBuf) {
+    let agent = state.active;
+    let Some(hub) = state.cloud.hub().filter(|_| state.cloud.is_cloud(agent)) else {
+        return;
+    };
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    tokio::spawn(async move {
+        let text = hub
+            .read_file(agent, &path)
+            .await
+            .map_err(|err| err.to_string());
+        ui.send(UiCommand::SandboxFile { path, text }).await;
+    });
+}
+
+/// A cloud agent's plans, which are on its machine: its Plans tab and plan
+/// strip show them as read there, or while the machine sleeps, as last
+/// read from it.
+pub(super) struct MachinePlans {
+    hub: Arc<CloudHub>,
+    shared: Arc<Shared>,
+    store: Arc<dyn aura_store_record::ReadStore>,
+    agent: AgentId,
+    /// Its project folder here, whose task board links tasks to its plans
+    workspace: PathBuf,
+}
+
+impl MachinePlans {
+    /// `agent`'s plans, when it runs in the cloud.
+    pub(super) fn of(state: &LoopState<'_>, agent: AgentId) -> Option<Self> {
+        if !state.cloud.is_cloud(agent) {
+            return None;
+        }
+        Some(Self {
+            hub: state.cloud.hub()?,
+            shared: Arc::clone(&state.cloud.shared),
+            store: Arc::clone(&state.hub.factory.store),
+            agent,
+            workspace: lock(&state.hub.registry).project_folder(agent)?,
+        })
+    }
+
+    /// Where its task board is.
+    pub(super) fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
+    /// Read them and show them. Its plan in the strip is the one its
+    /// copied record last wrote.
+    pub(super) async fn send(&self, ui: &AgentUi) {
+        let (store, agent) = (Arc::clone(&self.store), self.agent);
+        let active = tokio::task::spawn_blocking(move || {
+            crate::record_loader::latest_plan_path(store.as_ref(), agent)
+        })
+        .await
+        .ok()
+        .flatten();
+        let plans = match self.hub.machine_plans(agent, active.as_deref()).await {
+            Ok(plans) => {
+                self.shared.plans.lock().insert(agent, plans.clone());
+                plans
+            }
+            Err(err) => {
+                tracing::debug!(%agent, error = %err, "plans not read from the machine");
+                self.shared
+                    .plans
+                    .lock()
+                    .get(&agent)
+                    .cloned()
+                    .unwrap_or_default()
+            }
+        };
+        let workspace = self.workspace.clone();
+        let views = tokio::task::spawn_blocking(move || {
+            super::plan_mode::machine_plan_views(&workspace, &plans, active.as_deref())
+        })
+        .await;
+        let Ok((views, strip)) = views else {
+            return;
+        };
+        ui.send(UiCommand::SetPlans(views)).await;
+        ui.send(UiCommand::SetPlan(strip)).await;
+    }
+}
+
+/// Show cloud agent `agent`'s plans as its machine holds them now, in the
+/// background.
+pub(super) fn refresh_machine_plans(state: &LoopState<'_>, agent: AgentId) {
+    if let Some(plans) = MachinePlans::of(state, agent) {
+        let ui = AgentUi::new(state.commands.clone(), agent);
+        tokio::spawn(async move { plans.send(&ui).await });
+    }
+}
+
 /// What cloud agents' machines have under way, as PROCESSES rows.
 struct MachineRows(std::sync::Weak<CloudHub>);
 
@@ -561,7 +687,18 @@ fn start_publisher(state: &mut LoopState<'_>) {
             if cloud.as_ref().is_some_and(|cloud| cloud.take_copied()) {
                 hub.refresh_agent_list().await;
             }
-            let Some(agent) = hub.record_panel.get() else {
+            let on_screen = hub.record_panel.get();
+            for copied in cloud
+                .as_ref()
+                .map(|c| c.take_traces_copied())
+                .unwrap_or_default()
+            {
+                hub.traces.forget_shown(copied);
+                if on_screen == Some(copied) {
+                    hub.traces.send_history(copied).await;
+                }
+            }
+            let Some(agent) = on_screen else {
                 continue;
             };
             let current = auth.owner();
@@ -626,6 +763,7 @@ fn placement_state(
 ) -> PlacementState {
     let moving = shared.moving.lock().contains(&agent);
     let placement = cloud.map_or(Placement::Local, |hub| hub.placement_of(agent));
+    let machine = cloud.and_then(|hub| hub.fleet().view(&agent.to_hex()));
     PlacementState {
         placement: match placement {
             Placement::Local => PlacementView::Local,
@@ -635,9 +773,9 @@ fn placement_state(
             Placement::Local => "moving to cloud".to_string(),
             Placement::Cloud => "bringing back".to_string(),
         }),
-        machine_state: cloud
-            .and_then(|hub| hub.fleet().view(&agent.to_hex()))
-            .map(|view| view.state.label().to_string()),
+        asleep: placement == Placement::Cloud
+            && machine.as_ref().is_some_and(|view| !view.state.is_awake()),
+        machine_state: machine.map(|view| view.state.label().to_string()),
         cloud_ready: cloud.is_some() || aura_config::cloud().is_configured(),
         owner: foreign_label(cloud, agent, current),
     }
@@ -821,6 +959,7 @@ pub(super) async fn handle_set_placement(
             state.idle.remove(&agent);
             state.hub.traces.close(agent);
             let shared = Arc::clone(&state.cloud.shared);
+            let ui = AgentUi::new(state.commands.clone(), agent);
             tokio::spawn(async move {
                 let (boot, events) = BootReporter::channel();
                 let shown = console.pump(events);
@@ -828,6 +967,10 @@ pub(super) async fn handle_set_placement(
                 drop(boot);
                 let _ = shown.await;
                 shared.moving.lock().remove(&agent);
+                if result.is_ok() {
+                    let root = PathBuf::from(aura_engine_cloud::machine_env::WORKSPACE_DIR);
+                    ui.send(UiCommand::SetSandboxRemote(root)).await;
+                }
                 let (ok, note) = match result {
                     Ok(view) => (true, format!(
                         "Now running in the cloud on {} ({} vCPU). Its record syncs back here; `/local` brings it back.",
@@ -854,10 +997,9 @@ pub(super) async fn handle_set_placement(
 fn recall(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, reason: &'static str) {
     let shared = Arc::clone(&state.cloud.shared);
     let hub = Arc::clone(hub);
-    let console = BootConsoleUi::new(
-        AgentUi::new(state.commands.clone(), agent),
-        "Bringing the agent back",
-    );
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    let console = BootConsoleUi::new(ui.clone(), "Bringing the agent back");
+    let workspace = lock(&state.hub.registry).project_folder(agent);
     shared.moving.lock().insert(agent);
     tokio::spawn(async move {
         console.begin().await;
@@ -870,6 +1012,10 @@ fn recall(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, reason: &'
         let (ok, note) = match result {
             Ok(outcome) => {
                 shared.stale.lock().insert(agent);
+                shared.plans.lock().remove(&agent);
+                if let Some(workspace) = workspace {
+                    ui.send(UiCommand::SetSandboxRoot(workspace)).await;
+                }
                 (
                     true,
                     format!("Back on this machine: {}.", outcome.describe()),
