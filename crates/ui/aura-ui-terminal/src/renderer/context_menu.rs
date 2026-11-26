@@ -55,12 +55,7 @@ pub(super) fn render_context_menu(frame: &mut Frame, app: &mut App, theme: &Them
         .max()
         .unwrap_or(0);
     let inner_width = widest + 2 * GUTTER.len();
-    let width = u16::try_from(inner_width + 2)
-        .unwrap_or(u16::MAX)
-        .min(screen.width);
-    let height = u16::try_from(rows.len() + 2)
-        .unwrap_or(u16::MAX)
-        .min(screen.height);
+    let (width, height) = box_size(screen, inner_width, rows.len());
     let x = anchor.x.min(screen.right().saturating_sub(width));
     let below = anchor.y.saturating_add(1);
     let y = if below.saturating_add(height) <= screen.bottom() {
@@ -75,20 +70,7 @@ pub(super) fn render_context_menu(frame: &mut Frame, app: &mut App, theme: &Them
         height,
     };
 
-    let lines: Vec<Line<'_>> = rows
-        .iter()
-        .enumerate()
-        .map(|(index, &(label, opens))| {
-            let text = if opens {
-                let pad = inner_width.saturating_sub(display_width(label) + 2 * GUTTER.len() + 1);
-                format!("{GUTTER}{label}{}{SUBMENU_MARK}{GUTTER}", " ".repeat(pad))
-            } else {
-                let pad = inner_width.saturating_sub(display_width(label) + GUTTER.len());
-                format!("{GUTTER}{label}{}", " ".repeat(pad))
-            };
-            row_line(theme, text, index == selected)
-        })
-        .collect();
+    let lines = menu_lines(&rows, inner_width, selected, theme);
     draw_box(frame, theme, area, lines);
     app.set_context_menu_area(area);
 
@@ -121,12 +103,7 @@ fn render_submenu(frame: &mut Frame, app: &mut App, theme: &Theme, menu: Rect, r
         .max()
         .unwrap_or(0);
     let inner_width = widest + 2 * GUTTER.len();
-    let width = u16::try_from(inner_width + 2)
-        .unwrap_or(u16::MAX)
-        .min(screen.width);
-    let height = u16::try_from(labels.len() + 2)
-        .unwrap_or(u16::MAX)
-        .min(screen.height);
+    let (width, height) = box_size(screen, inner_width, labels.len());
     let x = if menu.right().saturating_add(width) <= screen.right() {
         menu.right()
     } else if menu.x.saturating_sub(screen.x) >= width {
@@ -146,7 +123,53 @@ fn render_submenu(frame: &mut Frame, app: &mut App, theme: &Theme, menu: Rect, r
         height,
     };
 
-    let lines: Vec<Line<'_>> = labels
+    let lines = submenu_lines(labels, inner_width, selected, theme);
+    draw_box(frame, theme, area, lines);
+    app.set_context_submenu_area(area);
+}
+
+/// The width and height of a box of `rows` rows `inner_width` wide
+/// inside its border, kept within `screen`.
+fn box_size(screen: Rect, inner_width: usize, rows: usize) -> (u16, u16) {
+    let width = u16::try_from(inner_width + 2)
+        .unwrap_or(u16::MAX)
+        .min(screen.width);
+    let height = u16::try_from(rows + 2)
+        .unwrap_or(u16::MAX)
+        .min(screen.height);
+    (width, height)
+}
+
+/// The menu's rows, an item opening a submenu ended by [`SUBMENU_MARK`].
+fn menu_lines(
+    rows: &[(&str, bool)],
+    inner_width: usize,
+    selected: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    rows.iter()
+        .enumerate()
+        .map(|(index, &(label, opens))| {
+            let text = if opens {
+                let pad = inner_width.saturating_sub(display_width(label) + 2 * GUTTER.len() + 1);
+                format!("{GUTTER}{label}{}{SUBMENU_MARK}{GUTTER}", " ".repeat(pad))
+            } else {
+                let pad = inner_width.saturating_sub(display_width(label) + GUTTER.len());
+                format!("{GUTTER}{label}{}", " ".repeat(pad))
+            };
+            row_line(theme, text, index == selected)
+        })
+        .collect()
+}
+
+/// The submenu's rows.
+fn submenu_lines(
+    labels: Vec<String>,
+    inner_width: usize,
+    selected: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    labels
         .into_iter()
         .enumerate()
         .map(|(index, label)| {
@@ -157,9 +180,7 @@ fn render_submenu(frame: &mut Frame, app: &mut App, theme: &Theme, menu: Rect, r
                 index == selected,
             )
         })
-        .collect();
-    draw_box(frame, theme, area, lines);
-    app.set_context_submenu_area(area);
+        .collect()
 }
 
 /// What a submenu entry reads: `Workspace 2  NOTES / CC` or `New

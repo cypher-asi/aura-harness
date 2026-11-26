@@ -1,7 +1,7 @@
 //! The AGENTS app: the roster of permanent agents, and selecting,
 //! spawning, editing, and deleting them.
 
-use crate::app::{contains, follow_selection, AgentsTab, App, NotificationType};
+use crate::app::{contains, AgentsTab, App, NotificationType};
 use crate::events::{AgentDefinitionSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -11,31 +11,26 @@ impl App {
     /// Permanent agents shown in the panel.
     #[must_use]
     pub fn definitions(&self) -> &[AgentDefinitionSummary] {
-        &self.definitions
+        &self.definitions.items
     }
 
     /// Highlighted row in the roster (the last row is
     /// "+ New agent").
     #[must_use]
     pub const fn selected_definition(&self) -> usize {
-        self.selected_definition
+        self.definitions.selected
     }
 
     /// First visible row of the roster.
     #[must_use]
     pub const fn definitions_scroll(&self) -> usize {
-        self.definitions_scroll
+        self.definitions.scroll
     }
 
     /// Keep the highlighted row inside a list `visible_rows` tall.
     /// "+ New agent" is pinned below the list, so it never scrolls.
     pub fn sync_definitions_scroll(&mut self, visible_rows: usize) {
-        self.definitions_scroll = follow_selection(
-            self.definitions_scroll,
-            self.selected_definition,
-            visible_rows,
-            self.definitions.len(),
-        );
+        self.definitions.follow_selection(visible_rows);
     }
 
     /// Record where the permanent agents rows were drawn this frame.
@@ -58,24 +53,24 @@ impl App {
             .areas
             .definition_rows
             .filter(|&rows| contains(Some(rows), column, row))?;
-        let index = self.definitions_scroll + usize::from(row - rows.y);
+        let index = self.definitions.scroll + usize::from(row - rows.y);
         (index < self.definitions.len()).then_some(index)
     }
 
     /// File the user asked to edit, once. The terminal opens it in the
     /// editor and then calls [`Self::editor_closed`].
     pub fn take_editor_request(&mut self) -> Option<PathBuf> {
-        self.editor_request.take()
+        self.pending.editor_request.take()
     }
 
     /// Report that the editor opened for `path` exited.
     pub fn editor_closed(&mut self, path: PathBuf, result: &std::io::Result<()>) {
-        self.redraw = true;
+        self.ticks.redraw = true;
         if self.input_editor_closed(&path, result) {
             return;
         }
         if let Err(e) = result {
-            self.notification = Some((
+            self.notifications.current = Some((
                 format!("Could not open editor: {e}"),
                 NotificationType::Error,
             ));
@@ -84,18 +79,16 @@ impl App {
     }
 
     pub(in crate::app) fn set_definitions(&mut self, definitions: Vec<AgentDefinitionSummary>) {
-        self.definitions = definitions;
-        self.selected_definition = self.selected_definition.min(self.definitions.len());
+        self.definitions.items = definitions;
+        self.definitions.selected = self.definitions.selected.min(self.definitions.len());
     }
 
     pub(in crate::app) fn select_definition_row(&mut self, row: usize) {
-        self.selected_definition = row.min(self.definitions.len());
+        self.definitions.selected = row.min(self.definitions.len());
     }
 
     pub(in crate::app) fn selected_definition_name(&self) -> Option<String> {
-        self.definitions
-            .get(self.selected_definition)
-            .map(|d| d.name.clone())
+        self.definitions.selected_item().map(|d| d.name.clone())
     }
 
     /// Spawn the highlighted permanent agent, or create one on the
@@ -132,17 +125,17 @@ impl App {
         let Some(name) = self.selected_definition_name() else {
             return;
         };
-        self.notification = Some((
+        self.notifications.current = Some((
             format!("Delete permanent agent {name}? Press y to confirm"),
             NotificationType::Warning,
         ));
-        self.pending_delete = Some(name);
+        self.pending.delete = Some(name);
     }
 
     /// Resolve a pending deletion with `key`. Returns `false` when nothing
     /// was pending.
     pub(in crate::app) fn handle_pending_delete(&mut self, key: KeyEvent) -> bool {
-        let Some(name) = self.pending_delete.take() else {
+        let Some(name) = self.pending.delete.take() else {
             return false;
         };
         if matches!(key.code, KeyCode::Char('y' | 'Y')) {
@@ -168,13 +161,14 @@ impl App {
     /// Navigation keys of the focused panel.
     pub(in crate::app) fn handle_definitions_key(&mut self, key: KeyEvent) {
         let last = self.definitions.len();
+        let selected = self.definitions.selected;
         match key.code {
-            KeyCode::Up => self.select_definition_row(self.selected_definition.saturating_sub(1)),
-            KeyCode::Down => self.select_definition_row(self.selected_definition + 1),
+            KeyCode::Up => self.select_definition_row(selected.saturating_sub(1)),
+            KeyCode::Down => self.select_definition_row(selected + 1),
             KeyCode::PageUp => {
-                self.select_definition_row(self.selected_definition.saturating_sub(5));
+                self.select_definition_row(selected.saturating_sub(5));
             }
-            KeyCode::PageDown => self.select_definition_row(self.selected_definition + 5),
+            KeyCode::PageDown => self.select_definition_row(selected + 5),
             KeyCode::Home => self.select_definition_row(0),
             KeyCode::End => self.select_definition_row(last),
             KeyCode::Enter => self.activate_definition_row(),
@@ -189,7 +183,7 @@ impl App {
         let Some(index) = self.definition_row_at(column, row) else {
             return;
         };
-        self.selected_definition = index;
+        self.definitions.selected = index;
         match self.selected_definition_name() {
             Some(name) => self.open_definition(&name),
             None => self.edit_definition(None),
@@ -197,7 +191,7 @@ impl App {
     }
 
     fn send(&self, event: UiEvent) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(event);
         }
     }

@@ -65,30 +65,30 @@ impl App {
     /// wide. Each prose row then packs its text into the cells it would
     /// cover, for [`Self::prose_rows`] to set in that face.
     pub fn set_prose_measure(&mut self, measure: ProseMeasure) {
-        self.prose_measure = Some(measure);
-        self.chat_lines = ChatLineCache::default();
+        self.chat.prose_measure = Some(measure);
+        self.chat.chat_lines = ChatLineCache::default();
         // An open plan was laid out with the old widths too.
-        if let Some(super::DetailView::Plan(doc)) = self.detail.as_mut() {
+        if let Some(super::DetailView::Plan(doc)) = self.detail.view.as_mut() {
             doc.layout.key = None;
         }
     }
 
     pub(crate) const fn prose_measure(&self) -> Option<ProseMeasure> {
-        self.prose_measure
+        self.chat.prose_measure
     }
 
     /// The chat's prose rows in the last frame, top to bottom.
     #[must_use]
     pub fn prose_rows(&self) -> &[ProseRow] {
-        &self.prose_rows
+        &self.chat.prose_rows
     }
 
     pub(crate) fn set_prose_rows(&mut self, rows: Vec<ProseRow>) {
-        self.prose_rows = rows;
+        self.chat.prose_rows = rows;
     }
 
     /// Forget the prose rows an overlay or menu was drawn over.
     pub(crate) fn drop_covered_prose(&mut self, buffer: &Buffer) {
-        self.prose_rows.retain(|row| row.uncovered(buffer));
+        self.chat.prose_rows.retain(|row| row.uncovered(buffer));
     }
 }

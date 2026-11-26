@@ -1,6 +1,8 @@
 //! The agents panel's PROJECTS tab: projects, each over its agents and
 //! the agents they spawned, with "+ New project" pinned to the bottom.
 
+pub(in crate::renderer) use super::drop_marks::DROP_RAIL;
+use super::drop_marks::{drop_line_at, mark_drop};
 use super::{draw_list, split_pinned, working_icon};
 use crate::components::{
     cell_style, format_ago, list_row, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE,
@@ -12,12 +14,7 @@ use crate::{
     App, Theme,
 };
 use aura_core_types::time::now_ms;
-use ratatui::{
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    Frame,
-};
+use ratatui::{layout::Rect, style::Style, text::Line, Frame};
 use std::ops::Range;
 
 /// Draw the PROJECTS tab into `body`, the inside of the panel bordered
@@ -90,17 +87,6 @@ fn build_swarm_lines<'a>(
     window: Range<usize>,
     theme: &Theme,
 ) -> (Vec<Line<'a>>, Line<'a>, usize) {
-    let is_focused = app.focus() == PanelFocus::Swarm;
-    let selected = app.selected_agent();
-    // Unfocused, the agent in the chat is lit, or the folded agent over it.
-    let shown_active = app.shown_active_agent();
-    let width = inner.width as usize;
-    let now_ms = now_ms();
-    let is_thinking = |agent: &crate::events::AgentSummary| app.agent_thinking(agent);
-    let project_name = Style::default().fg(theme.colors.muted);
-    let agent_name = Style::default().fg(theme.colors.foreground);
-    let subagent_name = Style::default().fg(theme.colors.muted);
-    let menu_target = app.context_menu().map(|menu| &menu.target);
     // While a project or agent is dragged its rows stay lit, and a line
     // in the accent color between rows marks where they go.
     let drag = app.project_drag_hit();
@@ -110,14 +96,8 @@ fn build_swarm_lines<'a>(
         .and_then(|drag| drag.edge)
         .and_then(|edge| drop_line_at(&rows, edge));
     let listed = rows.len().saturating_sub(1);
-    // A project's agents run up to the next project's root.
-    let roots: Vec<usize> = rows
-        .iter()
-        .filter_map(|row| match row {
-            ProjectListRow::Project { root, .. } => Some(*root),
-            _ => None,
-        })
-        .collect();
+    let roots = project_roots(&rows);
+    let swarm = Swarm::new(app, theme, inner, &roots, drag.map(|drag| drag.dragged));
     let mut projects_seen = 0;
     let mut lines = Vec::with_capacity(window.len());
     let mut new_project = Line::default();
@@ -130,21 +110,136 @@ fn build_swarm_lines<'a>(
         if !pinned && (row_index >= listed || !window.contains(&row_index)) {
             continue;
         }
+        let state = swarm.row_state(row, row_index);
+        match row {
+            ProjectListRow::Project { root, expanded } => {
+                lines.push(swarm.project_line(root, expanded, projects_seen, state));
+            }
+            ProjectListRow::EmptyProject { project } => {
+                lines.push(swarm.empty_project_line(project, state));
+            }
+            ProjectListRow::Agent { index } => {
+                lines.push(swarm.agent_line(index, row_index, state));
+            }
+            ProjectListRow::NewProject => new_project = swarm.new_project_line(state),
+            ProjectListRow::Gap => lines.push(Line::default()),
+        }
+        if !pinned {
+            if let Some(line) = lines.last_mut() {
+                mark_drop(
+                    line,
+                    drop_line,
+                    row_index,
+                    swarm.width,
+                    theme.colors.success,
+                );
+            }
+        }
+    }
+    (lines, new_project, listed)
+}
+
+/// The root agent of every project row; a project's agents run up to the
+/// next project's root.
+fn project_roots(rows: &[ProjectListRow]) -> Vec<usize> {
+    rows.iter()
+        .filter_map(|row| match row {
+            ProjectListRow::Project { root, .. } => Some(*root),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What every row of the PROJECTS tab is drawn with, worked out once a
+/// frame.
+struct Swarm<'s> {
+    app: &'s App,
+    theme: &'s Theme,
+    width: usize,
+    now_ms: u64,
+    is_focused: bool,
+    selected: usize,
+    /// Unfocused, the agent in the chat is lit, or the folded agent over it.
+    shown_active: Option<usize>,
+    menu_target: Option<&'s MenuTarget>,
+    /// Rows of the project or agent being dragged, while one is
+    dragged: Option<Range<usize>>,
+    /// The root agent of each project, in order
+    roots: &'s [usize],
+}
+
+/// How one row stands to the cursor and the pointer.
+#[derive(Clone, Copy)]
+struct RowState {
+    is_selected: bool,
+    is_hovered: bool,
+    /// The pointer is on the row's "+"
+    add_hovered: bool,
+    /// The pointer is on the row or one of its buttons
+    pointer_on_row: bool,
+}
+
+impl<'s> Swarm<'s> {
+    fn new(
+        app: &'s App,
+        theme: &'s Theme,
+        inner: Rect,
+        roots: &'s [usize],
+        dragged: Option<Range<usize>>,
+    ) -> Self {
+        Self {
+            app,
+            theme,
+            width: inner.width as usize,
+            now_ms: now_ms(),
+            is_focused: app.focus() == PanelFocus::Swarm,
+            selected: app.selected_agent(),
+            shown_active: app.shown_active_agent(),
+            menu_target: app.context_menu().map(|menu| &menu.target),
+            dragged,
+            roots,
+        }
+    }
+
+    fn button_hovered(&self, button: AgentButton, row_index: usize) -> bool {
+        self.app.hover() == Some(HoverTarget::agent_button(button, row_index))
+    }
+
+    fn row_state(&self, row: ProjectListRow, row_index: usize) -> RowState {
+        let hover = self.app.hover();
         let is_selected = match row {
             ProjectListRow::Project { .. }
             | ProjectListRow::EmptyProject { .. }
             | ProjectListRow::Gap => false,
-            _ if is_focused => row_index == selected,
-            ProjectListRow::Agent { index } => shown_active == Some(index),
+            _ if self.is_focused => row_index == self.selected,
+            ProjectListRow::Agent { index } => self.shown_active == Some(index),
             ProjectListRow::NewProject => false,
         };
         let add_hovered =
-            matches!(app.hover(), Some(HoverTarget::AddToProject(index)) if index == row_index);
-        let button_hovered =
-            |button: AgentButton| app.hover() == Some(HoverTarget::agent_button(button, row_index));
-        let pointer_on_row = AgentButton::ALL.into_iter().any(button_hovered)
-            || matches!(app.hover(), Some(HoverTarget::ProjectRow(index)) if index == row_index);
-        let menu_on = match (row, menu_target) {
+            matches!(hover, Some(HoverTarget::AddToProject(index)) if index == row_index);
+        let pointer_on_row = AgentButton::ALL
+            .into_iter()
+            .any(|button| self.button_hovered(button, row_index))
+            || matches!(hover, Some(HoverTarget::ProjectRow(index)) if index == row_index);
+        let is_hovered = add_hovered
+            || pointer_on_row
+            || self.menu_on(row)
+            || self
+                .dragged
+                .as_ref()
+                .is_some_and(|dragged| dragged.contains(&row_index));
+        RowState {
+            is_selected,
+            is_hovered,
+            add_hovered,
+            pointer_on_row,
+        }
+    }
+
+    /// Whether the open context menu is for `row`.
+    fn menu_on(&self, row: ProjectListRow) -> bool {
+        let app = self.app;
+        match (row, self.menu_target) {
             (ProjectListRow::Project { root, .. }, Some(MenuTarget::Project(key))) => {
                 app.agents()[root].project_key() == key
             }
@@ -155,195 +250,166 @@ fn build_swarm_lines<'a>(
                 app.agents()[index].id == *id
             }
             _ => false,
+        }
+    }
+
+    fn project_line<'a>(
+        &self,
+        root: usize,
+        expanded: bool,
+        projects_seen: usize,
+        state: RowState,
+    ) -> Line<'a> {
+        let (app, theme) = (self.app, self.theme);
+        let end = self
+            .roots
+            .get(projects_seen)
+            .copied()
+            .unwrap_or(app.agents().len());
+        let agents = &app.agents()[root..end];
+        let icon = if !expanded && agents.iter().any(|agent| app.agent_thinking(agent)) {
+            working_icon(app, theme)
+        } else {
+            let folder = if expanded { "🗁" } else { "🗀" };
+            StatusIcon::new(folder, theme.colors.muted)
         };
-        let is_hovered = add_hovered
-            || pointer_on_row
-            || menu_on
-            || drag
-                .as_ref()
-                .is_some_and(|drag| drag.dragged.contains(&row_index));
-        match row {
-            ProjectListRow::Project { root, expanded } => {
-                let end = roots
-                    .get(projects_seen)
-                    .copied()
-                    .unwrap_or(app.agents().len());
-                let agents = &app.agents()[root..end];
-                let icon = if !expanded && agents.iter().any(is_thinking) {
-                    working_icon(app, theme)
-                } else {
-                    let folder = if expanded { "🗁" } else { "🗀" };
-                    StatusIcon::new(folder, theme.colors.muted)
-                };
-                let mut cell =
-                    cell_style(theme, CellState::of(is_selected, is_hovered), project_name);
-                if add_hovered {
-                    cell.time = theme.colors.foreground;
-                }
-                lines.push(list_row(
-                    width,
-                    0,
-                    icon,
-                    &project_label(&app.agents()[root]),
-                    cell,
-                    Some("+"),
-                ));
-            }
-            ProjectListRow::EmptyProject { project } => {
-                let name = app
-                    .projects()
-                    .get(project)
-                    .map(|p| p.name.to_uppercase())
-                    .unwrap_or_default();
-                let mut cell =
-                    cell_style(theme, CellState::of(is_selected, is_hovered), project_name);
-                if add_hovered {
-                    cell.time = theme.colors.foreground;
-                }
-                let icon = StatusIcon::new("🗀", theme.colors.muted);
-                lines.push(list_row(width, 0, icon, &name, cell, Some("+")));
-            }
-            ProjectListRow::Agent { index } => {
-                let agent = &app.agents()[index];
-                let marker = app.agent_has_spawns(index).then(|| {
-                    if app.agent_folded(index) {
-                        "▸"
-                    } else {
-                        "▾"
-                    }
-                });
-                // A busy agent's spinner sits in the icon column and stands in
-                // for its fold marker, open or folded; clicking it still
-                // folds, as `fold_marker_at` says.
-                let icon = if app.agent_row_busy(index) {
-                    working_icon(app, theme)
-                } else {
-                    StatusIcon::new(marker.unwrap_or(""), theme.colors.muted)
-                };
-                let ago = agent.last_active_ms.map(|ms| format_ago(ms, now_ms));
-                let state = CellState::of(is_selected, is_hovered);
-                let name = if agent.depth == 0 {
-                    agent_name
-                } else {
-                    subagent_name
-                };
-                let cell = cell_style(theme, state, name);
-                // The buttons show only under the pointer, muted like the
-                // time, and the one that is hovered lights up.
-                let buttons = AgentButton::ALL.map(|button| {
-                    let color = if button_hovered(button) && !is_selected {
-                        theme.colors.foreground
-                    } else {
-                        cell.time
-                    };
-                    (button, color)
-                });
-                let buttons: &[_] = if pointer_on_row { &buttons } else { &[] };
-                // Plan mode wins the badge; otherwise a cloud agent shows
-                // a cloud, dimmed with its owner's name for another user's.
-                let cloud = app.cloud_badge(&agent.id);
-                let badge = if agent.plan_mode {
-                    Some(RowBadge {
-                        text: PLAN_BADGE,
-                        color: theme.colors.success,
-                    })
-                } else {
-                    cloud.as_ref().map(|(text, foreign)| RowBadge {
-                        text,
-                        color: if *foreign {
-                            theme.colors.faint
-                        } else {
-                            theme.colors.primary
-                        },
-                    })
-                };
-                let end = AgentRowEnd::agent(ago.as_deref());
-                lines.push(tree_row(
-                    width,
-                    (&spawn_guides(app.agents(), index), theme.colors.muted),
-                    icon,
-                    (&agent.name, badge),
-                    cell,
-                    &end,
-                    buttons,
-                ));
-            }
-            ProjectListRow::NewProject => {
-                let cell = cell_style(
-                    theme,
-                    CellState::of(is_selected, is_hovered),
-                    Style::default().fg(theme.colors.muted),
-                );
-                let icon = StatusIcon::new("+", cell.text.fg.unwrap_or(theme.colors.muted));
-                new_project = list_row(width, 0, icon, "New project", cell, None);
-            }
-            ProjectListRow::Gap => lines.push(Line::default()),
+        let project_name = Style::default().fg(theme.colors.muted);
+        let mut cell = cell_style(
+            theme,
+            CellState::of(state.is_selected, state.is_hovered),
+            project_name,
+        );
+        if state.add_hovered {
+            cell.time = theme.colors.foreground;
         }
-        if !pinned {
-            if let Some(line) = lines.last_mut() {
-                match drop_line {
-                    Some(DropLine::Rule(at)) if at == row_index => {
-                        *line = drop_rule(width, theme.colors.success);
-                    }
-                    Some(DropLine::Under(at)) if at == row_index => {
-                        underline(line, theme.colors.success);
-                    }
-                    _ => {}
-                }
+        list_row(
+            self.width,
+            0,
+            icon,
+            &project_label(&app.agents()[root]),
+            cell,
+            Some("+"),
+        )
+    }
+
+    fn empty_project_line<'a>(&self, project: usize, state: RowState) -> Line<'a> {
+        let theme = self.theme;
+        let name = self
+            .app
+            .projects()
+            .get(project)
+            .map(|p| p.name.to_uppercase())
+            .unwrap_or_default();
+        let project_name = Style::default().fg(theme.colors.muted);
+        let mut cell = cell_style(
+            theme,
+            CellState::of(state.is_selected, state.is_hovered),
+            project_name,
+        );
+        if state.add_hovered {
+            cell.time = theme.colors.foreground;
+        }
+        let icon = StatusIcon::new("🗀", theme.colors.muted);
+        list_row(self.width, 0, icon, &name, cell, Some("+"))
+    }
+
+    fn agent_line<'a>(&self, index: usize, row_index: usize, state: RowState) -> Line<'a> {
+        let (app, theme) = (self.app, self.theme);
+        let agent = &app.agents()[index];
+        let icon = self.agent_icon(index);
+        let ago = agent.last_active_ms.map(|ms| format_ago(ms, self.now_ms));
+        let name = if agent.depth == 0 {
+            Style::default().fg(theme.colors.foreground)
+        } else {
+            Style::default().fg(theme.colors.muted)
+        };
+        let cell = cell_style(
+            theme,
+            CellState::of(state.is_selected, state.is_hovered),
+            name,
+        );
+        // The buttons show only under the pointer, muted like the
+        // time, and the one that is hovered lights up.
+        let buttons = AgentButton::ALL.map(|button| {
+            let color = if self.button_hovered(button, row_index) && !state.is_selected {
+                theme.colors.foreground
+            } else {
+                cell.time
+            };
+            (button, color)
+        });
+        let buttons: &[_] = if state.pointer_on_row { &buttons } else { &[] };
+        let cloud = app.cloud_badge(&agent.id);
+        let badge = self.agent_badge(agent.plan_mode, cloud.as_ref());
+        let end = AgentRowEnd::agent(ago.as_deref());
+        tree_row(
+            self.width,
+            (&spawn_guides(app.agents(), index), theme.colors.muted),
+            icon,
+            (&agent.name, badge),
+            cell,
+            &end,
+            buttons,
+        )
+    }
+
+    /// The icon column of the agent at `index`: its fold marker, ▾ over
+    /// its spawns or ▸ folded over them, blank without any.
+    fn agent_icon(&self, index: usize) -> StatusIcon {
+        let app = self.app;
+        let marker = app.agent_has_spawns(index).then(|| {
+            if app.agent_folded(index) {
+                "▸"
+            } else {
+                "▾"
             }
+        });
+        // A busy agent's spinner sits in the icon column and stands in
+        // for its fold marker, open or folded; clicking it still
+        // folds, as `fold_marker_at` says.
+        if app.agent_row_busy(index) {
+            working_icon(app, self.theme)
+        } else {
+            StatusIcon::new(marker.unwrap_or(""), self.theme.colors.muted)
         }
     }
-    (lines, new_project, listed)
-}
 
-/// How the edge a drag's rows go to is drawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DropLine {
-    /// A rule across this gap row, between two projects
-    Rule(usize),
-    /// An underline along this row, the one just above the edge
-    Under(usize),
-}
-
-/// How to draw the edge just above list row `edge`: across the gap row
-/// beside it when there is one, else under the row above it. `None` above
-/// the first row, where there is no row to draw on.
-fn drop_line_at(rows: &[ProjectListRow], edge: usize) -> Option<DropLine> {
-    let above = edge.checked_sub(1);
-    if let Some(above) = above.filter(|&above| rows.get(above) == Some(&ProjectListRow::Gap)) {
-        return Some(DropLine::Rule(above));
+    /// Plan mode wins the badge; otherwise a cloud agent shows
+    /// a cloud, dimmed with its owner's name for another user's.
+    fn agent_badge<'b>(
+        &self,
+        plan_mode: bool,
+        cloud: Option<&'b (String, bool)>,
+    ) -> Option<RowBadge<'b>> {
+        let colors = &self.theme.colors;
+        if plan_mode {
+            Some(RowBadge {
+                text: PLAN_BADGE,
+                color: colors.success,
+            })
+        } else {
+            cloud.map(|(text, foreign)| RowBadge {
+                text,
+                color: if *foreign {
+                    colors.faint
+                } else {
+                    colors.primary
+                },
+            })
+        }
     }
-    if rows.get(edge) == Some(&ProjectListRow::Gap) {
-        return Some(DropLine::Rule(edge));
-    }
-    above.map(DropLine::Under)
-}
 
-/// A horizontal rule `width` columns wide, padded like the list's rows.
-fn drop_rule(width: usize, color: Color) -> Line<'static> {
-    let rule = DROP_RULE.repeat(width.saturating_sub(2));
-    Line::from(vec![
-        Span::raw(" "),
-        Span::styled(rule, Style::default().fg(color)),
-        Span::raw(" "),
-    ])
-}
-
-/// Underline all of `line` in `color`, keeping its text colors.
-fn underline(line: &mut Line<'_>, color: Color) {
-    for span in &mut line.spans {
-        span.style = span
-            .style
-            .add_modifier(Modifier::UNDERLINED)
-            .underline_color(color);
+    fn new_project_line<'a>(&self, state: RowState) -> Line<'a> {
+        let theme = self.theme;
+        let cell = cell_style(
+            theme,
+            CellState::of(state.is_selected, state.is_hovered),
+            Style::default().fg(theme.colors.muted),
+        );
+        let icon = StatusIcon::new("+", cell.text.fg.unwrap_or(theme.colors.muted));
+        list_row(self.width, 0, icon, "New project", cell, None)
     }
 }
-
-/// Glyph of the rule drawn where a dragged project or agent goes.
-pub(in crate::renderer) const DROP_RULE: &str = "─";
-
-/// Glyph of the rail beside a drag's hit area.
-pub(in crate::renderer) const DROP_RAIL: &str = "▎";
 
 /// `   │   ├`: the tree lines before the agent at `index` in `agents`.
 /// Each level's line drops from the first column of its parent's name.

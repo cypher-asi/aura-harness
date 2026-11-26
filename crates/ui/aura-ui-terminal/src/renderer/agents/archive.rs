@@ -64,65 +64,87 @@ fn build_archived_lines<'a>(
             (Vec::new(), 1)
         };
     }
-    let is_focused = app.focus() == PanelFocus::Swarm;
-    let shown_active = app.shown_active_archived();
-    let width = inner.width as usize;
-    let now_ms = now_ms();
-    let menu_target = app.context_menu().map(|menu| &menu.target);
+    let archive = Archive {
+        app,
+        theme,
+        inner,
+        is_focused: app.focus() == PanelFocus::Swarm,
+        shown_active: app.shown_active_archived(),
+        now_ms: now_ms(),
+        menu_target: app.context_menu().map(|menu| &menu.target),
+    };
     let rows = app.archive_rows();
     let total = rows.len();
     let shown = rows
         .into_iter()
         .skip(window.start)
         .take(window.len())
-        .filter_map(|row| {
-            let index = match row {
-                ArchiveRow::Day(label) => {
-                    return Some(
-                        empty_line(&label, inner.width, theme)
-                            .patch_style(Style::default().add_modifier(Modifier::BOLD)),
-                    );
-                }
-                ArchiveRow::Agent { index } => index,
-            };
-            let agent = archived.get(index)?;
-            let selected = if is_focused {
-                index == app.selected_archived()
-            } else {
-                shown_active == Some(index)
-            };
-            let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index)
-                || matches!(menu_target, Some(MenuTarget::Archived(id)) if *id == agent.id);
-            // Top-level rows leave the right side blank; agents under them
-            // show how long ago they were last active.
-            let side = if agent.depth == 0 {
-                None
-            } else {
-                agent.last_active_ms.map(|ms| format_ago(ms, now_ms))
-            };
-            // ▸ over folded agents under it, ▾ once opened.
-            let marker = match (app.archived_has_spawns(index), app.archived_folded(index)) {
-                (false, _) => "",
-                (true, true) => "▸",
-                (true, false) => "▾",
-            };
-            Some(list_row(
-                width,
-                agent.depth,
-                StatusIcon::new(marker, theme.colors.muted),
-                &agent.name,
-                cell_style(
-                    theme,
-                    CellState::of(selected, hovered),
-                    Style::default().fg(if agent.depth == 0 {
-                        theme.colors.foreground
-                    } else {
-                        theme.colors.muted
-                    }),
-                ),
-                side.as_deref(),
-            ))
+        .filter_map(|row| match row {
+            ArchiveRow::Day(label) => Some(archive.day_line(&label)),
+            ArchiveRow::Agent { index } => archive.agent_line(index),
         })
         .collect();
     (shown, total)
+}
+
+/// What every row of the ARCHIVE tab is drawn with, worked out once a
+/// frame.
+struct Archive<'s> {
+    app: &'s App,
+    theme: &'s Theme,
+    inner: Rect,
+    is_focused: bool,
+    shown_active: Option<usize>,
+    now_ms: u64,
+    menu_target: Option<&'s MenuTarget>,
+}
+
+impl Archive<'_> {
+    /// The muted header of the day `label`.
+    fn day_line<'a>(&self, label: &str) -> Line<'a> {
+        empty_line(label, self.inner.width, self.theme)
+            .patch_style(Style::default().add_modifier(Modifier::BOLD))
+    }
+
+    /// The row of archived agent `index`, `None` when there is none.
+    fn agent_line<'a>(&self, index: usize) -> Option<Line<'a>> {
+        let (app, theme) = (self.app, self.theme);
+        let agent = app.archived().get(index)?;
+        let selected = if self.is_focused {
+            index == app.selected_archived()
+        } else {
+            self.shown_active == Some(index)
+        };
+        let hovered = matches!(app.hover(), Some(HoverTarget::ArchivedRow(i)) if i == index)
+            || matches!(self.menu_target, Some(MenuTarget::Archived(id)) if *id == agent.id);
+        // Top-level rows leave the right side blank; agents under them
+        // show how long ago they were last active.
+        let side = if agent.depth == 0 {
+            None
+        } else {
+            agent.last_active_ms.map(|ms| format_ago(ms, self.now_ms))
+        };
+        // ▸ over folded agents under it, ▾ once opened.
+        let marker = match (app.archived_has_spawns(index), app.archived_folded(index)) {
+            (false, _) => "",
+            (true, true) => "▸",
+            (true, false) => "▾",
+        };
+        Some(list_row(
+            self.inner.width as usize,
+            agent.depth,
+            StatusIcon::new(marker, theme.colors.muted),
+            &agent.name,
+            cell_style(
+                theme,
+                CellState::of(selected, hovered),
+                Style::default().fg(if agent.depth == 0 {
+                    theme.colors.foreground
+                } else {
+                    theme.colors.muted
+                }),
+            ),
+            side.as_deref(),
+        ))
+    }
 }

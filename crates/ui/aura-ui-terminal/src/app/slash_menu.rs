@@ -180,7 +180,7 @@ impl App {
     /// prompt (where `/` starts a path), and no modal state owns the
     /// keyboard.
     fn slash_menu_allowed(&self) -> bool {
-        !self.slash_dismissed
+        !self.input.slash_dismissed
             && !self.terminal_mode
             && matches!(self.state, AppState::Idle | AppState::Processing)
     }
@@ -193,7 +193,7 @@ impl App {
         if !self.slash_menu_allowed() {
             return Vec::new();
         }
-        match self.input.strip_prefix('/') {
+        match self.input.text.strip_prefix('/') {
             Some(query) if !query.contains(char::is_whitespace) => {
                 prefix_first(SLASH_COMMANDS, query, |c| c.name)
             }
@@ -211,6 +211,7 @@ impl App {
         }
         let Some((command, query)) = self
             .input
+            .text
             .strip_prefix('/')
             .and_then(|rest| rest.split_once(' '))
         else {
@@ -225,7 +226,7 @@ impl App {
         {
             return Vec::new();
         }
-        prefix_first(&self.definitions, query, |d| d.name.as_str())
+        prefix_first(&self.definitions.items, query, |d| d.name.as_str())
     }
 
     /// Rows in the open menu: matching commands, or else agents to add.
@@ -239,14 +240,9 @@ impl App {
     /// Highlighted row in the slash menu.
     #[must_use]
     pub fn slash_cursor(&self) -> usize {
-        self.slash_cursor
+        self.input
+            .slash_cursor
             .min(self.slash_menu_len().saturating_sub(1))
-    }
-
-    /// Reopen the menu at its first row after the input was edited.
-    pub(super) fn reset_slash_menu(&mut self) {
-        self.slash_cursor = 0;
-        self.slash_dismissed = false;
     }
 
     /// Handle a key while the slash menu is open. `None` when the menu is
@@ -261,8 +257,8 @@ impl App {
         let last = self.slash_menu_len().checked_sub(1)?;
         let cursor = self.slash_cursor();
         match key.code {
-            KeyCode::Up => self.slash_cursor = cursor.checked_sub(1).unwrap_or(last),
-            KeyCode::Down => self.slash_cursor = if cursor >= last { 0 } else { cursor + 1 },
+            KeyCode::Up => self.input.slash_cursor = cursor.checked_sub(1).unwrap_or(last),
+            KeyCode::Down => self.input.slash_cursor = if cursor >= last { 0 } else { cursor + 1 },
             KeyCode::Tab | KeyCode::Enter => {
                 if let Some(&command) = self.slash_matches().get(cursor) {
                     self.complete_slash_command(command);
@@ -278,7 +274,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Esc => self.slash_dismissed = true,
+            KeyCode::Esc => self.input.slash_dismissed = true,
             _ => return None,
         }
         Some(KeyResult::continue_running())
@@ -292,8 +288,8 @@ impl App {
 
     /// Replace the input with `text`, cursor at its end, menu at its top.
     fn set_slash_input(&mut self, text: String) {
-        self.input = text;
-        self.cursor_pos = self.input.len();
-        self.slash_cursor = 0;
+        self.input.text = text;
+        self.input.cursor_pos = self.input.text.len();
+        self.input.slash_cursor = 0;
     }
 }

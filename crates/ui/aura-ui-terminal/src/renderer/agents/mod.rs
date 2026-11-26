@@ -4,6 +4,7 @@
 mod archive;
 mod bench;
 pub(super) mod channels;
+mod drop_marks;
 pub(super) mod projects;
 pub(super) mod roster;
 

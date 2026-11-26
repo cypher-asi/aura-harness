@@ -14,7 +14,7 @@
 use super::chrome::{render_scrollbar, ScrollView};
 use super::graph::status_glyph;
 use super::text::display_width;
-use crate::app::flow::timeline::{MarkKind, TimelineRow, TimelineView};
+use crate::app::flow::timeline::{MarkKind, TimelineRow, TimelineView, TurnSpan};
 use crate::app::format::format_cost;
 use crate::components::truncate_record_info;
 use crate::events::TraceNodeStatus;
@@ -25,6 +25,7 @@ use ratatui::{
     style::{Modifier, Style},
     Frame,
 };
+use std::ops::Range;
 use unicode_width::UnicodeWidthChar;
 
 /// Columns of the cost, time and check against the right edge.
@@ -47,72 +48,18 @@ pub(super) fn render_timeline(
         .clamp(16, 44)
         .min(inner.width.saturating_sub(10));
     let facts = if inner.width >= 70 { FACTS } else { 0 };
-    let bar_x = inner.x + label + 1;
-    let bar_width = inner
-        .width
-        .saturating_sub(label + 1 + facts + u16::from(facts > 0))
-        .max(1);
+    let view = timeline_view(app, inner, rows_shown, label, facts);
 
-    let flow = app.flow_mut();
-    flow.ensure_timeline();
-    flow.timeline_mut().follow(rows_shown);
-    let window = flow.timeline().window();
-    let view = TimelineView {
-        area: inner,
-        rows_top: inner.y + 1,
-        rows_shown,
-        bar_x,
-        bar_width,
-        window,
-    };
-    flow.timeline_mut().set_view(Some(view));
-
-    let flow = app.flow();
-    let state = flow.timeline();
-    let timeline = state.timeline();
+    let state = app.flow().timeline();
     let mut draw = Draw {
         buffer: frame.buffer_mut(),
         theme,
         view,
     };
-    draw.axis(inner, label, timeline.start_ms, facts > 0);
-    let selected = state.selected_row();
-    let span = state.selected_span().map(|(_, span)| span);
-    for (at, row) in timeline
-        .rows
-        .iter()
-        .enumerate()
-        .skip(state.scroll())
-        .take(rows_shown)
-    {
-        let y = view.rows_top + u16::try_from(at - state.scroll()).unwrap_or(u16::MAX);
-        let is_selected = selected == Some(at);
-        draw.label(inner.x, y, label, row, is_selected);
-        draw.bars(y, row, is_selected.then_some(span).flatten());
-        if facts > 0 {
-            draw.facts(inner.right() - FACTS, y, row);
-        }
-    }
-    if timeline.rows.is_empty() {
-        let text = if state.issues_only() {
-            "Nothing failed. e shows every agent again."
-        } else {
-            "Nothing recorded yet."
-        };
-        draw.text(inner.x + 1, view.rows_top, text, inner.width, draw.muted());
-    }
+    draw.axis(inner, label, state.timeline().start_ms, facts > 0);
+    draw.rows(app, inner, label, facts);
     if footer > 0 {
-        let (first, second) = footer_lines(app);
-        let y = inner.bottom() - 2;
-        let width = inner.width.saturating_sub(2);
-        let mut draw = Draw {
-            buffer: frame.buffer_mut(),
-            theme,
-            view,
-        };
-        let style = Style::default().fg(theme.colors.foreground);
-        draw.text(inner.x + 1, y, &first, width, style);
-        draw.text(inner.x + 1, y + 1, &second, width, draw.muted());
+        draw.footer(app, inner);
     }
 
     let state = app.flow().timeline();
@@ -134,6 +81,37 @@ pub(super) fn render_timeline(
     );
 }
 
+/// Follow the selection in `rows_shown` rows, store where the rows and
+/// bars go, and return it.
+fn timeline_view(
+    app: &mut App,
+    inner: Rect,
+    rows_shown: usize,
+    label: u16,
+    facts: u16,
+) -> TimelineView {
+    let bar_x = inner.x + label + 1;
+    let bar_width = inner
+        .width
+        .saturating_sub(label + 1 + facts + u16::from(facts > 0))
+        .max(1);
+
+    let flow = app.flow_mut();
+    flow.ensure_timeline();
+    flow.timeline_mut().follow(rows_shown);
+    let window = flow.timeline().window();
+    let view = TimelineView {
+        area: inner,
+        rows_top: inner.y + 1,
+        rows_shown,
+        bar_x,
+        bar_width,
+        window,
+    };
+    flow.timeline_mut().set_view(Some(view));
+    view
+}
+
 /// What the selected row is and did, and what its selected turn is, or
 /// the keys when no turn is selected.
 fn footer_lines(app: &App) -> (String, String) {
@@ -143,6 +121,11 @@ fn footer_lines(app: &App) -> (String, String) {
         return (String::new(), String::new());
     };
     let row = &state.timeline().rows[at];
+    (row_line(row), turn_line(app, row))
+}
+
+/// `b-1 · opus · 3 turns · 41 calls · $0.21 · 2m40s · check failed`.
+fn row_line(row: &TimelineRow) -> String {
     let mut parts = vec![row.name.clone()];
     if !row.note.is_empty() {
         parts.push(row.note.clone());
@@ -168,8 +151,14 @@ fn footer_lines(app: &App) -> (String, String) {
     if let Some(error) = &row.error {
         parts.push(error.clone());
     }
-    let first = parts.join(" · ");
-    let second = match state.selected_span() {
+    parts.join(" · ")
+}
+
+/// The selected turn of `row`, or the keys when no turn is selected.
+fn turn_line(app: &App, row: &TimelineRow) -> String {
+    let flow = app.flow();
+    let state = flow.timeline();
+    match state.selected_span() {
         Some((_, span)) => {
             let turn = &row.spans[span];
             let head = &flow.nodes()[turn.head];
@@ -192,8 +181,7 @@ fn footer_lines(app: &App) -> (String, String) {
                  +/- zoom · e issues"
             )
         }
-    };
-    (first, second)
+    }
 }
 
 /// `850ms`, `42s`, `3m05s`, `1h02m`.
@@ -258,6 +246,48 @@ impl Draw<'_> {
     fn column(&self, at_ms: u64) -> i64 {
         let (from, to) = self.view.window;
         ((at_ms as f64 - from) / (to - from) * f64::from(self.view.bar_width)).floor() as i64
+    }
+
+    /// The rows in view, or what an empty timeline says.
+    fn rows(&mut self, app: &App, inner: Rect, label: u16, facts: u16) {
+        let view = self.view;
+        let state = app.flow().timeline();
+        let timeline = state.timeline();
+        let selected = state.selected_row();
+        let span = state.selected_span().map(|(_, span)| span);
+        for (at, row) in timeline
+            .rows
+            .iter()
+            .enumerate()
+            .skip(state.scroll())
+            .take(view.rows_shown)
+        {
+            let y = view.rows_top + u16::try_from(at - state.scroll()).unwrap_or(u16::MAX);
+            let is_selected = selected == Some(at);
+            self.label(inner.x, y, label, row, is_selected);
+            self.bars(y, row, is_selected.then_some(span).flatten());
+            if facts > 0 {
+                self.facts(inner.right() - FACTS, y, row);
+            }
+        }
+        if timeline.rows.is_empty() {
+            let text = if state.issues_only() {
+                "Nothing failed. e shows every agent again."
+            } else {
+                "Nothing recorded yet."
+            };
+            self.text(inner.x + 1, view.rows_top, text, inner.width, self.muted());
+        }
+    }
+
+    /// The two lines under the rows: see [`footer_lines`].
+    fn footer(&mut self, app: &App, inner: Rect) {
+        let (first, second) = footer_lines(app);
+        let y = inner.bottom() - 2;
+        let width = inner.width.saturating_sub(2);
+        let style = Style::default().fg(self.theme.colors.foreground);
+        self.text(inner.x + 1, y, &first, width, style);
+        self.text(inner.x + 1, y + 1, &second, width, self.muted());
     }
 
     /// The header: `agents`, the time from the run's start along the bars,
@@ -353,71 +383,87 @@ impl Draw<'_> {
         }
     }
 
+    /// The cell of bar column `column`, which is on the bars.
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    fn bar_cell(&self, column: i64) -> u16 {
+        self.view.bar_x + column as u16
+    }
+
+    /// The bar columns from `from` to `to`, cut to the bars.
+    fn cells(&self, from: i64, to: i64) -> Range<i64> {
+        from.max(0)..(to + 1).min(i64::from(self.view.bar_width))
+    }
+
+    /// `symbol` in every bar cell from time `start` to `end`.
+    fn fill(&mut self, y: u16, (start, end): (u64, u64), symbol: &str, style: Style) {
+        for column in self.cells(self.column(start), self.column(end)) {
+            self.put(self.bar_cell(column), y, symbol, style);
+        }
+    }
+
     /// The row's bars: its turns, the time of the rows its fold hides,
     /// and a group's extent.
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     fn bars(&mut self, y: u16, row: &TimelineRow, selected_span: Option<usize>) {
-        let width = i64::from(self.view.bar_width);
-        let cells = |from: i64, to: i64| from.max(0)..(to + 1).min(width);
-        let bar_x = self.view.bar_x;
-        let at = |column: i64| bar_x + column as u16;
         let muted = self.muted();
         if row.lane.is_none() && !row.folded {
-            if let Some((start, end)) = row.extent {
-                for column in cells(self.column(start), self.column(end)) {
-                    self.put(at(column), y, "─", muted);
-                }
+            if let Some(extent) = row.extent {
+                self.fill(y, extent, "─", muted);
             }
         }
-        for &(start, end) in &row.hidden {
-            for column in cells(self.column(start), self.column(end)) {
-                self.put(at(column), y, "┄", muted);
-            }
+        for &hidden in &row.hidden {
+            self.fill(y, hidden, "┄", muted);
         }
         for (index, span) in row.spans.iter().enumerate() {
-            let color = match span.status {
-                TraceNodeStatus::Error => self.theme.colors.error,
-                TraceNodeStatus::Pending | TraceNodeStatus::Warn => self.theme.colors.warning,
-                TraceNodeStatus::Ok => self.theme.colors.secondary,
-            };
-            let style = if selected_span == Some(index) {
-                self.selection()
-            } else {
-                Style::default().fg(color)
-            };
-            let first = self.column(span.start_ms);
-            let last = self.column(span.end_ms).max(first);
-            for column in cells(first, last) {
-                let symbol = if column == first { "┃" } else { "━" };
-                self.put(at(column), y, symbol, style);
-            }
-            for mark in &span.marks {
-                let column = self.column(mark.at_ms);
-                if !(0..width).contains(&column) {
-                    continue;
-                }
-                let (symbol, color) = match mark.kind {
-                    MarkKind::Gate => ("◆", self.theme.colors.primary),
-                    MarkKind::Judge => ("◇", self.theme.colors.warning),
-                    MarkKind::Error => ("✗", self.theme.colors.error),
-                };
-                let style = if selected_span == Some(index) {
-                    self.selection()
-                } else {
-                    Style::default().fg(color)
-                };
-                self.put(at(column), y, symbol, style);
-            }
+            self.turn(y, span, selected_span == Some(index));
         }
         // Errors win a cell over everything else in it.
+        let width = i64::from(self.view.bar_width);
         for span in &row.spans {
             for mark in span.marks.iter().filter(|m| m.kind == MarkKind::Error) {
                 let column = self.column(mark.at_ms);
                 if (0..width).contains(&column) {
                     let style = Style::default().fg(self.theme.colors.error);
-                    self.put(at(column), y, "✗", style);
+                    self.put(self.bar_cell(column), y, "✗", style);
                 }
             }
+        }
+    }
+
+    /// One turn's bar and its marks.
+    fn turn(&mut self, y: u16, span: &TurnSpan, selected: bool) {
+        let width = i64::from(self.view.bar_width);
+        let color = match span.status {
+            TraceNodeStatus::Error => self.theme.colors.error,
+            TraceNodeStatus::Pending | TraceNodeStatus::Warn => self.theme.colors.warning,
+            TraceNodeStatus::Ok => self.theme.colors.secondary,
+        };
+        let style = if selected {
+            self.selection()
+        } else {
+            Style::default().fg(color)
+        };
+        let first = self.column(span.start_ms);
+        let last = self.column(span.end_ms).max(first);
+        for column in self.cells(first, last) {
+            let symbol = if column == first { "┃" } else { "━" };
+            self.put(self.bar_cell(column), y, symbol, style);
+        }
+        for mark in &span.marks {
+            let column = self.column(mark.at_ms);
+            if !(0..width).contains(&column) {
+                continue;
+            }
+            let (symbol, color) = match mark.kind {
+                MarkKind::Gate => ("◆", self.theme.colors.primary),
+                MarkKind::Judge => ("◇", self.theme.colors.warning),
+                MarkKind::Error => ("✗", self.theme.colors.error),
+            };
+            let style = if selected {
+                self.selection()
+            } else {
+                Style::default().fg(color)
+            };
+            self.put(self.bar_cell(column), y, symbol, style);
         }
     }
 

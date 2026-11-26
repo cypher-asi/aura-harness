@@ -3,7 +3,10 @@
 //! Manages the overall application state, conversation history,
 //! panels (Chat, Record and Sandbox), and coordinates between input handling and rendering.
 
+mod account;
+mod agent_switch;
 mod agent_views;
+mod approval;
 mod apps;
 mod areas;
 pub(crate) mod bench_progress;
@@ -16,6 +19,7 @@ mod context_menu;
 pub mod file_view;
 pub mod flow;
 pub mod folder_picker;
+mod host_chrome;
 mod host_tab;
 pub(crate) use aura_ui::format;
 pub mod graph;
@@ -24,37 +28,60 @@ pub(crate) use crate::components::image_preview;
 pub mod images;
 mod inbox;
 mod input_editor;
+mod input_state;
+mod kernel_link;
 mod keys;
 mod line_edit;
+mod list_state;
 mod members;
 pub mod mentions;
 mod model_picker;
 mod mouse;
+mod notifications;
+mod panel_layout;
 mod panes;
+mod pending;
 mod plan_doc;
 pub mod plans;
 mod policies;
 mod processes;
 mod project_drag;
+mod project_list;
 mod prose;
 pub(crate) mod queue_panel;
+mod record_list;
 pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
+mod chat_hits;
+mod chat_view;
+mod detail;
+mod detail_state;
+mod hit_targets;
+mod init;
+mod panel_areas;
+mod redraw;
 mod scroll;
 pub(crate) mod scrollbar;
 mod selection;
+mod selection_state;
+mod session;
 pub(crate) mod shell_input;
 mod shell_prompt;
+mod side_panel;
 mod side_scope;
 mod slash_menu;
 mod smooth;
+mod status;
 mod switching;
 pub mod tab_bar;
+mod ticks;
+mod todo_view;
 mod tool_view;
 pub mod trace_feed;
 mod trace_json;
 mod turn;
+mod view_state;
 pub mod vim;
 
 #[cfg(test)]
@@ -69,40 +96,59 @@ use crate::{
     components::{quiet_for, Activity, Message, MoreSection, ShellRun, ToolStep},
     events::{
         AgentDefinitionSummary, AgentSummary, ChannelPostView, ModelOptionView, PlanView,
-        ProcessSummary, ProjectSummary, RecordSummary, UiCommand, UiEvent,
+        ProcessSummary, RecordSummary, UiCommand, UiEvent,
     },
-    input::InputHistory,
     renderer::{ChatLineCache, GroupState},
 };
+use account::Account;
+use agent_switch::AgentSwitch;
+pub use approval::PendingApproval;
 pub use apps::{
     AgentsTab, ArchiveRow, BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice,
     AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
 pub use chat_tabs::ChatTab;
+use chat_view::ChatView;
 pub(crate) use context_menu::{MenuTarget, SubmenuEntry};
 pub use context_menu::{WorkspaceMove, WorkspaceTarget};
+pub use detail::DetailView;
+use detail_state::DetailState;
 use file_view::FileView;
-use folder_picker::FolderPicker;
+pub(crate) use hit_targets::{
+    CodeCopyHit, CopyText, HoverTarget, ImageHit, ProjectListRow, ToggleRow, ToggleTarget,
+};
+use host_chrome::HostChrome;
 pub use host_tab::{switch_label, switch_rect, SWITCH_GAP};
 use hud::Hud;
 pub use inbox::{InboxRow, ThreadView};
+use input_state::InputState;
+use kernel_link::KernelLink;
+use list_state::ListState;
 pub use members::{MemberRow, RecordsTab};
 pub use model_picker::{ModelPicker, ModelTab, PickerLayout, PickerTarget};
+use notifications::Notifications;
+pub use panel_areas::PanelAreas;
+use panel_areas::{contains, tab_at};
+pub(crate) use panel_areas::{follow_selection, InputRows, InputView};
+use panel_layout::PanelLayout;
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
+use pending::Pending;
 pub(crate) use plan_doc::PlanDoc;
 pub use processes::SidePanelTab;
+use project_list::ProjectList;
 pub use prose::{ProseMeasure, ProseRow};
-use ratatui::{
-    buffer::Buffer,
-    layout::{Position, Rect},
-};
+use ratatui::{buffer::Buffer, layout::Rect};
+use record_list::RecordList;
 use sandbox::{SandboxEntryKind, SandboxTree};
 pub use selection::Selection;
+use selection_state::SelectionState;
+use side_panel::SidePanel;
 pub use side_scope::SideScope;
 pub use smooth::ChatScroll;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+use ticks::Ticks;
+use todo_view::TodoView;
 use tokio::sync::mpsc;
 
 /// Maximum number of messages to keep in history. Every tool call, thinking
@@ -114,16 +160,6 @@ const DEFAULT_COMMAND_COLUMNS: u16 = 80;
 
 /// Narrowest terminal a command is given.
 const MIN_COMMAND_COLUMNS: u16 = 20;
-
-/// How long a notification stays in the corner.
-const NOTIFICATION_TTL: Duration = Duration::from_secs(4);
-
-/// How long an error stays in the corner.
-const ERROR_NOTIFICATION_TTL: Duration = Duration::from_secs(6);
-
-/// How long a notification too long for its row stays once it has
-/// scrolled to its end.
-const NOTIFICATION_TAIL: Duration = Duration::from_secs(2);
 
 // Maximum number of records to keep in the list, shared with the loader.
 use crate::events::MAX_RECORDS;
@@ -181,685 +217,107 @@ pub enum AppState {
     ChannelForm,
 }
 
-/// Pending approval request.
-#[derive(Debug, Clone)]
-pub struct PendingApproval {
-    /// Approval request ID
-    pub id: String,
-    /// Tool name
-    pub tool: String,
-    /// Description of the action
-    pub description: String,
-    /// What "always allow" would allow; empty when it isn't offered
-    pub always: String,
-}
-
 /// Main application struct managing UI state.
-#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     /// Current application state
     pub(super) state: AppState,
-    /// Listed projects, in list order
-    pub(super) projects: Vec<ProjectSummary>,
-    /// Key of the project whose details are shown
-    pub(super) project_info: Option<String>,
     /// Conversation messages
     pub(super) messages: VecDeque<Message>,
-    /// Current input text
-    pub(super) input: String,
-    /// Input history for navigation
-    pub(super) input_history: InputHistory,
-    /// Cursor position in input
-    pub(super) cursor_pos: usize,
+    /// The input box: its text, cursor, histories, menus, images and
+    /// scroll
+    pub(super) input: InputState,
     /// Current status message
     pub(super) status: String,
-    /// Calls waiting for an answer, oldest first; the front one is shown.
-    /// Calls of one turn ask together, so one prompt must not replace
-    /// another.
-    pub(super) pending_approvals: VecDeque<PendingApproval>,
+    /// Things waiting on the user or the host: approvals, confirmations
+    /// and requests not yet taken
+    pub(super) pending: Pending,
     /// Chat lines below the bottom of the chat view (0 = following the end)
     pub(super) scroll_offset: usize,
-    /// Rendered lines of each message, reused between frames
-    pub(super) chat_lines: ChatLineCache,
-    /// Rendered lines of each shell command, for the terminal pane
-    pub(super) terminal_lines: ChatLineCache,
-    /// Total chat lines in the last frame
-    pub(super) chat_line_count: usize,
-    /// Chat rows of the last frame that expand or collapse a group of
-    /// steps or one step when clicked
-    pub(super) toggle_rows: Vec<ToggleRow>,
-    /// First chat line shown in the last frame
-    pub(super) chat_first_line: usize,
-    /// Whether new activity blocks start expanded (`Ctrl+O` toggles)
-    pub(super) activity_expanded: bool,
-    /// Groups of steps the user opened (`true`) or closed, by the id of
-    /// their first message
-    pub(super) group_open: HashMap<u64, bool>,
-    /// Whether verbose mode is enabled
-    pub(super) verbose: bool,
-    /// Event sender (for sending events to kernel)
-    pub(super) event_tx: Option<mpsc::Sender<UiEvent>>,
-    /// Command receiver (for receiving commands from kernel)
-    pub(super) command_rx: Option<mpsc::Receiver<UiCommand>>,
-    /// Current streaming message (being built)
-    pub(super) streaming_content: String,
-    /// Notification message (ephemeral)
-    pub(super) notification: Option<(String, NotificationType)>,
-    /// The notification on screen and when it goes away.
-    pub(super) notification_shown: Option<((String, NotificationType), Instant)>,
-    /// When the notification on screen first showed.
-    pub(super) notification_since: Option<Instant>,
+    /// The chat as last drawn: rendered lines, rows, images and buttons
+    pub(super) chat: ChatView,
+    /// The channels to and from the kernel
+    pub(super) link: KernelLink,
+    /// The corner notification and its timer
+    pub(super) notifications: Notifications,
     /// Which panel has focus
     pub(super) focus: PanelFocus,
-    /// Whether the Record panel is visible
-    pub(super) record_panel_visible: bool,
-    /// Whether the Swarm panel is visible
-    pub(super) swarm_panel_visible: bool,
-    /// Whether the Sandbox panel is visible
-    pub(super) sandbox_panel_visible: bool,
-    /// Whether the chat panel fills the screen, the other panels hidden
-    pub(super) chat_expanded: bool,
-    /// Whether the side panel fills the right column, over the Record
-    /// panel, while it is shown
-    pub(super) side_expanded: bool,
-    /// Which of the Record and side panels were shown when the hamburger
-    /// button hid the right column, to show again when it comes back
-    pub(super) side_column_hidden: Option<(bool, bool)>,
+    /// Which panels are shown, and which fill the room of the others
+    pub(super) panels: PanelLayout,
     /// File tree of the active agent's sandbox
     pub(super) sandbox: SandboxTree,
-    /// Whether a tool may have changed files since the tree was read; the
-    /// next tick reads it again, once however many tools finished
-    pub(super) sandbox_stale: bool,
-    /// Animation frame counter for spinners
-    pub(super) animation_frame: usize,
-    /// Ticks until spinners turn again while nothing else animates
-    pub(super) spinner_wait: usize,
-    /// Whether the screen may look different since the host last drew
-    /// it; see [`Self::take_redraw`]
-    pub(super) redraw: bool,
-    /// Kernel records list
-    pub(super) records: VecDeque<RecordSummary>,
-    /// Selected record index in the list
-    pub(super) selected_record: usize,
-    /// Scroll offset for records list
-    pub(super) records_scroll: usize,
-    /// Which list the Kernel panel shows
-    pub(super) records_tab: RecordsTab,
+    /// Animation, redraw and alert bookkeeping kept from tick to tick
+    pub(super) ticks: Ticks,
+    /// Kernel records list, its selection, scroll and tab
+    pub(super) records: RecordList,
     /// The agents of the run of the agent on screen, for the MEMBERS tab
     pub(super) members: members::Members,
     /// The threads of mail between agents, for the INBOX tab
     pub(super) inbox: inbox::Inbox,
-    /// How far the POLICIES tab is scrolled
-    pub(super) policies_scroll: scroll::InfoScroll,
-    /// Record or file shown over the chat panel
-    pub(super) detail: Option<DetailView>,
-    /// First line of the detail view shown
-    pub(super) detail_scroll: usize,
-    /// Source lines on screen in the detail view in the last frame
-    pub(super) detail_shown: usize,
+    /// Record or file shown over the chat panel, and its scroll
+    pub(super) detail: DetailState,
     /// List of agents in the swarm
     pub(super) agents: Vec<AgentSummary>,
-    /// Highlighted row of the projects list (headers, agents, "+ New project")
-    pub(super) selected_agent: usize,
-    /// Root-agent ids whose project row is folded shut
-    pub(super) collapsed_projects: HashSet<String>,
-    /// Ids of agents folded shut, hiding the agents they spawned
-    pub(super) collapsed_agents: HashSet<String>,
-    /// The left button is down on a project's header: a click folds it, a
-    /// drag moves it
-    pub(super) project_press: Option<project_drag::ProjectPress>,
-    /// Times a drag has reordered the projects, so the screen is redrawn
-    pub(super) project_moves: usize,
+    /// The projects list: projects, highlight, scroll, folds and drags
+    pub(super) project_list: ProjectList,
     /// Currently active agent ID
     pub(super) active_agent_id: String,
-    /// Chats of the agents not on screen, by agent ID
-    pub(super) views: HashMap<String, agent_views::AgentView>,
-    /// Whether the chat on screen holds its agent's history, so showing
-    /// it again needs no reload (see `agent_views`)
-    pub(super) chat_loaded: bool,
-    /// When the chat on screen started waiting for its history
-    pub(super) chat_loading_since: Option<Instant>,
-    /// When the chat on screen got its history after waiting for it, to
-    /// fade it in
-    pub(super) chat_revealed_at: Option<Instant>,
-    /// The agent the UI switched to on screen and asked the session for,
-    /// until the session confirms it; echoes of earlier switches are
-    /// ignored meanwhile
-    pub(super) switch_sent: Option<String>,
-    /// The agent the session last confirmed as active, to go back to when
-    /// a switch fails
-    pub(super) confirmed_agent: String,
-    /// What was typed for the agents not on screen, by agent ID; each
-    /// agent gets its draft back when it comes on screen again
-    pub(super) drafts: HashMap<String, queue_panel::Draft>,
-    /// Whether the API is currently active
-    pub(super) api_active: bool,
-    /// Stored email during login flow (between email and password steps)
-    pub(super) login_email: String,
-    /// Models offered by the selector
-    pub(super) models: Vec<ModelOptionView>,
-    /// Id of the selected model (`gate` when Gate picks it)
-    pub(super) current_model: String,
-    /// The model and route Gate sends the next turn to
-    pub(super) model_route: Option<String>,
-    /// Thinking level pinned for every turn; `None` when each model picks
-    pub(super) thinking: Option<String>,
-    /// Logged-in user's display name (`None` = guest)
-    pub(super) user: Option<String>,
-    /// Labels of the usable linked plans
-    pub(super) plans: Vec<String>,
-    /// The active agent's current plan
-    pub(super) active_plan: Option<PlanView>,
-    /// Model selector state: tab, filter and highlighted row
-    pub(super) model_picker: ModelPicker,
-    /// Where the model selector's rows were drawn, for clicks
-    pub(super) model_picker_layout: PickerLayout,
-    /// Cloud model to select once the in-chat login completes
-    pub(super) pending_model: Option<String>,
-    /// First visible row of the agents list
-    pub(super) agents_scroll: usize,
-    /// The wheel moved the agents list away from the highlight; it stays
-    /// there until a key or click moves the highlight again
-    pub(super) agents_scroll_detached: bool,
-    /// First visible row of the sandbox tree
-    pub(super) sandbox_scroll: usize,
+    /// Switching which agent is on screen
+    pub(super) switching: AgentSwitch,
+    /// The signed-in user, plans and models
+    pub(super) account: Account,
     /// Screen areas from the last frame, for mouse hit-testing
     pub(super) areas: PanelAreas,
-    /// The chat's prose rows from the last frame
-    prose_rows: Vec<ProseRow>,
-    /// How wide prose is in the front end's proportional face, if it has one
-    prose_measure: Option<ProseMeasure>,
-    /// The chat as last drawn, for a front end that scrolls it by pixels
-    smooth: smooth::SmoothScroll,
-    /// Whether the front end draws the panels' title bars itself
-    host_chrome: bool,
-    /// Whether the front end draws the GRAPH tab's canvas itself
-    host_canvas: bool,
-    /// What each panel's title bar showed in the last frame, for a front
-    /// end that draws them
-    pane_chrome: Vec<PaneChrome>,
-    /// Where the front end put the dividers between panels
-    pane_splits: PaneSplits,
+    /// What the front end draws or decides itself
+    pub(super) host: HostChrome,
     /// Clickable item under the mouse pointer
     hover: Option<HoverTarget>,
-    /// When the in-flight turn started (`None` unless processing)
-    pub(super) processing_since: Option<Instant>,
     /// `[user@host dir]$ ` shown before the input line at the terminal prompt
     pub(super) shell_prompt: String,
-    /// Width of the chat text area in the last frame (0 before the first)
-    pub(super) chat_width: u16,
     /// Whether the chat panel's TERMINAL tab is open (`$` opens it): the
     /// panel shows the session's shell commands, and Enter runs the line
     /// as one
     pub(super) terminal_mode: bool,
-    /// Commands run at the terminal prompt, recalled there instead of chat
-    /// history
-    pub(super) command_history: InputHistory,
-    /// Highlighted row in the slash menu
-    pub(super) slash_cursor: usize,
-    /// Whether Esc closed the slash menu (until the input is edited)
-    pub(super) slash_dismissed: bool,
-    /// `@` file picker shown while an `@path` word is typed
-    pub(super) mentions: mentions::MentionMenu,
-    /// Images pasted into the input, each under an `[image N]` chip
-    pub(super) images: Vec<images::PendingImage>,
-    /// Whether Ctrl+V asked for the clipboard before the next frame
-    pub(super) paste_requested: bool,
-    /// Images of messages sent to a busy agent, by message text, until
-    /// the chat shows the message
-    pub(super) queued_images: VecDeque<(String, Vec<std::sync::Arc<image_preview::ImagePreview>>)>,
-    /// Agent (hex id) whose queue the last key put a message in. The next
-    /// key, if it is Enter on an empty prompt, sends that message now even
-    /// before the event loop's `SetQueue` shows it, and whatever panel has
-    /// the keys; any other key clears it.
-    pub(super) just_queued: Option<String>,
-    /// Image thumbnails in the chat in the last frame
-    pub(super) image_hits: Vec<ImageHit>,
-    /// Copy buttons of code blocks in the chat in the last frame
-    pub(super) code_copy_hits: Vec<CodeCopyHit>,
-    /// Thumbnails of the images waiting in the input, in the last frame
-    pub(super) pending_image_areas: Vec<(Rect, usize)>,
-    /// Absolute cell rect where the detail-view image was drawn in the last
-    /// frame; `None` when no image detail view is open or nothing was drawn.
-    pub(super) detail_image_rect: Option<Rect>,
-    /// Text selected with the mouse
-    pub(super) selection: Option<Selection>,
-    /// Where the pointer is while the left button is still held for
-    /// `selection`
-    pub(super) selecting: Option<Position>,
-    /// The chat panel's scrollbar while the left button holds it
-    pub(super) scrollbar_grab: Option<scrollbar::ScrollbarGrab>,
-    /// The cells of the chat panel's scrollbar track as it was drawn this
-    /// frame, to tell what was drawn over it after
-    pub(super) scrollbar_cells: Vec<ratatui::buffer::Cell>,
-    /// Whether `selection` is in the chat panel's body, whose rows scroll
-    pub(super) selection_scrolls: bool,
-    /// When the chat last scrolled for a selection dragged past its edge
-    pub(super) selection_scrolled: Option<Instant>,
-    /// Whether the selection should be copied after the next frame.
-    /// Dropping the selection drops this, not `copy_pending_text`.
-    pub(super) copy_requested: bool,
+    /// Text selected with the mouse, the chat scrollbar's grab and what
+    /// waits to be copied
+    pub(super) select: SelectionState,
     /// Which list the agents panel shows
     pub(super) agents_tab: AgentsTab,
     /// What each agent app showed, put back when it comes to the front
     apps: apps::AppMemory,
     /// Channels, and the one open in the CHANNELS tab
     pub(super) channels: apps::ChannelState,
-    /// Permanent agents
-    pub(super) definitions: Vec<AgentDefinitionSummary>,
-    /// Highlighted row in the roster
-    pub(super) selected_definition: usize,
-    /// First visible row of the roster
-    pub(super) definitions_scroll: usize,
-    /// File to open in the editor before the next frame
-    pub(super) editor_request: Option<PathBuf>,
-    /// Temp file holding the input while Ctrl+G has it in the editor
-    pub(super) input_editor_file: Option<PathBuf>,
-    /// Permanent agent waiting for `y` to confirm its deletion
-    pub(super) pending_delete: Option<String>,
-    /// Agent whose project waits for `y` to confirm removing it
-    pub(super) pending_remove_project: Option<String>,
-    /// Archived agents, each followed by the agents under it
-    pub(super) archived: Vec<AgentSummary>,
-    /// Highlighted row of the Archive
-    pub(super) selected_archived: usize,
-    /// Archived agents opened over the agents under them; every other one
-    /// with agents under it is folded. Kept while another app is in front.
-    pub(super) opened_archived: HashSet<String>,
-    /// First visible row of the Archive
-    pub(super) archived_scroll: usize,
-    /// Folder browser for a new project, while it is open
-    pub(super) folder_picker: Option<FolderPicker>,
+    /// Permanent agents, the highlighted row in the roster (one past the
+    /// last agent is "+ New agent") and its first visible row
+    pub(super) definitions: ListState<AgentDefinitionSummary>,
+    /// Archived agents, each followed by the agents under it; the
+    /// highlighted one, and the first visible row of the Archive
+    pub(super) archived: ListState<AgentSummary>,
     /// The new-channel form, while it is open
     pub(super) channel_form: Option<channel_form::ChannelForm>,
-    /// Id of the channel waiting for `y` to be archived
-    pub(super) pending_archive_channel: Option<String>,
     /// Menu a right click opened on the projects list
     pub(super) context_menu: Option<context_menu::ContextMenu>,
-    /// The host's workspaces, which the menu offers to move a project to
-    pub(super) workspaces: context_menu::Workspaces,
-    /// A move to another workspace the menu asked for, until the host
-    /// takes it
-    pub(super) workspace_move: Option<WorkspaceMove>,
     /// Usage, todos and jobs of the agent on screen
     pub(super) hud: Hud,
-    /// Where each agent runs, and the HOST tab
-    pub(super) cloud: host_tab::CloudUi,
     /// The queued-messages panel above the input
     pub(super) queue_panel: queue_panel::QueuePanel,
     /// The benchmark progress panel above the input
     pub(super) bench_panel: bench_progress::BenchPanel,
-    /// Whether the full todo list is shown above the input
-    pub(super) todos_open: bool,
-    /// Whether the chat's live to-do checklist lists every item in full
-    pub(super) todos_expanded: bool,
-    /// When to get the user's attention
-    pub(super) alert_settings: AlertSettings,
-    /// Messages for the user that the terminal should ring the bell for
-    pub(super) alerts: Vec<String>,
-    /// Which view the panel below the Record panel shows
-    pub(super) side_tab: SidePanelTab,
-    /// Whose items the panel's lists show
-    pub(super) side_scope: SideScope,
-    /// Every process, of every agent
-    pub(super) all_processes: Vec<ProcessSummary>,
-    /// Agents whose processes the Processes tab lists
-    pub(super) process_filter: side_scope::AgentFilter,
-    /// Rows of the Processes tab: the processes `process_filter` lets
-    /// through
-    pub(super) processes: Vec<ProcessSummary>,
-    /// Highlighted row of the Processes tab
-    pub(super) selected_process: usize,
-    /// First visible row of the Processes tab
-    pub(super) processes_scroll: usize,
-    /// Process waiting for `y` to confirm killing it
-    pub(super) pending_kill: Option<String>,
+    /// Whether the todo list is open and the checklist expanded
+    pub(super) todos: TodoView,
+    /// The panel below the Record panel: its tab, scope, processes and
+    /// scroll positions
+    pub(super) side: SidePanel,
     /// Run graph shown by `/graph`
     pub(super) graph: graph::GraphState,
     pub(super) trace_feed: trace_feed::TraceFeed,
-    /// First visible row of the TRACE tab
-    pub(super) trace_scroll: usize,
     /// Plans and tasks of the TASKS tab
     pub(super) task_list: tasks::TaskList,
-    /// First visible row of the TASKS tab
-    pub(super) tasks_scroll: usize,
-    /// Where the side panel's lists were when the agent just put on
-    /// screen was last shown, put back once they are filtered for it
-    list_places_due: Option<side_scope::ListPlaces>,
-    /// Node to select once the requested graph loads.
-    pub(super) pending_graph_node: Option<String>,
     /// Flow between agents shown by the chat panel's GRAPH tab
     pub(super) flow: flow::FlowState,
     /// Benchmarks, and the one shown in the BENCH tab
     pub(super) bench: BenchState,
     /// Run log shown by the chat panel's LOG tab
     pub(super) log: run_log::LogState,
-    /// Text to copy after the next frame instead of the selection
-    pub(super) copy_pending_text: Option<String>,
-    /// What that text is, for the notice once it is copied
-    pub(super) copy_label: Option<String>,
-    /// Where the wheel scrolled the input box's text, if it did
-    pub(super) input_view: Option<InputView>,
-}
-
-/// Rows of the input box's wrapped text in the last frame.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct InputRows {
-    /// Text row drawn on the box's first row
-    pub(crate) top: usize,
-    /// Rows the text wraps to
-    pub(crate) total: usize,
-    /// Rows the box had room to show
-    pub(crate) visible: usize,
-}
-
-impl InputRows {
-    /// Highest `top` that still fills the box.
-    const fn max_top(self) -> usize {
-        self.total.saturating_sub(self.visible)
-    }
-}
-
-/// Where the wheel scrolled the input box's text, and the draft and
-/// cursor it was scrolled on. Any edit or cursor move changes one of
-/// those, so comparing them tells when the view should follow the cursor
-/// again without every key path having to reset it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct InputView {
-    /// Text row to show on the box's first row
-    top: usize,
-    /// The input when it was scrolled
-    input: String,
-    /// The cursor when it was scrolled
-    cursor: usize,
-}
-
-/// Screen areas of the content panels from the last rendered frame.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PanelAreas {
-    /// Agents panel (including border)
-    pub swarm: Option<Rect>,
-    /// Rows of the agents list inside the panel
-    pub agent_rows: Option<Rect>,
-    /// "+ New project", pinned to the bottom of the agents panel
-    pub new_project_row: Option<Rect>,
-    /// Header bar of the agents panel
-    pub agent_tabs: Option<Rect>,
-    /// Rows of the roster inside the agents panel
-    pub definition_rows: Option<Rect>,
-    /// "+ New agent", pinned to the bottom of the agents panel
-    pub new_agent_row: Option<Rect>,
-    /// Rows of the Archive inside the agents panel
-    pub archived_rows: Option<Rect>,
-    /// Chat panel (including border)
-    pub chat: Option<Rect>,
-    /// Header bar of the chat panel
-    pub chat_tabs: Option<Rect>,
-    /// Close button in the chat panel's header bar while a view covers it
-    pub detail_close: Option<Rect>,
-    /// Button in the chat panel's header bar that expands or restores it
-    pub chat_expand: Option<Rect>,
-    /// Message text area inside the chat panel
-    pub chat_text: Option<Rect>,
-    /// Rows of the chat panel's body that scroll by rows: the
-    /// conversation, the terminal, the benchmarks, or a record or file
-    /// shown over them. `None` under the graph or an image.
-    pub chat_rows: Option<Rect>,
-    /// Content row shown at the top of `chat_rows`
-    pub chat_rows_top: usize,
-    /// Input box under the chat panel (including border)
-    pub input: Option<Rect>,
-    /// Stop button at the right end of the input box's first row, drawn
-    /// while the agent on screen is busy
-    pub input_stop: Option<Rect>,
-    /// Columns the input box wrapped its text at, which Up and Down
-    /// follow to move between the rows drawn
-    pub input_wrap: Option<usize>,
-    /// Rows of the input box's text and which of them it showed, which
-    /// the wheel scrolls from
-    pub(crate) input_rows: Option<InputRows>,
-    /// Record panel (including border)
-    pub records: Option<Rect>,
-    /// Header bar of the record panel
-    pub record_tabs: Option<Rect>,
-    /// Rows of the record list inside the panel
-    pub record_rows: Option<Rect>,
-    /// Rows of the MEMBERS tab inside the record panel
-    pub member_rows: Option<Rect>,
-    /// Member row shown at the top of `member_rows`
-    pub members_scroll: usize,
-    /// Rows of the INBOX tab inside the record panel
-    pub inbox_rows: Option<Rect>,
-    /// Inbox row shown at the top of `inbox_rows`
-    pub inbox_scroll: usize,
-    /// Sandbox panel (including border)
-    pub sandbox: Option<Rect>,
-    /// Rows of the sandbox tree inside the panel
-    pub sandbox_rows: Option<Rect>,
-    /// Tree row shown at the top of `sandbox_rows`
-    pub sandbox_scroll: usize,
-    /// Header bar of the panel below the Record panel, up to its `*`
-    /// button
-    pub side_tabs: Option<Rect>,
-    /// Button at the right end of that bar that shows the whole
-    /// project's items in its lists, or the active agent's
-    pub side_scope: Option<Rect>,
-    /// Button right of that one that maximizes the panel over the Record
-    /// panel, or restores it
-    pub side_expand: Option<Rect>,
-    /// Hamburger button at the right end of the header row that hides
-    /// the right column or shows it again
-    pub side_toggle: Option<Rect>,
-    /// Rows of the Processes tab inside the panel
-    pub process_rows: Option<Rect>,
-    /// Process row shown at the top of `process_rows`
-    pub processes_scroll: usize,
-    /// Rows of the Trace tab inside the panel
-    pub trace_rows: Option<Rect>,
-    /// Feed row shown at the top of `trace_rows`
-    pub trace_scroll: usize,
-    /// Rows of the Tasks tab inside the panel
-    pub task_rows: Option<Rect>,
-    /// Tasks row shown at the top of `task_rows`
-    pub tasks_scroll: usize,
-    /// Scrollbar on the chat panel's right border, when its list
-    /// overflows
-    pub(crate) scrollbar: Option<scrollbar::ScrollbarArea>,
-}
-
-/// What is shown over the chat panel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DetailView {
-    /// The record highlighted in the Record panel.
-    Record,
-    /// A file from the sandbox.
-    File(Box<FileView>),
-    /// A process from the Processes tab, refreshed while it stays listed.
-    Process(Box<ProcessSummary>),
-    /// The run graph (`/graph`).
-    Graph,
-    /// A pasted image, as large as the panel allows.
-    Image(Box<image_preview::ImageView>),
-    /// A thread of mail between agents, from the INBOX tab, kept up to
-    /// date as its messages arrive.
-    Thread(Box<ThreadView>),
-    /// A plan file read as a document: title, overview, todo checklist
-    /// and body, without its frontmatter. `s` shows its source.
-    Plan(Box<PlanDoc>),
-}
-
-/// Clickable item under the pointer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HoverTarget {
-    /// A label in the agents tab bar.
-    AgentTab(AgentsTab),
-    /// A label in the chat panel's tab bar.
-    ChatTab(ChatTab),
-    /// The close button of the view over the chat panel.
-    CloseDetail,
-    /// The button that expands the chat panel or restores it.
-    ExpandChat,
-    /// The stop button in the input box, shown while a turn runs.
-    StopTurn,
-    /// A row in the projects list, including "+ New project".
-    ProjectRow(usize),
-    /// The "+" at the right end of a project's row in the projects list.
-    AddToProject(usize),
-    /// The archive button left of the time on an agent's row in the
-    /// projects list, shown while the row is hovered.
-    ArchiveAgent(usize),
-    /// A row in the roster, including "+ New agent".
-    DefinitionRow(usize),
-    /// A selectable row of the CHANNELS tab: a channel or "+ New channel".
-    ChannelRow(usize),
-    /// A row of BENCH's list, by its index in `App::bench_rows`: a
-    /// benchmark, one of its agents, or "+ New bench".
-    BenchRow(usize),
-    /// A member row of an open channel's MEMBERS side tab.
-    ChannelMemberRow(usize),
-    /// A row in the Archive.
-    ArchivedRow(usize),
-    /// A row in the sandbox tree.
-    SandboxRow(usize),
-    /// A row in the Record panel.
-    RecordRow(usize),
-    /// A label in the Record panel's tab bar.
-    RecordTab(RecordsTab),
-    /// A row in the Record panel's MEMBERS tab.
-    MemberRow(usize),
-    /// A row in the Record panel's INBOX tab.
-    InboxRow(usize),
-    /// A label in the side panel's tab bar.
-    SideTab(SidePanelTab),
-    /// The `*` button at the right end of the side panel's tab bar.
-    SideScope,
-    /// The button right of it that maximizes the side panel or restores
-    /// it.
-    ExpandSide,
-    /// The hamburger button at the right end of the header row, which
-    /// hides the right column or shows it again.
-    SideToggle,
-    /// A row in the Processes tab.
-    ProcessRow(usize),
-    /// A row in the Trace tab.
-    TraceRow(usize),
-    /// A row in the Tasks tab.
-    TaskRow(usize),
-    /// A chat row that expands or collapses agent activity.
-    Activity(ToggleTarget),
-    /// An image thumbnail in the chat: message id, which of its images.
-    ChatImage(u64, usize),
-    /// A thumbnail above the input, by its `[image N]` label.
-    PendingImage(usize),
-    /// The copy button of a code block in the chat, by the chat line of
-    /// the block's top border.
-    CopyCode(usize),
-}
-
-/// What clicking an activity row in the chat expands or collapses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum ToggleTarget {
-    /// A group of steps, by the id of its first message
-    Group(u64),
-    /// One step, by message id
-    Step(u64),
-    /// The kernel records of a turn, by when its prompt was sent (Unix ms)
-    TurnRecords(u64),
-    /// The live to-do checklist under the conversation
-    TodoChecklist,
-    /// The `… more lines` row of a part of a message cut short, by
-    /// message id
-    More(u64, MoreSection),
-}
-
-/// A thumbnail in the chat that opens its image when clicked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ImageHit {
-    /// Chat line of the thumbnail's first row
-    pub line: usize,
-    /// Rows the thumbnail takes
-    pub rows: usize,
-    /// First column, counted from the chat text's left edge
-    pub x: u16,
-    /// Columns the thumbnail takes
-    pub width: u16,
-    /// Id of the message holding the image
-    pub message: u64,
-    /// Which of the message's images
-    pub index: usize,
-}
-
-/// A copy button in the chat: in the top border of a code block, or on a
-/// boot console's header.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CodeCopyHit {
-    /// Chat line of the button
-    pub line: usize,
-    /// First column of the button, counted from the chat text's left edge
-    pub x: u16,
-    /// Columns the button takes
-    pub width: u16,
-    /// What a click copies
-    pub text: CopyText,
-}
-
-/// What a chat copy button copies.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CopyText {
-    /// The code as written in the message, shared with the line cache so
-    /// handing hits out each frame does not copy it
-    Code(std::sync::Arc<str>),
-    /// The boot console with this id, its whole log read when clicked, as
-    /// a live one is drawn every frame
-    BootLog(String),
-}
-
-/// A chat row that expands or collapses `target` when clicked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ToggleRow {
-    /// Chat line of the row
-    pub line: usize,
-    /// What the row toggles
-    pub target: ToggleTarget,
-    /// Whether `target` is shown open
-    pub open: bool,
-}
-
-/// The tab of the header bar drawn at `bar` under a screen cell, laid out
-/// by `layout` for the bar's width.
-fn tab_at<T: Copy + PartialEq>(
-    bar: Option<Rect>,
-    column: u16,
-    row: u16,
-    layout: impl Fn(u16) -> tab_bar::TabLayout<T>,
-) -> Option<T> {
-    let bar = bar.filter(|&bar| contains(Some(bar), column, row))?;
-    layout(bar.width).tab_at(column - bar.x)
-}
-
-fn contains(area: Option<Rect>, column: u16, row: u16) -> bool {
-    area.is_some_and(|a| {
-        column >= a.x && column < a.x + a.width && row >= a.y && row < a.y + a.height
-    })
-}
-
-/// First row to show of a `total`-row list in a `visible`-row view so that
-/// row `selected` stays in view, moving as little as possible from `scroll`.
-pub(super) fn follow_selection(
-    scroll: usize,
-    selected: usize,
-    visible: usize,
-    total: usize,
-) -> usize {
-    let visible = visible.max(1);
-    let scroll = if selected < scroll {
-        selected
-    } else if selected >= scroll + visible {
-        selected + 1 - visible
-    } else {
-        scroll
-    };
-    scroll.min(total.saturating_sub(visible))
 }
 
 /// Columns of the " + " at the right end of a project's row, which adds an
@@ -867,34 +325,6 @@ pub(super) fn follow_selection(
 pub(crate) const PROJECT_ADD_WIDTH: u16 = 3;
 
 pub(crate) use crate::components::{agent_button_at, AgentButton, AgentRowEnd};
-
-impl HoverTarget {
-    /// The hover target of `button` on projects-list row `index`.
-    pub(crate) const fn agent_button(button: AgentButton, index: usize) -> Self {
-        match button {
-            AgentButton::Archive => Self::ArchiveAgent(index),
-        }
-    }
-}
-
-/// One row of the projects list. A project is its own row; its first
-/// agent, and any agents that agent spawned, hang underneath while the
-/// project is expanded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProjectListRow {
-    /// Foldable header. `root` is the index of the project's first agent.
-    Project { root: usize, expanded: bool },
-    /// Header of a project with every agent archived, which stays listed
-    /// until it is removed. `project` is its index in
-    /// [`App::projects`].
-    EmptyProject { project: usize },
-    /// An agent under a project.
-    Agent { index: usize },
-    /// The "+ New project" row.
-    NewProject,
-    /// Blank row between two projects. Never selected.
-    Gap,
-}
 
 /// Type of notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -905,1267 +335,4 @@ pub enum NotificationType {
     Warning,
     /// Error notification
     Error,
-}
-
-impl App {
-    /// Create a new application instance.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            state: AppState::Idle,
-            projects: Vec::new(),
-            project_info: None,
-            messages: VecDeque::new(),
-            input: String::new(),
-            input_history: InputHistory::new(),
-            cursor_pos: 0,
-            status: "Ready".to_string(),
-            pending_approvals: VecDeque::new(),
-            scroll_offset: 0,
-            chat_lines: ChatLineCache::default(),
-            terminal_lines: ChatLineCache::terminal(),
-            chat_line_count: 0,
-            toggle_rows: Vec::new(),
-            chat_first_line: 0,
-            activity_expanded: false,
-            group_open: HashMap::new(),
-            verbose: false,
-            event_tx: None,
-            command_rx: None,
-            streaming_content: String::new(),
-            notification: None,
-            notification_shown: None,
-            notification_since: None,
-            focus: PanelFocus::default(),
-            record_panel_visible: true,
-            swarm_panel_visible: true,
-            sandbox_panel_visible: true,
-            chat_expanded: false,
-            side_expanded: false,
-            side_column_hidden: None,
-            sandbox: SandboxTree::default(),
-            sandbox_stale: false,
-            animation_frame: 0,
-            spinner_wait: 0,
-            redraw: true,
-            records: VecDeque::new(),
-            selected_record: 0,
-            records_scroll: 0,
-            records_tab: RecordsTab::default(),
-            members: members::Members::default(),
-            inbox: inbox::Inbox::default(),
-            policies_scroll: scroll::InfoScroll::default(),
-            detail: None,
-            detail_scroll: 0,
-            detail_shown: 1,
-            agents: Vec::new(),
-            selected_agent: 0,
-            collapsed_projects: HashSet::new(),
-            collapsed_agents: HashSet::new(),
-            project_press: None,
-            project_moves: 0,
-            active_agent_id: String::new(),
-            views: HashMap::new(),
-            // The chat at startup gets its history without a switch; it
-            // shows at once instead of fading in.
-            chat_loaded: true,
-            chat_loading_since: None,
-            chat_revealed_at: None,
-            switch_sent: None,
-            confirmed_agent: String::new(),
-            drafts: HashMap::new(),
-            api_active: false,
-            login_email: String::new(),
-            models: Vec::new(),
-            current_model: String::new(),
-            model_route: None,
-            thinking: None,
-            user: None,
-            plans: Vec::new(),
-            active_plan: None,
-            model_picker: ModelPicker::default(),
-            model_picker_layout: PickerLayout::default(),
-            pending_model: None,
-            agents_scroll: 0,
-            agents_scroll_detached: false,
-            sandbox_scroll: 0,
-            areas: PanelAreas::default(),
-            prose_rows: Vec::new(),
-            prose_measure: None,
-            smooth: smooth::SmoothScroll::default(),
-            host_chrome: false,
-            host_canvas: false,
-            pane_chrome: Vec::new(),
-            pane_splits: PaneSplits::default(),
-            hover: None,
-            processing_since: None,
-            shell_prompt: shell_prompt::detect(),
-            chat_width: 0,
-            terminal_mode: false,
-            command_history: InputHistory::new(),
-            slash_cursor: 0,
-            slash_dismissed: false,
-            mentions: mentions::MentionMenu::default(),
-            images: Vec::new(),
-            paste_requested: false,
-            queued_images: VecDeque::new(),
-            just_queued: None,
-            image_hits: Vec::new(),
-            code_copy_hits: Vec::new(),
-            pending_image_areas: Vec::new(),
-            detail_image_rect: None,
-            selection: None,
-            selecting: None,
-            scrollbar_grab: None,
-            scrollbar_cells: Vec::new(),
-            selection_scrolls: false,
-            selection_scrolled: None,
-            copy_requested: false,
-            agents_tab: AgentsTab::default(),
-            apps: apps::AppMemory::default(),
-            channels: apps::ChannelState::default(),
-            definitions: Vec::new(),
-            selected_definition: 0,
-            definitions_scroll: 0,
-            editor_request: None,
-            input_editor_file: None,
-            pending_delete: None,
-            pending_remove_project: None,
-            archived: Vec::new(),
-            selected_archived: 0,
-            opened_archived: HashSet::new(),
-            archived_scroll: 0,
-            folder_picker: None,
-            channel_form: None,
-            pending_archive_channel: None,
-            context_menu: None,
-            workspaces: context_menu::Workspaces::default(),
-            workspace_move: None,
-            hud: Hud::default(),
-            cloud: host_tab::CloudUi::default(),
-            queue_panel: queue_panel::QueuePanel::default(),
-            bench_panel: bench_progress::BenchPanel::default(),
-            todos_open: false,
-            todos_expanded: false,
-            alert_settings: AlertSettings::default(),
-            alerts: Vec::new(),
-            side_tab: SidePanelTab::default(),
-            side_scope: SideScope::default(),
-            all_processes: Vec::new(),
-            process_filter: None,
-            processes: Vec::new(),
-            selected_process: 0,
-            processes_scroll: 0,
-            pending_kill: None,
-            graph: graph::GraphState::default(),
-            trace_feed: trace_feed::TraceFeed::default(),
-            trace_scroll: 0,
-            task_list: tasks::TaskList::default(),
-            tasks_scroll: 0,
-            list_places_due: None,
-            pending_graph_node: None,
-            flow: flow::FlowState::default(),
-            bench: BenchState::default(),
-            log: run_log::LogState::default(),
-            copy_pending_text: None,
-            copy_label: None,
-            input_view: None,
-        }
-    }
-
-    /// Get the user's attention according to `settings`.
-    #[must_use]
-    pub const fn with_alert_settings(mut self, settings: AlertSettings) -> Self {
-        self.alert_settings = settings;
-        self
-    }
-
-    /// When the terminal gets the user's attention.
-    #[must_use]
-    pub const fn alert_settings(&self) -> &AlertSettings {
-        &self.alert_settings
-    }
-
-    /// Messages to get the user's attention for since the last call.
-    pub fn take_alerts(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.alerts)
-    }
-
-    /// Set the event sender for communication with kernel.
-    #[must_use]
-    pub fn with_event_sender(mut self, tx: mpsc::Sender<UiEvent>) -> Self {
-        self.event_tx = Some(tx);
-        self
-    }
-
-    /// Set the command receiver for communication from kernel.
-    #[must_use]
-    pub fn with_command_receiver(mut self, rx: mpsc::Receiver<UiCommand>) -> Self {
-        self.command_rx = Some(rx);
-        self
-    }
-
-    /// Enable or disable verbose mode.
-    pub fn set_verbose(&mut self, verbose: bool) {
-        self.verbose = verbose;
-    }
-
-    /// Get whether verbose mode is enabled.
-    #[must_use]
-    pub const fn verbose(&self) -> bool {
-        self.verbose
-    }
-
-    /// Get the current application state.
-    #[must_use]
-    pub const fn state(&self) -> AppState {
-        self.state
-    }
-
-    /// Check if currently processing a request.
-    #[must_use]
-    pub fn is_processing(&self) -> bool {
-        self.state == AppState::Processing
-    }
-
-    /// Whether the agent on screen has a turn in flight, including one
-    /// waiting for an approval.
-    #[must_use]
-    pub fn is_busy(&self) -> bool {
-        matches!(
-            self.state,
-            AppState::Processing | AppState::AwaitingApproval
-        )
-    }
-
-    /// Get the current status message.
-    #[must_use]
-    pub fn status(&self) -> &str {
-        &self.status
-    }
-
-    /// What the agent is doing during a turn while no reply text is arriving
-    /// (`"thinking"`, `"running fs.read"`, ...). `None` when idle, awaiting
-    /// approval, or while reply text is streaming into the chat.
-    #[must_use]
-    pub fn working_label(&self) -> Option<String> {
-        if self.state != AppState::Processing {
-            return None;
-        }
-        let reply_streaming = self
-            .messages
-            .back()
-            .is_some_and(|m| m.is_streaming() && !m.content().is_empty());
-        if reply_streaming {
-            return None;
-        }
-        if let Some(run) = self.running_shell() {
-            let program = run.command.split_whitespace().next().unwrap_or_default();
-            return Some(format!("running {program}"));
-        }
-        if let Some(tool) = self.running_tool() {
-            return Some(format!("running {}", tool.name));
-        }
-        if self.status.starts_with("Running") {
-            return Some("running".to_string());
-        }
-        Some("thinking".to_string())
-    }
-
-    /// How long the work [`Self::working_label`] names has gone on: the
-    /// running tool call's own time, else the turn's. With it, how long a
-    /// running command has printed nothing, once that is long enough to
-    /// suggest it is stuck.
-    #[must_use]
-    pub fn working_times(&self) -> (Option<Duration>, Option<Duration>) {
-        if let Some(run) = self.running_shell() {
-            let quiet = quiet_for(self.processing_since, &run.live);
-            return (self.processing_elapsed(), quiet);
-        }
-        if let Some(tool) = self.running_tool() {
-            let elapsed = tool.started.map(|since| since.elapsed());
-            return (
-                elapsed.or_else(|| self.processing_elapsed()),
-                tool.quiet_for(),
-            );
-        }
-        (self.processing_elapsed(), None)
-    }
-
-    /// The shell command the user typed, while it runs.
-    fn running_shell(&self) -> Option<&ShellRun> {
-        self.messages
-            .back()
-            .filter(|m| m.is_running_shell())
-            .and_then(Message::shell_run)
-    }
-
-    /// The latest step still in progress, when it is a tool call.
-    fn running_tool(&self) -> Option<&ToolStep> {
-        match self
-            .messages
-            .iter()
-            .rev()
-            .filter_map(Message::activity_step)
-            .find(|a| a.is_running())
-        {
-            Some(Activity::Tool(tool)) => Some(tool),
-            _ => None,
-        }
-    }
-
-    /// Time since the in-flight turn started.
-    #[must_use]
-    pub fn processing_elapsed(&self) -> Option<Duration> {
-        self.processing_since.map(|since| since.elapsed())
-    }
-
-    /// Usage, todos and jobs of the agent on screen.
-    #[must_use]
-    pub const fn hud(&self) -> &Hud {
-        &self.hud
-    }
-
-    /// Whether the full todo list is shown above the input.
-    #[must_use]
-    pub const fn todos_open(&self) -> bool {
-        self.todos_open
-    }
-
-    /// Whether the chat's live to-do checklist lists every item in full,
-    /// rather than the first few cut to one row each.
-    #[must_use]
-    pub const fn todos_expanded(&self) -> bool {
-        self.todos_expanded
-    }
-
-    /// Get the messages.
-    #[must_use]
-    pub const fn messages(&self) -> &VecDeque<Message> {
-        &self.messages
-    }
-
-    /// Whether an activity block (thinking, a tool call) is in progress.
-    #[must_use]
-    pub fn has_live_activity(&self) -> bool {
-        self.messages.iter().rev().any(Message::is_live_activity)
-    }
-
-    /// Whether new activity blocks start expanded.
-    #[must_use]
-    pub const fn activity_expanded(&self) -> bool {
-        self.activity_expanded
-    }
-
-    /// Expand every activity block, or collapse them all if they were
-    /// expanded. New blocks follow suit.
-    pub fn toggle_all_activity(&mut self) {
-        self.activity_expanded = !self.activity_expanded;
-        let expanded = self.activity_expanded;
-        self.group_open.clear();
-        for message in &mut self.messages {
-            message.set_expanded(expanded);
-        }
-    }
-
-    /// Whether the conversation ends in a group of steps that the turn in
-    /// flight may still add to. Its summary line spins while it grows.
-    #[must_use]
-    pub fn ends_in_live_group(&self) -> bool {
-        self.state == AppState::Processing
-            && self.messages.len() >= 2
-            && self
-                .messages
-                .iter()
-                .rev()
-                .take(2)
-                .all(|m| m.activity_step().is_some())
-    }
-
-    /// Record where activity rows were drawn: `rows` holds the chat line
-    /// of each one, and `first_line` is the chat line at the top of the
-    /// view.
-    pub(crate) fn set_chat_layout(&mut self, rows: Vec<ToggleRow>, first_line: usize) {
-        self.toggle_rows = rows;
-        self.chat_first_line = first_line;
-    }
-
-    /// The activity row at a screen cell, using the layout of the last frame.
-    fn toggle_row_at(&self, column: u16, row: u16) -> Option<ToggleRow> {
-        let area = self
-            .areas
-            .chat_text
-            .filter(|area| contains(Some(*area), column, row))?;
-        let line = self.chat_first_line + usize::from(row - area.y);
-        self.toggle_rows.iter().find(|r| r.line == line).copied()
-    }
-
-    /// Record where the chat drew code blocks' copy buttons this frame.
-    pub(crate) fn set_chat_code_copies(&mut self, hits: Vec<CodeCopyHit>) {
-        self.code_copy_hits = hits;
-    }
-
-    /// The code block copy button at a screen cell, using the last frame.
-    /// A view over the chat hides the buttons.
-    fn code_copy_at(&self, column: u16, row: u16) -> Option<&CodeCopyHit> {
-        if self.detail.is_some() {
-            return None;
-        }
-        let area = self
-            .areas
-            .chat_text
-            .filter(|area| contains(Some(*area), column, row))?;
-        let line = self.chat_first_line + usize::from(row - area.y);
-        let x = column - area.x;
-        self.code_copy_hits
-            .iter()
-            .find(|hit| hit.line == line && (hit.x..hit.x + hit.width).contains(&x))
-    }
-
-    /// Forget the copy buttons a menu or overlay was drawn over, so a click
-    /// on what covers one does not copy.
-    pub(crate) fn drop_covered_code_copies(&mut self, buffer: &Buffer) {
-        let Some(area) = self.areas.chat_text else {
-            self.code_copy_hits.clear();
-            return;
-        };
-        let first = self.chat_first_line;
-        self.code_copy_hits.retain(|hit| {
-            let Some(y) = hit
-                .line
-                .checked_sub(first)
-                .and_then(|offset| u16::try_from(offset).ok())
-                .map(|offset| area.y.saturating_add(offset))
-            else {
-                return false;
-            };
-            let x = area.x.saturating_add(hit.x);
-            let drawn: String = (x..x.saturating_add(hit.width))
-                .filter_map(|x| buffer.cell((x, y)).map(ratatui::buffer::Cell::symbol))
-                .collect();
-            drawn == crate::components::COPY_BUTTON
-        });
-    }
-
-    /// Copy what the copy button at a screen cell copies after the next
-    /// frame. Returns whether there was a button there.
-    fn copy_code_at(&mut self, column: u16, row: u16) -> bool {
-        let Some(text) = self.code_copy_at(column, row).map(|hit| hit.text.clone()) else {
-            return false;
-        };
-        let (text, what) = match text {
-            CopyText::Code(code) => (code.to_string(), "the code"),
-            CopyText::BootLog(id) => {
-                let Some(console) = self
-                    .messages
-                    .iter()
-                    .rev()
-                    .filter_map(|m| m.boot_console())
-                    .find(|console| console.id == id)
-                else {
-                    return true;
-                };
-                (console.transcript(), "the boot log")
-            }
-        };
-        self.copy_pending_text = Some(text);
-        self.copy_label = Some(what.to_string());
-        true
-    }
-
-    /// Open or close the group of steps, the step or the to-do checklist
-    /// at screen `row`, or open a turn's records. Returns whether anything
-    /// was toggled.
-    fn toggle_activity_at(&mut self, column: u16, row: u16) -> bool {
-        let Some(toggle) = self.toggle_row_at(column, row) else {
-            return false;
-        };
-        match toggle.target {
-            ToggleTarget::Group(id) => {
-                self.group_open.insert(id, !toggle.open);
-            }
-            ToggleTarget::Step(id) => {
-                if self.open_tool_step(id) {
-                    return true;
-                }
-                let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
-                    return false;
-                };
-                let expanded = !message.is_expanded();
-                message.set_expanded(expanded);
-            }
-            ToggleTarget::TurnRecords(started_ms) => self.show_turn_records(started_ms),
-            ToggleTarget::TodoChecklist => self.todos_expanded = !self.todos_expanded,
-            ToggleTarget::More(id, section) => {
-                let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
-                    return false;
-                };
-                message.show_more(section);
-            }
-        }
-        true
-    }
-
-    /// Get the current input text.
-    #[must_use]
-    pub fn input(&self) -> &str {
-        &self.input
-    }
-
-    /// Get the cursor position.
-    #[must_use]
-    pub const fn cursor_pos(&self) -> usize {
-        self.cursor_pos
-    }
-
-    /// Get the scroll offset.
-    #[must_use]
-    pub const fn scroll_offset(&self) -> usize {
-        self.scroll_offset
-    }
-
-    /// Messages, and the posts of the channel the agent on screen
-    /// coordinates, along with the cache of the lines the open pane draws
-    /// them as.
-    pub(crate) fn chat_line_cache(
-        &mut self,
-    ) -> (
-        (&VecDeque<Message>, &[ChannelPostView]),
-        &mut ChatLineCache,
-        GroupState<'_>,
-    ) {
-        let groups = GroupState {
-            open: &self.group_open,
-            expand_all: self.activity_expanded,
-            turn_live: self.state == AppState::Processing,
-        };
-        let cache = if self.terminal_mode {
-            self.terminal_lines.set_prompt(&self.shell_prompt);
-            &mut self.terminal_lines
-        } else {
-            &mut self.chat_lines
-        };
-        let posts = self.channels.coordinator_posts(&self.active_agent_id);
-        ((&self.messages, posts), cache, groups)
-    }
-
-    /// Whether the chat panel shows the terminal pane: the shell commands
-    /// run this session, in place of the conversation.
-    #[must_use]
-    pub const fn terminal_pane(&self) -> bool {
-        self.terminal_mode
-    }
-
-    /// Whether the open pane has nothing to show.
-    #[must_use]
-    pub fn pane_is_empty(&self) -> bool {
-        let has_posts = !self.terminal_mode
-            && !self
-                .channels
-                .coordinator_posts(&self.active_agent_id)
-                .is_empty();
-        !has_posts
-            && !self
-                .messages
-                .iter()
-                .any(|m| m.shell_run().is_some() == self.terminal_mode)
-    }
-
-    /// Whether a copy is waiting for the next frame to be drawn.
-    #[must_use]
-    pub const fn copy_pending(&self) -> bool {
-        self.copy_requested || self.copy_pending_text.is_some()
-    }
-
-    /// Ask for the current selection to be copied after the next frame.
-    /// Returns `false` when nothing is selected.
-    pub fn request_copy(&mut self) -> bool {
-        self.copy_requested = self.selection.as_ref().is_some_and(|s| !s.is_empty());
-        self.copy_requested
-    }
-
-    /// The text to copy once per copy request: text asked for outright,
-    /// else the selected text in `buffer` (the frame just drawn).
-    pub fn take_copy_text(&mut self, buffer: &Buffer) -> Option<String> {
-        let selection = std::mem::take(&mut self.copy_requested);
-        if let Some(text) = self.copy_pending_text.take() {
-            return Some(text);
-        }
-        if !selection {
-            return None;
-        }
-        self.copy_label = None;
-        let text = self.selection.as_ref()?.text(buffer);
-        (!text.is_empty()).then_some(text)
-    }
-
-    /// Report the outcome of copying `chars` characters to the clipboard.
-    ///
-    pub fn notify_copied(&mut self, chars: usize, result: &std::io::Result<()>) {
-        self.redraw = true;
-        let what = self.copy_label.take();
-        self.log.copy_finished(result.is_ok());
-        self.notification = Some(match result {
-            Ok(()) => (
-                match what {
-                    Some(what) => format!("Copied {what} ({chars} characters)"),
-                    None => format!(
-                        "Copied {chars} character{}",
-                        if chars == 1 { "" } else { "s" }
-                    ),
-                },
-                NotificationType::Success,
-            ),
-            Err(e) => (format!("Copy failed: {e}"), NotificationType::Error),
-        });
-    }
-
-    /// The approval prompt on screen: the oldest call still waiting.
-    #[must_use]
-    pub fn pending_approval(&self) -> Option<&PendingApproval> {
-        self.pending_approvals.front()
-    }
-
-    /// How many calls of the chat on screen wait for an answer.
-    #[must_use]
-    pub fn pending_approval_count(&self) -> usize {
-        self.pending_approvals.len()
-    }
-
-    /// Get the current notification.
-    #[must_use]
-    pub const fn notification(&self) -> Option<&(String, NotificationType)> {
-        self.notification.as_ref()
-    }
-
-    /// Get which panel has focus.
-    #[must_use]
-    pub const fn focus(&self) -> PanelFocus {
-        self.focus
-    }
-
-    /// Check if the Record panel is visible. It hides while the side
-    /// panel is maximized over it, and with no agent on screen.
-    #[must_use]
-    pub fn record_panel_visible(&self) -> bool {
-        self.record_panel_visible
-            && !self.chat_expanded
-            && !self.side_maximized()
-            && !self.no_agent_on_screen()
-    }
-
-    /// Whether the side panel, shown, takes the Record panel's room too:
-    /// the user maximized it, or the channel app is on screen, which has
-    /// no Record panel and whose own panel fills the right column.
-    const fn side_maximized(&self) -> bool {
-        self.channel_app() || (self.side_expanded && self.sandbox_panel_visible)
-    }
-
-    /// Check if the Swarm panel is visible.
-    #[must_use]
-    pub const fn swarm_panel_visible(&self) -> bool {
-        self.swarm_panel_visible && !self.chat_expanded
-    }
-
-    /// Check if the Sandbox panel is visible. It shows while a channel is
-    /// open even when the user hid it, and hides with no agent on screen,
-    /// which leaves it nothing to show.
-    #[must_use]
-    pub fn sandbox_panel_visible(&self) -> bool {
-        (self.sandbox_panel_visible || self.channel_open())
-            && !self.chat_expanded
-            && !self.no_agent_on_screen()
-    }
-
-    /// Whether the chat panel fills the screen, the other panels hidden.
-    #[must_use]
-    pub const fn chat_expanded(&self) -> bool {
-        self.chat_expanded
-    }
-
-    /// Expand the chat panel to fill the screen, or give the other panels
-    /// their room back. The chat keeps whichever tab or view it shows.
-    pub fn toggle_chat_expanded(&mut self) {
-        self.chat_expanded = !self.chat_expanded;
-        if self.chat_expanded {
-            self.focus = PanelFocus::Chat;
-        }
-    }
-
-    /// Whether the side panel fills the right column, the Record panel
-    /// above it hidden.
-    #[must_use]
-    pub const fn side_expanded(&self) -> bool {
-        self.side_expanded
-    }
-
-    /// Maximize the side panel over the Record panel, focused, or put it
-    /// back below it with the split it had. The channel app's panel fills
-    /// the column anyway, so there this does nothing.
-    pub fn toggle_side_expanded(&mut self) {
-        if self.channel_app() {
-            return;
-        }
-        self.side_expanded = !self.side_expanded;
-        if self.side_expanded {
-            self.focus = PanelFocus::Sandbox;
-        }
-    }
-
-    /// Whether the right column, the Record panel above the side panel,
-    /// is on screen.
-    #[must_use]
-    pub fn side_column_shown(&self) -> bool {
-        self.record_panel_visible() || self.sandbox_panel_visible()
-    }
-
-    /// Hide the right column, remembering which of its panels were shown,
-    /// or show those again, as the hamburger button at the right end of
-    /// the header does. With nothing remembered, or nothing to show, both
-    /// come back. While the chat is expanded the column is not on screen,
-    /// so the button restores the chat and shows the column.
-    ///
-    /// Only the panels' own flags change, so `/kernel`, `/files` and the
-    /// tabs that open the Record panel show the column again as usual.
-    pub fn toggle_side_column(&mut self) {
-        if self.side_column_shown() {
-            self.side_column_hidden = Some((self.record_panel_visible, self.sandbox_panel_visible));
-            self.record_panel_visible = false;
-            self.sandbox_panel_visible = false;
-            if matches!(self.focus, PanelFocus::Records | PanelFocus::Sandbox) {
-                self.focus = PanelFocus::Chat;
-            }
-            return;
-        }
-        self.chat_expanded = false;
-        let remembered = self.side_column_hidden.take();
-        if self.record_panel_visible || self.sandbox_panel_visible {
-            // It was only under the expanded chat.
-            return;
-        }
-        let (records, side) = remembered
-            .filter(|&shown| shown != (false, false))
-            .unwrap_or((true, true));
-        self.record_panel_visible = records;
-        self.sandbox_panel_visible = side;
-        if side {
-            self.sandbox.refresh();
-        }
-    }
-
-    /// File tree of the active agent's sandbox.
-    #[must_use]
-    pub const fn sandbox(&self) -> &SandboxTree {
-        &self.sandbox
-    }
-
-    /// Get the active agent ID.
-    #[must_use]
-    pub fn active_agent_id(&self) -> &str {
-        &self.active_agent_id
-    }
-
-    /// Check if the API is active.
-    #[must_use]
-    pub const fn api_active(&self) -> bool {
-        self.api_active
-    }
-
-    /// Models offered by the selector.
-    #[must_use]
-    pub fn models(&self) -> &[ModelOptionView] {
-        &self.models
-    }
-
-    /// Id of the model used for the next turn (empty until the kernel reports it).
-    #[must_use]
-    pub fn current_model(&self) -> &str {
-        &self.current_model
-    }
-
-    /// The model and route Gate sends the next turn to, `None` for a
-    /// pinned model.
-    #[must_use]
-    pub fn model_route(&self) -> Option<&str> {
-        self.model_route.as_deref()
-    }
-
-    /// Thinking level pinned for every turn (`high`, `off`, ...), `None`
-    /// when each model picks its own.
-    #[must_use]
-    pub fn thinking(&self) -> Option<&str> {
-        self.thinking.as_deref()
-    }
-
-    /// Selector entry for the current model, if listed.
-    #[must_use]
-    pub fn current_model_option(&self) -> Option<&ModelOptionView> {
-        self.models.iter().find(|m| m.id == self.current_model)
-    }
-
-    /// Logged-in user's display name (`None` = guest).
-    #[must_use]
-    pub fn user(&self) -> Option<&str> {
-        self.user.as_deref()
-    }
-
-    /// Labels of the usable linked plans (e.g. "Claude").
-    #[must_use]
-    pub fn plans(&self) -> &[String] {
-        &self.plans
-    }
-
-    /// Work mode of the agent on screen.
-    #[must_use]
-    pub fn mode(&self) -> crate::mode_command::PermissionMode {
-        self.hud.mode.unwrap_or_default()
-    }
-
-    /// Approval level of the agent on screen; `None` until the event loop
-    /// reports it.
-    #[must_use]
-    pub const fn approval(&self) -> Option<crate::mode_command::ApprovalLevel> {
-        self.hud.approval
-    }
-
-    /// The active agent's current plan.
-    #[must_use]
-    pub const fn active_plan(&self) -> Option<&PlanView> {
-        self.active_plan.as_ref()
-    }
-
-    /// Bash-style `[user@host dir]$ ` prompt shown before the input line at
-    /// the terminal prompt.
-    #[must_use]
-    pub fn shell_prompt(&self) -> &str {
-        &self.shell_prompt
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_shell_prompt(&mut self, prompt: &str) {
-        self.shell_prompt = prompt.to_string();
-    }
-
-    /// Whether the input line shows the terminal prompt and Enter runs it
-    /// as a shell command. Prompts that ask for a value (login, folder)
-    /// take the line over while they are open.
-    #[must_use]
-    pub const fn input_is_command(&self) -> bool {
-        self.terminal_mode
-            && !matches!(
-                self.state,
-                AppState::LoginEmail
-                    | AppState::LoginPassword
-                    | AppState::LinkCode
-                    | AppState::SelectingFolder
-                    | AppState::ChannelForm
-            )
-    }
-
-    /// Record the width of the chat text area drawn this frame.
-    pub fn set_chat_width(&mut self, width: u16) {
-        self.chat_width = width;
-    }
-
-    /// Width of the chat text area drawn last frame.
-    #[cfg(test)]
-    pub(crate) const fn chat_width(&self) -> u16 {
-        self.chat_width
-    }
-
-    /// Terminal width for a command, matching where its output is drawn.
-    pub(super) fn command_columns(&self) -> u16 {
-        if self.chat_width == 0 {
-            return DEFAULT_COMMAND_COLUMNS;
-        }
-        self.chat_width.max(MIN_COMMAND_COLUMNS)
-    }
-
-    /// Model selector state (tab, filter, highlighted row).
-    #[must_use]
-    pub const fn model_picker(&self) -> &ModelPicker {
-        &self.model_picker
-    }
-
-    /// Where the model selector and its rows were drawn this frame.
-    pub fn set_model_picker_layout(&mut self, layout: PickerLayout) {
-        self.model_picker_layout = layout;
-    }
-
-    /// Get the current spinner character for animations.
-    #[must_use]
-    pub fn spinner_char(&self) -> &'static str {
-        const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        SPINNER_FRAMES[self.animation_frame % SPINNER_FRAMES.len()]
-    }
-
-    /// Frames drawn so far, to step animations by.
-    #[must_use]
-    pub const fn animation_frame(&self) -> usize {
-        self.animation_frame
-    }
-
-    /// Current frame of the ring shown beside thinking agents.
-    #[must_use]
-    pub fn aura_frame(&self) -> (String, ratatui::style::Color) {
-        crate::animation::aura_ring(self.animation_frame)
-    }
-
-    /// Get the records list.
-    #[must_use]
-    pub const fn records(&self) -> &VecDeque<RecordSummary> {
-        &self.records
-    }
-
-    /// Get the selected record index.
-    #[must_use]
-    pub const fn selected_record(&self) -> usize {
-        self.selected_record
-    }
-
-    /// Get the records scroll offset.
-    #[must_use]
-    pub const fn records_scroll(&self) -> usize {
-        self.records_scroll
-    }
-
-    /// Record or file shown over the chat panel, if any.
-    #[must_use]
-    pub const fn detail_view(&self) -> Option<&DetailView> {
-        self.detail.as_ref()
-    }
-
-    /// Show `view` over the chat panel, starting at its top.
-    pub(super) fn open_detail(&mut self, view: DetailView) {
-        self.detail = Some(view);
-        self.detail_scroll = 0;
-        self.graph.behind = false;
-        self.clear_selection();
-    }
-
-    /// Close the view over the chat panel.
-    pub(super) fn close_detail(&mut self) {
-        self.detail = None;
-        self.detail_scroll = 0;
-        self.graph.behind = false;
-        self.clear_selection();
-    }
-
-    fn detail_close_at(&self, column: u16, row: u16) -> bool {
-        self.detail.is_some() && contains(self.areas.detail_close, column, row)
-    }
-
-    /// Open the highlighted sandbox row: a file over the chat panel, a
-    /// plan file as a document; a directory, which has nothing to show,
-    /// folds or unfolds.
-    pub(super) fn activate_selected_sandbox_row(&mut self) {
-        let Some(row) = self.sandbox.rows().get(self.sandbox.selected()) else {
-            return;
-        };
-        match row.kind {
-            SandboxEntryKind::File | SandboxEntryKind::Symlink
-                if plan_doc::is_plan_file(&row.path) =>
-            {
-                let path = row.path.clone();
-                self.open_plan_doc(&path, None);
-            }
-            SandboxEntryKind::File | SandboxEntryKind::Symlink => {
-                let view = FileView::load(&row.path, self.sandbox.root());
-                self.open_detail(DetailView::File(Box::new(view)));
-            }
-            SandboxEntryKind::Dir => self.sandbox.toggle_selected(),
-            SandboxEntryKind::More(_) => {}
-        }
-    }
-
-    /// Unfold the highlighted directory; on an open directory or a file,
-    /// do nothing.
-    pub(super) fn expand_selected_sandbox_dir(&mut self) {
-        let closed_dir = self
-            .sandbox
-            .rows()
-            .get(self.sandbox.selected())
-            .is_some_and(|row| row.kind == SandboxEntryKind::Dir && !row.expanded);
-        if closed_dir {
-            self.sandbox.toggle_selected();
-        }
-    }
-
-    pub(super) fn scroll_detail_up(&mut self, lines: usize) {
-        self.detail_scroll = self.detail_scroll.saturating_sub(lines);
-        self.detail_scrolled();
-    }
-
-    pub(super) fn scroll_detail_down(&mut self, lines: usize) {
-        self.detail_scroll = self.detail_scroll.saturating_add(lines);
-        self.detail_scrolled();
-    }
-
-    /// An open file's cursor follows a scroll instead of pulling it back;
-    /// an open plan stops scrolling to its focused todo, so a later frame
-    /// does not snap back to it.
-    fn detail_scrolled(&mut self) {
-        match self.detail.as_mut() {
-            Some(DetailView::File(file)) => file.vim.scrolled(),
-            Some(DetailView::Plan(doc)) => doc.scroll_to_focus = false,
-            _ => {}
-        }
-    }
-
-    /// Lines a page key moves the detail view.
-    pub(super) fn detail_page_rows(&self) -> usize {
-        self.detail_shown.saturating_sub(1).max(1)
-    }
-
-    /// The open file and its scroll, for keys and drawing.
-    pub(crate) fn file_view_mut(&mut self) -> Option<(&mut FileView, &mut usize)> {
-        match self.detail.as_mut() {
-            Some(DetailView::File(file)) => Some((file.as_mut(), &mut self.detail_scroll)),
-            _ => None,
-        }
-    }
-
-    /// The open image, to draw it.
-    pub(crate) fn image_view_mut(&mut self) -> Option<&mut image_preview::ImageView> {
-        match self.detail.as_mut() {
-            Some(DetailView::Image(view)) => Some(view.as_mut()),
-            _ => None,
-        }
-    }
-
-    /// What the detail view showed in the last frame.
-    pub(super) const fn detail_screen(&self) -> vim::Screen {
-        vim::Screen {
-            first: self.detail_scroll,
-            shown: self.detail_shown,
-        }
-    }
-
-    /// First line of the detail view to show.
-    #[must_use]
-    pub const fn detail_scroll(&self) -> usize {
-        self.detail_scroll
-    }
-
-    /// Clamp the detail view's scroll to `max_scroll` and record that
-    /// `shown` source lines fit, as measured by the last frame.
-    pub fn set_detail_bounds(&mut self, max_scroll: usize, shown: usize) {
-        self.detail_scroll = self.detail_scroll.min(max_scroll);
-        self.detail_shown = shown.max(1);
-    }
-
-    /// Get the currently selected record (if any).
-    #[must_use]
-    pub fn selected_record_data(&self) -> Option<&RecordSummary> {
-        self.records.get(self.selected_record)
-    }
-
-    /// Clear the current notification.
-    pub fn clear_notification(&mut self) {
-        self.notification = None;
-    }
-
-    /// Start the timer of a notification seen for the first time, and drop
-    /// one whose time is up.
-    fn expire_notification(&mut self) {
-        let Some(current) = &self.notification else {
-            self.notification_shown = None;
-            self.notification_since = None;
-            return;
-        };
-        let now = Instant::now();
-        match &self.notification_shown {
-            Some((shown, until)) if shown == current => {
-                if now >= *until {
-                    self.notification = None;
-                    self.notification_shown = None;
-                    self.notification_since = None;
-                }
-            }
-            _ => {
-                let ttl = match current.1 {
-                    NotificationType::Error => ERROR_NOTIFICATION_TTL,
-                    NotificationType::Success | NotificationType::Warning => NOTIFICATION_TTL,
-                };
-                self.notification_shown = Some((current.clone(), now + ttl));
-                self.notification_since = Some(now);
-            }
-        }
-    }
-
-    /// How long the notification on screen has been showing; zero before
-    /// its timer starts.
-    #[must_use]
-    pub(crate) fn notification_age(&self) -> Duration {
-        self.notification_since
-            .map_or(Duration::ZERO, |since| since.elapsed())
-    }
-
-    /// Keep the notification on screen until it has scrolled for `read`,
-    /// and a moment after.
-    pub(crate) fn hold_notification_for(&mut self, read: Duration) {
-        if let (Some((_, until)), Some(since)) =
-            (&mut self.notification_shown, self.notification_since)
-        {
-            *until = (*until).max(since + read + NOTIFICATION_TAIL);
-        }
-    }
-
-    /// Cancel the turn of the agent on screen.
-    pub fn cancel(&mut self) {
-        if self.is_busy() {
-            // The event loop denies the waiting call when it cancels the
-            // turn, so the prompts can go now.
-            for approval in std::mem::take(&mut self.pending_approvals) {
-                self.mark_awaiting_approval(&approval.id, false);
-            }
-            self.state = AppState::Idle;
-            self.status = "Cancelled".to_string();
-            if let Some(tx) = &self.event_tx {
-                let _ = tx.try_send(UiEvent::Cancel(self.active_agent_id.clone()));
-            }
-        }
-    }
-
-    /// Stop the commands the agent on screen is running. Its turn goes on
-    /// with what they printed.
-    pub fn stop_command(&mut self) {
-        if let Some(tx) = &self.event_tx {
-            let _ = tx.try_send(UiEvent::StopCommand(self.active_agent_id.clone()));
-        }
-    }
-
-    /// Add a message to the conversation.
-    pub fn add_message(&mut self, message: Message) {
-        self.messages.push_back(message);
-        while self.messages.len() > MAX_MESSAGES {
-            self.messages.pop_front();
-        }
-    }
-
-    /// Send `event` to the session. Returns whether it went out.
-    fn try_send_event(&self, event: UiEvent) -> bool {
-        self.event_tx
-            .as_ref()
-            .is_some_and(|tx| tx.try_send(event).is_ok())
-    }
-
-    /// Process pending updates from the command channel, and scroll the
-    /// chat under a selection held past its top or bottom.
-    pub fn tick(&mut self) {
-        let shown = self.notification.is_some();
-        self.expire_notification();
-        if !self.selection_scrolling() {
-            self.selection_scrolled = None;
-        } else if self
-            .selection_scrolled
-            .is_none_or(|at| at.elapsed() >= SELECTION_SCROLL_EVERY)
-        {
-            self.scroll_selection();
-            self.selection_scrolled = Some(Instant::now());
-        }
-
-        self.receive_commands();
-        if self.sandbox_stale && self.sandbox_panel_visible {
-            self.sandbox_stale = false;
-            self.sandbox.refresh();
-            self.redraw = true;
-        }
-        self.refresh_live_log();
-
-        if matches!(
-            self.state,
-            AppState::Processing | AppState::AwaitingApproval
-        ) {
-            self.processing_since.get_or_insert_with(Instant::now);
-        } else {
-            self.processing_since = None;
-        }
-        let turns = if shown || self.animates_every_tick() {
-            true
-        } else if self.spinners_turning() {
-            let due = self.spinner_wait == 0;
-            self.spinner_wait = if due {
-                SPINNER_TICKS - 1
-            } else {
-                self.spinner_wait - 1
-            };
-            due
-        } else {
-            self.spinner_wait = 0;
-            false
-        };
-        if turns {
-            self.animation_frame = self.animation_frame.wrapping_add(1);
-            self.redraw = true;
-        }
-    }
-
-    /// Whether the screen may look different since this was last called:
-    /// a command changed what it shows, a tick turned a spinner, or
-    /// something it shows changed with time. Commands for agents off
-    /// screen count only when they change something on it (a
-    /// notification, the projects list's marks). The host draws when this
-    /// says so, and after input, which this doesn't track.
-    pub fn take_redraw(&mut self) -> bool {
-        std::mem::take(&mut self.redraw)
-    }
-
-    /// Have the next [`Self::take_redraw`] say the screen changed.
-    pub fn request_redraw(&mut self) {
-        self.redraw = true;
-    }
-
-    /// Whether the screen changes from tick to tick: a spinner turns for
-    /// an agent, task or process at work, a notification scrolls, a
-    /// selection held past the chat's edge scrolls it, or the chat, the
-    /// LOG tab or BENCH animates.
-    #[must_use]
-    pub fn animating(&self) -> bool {
-        self.animates_every_tick() || self.spinners_turning()
-    }
-
-    /// Whether what changes from tick to tick is more than spinner glyphs:
-    /// the agent on screen at work, a notification, a selection scrolling
-    /// the chat, or the chat, the LOG tab or BENCH animating.
-    fn animates_every_tick(&self) -> bool {
-        self.is_busy()
-            || self.notification.is_some()
-            || self.selection_scrolling()
-            || self.bench_animating()
-            || self.log_animating()
-            || self.chat_animating()
-    }
-
-    /// Whether a spinner turns for an agent, task or process at work.
-    fn spinners_turning(&self) -> bool {
-        self.agents.iter().any(|agent| agent.running)
-            || self
-                .task_list
-                .tasks()
-                .iter()
-                .any(|task| task.state == crate::events::TaskState::Running)
-            || self
-                .processes
-                .iter()
-                .any(|process| process.status == crate::events::ProcessStatus::Running)
-    }
-
-    /// Apply every command waiting in the command channel. Between frames
-    /// this keeps the channel from filling, which would hold up the agents
-    /// and the event loop sending to it.
-    pub fn receive_commands(&mut self) {
-        if let Some(mut rx) = self.command_rx.take() {
-            while let Ok(cmd) = rx.try_recv() {
-                self.process_command(cmd);
-            }
-            self.command_rx = Some(rx);
-        }
-    }
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
 }

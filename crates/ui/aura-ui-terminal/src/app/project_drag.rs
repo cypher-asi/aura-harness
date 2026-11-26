@@ -105,7 +105,7 @@ impl App {
             _ => return false,
         };
         let header = matches!(pressed, Pressed::Project(_));
-        self.project_press = Some(ProjectPress {
+        self.project_list.project_press = Some(ProjectPress {
             pressed,
             row,
             pointer: row,
@@ -119,7 +119,7 @@ impl App {
     /// project or agent is pressed, which keeps the drag from selecting
     /// text.
     pub(super) fn drag_project(&mut self, row: u16) -> bool {
-        let Some(press) = self.project_press.as_mut() else {
+        let Some(press) = self.project_list.project_press.as_mut() else {
             return false;
         };
         press.moved |= row != press.row;
@@ -129,7 +129,7 @@ impl App {
                 Pressed::Project(key) => self.move_project_under(&key, row),
                 Pressed::Agent(id) => self.move_agent_under(&id, row),
             };
-            if let (Some(down), Some(press)) = (swapped, self.project_press.as_mut()) {
+            if let (Some(down), Some(press)) = (swapped, self.project_list.project_press.as_mut()) {
                 press.swapped_down = Some(down);
             }
         }
@@ -138,7 +138,7 @@ impl App {
 
     /// The button came up. Returns whether a project or agent was pressed.
     pub(super) fn release_project(&mut self) -> bool {
-        let Some(press) = self.project_press.take() else {
+        let Some(press) = self.project_list.project_press.take() else {
             return false;
         };
         match press.pressed {
@@ -162,7 +162,7 @@ impl App {
     }
 
     fn send_order(&self, event: UiEvent) {
-        if let Some(tx) = &self.event_tx {
+        if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(event);
         }
     }
@@ -170,61 +170,54 @@ impl App {
     /// Whether a project or agent is being dragged, not just pressed.
     #[must_use]
     pub fn project_dragging(&self) -> bool {
-        self.project_press.as_ref().is_some_and(|press| press.moved)
+        self.project_list
+            .project_press
+            .as_ref()
+            .is_some_and(|press| press.moved)
     }
 
     /// The rows being dragged and the rows under the pointer, while a
     /// project or agent is dragged; `None` otherwise, a mere press too.
     #[must_use]
     pub(crate) fn project_drag_hit(&self) -> Option<ProjectDragHit> {
-        let press = self.project_press.as_ref().filter(|press| press.moved)?;
-        let rows = self.project_rows();
-        let block_rows = |start: usize, end: usize, header: bool| {
-            let within = |row: &ProjectListRow| match *row {
-                ProjectListRow::Project { root, .. } => header && root == start,
-                ProjectListRow::Agent { index } => (start..end).contains(&index),
-                _ => false,
-            };
-            let first = rows.iter().position(within)?;
-            let len = rows[first..].iter().take_while(|row| within(row)).count();
-            Some(first..first + len)
-        };
-        let at = self.list_row_at(press.pointer);
-        let (dragged, target) = match &press.pressed {
-            Pressed::Project(key) => {
-                let from = self.project_root_of_key(key)?;
-                let dragged = block_rows(from, self.project_end(from), true)?;
-                let target = at
-                    .and_then(|at| self.project_at_row(&rows, at))
-                    .and_then(|root| block_rows(root, self.project_end(root), true));
-                (dragged, target)
-            }
-            Pressed::Agent(id) => {
-                let from = self.agents_position(id)?;
-                let dragged = block_rows(from, self.block_end(from), false)?;
-                let target = at
-                    .and_then(|at| self.agent_block_at_row(&rows, at))
-                    .filter(|&start| self.project_root(start) == self.project_root(from))
-                    .and_then(|start| block_rows(start, self.block_end(start), false));
-                (dragged, target)
-            }
-        };
-        let edge = target
+        let press = self
+            .project_list
+            .project_press
             .as_ref()
-            .and_then(|target| match target.start.cmp(&dragged.start) {
-                std::cmp::Ordering::Greater => Some(target.end),
-                std::cmp::Ordering::Less => Some(target.start),
-                std::cmp::Ordering::Equal => {
-                    press
-                        .swapped_down
-                        .map(|down| if down { dragged.start } else { dragged.end })
-                }
-            });
+            .filter(|press| press.moved)?;
+        let (dragged, target) = self.drag_rows(press)?;
+        let edge = drop_edge(press, &dragged, target.as_ref());
         Some(ProjectDragHit {
             dragged,
             target,
             edge,
         })
+    }
+
+    /// The rows being dragged, and the rows of the block under the pointer
+    /// they may take the place of.
+    fn drag_rows(&self, press: &ProjectPress) -> Option<(Range<usize>, Option<Range<usize>>)> {
+        let rows = self.project_rows();
+        let at = self.list_row_at(press.pointer);
+        match &press.pressed {
+            Pressed::Project(key) => {
+                let from = self.project_root_of_key(key)?;
+                let dragged = block_rows(&rows, from, self.project_end(from), true)?;
+                let target = at
+                    .and_then(|at| self.project_at_row(&rows, at))
+                    .and_then(|root| block_rows(&rows, root, self.project_end(root), true));
+                Some((dragged, target))
+            }
+            Pressed::Agent(id) => {
+                let from = self.agents_position(id)?;
+                let dragged = block_rows(&rows, from, self.block_end(from), false)?;
+                let target = at
+                    .and_then(|at| self.agent_block_at_row(&rows, at))
+                    .filter(|&start| self.project_root(start) == self.project_root(from))
+                    .and_then(|start| block_rows(&rows, start, self.block_end(start), false));
+                Some((dragged, target))
+            }
+        }
     }
 
     /// Keys of the projects, in the order listed.
@@ -266,7 +259,7 @@ impl App {
         let lands = self.project_at_row(&self.project_rows(), at) == self.project_root_of_key(key);
         if lands {
             self.restore_selected_row(selected);
-            self.project_moves += 1;
+            self.project_list.project_moves += 1;
             Some(from < target)
         } else {
             self.agents = before;
@@ -291,7 +284,7 @@ impl App {
         let lands = self.agent_block_at_row(&self.project_rows(), at) == self.agents_position(id);
         if lands {
             self.restore_selected_row(selected);
-            self.project_moves += 1;
+            self.project_list.project_moves += 1;
             Some(from < target)
         } else {
             self.agents = before;
@@ -303,7 +296,7 @@ impl App {
     fn list_row_at(&self, row: u16) -> Option<usize> {
         let list = self.areas.agent_rows?;
         let row = row.clamp(list.y, list.y.saturating_add(list.height.saturating_sub(1)));
-        Some(self.agents_scroll + usize::from(row - list.y))
+        Some(self.project_list.scroll + usize::from(row - list.y))
     }
 
     fn agents_position(&self, id: &str) -> Option<usize> {
@@ -369,7 +362,7 @@ impl App {
 
     /// What the highlighted row is, to find it again after a move.
     fn selected_row_key(&self) -> Option<(String, bool)> {
-        match self.project_rows().get(self.selected_agent)? {
+        match self.project_rows().get(self.project_list.selected)? {
             ProjectListRow::Project { root, .. } => {
                 Some((self.agents[*root].project_key().to_string(), true))
             }
@@ -392,7 +385,44 @@ impl App {
             | ProjectListRow::Gap => false,
         });
         if let Some(row) = found {
-            self.selected_agent = row;
+            self.project_list.selected = row;
         }
     }
+}
+
+/// The list rows of the agents `start..end`, with the header of the
+/// project rooted at `start` when `header`.
+fn block_rows(
+    rows: &[ProjectListRow],
+    start: usize,
+    end: usize,
+    header: bool,
+) -> Option<Range<usize>> {
+    let within = |row: &ProjectListRow| match *row {
+        ProjectListRow::Project { root, .. } => header && root == start,
+        ProjectListRow::Agent { index } => (start..end).contains(&index),
+        _ => false,
+    };
+    let first = rows.iter().position(within)?;
+    let len = rows[first..].iter().take_while(|row| within(row)).count();
+    Some(first..first + len)
+}
+
+/// The edge the dragged rows go to: below a target below them, above one
+/// above; once they landed, the edge between them and the block they
+/// passed.
+fn drop_edge(
+    press: &ProjectPress,
+    dragged: &Range<usize>,
+    target: Option<&Range<usize>>,
+) -> Option<usize> {
+    target.and_then(|target| match target.start.cmp(&dragged.start) {
+        std::cmp::Ordering::Greater => Some(target.end),
+        std::cmp::Ordering::Less => Some(target.start),
+        std::cmp::Ordering::Equal => {
+            press
+                .swapped_down
+                .map(|down| if down { dragged.start } else { dragged.end })
+        }
+    })
 }

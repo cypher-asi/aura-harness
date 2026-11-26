@@ -126,24 +126,7 @@ pub(super) fn graph_header(app: &App, theme: &Theme) -> (String, Option<HeaderIn
 /// Draw the graph over `area`, the chat panel.
 pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let rows = app.graph().rows();
-    let footer = Line::from(Span::styled(
-        format!(
-            " {} ",
-            truncate_record_info(HINT, usize::from(area.width).saturating_sub(4))
-        ),
-        Style::default().fg(theme.colors.muted),
-    ));
-    let block = body_block((true, app.host_chrome()), theme).title_bottom(footer);
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-
-    let inner = Rect {
-        x: area.x.saturating_add(1),
-        y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(2),
-    };
-    let tree = inner;
+    let tree = render_frame(frame, area, app, theme);
 
     if rows.is_empty() {
         render_empty(frame, tree, "No steps recorded yet.", theme);
@@ -154,26 +137,7 @@ pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: 
 
     let visible = usize::from(tree.height);
     let first = app.graph_mut().sync_scroll(&rows, visible);
-    let selected = app.graph().selected_row(&rows);
-    let linked = app.graph().linked_to_selected();
-    let width = usize::from(tree.width);
-    let lines: Vec<Line> = rows
-        .iter()
-        .enumerate()
-        .skip(first)
-        .take(visible)
-        .map(|(i, row)| {
-            let node = &app.graph().nodes()[row.node];
-            tree_line(
-                row,
-                node,
-                i == selected,
-                linked.contains(node.id.as_str()),
-                width,
-                theme,
-            )
-        })
-        .collect();
+    let lines = tree_lines(app, &rows, first, visible, usize::from(tree.width), theme);
     frame.render_widget(Paragraph::new(lines), tree);
     render_scrollbar(
         frame,
@@ -190,6 +154,56 @@ pub(super) fn render_graph(frame: &mut Frame, area: Rect, app: &mut App, theme: 
 
     app.graph_mut().set_tree_area(Some(tree));
     app.set_detail_bounds(0, visible);
+}
+
+/// Draw the graph's frame over `area` and return the cells inside it.
+fn render_frame(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> Rect {
+    let footer = Line::from(Span::styled(
+        format!(
+            " {} ",
+            truncate_record_info(HINT, usize::from(area.width).saturating_sub(4))
+        ),
+        Style::default().fg(theme.colors.muted),
+    ));
+    let block = body_block((true, app.host_chrome()), theme).title_bottom(footer);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+
+    Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+/// The `visible` rows of the tree from `first`, `width` columns wide.
+fn tree_lines<'a>(
+    app: &App,
+    rows: &[GraphRow],
+    first: usize,
+    visible: usize,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'a>> {
+    let selected = app.graph().selected_row(rows);
+    let linked = app.graph().linked_to_selected();
+    rows.iter()
+        .enumerate()
+        .skip(first)
+        .take(visible)
+        .map(|(i, row)| {
+            let node = &app.graph().nodes()[row.node];
+            tree_line(
+                row,
+                node,
+                i == selected,
+                linked.contains(node.id.as_str()),
+                width,
+                theme,
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

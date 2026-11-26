@@ -57,6 +57,18 @@ impl HeaderBar {
 
     /// Render the header bar.
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let line = Line::from(self.spans(theme));
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(theme.border_style.to_border_type())
+            .border_style(Style::default().fg(theme.colors.primary));
+
+        let paragraph = Paragraph::new(line).block(block);
+        frame.render_widget(paragraph, area);
+    }
+
+    /// The app name, the agent and session ids, then the connection status.
+    fn spans(&self, theme: &Theme) -> Vec<Span<'_>> {
         let mut spans = vec![
             Span::styled("  ◈ ", Style::default().fg(theme.colors.primary)),
             Span::styled(
@@ -89,31 +101,21 @@ impl HeaderBar {
             ));
         }
 
-        // Connection status
-        spans.push(Span::styled(
-            "  │  ",
-            Style::default().fg(theme.colors.muted),
-        ));
-        if self.connected {
-            spans.push(Span::styled(
-                "● Connected",
-                Style::default().fg(theme.colors.success),
-            ));
+        spans.extend(self.connection_spans(theme));
+        spans
+    }
+
+    /// Connection status
+    fn connection_spans(&self, theme: &Theme) -> [Span<'static>; 2] {
+        let status = if self.connected {
+            Span::styled("● Connected", Style::default().fg(theme.colors.success))
         } else {
-            spans.push(Span::styled(
-                "○ Disconnected",
-                Style::default().fg(theme.colors.error),
-            ));
-        }
-
-        let line = Line::from(spans);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(theme.border_style.to_border_type())
-            .border_style(Style::default().fg(theme.colors.primary));
-
-        let paragraph = Paragraph::new(line).block(block);
-        frame.render_widget(paragraph, area);
+            Span::styled("○ Disconnected", Style::default().fg(theme.colors.error))
+        };
+        [
+            Span::styled("  │  ", Style::default().fg(theme.colors.muted)),
+            status,
+        ]
     }
 }
 

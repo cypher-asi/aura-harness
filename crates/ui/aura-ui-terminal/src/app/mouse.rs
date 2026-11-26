@@ -38,13 +38,18 @@ impl App {
         } else {
             (top + 1).min(rows.max_top())
         };
-        if let Some(view) = self.input_view.as_mut().filter(|_| scrolled.is_some()) {
+        if let Some(view) = self
+            .input
+            .input_view
+            .as_mut()
+            .filter(|_| scrolled.is_some())
+        {
             view.top = top;
         } else {
-            self.input_view = Some(InputView {
+            self.input.input_view = Some(InputView {
                 top,
-                input: self.input.clone(),
-                cursor: self.cursor_pos,
+                input: self.input.text.clone(),
+                cursor: self.input.cursor_pos,
             });
         }
         true
@@ -95,16 +100,16 @@ impl App {
                 (menu.selected, submenu)
             })
         };
-        let ends = |app: &Self| app.selection.as_ref().map(Selection::ends);
+        let ends = |app: &Self| app.select.selection.as_ref().map(Selection::ends);
         let state = |app: &Self| {
             (
                 app.hover,
                 ends(app),
                 menu(app),
-                app.project_moves,
+                app.project_list.project_moves,
                 app.project_drag_hit(),
                 app.queue_pointer_state(),
-                (app.scrollbar_held(), app.scroll_offset, app.detail_scroll),
+                (app.scrollbar_held(), app.scroll_offset, app.detail.scroll),
             )
         };
         let before = state(self);
@@ -113,13 +118,29 @@ impl App {
     }
 
     pub(super) fn mouse(&mut self, mouse: MouseEvent) {
+        if self.mouse_taken_first(mouse) || self.mouse_on_chrome(mouse) {
+            return;
+        }
+        match mouse.kind {
+            MouseEventKind::Drag(MouseButton::Left) => self.drag_left(mouse),
+            MouseEventKind::Up(MouseButton::Left) => self.release_left(mouse),
+            MouseEventKind::Moved => self.hover = self.hover_target(mouse.column, mouse.row),
+            _ => self.mouse_on_panel(mouse),
+        }
+    }
+
+    /// What takes the event before anything on screen: the stop button,
+    /// the placement switch, the model selector or a state other than
+    /// idle or processing, and an open context menu. Returns whether one
+    /// took it.
+    fn mouse_taken_first(&mut self, mouse: MouseEvent) -> bool {
         // First, so the button works while an approval waits too; an
         // open context menu takes the click instead, as it may cover it.
         if self.context_menu.is_none() && self.click_stop_button(mouse) {
-            return;
+            return true;
         }
         if self.context_menu.is_none() && self.click_placement_switch(mouse) {
-            return;
+            return true;
         }
         // The selector takes the click whole: one that picks a model and
         // closes it must not also land on what is under it.
@@ -130,106 +151,124 @@ impl App {
         if selecting || (self.state != AppState::Idle && self.state != AppState::Processing) {
             self.hover = None;
             self.context_menu = None;
-            self.project_press = None;
-            self.scrollbar_grab = None;
+            self.project_list.project_press = None;
+            self.select.scrollbar_grab = None;
             self.drop_queue_press();
-            return;
+            return true;
         }
         if self.context_menu_mouse(mouse.kind, mouse.column, mouse.row) {
             self.hover = None;
-            return;
+            return true;
         }
+        false
+    }
+
+    /// The side column's toggle, the queue, the bench panel, right clicks
+    /// and the chat panel's scrollbar. Returns whether one took the event.
+    fn mouse_on_chrome(&mut self, mouse: MouseEvent) -> bool {
+        let (column, row) = (mouse.column, mouse.row);
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-            && contains(self.areas.side_toggle, mouse.column, mouse.row)
+            && contains(self.areas.side_toggle, column, row)
         {
             self.toggle_side_column();
             self.clear_selection();
-            self.hover = self.hover_target(mouse.column, mouse.row);
-            return;
+            self.hover = self.hover_target(column, row);
+            return true;
         }
-        if self.queue_mouse(mouse.kind, mouse.column, mouse.row)
-            || self.bench_panel_mouse(mouse.kind, mouse.column, mouse.row)
+        if self.queue_mouse(mouse.kind, column, row)
+            || self.bench_panel_mouse(mouse.kind, column, row)
         {
             self.hover = None;
-            return;
+            return true;
         }
-        if mouse.kind == MouseEventKind::Down(MouseButton::Right)
-            && self.panel_at(mouse.column, mouse.row) == Some(PanelFocus::Swarm)
-            && self.open_context_menu(mouse.column, mouse.row)
-        {
-            self.clear_selection();
-            self.hover = None;
-            return;
+        if mouse.kind == MouseEventKind::Down(MouseButton::Right) && self.right_click(column, row) {
+            return true;
         }
-        if mouse.kind == MouseEventKind::Down(MouseButton::Right)
-            && self.panel_at(mouse.column, mouse.row) == Some(PanelFocus::Sandbox)
-            && self.open_channel_side_menu(mouse.column, mouse.row)
-        {
-            self.clear_selection();
-            self.hover = None;
-            return;
+        if self.scrollbar_mouse(mouse.kind, column, row) {
+            self.hover = self.hover_target(column, row);
+            return true;
         }
+        false
+    }
+
+    /// A right click opens the agents panel's or the side panel's menu,
+    /// or pastes in the input box. Returns whether it did any of them.
+    fn right_click(&mut self, column: u16, row: u16) -> bool {
+        let menu = (self.panel_at(column, row) == Some(PanelFocus::Swarm)
+            && self.open_context_menu(column, row))
+            || (self.panel_at(column, row) == Some(PanelFocus::Sandbox)
+                && self.open_channel_side_menu(column, row));
         // Right-click in the input box pastes, as in a terminal.
-        if mouse.kind == MouseEventKind::Down(MouseButton::Right)
-            && contains(self.areas.input, mouse.column, mouse.row)
-        {
-            self.clear_selection();
-            self.hover = None;
-            self.request_paste();
-            return;
+        let paste = !menu && contains(self.areas.input, column, row);
+        if !menu && !paste {
+            return false;
         }
-        if self.scrollbar_mouse(mouse.kind, mouse.column, mouse.row) {
-            self.hover = self.hover_target(mouse.column, mouse.row);
+        self.clear_selection();
+        self.hover = None;
+        if paste {
+            self.request_paste();
+        }
+        true
+    }
+
+    /// Dragging with the left button moves a project or the flow view, or
+    /// extends the selection.
+    fn drag_left(&mut self, mouse: MouseEvent) {
+        self.hover = None;
+        if self.drag_project(mouse.row) || self.drag_flow(mouse.column, mouse.row) {
             return;
         }
         let at = Position::new(mouse.column, mouse.row);
-        match mouse.kind {
-            MouseEventKind::Drag(MouseButton::Left) => {
-                self.hover = None;
-                if self.drag_project(mouse.row) {
-                    return;
-                }
-                if self.drag_flow(mouse.column, mouse.row) {
-                    return;
-                }
-                if let Some(selection) =
-                    self.selection.as_mut().filter(|_| self.selecting.is_some())
-                {
-                    selection.extend_to(at);
-                    self.selecting = Some(at);
-                }
-                return;
-            }
-            MouseEventKind::Up(MouseButton::Left) => {
-                if self.release_project() {
-                    self.hover = self.hover_target(mouse.column, mouse.row);
-                    return;
-                }
-                if self.release_flow() {
-                    return;
-                }
-                if self.selecting.take().is_some() {
-                    if let Some(selection) = self.selection.as_mut() {
-                        selection.extend_to(at);
-                    }
-                    if self.selection.as_ref().is_some_and(|s| !s.is_empty()) {
-                        self.copy_requested = true;
-                    } else {
-                        self.selection = None;
-                        if self.detail.is_none() {
-                            self.toggle_activity_at(mouse.column, mouse.row);
-                        }
-                    }
-                }
-                self.hover = self.hover_target(mouse.column, mouse.row);
-                return;
-            }
-            MouseEventKind::Moved => {
-                self.hover = self.hover_target(mouse.column, mouse.row);
-                return;
-            }
-            _ => {}
+        if let Some(selection) = self
+            .select
+            .selection
+            .as_mut()
+            .filter(|_| self.select.selecting.is_some())
+        {
+            selection.extend_to(at);
+            self.select.selecting = Some(at);
         }
+    }
+
+    /// Releasing the left button drops a project or the flow view, or
+    /// ends the selection.
+    fn release_left(&mut self, mouse: MouseEvent) {
+        if self.release_project() {
+            self.hover = self.hover_target(mouse.column, mouse.row);
+            return;
+        }
+        if self.release_flow() {
+            return;
+        }
+        if self.select.selecting.take().is_some() {
+            self.finish_selection(mouse.column, mouse.row);
+        }
+        self.hover = self.hover_target(mouse.column, mouse.row);
+    }
+
+    /// End the selection at the pointer: copy it, or treat an empty one
+    /// as a click on an activity row.
+    fn finish_selection(&mut self, column: u16, row: u16) {
+        if let Some(selection) = self.select.selection.as_mut() {
+            selection.extend_to(Position::new(column, row));
+        }
+        if self
+            .select
+            .selection
+            .as_ref()
+            .is_some_and(|s| !s.is_empty())
+        {
+            self.select.copy_requested = true;
+        } else {
+            self.select.selection = None;
+            if self.detail.view.is_none() {
+                self.toggle_activity_at(column, row);
+            }
+        }
+    }
+
+    /// The wheel over the input box or a panel, or a press on a panel.
+    fn mouse_on_panel(&mut self, mouse: MouseEvent) {
         if self.scroll_input(mouse) {
             self.hover = self.hover_target(mouse.column, mouse.row);
             return;
@@ -237,12 +276,25 @@ impl App {
         let Some(panel) = self.panel_at(mouse.column, mouse.row) else {
             return;
         };
+        match mouse.kind {
+            MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => self.wheel_panel(panel, mouse),
+            MouseEventKind::Down(MouseButton::Left) => self.press_panel(panel, mouse),
+            _ => self.hover = self.hover_target(mouse.column, mouse.row),
+        }
+    }
+
+    /// The wheel over `panel` scrolls the detail view, the flow view or
+    /// the panel.
+    fn wheel_panel(&mut self, panel: PanelFocus, mouse: MouseEvent) {
         let step = if panel == PanelFocus::Swarm {
             self.agents_panel_wheel_step()
         } else {
             3
         };
-        let over_detail = panel == PanelFocus::Chat && self.detail.is_some();
+        let over_detail = panel == PanelFocus::Chat && self.detail.view.is_some();
         if matches!(
             mouse.kind,
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
@@ -253,74 +305,78 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp if over_detail => self.scroll_detail_up(step),
             MouseEventKind::ScrollDown if over_detail => self.scroll_detail_down(step),
-            MouseEventKind::ScrollUp
-            | MouseEventKind::ScrollDown
-            | MouseEventKind::ScrollLeft
-            | MouseEventKind::ScrollRight
-                if panel == PanelFocus::Chat && self.flow.is_open() =>
-            {
+            _ if panel == PanelFocus::Chat && self.flow.is_open() => {
                 self.clear_selection();
                 self.scroll_flow(mouse.kind, mouse.modifiers, step);
             }
             MouseEventKind::ScrollUp => self.scroll_panel_up(panel, step),
             MouseEventKind::ScrollDown => self.scroll_panel_down(panel, step),
-            MouseEventKind::Down(MouseButton::Left) => {
-                self.focus = panel;
-                if panel == PanelFocus::Chat
-                    && (self.open_image_at(mouse.column, mouse.row)
-                        || self.copy_code_at(mouse.column, mouse.row))
-                {
-                    self.clear_selection();
-                    self.hover = None;
-                    return;
-                }
-                self.selection_scrolls =
-                    panel == PanelFocus::Chat && self.areas.chat_rows.is_some();
-                let top = if self.selection_scrolls {
-                    self.areas.chat_rows_top
-                } else {
-                    0
-                };
-                self.selection = self
-                    .selectable_area(panel)
-                    .map(|bounds| Selection::new(bounds, top, at));
-                self.selecting = self.selection.is_some().then_some(at);
-                match panel {
-                    PanelFocus::Swarm => {
-                        if !self.press_project(mouse.column, mouse.row) {
-                            self.click_agents_panel(mouse.column, mouse.row);
-                        }
-                    }
-                    PanelFocus::Sandbox => self.click_side_panel(mouse.column, mouse.row),
-                    PanelFocus::Records => self.click_records_panel(mouse.column, mouse.row),
-                    PanelFocus::Chat => {
-                        if self.detail_close_at(mouse.column, mouse.row) {
-                            self.close_detail();
-                            self.clear_selection();
-                        } else if contains(self.areas.chat_expand, mouse.column, mouse.row) {
-                            self.toggle_chat_expanded();
-                            self.clear_selection();
-                        } else if self.click_chat_tabs(mouse.column, mouse.row) {
-                            self.clear_selection();
-                        } else if self.detail == Some(DetailView::Graph) {
-                            self.click_graph(mouse.column, mouse.row);
-                        } else if self.click_thread(mouse.column, mouse.row)
-                            || (self.detail.is_none()
-                                && ((self.log.is_open()
-                                    && self.click_log(mouse.column, mouse.row))
-                                    || (self.flow.is_open()
-                                        && self.click_flow(mouse.column, mouse.row))
-                                    || (self.bench_draws_center()
-                                        && self.click_bench(mouse.column, mouse.row))))
-                        {
-                            self.clear_selection();
-                        }
-                    }
-                }
-            }
             _ => {}
         }
         self.hover = self.hover_target(mouse.column, mouse.row);
+    }
+
+    /// A left press focuses `panel`, opens an image or copies code in the
+    /// chat panel, or starts a selection and clicks what is under it.
+    fn press_panel(&mut self, panel: PanelFocus, mouse: MouseEvent) {
+        let (column, row) = (mouse.column, mouse.row);
+        self.focus = panel;
+        if panel == PanelFocus::Chat
+            && (self.open_image_at(column, row) || self.copy_code_at(column, row))
+        {
+            self.clear_selection();
+            self.hover = None;
+            return;
+        }
+        self.start_selection(panel, Position::new(column, row));
+        match panel {
+            PanelFocus::Swarm => {
+                if !self.press_project(column, row) {
+                    self.click_agents_panel(column, row);
+                }
+            }
+            PanelFocus::Sandbox => self.click_side_panel(column, row),
+            PanelFocus::Records => self.click_records_panel(column, row),
+            PanelFocus::Chat => self.click_chat_panel(column, row),
+        }
+        self.hover = self.hover_target(column, row);
+    }
+
+    /// Start selecting text in `panel` at `at`, if it has selectable text.
+    fn start_selection(&mut self, panel: PanelFocus, at: Position) {
+        self.select.selection_scrolls = panel == PanelFocus::Chat && self.areas.chat_rows.is_some();
+        let top = if self.select.selection_scrolls {
+            self.areas.chat_rows_top
+        } else {
+            0
+        };
+        self.select.selection = self
+            .selectable_area(panel)
+            .map(|bounds| Selection::new(bounds, top, at));
+        self.select.selecting = self.select.selection.is_some().then_some(at);
+    }
+
+    /// A left click in the chat panel: its close, expand and tab buttons,
+    /// the graph, a thread, the log, the flow view or the bench.
+    fn click_chat_panel(&mut self, column: u16, row: u16) {
+        if self.detail_close_at(column, row) {
+            self.close_detail();
+            self.clear_selection();
+        } else if contains(self.areas.chat_expand, column, row) {
+            self.toggle_chat_expanded();
+            self.clear_selection();
+        } else if self.click_chat_tabs(column, row) {
+            self.clear_selection();
+        } else if self.detail.view == Some(DetailView::Graph) {
+            self.click_graph(column, row);
+        } else if self.click_thread(column, row)
+            || (self.detail.view.is_none()
+                && ((self.log.is_open() && self.click_log(column, row))
+                    || (self.flow.is_open() && self.click_flow(column, row))
+                    || (self.bench_draws_center() && self.click_bench(column, row))))
+        {
+            self.clear_selection();
+        }
     }
 
     /// A left press on the input box's stop button cancels the running
@@ -392,20 +448,20 @@ impl App {
             .areas
             .record_rows
             .filter(|&rows| contains(Some(rows), column, row))?;
-        let index = self.records_scroll + usize::from(row - rows.y);
-        (index < self.records.len()).then_some(index)
+        let index = self.records.scroll + usize::from(row - rows.y);
+        (index < self.records.items.len()).then_some(index)
     }
 
     /// Clicking a record highlights it and shows it over the chat panel.
     pub(super) fn click_record_row(&mut self, column: u16, row: u16) {
         if let Some(index) = self.record_row_at(column, row) {
-            self.selected_record = index;
+            self.records.selected = index;
             self.open_detail(DetailView::Record);
         }
     }
 
     pub(super) fn hovered_activity(&self, column: u16, row: u16) -> Option<HoverTarget> {
-        if self.detail.is_some() {
+        if self.detail.view.is_some() {
             return None;
         }
         self.toggle_row_at(column, row)

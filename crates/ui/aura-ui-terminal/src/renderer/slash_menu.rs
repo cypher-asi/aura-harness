@@ -38,11 +38,11 @@ impl MenuRow<'_> {
     }
 }
 
-/// Render the slash menu across the full width of `chat`, bottom-aligned
-/// with it. Draws nothing while the menu is closed.
-pub(super) fn render_slash_menu(frame: &mut Frame, chat: Rect, app: &App, theme: &Theme) {
+/// The menu's title, its key hint and its rows: the matching commands, or
+/// the agents to add after `/agent `.
+fn menu_rows(app: &App) -> (&'static str, &'static str, Vec<MenuRow<'_>>) {
     let commands = app.slash_matches();
-    let (title, hint, rows): (_, _, Vec<MenuRow<'_>>) = if commands.is_empty() {
+    if commands.is_empty() {
         (
             " ADD AGENT TO PROJECT ",
             " ↑/↓ select  Tab complete  Enter add  Esc close ",
@@ -68,7 +68,40 @@ pub(super) fn render_slash_menu(frame: &mut Frame, chat: Rect, app: &App, theme:
                 })
                 .collect(),
         )
+    }
+}
+
+/// One row of the menu, its description starting `label_width` columns
+/// past the marker.
+fn menu_line<'a>(row: &MenuRow<'a>, selected: bool, label_width: usize, theme: &Theme) -> Line<'a> {
+    let (marker, name_color) = if selected {
+        ("› ", theme.colors.primary)
+    } else {
+        ("  ", theme.colors.foreground)
     };
+    let mut spans = vec![
+        Span::styled(marker, Style::default().fg(theme.colors.primary)),
+        Span::styled(row.name.clone(), Style::default().fg(name_color)),
+    ];
+    if !row.args.is_empty() {
+        spans.push(Span::styled(
+            format!(" {}", row.args),
+            Style::default().fg(theme.colors.muted),
+        ));
+    }
+    let pad = label_width - row.label_width();
+    spans.push(Span::raw(" ".repeat(pad + DESCRIPTION_GAP)));
+    spans.push(Span::styled(
+        row.description,
+        Style::default().fg(theme.colors.muted),
+    ));
+    Line::from(spans)
+}
+
+/// Render the slash menu across the full width of `chat`, bottom-aligned
+/// with it. Draws nothing while the menu is closed.
+pub(super) fn render_slash_menu(frame: &mut Frame, chat: Rect, app: &App, theme: &Theme) {
+    let (title, hint, rows) = menu_rows(app);
     if rows.is_empty() || chat.height < 3 {
         return;
     }
@@ -91,31 +124,7 @@ pub(super) fn render_slash_menu(frame: &mut Frame, chat: Rect, app: &App, theme:
         .enumerate()
         .skip(scroll)
         .take(visible)
-        .map(|(idx, row)| {
-            let selected = idx == cursor;
-            let (marker, name_color) = if selected {
-                ("› ", theme.colors.primary)
-            } else {
-                ("  ", theme.colors.foreground)
-            };
-            let mut spans = vec![
-                Span::styled(marker, Style::default().fg(theme.colors.primary)),
-                Span::styled(row.name.clone(), Style::default().fg(name_color)),
-            ];
-            if !row.args.is_empty() {
-                spans.push(Span::styled(
-                    format!(" {}", row.args),
-                    Style::default().fg(theme.colors.muted),
-                ));
-            }
-            let pad = label_width - row.label_width();
-            spans.push(Span::raw(" ".repeat(pad + DESCRIPTION_GAP)));
-            spans.push(Span::styled(
-                row.description,
-                Style::default().fg(theme.colors.muted),
-            ));
-            Line::from(spans)
-        })
+        .map(|(idx, row)| menu_line(row, idx == cursor, label_width, theme))
         .collect();
 
     let block = Block::default()

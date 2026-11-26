@@ -31,7 +31,7 @@ use super::side_scope::ListPlaces;
 use super::{hud::Hud, App, AppState, ChatTab, NotificationType, PendingApproval, SidePanelTab};
 use crate::{
     components::Message,
-    events::{RecordSummary, UiCommand},
+    events::{QueuedItemView, RecordSummary, TraceNode, UiCommand},
     renderer::{format_elapsed, ChatLineCache},
     PermissionMode,
 };
@@ -126,31 +126,37 @@ impl App {
     /// Exchange the chat on screen with `view`.
     fn swap_chat(&mut self, view: &mut AgentView) {
         mem::swap(&mut self.messages, &mut view.messages);
-        mem::swap(&mut self.streaming_content, &mut view.streaming_content);
+        mem::swap(
+            &mut self.chat.streaming_content,
+            &mut view.streaming_content,
+        );
         mem::swap(&mut self.status, &mut view.status);
-        mem::swap(&mut self.processing_since, &mut view.processing_since);
+        mem::swap(&mut self.ticks.processing_since, &mut view.processing_since);
         mem::swap(&mut self.scroll_offset, &mut view.scroll_offset);
-        mem::swap(&mut self.group_open, &mut view.group_open);
-        mem::swap(&mut self.chat_lines, &mut view.chat_lines);
-        mem::swap(&mut self.pending_approvals, &mut view.pending_approvals);
+        mem::swap(&mut self.chat.group_open, &mut view.group_open);
+        mem::swap(&mut self.chat.chat_lines, &mut view.chat_lines);
+        mem::swap(&mut self.pending.approvals, &mut view.pending_approvals);
         mem::swap(&mut self.hud, &mut view.hud);
-        mem::swap(&mut self.chat_loaded, &mut view.loaded);
-        mem::swap(&mut self.chat_loading_since, &mut view.loading_since);
-        mem::swap(&mut self.chat_revealed_at, &mut view.revealed_at);
-        mem::swap(&mut self.records, &mut view.records);
-        mem::swap(&mut self.selected_record, &mut view.selected_record);
-        mem::swap(&mut self.records_scroll, &mut view.records_scroll);
+        mem::swap(&mut self.switching.chat_loaded, &mut view.loaded);
+        mem::swap(
+            &mut self.switching.chat_loading_since,
+            &mut view.loading_since,
+        );
+        mem::swap(&mut self.switching.chat_revealed_at, &mut view.revealed_at);
+        mem::swap(&mut self.records.items, &mut view.records);
+        mem::swap(&mut self.records.selected, &mut view.selected_record);
+        mem::swap(&mut self.records.scroll, &mut view.records_scroll);
         mem::swap(&mut self.sandbox, &mut view.sandbox);
-        mem::swap(&mut self.sandbox_scroll, &mut view.sandbox_scroll);
+        mem::swap(&mut self.side.sandbox_scroll, &mut view.sandbox_scroll);
     }
 
     /// Have the chat on screen wait for its history when it doesn't hold
     /// it: nothing of it is drawn until the history arrives, so the panel
     /// never shows a partial or out-of-date chat that then jumps.
     pub(super) fn start_chat_loading(&mut self) {
-        if !self.chat_loaded {
-            self.chat_loading_since = Some(Instant::now());
-            self.chat_revealed_at = None;
+        if !self.switching.chat_loaded {
+            self.switching.chat_loading_since = Some(Instant::now());
+            self.switching.chat_revealed_at = None;
         }
     }
 
@@ -159,27 +165,29 @@ impl App {
     /// or was shown all along, is shown as it is: fading in after a wait
     /// too short to see only holds it back.
     pub(super) fn reveal_chat(&mut self) {
-        self.chat_loaded = true;
+        self.switching.chat_loaded = true;
         if self
+            .switching
             .chat_loading_since
             .take()
             .is_some_and(|at| at.elapsed() >= LOADING_DELAY)
         {
-            self.chat_revealed_at = Some(Instant::now());
+            self.switching.chat_revealed_at = Some(Instant::now());
         }
     }
 
     /// Whether the chat on screen waits for its agent's history.
     #[must_use]
     pub const fn chat_loading(&self) -> bool {
-        self.chat_loading_since.is_some()
+        self.switching.chat_loading_since.is_some()
     }
 
     /// Whether the chat has waited long enough to say it is loading, so a
     /// quick load shows no message at all.
     #[must_use]
     pub fn chat_loading_shown(&self) -> bool {
-        self.chat_loading_since
+        self.switching
+            .chat_loading_since
             .is_some_and(|at| at.elapsed() >= LOADING_DELAY)
     }
 
@@ -187,7 +195,7 @@ impl App {
     /// as milliseconds of [`super::run_log::FADE_IN`], while it still is.
     #[must_use]
     pub fn chat_fading(&self) -> Option<(usize, usize)> {
-        fade_progress(self.chat_revealed_at)
+        fade_progress(self.switching.chat_revealed_at)
     }
 
     /// Whether the chat on screen changes from frame to frame: it waits
@@ -207,7 +215,10 @@ impl App {
         if agent_id == self.active_agent_id {
             is_busy(self.state)
         } else {
-            self.views.get(agent_id).is_some_and(|view| view.busy)
+            self.switching
+                .views
+                .get(agent_id)
+                .is_some_and(|view| view.busy)
         }
     }
 
@@ -225,13 +236,13 @@ impl App {
         if !input_is_prompt_answer(self.state) {
             self.swap_draft(&previous, agent_id);
         }
-        let mut view = self.views.remove(agent_id).unwrap_or_default();
+        let mut view = self.switching.views.remove(agent_id).unwrap_or_default();
         let busy = view.busy;
         let tab = mem::replace(&mut view.chat_tab, self.chat_tab());
-        self.list_places_due = view.list_places.replace(self.list_places());
+        self.switching.list_places_due = view.list_places.replace(self.list_places());
         self.swap_chat(&mut view);
         view.busy = is_busy(self.state);
-        self.views.insert(previous, view);
+        self.switching.views.insert(previous, view);
         if !is_modal(self.state) {
             self.state = self.chat_state(busy);
         }
@@ -245,7 +256,7 @@ impl App {
     pub(super) fn give_chat_tab_back(&mut self, agent_id: &str, tab: ChatTab) {
         if agent_id == self.active_agent_id {
             self.restore_chat_tab(tab);
-        } else if let Some(view) = self.views.get_mut(agent_id) {
+        } else if let Some(view) = self.switching.views.get_mut(agent_id) {
             view.chat_tab = tab;
         }
     }
@@ -257,23 +268,23 @@ impl App {
     /// input (see [`input_is_prompt_answer`]) was never taken back, and
     /// still waits for its agent's next return.
     fn swap_draft(&mut self, previous: &str, agent_id: &str) {
-        let incoming = self.drafts.remove(agent_id).unwrap_or_default();
+        let incoming = self.switching.drafts.remove(agent_id).unwrap_or_default();
         let outgoing = self.take_draft(String::new());
         self.restore_draft(incoming);
         if !outgoing.is_empty() {
-            self.drafts.insert(previous.to_string(), outgoing);
+            self.switching.drafts.insert(previous.to_string(), outgoing);
         }
         // Menus and history browsing followed the old text.
-        self.reset_slash_menu();
+        self.input.reset_slash_menu();
         self.close_mentions();
-        self.input_history.reset();
-        self.command_history.reset();
+        self.input.history.reset();
+        self.input.command_history.reset();
     }
 
     /// State of the chat swapped in, whose agent is `busy` or not. A turn
     /// waiting for an approval shows its prompt.
     fn chat_state(&self, busy: bool) -> AppState {
-        if !self.pending_approvals.is_empty() {
+        if !self.pending.approvals.is_empty() {
             AppState::AwaitingApproval
         } else if busy {
             AppState::Processing
@@ -292,14 +303,17 @@ impl App {
             }
             UiCommand::Complete => {
                 let since = if on_screen {
-                    self.processing_since
+                    self.ticks.processing_since
                 } else {
-                    self.views.get(agent_id).and_then(|v| v.processing_since)
+                    self.switching
+                        .views
+                        .get(agent_id)
+                        .and_then(|v| v.processing_since)
                 };
                 let Some(elapsed) = since.map(|since| since.elapsed()) else {
                     return;
                 };
-                if elapsed < self.alert_settings.notify_after {
+                if elapsed < self.ticks.alert_settings.notify_after {
                     return;
                 }
                 format!(
@@ -310,7 +324,7 @@ impl App {
             }
             _ => return,
         };
-        self.alerts.push(message);
+        self.ticks.alerts.push(message);
     }
 
     /// Apply `command` to the chat of `agent_id`, on screen or not. One
@@ -324,12 +338,7 @@ impl App {
             self.set_agent_plan_mode(agent_id, *mode == PermissionMode::Plan);
         }
         if let UiCommand::GraphUpsert { run_id, nodes } = command {
-            self.trace_feed.push(agent_id, &run_id, &nodes);
-            let graphed = self.upsert_graph(&run_id, nodes);
-            // Any agent's step may be in the log on screen, as a subagent's.
-            self.log.mark_stale();
-            let feed_shown = self.sandbox_panel_visible() && self.side_tab == SidePanelTab::Trace;
-            self.redraw |= graphed || feed_shown;
+            self.agent_graph_upsert(agent_id, &run_id, nodes);
             return;
         }
         if agent_id == self.active_agent_id || self.active_agent_id.is_empty() {
@@ -337,39 +346,50 @@ impl App {
             return;
         }
         if let UiCommand::SetQueue(queue) = command {
-            // The queue panel's state is the agent on screen's; this one
-            // only stores the queue, and confirms its edits.
-            self.confirm_queued_renames(agent_id, &queue);
-            self.views
-                .entry(agent_id.to_string())
-                .or_default()
-                .hud
-                .queue = queue;
-            // A confirmed rename shows in the chat's queued previews.
-            self.redraw = true;
+            self.store_offscreen_queue(agent_id, queue);
             return;
         }
         let asks = matches!(command, UiCommand::RequestApproval { .. });
-        if matches!(
-            command,
-            UiCommand::NewRecord(_)
-                | UiCommand::ClearRecords
-                | UiCommand::SetRecords(_)
-                | UiCommand::SetSandboxRoot(_)
-                | UiCommand::SetPlan(_)
-                | UiCommand::SetPlans(_)
-                | UiCommand::SetTasks(_)
-                | UiCommand::UpsertTask(_)
-        ) {
+        if shows_active_agent_only(&command) {
             // The Record and Sandbox panels, the plan strip and the Plans
             // and Tasks tabs show the active agent only.
             return;
         }
+        self.process_offscreen_command(agent_id, command, asks);
+    }
 
-        let mut view = self.views.remove(agent_id).unwrap_or_default();
+    /// A graph update of any agent: into the trace feed and the graph.
+    fn agent_graph_upsert(&mut self, agent_id: &str, run_id: &str, nodes: Vec<TraceNode>) {
+        self.trace_feed.push(agent_id, run_id, &nodes);
+        let graphed = self.upsert_graph(run_id, nodes);
+        // Any agent's step may be in the log on screen, as a subagent's.
+        self.log.mark_stale();
+        let feed_shown = self.sandbox_panel_visible() && self.side.tab == SidePanelTab::Trace;
+        self.ticks.redraw |= graphed || feed_shown;
+    }
+
+    /// The queue of an agent off screen.
+    fn store_offscreen_queue(&mut self, agent_id: &str, queue: Vec<QueuedItemView>) {
+        // The queue panel's state is the agent on screen's; this one
+        // only stores the queue, and confirms its edits.
+        self.confirm_queued_renames(agent_id, &queue);
+        self.switching
+            .views
+            .entry(agent_id.to_string())
+            .or_default()
+            .hud
+            .queue = queue;
+        // A confirmed rename shows in the chat's queued previews.
+        self.ticks.redraw = true;
+    }
+
+    /// Run `command` on the chat of `agent_id`, off screen, swapped in for
+    /// the time being, then tell what came of it.
+    fn process_offscreen_command(&mut self, agent_id: &str, command: UiCommand, asks: bool) {
+        let mut view = self.switching.views.remove(agent_id).unwrap_or_default();
         let state = self.state;
-        let notification = self.notification.take();
-        let redraw = self.redraw;
+        let notification = self.notifications.current.take();
+        let redraw = self.ticks.redraw;
         let was_busy = view.busy;
         self.swap_chat(&mut view);
         self.state = self.chat_state(was_busy);
@@ -378,16 +398,16 @@ impl App {
 
         let busy = is_busy(self.state);
         if busy {
-            self.processing_since.get_or_insert_with(Instant::now);
+            self.ticks.processing_since.get_or_insert_with(Instant::now);
         } else {
-            self.processing_since = None;
+            self.ticks.processing_since = None;
         }
-        let note = self.notification.take();
+        let note = self.notifications.current.take();
         self.state = state;
         self.swap_chat(&mut view);
         view.busy = busy;
-        self.views.insert(agent_id.to_string(), view);
-        self.redraw = redraw;
+        self.switching.views.insert(agent_id.to_string(), view);
+        self.ticks.redraw = redraw;
 
         let name = self.agent_name(agent_id);
         let noticed = match note {
@@ -403,10 +423,10 @@ impl App {
         };
         match noticed {
             Some(noticed) => {
-                self.notification = Some(noticed);
-                self.redraw = true;
+                self.notifications.current = Some(noticed);
+                self.ticks.redraw = true;
             }
-            None => self.notification = notification,
+            None => self.notifications.current = notification,
         }
     }
 
@@ -424,8 +444,23 @@ impl App {
         if let Some(agent) = self.agents.iter_mut().find(|a| a.id == agent_id) {
             if agent.plan_mode != on {
                 agent.plan_mode = on;
-                self.redraw = true;
+                self.ticks.redraw = true;
             }
         }
     }
+}
+
+/// Whether `command` is for panels that show the active agent only.
+fn shows_active_agent_only(command: &UiCommand) -> bool {
+    matches!(
+        command,
+        UiCommand::NewRecord(_)
+            | UiCommand::ClearRecords
+            | UiCommand::SetRecords(_)
+            | UiCommand::SetSandboxRoot(_)
+            | UiCommand::SetPlan(_)
+            | UiCommand::SetPlans(_)
+            | UiCommand::SetTasks(_)
+            | UiCommand::UpsertTask(_)
+    )
 }

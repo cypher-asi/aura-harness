@@ -57,6 +57,21 @@ impl StatusBar {
 
     /// Render the status bar.
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let mut spans = self.status_spans(theme);
+        spans.extend(self.stat_spans(theme));
+
+        let line = Line::from(spans);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(theme.border_style.to_border_type())
+            .border_style(Style::default().fg(theme.colors.muted));
+
+        let paragraph = Paragraph::new(line).block(block);
+        frame.render_widget(paragraph, area);
+    }
+
+    /// The status icon and message, colored by whether it is ready.
+    fn status_spans(&self, theme: &Theme) -> Vec<Span<'_>> {
         let is_ready = self.status == "Ready";
         let status_color = if is_ready {
             theme.colors.success
@@ -66,7 +81,7 @@ impl StatusBar {
 
         let status_icon = if is_ready { "●" } else { "◐" };
 
-        let mut spans = vec![
+        vec![
             Span::styled(
                 format!("  {status_icon} "),
                 Style::default().fg(status_color),
@@ -77,7 +92,12 @@ impl StatusBar {
                     .fg(status_color)
                     .add_modifier(Modifier::BOLD),
             ),
-        ];
+        ]
+    }
+
+    /// The token count, tool calls and elapsed time, those that are set.
+    fn stat_spans(&self, theme: &Theme) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
 
         // Token count - format as "X.Yk/Zk" using integer math
         if let Some((used, total)) = self.tokens {
@@ -119,15 +139,7 @@ impl StatusBar {
                 Style::default().fg(theme.colors.foreground),
             ));
         }
-
-        let line = Line::from(spans);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(theme.border_style.to_border_type())
-            .border_style(Style::default().fg(theme.colors.muted));
-
-        let paragraph = Paragraph::new(line).block(block);
-        frame.render_widget(paragraph, area);
+        spans
     }
 }
 

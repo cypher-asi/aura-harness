@@ -42,61 +42,85 @@ pub fn format_tool_label_of(tool_name: &str, parsed: &ToolArgs) -> String {
     if args.as_object().is_some_and(serde_json::Map::is_empty) && !parsed.complete {
         return String::new();
     }
-    let text = |key: &str| {
-        args.get(key)
-            .and_then(serde_json::Value::as_str)
-            .filter(|s| !s.is_empty())
-    };
-    let file = |verb: &str| match text("path") {
+    match tool_name {
+        "read_file" => read_file_label(args),
+        "write_file" => file_label(args, "Wrote"),
+        "edit_file" => file_label(args, "Edited"),
+        "delete_file" => file_label(args, "Deleted"),
+        "stat_file" => file_label(args, "Checked"),
+        "list_files" => format!("Listed {}", arg_text(args, "path").unwrap_or(".")),
+        "search_code" => search_code_label(args),
+        "find_files" => in_path_label(
+            args,
+            format!("Found {}", arg_text(args, "pattern").unwrap_or_default()),
+        ),
+        "run_command" => format!("Ran {}", format_tool_summary_from_value(tool_name, args)),
+        "task" => task_label(args),
+        _ => other_tool_label(tool_name, args),
+    }
+}
+
+/// The non-empty string argument `key`.
+fn arg_text<'a>(args: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    args.get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+}
+
+/// `verb` followed by the file name of the `path` argument, if any.
+fn file_label(args: &serde_json::Value, verb: &str) -> String {
+    match arg_text(args, "path") {
         Some(path) => format!("{verb} {}", file_name(path)),
         None => verb.to_string(),
-    };
-    let in_path = |label: String| match text("path") {
+    }
+}
+
+/// `label` followed by `in <path>` when there is a `path` argument.
+fn in_path_label(args: &serde_json::Value, label: String) -> String {
+    match arg_text(args, "path") {
         Some(path) => format!("{label} in {path}"),
         None => label,
+    }
+}
+
+fn read_file_label(args: &serde_json::Value) -> String {
+    let line = |key: &str| args.get(key).and_then(serde_json::Value::as_u64);
+    match (line("start_line"), line("end_line")) {
+        (Some(start), Some(end)) => format!("{} L{start}-{end}", file_label(args, "Read")),
+        (Some(start), None) => format!("{} from L{start}", file_label(args, "Read")),
+        (None, Some(end)) => format!("{} L1-{end}", file_label(args, "Read")),
+        (None, None) => file_label(args, "Read"),
+    }
+}
+
+fn search_code_label(args: &serde_json::Value) -> String {
+    let label = in_path_label(
+        args,
+        format!("Grepped {}", arg_text(args, "pattern").unwrap_or_default()),
+    );
+    match arg_text(args, "include") {
+        Some(include) => format!("{label} ({include})"),
+        None => label,
+    }
+}
+
+fn task_label(args: &serde_json::Value) -> String {
+    let agent = match arg_text(args, "subagent_type") {
+        Some(kind) => format!("Delegated to @{kind}"),
+        None => "Delegated".to_string(),
     };
-    match tool_name {
-        "read_file" => {
-            let line = |key: &str| args.get(key).and_then(serde_json::Value::as_u64);
-            match (line("start_line"), line("end_line")) {
-                (Some(start), Some(end)) => format!("{} L{start}-{end}", file("Read")),
-                (Some(start), None) => format!("{} from L{start}", file("Read")),
-                (None, Some(end)) => format!("{} L1-{end}", file("Read")),
-                (None, None) => file("Read"),
-            }
-        }
-        "write_file" => file("Wrote"),
-        "edit_file" => file("Edited"),
-        "delete_file" => file("Deleted"),
-        "stat_file" => file("Checked"),
-        "list_files" => format!("Listed {}", text("path").unwrap_or(".")),
-        "search_code" => {
-            let label = in_path(format!("Grepped {}", text("pattern").unwrap_or_default()));
-            match text("include") {
-                Some(include) => format!("{label} ({include})"),
-                None => label,
-            }
-        }
-        "find_files" => in_path(format!("Found {}", text("pattern").unwrap_or_default())),
-        "run_command" => format!("Ran {}", format_tool_summary_from_value(tool_name, args)),
-        "task" => {
-            let agent = match text("subagent_type") {
-                Some(kind) => format!("Delegated to @{kind}"),
-                None => "Delegated".to_string(),
-            };
-            match text("prompt").and_then(|p| p.lines().map(str::trim).find(|l| !l.is_empty())) {
-                Some(line) => format!("{agent}: {line}"),
-                None => agent,
-            }
-        }
-        _ => {
-            let summary = format_tool_summary_from_value(tool_name, args);
-            if summary.is_empty() {
-                tool_name.to_string()
-            } else {
-                format!("{tool_name} {summary}")
-            }
-        }
+    match arg_text(args, "prompt").and_then(|p| p.lines().map(str::trim).find(|l| !l.is_empty())) {
+        Some(line) => format!("{agent}: {line}"),
+        None => agent,
+    }
+}
+
+fn other_tool_label(tool_name: &str, args: &serde_json::Value) -> String {
+    let summary = format_tool_summary_from_value(tool_name, args);
+    if summary.is_empty() {
+        tool_name.to_string()
+    } else {
+        format!("{tool_name} {summary}")
     }
 }
 
@@ -281,55 +305,62 @@ fn format_background_start(result: &str) -> Option<String> {
 /// Format a tool summary given parsed JSON args.
 fn format_tool_summary_from_value(tool_name: &str, args: &serde_json::Value) -> String {
     match tool_name {
-        "run_command" => {
-            if let Some(script) = ["shell_script", "command"]
-                .iter()
-                .find_map(|key| args.get(*key).and_then(|v| v.as_str()))
-            {
-                return script.to_string();
-            }
-            let program = args.get("program").and_then(|v| v.as_str()).unwrap_or("");
-            let cmd_args = args
-                .get("args")
-                .and_then(|v| {
-                    v.as_array().map(|arr| {
-                        arr.iter()
-                            .filter_map(|a| a.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    })
-                })
-                .unwrap_or_default();
-            if cmd_args.is_empty() {
-                program.to_string()
+        "run_command" => command_summary(args),
+        _ => fields_summary(args),
+    }
+}
+
+/// The `run_command` call's script, or its program and args.
+fn command_summary(args: &serde_json::Value) -> String {
+    if let Some(script) = ["shell_script", "command"]
+        .iter()
+        .find_map(|key| args.get(*key).and_then(|v| v.as_str()))
+    {
+        return script.to_string();
+    }
+    let program = args.get("program").and_then(|v| v.as_str()).unwrap_or("");
+    let cmd_args = args
+        .get("args")
+        .and_then(|v| {
+            v.as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|a| a.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+        })
+        .unwrap_or_default();
+    if cmd_args.is_empty() {
+        program.to_string()
+    } else {
+        format!("{program} {cmd_args}")
+    }
+}
+
+/// The first three fields as `key=value`, long strings cut short.
+fn fields_summary(args: &serde_json::Value) -> String {
+    let summary: Vec<String> = args
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .take(3)
+                .map(|(k, v)| format!("{k}={}", summary_value(v)))
+                .collect()
+        })
+        .unwrap_or_default();
+    summary.join(", ")
+}
+
+fn summary_value(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => {
+            if s.chars().count() > 30 {
+                format!("{}...", s.chars().take(27).collect::<String>())
             } else {
-                format!("{program} {cmd_args}")
+                s.clone()
             }
         }
-        _ => {
-            let summary: Vec<String> = args
-                .as_object()
-                .map(|obj| {
-                    obj.iter()
-                        .take(3)
-                        .map(|(k, v)| {
-                            let val_str = match v {
-                                serde_json::Value::String(s) => {
-                                    if s.chars().count() > 30 {
-                                        format!("{}...", s.chars().take(27).collect::<String>())
-                                    } else {
-                                        s.clone()
-                                    }
-                                }
-                                _ => v.to_string(),
-                            };
-                            format!("{k}={val_str}")
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            summary.join(", ")
-        }
+        _ => v.to_string(),
     }
 }
 

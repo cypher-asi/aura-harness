@@ -178,12 +178,26 @@ pub(super) fn render_pending_images(frame: &mut Frame, chat: Rect, app: &mut App
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 
+    let areas = pending_image_areas(frame, inner, app, &tiles, &previews, theme);
+    app.set_pending_image_areas(areas);
+}
+
+/// Where each pending image's thumbnail went inside `inner`, lighting the
+/// caption of the one under the pointer.
+fn pending_image_areas(
+    frame: &mut Frame,
+    inner: Rect,
+    app: &App,
+    tiles: &[Tile],
+    previews: &[(usize, Arc<ImagePreview>)],
+    theme: &Theme,
+) -> Vec<(Rect, usize)> {
     let hovered = match app.hover() {
         Some(HoverTarget::PendingImage(label)) => Some(label),
         _ => None,
     };
     let mut areas = Vec::with_capacity(tiles.len());
-    for (t, (label, _)) in tiles.iter().zip(&previews) {
+    for (t, (label, _)) in tiles.iter().zip(previews) {
         let rect = Rect {
             x: inner.x + u16::try_from(t.x).unwrap_or(u16::MAX),
             y: inner.y + u16::try_from(t.line).unwrap_or(u16::MAX),
@@ -199,5 +213,5 @@ pub(super) fn render_pending_images(frame: &mut Frame, chat: Rect, app: &mut App
         }
         areas.push((rect, *label));
     }
-    app.set_pending_image_areas(areas);
+    areas
 }

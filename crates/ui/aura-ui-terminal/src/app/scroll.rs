@@ -67,9 +67,9 @@ impl App {
             self.scroll_offset = self
                 .scroll_offset
                 .saturating_add(total_lines)
-                .saturating_sub(self.chat_line_count);
+                .saturating_sub(self.chat.line_count);
         }
-        self.chat_line_count = total_lines;
+        self.chat.line_count = total_lines;
         let bottom_start = total_lines.saturating_sub(visible_rows);
         self.scroll_offset = self.scroll_offset.min(bottom_start);
         bottom_start - self.scroll_offset
@@ -112,31 +112,31 @@ impl App {
                 self.bench
                     .scroll_by(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
-            PanelFocus::Chat if self.log.is_open() && self.detail.is_none() => {
+            PanelFocus::Chat if self.log.is_open() && self.detail.view.is_none() => {
                 self.log
                     .scroll_by(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_add(lines);
             }
-            PanelFocus::Records if self.records_tab == RecordsTab::Members => {
+            PanelFocus::Records if self.records.tab == RecordsTab::Members => {
                 self.scroll_members(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
-            PanelFocus::Records if self.records_tab == RecordsTab::Policies => {
+            PanelFocus::Records if self.records.tab == RecordsTab::Policies => {
                 self.scroll_policies(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
-            PanelFocus::Records if self.records_tab == RecordsTab::Inbox => {
+            PanelFocus::Records if self.records.tab == RecordsTab::Inbox => {
                 self.scroll_inbox(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Records => {
-                self.selected_record = self.selected_record.saturating_sub(lines);
+                self.records.selected = self.records.selected.saturating_sub(lines);
             }
             PanelFocus::Swarm => {
                 self.scroll_agents_panel(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Sandbox => {
                 let delta = -isize::try_from(lines).unwrap_or(isize::MAX);
-                match self.side_tab {
+                match self.side.tab {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Host => self.scroll_host(delta),
@@ -158,26 +158,26 @@ impl App {
                 self.bench
                     .scroll_by(isize::try_from(lines).unwrap_or(isize::MAX));
             }
-            PanelFocus::Chat if self.log.is_open() && self.detail.is_none() => {
+            PanelFocus::Chat if self.log.is_open() && self.detail.view.is_none() => {
                 self.log
                     .scroll_by(isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(lines);
             }
-            PanelFocus::Records if self.records_tab == RecordsTab::Members => {
+            PanelFocus::Records if self.records.tab == RecordsTab::Members => {
                 self.scroll_members(isize::try_from(lines).unwrap_or(isize::MAX));
             }
-            PanelFocus::Records if self.records_tab == RecordsTab::Policies => {
+            PanelFocus::Records if self.records.tab == RecordsTab::Policies => {
                 self.scroll_policies(isize::try_from(lines).unwrap_or(isize::MAX));
             }
-            PanelFocus::Records if self.records_tab == RecordsTab::Inbox => {
+            PanelFocus::Records if self.records.tab == RecordsTab::Inbox => {
                 self.scroll_inbox(isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Records => {
-                if !self.records.is_empty() {
-                    self.selected_record =
-                        (self.selected_record + lines).min(self.records.len().saturating_sub(1));
+                if !self.records.items.is_empty() {
+                    self.records.selected = (self.records.selected + lines)
+                        .min(self.records.items.len().saturating_sub(1));
                 }
             }
             PanelFocus::Swarm => {
@@ -185,7 +185,7 @@ impl App {
             }
             PanelFocus::Sandbox => {
                 let delta = isize::try_from(lines).unwrap_or(isize::MAX);
-                match self.side_tab {
+                match self.side.tab {
                     SidePanelTab::Sandbox => self.sandbox.move_by(delta),
                     SidePanelTab::Processes => self.scroll_processes(delta),
                     SidePanelTab::Host => self.scroll_host(delta),
@@ -201,25 +201,25 @@ impl App {
     /// Keep the selected record inside a list `visible_rows` tall, returning
     /// the first record to show.
     pub fn sync_records_scroll(&mut self, visible_rows: usize) -> usize {
-        self.records_scroll = follow_selection(
-            self.records_scroll,
-            self.selected_record,
+        self.records.scroll = follow_selection(
+            self.records.scroll,
+            self.records.selected,
             visible_rows,
-            self.records.len(),
+            self.records.items.len(),
         );
-        self.records_scroll
+        self.records.scroll
     }
 
     /// Keep the selected sandbox row inside a tree `visible_rows` tall,
     /// returning the first row to show.
     pub fn sync_sandbox_scroll(&mut self, visible_rows: usize) -> usize {
-        self.sandbox_scroll = follow_selection(
-            self.sandbox_scroll,
+        self.side.sandbox_scroll = follow_selection(
+            self.side.sandbox_scroll,
             self.sandbox.selected(),
             visible_rows,
             self.sandbox.rows().len(),
         );
-        self.sandbox_scroll
+        self.side.sandbox_scroll
     }
 }
 

@@ -58,56 +58,14 @@ pub fn wrap_words(text: &str, max_width: usize) -> Vec<String> {
         let word_width = display_width(word);
 
         if current_width == 0 {
-            if word_width > max_width {
-                let mut chunk = String::new();
-                let mut chunk_width = 0;
-                for c in word.chars() {
-                    use unicode_width::UnicodeWidthChar;
-                    let char_width = c.width().unwrap_or(1);
-                    if chunk_width + char_width > max_width && !chunk.is_empty() {
-                        lines.push(std::mem::take(&mut chunk));
-                        chunk_width = 0;
-                    }
-                    chunk.push(c);
-                    chunk_width += char_width;
-                }
-                if !chunk.is_empty() {
-                    current_line = chunk;
-                    current_width = display_width(&current_line);
-                }
-            } else {
-                current_line = word.to_string();
-                current_width = word_width;
-            }
+            (current_line, current_width) = start_line(word, word_width, max_width, &mut lines);
         } else if current_width + 1 + word_width <= max_width {
             current_line.push(' ');
             current_line.push_str(word);
             current_width += 1 + word_width;
         } else {
             lines.push(std::mem::take(&mut current_line));
-            current_width = 0;
-
-            if word_width > max_width {
-                let mut chunk = String::new();
-                let mut chunk_width = 0;
-                for c in word.chars() {
-                    use unicode_width::UnicodeWidthChar;
-                    let char_width = c.width().unwrap_or(1);
-                    if chunk_width + char_width > max_width && !chunk.is_empty() {
-                        lines.push(std::mem::take(&mut chunk));
-                        chunk_width = 0;
-                    }
-                    chunk.push(c);
-                    chunk_width += char_width;
-                }
-                if !chunk.is_empty() {
-                    current_line = chunk;
-                    current_width = display_width(&current_line);
-                }
-            } else {
-                current_line = word.to_string();
-                current_width = word_width;
-            }
+            (current_line, current_width) = start_line(word, word_width, max_width, &mut lines);
         }
     }
 
@@ -120,6 +78,34 @@ pub fn wrap_words(text: &str, max_width: usize) -> Vec<String> {
     }
 
     lines
+}
+
+/// Start a line with `word`, `word_width` wide. A word wider than
+/// `max_width` is broken into chunks that fit, all but the last pushed to
+/// `lines`. Returns the line begun and its width.
+fn start_line(
+    word: &str,
+    word_width: usize,
+    max_width: usize,
+    lines: &mut Vec<String>,
+) -> (String, usize) {
+    if word_width <= max_width {
+        return (word.to_string(), word_width);
+    }
+    let mut chunk = String::new();
+    let mut chunk_width = 0;
+    for c in word.chars() {
+        use unicode_width::UnicodeWidthChar;
+        let char_width = c.width().unwrap_or(1);
+        if chunk_width + char_width > max_width && !chunk.is_empty() {
+            lines.push(std::mem::take(&mut chunk));
+            chunk_width = 0;
+        }
+        chunk.push(c);
+        chunk_width += char_width;
+    }
+    let width = display_width(&chunk);
+    (chunk, width)
 }
 
 /// Helper to create a centered rect.

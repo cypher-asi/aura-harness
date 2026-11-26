@@ -131,11 +131,11 @@ impl App {
     /// track then tell what is drawn over it later in the frame (see
     /// [`Self::trim_covered_scrollbar`]).
     pub(crate) fn set_chat_scrollbar(&mut self, scrollbar: Option<ScrollbarArea>, buffer: &Buffer) {
-        self.scrollbar_cells.clear();
+        self.select.scrollbar_cells.clear();
         if let Some(track) = scrollbar.map(|bar| bar.track) {
             let cells = (track.y..track.bottom())
                 .map(|y| buffer.cell((track.x, y)).cloned().unwrap_or_default());
-            self.scrollbar_cells.extend(cells);
+            self.select.scrollbar_cells.extend(cells);
         }
         self.areas.scrollbar = scrollbar;
     }
@@ -149,7 +149,7 @@ impl App {
         };
         let track = bar.track;
         let open = (track.y..track.bottom())
-            .zip(&self.scrollbar_cells)
+            .zip(&self.select.scrollbar_cells)
             .take_while(|&(y, cell)| buffer.cell((track.x, y)) == Some(cell))
             .count();
         bar.open = u16::try_from(open).unwrap_or(u16::MAX);
@@ -157,7 +157,7 @@ impl App {
 
     /// Whether a scrollbar is held.
     pub(crate) const fn scrollbar_held(&self) -> bool {
-        self.scrollbar_grab.is_some()
+        self.select.scrollbar_grab.is_some()
     }
 
     /// Grab, drag or let go of the chat panel's scrollbar with the left
@@ -172,13 +172,13 @@ impl App {
         match kind {
             MouseEventKind::Down(MouseButton::Left) => self.grab_scrollbar(column, row),
             MouseEventKind::Drag(MouseButton::Left) => {
-                let Some(grab) = self.scrollbar_grab else {
+                let Some(grab) = self.select.scrollbar_grab else {
                     return false;
                 };
                 self.drag_scrollbar(grab, row);
                 true
             }
-            MouseEventKind::Up(MouseButton::Left) => self.scrollbar_grab.take().is_some(),
+            MouseEventKind::Up(MouseButton::Left) => self.select.scrollbar_grab.take().is_some(),
             _ => false,
         }
     }
@@ -197,7 +197,7 @@ impl App {
         };
         self.focus = super::PanelFocus::Chat;
         self.clear_selection();
-        self.scrollbar_grab = Some(grab);
+        self.select.scrollbar_grab = Some(grab);
         if !on_thumb {
             self.drag_scrollbar(grab, row);
         }
@@ -208,7 +208,7 @@ impl App {
     /// scrollbar that is no longer drawn lets go.
     fn drag_scrollbar(&mut self, grab: ScrollbarGrab, row: u16) {
         let Some(bar) = self.areas.scrollbar.filter(|bar| bar.target == grab.target) else {
-            self.scrollbar_grab = None;
+            self.select.scrollbar_grab = None;
             return;
         };
         let top = usize::from(row.saturating_sub(bar.track.y)).saturating_sub(grab.anchor);
@@ -226,8 +226,8 @@ impl App {
         match bar.target {
             ScrollTarget::Chat => self.scroll_chat_to_row(bar, first),
             ScrollTarget::Detail => {
-                if self.detail.as_ref().is_some_and(DetailView::scrolls) {
-                    self.detail_scroll = first;
+                if self.detail.view.as_ref().is_some_and(DetailView::scrolls) {
+                    self.detail.scroll = first;
                     self.detail_scrolled();
                 }
             }
@@ -239,7 +239,7 @@ impl App {
     fn scrollbar_first(&self, bar: ScrollbarArea) -> usize {
         match bar.target {
             ScrollTarget::Chat => bar.last - self.scroll_offset.min(bar.last),
-            ScrollTarget::Detail => self.detail_scroll.min(bar.last),
+            ScrollTarget::Detail => self.detail.scroll.min(bar.last),
         }
     }
 

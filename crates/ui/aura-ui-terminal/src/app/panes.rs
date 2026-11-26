@@ -117,37 +117,37 @@ impl App {
     /// Leave the panels' title bars to the front end: the grid keeps a
     /// framed, empty row for each (see [`Self::pane_chrome`]).
     pub fn set_host_chrome(&mut self, on: bool) {
-        self.host_chrome = on;
+        self.host.chrome = on;
     }
 
     #[must_use]
     pub const fn host_chrome(&self) -> bool {
-        self.host_chrome
+        self.host.chrome
     }
 
     /// The title bars of the panels in the last frame, while the front end
     /// draws them.
     #[must_use]
     pub fn pane_chrome(&self) -> &[PaneChrome] {
-        &self.pane_chrome
+        &self.host.pane_chrome
     }
 
     pub(crate) fn clear_pane_chrome(&mut self) {
-        self.pane_chrome.clear();
+        self.host.pane_chrome.clear();
     }
 
     pub(crate) fn push_pane_chrome(&mut self, chrome: PaneChrome) {
-        self.pane_chrome.push(chrome);
+        self.host.pane_chrome.push(chrome);
     }
 
     /// Move the dividers between panels; the next frame lays them out so.
     pub fn set_pane_splits(&mut self, splits: PaneSplits) {
-        self.pane_splits = splits;
+        self.host.pane_splits = splits;
     }
 
     #[must_use]
     pub const fn pane_splits(&self) -> PaneSplits {
-        self.pane_splits
+        self.host.pane_splits
     }
 
     /// Show `tab` and focus its panel, as clicking it in a drawn bar does.

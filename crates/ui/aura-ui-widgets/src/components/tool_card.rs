@@ -92,6 +92,34 @@ impl ToolCard {
 
     /// Render the tool card.
     pub fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme) {
+        let block = self.block(theme);
+
+        // Build content
+        let mut lines = vec![self.status_line(theme)];
+        lines.extend(self.preview_lines(theme));
+
+        let paragraph = Paragraph::new(lines).block(block);
+        frame.render_widget(paragraph, area);
+    }
+
+    /// The card's border, titled with the tool's name.
+    fn block(&self, theme: &Theme) -> Block<'static> {
+        let title = format!(" TOOL: {} ", self.name);
+
+        Block::default()
+            .title(Span::styled(
+                title,
+                Style::default()
+                    .fg(theme.colors.secondary)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .borders(Borders::ALL)
+            .border_type(theme.border_style.to_border_type())
+            .border_style(Style::default().fg(theme.colors.secondary))
+    }
+
+    /// Status line: its icon (a spinner while running) and what it means.
+    fn status_line(&mut self, theme: &Theme) -> Line<'static> {
         let (status_icon, status_color) = match self.status {
             ToolStatus::Running => (self.spinner.tick(), theme.colors.secondary),
             ToolStatus::Success => ("✓", theme.colors.success),
@@ -99,24 +127,7 @@ impl ToolCard {
             ToolStatus::Denied => ("⊘", theme.colors.warning),
         };
 
-        let title = format!(" TOOL: {} ", self.name);
-
-        let block = Block::default()
-            .title(Span::styled(
-                &title,
-                Style::default()
-                    .fg(theme.colors.secondary)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .borders(Borders::ALL)
-            .border_type(theme.border_style.to_border_type())
-            .border_style(Style::default().fg(theme.colors.secondary));
-
-        // Build content
-        let mut lines = vec![];
-
-        // Status line
-        lines.push(Line::from(vec![
+        Line::from(vec![
             Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
             Span::styled(
                 match self.status {
@@ -127,7 +138,12 @@ impl ToolCard {
                 },
                 Style::default().fg(status_color),
             ),
-        ]));
+        ])
+    }
+
+    /// Previews of the args and the result, those there are.
+    fn preview_lines(&self, theme: &Theme) -> Vec<Line<'static>> {
+        let mut lines = vec![];
 
         // Args preview (if any)
         if !self.args.is_empty() {
@@ -158,9 +174,7 @@ impl ToolCard {
                 )));
             }
         }
-
-        let paragraph = Paragraph::new(lines).block(block);
-        frame.render_widget(paragraph, area);
+        lines
     }
 
     /// Calculate the height needed to render this card.
