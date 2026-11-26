@@ -19,7 +19,9 @@ mod tool_card;
 pub use crate::events::MessageRole;
 pub(crate) use activity::elapsed_ms;
 pub use activity::{Activity, ThinkingStep, ToolStep};
-pub use boot::{BootConsole, BootOutcome, BootStep, LIVE_BOOT_LOG_LINES, MAX_BOOT_LOG_LINES};
+pub use boot::{
+    boot_duration, BootConsole, BootOutcome, BootStep, LIVE_BOOT_LOG_LINES, MAX_BOOT_LOG_LINES,
+};
 pub use code_block::{highlight_code_line, CodeBlock};
 pub(crate) use code_block::{unframe_code, COPY_BUTTON};
 pub use diff::{DiffLine, DiffLineType, DiffView};

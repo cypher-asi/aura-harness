@@ -3,6 +3,7 @@
 
 use crate::events::{BootHistory, BootLogLine, BootStageState, BootUpdate};
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -16,6 +17,19 @@ pub const MAX_BOOT_LOG_LINES: usize = 500;
 
 /// Log lines shown while a console runs, before any earlier are asked for.
 pub const LIVE_BOOT_LOG_LINES: usize = 8;
+
+/// `850 ms`, `12.4s` or `3m 05s`.
+#[must_use]
+pub fn boot_duration(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else if ms < 60_000 {
+        format!("{}.{}s", ms / 1000, (ms % 1000) / 100)
+    } else {
+        let secs = ms / 1000;
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    }
+}
 
 /// Numbers spill files, so two consoles never share one.
 static NEXT_SPILL: AtomicU64 = AtomicU64::new(0);
@@ -300,6 +314,71 @@ impl BootConsole {
         if failed {
             self.spill = None;
         }
+    }
+
+    /// The console as plain text to copy: how it went, its steps, the
+    /// facts and its whole log, the lines dropped from memory read back
+    /// from the spill file.
+    #[must_use]
+    pub fn transcript(&self) -> String {
+        let mut out = self.title.clone();
+        match &self.outcome {
+            None => out.push_str(" (still going)\n"),
+            Some(outcome) => {
+                let how = if outcome.ok { "done" } else { "failed" };
+                let took = boot_duration(outcome.elapsed_ms);
+                let _ = writeln!(out, " ({how} after {took})\n{}", outcome.summary);
+            }
+        }
+        if !self.steps.is_empty() {
+            out.push('\n');
+        }
+        for step in &self.steps {
+            let label = &step.label;
+            let _ = match &step.state {
+                BootStageState::Pending => writeln!(out, "· {label}"),
+                BootStageState::Running => writeln!(out, "… {label} (running)"),
+                BootStageState::Done { ms } => writeln!(out, "✓ {label}  {}", boot_duration(*ms)),
+                BootStageState::Skipped(why) => writeln!(out, "– {label}  skipped: {why}"),
+                BootStageState::Failed(why) => writeln!(out, "✗ {label}  {why}"),
+            };
+        }
+        if !self.facts.is_empty() {
+            out.push('\n');
+        }
+        let key_width = self.facts.iter().map(|(k, _)| k.chars().count()).max();
+        for (key, value) in &self.facts {
+            let _ = writeln!(
+                out,
+                "{key:<width$}  {value}",
+                width = key_width.unwrap_or(0)
+            );
+        }
+        if self.dropped + self.log.len() > 0 {
+            out.push('\n');
+        }
+        let spilled = self.spill.as_ref().and_then(|spill| {
+            let mut spill = spill.lock();
+            let count = spill.starts.len();
+            spill.read(0, count).ok()
+        });
+        match spilled {
+            Some(lines) => {
+                for line in lines {
+                    out.push_str(&line.text);
+                    out.push('\n');
+                }
+            }
+            None if self.dropped > 0 => {
+                let _ = writeln!(out, "… {} earlier lines could not be kept", self.dropped);
+            }
+            None => {}
+        }
+        for line in &self.log {
+            out.push_str(&line.text);
+            out.push('\n');
+        }
+        out
     }
 
     /// Whether it is still going.
@@ -592,6 +671,36 @@ mod tests {
         assert_eq!(console.earlier[0].text, "line 0");
         assert_eq!(console.hidden(), 0);
         assert_eq!(console.can_show(), 0);
+    }
+
+    #[test]
+    fn the_transcript_has_the_whole_log_spilled_lines_included() {
+        let mut console = BootConsole::new("b1", "Moving to the cloud");
+        console.apply(stage(
+            "snapshot",
+            BootStageState::Failed("build failed".into()),
+        ));
+        console.apply(BootUpdate::Fact {
+            key: "machine".into(),
+            value: "aura-1".into(),
+        });
+        console.apply(numbered(0..MAX_BOOT_LOG_LINES + 40));
+        console.apply(BootUpdate::End {
+            ok: false,
+            summary: "Could not move the agent".into(),
+        });
+        let text = console.transcript();
+        assert!(
+            text.starts_with("Moving to the cloud (failed after "),
+            "{text}"
+        );
+        assert!(text.contains("\nCould not move the agent\n"));
+        assert!(text.contains("✗ Doing snapshot  build failed\n"));
+        assert!(text.contains("machine  aura-1\n"));
+        let log: Vec<&str> = text.lines().filter(|l| l.starts_with("line ")).collect();
+        assert_eq!(log.len(), MAX_BOOT_LOG_LINES + 40, "every line, none twice");
+        assert_eq!(log[0], "line 0");
+        assert_eq!(log.last().copied(), Some("line 539"));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use super::activity::{
     activity_lines, collapsed_hint, group_header_of, records_link, running_tool_lines, GroupView,
     Shown, StepNumber, StepTally, Tally, ToolParts,
 };
-use super::boot::boot_lines;
+use super::boot::{boot_copy, boot_lines};
 use super::command::shell_lines;
 use super::diff::diff_message_lines;
 use super::markdown::{parse_content_segments, ContentSegment};
@@ -1006,13 +1006,9 @@ fn message_lines(
         return with_more(diff_message_lines(block, more, width, theme));
     }
     if let Some(console) = message.boot_console() {
-        return with_more(boot_lines(
-            console,
-            message.is_expanded(),
-            spinner,
-            width,
-            theme,
-        ));
+        let (lines, more) = boot_lines(console, message.is_expanded(), spinner, width, theme);
+        let copy = boot_copy(console, width).into_iter().collect();
+        return ((lines, Vec::new(), copy), more);
     }
     let role = message.role();
     let (prompt, prompt_color, msg_color) = message_style(role, theme);
