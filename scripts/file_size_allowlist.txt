@@ -153,8 +153,6 @@ crates/surface/aura-app/src/project_instructions.rs
 crates/surface/aura-app/src/record_loader.rs
 crates/surface/aura-app/src/record_loader/tests.rs
 crates/surface/aura-app/src/turn_calls.rs
-crates/surface/aura-cli/src/cli.rs
-crates/surface/aura-cli/src/evals.rs
 crates/surface/aura-desktop/src/canvas.rs
 crates/surface/aura-desktop/src/chrome.rs
 crates/surface/aura-desktop/src/gpu.rs
