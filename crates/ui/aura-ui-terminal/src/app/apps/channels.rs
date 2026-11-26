@@ -323,10 +323,12 @@ impl App {
             self.channels.side_tab_before = Some(self.side_tab);
         }
         self.channels.open = Some(id.to_string());
+        if self.channels.last_open.as_deref() != Some(id) {
+            self.channels.member_selected = 0;
+            self.channels.member_scroll = 0;
+        }
         self.channels.last_open = Some(id.to_string());
         self.channels.selected = row;
-        self.channels.member_selected = 0;
-        self.channels.member_scroll = 0;
         self.channels.forget_areas();
         self.show_side_tab(SidePanelTab::ChannelMembers);
         self.show_channel_chat();

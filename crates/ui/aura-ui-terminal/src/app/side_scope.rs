@@ -6,6 +6,8 @@
 
 use std::collections::HashSet;
 
+use super::tasks::RowKey;
+use super::trace_feed::FeedPlace;
 use super::{contains, App};
 use crate::events::{starts_project, ProcessSummary};
 use ratatui::layout::Rect;
@@ -34,6 +36,20 @@ impl SideScope {
 
 /// Hex ids of the agents whose items a list shows; `None` shows every item.
 pub type AgentFilter = Option<HashSet<String>>;
+
+/// Where the PROCESSES, TRACE and TASKS lists were while an agent was on
+/// screen: the row each highlighted, and the first row each showed. They
+/// are filtered for another agent while it is away, so its rows come back
+/// by what they are, not by index.
+#[derive(Debug, Clone)]
+pub(super) struct ListPlaces {
+    process: Option<String>,
+    processes_scroll: usize,
+    step: FeedPlace,
+    trace_scroll: usize,
+    task: Option<RowKey>,
+    tasks_scroll: usize,
+}
 
 /// Whether `process` belongs to an agent `agents` lets through: the one
 /// that started it, the one it runs, or one above them. Rows of no agent
@@ -122,6 +138,35 @@ impl App {
         self.process_filter = agents;
         self.reshow_processes();
         self.refresh_members();
+    }
+
+    /// Where the side panel's lists are now, for the agent on screen.
+    pub(super) fn list_places(&self) -> ListPlaces {
+        ListPlaces {
+            process: self.selected_process_data().map(|p| p.id.clone()),
+            processes_scroll: self.processes_scroll,
+            step: self.trace_feed.place(),
+            trace_scroll: self.trace_scroll,
+            task: self.task_list.place(),
+            tasks_scroll: self.tasks_scroll,
+        }
+    }
+
+    /// Put the side panel's lists back where `places` has them, once they
+    /// are filtered for the agent they were left with. A row gone since
+    /// leaves its list's highlight where the filter put it.
+    pub(super) fn put_back_list_places(&mut self, places: ListPlaces) {
+        if let Some(at) = places
+            .process
+            .and_then(|id| self.processes.iter().position(|p| p.id == id))
+        {
+            self.selected_process = at;
+        }
+        self.processes_scroll = places.processes_scroll;
+        self.trace_feed.put_back(&places.step);
+        self.trace_scroll = places.trace_scroll;
+        self.task_list.put_back(places.task.as_ref());
+        self.tasks_scroll = places.tasks_scroll;
     }
 }
 
@@ -330,6 +375,56 @@ mod tests {
         assert_eq!(
             app.selected_process_data().map(|p| p.id.as_str()),
             Some("pac")
+        );
+    }
+
+    #[test]
+    fn an_agent_comes_back_with_its_lists_where_it_left_them() {
+        let mut app = app();
+        app.selected_process = 1;
+        app.processes_scroll = 1;
+        app.trace_feed.select(0);
+        app.trace_scroll = 1;
+        app.task_list.select(1);
+        app.tasks_scroll = 1;
+        let task = highlighted(&app);
+
+        app.process_command(UiCommand::SetActiveAgent("b".into()));
+        assert_eq!(processes(&app), ["pb", "none"]);
+        app.selected_process = 0;
+        app.processes_scroll = 0;
+        app.trace_scroll = 0;
+        app.tasks_scroll = 0;
+
+        app.process_command(UiCommand::SetActiveAgent("a".into()));
+        assert_eq!(
+            app.selected_process_data().map(|p| p.id.as_str()),
+            Some("pac")
+        );
+        assert_eq!(
+            app.trace_feed()
+                .selected_entry()
+                .map(|e| e.node.id.as_str()),
+            Some("sa")
+        );
+        assert_eq!(highlighted(&app), task);
+        assert_eq!(
+            (app.processes_scroll, app.trace_scroll, app.tasks_scroll),
+            (1, 1, 1)
+        );
+    }
+
+    #[test]
+    fn a_trace_left_on_its_newest_step_follows_new_ones() {
+        let mut app = app();
+        app.process_command(UiCommand::SetActiveAgent("b".into()));
+        app.process_command(step("a", "sa2"));
+        app.process_command(UiCommand::SetActiveAgent("a".into()));
+        assert_eq!(
+            app.trace_feed()
+                .selected_entry()
+                .map(|e| e.node.id.as_str()),
+            Some("sa2")
         );
     }
 

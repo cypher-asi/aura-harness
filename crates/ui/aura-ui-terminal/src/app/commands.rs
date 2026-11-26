@@ -1032,7 +1032,7 @@ impl App {
             }
             UiCommand::SetRecords(records) => self.cmd_set_records(records),
             UiCommand::LoadConversation(history) => self.cmd_load_conversation(history),
-            UiCommand::SetSandboxRoot(root) => self.sandbox.set_root(root),
+            UiCommand::SetSandboxRoot(root) => self.set_sandbox_root(root),
             UiCommand::SetProcesses(processes) => self.set_processes(processes),
             UiCommand::AddMail(mail) => self.add_mail(mail),
             UiCommand::SetThreadSubject { thread_id, subject } => {
@@ -1440,13 +1440,14 @@ impl App {
     }
 
     /// Replace the records with `records`, oldest first, keeping the
-    /// newest [`super::MAX_RECORDS`]. Like a `ClearRecords` followed by a
-    /// `NewRecord` each: the Record detail view closes and the selection
-    /// follows the newest record.
+    /// newest [`super::MAX_RECORDS`]. The records held already, as when an
+    /// agent comes back on screen, stay as they are, highlight, scroll and
+    /// Record detail view included. Otherwise the detail view closes, and
+    /// the highlight stays on its record, or follows the newest when it
+    /// was on it. Records all of another agent, sent for an agent the
+    /// screen has left since, are dropped.
     fn cmd_set_records(&mut self, records: Vec<crate::events::RecordSummary>) {
-        if self.detail == Some(DetailView::Record) {
-            self.close_detail();
-        }
+        let sent = records.len();
         let active = &self.active_agent_id;
         let mut kept: std::collections::VecDeque<_> = records
             .into_iter()
@@ -1454,10 +1455,43 @@ impl App {
                 record.agent_id.is_empty() || active.is_empty() || record.agent_id == *active
             })
             .collect();
+        if sent > 0 && kept.is_empty() {
+            return;
+        }
         let excess = kept.len().saturating_sub(super::MAX_RECORDS);
         kept.drain(..excess);
+        let same = |a: &crate::events::RecordSummary, b: &crate::events::RecordSummary| {
+            a.seq == b.seq && a.full_hash == b.full_hash
+        };
+        if kept.len() == self.records.len()
+            && kept.iter().zip(&self.records).all(|(a, b)| same(a, b))
+        {
+            return;
+        }
+        if self.detail == Some(DetailView::Record) {
+            self.close_detail();
+        }
+        let newest = self.selected_record + 1 >= self.records.len();
+        let on = self.records.get(self.selected_record).map(|r| r.seq);
         self.records = kept;
-        self.selected_record = self.records.len().saturating_sub(1);
+        let last = self.records.len().saturating_sub(1);
+        self.selected_record = on
+            .filter(|_| !newest)
+            .and_then(|seq| self.records.iter().position(|r| r.seq == seq))
+            .unwrap_or(last);
+    }
+
+    /// Point the Sandbox tree at `root`. A tree held for it already, as
+    /// when its agent comes back on screen, keeps its opened folders,
+    /// highlight and scroll, and is read again on the next tick to show
+    /// what changed while it was away.
+    fn set_sandbox_root(&mut self, root: std::path::PathBuf) {
+        if self.sandbox.root() == Some(root.as_path()) {
+            self.sandbox_stale = true;
+            return;
+        }
+        self.sandbox.set_root(root);
+        self.sandbox_scroll = 0;
     }
 
     fn cmd_set_agents(&mut self, agents: Vec<crate::events::AgentSummary>) {

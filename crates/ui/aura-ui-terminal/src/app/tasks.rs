@@ -218,7 +218,7 @@ struct Under {
 /// What a row shows, by path, id and content rather than index, so the
 /// highlight can find it again after the lists change.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RowKey {
+pub(super) enum RowKey {
     Plan(String),
     NoPlan,
     Todo(String, usize),
@@ -1314,6 +1314,21 @@ impl TaskList {
         }
     }
 
+    /// The highlighted row, by what it shows.
+    pub(super) fn place(&self) -> Option<RowKey> {
+        self.selected_key()
+    }
+
+    /// Highlight the row `key` names again; with none, or one no longer
+    /// listed, the highlight stays where it is.
+    pub(super) fn put_back(&mut self, key: Option<&RowKey>) {
+        if let Some(at) =
+            key.and_then(|key| self.rows.iter().position(|&row| self.row_is(row, key)))
+        {
+            self.select(at);
+        }
+    }
+
     fn rebuild(&mut self, keep: Option<RowKey>) {
         self.scoped = self.scope();
         self.plans_shown = self.shown_plans();
@@ -1393,12 +1408,13 @@ impl App {
     /// Keep the highlighted row inside `visible` rows, returning the first
     /// row to draw.
     pub fn sync_tasks_scroll(&mut self, visible: usize) -> usize {
-        follow_selection(
-            self.areas.tasks_scroll,
+        self.tasks_scroll = follow_selection(
+            self.tasks_scroll,
             self.task_list.selected,
             visible,
             self.task_list.rows.len(),
-        )
+        );
+        self.tasks_scroll
     }
 
     /// Where the task rows were drawn, for mouse clicks.

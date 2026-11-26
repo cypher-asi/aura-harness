@@ -459,7 +459,7 @@ pub struct App {
     /// Highlighted row of the Archive
     pub(super) selected_archived: usize,
     /// Archived agents opened over the agents under them; every other one
-    /// with agents under it is folded. Cleared on entering the Archive.
+    /// with agents under it is folded. Kept while another app is in front.
     pub(super) opened_archived: HashSet<String>,
     /// First visible row of the Archive
     pub(super) archived_scroll: usize,
@@ -512,8 +512,15 @@ pub struct App {
     /// Run graph shown by `/graph`
     pub(super) graph: graph::GraphState,
     pub(super) trace_feed: trace_feed::TraceFeed,
+    /// First visible row of the TRACE tab
+    pub(super) trace_scroll: usize,
     /// Plans and tasks of the TASKS tab
     pub(super) task_list: tasks::TaskList,
+    /// First visible row of the TASKS tab
+    pub(super) tasks_scroll: usize,
+    /// Where the side panel's lists were when the agent just put on
+    /// screen was last shown, put back once they are filtered for it
+    list_places_due: Option<side_scope::ListPlaces>,
     /// Node to select once the requested graph loads.
     pub(super) pending_graph_node: Option<String>,
     /// Flow between agents shown by the chat panel's GRAPH tab
@@ -1246,7 +1253,10 @@ impl App {
             pending_kill: None,
             graph: graph::GraphState::default(),
             trace_feed: trace_feed::TraceFeed::default(),
+            trace_scroll: 0,
             task_list: tasks::TaskList::default(),
+            tasks_scroll: 0,
+            list_places_due: None,
             pending_graph_node: None,
             flow: flow::FlowState::default(),
             bench: benchmarks::BenchState::default(),
@@ -3086,7 +3096,8 @@ impl App {
         }
 
         self.receive_commands();
-        if std::mem::take(&mut self.sandbox_stale) && self.sandbox_panel_visible {
+        if self.sandbox_stale && self.sandbox_panel_visible {
+            self.sandbox_stale = false;
             self.sandbox.refresh();
             self.redraw = true;
         }

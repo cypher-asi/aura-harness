@@ -175,9 +175,6 @@ impl App {
             return false;
         }
         self.remember_app(was);
-        if tab == AgentsTab::Archive {
-            self.fold_all_archived();
-        }
         if was == AgentsTab::Channels {
             self.leave_channel_app();
         }

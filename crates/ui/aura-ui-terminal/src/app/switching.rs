@@ -126,6 +126,9 @@ impl App {
         self.log.show_agent(agent_id);
         let left_on = self.show_agent_chat(agent_id);
         self.refresh_side_scope();
+        if let Some(places) = self.list_places_due.take() {
+            self.put_back_list_places(places);
+        }
         if self.log_wanted_for(agent_id) {
             // The switch was asked for to show the agent's log.
             self.show_chat_tab(super::ChatTab::Log);

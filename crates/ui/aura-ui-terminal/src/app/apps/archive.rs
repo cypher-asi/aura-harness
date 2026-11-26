@@ -162,13 +162,6 @@ impl App {
         Some(self.shown_as(index))
     }
 
-    /// Fold every archived agent over the agents under it, as on entering
-    /// the Archive. A highlight inside a folded agent moves onto it.
-    pub(in crate::app) fn fold_all_archived(&mut self) {
-        self.opened_archived.clear();
-        self.select_archived_row(self.selected_archived);
-    }
-
     /// Fold or open archived agent `index`. One with nothing under it
     /// folds the agent it sits under instead. A highlight left inside a
     /// folded agent moves onto it.
@@ -838,13 +831,13 @@ mod tests {
     }
 
     #[test]
-    fn entering_the_archive_folds_every_agent_over_its_subagents() {
+    fn the_archive_keeps_what_was_opened_in_it() {
         let (mut app, _rx) = nested_archive();
         assert_eq!(shown_ids(&app), ["dd", "gg", "hh"]);
         assert!(app.archived_folded(0) && app.archived_folded(4));
         assert!(!app.archived_folded(3), "gg has nothing to fold");
 
-        // Opened ones stay open while on the Archive, one level at a time.
+        // Folded at first; opened one level at a time.
         app.handle_key(key(KeyCode::Char(' ')));
         assert_eq!(shown_ids(&app), ["dd", "ee", "gg", "hh"]);
         app.handle_key(key(KeyCode::Down));
@@ -854,11 +847,12 @@ mod tests {
         app.handle_key(key(KeyCode::Right));
         assert_eq!(shown_ids(&app).len(), 5, "other tabs leave it alone");
 
-        // Coming back folds them all again.
+        // Coming back finds them as they were left, highlight included.
+        let selected = app.selected_archived();
         app.show_agents_tab(AgentsTab::Projects);
         app.show_agents_tab(AgentsTab::Archive);
-        assert_eq!(shown_ids(&app), ["dd", "gg", "hh"]);
-        assert_eq!(app.selected_archived(), 0, "the highlight moved onto dd");
+        assert_eq!(shown_ids(&app), ["dd", "ee", "ff", "gg", "hh"]);
+        assert_eq!(app.selected_archived(), selected);
     }
 
     #[test]

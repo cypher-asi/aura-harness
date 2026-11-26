@@ -204,6 +204,39 @@ impl TraceFeed {
             .get(self.selected)
             .map(|&index| &self.entries[index])
     }
+
+    /// Where the highlight is: following the newest step, or on a step.
+    pub(super) fn place(&self) -> FeedPlace {
+        match self.selected_entry() {
+            Some(entry) if !self.pinned && !self.at_end() => FeedPlace::Step(entry.key()),
+            _ => FeedPlace::Newest,
+        }
+    }
+
+    /// Put the highlight back at `place`; on a step no longer listed it
+    /// stays where it is.
+    pub(super) fn put_back(&mut self, place: &FeedPlace) {
+        match place {
+            FeedPlace::Newest => self.select(usize::MAX),
+            FeedPlace::Step((agent_id, run_id, node_id)) => {
+                let at = self
+                    .entries()
+                    .position(|e| e.is((agent_id, run_id, node_id)));
+                if let Some(at) = at {
+                    self.select(at);
+                }
+            }
+        }
+    }
+}
+
+/// Where the TRACE tab's highlight was (see [`TraceFeed::place`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum FeedPlace {
+    /// On the newest step, following new ones
+    Newest,
+    /// On the step with this agent, run and node id
+    Step((String, String, String)),
 }
 
 impl App {
@@ -216,12 +249,13 @@ impl App {
     /// Keep the highlighted feed row inside `visible` rows, returning the
     /// first row to draw.
     pub fn sync_trace_scroll(&mut self, visible: usize) -> usize {
-        follow_selection(
-            self.areas.trace_scroll,
+        self.trace_scroll = follow_selection(
+            self.trace_scroll,
             self.trace_feed.selected,
             visible,
             self.trace_feed.len(),
-        )
+        );
+        self.trace_scroll
     }
 
     /// Where the feed rows were drawn, for mouse clicks.
