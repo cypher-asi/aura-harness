@@ -1,7 +1,7 @@
 use super::file_view::FileBody;
 use super::*;
 use crate::events::{RecordStatus, UiCommand};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
 fn key(code: KeyCode) -> KeyEvent {
