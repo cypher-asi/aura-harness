@@ -3,6 +3,10 @@
 # the cloud hub looks for it ($AURA_HOME/cloud/bin/aura, default
 # ~/.aura/cloud/bin/aura).
 #
+# Rebuild it after the node side changes: the hub asks the binary for its
+# node protocol (`aura node protocol`) and refuses one older than itself,
+# both when building the base image and on machines already placed.
+#
 # The boxd machines run Ubuntu with glibc 2.39, so the binary must not need
 # a newer glibc. The script builds natively first; when the host's toolchain
 # produces a binary that needs a newer glibc (e.g. on a rolling-release

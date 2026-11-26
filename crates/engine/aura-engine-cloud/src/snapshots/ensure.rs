@@ -288,7 +288,7 @@ fn base_steps(local: Option<LocalBinary>, home: &Path) -> CloudResult<Vec<Step>>
             command: "sudo install -m 0755 /tmp/aura /usr/local/bin/aura && rm -f /tmp/aura".into(),
             timeout: SHORT_STEP_TIMEOUT,
         });
-        steps.push(Step::CheckBinary);
+        steps.push(Step::CheckBinary { source: local.path });
     }
     Ok(steps)
 }

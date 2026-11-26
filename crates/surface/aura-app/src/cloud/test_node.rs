@@ -124,4 +124,20 @@ impl TestNode {
             }
         })
     }
+
+    /// [`Self::exec_handler`], its claim answered as a node from before
+    /// the node protocol answers: without one.
+    pub(crate) fn older_exec_handler(&self) -> ExecHandler {
+        let current = self.exec_handler();
+        Arc::new(move |machine, command, stdin| {
+            let mut output = current(machine, command, stdin);
+            if let Ok(serde_json::Value::Object(mut answer)) =
+                serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            {
+                answer.remove("protocol");
+                output.stdout = serde_json::to_vec(&answer).unwrap_or_default();
+            }
+            output
+        })
+    }
 }

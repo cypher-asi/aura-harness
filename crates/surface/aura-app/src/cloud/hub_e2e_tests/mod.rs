@@ -12,6 +12,7 @@ use aura_agent_kernel::RecordObserver;
 use aura_config::CloudConfig;
 use aura_core_protocol::cloud::{MeshProcess, MESH_PROCESS_AGENT};
 use aura_core_types::{AgentId, RecordEntry, Transaction, TransactionType};
+use aura_engine_cloud::fake::ExecHandler;
 use aura_engine_cloud::hub::test_support as hooks;
 use aura_engine_cloud::hub::{Owner, PlacedAgent};
 use aura_engine_cloud::machine_env::WORKSPACE_DIR;
@@ -81,6 +82,11 @@ fn placement(project_dir: PathBuf) -> PlacedAgent {
 }
 
 async fn placed(config: CloudConfig) -> Placed {
+    placed_with(config, TestNode::exec_handler).await
+}
+
+/// [`placed`], what fake boxd runs in the machine being `exec(node)`.
+async fn placed_with(config: CloudConfig, exec: fn(&TestNode) -> ExecHandler) -> Placed {
     let hub_dir = tempfile::tempdir().expect("tempdir");
     let node_dir = tempfile::tempdir().expect("tempdir");
     let store: Arc<dyn Store> =
@@ -95,7 +101,7 @@ async fn placed(config: CloudConfig) -> Placed {
     )
     .expect("hub");
     let node = TestNode::serve(node_dir.path(), "done").await;
-    fake.on_exec(node.exec_handler());
+    fake.on_exec(exec(&node));
     fake.insert_machine(machine(&node.base));
     let agent = AgentId::new([6; 32]);
     let hex = agent.to_hex();

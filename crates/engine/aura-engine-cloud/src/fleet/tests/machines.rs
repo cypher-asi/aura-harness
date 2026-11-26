@@ -276,4 +276,44 @@ async fn an_adopted_machine_is_claimed_again_on_first_use() {
     assert!(restarted.node_token("aa").is_none());
     restarted.ensure_awake("aa").await.expect("claim");
     assert!(restarted.node_token("aa").is_some());
+    restarted.check_node_protocol("aa").expect("current");
+}
+
+#[tokio::test]
+async fn an_adopted_node_older_than_the_hub_is_claimed_but_flagged() {
+    let (fleet, fake, _) = fleet(Duration::from_secs(300));
+    fleet
+        .provision(request("aa", MachineOrigin::Fresh))
+        .await
+        .expect("aa");
+    fake.on_exec(Arc::new(|_, _, stdin| claimed_by_an_older_node(stdin)));
+    let restarted = Arc::new(VmFleet::new(
+        Arc::new(fake.clone()),
+        Arc::new(MemoryLedger::default()),
+        settings(Duration::from_secs(300)),
+    ));
+    restarted
+        .adopt(
+            "aa",
+            "0://terminal/aa",
+            "p1",
+            "aura-re36-aa",
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("adopt");
+
+    restarted
+        .ensure_awake("aa")
+        .await
+        .expect("claimed, so its agent can be brought back");
+    assert!(restarted.node_token("aa").is_some());
+    let err = restarted
+        .check_node_protocol("aa")
+        .expect_err("too old for new work");
+    assert!(
+        matches!(err, CloudError::OutdatedNode { has: 0, .. }),
+        "{err:?}"
+    );
 }

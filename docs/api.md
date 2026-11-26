@@ -125,7 +125,7 @@ Scheduled automations (cron + prompt + config) and their run history, sealed at 
 
 ## Cloud nodes
 
-Served only by a node started with `AURA_CLOUD_NODE=1` on a boxd machine (other nodes answer `404`). Such a node accepts no token until its hub claims it over boxd's authenticated `Exec` (`aura node claim --stdin`); after that it accepts only the hub's node token, and its project's mesh token on the mesh routes. Wire types live in [`aura_core_protocol::cloud`](../crates/core/aura-core-protocol/src/cloud).
+Served only by a node started with `AURA_CLOUD_NODE=1` on a boxd machine (other nodes answer `404`). Such a node accepts no token until its hub claims it over boxd's authenticated `Exec` (`aura node claim --stdin`); after that it accepts only the hub's node token, and its project's mesh token on the mesh routes. The claim's answer (`NodeClaimed`) carries the node protocol the node speaks (`NODE_PROTOCOL`, also printed by `aura node protocol`); a hub gives no turns to a node that speaks an older one. Wire types live in [`aura_core_protocol::cloud`](../crates/core/aura-core-protocol/src/cloud).
 
 | Method | Path | Purpose |
 |--------|------|---------|

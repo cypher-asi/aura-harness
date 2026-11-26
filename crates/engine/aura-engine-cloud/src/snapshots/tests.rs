@@ -5,6 +5,7 @@ use crate::error::CloudError;
 use crate::fake::FakeProvider;
 use crate::fleet::MemoryLedger;
 use crate::glibc::{GlibcVersion, MACHINE_GLIBC};
+use aura_core_protocol::cloud::NODE_PROTOCOL;
 use aura_core_types::VmEvent;
 use std::path::Path;
 
@@ -90,6 +91,29 @@ fn fake_binary(dir: &Path, minor: u32) -> PathBuf {
     path
 }
 
+/// A fake whose builders answer [`CHECK_PROTOCOL`] with `protocol`, the
+/// rest with success.
+fn speaking(protocol: crate::ExecOutput) -> FakeProvider {
+    let fake = FakeProvider::new();
+    fake.on_exec(Arc::new(move |_, command, _| {
+        if command == CHECK_PROTOCOL {
+            protocol.clone()
+        } else {
+            crate::ExecOutput::default()
+        }
+    }));
+    fake
+}
+
+/// What `aura node protocol` prints for `protocol`.
+fn printed(protocol: u32) -> crate::ExecOutput {
+    crate::ExecOutput {
+        exit_code: 0,
+        stdout: format!("{protocol}\n").into_bytes(),
+        stderr: Vec::new(),
+    }
+}
+
 #[tokio::test]
 async fn a_binary_needing_a_newer_glibc_is_refused_before_any_machine() {
     let home = tempfile::tempdir().expect("home");
@@ -130,7 +154,7 @@ async fn a_binary_needing_a_newer_glibc_is_refused_before_any_machine() {
 async fn an_uploaded_binary_is_started_once_installed() {
     let home = tempfile::tempdir().expect("home");
     let binary = fake_binary(home.path(), 34);
-    let fake = FakeProvider::new();
+    let fake = speaking(printed(NODE_PROTOCOL));
     let (builder, _) = builder_with(&fake, home.path(), AuraBinary::Upload(binary));
 
     builder.ensure_base().await.expect("build");
@@ -142,7 +166,55 @@ async fn an_uploaded_binary_is_started_once_installed() {
             .unwrap_or_else(|| panic!("{needle} not run: {calls:?}"))
     };
     assert!(position("install -m 0755 /tmp/aura") < position(CHECK_BINARY));
-    assert!(position(CHECK_BINARY) < position("nohup aura run"));
+    assert!(position(CHECK_BINARY) < position(CHECK_PROTOCOL));
+    assert!(position(CHECK_PROTOCOL) < position("nohup aura run"));
+}
+
+#[tokio::test]
+async fn a_binary_older_than_the_hub_never_becomes_the_base() {
+    let unknown_subcommand = crate::ExecOutput {
+        exit_code: 2,
+        stdout: Vec::new(),
+        stderr: b"error: unrecognized subcommand 'protocol'".to_vec(),
+    };
+    for answer in [unknown_subcommand, printed(0)] {
+        let home = tempfile::tempdir().expect("home");
+        let binary = fake_binary(home.path(), 34);
+        let fake = speaking(answer);
+        let (builder, ledger) =
+            builder_with(&fake, home.path(), AuraBinary::Upload(binary.clone()));
+
+        let err = builder.ensure_base().await.expect_err("refused");
+        assert!(
+            matches!(
+                err,
+                CloudError::StaleBinary {
+                    has: 0,
+                    needs: NODE_PROTOCOL,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        let message = err.to_string();
+        for part in [
+            binary.display().to_string(),
+            "node protocol 0".into(),
+            "scripts/build-cloud-binary.sh".into(),
+            cloud_binary_path(&home.path().join("cloud"))
+                .display()
+                .to_string(),
+        ] {
+            assert!(message.contains(&part), "{part} missing from: {message}");
+        }
+        assert!(fake.machine_names().is_empty(), "builder destroyed");
+        assert!(!fake.calls().iter().any(|c| c.contains("nohup aura run")));
+        assert!(fake.calls_matching("SaveSnapshot(").is_empty());
+        assert_eq!(
+            ledger.events("0://cloud/project/base"),
+            vec![VmEvent::Error]
+        );
+    }
 }
 
 #[tokio::test]

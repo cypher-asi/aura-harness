@@ -13,6 +13,7 @@ use aura_core_types::{VmEvent, VmPayload, VmSource};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
+use super::claim::Accept;
 use super::{Entry, MachineView, ProvisionRequest, VmFleet, VmState, AUTO_HIBERNATE_BACKSTOP_SECS};
 
 /// What boxd says about a machine it just made, as boot facts.
@@ -127,7 +128,13 @@ impl VmFleet {
         self.keep_claiming(&request, &machine, &ledger);
         self.configure(&machine, boot).await?;
         if let Err(err) = self
-            .claim_reported(&request.agent, &machine.name, &request.seal, boot)
+            .claim_reported(
+                &request.agent,
+                &machine.name,
+                &request.seal,
+                Accept::Current,
+                boot,
+            )
             .await
         {
             self.row(
@@ -303,6 +310,7 @@ impl VmFleet {
                 busy: 0,
                 idle_since: Instant::now(),
                 node_token: None,
+                node_protocol: 0,
                 usage: None,
                 seen_ms: now_ms(),
             },

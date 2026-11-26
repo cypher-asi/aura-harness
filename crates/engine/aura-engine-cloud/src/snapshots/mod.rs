@@ -28,7 +28,7 @@ mod ensure;
 mod fingerprint;
 mod index;
 
-pub use self::binary::{binary_digest, cloud_binary_path, CHECK_BINARY};
+pub use self::binary::{binary_digest, cloud_binary_path, CHECK_BINARY, CHECK_PROTOCOL};
 pub use self::build::uploading;
 pub use self::fingerprint::{base_fingerprint, default_build_command, project_fingerprint};
 pub use self::index::{SnapshotIndex, SnapshotRecord};

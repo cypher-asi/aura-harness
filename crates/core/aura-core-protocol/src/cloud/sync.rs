@@ -11,6 +11,7 @@
 //! | `GET /v1/sync/traces?agent=` | none | [`TracePage`] |
 //! | `GET /v1/workspace/patch?base=` | none | [`WorkspacePatch`] |
 //! | `aura node claim --stdin` (over `Exec`) | [`NodeClaim`] | [`NodeClaimed`] |
+//! | `aura node protocol` (over `Exec`) | none | [`NODE_PROTOCOL`], printed |
 //!
 //! Record pages themselves come from the existing
 //! `GET /agents/:id/record`; [`RecordPage`] is its answer's shape.
@@ -222,6 +223,17 @@ impl std::fmt::Display for NodeClaim {
     }
 }
 
+/// Version of what the hub relies on a cloud node for, sent in
+/// [`NodeClaimed`] and printed by `aura node protocol`. Bump it when the
+/// hub starts depending on something new from nodes: a hub gives no new
+/// work to a node that speaks an older one.
+///
+/// - 0: nodes from before the number, which don't send it.
+/// - 1: the node keeps the agent's conversation across runs: it records
+///   each reply, saves session checkpoints and serves
+///   `/v1/sync/session`.
+pub const NODE_PROTOCOL: u32 = 1;
+
 /// Answer to [`NodeClaim`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeClaimed {
@@ -231,6 +243,9 @@ pub struct NodeClaimed {
     pub port: u16,
     /// Agents it sealed.
     pub sealed: usize,
+    /// The [`NODE_PROTOCOL`] the node speaks; 0 from nodes before it.
+    #[serde(default)]
+    pub protocol: u32,
 }
 
 #[cfg(test)]
@@ -278,5 +293,13 @@ mod tests {
             serde_json::from_str::<NodeClaim>(&json).expect("parse"),
             claim
         );
+    }
+
+    #[test]
+    fn a_claim_answer_from_a_node_before_the_protocol_reads_as_zero() {
+        let claimed: NodeClaimed =
+            serde_json::from_str(r#"{"node_id":"aura-re36-3f9c","port":8080,"sealed":0}"#)
+                .expect("parse");
+        assert_eq!(claimed.protocol, 0);
     }
 }

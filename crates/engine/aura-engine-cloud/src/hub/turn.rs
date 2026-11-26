@@ -65,7 +65,8 @@ pub enum RemoteEvent {
 impl CloudHub {
     /// Wake `hex`'s node, showing the machine waking on `tx`. A machine
     /// that sleeps shows itself waking; the events all reach the turn's
-    /// stream before anything else does.
+    /// stream before anything else does. A node older than this hub is
+    /// refused ([`CloudHub::current_node`]).
     async fn wake_for_turn(
         &self,
         hex: &str,
@@ -80,7 +81,7 @@ impl CloudHub {
                 }
             }
         });
-        let awake = self.awake_node(hex, &boot).await;
+        let awake = self.current_node(hex, &boot).await;
         drop(boot);
         let _ = forward.await;
         awake

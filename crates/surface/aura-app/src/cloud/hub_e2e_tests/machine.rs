@@ -45,6 +45,45 @@ async fn the_machine_titles_the_chat_during_the_turn_and_records_the_call() {
 }
 
 #[tokio::test]
+async fn a_machine_whose_aura_is_too_old_runs_no_turn_but_its_agent_can_come_back() {
+    let p = placed_with(CloudConfig::defaults(), TestNode::older_exec_handler).await;
+    p.import().await;
+    let node_head = p.node.store.get_head_seq(p.agent).expect("head");
+
+    let mut events = p.hub.run_turn(
+        p.agent,
+        "fix the build".into(),
+        Some("mock-model".into()),
+        None,
+        None,
+        CancellationToken::new(),
+    );
+    let mut refused = None;
+    while let Some(event) = events.recv().await {
+        match event {
+            RemoteEvent::Failed(err) => refused = Some(err),
+            RemoteEvent::Done(_) => panic!("the turn ran"),
+            _ => {}
+        }
+    }
+
+    let refused = refused.expect("the turn is refused");
+    for part in ["node protocol 0", "scripts/build-cloud-binary.sh", "/local"] {
+        assert!(refused.contains(part), "{part} missing from: {refused}");
+    }
+    assert_eq!(
+        p.node.store.get_head_seq(p.agent).expect("head"),
+        node_head,
+        "nothing ran on the machine"
+    );
+    p.hub
+        .recall(p.agent, "test", &BootReporter::none())
+        .await
+        .expect("brought back");
+    assert!(!p.hub.is_placed(p.agent));
+}
+
+#[tokio::test]
 async fn a_renamed_cloud_agent_is_named_so_in_its_placement_and_the_directory() {
     let p = placed(CloudConfig::defaults()).await;
     let hex = p.agent.to_hex();

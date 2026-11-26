@@ -38,7 +38,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use aura_agent::checkpoint::Checkpoints;
 use aura_agent_trace::db::RunCopy;
 use aura_agent_trace::{RunMeta, RunRecorder};
-use aura_core_protocol::cloud::{GitClaim, HostStats, NodeClaim, NodeClaimed};
+use aura_core_protocol::cloud::{GitClaim, HostStats, NodeClaim, NodeClaimed, NODE_PROTOCOL};
 use aura_core_types::AgentId;
 use aura_engine_cloud::host::HostSampler;
 use axum::http::{HeaderMap, StatusCode};
@@ -291,6 +291,7 @@ impl CloudNode {
             node_id,
             port,
             sealed,
+            protocol: NODE_PROTOCOL,
         }
     }
 

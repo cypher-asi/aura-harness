@@ -220,6 +220,8 @@ struct Entry {
     busy: u32,
     idle_since: Instant,
     node_token: Option<BoxdToken>,
+    /// What the node answered its last claim with; 0 until claimed.
+    node_protocol: u32,
     usage: Option<UsageReading>,
     seen_ms: u64,
 }

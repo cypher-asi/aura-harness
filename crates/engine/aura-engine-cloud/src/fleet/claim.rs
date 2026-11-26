@@ -6,12 +6,37 @@ use crate::error::{CloudError, CloudResult};
 use crate::names::{self, LABEL_OWNER};
 use crate::provider::{MachineInfo, MachineStatus};
 use aura_config::BoxdToken;
-use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed, PlanTemplate};
+use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed, PlanTemplate, NODE_PROTOCOL};
 use aura_core_types::time::now_ms;
 use aura_core_types::{VmEvent, VmPayload};
 use std::time::Instant;
 
 use super::{random_token, Entry, MachineView, VmFleet, VmState, CLAIM_COMMAND, CLAIM_TIMEOUT};
+
+/// Which nodes a claim takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Accept {
+    /// Any node. One older than this hub is still claimed, so its agent
+    /// can be brought back; new work checks it first
+    /// ([`VmFleet::check_node_protocol`]).
+    Any,
+    /// Only a node that speaks this hub's [`NODE_PROTOCOL`]: an older one
+    /// fails the claim.
+    Current,
+}
+
+/// [`CloudError::OutdatedNode`] unless `protocol`, what `machine`'s node
+/// answered its claim with, is at least this hub's [`NODE_PROTOCOL`].
+fn check_protocol(machine: &str, protocol: u32) -> CloudResult<()> {
+    if protocol >= NODE_PROTOCOL {
+        return Ok(());
+    }
+    Err(CloudError::OutdatedNode {
+        machine: machine.to_string(),
+        has: protocol,
+        needs: NODE_PROTOCOL,
+    })
+}
 
 /// What a node answered its claim with, as boot facts.
 fn claim_facts(boot: &BootReporter, claimed: &NodeClaimed) {
@@ -62,7 +87,7 @@ impl VmFleet {
             git: target.git,
         };
         let claimed = self.send_claim(&target.machine, &claim).await?;
-        self.mark_claimed(agent, node_token);
+        self.mark_claimed(agent, node_token, claimed.protocol);
         self.row(
             &target.ledger,
             &VmPayload {
@@ -75,27 +100,52 @@ impl VmFleet {
 
     /// [`Self::claim`] of `agent`'s machine `machine` as the
     /// [`BootStage::Claim`] stage of `boot`, showing what the node
-    /// answered.
+    /// answered. A node `accept` doesn't take fails the stage.
     pub(super) async fn claim_reported(
         &self,
         agent: &str,
         machine: &str,
         seal: &[String],
+        accept: Accept,
         boot: &BootReporter,
     ) -> CloudResult<NodeClaimed> {
         let claimed = boot
-            .run(
-                BootStage::Claim,
-                boot.wait(
-                    BootStage::Claim,
-                    claim_waits_on(machine),
-                    Some(CLAIM_TIMEOUT),
-                    self.claim(agent, seal),
-                ),
-            )
+            .run(BootStage::Claim, async {
+                let claimed = boot
+                    .wait(
+                        BootStage::Claim,
+                        claim_waits_on(machine),
+                        Some(CLAIM_TIMEOUT),
+                        self.claim(agent, seal),
+                    )
+                    .await?;
+                if accept == Accept::Current {
+                    check_protocol(machine, claimed.protocol)?;
+                }
+                Ok::<_, CloudError>(claimed)
+            })
             .await?;
         claim_facts(boot, &claimed);
         Ok(claimed)
+    }
+
+    /// [`CloudError::OutdatedNode`] when `agent`'s node, as last claimed,
+    /// speaks an older protocol than this hub, so a turn there would
+    /// start without the agent's conversation.
+    ///
+    /// # Errors
+    ///
+    /// That, or [`CloudError::NotFound`] when the agent has no machine.
+    pub fn check_node_protocol(&self, agent: &str) -> CloudResult<()> {
+        let (machine, protocol) = {
+            let machines = self.machines.lock();
+            let entry = machines.get(agent).ok_or_else(|| CloudError::NotFound {
+                what: "machine",
+                name: agent.to_string(),
+            })?;
+            (entry.machine.name.clone(), entry.node_protocol)
+        };
+        check_protocol(&machine, protocol)
     }
 
     fn claim_target(&self, agent: &str) -> CloudResult<ClaimTarget> {
@@ -116,7 +166,7 @@ impl VmFleet {
 
     /// Run [`CLAIM_COMMAND`] on `machine` with `claim` on its stdin: what
     /// the node answered, or what a node that answers nothing readable
-    /// is taken to have said.
+    /// is taken to have said (no [`NODE_PROTOCOL`] at all).
     async fn send_claim(
         &self,
         machine: &MachineInfo,
@@ -143,16 +193,18 @@ impl VmFleet {
                 node_id: machine.name.clone(),
                 port: crate::machine_env::NODE_PORT,
                 sealed: claim.seal.len(),
+                protocol: 0,
             }),
         )
     }
 
-    /// `agent`'s node holds `node_token` now: its machine is up and
-    /// ready for work.
-    fn mark_claimed(&self, agent: &str, node_token: BoxdToken) {
+    /// `agent`'s node holds `node_token` now and speaks `protocol`: its
+    /// machine is up and ready for work.
+    fn mark_claimed(&self, agent: &str, node_token: BoxdToken, protocol: u32) {
         let mut machines = self.machines.lock();
         if let Some(entry) = machines.get_mut(agent) {
             entry.node_token = Some(node_token);
+            entry.node_protocol = protocol;
             entry.state = VmState::Ready;
             entry.machine.status = MachineStatus::Running;
             entry.idle_since = Instant::now();
@@ -203,6 +255,7 @@ impl VmFleet {
                 busy: 0,
                 idle_since: Instant::now(),
                 node_token: None,
+                node_protocol: 0,
                 usage: None,
                 seen_ms: now_ms(),
             },

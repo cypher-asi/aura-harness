@@ -6,10 +6,12 @@ async fn a_machine_lists_one_repo_secret_and_its_claim_names_the_branch() {
     let claims = Arc::new(Mutex::new(Vec::<NodeClaim>::new()));
     let seen = Arc::clone(&claims);
     fake.on_exec(Arc::new(move |_, _, stdin| {
-        if let Some(claim) = stdin.and_then(|s| serde_json::from_slice(s).ok()) {
-            seen.lock().push(claim);
-        }
-        crate::provider::ExecOutput::default()
+        let Some(claim) = stdin.and_then(|s| serde_json::from_slice::<NodeClaim>(s).ok()) else {
+            return crate::provider::ExecOutput::default();
+        };
+        let answer = claimed(&claim, NODE_PROTOCOL);
+        seen.lock().push(claim);
+        answer
     }));
     let plan = crate::names::plan_secret(ALICE, "inst-1", aura_core_auth::ProviderKind::Claude)
         .expect("name");

@@ -125,6 +125,38 @@ async fn a_failed_claim_shows_as_a_failed_stage() {
 }
 
 #[tokio::test]
+async fn a_new_machine_whose_node_is_older_than_the_hub_fails_its_claim_and_goes() {
+    let (fleet, fake, ledger) = fleet(Duration::from_secs(300));
+    fake.on_exec(Arc::new(|_, _, stdin| claimed_by_an_older_node(stdin)));
+    let (boot, mut rx) = BootReporter::channel();
+    let err = fleet
+        .provision_reported(request("aa", MachineOrigin::Fresh), &boot)
+        .await
+        .expect_err("outdated");
+
+    assert!(
+        matches!(
+            &err,
+            CloudError::OutdatedNode { machine, has: 0, needs: NODE_PROTOCOL }
+                if machine == "aura-re36-aa"
+        ),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string().contains("scripts/build-cloud-binary.sh"),
+        "{err}"
+    );
+    let trail = stage_trail(&drain(&mut rx));
+    assert_eq!(trail.last(), Some(&(BootStage::Claim, "failed")));
+    assert!(fake.machine("aura-re36-aa").is_none());
+    assert!(!fleet.has("aa"));
+    assert_eq!(
+        ledger.events("0://cloud/vm/terminal/aa"),
+        vec![VmEvent::Created, VmEvent::Claimed, VmEvent::Error]
+    );
+}
+
+#[tokio::test]
 async fn waking_shows_only_when_the_machine_sleeps() {
     let (fleet, _, _) = fleet(Duration::from_secs(300));
     fleet

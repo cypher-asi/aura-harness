@@ -9,6 +9,7 @@ use aura_core_types::{VmEvent, VmPayload};
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::claim::Accept;
 use super::{Entry, MachineView, VmFleet, VmState};
 
 /// What waking needs from an agent's machine entry.
@@ -81,7 +82,7 @@ impl VmFleet {
             self.wake_reported(agent, &target, boot).await?;
         }
         if !target.claimed {
-            self.claim_reported(agent, &target.machine.name, &[], boot)
+            self.claim_reported(agent, &target.machine.name, &[], Accept::Any, boot)
                 .await?;
         }
         self.view(agent).ok_or(CloudError::NotFound {

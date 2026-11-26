@@ -36,4 +36,7 @@ pub enum NodeSubcommand {
         #[arg(long)]
         stdin: bool,
     },
+    /// Print the node protocol this build speaks; the hub refuses to put
+    /// a build older than itself on its machines.
+    Protocol,
 }

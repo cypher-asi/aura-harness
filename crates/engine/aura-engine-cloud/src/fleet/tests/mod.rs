@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aura_config::MachineSize;
-use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed};
+use aura_core_protocol::cloud::{GitClaim, NodeClaim, NodeClaimed, NODE_PROTOCOL};
 use aura_core_types::{VmEvent, VmSource};
 use parking_lot::Mutex;
 
@@ -29,6 +29,37 @@ fn settings(idle: Duration) -> FleetSettings {
     }
 }
 
+/// What a node speaking `protocol` answers `claim` with.
+fn claimed(claim: &NodeClaim, protocol: u32) -> crate::ExecOutput {
+    let answer = NodeClaimed {
+        node_id: claim.node_id.clone(),
+        port: 8080,
+        sealed: claim.seal.len(),
+        protocol,
+    };
+    crate::ExecOutput {
+        exit_code: 0,
+        stdout: serde_json::to_vec(&answer).expect("json"),
+        stderr: Vec::new(),
+    }
+}
+
+/// What a node from before [`NODE_PROTOCOL`] answers a claim with: the
+/// same, without the protocol.
+fn claimed_by_an_older_node(stdin: Option<&[u8]>) -> crate::ExecOutput {
+    let claim: NodeClaim = serde_json::from_slice(stdin.unwrap_or_default()).expect("claim json");
+    let answer = serde_json::json!({
+        "node_id": claim.node_id,
+        "port": 8080,
+        "sealed": claim.seal.len(),
+    });
+    crate::ExecOutput {
+        exit_code: 0,
+        stdout: serde_json::to_vec(&answer).expect("json"),
+        stderr: Vec::new(),
+    }
+}
+
 fn fleet(idle: Duration) -> (Arc<VmFleet>, FakeProvider, Arc<MemoryLedger>) {
     let fake = FakeProvider::new();
     fake.on_exec(Arc::new(|machine, command, stdin| {
@@ -37,16 +68,7 @@ fn fleet(idle: Duration) -> (Arc<VmFleet>, FakeProvider, Arc<MemoryLedger>) {
             serde_json::from_slice(stdin.unwrap_or_default()).expect("claim json");
         assert_eq!(claim.node_id, machine);
         assert_eq!(claim.node_token.len(), 64);
-        let answer = NodeClaimed {
-            node_id: claim.node_id,
-            port: 8080,
-            sealed: claim.seal.len(),
-        };
-        crate::ExecOutput {
-            exit_code: 0,
-            stdout: serde_json::to_vec(&answer).expect("json"),
-            stderr: Vec::new(),
-        }
+        claimed(&claim, NODE_PROTOCOL)
     }));
     let ledger = Arc::new(MemoryLedger::default());
     let fleet = Arc::new(VmFleet::new(

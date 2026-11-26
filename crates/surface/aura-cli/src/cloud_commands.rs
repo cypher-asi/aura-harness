@@ -1,4 +1,4 @@
-//! `aura cloud setup|status` and the hidden `aura node claim --stdin`.
+//! `aura cloud setup|status` and the hidden `aura node claim --stdin|protocol`.
 
 use std::io::Read;
 
@@ -87,13 +87,18 @@ fn print_settings(config: &aura_config::CloudConfig) {
     );
 }
 
-/// `aura node claim --stdin`: run inside a cloud machine by the hub.
+/// `aura node claim --stdin` and `aura node protocol`: run inside a cloud
+/// machine by the hub.
 ///
 /// # Errors
 ///
 /// When the claim can't be read or the node refuses it.
 pub(crate) async fn cmd_node(args: NodeCommand) -> anyhow::Result<()> {
     match args.action {
+        NodeSubcommand::Protocol => {
+            println!("{}", aura_core_protocol::cloud::NODE_PROTOCOL);
+            Ok(())
+        }
         NodeSubcommand::Claim { stdin } => {
             if !stdin {
                 anyhow::bail!("the claim is only read from stdin: aura node claim --stdin");

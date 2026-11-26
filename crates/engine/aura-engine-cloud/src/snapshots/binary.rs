@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{CloudError, CloudResult};
 use crate::glibc::{self, GlibcVersion, MACHINE_GLIBC};
+use crate::provider::ExecOutput;
 
 /// The first 16 hex characters of `path`'s blake3 hash. Blocking.
 ///
@@ -34,10 +35,24 @@ pub fn cloud_binary_path(home: &Path) -> PathBuf {
 /// the machine.
 pub const CHECK_BINARY: &str = "/usr/local/bin/aura --help >/dev/null";
 
+/// Run on a builder once [`CHECK_BINARY`] passes: prints the node
+/// protocol the binary speaks. A build from before the number fails it
+/// as an unknown subcommand.
+pub const CHECK_PROTOCOL: &str = "/usr/local/bin/aura node protocol";
+
+/// The node protocol a [`CHECK_PROTOCOL`] run printed: 0 when it failed
+/// or printed anything but a number.
+pub(super) fn printed_protocol(output: &ExecOutput) -> u32 {
+    if !output.success() {
+        return 0;
+    }
+    output.stdout_text().trim().parse().unwrap_or(0)
+}
+
 /// The aura binary to upload, read once for its digest, its glibc needs
 /// and the upload itself.
 pub(super) struct LocalBinary {
-    path: PathBuf,
+    pub(super) path: PathBuf,
     pub(super) bytes: Vec<u8>,
     pub(super) digest: String,
     glibc: Option<GlibcVersion>,

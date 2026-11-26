@@ -100,6 +100,7 @@ async fn claims_travel_over_the_socket() {
     let claimed: NodeClaimed = serde_json::from_slice(&answer).expect("answer");
     assert_eq!(claimed.node_id, "aura-re36-3f9c");
     assert_eq!(claimed.port, 8080);
+    assert_eq!(claimed.protocol, aura_core_protocol::cloud::NODE_PROTOCOL);
     assert_eq!(node.node_id().as_deref(), Some("aura-re36-3f9c"));
     let err = send_claim(&path, b"not json").await.expect_err("bad claim");
     assert!(err.to_string().contains("bad claim"), "{err}");

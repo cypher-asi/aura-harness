@@ -63,11 +63,11 @@ impl CloudHub {
     ///
     /// # Errors
     ///
-    /// When the machine can't be woken, the node refuses, or the copy
-    /// fails.
+    /// When the machine can't be woken, its node is older than this hub,
+    /// the node refuses, or the copy fails.
     pub async fn new_session(&self, agent: AgentId) -> CloudResult<u64> {
         let hex = agent.to_hex();
-        let node = self.awake_node(&hex, &BootReporter::none()).await?;
+        let node = self.current_node(&hex, &BootReporter::none()).await?;
         let _work = self.fleet.begin_work(&hex);
         let started = node.new_session(agent).await?;
         self.mirror_from(&node, agent).await?;

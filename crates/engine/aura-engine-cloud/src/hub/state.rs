@@ -324,4 +324,18 @@ impl CloudHub {
         self.fleet.ensure_awake_reported(agent, boot).await?;
         self.node(agent)
     }
+
+    /// [`Self::awake_node`] for a turn or a new session: a node older than
+    /// this hub is refused ([`CloudError::OutdatedNode`]), since its runs
+    /// would start without the agent's conversation. [`Self::awake_node`]
+    /// takes it anyway, so the agent can still be brought back.
+    pub(super) async fn current_node(
+        &self,
+        agent: &str,
+        boot: &BootReporter,
+    ) -> CloudResult<NodeClient> {
+        let node = self.awake_node(agent, boot).await?;
+        self.fleet.check_node_protocol(agent)?;
+        Ok(node)
+    }
 }

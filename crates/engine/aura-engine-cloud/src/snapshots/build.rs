@@ -2,14 +2,16 @@
 //! saved as the snapshot once its node runs, and destroyed.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use aura_core_protocol::cloud::SnapshotOrigin;
+use aura_core_protocol::cloud::{SnapshotOrigin, NODE_PROTOCOL};
 use aura_core_types::{VmEvent, VmPayload};
 
+use super::binary::printed_protocol;
 use super::{
-    SnapshotBuilder, BUILDER_TTL_SECS, CHECK_BINARY, READY_WAIT, SHORT_STEP_TIMEOUT,
-    SNAPSHOT_MANIFEST, START_NODE, STEP_TIMEOUT, STOP_NODE,
+    cloud_binary_path, SnapshotBuilder, BUILDER_TTL_SECS, CHECK_BINARY, CHECK_PROTOCOL, READY_WAIT,
+    SHORT_STEP_TIMEOUT, SNAPSHOT_MANIFEST, START_NODE, STEP_TIMEOUT, STOP_NODE,
 };
 use crate::boot::{human_bytes, BootReporter, BootStage};
 use crate::boxd::CREATE_TIMEOUT;
@@ -30,8 +32,12 @@ pub(super) enum Step {
         command: String,
         timeout: Duration,
     },
-    /// [`CHECK_BINARY`], failing as [`CloudError::BinaryDoesNotRun`].
-    CheckBinary,
+    /// [`CHECK_BINARY`], failing as [`CloudError::BinaryDoesNotRun`], then
+    /// [`CHECK_PROTOCOL`], failing as [`CloudError::StaleBinary`].
+    CheckBinary {
+        /// The local file the installed binary was uploaded from.
+        source: PathBuf,
+    },
 }
 
 /// One snapshot to build: what its builder is made from, what runs on
@@ -288,7 +294,7 @@ impl SnapshotBuilder {
             Step::Run { command, timeout } => {
                 self.run_command(builder, command, timeout, boot).await
             }
-            Step::CheckBinary => self.check_binary(builder, boot).await,
+            Step::CheckBinary { source } => self.check_binary(builder, &source, boot).await,
         }
     }
 
@@ -363,7 +369,12 @@ impl SnapshotBuilder {
         }
     }
 
-    async fn check_binary(&self, builder: &str, boot: &BootReporter) -> CloudResult<()> {
+    async fn check_binary(
+        &self,
+        builder: &str,
+        source: &Path,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
         let output = boot
             .wait(
                 BootStage::Snapshot,
@@ -373,15 +384,43 @@ impl SnapshotBuilder {
                     .exec(builder, CHECK_BINARY, None, SHORT_STEP_TIMEOUT),
             )
             .await?;
-        if output.success() {
-            Ok(())
-        } else {
-            Err(CloudError::BinaryDoesNotRun {
+        if !output.success() {
+            return Err(CloudError::BinaryDoesNotRun {
                 machine: builder.to_string(),
                 exit_code: output.exit_code,
                 stderr: output.stderr_tail(800),
-            })
+            });
         }
+        self.check_protocol(builder, source, boot).await
+    }
+
+    /// [`CloudError::StaleBinary`] when the binary on `builder`, uploaded
+    /// from `source`, speaks an older node protocol than this hub.
+    async fn check_protocol(
+        &self,
+        builder: &str,
+        source: &Path,
+        boot: &BootReporter,
+    ) -> CloudResult<()> {
+        let output = boot
+            .wait(
+                BootStage::Snapshot,
+                format!("checking aura's node protocol on {builder}"),
+                Some(SHORT_STEP_TIMEOUT),
+                self.provider
+                    .exec(builder, CHECK_PROTOCOL, None, SHORT_STEP_TIMEOUT),
+            )
+            .await?;
+        let has = printed_protocol(&output);
+        if has >= NODE_PROTOCOL {
+            return Ok(());
+        }
+        Err(CloudError::StaleBinary {
+            path: source.to_path_buf(),
+            has,
+            needs: NODE_PROTOCOL,
+            install_to: cloud_binary_path(&self.home),
+        })
     }
 }
 

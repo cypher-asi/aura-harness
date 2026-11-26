@@ -263,6 +263,16 @@ fn limits_reject_nonsense() {
 }
 
 #[test]
+fn the_hub_can_ask_a_machine_for_its_node_protocol() {
+    assert!(matches!(
+        parse(&["node", "protocol"]).unwrap().command,
+        Some(Commands::Node(NodeCommand {
+            action: NodeSubcommand::Protocol
+        }))
+    ));
+}
+
+#[test]
 fn run_subcommand_still_owns_its_dir_flag() {
     let cli = parse(&["run", "-d", "/data"]).unwrap();
     let Some(Commands::Run(args)) = cli.command else {

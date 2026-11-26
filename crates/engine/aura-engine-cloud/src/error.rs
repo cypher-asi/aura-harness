@@ -150,6 +150,41 @@ pub enum CloudError {
         /// The end of its stderr (e.g. the loader's complaint).
         stderr: String,
     },
+    /// The uploaded aura binary is older than this hub, found on the base
+    /// builder before the base snapshot is saved.
+    #[error(
+        "the aura binary at {} is older than this app (node protocol {has}, needs {needs}), \
+         so cloud agents would lose their conversation between turns; rebuild it with \
+         `scripts/build-cloud-binary.sh` (it installs to {}) or set AURA_CLOUD_BINARY",
+        path.display(),
+        install_to.display()
+    )]
+    StaleBinary {
+        /// The binary that was uploaded.
+        path: PathBuf,
+        /// The node protocol it speaks; 0 from builds before the number.
+        has: u32,
+        /// This hub's node protocol.
+        needs: u32,
+        /// Where the hub looks for a cloud build of aura.
+        install_to: PathBuf,
+    },
+    /// A machine's node is older than this hub: a turn there would start
+    /// without the agent's conversation.
+    #[error(
+        "aura on {machine} is older than this app (node protocol {has}, needs {needs}), \
+         so the agent would lose its conversation between turns; rebuild the cloud binary \
+         with `scripts/build-cloud-binary.sh`, then place the agent again (bring it back \
+         with /local first if it is on that machine)"
+    )]
+    OutdatedNode {
+        /// The machine.
+        machine: String,
+        /// The node protocol its node speaks; 0 from nodes before the number.
+        has: u32,
+        /// This hub's node protocol.
+        needs: u32,
+    },
 }
 
 impl CloudError {
