@@ -4529,7 +4529,7 @@ fn test_plan_with_a_message_sends_it_in_plan_mode() {
 
 #[test]
 fn test_plan_message_parsing() {
-    use super::commands::{plan_ranges, strip_plan};
+    use super::slash::{plan_ranges, strip_plan};
     let ranges = |text: &str| -> Vec<(usize, usize)> {
         plan_ranges(text).iter().map(|r| (r.start, r.end)).collect()
     };

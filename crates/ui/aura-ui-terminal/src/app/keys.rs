@@ -831,7 +831,7 @@ impl App {
             return KeyResult::continue_running();
         }
 
-        if let Some(message) = super::commands::strip_plan(&text) {
+        if let Some(message) = super::slash::strip_plan(&text) {
             // A `/plan` word anywhere sends the rest in plan mode, never
             // as a build request ("/plan implement auth" asks for a plan).
             // On its own it enters or leaves plan mode.
