@@ -107,8 +107,8 @@ impl VisibleRows {
     }
 
     /// Keep the rows of `tail` that fall on screen, after `tail_gap` blank
-    /// ones, lighting up the checklist or the working line (`tail_toggle`)
-    /// when the pointer is on it.
+    /// ones, lighting up the working line (`tail_toggle`) when the pointer
+    /// is on it.
     pub(super) fn push_tail(
         &mut self,
         tail: &LiveTail,
@@ -118,12 +118,11 @@ impl VisibleRows {
         if tail_gap > 0 {
             self.push(Line::default());
         }
-        let checklist_hovered = hovered_activity == Some(ToggleTarget::TodoChecklist);
         for (row, line) in tail.lines.iter().enumerate() {
             let mut line = line.clone();
             let status_hovered = tail.status_row == Some(row)
                 && tail_toggle.is_some_and(|t| hovered_activity == Some(t.target));
-            if status_hovered || (checklist_hovered && tail.is_checklist_label(row)) {
+            if status_hovered {
                 apply_activity_hover(&mut line, theme);
             }
             self.push(line);

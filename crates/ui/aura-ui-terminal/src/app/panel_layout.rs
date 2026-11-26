@@ -18,6 +18,10 @@ pub(crate) struct PanelLayout {
     /// Which of the Record and side panels were shown when the hamburger
     /// button hid the right column, to show again when it comes back
     pub(crate) side_column_hidden: Option<(bool, bool)>,
+    /// Whether the hamburger button hid an open channel's panel. The
+    /// channel's right column ignores the agent panels' flags, so it
+    /// keeps its own.
+    pub(crate) channel_side_hidden: bool,
 }
 
 impl Default for PanelLayout {
@@ -30,6 +34,7 @@ impl Default for PanelLayout {
             chat_expanded: false,
             side_expanded: false,
             side_column_hidden: None,
+            channel_side_hidden: false,
         }
     }
 }

@@ -1,0 +1,36 @@
+{
+  "id": "01a219359288000e",
+  "title": "create a new feature, and create a plan first, to allow when in channels mode, when you click a member on right side, o…",
+  "state": "open",
+  "agent_id": "565a362f42a871aadaca8106bac349179635179e74a078c2dfa8d571510ec549",
+  "agent_name": "#zode coordinator",
+  "items": [
+    {
+      "content": "Make header hamburger toggle the channel info panel (done; workspace-wide gates blocked by other sessions' WIP)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the hamburger change",
+      "state": "completed",
+      "assignee": "reviewer"
+    },
+    {
+      "content": "Fix review findings: code done, tests and verification blocked by another session's SetRepo WIP",
+      "state": "pending",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Plan: clicking a channel member opens that agent's chat in the middle column with an x to return to the channel (like a file view)",
+      "state": "pending",
+      "assignee": "explorer"
+    },
+    {
+      "content": "Implement member chat view (after plan approval)",
+      "state": "pending"
+    }
+  ],
+  "summary": "I've asked EXP68 to write a plan for opening a member's chat from Channels. When you click a member in the right panel, their chat would replace the channel chat in the middle column, with an x at the top to go back, the same way a file opens. EXP68 is only reading the code, not changing it.",
+  "updated_ms": 1795719293262,
+  "created_ms": 1795719271048
+}

@@ -1,0 +1,16 @@
+{
+  "id": "01a2177e61fa0021",
+  "title": "Read `.worktrees/simplify-out/BRIEF.md` and `.worktrees/simplify-out/PHASE4.md` first and follow them. Lane: worktree `…",
+  "state": "completed",
+  "agent_id": "6126eb27910a9223edf8a0f2e4272ed1a9b6497c1e03fde66744ef601e9a81c9",
+  "agent_name": "rust-engineer #170",
+  "assignee": "rust-engineer",
+  "parent": "01a2169842dc000c",
+  "plan": ".aura/plans/codebase-simplification-500-line-files-cleaner-c_bab3130a.plan.md",
+  "plan_todo": "p4-model-context",
+  "items": [],
+  "summary": "The crate is not finished, and its test build is broken right now. I ran out of time partway through splitting the tests, so please don't commit this lane yet.",
+  "updated_ms": 1795690903499,
+  "created_ms": 1795690488314,
+  "tool_use_id": "toolu_01233fY39YJvJpXgPXpmeonq"
+}

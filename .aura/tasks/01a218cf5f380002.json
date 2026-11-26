@@ -1,0 +1,12 @@
+{
+  "id": "01a218cf5f380002",
+  "title": "[image 1] have tasks be in a drawer at bottom when they are active for a session. You should be able to collapse and ex…",
+  "state": "completed",
+  "agent_id": "67557af110cbe8fae75dea200931afadd747b10baf585b74dce74293ace51c46",
+  "agent_name": "Agent 1695",
+  "plan": ".aura/plans/todo-drawer-above-the-input_ec7cb338.plan.md",
+  "items": [],
+  "summary": "I'll look at how the todo list is rendered today before planning.",
+  "updated_ms": 1795712669380,
+  "created_ms": 1795712573240
+}

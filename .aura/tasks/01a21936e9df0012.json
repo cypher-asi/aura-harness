@@ -1,0 +1,41 @@
+{
+  "id": "01a21936e9df0012",
+  "title": "go",
+  "state": "running",
+  "agent_id": "565a362f42a871aadaca8106bac349179635179e74a078c2dfa8d571510ec549",
+  "agent_name": "#zode coordinator",
+  "items": [
+    {
+      "content": "Make header hamburger toggle the channel info panel (done; workspace-wide gates blocked by other sessions' WIP)",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Review the hamburger change",
+      "state": "completed",
+      "assignee": "reviewer"
+    },
+    {
+      "content": "Hamburger fix-ups done (RUS192): 1366 tests pass, clippy clean, uncommitted",
+      "state": "completed",
+      "assignee": "rust-engineer"
+    },
+    {
+      "content": "Plan: member chat in middle column (EXP68 done)",
+      "state": "completed",
+      "assignee": "explorer"
+    },
+    {
+      "content": "Implement member chat view per EXP68 plan",
+      "state": "in_progress",
+      "assignee": "RUS192"
+    },
+    {
+      "content": "Review member chat view",
+      "state": "pending"
+    }
+  ],
+  "summary": "The member-chat plan from EXP68 is ready. It fits what you approved and needs no changes to the backend or the desktop app:",
+  "updated_ms": 1795719579961,
+  "created_ms": 1795719358943
+}

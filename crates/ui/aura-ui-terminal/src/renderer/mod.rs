@@ -43,6 +43,7 @@ mod side_list;
 mod slash_menu;
 mod tasks;
 mod text;
+mod todo_drawer;
 mod trace_feed;
 
 #[cfg(test)]
@@ -94,8 +95,9 @@ struct FrameLayout {
     header: Rect,
     swarm: Option<Rect>,
     right: Option<Rect>,
-    /// The Chat column's rows: chat, benchmarks, queue, input and footer
-    chat_column: [Rect; 5],
+    /// The Chat column's rows: chat, to-do drawer, benchmarks, queue,
+    /// input and footer
+    chat_column: [Rect; 6],
     /// The footer row under the right column, when it is shown
     under_right: Option<Rect>,
 }
@@ -156,11 +158,13 @@ fn frame_layout(area: Rect, app: &App) -> FrameLayout {
     }
 }
 
-/// Split the Chat `column` into the chat, benchmarks, queue, input and
-/// footer rows.
-fn chat_column_rows(content: Rect, column: Rect, app: &App) -> [Rect; 5] {
-    // The queue and benchmark panels give up rows before the chat does:
-    // the chat keeps three and the input one. The queue goes first.
+/// Split the Chat `column` into the chat, to-do drawer, benchmarks,
+/// queue, input and footer rows.
+fn chat_column_rows(content: Rect, column: Rect, app: &App) -> [Rect; 6] {
+    // The queue, benchmark and to-do panels give up rows before the chat
+    // does: the chat keeps three and the input one. The queue takes its
+    // rows first, then the benchmark panel, then the to-do drawer, so the
+    // drawer is the first to go short.
     let queue_rows = queue_panel::height(app).min(
         content
             .height
@@ -171,22 +175,30 @@ fn chat_column_rows(content: Rect, column: Rect, app: &App) -> [Rect; 5] {
             .height
             .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 1 + 3 + queue_rows),
     );
+    let drawer_rows = todo_drawer::height(app).min(
+        content
+            .height
+            .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 1 + 3 + queue_rows + bench_rows),
+    );
     let max_input_rows = content
         .height
-        .saturating_sub(hud::FOOTER_ROWS + input::BOX_ROWS + 3 + queue_rows + bench_rows)
+        .saturating_sub(
+            hud::FOOTER_ROWS + input::BOX_ROWS + 3 + queue_rows + bench_rows + drawer_rows,
+        )
         .max(1);
     let input_rows = input::input_rows(column, app, max_input_rows);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
+            Constraint::Length(drawer_rows),
             Constraint::Length(bench_rows),
             Constraint::Length(queue_rows),
             Constraint::Length(input_rows + input::BOX_ROWS),
             Constraint::Length(hud::FOOTER_ROWS),
         ])
         .split(column);
-    [rows[0], rows[1], rows[2], rows[3], rows[4]]
+    [rows[0], rows[1], rows[2], rows[3], rows[4], rows[5]]
 }
 
 /// Images, the detail view and the selection over the Chat panel's body.
@@ -199,18 +211,20 @@ fn render_chat_overlays(frame: &mut Frame, chat: Rect, app: &mut App, theme: &Th
     }
 }
 
-/// The benchmark and queue panels, the input, the footer and the notice.
+/// The to-do drawer, the benchmark and queue panels, the input, the
+/// footer and the notice.
 fn render_below_chat(frame: &mut Frame, layout: &FrameLayout, app: &mut App, theme: &Theme) {
     let chat_column = &layout.chat_column;
-    bench_panel::render(frame, chat_column[1], app, theme);
-    queue_panel::render(frame, chat_column[2], app, theme);
-    app.set_input_area(chat_column[3]);
-    let drawn = input::render_input(frame, chat_column[3], app, theme);
+    todo_drawer::render(frame, chat_column[1], app, theme);
+    bench_panel::render(frame, chat_column[2], app, theme);
+    queue_panel::render(frame, chat_column[3], app, theme);
+    app.set_input_area(chat_column[4]);
+    let drawn = input::render_input(frame, chat_column[4], app, theme);
     app.set_input_stop_area(drawn.stop);
     app.set_input_wrap_width(drawn.wrap_width);
     app.set_input_rows(drawn.rows);
-    let footer_gap = hud::render_footer(frame, inset_edges(chat_column[4]), app, theme);
-    app.set_footer_area(inset_edges(chat_column[4]));
+    let footer_gap = hud::render_footer(frame, inset_edges(chat_column[5]), app, theme);
+    app.set_footer_area(inset_edges(chat_column[5]));
     let (records, sandbox) = split_right_column(layout.right, app);
     let notice_area = layout.under_right.unwrap_or(footer_gap);
     if let Some(read) = hud::render_notice(frame, (notice_area, sandbox.or(records)), app, theme) {
@@ -220,7 +234,6 @@ fn render_below_chat(frame: &mut Frame, layout: &FrameLayout, app: &mut App, the
 
 /// The menus, pickers and overlays drawn over everything else.
 fn render_popups(frame: &mut Frame, chat: Rect, app: &mut App, theme: &Theme) {
-    hud::render_todo_panel(frame, chat, app, theme);
     slash_menu::render_slash_menu(frame, chat, app, theme);
     mention_menu::render_mention_menu(frame, chat, app, theme);
     context_menu::render_context_menu(frame, app, theme);

@@ -18,6 +18,7 @@ use support::*;
 mod agent_codes;
 mod agent_commands;
 mod agents_header;
+mod channel_side_toggle;
 mod channels;
 mod chat_messages;
 mod chat_view;

@@ -21,7 +21,7 @@ const HELP_ITEMS: [&str; 48] = [
     "/context   What fills the context window",
     "/compact [focus]    Summarize older history now",
     "/init      Write or improve AGENTS.md",
-    "/todos     Toggle the agent's todo list",
+    "/todos     Fold or open the to-do drawer",
     "/cost      Tokens and cost of the session",
     "/agent [n|name]     Add an agent, or switch",
     "/agent new [name]   Create and switch to agent",

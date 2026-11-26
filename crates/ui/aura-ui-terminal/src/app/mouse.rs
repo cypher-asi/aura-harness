@@ -109,6 +109,7 @@ impl App {
                 app.project_list.project_moves,
                 app.project_drag_hit(),
                 app.queue_pointer_state(),
+                app.todo_drawer_pointer_state(),
                 (app.scrollbar_held(), app.scroll_offset, app.detail.scroll),
             )
         };
@@ -154,6 +155,7 @@ impl App {
             self.project_list.project_press = None;
             self.select.scrollbar_grab = None;
             self.drop_queue_press();
+            self.drop_todo_drawer_hover();
             return true;
         }
         if self.context_menu_mouse(mouse.kind, mouse.column, mouse.row) {
@@ -163,8 +165,9 @@ impl App {
         false
     }
 
-    /// The side column's toggle, the queue, the bench panel, right clicks
-    /// and the chat panel's scrollbar. Returns whether one took the event.
+    /// The side column's toggle, the queue, the to-do drawer, the bench
+    /// panel, right clicks and the chat panel's scrollbar. Returns whether
+    /// one took the event.
     fn mouse_on_chrome(&mut self, mouse: MouseEvent) -> bool {
         let (column, row) = (mouse.column, mouse.row);
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
@@ -176,6 +179,7 @@ impl App {
             return true;
         }
         if self.queue_mouse(mouse.kind, column, row)
+            || self.todo_drawer_mouse(mouse.kind, column, row)
             || self.bench_panel_mouse(mouse.kind, column, row)
         {
             self.hover = None;

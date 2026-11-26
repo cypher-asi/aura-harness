@@ -75,7 +75,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     let tail = if terminal {
         LiveTail::default()
     } else {
-        live_tail(app, padded.width as usize, theme)
+        live_tail(app, theme)
     };
     if render_waiting(frame, app, padded, (terminal, &tail), theme) {
         return;

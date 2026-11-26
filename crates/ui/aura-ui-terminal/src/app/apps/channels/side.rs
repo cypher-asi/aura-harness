@@ -31,6 +31,12 @@ impl App {
         self.channels.member_rows_area = Some(area);
     }
 
+    /// Drop where the MEMBERS side tab's rows were drawn, for a frame
+    /// that may not draw them.
+    pub(in crate::app) fn forget_channel_member_rows(&mut self) {
+        self.channels.member_rows_area = None;
+    }
+
     /// Member row of the MEMBERS side tab drawn at a screen cell.
     pub(in crate::app) fn channel_member_row_at(&self, column: u16, row: u16) -> Option<usize> {
         let state = &self.channels;

@@ -156,19 +156,6 @@ impl App {
         &self.hud
     }
 
-    /// Whether the full todo list is shown above the input.
-    #[must_use]
-    pub const fn todos_open(&self) -> bool {
-        self.todos.open
-    }
-
-    /// Whether the chat's live to-do checklist lists every item in full,
-    /// rather than the first few cut to one row each.
-    #[must_use]
-    pub const fn todos_expanded(&self) -> bool {
-        self.todos.expanded
-    }
-
     /// Get the messages.
     #[must_use]
     pub const fn messages(&self) -> &VecDeque<Message> {

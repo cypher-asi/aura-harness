@@ -1,0 +1,15 @@
+{
+  "id": "01a218db2c820005",
+  "title": "Work in the Rust crate `crates/ui/aura-ui-terminal`. Context: plan `.aura/plans/todo-drawer-above-the-input_ec7cb338.pl…",
+  "state": "completed",
+  "agent_id": "0e428ade0b5d4f86ed7b53c0cfec94c5bc2734a690cc29989d68c3b88c7a50cf",
+  "agent_name": "rust-engineer #191",
+  "assignee": "rust-engineer",
+  "parent": "01a218d0d71c0003",
+  "plan": ".aura/plans/todo-drawer-above-the-input_ec7cb338.plan.md",
+  "items": [],
+  "summary": "The old to-do UI is gone and `/todos` now drives the drawer. All the checks you asked for pass.",
+  "updated_ms": 1795713801985,
+  "created_ms": 1795713346690,
+  "tool_use_id": "toolu_011EEdfvW48M7Axy4Mp17teZ"
+}

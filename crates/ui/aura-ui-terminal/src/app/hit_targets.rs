@@ -83,8 +83,6 @@ pub(crate) enum ToggleTarget {
     Step(u64),
     /// The kernel records of a turn, by when its prompt was sent (Unix ms)
     TurnRecords(u64),
-    /// The live to-do checklist under the conversation
-    TodoChecklist,
     /// The `… more lines` row of a part of a message cut short, by
     /// message id
     More(u64, MoreSection),

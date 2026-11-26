@@ -247,20 +247,14 @@ impl BlockHits {
     }
 }
 
-/// Add the rows of `tail` starting at `tail_start` that toggle something:
-/// the checklist's, and the working line's, which is returned.
+/// Add the row of `tail` starting at `tail_start` that toggles something,
+/// the working line's, and return it.
 fn push_tail_toggles(
     toggle_rows: &mut Vec<ToggleRow>,
     app: &App,
     tail: &LiveTail,
     tail_start: usize,
 ) -> Option<ToggleRow> {
-    let checklist_open = app.todos_expanded();
-    toggle_rows.extend((0..tail.checklist_rows).map(|row| ToggleRow {
-        line: tail_start + row,
-        target: ToggleTarget::TodoChecklist,
-        open: checklist_open,
-    }));
     let tail_toggle = app
         .turn_started_ms()
         .zip(tail.status_row)

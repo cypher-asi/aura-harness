@@ -321,6 +321,7 @@ impl App {
         let switched = !coordinator.is_empty() && self.switch_on_screen(&coordinator);
         self.channels.awaiting_member =
             !switched && !self.channels.is_open_member(&self.active_agent_id);
+        self.keep_channel_focus_on_screen();
         self.try_send_event(UiEvent::OpenChannel(id.to_string()));
     }
 

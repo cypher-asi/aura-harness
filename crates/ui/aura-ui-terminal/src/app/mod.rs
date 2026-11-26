@@ -78,7 +78,7 @@ mod status;
 mod switching;
 pub mod tab_bar;
 mod ticks;
-mod todo_view;
+pub(crate) mod todo_drawer;
 mod tool_view;
 pub mod trace_feed;
 mod trace_json;
@@ -150,7 +150,6 @@ pub use smooth::ChatScroll;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use ticks::Ticks;
-use todo_view::TodoView;
 use tokio::sync::mpsc;
 
 /// Maximum number of messages to keep in history. Every tool call, thinking
@@ -304,8 +303,8 @@ pub struct App {
     pub(super) queue_panel: queue_panel::QueuePanel,
     /// The benchmark progress panel above the input
     pub(super) bench_panel: bench_progress::BenchPanel,
-    /// Whether the todo list is open and the checklist expanded
-    pub(super) todos: TodoView,
+    /// The to-do drawer under the Chat body
+    pub(super) todo_drawer: todo_drawer::TodoDrawer,
     /// The panel below the Record panel: its tab, scope, processes and
     /// scroll positions
     pub(super) side: SidePanel,

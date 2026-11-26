@@ -1,0 +1,16 @@
+{
+  "id": "01a2172bc22b0018",
+  "title": "First read `.worktrees/simplify-out/BRIEF.md` and follow it (work only in `.worktrees/simplify/`, branch CARGO_TARGET_D…",
+  "state": "completed",
+  "agent_id": "7faf7ed35c61525b43a6ac814247592dfc7ca55261e501fa2de82d06ab7e6fa0",
+  "agent_name": "rust-engineer #161",
+  "assignee": "rust-engineer",
+  "parent": "01a2169842dc000c",
+  "plan": ".aura/plans/codebase-simplification-500-line-files-cleaner-c_bab3130a.plan.md",
+  "plan_todo": "p3-registry",
+  "items": [],
+  "summary": "The agent registry now lives in a new engine-layer crate, `crates/engine/aura-engine-registry`. Behaviour and aura-app's public paths are unchanged. All the requested checks pass; the invariant check still reports exactly the 7 known violations. Nothing was committed.",
+  "updated_ms": 1795685489467,
+  "created_ms": 1795685073451,
+  "tool_use_id": "toolu_01PJ7Ty8vTPjiPi48snXc8vz"
+}

@@ -1,6 +1,6 @@
 //! What the agent on screen has used and is working on: the footer under
-//! the input, the notice beside it, and the full todo list that `/todos`
-//! opens.
+//! the input, the notice beside it, and the to-do header and rows the
+//! to-do drawer draws.
 //!
 //! ```text
 //! qwen3:4b · auto thinking · 23% context used · 2 calls        ● Ready
@@ -11,10 +11,10 @@ mod notice;
 
 pub(super) use notice::render_notice;
 
-use super::text::{display_width, wrap_words};
+use super::text::display_width;
 use crate::app::format::format_tokens;
 use crate::app::hud::{Hud, SessionStats};
-use crate::events::{TodoState, TodoView};
+use crate::events::TodoView;
 use crate::mode_command::PermissionMode;
 use crate::{App, Theme};
 use notice::MIN_NOTICE_WIDTH;
@@ -22,12 +22,12 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
 /// Most todo items listed at once.
-const MAX_TODO_ROWS: usize = 10;
+pub(super) const MAX_TODO_ROWS: usize = 10;
 
 /// Columns kept clear between the stats and the status at the right.
 const STATUS_GAP: usize = 2;
@@ -257,112 +257,25 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, app: &App, theme: &Th
     }
 }
 
-/// The full todo list over the bottom of the Chat panel, while `/todos`
-/// has it open.
-pub(super) fn render_todo_panel(frame: &mut Frame, chat: Rect, app: &App, theme: &Theme) {
-    let hud = app.hud();
-    // Todos are an agent feature; the channel app's chat and BENCH have
-    // none.
-    if app.channel_app()
-        || app.no_agent_on_screen()
-        || !app.todos_open()
-        || hud.todos.is_empty()
-        || chat.height < 3
-        || chat.width < 8
-    {
-        return;
-    }
-    let rows = hud.todos.len().min(MAX_TODO_ROWS);
-    let height = u16::try_from(rows)
-        .unwrap_or(u16::MAX)
-        .saturating_add(2)
-        .min(chat.height);
-    let area = Rect {
-        y: chat.bottom() - height,
-        height,
-        ..chat
-    };
-    let text_room = usize::from(chat.width).saturating_sub(6);
-    // Long lists start at the item being worked on, so it stays in view.
-    let first = hud
-        .todos
-        .iter()
-        .position(|t| t.state == TodoState::InProgress)
-        .map_or(0, |at| at.min(hud.todos.len() - rows));
-    let lines: Vec<Line<'_>> = hud
-        .todos
-        .iter()
-        .skip(first)
-        .take(rows)
-        .map(|todo| todo_line(todo, text_room, theme))
-        .collect();
-    let (done, total) = hud.todo_progress();
-    let block = Block::default()
-        .title(format!(" TODOS {done}/{total} "))
-        .title_bottom(Line::from(" /todos close ").right_aligned())
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.muted));
-    frame.render_widget(Clear, area);
-    frame.render_widget(Paragraph::new(lines).block(block), area);
-}
-
-/// `⬢ Working on 3 to-dos` over the to-do list, as the chat's live tail
-/// while a turn is in flight. With an animation `frame`, a band of light
-/// sweeps across `Working` to show the work goes on. Short, it lists the
-/// first [`MAX_TODO_ROWS`] items cut to one row each and counts the rest;
-/// `expanded`, it lists every item in full and offers to show less.
-pub(super) fn todo_checklist(
+/// `⬢ Working on 3 to-dos` while the agent is `working`, with `Working`
+/// shimmering on an animation `frame`; `⬢ 3 to-dos` otherwise.
+pub(super) fn checklist_header(
     hud: &Hud,
-    width: usize,
     theme: &Theme,
+    working: bool,
     frame: Option<usize>,
-    expanded: bool,
-) -> TodoChecklist {
-    if hud.todos.is_empty() {
-        return TodoChecklist::default();
-    }
-    let mut lines = vec![checklist_header(hud, theme, frame)];
-    let room = width.saturating_sub(2);
-    let footer = if expanded {
-        lines.extend(
-            hud.todos
-                .iter()
-                .flat_map(|todo| todo_lines_in_full(todo, room, theme)),
-        );
-        Some("  show less".to_string())
-    } else {
-        lines.extend(
-            hud.todos
-                .iter()
-                .take(MAX_TODO_ROWS)
-                .map(|todo| todo_line(todo, room, theme)),
-        );
-        let more = hud.todos.len().saturating_sub(MAX_TODO_ROWS);
-        (more > 0).then(|| format!("  {more} more"))
-    };
-    let has_footer = footer.is_some();
-    lines.extend(
-        footer.map(|text| Line::from(Span::styled(text, Style::default().fg(theme.colors.muted)))),
-    );
-    TodoChecklist { lines, has_footer }
-}
-
-/// The rows of the chat's to-do checklist.
-#[derive(Debug, Default)]
-pub(super) struct TodoChecklist {
-    pub(super) lines: Vec<Line<'static>>,
-    /// Whether the last row is `N more` or `show less`, which with the
-    /// header is what lights up under the mouse.
-    pub(super) has_footer: bool,
-}
-
-/// `⬢ Working on 3 to-dos`, with `Working` shimmering on an animation
-/// `frame`.
-fn checklist_header(hud: &Hud, theme: &Theme, frame: Option<usize>) -> Line<'static> {
+) -> Line<'static> {
     let (_, total) = hud.todo_progress();
     let plural = if total == 1 { "" } else { "s" };
     let label_style = Style::default().add_modifier(Modifier::BOLD);
     let mut header = vec![Span::styled("⬢ ", Style::default().fg(theme.colors.faint))];
+    if !working {
+        header.push(Span::styled(
+            format!("{total} to-do{plural}"),
+            label_style.fg(theme.colors.foreground),
+        ));
+        return Line::from(header);
+    }
     match frame {
         Some(frame) => header.extend(crate::animation::shimmer_spans(
             "Working",
@@ -384,7 +297,7 @@ fn checklist_header(hud: &Hud, theme: &Theme, frame: Option<usize>) -> Line<'sta
 
 /// `▣ Write the parser`: a to-do's box, under the header's `⬢`, then its
 /// text.
-fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
+pub(super) fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
     let mark = super::plans::marker(todo.state);
     let mark_color = super::plans::marker_color(todo.state, theme);
     let text_style = super::plans::todo_style(todo.state, theme);
@@ -400,40 +313,6 @@ fn todo_line(todo: &TodoView, room: usize, theme: &Theme) -> Line<'static> {
         Span::styled(truncate(&todo.content, room), text_style),
         Span::styled(agent, Style::default().fg(theme.colors.faint)),
     ])
-}
-
-/// A to-do's box and its whole text, wrapped to `room` columns, with
-/// later rows indented to start under the text rather than the box. The
-/// `→ agent` it is assigned to ends the last row when it fits there.
-fn todo_lines_in_full(todo: &TodoView, room: usize, theme: &Theme) -> Vec<Line<'static>> {
-    let mark = super::plans::marker(todo.state);
-    let mark_color = super::plans::marker_color(todo.state, theme);
-    let text_style = super::plans::todo_style(todo.state, theme);
-    let lead = format!("{mark} ");
-    let indent = " ".repeat(display_width(&lead));
-    let rows = wrap_words(&todo.content, room);
-    let last = rows.len().saturating_sub(1);
-    rows.into_iter()
-        .enumerate()
-        .map(|(i, text)| {
-            let mut spans = vec![if i == 0 {
-                Span::styled(lead.clone(), Style::default().fg(mark_color))
-            } else {
-                Span::raw(indent.clone())
-            }];
-            let agent = todo
-                .assignee
-                .as_deref()
-                .filter(|_| i == last)
-                .map(|agent| format!("  → {agent}"))
-                .filter(|agent| display_width(&text) + display_width(agent) <= room);
-            spans.push(Span::styled(text, text_style));
-            spans.extend(
-                agent.map(|agent| Span::styled(agent, Style::default().fg(theme.colors.faint))),
-            );
-            Line::from(spans)
-        })
-        .collect()
 }
 
 /// `text` cut to `width` columns, ending in `…` when cut.

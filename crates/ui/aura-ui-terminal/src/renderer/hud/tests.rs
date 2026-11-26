@@ -1,5 +1,6 @@
 use super::notice::columns;
 use super::*;
+use crate::events::TodoState;
 
 #[test]
 fn plan_mode_status_says_how_to_leave() {
@@ -83,7 +84,8 @@ fn checklist_boxes_each_state() {
         ],
         ..Hud::default()
     };
-    let lines = todo_checklist(&hud, 40, &theme, None, false).lines;
+    let mut lines = vec![checklist_header(&hud, &theme, true, None)];
+    lines.extend(hud.todos.iter().map(|todo| todo_line(todo, 38, &theme)));
     let text = |line: &Line<'_>| -> String { line.spans.iter().map(|s| &*s.content).collect() };
     let rows: Vec<String> = lines.iter().map(text).collect();
     assert_eq!(
@@ -116,10 +118,7 @@ fn checklist_working_label_shimmers_when_animated() {
         }],
         ..Hud::default()
     };
-    let header = |frame| {
-        let lines = todo_checklist(&hud, 40, &theme, frame, false).lines;
-        lines[0].spans.clone()
-    };
+    let header = |frame| checklist_header(&hud, &theme, true, frame).spans;
     let text = |spans: &[Span<'_>]| -> String { spans.iter().map(|s| &*s.content).collect() };
     // Mid-pass, the band lights part of `Working` and leaves the rest.
     let lit = header(Some(4));
@@ -132,91 +131,6 @@ fn checklist_working_label_shimmers_when_animated() {
     let steady = header(None);
     assert_eq!(steady.len(), 3);
     assert_eq!(steady[1].style.fg, Some(theme.colors.foreground));
-}
-
-fn text_of(line: &Line<'_>) -> String {
-    line.spans.iter().map(|s| &*s.content).collect()
-}
-
-fn pending(content: &str) -> TodoView {
-    TodoView {
-        content: content.to_string(),
-        state: TodoState::Pending,
-        assignee: None,
-        task: None,
-    }
-}
-
-#[test]
-fn checklist_counts_what_it_leaves_out() {
-    let theme = Theme::default();
-    let hud = Hud {
-        todos: (0..MAX_TODO_ROWS + 2)
-            .map(|i| pending(&format!("step {i}")))
-            .collect(),
-        ..Hud::default()
-    };
-    let checklist = todo_checklist(&hud, 40, &theme, None, false);
-    assert_eq!(checklist.lines.len(), MAX_TODO_ROWS + 2);
-    assert!(checklist.has_footer);
-    let last = text_of(&checklist.lines[MAX_TODO_ROWS + 1]);
-    assert_eq!(last.trim(), "2 more");
-}
-
-#[test]
-fn short_checklist_cuts_long_items_to_one_row() {
-    let theme = Theme::default();
-    let hud = Hud {
-        todos: vec![pending("parse every config file the user has")],
-        ..Hud::default()
-    };
-    let checklist = todo_checklist(&hud, 20, &theme, None, false);
-    let rows: Vec<String> = checklist.lines.iter().map(text_of).collect();
-    assert_eq!(rows[1..], ["☐ parse every confi…"]);
-    assert!(!checklist.has_footer);
-}
-
-#[test]
-fn expanded_checklist_lists_every_item_in_full() {
-    let theme = Theme::default();
-    let mut todos: Vec<TodoView> = (0..MAX_TODO_ROWS + 2)
-        .map(|i| pending(&format!("step {i}")))
-        .collect();
-    todos[0] = TodoView {
-        assignee: Some("bob".to_string()),
-        ..pending("parse the config files and tests too")
-    };
-    let hud = Hud {
-        todos,
-        ..Hud::default()
-    };
-    let checklist = todo_checklist(&hud, 20, &theme, None, true);
-    let rows: Vec<String> = checklist.lines.iter().map(text_of).collect();
-    // The long item wraps at words, later rows under its text, and its
-    // agent ends the last row.
-    assert_eq!(
-        rows[1..4],
-        ["☐ parse the config", "  files and tests", "  too  → bob"]
-    );
-    assert_eq!(rows.len(), 1 + 3 + MAX_TODO_ROWS + 1 + 1);
-    assert_eq!(
-        rows[rows.len() - 2],
-        format!("☐ step {}", MAX_TODO_ROWS + 1)
-    );
-    assert_eq!(rows[rows.len() - 1].trim(), "show less");
-    assert!(checklist.has_footer);
-}
-
-#[test]
-fn expanded_checklist_breaks_a_word_too_long_for_a_row() {
-    let theme = Theme::default();
-    let hud = Hud {
-        todos: vec![pending("abcdefghijkl")],
-        ..Hud::default()
-    };
-    let checklist = todo_checklist(&hud, 7, &theme, None, true);
-    let rows: Vec<String> = checklist.lines.iter().map(text_of).collect();
-    assert_eq!(rows[1..4], ["☐ abcde", "  fghij", "  kl"]);
 }
 
 #[test]

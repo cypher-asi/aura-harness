@@ -52,16 +52,16 @@ impl App {
         self.add_message(Message::new(MessageRole::System, &report));
     }
 
-    /// `/todos`: show or hide the agent's todo list.
+    /// `/todos`: fold or open the to-do drawer, or bring a finished list
+    /// back into it.
     fn todos_command(&mut self) {
         if self.hud.todos.is_empty() {
-            self.todos.open = false;
             self.notifications.current = Some((
                 "The agent has no todo list".to_string(),
                 NotificationType::Warning,
             ));
         } else {
-            self.todos.open = !self.todos.open;
+            self.cycle_todo_drawer();
         }
     }
 
@@ -88,7 +88,7 @@ impl App {
             instructions,
             ..Default::default()
         };
-        self.todos.open = false;
+        self.reset_todo_drawer();
         // The new conversation is a new run, which no agent has
         // joined yet.
         self.start_members_run();

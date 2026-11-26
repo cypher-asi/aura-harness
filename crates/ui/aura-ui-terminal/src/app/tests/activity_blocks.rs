@@ -144,53 +144,27 @@ fn test_clicking_a_group_summary_flips_what_it_shows() {
 }
 
 #[test]
-fn test_clicking_the_todo_checklist_expands_and_collapses_it() {
+fn test_the_todo_drawer_folds_and_an_emptied_list_opens_it_again() {
     use crate::events::{TodoState, TodoView};
-    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
     let mut app = App::new();
-    app.areas.chat = Some(Rect::new(0, 0, 60, 20));
-    app.set_chat_text_area(Rect::new(2, 1, 56, 18));
-    let click = |app: &mut App| {
-        for kind in [
-            MouseEventKind::Down(MouseButton::Left),
-            MouseEventKind::Up(MouseButton::Left),
-        ] {
-            app.handle_mouse(MouseEvent {
-                kind,
-                column: 10,
-                row: 1,
-                modifiers: KeyModifiers::empty(),
-            });
-        }
-    };
-    let checklist = |open| ToggleRow {
-        line: 0,
-        target: ToggleTarget::TodoChecklist,
-        open,
-    };
+    assert!(!app.todo_drawer_folded());
+    app.toggle_todo_drawer();
+    assert!(app.todo_drawer_folded());
+    app.toggle_todo_drawer();
+    assert!(!app.todo_drawer_folded());
 
-    assert!(!app.todos_expanded());
-    app.set_chat_layout(vec![checklist(false)], 0);
-    click(&mut app);
-    assert!(app.todos_expanded());
-
-    app.set_chat_layout(vec![checklist(true)], 0);
-    click(&mut app);
-    assert!(!app.todos_expanded());
-
-    // An emptied list starts the next one short.
-    click(&mut app);
-    assert!(app.todos_expanded());
+    // A new list keeps the fold; an emptied one opens the next list.
+    app.toggle_todo_drawer();
     app.process_command(UiCommand::SetTodos(vec![TodoView {
         content: "next".to_string(),
         state: TodoState::Pending,
         assignee: None,
         task: None,
     }]));
-    assert!(app.todos_expanded());
+    assert!(app.todo_drawer_folded());
     app.process_command(UiCommand::SetTodos(Vec::new()));
-    assert!(!app.todos_expanded());
+    assert!(!app.todo_drawer_folded());
 }
 
 #[test]

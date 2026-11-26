@@ -129,7 +129,7 @@ fn test_todos_stay_with_their_agent() {
     assert!(!screen.contains("Background work"), "{screen}");
 
     app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
-    run_slash(&mut app, "/todos");
+    // The drawer shows the agent's list by itself, no `/todos` needed.
     let screen = render_rows(&mut app, 160).join("\n");
     assert!(screen.contains("▣ Background work"), "{screen}");
 }

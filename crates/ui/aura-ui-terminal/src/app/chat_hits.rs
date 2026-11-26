@@ -121,7 +121,6 @@ impl App {
                 message.set_expanded(expanded);
             }
             ToggleTarget::TurnRecords(started_ms) => self.show_turn_records(started_ms),
-            ToggleTarget::TodoChecklist => self.todos.expanded = !self.todos.expanded,
             ToggleTarget::More(id, section) => {
                 let Some(message) = self.messages.iter_mut().find(|m| m.version().0 == id) else {
                     return false;

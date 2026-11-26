@@ -211,7 +211,10 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     app.handle_key(key(KeyCode::Left));
     assert!(app.channel_open());
     assert!(!app.record_panel_visible(), "no Kernel panel in a channel");
-    assert!(app.sandbox_panel_visible(), "shown though the user hid it");
+    assert!(
+        app.sandbox_panel_visible(),
+        "shown though the agent's side panel is hidden"
+    );
     assert!(app.side_maximized());
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
     assert_eq!(

@@ -31,12 +31,14 @@ impl App {
     }
 
     fn cmd_set_todos(&mut self, todos: Vec<TodoView>) {
-        if todos.is_empty() {
-            self.todos.open = false;
-            // The next list starts short, whatever the last one did.
-            self.todos.expanded = false;
-        }
         self.hud.todos = todos;
+        if self.hud.todos.is_empty() {
+            self.reset_todo_drawer();
+        } else if self.hud.has_open_todos() {
+            // Work under way shows the drawer by itself; once it
+            // finishes, the drawer hides again until `/todos`.
+            self.unforce_todo_drawer();
+        }
     }
 
     fn cmd_set_context(&mut self, context: ContextView) {

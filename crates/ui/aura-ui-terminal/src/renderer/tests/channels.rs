@@ -2,7 +2,7 @@ use super::*;
 
 /// An app showing the CHANNELS tab with `#zode`, whose coordinator spawned
 /// a worker.
-fn channels_app() -> crate::App {
+pub(super) fn channels_app() -> crate::App {
     use crate::app::{AgentsTab, PaneTab};
     use crate::events::{AgentSummary, ChannelSummary, UiCommand};
     let member = |id: &str, name: &str, depth: usize| AgentSummary {
@@ -115,7 +115,7 @@ fn test_an_open_channel_keeps_the_list_and_lists_its_members_on_the_right() {
 
 /// `channels_app` with `#zode` open on its INFO tab, `#zode` working in
 /// `project` when given.
-fn channel_info_app(project: Option<crate::events::ChannelProjectView>) -> crate::App {
+pub(super) fn channel_info_app(project: Option<crate::events::ChannelProjectView>) -> crate::App {
     use crate::app::{PaneTab, SidePanelTab};
     use crate::events::UiCommand;
     let mut app = channels_app();
@@ -130,7 +130,7 @@ fn channel_info_app(project: Option<crate::events::ChannelProjectView>) -> crate
 
 /// The first of `rows` containing `needle` and not `PROJECTS`, which
 /// the left panel may show.
-fn info_row(rows: &[String], needle: &str) -> usize {
+pub(super) fn info_row(rows: &[String], needle: &str) -> usize {
     rows.iter()
         .position(|row| row.contains(needle) && !row.contains("PROJECTS"))
         .unwrap_or_else(|| panic!("no {needle:?} in:\n{}", rows.join("\n")))

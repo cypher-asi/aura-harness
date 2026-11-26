@@ -168,14 +168,18 @@ impl App {
         self.panels.swarm_visible && !self.panels.chat_expanded
     }
 
-    /// Check if the Sandbox panel is visible. It shows while a channel is
-    /// open even when the user hid it, and hides with no agent on screen,
-    /// which leaves it nothing to show.
+    /// Check if the Sandbox panel is visible. While a channel is open it
+    /// is the channel's panel, shown whatever the user did to the agent's
+    /// unless the hamburger button hid it; it hides with no agent on
+    /// screen, which leaves it nothing to show.
     #[must_use]
     pub fn sandbox_panel_visible(&self) -> bool {
-        (self.panels.sandbox_visible || self.channel_open())
-            && !self.panels.chat_expanded
-            && !self.no_agent_on_screen()
+        let shown = if self.channel_open() {
+            !self.panels.channel_side_hidden
+        } else {
+            self.panels.sandbox_visible
+        };
+        shown && !self.panels.chat_expanded && !self.no_agent_on_screen()
     }
 
     /// Whether the chat panel fills the screen, the other panels hidden.
@@ -228,7 +232,13 @@ impl App {
     ///
     /// Only the panels' own flags change, so `/kernel`, `/files` and the
     /// tabs that open the Record panel show the column again as usual.
+    /// In a channel the button hides or shows the channel's panel alone,
+    /// leaving the agent panels' flags and what they remember as they were.
     pub fn toggle_side_column(&mut self) {
+        if self.channel_open() {
+            self.toggle_channel_side();
+            return;
+        }
         if self.side_column_shown() {
             self.panels.side_column_hidden =
                 Some((self.panels.record_visible, self.panels.sandbox_visible));
@@ -252,6 +262,32 @@ impl App {
         self.panels.sandbox_visible = side;
         if side {
             self.sandbox.refresh();
+        }
+    }
+
+    /// [`Self::toggle_side_column`] in a channel: hide the channel's panel,
+    /// its room going to the chat, or show it again. While the chat is
+    /// expanded the panel is not on screen, so the button restores the
+    /// chat and shows the panel, as it does for the agent's column.
+    fn toggle_channel_side(&mut self) {
+        if self.sandbox_panel_visible() {
+            self.panels.channel_side_hidden = true;
+            self.keep_channel_focus_on_screen();
+            return;
+        }
+        self.panels.chat_expanded = false;
+        self.panels.channel_side_hidden = false;
+    }
+
+    /// In the channel app, move the focus to the chat when it is on a
+    /// panel not on screen: the channel's panel the hamburger button hid,
+    /// or the agent panels the app leaves away. Keys would otherwise move
+    /// a highlight or switch a tab no one sees. Called wherever the
+    /// channel's layout can change under the focus, and before each key.
+    /// The agent apps keep the focus they have.
+    pub(super) fn keep_channel_focus_on_screen(&mut self) {
+        if self.channel_app() && !self.panel_visible(self.focus) {
+            self.focus = PanelFocus::Chat;
         }
     }
 }
