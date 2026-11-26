@@ -5,11 +5,11 @@
 use crate::app::folder_picker::FolderPicker;
 use crate::app::{
     agent_button_at, contains, follow_selection, AgentButton, AgentRowEnd, App, AppState,
-    NotificationType, ProjectListRow, PROJECT_ADD_WIDTH,
+    HoverTarget, NotificationType, ProjectListRow, PROJECT_ADD_WIDTH,
 };
 use crate::events::{empty_projects, starts_project, AgentSummary, ProjectSummary, UiEvent};
 use crate::terminal::KeyResult;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use std::path::PathBuf;
 
@@ -305,6 +305,49 @@ impl App {
     /// Record where "+ New project" was drawn this frame.
     pub fn set_new_project_area(&mut self, area: Rect) {
         self.areas.new_project_row = Some(area);
+    }
+
+    /// Space folds the highlighted agent, or with Shift its project;
+    /// Delete archives the highlighted agent, or with Shift removes its
+    /// project. Returns whether `key` was one of them.
+    pub(in crate::app) fn projects_shortcut(&mut self, key: KeyEvent, word_motion: bool) -> bool {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::Char(' ') if !word_motion && shift => self.toggle_selected_project(),
+            KeyCode::Char(' ') if !word_motion => self.toggle_selected_fold(),
+            KeyCode::Delete if shift => self.remove_selected_project(),
+            KeyCode::Delete => self.archive_selected_agent(),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Scroll the projects list `delta` rows, leaving the highlight where
+    /// it is; down stops at the last row.
+    pub(in crate::app) fn scroll_project_rows(&mut self, delta: isize) {
+        let scroll = self.agents_scroll.saturating_add_signed(delta);
+        self.agents_scroll = if delta > 0 {
+            let visible = self
+                .areas
+                .agent_rows
+                .map_or(1, |area| usize::from(area.height));
+            scroll.min(self.listed_project_rows().saturating_sub(visible))
+        } else {
+            scroll
+        };
+        self.agents_scroll_detached = true;
+    }
+
+    /// What the pointer is over in the projects list.
+    pub(in crate::app) fn hovered_project_row(&self, column: u16, row: u16) -> Option<HoverTarget> {
+        let index = self.project_row_at(column, row)?;
+        if self.project_add_at(index, column).is_some() {
+            return Some(HoverTarget::AddToProject(index));
+        }
+        if let Some((button, _)) = self.agent_button_hit(index, column) {
+            return Some(button.target(index));
+        }
+        Some(HoverTarget::ProjectRow(index))
     }
 
     /// Projects-list row drawn at a screen cell: a listed project or agent,

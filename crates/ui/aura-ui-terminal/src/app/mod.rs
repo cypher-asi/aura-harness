@@ -1751,21 +1751,9 @@ impl App {
             PanelFocus::Records => {
                 self.selected_record = self.selected_record.saturating_sub(lines);
             }
-            PanelFocus::Swarm => match self.agents_tab {
-                AgentsTab::Channels => {
-                    self.move_channel_highlight(-isize::try_from(lines).unwrap_or(isize::MAX));
-                }
-                AgentsTab::Projects => {
-                    self.agents_scroll = self.agents_scroll.saturating_sub(lines);
-                    self.agents_scroll_detached = true;
-                }
-                AgentsTab::Roster => {
-                    self.select_definition_row(self.selected_definition.saturating_sub(lines));
-                }
-                AgentsTab::Archive => {
-                    self.move_archived_by(-isize::try_from(lines).unwrap_or(isize::MAX));
-                }
-            },
+            PanelFocus::Swarm => {
+                self.scroll_agents_panel(-isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Sandbox => {
                 let delta = -isize::try_from(lines).unwrap_or(isize::MAX);
                 match self.side_tab {
@@ -1812,26 +1800,9 @@ impl App {
                         (self.selected_record + lines).min(self.records.len().saturating_sub(1));
                 }
             }
-            PanelFocus::Swarm => match self.agents_tab {
-                AgentsTab::Channels => {
-                    self.move_channel_highlight(isize::try_from(lines).unwrap_or(isize::MAX));
-                }
-                AgentsTab::Projects => {
-                    let visible = self
-                        .areas
-                        .agent_rows
-                        .map_or(1, |area| usize::from(area.height));
-                    let max = self.listed_project_rows().saturating_sub(visible);
-                    self.agents_scroll = (self.agents_scroll + lines).min(max);
-                    self.agents_scroll_detached = true;
-                }
-                AgentsTab::Roster => {
-                    self.select_definition_row(self.selected_definition.saturating_add(lines));
-                }
-                AgentsTab::Archive => {
-                    self.move_archived_by(isize::try_from(lines).unwrap_or(isize::MAX));
-                }
-            },
+            PanelFocus::Swarm => {
+                self.scroll_agents_panel(isize::try_from(lines).unwrap_or(isize::MAX));
+            }
             PanelFocus::Sandbox => {
                 let delta = isize::try_from(lines).unwrap_or(isize::MAX);
                 match self.side_tab {
@@ -2168,8 +2139,11 @@ impl App {
         let Some(panel) = self.panel_at(mouse.column, mouse.row) else {
             return;
         };
-        let picks_a_row = panel == PanelFocus::Swarm && self.agents_tab != AgentsTab::Projects;
-        let step = if picks_a_row { 1 } else { 3 };
+        let step = if panel == PanelFocus::Swarm {
+            self.agents_panel_wheel_step()
+        } else {
+            3
+        };
         let over_detail = panel == PanelFocus::Chat && self.detail.is_some();
         if matches!(
             mouse.kind,
@@ -2287,31 +2261,8 @@ impl App {
         if contains(self.areas.side_toggle, column, row) {
             return Some(HoverTarget::SideToggle);
         }
-        if self.agents_tab == AgentsTab::Projects {
-            if let Some(index) = self.project_row_at(column, row) {
-                if self.project_add_at(index, column).is_some() {
-                    return Some(HoverTarget::AddToProject(index));
-                }
-                if let Some((button, _)) = self.agent_button_hit(index, column) {
-                    return Some(button.target(index));
-                }
-                return Some(HoverTarget::ProjectRow(index));
-            }
-        }
-        if self.agents_tab == AgentsTab::Channels {
-            if let Some(index) = self.channel_row_at(column, row) {
-                return Some(HoverTarget::ChannelRow(index));
-            }
-        }
-        if self.agents_tab == AgentsTab::Roster {
-            if let Some(index) = self.definition_row_at(column, row) {
-                return Some(HoverTarget::DefinitionRow(index));
-            }
-        }
-        if self.agents_tab == AgentsTab::Archive {
-            if let Some(index) = self.archived_row_at(column, row) {
-                return Some(HoverTarget::ArchivedRow(index));
-            }
+        if let Some(target) = self.hovered_agents_panel(column, row) {
+            return Some(target);
         }
         if contains(self.areas.record_tabs, column, row) {
             return tab_at(self.areas.record_tabs, column, row, RecordsTab::layout)

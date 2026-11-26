@@ -4,7 +4,7 @@ use super::model_picker::PAGE_STEP;
 use super::processes::SIDE_PAGE;
 use super::{
     line_edit::{is_newline_key, LineEdit},
-    AgentsTab, App, AppState, ChatTab, NotificationType, PanelFocus, RecordsTab, SidePanelTab,
+    App, AppState, ChatTab, NotificationType, PanelFocus, RecordsTab, SidePanelTab,
 };
 use crate::{events::UiEvent, input::InputHistory, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
@@ -448,51 +448,8 @@ impl App {
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Roster
             && self.input.is_empty()
-            && !word_motion
-            && self.handle_definitions_shortcut(key)
-        {
-            return KeyResult::continue_running();
-        }
-        if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Projects
-            && self.input.is_empty()
-            && !word_motion
-            && key.code == KeyCode::Char(' ')
-        {
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                self.toggle_selected_project();
-            } else {
-                self.toggle_selected_fold();
-            }
-            return KeyResult::continue_running();
-        }
-        if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Projects
-            && self.input.is_empty()
-            && key.code == KeyCode::Delete
-        {
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                self.remove_selected_project();
-            } else {
-                self.archive_selected_agent();
-            }
-            return KeyResult::continue_running();
-        }
-        if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Channels
-            && self.input.is_empty()
-            && !word_motion
-            && self.handle_channels_key(key)
-        {
-            return KeyResult::continue_running();
-        }
-        if self.focus == PanelFocus::Swarm
-            && self.agents_tab == AgentsTab::Archive
-            && self.input.is_empty()
-            && !word_motion
-            && self.handle_archive_key(key)
+            && self.agents_panel_shortcut(key, word_motion)
         {
             return KeyResult::continue_running();
         }
@@ -577,21 +534,7 @@ impl App {
                     KeyResult::continue_running()
                 }
             },
-            PanelFocus::Swarm => match self.agents_tab {
-                AgentsTab::Channels => {
-                    self.handle_channels_key(key);
-                    KeyResult::continue_running()
-                }
-                AgentsTab::Projects => self.handle_swarm_key(key),
-                AgentsTab::Roster => {
-                    self.handle_definitions_key(key);
-                    KeyResult::continue_running()
-                }
-                AgentsTab::Archive => {
-                    self.handle_archive_key(key);
-                    KeyResult::continue_running()
-                }
-            },
+            PanelFocus::Swarm => self.handle_agents_panel_key(key),
             PanelFocus::Sandbox => match self.side_tab {
                 SidePanelTab::Sandbox => self.handle_sandbox_key(key),
                 SidePanelTab::Processes => {

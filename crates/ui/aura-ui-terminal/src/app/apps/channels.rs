@@ -64,9 +64,6 @@ pub(crate) struct ChannelState {
     rows_area: Option<Rect>,
     /// Where "+ New channel" was drawn this frame
     new_channel_area: Option<Rect>,
-    /// The channel open when the user last left CHANNELS, opened again
-    /// on coming back
-    last_open: Option<String>,
     /// The agent on screen when the user came to CHANNELS and the chat
     /// panel's tab it was on, which CHANNELS turned to CHAT: given back
     /// on leaving
@@ -269,13 +266,10 @@ impl App {
         self.show_channel_chat();
     }
 
-    /// The user left the channel app for another tab: close the open
-    /// channel, remembering it for coming back, and give the agent that
-    /// was on screen before back the chat tab it was on.
+    /// The user left the channel app for another tab, which remembered
+    /// the open channel: close it, and give the agent that was on screen
+    /// before back the chat tab it was on.
     pub(in crate::app) fn leave_channel_app(&mut self) {
-        if let Some(open) = self.channels.open.clone() {
-            self.channels.last_open = Some(open);
-        }
         self.close_channel();
         if let Some((agent, tab)) = self.channels.chat_tab_before.take() {
             self.give_chat_tab_back(&agent, tab);
@@ -285,8 +279,8 @@ impl App {
     /// The channel open when the user last left CHANNELS, if it is still
     /// listed.
     pub(in crate::app) fn channel_to_reopen(&self) -> Option<String> {
-        self.channels
-            .last_open
+        self.apps
+            .channel
             .clone()
             .filter(|id| self.channels.find(id).is_some())
     }
@@ -323,11 +317,11 @@ impl App {
             self.channels.side_tab_before = Some(self.side_tab);
         }
         self.channels.open = Some(id.to_string());
-        if self.channels.last_open.as_deref() != Some(id) {
+        if self.apps.channel.as_deref() != Some(id) {
             self.channels.member_selected = 0;
             self.channels.member_scroll = 0;
         }
-        self.channels.last_open = Some(id.to_string());
+        self.apps.channel = Some(id.to_string());
         self.channels.selected = row;
         self.channels.forget_areas();
         self.show_side_tab(SidePanelTab::ChannelMembers);
@@ -447,7 +441,7 @@ impl App {
             self.left_channel();
         }
         if self.channel_to_reopen().is_none() {
-            self.channels.last_open = None;
+            self.apps.channel = None;
         }
         if let Some(row) = self.open_channel_row() {
             self.channels.selected = row;

@@ -24,7 +24,7 @@
 //! linked to and those it is (each item is left out when its list would
 //! be empty), and "Archive channel…", which asks for `y` first.
 
-use super::{contains, AgentsTab, App, AppState, PanelFocus, ProjectListRow};
+use super::{contains, App, AppState, PanelFocus, ProjectListRow};
 use crate::events::UiEvent;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
@@ -395,17 +395,10 @@ impl App {
         items
     }
 
-    /// A right click on the agents panel: highlight the project or agent
+    /// A right click on the PROJECTS list: highlight the project or agent
     /// under the pointer and open its menu there. Returns whether a menu
     /// opened.
-    pub(super) fn open_context_menu(&mut self, column: u16, row: u16) -> bool {
-        self.context_menu = None;
-        match self.agents_tab {
-            AgentsTab::Projects => {}
-            AgentsTab::Archive => return self.open_archive_menu(column, row),
-            AgentsTab::Channels => return self.open_channel_menu(column, row),
-            AgentsTab::Roster => return false,
-        }
+    pub(super) fn open_project_menu(&mut self, column: u16, row: u16) -> bool {
         let Some(index) = self.project_row_at(column, row) else {
             return false;
         };
@@ -453,7 +446,7 @@ impl App {
 
     /// A right click on an Archive row: highlight it and offer to bring
     /// it back.
-    fn open_archive_menu(&mut self, column: u16, row: u16) -> bool {
+    pub(super) fn open_archive_menu(&mut self, column: u16, row: u16) -> bool {
         let Some(index) = self.archived_row_at(column, row) else {
             return false;
         };
@@ -472,7 +465,7 @@ impl App {
 
     /// A right click on the CHANNELS tab: open the menu of the channel
     /// under the pointer, or of the open channel.
-    fn open_channel_menu(&mut self, column: u16, row: u16) -> bool {
+    pub(super) fn open_channel_menu(&mut self, column: u16, row: u16) -> bool {
         let Some(id) = self.channel_menu_target_at(column, row) else {
             return false;
         };
@@ -768,6 +761,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::AgentsTab;
     use crate::events::{AgentSummary, UiCommand, UiEvent};
     use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use tokio::sync::mpsc;
