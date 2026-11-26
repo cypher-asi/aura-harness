@@ -1,4 +1,8 @@
+use super::load::shared_store;
 use super::*;
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 /// The registry in `dir`, launched from `launch`.
 fn open(dir: &Path, launch: &Path) -> AgentRegistry {
