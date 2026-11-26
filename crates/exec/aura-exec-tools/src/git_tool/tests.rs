@@ -170,6 +170,78 @@ async fn commit_surfaces_nonzero_exit_from_add() {
 }
 
 #[tokio::test]
+async fn a_workspace_inside_another_repo_fails_without_touching_it() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let outer = TempDir::new().unwrap();
+    init_repo(outer.path()).await;
+    std::fs::write(outer.path().join("theirs.txt"), b"theirs").unwrap();
+    let workspace = outer.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    std::fs::write(workspace.join("mine.txt"), b"mine").unwrap();
+
+    let err = git_commit_impl(&workspace, "should fail", Duration::from_secs(10))
+        .await
+        .expect_err("a workspace that isn't a repo's top must not commit");
+    assert!(
+        matches!(err, GitToolError::NonZeroExit { op: "add", .. }),
+        "got {err:?}"
+    );
+    let err = git_push_impl(
+        &workspace,
+        PushTarget::default(),
+        PushPolicy::single(Duration::from_secs(5)),
+    )
+    .await
+    .expect_err("nor push");
+    assert!(
+        matches!(err, GitToolError::NonZeroExit { .. }),
+        "got {err:?}"
+    );
+
+    assert_eq!(
+        git(outer.path(), &["rev-list", "--all", "--count"]).await,
+        "0"
+    );
+    assert_eq!(
+        git(outer.path(), &["status", "--porcelain"]).await,
+        "?? theirs.txt\n?? workspace/",
+        "nothing of the outer repo was staged"
+    );
+}
+
+#[tokio::test]
+async fn a_linked_worktree_still_commits_to_its_branch() {
+    if !git_available() {
+        eprintln!("skip: git not available on PATH");
+        return;
+    }
+    let (parent, repo, _origin) = repo_with_bare_origin().await;
+    let worktree = parent.path().join("worktree");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "side",
+            &worktree.to_string_lossy(),
+        ],
+    )
+    .await;
+    std::fs::write(worktree.join("b.txt"), b"b").unwrap();
+
+    let sha = git_commit_impl(&worktree, "from the worktree", Duration::from_secs(10))
+        .await
+        .expect("commit in a linked worktree")
+        .expect("there was a change to commit");
+    assert_eq!(git(&repo, &["rev-parse", "side"]).await, sha);
+}
+
+#[tokio::test]
 async fn spawn_git_enforces_subcommand_allowlist() {
     let dir = TempDir::new().unwrap();
     let err = spawn_git(

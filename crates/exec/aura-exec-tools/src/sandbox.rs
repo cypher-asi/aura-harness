@@ -257,7 +257,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 
 /// Strip the `\\?\` verbatim prefix that Windows `canonicalize()` adds.
 /// On non-Windows this is a no-op.
-fn strip_unc_prefix(path: &Path) -> PathBuf {
+pub(crate) fn strip_unc_prefix(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     s.strip_prefix(r"\\?\")
         .map_or_else(|| path.to_path_buf(), PathBuf::from)

@@ -7,6 +7,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### The git tools commit only the repository the agent works in
+
+##### Changed
+
+- `git_commit`, `git_push` and `git_commit_push` no longer look above
+  the agent's workspace for a repository. A workspace that is a folder
+  inside a bigger repository, rather than the top of a repository
+  itself, fails with "not a git repository". Before, `git_commit`
+  staged and committed the whole bigger repository, changes outside
+  the workspace included.
+
 ### Channel coordinators hand work to agents
 
 ##### Changed

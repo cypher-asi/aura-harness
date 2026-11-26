@@ -10,7 +10,9 @@
 //! Each tool in this module:
 //! - Uses `tokio::process::Command` with a hard timeout.
 //! - Operates strictly inside `ToolContext::sandbox.root()` — the kernel
-//!   rooted workspace. No caller-supplied cwd is honored.
+//!   rooted workspace. No caller-supplied cwd is honored, and git never
+//!   looks above the root for a repository: a root that isn't the top of
+//!   its own repository fails instead of committing the checkout around it.
 //! - Restricts itself to the allow-listed subcommand (`add`, `commit`,
 //!   `push`, plus the read-only helpers `diff --cached`, `rev-parse`
 //!   and `remote get-url` used to implement commit and push).
