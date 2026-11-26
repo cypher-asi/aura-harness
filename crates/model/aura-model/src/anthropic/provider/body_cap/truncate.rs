@@ -25,71 +25,17 @@ pub(in crate::anthropic::provider) fn collapse_messages_to_marker(
     };
     let mut value = parsed;
 
-    let mut salvaged_user_context: Option<String> = None;
-    let mut system_messages: Vec<serde_json::Value> = Vec::new();
-    if let Some(messages) = value.get("messages").and_then(serde_json::Value::as_array) {
-        for m in messages {
-            if m.get("role").and_then(serde_json::Value::as_str) == Some("system") {
-                system_messages.push(m.clone());
-            }
-        }
-        if let Some(last_user) = messages
-            .iter()
-            .rev()
-            .find(|m| m.get("role").and_then(serde_json::Value::as_str) == Some("user"))
-        {
-            if let Some(blocks) = last_user
-                .get("content")
-                .and_then(serde_json::Value::as_array)
-            {
-                if let Some(text) = latest_non_empty_text_block(blocks) {
-                    salvaged_user_context = Some(text.to_string());
-                } else if let Some(tool_result) = largest_non_empty_tool_result(blocks) {
-                    let latest_instruction = messages
-                        .iter()
-                        .rev()
-                        .filter(|m| {
-                            m.get("role").and_then(serde_json::Value::as_str) == Some("user")
-                        })
-                        .filter_map(|m| {
-                            m.get("content")
-                                .and_then(serde_json::Value::as_array)
-                                .and_then(|blocks| latest_non_empty_text_block(blocks))
-                        })
-                        .next();
-
-                    salvaged_user_context = Some(match latest_instruction {
-                        Some(instruction) => format!(
-                            "[latest user instruction retained after history truncation]\n\
-                             {instruction}\n\n\
-                             [latest tool result retained after history truncation]\n\
-                             {tool_result}"
-                        ),
-                        None => tool_result.to_string(),
-                    });
-                }
-            } else if let Some(text) = last_user.get("content").and_then(serde_json::Value::as_str)
-            {
-                if !text.trim().is_empty() {
-                    salvaged_user_context = Some(text.to_string());
-                }
-            }
-        }
-
-        if salvaged_user_context.is_none() {
-            salvaged_user_context = messages
+    let messages = value.get("messages").and_then(serde_json::Value::as_array);
+    let system_messages: Vec<serde_json::Value> = messages
+        .map(|messages| {
+            messages
                 .iter()
-                .rev()
-                .filter(|m| m.get("role").and_then(serde_json::Value::as_str) == Some("user"))
-                .filter_map(|m| {
-                    m.get("content")
-                        .and_then(serde_json::Value::as_array)
-                        .and_then(|blocks| latest_non_empty_text_block(blocks))
-                })
-                .next()
-                .map(str::to_string);
-        }
-    }
+                .filter(|m| has_role(m, "system"))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let salvaged_user_context = messages.and_then(|messages| salvage_user_context(messages));
 
     // Compute a generous tail size so the user sees *something* from
     // their last message even after collapse. Half the cap minus
@@ -117,6 +63,62 @@ pub(in crate::anthropic::provider) fn collapse_messages_to_marker(
     }
 
     serialize_request_body(&value).unwrap_or_else(|_| body_bytes.to_vec())
+}
+
+fn has_role(message: &serde_json::Value, role: &str) -> bool {
+    message.get("role").and_then(serde_json::Value::as_str) == Some(role)
+}
+
+/// The most useful user context to keep: what the latest user turn
+/// offers, else the latest non-empty text block of any user turn.
+fn salvage_user_context(messages: &[serde_json::Value]) -> Option<String> {
+    salvage_from_last_user(messages)
+        .or_else(|| latest_user_instruction(messages).map(str::to_string))
+}
+
+fn salvage_from_last_user(messages: &[serde_json::Value]) -> Option<String> {
+    let last_user = messages.iter().rev().find(|m| has_role(m, "user"))?;
+    if let Some(blocks) = last_user
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+    {
+        if let Some(text) = latest_non_empty_text_block(blocks) {
+            return Some(text.to_string());
+        }
+        return largest_non_empty_tool_result(blocks)
+            .map(|tool_result| tool_result_context(messages, tool_result));
+    }
+    last_user
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_string)
+}
+
+/// Latest non-empty text block across all user turns, newest first.
+fn latest_user_instruction(messages: &[serde_json::Value]) -> Option<&str> {
+    messages
+        .iter()
+        .rev()
+        .filter(|m| has_role(m, "user"))
+        .filter_map(|m| {
+            m.get("content")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|blocks| latest_non_empty_text_block(blocks))
+        })
+        .next()
+}
+
+fn tool_result_context(messages: &[serde_json::Value], tool_result: &str) -> String {
+    match latest_user_instruction(messages) {
+        Some(instruction) => format!(
+            "[latest user instruction retained after history truncation]\n\
+             {instruction}\n\n\
+             [latest tool result retained after history truncation]\n\
+             {tool_result}"
+        ),
+        None => tool_result.to_string(),
+    }
 }
 
 fn latest_non_empty_text_block(blocks: &[serde_json::Value]) -> Option<&str> {

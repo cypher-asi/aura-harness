@@ -2,7 +2,10 @@ use super::errors::{
     classify_transport_error, parse_retry_after_from_body, parse_retry_after_header,
     parse_retry_after_prose, provider_api_error_message,
 };
-use super::retry::{classify_retry_action, retry_reason_for, sleep_for_overloaded, RetryAction};
+use super::retry::{
+    classify_retry_action, retry_reason_for, sleep_for_overloaded, FailedAttempt, RetryAction,
+    RetryPolicy,
+};
 use crate::anthropic::ApiError;
 use crate::error::ReasonerError;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -138,16 +141,20 @@ fn classify_retry_action_honours_retry_after_hint() {
     let mut last_err = None;
     let action = classify_retry_action(
         &err,
-        0,
-        2,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "test-model",
+        &RetryPolicy {
+            max_retries: 2,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 0,
+            model_idx: 0,
+            model_count: 1,
+            model: "test-model",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     match action {
         RetryAction::Retry {
@@ -195,16 +202,20 @@ fn classify_retry_action_falls_back_after_exhausting_retries() {
     // attempt == max_retries → retries exhausted, fallback chain available
     let action = classify_retry_action(
         &err,
-        2,
-        2,
-        3,
-        1000,
-        30_000,
-        0,
-        2,
-        "primary",
+        &RetryPolicy {
+            max_retries: 2,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 2,
+            model_idx: 0,
+            model_count: 2,
+            model: "primary",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     assert!(matches!(action, RetryAction::FallbackModel));
     assert!(matches!(last_err, Some(ReasonerError::RateLimited { .. })));
@@ -220,16 +231,20 @@ fn classify_retry_action_propagates_when_no_fallback_available() {
     // attempt == max_retries AND model_idx == model_count - 1 → no fallback left
     let action = classify_retry_action(
         &err,
-        2,
-        2,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "only",
+        &RetryPolicy {
+            max_retries: 2,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 2,
+            model_idx: 0,
+            model_count: 1,
+            model: "only",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     assert!(matches!(action, RetryAction::Propagate));
 }
@@ -240,16 +255,20 @@ fn classify_retry_action_other_errors_propagate() {
     let mut last_err = None;
     let action = classify_retry_action(
         &err,
-        0,
-        2,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "m",
+        &RetryPolicy {
+            max_retries: 2,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 0,
+            model_idx: 0,
+            model_count: 1,
+            model: "m",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     assert!(matches!(action, RetryAction::Propagate));
 }
@@ -265,16 +284,20 @@ fn classify_retry_action_retries_transient_5xx_with_exp_backoff() {
     let mut last_err = None;
     let action = classify_retry_action(
         &err,
-        0,
-        2,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "primary",
+        &RetryPolicy {
+            max_retries: 2,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 0,
+            model_idx: 0,
+            model_count: 1,
+            model: "primary",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     match action {
         RetryAction::Retry {
@@ -312,16 +335,20 @@ fn classify_retry_action_falls_back_when_5xx_retries_exhausted() {
     let mut last_err = None;
     let action = classify_retry_action(
         &err,
-        2,
-        2,
-        3,
-        1000,
-        30_000,
-        0,
-        2,
-        "primary",
+        &RetryPolicy {
+            max_retries: 2,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 2,
+            model_idx: 0,
+            model_count: 2,
+            model: "primary",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     assert!(
         matches!(action, RetryAction::FallbackModel),
@@ -342,16 +369,20 @@ fn classify_retry_action_propagates_5xx_when_no_fallback_available() {
     let mut last_err = None;
     let action = classify_retry_action(
         &err,
-        2,
-        2,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "only",
+        &RetryPolicy {
+            max_retries: 2,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 2,
+            model_idx: 0,
+            model_count: 1,
+            model: "only",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     assert!(
         matches!(action, RetryAction::Propagate),
@@ -396,16 +427,20 @@ fn classify_retry_action_caps_cloudflare_retries() {
     for attempt in 0..3 {
         let action = classify_retry_action(
             &err,
-            attempt,
-            8,
-            3,
-            1000,
-            30_000,
-            0,
-            1,
-            "primary",
+            &RetryPolicy {
+                max_retries: 8,
+                cloudflare_max_retries: 3,
+                backoff_initial_ms: 1000,
+                backoff_cap_ms: 30_000,
+            },
+            &FailedAttempt {
+                attempt,
+                model_idx: 0,
+                model_count: 1,
+                model: "primary",
+                current_body_cap: 524_288,
+            },
             &mut last_err,
-            524_288,
         );
         assert!(
             matches!(action, RetryAction::Retry { .. }),
@@ -415,16 +450,20 @@ fn classify_retry_action_caps_cloudflare_retries() {
 
     let exhausted = classify_retry_action(
         &err,
-        3,
-        8,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "primary",
+        &RetryPolicy {
+            max_retries: 8,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 3,
+            model_idx: 0,
+            model_count: 1,
+            model: "primary",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     assert!(
         matches!(exhausted, RetryAction::Propagate),
@@ -439,16 +478,20 @@ fn classify_retry_action_shrinks_configured_body_cap_on_cloudflare() {
 
     let first = classify_retry_action(
         &err,
-        0,
-        8,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "primary",
+        &RetryPolicy {
+            max_retries: 8,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 0,
+            model_idx: 0,
+            model_count: 1,
+            model: "primary",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     let first_cap = match first {
         RetryAction::Retry {
@@ -466,16 +509,20 @@ fn classify_retry_action_shrinks_configured_body_cap_on_cloudflare() {
     // Second Cloudflare hit: cap shrinks again from the previous override.
     let second = classify_retry_action(
         &err,
-        1,
-        8,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "primary",
+        &RetryPolicy {
+            max_retries: 8,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 1,
+            model_idx: 0,
+            model_count: 1,
+            model: "primary",
+            current_body_cap: first_cap,
+        },
         &mut last_err,
-        first_cap,
     );
     let second_cap = match second {
         RetryAction::Retry {
@@ -497,16 +544,20 @@ fn classify_retry_action_shrinks_observed_body_on_cloudflare() {
 
     let action = classify_retry_action(
         &err,
-        0,
-        8,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "primary",
+        &RetryPolicy {
+            max_retries: 8,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 0,
+            model_idx: 0,
+            model_count: 1,
+            model: "primary",
+            current_body_cap: 524_288,
+        },
         &mut last_err,
-        524_288,
     );
     let cap = match action {
         RetryAction::Retry {
@@ -539,16 +590,20 @@ fn classify_retry_action_crosses_low_waf_band_with_default_retries() {
     for attempt in 0..3 {
         let action = classify_retry_action(
             &err,
-            attempt,
-            8,
-            3,
-            1000,
-            30_000,
-            0,
-            1,
-            "primary",
+            &RetryPolicy {
+                max_retries: 8,
+                cloudflare_max_retries: 3,
+                backoff_initial_ms: 1000,
+                backoff_cap_ms: 30_000,
+            },
+            &FailedAttempt {
+                attempt,
+                model_idx: 0,
+                model_count: 1,
+                model: "primary",
+                current_body_cap: current_cap,
+            },
             &mut last_err,
-            current_cap,
         );
         current_cap = match action {
             RetryAction::Retry {
@@ -573,16 +628,20 @@ fn classify_retry_action_cloudflare_shrink_has_a_floor() {
     let mut last_err = None;
     let action = classify_retry_action(
         &err,
-        0,
-        8,
-        3,
-        1000,
-        30_000,
-        0,
-        1,
-        "primary",
+        &RetryPolicy {
+            max_retries: 8,
+            cloudflare_max_retries: 3,
+            backoff_initial_ms: 1000,
+            backoff_cap_ms: 30_000,
+        },
+        &FailedAttempt {
+            attempt: 0,
+            model_idx: 0,
+            model_count: 1,
+            model: "primary",
+            current_body_cap: 8 * 1024, // already below the floor
+        },
         &mut last_err,
-        8 * 1024, // already below the floor
     );
     match action {
         RetryAction::Retry {

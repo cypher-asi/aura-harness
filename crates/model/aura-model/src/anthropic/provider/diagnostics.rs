@@ -81,64 +81,19 @@ pub(super) struct RequestDiagnosticsSummary {
 pub(super) fn summarize_anthropic_request(body_bytes: &[u8]) -> RequestDiagnosticsSummary {
     let body_hash = stable_hash_hex(body_bytes);
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(body_bytes) else {
-        return RequestDiagnosticsSummary {
-            body_hash,
-            top_level_keys: "<invalid-json>".to_string(),
-            stream: false,
-            system_bytes: 0,
-            messages_text_bytes: 0,
-            last_user_text_bytes: 0,
-            last_user_text_hash: None,
-            tools_count: 0,
-            tool_names: "<invalid-json>".to_string(),
-            tool_choice: None,
-            has_thinking: false,
-            thinking_type: None,
-            thinking_budget_tokens: None,
-            has_output_config: false,
-        };
+        return invalid_json_summary(body_hash);
     };
 
-    let top_level_keys = value.as_object().map_or_else(
-        || "<not-object>".to_string(),
-        |obj| {
-            let mut keys = obj.keys().map(String::as_str).collect::<Vec<_>>();
-            keys.sort_unstable();
-            keys.join(",")
-        },
-    );
+    let top_level_keys = sorted_top_level_keys(&value);
     let stream = value
         .get("stream")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let system_bytes = text_bytes_in_value(value.get("system"));
-
-    let mut messages_text_bytes = 0usize;
-    let mut last_user_text = String::new();
-    if let Some(messages) = value.get("messages").and_then(serde_json::Value::as_array) {
-        for message in messages {
-            messages_text_bytes += text_bytes_in_value(message.get("content"));
-            if message.get("role").and_then(serde_json::Value::as_str) == Some("user") {
-                last_user_text.clear();
-                collect_text_fields(message.get("content"), &mut last_user_text);
-            }
-        }
-    }
-    let last_user_text_bytes = last_user_text.len();
-    let last_user_text_hash =
-        (!last_user_text.is_empty()).then(|| stable_hash_hex(last_user_text.as_bytes()));
-
+    let messages = summarize_messages(value.get("messages"));
     let (tools_count, tool_names) = summarize_tools(value.get("tools"));
     let tool_choice = value.get("tool_choice").map(compact_json_for_log);
-    let thinking_value = value.get("thinking");
-    let has_thinking = thinking_value.is_some();
-    let thinking_type = thinking_value
-        .and_then(|t| t.get("type"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    let thinking_budget_tokens = thinking_value
-        .and_then(|t| t.get("budget_tokens"))
-        .and_then(serde_json::Value::as_u64);
+    let thinking = summarize_thinking(value.get("thinking"));
     let has_output_config = value.get("output_config").is_some();
 
     RequestDiagnosticsSummary {
@@ -146,16 +101,91 @@ pub(super) fn summarize_anthropic_request(body_bytes: &[u8]) -> RequestDiagnosti
         top_level_keys,
         stream,
         system_bytes,
-        messages_text_bytes,
-        last_user_text_bytes,
-        last_user_text_hash,
+        messages_text_bytes: messages.text_bytes,
+        last_user_text_bytes: messages.last_user_text_bytes,
+        last_user_text_hash: messages.last_user_text_hash,
         tools_count,
         tool_names,
         tool_choice,
-        has_thinking,
-        thinking_type,
-        thinking_budget_tokens,
+        has_thinking: thinking.is_present,
+        thinking_type: thinking.kind,
+        thinking_budget_tokens: thinking.budget_tokens,
         has_output_config,
+    }
+}
+
+fn invalid_json_summary(body_hash: String) -> RequestDiagnosticsSummary {
+    RequestDiagnosticsSummary {
+        body_hash,
+        top_level_keys: "<invalid-json>".to_string(),
+        stream: false,
+        system_bytes: 0,
+        messages_text_bytes: 0,
+        last_user_text_bytes: 0,
+        last_user_text_hash: None,
+        tools_count: 0,
+        tool_names: "<invalid-json>".to_string(),
+        tool_choice: None,
+        has_thinking: false,
+        thinking_type: None,
+        thinking_budget_tokens: None,
+        has_output_config: false,
+    }
+}
+
+fn sorted_top_level_keys(value: &serde_json::Value) -> String {
+    value.as_object().map_or_else(
+        || "<not-object>".to_string(),
+        |obj| {
+            let mut keys = obj.keys().map(String::as_str).collect::<Vec<_>>();
+            keys.sort_unstable();
+            keys.join(",")
+        },
+    )
+}
+
+struct MessagesSummary {
+    text_bytes: usize,
+    last_user_text_bytes: usize,
+    last_user_text_hash: Option<String>,
+}
+
+fn summarize_messages(messages: Option<&serde_json::Value>) -> MessagesSummary {
+    let mut text_bytes = 0usize;
+    let mut last_user_text = String::new();
+    if let Some(messages) = messages.and_then(serde_json::Value::as_array) {
+        for message in messages {
+            text_bytes += text_bytes_in_value(message.get("content"));
+            if message.get("role").and_then(serde_json::Value::as_str) == Some("user") {
+                last_user_text.clear();
+                collect_text_fields(message.get("content"), &mut last_user_text);
+            }
+        }
+    }
+    MessagesSummary {
+        text_bytes,
+        last_user_text_bytes: last_user_text.len(),
+        last_user_text_hash: (!last_user_text.is_empty())
+            .then(|| stable_hash_hex(last_user_text.as_bytes())),
+    }
+}
+
+struct ThinkingSummary {
+    is_present: bool,
+    kind: Option<String>,
+    budget_tokens: Option<u64>,
+}
+
+fn summarize_thinking(thinking: Option<&serde_json::Value>) -> ThinkingSummary {
+    ThinkingSummary {
+        is_present: thinking.is_some(),
+        kind: thinking
+            .and_then(|t| t.get("type"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        budget_tokens: thinking
+            .and_then(|t| t.get("budget_tokens"))
+            .and_then(serde_json::Value::as_u64),
     }
 }
 

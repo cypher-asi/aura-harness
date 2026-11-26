@@ -27,53 +27,100 @@ pub(super) async fn classify_api_error(
     content_profile: Option<&ModelContentProfile>,
     wire_body_bytes: usize,
 ) -> (ApiError, FailureMeta) {
-    let status = response.status();
-    let status_code = status.as_u16();
-    let status_text = status
-        .canonical_reason()
-        .map_or_else(|| status.to_string(), str::to_string);
-    let header_retry_after = parse_retry_after_header(response.headers());
-    // Pull any quota / request-id headers before consuming the response body so
-    // 429/529 failures are easier to correlate with proxy-side logs.
-    let header_request_id = response
-        .headers()
-        .get("x-request-id")
-        .or_else(|| response.headers().get("request-id"))
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_string);
-    let body = response.text().await.unwrap_or_default();
-    let request_id = header_request_id.or_else(|| extract_waf_request_id_from_body(&body));
-    let body_preview = crate::truncate_body(&body, 200);
-    error!(
-        status = %status,
-        body = %body_preview,
-        retry_after_s = ?header_retry_after.map(|d| d.as_secs()),
-        request_id = ?request_id,
-        aura_org_id = routing.org_label(),
-        aura_session_id = routing.session_label(),
-        "Model provider API error"
-    );
+    let failure = FailedResponse::read(response).await;
+    failure.log(routing);
 
-    if crate::anthropic::is_cloudflare_html(&body) {
-        if let Ok(dir) = std::env::var("AURA_DEBUG_CLOUDFLARE_DUMP_DIR") {
-            let dir_path = std::path::PathBuf::from(&dir);
-            if std::fs::create_dir_all(&dir_path).is_ok() {
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_millis());
-                let file = dir_path.join(format!("cf-block-{ts}.html"));
-                let header_dump = format!(
-                    "<!-- aura-debug status={status} request_id={request_id:?} retry_after_s={:?} -->\n",
-                    header_retry_after.map(|d| d.as_secs())
-                );
-                let _ = std::fs::write(&file, format!("{header_dump}{body}"));
-                error!(
-                    cloudflare_dump_path = %file.display(),
-                    "Cloudflare HTML dumped for diagnosis"
-                );
-            }
+    if crate::anthropic::is_cloudflare_html(&failure.body) {
+        failure.dump_cloudflare_html_if_enabled();
+        return failure.into_cloudflare_block(routing, content_profile, wire_body_bytes);
+    }
+
+    failure.into_status_error()
+}
+
+/// A non-success response with its body buffered and its retry /
+/// correlation headers pulled out.
+struct FailedResponse {
+    status: reqwest::StatusCode,
+    header_retry_after: Option<Duration>,
+    request_id: Option<String>,
+    body: String,
+    body_preview: String,
+}
+
+impl FailedResponse {
+    async fn read(response: reqwest::Response) -> Self {
+        let status = response.status();
+        let header_retry_after = parse_retry_after_header(response.headers());
+        // Pull any quota / request-id headers before consuming the response body so
+        // 429/529 failures are easier to correlate with proxy-side logs.
+        let header_request_id = response
+            .headers()
+            .get("x-request-id")
+            .or_else(|| response.headers().get("request-id"))
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let body = response.text().await.unwrap_or_default();
+        let request_id = header_request_id.or_else(|| extract_waf_request_id_from_body(&body));
+        let body_preview = crate::truncate_body(&body, 200);
+        Self {
+            status,
+            header_retry_after,
+            request_id,
+            body,
+            body_preview,
         }
-        let request_id_label = request_id.as_deref().unwrap_or("unknown");
+    }
+
+    fn header_retry_after_s(&self) -> Option<u64> {
+        self.header_retry_after.map(|d| d.as_secs())
+    }
+
+    fn log(&self, routing: RequestRoutingContext) {
+        error!(
+            status = %self.status,
+            body = %self.body_preview,
+            retry_after_s = ?self.header_retry_after_s(),
+            request_id = ?self.request_id,
+            aura_org_id = routing.org_label(),
+            aura_session_id = routing.session_label(),
+            "Model provider API error"
+        );
+    }
+
+    fn dump_cloudflare_html_if_enabled(&self) {
+        let Ok(dir) = std::env::var("AURA_DEBUG_CLOUDFLARE_DUMP_DIR") else {
+            return;
+        };
+        let dir_path = std::path::PathBuf::from(&dir);
+        if std::fs::create_dir_all(&dir_path).is_err() {
+            return;
+        }
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        let file = dir_path.join(format!("cf-block-{ts}.html"));
+        let header_dump = format!(
+            "<!-- aura-debug status={} request_id={:?} retry_after_s={:?} -->\n",
+            self.status,
+            self.request_id,
+            self.header_retry_after_s()
+        );
+        let _ = std::fs::write(&file, format!("{header_dump}{}", self.body));
+        error!(
+            cloudflare_dump_path = %file.display(),
+            "Cloudflare HTML dumped for diagnosis"
+        );
+    }
+
+    fn into_cloudflare_block(
+        self,
+        routing: RequestRoutingContext,
+        content_profile: Option<&ModelContentProfile>,
+        wire_body_bytes: usize,
+    ) -> (ApiError, FailureMeta) {
+        let status = self.status;
+        let request_id_label = self.request_id.as_deref().unwrap_or("unknown");
         let profile_label = content_profile.map_or_else(
             || "profile=unavailable".to_string(),
             ModelContentProfile::summary,
@@ -87,30 +134,52 @@ pub(super) async fn classify_api_error(
             ),
             wire_body_bytes: Some(wire_body_bytes),
         };
-        return (
-            err,
-            FailureMeta {
-                class: "cloudflare_block",
-                status_code,
-                status_text,
-                request_id,
-                retry_after_s: header_retry_after.map(|d| d.as_secs()),
-                body_preview,
-            },
-        );
+        let retry_after_s = self.header_retry_after_s();
+        (err, self.into_meta("cloudflare_block", retry_after_s))
     }
 
-    let (err, class) = match status_code {
+    fn into_status_error(self) -> (ApiError, FailureMeta) {
+        let (err, class) = status_error(self.status, &self.body, self.header_retry_after);
+        let retry_after_s = match &err {
+            ApiError::Overloaded { retry_after, .. } => retry_after.map(|d| d.as_secs()),
+            _ => self.header_retry_after_s(),
+        };
+        (err, self.into_meta(class, retry_after_s))
+    }
+
+    fn into_meta(self, class: &'static str, retry_after_s: Option<u64>) -> FailureMeta {
+        let status = self.status;
+        FailureMeta {
+            class,
+            status_code: status.as_u16(),
+            status_text: status
+                .canonical_reason()
+                .map_or_else(|| status.to_string(), str::to_string),
+            request_id: self.request_id,
+            retry_after_s,
+            body_preview: self.body_preview,
+        }
+    }
+}
+
+/// Map a non-Cloudflare failure status to its error and class label.
+fn status_error(
+    status: reqwest::StatusCode,
+    body: &str,
+    header_retry_after: Option<Duration>,
+) -> (ApiError, &'static str) {
+    let status_code = status.as_u16();
+    match status_code {
         402 => (
-            ApiError::InsufficientCredits(provider_api_error_message(status, &body)),
+            ApiError::InsufficientCredits(provider_api_error_message(status, body)),
             "insufficient_credits",
         ),
         429 | 529 => {
-            let body_retry_after = parse_retry_after_from_body(&body);
+            let body_retry_after = parse_retry_after_from_body(body);
             let retry_after = header_retry_after.or(body_retry_after);
             (
                 ApiError::Overloaded {
-                    message: provider_api_error_message(status, &body),
+                    message: provider_api_error_message(status, body),
                     retry_after,
                 },
                 "rate_limited_429",
@@ -127,7 +196,7 @@ pub(super) async fn classify_api_error(
         500 | 502 | 503 | 504 => (
             ApiError::TransientServer {
                 status: status_code,
-                message: provider_api_error_message(status, &body),
+                message: provider_api_error_message(status, body),
             },
             "upstream_5xx",
         ),
@@ -138,24 +207,7 @@ pub(super) async fn classify_api_error(
             }),
             "other",
         ),
-    };
-
-    let retry_after_s = match &err {
-        ApiError::Overloaded { retry_after, .. } => retry_after.map(|d| d.as_secs()),
-        _ => header_retry_after.map(|d| d.as_secs()),
-    };
-
-    (
-        err,
-        FailureMeta {
-            class,
-            status_code,
-            status_text,
-            request_id,
-            retry_after_s,
-            body_preview,
-        },
-    )
+    }
 }
 
 pub(super) fn provider_api_error_message(status: reqwest::StatusCode, body: &str) -> String {
