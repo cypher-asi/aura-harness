@@ -2,8 +2,8 @@
 //! lets it do. A read-only document in sections: STATUS, CAPABILITIES,
 //! TOOLS, ALWAYS ALLOW, SESSION GRANTS and INTEGRATIONS.
 
+use super::chrome::{render_scrollbar, ScrollView};
 use super::header::HeaderInfo;
-use super::panels::{render_scrollbar, ScrollView};
 use super::processes::format_elapsed;
 use super::side_list::{render_empty, render_hint, split_hint, POLICIES_HINT};
 use crate::app::PanelFocus;

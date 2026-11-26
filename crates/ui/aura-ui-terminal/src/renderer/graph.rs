@@ -3,11 +3,12 @@
 //! metadata and links in a modal. Nodes linked to the selection are
 //! marked in the tree.
 
+use super::chrome::{body_block, render_scrollbar, ScrollView};
 use super::header::HeaderInfo;
-use super::panels::{body_block, render_scrollbar, truncate_record_info, ScrollView};
 use super::side_list::render_empty;
 use super::text::display_width;
 use crate::app::graph::GraphRow;
+use crate::components::truncate_record_info;
 use crate::events::{TraceNode, TraceNodeStatus};
 use crate::{App, Theme};
 use ratatui::{

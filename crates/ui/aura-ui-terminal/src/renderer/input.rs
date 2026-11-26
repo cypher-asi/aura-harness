@@ -271,7 +271,7 @@ pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &The
     }
     let block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-        .border_style(Style::default().fg(super::panels::border_color(
+        .border_style(Style::default().fg(super::chrome::border_color(
             app.focus() == PanelFocus::Chat,
             theme,
         )));

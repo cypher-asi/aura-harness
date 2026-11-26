@@ -11,11 +11,12 @@
 //!  turn 2 of 3 · run the tests again · 1m10s · Enter opens its cards
 //! ```
 
+use super::chrome::{render_scrollbar, ScrollView};
 use super::graph::status_glyph;
-use super::panels::{render_scrollbar, truncate_record_info, ScrollView};
 use super::text::display_width;
 use crate::app::flow::timeline::{MarkKind, TimelineRow, TimelineView};
 use crate::app::format::format_cost;
+use crate::components::truncate_record_info;
 use crate::events::TraceNodeStatus;
 use crate::{App, Theme};
 use ratatui::{

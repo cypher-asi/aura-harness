@@ -18,8 +18,8 @@
 //! keeps the tabs and the bar.
 
 use super::benchmarks::{fit, money, setup_counts, short_model, task_prefix, under_way};
+use super::chrome::border_color;
 use super::input::join_divider;
-use super::panels::border_color;
 use super::text::display_width;
 use crate::app::bench_progress::{BenchPanelAreas, BenchTabArea};
 use crate::app::PanelFocus;

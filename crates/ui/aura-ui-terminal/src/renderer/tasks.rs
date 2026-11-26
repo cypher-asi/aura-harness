@@ -21,16 +21,15 @@
 //!  ✓  Fix the typo  → coder
 //! ```
 
-use super::panels::{
-    aura_icon, cell_style, list_row, list_row_with_detail, render_scrollbar, CellState, ScrollView,
-    StatusIcon,
-};
+use super::agents::aura_icon;
+use super::chrome::{render_scrollbar, ScrollView};
 use super::plans::{marker, marker_color, todo_style};
 use super::side_list::{
     name_style, render_empty, render_hidden, render_hint, split_hint, Tone, TASKS_HINT,
 };
 use crate::app::tasks::{TaskList, TaskRow};
 use crate::app::{HoverTarget, PanelFocus};
+use crate::components::{cell_style, list_row, list_row_with_detail, CellState, StatusIcon};
 use crate::events::{PlanView, TaskState, TaskView, TodoView};
 use crate::{App, Theme};
 use ratatui::{layout::Rect, style::Modifier, text::Line, widgets::Paragraph, Frame};

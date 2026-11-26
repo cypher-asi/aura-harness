@@ -9,6 +9,7 @@ mod code_block;
 mod diff;
 mod header;
 mod input;
+mod list_row;
 mod live_output;
 mod message;
 mod progress;
@@ -27,6 +28,10 @@ pub(crate) use code_block::{unframe_code, COPY_BUTTON};
 pub use diff::{DiffLine, DiffLineType, DiffView};
 pub use header::HeaderBar;
 pub use input::InputField;
+pub(crate) use list_row::{
+    cell_style, format_ago, list_row, list_row_ending, list_row_with_detail, now_ms, tree_row,
+    truncate_record_info, CellState, RowBadge, StatusIcon, PLAN_BADGE,
+};
 pub use live_output::{quiet_for, LiveOutput, QUIET_AFTER};
 pub use message::{DiffBlock, Message, MoreSection, ShellRun, MORE_PAGE_LINES};
 pub use progress::ProgressBar;

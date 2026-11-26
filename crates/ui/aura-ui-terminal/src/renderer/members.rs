@@ -2,12 +2,13 @@
 //! run, then every agent the run brought in, each under the one that
 //! started it, with how it is doing and how long it has worked.
 
-use super::panels::{cell_style, list_row, now_ms, render_scrollbar, CellState, ScrollView};
+use super::chrome::{render_scrollbar, ScrollView};
 use super::processes::{format_elapsed, status_icon};
 use super::side_list::{
     empty_line, name_style, render_empty, render_hint, split_hint, Tone, MEMBERS_HINT,
 };
 use crate::app::{HoverTarget, MemberRow, PanelFocus};
+use crate::components::{cell_style, list_row, now_ms, CellState};
 use crate::{App, Theme};
 use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 

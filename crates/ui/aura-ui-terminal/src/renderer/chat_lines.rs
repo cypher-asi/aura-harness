@@ -789,7 +789,7 @@ fn group_progress(steps: &[&Activity], place: &TurnPlace<'_>) -> String {
         .filter(|elapsed| elapsed.as_secs() > 0)
     {
         progress.push_str(" · ");
-        progress.push_str(&super::panels::format_elapsed(elapsed));
+        progress.push_str(&super::chat_panel::format_elapsed(elapsed));
     }
     progress
 }

@@ -30,10 +30,9 @@
 //! [`PlanDoc`]; each is exactly one screen row, so the view scrolls by
 //! row.
 
+use super::chat_panel::{pack_prose, prose_columns, terminal_text_area};
+use super::chrome::{body_block, render_scrollbar, ScrollView};
 use super::markdown::{parse_content_segments, render_markdown_flow, ContentSegment};
-use super::panels::{
-    body_block, pack_prose, prose_columns, render_scrollbar, terminal_text_area, ScrollView,
-};
 use super::plans::{marker, todo_style};
 use super::segments::render_code_segment;
 use super::text::Measure;

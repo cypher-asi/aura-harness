@@ -2,10 +2,10 @@
 //! a one-line header or expanded to show everything. Consecutive steps are
 //! drawn as a group under one summary line (`Explored 4 files, 2 searches`).
 
+use super::chat_panel::format_elapsed;
 use super::command::{script_lines, wrap_spans};
 use super::diff::diff_stat_spans;
 use super::markdown::{parse_content_segments, render_markdown, ContentSegment};
-use super::panels::format_elapsed;
 use super::text::{display_width, wrap_words};
 use super::{more_label, MoreRows};
 use crate::app::format::{file_name, format_tool_label_of, parse_tool_args, ToolArgs};

@@ -7,12 +7,12 @@
 //! └──────────┴──────────┴───────────┘
 //! ```
 
-use super::panels::truncate_record_info;
 use super::text::display_width;
 use crate::app::tab_bar::TabLayout;
 use crate::app::{
     AgentsTab, ChatTab, Pane, PaneChrome, PaneTab, RecordsTab, SidePanelTab, SideScope,
 };
+use crate::components::truncate_record_info;
 use crate::{App, Theme};
 use ratatui::{
     buffer::Buffer,
@@ -340,7 +340,7 @@ pub(super) fn render_panel_header<T: Copy + PartialEq>(
         return;
     }
     let colors = &theme.colors;
-    let frame_style = Style::default().fg(super::panels::border_color(header.focused, theme));
+    let frame_style = Style::default().fg(super::chrome::border_color(header.focused, theme));
     let buf = frame.buffer_mut();
     if header.hosted {
         draw_hosted_frame(buf, bar, frame_style);

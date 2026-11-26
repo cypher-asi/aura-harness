@@ -1,7 +1,7 @@
 //! Draw the chat panel's BENCH tab: the list of benchmarks, one
 //! benchmark's numbers side by side, or the form that sets one up.
 
-use super::panels::body_block;
+use super::chrome::body_block;
 use super::text::display_width;
 use crate::app::benchmarks::{
     BenchMode, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST,
