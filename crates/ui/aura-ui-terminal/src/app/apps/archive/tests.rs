@@ -220,7 +220,7 @@ fn clicking_an_archived_agent_opens_it_and_stays_on_the_archive() {
 
     // A day header opens nothing.
     let rows = screen(&mut app, 100);
-    click(&mut app, cell_of(&rows, "Earlier"));
+    click(&mut app, cell_of(&rows, "EARLIER"));
     assert!(rx.try_recv().is_err());
 }
 
@@ -317,9 +317,9 @@ fn the_archive_draws_its_day_headers() {
     app.show_agents_tab(AgentsTab::Archive);
     let rows = screen(&mut app, 100);
     let row_of = |name: &str| cell_of(&rows, name).1;
-    assert!(row_of("Today") < row_of("DD"));
-    assert!(row_of("DD") < row_of("Earlier"));
-    assert!(row_of("Earlier") < row_of("EE"));
+    assert!(row_of("TODAY") < row_of("DD"));
+    assert!(row_of("DD") < row_of("EARLIER"));
+    assert!(row_of("EARLIER") < row_of("EE"));
 }
 
 #[test]

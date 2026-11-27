@@ -5,7 +5,7 @@
 //! the next (drawn here without the row's inset):
 //!
 //! ```text
-//! Today
+//! TODAY
 //! ▾  name  detail                   5m
 //!    ├── name                       2m
 //!    └── name                       2d
@@ -21,7 +21,7 @@
 //!   is muted too: how long ago, a code, or a project's `+`.
 //! - Rows under a row hang from its name on tree lines.
 //! - A header grouping rows, a project or a day, starts in the icon
-//!   column.
+//!   column and is written in muted capitals.
 //! - The row that makes something new is pinned to the bottom.
 
 mod archive;

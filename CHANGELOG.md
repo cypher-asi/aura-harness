@@ -197,9 +197,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ##### Changed
 
-- Day headers in the ARCHIVE tab older than Yesterday read in full, as
-  `Wednesday, September 16 2026`, instead of `2026-09-16`. `Today`,
-  `Yesterday` and `Earlier` are unchanged.
+- Day headers in the ARCHIVE tab are written like project headers, in
+  muted capitals rather than bold: `TODAY`, `YESTERDAY`, `EARLIER`, and
+  older days in full, as `WEDNESDAY, SEPTEMBER 16 2026` instead of
+  `2026-09-16`.
 
 ### To-dos move to a drawer above the input
 

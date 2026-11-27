@@ -3,7 +3,7 @@
 //! projects list hangs spawns.
 //!
 //! ```text
-//! Yesterday
+//! YESTERDAY
 //! ▾  Agent                    2d
 //!    └── reviewer #1          2d
 //!    Agent 2                  3d
@@ -24,7 +24,7 @@ use aura_core_types::time::now_ms;
 use ratatui::Frame;
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
 };
 use std::ops::Range;
@@ -111,15 +111,14 @@ struct Archive<'s> {
 }
 
 impl Archive<'_> {
-    /// The muted header of the day `label`, from the icon column on.
+    /// The header of the day `label`, from the icon column on, in muted
+    /// capitals like a project's.
     fn day_line<'a>(&self, label: &str) -> Line<'a> {
         let room = usize::from(self.inner.width).saturating_sub(2 * ROW_INSET);
-        let label = truncate_record_info(label, room);
+        let label = truncate_record_info(&label.to_uppercase(), room);
         Line::from(Span::styled(
             format!("{:ROW_INSET$}{label}", ""),
-            Style::default()
-                .fg(self.theme.colors.muted)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(self.theme.colors.muted),
         ))
     }
 

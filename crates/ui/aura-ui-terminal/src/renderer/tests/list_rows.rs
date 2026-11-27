@@ -106,13 +106,27 @@ fn an_archived_agent_says_how_long_ago_under_a_day_in_its_icon_column() {
     let rows = render_rows(&mut app, 200);
     let panel = agents_panel(&rows);
     let agent = row_naming(&panel, "Drafter");
-    let day = row_naming(&panel, "Earlier");
+    let day = row_naming(&panel, "EARLIER");
     assert_eq!(
-        char_column(day, "Earlier"),
+        char_column(day, "EARLIER"),
         char_column(agent, "▸"),
         "{panel:#?}"
     );
     let at = line_with(&panel, "Drafter");
     let inside = rows[at].split('│').nth(1).unwrap_or_default();
     assert!(inside.trim_end().ends_with("2d"), "{inside:?}");
+}
+
+#[test]
+fn a_day_header_is_drawn_like_a_project_header() {
+    let mut app = lists_app();
+    let mut header = |digit: char, label: &str| {
+        show_app(&mut app, digit);
+        let row = line_with(&agents_panel(&render_rows(&mut app, 200)), label);
+        let buffer = render_buffer(&mut app, 200);
+        find_cell(&buffer, u16::try_from(row).unwrap(), label).map(|(_, style)| style)
+    };
+    let project = header('2', "PLANNER");
+    assert!(project.is_some());
+    assert_eq!(header('5', "EARLIER"), project);
 }
