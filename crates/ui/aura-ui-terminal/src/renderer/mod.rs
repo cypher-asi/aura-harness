@@ -185,7 +185,13 @@ fn chat_column_rows(content: Rect, column: Rect, app: &App) -> [Rect; 6] {
             hud::FOOTER_ROWS + input::BOX_ROWS + 3 + queue_rows + bench_rows + drawer_rows,
         )
         .max(1);
-    let input_rows = input::input_rows(column, app, max_input_rows);
+    // The terminal's prompt follows its output inside the chat, so it
+    // takes no rows of its own under it.
+    let input_rows = if app.terminal_inline() {
+        0
+    } else {
+        input::input_rows(column, app, max_input_rows) + input::BOX_ROWS
+    };
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -193,7 +199,7 @@ fn chat_column_rows(content: Rect, column: Rect, app: &App) -> [Rect; 6] {
             Constraint::Length(drawer_rows),
             Constraint::Length(bench_rows),
             Constraint::Length(queue_rows),
-            Constraint::Length(input_rows + input::BOX_ROWS),
+            Constraint::Length(input_rows),
             Constraint::Length(hud::FOOTER_ROWS),
         ])
         .split(column);
@@ -218,11 +224,10 @@ fn render_below_chat(frame: &mut Frame, layout: &FrameLayout, app: &mut App, the
     todo_drawer::render(frame, chat_column[1], app, theme);
     bench_panel::render(frame, chat_column[2], app, theme);
     queue_panel::render(frame, chat_column[3], app, theme);
-    app.set_input_area(chat_column[4]);
-    let drawn = input::render_input(frame, chat_column[4], app, theme);
-    app.set_input_stop_area(drawn.stop);
-    app.set_input_wrap_width(drawn.wrap_width);
-    app.set_input_rows(drawn.rows);
+    // The terminal's prompt was drawn in the chat panel's body.
+    if !app.terminal_inline() {
+        input::show_input(frame, chat_column[4], app, theme, false);
+    }
     let footer_gap = hud::render_footer(frame, inset_edges(chat_column[5]), app, theme);
     app.set_footer_area(inset_edges(chat_column[5]));
     if app.modal().is_some() {

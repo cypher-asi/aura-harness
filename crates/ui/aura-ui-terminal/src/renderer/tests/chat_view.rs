@@ -174,7 +174,15 @@ fn test_terminal_output_runs_to_the_bottom_row() {
     app.process_command(UiCommand::Complete);
     assert_eq!(app.chat_tab(), crate::app::ChatTab::Terminal);
     let rows = render_rows(&mut app, 120);
-    assert_eq!(rows_under(&rows, "line 59").1, 0, "{}", rows.join("\n"));
+    let screen = rows.join("\n");
+    // The last line, then the prompt on the body's last row, then the
+    // panel's bottom border.
+    let last = rows.iter().position(|row| row.contains("line 59")).unwrap();
+    assert!(rows[last + 1].contains("]$ "), "{screen}");
+    let column = rows[last][..rows[last].find("line 59").unwrap()]
+        .chars()
+        .count();
+    assert_eq!(rows[last + 2].chars().nth(column), Some('─'), "{screen}");
 }
 
 #[test]
@@ -271,13 +279,10 @@ fn test_command_output_renders_like_a_terminal() {
     let listing = &rows[echo + 2];
     assert!(total.contains("total 0"), "{total:?}");
     assert!(listing.contains("drwxr-xr-x  2 u u  40 src"), "{listing:?}");
-    assert!(
-        !rows[echo + 3].contains("[u@h d]$ "),
-        "{:?}",
-        rows[echo + 3]
-    );
-    let input_row = &rows[rows.len() - INPUT_FROM_BOTTOM];
-    assert!(input_row.contains("[u@h d]$ "), "{input_row:?}");
+    // The next prompt follows the output, as a terminal's does.
+    let next = &rows[echo + 3];
+    assert_eq!(next.matches("[u@h d]$ ").count(), 1, "{next:?}");
+    assert!(!next.contains("ls -la"), "{next:?}");
     assert!(!screen.contains('\x1b'));
     let column = |row: &str, needle: &str| row.find(needle).map(|i| row[..i].chars().count());
     assert_eq!(

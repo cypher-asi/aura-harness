@@ -46,6 +46,7 @@ mod sign_ins;
 mod spawn_folding;
 mod status_and_columns;
 mod status_line;
+mod terminal_inline;
 mod terminal_pane;
 mod text_layout;
 mod todos;
