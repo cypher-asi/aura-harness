@@ -379,7 +379,12 @@ mod machine_tests {
         assert_eq!(rows[2].parent_chain, ["aa"]);
         assert_eq!(rows[2].status, ProcessStatus::Idle);
 
-        assert!(rows.iter().all(|row| row.jump_agent_id == "aa"));
+        let jumps: Vec<&str> = rows.iter().map(|row| row.jump_agent_id.as_str()).collect();
+        assert_eq!(
+            jumps,
+            ["aa", "bb", "cc"],
+            "a spawned agent opens its own chat"
+        );
         assert!(rows.iter().all(|row| !row.killable));
     }
 }

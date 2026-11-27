@@ -7,12 +7,12 @@ use super::*;
 /// panel. A sleeping machine is not read, so looking never wakes it.
 pub(in crate::event_loop) fn list_sandbox(state: &LoopState<'_>, dir: PathBuf) {
     let agent = state.active;
-    let Some(hub) = state.cloud.hub().filter(|_| state.cloud.is_cloud(agent)) else {
+    let (Some(hub), Some(placed)) = (state.cloud.hub(), state.cloud.machine_of(agent)) else {
         return;
     };
     let ui = AgentUi::new(state.commands.clone(), agent);
     tokio::spawn(async move {
-        let entries = match hub.list_files(agent, &dir).await {
+        let entries = match hub.list_files(placed, &dir).await {
             Ok(entries) => Ok(entries
                 .into_iter()
                 .map(|entry| RemoteEntry {
@@ -33,13 +33,13 @@ pub(in crate::event_loop) fn list_sandbox(state: &LoopState<'_>, dir: PathBuf) {
 /// opened. A sleeping machine is not read.
 pub(in crate::event_loop) fn read_sandbox_file(state: &LoopState<'_>, path: PathBuf) {
     let agent = state.active;
-    let Some(hub) = state.cloud.hub().filter(|_| state.cloud.is_cloud(agent)) else {
+    let (Some(hub), Some(placed)) = (state.cloud.hub(), state.cloud.machine_of(agent)) else {
         return;
     };
     let ui = AgentUi::new(state.commands.clone(), agent);
     tokio::spawn(async move {
         let text = hub
-            .read_file(agent, &path)
+            .read_file(placed, &path)
             .await
             .map_err(|err| err.to_string());
         ui.send(UiCommand::SandboxFile { path, text }).await;
@@ -168,7 +168,8 @@ fn chain_above(
 
 /// `rows`, what placed `agent`'s machine has under way, as PROCESSES
 /// rows. Spawned agents nest under the agent that spawned them, with the
-/// ids local ones have, so MEMBERS lists them too.
+/// ids local ones have, so MEMBERS lists them too, and open their own
+/// chat as a `task`'s row does.
 pub(super) fn machine_rows(agent: &str, rows: &[MeshProcess]) -> Vec<ProcessSummary> {
     let parents: std::collections::HashMap<&str, &str> = rows
         .iter()
@@ -208,6 +209,7 @@ pub(super) fn machine_rows(agent: &str, rows: &[MeshProcess]) -> Vec<ProcessSumm
                     .unwrap_or_default(),
                 owner_agent_id: owner,
                 parent_chain: chain,
+                jump_agent_id: row.agent_id.clone(),
                 ..summary
             }
         })

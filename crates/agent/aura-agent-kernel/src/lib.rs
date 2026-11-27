@@ -52,7 +52,7 @@ pub use policy::{
     PolicyVerdict, ToolModeClass,
 };
 pub use replay::{ReplayConsumer, ReplayError, ReplayReport};
-pub use spawn_hook::KernelSpawnHook;
+pub use spawn_hook::{spawned_as, KernelSpawnHook, SpawnedAs};
 
 /// Errors from the deterministic kernel (store, reasoner, serialization).
 #[derive(Debug, thiserror::Error)]

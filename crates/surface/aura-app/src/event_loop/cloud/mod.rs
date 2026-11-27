@@ -65,6 +65,9 @@ mod machine;
 mod moving;
 mod placement;
 mod publish;
+mod spawns;
+#[cfg(test)]
+mod spawns_tests;
 mod submit;
 #[cfg(test)]
 mod tests;
@@ -196,7 +199,24 @@ impl CloudState {
     /// Whether the local kernel must leave `agent`'s record alone: it
     /// runs on a cloud machine, whose node writes it, or is being moved.
     pub(super) fn node_writes(&self, agent: AgentId) -> bool {
-        self.is_cloud(agent) || self.is_moving(agent)
+        self.is_moving(agent) || self.machine_of(agent).is_some()
+    }
+
+    /// The cloud agent on whose machine `agent` was spawned, by it or by
+    /// an agent it spawned there: that machine runs `agent`.
+    pub(super) fn machine_root(&self, agent: AgentId) -> Option<AgentId> {
+        self.hub()?.machine_root(agent)
+    }
+
+    /// The cloud agent whose machine runs `agent`: `agent` itself, or the
+    /// one on whose machine it was spawned ([`Self::machine_root`]).
+    pub(super) fn machine_of(&self, agent: AgentId) -> Option<AgentId> {
+        let hub = self.hub()?;
+        if hub.is_placed(agent) {
+            Some(agent)
+        } else {
+            hub.machine_root(agent)
+        }
     }
 
     /// Forget `agent`'s local session if it is older than its record.
@@ -373,6 +393,22 @@ async fn refuse(
         }
         None => system(state, agent, note).await,
     }
+}
+
+/// Why `agent` takes no work, `/new` or move from here: it was spawned
+/// on cloud agent `root`'s machine, whose node writes its record.
+fn spawned_on_machine(state: &LoopState<'_>, agent: AgentId, root: AgentId) -> String {
+    let registry = lock(&state.hub.registry);
+    let short = |id: AgentId| {
+        registry.find(id).map_or_else(
+            || id.to_hex()[..8].to_string(),
+            |found| found.code.clone().unwrap_or_else(|| found.name.clone()),
+        )
+    };
+    let (name, root) = (short(agent), short(root));
+    format!(
+        "{name} runs on {root}'s cloud machine: ask {root} to continue it, or bring {root} back (/local) to continue it here."
+    )
 }
 
 /// Why the user signed in here may not manage cloud agent `agent`: only

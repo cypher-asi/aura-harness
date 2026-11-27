@@ -7,6 +7,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A cloud agent's subagents are listed under it
+
+##### Fixed
+
+- The agents a cloud agent spawns on its machine are listed under it,
+  as a local agent's are: in PROJECTS, and in its channel's MEMBERS as
+  its subagents. A `task` is named for its kind and first prompt
+  ("EXP1: Engine core"), and each spins while its machine says it
+  works. They were only copied here, so an agent launched in a channel
+  showed none of the subagents it started. Their chat follows the
+  machine's copy, HOST shows the machine they run on, and their row in
+  the machine's list opens their chat. They carry on only on that
+  machine: a message to one says to ask the agent that spawned it, or
+  to bring that agent back with `/local`.
+
 ### A channel shows its project's plans and tasks
 
 ##### Added
