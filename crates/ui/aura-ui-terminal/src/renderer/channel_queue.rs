@@ -38,7 +38,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// What QUEUE says while no merge has been queued.
 pub(super) const NO_MERGES: &str = "No merges yet. Every push from an agent of this channel \
-lands here and merges into main one at a time.";
+lands here and merges into its target branch one at a time.";
 
 /// Draw the open channel's merge queue into `inner`, the body below the
 /// tab bar of the panel bordered by `area`. Without an open channel there

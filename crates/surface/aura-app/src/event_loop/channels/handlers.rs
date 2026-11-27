@@ -73,6 +73,7 @@ pub(super) async fn reopen_coordinator(state: &mut LoopState<'_>, coordinator: A
 /// (`SelectAgent` or `FocusAgent`), so it is active already and its chat
 /// is not loaded a second time.
 pub(in crate::event_loop) async fn handle_open(state: &mut LoopState<'_>, channel_id: &str) {
+    crate::event_loop::factory::service::show_channel(channel_id);
     let channel = match open_channel_record(&state.hub, channel_id).await {
         Ok(channel) => channel,
         Err(error) => {

@@ -158,6 +158,26 @@ fn entries_waiting_too_long_expire() {
 }
 
 #[test]
+fn the_same_push_of_a_queued_branch_is_a_duplicate() {
+    let mut state = QueueState::default();
+    state.enqueue(request("a", "h1"), at(0));
+    assert!(matches!(
+        state.enqueue(request("a", "h1"), at(1)),
+        Enqueued::Duplicate(_)
+    ));
+    assert_eq!(state.entries[0].pushed_at, None);
+}
+
+#[test]
+fn a_new_push_restarts_the_wait() {
+    let mut state = QueueState::default();
+    state.enqueue(request("a", "h1"), at(0));
+    state.enqueue(request("a", "h2"), at(7_000));
+    assert!(state.expire(at(7_300), Duration::hours(2)).is_empty());
+    assert_eq!(state.expire(at(14_300), Duration::hours(2)).len(), 1);
+}
+
+#[test]
 fn pruning_drops_the_oldest_finished_entries_only() {
     let mut state = QueueState::default();
     for n in 0..4 {

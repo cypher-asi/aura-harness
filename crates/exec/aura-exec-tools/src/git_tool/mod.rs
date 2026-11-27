@@ -340,6 +340,26 @@ pub(crate) fn check_not_protected(branch: &str) -> Result<(), GitToolError> {
     Ok(())
 }
 
+/// Refuse `branch` when the merge queue config in `workspace`
+/// (`.aura/merge-queue.toml`) names it as the queue's target: like the
+/// [`PROTECTED_BRANCHES`], it only changes through the queue.
+pub(crate) async fn check_not_queue_target(
+    workspace: &std::path::Path,
+    branch: &str,
+) -> Result<(), GitToolError> {
+    let path = workspace.join(aura_exec_merge_queue::config::CONFIG_PATH);
+    // No config (or an unreadable one) names no other target.
+    let Ok(text) = tokio::fs::read_to_string(&path).await else {
+        return Ok(());
+    };
+    if aura_exec_merge_queue::config::target_in(&text).as_deref() == Some(branch) {
+        return Err(GitToolError::ProtectedBranch {
+            branch: branch.to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Outcome of [`git_commit_push_impl`].
 ///
 /// The commit half and the push half are reported independently so a

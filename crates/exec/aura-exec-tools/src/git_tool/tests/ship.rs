@@ -155,6 +155,33 @@ async fn pushes_never_update_a_protected_branch() {
 }
 
 #[tokio::test]
+async fn the_queue_target_a_repo_configures_is_protected_too() {
+    if !git_available() {
+        return;
+    }
+    let (_parent, repo, _origin) = repo_with_bare_origin().await;
+    std::fs::create_dir_all(repo.join(".aura")).unwrap();
+    std::fs::write(repo.join(".aura/merge-queue.toml"), "target = \"trunk\"\n").unwrap();
+    let err = git_push_impl(
+        &repo,
+        to_branch("trunk"),
+        PushPolicy::single(Duration::from_secs(5)),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, GitToolError::ProtectedBranch { branch } if branch == "trunk"),
+        "{err:?}"
+    );
+    git(&repo, &["checkout", "-q", "-b", "trunk"]).await;
+    let err = git_ship_impl(&repo, request("on trunk")).await.unwrap_err();
+    assert!(
+        matches!(err, GitToolError::ProtectedBranch { .. }),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_repo_without_origin_queues_its_local_branch() {
     if !git_available() {
         return;

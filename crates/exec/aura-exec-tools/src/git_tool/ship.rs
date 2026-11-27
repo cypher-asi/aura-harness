@@ -108,6 +108,11 @@ pub async fn git_ship_impl(
     check_target_name(request.target)?;
     let current = current_branch(workspace, request.timeout).await?;
     let branch = resolve_branch(request.push, current.as_deref())?;
+    super::check_not_queue_target(workspace, &branch).await?;
+    // Ships of one folder run one at a time: two at once would race on
+    // its index and commit each other's half-staged work.
+    let folder_lock = ship_lock(workspace);
+    let _shipping = folder_lock.lock().await;
     let commit = git_commit_impl(workspace, request.message, request.timeout).await?;
 
     let has_origin = match remote_url(workspace, request.timeout).await {
@@ -137,6 +142,21 @@ pub async fn git_ship_impl(
         head: pushed.head.clone(),
         pushed: Some(pushed),
     })
+}
+
+/// The lock the ships of `workspace` take, one per folder in this
+/// process.
+fn ship_lock(workspace: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<std::path::PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>,
+        >,
+    > = std::sync::OnceLock::new();
+    let locks = LOCKS.get_or_init(Default::default);
+    let mut locks = locks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    std::sync::Arc::clone(locks.entry(workspace.to_path_buf()).or_default())
 }
 
 /// The target goes into a refspec, so it must be a plain branch name.

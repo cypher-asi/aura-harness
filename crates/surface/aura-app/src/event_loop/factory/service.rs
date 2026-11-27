@@ -63,7 +63,23 @@ pub(crate) fn start(
         quit,
         queues: Mutex::default(),
     });
+    // Set once, with the push sink above.
+    let _ = SERVICE.set(Arc::clone(&service));
     tokio::spawn(service.run(pushes));
+}
+
+/// The running service, for the channels opened from now on.
+static SERVICE: std::sync::OnceLock<Arc<QueueService>> = std::sync::OnceLock::new();
+
+/// Channel `channel_id` opened: send its QUEUE tab its repo's queue, when
+/// the repo has one.
+pub(crate) fn show_channel(channel_id: &str) {
+    let Some(service) = SERVICE.get() else {
+        return;
+    };
+    let service = Arc::clone(service);
+    let channel_id = channel_id.to_string();
+    tokio::spawn(async move { service.show(&channel_id).await });
 }
 
 impl QueueService {
@@ -86,15 +102,37 @@ impl QueueService {
             let Ok(repo) = RepoPaths::of(&folder).await else {
                 continue;
             };
-            let file = repo
-                .queue_dir()
-                .join(aura_exec_merge_queue::store::QUEUE_FILE);
-            if tokio::fs::try_exists(&file).await.unwrap_or(false) {
+            if has_queue_file(&repo).await {
                 if let Err(why) = self.queue_for(repo).await {
                     warn!(folder = %folder.display(), %why, "Could not resume a merge queue");
                 }
             }
         }
+    }
+
+    /// Send channel `channel_id`'s QUEUE tab its repo's queue, opening the
+    /// queue when the repo has one on disk.
+    async fn show(self: &Arc<Self>, channel_id: &str) {
+        let folders = channel_folders(&self.hub).await;
+        let Some((_, folder)) = folders.into_iter().find(|(id, _)| id == channel_id) else {
+            return;
+        };
+        let Ok(repo) = RepoPaths::of(&folder).await else {
+            return;
+        };
+        let known = self.queues.lock().await.get(&repo.common).cloned();
+        let repo_queue = match known {
+            Some(found) => found,
+            None if has_queue_file(&repo).await => match self.queue_for(repo).await {
+                Ok(opened) => opened,
+                Err(why) => {
+                    warn!(%channel_id, %why, "Could not open a channel's merge queue");
+                    return;
+                }
+            },
+            None => return,
+        };
+        self.publish(&repo_queue).await;
     }
 
     /// Queue `observed` in the queue of the repo its agent works in.
@@ -122,10 +160,12 @@ impl QueueService {
         };
         let note = queued.await.unwrap_or_else(|why| {
             warn!(%agent, %why, "Could not queue a push");
-            format!("Merge queue: could not queue the push: {why}")
+            Some(format!("Merge queue: could not queue the push: {why}"))
         });
-        info!(%agent, %note, "Push queued");
-        ui.send(system_message(note)).await;
+        if let Some(note) = note {
+            info!(%agent, %note, "Push queued");
+            ui.send(system_message(note)).await;
+        }
     }
 
     /// The queue of `repo`, opened (and its processor started) the first
@@ -140,8 +180,9 @@ impl QueueService {
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
-        let integrator = Arc::new(GitIntegrator::new(repo.clone(), config.clone()));
-        let (queue, failed) = MergeQueue::open(repo.clone(), integrator, Limits::default())
+        // The checks come from each entry's target commit, not this folder.
+        let integrator = Arc::new(GitIntegrator::new(repo.clone(), config.without_checks()));
+        let queue = MergeQueue::open(repo.clone(), integrator, Limits::default())
             .await
             .map_err(|e| e.to_string())?;
         info!(repo = %repo.top.display(), target = %config.target, "Merge queue opened");
@@ -151,10 +192,8 @@ impl QueueService {
         });
         queues.insert(repo.common.clone(), Arc::clone(&repo_queue));
         drop(queues);
+        // Recovery's failures come back as events once it holds the lock.
         self.spawn_processor(&repo_queue);
-        for entry in failed {
-            self.send_back(&entry).await;
-        }
         self.publish(&repo_queue).await;
         Ok(repo_queue)
     }
@@ -226,6 +265,7 @@ impl QueueService {
             &repo_queue.queue.entries().await,
         );
         for channel_id in channels_on(&self.hub, &repo.common).await {
+            // A closed UI takes no more views; nothing to do then.
             let _ = self
                 .commands
                 .send(UiCommand::SetMergeQueue {
@@ -235,6 +275,14 @@ impl QueueService {
                 .await;
         }
     }
+}
+
+/// Whether `repo` has a queue file.
+async fn has_queue_file(repo: &RepoPaths) -> bool {
+    let file = repo
+        .queue_dir()
+        .join(aura_exec_merge_queue::store::QUEUE_FILE);
+    tokio::fs::try_exists(&file).await.unwrap_or(false)
 }
 
 /// The folders of the channels' projects.
@@ -294,18 +342,17 @@ fn origin_of(hub: &AgentHub, agent: AgentId) -> Origin {
     }
 }
 
-/// The chat line for a push that was queued as `enqueued`.
-fn queued_note(branch: &str, target: &str, enqueued: &Enqueued) -> String {
+/// The chat line for a push that was queued as `enqueued`; none for a
+/// push seen again (a cloud turn's pushes are read twice).
+fn queued_note(branch: &str, target: &str, enqueued: &Enqueued) -> Option<String> {
     match enqueued {
-        Enqueued::Added(id) => {
-            format!("Merge queue: {branch} is queued to merge into {target} ({id}).")
-        }
-        Enqueued::Updated(id) => {
-            format!("Merge queue: {branch} was queued already; it merges the new push ({id}).")
-        }
-        Enqueued::Duplicate(id) => {
-            format!("Merge queue: this push of {branch} is merging or merged already ({id}).")
-        }
+        Enqueued::Added(id) => Some(format!(
+            "Merge queue: {branch} is queued to merge into {target} ({id})."
+        )),
+        Enqueued::Updated(id) => Some(format!(
+            "Merge queue: {branch} was queued already; it merges the new push ({id})."
+        )),
+        Enqueued::Duplicate(_) => None,
     }
 }
 
@@ -373,7 +420,12 @@ mod tests {
     #[test]
     fn the_queued_note_says_where_the_push_is() {
         let id = EntryId::from_seq(4);
-        assert!(queued_note("aura/x", "main", &Enqueued::Added(id.clone())).contains("q4"));
-        assert!(queued_note("aura/x", "main", &Enqueued::Updated(id)).contains("new push"));
+        let note = |enqueued| queued_note("aura/x", "main", &enqueued).unwrap_or_default();
+        assert!(note(Enqueued::Added(id.clone())).contains("q4"));
+        assert!(note(Enqueued::Updated(id.clone())).contains("new push"));
+        assert_eq!(
+            queued_note("aura/x", "main", &Enqueued::Duplicate(id)),
+            None
+        );
     }
 }

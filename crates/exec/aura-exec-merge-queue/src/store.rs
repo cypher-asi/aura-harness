@@ -1,33 +1,41 @@
-//! The queue on disk, and the lock that keeps one processor per repo.
+//! The queue on disk, and the locks that keep it consistent.
 //!
 //! ## Invariants
 //!
 //! - The queue file is replaced atomically: written to a temporary file
 //!   in the same directory, synced, then renamed over the old one. A
 //!   crash leaves the old queue or the new one, never half of either.
+//! - Every change is a read, modify, write under [`STATE_LOCK_FILE`]'s
+//!   lock ([`QueueStore::update`]), so processes sharing a queue never
+//!   overwrite each other's changes.
+//! - While a processor holds [`ProcessorLock`], no other processor of the
+//!   same repo runs, in this process or another. The lock is the
+//!   operating system's ([`FileLock`]): it lasts as long as its holder
+//!   and goes with it, so nothing refreshes it and no one takes it over
+//!   from a live holder, however long a merge runs.
 //! - A queue file that cannot be read as a queue is moved aside (never
 //!   deleted) and the queue starts empty, so one bad write can't stop the
 //!   repo's merges for good.
-//! - While a processor holds [`ProcessorLock`], no other processor of the
-//!   same repo runs. A lock whose holder stopped touching it for
-//!   [`STALE_LOCK`] is taken over: its holder crashed.
 //!
 //! Everything here is blocking file IO; async callers run it on a
 //! blocking thread.
 
 use crate::error::QueueError;
+use crate::lock::FileLock;
 use crate::state::QueueState;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 /// Name of the queue file in the queue directory.
 pub const QUEUE_FILE: &str = "merge-queue.json";
 /// Name of the processor lock in the queue directory.
 pub const LOCK_FILE: &str = "merge-queue.lock";
-/// How long a lock may go untouched before it counts as abandoned.
-pub const STALE_LOCK: Duration = Duration::from_secs(10 * 60);
+/// Name of the lock every change to the queue file is made under.
+pub const STATE_LOCK_FILE: &str = "merge-queue.state.lock";
+/// Longest a change waits for another process's change to the file.
+pub const STATE_LOCK_WAIT: Duration = Duration::from_secs(30);
 
 /// A repo's queue file.
 #[derive(Debug, Clone)]
@@ -95,82 +103,46 @@ impl QueueStore {
         let path = self.path();
         fs::rename(&tmp, &path).map_err(|e| QueueError::io(&path, e))
     }
+
+    /// Apply `edit` to the stored queue and save it when it changed, all
+    /// under the state lock. Returns the queue after the edit and what
+    /// `edit` returned.
+    ///
+    /// # Errors
+    /// The lock can't be taken in [`STATE_LOCK_WAIT`], or the file can't
+    /// be read or written; nothing is changed then.
+    pub fn update<T>(
+        &self,
+        edit: impl FnOnce(&mut QueueState) -> T,
+    ) -> Result<(QueueState, T), QueueError> {
+        let _lock = FileLock::exclusive(&self.dir.join(STATE_LOCK_FILE), STATE_LOCK_WAIT)?;
+        let (before, aside) = self.load()?;
+        if let Some(aside) = aside {
+            tracing::warn!(moved_to = %aside.display(), "The merge queue file was unreadable; started a new one");
+        }
+        let mut after = before.clone();
+        let result = edit(&mut after);
+        if after != before {
+            self.save(&after)?;
+        }
+        Ok((after, result))
+    }
 }
 
-/// The right to process one repo's queue, held while a lock file exists.
-/// Dropping it removes the file.
+/// The right to process one repo's queue, for as long as it lives.
 #[derive(Debug)]
 pub struct ProcessorLock {
-    path: PathBuf,
+    _lock: FileLock,
 }
 
 impl ProcessorLock {
-    /// Take the lock in `dir`; `None` when a live processor holds it.
+    /// Take the lock in `dir`; `None` while a live processor, in this
+    /// process or another, holds it.
     ///
     /// # Errors
-    /// The lock file can't be created or inspected.
+    /// The lock file can't be created or locked.
     pub fn acquire(dir: &Path) -> Result<Option<Self>, QueueError> {
-        fs::create_dir_all(dir).map_err(|e| QueueError::io(dir, e))?;
-        let path = dir.join(LOCK_FILE);
-        for _ in 0..2 {
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut file) => {
-                    // The holder is for people reading the file; nothing
-                    // parses it, so a failed write is no reason to give up.
-                    let _ = writeln!(file, "pid {}", std::process::id());
-                    return Ok(Some(Self { path }));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if !is_stale(&path)? {
-                        return Ok(None);
-                    }
-                    tracing::warn!(lock = %path.display(), "Taking over an abandoned merge queue lock");
-                    remove_if_present(&path)?;
-                }
-                Err(e) => return Err(QueueError::io(&path, e)),
-            }
-        }
-        Ok(None)
-    }
-
-    /// Show the lock is still held, so no one takes it over.
-    ///
-    /// # Errors
-    /// The lock file can't be written.
-    pub fn touch(&self) -> Result<(), QueueError> {
-        fs::write(&self.path, format!("pid {}\n", std::process::id()))
-            .map_err(|e| QueueError::io(&self.path, e))
-    }
-}
-
-impl Drop for ProcessorLock {
-    fn drop(&mut self) {
-        // Best effort: a lock left behind goes stale and is taken over.
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn is_stale(path: &Path) -> Result<bool, QueueError> {
-    let modified = match fs::metadata(path).and_then(|meta| meta.modified()) {
-        Ok(modified) => modified,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(true),
-        Err(e) => return Err(QueueError::io(path, e)),
-    };
-    let age = SystemTime::now()
-        .duration_since(modified)
-        .unwrap_or_default();
-    Ok(age > STALE_LOCK)
-}
-
-fn remove_if_present(path: &Path) -> Result<(), QueueError> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(QueueError::io(path, e)),
+        Ok(FileLock::try_exclusive(&dir.join(LOCK_FILE))?.map(|lock| Self { _lock: lock }))
     }
 }
 
@@ -222,6 +194,36 @@ mod tests {
         assert_eq!(state, QueueState::default());
         let aside = aside.unwrap();
         assert_eq!(fs::read_to_string(aside).unwrap(), "{ half a");
+    }
+
+    #[test]
+    fn updates_from_two_stores_of_one_queue_both_land() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (QueueStore::new(dir.path()), QueueStore::new(dir.path()));
+        let push = |branch: &str| MergeRequest {
+            push: QueuedPush {
+                branch: branch.into(),
+                head: "h".into(),
+                remote: None,
+            },
+            origin: Origin::default(),
+        };
+        a.update(|state| state.enqueue(push("aura/a"), chrono::Utc::now()))
+            .unwrap();
+        let (after, _) = b
+            .update(|state| state.enqueue(push("aura/b"), chrono::Utc::now()))
+            .unwrap();
+        let branches: Vec<&str> = after.entries.iter().map(|e| e.branch.as_str()).collect();
+        assert_eq!(branches, ["aura/a", "aura/b"]);
+        assert_eq!(a.load().unwrap().0, after);
+    }
+
+    #[test]
+    fn an_unchanged_queue_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = QueueStore::new(dir.path());
+        store.update(|_| ()).unwrap();
+        assert!(!dir.path().join(QUEUE_FILE).exists());
     }
 
     #[test]

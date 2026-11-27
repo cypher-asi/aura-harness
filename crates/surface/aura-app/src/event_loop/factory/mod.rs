@@ -5,6 +5,7 @@
 //! - [`flow`]: plan, build, ship, as pure stages.
 //! - [`hooks`]: where the event loop applies them.
 //! - [`observe`]: every push any agent makes, from its tool results.
+//! - [`turn`]: what one turn did: the plan it wrote, the pushes it made.
 //! - [`service`]: the repos' merge queues and their processors.
 //! - [`view`]: a queue as the QUEUE tab shows it.
 
@@ -12,6 +13,7 @@ pub(crate) mod flow;
 pub(crate) mod hooks;
 pub(crate) mod observe;
 pub(crate) mod service;
+pub(crate) mod turn;
 pub(crate) mod view;
 
 pub(crate) use flow::Flows;

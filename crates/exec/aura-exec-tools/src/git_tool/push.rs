@@ -298,6 +298,7 @@ async fn plan_push(
 ) -> Result<PushPlan, GitToolError> {
     let current = current_branch(workspace, INSPECT_TIMEOUT).await?;
     let branch = resolve_branch(target, current.as_deref())?;
+    super::check_not_queue_target(workspace, &branch).await?;
     let remote = remote_url(workspace, INSPECT_TIMEOUT).await?;
     let head = head_commit(workspace, INSPECT_TIMEOUT).await?;
 

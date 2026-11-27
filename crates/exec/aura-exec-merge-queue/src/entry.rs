@@ -145,6 +145,9 @@ pub struct MergeEntry {
     pub status: MergeStatus,
     /// When it was queued (a re-push of a queued branch keeps its place)
     pub enqueued_at: DateTime<Utc>,
+    /// When its branch was last pushed, when after `enqueued_at`
+    #[serde(default)]
+    pub pushed_at: Option<DateTime<Utc>>,
     /// When it last started running
     #[serde(default)]
     pub started_at: Option<DateTime<Utc>>,
@@ -217,6 +220,7 @@ mod tests {
             origin: Origin::default(),
             status: MergeStatus::Failed,
             enqueued_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap_or_default(),
+            pushed_at: None,
             started_at: None,
             finished_at: None,
             attempts: 2,

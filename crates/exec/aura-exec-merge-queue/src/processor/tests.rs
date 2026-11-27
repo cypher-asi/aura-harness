@@ -61,21 +61,29 @@ fn request(branch: &str) -> MergeRequest {
     }
 }
 
-async fn open(dir: &Path, integrator: Arc<dyn Integrator>) -> (MergeQueue, Vec<MergeEntry>) {
+async fn open(dir: &Path, integrator: Arc<dyn Integrator>) -> MergeQueue {
     MergeQueue::open(repo(dir), integrator, Limits::default())
         .await
         .unwrap()
+}
+
+/// `queue`'s processor, recovered; panics when another holds it.
+async fn processor(queue: &MergeQueue) -> (Processor, Vec<MergeEntry>) {
+    let processor = queue.processor().await.unwrap().expect("the lock is free");
+    let failed = processor.recover().await.unwrap();
+    (processor, failed)
 }
 
 #[tokio::test]
 async fn entries_are_merged_in_the_order_they_were_pushed() {
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());
-    let (queue, _) = open(dir.path(), recorder.clone()).await;
+    let queue = open(dir.path(), recorder.clone()).await;
     for branch in ["a", "bad-b", "c"] {
         queue.enqueue(request(branch)).await.unwrap();
     }
-    while queue.process_next().await.unwrap().is_some() {}
+    let (processor, _) = processor(&queue).await;
+    while processor.process_next().await.unwrap().is_some() {}
     assert_eq!(*recorder.seen.lock().unwrap(), ["a", "bad-b", "c"]);
     let statuses: Vec<MergeStatus> = queue.entries().await.iter().map(|e| e.status).collect();
     assert_eq!(
@@ -91,10 +99,10 @@ async fn entries_are_merged_in_the_order_they_were_pushed() {
 #[tokio::test]
 async fn a_failure_is_announced_with_its_reason_and_owner() {
     let dir = tempfile::tempdir().unwrap();
-    let (queue, _) = open(dir.path(), Arc::new(Recorder::default())).await;
+    let queue = open(dir.path(), Arc::new(Recorder::default())).await;
     let mut events = queue.subscribe();
     queue.enqueue(request("bad")).await.unwrap();
-    queue.process_next().await.unwrap();
+    processor(&queue).await.0.process_next().await.unwrap();
     let mut finished = None;
     while let Ok(event) = events.try_recv() {
         if let QueueEvent::Finished(entry) = event {
@@ -111,15 +119,16 @@ async fn a_failure_is_announced_with_its_reason_and_owner() {
 async fn the_queue_survives_a_restart() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let (queue, _) = open(dir.path(), Arc::new(Recorder::default())).await;
+        let queue = open(dir.path(), Arc::new(Recorder::default())).await;
         queue.enqueue(request("a")).await.unwrap();
         queue.enqueue(request("b")).await.unwrap();
     }
     let recorder = Arc::new(Recorder::default());
-    let (queue, failed) = open(dir.path(), recorder.clone()).await;
+    let queue = open(dir.path(), recorder.clone()).await;
+    let (processor, failed) = processor(&queue).await;
     assert!(failed.is_empty());
     assert_eq!(queue.entries().await.len(), 2);
-    while queue.process_next().await.unwrap().is_some() {}
+    while processor.process_next().await.unwrap().is_some() {}
     assert_eq!(*recorder.seen.lock().unwrap(), ["a", "b"]);
 }
 
@@ -127,19 +136,26 @@ async fn the_queue_survives_a_restart() {
 async fn a_merge_cut_off_by_a_crash_runs_again_in_its_place() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let (queue, _) = open(dir.path(), Arc::new(Hangs)).await;
+        let queue = open(dir.path(), Arc::new(Hangs)).await;
         queue.enqueue(request("a")).await.unwrap();
         queue.enqueue(request("b")).await.unwrap();
-        let cut = tokio::time::timeout(Duration::from_millis(50), queue.process_next()).await;
+        let (processor, _) = processor(&queue).await;
+        let cut = tokio::time::timeout(Duration::from_millis(50), processor.process_next()).await;
         assert!(cut.is_err(), "the merge was cut off");
         assert_eq!(queue.entries().await[0].status, MergeStatus::Running);
     }
     let recorder = Arc::new(Recorder::default());
-    let (queue, _) = open(dir.path(), recorder.clone()).await;
+    let queue = open(dir.path(), recorder.clone()).await;
+    assert_eq!(
+        queue.entries().await[0].status,
+        MergeStatus::Running,
+        "opening alone recovers nothing"
+    );
+    let (processor, _) = processor(&queue).await;
     let entries = queue.entries().await;
     assert_eq!(entries[0].status, MergeStatus::Queued);
     assert_eq!(entries[0].attempts, 1);
-    while queue.process_next().await.unwrap().is_some() {}
+    while processor.process_next().await.unwrap().is_some() {}
     assert_eq!(*recorder.seen.lock().unwrap(), ["a", "b"]);
 }
 
@@ -147,13 +163,16 @@ async fn a_merge_cut_off_by_a_crash_runs_again_in_its_place() {
 async fn an_entry_that_crashes_every_time_fails_instead_of_looping() {
     let dir = tempfile::tempdir().unwrap();
     for _ in 0..3 {
-        let (queue, _) = open(dir.path(), Arc::new(Hangs)).await;
+        let queue = open(dir.path(), Arc::new(Hangs)).await;
         if queue.entries().await.is_empty() {
             queue.enqueue(request("a")).await.unwrap();
         }
-        let _ = tokio::time::timeout(Duration::from_millis(20), queue.process_next()).await;
+        let (processor, _) = processor(&queue).await;
+        let cut = tokio::time::timeout(Duration::from_millis(20), processor.process_next()).await;
+        assert!(cut.is_err());
     }
-    let (queue, failed) = open(dir.path(), Arc::new(Recorder::default())).await;
+    let queue = open(dir.path(), Arc::new(Recorder::default())).await;
+    let (_processor, failed) = processor(&queue).await;
     assert_eq!(failed.len(), 1);
     assert_eq!(queue.entries().await[0].status, MergeStatus::Failed);
 }
@@ -165,11 +184,17 @@ async fn an_entry_running_too_long_fails() {
         entry_timeout: Duration::from_millis(20),
         ..Limits::default()
     };
-    let (queue, _) = MergeQueue::open(repo(dir.path()), Arc::new(Hangs), limits)
+    let queue = MergeQueue::open(repo(dir.path()), Arc::new(Hangs), limits)
         .await
         .unwrap();
     queue.enqueue(request("a")).await.unwrap();
-    let done = queue.process_next().await.unwrap().unwrap();
+    let done = processor(&queue)
+        .await
+        .0
+        .process_next()
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(done.status, MergeStatus::Failed);
     assert!(done.detail.unwrap_or_default().contains("took longer"));
 }
@@ -178,7 +203,7 @@ async fn an_entry_running_too_long_fails() {
 async fn the_processor_merges_pushes_as_they_arrive_until_cancelled() {
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());
-    let (queue, _) = open(dir.path(), recorder.clone()).await;
+    let queue = open(dir.path(), recorder.clone()).await;
     let mut events = queue.subscribe();
     let cancel = CancellationToken::new();
     let processor = tokio::spawn({
@@ -198,10 +223,88 @@ async fn the_processor_merges_pushes_as_they_arrive_until_cancelled() {
     cancel.cancel();
     processor.await.unwrap();
     assert!(
-        !repo(dir.path())
-            .queue_dir()
-            .join(crate::store::LOCK_FILE)
-            .exists(),
+        queue.processor().await.unwrap().is_some(),
         "the lock goes with the processor"
     );
+}
+
+/// Never finishes, but has landed: the merge was pushed when time ran out.
+struct LandedThenHung;
+
+#[async_trait]
+impl Integrator for LandedThenHung {
+    async fn integrate(&self, _entry: &MergeEntry) -> RunOutcome {
+        std::future::pending().await
+    }
+
+    async fn landed(&self, _entry: &MergeEntry) -> Option<String> {
+        Some("tip".to_string())
+    }
+}
+
+#[tokio::test]
+async fn an_entry_that_landed_before_its_time_ran_out_is_merged() {
+    let dir = tempfile::tempdir().unwrap();
+    let limits = Limits {
+        entry_timeout: Duration::from_millis(20),
+        ..Limits::default()
+    };
+    let queue = MergeQueue::open(repo(dir.path()), Arc::new(LandedThenHung), limits)
+        .await
+        .unwrap();
+    queue.enqueue(request("a")).await.unwrap();
+    let done = processor(&queue)
+        .await
+        .0
+        .process_next()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(done.status, MergeStatus::Merged);
+    assert_eq!(done.merged.as_deref(), Some("tip"));
+}
+
+#[tokio::test]
+async fn two_queues_on_one_repo_share_one_file_and_one_processor() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let first = open(dir.path(), recorder.clone()).await;
+    let second = open(dir.path(), recorder.clone()).await;
+    first.enqueue(request("a")).await.unwrap();
+    second.enqueue(request("b")).await.unwrap();
+    first.enqueue(request("c")).await.unwrap();
+    let branches = |entries: Vec<MergeEntry>| -> Vec<String> {
+        entries.into_iter().map(|entry| entry.branch).collect()
+    };
+    assert_eq!(branches(first.entries().await), ["a", "b", "c"]);
+    assert_eq!(branches(second.entries().await), ["a", "b", "c"]);
+
+    let (processor, _) = processor(&first).await;
+    assert!(
+        second.processor().await.unwrap().is_none(),
+        "one processor per repo"
+    );
+    while processor.process_next().await.unwrap().is_some() {}
+    assert_eq!(*recorder.seen.lock().unwrap(), ["a", "b", "c"]);
+    let merged = second.entries().await;
+    assert!(merged
+        .iter()
+        .all(|entry| entry.status == MergeStatus::Merged));
+}
+
+#[tokio::test]
+async fn a_running_entry_is_left_alone_while_its_processor_lives() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = open(dir.path(), Arc::new(Hangs)).await;
+    first.enqueue(request("a")).await.unwrap();
+    let (processor, _) = processor(&first).await;
+    let cut = tokio::time::timeout(Duration::from_millis(20), processor.process_next()).await;
+    assert!(cut.is_err());
+    // Another process opens the queue and queues a push meanwhile.
+    let second = open(dir.path(), Arc::new(Recorder::default())).await;
+    assert!(second.processor().await.unwrap().is_none());
+    second.enqueue(request("b")).await.unwrap();
+    let entries = first.entries().await;
+    assert_eq!(entries[0].status, MergeStatus::Running);
+    assert_eq!(entries.len(), 2);
 }

@@ -1,41 +1,33 @@
 //! Where the event loop applies the software factory's flow
 //! ([`super::flow`]) to a channel member's turns, local or cloud.
+//!
+//! Shipping always goes through the agent's own kernel: the hub never runs
+//! git for it, it asks the agent to call `git_ship` ([`SHIP_PROMPT`]).
 
 use super::flow::{Next, TurnEnd};
 use super::observe::{self, ObservedPush};
+use super::turn;
 use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::agents::AgentSession;
 use crate::event_loop::handlers::system_message;
-use crate::event_loop::notices::Notice;
 use crate::event_loop::subagents::{lock, AgentHub};
-use crate::event_loop::turns::{Prompt, Work};
-use crate::event_loop::{modes, LoopState, Permissions};
+use crate::event_loop::turns::{Prompt, Request, Work};
+use crate::event_loop::{inbox, modes, LoopState, Permissions};
 use aura_context_prompts::model_messages::build_plan::build_plan_prompt;
 use aura_core_types::AgentId;
-use aura_exec_merge_queue::{QueueConfig, QueuedPush, RepoPaths};
-use aura_exec_tools::git_tool::{git_ship_impl, PushPolicy, PushTarget, ShipRequest};
-use aura_exec_tools::plan_tools::plan_path_from_output;
-use aura_model::{ContentBlock, Message, Role, ToolResultContent};
+use aura_model::Message;
 use aura_ui::PermissionMode;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::info;
 
-/// What a cloud agent is told once it built its plan without shipping.
+/// What an agent is told once it built its plan without shipping.
 pub(crate) const SHIP_PROMPT: &str = "Your plan is built. Ship it now: call git_ship with a \
     short commit message. It commits every change, pulls main, pushes your branch and puts it in \
     the merge queue. Then end your turn with your report.";
 
-/// Longest a git step of the hub's own `git_ship` may take.
-const SHIP_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// Agents whose branch names the hub ships on its own: branches only an
-/// agent works on.
-const AGENT_BRANCH_PREFIX: &str = "aura/";
-
 /// A task reached `agent` through its inbox: a channel member plans it
-/// first.
+/// first, once its work starts.
 pub(crate) fn on_assignment(state: &LoopState<'_>, agent: AgentId) {
     if !lock(&state.hub.channel_members).contains(&agent) {
         return;
@@ -46,76 +38,92 @@ pub(crate) fn on_assignment(state: &LoopState<'_>, agent: AgentId) {
     if crate::event_loop::channels::is_coordinator(definition.as_deref()) {
         return;
     }
-    let before = state
-        .idle
-        .get(&agent)
-        .and_then(|session| session.active_plan.clone());
     info!(%agent, "Software factory: the task starts with a plan");
-    state.hub.factory_flows.start(agent, before);
+    state.hub.factory_flows.assign(agent);
 }
 
-/// Before a local turn of `session`: an agent whose task starts with a
-/// plan works in plan mode.
-pub(crate) async fn plan_first(state: &LoopState<'_>, session: &AgentSession) {
+/// Before a local prompt of `session`: when its task plans, it works in
+/// plan mode. Returns whether this turn plans.
+pub(crate) async fn plan_first(state: &LoopState<'_>, session: &AgentSession) -> bool {
     let agent = session.agent_id();
-    if state.hub.factory_flows.is_planning(agent)
-        && state.hub.mode_of(agent) != PermissionMode::Plan
-    {
+    if !state.hub.factory_flows.begin(agent) {
+        return false;
+    }
+    if state.hub.mode_of(agent) != PermissionMode::Plan {
         modes::switch_mode(state, agent, &session.kernel, PermissionMode::Plan).await;
     }
+    true
 }
 
 /// Before a cloud turn of `agent`: plan mode, which the machine gets as
-/// its plan-mode prompt.
+/// its plan-mode prompt, when its task plans.
 pub(crate) fn plan_first_in_cloud(hub: &AgentHub, agent: AgentId) {
-    if hub.factory_flows.is_planning(agent) && hub.mode_of(agent) != PermissionMode::Plan {
+    if hub.factory_flows.begin(agent) && hub.mode_of(agent) != PermissionMode::Plan {
         let approval = hub.permissions_of(agent).approval;
         hub.set_permissions(agent, Permissions::new(PermissionMode::Plan, approval));
     }
 }
 
+/// The build of the plan `session` wrote could not start: the flow ends,
+/// and what the planning turn was asked is answered now.
+pub(crate) fn build_gave_up(state: &LoopState<'_>, session: &AgentSession) {
+    let agent = session.agent_id();
+    if state.hub.factory_flows.stage(agent) == Some(super::flow::Stage::Building) {
+        info!(%agent, "Software factory: the plan could not be built; answering");
+        state.hub.factory_flows.leave(agent);
+        inbox::answer_seen(&state.hub, agent, &session.messages);
+    }
+}
+
 /// After a local turn of `agent` that ended `ok` or not: start what the
 /// flow does next. Returns whether the turn's answer waits for it.
-pub(crate) fn after_local_turn(state: &mut LoopState<'_>, agent: AgentId, ok: bool) -> bool {
+pub(crate) async fn after_local_turn(state: &mut LoopState<'_>, agent: AgentId, ok: bool) -> bool {
     let Some(session) = state.idle.get(&agent) else {
         return false;
     };
-    let plan = session.active_plan.clone();
-    let folder = session.kernel.agent_workspace();
+    let wrote = turn::wrote_plan(&session.messages);
+    let shipped = !turn::pushes(&session.messages).is_empty();
+    let kernel = Arc::clone(&session.kernel);
+    let folder = kernel.agent_workspace();
     let end = TurnEnd {
         ok,
-        plan: plan.as_deref(),
-        shipped: false,
-        cloud: false,
+        wrote_plan: wrote.as_deref(),
+        shipped,
     };
     let next = state.hub.factory_flows.turn_ended(agent, end);
-    match &next {
-        Next::Build(path) => {
-            info!(%agent, %path, "Software factory: plan written; building it");
-            state.queued.push_front(
-                agent,
-                Work::Build {
-                    path: Some(path.clone()),
-                },
-            );
+    let work = match &next {
+        Next::Build(path) => Some(Work::Build {
+            path: Some(path.clone()),
+        }),
+        Next::AskToShip if shares_folder(&state.hub, agent, &folder) => {
+            state.hub.factory_flows.leave(agent);
+            let line = "Built. Not shipped on its own: other members work in this folder, \
+                        so a ship would commit their work too. Call git_ship when it is yours alone.";
+            AgentUi::new(state.commands.clone(), agent)
+                .send(system_message(line.to_string()))
+                .await;
+            return false;
         }
-        Next::Ship => {
-            let ship = LocalShip {
-                hub: Arc::clone(&state.hub),
-                ui: AgentUi::new(state.commands.clone(), agent),
-                agent,
-                folder,
-                message: ship_message(plan.as_deref()),
-            };
-            tokio::spawn(ship.run());
+        Next::AskToShip => Some(ship_work()),
+        Next::LeftPlanning => {
+            if state.hub.mode_of(agent) == PermissionMode::Plan {
+                let back = state.hub.exit_plan_mode(agent);
+                modes::switch_mode(state, agent, &kernel, back).await;
+            }
+            None
         }
-        Next::Normal | Next::AskToShip => {}
+        Next::Normal => None,
+    };
+    if let Some(work) = work {
+        info!(%agent, ?next, "Software factory: the agent carries on");
+        state.queued.push_front(agent, work);
     }
     next.defers_answer()
 }
 
 /// After a cloud turn of `agent` that ended `ok` or not with `messages`,
-/// its conversation: start what the flow does next. Returns whether the
+/// its conversation: queue the pushes it made (again: the stream may have
+/// lost one), then start what the flow does next. Returns whether the
 /// turn's answer waits for it.
 pub(crate) fn after_cloud_turn(
     state: &mut LoopState<'_>,
@@ -123,210 +131,69 @@ pub(crate) fn after_cloud_turn(
     ok: bool,
     messages: &[Message],
 ) -> bool {
-    let results = turn_results(messages);
-    let plan = results.iter().find_map(|text| plan_path_from_output(text));
-    let shipped = results
-        .iter()
-        .any(|text| QueuedPush::from_tool_output(text).is_some());
+    let pushes = turn::pushes(messages);
+    let shipped = !pushes.is_empty();
+    for push in pushes {
+        observe::report(ObservedPush { agent, push });
+    }
+    let wrote = turn::wrote_plan(messages);
     let end = TurnEnd {
         ok,
-        plan,
+        wrote_plan: wrote.as_deref(),
         shipped,
-        cloud: true,
     };
     let next = state.hub.factory_flows.turn_ended(agent, end);
-    let prompt = match &next {
+    let work = match &next {
         Next::Build(path) => {
-            let back = state.hub.exit_plan_mode(agent);
-            let approval = state.hub.permissions_of(agent).approval;
-            state
-                .hub
-                .set_permissions(agent, Permissions::new(back, approval));
-            Some(Prompt::build(build_plan_prompt(path)))
-        }
-        Next::AskToShip => Some(Prompt::build(SHIP_PROMPT.to_string())),
-        Next::Normal | Next::Ship => None,
-    };
-    if let Some(prompt) = prompt {
-        info!(%agent, ?next, "Software factory: the cloud agent carries on");
-        state.queued.push_front(
-            agent,
-            Work::Prompt {
-                prompt,
+            leave_plan_mode(&state.hub, agent);
+            Some(Work::Prompt {
+                prompt: Prompt::build(build_plan_prompt(path)),
                 shown: false,
-            },
-        );
+            })
+        }
+        Next::AskToShip => Some(ship_work()),
+        Next::LeftPlanning => {
+            leave_plan_mode(&state.hub, agent);
+            None
+        }
+        Next::Normal => None,
+    };
+    if let Some(work) = work {
+        info!(%agent, ?next, "Software factory: the cloud agent carries on");
+        state.queued.push_front(agent, work);
     }
     next.defers_answer()
 }
 
-/// The text of every tool result since the last prompt in `messages`.
-pub(crate) fn turn_results(messages: &[Message]) -> Vec<String> {
-    let start = messages
-        .iter()
-        .rposition(|message| {
-            message.role == Role::User
-                && message
-                    .content
-                    .iter()
-                    .any(|block| matches!(block, ContentBlock::Text { .. }))
+/// The turn asking an agent to ship what it built.
+fn ship_work() -> Work {
+    Work::Prompt {
+        prompt: Prompt::inbox(SHIP_PROMPT.to_string(), Request::Resume),
+        shown: false,
+    }
+}
+
+/// Put cloud agent `agent` back in the mode it had before plan mode.
+fn leave_plan_mode(hub: &AgentHub, agent: AgentId) {
+    if hub.mode_of(agent) == PermissionMode::Plan {
+        let back = hub.exit_plan_mode(agent);
+        let approval = hub.permissions_of(agent).approval;
+        hub.set_permissions(agent, Permissions::new(back, approval));
+    }
+}
+
+/// Whether another member of a channel, not its coordinator, works in
+/// `folder` too.
+fn shares_folder(hub: &AgentHub, agent: AgentId, folder: &Path) -> bool {
+    let members: Vec<AgentId> = lock(&hub.channel_members).iter().copied().collect();
+    let registry = lock(&hub.registry);
+    members
+        .into_iter()
+        .filter(|other| *other != agent)
+        .any(|other| {
+            let coordinator = registry.find(other).is_some_and(|found| {
+                crate::event_loop::channels::is_coordinator(found.definition.as_deref())
+            });
+            !coordinator && registry.project_folder(other).as_deref() == Some(folder)
         })
-        .unwrap_or(0);
-    messages
-        .get(start..)
-        .unwrap_or_default()
-        .iter()
-        .flat_map(|message| message.content.iter())
-        .filter_map(|block| match block {
-            ContentBlock::ToolResult {
-                content,
-                is_error: false,
-                ..
-            } => Some(match content {
-                ToolResultContent::Text(text) => text.clone(),
-                ToolResultContent::Json(value) => value.to_string(),
-            }),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The commit message of the hub's ship after the plan at `plan`.
-fn ship_message(plan: Option<&str>) -> String {
-    let name = plan
-        .and_then(|path| std::path::Path::new(path).file_name())
-        .and_then(|name| name.to_str())
-        .map(|name| name.trim_end_matches(".plan.md").replace(['-', '_'], " "));
-    match name {
-        Some(name) if !name.trim().is_empty() => format!("Build plan: {}", name.trim()),
-        _ => "Finish task".to_string(),
-    }
-}
-
-/// The hub shipping a local agent's workspace after it built its plan.
-struct LocalShip {
-    hub: Arc<AgentHub>,
-    ui: AgentUi,
-    agent: AgentId,
-    folder: PathBuf,
-    message: String,
-}
-
-impl LocalShip {
-    async fn run(self) {
-        match self.ship().await {
-            Ok(Some(push)) => {
-                let line = format!(
-                    "Shipped {} at {}.",
-                    push.branch,
-                    aura_exec_merge_queue::short_sha(&push.head)
-                );
-                self.ui.send(system_message(line)).await;
-                observe::report(ObservedPush {
-                    agent: self.agent,
-                    push,
-                });
-            }
-            Ok(None) => {}
-            Err(why) => {
-                let notice = Notice {
-                    to: self.agent,
-                    shown: format!("Could not ship: {why}"),
-                    prompt: format!(
-                        "Shipping your finished work failed: {why}\n\nFix it, then call git_ship."
-                    ),
-                    inbox: None,
-                };
-                let _ = self.hub.notices.send(notice);
-            }
-        }
-    }
-
-    /// Ship the workspace when it is on an agent's own branch; `None`
-    /// (with a line in the chat) when it is on another.
-    async fn ship(&self) -> Result<Option<QueuedPush>, String> {
-        let timeout = Duration::from_secs(15);
-        let branch = aura_exec_merge_queue::git::ok(
-            &self.folder,
-            &["rev-parse", "--abbrev-ref", "HEAD"],
-            timeout,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        if !branch.starts_with(AGENT_BRANCH_PREFIX) {
-            let line = format!(
-                "Not shipping on its own: the work is on `{branch}`, not an agent's own \
-                 `{AGENT_BRANCH_PREFIX}*` branch. Call git_ship from a branch of its own."
-            );
-            self.ui.send(system_message(line)).await;
-            return Ok(None);
-        }
-        let repo = RepoPaths::of(&self.folder)
-            .await
-            .map_err(|e| e.to_string())?;
-        let top = repo.top.clone();
-        let target = tokio::task::spawn_blocking(move || QueueConfig::load(&top))
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string())?
-            .target;
-        let request = ShipRequest {
-            message: &self.message,
-            target: &target,
-            push: PushTarget::default(),
-            timeout: SHIP_TIMEOUT,
-            push_policy: PushPolicy::from_config(&aura_exec_tools::ToolConfig::default()),
-        };
-        let shipped = git_ship_impl(&self.folder, request)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(Some(shipped.marker()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn text(role: Role, text: &str) -> Message {
-        Message {
-            role,
-            content: vec![ContentBlock::Text {
-                text: text.to_string(),
-            }],
-        }
-    }
-
-    fn result(text: &str, is_error: bool) -> Message {
-        Message {
-            role: Role::User,
-            content: vec![ContentBlock::ToolResult {
-                tool_use_id: "t".to_string(),
-                content: ToolResultContent::Text(text.to_string()),
-                is_error,
-            }],
-        }
-    }
-
-    #[test]
-    fn only_the_last_turns_good_results_count() {
-        let messages = vec![
-            text(Role::User, "first task"),
-            result("old", false),
-            text(Role::User, "second task"),
-            text(Role::Assistant, "on it"),
-            result("new", false),
-            result("broken", true),
-        ];
-        assert_eq!(turn_results(&messages), ["new"]);
-    }
-
-    #[test]
-    fn the_ship_commit_is_named_after_the_plan() {
-        assert_eq!(
-            ship_message(Some(".aura/plans/merge-queue_tab.plan.md")),
-            "Build plan: merge queue tab"
-        );
-        assert_eq!(ship_message(None), "Finish task");
-    }
 }

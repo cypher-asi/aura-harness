@@ -15,6 +15,7 @@
 //! - [`entry`]: what an entry is, and the push marker.
 //! - [`state`]: the queue and every change to it, pure.
 //! - [`store`]: the queue file and the one-processor-per-repo lock.
+//! - [`lock`]: the operating system's file locks both are held with.
 //! - [`config`]: target branch and checks.
 //! - [`integrate`]: landing one entry with git.
 //! - [`processor`]: the queue at work.
@@ -25,6 +26,7 @@ pub mod entry;
 pub mod error;
 pub mod git;
 pub mod integrate;
+pub mod lock;
 pub mod processor;
 pub mod state;
 pub mod store;

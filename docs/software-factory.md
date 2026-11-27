@@ -13,7 +13,7 @@ flowchart LR
     P -- asked a question --> P
     B --> S[git_ship: commit, pull main, push]
     S --> Q[(merge queue)]
-    Q -- rebase, build, test pass --> M[main fast-forwards]
+    Q -- merge with main, build, test pass --> M[main fast-forwards]
     Q -- conflict or failure --> F[reason back to the agent]
     F --> B
 ```
@@ -25,13 +25,18 @@ pure and unit-tested) and `factory/hooks.rs` (where the event loop applies
 them).
 
 - When a channel member that isn't the coordinator gets an inbox
-  **assignment**, it enters the flow at `Planning`. This happens both when
-  the member is new and when an existing member is given more work.
+  **assignment**, it enters the flow at `Assigned`. This happens both when
+  the member is new and when an existing member is given more work. It
+  moves to `Planning` when the assignment's work starts, not when the
+  message arrives, so a turn still running for an earlier task is not
+  taken for the new one.
 - A turn at `Planning` runs in **plan mode**. For a local agent the kernel
   switches its policy, as `/plan` does. For a cloud agent the hub sets the
   mode, so the machine gets the plan-mode prompt.
-- When the turn ends with a new plan written by `create_plan`, the hub
-  queues the build at the front of the agent's work:
+- When the turn ends having run `create_plan` itself, the hub queues the
+  build at the front of the agent's work. The plan is read from the turn's
+  own tool calls (`factory::turn`), so an older plan is never taken for
+  the new one, and rewriting the same plan file counts:
   - a local agent gets `Work::Build`, the same path as `/build`;
   - a cloud agent gets the build-plan prompt after leaving plan mode.
 
@@ -42,7 +47,10 @@ them).
   reply comes back to a turn that still plans, and once that turn writes a
   plan, the build starts.
 - A turn that fails or is stopped leaves the flow. Its work is given up,
-  as before.
+  as before. One that was planning also takes the agent out of plan mode,
+  where it couldn't edit or ship.
+- If the build can't start (`start_build` finds no plan to build), the
+  flow ends and the planning turn's inbox answer is sent then.
 - **Resume:** a plan that is open but unfinished, for example after a
   restart, carries on through the existing `continue_open_plan`. A new
   assignment always starts with a new plan, even if an old one is still
@@ -76,30 +84,34 @@ timeout. The steps are:
 
 How shipping is started:
 
-- **Local agents:** when the build turn ends, the hub runs `git_ship`
-  itself in the agent's folder. It only does this when the folder is on an
-  agent's own `aura/*` branch; a folder on any other branch is left alone,
-  with a line in the chat. If the ship fails, the agent gets a notice,
-  which starts a turn to fix it.
-- **Cloud agents:** the hub can't run git on the machine.
-  - The `<cloud_git>` note and the factory rules tell the agent to call
-    `git_ship` at the end.
-  - If a build turn ends with no push marker in its results, the hub
-    queues one more turn that asks the agent to ship.
+- The factory rules (and, on a machine, the `<cloud_git>` note) tell the
+  agent to call `git_ship` at the end.
+- If a build turn ends without a push, the hub queues one more turn that
+  asks the agent to ship (`hooks::SHIP_PROMPT`). The hub never runs git
+  for an agent: every ship goes through the agent's own kernel and tool
+  policy, like any other tool call.
+- A local agent whose folder another channel member also works in is not
+  asked: `add -A` there would commit the other member's work too. Its chat
+  says so. `git_ship` calls of one folder also run one at a time, so two
+  members never race on its index.
 
 ## 3. No push skips the queue
 
 - Every successful push carries the marker. That includes `git_push`,
   `git_commit_push` and `git_ship`. Implemented in `Pushed::to_json` and
   `Shipped::to_json`.
-- Every tool result of every agent, local or cloud, reaches the UI through
-  `AgentUi`. `AgentUi` hands each result to `factory::observe::record`,
-  which forwards markers to the queue service. The marker is written by
-  the push tools themselves and read at the one place every result passes,
-  so an aura push can't avoid the queue.
+- Every tool call of every agent, local or cloud, reaches the UI through
+  `AgentUi`, which hands each command to `factory::observe::record`. A
+  result counts as a push only when its call started as `git_push`,
+  `git_commit_push` or `git_ship`, so another tool's output that happens
+  to hold a marker (a `run_command` echoing one) queues nothing.
+- A cloud turn's conversation is read again when the turn ends, and its
+  pushes are queued again; a stream cut off mid-turn can't lose one. The
+  queue drops the repeat.
 - Pushes to `main` or `master` (`PROTECTED_BRANCHES`) are refused with
-  `GitToolError::ProtectedBranch`. The target only moves through the
-  queue.
+  `GitToolError::ProtectedBranch`, and so are pushes to the target a
+  workspace's `.aura/merge-queue.toml` names. The target only moves
+  through the queue.
 - **Known gap:** a raw `git push` typed into `run_command` doesn't go
   through the git tools, so it skips the queue. The prompts steer agents
   to `git_ship`.
@@ -112,50 +124,75 @@ Crate: `crates/exec/aura-exec-merge-queue`.
 |---|---|
 | `entry` | `MergeEntry`, `MergeStatus` (queued, running, merged, failed), the `QueuedPush` marker |
 | `state` | `QueueState`: enqueue, claim, finish, recover, expire and prune, all pure |
-| `store` | Atomic JSON file and the one-processor lock |
+| `store` | Atomic JSON file, changed only under its file lock, and the one-processor lock |
+| `lock` | The operating system's file locks (`flock`; no-sharing opens on Windows) |
+| `checks` | Running a check in its own process group, its output in a log file |
 | `config` | Target branch and checks |
 | `integrate` | `GitIntegrator`, which lands one entry |
-| `processor` | `MergeQueue`, which runs the loop, persists and announces |
+| `processor` | `MergeQueue` (queue, read, announce) and `Processor`, the lock holder that recovers and lands |
 
 - **Ordering:** entries run in first-in, first-out order, and at most one
   runs at a time.
   - A new push of a branch that is still queued updates that entry's head
     and keeps its place.
-  - The same push again, while it is running or after it merged, is a
+  - The same push again, while it is queued, running or merged, is a
     duplicate.
 - **One queue per repo:**
   - A repo's queue is keyed by its common git dir. Every worktree and
     clone path of the repo inside the hub therefore shares one queue and
     one processor.
-  - `merge-queue.lock` keeps other processes out. A lock untouched for
-    10 minutes counts as abandoned and is taken over.
+  - Only a `Processor` lands entries, and one exists per repo: it holds an
+    OS lock on `merge-queue.lock` for as long as it lives. The lock goes
+    with its process however that ends, so nothing refreshes it and no
+    other process can take it from a live processor, however long a merge
+    runs.
+  - Every change to the file is a read, modify and write under the lock
+    on `merge-queue.state.lock`. Processes sharing a queue (two hubs on one
+    repo) see each other's pushes, and a processor picks up pushes queued
+    elsewhere within 15 seconds.
 - **Persistence:** the queue lives at
   `<git-common-dir>/aura/merge-queue.json`.
   - The file is rewritten atomically (temp file, fsync, rename) before
     any change is announced.
   - An unreadable file is moved aside, never deleted.
-- **Crash recovery:** when a queue opens, an entry left `running` goes
-  back to `queued` in its old place. After 3 interrupted attempts it fails.
+- **Crash recovery:** once a processor holds the lock (never before), an
+  entry left `running` goes back to `queued` in its old place. After 3
+  interrupted attempts it fails.
   At startup the hub opens the queue of every channel project that has a
   queue file, so processing resumes.
 - **Timeouts:**
   - each git call: 5 minutes;
   - each check: 60 minutes by default;
-  - each entry in total: 3 hours;
-  - an entry may wait in the queue for up to 24 hours before it expires.
+  - each entry in total: 3 hours. An entry cut off by that limit is checked
+    first: if the target already holds its commit (the push landed just
+    before the cut), it counts as merged;
+  - an entry may wait for up to 24 hours after its branch's last push
+    before it expires;
+  - the 1,000 newest finished entries are kept.
 - **Landing an entry** (`integrate`):
   1. Fetch the target and the entry's branch into private
      `refs/aura-queue/*` refs.
   2. Check out the entry's exact head in the queue's own worktree
      (`<git-common-dir>/aura/merge-worktree`). The worktree is reset and
      cleaned each time; ignored build caches are kept.
-  3. Fast-forward if the head is already based on the target, else rebase
-     onto the target. A conflict fails the entry and names the files.
-  4. Run the build, then the test, on exactly that commit.
+  3. Fast-forward if the head is already based on the target. Otherwise
+     merge it with the target: one merge commit, the target first. The
+     queue merges rather than rebases, because `git_ship` already merged
+     main into the branch and the agent resolved the conflicts; a rebase
+     would drop that merge and replay the same conflict. A conflict fails
+     the entry and names the files.
+  4. Run the build, then the test, on exactly that commit. The commands
+     are those of `.aura/merge-queue.toml` as the target's commit has it
+     (`git show <target>:.aura/merge-queue.toml`), read per entry, so a
+     push can't change the checks that gate it. Each check runs in a
+     process group of its own, which a timeout kills whole; its output
+     goes to `<git-common-dir>/aura/check.log`, and the failure reason
+     keeps the end of it.
   5. Move the target:
      - With a remote: a non-forced `push <sha>:refs/heads/<target>`. If
        the target moved in the meantime, the push is rejected and the
-       entry is retried from step 1, up to 3 times.
+       entry is retried from step 1, up to 3 times. A push cut off by its
+       timeout counts when the remote's target holds the commit.
      - A local target: a compare-and-swap `update-ref`. If the target is
        checked out, it is moved with `merge --ff-only`, but only in a clean
        checkout; a dirty checkout fails the entry.
@@ -167,7 +204,7 @@ Crate: `crates/exec/aura-exec-merge-queue`.
   - Every change is sent to the QUEUE tab of each channel whose project is
     in that repo (`UiCommand::SetMergeQueue`).
 
-### Config: `.aura/merge-queue.toml` (optional, in the repo)
+### Config: `.aura/merge-queue.toml` (optional, committed on the target)
 
 ```toml
 target = "main"                    # branch merges land on
@@ -176,7 +213,9 @@ test = "cargo test --workspace"    # "" turns the test check off
 check_timeout_secs = 3600
 ```
 
-Without the file, the checks are inferred from the repo's files:
+`target` is read from the hub's checkout when the queue opens. The other
+keys are read from the target branch's commit, per entry. Without the
+file, the checks are inferred from the merged tree's files:
 
 - `Cargo.toml`: `cargo build --workspace --all-targets` and
   `cargo test --workspace`
@@ -235,7 +274,7 @@ The pull never fails a placement and never loses work:
   refused by git before it changes anything.
 - **Aborted:** a merge that conflicts is aborted, so the branch is left
   as it was. The agent then merges main itself when it ships
-  (`git_ship`), and the queue rebases it anyway.
+  (`git_ship`), and the queue merges it with main anyway.
 
 The outcome shows as the `github` fact of the machine's boot ("merged
 origin/main at 1a2b3c4d", "up to date with origin/main" or "skipped: …").
@@ -249,7 +288,8 @@ origin/main at 1a2b3c4d", "up to date with origin/main" or "skipped: …").
   never touches an agent's workspace or the user's checkout, except the
   clean fast-forward of a local target described above.
 - **Local channels:** members still work in the channel project's folder,
-  as before. The hub auto-ships only from `aura/*` branches. Hundreds of
+  as before. The hub doesn't ask an agent to ship in a folder another
+  member shares, and `git_ship` calls of one folder run one at a time. Hundreds of
   parallel agents should run in a cloud channel.
   - Giving each local member its own git worktree is left for later.
     `isolation::WorktreeIsolation` already provides the mechanics.
@@ -258,7 +298,7 @@ origin/main at 1a2b3c4d", "up to date with origin/main" or "skipped: …").
 
 | Question | Default |
 |---|---|
-| Straight into main, or GitHub PRs and GitHub's merge queue? | Straight into the target branch through aura's own queue: a non-forced push after a rebase and green checks. This needs no GitHub settings, and it works without a remote too. |
+| Straight into main, or GitHub PRs and GitHub's merge queue? | Straight into the target branch through aura's own queue: a non-forced push after a merge with main and green checks. This needs no GitHub settings, and it works without a remote too. |
 | Is each entry gated on build and tests? | Yes. Configured or inferred build and test must pass on the exact commit that lands. A repo with nothing to check merges unchecked, and says so. |
 | How many processors? | One per repo, enforced in the process and across processes. |
 | What happens on failure? | The entry is marked failed with its reason, and the reason goes to the owning agent, which is prompted to fix and re-ship. It also shows in the channel's QUEUE tab. |

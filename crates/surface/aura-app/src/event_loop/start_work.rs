@@ -105,6 +105,13 @@ async fn plan_work(
     agent_id: AgentId,
     work: Work,
 ) -> Option<Work> {
+    // A new task of a channel member plans first, rather than building
+    // or carrying on an old plan.
+    if matches!(work, Work::Prompt { .. })
+        && super::factory::hooks::plan_first(state, session).await
+    {
+        return Some(work);
+    }
     match work {
         Work::Prompt { prompt, shown }
             if plan_mode::asks_to_build(
@@ -117,11 +124,6 @@ async fn plan_work(
             build_work(state, session, None, shown).await
         }
         Work::Build { path } => build_work(state, session, path, false).await,
-        Work::Prompt { prompt, shown } if state.hub.factory_flows.is_planning(agent_id) => {
-            // A new task plans first, rather than carrying on an old plan.
-            super::factory::hooks::plan_first(state, session).await;
-            Some(Work::Prompt { prompt, shown })
-        }
         Work::Prompt { prompt, shown } => {
             let prompt = plan_mode::continue_open_plan(state, session, prompt).await;
             Some(Work::Prompt { prompt, shown })
@@ -245,7 +247,10 @@ async fn build_work(
     path: Option<String>,
     shown: bool,
 ) -> Option<Work> {
-    let text = plan_mode::start_build(state, session, path).await?;
+    let Some(text) = plan_mode::start_build(state, session, path).await else {
+        super::factory::hooks::build_gave_up(state, session);
+        return None;
+    };
     Some(Work::Prompt {
         prompt: Prompt::build(text),
         shown,

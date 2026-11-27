@@ -17,6 +17,11 @@ tokio-util = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 
+# The OS file locks of the queue (`flock`), and killing a timed-out
+# check's whole process group. Already in the tree through aura-app.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "process"] }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

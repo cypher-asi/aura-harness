@@ -10,7 +10,8 @@
 //!   `None` while one is.
 //! - A finished entry never changes again.
 //! - A branch has at most one queued entry: a new push of a queued branch
-//!   updates its head and keeps its place.
+//!   updates its head and keeps its place, and its wait counts from that
+//!   push ([`QueueState::expire`]).
 
 use crate::entry::{EntryId, MergeEntry, MergeRequest, MergeStatus};
 use chrono::{DateTime, Duration, Utc};
@@ -47,7 +48,7 @@ pub enum Enqueued {
     Added(EntryId),
     /// The branch's queued entry now merges the new head, in its place.
     Updated(EntryId),
-    /// That exact push is running or merged already.
+    /// That exact push is queued, running or merged already.
     Duplicate(EntryId),
 }
 
@@ -84,6 +85,10 @@ impl QueueState {
             .iter_mut()
             .find(|entry| entry.branch == push.branch && entry.status == MergeStatus::Queued)
         {
+            if entry.head == push.head {
+                return Enqueued::Duplicate(entry.id.clone());
+            }
+            entry.pushed_at = Some(now);
             entry.head.clone_from(&push.head);
             entry.remote.clone_from(&push.remote);
             entry.origin = request.origin;
@@ -106,6 +111,7 @@ impl QueueState {
             origin: request.origin,
             status: MergeStatus::Queued,
             enqueued_at: now,
+            pushed_at: None,
             started_at: None,
             finished_at: None,
             attempts: 0,
@@ -192,12 +198,13 @@ impl QueueState {
         failed
     }
 
-    /// Fail every entry queued longer than `ttl` before `now`. Returns
-    /// them.
+    /// Fail every entry whose branch was last pushed longer than `ttl`
+    /// before `now` and has waited since. Returns them.
     pub fn expire(&mut self, now: DateTime<Utc>, ttl: Duration) -> Vec<MergeEntry> {
         let mut expired = Vec::new();
         for entry in &mut self.entries {
-            if entry.status == MergeStatus::Queued && now - entry.enqueued_at > ttl {
+            let pushed = entry.pushed_at.unwrap_or(entry.enqueued_at);
+            if entry.status == MergeStatus::Queued && now - pushed > ttl {
                 entry.status = MergeStatus::Failed;
                 entry.finished_at = Some(now);
                 entry.detail = Some(format!(

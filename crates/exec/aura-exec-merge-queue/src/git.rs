@@ -13,15 +13,16 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
-/// The subcommands the queue runs. `merge` only fast-forwards a clean
-/// checkout of the target branch; `push` never forces.
+/// The subcommands the queue runs. `merge` merges an entry in the
+/// queue's worktree, or fast-forwards a clean checkout of the target
+/// branch; `push` never forces; `show` reads the target's config file.
 pub const ALLOWED_SUBCOMMANDS: &[&str] = &[
     "fetch",
     "worktree",
     "checkout",
     "reset",
     "clean",
-    "rebase",
+    "show",
     "merge-base",
     "rev-parse",
     "rev-list",
@@ -32,7 +33,7 @@ pub const ALLOWED_SUBCOMMANDS: &[&str] = &[
     "merge",
 ];
 
-/// Committer the queue's rebases are recorded with.
+/// Author and committer of the queue's merge commits.
 const COMMITTER_NAME: &str = "aura merge queue";
 const COMMITTER_EMAIL: &str = "merge-queue@aura.local";
 
@@ -67,6 +68,8 @@ pub async fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<GitOutp
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_COMMITTER_NAME", COMMITTER_NAME)
         .env("GIT_COMMITTER_EMAIL", COMMITTER_EMAIL)
+        .env("GIT_AUTHOR_NAME", COMMITTER_NAME)
+        .env("GIT_AUTHOR_EMAIL", COMMITTER_EMAIL)
         .stdin(Stdio::null())
         .kill_on_drop(true);
     let output = tokio::time::timeout(timeout, command.output())

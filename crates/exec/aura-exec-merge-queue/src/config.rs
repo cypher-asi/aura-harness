@@ -11,6 +11,11 @@
 //!
 //! Without a file, the checks are inferred from the repo's files
 //! ([`infer_checks`]).
+//!
+//! The checks an entry must pass are read per entry from the target
+//! branch's commit it merges onto ([`QueueConfig::with_checks`]), not from
+//! a working folder agents edit: a push can't turn off the checks that
+//! gate it. The target is read where the queue opens ([`QueueConfig::load`]).
 
 use crate::error::QueueError;
 use serde::Deserialize;
@@ -62,15 +67,52 @@ impl QueueConfig {
     pub fn load(top: &Path) -> Result<Self, QueueError> {
         let path = top.join(CONFIG_PATH);
         let file = match std::fs::read_to_string(&path) {
-            Ok(text) => toml::from_str::<ConfigFile>(&text).map_err(|e| QueueError::Config {
-                path: path.display().to_string(),
-                reason: e.to_string(),
-            })?,
+            Ok(text) => ConfigFile::parse(&text, &path.display().to_string())?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => ConfigFile::default(),
             Err(e) => return Err(QueueError::io(&path, e)),
         };
         Ok(file.over(top))
     }
+
+    /// This config with the checks `text` sets, the config file as the
+    /// target branch's commit has it, inferred from the files in `tree`
+    /// where it sets none. Without a file (`None`), this config's own
+    /// checks when it has any, else the inferred ones. The target stays.
+    ///
+    /// # Errors
+    /// `text` is not a valid config.
+    pub fn with_checks(&self, text: Option<&str>, tree: &Path) -> Result<Self, QueueError> {
+        let checks = match text {
+            Some(text) => ConfigFile::parse(text, CONFIG_PATH)?.over(tree),
+            None if self.build.is_some() || self.test.is_some() => self.clone(),
+            None => ConfigFile::default().over(tree),
+        };
+        Ok(Self {
+            target: self.target.clone(),
+            git_timeout: self.git_timeout,
+            ..checks
+        })
+    }
+
+    /// Only where this config merges and how long git may take: the
+    /// checks come from each entry's target ([`Self::with_checks`]).
+    #[must_use]
+    pub fn without_checks(&self) -> Self {
+        Self {
+            build: None,
+            test: None,
+            ..self.clone()
+        }
+    }
+}
+
+/// The target branch a config file's `text` names, if any.
+#[must_use]
+pub fn target_in(text: &str) -> Option<String> {
+    ConfigFile::parse(text, CONFIG_PATH)
+        .ok()?
+        .target
+        .filter(|target| !target.trim().is_empty())
 }
 
 /// The optional fields of `.aura/merge-queue.toml`.
@@ -84,6 +126,13 @@ struct ConfigFile {
 }
 
 impl ConfigFile {
+    fn parse(text: &str, path: &str) -> Result<Self, QueueError> {
+        toml::from_str(text).map_err(|e| QueueError::Config {
+            path: path.to_string(),
+            reason: e.to_string(),
+        })
+    }
+
     fn over(self, top: &Path) -> QueueConfig {
         let (build, test) = infer_checks(top);
         let chosen = |set: Option<String>, inferred: Option<String>| match set {
@@ -166,6 +215,23 @@ mod tests {
         assert_eq!(config.build, None, "an empty command turns a check off");
         assert_eq!(config.test.as_deref(), Some("make check"));
         assert_eq!(config.check_timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn checks_come_from_the_given_text_and_keep_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+        let base = QueueConfig::unchecked("trunk");
+        let set = base
+            .with_checks(Some("build = \"\"\ntarget = \"other\"\n"), dir.path())
+            .unwrap();
+        assert_eq!(set.target, "trunk");
+        assert_eq!(set.build, None);
+        assert_eq!(set.test.as_deref(), Some("cargo test --workspace"));
+        let inferred = base.with_checks(None, dir.path()).unwrap();
+        assert!(inferred.build.is_some());
+        assert_eq!(target_in("target = \"trunk\""), Some("trunk".to_string()));
+        assert_eq!(target_in("nonsense ="), None);
     }
 
     #[test]
