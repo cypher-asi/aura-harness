@@ -25,6 +25,7 @@
 //! swapped with the rest of the chat, so an answer for an agent no longer
 //! on screen still ends its wait.
 
+use super::chat_view::EarlyPolicy;
 use super::run_log::{fade_progress, LOADING_DELAY};
 use super::sandbox::SandboxTree;
 use super::side_scope::ListPlaces;
@@ -43,6 +44,7 @@ use std::time::Instant;
 pub(crate) struct AgentView {
     messages: VecDeque<Message>,
     streaming_content: String,
+    early_policies: Vec<EarlyPolicy>,
     status: String,
     processing_since: Option<Instant>,
     scroll_offset: usize,
@@ -78,6 +80,7 @@ impl Default for AgentView {
         Self {
             messages: VecDeque::new(),
             streaming_content: String::new(),
+            early_policies: Vec::new(),
             status: "Ready".to_string(),
             processing_since: None,
             scroll_offset: 0,
@@ -122,6 +125,7 @@ impl App {
             &mut self.chat.streaming_content,
             &mut view.streaming_content,
         );
+        mem::swap(&mut self.chat.early_policies, &mut view.early_policies);
         mem::swap(&mut self.status, &mut view.status);
         mem::swap(&mut self.ticks.processing_since, &mut view.processing_since);
         mem::swap(&mut self.scroll_offset, &mut view.scroll_offset);

@@ -85,6 +85,38 @@ async fn forward_events_coalesces_consecutive_text_deltas() {
     assert!(outbound_rx.recv().await.is_none());
 }
 
+/// A model that pauses mid-block still streams: what it wrote goes out
+/// without waiting for more of the block, or for the block to end.
+#[tokio::test(start_paused = true)]
+async fn forward_events_sends_a_waiting_delta_while_the_stream_stays_open() {
+    let (event_tx, event_rx) = mpsc::channel(8);
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let forward_handle = tokio::spawn(forward_events_to_ws(event_rx, outbound_tx));
+
+    event_tx
+        .send(AgentLoopEvent::ThinkingDelta("Let me ".to_string()))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(outbound_rx.try_recv().is_err(), "it waits for more first");
+    event_tx
+        .send(AgentLoopEvent::ThinkingDelta("look".to_string()))
+        .await
+        .unwrap();
+
+    let sent = tokio::time::timeout(Duration::from_secs(1), outbound_rx.recv())
+        .await
+        .expect("sent while the block goes on");
+    assert!(matches!(
+        sent,
+        Some(OutboundMessage::ThinkingDelta(delta)) if delta.thinking == "Let me look"
+    ));
+    assert!(!forward_handle.is_finished(), "the block goes on");
+    drop(event_tx);
+    forward_handle.await.expect("stream forward task joins");
+    assert!(outbound_rx.recv().await.is_none());
+}
+
 #[tokio::test]
 async fn forward_events_flushes_failed_deltas_before_stream_reset() {
     let (event_tx, event_rx) = mpsc::channel(8);

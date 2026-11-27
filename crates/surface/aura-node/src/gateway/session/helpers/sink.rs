@@ -8,11 +8,15 @@ use async_trait::async_trait;
 use aura_agent::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, timeout_at, Duration, Instant};
 use tracing::warn;
 
 const OUTBOUND_DELIVERY_TIMEOUT: Duration = Duration::from_secs(30);
 const STREAM_DELTA_COALESCE_BYTES: usize = 512;
+/// How long a delta may wait for more of its kind. A model that writes
+/// slowly must still stream, not arrive [`STREAM_DELTA_COALESCE_BYTES`] at
+/// a time or whole once its block ends.
+const STREAM_DELTA_FLUSH: Duration = Duration::from_millis(33);
 
 /// [`TurnEventSink`] that maps events onto the WebSocket wire protocol.
 ///
@@ -30,6 +34,8 @@ struct OutboundMessageSink<'a> {
     outbound: &'a mpsc::Sender<OutboundMessage>,
     closed: bool,
     pending_delta: Option<PendingStreamDelta>,
+    /// When `pending_delta` goes out, however short it is.
+    flush_at: Option<Instant>,
 }
 
 enum PendingStreamDelta {
@@ -83,6 +89,9 @@ impl OutboundMessageSink<'_> {
         if self.pending_delta.is_some() && !matches_pending {
             self.flush_pending_delta().await;
         }
+        if self.pending_delta.is_none() {
+            self.flush_at = Some(Instant::now() + STREAM_DELTA_FLUSH);
+        }
 
         match (&mut self.pending_delta, kind) {
             (Some(PendingStreamDelta::Text(buffer)), StreamDeltaKind::Text) => {
@@ -110,12 +119,32 @@ impl OutboundMessageSink<'_> {
     }
 
     async fn flush_pending_delta(&mut self) {
+        self.flush_at = None;
         if self.closed {
             return;
         }
         if let Some(delta) = self.pending_delta.take() {
             self.push_now(delta.into_message()).await;
         }
+    }
+
+    /// The next agent-loop event, sending the pending delta while it
+    /// waits once the delta's time comes; `None` once the events end or
+    /// the socket is gone.
+    async fn next_event(
+        &mut self,
+        events: &mut mpsc::Receiver<AgentLoopEvent>,
+    ) -> Option<AgentLoopEvent> {
+        while let Some(flush_at) = self.flush_at {
+            match timeout_at(flush_at, events.recv()).await {
+                Ok(event) => return event,
+                Err(_) => self.flush_pending_delta().await,
+            }
+        }
+        if self.closed {
+            return None;
+        }
+        events.recv().await
     }
 
     async fn push_now(&mut self, msg: OutboundMessage) {
@@ -294,8 +323,9 @@ pub(in crate::gateway::session) async fn forward_and_record(
         outbound: &outbound,
         closed: false,
         pending_delta: None,
+        flush_at: None,
     };
-    while let Some(event) = event_rx.recv().await {
+    while let Some(event) = sink.next_event(&mut event_rx).await {
         if let Some(rec) = &recorder {
             rec.on_event(&event);
         }

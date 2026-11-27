@@ -7,6 +7,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A cloud agent's chat shows its work as it goes
+
+##### Fixed
+
+- A cloud agent working on a message from its channel or its queue
+  shows its turn as a local agent does: its thinking and steps stay
+  open under a working line that counts the time, and fold when the
+  turn ends. Only a prompt typed into its chat told the chat the agent
+  was working, so each step folded the moment it finished and its
+  thinking blinked in and out.
+- A cloud machine sends what the model writes within 33 ms rather
+  than holding it for 512 bytes, so a short thought streams instead of
+  arriving whole just before its tool call. It takes a rebuilt cloud
+  binary (`scripts/build-cloud-binary.sh`); an agent placed before
+  keeps the old pace until it is placed again.
+- A tool call's policy decision stays on the call when the record
+  copied from the machine brings the decision before the stream brings
+  the call, instead of showing as a separate `policy:` line. One whose
+  call never comes still shows as that line when the turn ends.
+
 ### A channel lists its coordinator, and chats open in their tab
 
 ##### Fixed
@@ -231,6 +251,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A member dropped from the channel while its chat is open gives way
   to the coordinator even when the session can't be told at once, so
   it never stays on screen under the channel's name.
+- The member chat's bar is lit only while the chat has the focus,
+  like the chat's own frame. Opening a member from MEMBERS leaves the
+  focus there, and the bar was lit anyway.
 
 ### ARCHIVE headers spell out the date
 
