@@ -185,6 +185,8 @@ impl TurnChat<'_> {
         match event {
             RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
             RemoteEvent::Boot(_) | RemoteEvent::Title(_) => {}
+            // `close_open` ended the reply the call wrote.
+            RemoteEvent::ModelCallEnd => {}
             RemoteEvent::Text(text) => self.append_text(text).await,
             RemoteEvent::Thinking(text) => self.append_thinking(text).await,
             event @ (RemoteEvent::ToolStart { .. }

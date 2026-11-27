@@ -299,6 +299,29 @@ mod forward_tests {
     }
 
     #[tokio::test]
+    async fn each_model_call_writes_a_reply_of_its_own() {
+        let (ui, mut rx) = chat();
+        let (tx, mut events) = mpsc::channel(8);
+        for event in [
+            RemoteEvent::Text("Built it.".into()),
+            RemoteEvent::ModelCallEnd,
+            RemoteEvent::Text("Nothing is blocked.".into()),
+        ] {
+            tx.send(event).await.unwrap();
+        }
+        drop(tx);
+        let cancel = CancellationToken::new();
+        forward(&ui, &mut events, &mut TurnExtras::default(), &cancel).await;
+
+        let sent = commands(&mut rx);
+        let starts = sent
+            .iter()
+            .filter(|command| matches!(command, UiCommand::StartStreaming))
+            .count();
+        assert_eq!(starts, 2, "a reply per model call: {sent:?}");
+    }
+
+    #[tokio::test]
     async fn without_a_title_from_the_machine_the_prompt_names_the_chat() {
         for last in [done(10), RemoteEvent::Failed("boom".into())] {
             let (ui, _rx) = chat();

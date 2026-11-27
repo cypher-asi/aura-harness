@@ -52,6 +52,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or a notice sent into the turn, the second answer ran on into the
   first with no space: "…say if you want that instead.RUS197 is still
   building…".
+- So does an agent in the cloud: its machine sends `iteration_complete`
+  on the turn's stream as each model call ends, and the chat starts a
+  new reply after it. It takes a rebuilt cloud binary
+  (`scripts/build-cloud-binary.sh`); an agent placed before still runs
+  its replies together until it is placed again.
 - A channel's coordinator is no longer sent back to its todo list each
   time it answers. Its todos are its members' work, which it can't
   carry on with, so every turn ended with the same status a second
