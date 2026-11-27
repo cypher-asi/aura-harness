@@ -24,6 +24,10 @@
 //! user going to that agent: PROJECTS comes to the front with it, or
 //! ARCHIVE for an archived one.
 //!
+//! What CHANNELS and PROJECTS were on outlives the run: a front end saves
+//! [`App::last_selection`] on closing and hands it to the next run's
+//! [`App::restore_selection`] (see `remembered`).
+//!
 //! CHANNELS shows none of the agent's chat tabs, nor does BENCH but for
 //! an agent of a benchmark: coming to one of them turns the chat panel to
 //! CHAT, and going back to an app with the tabs, or to an agent in BENCH,
@@ -39,6 +43,7 @@ mod channel_member_chat;
 mod channels;
 mod empty;
 mod projects;
+mod remembered;
 mod roster;
 
 pub use agents_tab::AgentsTab;
@@ -50,7 +55,7 @@ pub use bench::{
 pub(super) use channels::ChannelState;
 pub(crate) use channels::CHANNEL_MEMBER_ROWS;
 
-use super::{contains, tab_at, App, ChatTab, HoverTarget};
+use super::{contains, tab_at, App, ChatTab, HoverTarget, LastSelection, ProjectPick};
 use crate::terminal::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -58,8 +63,13 @@ use ratatui::layout::Rect;
 /// What each agent app showed, to show again when it comes back.
 #[derive(Debug, Default)]
 pub(super) struct AppMemory {
-    /// The listed agent PROJECTS was left on
-    projects: Option<String>,
+    /// The agent PROJECTS was left on in each project, the latest first:
+    /// it comes back on the first one still listed. Seeded from the last
+    /// run (see `remembered`).
+    project_picks: Vec<ProjectPick>,
+    /// The last run's selection, until the session first puts an agent
+    /// on screen and it can be brought back
+    restore: Option<LastSelection>,
     /// The archived agent ARCHIVE was left on
     archive: Option<String>,
     /// The permanent agent whose latest instance AGENTS shows
@@ -315,7 +325,7 @@ impl App {
         let on_screen = self.active_agent_id.clone();
         match app {
             AgentsTab::Projects if self.is_listed(&on_screen) => {
-                self.apps.projects = Some(on_screen);
+                self.note_project_pick(&on_screen);
             }
             AgentsTab::Archive if self.is_archived_agent(&on_screen) => {
                 self.apps.archive = Some(on_screen);
@@ -340,10 +350,7 @@ impl App {
     /// The agent PROJECTS shows on coming back.
     fn projects_app_agent(&self) -> Option<String> {
         let listed = |id: &&str| self.is_listed(id);
-        self.apps
-            .projects
-            .as_deref()
-            .filter(listed)
+        self.remembered_agent()
             .or_else(|| Some(self.active_agent_id.as_str()).filter(listed))
             .map(str::to_string)
             .or_else(|| self.highlighted_agent())
@@ -380,9 +387,14 @@ impl App {
                 self.follow_active_agent_out_of_channel();
                 return;
             }
+            AgentsTab::Projects => {
+                let on_screen = self.active_agent_id.clone();
+                self.note_project_pick(&on_screen);
+                return;
+            }
             // BENCH gave way to an agent it does not show before its tab
             // came back (`apply_active_agent`).
-            AgentsTab::Projects | AgentsTab::Bench => return,
+            AgentsTab::Bench => return,
             AgentsTab::Roster => self.roster_shows_instance(),
             AgentsTab::Archive => self.is_archived_agent(&self.active_agent_id),
         };

@@ -70,6 +70,9 @@ pub struct UiSession {
     pub commands: mpsc::Receiver<UiCommand>,
     /// The event loop serving `events`
     pub task: SessionTask,
+    /// The data directory the session's agents and records are in, where
+    /// a UI keeps what it saves between runs beside them
+    pub data_dir: PathBuf,
 }
 
 /// The spawned agent event loop of a [`UiSession`], and the background
@@ -145,12 +148,14 @@ pub async fn start(
     api_server::start_api_server(cmd_tx.clone(), workspace.root.clone()).await;
     let (side, run, inbox) = agent_side(args, requested_mode, &cmd_tx, &workspace)?;
     let history = workspace.data_dir.join(PROCESS_HISTORY_FILE);
+    let data_dir = workspace.data_dir.clone();
     let harness = build_hub(hub_setup(workspace, side, &run, &cmd_tx));
     let task = launch(harness, run, opening, inbox, ui_rx, cmd_tx, history).await?;
     Ok(UiSession {
         events: ui_tx,
         commands: cmd_rx,
         task,
+        data_dir,
     })
 }
 

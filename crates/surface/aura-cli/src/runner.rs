@@ -8,6 +8,7 @@ use crate::auth_commands;
 use crate::cli::{
     Cli, Commands, DesktopArgs, MigrateArgs, PluginsCommand, PluginsSubcommand, RunArgs, UiMode,
 };
+use crate::last_selection;
 
 use anyhow::Context;
 use aura_app::session;
@@ -416,23 +417,27 @@ async fn run_terminal(
         ..args.session_options()
     };
     let session = session::start(&options, requested_mode).await?;
+    let selection_file = aura_ui_terminal::LastSelection::file_in(&session.data_dir);
 
     let mut app = App::new()
         .with_event_sender(session.events.clone())
         .with_command_receiver(session.commands)
         .with_alert_settings(AlertSettings::from_env());
+    app.restore_selection(last_selection::load(selection_file.clone()).await);
     if args.verbose {
         app.set_verbose(true);
     }
 
     let mut terminal = Terminal::new(theme)?;
     let ran = terminal.run(&mut app);
+    let selection = app.last_selection();
     // Shutting down can take a few seconds while running turns end and
     // save their sessions: give the screen back first, and close the
     // commands channel so the session's last updates don't wait on a full
     // channel nobody reads any more.
     drop(terminal);
     drop(app);
+    last_selection::save(selection_file, selection).await;
     let finished = session.task.finish().await;
     ran?;
     finished

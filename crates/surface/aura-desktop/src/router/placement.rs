@@ -189,6 +189,7 @@ impl Tabs {
         if self.focus_sent.is_none() && self.front().agent().is_empty() {
             self.front = index;
         }
+        self.give_first_shown(index);
         self.tabs[index]
             .tui
             .process_command(UiCommand::SetActiveAgent(agent));
@@ -198,12 +199,16 @@ impl Tabs {
 
     /// Add a tab with the lists the others have. Returns its index.
     pub(super) fn open(&mut self) -> usize {
-        let mut tab = Tab::new(self.next_id, self.settings);
+        self.tabs.push(Tab::new(self.next_id, self.settings));
         self.next_id += 1;
+        let index = self.tabs.len() - 1;
+        // Before the lists, which drop a remembered channel no longer
+        // listed.
+        self.give_remembered(index);
+        let tab = &mut self.tabs[index];
         for command in self.lists.iter().flatten() {
             tab.tui.process_command(command.clone());
         }
-        self.tabs.push(tab);
-        self.tabs.len() - 1
+        index
     }
 }
