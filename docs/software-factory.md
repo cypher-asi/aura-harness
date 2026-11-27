@@ -206,7 +206,41 @@ app, which draws the same tabs.
 Code: `crates/ui/aura-ui-terminal/src/renderer/channel_queue.rs`, with
 views in `aura_ui::events::{MergeQueueView, MergeEntryView}`.
 
-## 6. Isolation of parallel agents
+## 6. A new cloud machine starts on the latest code
+
+A machine starts from its project's snapshot plus the hub's HEAD and
+uncommitted changes, or, for a fork, from its parent's disk. Either can be
+behind GitHub, because the merge queue lands other agents' work on
+`origin`'s main and not in the hub's checkout. So every new agent's
+machine pulls the latest main from GitHub on top of what it has, before
+the agent's first turn:
+
+1. The agent's branch is checked out at the hub's HEAD, `origin` is set to
+   the project's GitHub repository, and the hub's uncommitted changes are
+   unpacked (`workspace::start_branch`). A fork instead moves its parent's
+   disk to its own branch (`workspace::fork_branch`).
+2. `git fetch origin main` runs with the machine's credentials (from its
+   claim), bounded by 120 seconds. Then `origin/main` is merged into the
+   agent's branch. That is a fast-forward when the branch has nothing of
+   its own (`workspace::pull::pull_latest`).
+3. Only then is the working tree marked as the base the hub takes
+   patches against, so later pulls back to the hub see only the agent's
+   own changes.
+
+The pull never fails a placement and never loses work:
+
+- **Skipped:** without `origin`, without a `main` on it, or without
+  access, nothing changes.
+- **Refused:** a merge that would touch the hub's uncommitted changes is
+  refused by git before it changes anything.
+- **Aborted:** a merge that conflicts is aborted, so the branch is left
+  as it was. The agent then merges main itself when it ships
+  (`git_ship`), and the queue rebases it anyway.
+
+The outcome shows as the `github` fact of the machine's boot ("merged
+origin/main at 1a2b3c4d", "up to date with origin/main" or "skipped: …").
+
+## 7. Isolation of parallel agents
 
 - **Cloud channels:** each member has its own machine, its own clone and
   its own branch (`aura/<slug>-<code>`). Members never share a checkout,
@@ -229,3 +263,4 @@ views in `aura_ui::events::{MergeQueueView, MergeEntryView}`.
 | How many processors? | One per repo, enforced in the process and across processes. |
 | What happens on failure? | The entry is marked failed with its reason, and the reason goes to the owning agent, which is prompted to fix and re-ship. It also shows in the channel's QUEUE tab. |
 | Which branches are protected? | `main` and `master`. Agents can never push them. |
+| What does a new cloud machine start on? | The hub's HEAD and uncommitted changes, with GitHub's latest `main` merged on top. If the merge isn't clean, it starts on the hub's code alone and says why. |
