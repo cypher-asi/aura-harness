@@ -7,6 +7,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A channel's reports read as paragraphs
+
+##### Fixed
+
+- Each model call of a turn writes a reply of its own. When a turn
+  called the model again without a tool call in between, after a nudge
+  or a notice sent into the turn, the second answer ran on into the
+  first with no space: "…say if you want that instead.RUS197 is still
+  building…".
+- A channel's coordinator is no longer sent back to its todo list each
+  time it answers. Its todos are its members' work, which it can't
+  carry on with, so every turn ended with the same status a second
+  time ("Nothing is blocked…").
+- A coordinator writes a few short paragraphs with a blank line between
+  them. Told to write "at most three short lines", it put each point on
+  a line of its own, and the chat drew them one under the other with no
+  space, so a wrapped line could not be told from the next point. A
+  `coordinator.md` nobody edited is brought up to date.
+
 ### /plan in a channel plans in a new member
 
 ##### Changed

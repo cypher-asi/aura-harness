@@ -103,7 +103,7 @@ async fn channel_prompt_gives_the_coordinator_the_channel_and_how_it_works() {
         "with `assign`",
         "never how to do it",
         "subagents included, is its own call",
-        "at most three short lines",
+        "with a blank line between them",
     ] {
         assert!(prompt.contains(rule), "{rule}: {prompt}");
     }
@@ -210,6 +210,19 @@ fn coordinator_turns_only_assign_and_check_in() {
             "todo_write"
         ]
     );
+}
+
+#[test]
+fn coordinator_turns_are_not_sent_back_to_their_todos() {
+    let fixture = fixture("unused");
+    let workspace = lock(&fixture.hub.registry).data_dir().to_path_buf();
+    let (coordinator, _) = fixture.hub.turn(Some(COORDINATOR_DEFINITION), &workspace);
+    let (own, _) = fixture.hub.turn(None, &workspace);
+    assert!(
+        !coordinator.continue_open_todos,
+        "a coordinator's todos are its members' work"
+    );
+    assert!(own.continue_open_todos);
 }
 
 #[tokio::test]

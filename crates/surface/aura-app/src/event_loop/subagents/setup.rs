@@ -231,6 +231,10 @@ impl AgentHub {
         let instructions = self.instructions.for_workspace(workspace);
         let (mut config, tools) = self.definition_turn(definition, &instructions.text, top_level);
         self.long_run.apply(&mut config);
+        if crate::event_loop::channels::is_coordinator(definition) {
+            // Its todos are its members' work, which it can't carry on with.
+            config.continue_open_todos = false;
+        }
         (config, tools)
     }
 
