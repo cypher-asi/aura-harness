@@ -1,5 +1,5 @@
-//! The right column's panel while a channel is open: its MEMBERS and its
-//! INFO, and none of the agent app's tabs.
+//! The side panel while a channel is open, below its TASKS: its MEMBERS
+//! and its INFO, and none of the agent app's tabs.
 //!
 //! MEMBERS is the coordinator, then the agents it started, each with the
 //! subagents it spawned in a tree below it, drawn as nested agents are

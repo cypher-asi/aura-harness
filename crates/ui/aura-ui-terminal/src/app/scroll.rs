@@ -119,17 +119,8 @@ impl App {
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_add(lines);
             }
-            PanelFocus::Records if self.records.tab == RecordsTab::Members => {
-                self.scroll_members(-isize::try_from(lines).unwrap_or(isize::MAX));
-            }
-            PanelFocus::Records if self.records.tab == RecordsTab::Policies => {
-                self.scroll_policies(-isize::try_from(lines).unwrap_or(isize::MAX));
-            }
-            PanelFocus::Records if self.records.tab == RecordsTab::Inbox => {
-                self.scroll_inbox(-isize::try_from(lines).unwrap_or(isize::MAX));
-            }
             PanelFocus::Records => {
-                self.records.selected = self.records.selected.saturating_sub(lines);
+                self.scroll_records(-isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Swarm => {
                 self.scroll_agents_panel(-isize::try_from(lines).unwrap_or(isize::MAX));
@@ -166,20 +157,8 @@ impl App {
             PanelFocus::Chat => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(lines);
             }
-            PanelFocus::Records if self.records.tab == RecordsTab::Members => {
-                self.scroll_members(isize::try_from(lines).unwrap_or(isize::MAX));
-            }
-            PanelFocus::Records if self.records.tab == RecordsTab::Policies => {
-                self.scroll_policies(isize::try_from(lines).unwrap_or(isize::MAX));
-            }
-            PanelFocus::Records if self.records.tab == RecordsTab::Inbox => {
-                self.scroll_inbox(isize::try_from(lines).unwrap_or(isize::MAX));
-            }
             PanelFocus::Records => {
-                if !self.records.items.is_empty() {
-                    self.records.selected = (self.records.selected + lines)
-                        .min(self.records.items.len().saturating_sub(1));
-                }
+                self.scroll_records(isize::try_from(lines).unwrap_or(isize::MAX));
             }
             PanelFocus::Swarm => {
                 self.scroll_agents_panel(isize::try_from(lines).unwrap_or(isize::MAX));
@@ -197,6 +176,22 @@ impl App {
                     SidePanelTab::ChannelInfo => self.scroll_channel_info(delta),
                 }
             }
+        }
+    }
+
+    /// Move the Record panel's open tab `delta` rows: the Kernel's
+    /// selected record, or the tab's own list.
+    fn scroll_records(&mut self, delta: isize) {
+        match self.records.tab {
+            RecordsTab::Kernel => {
+                let last = self.records.items.len().saturating_sub(1);
+                let selected = self.records.selected.saturating_add_signed(delta);
+                self.records.selected = selected.min(last);
+            }
+            RecordsTab::Members => self.scroll_members(delta),
+            RecordsTab::Policies => self.scroll_policies(delta),
+            RecordsTab::Inbox => self.scroll_inbox(delta),
+            RecordsTab::ChannelTasks => self.task_list.move_by(delta),
         }
     }
 

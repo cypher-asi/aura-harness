@@ -239,7 +239,7 @@ fn clicking_a_tab_in_the_kernel_bar_shows_it() {
     let mut app = app_with_lead();
     let bar = Rect::new(80, 0, 40, 3);
     app.set_record_tabs_area(bar);
-    let members = RecordsTab::layout(bar.width).cells[1];
+    let members = RecordsTab::layout(bar.width, false).cells[1];
     app.click_records_panel(bar.x + members.start, 1);
     assert_eq!(app.records_tab(), RecordsTab::Members);
 }

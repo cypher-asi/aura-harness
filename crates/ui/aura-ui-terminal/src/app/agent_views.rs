@@ -462,5 +462,6 @@ fn shows_active_agent_only(command: &UiCommand) -> bool {
             | UiCommand::SetPlans(_)
             | UiCommand::SetTasks(_)
             | UiCommand::UpsertTask(_)
+            | UiCommand::UpsertPlan(_)
     )
 }

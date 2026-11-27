@@ -55,6 +55,10 @@ impl UiCommandSink {
             "Plan ready: {} ({path}). Keep chatting to revise it, or say \"implement\" (or run /build) to build it.",
             view.name
         );
+        self.plan
+            .tasks
+            .show_plan(&self.plan.workspace, view.clone())
+            .await;
         self.ui
             .send_if_shown(UiCommand::SetPlans(plan_views(&self.plan.workspace)))
             .await;
@@ -76,6 +80,10 @@ impl UiCommandSink {
             Ok(false) => {}
             Ok(true) => {
                 if let Some(view) = plan_view(&self.plan.workspace, path) {
+                    self.plan
+                        .tasks
+                        .show_plan(&self.plan.workspace, view.clone())
+                        .await;
                     self.ui.send_if_shown(UiCommand::SetPlan(Some(view))).await;
                 }
             }

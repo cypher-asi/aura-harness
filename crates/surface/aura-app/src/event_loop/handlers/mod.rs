@@ -217,6 +217,7 @@ pub(super) async fn handle_agent_success(
     record_response(session, &result.total_text).await;
     if let Some(plan) = &finished {
         let workspace = session.kernel.agent_workspace();
+        session.tasks.show_plan(&workspace, plan.clone()).await;
         super::plan_mode::announce_finished_plan(ui, &workspace, plan).await;
     }
     session.save_checkpoint().await;
