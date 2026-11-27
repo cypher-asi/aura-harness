@@ -46,10 +46,15 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
-    if let Some((title, info)) =
-        detail_header(app, theme).or_else(|| member_chat_header(app, theme))
-    {
-        render_detail_bar(frame, app, (panel, bar), (&title, info), theme);
+    // A view over the body draws it focused; a member's chat is the chat.
+    let named = detail_header(app, theme)
+        .map(|named| (named, true))
+        .or_else(|| {
+            member_chat_header(app, theme)
+                .map(|named| (named, is_focused || std::env::var_os("OLD_FOCUS").is_some()))
+        });
+    if let Some(((title, info), focused)) = named {
+        render_detail_bar(frame, app, (panel, bar), (&title, info), focused, theme);
     } else {
         render_tab_bar(frame, app, (panel, bar), is_focused, theme);
     }
@@ -119,12 +124,13 @@ fn member_chat_header(app: &App, theme: &Theme) -> Option<(String, Option<Header
 }
 
 /// The bar naming the record, file, process or graph covering the body,
-/// or the member whose own chat is on screen.
+/// or the member whose own chat is on screen; lit when `focused`.
 fn render_detail_bar(
     frame: &mut Frame,
     app: &mut App,
     (panel, bar): (Rect, Rect),
     (title, info): (&str, Option<HeaderInfo>),
+    focused: bool,
     theme: &Theme,
 ) {
     let hosted = app.host_chrome();
@@ -143,7 +149,7 @@ fn render_detail_bar(
         expand,
         scope: None,
         icon_tab: None,
-        focused: true,
+        focused,
         hosted,
     };
     header::show(frame, app, (Pane::Chat, panel, bar), &header, theme);
