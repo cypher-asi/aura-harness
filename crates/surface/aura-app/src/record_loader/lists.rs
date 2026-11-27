@@ -85,7 +85,8 @@ pub(crate) struct ListRows {
     pub(crate) listed: Vec<(AgentId, AgentSummary)>,
     pub(crate) archived: Vec<(AgentId, AgentSummary)>,
     /// Rows of channel members, copied (or, for hidden ones, taken) out of
-    /// `listed` by [`ListRows::split_members`] for the channels list
+    /// `listed`, and copied out of `archived`, by
+    /// [`ListRows::split_members`] for the channels list
     pub(crate) members: Vec<(AgentId, AgentSummary)>,
     /// The agent the rows mark active
     pub(crate) active: AgentId,
@@ -139,8 +140,10 @@ impl ListRows {
     /// [`ListRows::members`], for the channels list, and move those also in
     /// `hidden` (members of channels without a project) out of the agents
     /// column, taking them off their project's listed count. Members of a
-    /// channel with a project stay in the agents column under it. A
-    /// project's archived count is left as it is.
+    /// channel with a project stay in the agents column under it. Rows of
+    /// archived members are copied too, staying in the Archive: a channel
+    /// still lists its coordinator when that is archived. A project's
+    /// archived count is left as it is.
     ///
     /// Every project stays on the projects list, even one whose every
     /// listed row was hidden: any listed project is one a channel can be
@@ -167,6 +170,11 @@ impl ListRows {
             }
         }
         self.listed = kept;
+        taken.extend(
+            (self.archived.iter())
+                .filter(|(agent_id, _)| members.contains(agent_id))
+                .cloned(),
+        );
         self.members = taken;
         for project in &mut self.projects {
             if let Some(&gone) = removed.get(&project.id) {

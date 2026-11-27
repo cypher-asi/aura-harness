@@ -1,7 +1,7 @@
 //! Channel summaries, prompts naming the project, updates and archiving.
 
 use super::super::*;
-use super::support::{edit, new_channel, new_channel_in, store, summary_of};
+use super::support::{add_member, edit, new_channel, new_channel_in, store, summary_of};
 use crate::event_loop::subagents::tests::{fixture, request};
 use crate::event_loop::tests::support::open_project;
 use aura_ui::UiCommand;
@@ -52,6 +52,32 @@ async fn summaries_list_the_coordinator_first_with_its_agents_beside_it() {
     let child = registry.find(agent).unwrap();
     assert_eq!(summary.members[1].name, child.display_name());
     assert_eq!(summary.members[1].code, child.code);
+}
+
+#[tokio::test]
+async fn an_archived_coordinator_is_still_listed_but_other_archived_members_are_not() {
+    let fixture = fixture("unused");
+    let dir = tempfile::TempDir::new().unwrap();
+    let (project_id, _) = open_project(&fixture.hub, dir.path());
+    let channel = create_channel(&fixture.hub, new_channel_in("site", &project_id))
+        .await
+        .unwrap();
+    let kept = add_member(&fixture, channel.coordinator, "reviewer");
+    let archived = add_member(&fixture, channel.coordinator, "tests");
+    {
+        let mut registry = lock(&fixture.hub.registry);
+        registry.archive(archived).unwrap();
+        registry.archive(channel.coordinator).unwrap();
+    }
+
+    let summaries = channel_summaries(&fixture.hub).await.unwrap();
+    let members: Vec<String> = summary_of(&summaries, &channel.id)
+        .unwrap()
+        .members
+        .into_iter()
+        .map(|member| member.id)
+        .collect();
+    assert_eq!(members, [channel.coordinator.to_hex(), kept.to_hex()]);
 }
 
 #[tokio::test]

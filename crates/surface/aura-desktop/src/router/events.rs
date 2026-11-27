@@ -61,11 +61,14 @@ impl Tabs {
     }
 
     /// Handle `event` when it switches the tab at `from` to an agent, of
-    /// its own or of another tab. Returns whether it did.
+    /// its own or of another tab. Returns whether it did. An agent no tab
+    /// holds (a channel's coordinator, an archived agent) that the tab
+    /// has put on screen counts as its own.
     fn switched(&mut self, from: usize, event: &UiEvent) -> bool {
         match event {
             UiEvent::SelectAgent(agent) | UiEvent::FocusAgent(agent)
-                if self.owner(agent) == Some(from) =>
+                if self.owner(agent) == Some(from)
+                    || (self.owner(agent).is_none() && self.tabs[from].agent() == agent) =>
             {
                 let load = matches!(event, UiEvent::SelectAgent(_));
                 self.switch_in_tab(from, agent.clone(), load);

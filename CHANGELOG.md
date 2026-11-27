@@ -7,6 +7,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A channel lists its coordinator, and chats open in their tab
+
+##### Fixed
+
+- A channel's MEMBERS list always shows its coordinator, also when the
+  coordinator was archived (from PROJECTS, say): the channel's chat is
+  the coordinator's chat. Other archived members still leave the list.
+- Opening a channel in a desktop tab asks the session for its
+  coordinator once, with its chat, instead of having the session switch
+  to it twice and build every agent list twice.
+- A desktop window that starts on an agent whose project is in a tab
+  other than the first shows that agent's chat. The session sent the
+  chat before the window had its tabs, so the first tab took it and the
+  agent's own tab showed an empty chat it counted as loaded. The chat
+  now comes after the agent lists, addressed to its agent.
+
 ### Channel members show an `@`, as AGENTS does
 
 ##### Changed

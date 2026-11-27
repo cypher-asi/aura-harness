@@ -160,3 +160,35 @@ fn hiding_every_listed_row_of_a_project_keeps_it_on_the_projects_list() {
         .collect();
     assert_eq!(counts, [("launch", 0), ("shared", 2)]);
 }
+
+#[test]
+fn archived_members_are_copied_for_the_channels_and_stay_in_the_archive() {
+    let (listed, archived, other) = (
+        AgentId::new([1; 32]),
+        AgentId::new([2; 32]),
+        AgentId::new([3; 32]),
+    );
+    let row = |id: AgentId, archived_at_ms: Option<u64>| {
+        (
+            id,
+            AgentSummary {
+                id: id.to_hex(),
+                archived_at_ms,
+                ..AgentSummary::default()
+            },
+        )
+    };
+    let mut rows = ListRows {
+        projects: Vec::new(),
+        listed: vec![row(listed, None)],
+        archived: vec![row(archived, Some(1)), row(other, Some(2))],
+        members: Vec::new(),
+        active: listed,
+    };
+    rows.split_members(&HashSet::from([listed, archived]), &HashSet::new());
+
+    let ids = |rows: &[(AgentId, AgentSummary)]| rows.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    assert_eq!(ids(&rows.members), [listed, archived]);
+    assert_eq!(ids(&rows.listed), [listed]);
+    assert_eq!(ids(&rows.archived), [archived, other]);
+}

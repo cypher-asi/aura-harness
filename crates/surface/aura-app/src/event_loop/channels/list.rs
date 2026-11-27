@@ -53,8 +53,10 @@ async fn summaries_with(
         .collect())
 }
 
-/// The summary of one channel. Members without a row (archived agents)
-/// are left out; each row is used once, as an agent is in one channel.
+/// The summary of one channel. Archived members are left out, except the
+/// coordinator: the channel's chat is its chat, so the channel lists it
+/// whether or not it is archived. Each row is used once, as an agent is
+/// in one channel.
 fn summarize(
     registry: &AgentRegistry,
     read: ChannelRead,
@@ -69,7 +71,8 @@ fn summarize(
         .into_iter()
         .filter_map(|member| {
             let row = rows.remove(&member.agent_id)?;
-            Some((row, member.parent.map(|parent| parent.to_hex())))
+            let listed = row.archived_at_ms.is_none() || member.agent_id == channel.coordinator;
+            listed.then(|| (row, member.parent.map(|parent| parent.to_hex())))
         })
         .collect();
     let coordinator_id = channel.coordinator.to_hex();

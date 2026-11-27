@@ -2,6 +2,7 @@
 
 use super::support::*;
 use crate::router::*;
+use aura_ui::events::{MessageData, MessageRole};
 
 /// Whether tab `tab` lists agent `id` as in plan mode, if it lists it.
 fn plan_mode_in(tabs: &Tabs, tab: usize, id: &str) -> Option<bool> {
@@ -90,6 +91,24 @@ fn the_tabs_of_the_last_run_come_back() {
     switch(&mut tabs, TWO, "p2");
     assert_eq!(shown(&tabs), ["p2", "a1"]);
     assert_eq!(tabs.front_index(), 0);
+}
+
+#[test]
+fn the_sessions_agent_gets_its_chat_in_its_own_tab() {
+    let (mut tabs, mut events) = tabs_with(&[&["a1"], &["p2"]]);
+    start(&mut tabs, ONE, "p2");
+    tabs.apply(UiCommand::ForAgent {
+        agent_id: "p2".into(),
+        command: Box::new(UiCommand::LoadConversation(vec![MessageData::new(
+            MessageRole::Assistant,
+            "p2's chat",
+        )])),
+    });
+    assert_eq!(shown(&tabs), ["", "p2"]);
+    assert_eq!(tabs.front_index(), 1);
+    assert_eq!(messages(&tabs), [0, 1]);
+    tabs.forward_events();
+    assert!(sent(&mut events).is_empty(), "nothing left to ask for");
 }
 
 #[test]

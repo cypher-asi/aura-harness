@@ -141,12 +141,12 @@ pub async fn start(
 ) -> anyhow::Result<UiSession> {
     let (ui_tx, ui_rx) = mpsc::channel::<UiEvent>(100);
     let (cmd_tx, cmd_rx) = mpsc::channel::<UiCommand>(UI_COMMANDS);
-    let (workspace, active) = open_workspace(args, &cmd_tx).await?;
+    let (workspace, opening) = open_workspace(args, &cmd_tx).await?;
     api_server::start_api_server(cmd_tx.clone(), workspace.root.clone()).await;
     let (side, run, inbox) = agent_side(args, requested_mode, &cmd_tx, &workspace)?;
     let history = workspace.data_dir.join(PROCESS_HISTORY_FILE);
     let harness = build_hub(hub_setup(workspace, side, &run, &cmd_tx));
-    let task = launch(harness, run, active, inbox, ui_rx, cmd_tx, history).await?;
+    let task = launch(harness, run, opening, inbox, ui_rx, cmd_tx, history).await?;
     Ok(UiSession {
         events: ui_tx,
         commands: cmd_rx,
@@ -164,12 +164,20 @@ struct Workspace {
     definitions: AgentDefinitions,
 }
 
-/// The workspace, and the agent the session opens on with its project
-/// folder; the UI is sent that agent's record and conversation.
+/// The agent the session opens on, with its project's folder and its
+/// chat, `None` when its record could not be read.
+struct Opening {
+    agent: RegisteredAgent,
+    folder: Option<PathBuf>,
+    chat: Option<Vec<aura_ui::events::MessageData>>,
+}
+
+/// The workspace, and the agent the session opens on; the UI is sent
+/// that agent's record now, and its chat by [`launch`].
 async fn open_workspace(
     args: &SessionOptions,
     cmd_tx: &mpsc::Sender<UiCommand>,
-) -> anyhow::Result<(Workspace, (RegisteredAgent, Option<PathBuf>))> {
+) -> anyhow::Result<(Workspace, Opening)> {
     let data_dir = args
         .dir
         .clone()
@@ -200,13 +208,10 @@ async fn open_workspace(
     let active_folder = registry.project_folder(agent_id);
     crate::chat_notes::install(crate::chat_notes::ChatNotes::new(&data_dir));
     record_loader::load_existing_records(store.as_ref(), agent_id, cmd_tx);
-    match record_loader::conversation_history(store.as_ref(), agent_id) {
-        Ok(history) => {
-            let history = crate::chat_notes::with_notes(agent_id, history);
-            let _ = cmd_tx.try_send(UiCommand::LoadConversation(history));
-        }
-        Err(e) => warn!(error = %e, "Failed to rebuild conversation from record"),
-    }
+    let chat = record_loader::conversation_history(store.as_ref(), agent_id)
+        .inspect_err(|e| warn!(error = %e, "Failed to rebuild conversation from record"))
+        .ok()
+        .map(|history| crate::chat_notes::with_notes(agent_id, history));
     let workspace = Workspace {
         data_dir,
         root,
@@ -214,7 +219,12 @@ async fn open_workspace(
         registry,
         definitions,
     };
-    Ok((workspace, (active_agent, active_folder)))
+    let opening = Opening {
+        agent: active_agent,
+        folder: active_folder,
+        chat,
+    };
+    Ok((workspace, opening))
 }
 
 /// What [`hub_setup`] hands the hub from [`agent_side`].
@@ -355,7 +365,7 @@ fn hub_setup(
 async fn launch(
     harness: Harness,
     run: LoopSide,
-    (active_agent, active_folder): (RegisteredAgent, Option<PathBuf>),
+    opening: Opening,
     flow_inbox: event_loop::FlowInbox,
     mut events: mpsc::Receiver<UiEvent>,
     commands: mpsc::Sender<UiCommand>,
@@ -364,19 +374,12 @@ async fn launch(
     let hub = harness.hub;
     hub.processes.keep_history(process_history);
     flow_inbox.serve(&hub, commands.clone());
-    for list in hub.agent_lists() {
-        let _ = commands.try_send(list);
-    }
-    match event_loop::channels::channel_summaries(&hub).await {
-        Ok(channels) if channels.is_empty() => {}
-        Ok(channels) => {
-            let _ = commands.try_send(UiCommand::SetChannels(channels));
-        }
-        Err(error) => tracing::warn!(error = %format!("{error:#}"), "Could not list the channels"),
-    }
-    let agent_id = active_agent.identity().agent_id;
-    let _ = commands.try_send(UiCommand::SetActiveAgent(agent_id.to_hex()));
-    let _ = commands.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
+    let Opening {
+        agent: active_agent,
+        folder: active_folder,
+        chat,
+    } = opening;
+    show_opening(&hub, &commands, active_agent.identity().agent_id, chat).await;
     let session = hub.factory.open(&active_agent, Vec::new(), active_folder)?;
     run.record_panel.set(session.agent_id());
     let quit = CancellationToken::new();
@@ -405,6 +408,36 @@ async fn launch(
         background: harness.background,
         quit,
     })
+}
+
+/// Send the UI the lists, the channels and `agent_id`, the agent the
+/// session opens on, with its `chat`.
+async fn show_opening(
+    hub: &event_loop::AgentHub,
+    commands: &mpsc::Sender<UiCommand>,
+    agent_id: aura_core_types::AgentId,
+    chat: Option<Vec<aura_ui::events::MessageData>>,
+) {
+    for list in hub.agent_lists() {
+        let _ = commands.try_send(list);
+    }
+    match event_loop::channels::channel_summaries(hub).await {
+        Ok(channels) if channels.is_empty() => {}
+        Ok(channels) => {
+            let _ = commands.try_send(UiCommand::SetChannels(channels));
+        }
+        Err(error) => tracing::warn!(error = %format!("{error:#}"), "Could not list the channels"),
+    }
+    let _ = commands.try_send(UiCommand::SetActiveAgent(agent_id.to_hex()));
+    // Addressed, and only after the lists and the agent: a desktop window
+    // gives it to the tab holding the agent, which the lists decide.
+    if let Some(chat) = chat {
+        let _ = commands.try_send(UiCommand::ForAgent {
+            agent_id: agent_id.to_hex(),
+            command: Box::new(UiCommand::LoadConversation(chat)),
+        });
+    }
+    let _ = commands.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
 }
 
 #[cfg(test)]

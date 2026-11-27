@@ -57,15 +57,12 @@ fn a_channel_opens_in_its_tab_and_its_chat_is_not_held_back() {
             aura_ui_terminal::AgentsTab::Channels,
         ));
     tabs.forward_events();
-    let asked = sent(&mut events);
-    assert!(
-        asked.contains(&r#"SelectAgent("c1")"#.to_string()),
-        "{asked:?}"
-    );
-    assert!(
-        asked.contains(&r#"OpenChannel("ch")"#.to_string()),
-        "{asked:?}"
-    );
+    let asked = sent(&mut events).join(" ");
+    assert!(asked.contains(r#"SelectAgent("c1")"#), "{asked}");
+    // Asked for once, with its chat: a `FocusAgent` first would have the
+    // session switch, and build its lists, twice.
+    assert!(!asked.contains(r#"FocusAgent("c1")"#), "{asked}");
+    assert!(asked.contains(r#"OpenChannel("ch")"#), "{asked}");
     assert_eq!(shown(&tabs), ["a1", "c1"]);
     assert!(tabs.front().tui.chat_loading());
 
