@@ -37,11 +37,30 @@ fn test_channels_tab_lists_channels_over_new_channel() {
     // The channel opened, so the chat's bar names it too, with its title.
     let bar = row_with("Zode release");
     let channel = (0..rows.len())
-        .find(|&row| row != bar && rows[row].contains("#zode"))
+        .find(|&row| row != bar && rows[row].contains("#  zode"))
         .unwrap_or_else(|| panic!("no #zode row in:\n{}", rows.join("\n")));
     let new_channel = row_with("New channel");
     assert!(rows[new_channel].contains('+'), "{}", rows[new_channel]);
     assert!(channel < new_channel);
+    // The `#` is the row's icon, over the `+` of "+ New channel", and the
+    // slug its name, as a project's folder and name are.
+    let column = |row: usize, text: &str| {
+        rows[row]
+            .find(text)
+            .map(|at| rows[row][..at].chars().count())
+    };
+    assert_eq!(
+        column(channel, "#"),
+        column(new_channel, "+"),
+        "{}",
+        rows[channel]
+    );
+    assert_eq!(
+        column(channel, "zode"),
+        column(new_channel, "New channel"),
+        "{}",
+        rows[channel]
+    );
     // The row is the slug and nothing else: no description.
     assert!(!rows[channel].contains("Ship it"), "{}", rows[channel]);
     // "+ New channel" is pinned to the panel's last row, above its border.
@@ -83,7 +102,7 @@ fn test_an_open_channel_keeps_the_list_and_lists_its_members_on_the_right() {
             .unwrap_or_else(|| panic!("no {needle:?} in:\n{screen}"))
     };
     // The left panel is still the list.
-    at("#docs");
+    at("#  docs");
     at("New channel");
     assert!(!screen.contains("‹ #zode"), "{screen}");
     // The members are in the right column, two rows each: the worker, a

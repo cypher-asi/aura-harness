@@ -7,6 +7,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Channels show their `#` as an icon
+
+##### Changed
+
+- CHANNELS draws each channel the way PROJECTS draws a project: a gray
+  `#` in the icon column, where a project's folder and a roster agent's
+  `@` sit, over the `+` of `New channel`, then the slug without the `#`.
+  A channel with a member at work shows the spinner in place of its `#`.
+  The chat bar, the edit form and the input's `Message #zode` still name
+  the channel with its `#`.
+
 ### Channel members show their agent, with what they work on below
 
 ##### Changed

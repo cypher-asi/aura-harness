@@ -16,7 +16,8 @@
 //!   then the name.
 //! - The icon column holds one thing: the spinner while the row, or a row
 //!   folded under it, works; else `▸` over the rows it folds, `▾` once
-//!   they show; else the app's mark (`@`, a folder, `+`); else nothing.
+//!   they show; else the app's mark (`#`, `@`, a folder, `+`); else
+//!   nothing.
 //! - A muted detail may follow the name, and is cut first. The right end
 //!   is muted too: how long ago, a code, or a project's `+`.
 //! - Rows under a row hang from its name on tree lines.

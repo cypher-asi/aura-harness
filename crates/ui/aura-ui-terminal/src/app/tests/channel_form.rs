@@ -296,10 +296,10 @@ fn test_esc_cancels_the_form_without_an_event() {
     assert!(rx.try_recv().is_err());
 }
 
-/// Right-click `#zode`'s row of the list, which shows only its slug, not
+/// Right-click `#zode`'s row of the list, its `#` in the icon column, not
 /// the chat bar's title row naming the open channel.
 fn right_click_on_channel_row(app: &mut App) {
-    right_click_on_where(app, "#zode", |row| !row.contains("Zode release"));
+    right_click_on_where(app, "#  zode", |row| !row.contains("Zode release"));
 }
 
 /// Right-click `#zode`'s row and run "Edit channel…", the first item.

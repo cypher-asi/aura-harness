@@ -1,10 +1,11 @@
 //! The agents panel's CHANNELS tab: the list of channels, one row per
-//! channel, `#slug` and nothing else, and "+ New channel" pinned to the
-//! bottom row:
+//! channel, its `#` in the icon column as a project has its folder, then
+//! its slug and nothing else, and "+ New channel" pinned to the bottom
+//! row:
 //!
 //! ```text
-//!    #zode
-//!    #docs
+//!  #  zode
+//!  #  docs
 //!
 //!  +  New channel
 //! ```
@@ -94,8 +95,9 @@ fn row_state(app: &App, index: usize, selected: bool) -> CellState {
     CellState::of(selected, hovered)
 }
 
-/// `#slug`: the channel's slug and nothing else. A channel with a member
-/// at work shows the spinner in the icon column.
+/// `#  slug`: a muted `#` in the icon column, then the channel's slug and
+/// nothing else. A channel with a member at work shows the spinner in
+/// place of its `#`.
 fn channel_row<'a>(
     app: &App,
     width: usize,
@@ -110,9 +112,8 @@ fn channel_row<'a>(
     let icon = if busy {
         working_icon(app, theme)
     } else {
-        StatusIcon::new("", theme.colors.muted)
+        StatusIcon::new("#", theme.colors.muted)
     };
     let cell = cell_style(theme, state, Style::default().fg(theme.colors.foreground));
-    let slug = format!("#{}", channel.slug);
-    list_row(width, 0, icon, &slug, cell, None)
+    list_row(width, 0, icon, &channel.slug, cell, None)
 }
