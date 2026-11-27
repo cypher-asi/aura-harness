@@ -1,6 +1,6 @@
-//! A dialog over the whole screen. The screen around it goes dark
-//! ([`backdrop`]), so nothing underneath shows or competes with it, and a
-//! framed box in the middle holds the dialog's lines. Every dialog draws
+//! A dialog over the whole screen. The screen around it is emptied to the
+//! background ([`backdrop`]), so nothing underneath shows or competes with
+//! it, and a framed box in the middle holds the dialog's lines. Every dialog draws
 //! through a [`Modal`], so they share one frame, title, padding, scrollbar
 //! and status line:
 //!
@@ -106,7 +106,7 @@ pub struct ModalArea {
 }
 
 /// A dialog's box, its title, border, width and status, which draws the
-/// dialog's lines over the darkened screen.
+/// dialog's lines over the emptied screen.
 #[derive(Debug, Clone)]
 pub struct Modal<'t> {
     theme: &'t Theme,
@@ -187,7 +187,7 @@ impl<'t> Modal<'t> {
             .saturating_sub(self.status_rows(screen))
     }
 
-    /// Darken `screen` and draw the box in its middle holding `lines`,
+    /// Empty `screen` and draw the box in its middle holding `lines`,
     /// cut to [`Modal::body_room`] of them.
     pub fn render(self, buf: &mut Buffer, screen: Rect, lines: Vec<Line<'_>>) -> ModalArea {
         backdrop(buf, screen, self.theme);

@@ -1,6 +1,6 @@
 //! The modal on top: the approval waiting for an answer, or the dialog
 //! open under it. Only the one on top is drawn, through a [`Modal`],
-//! which darkens the whole screen around it so nothing underneath shows.
+//! which empties the whole screen around it so nothing underneath shows.
 //!
 //! The HUD's notice is under the backdrop too, so a notification raised
 //! while a modal is open, such as a folder that cannot be opened, is the

@@ -1,6 +1,6 @@
-//! The modal layer: the screen around the modal on top goes dark, with
-//! nothing underneath showing through, not even the input's cursor, and
-//! the modal shows no key hints.
+//! The modal layer: the screen around the modal on top is bare background,
+//! with nothing underneath showing through, not even the input's cursor,
+//! and the modal shows no key hints.
 
 use super::*;
 use crate::components::{Message, MessageRole};
@@ -42,7 +42,7 @@ fn ask_approval(app: &mut crate::App) {
 }
 
 #[test]
-fn the_screen_around_a_modal_is_dark_and_blank() {
+fn the_screen_around_a_modal_is_blank_background() {
     let theme = test_theme();
     let mut app = app_with_model(None);
     app.add_message(Message::new(MessageRole::Assistant, "zebra crossing"));
@@ -58,7 +58,7 @@ fn the_screen_around_a_modal_is_dark_and_blank() {
             if !frame.contains(Position::new(x, y)) {
                 assert_eq!(
                     (cell.symbol(), cell.bg),
-                    (" ", theme.colors.backdrop),
+                    (" ", theme.colors.background),
                     "({x}, {y})"
                 );
             }

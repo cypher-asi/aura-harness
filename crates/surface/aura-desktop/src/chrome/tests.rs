@@ -340,9 +340,9 @@ fn a_dialogs_backdrop_covers_the_bars_and_the_hamburger() {
         .side_toggle
         .is_some());
 
-    // The backdrop leaves every cell blank, but dark.
-    let dark = ratatui::style::Style::default().bg(ratatui::style::Color::Rgb(10, 10, 10));
-    buffer.set_style(buffer.area, dark);
+    // The backdrop leaves every cell blank, but painted the background.
+    let area = buffer.area;
+    aura_ui_terminal::components::backdrop(&mut buffer, area, &aura_ui_terminal::Theme::cyber());
     let model = Model::new(&panes, toggle, &buffer, at);
     assert!(model.panes.is_empty(), "{:?}", model.panes);
     assert!(model.covered);

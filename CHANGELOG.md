@@ -84,15 +84,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on INBOX, are answered when the agent asked ends its turn, and count
   toward their thread's cap.
 
-### Dialogs share one look, over a dark screen
+### Dialogs share one look, over an empty screen
 
 ##### Changed
 
 - The approval, help, model selector, project folder browser, project
   details and channel form are drawn alike: a box in the middle of the
-  screen, titled in capitals on its top border, over a dark screen that
-  hides everything under it, pictures, the input's cursor and the
-  desktop's panel bars included.
+  screen, titled in capitals on its top border. The rest of the screen
+  is left in the app's background color, with nothing under the dialog
+  showing, pictures, the input's cursor and the desktop's panel bars
+  included.
 - Dialogs show no key hints. `/help` lists the dialogs' keys under IN
   DIALOGS, and scrolls with the arrows, PgUp/PgDn and the wheel. A list
   longer than its dialog shows a scrollbar on the box's right border

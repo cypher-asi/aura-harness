@@ -37,7 +37,7 @@ fn draw(modal: Modal<'_>, buf: &mut Buffer, lines: Vec<Line<'_>>) -> ModalArea {
 }
 
 #[test]
-fn the_backdrop_empties_every_cell_and_darkens_it() {
+fn the_backdrop_empties_every_cell_to_the_background() {
     let theme = theme();
     let mut buf = screen(10, 3);
     buf.set_string(0, 1, "underneath", Style::default().fg(Color::Red));
@@ -47,7 +47,7 @@ fn the_backdrop_empties_every_cell_and_darkens_it() {
     for cell in &buf.content {
         assert_eq!(cell.symbol(), " ");
         assert_eq!(cell.fg, Color::Reset);
-        assert_eq!(cell.bg, theme.colors.backdrop);
+        assert_eq!(cell.bg, theme.colors.background);
         assert!(cell.modifier.is_empty());
         assert!(!cell.skip, "an image's cells are drawn over too");
     }
@@ -85,7 +85,7 @@ fn a_dialog_is_centered_framed_and_padded() {
     assert_eq!(title.fg, theme.colors.primary);
     assert!(title.modifier.contains(Modifier::BOLD));
     assert_eq!(buf[(8, 8)].fg, theme.colors.muted);
-    assert_eq!(buf[(0, 0)].bg, theme.colors.backdrop, "the rest is dark");
+    assert_eq!(buf[(0, 0)].bg, theme.colors.background, "the rest too");
 }
 
 #[test]

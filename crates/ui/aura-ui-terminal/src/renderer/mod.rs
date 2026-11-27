@@ -235,7 +235,7 @@ fn render_below_chat(frame: &mut Frame, layout: &FrameLayout, app: &mut App, the
     }
 }
 
-/// The menus, then the modal on top, which darkens all of it.
+/// The menus, then the modal on top, which hides all of it.
 fn render_popups(frame: &mut Frame, chat: Rect, app: &mut App, theme: &Theme) {
     slash_menu::render_slash_menu(frame, chat, app, theme);
     mention_menu::render_mention_menu(frame, chat, app, theme);
