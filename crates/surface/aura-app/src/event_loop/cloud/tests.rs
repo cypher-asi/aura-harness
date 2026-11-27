@@ -79,6 +79,33 @@ mod forward_tests {
         );
     }
 
+    /// A prompt from the channel or the queue finds the chat idle, and an
+    /// idle chat folds each group of steps as soon as none of them runs.
+    #[tokio::test]
+    async fn a_cloud_turn_puts_its_chat_to_work_until_it_ends() {
+        let (ui, mut rx) = chat();
+        let (tx, mut events) = mpsc::channel(8);
+        tx.send(RemoteEvent::Thinking("hmm".into())).await.unwrap();
+        tx.send(done(10)).await.unwrap();
+        drop(tx);
+
+        let end = forward(
+            &ui,
+            &mut events,
+            &mut TurnExtras::default(),
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(end, TurnEnd::Done);
+        let sent = commands(&mut rx);
+        assert!(
+            matches!(sent.first(), Some(UiCommand::TurnStarted { prompt: None })),
+            "{sent:?}"
+        );
+        ends_the_turn(&sent);
+    }
+
     #[tokio::test]
     async fn a_finished_cloud_turn_completes_the_chat() {
         let (ui, mut rx) = chat();
