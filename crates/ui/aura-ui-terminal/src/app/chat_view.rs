@@ -39,6 +39,11 @@ pub(crate) struct ChatView {
     pub(crate) image_hits: Vec<ImageHit>,
     /// Copy buttons of code blocks in the chat in the last frame
     pub(crate) code_copy_hits: Vec<CodeCopyHit>,
+    /// Links in the chat's text on screen in the last frame
+    pub(crate) link_hits: Vec<super::chat_links::ShownLink>,
+    /// Links a click opened, which tests read instead of starting a browser
+    #[cfg(test)]
+    pub(crate) opened_links: Vec<String>,
     /// Thumbnails of the images waiting in the input, in the last frame
     pub(crate) pending_image_areas: Vec<(Rect, usize)>,
     /// Absolute cell rect where the detail-view image was drawn in the last
@@ -67,6 +72,9 @@ impl Default for ChatView {
             smooth: smooth::SmoothScroll::default(),
             image_hits: Vec::new(),
             code_copy_hits: Vec::new(),
+            link_hits: Vec::new(),
+            #[cfg(test)]
+            opened_links: Vec::new(),
             pending_image_areas: Vec::new(),
             detail_image_rect: None,
             queued_images: VecDeque::new(),

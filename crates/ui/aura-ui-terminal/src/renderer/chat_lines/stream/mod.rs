@@ -11,7 +11,7 @@
 //! out again.
 
 use super::super::markdown::{may_continue_list, may_join_list};
-use crate::app::CodeCopyHit;
+use crate::app::{CodeCopyHit, LinkHit};
 use crate::components::{Message, MessageRole};
 use ratatui::text::Line;
 
@@ -25,15 +25,64 @@ pub(super) struct Settled {
 }
 
 /// Lines, whether each is prose (see `BlockLines::prose`), and the copy
-/// buttons of the code blocks among them, `line` counted in the lines.
-pub(super) type Laid = (Vec<Line<'static>>, Vec<Option<u16>>, Vec<CodeCopyHit>);
+/// buttons and links among them, `line` counted in the lines.
+#[derive(Debug, Default)]
+pub(super) struct Laid {
+    pub(super) lines: Vec<Line<'static>>,
+    pub(super) prose: Vec<Option<u16>>,
+    pub(super) codes: Vec<CodeCopyHit>,
+    pub(super) links: Vec<LinkHit>,
+}
 
-/// The block's laid out lines, prose flags and copy buttons, to add to.
-type LaidMut<'a> = (
-    &'a mut Vec<Line<'static>>,
-    &'a mut Vec<Option<u16>>,
-    &'a mut Vec<CodeCopyHit>,
-);
+impl Laid {
+    /// Lines with no prose, copy buttons or links.
+    pub(super) fn of(lines: Vec<Line<'static>>) -> Self {
+        Self {
+            lines,
+            ..Self::default()
+        }
+    }
+
+    /// Put `more` lines after these, whose last may have no entry in
+    /// `prose`, with their copy buttons and links moved down to match and
+    /// the links numbered after these.
+    pub(super) fn add(&mut self, more: Self) {
+        self.prose.resize(self.lines.len(), None);
+        self.prose.extend(more.prose);
+        let start = self.lines.len();
+        self.codes
+            .extend(more.codes.into_iter().map(|hit| CodeCopyHit {
+                line: start + hit.line,
+                ..hit
+            }));
+        let shift = (start, 0, LinkHit::numbers(&self.links));
+        self.links
+            .extend(more.links.into_iter().map(|hit| hit.moved(shift)));
+        self.lines.extend(more.lines);
+    }
+
+    /// Move what is on the lines `rows` further down, as rows are put
+    /// before them.
+    pub(super) fn push_down(&mut self, rows: usize) {
+        for hit in &mut self.codes {
+            hit.line += rows;
+        }
+        for hit in &mut self.links {
+            hit.line += rows;
+        }
+        if !self.prose.is_empty() {
+            self.prose.splice(0..0, std::iter::repeat_n(None, rows));
+        }
+    }
+
+    /// Keep only the first `lines` lines and what is on them.
+    fn truncate(&mut self, lines: usize) {
+        self.lines.truncate(lines);
+        self.prose.truncate(lines);
+        self.codes.retain(|hit| hit.line < lines);
+        self.links.retain(|hit| hit.line < lines);
+    }
+}
 
 /// Whether `message` is a reply still being written, which is laid out a
 /// part at a time.
@@ -49,48 +98,26 @@ impl Settled {
     /// Lay `content` out as `render` would in one go, calling it only for
     /// what was not settled before. `laid` is the block's as the last call
     /// left it, with whatever was put after it since.
-    pub(super) fn extend(
-        &mut self,
-        content: &str,
-        laid: LaidMut<'_>,
-        render: impl Fn(&str) -> Laid,
-    ) {
+    pub(super) fn extend(&mut self, content: &str, laid: &mut Laid, render: impl Fn(&str) -> Laid) {
         if !content.starts_with(self.text.as_str()) {
             // The reply was replaced, not added to
             *self = Self::default();
         }
-        let (lines, prose, codes) = laid;
-        lines.truncate(self.lines);
-        prose.truncate(self.lines);
-        let settled = self.lines;
-        codes.retain(|hit| hit.line < settled);
+        laid.truncate(self.lines);
         let mut rest = &content[self.text.len()..];
         if let Some(found) = last_break(rest) {
-            add((lines, prose, codes), render(&rest[..found.before]));
-            let gap = vec![Line::default(); found.blank];
-            add(
-                (lines, prose, codes),
-                (gap, vec![Some(0); found.blank], Vec::new()),
-            );
-            self.lines = lines.len();
+            laid.add(render(&rest[..found.before]));
+            laid.add(Laid {
+                lines: vec![Line::default(); found.blank],
+                prose: vec![Some(0); found.blank],
+                ..Laid::default()
+            });
+            self.lines = laid.lines.len();
             self.text.push_str(&rest[..found.after]);
             rest = &rest[found.after..];
         }
-        add((lines, prose, codes), render(rest));
+        laid.add(render(rest));
     }
-}
-
-/// Put `more` lines after `lines`, whose last may have no entry in `prose`,
-/// with their copy buttons moved down to match.
-pub(super) fn add((lines, prose, codes): LaidMut<'_>, (more, flags, hits): Laid) {
-    prose.resize(lines.len(), None);
-    prose.extend(flags);
-    let start = lines.len();
-    codes.extend(hits.into_iter().map(|hit| CodeCopyHit {
-        line: start + hit.line,
-        ..hit
-    }));
-    lines.extend(more);
 }
 
 /// A place a reply can be cut in two that are laid out apart.

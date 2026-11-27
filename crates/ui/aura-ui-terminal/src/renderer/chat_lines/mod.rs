@@ -11,7 +11,7 @@ use super::activity::{
 };
 use super::text::Measure;
 use super::MoreRows;
-use crate::app::{CodeCopyHit, ImageHit, ToggleRow};
+use crate::app::{CodeCopyHit, ImageHit, LinkHit, ToggleRow};
 use crate::components::{Activity, Message};
 use crate::events::ChannelPostView;
 use crate::Theme;
@@ -109,6 +109,10 @@ pub(crate) struct BlockLines {
     /// Copy buttons of code blocks, `line` counted from the block's first
     /// line
     pub codes: Vec<CodeCopyHit>,
+    /// The rows of links a click opens, `line` counted from the block's
+    /// first line, `x` in display columns, links numbered from 0 in the
+    /// block
+    pub links: Vec<LinkHit>,
     /// Whether each line is prose, the user's or the agent's flowing text:
     /// `Some` of the columns its marker, quote bar or indent takes. Lines
     /// past the end are not.

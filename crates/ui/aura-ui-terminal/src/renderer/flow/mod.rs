@@ -100,6 +100,7 @@ fn clear_chat_layout(app: &mut App, inner: Rect) {
     app.set_chat_layout(Vec::new(), 0);
     app.set_chat_images(Vec::new());
     app.set_chat_code_copies(Vec::new());
+    app.clear_chat_links();
     app.set_chat_width(inner.width);
     app.set_chat_text_area(inner);
 }

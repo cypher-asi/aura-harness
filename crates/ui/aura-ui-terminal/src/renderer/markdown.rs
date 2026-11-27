@@ -12,18 +12,21 @@
 
 mod fields;
 mod inline;
+mod rendered;
 mod table;
 #[cfg(test)]
 mod tests;
+mod urls;
 mod wrap;
 
 use super::text::Measure;
 use crate::Theme;
-use inline::parse_inline;
+use inline::{parse_linked, Linked};
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+pub(crate) use rendered::Rendered;
 use std::borrow::Cow;
 pub(crate) use wrap::wrap_spans;
 
@@ -47,11 +50,22 @@ pub(crate) fn render_markdown_flow(
     theme: &Theme,
     measure: Measure,
 ) -> (Vec<Line<'static>>, Vec<Option<u16>>) {
+    let (rendered, flow) = render_markdown_linked(text, width, (base, theme), measure);
+    (rendered.lines, flow)
+}
+
+/// [`render_markdown_flow`], with where the links a click opens fell.
+pub(crate) fn render_markdown_linked(
+    text: &str,
+    width: usize,
+    (base, theme): (Style, &Theme),
+    measure: Measure,
+) -> (Rendered, Vec<Option<u16>>) {
     let expanded: Vec<Cow<'_, str>> = text.lines().map(expand_tabs).collect();
     let lines: Vec<&str> = expanded.iter().map(AsRef::as_ref).collect();
     let plan = fields::plan(&lines);
 
-    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut out = Rendered::default();
     let mut flow = Vec::new();
     let mut previous = None;
     let mut i = 0;
@@ -69,21 +83,22 @@ pub(crate) fn render_markdown_flow(
             Block::of(lines[i], previous)
         };
         let parted = plan[i].gap || Block::parts(previous, block);
-        if parted && out.last().is_some_and(|last| last.width() > 0) {
-            out.push(Line::default());
+        if parted && out.lines.last().is_some_and(|last| last.width() > 0) {
+            out.lines.push(Line::default());
             flow.push(Some(0));
         }
         previous = block;
         if table {
             let end = table::end(&lines, i);
-            out.extend(table::render(&lines[i..end], width, base, theme));
-            flow.resize(out.len(), None);
+            out.lines
+                .extend(table::render(&lines[i..end], width, base, theme));
+            flow.resize(out.lines.len(), None);
             i = end;
         } else {
             let indent = render_block_line(&mut out, lines[i], width, (base, theme), measure);
             let prose = (!is_rule(lines[i].trim_start()))
                 .then(|| u16::try_from(indent).unwrap_or(u16::MAX));
-            flow.resize(out.len(), prose);
+            flow.resize(out.lines.len(), prose);
             i += 1;
         }
     }
@@ -144,7 +159,7 @@ pub(crate) fn is_inline_code(style: Style, theme: &Theme) -> bool {
 /// Render one line of markdown, returning how many columns of the lines
 /// it added are a marker, quote bar or indent rather than text.
 fn render_block_line(
-    out: &mut Vec<Line<'static>>,
+    out: &mut Rendered,
     line: &str,
     width: usize,
     (base, theme): (Style, &Theme),
@@ -154,14 +169,14 @@ fn render_block_line(
     let indent = line.len() - trimmed.len();
 
     if trimmed.is_empty() {
-        out.push(Line::default());
+        out.lines.push(Line::default());
         0
     } else if let Some((level, title)) = heading(trimmed) {
-        let spans = parse_inline(title, heading_style(level, base, theme), theme);
-        out.extend(wrap_spans(&spans, width, (&[], &[]), measure));
+        let linked = parse_linked(title, heading_style(level, base, theme), theme);
+        out.wrap(linked, width, (&[], &[]), measure);
         0
     } else if is_rule(trimmed) {
-        out.push(Line::from(Span::styled(
+        out.lines.push(Line::from(Span::styled(
             "─".repeat(width.max(3)),
             Style::default().fg(theme.colors.muted),
         )));
@@ -172,8 +187,8 @@ fn render_block_line(
         render_list_item(out, indent, &item, width, (base, theme), measure)
     } else {
         let pad = indent_spans(indent);
-        let spans = parse_inline(trimmed, base, theme);
-        out.extend(wrap_spans(&spans, width, (&pad, &pad), measure));
+        let linked = parse_linked(trimmed, base, theme);
+        out.wrap(linked, width, (&pad, &pad), measure);
         indent
     }
 }
@@ -227,7 +242,7 @@ fn is_rule(line: &str) -> bool {
 /// Blockquote lines get a `│ ` bar per nesting level and their content is
 /// rendered as markdown in the remaining width.
 fn render_quote(
-    out: &mut Vec<Line<'static>>,
+    out: &mut Rendered,
     line: &str,
     width: usize,
     (base, theme): (Style, &Theme),
@@ -246,19 +261,16 @@ fn render_quote(
         width.saturating_sub(bar.width()).max(1)
     };
 
-    let mut inner_lines = Vec::new();
+    let mut inner = Rendered::default();
     let inner_indent = render_block_line(
-        &mut inner_lines,
+        &mut inner,
         rest,
         inner_width,
         (base.add_modifier(Modifier::ITALIC), theme),
         measure,
     );
     let bar_width = bar.width();
-    for mut quoted in inner_lines {
-        quoted.spans.insert(0, bar.clone());
-        out.push(quoted);
-    }
+    out.quote(inner, &bar);
     bar_width + inner_indent
 }
 
@@ -343,7 +355,7 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
 
 /// A list item with its marker; wrapped lines hang under the item text.
 fn render_list_item(
-    out: &mut Vec<Line<'static>>,
+    out: &mut Rendered,
     indent: usize,
     item: &ListItem<'_>,
     width: usize,
@@ -368,8 +380,8 @@ fn render_list_item(
     let hang_width: usize = prefix.iter().map(Span::width).sum();
     let hang = vec![Span::raw(" ".repeat(hang_width))];
 
-    let spans = item_spans(item, base, theme);
-    out.extend(wrap_spans(&spans, width, (&prefix, &hang), measure));
+    let linked = item_spans(item, base, theme);
+    out.wrap(linked, width, (&prefix, &hang), measure);
     hang_width
 }
 
@@ -377,7 +389,7 @@ fn render_list_item(
 /// apart from the names; a bold one keeps the emphasis its author gave
 /// it. Whether it is muted depends on the item alone, so a label does not
 /// change color while the items after it stream in.
-fn item_spans(item: &ListItem<'_>, base: Style, theme: &Theme) -> Vec<Span<'static>> {
+fn item_spans(item: &ListItem<'_>, base: Style, theme: &Theme) -> Linked {
     let plain = item
         .task
         .is_none()
@@ -385,14 +397,14 @@ fn item_spans(item: &ListItem<'_>, base: Style, theme: &Theme) -> Vec<Span<'stat
         .flatten()
         .filter(|label| !label.bold);
     let Some(label) = plain else {
-        return parse_inline(item.body, base, theme);
+        return parse_linked(item.body, base, theme);
     };
-    let mut spans = vec![Span::styled(
+    let mut linked = Linked::plain(vec![Span::styled(
         format!("{}:", label.text),
         base.fg(theme.colors.muted),
-    )];
-    spans.extend(parse_inline(label.rest, base, theme));
-    spans
+    )]);
+    linked.append(parse_linked(label.rest, base, theme));
+    linked
 }
 
 // ============================================================================

@@ -57,6 +57,7 @@ pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
 mod chat_hits;
+pub(crate) mod chat_links;
 mod chat_view;
 mod detail;
 mod detail_state;
@@ -111,6 +112,7 @@ pub use apps::{
     AgentsTab, ArchiveRow, BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice,
     AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
+pub(crate) use chat_links::is_openable_url;
 pub use chat_tabs::ChatTab;
 use chat_view::ChatView;
 pub(crate) use context_menu::{MenuTarget, SubmenuEntry};
@@ -119,7 +121,7 @@ pub use detail::DetailView;
 use detail_state::DetailState;
 use file_view::FileView;
 pub(crate) use hit_targets::{
-    CodeCopyHit, CopyText, HoverTarget, ImageHit, ProjectListRow, ToggleRow, ToggleTarget,
+    CodeCopyHit, CopyText, HoverTarget, ImageHit, LinkHit, ProjectListRow, ToggleRow, ToggleTarget,
 };
 use host_chrome::HostChrome;
 pub(crate) use host_tab::switch_button;

@@ -4,7 +4,7 @@ use super::group::{group_lines, group_view, more_toggles, single_lines, KeptStep
 use super::message::message_lines;
 use super::stream::{self, Laid, Settled};
 use super::{content_lines, BlockLines, GroupState, TurnPlace, USER_FRAME_ROWS};
-use crate::app::{CodeCopyHit, ImageHit, ToggleRow};
+use crate::app::{ImageHit, ToggleRow};
 use crate::components::{Message, MessageRole};
 use crate::renderer::activity::GroupView;
 use crate::renderer::command::shell_lines;
@@ -122,18 +122,18 @@ impl Layout<'_> {
     /// `before`, how it was laid out the last time.
     pub(super) fn block(self, block: &Stale<'_>, before: Option<BlockLines>) -> BlockLines {
         let Body {
-            laid: (mut lines, mut prose, mut codes),
+            mut laid,
             mut toggles,
             settled,
             steps,
         } = self.body(block, before);
         let members = block.members;
         if let Some(author) = members[0].author().filter(|_| members.len() == 1) {
-            put_author_label(author, (&mut lines, &mut toggles, &mut prose), self.theme);
+            put_author_label(author, (&mut laid, &mut toggles), self.theme);
         }
-        let mut images = self.push_images(members, &mut lines);
+        let mut images = self.push_images(members, &mut laid.lines);
         if let Some(reply) = block.place.meta {
-            push_footer(&mut lines, reply, self.width, self.theme);
+            push_footer(&mut laid.lines, reply, self.width, self.theme);
         }
         let folded = members[0].inbox_fold().is_some() && !members[0].is_expanded();
         let user = !self.terminal
@@ -141,13 +141,14 @@ impl Layout<'_> {
             && members[0].role() == MessageRole::User
             && !folded;
         if user {
-            frame_user_block(
-                &mut lines,
-                &mut toggles,
-                (&mut images, &mut codes),
-                &mut prose,
-            );
+            frame_user_block(&mut laid, &mut toggles, &mut images);
         }
+        let Laid {
+            lines,
+            prose,
+            codes,
+            links,
+        } = laid;
         BlockLines {
             revision: block.revision,
             user,
@@ -155,6 +156,7 @@ impl Layout<'_> {
             toggles,
             images,
             codes,
+            links,
             prose,
             settled,
             steps,
@@ -168,11 +170,7 @@ impl Layout<'_> {
         let shell = members[0].shell_run().filter(|_| self.terminal);
         match (shell, block.view) {
             (Some(run), _) => Body::of((
-                (
-                    shell_lines(run, self.prompt, self.width, self.theme),
-                    Vec::new(),
-                    Vec::new(),
-                ),
+                Laid::of(shell_lines(run, self.prompt, self.width, self.theme)),
                 Vec::new(),
             )),
             (None, Some(view)) => self.group_body(block, view, before),
@@ -197,7 +195,7 @@ impl Layout<'_> {
             kept,
         );
         Body {
-            laid: (lines, Vec::new(), Vec::new()),
+            laid: Laid::of(lines),
             toggles,
             settled: None,
             steps,
@@ -211,8 +209,8 @@ impl Layout<'_> {
         for member in members {
             let (more, rows) =
                 message_lines(member, (self.width, self.measure), self.theme, self.spinner);
-            toggles.extend(more_toggles(member, rows, laid.0.len()));
-            stream::add((&mut laid.0, &mut laid.1, &mut laid.2), more);
+            toggles.extend(more_toggles(member, rows, laid.lines.len()));
+            laid.add(more);
         }
         (laid, toggles)
     }
@@ -226,22 +224,20 @@ impl Layout<'_> {
             theme,
             ..
         } = self;
-        let (mut lines, mut prose, mut codes, mut state) =
-            before.map_or_else(Default::default, |block| {
-                (
-                    block.lines,
-                    block.prose,
-                    block.codes,
-                    block.settled.unwrap_or_default(),
-                )
-            });
-        state.extend(
-            block.members[0].content(),
-            (&mut lines, &mut prose, &mut codes),
-            |text| content_lines(text, MessageRole::Assistant, (width, measure), theme),
-        );
+        let (mut laid, mut state) = before.map_or_else(Default::default, |block| {
+            let laid = Laid {
+                lines: block.lines,
+                prose: block.prose,
+                codes: block.codes,
+                links: block.links,
+            };
+            (laid, block.settled.unwrap_or_default())
+        });
+        state.extend(block.members[0].content(), &mut laid, |text| {
+            content_lines(text, MessageRole::Assistant, (width, measure), theme)
+        });
         Body {
-            laid: (lines, prose, codes),
+            laid,
             toggles: Vec::new(),
             settled: Some(state),
             steps: KeptSteps::new(),
@@ -353,49 +349,31 @@ fn push_footer(lines: &mut Vec<Line<'static>>, reply: &Message, width: usize, th
 }
 /// Make room for the frame around a user's message: [`USER_FRAME_ROWS`]
 /// blank rows before and after its lines, with the rows of its toggles,
-/// images, copy buttons and prose moved down to match. The panel draws
-/// the border on the outermost of them.
-fn frame_user_block(
-    lines: &mut Vec<Line<'static>>,
-    toggles: &mut [ToggleRow],
-    (images, codes): (&mut [ImageHit], &mut [CodeCopyHit]),
-    prose: &mut Vec<Option<u16>>,
-) {
+/// images, copy buttons, links and prose moved down to match. The panel
+/// draws the border on the outermost of them.
+fn frame_user_block(laid: &mut Laid, toggles: &mut [ToggleRow], images: &mut [ImageHit]) {
     let pad = USER_FRAME_ROWS;
-    lines.splice(0..0, std::iter::repeat_n(Line::default(), pad));
-    lines.extend(std::iter::repeat_n(Line::default(), pad));
+    laid.lines
+        .splice(0..0, std::iter::repeat_n(Line::default(), pad));
+    laid.lines.extend(std::iter::repeat_n(Line::default(), pad));
+    laid.push_down(pad);
     for toggle in toggles {
         toggle.line += pad;
     }
     for hit in images {
         hit.line += pad;
     }
-    for hit in codes {
-        hit.line += pad;
-    }
-    if !prose.is_empty() {
-        prose.splice(0..0, std::iter::repeat_n(None, pad));
-    }
 }
 /// Put a post's `author` label above its lines, moving the rows of its
-/// toggles and prose down to match.
-fn put_author_label(
-    author: &str,
-    (lines, toggles, prose): (
-        &mut Vec<Line<'static>>,
-        &mut [ToggleRow],
-        &mut Vec<Option<u16>>,
-    ),
-    theme: &Theme,
-) {
+/// toggles, copy buttons, links and prose down to match.
+fn put_author_label(author: &str, (laid, toggles): (&mut Laid, &mut [ToggleRow]), theme: &Theme) {
     let style = Style::default()
         .fg(theme.colors.primary)
         .add_modifier(Modifier::BOLD);
-    lines.insert(0, Line::from(Span::styled(author.to_string(), style)));
+    laid.lines
+        .insert(0, Line::from(Span::styled(author.to_string(), style)));
+    laid.push_down(1);
     for toggle in toggles {
         toggle.line += 1;
-    }
-    if !prose.is_empty() {
-        prose.insert(0, None);
     }
 }

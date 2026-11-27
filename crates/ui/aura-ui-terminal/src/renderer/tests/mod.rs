@@ -23,6 +23,7 @@ mod channel_member_chat;
 mod channel_members;
 mod channel_side_toggle;
 mod channels;
+mod chat_links;
 mod chat_messages;
 mod chat_view;
 mod copy_buttons;

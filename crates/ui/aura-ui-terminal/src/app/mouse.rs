@@ -244,7 +244,8 @@ impl App {
     }
 
     /// End the selection at the pointer: copy it, or treat an empty one
-    /// as a click on an activity row.
+    /// as a click on a link or an activity row. A link opens on release
+    /// rather than press, so a drag that starts on one selects its text.
     fn finish_selection(&mut self, column: u16, row: u16) {
         if let Some(selection) = self.select.selection.as_mut() {
             selection.extend_to(Position::new(column, row));
@@ -258,7 +259,7 @@ impl App {
             self.select.copy_requested = true;
         } else {
             self.select.selection = None;
-            if self.detail.view.is_none() {
+            if self.detail.view.is_none() && !self.open_link_at(column, row) {
                 self.toggle_activity_at(column, row);
             }
         }
@@ -433,13 +434,13 @@ impl App {
         if let Some(target) = self.hovered_side_panel(column, row) {
             return Some(target);
         }
-        if let Some(target) = self.image_at(column, row) {
-            return Some(target);
-        }
-        if let Some(hit) = self.code_copy_at(column, row) {
-            return Some(HoverTarget::CopyCode(hit.line));
-        }
-        self.hovered_activity(column, row)
+        self.image_at(column, row)
+            .or_else(|| {
+                self.code_copy_at(column, row)
+                    .map(|hit| HoverTarget::CopyCode(hit.line))
+            })
+            .or_else(|| self.hovered_link(column, row))
+            .or_else(|| self.hovered_activity(column, row))
     }
 
     fn record_row_at(&self, column: u16, row: u16) -> Option<usize> {

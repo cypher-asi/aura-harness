@@ -2,6 +2,7 @@
 //! tabs under its header bar.
 
 mod below;
+mod links;
 mod live_tail;
 mod prose;
 mod rows;
@@ -226,6 +227,7 @@ fn render_other_tab(
 fn clear_chat_rows(app: &mut App, padded: Rect) {
     app.set_chat_images(Vec::new());
     app.set_chat_code_copies(Vec::new());
+    app.clear_chat_links();
     app.set_chat_rows(Some((padded, 0)));
 }
 

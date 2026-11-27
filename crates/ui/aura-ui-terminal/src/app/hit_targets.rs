@@ -74,6 +74,9 @@ pub(crate) enum HoverTarget {
     /// The copy button of a code block in the chat, by the chat line of
     /// the block's top border.
     CopyCode(usize),
+    /// A link in the chat, by its number (see [`LinkHit::link`]), so
+    /// every row of a link that wraps lights up with the one pointed at.
+    Link(usize),
 }
 
 /// What clicking an activity row in the chat expands or collapses.
@@ -130,6 +133,43 @@ pub(crate) enum CopyText {
     /// The boot console with this id, its whole log read when clicked, as
     /// a live one is drawn every frame
     BootLog(String),
+}
+
+/// One row of a link in the chat's text. A link that wraps is a piece
+/// per row, all with the same `link` and `url`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinkHit {
+    /// Chat line of the piece
+    pub line: usize,
+    /// First column of the piece, counted from the chat text's left edge
+    pub x: u16,
+    /// Columns the piece takes
+    pub width: u16,
+    /// Which link the piece is part of, numbered from 0 in the order the
+    /// links are drawn
+    pub link: usize,
+    /// Where the link goes, shared by its pieces and the line cache
+    pub url: std::sync::Arc<str>,
+}
+
+impl LinkHit {
+    /// The piece `rows` further down and `columns` further right, its
+    /// link numbered after the first `links`: where it falls once the
+    /// lines it is on are put after others or behind a prompt.
+    pub(crate) fn moved(self, (rows, columns, links): (usize, u16, usize)) -> Self {
+        Self {
+            line: self.line + rows,
+            x: self.x.saturating_add(columns),
+            link: self.link + links,
+            ..self
+        }
+    }
+
+    /// How many numbers the links of `hits` take, so links put after
+    /// them are numbered on from there.
+    pub(crate) fn numbers(hits: &[Self]) -> usize {
+        hits.iter().map(|hit| hit.link + 1).max().unwrap_or(0)
+    }
 }
 
 /// A chat row that expands or collapses `target` when clicked.

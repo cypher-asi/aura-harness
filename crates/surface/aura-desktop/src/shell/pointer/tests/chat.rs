@@ -239,3 +239,52 @@ fn cross_is_centered(stage: &mut Stage) {
         "{cy} in {close:?} at {size}"
     );
 }
+
+#[test]
+fn the_pointer_is_a_hand_over_a_link_in_the_chat() {
+    use aura_ui::events::{MessageData, MessageRole};
+
+    let mut stage = stage();
+    stage.seed(false);
+    stage
+        .shell
+        .commands([UiCommand::ShowMessage(MessageData::new(
+            MessageRole::Assistant,
+            "Read https://example.com/docs first".to_string(),
+        ))]);
+    stage.draw();
+    let (cell, area) = (stage.shell.metrics.cell, stage.shell.grid_area());
+    let origin = stage.shell.metrics.origin(area, stage.shell.cols);
+    let bar = tab_bar::height(&stage.shell.metrics);
+    let at = |col: u16, row: u16| {
+        Point::new(
+            origin.x + (f32::from(col) + 0.5) * cell.width,
+            origin.y + (f32::from(row) + 0.5) * cell.height + bar,
+        )
+    };
+    let cells: Vec<(u16, u16)> = stage
+        .shell
+        .tabs
+        .front()
+        .tui
+        .prose_rows()
+        .iter()
+        .flat_map(|row| (row.x..row.x + row.width).map(move |x| (x, row.y)))
+        .collect();
+    let mut over_link = None;
+    let mut over_text = None;
+    for (x, y) in cells {
+        stage.shell.pointer_moved(at(x, y));
+        if stage.shell.tabs.front().tui.hovers_link() {
+            over_link.get_or_insert((x, y));
+        } else {
+            over_text.get_or_insert((x, y));
+        }
+    }
+    let (x, y) = over_link.expect("the link is under the pointer somewhere");
+    stage.shell.pointer_moved(at(x, y));
+    assert_eq!(stage.shell.cursor_icon(), CursorIcon::Pointer);
+    let (x, y) = over_text.expect("the words around it are not a link");
+    stage.shell.pointer_moved(at(x, y));
+    assert_eq!(stage.shell.cursor_icon(), CursorIcon::Default);
+}

@@ -14,7 +14,6 @@ use crate::renderer::segments::{
 use crate::renderer::text::Measure;
 use crate::renderer::MoreRows;
 use crate::Theme;
-use ratatui::text::Line;
 
 /// The lines of one chat message, whether each is prose, the copy
 /// buttons of its code blocks, and its rows that show more of a part cut
@@ -26,8 +25,8 @@ pub(super) fn message_lines(
     theme: &Theme,
     spinner: &str,
 ) -> (Laid, MoreRows) {
-    let alone = |lines| ((lines, Vec::new(), Vec::new()), MoreRows::new());
-    let with_more = |(lines, more)| ((lines, Vec::new(), Vec::new()), more);
+    let alone = |lines| (Laid::of(lines), MoreRows::new());
+    let with_more = |(lines, more)| (Laid::of(lines), more);
     if let Some(activity) = message.activity_step() {
         return with_more(activity_lines(
             activity,
@@ -48,7 +47,11 @@ pub(super) fn message_lines(
     if let Some(console) = message.boot_console() {
         let (lines, more) = boot_lines(console, message.is_expanded(), spinner, width, theme);
         let copy = boot_copy(console, width).into_iter().collect();
-        return ((lines, Vec::new(), copy), more);
+        let laid = Laid {
+            codes: copy,
+            ..Laid::of(lines)
+        };
+        return (laid, more);
     }
     let role = message.role();
     let (prompt, prompt_color, msg_color) = message_style(role, theme);
@@ -68,8 +71,8 @@ pub(super) fn message_lines(
 }
 
 /// The lines of the text a message of `role` says, whether each is prose,
-/// and the copy buttons of its code blocks: fenced code set apart from
-/// the text around it.
+/// the copy buttons of its code blocks and its links: fenced code set
+/// apart from the text around it.
 pub(super) fn content_lines(
     content: &str,
     role: MessageRole,
@@ -77,25 +80,25 @@ pub(super) fn content_lines(
     theme: &Theme,
 ) -> Laid {
     let (prompt, prompt_color, msg_color) = message_style(role, theme);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut prose = Vec::new();
-    let mut codes = Vec::new();
+    let mut laid = Laid::default();
     for (i, segment) in parse_content_segments(content).into_iter().enumerate() {
-        prose.resize(lines.len(), None);
+        let mut part = Laid::default();
         match segment {
             ContentSegment::Text(text) => {
-                prose.extend(render_text_segment(
-                    &mut lines,
+                let (prose, links) = render_text_segment(
+                    &mut part.lines,
                     &text,
                     (role, i == 0),
                     width,
                     theme,
                     measure,
-                ));
+                );
+                part.prose = prose;
+                part.links = links;
             }
             ContentSegment::CodeBlock { language, code } => {
                 if i == 0 && !prompt.is_empty() {
-                    lines.extend(prefixed_lines(
+                    part.lines.extend(prefixed_lines(
                         (prompt, prompt_color),
                         "",
                         msg_color,
@@ -103,11 +106,16 @@ pub(super) fn content_lines(
                         Measure::GRID,
                     ));
                 }
-                codes.extend(render_code_segment(
-                    &mut lines, &language, &code, width, theme,
+                part.codes.extend(render_code_segment(
+                    &mut part.lines,
+                    &language,
+                    &code,
+                    width,
+                    theme,
                 ));
             }
         }
+        laid.add(part);
     }
-    (lines, prose, codes)
+    laid
 }

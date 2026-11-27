@@ -235,7 +235,7 @@ pub(super) fn single_lines(
         place,
         (width, theme),
     );
-    ((lines, Vec::new(), Vec::new()), toggles)
+    (Laid::of(lines), toggles)
 }
 
 /// Before an inbox message folded to its `summary`.
@@ -269,7 +269,7 @@ fn inbox_lines(
         Span::styled(INBOX_PROMPT, muted),
         Span::styled(truncate_line(summary, room), muted),
     ]);
-    ((vec![line], Vec::new(), Vec::new()), vec![toggle])
+    (Laid::of(vec![line]), vec![toggle])
 }
 
 /// The rows of `message` that show more of a part cut short, `offset`

@@ -248,6 +248,7 @@ fn render_popups(frame: &mut Frame, chat: Rect, app: &mut App, theme: &Theme) {
 fn drop_covered(frame: &mut Frame, app: &mut App) {
     app.drop_covered_prose(frame.buffer_mut());
     app.drop_covered_code_copies(frame.buffer_mut());
+    app.drop_covered_links(frame.buffer_mut());
     app.drop_covered_chat(frame.buffer_mut());
     app.trim_covered_scrollbar(frame.buffer_mut());
     app.flow_mut().take_canvas_marks(frame.buffer_mut());

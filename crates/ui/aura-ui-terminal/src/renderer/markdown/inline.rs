@@ -2,25 +2,75 @@
 //!
 //! Delimiters that never close render literally, so half-streamed replies
 //! (`**still typ`) show their raw text until the closer arrives.
+//!
+//! Links are drawn in the link color, and the ones a click may open (see
+//! [`is_openable_url`]) are kept with their URL, so the chat can find
+//! them under the pointer. A web address written out in prose is a link
+//! too, without the sentence's punctuation after it (see [`bare_url`]).
 
+use super::urls::bare_url;
+use crate::app::is_openable_url;
 use crate::Theme;
 use ratatui::{
     style::{Modifier, Style},
     text::Span,
 };
+use std::sync::Arc;
+
+/// Inline markdown parsed into spans, with the links among them.
+#[derive(Debug, Default)]
+pub(crate) struct Linked {
+    pub(crate) spans: Vec<Span<'static>>,
+    /// For each span, which of `urls` it links to, if any
+    pub(crate) links: Vec<Option<usize>>,
+    /// Where each link goes
+    pub(crate) urls: Vec<Arc<str>>,
+}
+
+impl Linked {
+    /// Put `more` after these spans, its links numbered after these.
+    pub(crate) fn append(&mut self, more: Self) {
+        let offset = self.urls.len();
+        self.spans.extend(more.spans);
+        self.links
+            .extend(more.links.into_iter().map(|link| link.map(|i| i + offset)));
+        self.urls.extend(more.urls);
+    }
+
+    /// Spans that link nowhere.
+    pub(crate) fn plain(spans: Vec<Span<'static>>) -> Self {
+        Self {
+            links: vec![None; spans.len()],
+            spans,
+            urls: Vec::new(),
+        }
+    }
+}
 
 /// Parse inline markdown in `text` into styled spans layered on `base`.
 pub(crate) fn parse_inline(text: &str, base: Style, theme: &Theme) -> Vec<Span<'static>> {
+    parse_linked(text, base, theme).spans
+}
+
+/// [`parse_inline`], keeping which spans are links a click may open.
+pub(crate) fn parse_linked(text: &str, base: Style, theme: &Theme) -> Linked {
     let mut parser = Inline {
         pieces: Vec::new(),
+        urls: Vec::new(),
+        link: None,
         theme,
     };
     parser.parse(text, base);
-    parser
+    let (spans, links) = parser
         .pieces
         .into_iter()
-        .map(|(text, style)| Span::styled(text, style))
-        .collect()
+        .map(|(text, style, link)| (Span::styled(text, style), link))
+        .unzip();
+    Linked {
+        spans,
+        links,
+        urls: parser.urls,
+    }
 }
 
 /// Inline code is gray on its shaded cell, a step below the body text, so
@@ -40,13 +90,17 @@ fn emphasis_style(base: Style, modifier: Modifier, theme: &Theme) -> Style {
     }
 }
 
+/// Links are colored but not underlined: the chat underlines the one the
+/// pointer is on, so the underline says a click opens it.
 fn link_style(base: Style, theme: &Theme) -> Style {
     base.fg(theme.colors.warning)
-        .add_modifier(Modifier::UNDERLINED)
 }
 
 struct Inline<'t> {
-    pieces: Vec<(String, Style)>,
+    pieces: Vec<(String, Style, Option<usize>)>,
+    urls: Vec<Arc<str>>,
+    /// The link what is pushed now is part of
+    link: Option<usize>,
     theme: &'t Theme,
 }
 
@@ -55,10 +109,31 @@ impl Inline<'_> {
         if text.is_empty() {
             return;
         }
+        let link = self.link;
         match self.pieces.last_mut() {
-            Some((last, last_style)) if *last_style == style => last.push_str(text),
-            _ => self.pieces.push((text.to_string(), style)),
+            Some((last, last_style, last_link)) if *last_style == style && *last_link == link => {
+                last.push_str(text);
+            }
+            _ => self.pieces.push((text.to_string(), style, link)),
         }
+    }
+
+    /// A new link to `url`, when a click may open it and it is not inside
+    /// another link.
+    fn new_link(&mut self, url: &str) -> Option<usize> {
+        if self.link.is_some() || !is_openable_url(url) {
+            return None;
+        }
+        self.urls.push(Arc::from(url));
+        Some(self.urls.len() - 1)
+    }
+
+    /// Push what `push` does as part of `link`, if there is one.
+    fn push_in(&mut self, link: Option<usize>, push: impl FnOnce(&mut Self)) {
+        let outer = self.link;
+        self.link = link.or(outer);
+        push(self);
+        self.link = outer;
     }
 
     fn parse(&mut self, text: &str, style: Style) {
@@ -66,35 +141,7 @@ impl Inline<'_> {
         let mut literal_start = 0;
         let mut i = 0;
         while i < text.len() {
-            let matched = match bytes[i] {
-                b'\\' => escaped_char(text, i).map(|c| {
-                    self.push(&text[literal_start..i], style);
-                    self.push(c, style);
-                    i + 2
-                }),
-                b'`' => code_span(text, i).map(|(code, end)| {
-                    self.push(&text[literal_start..i], style);
-                    self.push(code, code_style(style, self.theme));
-                    end
-                }),
-                b'*' | b'_' | b'~' => emphasis(text, i).map(|(inner, modifier, end)| {
-                    self.push(&text[literal_start..i], style);
-                    self.parse(inner, emphasis_style(style, modifier, self.theme));
-                    end
-                }),
-                b'[' | b'!' => link(text, i).map(|link| {
-                    self.push(&text[literal_start..i], style);
-                    self.push_link(&link, style);
-                    link.end
-                }),
-                b'<' => autolink(text, i).map(|(url, end)| {
-                    self.push(&text[literal_start..i], style);
-                    self.push(url, link_style(style, self.theme));
-                    end
-                }),
-                _ => None,
-            };
-            match matched {
+            match self.inline_at(text, (i, literal_start), style) {
                 Some(end) => {
                     i = end;
                     literal_start = end;
@@ -110,23 +157,75 @@ impl Inline<'_> {
         self.push(&text[literal_start..], style);
     }
 
+    /// Push the inline element starting at `i`, after the literal text
+    /// from `literal_start`, and return where it ends; `None` when none
+    /// starts there.
+    fn inline_at(
+        &mut self,
+        text: &str,
+        (i, literal_start): (usize, usize),
+        style: Style,
+    ) -> Option<usize> {
+        let (end, element) = match text.as_bytes()[i] {
+            b'\\' => escaped_char(text, i).map(|c| (i + 2, Element::Literal(c)))?,
+            b'`' => code_span(text, i).map(|(code, end)| (end, Element::Code(code)))?,
+            b'*' | b'_' | b'~' => emphasis(text, i)
+                .map(|(inner, modifier, end)| (end, Element::Emphasis(inner, modifier)))?,
+            b'[' | b'!' => link(text, i).map(|link| (link.end, Element::Link(link)))?,
+            b'<' => autolink(text, i).map(|(url, end)| (end, Element::Url(url)))?,
+            b'h' | b'H' if self.link.is_none() => {
+                bare_url(text, i).map(|(url, end)| (end, Element::Url(url)))?
+            }
+            _ => return None,
+        };
+        self.push(&text[literal_start..i], style);
+        match element {
+            Element::Literal(c) => self.push(c, style),
+            Element::Code(code) => self.push(code, code_style(style, self.theme)),
+            Element::Emphasis(inner, modifier) => {
+                self.parse(inner, emphasis_style(style, modifier, self.theme));
+            }
+            Element::Link(link) => self.push_link(&link, style),
+            Element::Url(url) => {
+                let link = self.new_link(url);
+                let style = link_style(style, self.theme);
+                self.push_in(link, |parser| parser.push(url, style));
+            }
+        }
+        Some(end)
+    }
+
+    /// The label in the link color, then a muted ` (url)` when the URL
+    /// is not the label. Both are the one link; the parentheses are not.
     fn push_link(&mut self, link: &Link<'_>, style: Style) {
         let label_style = link_style(style, self.theme);
         if link.is_image {
             self.push("[image] ", style.fg(self.theme.colors.muted));
         }
+        let target = self.new_link(link.url);
         if link.label.is_empty() {
-            self.push(link.url, label_style);
+            self.push_in(target, |parser| parser.push(link.url, label_style));
             return;
         }
-        self.parse(link.label, label_style);
+        self.push_in(target, |parser| parser.parse(link.label, label_style));
         if !link.url.is_empty() && link.url != link.label {
-            self.push(
-                &format!(" ({})", link.url),
-                style.fg(self.theme.colors.muted),
-            );
+            let muted = style.fg(self.theme.colors.muted);
+            self.push(" (", muted);
+            self.push_in(target, |parser| parser.push(link.url, muted));
+            self.push(")", muted);
         }
     }
+}
+
+/// An inline element found in the text.
+enum Element<'a> {
+    /// An escaped character, drawn as written
+    Literal(&'a str),
+    Code(&'a str),
+    Emphasis(&'a str, Modifier),
+    Link(Link<'a>),
+    /// A URL that is its own label
+    Url(&'a str),
 }
 
 fn run_length(bytes: &[u8], start: usize) -> usize {

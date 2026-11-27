@@ -3,17 +3,22 @@
 
 use super::below::{hand_over_scroll, BelowRow};
 use super::breathing_room;
+use super::links;
 use super::live_tail::LiveTail;
-use super::prose::{pack_prose, prose_columns};
+use super::prose::{pack_prose_mapped, prose_columns, ColumnMap};
 use super::user_band::paint_user_band;
 use super::visible::{NextRow, VisibleRows};
 use crate::renderer::chat_lines::ChatLineCache;
 use crate::renderer::text::Measure;
 use crate::{
-    app::{CodeCopyHit, HoverTarget, ImageHit, ProseRow, ToggleRow, ToggleTarget},
+    app::{CodeCopyHit, HoverTarget, ImageHit, LinkHit, ProseRow, ToggleRow, ToggleTarget},
     App, Theme,
 };
 use ratatui::{buffer::Buffer, layout::Rect, style::Style, text::Line, widgets::Paragraph, Frame};
+
+/// The prose rows packed into a proportional face, by their row on
+/// screen, with where each one's columns went.
+type PackedRows = Vec<(usize, ColumnMap)>;
 
 /// How the chat's rows fell in the last frame.
 pub(super) struct ChatRows {
@@ -54,7 +59,7 @@ pub(super) fn render_chat_lines(
         (tail, hovered_activity),
         theme,
     );
-    let fade = draw_visible(frame, app, (body, padded), visible, (measure, theme));
+    let (fade, packed) = draw_visible(frame, app, (body, padded), visible, (measure, theme));
     highlight_hovered(
         frame.buffer_mut(),
         app.hover(),
@@ -62,6 +67,7 @@ pub(super) fn render_chat_lines(
         (padded, height),
         theme,
     );
+    place_links(frame.buffer_mut(), app, &layout, &packed, (padded, height));
     let RowLayout {
         image_hits,
         code_hits,
@@ -107,21 +113,21 @@ fn visible_rows(
 
 /// Draw the `visible` rows into `padded` with their prose packed and the
 /// user's messages framed, then fade the chat in while it waits; returns
-/// how far it has faded in.
+/// how far it has faded in, and where each packed row's columns went.
 fn draw_visible(
     frame: &mut Frame,
     app: &mut App,
     (body, padded): (Rect, Rect),
     visible: VisibleRows,
     (measure, theme): (Measure, &Theme),
-) -> Option<(usize, usize)> {
+) -> (Option<(usize, usize)>, PackedRows) {
     let VisibleRows {
         lines,
         prose,
         user_rows,
         ..
     } = visible;
-    let prose = draw_rows(frame, padded, (lines, prose), measure, theme);
+    let (prose, packed) = draw_rows(frame, padded, (lines, prose), measure, theme);
     app.set_prose_rows(prose);
     paint_user_band(frame.buffer_mut(), (body, padded), &user_rows, theme);
     // A chat that waited for its history fades in from the background.
@@ -131,7 +137,21 @@ fn draw_visible(
     if let Some(progress) = fade {
         crate::animation::fade_area(frame.buffer_mut(), body, progress, theme);
     }
-    fade
+    (fade, packed)
+}
+
+/// Put the links of the rows on screen where they were drawn, underline
+/// the one the pointer is on, and hand them to `app` for the pointer.
+fn place_links(
+    buffer: &mut Buffer,
+    app: &mut App,
+    layout: &RowLayout,
+    packed: &[(usize, ColumnMap)],
+    (padded, height): (Rect, usize),
+) {
+    let shown = links::place(&layout.link_hits, packed, (layout.start, height));
+    links::underline_hovered(buffer, &shown, app.hover(), (padded, layout.start));
+    app.set_chat_links(shown, buffer);
 }
 
 /// Where the chat's blocks and its live tail fall in the whole
@@ -141,6 +161,8 @@ struct RowLayout {
     image_hits: Vec<ImageHit>,
     /// Code blocks' copy buttons, `line` counted from the first row
     code_hits: Vec<CodeCopyHit>,
+    /// Rows of links, `line` counted from the first row, on the grid
+    link_hits: Vec<LinkHit>,
     /// The working line's row, which opens the turn's records
     tail_toggle: Option<ToggleRow>,
     /// Blank rows between the conversation and the live tail
@@ -172,6 +194,7 @@ fn layout_rows(
         mut toggle_rows,
         image_hits,
         code_hits,
+        link_hits,
         message_rows,
         last_prompt_row,
     } = BlockHits::collect(cache, gap);
@@ -188,6 +211,7 @@ fn layout_rows(
     RowLayout {
         image_hits,
         code_hits,
+        link_hits,
         tail_toggle,
         tail_gap,
         gap,
@@ -203,6 +227,7 @@ struct BlockHits {
     toggle_rows: Vec<ToggleRow>,
     image_hits: Vec<ImageHit>,
     code_hits: Vec<CodeCopyHit>,
+    link_hits: Vec<LinkHit>,
     /// Rows the blocks take, the gaps between them included
     message_rows: usize,
     /// First row of the latest prompt
@@ -214,6 +239,7 @@ impl BlockHits {
         let mut toggle_rows = Vec::new();
         let mut image_hits = Vec::new();
         let mut code_hits = Vec::new();
+        let mut link_hits: Vec<LinkHit> = Vec::new();
         let mut message_rows = 0;
         let mut last_prompt_row = None;
         for (i, block) in cache.blocks().enumerate() {
@@ -235,12 +261,17 @@ impl BlockHits {
                 line: message_rows + hit.line,
                 ..hit.clone()
             }));
+            // Numbered across the chat, so hovering one link lights up
+            // its rows and not another block's link of the same number.
+            let shift = (message_rows, 0, LinkHit::numbers(&link_hits));
+            link_hits.extend(block.links.iter().map(|hit| hit.clone().moved(shift)));
             message_rows += block.lines.len();
         }
         Self {
             toggle_rows,
             image_hits,
             code_hits,
+            link_hits,
             message_rows,
             last_prompt_row,
         }
@@ -284,37 +315,43 @@ fn end_padding(
         .max(room)
 }
 /// Draw `lines` into `padded`, then pack its `prose` rows; returns what
-/// the front end needs of each prose row.
+/// the front end needs of each prose row, and for each packed one, by its
+/// row in `lines`, where its columns went.
 fn draw_rows(
     frame: &mut Frame,
     padded: Rect,
     (lines, prose): (Vec<Line<'static>>, Vec<(usize, u16)>),
     measure: Measure,
     theme: &Theme,
-) -> Vec<ProseRow> {
+) -> (Vec<ProseRow>, PackedRows) {
+    let mut packed = Vec::new();
     let prose_lines: Vec<(usize, u16, Line<'static>)> = prose
         .into_iter()
         .map(|(row, indent)| (row, indent.min(padded.width), lines[row].clone()))
         .collect();
     frame.render_widget(Paragraph::new(lines), padded);
     let buffer = frame.buffer_mut();
-    prose_lines
+    let rows = prose_lines
         .into_iter()
-        .map(|(row, indent, line)| {
+        .map(|(index, indent, line)| {
             #[allow(clippy::cast_possible_truncation)]
             let row = Rect {
-                y: padded.y + row as u16,
+                y: padded.y + index as u16,
                 height: 1,
                 ..padded
             };
             let (width, code) = if measure.is_grid() {
                 prose_columns(&line, row, theme)
             } else {
-                pack_prose(buffer, &line, (row, indent), measure, theme)
+                let (columns, map) =
+                    pack_prose_mapped(buffer, &line, (row, indent), measure, theme);
+                packed.push((index, map));
+                columns
             };
             ProseRow::new(buffer, (row.x, row.y), (width, indent), code)
         })
-        .collect()
+        .collect();
+    (rows, packed)
 }
 
 /// Light up the image caption or the copy button the pointer (`hover`)

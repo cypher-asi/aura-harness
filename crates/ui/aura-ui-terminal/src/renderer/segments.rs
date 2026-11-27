@@ -1,9 +1,9 @@
 //! Text and code segment rendering for the chat panel.
 
-use super::markdown::{render_markdown_flow, wrap_spans};
+use super::markdown::{render_markdown_linked, wrap_spans};
 use super::text::{display_width, wrap_words, Measure};
 use crate::app::format::{format_partial_cost, format_tokens};
-use crate::app::{CodeCopyHit, CopyText};
+use crate::app::{CodeCopyHit, CopyText, LinkHit};
 use crate::components::{CodeBlock, MessageRole};
 use crate::events::{CallUsage, SourceUsage};
 use crate::Theme;
@@ -149,7 +149,8 @@ pub(super) const NOTICE_PROMPT: &str = "* ";
 /// Prose, the user's or the agent's flowing text, is as wide as `measure`
 /// makes it. Returns, for each added line, whether it is prose: `Some` of
 /// the columns its marker, quote bar or indent takes. Tables, rules and
-/// system messages are not.
+/// system messages are not. Returns too where the links a click opens
+/// fell, `line` counted in the added lines.
 pub(super) fn render_text_segment(
     lines: &mut Vec<Line<'_>>,
     text: &str,
@@ -157,13 +158,13 @@ pub(super) fn render_text_segment(
     width: usize,
     theme: &Theme,
     measure: Measure,
-) -> Vec<Option<u16>> {
+) -> (Vec<Option<u16>>, Vec<LinkHit>) {
     let (prompt, prompt_color, msg_color) = message_style(role, theme);
     if role == MessageRole::Assistant {
         let base_style = Style::default().fg(msg_color);
-        let (markdown, flow) = render_markdown_flow(text, width, base_style, theme, measure);
-        lines.extend(markdown);
-        return flow;
+        let (markdown, flow) = render_markdown_linked(text, width, (base_style, theme), measure);
+        lines.extend(markdown.lines);
+        return (flow, markdown.links);
     }
     let indent = " ".repeat(display_width(prompt));
     let lead = if first { prompt } else { indent.as_str() };
@@ -184,11 +185,11 @@ pub(super) fn render_text_segment(
     let plain = prefixed_lines((lead, prompt_color), text, msg_color, width, Measure::GRID);
     let prose = vec![None; plain.len()];
     lines.extend(plain);
-    prose
+    (prose, Vec::new())
 }
 
 /// A user message as markdown, `lead` before its first row and later rows
-/// indented under it. Prose columns count the lead too.
+/// indented under it. Prose and link columns count the lead too.
 fn user_markdown_lines(
     lines: &mut Vec<Line<'_>>,
     text: &str,
@@ -197,12 +198,18 @@ fn user_markdown_lines(
     width: usize,
     theme: &Theme,
     measure: Measure,
-) -> Vec<Option<u16>> {
+) -> (Vec<Option<u16>>, Vec<LinkHit>) {
     let indent = display_width(lead);
     let indent_cols = u16::try_from(indent).unwrap_or(u16::MAX);
     let base = Style::default().fg(text_color);
     let room = width.saturating_sub(indent).max(1);
-    let (mut rendered, mut flow) = render_markdown_flow(text, room, base, theme, measure);
+    let (markdown, mut flow) = render_markdown_linked(text, room, (base, theme), measure);
+    let links = markdown
+        .links
+        .into_iter()
+        .map(|hit| hit.moved((0, indent_cols, 0)))
+        .collect();
+    let mut rendered = markdown.lines;
     if rendered.is_empty() {
         rendered.push(Line::default());
         flow.push(Some(0));
@@ -221,7 +228,7 @@ fn user_markdown_lines(
         .map(|cols| cols.map(|cols| cols.saturating_add(indent_cols)))
         .collect();
     lines.extend(rendered);
-    prose
+    (prose, links)
 }
 
 fn plain_lines(text: &str, width: usize, style: Style, measure: Measure) -> Vec<Line<'static>> {

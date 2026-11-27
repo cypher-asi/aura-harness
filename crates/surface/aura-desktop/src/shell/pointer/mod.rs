@@ -340,7 +340,7 @@ impl Shell {
     }
 
     /// The pointer's shape where it is: arrows over what resizes or
-    /// drags, a hand over a panel's tab.
+    /// drags, a hand over a panel's tab or a link in the chat.
     pub fn cursor_icon(&self) -> CursorIcon {
         let hover = self.chrome.hover();
         let divider = self.pointer.dragging.or(match hover {
@@ -368,7 +368,8 @@ impl Shell {
                     | chrome::Hit::Scope(_)
                     | chrome::Hit::SideToggle
             )
-        ) {
+        ) || self.tabs.front().tui.hovers_link()
+        {
             CursorIcon::Pointer
         } else {
             CursorIcon::Default

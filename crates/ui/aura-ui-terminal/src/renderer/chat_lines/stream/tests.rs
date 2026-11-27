@@ -13,7 +13,7 @@ const REPLY: &str = "Here's what I found for **the crates**:\n\n\
 The tests pass, and I updated the README so that it says what each of \
 the frontends is for and how a session is started from either of them:\n\n\
 ```rust\nlet session = start(&options).await?;\n\n// then\nsession.run();\n```\n\n\n\
-- Both UIs share one event loop\n- Fonts are Geist Mono and Inter\n\
+- Both UIs share [one event loop](https://x.dev/loop), see https://x.dev/ui.\n- Fonts are Geist Mono and Inter\n\
 # A heading right after a list\n\
 > quoted\n\n---\n\n1. first\n2. second\r\n\r\nA line after a CRLF gap\n  \n\
 ```\nunclosed code\n";
@@ -40,9 +40,9 @@ fn at_once(content: &str, width: usize, theme: &Theme) -> Laid {
 
 /// Prose flags as the renderer reads them: lines past the end are not
 /// prose.
-fn flags((lines, prose, _): &Laid) -> Vec<Option<u16>> {
-    (0..lines.len())
-        .map(|i| prose.get(i).copied().flatten())
+fn flags(laid: &Laid) -> Vec<Option<u16>> {
+    (0..laid.lines.len())
+        .map(|i| laid.prose.get(i).copied().flatten())
         .collect()
 }
 
@@ -62,12 +62,11 @@ fn stream(content: &str, chunks: impl Iterator<Item = usize>, width: usize) {
             end += 1;
         }
         let so_far = &content[..end];
-        settled.extend(so_far, (&mut laid.0, &mut laid.1, &mut laid.2), |text| {
-            at_once(text, width, &theme)
-        });
+        settled.extend(so_far, &mut laid, |text| at_once(text, width, &theme));
         let whole = at_once(so_far, width, &theme);
-        assert_eq!(laid.0, whole.0, "lines after {so_far:?}");
-        assert_eq!(laid.2, whole.2, "copy buttons after {so_far:?}");
+        assert_eq!(laid.lines, whole.lines, "lines after {so_far:?}");
+        assert_eq!(laid.codes, whole.codes, "copy buttons after {so_far:?}");
+        assert_eq!(laid.links, whole.links, "links after {so_far:?}");
         assert_eq!(flags(&laid), flags(&whole), "prose after {so_far:?}");
     }
     assert_eq!(end, content.len(), "the chunks ran out early");
@@ -226,7 +225,7 @@ fn a_reply_streamed_is_laid_out_as_it_would_be_at_once() {
 
 #[test]
 fn a_list_of_fields_streamed_is_laid_out_as_it_would_be_at_once() {
-    let (lines, _, _) = at_once(FIELDS, 80, &Theme::cyber());
+    let lines = at_once(FIELDS, 80, &Theme::cyber()).lines;
     let blank = lines.iter().filter(|line| line.width() == 0).count();
     assert_eq!(
         blank, 3,
@@ -267,10 +266,11 @@ fn a_reply_that_was_replaced_is_laid_out_again() {
         "",
         "other\n\ntext\n\nhere",
     ] {
-        settled.extend(content, (&mut laid.0, &mut laid.1, &mut laid.2), render);
+        settled.extend(content, &mut laid, render);
         let whole = render(content);
-        assert_eq!(laid.0, whole.0, "{content:?}");
-        assert_eq!(laid.2, whole.2, "{content:?}");
+        assert_eq!(laid.lines, whole.lines, "{content:?}");
+        assert_eq!(laid.codes, whole.codes, "{content:?}");
+        assert_eq!(laid.links, whole.links, "{content:?}");
         assert_eq!(flags(&laid), flags(&whole), "{content:?}");
     }
 }
@@ -286,7 +286,7 @@ fn only_what_is_still_being_written_is_laid_out_again() {
     let mut so_far = String::new();
     for chunk in chars.chunks(12) {
         so_far.extend(chunk);
-        settled.extend(&so_far, (&mut laid.0, &mut laid.1, &mut laid.2), |text| {
+        settled.extend(&so_far, &mut laid, |text| {
             seen.borrow_mut().push(text.len());
             at_once(text, 80, &theme)
         });
@@ -294,7 +294,7 @@ fn only_what_is_still_being_written_is_laid_out_again() {
     let longest = seen.borrow().iter().copied().max().unwrap_or(0);
     assert!(reply.len() > 20_000, "{}", reply.len());
     assert!(longest < 400, "laid out {longest} bytes at once");
-    assert_eq!(laid.0, at_once(&reply, 80, &theme).0);
+    assert_eq!(laid.lines, at_once(&reply, 80, &theme).lines);
 }
 
 #[test]

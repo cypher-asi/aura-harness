@@ -70,11 +70,12 @@ fn inline_links_show_label_and_url() {
     );
     let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
     assert_eq!(text, "see the docs (https://example.com) or https://a.io");
-    assert!(has(span_style(&spans, "the docs"), Modifier::UNDERLINED));
-    assert!(has(
-        span_style(&spans, "https://a.io"),
-        Modifier::UNDERLINED
-    ));
+    // Colored, and underlined only under the pointer (see the chat).
+    for link in ["the docs", "https://a.io"] {
+        let style = span_style(&spans, link);
+        assert_eq!(style.fg, Some(theme().colors.warning), "{link}");
+        assert!(!has(style, Modifier::UNDERLINED), "{link}");
+    }
 }
 
 #[test]

@@ -1,10 +1,11 @@
 {
   "id": "01a21b6cbfcb0004",
   "title": "commit all and push",
-  "state": "running",
+  "state": "completed",
   "agent_id": "ea1470d59aed2e0cc1f49548d0dac2bdbc752181a335d6e8bd49b1cbefab366e",
   "agent_name": "Agent 1710",
   "items": [],
-  "updated_ms": 1795756444479,
+  "summary": "I committed everything and pushed it to `origin/main` as `f0ababcd`.",
+  "updated_ms": 1795756458346,
   "created_ms": 1795756441547
 }
