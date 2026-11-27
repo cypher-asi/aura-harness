@@ -112,6 +112,16 @@ impl SidePanelTab {
         }
     }
 
+    /// The name shown beside a tab drawn as an icon while the pointer is
+    /// over it, which its icon alone does not spell out.
+    #[must_use]
+    pub const fn tooltip(self) -> Option<&'static str> {
+        match self {
+            Self::Host => Some("Host"),
+            _ => None,
+        }
+    }
+
     /// Label for header bars too narrow for `label`.
     #[must_use]
     pub const fn short_label(self) -> &'static str {

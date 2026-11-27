@@ -1,5 +1,6 @@
-//! The agents panel: a CHANNELS | PROJECTS | AGENTS | BENCH | ARCHIVE
-//! header bar over the list of the app in front, one module per app.
+//! The agents panel: a CHANNELS | PROJECTS | AGENTS | ARCHIVE header bar
+//! ending in BENCH's wrench, over the list of the app in front, one module
+//! per app.
 //!
 //! Every app lays its rows out alike, so names line up from one app to
 //! the next (drawn here without the row's inset):
@@ -41,23 +42,50 @@ use crate::{
 };
 use ratatui::{layout::Rect, text::Line, widgets::Paragraph, Frame};
 
-/// Render the agents panel: a CHANNELS | PROJECTS | AGENTS | BENCH |
-/// ARCHIVE header bar over the channels, the live agents, the roster of
-/// permanent agents, the benchmarks or the archived agents.
+/// Render the agents panel: a CHANNELS | PROJECTS | AGENTS | ARCHIVE
+/// header bar ending in BENCH's wrench, over the channels, the live
+/// agents, the roster of permanent agents, the benchmarks or the archived
+/// agents.
 pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
-    let is_focused = app.focus() == PanelFocus::Swarm;
-    let hosted = app.host_chrome();
     let panel = area;
-    let (bar, area) = header::split(area, hosted);
+    let (bar, area) = header::split(area, app.host_chrome());
+    let header = agents_header(app, bar);
+    header::show(frame, app, (Pane::Agents, panel, bar), &header, theme);
+
+    let chrome = (header.focused, header.hosted);
+    if let Some(body) = render_body_block(frame, area, chrome, theme) {
+        match app.agents_tab() {
+            AgentsTab::Channels => channels::render_channels(frame, area, body, app, theme),
+            AgentsTab::Projects => projects::render_projects(frame, area, body, app, theme),
+            AgentsTab::Roster => roster::render_roster(frame, area, body, app, theme),
+            AgentsTab::Bench => bench::render_bench(frame, area, body, app, theme),
+            AgentsTab::Archive => archive::render_archive(frame, area, body, app, theme),
+        }
+    }
+    header::render_icon_tooltip(frame, bar, &header, theme);
+}
+
+/// The agents panel's header in `bar`: the labelled tabs, then BENCH's
+/// wrench in a cell of its own at the right end. Where they fell is
+/// recorded for the pointer.
+fn agents_header(app: &mut App, bar: Rect) -> PanelHeader<'static, AgentsTab> {
+    let hosted = app.host_chrome();
+    let tab = AgentsTab::ICON_TAB;
+    let icon = tab.icon();
+    let end = header::bar_end(bar, (icon, false, false), AgentsTab::layout);
     if !hosted {
-        app.set_agent_tabs_area(bar);
+        app.set_agent_tabs_area(Rect {
+            width: end.tabs,
+            ..bar
+        });
+        app.set_agent_icon_tab_area(end.icon);
     }
     let hovered = match app.hover() {
         Some(HoverTarget::AgentTab(tab)) => Some(tab),
         _ => None,
     };
-    let header = PanelHeader {
-        layout: AgentsTab::layout(bar.width),
+    PanelHeader {
+        layout: AgentsTab::layout(end.tabs),
         active: Some(app.agents_tab()),
         hovered,
         title: None,
@@ -65,21 +93,14 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
         close: None,
         expand: None,
         scope: None,
-        icon_tab: None,
-        focused: is_focused,
+        icon_tab: icon.map(|icon| header::IconTab {
+            tab,
+            icon,
+            tooltip: tab.tooltip(),
+            cell: end.icon,
+        }),
+        focused: app.focus() == PanelFocus::Swarm,
         hosted,
-    };
-    header::show(frame, app, (Pane::Agents, panel, bar), &header, theme);
-
-    let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) else {
-        return;
-    };
-    match app.agents_tab() {
-        AgentsTab::Channels => channels::render_channels(frame, area, body, app, theme),
-        AgentsTab::Projects => projects::render_projects(frame, area, body, app, theme),
-        AgentsTab::Roster => roster::render_roster(frame, area, body, app, theme),
-        AgentsTab::Bench => bench::render_bench(frame, area, body, app, theme),
-        AgentsTab::Archive => archive::render_archive(frame, area, body, app, theme),
     }
 }
 

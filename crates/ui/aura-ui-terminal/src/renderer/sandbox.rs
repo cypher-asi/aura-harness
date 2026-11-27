@@ -58,6 +58,7 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
         icon_tab: icon_tab.zip(icon).map(|(tab, icon)| header::IconTab {
             tab,
             icon,
+            tooltip: tab.tooltip(),
             cell: end.icon,
         }),
         focused: is_focused,
@@ -65,11 +66,10 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     };
     header::show(frame, app, (Pane::Side, panel, bar), &header, theme);
 
-    let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) else {
-        return;
-    };
-
-    render_tab(frame, area, body, app, theme);
+    if let Some(body) = render_body_block(frame, area, (is_focused, hosted), theme) {
+        render_tab(frame, area, body, app, theme);
+    }
+    header::render_icon_tooltip(frame, bar, &header, theme);
 }
 
 /// Record where `bar`'s tabs and the buttons at its `end` fell, for the

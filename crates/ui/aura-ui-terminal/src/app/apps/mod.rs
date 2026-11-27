@@ -32,6 +32,7 @@
 //! Each app lives in its own module; what the agents panel does with a
 //! key, a click, a hover or the wheel is handed to the app in front here.
 
+mod agents_tab;
 mod archive;
 mod bench;
 mod channel_member_chat;
@@ -40,6 +41,7 @@ mod empty;
 mod projects;
 mod roster;
 
+pub use agents_tab::AgentsTab;
 pub use archive::ArchiveRow;
 pub use bench::{
     BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice, AUTO_CLASSIFIER,
@@ -48,85 +50,10 @@ pub use bench::{
 pub(super) use channels::ChannelState;
 pub(crate) use channels::CHANNEL_MEMBER_ROWS;
 
-use super::{contains, tab_at, tab_bar::TabLayout, App, ChatTab, HoverTarget};
+use super::{contains, tab_at, App, ChatTab, HoverTarget};
 use crate::terminal::KeyResult;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
-
-/// Views of the agents panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AgentsTab {
-    /// Channels: shared conversations with a coordinator and its agents.
-    Channels,
-    /// Live agents: the ones the user talks to and the instances they spawned.
-    #[default]
-    Projects,
-    /// The roster of permanent agents that can be spawned by name.
-    Roster,
-    /// Benchmarks: the same work on two arms (Gate or a model), their
-    /// cost and how well they did.
-    Bench,
-    /// Agents moved out of the projects list, until restored.
-    Archive,
-}
-
-impl AgentsTab {
-    pub const ALL: [Self; 5] = [
-        Self::Channels,
-        Self::Projects,
-        Self::Roster,
-        Self::Bench,
-        Self::Archive,
-    ];
-
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Channels => "CHANNELS",
-            Self::Projects => "PROJECTS",
-            Self::Roster => "AGENTS",
-            Self::Bench => "BENCH",
-            Self::Archive => "ARCHIVE",
-        }
-    }
-
-    /// Label for header bars too narrow for `label`.
-    #[must_use]
-    pub const fn short_label(self) -> &'static str {
-        match self {
-            Self::Channels => "CHN",
-            Self::Projects => "PRJ",
-            Self::Roster => "AGT",
-            Self::Bench => "BEN",
-            Self::Archive => "ARC",
-        }
-    }
-
-    /// The next tab (`forward`) or the one before, wrapping, for Left / Right.
-    const fn shifted(self, forward: bool) -> Self {
-        match (self, forward) {
-            (Self::Channels, true) | (Self::Roster, false) => Self::Projects,
-            (Self::Projects, true) | (Self::Bench, false) => Self::Roster,
-            (Self::Roster, true) | (Self::Archive, false) => Self::Bench,
-            (Self::Bench, true) | (Self::Channels, false) => Self::Archive,
-            (Self::Archive, true) | (Self::Projects, false) => Self::Channels,
-        }
-    }
-
-    /// The tab Alt+`digit` brings to the front: 1 to 5, in header order.
-    #[must_use]
-    pub fn numbered(digit: char) -> Option<Self> {
-        let index = digit.to_digit(10)?.checked_sub(1)?;
-        Self::ALL.get(usize::try_from(index).ok()?).copied()
-    }
-
-    /// The tabs' cells in a header bar `width` columns wide. The renderer
-    /// draws the bar with this layout and clicks are mapped back through it.
-    #[must_use]
-    pub fn layout(width: u16) -> TabLayout<Self> {
-        TabLayout::new(Self::ALL, Self::label, Self::short_label, width)
-    }
-}
 
 /// What each agent app showed, to show again when it comes back.
 #[derive(Debug, Default)]
@@ -153,9 +80,30 @@ impl App {
         self.agents_tab
     }
 
-    /// Record where the agents panel's header bar was drawn this frame.
+    /// Record where the agents panel's header bar was drawn this frame,
+    /// up to BENCH's icon.
     pub fn set_agent_tabs_area(&mut self, area: Rect) {
         self.areas.agent_tabs = Some(area);
+    }
+
+    /// Record where BENCH's icon was drawn this frame, if it was.
+    pub(crate) fn set_agent_icon_tab_area(&mut self, area: Option<Rect>) {
+        self.areas.agent_icon_tab = area;
+    }
+
+    /// Whether a screen cell is on the agents panel's header bar, its
+    /// labelled tabs or its icon.
+    pub(super) fn on_agent_tabs(&self, column: u16, row: u16) -> bool {
+        contains(self.areas.agent_tabs, column, row)
+            || contains(self.areas.agent_icon_tab, column, row)
+    }
+
+    /// The tab whose label or icon is at a screen cell.
+    pub(super) fn agent_tab_at(&self, column: u16, row: u16) -> Option<AgentsTab> {
+        if contains(self.areas.agent_icon_tab, column, row) {
+            return Some(AgentsTab::ICON_TAB);
+        }
+        tab_at(self.areas.agent_tabs, column, row, AgentsTab::layout)
     }
 
     /// Left shows the tab before, Right the one after.
@@ -165,8 +113,8 @@ impl App {
 
     /// Clicking a tab shows it; clicking a row acts on the visible list.
     pub(super) fn click_agents_panel(&mut self, column: u16, row: u16) {
-        if contains(self.areas.agent_tabs, column, row) {
-            if let Some(tab) = tab_at(self.areas.agent_tabs, column, row, AgentsTab::layout) {
+        if self.on_agent_tabs(column, row) {
+            if let Some(tab) = self.agent_tab_at(column, row) {
                 self.show_agents_tab(tab);
             }
             return;

@@ -1,7 +1,8 @@
 //! The title bars as quads.
 
-use super::{BarLayout, Boxed, Chrome, Hit, Info, Kind};
-use crate::geom::{rgba, Color, Point, Rectangle};
+use super::glyphs::{computer, corners, hamburger, wrench};
+use super::{BarLayout, Boxed, Chrome, Hit, Info, Kind, SIDE};
+use crate::geom::{rgba, Color, Point, Rectangle, Size};
 use crate::grid::Palette;
 use crate::scene::{fill, Layers, Quad};
 use crate::tab_bar::{
@@ -10,7 +11,8 @@ use crate::tab_bar::{
     unit,
 };
 use crate::text::{Align, Face, Label, Shaping, TextSystem, LABEL_LINE_EM};
-use aura_ui_terminal::{PaneTab, SideScope};
+use aura_ui_terminal::{AgentsTab, PaneTab, SideScope};
+use unicode_width::UnicodeWidthStr;
 
 /// What every section of the bars is drawn with.
 struct Pen {
@@ -25,14 +27,12 @@ struct Pen {
 }
 
 impl Chrome {
-    /// The bars' quads, the grid starting `top` pixels down the
-    /// window.
-    pub fn quads(&self, text: &mut TextSystem, out: &mut Layers, top: f32) {
-        let Some(model) = &self.model else {
-            return;
-        };
+    /// What the bars are drawn with, the grid starting `top` pixels down
+    /// the window; `None` before there is a model.
+    fn pen(&self, top: f32) -> Option<Pen> {
+        let model = self.model.as_ref()?;
         let size = label_size(&model.metrics);
-        let pen = Pen {
+        Some(Pen {
             palette: model.palette,
             line: (model.metrics.font_size / 14.0).round().max(1.0),
             unit: unit(&model.metrics),
@@ -48,6 +48,14 @@ impl Chrome {
                 color: [0; 4],
                 on_row: false,
             },
+        })
+    }
+
+    /// The bars' quads, the grid starting `top` pixels down the
+    /// window.
+    pub fn quads(&self, text: &mut TextSystem, out: &mut Layers, top: f32) {
+        let Some(pen) = self.pen(top) else {
+            return;
         };
         for bar in &self.layout.bars {
             for boxed in &bar.boxes {
@@ -131,7 +139,58 @@ impl Chrome {
         let ink = tab_box(&mut out.under, rect, lit, &pen.palette, pen.line);
         // As wide as the window boxes' glyphs: their arm each way.
         let arm = (pen.unit * 0.55).round();
-        computer(&mut out.under, rect, (arm, pen.line), ink);
+        if tab == PaneTab::Agents(AgentsTab::Bench) {
+            wrench(&mut out.under, rect, (arm, pen.line), ink);
+        } else {
+            computer(&mut out.under, rect, (arm, pen.line), ink);
+        }
+    }
+
+    /// The name of the tab drawn as an icon under the pointer, in a box
+    /// under the icon's, their right edges lined up. It covers the grid
+    /// below the bar, so it goes in `out`, a layer painted after the rest
+    /// of the frame.
+    pub fn tooltip_quads(&self, text: &mut TextSystem, out: &mut Layers, top: f32) {
+        let Some(Hit::Tab(tab)) = self.hover else {
+            return;
+        };
+        let Some(name) = tab.tooltip() else {
+            return;
+        };
+        let icon = self
+            .layout
+            .bars
+            .iter()
+            .find_map(|bar| bar.icon_tab.filter(|&(_, icon)| icon == tab));
+        let (Some((icon, _)), Some(pen)) = (icon, self.pen(top)) else {
+            return;
+        };
+        let width = ((name.width() as f32 + 2.0 * SIDE) * pen.unit).round();
+        let gap = (pen.unit * 0.4).round().max(2.0);
+        let rect = Rectangle::new(
+            Point::new(
+                (icon.x + icon.width - width).max(0.0),
+                icon.y + icon.height + gap + pen.top,
+            ),
+            Size::new(width, icon.height),
+        );
+        let palette = pen.palette;
+        fill(
+            &mut out.under,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            palette.bg,
+        );
+        outline(&mut out.under, rect, palette.muted, pen.line);
+        let label = Label {
+            text: name,
+            color: rgba(palette.fg),
+            ..pen.plain
+        };
+        let middle = Point::new(rect.center_x(), rect.center_y());
+        text.write(&mut out.over, &label, middle);
     }
 
     /// The close box and its cross.
@@ -264,171 +323,5 @@ fn tab_box(
     } else {
         outline(out, rect, palette.faint, line);
         palette.muted
-    }
-}
-
-/// A monitor on a stand centered in `rect`: a screen `2 * arm + line`
-/// pixels wide framed in strokes `line` pixels thick, a neck under its
-/// middle and a base under that. Laid out from the box's edges like
-/// [`hamburger`], its width and height take the box's parity, so its
-/// margins match across and down.
-fn computer(out: &mut Vec<Quad>, rect: Rectangle, size: (f32, f32), ink: Color) {
-    let (arm, line) = size;
-    let mut width = 2.0 * arm + line;
-    if (rect.width - width).rem_euclid(2.0) != 0.0 {
-        width -= 1.0;
-    }
-    let mut screen = (width * 0.7).round().max(3.0 * line);
-    let neck = (arm * 0.3).round().max(line);
-    if (rect.height - (screen + neck + line)).rem_euclid(2.0) != 0.0 {
-        screen -= 1.0;
-    }
-    let left = rect.x + ((rect.width - width) / 2.0).floor();
-    let top = rect.y + ((rect.height - (screen + neck + line)) / 2.0).floor();
-    fill(out, left, top, width, line, ink);
-    fill(out, left, top + screen - line, width, line, ink);
-    fill(out, left, top, line, screen, ink);
-    fill(out, left + width - line, top, line, screen, ink);
-    // Stand pieces as wide as asked, or a pixel wider to center them.
-    let centered = |wanted: f32| wanted + (width - wanted).rem_euclid(2.0);
-    let (stem, base) = (centered(line), centered((width * 0.6).round()));
-    let (neck_y, base_y) = (top + screen, top + screen + neck);
-    fill(out, left + (width - stem) / 2.0, neck_y, stem, neck, ink);
-    fill(out, left + (width - base) / 2.0, base_y, base, line, ink);
-}
-
-/// Three bars centered in `rect`, about `arm` pixels each way from the
-/// middle, strokes `line` pixels thick. The glyph is laid out from the
-/// box's edges rather than from a rounded middle, which lands half a
-/// pixel off and then rounds a whole pixel right and down in a box of
-/// odd size; its width takes the box's parity so the margins match.
-fn hamburger(out: &mut Vec<Quad>, rect: Rectangle, size: (f32, f32), ink: Color) {
-    let (arm, line) = size;
-    let mut width = 2.0 * arm + line;
-    if (rect.width - width).rem_euclid(2.0) != 0.0 {
-        width -= 1.0;
-    }
-    let step = (arm * 0.7).round().max(2.0 * line);
-    let height = 2.0 * step + line;
-    let left = rect.x + ((rect.width - width) / 2.0).floor();
-    let top = rect.y + ((rect.height - height) / 2.0).floor();
-    for offset in [0.0, step, 2.0 * step] {
-        fill(out, left, top + offset, width, line, ink);
-    }
-}
-
-/// Four corner brackets around `middle`, `reach` pixels out, strokes
-/// `line` pixels thick: at the corners and opening inward to expand, or
-/// near the middle and opening outward to restore.
-fn corners(out: &mut Vec<Quad>, middle: Point, size: (f32, f32), restore: bool, ink: Color) {
-    let (reach, line) = size;
-    let gap = (reach * 0.3).round().max(line);
-    let (from, arm) = if restore {
-        (gap, reach - gap)
-    } else {
-        (reach, (reach * 0.7).round())
-    };
-    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-        // The bracket's corner, and the way its arms run from it.
-        let corner = Point::new(middle.x + sx * from, middle.y + sy * from);
-        let (dx, dy): (f32, f32) = if restore { (sx, sy) } else { (-sx, -sy) };
-        let span = |at: f32, dir: f32, len: f32| {
-            if dir > 0.0 {
-                (at, len)
-            } else {
-                (at - len, len)
-            }
-        };
-        let (x, w) = span(corner.x, dx, arm);
-        let (y, h) = span(corner.y, dy, line);
-        fill(out, x, y, w, h, ink);
-        let (x, w) = span(corner.x, dx, line);
-        let (y, h) = span(corner.y, dy, arm);
-        fill(out, x, y, w, h, ink);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::geom::Size;
-
-    fn ink() -> Color {
-        Color::from_rgb8(255, 255, 255)
-    }
-
-    /// Pixels between the glyph `draw` puts in a box `side` pixels wide
-    /// and tall and the box, on the left, right, top and bottom.
-    fn margins_of(side: i16, draw: impl Fn(&mut Vec<Quad>, Rectangle)) -> [i64; 4] {
-        let size = f32::from(side);
-        let rect = Rectangle::new(Point::new(10.0, 20.0), Size::new(size, size));
-        let mut out = Vec::new();
-        draw(&mut out, rect);
-        let left = out.iter().map(|q| i64::from(q.x)).min().unwrap();
-        let right = out
-            .iter()
-            .map(|q| i64::from(q.x) + i64::from(q.w))
-            .max()
-            .unwrap();
-        let top = out.iter().map(|q| i64::from(q.y)).min().unwrap();
-        let bottom = out
-            .iter()
-            .map(|q| i64::from(q.y) + i64::from(q.h))
-            .max()
-            .unwrap();
-        let side = i64::from(side);
-        [left - 10, 10 + side - right, top - 20, 20 + side - bottom]
-    }
-
-    fn margins(side: i16) -> [i64; 4] {
-        margins_of(side, |out, rect| {
-            hamburger(out, rect, (4.0, 1.0), ink());
-            assert_eq!(out.len(), 3, "three bars");
-        })
-    }
-
-    #[test]
-    fn the_computer_sits_in_the_middle_of_its_box_across_and_down() {
-        for side in [22, 23, 24, 25] {
-            for arm in [4.0, 5.0] {
-                let [left, right, top, bottom] = margins_of(side, |out, rect| {
-                    computer(out, rect, (arm, 1.0), ink());
-                    assert_eq!(out.len(), 6, "the screen's four sides, a neck, a base");
-                });
-                assert_eq!(left, right, "centered across a box of {side}");
-                assert_eq!(top, bottom, "centered down a box of {side}");
-                assert!(left > 0 && top > 0, "inside a box of {side}");
-            }
-        }
-    }
-
-    #[test]
-    fn the_computers_stand_is_centered_under_its_screen() {
-        for side in [23_u8, 24] {
-            let rect = Rectangle::new(Point::new(10.0, 20.0), Size::new(f32::from(side), 23.0));
-            let mut out = Vec::new();
-            computer(&mut out, rect, (5.0, 1.0), ink());
-            let middle = |q: &Quad| 2 * i64::from(q.x) + i64::from(q.w);
-            let screen = middle(&out[0]);
-            for piece in &out[4..] {
-                assert_eq!(middle(piece), screen, "{piece:?} under {:?}", out[0]);
-            }
-        }
-    }
-
-    #[test]
-    fn the_hamburger_sits_in_the_middle_of_an_odd_box() {
-        let [left, right, top, bottom] = margins(23);
-        assert_eq!(left, right, "centered across");
-        assert_eq!(top, bottom, "centered down");
-    }
-
-    #[test]
-    fn the_hamburger_sits_in_the_middle_of_an_even_box_across() {
-        let [left, right, top, bottom] = margins(24);
-        assert_eq!(left, right, "centered across");
-        // Three equal bars with equal gaps have an odd height, so an even
-        // box leaves one pixel more on one side.
-        assert!(top.abs_diff(bottom) <= 1, "{top} {bottom}");
     }
 }

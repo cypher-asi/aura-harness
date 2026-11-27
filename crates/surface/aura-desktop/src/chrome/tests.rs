@@ -1,5 +1,6 @@
 use super::*;
-use aura_ui_terminal::{ChatTab, RecordsTab, SidePanelTab};
+use crate::scene::Layers;
+use aura_ui_terminal::{AgentsTab, ChatTab, RecordsTab, SidePanelTab};
 use ratatui::style::Color as TermColor;
 
 fn pane(which: Pane, area: Rect, tabs: Vec<PaneTab>) -> PaneChrome {
@@ -281,6 +282,78 @@ fn hosts_icon_is_a_square_tab_box_left_of_the_star_box() {
     let mut chrome = Chrome::default();
     chrome.update(model, None);
     assert_eq!(chrome.spot(host), Some(middle));
+}
+
+/// The four panels, the agents bar listing its labelled tabs and ending
+/// in BENCH's wrench.
+fn agents_with_bench() -> (Model, PaneTab) {
+    let bench = PaneTab::Agents(AgentsTab::Bench);
+    let mut model = four_panes();
+    model.panes[0].tabs = AgentsTab::LABELLED.map(PaneTab::Agents).to_vec();
+    model.panes[0].icon_tab = Some(bench);
+    (model, bench)
+}
+
+#[test]
+fn benchs_wrench_is_a_square_tab_box_at_the_agents_bars_right_end() {
+    let (model, bench) = agents_with_bench();
+    let layout = Layout::of(&model);
+    let bar = &layout.bars[0];
+    let (icon, tab) = bar.icon_tab.expect("room for the icon box");
+    assert_eq!(tab, bench);
+    assert!(
+        (icon.width - icon.height).abs() < f32::EPSILON,
+        "square: {icon:?}"
+    );
+    let last = bar.boxes.last().expect("the tabs are drawn");
+    assert_eq!(last.kind, Kind::Tab(PaneTab::Agents(AgentsTab::Archive)));
+    assert!(last.rect.x + last.rect.width < icon.x);
+    assert!(icon.x + icon.width <= bar.rect.x + bar.rect.width);
+    assert!(
+        bar.boxes.iter().all(|boxed| boxed.kind != Kind::Tab(bench)),
+        "it has no label's box"
+    );
+    let middle = Point::new(icon.center_x(), icon.center_y());
+    assert_eq!(layout.hit(middle), Some(Hit::Tab(bench)));
+}
+
+#[test]
+fn an_icon_tab_is_named_under_it_only_while_the_pointer_is_over_it() {
+    let (model, bench) = agents_with_bench();
+    let mut chrome = Chrome::default();
+    chrome.update(model, None);
+    let middle = chrome.spot(bench).expect("drawn");
+    let tip = |chrome: &Chrome| {
+        let mut out = Layers::default();
+        crate::text::with(|text| chrome.tooltip_quads(text, &mut out, 0.0));
+        out
+    };
+    assert_eq!(tip(&chrome), Layers::default(), "nothing until hovered");
+
+    chrome.point(Some(middle));
+    assert_eq!(chrome.hover(), Some(Hit::Tab(bench)));
+    let out = tip(&chrome);
+    assert!(!out.over.is_empty(), "the name's glyphs");
+    let (icon, _) = chrome.layout.bars[0].icon_tab.expect("drawn");
+    let backdrop = out.under.first().expect("the box under the name");
+    let icon_bottom = icon.y + icon.height;
+    assert!(
+        backdrop.y as f32 > icon_bottom,
+        "{backdrop:?} under {icon:?}"
+    );
+    let right = backdrop.right() as f32;
+    assert!(
+        (right - (icon.x + icon.width)).abs() <= 1.0,
+        "{backdrop:?} {icon:?}"
+    );
+    assert!(backdrop.w as f32 > icon.width, "wider than the icon");
+
+    // A labelled tab has no name to show.
+    let archive = chrome
+        .spot(PaneTab::Agents(AgentsTab::Archive))
+        .expect("drawn");
+    chrome.point(Some(archive));
+    assert_eq!(tip(&chrome), Layers::default());
 }
 
 #[test]

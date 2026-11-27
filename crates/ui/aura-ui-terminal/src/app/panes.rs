@@ -60,6 +60,17 @@ impl PaneTab {
         }
     }
 
+    /// The name a bar shows beside the tab while the pointer is over it,
+    /// for the tabs drawn as an icon: BENCH's wrench and HOST's computer.
+    #[must_use]
+    pub const fn tooltip(self) -> Option<&'static str> {
+        match self {
+            Self::Agents(tab) => tab.tooltip(),
+            Self::Side(tab) => tab.tooltip(),
+            Self::Chat(_) | Self::Records(_) => None,
+        }
+    }
+
     const fn pane(self) -> Pane {
         match self {
             Self::Agents(_) => Pane::Agents,
@@ -80,7 +91,7 @@ pub struct PaneChrome {
     pub bar: Rect,
     pub tabs: Vec<PaneTab>,
     /// A tab drawn as its icon at the bar's end, left of the scope and
-    /// expand buttons: HOST's computer
+    /// expand buttons: HOST's computer, or BENCH's wrench
     pub icon_tab: Option<PaneTab>,
     pub active: Option<PaneTab>,
     /// Shown first, for panels without tabs

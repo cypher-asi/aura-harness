@@ -3,8 +3,7 @@
 
 use super::selection::Selection;
 use super::{
-    contains, tab_at, AgentsTab, App, AppState, DetailView, HoverTarget, InputView, PanelFocus,
-    RecordsTab,
+    contains, tab_at, App, AppState, DetailView, HoverTarget, InputView, PanelFocus, RecordsTab,
 };
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
@@ -394,9 +393,8 @@ impl App {
 
     /// Clickable item at a screen cell, using the areas from the last frame.
     fn hover_target(&self, column: u16, row: u16) -> Option<HoverTarget> {
-        if contains(self.areas.agent_tabs, column, row) {
-            return tab_at(self.areas.agent_tabs, column, row, AgentsTab::layout)
-                .map(HoverTarget::AgentTab);
+        if self.on_agent_tabs(column, row) {
+            return self.agent_tab_at(column, row).map(HoverTarget::AgentTab);
         }
         if let Some(target) = self.hovered_chat_tab(column, row) {
             return Some(target);

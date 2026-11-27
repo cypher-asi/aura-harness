@@ -15,7 +15,7 @@ use crate::app::SideScope;
 use crate::app::{AgentsTab, ChatTab, Pane, PaneChrome, PaneTab, RecordsTab, SidePanelTab};
 use crate::renderer::text::display_width;
 use crate::{App, Theme};
-pub(super) use draw::{render_panel_header, tab_style};
+pub(super) use draw::{render_icon_tooltip, render_panel_header, tab_style};
 use ratatui::{layout::Rect, style::Color, Frame};
 
 /// Rows of a framed header bar.
@@ -223,8 +223,12 @@ pub(super) struct ScopeButton {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct IconTab<T> {
     pub tab: T,
-    /// Two columns, the second blank (see [`SidePanelTab::icon`])
+    /// Two columns: HOST's computer and a blank (see
+    /// [`SidePanelTab::icon`]), or BENCH's wrench (see [`AgentsTab::icon`])
     pub icon: &'static str,
+    /// The tab's name, shown under its icon while the pointer is over it
+    /// (see [`render_icon_tooltip`])
+    pub tooltip: Option<&'static str>,
     /// Where it is drawn, from [`bar_end`]; `None` on a bar too narrow
     /// for it
     pub cell: Option<Rect>,
