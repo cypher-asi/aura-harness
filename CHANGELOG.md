@@ -7,6 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### /plan in a channel plans in a new member
+
+##### Changed
+
+- `/plan` in a channel's chat starts a planner instead of putting the
+  coordinator, which can't read the code, in plan mode: a new
+  `engineer` member of the channel, in plan mode, whose chat opens over
+  the channel's with your request (and any pasted images) as its first
+  message. It writes the plan there and builds it when you say
+  "implement" or run `/build` in its chat; Esc goes back to the
+  channel's chat. Bare `/plan`, or `/mode plan`, opens a planner that
+  waits for the request. In a channel whose agents run in the cloud,
+  the planner works on this computer, where plan mode holds.
+
 ### A cloud agent's chat shows its work as it goes
 
 ##### Fixed
