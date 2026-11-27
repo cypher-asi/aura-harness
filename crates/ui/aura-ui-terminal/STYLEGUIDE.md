@@ -67,11 +67,9 @@ themes keep working:
   failed check is an accent `▓` in the progress bar.
 - **To-dos**: `☒` done in `faint`, `▣` in progress in bold `foreground`,
   `☐` pending in `muted`, cancelled `☐` struck through in `faint`. Past
-  ten, the rest are counted on a `muted` `+N more` row. The boxes line up
-  under the `⬢` in the to-do drawer's header. The TASKS tab draws a
-  plan's todos and the agents' todo items the same way, with their boxes
-  right under their group header's fold arrow, as the drawer's sit under
-  its `⬢`. What the
+  ten, the rest are counted on a `muted` `+N more` row. The TASKS tab
+  draws a plan's todos and the agents' todo items the same way, with
+  their boxes right under their group header's fold arrow. What the
   user asked has no row: each request's items stand for it, merged per
   agent since the list carries over between requests. Only a task an
   agent handed out is indented, one level (two columns) under the todo or
@@ -94,13 +92,15 @@ themes keep working:
   is wide, so that matches panels stacked on rows that touch. The side
   columns end level with the input box; the footer sits under the Chat
   column alone.
-- **Padding**: a panel's body starts one blank row under its top border.
-  Documents (an info tab such as POLICIES, HOST or a channel's INFO, and
-  a record, file or thread opened over the chat) also keep their text
-  two columns from each side border, as far from the sides as from the
-  top. Everything else keeps its own side columns: a list's rows start a
-  blank column in and their fills run border to border, and the chat,
-  the terminal, LOG, TIME and the benchmarks keep theirs. The sections
+- **Padding**: a panel's body starts one blank row under its top border,
+  and its headings and text keep two columns from each side border, as
+  far from the sides as from the top: an info tab such as POLICIES, HOST
+  or a channel's INFO, a record, file or thread opened over the chat,
+  the chat, the terminal, the benchmarks, LOG's header, TIME's summary,
+  the headers of the to-do drawer and the queue, the benchmark panel and
+  the input box. Lists keep less: a list's rows start a blank column in
+  and their fills run border to border, and the heads over a list's
+  columns, such as LOG's and TIME's, line up with them. The sections
   under the chat (the to-do drawer, the benchmark and queue panels and
   the input box) get no blank row.
 
@@ -272,11 +272,11 @@ under a fold arrow, then the timeline, newest first.
 │                                              │
 │  ⬢ Thinking… 12s                             │
 ├──────────────────────────────────────────────┤
-│ ⬢ Working on 2 to-dos  1/2                 — │
+│  ⬢ Working on 2 to-dos  1/2               —  │
 │ ☒ Read the handler                           │
 │ ▣ Fix the redirect                           │
 ├──────────────────────────────────────────────┤
-│ →  Add a follow-up                           │
+│  →  Add a follow-up                          │
 └──────────────────────────────────────────────┘
  qwen3:4b · 23% context used · 2 calls  ● Ready
 ```

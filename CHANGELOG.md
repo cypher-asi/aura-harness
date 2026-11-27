@@ -133,11 +133,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ##### Changed
 
-- Every panel's text starts one blank row under its top border. A
-  document's text, on the INFO, HOST and POLICIES tabs and in a record,
-  file or thread opened over the chat, also sits two columns in from
-  each side. Lists, the chat, the terminal, the input box and the other
-  views keep the columns they had.
+- Every panel's text starts one blank row under its top border, and
+  headings and text sit two columns in from each side: the INFO, HOST
+  and POLICIES tabs, a record, file or thread opened over the chat, the
+  terminal, the input box, the benchmarks and the benchmark panel, LOG's
+  header, TIME's summary, and the headers of the to-do drawer and the
+  queue. Lists keep the columns they had, so a to-do's box now sits a
+  column left of the drawer's `⬢`, and the heads over LOG's and TIME's
+  columns stay lined up with them.
 - Panels no longer spell out their keys or what a click does. Lines
   such as `↑↓ scroll  ⇧←→ tabs`, `Esc close`, `click to open`,
   `(click to expand)` and `click to show the boot log` are gone, and

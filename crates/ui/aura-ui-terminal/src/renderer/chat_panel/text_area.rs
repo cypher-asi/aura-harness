@@ -1,21 +1,19 @@
 //! Where the chat's and the terminal's text sits in the panel's body, and
 //! the blank rows kept below the conversation.
 
+use crate::renderer::chrome::pad_sides;
 use ratatui::layout::Rect;
 
 /// The text area of the chat and the terminal in `area`, the body's rows
-/// below its blank top row. The terminal keeps a single column
-/// on each side, so output starts at the top left like a terminal's; the
-/// chat is inset further, stops at [`MAX_CHAT_WIDTH`] columns so long
-/// lines stay readable, then gives up [`CHAT_NARROW_PERCENT`] of that
-/// width and sits centered, with equal padding on both sides.
+/// below its blank top row. The terminal keeps to the panel's side
+/// padding, so output starts at the top left like a terminal's; the chat
+/// is inset as far, or a column on a narrow panel, stops at
+/// [`MAX_CHAT_WIDTH`] columns so long lines stay readable, then gives up
+/// [`CHAT_NARROW_PERCENT`] of that width and sits centered, with equal
+/// padding on both sides.
 pub(in crate::renderer) fn terminal_text_area(area: Rect, terminal: bool) -> Rect {
     if terminal {
-        return Rect {
-            x: area.x.saturating_add(1),
-            width: area.width.saturating_sub(2),
-            ..area
-        };
+        return pad_sides(area);
     }
     let inset = chat_inset(area.width);
     let base = area.width.saturating_sub(inset * 2).min(MAX_CHAT_WIDTH);

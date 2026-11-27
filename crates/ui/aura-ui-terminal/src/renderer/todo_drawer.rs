@@ -4,14 +4,18 @@
 //!
 //! ```text
 //! ├──────────────────────────────────────────────┤
-//! │ ⬢ Working on 4 to-dos  1/4                 — │
+//! │  ⬢ Working on 4 to-dos  1/4               —  │
 //! │ ☒ Read the parser                            │
 //! │ ▣ Write the lexer                            │
 //! │ ☐ Run the tests                              │
 //! │ +1 more                                      │
 //! ├──────────────────────────────────────────────┤
-//! │ → Add a follow-up                            │
+//! │  → Add a follow-up                           │
 //! ```
+//!
+//! The header keeps the side padding of a panel's headings, the items a
+//! list's column at the left, and neither a blank row on top: the drawer
+//! is as tall as its rows.
 //!
 //! The header gives the count, `done/total` and a toggle, `—` to fold
 //! the drawer to the header, `+` to open it. Folded, the item in
@@ -23,7 +27,7 @@
 //! The drawer records where it drew its header on the [`App`] for the
 //! mouse.
 
-use super::chrome::border_color;
+use super::chrome::{border_color, PAD_SIDE};
 use super::hud::{checklist_header, todo_line, truncate, MAX_TODO_ROWS};
 use super::input::join_divider;
 use super::text::display_width;
@@ -118,13 +122,14 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
     }
 }
 
-/// ` ⬢ Working on 3 to-dos  1/3` at the left, with the item in progress
+/// `  ⬢ Working on 3 to-dos  1/3` at the left, with the item in progress
 /// when folded, and the toggle at the right.
 fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
     let hud = app.hud();
     let working = app.state() == AppState::Processing;
     let shimmer = (working && theme.animate_spinners).then(|| app.animation_frame());
-    let mut spans = vec![Span::raw(" ")];
+    let pad = " ".repeat(usize::from(PAD_SIDE));
+    let mut spans = vec![Span::raw(pad.clone())];
     spans.extend(checklist_header(hud, theme, working, shimmer).spans);
     let (done, total) = hud.todo_progress();
     spans.push(Span::styled(
@@ -143,7 +148,7 @@ fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
     let used =
         |spans: &[Span<'_>]| -> usize { spans.iter().map(|s| display_width(&s.content)).sum() };
     // The toggle, a space before it and the closing pad.
-    let tail = display_width(toggle) + 2;
+    let tail = display_width(toggle) + 1 + pad.len();
     let current = hud
         .todos
         .iter()
@@ -159,11 +164,11 @@ fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
             ));
         }
     }
-    let fill = width.saturating_sub(used(&spans) + display_width(toggle) + 1);
+    let fill = width.saturating_sub(used(&spans) + display_width(toggle) + pad.len());
     spans.extend([
         Span::raw(" ".repeat(fill)),
         Span::styled(toggle, Style::default().fg(toggle_color)),
-        Span::raw(" "),
+        Span::raw(pad),
     ]);
     Line::from(spans)
 }
@@ -216,7 +221,7 @@ mod tests {
     /// The drawer's header: the last row with its toggle.
     fn header(rows: &[String]) -> Option<(usize, &String)> {
         rows.iter().enumerate().rev().find(|(_, row)| {
-            row.contains("to-do") && (row.contains(" — │") || row.contains(" + │"))
+            row.contains("to-do") && (row.contains(" —  │") || row.contains(" +  │"))
         })
     }
 
@@ -255,7 +260,7 @@ mod tests {
         let rows = rows(&mut app);
 
         let (at, header_row) = header(&rows).expect("header");
-        assert!(header_row.contains("│ ⬢ 3 to-dos  1/3"), "{header_row:?}");
+        assert!(header_row.contains("│  ⬢ 3 to-dos  1/3"), "{header_row:?}");
         assert!(!header_row.contains("Working"), "idle: {header_row:?}");
         assert!(rows[at - 1].contains('├'), "{:?}", rows[at - 1]);
         assert!(
@@ -312,7 +317,7 @@ mod tests {
 
         let rows = rows(&mut app);
         let (at, header_row) = header(&rows).expect("header");
-        assert!(header_row.contains(" + │"), "{header_row:?}");
+        assert!(header_row.contains(" +  │"), "{header_row:?}");
         assert!(
             header_row.contains("1/3  Write the lexer"),
             "the item in progress follows the count: {header_row:?}"

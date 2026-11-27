@@ -9,7 +9,7 @@ mod runs;
 mod summary;
 mod table;
 
-use super::chrome::{body_block, pad_top};
+use super::chrome::{body_block, pad_sides, pad_top};
 use crate::app::{BenchMode, FormField};
 use crate::{App, Theme};
 use detail::detail_lines;
@@ -41,11 +41,7 @@ pub(super) fn render_benchmarks(
     app.set_chat_width(inner.width);
     app.set_chat_text_area(inner);
     let rows = pad_top(inner);
-    let padded = Rect {
-        x: rows.x.saturating_add(1),
-        width: rows.width.saturating_sub(2),
-        ..rows
-    };
+    let padded = pad_sides(rows);
     if padded.width < 12 || padded.height == 0 {
         return;
     }

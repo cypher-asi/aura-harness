@@ -4,14 +4,15 @@
 //!
 //! ```text
 //! ├──────────────────────────────────────────────┤
-//! │ 2 Queued                                   — │
+//! │  2 Queued                                 —  │
 //! │ first queued message text, cut to fit…       │
 //! │ second queued    Send Now ⏎  ✎  ✕            │
 //! ├──────────────────────────────────────────────┤
-//! │ → Add a follow-up                            │
+//! │  → Add a follow-up                           │
 //! ```
 //!
-//! The header gives the count and a toggle, `—` to fold the panel to the
+//! The header keeps the side padding of a panel's headings, the entries
+//! a list's column at the left. The header gives the count and a toggle, `—` to fold the panel to the
 //! header, `+` to open it. Each entry is one row; the row under the
 //! pointer, or the one the keyboard is on, is lit and shows its actions.
 //! Only messages have `✎`. Past [`MAX_VISIBLE_ROWS`] entries a `+N more`
@@ -22,7 +23,7 @@
 //! [`App`] for the mouse.
 
 use super::agents::projects::DROP_RAIL;
-use super::chrome::border_color;
+use super::chrome::{border_color, PAD_SIDE};
 use super::hud::truncate;
 use super::input::join_divider;
 use super::text::display_width;
@@ -133,16 +134,17 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
     app.set_queue_areas(areas);
 }
 
-/// ` 2 Queued` at the left and the toggle at the right.
+/// `  2 Queued` at the left and the toggle at the right.
 fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
-    let count = format!(" {} Queued", app.queue().len());
+    let pad = " ".repeat(usize::from(PAD_SIDE));
+    let count = format!("{pad}{} Queued", app.queue().len());
     let toggle = if app.queue_collapsed() { "+" } else { "—" };
     let toggle_color = if app.queue_hover() == Some(QueueSpot::Header) {
         theme.colors.foreground
     } else {
         theme.colors.muted
     };
-    let fixed = display_width(&count) + display_width(toggle) + 1;
+    let fixed = display_width(&count) + display_width(toggle) + pad.len();
     let fill = usize::from(width).saturating_sub(fixed);
     Line::from(vec![
         Span::styled(
@@ -153,7 +155,7 @@ fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
         ),
         Span::raw(" ".repeat(fill)),
         Span::styled(toggle, Style::default().fg(toggle_color)),
-        Span::raw(" "),
+        Span::raw(pad),
     ])
 }
 
@@ -342,7 +344,7 @@ mod tests {
         let rows = rows(&mut app);
 
         let (header, header_row) = row_with(&rows, "3 Queued").expect("header");
-        assert!(header_row.contains(" — │"), "{header_row:?}");
+        assert!(header_row.contains(" —  │"), "{header_row:?}");
         let (first, _) = row_with(&rows, "first message").expect("first row");
         let (second, _) = row_with(&rows, "second message").expect("second row");
         let (third, _) = row_with(&rows, "/compact").expect("third row");
@@ -374,7 +376,7 @@ mod tests {
         let rows = rows(&mut app);
 
         let (_, header) = row_with(&rows, "1 Queued").expect("header");
-        assert!(header.contains(" + │"), "{header:?}");
+        assert!(header.contains(" +  │"), "{header:?}");
         assert!(row_with(&rows, "first message").is_none());
     }
 

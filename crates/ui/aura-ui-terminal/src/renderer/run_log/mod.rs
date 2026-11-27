@@ -12,7 +12,7 @@ mod body;
 mod header;
 mod rows;
 
-use super::chrome::{body_block, pad_top};
+use super::chrome::{body_block, pad_top, PAD_SIDE};
 use crate::animation::fade_in;
 use crate::app::run_log::{LogPanel, LogState};
 use crate::{App, Theme};
@@ -54,8 +54,11 @@ const KIND_WIDTH: usize = 9;
 /// wrong lines up down the tab.
 const GUTTER: usize = 2;
 
-/// Lines above the panels: the header's three and the column heads.
-const TOP_LINES: u16 = 4;
+/// Lines of the header: the run's status and title, its totals, a rule.
+const HEADER_LINES: u16 = 3;
+
+/// Lines above the panels: the header's and the column heads.
+const TOP_LINES: u16 = HEADER_LINES + 1;
 
 /// Draw the LOG tab in `area`, the chat panel below its header bar.
 pub(super) fn render_run_log(
@@ -87,7 +90,7 @@ pub(super) fn render_run_log(
         return;
     };
 
-    let (mut top, button) = header_lines(state, view, padded, spinner, theme);
+    let (mut top, button) = header_lines(state, view, heading_area(padded), spinner, theme);
     top.push(column_heads(width, theme));
     let (mut lines, owners, selected_line) = document(state, width, spinner, theme);
     if let Some(progress) = fade {
@@ -133,13 +136,32 @@ fn reset_chat(
     }
 }
 
-/// Draw the header and column heads on top of `padded`; returns the rect
-/// under them, for the panels.
-fn draw_top(frame: &mut Frame, padded: Rect, top: Vec<Line<'static>>) -> Rect {
+/// Where the header goes in `padded`, the panels' columns: inside a
+/// heading's side padding, a column further in.
+fn heading_area(padded: Rect) -> Rect {
+    Rect {
+        x: padded.x.saturating_add(PAD_SIDE - 1),
+        width: padded.width.saturating_sub(2 * (PAD_SIDE - 1)),
+        ..padded
+    }
+}
+
+/// Draw the header and, over the panels' columns, the column heads on
+/// top of `padded`; returns the rect under them, for the panels.
+fn draw_top(frame: &mut Frame, padded: Rect, mut top: Vec<Line<'static>>) -> Rect {
+    let heads = top.split_off(usize::from(HEADER_LINES).min(top.len()));
     frame.render_widget(
         Paragraph::new(top),
         Rect {
-            height: TOP_LINES,
+            height: HEADER_LINES,
+            ..heading_area(padded)
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(heads),
+        Rect {
+            y: padded.y + HEADER_LINES,
+            height: TOP_LINES - HEADER_LINES,
             ..padded
         },
     );

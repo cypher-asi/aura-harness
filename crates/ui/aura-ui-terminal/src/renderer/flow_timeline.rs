@@ -7,11 +7,15 @@
 //!  ▾ ✗ coding/fix-shell-bug A 2/2 · B 1/2  ────────────────     $0.41  2m40s
 //!      ✓ a-1 gate              ┃━━◆━━━┃━━┄┄                     $0.08  1m02s ✓
 //!      ✗ b-1 opus              ┃━━━━━━━━━━━━━━━✗━━━━            $0.21  2m40s ✗
-//!  b-1 · opus · 3 turns · 41 calls · $0.21 · 2m40s · check failed
-//!  turn 2 of 3 · run the tests again · 1m10s
+//!   b-1 · opus · 3 turns · 41 calls · $0.21 · 2m40s · check failed
+//!   turn 2 of 3 · run the tests again · 1m10s
 //! ```
+//!
+//! The rows and the heads over their columns keep a list's column at the
+//! left; the lines under them, and what an empty timeline says, keep the
+//! side padding of a panel's text.
 
-use super::chrome::{render_scrollbar, ScrollView};
+use super::chrome::{pad_sides, render_scrollbar, ScrollView};
 use super::graph::status_glyph;
 use super::text::display_width;
 use crate::app::flow::timeline::{MarkKind, TimelineRow, TimelineView, TurnSpan};
@@ -269,7 +273,8 @@ impl Draw<'_> {
             } else {
                 "Nothing recorded yet."
             };
-            self.text(inner.x + 1, view.rows_top, text, inner.width, self.muted());
+            let room = pad_sides(inner);
+            self.text(room.x, view.rows_top, text, room.width, self.muted());
         }
     }
 
@@ -277,10 +282,10 @@ impl Draw<'_> {
     fn footer(&mut self, app: &App, inner: Rect) {
         let (first, second) = footer_lines(app);
         let y = inner.bottom() - 2;
-        let width = inner.width.saturating_sub(2);
+        let room = pad_sides(inner);
         let style = Style::default().fg(self.theme.colors.foreground);
-        self.text(inner.x + 1, y, &first, width, style);
-        self.text(inner.x + 1, y + 1, &second, width, self.muted());
+        self.text(room.x, y, &first, room.width, style);
+        self.text(room.x, y + 1, &second, room.width, self.muted());
     }
 
     /// The header: `agents`, the time from the run's start along the bars,

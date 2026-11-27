@@ -2,12 +2,12 @@
 //! inside the border, the [`Body`] that holds the tab's rows and the
 //! scrollbar on its right border.
 //!
-//! Every panel keeps [`PAD_TOP`] blank rows under its top border. Text
-//! that is not a list, an info tab's document or a record, file or thread
-//! opened over the chat, also keeps [`PAD_SIDE`] blank columns inside
-//! each side. A list's rows run from one border to the other, so a
-//! selected or hovered row's fill meets them, and keep their own blank at
-//! the left ([`ROW_INSET`](crate::components::ROW_INSET)).
+//! Every panel keeps [`PAD_TOP`] blank rows under its top border, and its
+//! headings and text keep [`PAD_SIDE`] blank columns inside each side. A
+//! list's rows run from one border to the other, so a selected or hovered
+//! row's fill meets them, and keep their own blank at the left
+//! ([`ROW_INSET`](crate::components::ROW_INSET)), as do the heads over
+//! the columns of a list.
 
 use crate::Theme;
 use ratatui::{
@@ -21,9 +21,9 @@ use ratatui::{
 /// Rows a panel keeps blank under its top border.
 pub(super) const PAD_TOP: u16 = 1;
 
-/// Columns a document's text keeps blank inside each side border. A cell
-/// is about twice as tall as it is wide, so two columns look as wide as
-/// the blank row on top.
+/// Columns a panel's headings and text keep blank inside each side
+/// border. A cell is about twice as tall as it is wide, so two columns
+/// look as wide as the blank row on top.
 pub(super) const PAD_SIDE: u16 = 2;
 
 /// `inner` below its blank top row, where a panel's rows go. A body under
@@ -39,7 +39,7 @@ pub(super) const fn pad_top(inner: Rect) -> Rect {
     }
 }
 
-/// `area` inside its blank side columns, where a document's text goes. An
+/// `area` inside its blank side columns, where headings and text go. An
 /// area too narrow for them keeps its columns.
 pub(super) const fn pad_sides(area: Rect) -> Rect {
     if area.width <= 2 * PAD_SIDE {
@@ -53,7 +53,7 @@ pub(super) const fn pad_sides(area: Rect) -> Rect {
 }
 
 /// `inner` inside the blank row on top and the blank columns at the
-/// sides, where a document's text goes.
+/// sides, where headings and text go.
 pub(super) const fn padded(inner: Rect) -> Rect {
     pad_sides(pad_top(inner))
 }

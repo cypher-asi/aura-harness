@@ -5,7 +5,7 @@
 //! ```text
 //! │ ...                                  │
 //! ├──────────────────────────────────────┤
-//! │ →  Add a follow-up                   │
+//! │  →  Add a follow-up                  │
 //! └──────────────────────────────────────┘
 //! ```
 //!
@@ -16,7 +16,7 @@
 //! before it:
 //!
 //! ```text
-//! │ →  Add a follow-up            ■ Stop │
+//! │  →  Add a follow-up          ■ Stop  │
 //! ```
 
 mod spans;
@@ -42,8 +42,9 @@ use ratatui::{
 /// Rows the box's border adds to the rows of text: only the bottom one,
 /// since the Chat body's bottom border sits on top of the text.
 pub(super) const BOX_ROWS: u16 = 1;
-/// Blank columns inside the border on each side of the text.
-const PAD: u16 = 1;
+/// Blank columns inside the border on each side of the text, as in the
+/// panels.
+const PAD: u16 = super::chrome::PAD_SIDE;
 /// Prompt before a chat message.
 const CHAT_PROMPT: &str = "→ ";
 /// Most rows the input grows to; past this it scrolls with the cursor,
