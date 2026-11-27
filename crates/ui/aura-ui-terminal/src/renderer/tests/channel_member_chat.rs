@@ -74,17 +74,19 @@ fn test_a_member_chat_is_named_in_the_chat_bar_and_its_close_button_goes_back() 
     assert!(!rows[bar].contains('✕'), "{:?}", rows[bar]);
 }
 
+/// The chat's bar as the hosting front end gets it to draw.
+fn chat_bar(app: &crate::App) -> crate::app::PaneChrome {
+    app.pane_chrome()
+        .iter()
+        .find(|chrome| chrome.pane == crate::app::Pane::Chat)
+        .cloned()
+        .expect("the chat's bar")
+}
+
 #[test]
 fn test_a_hosted_member_chat_bar_is_closable() {
     use crate::app::{Pane, PaneTab, SidePanelTab};
     use crossterm::event::{KeyCode, KeyEvent};
-    let chat_bar = |app: &crate::App| {
-        app.pane_chrome()
-            .iter()
-            .find(|chrome| chrome.pane == Pane::Chat)
-            .cloned()
-            .expect("the chat's bar")
-    };
     let (mut app, _rx) = channels_app_with_events();
     app.set_host_chrome(true);
     render_rows(&mut app, 140);
@@ -142,6 +144,32 @@ fn click_the_member_chat_close_button(app: &mut crate::App) {
         row: close.y,
         modifiers: KeyModifiers::empty(),
     });
+}
+
+/// Opening a member's chat from MEMBERS leaves the keys there, and the
+/// chat's bar is lit as its body is: only while the chat has them.
+#[test]
+fn test_a_member_chat_bar_is_lit_only_while_the_chat_has_the_focus() {
+    use crate::app::{Pane, PanelFocus};
+    let colors = test_theme().colors;
+    let edge = |app: &mut crate::App| {
+        let buffer = render_buffer(app, 140);
+        let row = row_of(&buffer, "WK7 · subagent · #zode");
+        let (_, style) = find_cell(&buffer, row, "│ Worker").expect("the bar's left edge");
+        style.fg
+    };
+    let (mut app, _rx) = worker_chat_app();
+    assert_eq!(app.focus(), PanelFocus::Sandbox, "opened from MEMBERS");
+    assert_eq!(edge(&mut app), Some(colors.faint));
+    app.focus_pane(Pane::Chat);
+    assert_eq!(edge(&mut app), Some(colors.success));
+
+    app.set_host_chrome(true);
+    render_rows(&mut app, 140);
+    assert!(chat_bar(&app).focused);
+    app.focus_pane(Pane::Side);
+    render_rows(&mut app, 140);
+    assert!(!chat_bar(&app).focused);
 }
 
 #[test]
