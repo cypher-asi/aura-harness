@@ -1,0 +1,11 @@
+{
+  "id": "01a21b331bbf0000",
+  "title": "okay test if setup correctly now",
+  "state": "completed",
+  "agent_id": "ea1470d59aed2e0cc1f49548d0dac2bdbc752181a335d6e8bd49b1cbefab366e",
+  "agent_name": "Agent 1710",
+  "items": [],
+  "summary": "The local files look right. Next I'll check that GitHub accepts the key by signing an App token and calling the API. The token is never printed.",
+  "updated_ms": 1795752697427,
+  "created_ms": 1795752663999
+}

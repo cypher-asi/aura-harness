@@ -1,7 +1,7 @@
 {
   "id": "01a219bff60e0024",
   "title": "Repo: /home/n3o/code/aura-harness (Rust workspace). Follow `.cursor/rules.md`: no warnings, rustfmt, clippy -D warnings…",
-  "state": "running",
+  "state": "open",
   "agent_id": "6f532594d584ac9f015396992f75e107b1f0e4dbb252b263e40baae872df6388",
   "agent_name": "rust-engineer #194",
   "assignee": "rust-engineer",

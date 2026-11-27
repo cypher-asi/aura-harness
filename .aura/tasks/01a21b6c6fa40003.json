@@ -1,0 +1,13 @@
+{
+  "id": "01a21b6c6fa40003",
+  "title": "In the Rust repo at /home/n3o/code/aura-harness, find how chat messages are rendered in the desktop app (crates/surface…",
+  "state": "running",
+  "agent_id": "8cb5622641bcef32d2979dfc031e197a3ab40cac335cb3b497cadd53108e3206",
+  "agent_name": "explorer #70",
+  "assignee": "explorer",
+  "parent": "01a21b6c4eee0002",
+  "items": [],
+  "updated_ms": 1795756421028,
+  "created_ms": 1795756421028,
+  "tool_use_id": "toolu_01DmhAza4Xn94SFcAfKDZz2z"
+}

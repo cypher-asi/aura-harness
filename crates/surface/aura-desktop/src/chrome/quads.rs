@@ -212,11 +212,11 @@ impl Chrome {
         corners(&mut out.under, middle, (reach, pen.line), expanded, ink);
     }
 
-    /// The hamburger box under the window's close box.
+    /// The hamburger glyph under the window's close box, drawn bare with
+    /// no outline around its box; the pointer only brightens its ink.
     fn side_toggle_quads(&self, pen: &Pen, mut rect: Rectangle, out: &mut Layers) {
         rect.y += pen.top;
-        let (edge, ink) = self.box_colors(pen, Hit::SideToggle);
-        outline(&mut out.under, rect, edge, pen.line);
+        let (_, ink) = self.box_colors(pen, Hit::SideToggle);
         // As wide as the window boxes' glyphs: their arm each way.
         let arm = (pen.unit * 0.55).round();
         hamburger(&mut out.under, rect, (arm, pen.line), ink);

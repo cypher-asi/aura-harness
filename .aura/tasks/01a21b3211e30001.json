@@ -1,0 +1,11 @@
+{
+  "id": "01a21b3211e30001",
+  "title": "private key is stored here: /home/n3o/Downloads/cypher-asi-aura.2026-11-26.private-key.pem, mv into correct location.",
+  "state": "completed",
+  "agent_id": "ea1470d59aed2e0cc1f49548d0dac2bdbc752181a335d6e8bd49b1cbefab366e",
+  "agent_name": "Agent 1710",
+  "items": [],
+  "summary": "I couldn't move the key. My sandbox doesn't allow writes to `~/.aura`, even though you own that folder (`touch ~/.aura/.probe` was also refused). Nothing changed: the key is still in `~/Downloads`. I didn't put it inside the repo instead, because `git_commit` stages everything, so it could end up committed.",
+  "updated_ms": 1795752609834,
+  "created_ms": 1795752595939
+}

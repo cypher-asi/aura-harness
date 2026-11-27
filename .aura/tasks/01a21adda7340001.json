@@ -1,0 +1,11 @@
+{
+  "id": "01a21adda7340001",
+  "title": "remove border around hamburger menu top right",
+  "state": "completed",
+  "agent_id": "c402688b740fbe9c0ed4e62de4431e30b732b6e0f85bbfce48e398065c0d27c3",
+  "agent_name": "Agent 1709",
+  "items": [],
+  "summary": "I removed the border around the hamburger button in the top-right corner of the desktop app. Only the three bars are drawn now, and they still get brighter when you point at it. Clicking still works the same. The chrome tests and clippy both pass.",
+  "updated_ms": 1795747177543,
+  "created_ms": 1795747063604
+}

@@ -1,0 +1,11 @@
+{
+  "id": "01a21b2bbb880000",
+  "title": "what is required to set github token for cloud vm",
+  "state": "completed",
+  "agent_id": "ea1470d59aed2e0cc1f49548d0dac2bdbc752181a335d6e8bd49b1cbefab366e",
+  "agent_name": "Agent 1710",
+  "items": [],
+  "summary": "Cloud VMs don't use a personal GitHub token, so `GITHUB_TOKEN` / `GH_TOKEN` won't work there. The hub uses a **GitHub App** instead. For each repo, it creates a short-lived token that only works on that one repo and hands it to the machine. The machine itself only holds a stand-in value, never the real token.",
+  "updated_ms": 1795752206038,
+  "created_ms": 1795752180616
+}
