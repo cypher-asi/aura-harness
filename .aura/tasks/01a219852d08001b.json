@@ -1,0 +1,11 @@
+{
+  "id": "01a219852d08001b",
+  "title": "COO1: Polish channel-ui-port per REV68",
+  "state": "completed",
+  "agent_id": "57e0452dff06b2c0ca619d41fd0cf343258320fcea5702990f8c887be474dad3",
+  "agent_name": "rust-engineer #192",
+  "items": [],
+  "summary": "Now the Esc test: I'll split it so each test claims only what it proves, and extend the fallback test to cover the doc's claims.",
+  "updated_ms": 1795724695081,
+  "created_ms": 1795724487944
+}
