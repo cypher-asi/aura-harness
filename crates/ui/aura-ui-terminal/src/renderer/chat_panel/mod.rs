@@ -49,10 +49,7 @@ pub(super) fn render_chat_panel(frame: &mut Frame, area: Rect, app: &mut App, th
     // A view over the body draws it focused; a member's chat is the chat.
     let named = detail_header(app, theme)
         .map(|named| (named, true))
-        .or_else(|| {
-            member_chat_header(app, theme)
-                .map(|named| (named, is_focused || std::env::var_os("OLD_FOCUS").is_some()))
-        });
+        .or_else(|| member_chat_header(app, theme).map(|named| (named, is_focused)));
     if let Some(((title, info), focused)) = named {
         render_detail_bar(frame, app, (panel, bar), (&title, info), focused, theme);
     } else {
