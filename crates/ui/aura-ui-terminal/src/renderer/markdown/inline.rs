@@ -90,10 +90,12 @@ fn emphasis_style(base: Style, modifier: Modifier, theme: &Theme) -> Style {
     }
 }
 
-/// Links are colored but not underlined: the chat underlines the one the
-/// pointer is on, so the underline says a click opens it.
+/// Links are gray (`muted`), like the other clickable text, and not
+/// underlined: the chat underlines the one the pointer is on, so the
+/// underline says a click opens it. A label's ` (url)` is part of the
+/// same link and shares its gray.
 fn link_style(base: Style, theme: &Theme) -> Style {
-    base.fg(theme.colors.warning)
+    base.fg(theme.colors.muted)
 }
 
 struct Inline<'t> {
