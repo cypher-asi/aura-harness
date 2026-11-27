@@ -9,8 +9,9 @@
 //! window has an expand box left of it. A panel whose lists can show the
 //! whole project's items rather than the active agent's ends in a `*`
 //! box, filled like a shown tab while it is on, left of its expand box.
-//! A tab shown as its icon, HOST's computer, has a square box left of
-//! that, lit as the other tabs are.
+//! A tab shown as its icon, HOST's computer or BENCH's wrench, has a
+//! square box left of that, lit as the other tabs are, and shows its name
+//! in a box under it while the pointer is over it.
 //!
 //! The dividers between panels live here too: bands over the gap between
 //! two panels and the border right of it, which drag to move the border.
@@ -20,6 +21,7 @@
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
 
+mod glyphs;
 mod layout;
 mod quads;
 

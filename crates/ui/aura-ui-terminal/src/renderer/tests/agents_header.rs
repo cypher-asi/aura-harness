@@ -12,11 +12,14 @@ fn test_agents_header_is_a_bar_of_equal_tabs() {
         } else {
             "CHN"
         };
-        let (tabs, widths) = header_bar(&rows, first);
+        let (tabs, cells) = header_bar(&rows, first);
+        // The last cell is BENCH's wrench; the labelled tabs lay out in
+        // the bar up to the divider before it.
+        let widths = &cells[..cells.len() - 1];
         let bar_width = widths.iter().sum::<usize>() + widths.len() + 1;
         let layout = AgentsTab::layout(u16::try_from(bar_width).unwrap());
         let tab_order: Vec<AgentsTab> = layout.cells.iter().map(|cell| cell.tab).collect();
-        assert_eq!(tab_order, AgentsTab::ALL);
+        assert_eq!(tab_order, AgentsTab::LABELLED);
         let order: Vec<Option<usize>> = layout
             .cells
             .iter()
@@ -30,7 +33,7 @@ fn test_agents_header_is_a_bar_of_equal_tabs() {
         );
         assert_eq!(
             widths.len(),
-            AgentsTab::ALL.len(),
+            AgentsTab::LABELLED.len(),
             "the tabs fill the bar: {widths:?}"
         );
         let (min, max) = (widths.iter().min(), widths.iter().max());

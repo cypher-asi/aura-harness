@@ -184,6 +184,41 @@ fn draw_icon_tab<T: Copy + PartialEq>(
     buf.set_string(x, cell.y, icon.icon, style);
 }
 
+/// The name of `header`'s icon tab while the pointer is over it, on the
+/// row under `bar` with its right end under the icon's: shaded as a
+/// hovered button, over whatever the panel's body drew there, so it is
+/// drawn after the body. A bar the front end draws shows its own.
+pub(in crate::renderer) fn render_icon_tooltip<T: Copy + PartialEq>(
+    frame: &mut Frame,
+    bar: Rect,
+    header: &PanelHeader<'_, T>,
+    theme: &Theme,
+) {
+    let Some(icon) = header
+        .icon_tab
+        .filter(|icon| header.hovered == Some(icon.tab))
+    else {
+        return;
+    };
+    let (Some(cell), Some(name)) = (icon.cell, icon.tooltip) else {
+        return;
+    };
+    let buf = frame.buffer_mut();
+    let row = bar.bottom();
+    if header.hosted || row >= buf.area.bottom() {
+        return;
+    }
+    let text = format!(" {name} ");
+    let width = u16::try_from(display_width(&text))
+        .unwrap_or(u16::MAX)
+        .min(cell.right().saturating_sub(bar.x));
+    let tip = Rect::new(cell.right().saturating_sub(width), row, width, 1);
+    let style = Style::default()
+        .bg(theme.colors.surface_hover)
+        .fg(theme.colors.foreground);
+    draw_centered(buf, tip, &text, style);
+}
+
 /// The info cell, less the columns of the buttons beside it.
 fn draw_info_cell<T>(
     buf: &mut Buffer,

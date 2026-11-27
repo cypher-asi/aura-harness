@@ -302,6 +302,7 @@ fn side_header(
         icon_tab: Some(IconTab {
             tab: SidePanelTab::Host,
             icon: SidePanelTab::Host.icon().unwrap(),
+            tooltip: SidePanelTab::Host.tooltip(),
             cell: end.icon,
         }),
         focused: false,

@@ -43,8 +43,10 @@ pub struct PanelAreas {
     pub agent_rows: Option<Rect>,
     /// "+ New project", pinned to the bottom of the agents panel
     pub new_project_row: Option<Rect>,
-    /// Header bar of the agents panel
+    /// Header bar of the agents panel, up to its BENCH icon
     pub agent_tabs: Option<Rect>,
+    /// BENCH's icon, at the right end of the agents panel's header bar
+    pub agent_icon_tab: Option<Rect>,
     /// Rows of the roster inside the agents panel
     pub definition_rows: Option<Rect>,
     /// "+ New agent", pinned to the bottom of the agents panel

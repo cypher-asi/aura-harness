@@ -11,6 +11,7 @@
 //!
 //! Every background, line and shape of the frame comes before any of its
 //! text: text is never covered by the background of the row below it.
+//! A tooltip comes after all of it, so it covers the text under it.
 
 // Cell coordinates become pixel positions.
 #![allow(clippy::cast_precision_loss)]
@@ -87,6 +88,8 @@ pub struct Painter {
     rows: RowCache,
     basis: Option<Basis>,
     frame: Layers,
+    /// What covers the rest of the frame, text included: a tooltip
+    top: Layers,
     scratch: Layers,
     scene: Scene,
     built: usize,
@@ -118,6 +121,8 @@ impl Painter {
         );
         self.scene.quads.extend_from_slice(&self.frame.under);
         self.scene.quads.extend_from_slice(&self.frame.over);
+        self.scene.quads.extend_from_slice(&self.top.under);
+        self.scene.quads.extend_from_slice(&self.top.over);
         &self.scene
     }
 
@@ -140,6 +145,7 @@ impl Painter {
         self.rebase(metrics, palette, origin.x, text);
 
         self.frame.clear();
+        self.top.clear();
         view.bar.quads(text, &mut self.frame);
 
         // Rows start on whole pixels: the origin and the bar are whole,
@@ -159,6 +165,7 @@ impl Painter {
             canvas.quads(brush.text, metrics, grid, &mut self.frame);
         }
         view.chrome.quads(brush.text, &mut self.frame, bar);
+        view.chrome.tooltip_quads(brush.text, &mut self.top, bar);
 
         let on_grid = |at: &Position| at.x < view.cols && at.y < view.rows;
         if let Some(at) = view.cursor.filter(on_grid) {

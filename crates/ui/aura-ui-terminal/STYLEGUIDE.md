@@ -189,6 +189,16 @@ their glyphs, and on a bar narrower still `⤢` goes.
 │ SBX │REPO │ PRC │TRACE│TASKS│ 🖥  │ * │ ⤢ │
 ```
 
+The agents panel's bar ends the same way in BENCH, drawn as its icon
+`🔧` in a cell of its own against the border, after ARCHIVE. While the
+pointer is over an icon tab, its name (`Bench`, `Host`) shows on the row
+under the bar, right-aligned under the icon and shaded like a hovered
+button.
+
+```text
+│ CHN │ PRJ │AGT │ARC │ 🔧 │
+```
+
 ### Panel Bodies
 
 Below its header bar every panel draws its tab in the same body
@@ -425,4 +435,7 @@ the focused active box is filled with `selection`, boxes at rest are
 outlined in `faint`, hovered ones in `muted`, and the busy bar under a
 window tab is the status accent. It draws `⬢ ☐ ☒ ▣` itself, since Geist
 Mono has no glyphs for them, and HOST's `🖥` as a square box left of the
-`*` box with a screen on a stand centered in it, across and down.
+`*` box with a screen on a stand centered in it, across and down, and
+BENCH's `🔧` as a square box at the agents bar's end with an upright
+open-end wrench centered in it. Hovering either shows its name in a box
+under it, over the grid.

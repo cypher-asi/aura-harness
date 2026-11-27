@@ -18,6 +18,7 @@ use support::*;
 mod agent_codes;
 mod agent_commands;
 mod agents_header;
+mod bench_icon;
 mod channel_member_chat;
 mod channel_members;
 mod channel_side_toggle;
