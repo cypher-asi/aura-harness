@@ -109,6 +109,16 @@ impl AgentHooks {
             .filter(|id| host.is_remote(*id))
     }
 
+    /// What `list_agents` says of `target`, an agent another node holds
+    /// that the caller's tree reaches.
+    fn remote_peer(&self, host: &HostInner, target: &str) -> Option<serde_json::Value> {
+        let id = Self::remote_target(host, target)?.to_hex();
+        let root = host.root_of(self.caller).unwrap_or(self.caller);
+        host.remote_peers(root)
+            .into_iter()
+            .find(|peer| peer["agent_id"].as_str() == Some(id.as_str()))
+    }
+
     fn unknown(target: &str) -> String {
         format!("unknown agent '{target}'; call list_agents to see the agents you can reach")
     }
@@ -254,6 +264,9 @@ impl AgentReadHook for AgentHooks {
             if let Some(info) = host.info(target) {
                 return Ok(info.to_json());
             }
+        }
+        if let Some(peer) = self.remote_peer(&host, target_agent_id) {
+            return Ok(peer);
         }
         match self.env().and_then(|env| env.remote_read) {
             Some(remote) => remote.snapshot(target_agent_id).await,

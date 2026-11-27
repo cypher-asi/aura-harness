@@ -32,11 +32,35 @@ pub struct ChannelRecord {
     /// in rows written before channels had a project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// Where the channel's new members run. Left out of rows of local
+    /// channels, and absent in rows written before channels had a
+    /// placement: both read as [`ChannelPlacement::Local`].
+    #[serde(default, skip_serializing_if = "ChannelPlacement::is_local")]
+    pub placement: ChannelPlacement,
+}
+
+/// Where the members a channel starts run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelPlacement {
+    /// On this computer.
+    #[default]
+    Local,
+    /// Each on a cloud machine of its own.
+    Cloud,
+}
+
+impl ChannelPlacement {
+    /// Whether new members run on this computer.
+    #[must_use]
+    pub const fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
 }
 
 /// What [`ChannelStore::create`](super::ChannelStore::create) needs to
 /// make a channel.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewChannel {
     /// Unique short name, see [`valid_slug`](super::valid_slug).
     pub slug: String,
@@ -48,6 +72,9 @@ pub struct NewChannel {
     /// empty or blank.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// Where the channel's new members run.
+    #[serde(default)]
+    pub placement: ChannelPlacement,
 }
 
 /// Fields [`ChannelStore::update`](super::ChannelStore::update) changes;
@@ -67,6 +94,10 @@ pub struct ChannelUpdate {
         deserialize_with = "present_option"
     )]
     pub project_id: Option<Option<String>>,
+    /// Where the channel's new members run from now on; members it has
+    /// stay where they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<ChannelPlacement>,
 }
 
 /// Deserialize a field that is present (possibly `null`) as `Some`, so

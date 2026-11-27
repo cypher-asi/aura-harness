@@ -33,7 +33,7 @@ impl CloudHub {
     pub(super) fn send_directories(&self, project: &str) {
         let links = self.links.lock();
         for node in self.directory.nodes_of(project) {
-            let frame = self.directory.frame_for(&node, project);
+            let frame = self.directory_frame(&node, project);
             for (hex, link) in links.iter() {
                 if self.directory.holder(hex).is_some_and(|h| h.node == node) {
                     let _ = link.frames.send(frame.clone());
@@ -59,8 +59,9 @@ impl CloudHub {
         tokio::spawn(async move { run_link(hub, hex, rx, stop).await });
     }
 
-    /// Mail from a node, for an agent here or on another node.
-    pub(super) fn take_mail(&self, mail: &MeshMail) -> MeshFrame {
+    /// Mail from a node, for an agent here or on another node, or for the
+    /// app's desk ([`Self::desk_for`]).
+    pub(super) async fn take_mail(&self, mail: &MeshMail) -> MeshFrame {
         let ack = |delivered: bool, error: Option<String>| MeshFrame::MailAck {
             from_node: mail.from_node.clone(),
             id: mail.id,
@@ -85,30 +86,33 @@ impl CloudHub {
                 Some(format!("agent {} belongs to another user", mail.to)),
             );
         }
-        match self.directory.holder(&mail.to) {
-            Some(holder) if holder.node != HUB_NODE => {
-                // For another node: forward it; that node drops it if
-                // its sender already reached it directly.
-                if holder.node != mail.from_node {
-                    self.forward(&mail.to, MeshFrame::Mail(mail.clone()));
-                }
-                ack(true, None)
+        let desk = self.desk_for(mail);
+        let elsewhere = self
+            .directory
+            .holder(&mail.to)
+            .filter(|holder| holder.node != HUB_NODE && desk.is_none());
+        if let Some(holder) = elsewhere {
+            // For another node: forward it; that node drops it if its
+            // sender already reached it directly.
+            if holder.node != mail.from_node {
+                self.forward(&mail.to, MeshFrame::Mail(mail.clone()));
             }
-            _ => {
-                let host = self.host.lock().clone();
-                let delivered = match (host, remote_mail(mail)) {
-                    (Some(host), Ok(remote)) => host.deliver_remote(remote),
-                    (None, _) => Err("the hub has no agents".to_string()),
-                    (_, Err(err)) => Err(err),
-                };
-                match delivered {
-                    Ok(()) => ack(true, None),
-                    Err(err) => {
-                        // A resend may succeed (the agent restarted).
-                        self.mail.forget(mail);
-                        ack(false, Some(err))
-                    }
-                }
+            return ack(true, None);
+        }
+        let delivered = match (desk, remote_mail(mail)) {
+            (_, Err(err)) => Err(err),
+            (Some(desk), Ok(remote)) => desk.file(remote).await,
+            (None, Ok(remote)) => match self.host.lock().clone() {
+                Some(host) => host.deliver_remote(remote),
+                None => Err("the hub has no agents".to_string()),
+            },
+        };
+        match delivered {
+            Ok(()) => ack(true, None),
+            Err(err) => {
+                // A resend may succeed (the agent restarted).
+                self.mail.forget(mail);
+                ack(false, Some(err))
             }
         }
     }
@@ -267,7 +271,7 @@ async fn greet(
     };
     let _ = sink.send(Message::Text(hello.to_text().into())).await;
     if let (Some(hub), Some(project)) = (hub.upgrade(), project) {
-        let frame = hub.directory.frame_for(node.node(), project);
+        let frame = hub.directory_frame(node.node(), project);
         let _ = sink.send(Message::Text(frame.to_text().into())).await;
     }
 }
@@ -322,7 +326,7 @@ impl LinkSocket<'_> {
         match frame {
             MeshFrame::Mail(mail) => {
                 hub.fleet.touch(hex);
-                let ack = hub.take_mail(&mail);
+                let ack = hub.take_mail(&mail).await;
                 let _ = self.sink.send(Message::Text(ack.to_text().into())).await;
             }
             MeshFrame::HostStats(stats) => hub.track(hex, stats),

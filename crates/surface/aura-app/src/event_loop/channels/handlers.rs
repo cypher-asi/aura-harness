@@ -23,12 +23,9 @@ pub(in crate::event_loop) async fn handle_create(state: &mut LoopState<'_>, new:
 pub(in crate::event_loop) async fn handle_update(
     state: &mut LoopState<'_>,
     channel_id: &str,
-    title: &str,
-    description: &str,
-    project_id: Option<String>,
+    edit: ChannelEdit,
 ) {
-    let updated = match update_channel(&state.hub, channel_id, title, description, project_id).await
-    {
+    let updated = match update_channel(&state.hub, channel_id, edit).await {
         Ok(updated) => updated,
         Err(error) => {
             let message = match error.downcast_ref::<CoordinatorBusy>() {

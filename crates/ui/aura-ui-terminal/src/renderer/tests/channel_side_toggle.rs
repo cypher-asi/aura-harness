@@ -94,15 +94,24 @@ fn test_a_channel_panel_the_hamburger_hid_leaves_no_member_rows_to_hover() {
     let (row, column) = rows
         .iter()
         .enumerate()
-        .find_map(|(y, text)| text.find("Worker").map(|x| (y, text[..x].chars().count())))
+        .find_map(|(y, text)| {
+            text.find("subagent")
+                .map(|x| (y, text[..x].chars().count()))
+        })
         .unwrap_or_else(|| panic!("no member row in:\n{}", rows.join("\n")));
     app.handle_mouse(moved(column, row));
     assert_eq!(app.hover(), Some(HoverTarget::ChannelMemberRow(1)));
+    app.handle_mouse(moved(column, row + 1));
+    assert_eq!(
+        app.hover(),
+        Some(HoverTarget::ChannelMemberRow(1)),
+        "its status row is the same member's"
+    );
 
     app.toggle_side_column();
     let hidden = render_rows(&mut app, 140);
     assert!(
-        !hidden.join("\n").contains("Worker"),
+        !hidden.join("\n").contains("subagent"),
         "{}",
         hidden.join("\n")
     );

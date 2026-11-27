@@ -7,6 +7,83 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Channel members show their agent, with what they work on below
+
+##### Changed
+
+- On the MEMBERS tab each member takes two rows. The first names the
+  permanent agent it was started from (`rust-engineer`, or `subagent`
+  for a subagent of none), with its code and spinner at the right. The
+  second, in gray, is what it works on: its title, a subagent's
+  subtask, else `Working…` or `Idle`. A click or hover on either row
+  picks that member.
+- Every `assign` titles the member it goes to with the assignment's
+  subject, or the brief's first line when it has none, so a member's
+  title is the work it was last given. A member's first typed prompt
+  titles it too, like any agent's. The coordinator sees each member's
+  title in its channel block: `working on "…"`, or `free, last on "…"`.
+- PROJECTS and the other agent lists show a channel member by its
+  title, like any agent, instead of as its permanent agent.
+- A member's chat bar shows its title, and its input reads
+  `Message REN3`.
+- Each `assign` to a permanent agent starts a new instance of it, with
+  a title of its own; nothing is written to the permanent agent.
+  Members keep `task`, and their subagents nest under them on MEMBERS.
+
+### Each channel says where its agents run
+
+##### Added
+
+- The channel form has an `Agents run` field after Project, `Locally`
+  or `In the cloud`, chosen with ←→ or Space. In the cloud needs a
+  project, whose folder each machine starts from: without one the form
+  says so and won't submit. Enter on `Agents run`, the last field,
+  submits. Editing a channel shows its setting. Channels saved before
+  run their agents locally.
+- INFO shows AGENTS RUN. A cloud channel without a usable project adds
+  that new members run locally.
+- A new member of a cloud channel moves to a cloud machine of its own
+  before its first work, with the boot shown in its chat, and its work
+  runs there once it is placed. Without a cloud (no `BOXD_API_KEY`), a
+  project folder, or a placement that works, the member stays on this
+  computer and its chat says why. The coordinator always runs here,
+  the setting moves no member already started, and `/cloud` and
+  `/local` still move any one member.
+
+##### Changed
+
+- Work sent to an agent while it moves between this computer and a
+  cloud machine waits in its queue and starts where the agent ends up,
+  instead of being refused.
+
+### Cloud members work like members on this computer
+
+##### Changed
+
+- Each turn of a member on a cloud machine brings what a turn here
+  has: the project's instruction files, its permanent agent's prompt,
+  the plan-mode section in plan mode and its channel block. The tools
+  its agent leaves out are off on the machine. Members still keep
+  `task`, `send_to_agent` and `list_agents`.
+- When a cloud member's turn ends, what it was asked is settled from
+  the conversation copied back. Assignments and requests get its last
+  words as their answer, and questions put to it on the channel get
+  their reply posted. A turn that fails or is stopped gives up on them
+  instead, saying `Stopped before finishing: …`.
+- A cloud member with a turn running shows as working, on MEMBERS, in
+  the agent lists, in the coordinator's channel block and to
+  `list_agents`.
+
+##### Added
+
+- A cloud member reaches the agents a member here does: its channel's
+  and its project's. `list_agents` on its machine lists them and
+  `get_agent_state` shows one. On the machine it names them by the
+  `agent_id` that `list_agents` gives, and its turns tell it so. Its
+  requests to them come back through this computer's inbox: they show
+  on INBOX, are answered when the agent asked ends its turn, and count
+  toward their thread's cap.
+
 ### Dialogs share one look, over a dark screen
 
 ##### Changed

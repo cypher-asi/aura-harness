@@ -17,9 +17,23 @@ pub(crate) struct CoordinatorBusy {
     slug: String,
 }
 
-/// Give channel `channel_id` the title `title` (kept when blank), the
-/// description `description` and the project `project_id` (`None`, or
-/// blank: no project).
+/// A channel's title, description, project and placement, as the edit
+/// form sends them: every one, each time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ChannelEdit {
+    /// New title; a blank one keeps the old title
+    pub(crate) title: String,
+    /// New description
+    pub(crate) description: String,
+    /// Project its agents work in (`None`, or blank: no project)
+    pub(crate) project_id: Option<String>,
+    /// Where the members it starts from now on run; members it has stay
+    /// where they are
+    pub(crate) placement: ChannelPlacement,
+}
+
+/// Give channel `channel_id` the title, description, project and
+/// placement of `edit`.
 ///
 /// When the project changes, the coordinator moves: into the new project
 /// (working in its folder), or, without one, back to the launch project
@@ -43,18 +57,17 @@ pub(crate) struct CoordinatorBusy {
 pub(crate) async fn update_channel(
     hub: &Arc<AgentHub>,
     channel_id: &str,
-    title: &str,
-    description: &str,
-    project_id: Option<String>,
+    edit: ChannelEdit,
 ) -> anyhow::Result<ChannelUpdated> {
     store_of(hub)?;
-    let title = title.trim();
+    let title = edit.title.trim();
     let update = ChannelUpdate {
         title: (!title.is_empty()).then(|| title.to_string()),
-        description: Some(description.trim().to_string()),
+        description: Some(edit.description.trim().to_string()),
         project_id: None,
+        placement: Some(edit.placement),
     };
-    let project_id = trimmed_project(project_id);
+    let project_id = trimmed_project(edit.project_id);
     let hub = Arc::clone(hub);
     let id = channel_id.to_string();
     tokio::task::spawn_blocking(move || apply_update(&hub, &id, update, project_id.as_deref()))

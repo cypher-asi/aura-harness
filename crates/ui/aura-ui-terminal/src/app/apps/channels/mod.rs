@@ -39,6 +39,8 @@
 mod list;
 mod side;
 
+pub(crate) use side::CHANNEL_MEMBER_ROWS;
+
 use crate::app::scroll::InfoScroll;
 use crate::app::{AgentsTab, App, ChatTab, SidePanelTab};
 use crate::events::{ChannelPostView, ChannelSummary, UiEvent};
@@ -225,14 +227,16 @@ impl App {
     }
 
     /// What the empty input says in the channel app: who a message goes
-    /// to, or that a channel has to be picked first. `None` outside it.
+    /// to, a member by its code, or that a channel has to be picked first.
+    /// `None` outside it.
     #[must_use]
     pub(crate) fn channel_placeholder(&self) -> Option<String> {
         if !self.channel_app() {
             return None;
         }
         if let Some(member) = self.member_chat() {
-            return Some(format!("Message {}", member.name));
+            let name = member.code.as_deref().unwrap_or(&member.name);
+            return Some(format!("Message {name}"));
         }
         Some(self.open_channel().map_or_else(
             || "Pick a channel".to_string(),

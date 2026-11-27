@@ -8,14 +8,13 @@ async fn the_machine_titles_the_chat_during_the_turn_and_records_the_call() {
     let p = placed(CloudConfig::defaults()).await;
     p.import().await;
 
-    let mut events = p.hub.run_turn(
-        p.agent,
-        "fix the build".into(),
-        Some("mock-model".into()),
-        Some("mock-model".into()),
-        None,
-        CancellationToken::new(),
-    );
+    let ask = crate::cloud::hub::TurnAsk {
+        prompt: "fix the build".into(),
+        model: Some("mock-model".into()),
+        title_model: Some("mock-model".into()),
+        ..Default::default()
+    };
+    let mut events = p.hub.run_turn(p.agent, ask, CancellationToken::new());
     let (mut title, mut done) = (None, false);
     while let Some(event) = events.recv().await {
         match event {
@@ -50,14 +49,12 @@ async fn a_machine_whose_aura_is_too_old_runs_no_turn_but_its_agent_can_come_bac
     p.import().await;
     let node_head = p.node.store.get_head_seq(p.agent).expect("head");
 
-    let mut events = p.hub.run_turn(
-        p.agent,
-        "fix the build".into(),
-        Some("mock-model".into()),
-        None,
-        None,
-        CancellationToken::new(),
-    );
+    let ask = crate::cloud::hub::TurnAsk {
+        prompt: "fix the build".into(),
+        model: Some("mock-model".into()),
+        ..Default::default()
+    };
+    let mut events = p.hub.run_turn(p.agent, ask, CancellationToken::new());
     let mut refused = None;
     while let Some(event) = events.recv().await {
         match event {

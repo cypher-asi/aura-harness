@@ -1,5 +1,6 @@
 use super::*;
-use crate::hub::turn::{chat_request, ws_url};
+use crate::hub::request::{chat_request, TurnAsk};
+use crate::hub::turn::ws_url;
 
 #[test]
 fn choose_binary_prefers_env_then_cloud_home_then_running_exe() {
@@ -78,7 +79,11 @@ fn urls_and_requests() {
         ws_url("http://127.0.0.1:8080", "/stream/1"),
         "ws://127.0.0.1:8080/stream/1"
     );
-    let request = chat_request(AgentId::new([1; 32]), Some("gate".into()), None, None);
+    let ask = TurnAsk {
+        model: Some("gate".into()),
+        ..TurnAsk::default()
+    };
+    let request = chat_request(AgentId::new([1; 32]), &ask);
     assert_eq!(
         request.agent_identity.partition_id,
         Some(AgentId::new([1; 32]).to_hex())
@@ -88,8 +93,41 @@ fn urls_and_requests() {
         request.workspace.project_path.as_deref(),
         Some(WORKSPACE_DIR)
     );
+    assert_eq!(request.agent_identity.system_prompt, None, "the node's own");
+    assert_eq!(request.tool_permissions, None);
     let json = serde_json::to_string(&request).expect("json");
     assert!(!json.contains("bxd_"), "{json}");
+}
+
+#[test]
+fn a_turn_brings_its_agents_prompt_and_turns_off_what_it_leaves_out() {
+    use aura_core_protocol::ToolStateWire;
+    let ask = TurnAsk {
+        system_prompt: Some("<channel slug=\"site\">…</channel>".into()),
+        tools_off: vec!["write_file".into(), "run_command".into()],
+        ..TurnAsk::default()
+    };
+    let request = chat_request(AgentId::new([1; 32]), &ask);
+    let prompt = request
+        .agent_identity
+        .system_prompt
+        .expect("its own prompt");
+    assert!(
+        prompt.starts_with("<channel slug=\"site\">…</channel>"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains(&format!("Your workspace root is `{WORKSPACE_DIR}`")),
+        "the node leaves that out of a prompt it is given: {prompt}"
+    );
+    let off = request.tool_permissions.expect("tools off").per_tool;
+    assert_eq!(
+        off.into_iter().collect::<Vec<_>>(),
+        [
+            ("run_command".to_string(), ToolStateWire::Off),
+            ("write_file".to_string(), ToolStateWire::Off),
+        ]
+    );
 }
 
 #[test]

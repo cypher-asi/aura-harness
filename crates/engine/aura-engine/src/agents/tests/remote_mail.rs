@@ -26,6 +26,9 @@ async fn mail_for_an_agent_on_another_node_goes_through_the_router() {
 
     let listed = h.hooks.list_agents(None).await.expect("list");
     assert!(listed.to_string().contains("cloud-scout"), "{listed}");
+    let state = h.hooks.snapshot(&remote.to_hex()).await.expect("state");
+    assert_eq!(state["name"], "cloud-scout", "{state}");
+    assert_eq!(state["node"], "aura-x", "{state}");
 }
 
 #[tokio::test]

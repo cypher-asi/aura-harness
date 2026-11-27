@@ -36,6 +36,7 @@ async fn site_in_a(
         title: "Website relaunch".to_string(),
         description: String::new(),
         project_id: Some(a.clone()),
+        placement: aura_ui::host::PlacementView::Local,
     };
     handle_ui_event(state, create, links).await;
     let channel = (fixture.hub.channels.as_ref().unwrap().by_slug("site"))
@@ -73,6 +74,7 @@ pub(super) fn update(
         title: title.to_string(),
         description: description.to_string(),
         project_id: project_id.map(str::to_string),
+        placement: aura_ui::host::PlacementView::Local,
     }
 }
 

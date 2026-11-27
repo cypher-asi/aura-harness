@@ -13,6 +13,8 @@ mod help;
 mod model_selector;
 mod project_info;
 
+pub(super) use channel_form::placement_name;
+
 use super::hud::notice_icon;
 use crate::app::{Dialog, ModalKind};
 use crate::components::Modal;

@@ -96,7 +96,7 @@ pub(crate) async fn assign(
     }
     let (peer, new) = assignee(hub, caller, &circle, &args).await?;
     let subject = Some(args.subject.as_str()).filter(|subject| !subject.trim().is_empty());
-    send(
+    let sent = send(
         hub,
         &circle,
         InboxKind::Assignment,
@@ -104,7 +104,13 @@ pub(crate) async fn assign(
         subject,
         brief,
         args.todo_id.as_deref(),
-    )?;
+    );
+    if sent.is_ok() {
+        title_member(hub, peer.agent.agent_id, subject, brief);
+    }
+    // A new member shows even when its work could not be sent.
+    hub.send_agent_list().await;
+    sent?;
     let status = status_of(hub, &peer, new);
     Ok(format!(
         "Assigned to {} ({status}). Its report will arrive in your inbox.",
@@ -155,7 +161,7 @@ fn named(field: Option<&str>) -> Option<String> {
 fn status_of(hub: &AgentHub, peer: &Peer, new: bool) -> &'static str {
     if new {
         "new member"
-    } else if hub.is_running(peer.agent.agent_id) {
+    } else if hub.is_working(peer.agent.agent_id) {
         "busy: it starts when free"
     } else {
         "starting now"
@@ -185,8 +191,25 @@ fn no_member(circle: &Circle, to: &str) -> String {
     }
 }
 
+/// Title the member `agent` after the work just assigned to it: `subject`,
+/// else the start of `brief`. A member's title is what the channel shows it
+/// working on, so each assignment's replaces the last one's.
+fn title_member(hub: &AgentHub, agent: AgentId, subject: Option<&str>, brief: &str) {
+    use aura_agent::titles::{fallback_title, sanitize, MAX_TITLE_CHARS};
+    let title = subject
+        .and_then(|subject| sanitize(subject, MAX_TITLE_CHARS))
+        .unwrap_or_else(|| fallback_title(brief));
+    if let Err(error) = lock(&hub.registry).set_title(agent, &title) {
+        warn!(
+            agent = %agent.to_hex(),
+            error = %error,
+            "Could not title a channel member after its assignment"
+        );
+    }
+}
+
 /// Start a new member of the channel `coordinator` runs from the
-/// permanent agent `definition`, and show it in the agent lists.
+/// permanent agent `definition`; [`assign`] shows it in the agent lists.
 async fn start_member(
     hub: &Arc<AgentHub>,
     coordinator: AgentId,
@@ -214,7 +237,6 @@ async fn start_member(
         Ok(Err(error)) => return Err(format!("assign: could not start a new member: {error:#}")),
         Err(error) => return Err(format!("assign: could not start a new member: {error}")),
     };
-    hub.send_agent_list().await;
     Ok(Peer {
         agent: Named::of(&agent),
         relation: Relation::Member,

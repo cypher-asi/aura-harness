@@ -20,6 +20,7 @@ async fn open_zode(
         title: "Zode".to_string(),
         description: String::new(),
         project_id: None,
+        placement: aura_ui::host::PlacementView::Local,
     };
     handle_ui_event(state, create, links).await;
     let _ = drain(commands);
@@ -124,6 +125,7 @@ async fn a_project_a_channel_works_in_cannot_be_removed() {
         title: "Zode".to_string(),
         description: String::new(),
         project_id: Some(project_id.clone()),
+        placement: aura_ui::host::PlacementView::Local,
     };
     handle_ui_event(&mut state, create, &links).await;
     let _ = drain(&mut commands);

@@ -2,13 +2,10 @@
 
 use std::sync::Arc;
 
-use crate::machine_env::WORKSPACE_DIR;
 use crate::{BootEvent, BootReporter, CloudError, CloudResult};
 use aura_config::BoxdToken;
 use aura_core_protocol::{
-    AgentCapabilities, AgentIdentity, AgentPermissionsWire, InboundMessage, ModelSelection,
-    OutboundMessage, RuntimeRequest, RuntimeRequestType, SessionUsage, UserMessage,
-    WorkspaceLocation,
+    InboundMessage, OutboundMessage, RuntimeRequest, SessionUsage, UserMessage,
 };
 use aura_core_types::AgentId;
 use futures_util::{SinkExt, StreamExt};
@@ -17,6 +14,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
 use super::node_client::NodeClient;
+use super::request::{chat_request, TurnAsk};
 
 use super::{CloudHub, MIRROR_EVERY, TURN_TIMEOUT};
 
@@ -87,18 +85,15 @@ impl CloudHub {
         awake
     }
 
-    /// Run one prompt on `agent`'s node and stream what it shows. The
-    /// node writes the turn; the hub mirrors it as it runs and when it
-    /// ends. With `title_model`, the node also titles the chat from
-    /// `prompt`, sent as [`RemoteEvent::Title`].
+    /// Run `ask` on `agent`'s node and stream what it shows. The node
+    /// writes the turn; the hub mirrors it as it runs and when it ends.
+    /// With a title model, the node also titles the chat from the prompt,
+    /// sent as [`RemoteEvent::Title`].
     #[must_use]
     pub fn run_turn(
         self: &Arc<Self>,
         agent: AgentId,
-        prompt: String,
-        model: Option<String>,
-        title_model: Option<String>,
-        auth_jwt: Option<String>,
+        ask: TurnAsk,
         cancel: CancellationToken,
     ) -> mpsc::Receiver<RemoteEvent> {
         let (tx, rx) = mpsc::channel(256);
@@ -116,6 +111,7 @@ impl CloudHub {
                 }
             };
             let guard = hub.fleet.begin_work(&hex);
+            let request = chat_request(agent, &ask);
             let turn = tokio::time::timeout(
                 TURN_TIMEOUT,
                 stream_turn(
@@ -123,8 +119,8 @@ impl CloudHub {
                     &node,
                     TurnPrompt {
                         agent,
-                        prompt,
-                        request: chat_request(agent, model, title_model, auth_jwt),
+                        prompt: ask.prompt,
+                        request,
                     },
                     &tx,
                     cancel,
@@ -152,76 +148,6 @@ impl CloudHub {
         });
         rx
     }
-}
-
-/// The chat run request for a cloud agent's turn.
-pub(super) fn chat_request(
-    agent: AgentId,
-    model: Option<String>,
-    title_model: Option<String>,
-    auth_jwt: Option<String>,
-) -> RuntimeRequest {
-    RuntimeRequest {
-        r#type: RuntimeRequestType::Chat {
-            conversation_messages: Vec::new(),
-        },
-        agent_identity: AgentIdentity {
-            partition_id: Some(agent.to_hex()),
-            ..AgentIdentity::default()
-        },
-        model: ModelSelection {
-            id: model,
-            title_model,
-            ..ModelSelection::default()
-        },
-        workspace: WorkspaceLocation {
-            project_path: Some(WORKSPACE_DIR.to_string()),
-            ..WorkspaceLocation::default()
-        },
-        project: None,
-        agent_permissions: cloud_agent_permissions(),
-        tool_permissions: None,
-        agent_capabilities: AgentCapabilities::default(),
-        auth_jwt,
-        user_id: "hub".to_string(),
-        mode: None,
-    }
-}
-
-/// What a cloud agent may do on its machine. Sent explicitly: an empty
-/// bundle means full access on a node, which includes computer use, and
-/// a cloud machine has no screen (and OpenRouter refuses the computer
-/// tool's server-tool entry).
-fn cloud_agent_permissions() -> AgentPermissionsWire {
-    use aura_core_protocol::CapabilityWire;
-    AgentPermissionsWire {
-        capabilities: vec![
-            CapabilityWire::SpawnAgent,
-            CapabilityWire::ControlAgent,
-            CapabilityWire::ReadAgent,
-            CapabilityWire::ListAgents,
-            CapabilityWire::InvokeProcess,
-            CapabilityWire::ReadAllProjects,
-            CapabilityWire::WriteAllProjects,
-        ],
-        ..AgentPermissionsWire::default()
-    }
-}
-
-/// The policy a cloud agent's node enforces on its turns: the permissions
-/// [`chat_request`] sends, over the node's defaults (the `Agent` mode, no
-/// per-tool settings), as the node builds it for a chat run.
-#[must_use]
-pub fn cloud_policy() -> aura_agent_kernel::PolicyConfig {
-    aura_agent_kernel::PolicyConfig {
-        agent_permissions: aura_core_protocol::agent_permissions_from_wire(
-            cloud_agent_permissions(),
-        ),
-        ..aura_agent_kernel::PolicyConfig::default()
-    }
-    .with_user_default(aura_core_types::UserToolDefaults::default())
-    .with_agent_override(None)
-    .with_mode(aura_core_types::AgentMode::Agent)
 }
 
 /// `https://x` → `wss://x`.

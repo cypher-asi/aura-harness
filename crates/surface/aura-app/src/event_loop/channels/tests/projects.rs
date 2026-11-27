@@ -2,8 +2,8 @@
 
 use super::super::*;
 use super::support::{
-    agent_count, is_listed, new_channel, new_channel_in, placement, projects_tree, spawn_under,
-    store, stored_placement, summary_of, unpin,
+    agent_count, edit, is_listed, new_channel, new_channel_in, placement, projects_tree,
+    spawn_under, store, stored_placement, summary_of, unpin,
 };
 use crate::event_loop::subagents::tests::{fixture, Fixture};
 use crate::event_loop::tests::support::open_project;
@@ -183,15 +183,10 @@ async fn setting_and_clearing_a_project_moves_the_coordinator_and_keeps_earlier_
     // A member from before folders were pinned on joining.
     unpin(&fixture, agent, launch_project.clone());
 
-    update_channel(
-        &fixture.hub,
-        &channel.id,
-        "",
-        "Ship it.",
-        Some(project_id.clone()),
-    )
-    .await
-    .unwrap();
+    let to_project = edit("", "Ship it.", Some(project_id.clone()));
+    update_channel(&fixture.hub, &channel.id, to_project)
+        .await
+        .unwrap();
     let record = store(&fixture).get(&channel.id).unwrap().unwrap();
     assert_eq!(record.project_id.as_deref(), Some(project_id.as_str()));
     assert_eq!(record.title, "Website relaunch");
@@ -199,7 +194,7 @@ async fn setting_and_clearing_a_project_moves_the_coordinator_and_keeps_earlier_
     let project = (project_id.as_str(), project_folder);
     assert_moved_into_project(&fixture, members, project, &channel_folder);
 
-    update_channel(&fixture.hub, &channel.id, "", "Ship it.", None)
+    update_channel(&fixture.hub, &channel.id, edit("", "Ship it.", None))
         .await
         .unwrap();
     let record = store(&fixture).get(&channel.id).unwrap().unwrap();
@@ -222,15 +217,10 @@ async fn an_unknown_project_is_refused_and_a_title_change_keeps_the_project() {
         .unwrap();
     let before = placement(&fixture, channel.coordinator);
 
-    let error = update_channel(
-        &fixture.hub,
-        &channel.id,
-        "Other",
-        "Other.",
-        Some("no-such-project".to_string()),
-    )
-    .await
-    .unwrap_err();
+    let unknown = edit("Other", "Other.", Some("no-such-project".to_string()));
+    let error = update_channel(&fixture.hub, &channel.id, unknown)
+        .await
+        .unwrap_err();
     assert!(format!("{error:#}").contains("no project"), "{error:#}");
     assert_eq!(
         store(&fixture).get(&channel.id).unwrap().as_ref(),
@@ -239,15 +229,10 @@ async fn an_unknown_project_is_refused_and_a_title_change_keeps_the_project() {
     assert_eq!(placement(&fixture, channel.coordinator), before);
     assert_eq!(stored_placement(&fixture, channel.coordinator), before);
 
-    update_channel(
-        &fixture.hub,
-        &channel.id,
-        "Relaunch",
-        "New plan.",
-        Some(project_id.clone()),
-    )
-    .await
-    .unwrap();
+    let retitle = edit("Relaunch", "New plan.", Some(project_id.clone()));
+    update_channel(&fixture.hub, &channel.id, retitle)
+        .await
+        .unwrap();
     let record = store(&fixture).get(&channel.id).unwrap().unwrap();
     assert_eq!(record.title, "Relaunch");
     assert_eq!(record.project_id.as_deref(), Some(project_id.as_str()));

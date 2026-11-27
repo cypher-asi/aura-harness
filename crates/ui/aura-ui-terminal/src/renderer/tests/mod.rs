@@ -19,6 +19,7 @@ mod agent_codes;
 mod agent_commands;
 mod agents_header;
 mod channel_member_chat;
+mod channel_members;
 mod channel_side_toggle;
 mod channels;
 mod chat_messages;

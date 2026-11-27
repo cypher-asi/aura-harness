@@ -129,18 +129,10 @@ pub(super) async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId
     state.hub.cancel(agent_id);
 }
 
-/// Start the oldest work waiting for `agent_id`, if any.
+/// Start the oldest work waiting for `agent_id`, if any, where it runs
+/// now. A local agent's work goes through the cloud's submit too: one
+/// just back from the cloud must first drop its session, which is older
+/// than its record.
 pub(super) async fn start_next(state: &mut LoopState<'_>, agent_id: AgentId) {
-    if state.cloud.is_cloud(agent_id) {
-        cloud::start_queued(state, agent_id).await;
-        return;
-    }
-    if state.queued.len(agent_id) == 0 {
-        return;
-    }
-    let next = state.queued.pop_front(agent_id);
-    hud::send_queued(state, agent_id).await;
-    if let Some(work) = next {
-        start_work(state, agent_id, work).await;
-    }
+    cloud::start_queued(state, agent_id).await;
 }

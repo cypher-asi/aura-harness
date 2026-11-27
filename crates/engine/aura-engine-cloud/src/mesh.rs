@@ -100,14 +100,23 @@ impl Directory {
         self.holder(agent).map(|holder| holder.owner)
     }
 
-    /// The directory frame for `node`: every agent of `project` with the
-    /// same owner that it does not hold itself. Other users' agents are
-    /// never listed.
+    /// The agents (hex) `node` holds.
     #[must_use]
-    pub fn frame_for(&self, node: &str, project: &str) -> MeshFrame {
+    pub fn held_by(&self, node: &str) -> Vec<String> {
+        self.agents
+            .lock()
+            .iter()
+            .filter(|(_, holder)| holder.node == node)
+            .map(|(agent, _)| agent.clone())
+            .collect()
+    }
+
+    /// Every agent of `project` with the same owner as `node` that it
+    /// does not hold itself. Other users' agents are never listed.
+    #[must_use]
+    pub fn peers_for(&self, node: &str, project: &str) -> Vec<MeshPeer> {
         let owner = self.owner_of_node(node);
-        let peers = self
-            .agents
+        self.agents
             .lock()
             .iter()
             .filter(|(_, holder)| holder.project == project && holder.node != node)
@@ -118,8 +127,15 @@ impl Directory {
                 node_id: holder.node.clone(),
                 url: holder.url.clone(),
             })
-            .collect();
-        MeshFrame::Directory { peers }
+            .collect()
+    }
+
+    /// The directory frame for `node`: [`Self::peers_for`].
+    #[must_use]
+    pub fn frame_for(&self, node: &str, project: &str) -> MeshFrame {
+        MeshFrame::Directory {
+            peers: self.peers_for(node, project),
+        }
     }
 }
 

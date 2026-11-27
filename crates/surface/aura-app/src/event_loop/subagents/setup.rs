@@ -1,4 +1,11 @@
 use super::*;
+use crate::cloud::hub::TurnAsk;
+
+/// Said after a cloud member's `<channel>` block: its machine finds the
+/// agents of its channel by id alone.
+const MACHINE_PEERS: &str = "\n\nYou run on a cloud machine: to reach the agents of \
+your channel, give `send_to_agent` the `agent_id` that `list_agents` shows for each, not \
+its code.";
 
 impl AgentHub {
     /// Build the hub. `factory` receives the dispatcher that kernels must
@@ -73,6 +80,8 @@ impl AgentHub {
             last_active: Mutex::default(),
             channel_members: Mutex::new(channel_sets.members),
             hidden_members: Mutex::new(channel_sets.hidden),
+            cloud_starts: Mutex::default(),
+            cloud_turns: Mutex::default(),
             channels: parts.channels,
             channel_chat: crate::event_loop::channels::ChannelChat::default(),
             inbox: crate::event_loop::inbox::Inbox::default(),
@@ -302,6 +311,52 @@ impl AgentHub {
                 .push_str(&aura_context_prompts::system::sections::plan_mode::render());
         }
         (config, tools)
+    }
+
+    /// What a turn of `agent_id` on its cloud machine adds to the node's
+    /// own prompt and tools, so it works as a turn here would: its
+    /// project's instructions, its permanent agent's prompt and skills,
+    /// plan mode's instructions and its channel's block, and the tools
+    /// its permanent agent leaves out, turned off. Everything else the
+    /// turn asks for is left at its default.
+    pub(crate) fn cloud_turn(&self, agent_id: AgentId) -> TurnAsk {
+        let (definition, folder, top_level) = {
+            let registry = lock(&self.registry);
+            (
+                registry.find(agent_id).and_then(|a| a.definition.clone()),
+                registry.project_folder(agent_id),
+                registry.is_top_level_agent(agent_id),
+            )
+        };
+        let mut prompt = folder
+            .map(|folder| self.instructions.for_workspace(&folder).text.clone())
+            .unwrap_or_default();
+        if let Some(name) = definition.as_deref() {
+            if let Some(found) = lock(&self.definitions).get(name) {
+                found.extend_system_prompt(&mut prompt, &lock(&self.skills));
+            }
+        }
+        if self.mode_of(agent_id) == PermissionMode::Plan {
+            prompt.push_str("\n\n");
+            prompt.push_str(&aura_context_prompts::system::sections::plan_mode::render());
+        }
+        if let Some(channel) = crate::event_loop::channels::channel_prompt(self, agent_id) {
+            prompt.push_str("\n\n");
+            prompt.push_str(&channel);
+            prompt.push_str(MACHINE_PEERS);
+        }
+        let prompt = prompt.trim();
+        let (_, offered) = self.definition_turn(None, "", top_level);
+        let (_, kept) = self.definition_turn(definition.as_deref(), "", top_level);
+        TurnAsk {
+            system_prompt: (!prompt.is_empty()).then(|| prompt.to_string()),
+            tools_off: offered
+                .into_iter()
+                .map(|tool| tool.name)
+                .filter(|name| kept.iter().all(|tool| &tool.name != name))
+                .collect(),
+            ..TurnAsk::default()
+        }
     }
 
     /// Show `agent_id` the instruction files its turns load from

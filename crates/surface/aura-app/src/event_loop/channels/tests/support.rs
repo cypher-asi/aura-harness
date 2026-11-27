@@ -9,7 +9,7 @@ pub(super) fn new_channel(slug: &str) -> NewChannel {
         slug: slug.to_string(),
         title: "Website relaunch".to_string(),
         description: "Ship the new marketing site.".to_string(),
-        project_id: None,
+        ..NewChannel::default()
     }
 }
 
@@ -18,6 +18,17 @@ pub(super) fn new_channel_in(slug: &str, project_id: &str) -> NewChannel {
     NewChannel {
         project_id: Some(project_id.to_string()),
         ..new_channel(slug)
+    }
+}
+
+/// What the edit form sends to give a local channel `title`,
+/// `description` and `project_id`.
+pub(super) fn edit(title: &str, description: &str, project_id: Option<String>) -> ChannelEdit {
+    ChannelEdit {
+        title: title.to_string(),
+        description: description.to_string(),
+        project_id,
+        placement: ChannelPlacement::Local,
     }
 }
 

@@ -385,6 +385,8 @@ pub enum UiEvent {
         description: String,
         /// Project its agents work in (`None`: no project)
         project_id: Option<String>,
+        /// Where the members it starts run
+        placement: crate::host::PlacementView,
     },
 
     /// User opened a channel (channel id)
@@ -404,6 +406,9 @@ pub enum UiEvent {
         /// Project its agents work in; the edit form always sends the full
         /// state, so `None` clears the project
         project_id: Option<String>,
+        /// Where the members it starts from now on run; members it has
+        /// stay where they are
+        placement: crate::host::PlacementView,
     },
 
     /// User archived a channel (channel id)

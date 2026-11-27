@@ -163,14 +163,12 @@ async fn a_turn_s_run_is_copied_into_the_main_trace_store() {
     p.hub.attach_traces(Arc::clone(&traces));
     p.import().await;
 
-    let mut events = p.hub.run_turn(
-        p.agent,
-        "hello".into(),
-        Some("mock-model".into()),
-        None,
-        None,
-        CancellationToken::new(),
-    );
+    let ask = crate::cloud::hub::TurnAsk {
+        prompt: "hello".into(),
+        model: Some("mock-model".into()),
+        ..Default::default()
+    };
+    let mut events = p.hub.run_turn(p.agent, ask, CancellationToken::new());
     while let Some(event) = events.recv().await {
         if let RemoteEvent::Failed(err) = event {
             panic!("the turn failed: {err}");

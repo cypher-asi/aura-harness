@@ -47,7 +47,7 @@ pub(crate) fn channel_prompt(hub: &AgentHub, agent_id: AgentId) -> Option<String
             let working: HashSet<AgentId> = members
                 .iter()
                 .map(|member| member.agent_id)
-                .filter(|agent| hub.is_running(*agent))
+                .filter(|agent| hub.is_working(*agent))
                 .collect();
             let registry = lock(&hub.registry);
             if channel.coordinator == agent_id {
@@ -75,8 +75,9 @@ pub(crate) fn is_coordinator(definition: Option<&str>) -> bool {
 }
 
 /// The coordinator's `<channel>` block. Its members are the top-level
-/// ones, each said to be `working` when in `working`; their subagents
-/// are only counted.
+/// ones, each said to be `working` when in `working`, else `free`, with
+/// the title of what it is (or last was) on; their subagents are only
+/// counted.
 fn render(
     registry: &AgentRegistry,
     channel: &ChannelRecord,
@@ -97,11 +98,15 @@ fn render(
             out.push_str(" (you)\n");
             continue;
         }
-        out.push_str(if working.contains(&member.agent_id) {
-            ": working"
-        } else {
-            ": free"
-        });
+        let busy = working.contains(&member.agent_id);
+        out.push_str(if busy { ": working" } else { ": free" });
+        if let Some(title) = registry
+            .find(member.agent_id)
+            .and_then(|agent| agent.title.as_deref())
+        {
+            let on = if busy { " on" } else { ", last on" };
+            let _ = write!(out, "{on} \"{title}\"");
+        }
         let subagents = members
             .iter()
             .filter(|m| m.role == MemberRole::Subagent && m.parent == Some(member.agent_id))

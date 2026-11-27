@@ -472,6 +472,7 @@ pub(super) fn rows(
                 plan_mode: false,
                 code: agent.code.clone(),
                 subtitle: agent.subtitle.clone(),
+                title: agent.title.clone(),
             };
             (agent_id, row)
         })

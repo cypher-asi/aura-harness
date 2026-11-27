@@ -91,9 +91,14 @@ fn channel_record_without_a_project_serializes_without_the_key() {
         updated_at: ts(2),
         archived: false,
         project_id: None,
+        placement: ChannelPlacement::Local,
     };
     let json = serde_json::to_value(&record).unwrap();
     assert!(!json.as_object().unwrap().contains_key("project_id"));
+    assert!(
+        !json.as_object().unwrap().contains_key("placement"),
+        "a local channel's row leaves its placement out"
+    );
     assert_eq!(
         serde_json::from_value::<ChannelRecord>(json).unwrap(),
         record
@@ -106,6 +111,60 @@ fn channel_record_without_a_project_serializes_without_the_key() {
     let json = serde_json::to_value(&with).unwrap();
     assert_eq!(json["project_id"], serde_json::json!("proj-a"));
     assert_eq!(serde_json::from_value::<ChannelRecord>(json).unwrap(), with);
+
+    let cloud = ChannelRecord {
+        placement: ChannelPlacement::Cloud,
+        ..with
+    };
+    let mut json = serde_json::to_value(&cloud).unwrap();
+    assert_eq!(json["placement"], serde_json::json!("cloud"));
+    assert_eq!(
+        serde_json::from_value::<ChannelRecord>(json.clone()).unwrap(),
+        cloud
+    );
+    json["placement"] = serde_json::json!("orbit");
+    assert!(
+        serde_json::from_value::<ChannelRecord>(json).is_err(),
+        "an unknown placement fails the read"
+    );
+}
+
+#[test]
+fn a_cloud_placement_is_stored_and_changed_on_its_own() {
+    for (mode, store, _dir) in stores() {
+        let channels = ChannelStore::for_store(&store);
+        let new = NewChannel {
+            placement: ChannelPlacement::Cloud,
+            ..new_channel_in("zode", "proj-a")
+        };
+        let ch = channels.create(new, &agent("zns-coord", 0), ts(1)).unwrap();
+        assert_eq!(ch.placement, ChannelPlacement::Cloud, "{mode}");
+        assert_eq!(channels.get(&ch.id).unwrap(), Some(ch.clone()), "{mode}");
+
+        let retitle = ChannelUpdate {
+            title: Some("Zode 2".to_string()),
+            ..ChannelUpdate::default()
+        };
+        let retitled = channels.update(&ch.id, retitle, ts(2)).unwrap();
+        assert_eq!(
+            retitled.placement,
+            ChannelPlacement::Cloud,
+            "{mode}: an update without a placement keeps it"
+        );
+        let to_local = ChannelUpdate {
+            placement: Some(ChannelPlacement::Local),
+            ..ChannelUpdate::default()
+        };
+        let local = channels.update(&ch.id, to_local, ts(3)).unwrap();
+        assert_eq!(local.placement, ChannelPlacement::Local, "{mode}");
+        assert_eq!(local.title, "Zode 2", "{mode}");
+        assert_eq!(local.project_id.as_deref(), Some("proj-a"), "{mode}");
+        assert_eq!(channels.get(&ch.id).unwrap(), Some(local), "{mode}");
+    }
+
+    let update: ChannelUpdate = serde_json::from_str(r#"{"placement":"cloud"}"#).unwrap();
+    assert_eq!(update.placement, Some(ChannelPlacement::Cloud));
+    assert_eq!(update.project_id, None);
 }
 
 #[test]

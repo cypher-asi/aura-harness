@@ -18,6 +18,23 @@ impl AgentRegistry {
         self.channel_members.extend(members);
     }
 
+    /// Whether `agent_id` should get a chat title: an agent that
+    /// [`RegisteredAgent::needs_title`], or a member at the top of a
+    /// channel, its coordinator aside, that has none yet. A member is an
+    /// instance of a permanent agent, but its title is what the channel
+    /// shows it working on; its subagents are named after their subtasks.
+    #[must_use]
+    pub fn wants_title(&self, agent_id: AgentId) -> bool {
+        self.find(agent_id).is_some_and(|agent| {
+            agent.needs_title()
+                || (agent.title.is_none()
+                    && agent.parent.is_none()
+                    && agent.definition.as_deref()
+                        != Some(crate::definitions::COORDINATOR_DEFINITION)
+                    && self.channel_members.contains(&agent_id))
+        })
+    }
+
     /// A fresh channel coordinator, working in `home`, not yet
     /// registered: an instance of
     /// [`crate::definitions::COORDINATOR_DEFINITION`] named just

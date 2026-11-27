@@ -1,9 +1,9 @@
 use super::*;
 use crate::hub::links::HubRouter;
-use crate::hub::turn::chat_request;
+use crate::hub::request::{chat_request, TurnAsk};
 
-#[test]
-fn mail_never_crosses_users() {
+#[tokio::test]
+async fn mail_never_crosses_users() {
     let (hub, _fake, _dir) = hub();
     hub.set_current_owner(alice());
     let local = AgentId::new([1; 32]);
@@ -14,13 +14,22 @@ fn mail_never_crosses_users() {
     place_cloud(&hub, bob_cloud, "aura-bob", &bob());
 
     // Bob's machine can't mail Alice's local agent or her cloud agent.
-    let err = ack_error(hub.take_mail(&mail_to(bob_cloud, "aura-bob", local, 1)));
+    let err = ack_error(
+        hub.take_mail(&mail_to(bob_cloud, "aura-bob", local, 1))
+            .await,
+    );
     assert!(err.is_some_and(|e| e.contains("another user")));
-    let err = ack_error(hub.take_mail(&mail_to(bob_cloud, "aura-bob", alice_cloud, 2)));
+    let err = ack_error(
+        hub.take_mail(&mail_to(bob_cloud, "aura-bob", alice_cloud, 2))
+            .await,
+    );
     assert!(err.is_some_and(|e| e.contains("another user")));
     // Alice's machine reaches her local agent (no host here: refused
     // for that reason, not for ownership).
-    let err = ack_error(hub.take_mail(&mail_to(alice_cloud, "aura-alice", local, 3)));
+    let err = ack_error(
+        hub.take_mail(&mail_to(alice_cloud, "aura-alice", local, 3))
+            .await,
+    );
     assert!(err.is_some_and(|e| !e.contains("another user")));
 
     // Local agents act as Alice: Bob's cloud agent is unknown to them.
@@ -90,7 +99,7 @@ fn patch_outcomes_describe_themselves() {
 
 #[test]
 fn cloud_turns_never_offer_computer_use() {
-    let request = chat_request(AgentId::new([1; 32]), None, None, None);
+    let request = chat_request(AgentId::new([1; 32]), &TurnAsk::default());
     let json = serde_json::to_value(&request.agent_permissions).expect("json");
     let text = json.to_string();
     assert!(!text.contains("computer"), "{text}");

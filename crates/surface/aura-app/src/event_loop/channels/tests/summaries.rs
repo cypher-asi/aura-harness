@@ -1,7 +1,7 @@
 //! Channel summaries, prompts naming the project, updates and archiving.
 
 use super::super::*;
-use super::support::{new_channel, new_channel_in, store, summary_of};
+use super::support::{edit, new_channel, new_channel_in, store, summary_of};
 use crate::event_loop::subagents::tests::{fixture, request};
 use crate::event_loop::tests::support::open_project;
 use aura_ui::UiCommand;
@@ -105,7 +105,7 @@ async fn updated_channels_show_their_new_title_and_archived_ones_leave_the_list(
         .await
         .unwrap();
 
-    update_channel(&fixture.hub, &site.id, "  ", "New plan.", None)
+    update_channel(&fixture.hub, &site.id, edit("  ", "New plan.", None))
         .await
         .unwrap();
     let summary = summary_of(&channel_summaries(&fixture.hub).await.unwrap(), &site.id).unwrap();
@@ -133,7 +133,7 @@ async fn archived_channels_cannot_be_changed() {
         .await
         .unwrap();
     archive_channel(&fixture.hub, &channel.id).await.unwrap();
-    let error = update_channel(&fixture.hub, &channel.id, "New", "", None)
+    let error = update_channel(&fixture.hub, &channel.id, edit("New", "", None))
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("archived"), "{error:#}");

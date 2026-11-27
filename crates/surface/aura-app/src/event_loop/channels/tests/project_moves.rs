@@ -2,8 +2,8 @@
 
 use super::super::*;
 use super::support::{
-    is_listed, listed_count, new_channel, new_channel_in, placement, projects_tree, spawn_under,
-    stored_placement,
+    edit, is_listed, listed_count, new_channel, new_channel_in, placement, projects_tree,
+    spawn_under, stored_placement,
 };
 use crate::event_loop::subagents::tests::fixture;
 use crate::event_loop::tests::support::open_project;
@@ -25,7 +25,7 @@ async fn switching_projects_moves_every_member_and_frees_the_old_project() {
     assert_eq!(listed_count(&fixture, &a), Some(3));
     assert_eq!(listed_count(&fixture, &b), Some(1));
 
-    update_channel(&fixture.hub, &channel.id, "", "", Some(b.clone()))
+    update_channel(&fixture.hub, &channel.id, edit("", "", Some(b.clone())))
         .await
         .unwrap();
     assert_eq!(listed_count(&fixture, &a), Some(1));
@@ -146,7 +146,7 @@ async fn clearing_a_project_keeps_it_on_the_projects_list() {
     }
     assert_eq!(listed_count(&fixture, &launch), Some(2));
 
-    update_channel(&fixture.hub, &channel.id, "", "", None)
+    update_channel(&fixture.hub, &channel.id, edit("", "", None))
         .await
         .unwrap();
     let (rows, projects) = projects_tree(&fixture);

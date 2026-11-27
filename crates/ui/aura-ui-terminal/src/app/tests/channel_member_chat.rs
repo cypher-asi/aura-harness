@@ -25,7 +25,8 @@ pub(super) fn switch_request(rx: &mut mpsc::Receiver<UiEvent>) -> Option<String>
 }
 
 /// Lay out the MEMBERS rows of [`app_in_channel`] at column 81, from row
-/// 5 down: `co` on row 5, `re` on 6, the subagent `sb` on 7.
+/// 5 down, two rows each: `co` on rows 5 and 6, `re` on 7 and 8, the
+/// subagent `sb` on 9 and 10.
 fn lay_out_member_rows(app: &mut App) {
     app.set_channel_member_rows_area(Rect::new(81, 5, 28, 10));
 }
@@ -64,18 +65,19 @@ fn test_members_side_tab_moves_its_highlight_and_enter_opens_the_members_chat() 
 fn test_clicking_a_member_opens_its_chat_and_the_coordinators_row_goes_back() {
     let (_dir, mut app, mut rx) = app_in_channel_with_events("co");
     lay_out_member_rows(&mut app);
-    app.click_channel_member(82, 6);
+    app.click_channel_member(82, 7);
     assert_eq!(switch_request(&mut rx).as_deref(), Some("re"));
     assert_eq!(app.member_chat().map(|m| m.id.as_str()), Some("re"));
     assert!(app.channel_open());
 
-    // A subagent, nested under a member, opens the same way.
-    app.click_channel_member(82, 7);
+    // A subagent, nested under a member, opens the same way, from its
+    // status row too.
+    app.click_channel_member(82, 10);
     assert_eq!(switch_request(&mut rx).as_deref(), Some("sb"));
     assert_eq!(app.member_chat().map(|m| m.id.as_str()), Some("sb"));
     assert!(app.channel_open());
 
-    app.click_channel_member(82, 5);
+    app.click_channel_member(82, 6);
     assert_eq!(switch_request(&mut rx).as_deref(), Some("co"));
     assert!(app.member_chat().is_none(), "back on the channel's chat");
     assert!(app.channel_open());
@@ -158,7 +160,7 @@ fn test_a_member_chat_sends_to_the_member_and_names_it() {
     assert_eq!(app.app_placeholder().as_deref(), Some("Message #zode"));
     app.open_channel_member(1);
     switch_request(&mut rx);
-    assert_eq!(app.app_placeholder().as_deref(), Some("Message Reviewer"));
+    assert_eq!(app.app_placeholder().as_deref(), Some("Message RE36"));
     assert_eq!(
         app.channel_chat_title().map(|(slug, _)| slug).as_deref(),
         Some("#zode"),

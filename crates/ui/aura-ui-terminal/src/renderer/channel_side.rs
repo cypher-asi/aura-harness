@@ -1,19 +1,27 @@
 //! The right column's panel while a channel is open: its MEMBERS and its
 //! INFO, and none of the agent app's tabs.
 //!
-//! MEMBERS is the coordinator, then the agents it spawned in a tree below
-//! it, drawn as nested agents are under PROJECTS, each with the spinner
-//! while it works and its code at the right:
+//! MEMBERS is the coordinator, then the agents it started, each with the
+//! subagents it spawned in a tree below it, drawn as nested agents are
+//! under PROJECTS. Each takes two rows: the permanent agent it is an
+//! instance of (`subagent` for a subagent of none), with the spinner
+//! while it works and its code at the right, then in gray what it works
+//! on, its title (a subagent's subtask), else `Working…` or `Idle`:
 //!
 //! ```text
-//!      Coordinator              CO
-//!       └─ Worker               WK
+//!     coordinator               CO
+//!     Idle
+//!     rust-engineer           REN3
+//!     Fix parser escapes
+//!     └── subagent            SB12
+//!         Write the escape tests
 //! ```
 //!
 //! INFO is what the channel is, as an info document: its slug, title
-//! and description, who coordinates it, how many members it has, and
-//! the project its agents work in. A right click anywhere in it opens
-//! the channel's menu, whose "Edit channel…" sets or clears the project.
+//! and description, who coordinates it, how many members it has, the
+//! project its agents work in and where the members it starts run. A
+//! right click anywhere in it opens the channel's menu, whose "Edit
+//! channel…" changes the project and where agents run.
 //!
 //! ```text
 //! #zode
@@ -27,6 +35,9 @@
 //!
 //! PROJECT
 //!   Zode  ~/code/zode
+//!
+//! AGENTS RUN
+//!   In the cloud
 //! ```
 //!
 //! Without a project, PROJECT says so, wrapped to the column:
@@ -39,13 +50,28 @@
 use super::agents::projects::spawn_guides;
 use super::agents::working_icon;
 use super::chrome::{Body, ScrollView};
+use super::modals::placement_name;
 use super::side_list::render_empty;
 use super::text::display_width;
-use crate::app::{AgentRowEnd, HoverTarget, PanelFocus};
-use crate::components::{cell_style, tree_row, CellState, Info, StatusIcon, Value};
+use crate::animation::AURA_WIDTH;
+use crate::app::{AgentRowEnd, HoverTarget, PanelFocus, CHANNEL_MEMBER_ROWS};
+use crate::components::{
+    cell_style, tree_row, truncate_record_info, CellState, Info, StatusIcon, Value, ROW_INSET,
+};
 use crate::events::{AgentSummary, ChannelSummary};
+use crate::host::PlacementView;
 use crate::{App, Theme};
-use ratatui::{layout::Rect, style::Style, text::Line, Frame};
+use ratatui::{
+    layout::Rect,
+    style::{Color, Style},
+    text::{Line, Span},
+    Frame,
+};
+
+/// What a member's second row says while it works with no title.
+const WORKING: &str = "Working…";
+/// What a member's second row says while it waits with no title.
+const IDLE: &str = "Idle";
 
 /// Draw the open channel's members into `inner`, the body below the tab
 /// bar of the panel bordered by `area`. Without an open channel there is
@@ -67,7 +93,8 @@ pub(super) fn render_channel_members(
     let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
     let visible = body.visible();
     app.set_channel_member_rows_area(body.rows());
-    let first = app.sync_channel_members_scroll(visible);
+    // A panel too short for one member's two rows still shows its name.
+    let first = app.sync_channel_members_scroll((visible / CHANNEL_MEMBER_ROWS).max(1));
     let width = body.width();
     let code_width = channel
         .members
@@ -77,28 +104,29 @@ pub(super) fn render_channel_members(
         .max()
         .unwrap_or(0);
     let lines: Vec<Line> = (first..channel.members.len())
+        .flat_map(|index| member_rows(app, (width, code_width), &channel.members, index, theme))
         .take(visible)
-        .map(|index| member_row(app, (width, code_width), &channel.members, index, theme))
         .collect();
     let view = ScrollView {
-        total: channel.members.len(),
+        total: channel.members.len() * CHANNEL_MEMBER_ROWS,
         visible,
-        first,
+        first: first * CHANNEL_MEMBER_ROWS,
     };
     body.draw(frame, lines, view, theme);
 }
 
-/// Member `index` of `members`: under the guides from the agent that
-/// spawned it, with the spinner while it works and its code at the
-/// right, in a column `code_width` wide. Lit by the keyboard while the
-/// panel is focused, else when it is the agent in the chat.
-fn member_row<'a>(
+/// Member `index` of `members`, on two rows: the permanent agent it is an
+/// instance of, under the guides from the agent that spawned it, with the
+/// spinner while it works and its code at the right, in a column
+/// `code_width` wide; then, in gray, what it works on. Lit by the keyboard
+/// while the panel is focused, else when it is the agent in the chat.
+fn member_rows<'a>(
     app: &App,
     (width, code_width): (usize, usize),
     members: &[AgentSummary],
     index: usize,
     theme: &Theme,
-) -> Line<'a> {
+) -> [Line<'a>; CHANNEL_MEMBER_ROWS] {
     let member = &members[index];
     let selected = if app.focus() == PanelFocus::Sandbox {
         app.selected_channel_member() == index
@@ -106,31 +134,103 @@ fn member_row<'a>(
         member.id == app.active_agent_id()
     };
     let hovered = app.hover() == Some(HoverTarget::ChannelMemberRow(index));
+    let state = CellState::of(selected, hovered);
     let name = if member.depth == 0 {
         theme.colors.foreground
     } else {
         theme.colors.muted
     };
-    let cell = cell_style(
-        theme,
-        CellState::of(selected, hovered),
-        Style::default().fg(name),
-    );
+    let cell = cell_style(theme, state, Style::default().fg(name));
     let icon = if app.agent_thinking(member) {
         working_icon(app, theme)
     } else {
         StatusIcon::new("", theme.colors.muted)
     };
     let end = AgentRowEnd::definition(width, (member_code(app, member), code_width));
-    tree_row(
+    let guides = spawn_guides(members, index);
+    let name_row = tree_row(
         width,
-        (&spawn_guides(members, index), theme.colors.muted),
+        (&guides, theme.colors.muted),
         icon,
-        (&member.name, None),
+        (member_name(member), None),
         cell,
         &end,
         &[],
-    )
+    );
+    let status = cell_style(theme, state, Style::default().fg(theme.colors.muted));
+    let status_row = status_row(
+        width,
+        &status_guides(&guides),
+        &member_status(app, member),
+        (status.bg, status.text),
+        theme,
+    );
+    [name_row, status_row]
+}
+
+/// What a member's first row calls it: the permanent agent it is an
+/// instance of, `subagent` for a subagent of none, else its name.
+fn member_name(member: &AgentSummary) -> &str {
+    match member.definition.as_deref() {
+        Some(definition) => definition,
+        None if member.depth > 0 => "subagent",
+        None => &member.name,
+    }
+}
+
+/// What a member's second row says: its title, else the subtask it was
+/// spawned for, else whether it is working.
+fn member_status(app: &App, member: &AgentSummary) -> String {
+    member
+        .title
+        .as_deref()
+        .or(member.subtitle.as_deref())
+        .map(str::trim)
+        .filter(|status| !status.is_empty())
+        .map_or_else(
+            || {
+                let status = if app.agent_thinking(member) {
+                    WORKING
+                } else {
+                    IDLE
+                };
+                status.to_string()
+            },
+            str::to_string,
+        )
+}
+
+/// The guides of a member's second row, from `guides`, its first row's:
+/// each level's line runs on down while more agents follow at it, so an
+/// elbow onto the member runs on as a line, or ends.
+fn status_guides(guides: &str) -> String {
+    guides.replace('├', "│").replace('└', " ")
+}
+
+/// A member's second row: `guides`, then `status` where the name above
+/// starts, cut to fit, on the row's `bg` in its `text` style.
+fn status_row<'a>(
+    width: usize,
+    guides: &str,
+    status: &str,
+    (bg, text): (Option<Color>, Style),
+    theme: &Theme,
+) -> Line<'a> {
+    let fill = bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
+    let lead = format!(
+        "{}{guides}{}",
+        " ".repeat(ROW_INSET),
+        " ".repeat(AURA_WIDTH + 1)
+    );
+    let lead_width = display_width(&lead);
+    // The row keeps its blanks at the right end, as the name's row does.
+    let status = truncate_record_info(status, width.saturating_sub(lead_width + ROW_INSET));
+    let padding = width.saturating_sub(lead_width + display_width(&status));
+    Line::from(vec![
+        Span::styled(lead, fill.fg(theme.colors.muted)),
+        Span::styled(status, fill.patch(text)),
+        Span::styled(" ".repeat(padding), fill),
+    ])
 }
 
 /// The member's own code (`RE36`), or, for an agent without one, the
@@ -204,8 +304,27 @@ fn info_lines(
         ),
         None => info.text(NO_PROJECT, Value::Quiet),
     }
+    placement_section(&mut info, channel);
     info.into_lines()
 }
+
+/// The AGENTS RUN section: where the members the channel starts run. A
+/// cloud channel without a project it can use (none, or one the app no
+/// longer lists, which comes without a folder) starts them locally.
+fn placement_section(info: &mut Info<'_>, channel: &ChannelSummary) {
+    info.section("AGENTS RUN", None);
+    info.item(placement_name(channel.placement), None);
+    let usable_project = channel
+        .project
+        .as_ref()
+        .is_some_and(|project| !project.folder.is_empty());
+    if channel.placement == PlacementView::Cloud && !usable_project {
+        info.text(CLOUD_WITHOUT_PROJECT, Value::Quiet);
+    }
+}
+
+/// What INFO says of a cloud channel without a project it can use.
+const CLOUD_WITHOUT_PROJECT: &str = "Without a project new members run locally";
 
 /// What INFO says of a channel without a project.
 const NO_PROJECT: &str = "No project — agents work in the channel's folder";

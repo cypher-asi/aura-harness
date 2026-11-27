@@ -15,7 +15,7 @@ fn retitle(channels: &ChannelStore, id: &str) -> ChannelRecord {
             ChannelUpdate {
                 title: Some("New title".to_string()),
                 description: Some("New description".to_string()),
-                project_id: None,
+                ..ChannelUpdate::default()
             },
             ts(5),
         )
@@ -92,9 +92,8 @@ fn update_with_none_leaves_a_field_as_it_is() {
             .update(
                 &ch.id,
                 ChannelUpdate {
-                    title: None,
                     description: Some("Only this".to_string()),
-                    project_id: None,
+                    ..ChannelUpdate::default()
                 },
                 ts(6),
             )
@@ -226,6 +225,7 @@ fn update_rejects_blank_project_ids_and_writes_nothing() {
                         title: Some("Should not land".to_string()),
                         description: Some("Nor this".to_string()),
                         project_id: Some(Some(bad.to_string())),
+                        placement: Some(ChannelPlacement::Cloud),
                     },
                     ts(9),
                 )

@@ -212,7 +212,9 @@ pub(super) fn new_id() -> String {
 /// is a new task, waiting while the agent is busy. Other messages go into
 /// the agent's running turn if it has one that still takes input, with a
 /// line in its chat; else they start a turn that carries on with its
-/// latest task.
+/// latest task. A new member of a channel whose agents run in the cloud
+/// first starts moving to a machine of its own, and the message waits
+/// for the move.
 pub(in crate::event_loop) async fn deliver(
     state: &mut LoopState<'_>,
     notice: Notice,
@@ -222,6 +224,9 @@ pub(in crate::event_loop) async fn deliver(
         to, shown, prompt, ..
     } = notice;
     info!(agent = %to, %shown, "Delivering an inbox message");
+    if lock(&state.hub.cloud_starts).remove(&to) {
+        crate::event_loop::cloud::start_in_cloud(state, to).await;
+    }
     if kind != InboxKind::Assignment {
         if let Some(steering) = state.hub.steering(to) {
             if steering

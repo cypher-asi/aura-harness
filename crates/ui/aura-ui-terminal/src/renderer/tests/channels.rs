@@ -86,12 +86,19 @@ fn test_an_open_channel_keeps_the_list_and_lists_its_members_on_the_right() {
     at("#docs");
     at("New channel");
     assert!(!screen.contains("‹ #zode"), "{screen}");
-    // The members are in the right column, the worker under its parent.
+    // The members are in the right column, two rows each: the worker, a
+    // subagent of no permanent agent, under its parent, and each one's
+    // status in gray under its name.
     let coordinator = at("Coordinator");
-    let worker = at("Worker");
-    assert_eq!(worker.0, coordinator.0 + 1);
+    let worker = at("subagent");
+    assert_eq!(worker.0, coordinator.0 + 2);
     assert!(worker.1 > coordinator.1, "the worker is indented");
     assert!(coordinator.1 > 100, "in the right column: {screen}");
+    for (y, x) in [coordinator, worker] {
+        let status = &rows[y + 1];
+        let at = status.find("Idle").map(|i| status[..i].chars().count());
+        assert_eq!(at, Some(x), "the status under the name: {status:?}");
+    }
     // Only the channel's own tabs, and none of the agent panels.
     assert!(screen.contains("MEMBERS"), "{screen}");
     assert!(screen.contains("INFO"), "{screen}");
@@ -151,11 +158,50 @@ fn test_channel_info_tab_shows_what_the_channel_is() {
     let heading = info_row(&rows, "PROJECT");
     let project = info_row(&rows, "zodeproj");
     assert!(rows[project].contains("/src/zodeproj"), "{}", rows[project]);
-    let order = [description, coordinator, members, heading, project];
+    let placement = info_row(&rows, "AGENTS RUN");
+    let local = info_row(&rows, "Locally");
+    let order = [
+        description,
+        coordinator,
+        members,
+        heading,
+        project,
+        placement,
+        local,
+    ];
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
     let screen = rows.join("\n");
     assert!(!screen.contains("LINKED PROJECTS"), "{screen}");
     assert!(!screen.contains("No project"), "{screen}");
+}
+
+#[test]
+fn test_channel_info_says_a_cloud_channel_needs_a_project_to_run_agents_there() {
+    use crate::events::{ChannelProjectView, UiCommand};
+    let zodeproj = ChannelProjectView {
+        id: "p1".to_string(),
+        name: "zodeproj".to_string(),
+        folder: "/src/zodeproj".to_string(),
+    };
+    let missing = ChannelProjectView {
+        folder: String::new(),
+        ..zodeproj.clone()
+    };
+    for (project, falls_back) in [(Some(zodeproj), false), (None, true), (Some(missing), true)] {
+        let mut app = channel_info_app(project.clone());
+        let mut channels = app.channels().to_vec();
+        channels[0].placement = crate::host::PlacementView::Cloud;
+        app.process_command(UiCommand::SetChannels(channels));
+        let rows = render_rows(&mut app, 140);
+        let cloud = info_row(&rows, "In the cloud");
+        assert!(info_row(&rows, "AGENTS RUN") < cloud, "{project:?}");
+        let note = rows.iter().position(|row| row.contains("run locally"));
+        assert_eq!(
+            note.is_some_and(|note| note > cloud),
+            falls_back,
+            "{project:?}"
+        );
+    }
 }
 
 #[test]
@@ -227,6 +273,13 @@ fn test_the_new_channel_form_draws_the_project_chooser() {
     let label = info_row(&rows, "Project");
     let chooser = info_row(&rows, "‹ None ›");
     assert!(label < chooser, "{label} {chooser}");
+    let placement = info_row(&rows, "‹ Locally ›");
+    assert!(chooser < placement, "{chooser} {placement}");
+    assert!(
+        rows[placement + 1].contains("New members run on this computer"),
+        "{}",
+        rows[placement + 1]
+    );
     for hint in ["agents work in", "choose project", "Ctrl+Enter", "Esc"] {
         assert!(!screen.contains(hint), "no hints, {hint}:\n{screen}");
     }
@@ -237,6 +290,7 @@ fn test_the_form_shows_a_chosen_project_and_its_folder() {
     use crossterm::event::{KeyCode, KeyEvent};
     let mut app = channels_app_with_projects();
     app.start_new_channel();
+    app.handle_key(KeyEvent::from(KeyCode::BackTab));
     app.handle_key(KeyEvent::from(KeyCode::BackTab));
     app.handle_key(KeyEvent::from(KeyCode::Right));
     let rows = render_rows(&mut app, 140);

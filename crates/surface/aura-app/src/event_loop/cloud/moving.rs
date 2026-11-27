@@ -2,11 +2,12 @@
 
 use super::*;
 
-/// Holds `agent` as moving for as long as it lives: its prompts are
-/// refused, the local kernel leaves its record alone and its footer
-/// switch shows the move. Taking and dropping it wake the HOST publisher,
-/// so the switch changes as the move starts and as it ends, however it
-/// ends.
+/// Holds `agent` as moving for as long as it lives: work sent to it
+/// waits in its queue, the local kernel leaves its record alone and its
+/// footer switch shows the move. Dropping it ends the move as
+/// [`Shared::end_move`] does, so the loop lets the agent go and starts
+/// what it queued. Taking and dropping it wake the HOST publisher, so the
+/// switch changes as the move starts and as it ends, however it ends.
 pub(super) struct MoveMark {
     shared: Arc<Shared>,
     agent: AgentId,
@@ -25,7 +26,7 @@ impl MoveMark {
 
 impl Drop for MoveMark {
     fn drop(&mut self) {
-        self.shared.moving.lock().remove(&self.agent);
+        self.shared.end_move(self.agent);
         self.shared.publish_now();
     }
 }
