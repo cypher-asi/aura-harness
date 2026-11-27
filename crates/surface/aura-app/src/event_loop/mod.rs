@@ -21,6 +21,7 @@ mod cloud;
 pub(crate) mod command_output;
 mod compare;
 mod delivery;
+pub(crate) mod factory;
 pub(crate) mod flow;
 mod flow_builder;
 pub(crate) mod gate;
@@ -243,6 +244,7 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
         link_tx,
         quit,
     };
+    factory::service::start(Arc::clone(&state.hub), commands.clone(), inbox.quit.clone());
     state.hub.name_agents();
     let active = state.active;
     state.hub.record_panel.set(active);

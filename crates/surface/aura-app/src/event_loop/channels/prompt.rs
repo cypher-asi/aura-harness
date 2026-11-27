@@ -155,7 +155,8 @@ fn render_member(
          - Keep {coordinator} to results, blockers and decisions. End each piece of work \
          with a short report: it goes back to whoever asked.\n"
     );
-    out.push_str("</channel>");
+    out.push_str("</channel>\n\n");
+    out.push_str(crate::event_loop::factory::FACTORY_RULES);
     out
 }
 

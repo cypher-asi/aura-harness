@@ -21,6 +21,7 @@ mod agents_header;
 mod bench_icon;
 mod channel_member_chat;
 mod channel_members;
+mod channel_queue;
 mod channel_side_toggle;
 mod channels;
 mod chat_links;

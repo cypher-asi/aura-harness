@@ -10,7 +10,10 @@ pub(in crate::event_loop) async fn handle_ended(state: &mut LoopState<'_>, ended
     let (agent, outcome) = state.cloud.free(ended);
     if let Some(outcome) = outcome {
         lock(&state.hub.cloud_turns).remove(&agent);
-        settle(state, agent, outcome).await;
+        let ok = outcome.failure.is_none();
+        let messages = outcome.messages.as_deref().unwrap_or_default();
+        let waits = crate::event_loop::factory::hooks::after_cloud_turn(state, agent, ok, messages);
+        settle(state, agent, outcome, waits).await;
         agents::send_agent_list(state).await;
     }
     // The turn may have written or worked through a plan.
@@ -23,12 +26,15 @@ pub(in crate::event_loop) async fn handle_ended(state: &mut LoopState<'_>, ended
 /// Settle what `agent`'s cloud turn was asked, as `outcome` says: post
 /// its answers to the channel questions and inbox requests the turn saw,
 /// or tell their senders none is coming.
-async fn settle(state: &LoopState<'_>, agent: AgentId, outcome: TurnOutcome) {
+async fn settle(state: &LoopState<'_>, agent: AgentId, outcome: TurnOutcome, waits: bool) {
     let messages = outcome.messages.as_deref();
     match (outcome.failure, messages) {
         (None, Some(messages)) => {
             channels::post_replies_from(state, agent, messages).await;
-            inbox::answer_seen(&state.hub, agent, messages);
+            // A plan turn's answer waits for the turns the factory adds.
+            if !waits {
+                inbox::answer_seen(&state.hub, agent, messages);
+            }
         }
         // Nothing tells what the turn answered: it still owes it all, as
         // an agent here whose session is gone does.

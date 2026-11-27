@@ -117,6 +117,11 @@ async fn plan_work(
             build_work(state, session, None, shown).await
         }
         Work::Build { path } => build_work(state, session, path, false).await,
+        Work::Prompt { prompt, shown } if state.hub.factory_flows.is_planning(agent_id) => {
+            // A new task plans first, rather than carrying on an old plan.
+            super::factory::hooks::plan_first(state, session).await;
+            Some(Work::Prompt { prompt, shown })
+        }
         Work::Prompt { prompt, shown } => {
             let prompt = plan_mode::continue_open_plan(state, session, prompt).await;
             Some(Work::Prompt { prompt, shown })

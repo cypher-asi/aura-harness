@@ -136,9 +136,14 @@ async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failure: Opti
     state
         .processes
         .finish(&processes::turn_id(agent_id), status);
-    if !failed && !cancelled {
+    let ok = !failed && !cancelled;
+    // A plan turn's answer waits for the build the factory starts next.
+    let waits = super::factory::hooks::after_local_turn(state, agent_id, ok);
+    if ok {
         channels::post_replies(state, agent_id).await;
-        inbox::answer(state, agent_id);
+        if !waits {
+            inbox::answer(state, agent_id);
+        }
     } else {
         channels::drop_unanswered(state, agent_id);
         inbox::give_up(state, agent_id, failure.unwrap_or("it was stopped"));

@@ -482,4 +482,11 @@ pub enum UiCommand {
         channel_id: String,
         posts: Vec<ChannelPostView>,
     },
+
+    /// The merge queue of a channel's repo, for its QUEUE tab
+    SetMergeQueue {
+        /// Channel id
+        channel_id: String,
+        queue: crate::events::MergeQueueView,
+    },
 }

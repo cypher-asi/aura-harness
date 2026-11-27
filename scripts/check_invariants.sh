@@ -155,10 +155,14 @@ run_band "§2" "append_entry_* used outside the kernel / store crates / tests" \
 #     machine's workspace for that patch, staging it in a scratch
 #     `GIT_INDEX_FILE` (`add`, `write-tree`). No commit, push, or call to
 #     a remote.
+#   * `crates/exec/aura-exec-merge-queue/src/git.rs` — the merge queue
+#     landing pushes in a worktree of its own: fetch into private refs,
+#     rebase, non-forced push of the checked result to the target branch.
+#     Closed subcommand allowlist; declared exception in docs/invariants.md.
 #   * Test files.
 run_band "§1" "Command::new(\"git\") outside the GitExecutor / declared exceptions" \
     'Command::new\("git"\)' \
-    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes/mod\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace/git\.rs|crates/engine/aura-engine-cloud/src/delta\.rs|crates/engine/aura-engine-cloud/src/hub/pull\.rs|crates/surface/aura-node/src/gateway/handlers/cloud/patch\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+    '^(crates/exec/aura-exec-tools/src/git_tool/|crates/exec/aura-exec-merge-queue/src/git\.rs|crates/agent/aura-agent/src/git\.rs|crates/surface/aura-app/src/isolation/mod\.rs|crates/surface/aura-app/src/isolation/changes/mod\.rs|crates/surface/aura-node/src/gateway/handlers/safe_workspace/git\.rs|crates/engine/aura-engine-cloud/src/delta\.rs|crates/engine/aura-engine-cloud/src/hub/pull\.rs|crates/surface/aura-node/src/gateway/handlers/cloud/patch\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
 
 # §1 — the git subcommands `changes/mod.rs` runs outside its tests (the first
 # literal of each `.arg(` / `.args([`) stay in the local-only set its row in

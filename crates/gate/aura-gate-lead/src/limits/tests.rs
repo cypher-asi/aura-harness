@@ -7,7 +7,14 @@ use super::{
 
 #[test]
 fn the_lead_keeps_every_tool_but_the_file_changing_ones() {
-    for tool in ["write_file", "edit_file", "delete_file", "git_commit"] {
+    for tool in [
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "git_commit",
+        "git_commit_push",
+        "git_ship",
+    ] {
         assert!(!keeps_tool(tool), "{tool}");
     }
     for tool in [

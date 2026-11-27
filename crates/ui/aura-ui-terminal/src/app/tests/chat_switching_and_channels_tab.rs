@@ -198,6 +198,22 @@ fn test_a_non_member_on_screen_takes_the_user_back_to_projects() {
     assert!(rx.try_recv().is_err(), "nothing is asked for in its place");
 }
 
+/// Shift+arrows go between the channel's three tabs only, from MEMBERS,
+/// ending on INFO.
+fn shift_arrows_cycle_the_channel_tabs(app: &mut App) {
+    let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
+    for (code, tab) in [
+        (KeyCode::Right, SidePanelTab::ChannelInfo),
+        (KeyCode::Right, SidePanelTab::ChannelQueue),
+        (KeyCode::Right, SidePanelTab::ChannelMembers),
+        (KeyCode::Left, SidePanelTab::ChannelQueue),
+        (KeyCode::Left, SidePanelTab::ChannelInfo),
+    ] {
+        assert!(app.handle_side_tab_key(shift(code)));
+        assert_eq!(app.side_tab(), tab);
+    }
+}
+
 #[test]
 fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     let (mut app, _rx) = app_with_others_channel();
@@ -219,17 +235,14 @@ fn test_an_open_channel_fills_the_right_column_with_members_and_info() {
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
     assert_eq!(
         SidePanelTab::tabs(true),
-        [SidePanelTab::ChannelMembers, SidePanelTab::ChannelInfo]
+        [
+            SidePanelTab::ChannelMembers,
+            SidePanelTab::ChannelInfo,
+            SidePanelTab::ChannelQueue
+        ]
     );
 
-    // Shift+arrows go between the channel's two tabs only.
-    let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
-    assert!(app.handle_side_tab_key(shift(KeyCode::Right)));
-    assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
-    assert!(app.handle_side_tab_key(shift(KeyCode::Right)));
-    assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers);
-    assert!(app.handle_side_tab_key(shift(KeyCode::Left)));
-    assert_eq!(app.side_tab(), SidePanelTab::ChannelInfo);
+    shift_arrows_cycle_the_channel_tabs(&mut app);
 
     // The agent panels stay away, and the user's flags are untouched.
     for command in ["/kernel", "/files", "/inbox", "/members", "/policies"] {
@@ -278,7 +291,11 @@ fn test_a_channel_dropped_from_the_list_gives_back_the_side_tab() {
 
 #[test]
 fn test_channel_side_tabs_are_listed_and_reached_only_in_a_channel() {
-    let channel_tabs = [SidePanelTab::ChannelMembers, SidePanelTab::ChannelInfo];
+    let channel_tabs = [
+        SidePanelTab::ChannelMembers,
+        SidePanelTab::ChannelInfo,
+        SidePanelTab::ChannelQueue,
+    ];
     for tab in channel_tabs {
         assert!(!SidePanelTab::tabs(false).contains(&tab));
     }
@@ -288,6 +305,10 @@ fn test_channel_side_tabs_are_listed_and_reached_only_in_a_channel() {
     }
     assert_eq!(
         SidePanelTab::ChannelInfo.next(true),
+        SidePanelTab::ChannelQueue
+    );
+    assert_eq!(
+        SidePanelTab::ChannelQueue.next(true),
         SidePanelTab::ChannelMembers
     );
     assert_eq!(
@@ -299,6 +320,7 @@ fn test_channel_side_tabs_are_listed_and_reached_only_in_a_channel() {
     app.show_side_tab(SidePanelTab::Trace);
     app.show_side_tab(SidePanelTab::ChannelMembers);
     app.show_side_tab(SidePanelTab::ChannelInfo);
+    app.show_side_tab(SidePanelTab::ChannelQueue);
     assert_eq!(app.side_tab(), SidePanelTab::Trace, "no channel is open");
     let mut shown = Vec::new();
     for _ in 0..SidePanelTab::tabs(false).len() * 2 {

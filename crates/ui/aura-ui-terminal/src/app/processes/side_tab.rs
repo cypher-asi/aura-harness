@@ -11,6 +11,9 @@ pub enum SidePanelTab {
     /// The open channel's description, coordinator and project.
     /// Listed only while a channel is open.
     ChannelInfo,
+    /// The merges of the open channel's merge queue, newest first.
+    /// Listed only while a channel is open, after INFO.
+    ChannelQueue,
     /// File tree of the active agent's workspace.
     #[default]
     Sandbox,
@@ -56,7 +59,7 @@ impl SidePanelTab {
 
     /// The tabs listed while a channel is open: the channel's own, and
     /// none of the agent app's.
-    const IN_CHANNEL: [Self; 2] = [Self::ChannelMembers, Self::ChannelInfo];
+    const IN_CHANNEL: [Self; 3] = [Self::ChannelMembers, Self::ChannelInfo, Self::ChannelQueue];
 
     /// The tabs the header bar lists, in order, with a channel open or
     /// not.
@@ -73,7 +76,10 @@ impl SidePanelTab {
     /// channel is open.
     #[must_use]
     pub const fn is_channel_tab(self) -> bool {
-        matches!(self, Self::ChannelMembers | Self::ChannelInfo)
+        matches!(
+            self,
+            Self::ChannelMembers | Self::ChannelInfo | Self::ChannelQueue
+        )
     }
 
     #[must_use]
@@ -81,6 +87,7 @@ impl SidePanelTab {
         match self {
             Self::ChannelMembers => "MEMBERS",
             Self::ChannelInfo => "INFO",
+            Self::ChannelQueue => "QUEUE",
             Self::Sandbox => "SANDBOX",
             Self::Repo => "REPO",
             Self::Processes => "PROCESSES",
@@ -128,6 +135,7 @@ impl SidePanelTab {
         match self {
             Self::ChannelMembers => "MBR",
             Self::ChannelInfo => "INF",
+            Self::ChannelQueue => "QUE",
             Self::Sandbox => "SBX",
             Self::Repo => "RPO",
             Self::Processes => "PRC",

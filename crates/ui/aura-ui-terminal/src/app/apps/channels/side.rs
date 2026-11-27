@@ -1,7 +1,8 @@
-//! The open channel's side panel: the MEMBERS and INFO tabs.
+//! The open channel's side panel: the MEMBERS, INFO and QUEUE tabs.
 
 use crate::app::processes::SIDE_PAGE;
 use crate::app::{contains, follow_selection, App};
+use crate::events::MergeQueueView;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
@@ -104,5 +105,38 @@ impl App {
     /// Keys of the INFO side tab, which scroll it.
     pub(in crate::app) fn handle_channel_info_key(&mut self, key: KeyEvent) {
         self.channels.info_scroll.key(key.code);
+    }
+
+    // ---- The QUEUE side tab --------------------------------------------
+
+    /// The merge queue of the open channel's repo, once the session sent
+    /// it. `None` with no channel open.
+    #[must_use]
+    pub(crate) fn open_channel_queue(&self) -> Option<&MergeQueueView> {
+        let id = self.channels.open.as_deref()?;
+        self.channels.merge_queues.get(id)
+    }
+
+    /// Keep the merge queue of channel `channel_id`'s repo, for its QUEUE
+    /// tab, in place of the one before.
+    pub(in crate::app) fn set_merge_queue(&mut self, channel_id: String, queue: MergeQueueView) {
+        self.channels.merge_queues.insert(channel_id, queue);
+    }
+
+    /// Keep the QUEUE side tab's scroll inside a document `total` lines
+    /// long shown `visible` lines at a time, returning the first line to
+    /// show.
+    pub(crate) fn sync_channel_queue_scroll(&mut self, total: usize, visible: usize) -> usize {
+        self.channels.queue_scroll.sync(total, visible)
+    }
+
+    /// Scroll the QUEUE side tab by `delta` lines, as the wheel does.
+    pub(in crate::app) fn scroll_channel_queue(&mut self, delta: isize) {
+        self.channels.queue_scroll.by(delta);
+    }
+
+    /// Keys of the QUEUE side tab, which scroll it.
+    pub(in crate::app) fn handle_channel_queue_key(&mut self, key: KeyEvent) {
+        self.channels.queue_scroll.key(key.code);
     }
 }

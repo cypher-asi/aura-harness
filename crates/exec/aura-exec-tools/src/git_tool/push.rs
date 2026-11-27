@@ -21,9 +21,9 @@ use std::time::Duration;
 
 use tracing::{info, instrument, warn};
 
-use super::executor::{list_unpushed_commits, run_git_expect_ok};
+use super::executor::{head_commit, list_unpushed_commits, run_git_expect_ok};
 use super::redact::redact_url;
-use super::{CommitInfo, GitToolError, PushPolicy, PushTarget, Pushed};
+use super::{check_not_protected, CommitInfo, GitToolError, PushPolicy, PushTarget, Pushed};
 
 /// The remote every push goes to.
 pub(super) const REMOTE: &str = "origin";
@@ -167,7 +167,7 @@ pub(super) fn check_branch_name(branch: &str) -> Result<(), GitToolError> {
 }
 
 /// The branch `HEAD` is on, or `None` when it is detached.
-async fn current_branch(
+pub(super) async fn current_branch(
     workspace: &std::path::Path,
     timeout: Duration,
 ) -> Result<Option<String>, GitToolError> {
@@ -184,7 +184,7 @@ async fn current_branch(
 }
 
 /// The URL of [`REMOTE`], with any user-info masked.
-async fn remote_url(
+pub(super) async fn remote_url(
     workspace: &std::path::Path,
     timeout: Duration,
 ) -> Result<String, GitToolError> {
@@ -230,14 +230,10 @@ pub async fn git_push_impl(
     let per_attempt_timeout = policy.per_attempt_timeout;
     let attempts = policy.attempts.max(1);
 
-    let PushPlan {
-        branch,
-        remote,
-        commits,
-        set_upstream,
-    } = plan_push(workspace, target).await?;
+    let plan = plan_push(workspace, target).await?;
+    let (remote, branch) = (plan.remote.as_str(), plan.branch.as_str());
     let refspec = format!("HEAD:refs/heads/{branch}");
-    let args = push_args(set_upstream, target.force, &refspec);
+    let args = push_args(plan.set_upstream, target.force, &refspec);
 
     let mut last_err: Option<GitToolError> = None;
     for attempt in 0..attempts {
@@ -247,19 +243,20 @@ pub async fn git_push_impl(
             info!(
                 %remote,
                 %branch,
-                commit_count = commits.len(),
+                commit_count = plan.commits.len(),
                 attempt = attempt + 1,
                 "git push succeeded"
             );
             return Ok(Pushed {
-                remote,
-                branch,
-                commits,
+                remote: plan.remote,
+                branch: plan.branch,
+                head: plan.head,
+                commits: plan.commits,
             });
         };
         let failed = FailedAttempt {
-            remote: &remote,
-            branch: &branch,
+            remote,
+            branch,
             attempt,
             attempts,
             cloud: target.only_branch.is_some(),
@@ -286,13 +283,15 @@ struct PushPlan {
     branch: String,
     /// `origin`'s URL, user-info masked.
     remote: String,
+    /// The commit `HEAD` (and so the pushed branch) points at.
+    head: String,
     commits: Vec<CommitInfo>,
     /// The push updates the current branch's own name.
     set_upstream: bool,
 }
 
-/// Resolve and check the branch, read `origin`'s URL and list the
-/// commits it lacks.
+/// Resolve and check the branch, read `origin`'s URL and `HEAD`, and
+/// list the commits `origin` lacks.
 async fn plan_push(
     workspace: &std::path::Path,
     target: PushTarget<'_>,
@@ -300,6 +299,7 @@ async fn plan_push(
     let current = current_branch(workspace, INSPECT_TIMEOUT).await?;
     let branch = resolve_branch(target, current.as_deref())?;
     let remote = remote_url(workspace, INSPECT_TIMEOUT).await?;
+    let head = head_commit(workspace, INSPECT_TIMEOUT).await?;
 
     // Best-effort unpushed commit listing: a repository that never
     // fetched from `origin` lists its recent history instead.
@@ -311,14 +311,19 @@ async fn plan_push(
     Ok(PushPlan {
         branch,
         remote,
+        head,
         commits,
         set_upstream,
     })
 }
 
 /// The branch to push: `target.branch`, else the current one; checked
-/// against the branch-name rules and the pinned branch.
-fn resolve_branch(target: PushTarget<'_>, current: Option<&str>) -> Result<String, GitToolError> {
+/// against the branch-name rules, the pinned branch and the protected
+/// branches.
+pub(super) fn resolve_branch(
+    target: PushTarget<'_>,
+    current: Option<&str>,
+) -> Result<String, GitToolError> {
     let branch = match (target.branch, current) {
         (Some(branch), _) => branch.to_string(),
         (None, Some(current)) => current.to_string(),
@@ -333,6 +338,7 @@ fn resolve_branch(target: PushTarget<'_>, current: Option<&str>) -> Result<Strin
             });
         }
     }
+    check_not_protected(&branch)?;
     Ok(branch)
 }
 

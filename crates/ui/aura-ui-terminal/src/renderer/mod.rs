@@ -5,6 +5,7 @@ mod agents;
 mod bench_panel;
 mod benchmarks;
 mod boot;
+mod channel_queue;
 mod channel_side;
 mod chat_lines;
 mod chat_panel;

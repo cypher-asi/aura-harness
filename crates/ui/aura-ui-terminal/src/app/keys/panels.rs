@@ -39,6 +39,7 @@ impl App {
             SidePanelTab::Tasks => self.handle_tasks_key(key),
             SidePanelTab::ChannelMembers => self.handle_channel_members_key(key),
             SidePanelTab::ChannelInfo => self.handle_channel_info_key(key),
+            SidePanelTab::ChannelQueue => self.handle_channel_queue_key(key),
         }
         KeyResult::continue_running()
     }
