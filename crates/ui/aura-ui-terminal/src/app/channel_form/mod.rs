@@ -2,9 +2,9 @@
 //! channel menu's "Edit channel…" opens it on a channel to change it.
 //! Its fields are a slug, a title and a description, each a line edited
 //! as the input line is (see [`edit_line`]), then the project the
-//! channel's agents work in, a chooser of "None" and every listed
-//! project, in list order, and where the members it starts run ("Agents
-//! run": locally or in the cloud).
+//! channel's agents work in, a chooser of "None", every listed project,
+//! in list order, and "New project", and where the members it starts run
+//! ("Agents run": locally or in the cloud).
 //!
 //! Keys:
 //!
@@ -13,8 +13,13 @@
 //! - On the project and on where agents run, Left goes to the choice
 //!   before and Right or Space to the next one, wrapping; other typing is
 //!   ignored there.
-//! - Enter goes to the next field, and on the last one (Agents run)
-//!   submits. Ctrl+Enter submits from any field.
+//! - Enter on "New project" opens the folder browser the projects list
+//!   uses. Esc there, or a press off it, returns to the form. A picked
+//!   folder creates the project without leaving the form, which selects
+//!   it once the project is listed. Enter otherwise goes to the next
+//!   field, and on the last one (Agents run) submits. Ctrl+Enter submits
+//!   from any field. On "New project", before that project exists, it
+//!   stays there and sends nothing.
 //! - Esc closes the form and sends nothing, as does a press off it.
 //!
 //! The slug must match `[a-z0-9-]{1,40}`. Uppercase letters typed into it
@@ -49,12 +54,28 @@ use crate::events::{ChannelProjectView, ChannelSummary, ProjectSummary, UiEvent}
 use crate::host::PlacementView;
 use crossterm::event::{KeyCode, KeyEvent};
 pub(crate) use field::ChannelField;
+use std::path::{Path, PathBuf};
 
 /// Longest slug, in characters.
 const MAX_SLUG: usize = 40;
 
 /// What the form says under a slug it refuses.
 pub(crate) const SLUG_HINT: &str = "lowercase letters, digits and -, up to 40";
+
+/// What the form says under "New project" before a folder is picked.
+pub(crate) const NEW_PROJECT_HINT: &str = "Enter picks a folder";
+
+/// What the project chooser is on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum ProjectPick {
+    /// No project
+    #[default]
+    None,
+    /// A listed project, by id
+    Listed(String),
+    /// Make one by picking its folder
+    New,
+}
 
 /// What the form does on submit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -100,10 +121,12 @@ pub(crate) struct ChannelForm {
     mode: FormMode,
     /// Slug, title and description, by [`ChannelField::text_index`]
     fields: [FieldText; 3],
-    /// Projects it offers besides "None", in order
+    /// Projects it offers besides "None" and "New project", in order
     choices: Vec<ChannelProjectView>,
-    /// Id of the chosen project; `None` for "None"
-    project: Option<String>,
+    /// Which project is chosen
+    pick: ProjectPick,
+    /// Folder of a project just asked for, until that project is listed
+    pending_folder: Option<PathBuf>,
     /// Where the members the channel starts run
     placement: PlacementView,
     /// Field the keys go to
@@ -128,7 +151,7 @@ impl ChannelForm {
     fn create(projects: &[ProjectSummary], project: Option<String>) -> Self {
         let mut form = Self::default();
         form.set_projects(projects);
-        form.project = project;
+        form.pick = project.map_or(ProjectPick::None, ProjectPick::Listed);
         form.drop_vanished_project();
         form
     }
@@ -147,7 +170,12 @@ impl ChannelForm {
                 FieldText::at_end(&channel.title),
                 FieldText::at_end(&channel.description),
             ],
-            project: channel.project.as_ref().map(|project| project.id.clone()),
+            pick: channel
+                .project
+                .as_ref()
+                .map_or(ProjectPick::None, |project| {
+                    ProjectPick::Listed(project.id.clone())
+                }),
             placement: channel.placement,
             focus: ChannelField::Title,
             ..Self::default()
@@ -181,10 +209,40 @@ impl ChannelForm {
         self.focus
     }
 
-    /// The chosen project; `None` for "None".
+    /// The chosen project; `None` for "None" and for "New project".
     pub(crate) fn project(&self) -> Option<&ChannelProjectView> {
-        let id = self.project.as_deref()?;
-        self.choices.iter().find(|choice| choice.id == id)
+        let ProjectPick::Listed(id) = &self.pick else {
+            return None;
+        };
+        self.choices.iter().find(|choice| choice.id == *id)
+    }
+
+    /// Whether the chooser is on "New project".
+    pub(crate) const fn is_new_project(&self) -> bool {
+        matches!(self.pick, ProjectPick::New)
+    }
+
+    /// What the chooser shows: "None", "New project", or the project's name.
+    pub(crate) fn project_label(&self) -> &str {
+        if self.is_new_project() {
+            "New project"
+        } else if let Some(project) = self.project() {
+            project.name.as_str()
+        } else {
+            "None"
+        }
+    }
+
+    /// Folder of a project just asked for, until that project is listed.
+    pub(crate) fn pending_folder(&self) -> Option<&Path> {
+        self.pending_folder.as_deref()
+    }
+
+    /// Remember `folder` until the project made from it is listed, and
+    /// stay on "New project" meanwhile.
+    fn await_created_folder(&mut self, folder: PathBuf) {
+        self.pick = ProjectPick::New;
+        self.pending_folder = Some(folder);
     }
 
     /// Where the members the channel starts run.
@@ -246,34 +304,71 @@ impl ChannelForm {
             }
         }
         self.choices = choices;
+        self.claim_created_project();
         self.drop_vanished_project();
     }
 
-    fn drop_vanished_project(&mut self) {
-        if self.project().is_none() {
-            self.project = None;
+    /// Select the project made from the folder the form is waiting on,
+    /// once it is listed.
+    fn claim_created_project(&mut self) {
+        let Some(folder) = self.pending_folder.clone() else {
+            return;
+        };
+        let id = self
+            .choices
+            .iter()
+            .find(|choice| folders_match(&choice.folder, &folder))
+            .map(|choice| choice.id.clone());
+        if let Some(id) = id {
+            self.pick = ProjectPick::Listed(id);
+            self.pending_folder = None;
         }
     }
 
-    /// Choose the project after the chosen one, or the one before; "None"
-    /// comes before the first and after the last.
+    fn drop_vanished_project(&mut self) {
+        let ProjectPick::Listed(id) = &self.pick else {
+            return;
+        };
+        if !self.choices.iter().any(|choice| choice.id == *id) {
+            self.pick = ProjectPick::None;
+            self.pending_folder = None;
+        }
+    }
+
+    /// Choose the project after the chosen one, or the one before. "None"
+    /// is first, "New project" is last, and the listed projects are
+    /// between them. Leaving "New project" forgets a folder it was
+    /// waiting on.
     fn cycle_project(&mut self, forward: bool) {
-        // Position 0 is "None", then the choices from 1.
-        let positions = self.choices.len() + 1;
-        let current = self
-            .project
-            .as_deref()
-            .and_then(|id| self.choices.iter().position(|choice| choice.id == id))
-            .map_or(0, |index| index + 1);
+        let listed = self.choices.len();
+        let positions = listed + 2;
+        let current = match &self.pick {
+            ProjectPick::None => 0,
+            ProjectPick::Listed(id) => self
+                .choices
+                .iter()
+                .position(|choice| choice.id == *id)
+                .map_or(0, |index| index + 1),
+            ProjectPick::New => listed + 1,
+        };
         let next = if forward {
             (current + 1) % positions
         } else {
             (current + positions - 1) % positions
         };
-        self.project = next
+        let leaving_new = matches!(self.pick, ProjectPick::New) && next != listed + 1;
+        let listed_id = next
             .checked_sub(1)
-            .and_then(|index| self.choices.get(index))
-            .map(|choice| choice.id.clone());
+            .filter(|index| *index < listed)
+            .map(|index| self.choices[index].id.clone());
+        self.pick = match listed_id {
+            Some(id) => ProjectPick::Listed(id),
+            None if next == listed + 1 => ProjectPick::New,
+            None => ProjectPick::None,
+        };
+        if leaving_new {
+            self.pending_folder = None;
+        }
     }
 
     /// Apply a key to the focused field: an editing key to a text field,
@@ -322,13 +417,14 @@ impl ChannelForm {
     }
 
     /// The event the form sends, or the field to fix first: the slug of a
-    /// new channel while it is refused, or the project while agents are
-    /// to run in the cloud without one.
+    /// new channel while it is refused, the project while "New project"
+    /// has no project yet, or the project while agents are to run in the
+    /// cloud without one.
     fn submission(&self) -> Result<UiEvent, ChannelField> {
         if !self.is_edit() && !self.slug_is_valid() {
             return Err(ChannelField::Slug);
         }
-        if self.cloud_without_project() {
+        if self.is_new_project() || self.cloud_without_project() {
             return Err(ChannelField::Project);
         }
         let typed_title = self.text(ChannelField::Title).trim();
@@ -370,6 +466,20 @@ impl ChannelForm {
                 }
             }
         })
+    }
+}
+
+/// Whether `listed` is the folder `picked`, once both are canonical when
+/// they can be. The registry stores a canonical path; the browser may
+/// hand back one that is not.
+fn folders_match(listed: &str, picked: &Path) -> bool {
+    let listed = Path::new(listed);
+    if listed == picked {
+        return true;
+    }
+    match (listed.canonicalize(), picked.canonicalize()) {
+        (Ok(listed), Ok(picked)) => listed == picked,
+        _ => false,
     }
 }
 

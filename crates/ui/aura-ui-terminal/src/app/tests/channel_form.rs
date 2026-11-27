@@ -200,25 +200,93 @@ fn test_tab_in_the_form_walks_every_field_through_the_project_and_wraps() {
 }
 
 #[test]
-fn test_left_and_right_on_the_project_cycle_none_and_each_project() {
+fn test_left_and_right_on_the_project_cycle_none_each_project_and_new() {
     let (mut app, _rx) = app_with_channel_form_and_projects();
     focus_project(&mut app);
     assert_eq!(form_project(&app), None);
+    assert!(!new_project(&app));
     let mut forward = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..2 {
         app.handle_key(key(KeyCode::Right));
         forward.push(form_project(&app));
     }
-    assert_eq!(
-        forward,
-        [Some("p1".to_string()), Some("p2".to_string()), None]
+    assert_eq!(forward, [Some("p1".to_string()), Some("p2".to_string())]);
+    app.handle_key(key(KeyCode::Right));
+    assert!(new_project(&app), "after the projects comes New project");
+    let text = drawn_text(&mut app);
+    assert!(text.contains("‹ New project ›"), "{text}");
+    assert!(
+        text.contains(super::super::channel_form::NEW_PROJECT_HINT),
+        "{text}"
     );
-    let mut back = Vec::new();
-    for _ in 0..3 {
-        app.handle_key(key(KeyCode::Left));
-        back.push(form_project(&app));
-    }
-    assert_eq!(back, [Some("p2".to_string()), Some("p1".to_string()), None]);
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(form_project(&app), None);
+    assert!(!new_project(&app), "Right wraps to None");
+    app.handle_key(key(KeyCode::Left));
+    assert!(new_project(&app), "Left from None is New project");
+}
+
+fn new_project(app: &App) -> bool {
+    app.channel_form()
+        .is_some_and(super::super::channel_form::ChannelForm::is_new_project)
+}
+
+#[test]
+fn test_new_project_picks_a_folder_and_the_form_selects_it() {
+    let (mut app, mut rx) = app_with_channel_form_and_projects();
+    type_keys(&mut app, "zode");
+    focus_project(&mut app);
+    app.handle_key(key(KeyCode::Left));
+    assert!(new_project(&app));
+
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+    assert_eq!(app.state(), AppState::ChannelForm, "no project yet");
+    assert!(rx.try_recv().is_err());
+
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.state(), AppState::SelectingFolder);
+    assert!(
+        app.channel_form().is_some(),
+        "the form stays under the browser"
+    );
+    app.handle_key(key(KeyCode::Esc));
+    assert_eq!(app.state(), AppState::ChannelForm);
+    assert!(new_project(&app));
+    assert!(app.folder_picker().is_none());
+    assert!(rx.try_recv().is_err(), "Esc picks nothing");
+
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.state(), AppState::SelectingFolder);
+    // The first row is "Use this folder", the directory the browser opened.
+    app.handle_key(key(KeyCode::Enter));
+    assert_eq!(app.state(), AppState::ChannelForm, "the form is back");
+    assert!(new_project(&app), "until the project is listed");
+    let folder = match rx.try_recv() {
+        Ok(UiEvent::CreateProject {
+            folder,
+            switch: false,
+        }) => folder,
+        other => panic!("expected a project that stays put, got {other:?}"),
+    };
+    assert!(rx.try_recv().is_err());
+
+    app.process_command(UiCommand::SetProjects(vec![
+        project_summary("p1", "alpha"),
+        crate::events::ProjectSummary {
+            id: "p9".to_string(),
+            name: "here".to_string(),
+            folder: folder.display().to_string(),
+            ..crate::events::ProjectSummary::default()
+        },
+    ]));
+    assert_eq!(form_project(&app), Some("p9".to_string()));
+    assert!(!new_project(&app));
+    app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiEvent::CreateChannel { slug, project_id: Some(project), .. })
+            if slug == "zode" && project == "p9"
+    ));
 }
 
 #[test]
@@ -401,7 +469,9 @@ fn test_choosing_none_in_the_edit_form_clears_the_project() {
     app.handle_key(key(KeyCode::BackTab));
     app.handle_key(key(KeyCode::BackTab));
     app.handle_key(key(KeyCode::Right));
-    assert_eq!(form_project(&app), None, "after the last project is None");
+    assert!(new_project(&app), "after the last project is New project");
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(form_project(&app), None, "then None");
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
     assert!(matches!(
         rx.try_recv(),

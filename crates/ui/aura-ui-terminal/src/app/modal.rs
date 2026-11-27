@@ -10,7 +10,8 @@
 //! What stands on top, the [`ModalKind`], takes keys, pastes and the
 //! pointer before anything under it. Esc backs out of it, and so does a
 //! press off its box: the approval is denied, the channel form cancelled,
-//! any other dialog closed.
+//! the folder browser cancelled (back to the channel form, when the form
+//! opened it), any other dialog closed.
 
 use super::{contains, App, AppState};
 use crate::components::ModalArea;
@@ -122,6 +123,17 @@ impl App {
         self.modals.help_scroll = first;
     }
 
+    /// Show `dialog` in place of the one open, keeping what that one was
+    /// editing. The channel form uses this so the folder browser can sit
+    /// over it: [`Self::open_dialog`] would drop the form.
+    pub(super) fn replace_dialog(&mut self, dialog: Dialog) {
+        self.modals.dialog = Some(dialog);
+        self.modals.help_scroll = 0;
+        self.modals.area = None;
+        self.release_pointer();
+        self.clear_selection();
+    }
+
     /// Open `dialog` over the screen, in place of another one open. What
     /// the pointer held underneath is let go, and the selection cleared.
     pub(super) fn open_dialog(&mut self, dialog: Dialog) {
@@ -158,7 +170,8 @@ impl App {
     }
 
     /// Esc, or a press off the modal on top: the approval is denied, the
-    /// folder browser cancelled, any other dialog closed.
+    /// folder browser cancelled (back to the channel form, when the form
+    /// opened it), any other dialog closed.
     pub(super) fn dismiss_modal(&mut self) {
         match self.modal() {
             Some(ModalKind::Approval) => self.deny_approval(),

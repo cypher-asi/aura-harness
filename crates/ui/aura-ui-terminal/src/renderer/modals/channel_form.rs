@@ -30,7 +30,7 @@
 use super::super::hud::{notice_icon, truncate};
 use super::super::text::display_width;
 use super::with_notice;
-use crate::app::channel_form::{ChannelField, ChannelForm, FormMode, SLUG_HINT};
+use crate::app::channel_form::{ChannelField, ChannelForm, FormMode, NEW_PROJECT_HINT, SLUG_HINT};
 use crate::app::NotificationType;
 use crate::components::{caret_line, Modal, ModalArea};
 use crate::host::PlacementView;
@@ -71,10 +71,13 @@ pub(super) fn render(frame: &mut Frame, app: &App, theme: &Theme) -> Option<Moda
         lines.push(label_line(form, field, theme));
         match field {
             ChannelField::Project => {
-                let name = form
-                    .project()
-                    .map_or("None", |project| project.name.as_str());
-                lines.push(chooser_line(form, field, name, theme, width));
+                lines.push(chooser_line(
+                    form,
+                    field,
+                    form.project_label(),
+                    theme,
+                    width,
+                ));
                 lines.push(project_folder_line(form, theme, width));
             }
             ChannelField::Placement => {
@@ -177,9 +180,18 @@ fn chooser_line(
     ])
 }
 
-/// The chosen project's folder, muted, when it is known. The line is
-/// blank otherwise, so the box keeps its height as projects are chosen.
+/// The chosen project's folder, muted, when it is known. "New project"
+/// says to press Enter until a folder is picked, and then shows that
+/// folder while the project is being listed. The line is blank for
+/// "None", so the box keeps its height as projects are chosen.
 fn project_folder_line(form: &ChannelForm, theme: &Theme, width: usize) -> Line<'static> {
+    if form.is_new_project() {
+        let pending = form
+            .pending_folder()
+            .map(|folder| folder.display().to_string());
+        let detail = pending.as_deref().unwrap_or(NEW_PROJECT_HINT);
+        return detail_line(detail, theme.colors.muted, width);
+    }
     match form.project().filter(|project| !project.folder.is_empty()) {
         Some(project) => detail_line(&project.folder, theme.colors.muted, width),
         None => Line::default(),

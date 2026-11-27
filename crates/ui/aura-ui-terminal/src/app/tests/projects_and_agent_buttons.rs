@@ -20,7 +20,7 @@ fn test_ctrl_n_picks_a_folder_and_opens_it_as_a_project() {
     let expected = dir.path().join("website");
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::CreateProject { folder }) if folder == expected
+        Ok(UiEvent::CreateProject { folder, switch: true }) if folder == expected
     ));
     assert_eq!(app.state(), AppState::Idle);
 }
@@ -35,7 +35,7 @@ fn test_dropping_a_folder_creates_a_project_named_after_it() {
     assert!(app.drop_path(&folder));
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::CreateProject { folder: got }) if got == folder
+        Ok(UiEvent::CreateProject { folder: got, switch: true }) if got == folder
     ));
 }
 
@@ -67,7 +67,7 @@ fn test_folder_picker_creates_a_folder_and_space_picks_it() {
     let expected = dir.path().join("new-app");
     assert!(matches!(
         rx.try_recv(),
-        Ok(UiEvent::CreateProject { folder }) if folder == expected
+        Ok(UiEvent::CreateProject { folder, switch: true }) if folder == expected
     ));
 }
 

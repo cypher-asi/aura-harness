@@ -9,7 +9,9 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
         UiEvent::SelectAgent(agent_hex) => agents::handle_select_agent(state, &agent_hex).await,
         UiEvent::FocusAgent(agent_hex) => agents::handle_focus_agent(state, &agent_hex).await,
         UiEvent::CreateAgent(name) => agents::handle_create_agent(state, name).await,
-        UiEvent::CreateProject { folder } => agents::handle_create_project(state, &folder).await,
+        UiEvent::CreateProject { folder, switch } => {
+            agents::handle_create_project(state, &folder, switch).await;
+        }
         UiEvent::AddAgentToProject(project) => {
             agents::handle_add_agent_to_project(state, &project).await;
         }

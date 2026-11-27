@@ -112,6 +112,7 @@ pub(super) fn plus(tabs: &mut Tabs) {
     );
     let event = UiEvent::CreateProject {
         folder: "/new/project".into(),
+        switch: true,
     };
     tabs.forward(tabs.front_index(), event);
 }

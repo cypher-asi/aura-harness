@@ -123,11 +123,12 @@ fn plus_opens_a_tab_holding_the_project_picked_only() {
     );
     let event = UiEvent::CreateProject {
         folder: "/new/project".into(),
+        switch: true,
     };
     tabs.forward(0, event);
     assert_eq!(
         sent(&mut events),
-        [r#"CreateProject { folder: "/new/project" }"#]
+        [r#"CreateProject { folder: "/new/project", switch: true }"#]
     );
     assert_eq!(tabs.len(), 1, "no tab until the project exists");
 
@@ -166,6 +167,7 @@ fn a_project_joins_the_tab_that_asked_for_it() {
 
     let event = UiEvent::CreateProject {
         folder: "/tmp".into(),
+        switch: true,
     };
     tabs.forward(0, event);
     assert_eq!(sent(&mut events).len(), 1);
@@ -233,6 +235,7 @@ fn plus_closed_without_a_folder_opens_no_tab() {
     // A project asked for later, as with Ctrl+N, joins the tab asking.
     let event = UiEvent::CreateProject {
         folder: "/later".into(),
+        switch: true,
     };
     tabs.forward(0, event);
     switch(&mut tabs, TWO, "a3");
@@ -259,7 +262,13 @@ fn plus_on_a_folder_already_a_project_brings_its_tab_forward() {
     let _ = sent(&mut events);
 
     tabs.new_tab();
-    tabs.forward(0, UiEvent::CreateProject { folder });
+    tabs.forward(
+        0,
+        UiEvent::CreateProject {
+            folder,
+            switch: true,
+        },
+    );
     assert_eq!(tabs.front_index(), 1);
     assert_eq!(tabs.len(), 2);
     assert!(

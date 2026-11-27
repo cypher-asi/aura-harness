@@ -10,20 +10,37 @@ impl App {
     /// Ask for a folder, then open it as a project named after it.
     /// Browsing starts in the launch directory.
     pub(in crate::app) fn prompt_new_project(&mut self) {
+        if self.start_folder_picker() {
+            self.open_dialog(Dialog::FolderPicker);
+        }
+    }
+
+    /// Ask for a folder for the channel form's "New project", over the
+    /// form, which stays open underneath.
+    pub(in crate::app) fn browse_folder_for_channel(&mut self) {
+        if self.start_folder_picker() {
+            self.replace_dialog(Dialog::FolderPicker);
+        }
+    }
+
+    /// Open the folder browser at the launch directory. Returns whether
+    /// it opened. The caller decides which dialog it stands in.
+    fn start_folder_picker(&mut self) -> bool {
         let start = std::env::current_dir()
             .ok()
             .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("/"));
         match FolderPicker::open(start) {
             Ok(picker) => {
-                self.open_dialog(Dialog::FolderPicker);
                 self.project_list.folder_picker = Some(picker);
+                true
             }
             Err(e) => {
                 self.notifications.current = Some((
                     format!("Cannot browse folders: {e}"),
                     NotificationType::Error,
                 ));
+                false
             }
         }
     }
@@ -33,17 +50,33 @@ impl App {
         self.prompt_new_project();
     }
 
-    /// Close the folder browser and open the folder as a project.
+    /// Close the folder browser and open the folder as a project. Opened
+    /// from the channel form, the form comes back and the screen stays
+    /// where it is; the form selects the project once it is listed.
     pub(in crate::app) fn choose_project_folder(&mut self, folder: PathBuf) {
+        let for_channel = self.channel_form.is_some();
         self.close_dialog();
+        if for_channel {
+            self.return_to_channel_form_with_folder(folder);
+            return;
+        }
         if let Some(tx) = &self.link.event_tx {
-            let _ = tx.try_send(UiEvent::CreateProject { folder });
+            let _ = tx.try_send(UiEvent::CreateProject {
+                folder,
+                switch: true,
+            });
         }
     }
 
-    /// Close the folder browser without creating a project.
+    /// Close the folder browser without creating a project. Opened from
+    /// the channel form, the form comes back and no notice is shown.
     pub(in crate::app) fn cancel_folder_picker(&mut self) {
+        let for_channel = self.channel_form.is_some();
         self.close_dialog();
+        if for_channel {
+            self.return_to_channel_form();
+            return;
+        }
         self.notifications.current = Some(("Cancelled".to_string(), NotificationType::Warning));
     }
 
@@ -64,6 +97,7 @@ impl App {
         };
         let event = UiEvent::CreateProject {
             folder: path.to_path_buf(),
+            switch: true,
         };
         if tx.try_send(event).is_err() {
             self.notifications.current = Some((

@@ -135,23 +135,31 @@ fn a_bad_slug_is_fixed_before_the_project() {
 }
 
 #[test]
-fn left_and_right_cycle_none_and_every_project_both_ways() {
+fn left_and_right_cycle_none_every_project_and_new_project() {
     let projects = [project("p1", "alpha"), project("p2", "beta")];
     let mut form = ChannelForm::create(&projects, None);
+    form.insert("zode");
     form.focus = ChannelField::Project;
     let mut forward = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..4 {
         assert!(form.edit_key(KeyEvent::from(KeyCode::Right)));
         forward.push(chosen(&form).map(str::to_string));
     }
     assert_eq!(
         forward,
-        [Some("p1".to_string()), Some("p2".to_string()), None]
+        [Some("p1".to_string()), Some("p2".to_string()), None, None]
     );
+    assert!(!form.is_new_project(), "the last step wraps to None");
+    assert!(form.edit_key(KeyEvent::from(KeyCode::Left)));
+    assert!(
+        form.is_new_project(),
+        "None's previous choice is New project"
+    );
+    assert_eq!(form.submission().err(), Some(ChannelField::Project));
     assert!(form.edit_key(KeyEvent::from(KeyCode::Left)));
     assert_eq!(chosen(&form), Some("p2"));
     assert!(form.edit_key(KeyEvent::from(KeyCode::Char(' '))));
-    assert_eq!(chosen(&form), None, "Space goes on, wrapping to None");
+    assert!(form.is_new_project(), "Space goes on to New project");
 }
 
 #[test]
@@ -225,10 +233,12 @@ fn editing_starts_on_where_the_channels_agents_run_and_sends_it_back() {
     ));
 
     // Clearing the project of a cloud channel is refused until it runs
-    // its agents locally.
+    // its agents locally. "None" is the choice before the channel's
+    // project; the one after is "New project".
     form.focus = ChannelField::Project;
-    assert!(form.edit_key(KeyEvent::from(KeyCode::Right)));
+    assert!(form.edit_key(KeyEvent::from(KeyCode::Left)));
     assert_eq!(chosen(&form), None);
+    assert!(!form.is_new_project());
     assert_eq!(form.submission().err(), Some(ChannelField::Project));
     form.focus = ChannelField::Placement;
     assert!(form.edit_key(KeyEvent::from(KeyCode::Left)));
@@ -240,6 +250,43 @@ fn editing_starts_on_where_the_channels_agents_run_and_sends_it_back() {
             ..
         })
     ));
+}
+
+#[test]
+fn a_picked_folder_becomes_the_chosen_project_once_it_is_listed() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().canonicalize().unwrap();
+    let mut form = ChannelForm::create(&[], None);
+    form.insert("zode");
+    form.focus = ChannelField::Project;
+    assert!(form.edit_key(KeyEvent::from(KeyCode::Left)));
+    assert!(form.is_new_project());
+    form.await_created_folder(dir.path().to_path_buf());
+    assert_eq!(form.submission().err(), Some(ChannelField::Project));
+    form.set_projects(&[ProjectSummary {
+        id: "p9".into(),
+        name: "site".into(),
+        folder: folder.display().to_string(),
+        ..ProjectSummary::default()
+    }]);
+    assert_eq!(chosen(&form), Some("p9"));
+    assert!(form.pending_folder().is_none());
+    assert!(matches!(
+        form.submission(),
+        Ok(UiEvent::CreateChannel { project_id: Some(project), .. }) if project == "p9"
+    ));
+}
+
+#[test]
+fn leaving_new_project_forgets_the_folder_it_was_waiting_on() {
+    let mut form = ChannelForm::create(&[project("p1", "alpha")], None);
+    form.focus = ChannelField::Project;
+    assert!(form.edit_key(KeyEvent::from(KeyCode::Left)));
+    form.await_created_folder(std::path::PathBuf::from("/src/gamma"));
+    assert!(form.edit_key(KeyEvent::from(KeyCode::Right)));
+    assert!(!form.is_new_project());
+    form.set_projects(&[project("p1", "alpha"), project("p9", "gamma")]);
+    assert_eq!(chosen(&form), None, "the folder was forgotten");
 }
 
 #[test]

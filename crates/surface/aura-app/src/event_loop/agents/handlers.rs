@@ -33,8 +33,10 @@ pub(crate) enum Chat {
 }
 
 /// Open `folder` as a project: a new one, the one it already is, or the
-/// one it was before it was removed. Switches to its agent.
-pub(crate) async fn handle_create_project(state: &mut LoopState<'_>, folder: &Path) {
+/// one it was before it was removed. With `switch`, the screen moves to
+/// its agent; otherwise the lists refresh and the screen stays where it
+/// is, so the channel form can select the project.
+pub(crate) async fn handle_create_project(state: &mut LoopState<'_>, folder: &Path, switch: bool) {
     let opened = {
         let mut registry = lock(&state.hub.registry);
         registry.open_project(folder).map(|(agent, opened)| {
@@ -56,7 +58,11 @@ pub(crate) async fn handle_create_project(state: &mut LoopState<'_>, folder: &Pa
     let name = project.name();
     let path = project.folder.display().to_string();
     info!(zns_id = %agent.zns_id, project = %name, folder = %path, ?opened, "Opened project");
-    activate_agent(state, agent.agent_id(), Chat::Reload).await;
+    if switch {
+        activate_agent(state, agent.agent_id(), Chat::Reload).await;
+    } else {
+        state.hub.refresh_agent_list().await;
+    }
     let notice = match opened {
         Opened::Created => UiCommand::ShowSuccess(format!("Created project {name} in {path}")),
         Opened::Existing => UiCommand::ShowWarning(format!("{path} is already project {name}")),

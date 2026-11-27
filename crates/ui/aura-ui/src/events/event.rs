@@ -155,10 +155,15 @@ pub enum UiEvent {
 
     /// User picked a folder for a project. A new project, named after the
     /// folder, gets a default agent working in it; a folder that is a
-    /// project already opens that project.
+    /// project already opens that project. With `switch`, the screen moves
+    /// to that agent. The channel form leaves it false, stays open and
+    /// selects the project once it is listed.
     CreateProject {
         /// Folder the project's agents work in
         folder: PathBuf,
+        /// Whether to show the project's agent. The projects list does;
+        /// the channel form does not.
+        switch: bool,
     },
 
     /// User asked for a new agent in the project with this id

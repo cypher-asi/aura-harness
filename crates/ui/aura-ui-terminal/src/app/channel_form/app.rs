@@ -2,7 +2,9 @@
 
 use super::{ChannelField, ChannelForm};
 use crate::app::{App, Dialog};
+use crate::events::UiEvent;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::path::PathBuf;
 
 impl App {
     /// The channel form, while it is open.
@@ -71,14 +73,48 @@ impl App {
         }
     }
 
+    /// The folder browser the form opened picked `folder`. The form comes
+    /// back and asks for the project, without switching to its agent, then
+    /// selects it once it is listed.
+    pub(in crate::app) fn return_to_channel_form_with_folder(&mut self, folder: PathBuf) {
+        self.open_dialog(Dialog::ChannelForm);
+        if !self.try_send_event(UiEvent::CreateProject {
+            folder: folder.clone(),
+            switch: false,
+        }) {
+            return;
+        }
+        if let Some(form) = self.channel_form.as_mut() {
+            form.await_created_folder(folder);
+        }
+    }
+
+    /// The folder browser the form opened was closed with no folder. The
+    /// form comes back as it was.
+    pub(in crate::app) fn return_to_channel_form(&mut self) {
+        self.open_dialog(Dialog::ChannelForm);
+    }
+
     /// Keys while the form is open, as the channel form's module docs
     /// list them.
     pub(in crate::app) fn handle_channel_form_key(&mut self, key: KeyEvent) {
-        let Some(form) = self.channel_form.as_mut() else {
+        let Some(form) = self.channel_form.as_ref() else {
             self.close_dialog();
             return;
         };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let open_picker = key.code == KeyCode::Enter
+            && !ctrl
+            && form.focus == ChannelField::Project
+            && form.is_new_project();
+        if open_picker {
+            self.browse_folder_for_channel();
+            return;
+        }
+        let Some(form) = self.channel_form.as_mut() else {
+            self.close_dialog();
+            return;
+        };
         match key.code {
             KeyCode::Esc => self.close_channel_form(),
             KeyCode::Enter if ctrl || form.focus == ChannelField::Placement => {

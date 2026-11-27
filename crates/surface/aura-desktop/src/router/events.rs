@@ -33,7 +33,7 @@ impl Tabs {
     /// The folder browser `+` opened in the tab at `from` picked a folder
     /// (`event` is its `CreateProject`).
     fn picked(&mut self, from: usize, event: UiEvent) {
-        let UiEvent::CreateProject { folder } = &event else {
+        let UiEvent::CreateProject { folder, .. } = &event else {
             return;
         };
         self.picking = None;
