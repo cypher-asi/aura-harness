@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Channel members show an `@`, as AGENTS does
+
+##### Changed
+
+- A channel's MEMBERS list marks each member with a gray `@` in the
+  icon column, as AGENTS marks a permanent agent, so its rows start one
+  column in from the border like every other list instead of leaving
+  that column blank. A member at work shows the spinner there instead,
+  and a subagent keeps the line from the member that spawned it.
+
 ### Channels show their `#` as an icon
 
 ##### Changed

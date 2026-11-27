@@ -4,14 +4,17 @@
 //! MEMBERS is the coordinator, then the agents it started, each with the
 //! subagents it spawned in a tree below it, drawn as nested agents are
 //! under PROJECTS. Each takes two rows: the permanent agent it is an
-//! instance of (`subagent` for a subagent of none), with the spinner
-//! while it works and its code at the right, then in gray what it works
-//! on, its title (a subagent's subtask), else `Working…` or `Idle`:
+//! instance of (`subagent` for a subagent of none), with its code at the
+//! right, then in gray what it works on, its title (a subagent's
+//! subtask), else `Working…` or `Idle`. A member has the `@` that marks a
+//! permanent agent on AGENTS in its icon column, and a subagent the line
+//! from the member that spawned it; either shows the spinner there while
+//! it works:
 //!
 //! ```text
-//!     coordinator               CO
+//!  @  coordinator               CO
 //!     Idle
-//!     rust-engineer           REN3
+//!  @  rust-engineer           REN3
 //!     Fix parser escapes
 //!     └── subagent            SB12
 //!         Write the escape tests
@@ -116,10 +119,12 @@ pub(super) fn render_channel_members(
 }
 
 /// Member `index` of `members`, on two rows: the permanent agent it is an
-/// instance of, under the guides from the agent that spawned it, with the
-/// spinner while it works and its code at the right, in a column
-/// `code_width` wide; then, in gray, what it works on. Lit by the keyboard
-/// while the panel is focused, else when it is the agent in the chat.
+/// instance of, under the guides from the agent that spawned it, after
+/// its `@` (a subagent has none, so its guides run on through the icon
+/// column) or the spinner while it works, with its code at the right, in
+/// a column `code_width` wide; then, in gray, what it works on. Lit by
+/// the keyboard while the panel is focused, else when it is the agent in
+/// the chat.
 fn member_rows<'a>(
     app: &App,
     (width, code_width): (usize, usize),
@@ -143,6 +148,8 @@ fn member_rows<'a>(
     let cell = cell_style(theme, state, Style::default().fg(name));
     let icon = if app.agent_thinking(member) {
         working_icon(app, theme)
+    } else if member.depth == 0 {
+        StatusIcon::new("@", theme.colors.muted)
     } else {
         StatusIcon::new("", theme.colors.muted)
     };

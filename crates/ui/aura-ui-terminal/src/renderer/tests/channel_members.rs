@@ -55,6 +55,13 @@ fn test_members_show_their_agent_and_what_each_instance_works_on_below() {
     let coordinator = at("CO");
     assert!(rows[coordinator].contains("coordinator"));
     assert!(rows[coordinator + 1].contains("Idle"));
+    // A member is marked `@` one column in from the border, as AGENTS
+    // marks a permanent agent.
+    assert!(
+        rows[coordinator].contains("│ @  coordinator"),
+        "{}",
+        rows[coordinator]
+    );
 
     // Each instance names the agent it is of, and its own work.
     let first = at("REN3");
@@ -67,8 +74,12 @@ fn test_members_show_their_agent_and_what_each_instance_works_on_below() {
         "{}",
         rows[second + 1]
     );
+    // One at work shows the spinner in place of its `@`.
+    assert!(rows[first].contains("@  rust-engineer"), "{}", rows[first]);
+    assert!(!rows[second].contains('@'), "{}", rows[second]);
 
-    // A subagent nests under its member, its subtask below its row.
+    // A subagent nests under its member, its subtask below its row, with
+    // the line from its member where a member has its `@`.
     let subagent = at("SB12");
     assert_eq!(subagent, first + 2);
     assert!(
@@ -76,6 +87,7 @@ fn test_members_show_their_agent_and_what_each_instance_works_on_below() {
         "{}",
         rows[subagent]
     );
+    assert!(!rows[subagent].contains('@'), "{}", rows[subagent]);
     let column = |row: &str, needle: &str| row.find(needle).map(|x| row[..x].chars().count());
     assert_eq!(
         column(&rows[subagent + 1], "Write the escape"),
