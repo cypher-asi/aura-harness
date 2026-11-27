@@ -89,7 +89,7 @@ impl App {
     /// Keys while the menu is open. Returns whether the key was used; any
     /// other key closes the menu and goes on to where it would have.
     pub(in crate::app) fn handle_context_menu_key(&mut self, key: KeyEvent) -> bool {
-        if !matches!(self.state, AppState::Idle | AppState::Processing) {
+        if !matches!(self.state(), AppState::Idle | AppState::Processing) {
             self.context_menu = None;
             return false;
         }

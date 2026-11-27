@@ -3,12 +3,13 @@
 //! then files and folders.
 
 use crate::app::mentions::MentionCandidate;
+use crate::components::{list_item, popup_block};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 
@@ -34,44 +35,43 @@ pub(super) fn render_mention_menu(frame: &mut Frame, chat: Rect, app: &App, them
     let rows = usize::from(height - 2);
     let cursor = app.mention_cursor();
     let scroll = (cursor + 1).saturating_sub(rows);
+    let width = usize::from(area.width.saturating_sub(2));
 
     let lines: Vec<Line<'_>> = matches
         .iter()
         .enumerate()
         .skip(scroll)
         .take(rows)
-        .map(|(idx, candidate)| candidate_line(candidate, idx == cursor, theme))
+        .map(|(idx, candidate)| candidate_line(candidate, idx == cursor, width, theme))
         .collect();
 
     let title = if matches.iter().any(|candidate| candidate.member.is_some()) {
-        " MEMBERS · FILES "
+        "MEMBERS · FILES"
     } else {
-        " FILES "
+        "FILES"
     };
-    let block = Block::default()
-        .title(title)
-        .title_bottom(
-            Line::from(" ↑/↓ select  Tab complete  Enter insert  Esc close ").right_aligned(),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.muted));
+    let hint = "↑/↓ select  Tab complete  Enter insert  Esc close";
+    let block = popup_block(Some(title), Some(hint), theme);
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// One match: the cursor marker, `@path`, and a member's name and role.
-fn candidate_line<'a>(candidate: &MentionCandidate, selected: bool, theme: &Theme) -> Line<'a> {
-    let (marker, color) = if selected {
-        ("› ", theme.colors.primary)
-    } else if candidate.is_dir {
-        ("  ", theme.colors.secondary)
+/// One match, `width` columns: `@path`, and a member's name and role.
+fn candidate_line<'a>(
+    candidate: &MentionCandidate,
+    selected: bool,
+    width: usize,
+    theme: &Theme,
+) -> Line<'a> {
+    let color = if candidate.is_dir {
+        theme.colors.secondary
     } else {
-        ("  ", theme.colors.foreground)
+        theme.colors.foreground
     };
-    let mut spans = vec![
-        Span::styled(marker, Style::default().fg(theme.colors.primary)),
-        Span::styled(format!("@{}", candidate.path), Style::default().fg(color)),
-    ];
+    let mut spans = vec![Span::styled(
+        format!("@{}", candidate.path),
+        Style::default().fg(color),
+    )];
     if let Some(member) = &candidate.member {
         spans.push(Span::raw(format!("  {}", member.name)));
         spans.push(Span::styled(
@@ -79,5 +79,5 @@ fn candidate_line<'a>(candidate: &MentionCandidate, selected: bool, theme: &Them
             Style::default().fg(theme.colors.muted),
         ));
     }
-    Line::from(spans)
+    list_item(spans, selected, width, theme)
 }

@@ -15,7 +15,7 @@ mod submit;
 pub use fields::FormField;
 
 use super::{BenchMode, BenchState};
-use crate::app::{App, AppState, NotificationType};
+use crate::app::{App, Dialog, NotificationType};
 use crate::events::{BenchExample, BenchRequest, BenchSession};
 use ratatui::layout::Rect;
 #[cfg(test)]
@@ -314,7 +314,7 @@ impl App {
         self.account
             .model_picker
             .open_for(&self.account.models, &current, target, filter);
-        self.state = AppState::SelectingModel;
+        self.open_dialog(Dialog::ModelSelector);
     }
 
     /// Put the model `id` picked in the selector on the form's row
@@ -350,7 +350,7 @@ impl App {
         *model = id.to_string();
         form.estimate = None;
         form.field = field;
-        self.state = AppState::Idle;
+        self.close_dialog();
         self.move_form_field(true);
     }
 

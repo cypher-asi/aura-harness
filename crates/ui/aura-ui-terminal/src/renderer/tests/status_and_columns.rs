@@ -8,18 +8,18 @@ fn test_folder_picker_overlay_lists_the_launch_directory() {
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
     let rows = render_rows(&mut app, 120);
     let screen = rows.join("\n");
-    assert!(screen.contains("Select project folder"));
-    assert!(screen.contains("› ✓ Use this folder"));
-    assert!(screen.contains("▰ src"));
-    assert!(screen.contains("n new folder"));
+    assert!(screen.contains("SELECT PROJECT FOLDER"), "{screen}");
+    assert!(screen.contains("› ✓ Use this folder"), "{screen}");
+    assert!(screen.contains("▰ src"), "{screen}");
+    assert!(!screen.contains("new folder"), "no key hints: {screen}");
 
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
     for c in "demo".chars() {
         app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     let screen = render_rows(&mut app, 120).join("\n");
-    assert!(screen.contains("New folder: demo"));
-    assert!(screen.contains("Enter create  Esc stop"));
+    assert!(screen.contains("New folder: demo█"), "{screen}");
+    assert!(!screen.contains("Esc stop"), "no key hints: {screen}");
 }
 
 #[test]

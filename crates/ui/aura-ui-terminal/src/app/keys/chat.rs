@@ -25,7 +25,7 @@ impl App {
                 }
                 // Enter on an empty (or blank) prompt sends the oldest
                 // queued message now, cancelling the turn that is running.
-                if self.state == AppState::Processing && self.hud.queued() > 0 {
+                if self.chat_state == AppState::Processing && self.hud.queued() > 0 {
                     self.send_queued_now();
                 }
             }
@@ -106,7 +106,7 @@ impl App {
         self.history().add(&text);
         self.scroll_chat_to_bottom();
 
-        let busy = self.state == AppState::Processing;
+        let busy = self.chat_state == AppState::Processing;
         let agent_id = self.active_agent_id.clone();
         if self.terminal_mode {
             return self.run_terminal_command(text, busy, agent_id);
@@ -150,7 +150,7 @@ impl App {
             return KeyResult::continue_running();
         }
         self.add_message(Message::shell(&command));
-        self.state = AppState::Processing;
+        self.chat_state = AppState::Processing;
         self.status = "Running...".to_string();
         let cols = self.command_columns();
         if let Some(tx) = &self.link.event_tx {
@@ -204,7 +204,7 @@ impl App {
             ));
         } else {
             self.add_message(Message::new(MessageRole::User, &text).with_images(previews));
-            self.state = AppState::Processing;
+            self.chat_state = AppState::Processing;
             self.status = "Thinking...".to_string();
         }
 

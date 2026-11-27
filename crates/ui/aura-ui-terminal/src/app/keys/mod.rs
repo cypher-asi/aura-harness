@@ -5,7 +5,7 @@ mod modal;
 mod normal;
 mod panels;
 
-use super::{App, AppState, NotificationType, PanelFocus};
+use super::{App, AppState, Dialog, ModalKind, NotificationType, PanelFocus};
 use crate::{events::UiEvent, input::InputHistory, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -24,7 +24,7 @@ impl App {
             && key.code == KeyCode::Enter
             && key.modifiers.is_empty()
             && self.input.text.is_empty()
-            && self.state == AppState::Processing
+            && self.state() == AppState::Processing
             && self.context_menu.is_none()
             && self.detail.view.is_none()
         {
@@ -32,12 +32,16 @@ impl App {
             return KeyResult::continue_running();
         }
 
+        if let Some(modal) = self.modal() {
+            self.modal_key(modal, key);
+            return KeyResult::continue_running();
+        }
         if self.context_menu.is_some() && self.handle_context_menu_key(key) {
             return KeyResult::continue_running();
         }
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('x')
-            && matches!(self.state, AppState::Idle | AppState::Processing)
+            && matches!(self.state(), AppState::Idle | AppState::Processing)
         {
             self.toggle_chat_expanded();
             return KeyResult::continue_running();
@@ -52,27 +56,25 @@ impl App {
         result
     }
 
+    /// A key for the modal on top, which takes every key while it is open.
+    fn modal_key(&mut self, modal: ModalKind, key: KeyEvent) {
+        match modal {
+            ModalKind::Approval => self.handle_approval_key(key),
+            ModalKind::Dialog(Dialog::Help) => self.help_key(key),
+            ModalKind::Dialog(Dialog::ProjectInfo) => self.close_dialog(),
+            ModalKind::Dialog(Dialog::ModelSelector) => self.handle_model_selector_key(key),
+            ModalKind::Dialog(Dialog::FolderPicker) => self.handle_folder_picker_key(key),
+            ModalKind::Dialog(Dialog::ChannelForm) => self.handle_channel_form_key(key),
+        }
+        self.sync_mentions();
+    }
+
     fn dispatch_key(&mut self, key: KeyEvent) -> KeyResult {
-        match self.state {
-            AppState::AwaitingApproval => self.handle_approval_key(key),
-            AppState::ShowingHelp => {
-                self.state = AppState::Idle;
-                KeyResult::continue_running()
-            }
-            AppState::ShowingProjectInfo => {
-                self.close_project_info();
-                KeyResult::continue_running()
-            }
+        match self.chat_state {
             AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode => {
                 self.handle_login_key(key)
             }
-            AppState::SelectingModel => self.handle_model_selector_key(key),
-            AppState::SelectingFolder => self.handle_folder_picker_key(key),
-            AppState::ChannelForm => {
-                self.handle_channel_form_key(key);
-                KeyResult::continue_running()
-            }
-            AppState::Idle | AppState::Processing => self.handle_normal_key(key),
+            _ => self.handle_normal_key(key),
         }
     }
 

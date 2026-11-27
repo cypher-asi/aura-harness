@@ -93,14 +93,15 @@ fn test_help_lists_the_input_keys_without_clipping() {
                 + "\n"
         })
         .collect();
-    for line in [
-        "@path      Attach a file or folder",
-        "Ctrl+V     Paste an image (or text)",
-        "Ctrl+G     Edit the input in $EDITOR",
-        "Press any key to close",
+    for (keys, what) in [
+        ("@path", "Attach a file or folder"),
+        ("Ctrl+V", "Paste an image (or text)"),
+        ("Ctrl+G", "Edit the input in $EDITOR"),
     ] {
-        assert!(screen.contains(line), "{line:?} missing:\n{screen}");
+        let line = format!("{keys:<24}{what}");
+        assert!(screen.contains(&line), "{line:?} missing:\n{screen}");
     }
+    assert!(!screen.contains("Press any key"), "no key hints:\n{screen}");
 }
 
 #[test]

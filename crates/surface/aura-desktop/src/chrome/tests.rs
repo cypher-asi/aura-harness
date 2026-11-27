@@ -329,3 +329,23 @@ fn covered_bars_are_left_to_what_covers_them() {
     assert!(model.covered);
     assert!(Layout::of(&model).bands.is_empty());
 }
+
+#[test]
+fn a_dialogs_backdrop_covers_the_bars_and_the_hamburger() {
+    let Model { panes, palette, .. } = four_panes();
+    let at = (Point::default(), Metrics::new(14.0), palette);
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 140, 40));
+    let toggle = Some(Rect::new(138, 0, 2, 1));
+    assert!(Model::new(&panes, toggle, &buffer, at)
+        .side_toggle
+        .is_some());
+
+    // The backdrop leaves every cell blank, but dark.
+    let dark = ratatui::style::Style::default().bg(ratatui::style::Color::Rgb(10, 10, 10));
+    buffer.set_style(buffer.area, dark);
+    let model = Model::new(&panes, toggle, &buffer, at);
+    assert!(model.panes.is_empty(), "{:?}", model.panes);
+    assert!(model.covered);
+    assert!(model.side_toggle.is_none());
+    assert!(Layout::of(&model).bands.is_empty());
+}

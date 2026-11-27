@@ -40,7 +40,13 @@ impl App {
     /// A thumbnail's rect covers its picture only: not the caption under
     /// it, nor the extra width a long caption gives its tile, since the
     /// terminal stretches the image over the whole rect.
+    ///
+    /// None while a modal is open: the terminal draws images over the
+    /// text, so they would show through the backdrop.
     pub(crate) fn visible_image_placements(&self) -> Vec<Placement> {
+        if self.modal().is_some() {
+            return Vec::new();
+        }
         let mut out = self.chat_thumbnail_placements();
         out.extend(self.pending_thumbnail_placements());
         out.extend(self.detail_image_placement());

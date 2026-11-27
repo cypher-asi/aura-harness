@@ -9,7 +9,7 @@
 
 mod notice;
 
-pub(super) use notice::render_notice;
+pub(super) use notice::{notice_icon, render_notice};
 
 use super::text::display_width;
 use crate::app::format::format_tokens;

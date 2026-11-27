@@ -52,14 +52,14 @@ fn enter_on_the_classifier_row_picks_it_in_the_selector_and_backspace_resets_it(
     app.bench.mode = Some(BenchMode::Form);
     app.bench.form.field = FormField::Classifier;
     assert!(app.bench_form_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
-    assert_eq!(app.state, AppState::SelectingModel);
+    assert_eq!(app.state(), AppState::SelectingModel);
     assert_eq!(
         app.account.model_picker.target(),
         PickerTarget::BenchClassifier
     );
 
     app.pick_bench_model(FormField::Classifier, DEEPSEEK);
-    assert_eq!(app.state, AppState::Idle);
+    assert_eq!(app.state(), AppState::Idle);
     assert_eq!(app.bench.form.classifier, DEEPSEEK);
     assert_eq!(app.bench.form.field, FormField::Repeats, "on to the next");
     assert_eq!(

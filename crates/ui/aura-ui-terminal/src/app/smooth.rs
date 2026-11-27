@@ -52,7 +52,7 @@ impl App {
     pub fn chat_scroll(&self) -> Option<ChatScroll> {
         let plain = self.detail.view.is_none()
             && !self.flow.is_open()
-            && matches!(self.state, AppState::Idle | AppState::Processing);
+            && matches!(self.state(), AppState::Idle | AppState::Processing);
         self.chat.smooth.view.filter(|_| plain)
     }
 

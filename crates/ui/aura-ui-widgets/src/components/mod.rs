@@ -15,6 +15,7 @@ mod input;
 mod list_row;
 mod live_output;
 mod message;
+mod modal;
 mod progress;
 mod status;
 pub mod syntax;
@@ -40,6 +41,10 @@ pub use list_row::{
 };
 pub use live_output::{quiet_for, LiveOutput, QUIET_AFTER};
 pub use message::{DiffBlock, Message, MoreSection, ShellRun, MORE_PAGE_LINES};
+pub use modal::{
+    backdrop, caret_line, choice_line, list_item, popup_block, ListScroll, Modal, ModalArea, Tone,
+    STANDARD_WIDTH, WIDE_WIDTH,
+};
 pub use progress::ProgressBar;
 pub use status::StatusBar;
 pub use tool_card::{ToolCard, ToolStatus};

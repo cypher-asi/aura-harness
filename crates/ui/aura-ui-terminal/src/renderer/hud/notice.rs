@@ -164,7 +164,11 @@ fn raised_lines<'a>(
         .collect()
 }
 
-const fn notice_icon(kind: NotificationType, theme: &Theme) -> (&'static str, Color) {
+/// The glyph that leads a notification of `kind`, and its color.
+pub(in crate::renderer) const fn notice_icon(
+    kind: NotificationType,
+    theme: &Theme,
+) -> (&'static str, Color) {
     match kind {
         NotificationType::Success => ("✓", theme.colors.success),
         NotificationType::Warning => ("!", theme.colors.warning),

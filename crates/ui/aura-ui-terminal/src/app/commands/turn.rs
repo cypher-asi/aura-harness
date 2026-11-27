@@ -56,7 +56,13 @@ impl App {
         }
         self.chat.streaming_content.clear();
         self.finish_live_activity();
-        self.state = AppState::Idle;
+        // A dialog stays open, and a sign-in prompt keeps the input.
+        if matches!(
+            self.chat_state,
+            AppState::Processing | AppState::AwaitingApproval
+        ) {
+            self.chat_state = AppState::Idle;
+        }
         self.status = "Ready".to_string();
         self.refresh_sandbox();
         if self.log.is_open() {
@@ -71,8 +77,8 @@ impl App {
         }
         // A turn the user did not start (a background completion notice)
         // must not hide a login prompt or an approval on screen.
-        if self.state == AppState::Idle {
-            self.state = AppState::Processing;
+        if self.chat_state == AppState::Idle {
+            self.chat_state = AppState::Processing;
             self.status = "Thinking...".to_string();
         }
     }

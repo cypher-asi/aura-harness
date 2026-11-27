@@ -292,11 +292,11 @@ fn a_login_prompt_keeps_its_answer_across_a_switch() {
 
     switch_to(&mut app, "aa");
     assert_eq!(app.input(), "me@x.io", "the prompt's answer stays");
-    assert_eq!(app.state, AppState::LoginEmail);
+    assert_eq!(app.state(), AppState::LoginEmail);
 
     // aa's draft waits for a switch made outside the prompt; the
     // prompt, once answered, leaves the input empty.
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
     app.input.text.clear();
     app.input.cursor_pos = 0;
     switch_to(&mut app, "bb");

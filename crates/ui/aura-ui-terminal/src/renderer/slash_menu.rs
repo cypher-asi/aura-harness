@@ -3,12 +3,13 @@
 //! to add to the project instead.
 
 use super::text::display_width;
+use crate::components::{list_item, popup_block};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 
@@ -44,8 +45,8 @@ fn menu_rows(app: &App) -> (&'static str, &'static str, Vec<MenuRow<'_>>) {
     let commands = app.slash_matches();
     if commands.is_empty() {
         (
-            " ADD AGENT TO PROJECT ",
-            " ↑/↓ select  Tab complete  Enter add  Esc close ",
+            "ADD AGENT TO PROJECT",
+            "↑/↓ select  Tab complete  Enter add  Esc close",
             app.agent_picks()
                 .into_iter()
                 .map(|definition| MenuRow {
@@ -57,8 +58,8 @@ fn menu_rows(app: &App) -> (&'static str, &'static str, Vec<MenuRow<'_>>) {
         )
     } else {
         (
-            " COMMANDS ",
-            " ↑/↓ select  Tab complete  Enter run  Esc close ",
+            "COMMANDS",
+            "↑/↓ select  Tab complete  Enter run  Esc close",
             commands
                 .into_iter()
                 .map(|command| MenuRow {
@@ -71,31 +72,26 @@ fn menu_rows(app: &App) -> (&'static str, &'static str, Vec<MenuRow<'_>>) {
     }
 }
 
-/// One row of the menu, its description starting `label_width` columns
-/// past the marker.
-fn menu_line<'a>(row: &MenuRow<'a>, selected: bool, label_width: usize, theme: &Theme) -> Line<'a> {
-    let (marker, name_color) = if selected {
-        ("› ", theme.colors.primary)
-    } else {
-        ("  ", theme.colors.foreground)
-    };
-    let mut spans = vec![
-        Span::styled(marker, Style::default().fg(theme.colors.primary)),
-        Span::styled(row.name.clone(), Style::default().fg(name_color)),
-    ];
+/// One row of the menu, `width` columns, its description starting
+/// `label_width` columns past the marker.
+fn menu_line<'a>(
+    row: &MenuRow<'a>,
+    selected: bool,
+    (label_width, width): (usize, usize),
+    theme: &Theme,
+) -> Line<'a> {
+    let muted = Style::default().fg(theme.colors.muted);
+    let mut spans = vec![Span::styled(
+        row.name.clone(),
+        Style::default().fg(theme.colors.foreground),
+    )];
     if !row.args.is_empty() {
-        spans.push(Span::styled(
-            format!(" {}", row.args),
-            Style::default().fg(theme.colors.muted),
-        ));
+        spans.push(Span::styled(format!(" {}", row.args), muted));
     }
     let pad = label_width - row.label_width();
     spans.push(Span::raw(" ".repeat(pad + DESCRIPTION_GAP)));
-    spans.push(Span::styled(
-        row.description,
-        Style::default().fg(theme.colors.muted),
-    ));
-    Line::from(spans)
+    spans.push(Span::styled(row.description, muted));
+    list_item(spans, selected, width, theme)
 }
 
 /// Render the slash menu across the full width of `chat`, bottom-aligned
@@ -118,20 +114,17 @@ pub(super) fn render_slash_menu(frame: &mut Frame, chat: Rect, app: &App, theme:
     let cursor = app.slash_cursor();
     let scroll = (cursor + 1).saturating_sub(visible);
     let label_width = rows.iter().map(MenuRow::label_width).max().unwrap_or(0);
+    let width = usize::from(area.width.saturating_sub(2));
 
     let lines: Vec<Line<'_>> = rows
         .iter()
         .enumerate()
         .skip(scroll)
         .take(visible)
-        .map(|(idx, row)| menu_line(row, idx == cursor, label_width, theme))
+        .map(|(idx, row)| menu_line(row, idx == cursor, (label_width, width), theme))
         .collect();
 
-    let block = Block::default()
-        .title(title)
-        .title_bottom(Line::from(hint).right_aligned())
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.muted));
+    let block = popup_block(Some(title), Some(hint), theme);
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }

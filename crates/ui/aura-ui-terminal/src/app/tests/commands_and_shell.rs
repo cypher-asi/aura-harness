@@ -377,11 +377,11 @@ fn test_slash_at_terminal_prompt_is_a_path_not_a_command() {
 fn test_terminal_prompt_recalls_only_commands() {
     let mut app = App::new();
     submit(&mut app, "hello agent");
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
     submit(&mut app, "$ls");
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
     submit(&mut app, "pwd");
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
 
     app.handle_key(key(KeyCode::Up));
     assert_eq!(app.input(), "pwd");

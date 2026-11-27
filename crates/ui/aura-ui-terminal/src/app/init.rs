@@ -7,7 +7,8 @@ impl App {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: AppState::Idle,
+            chat_state: AppState::Idle,
+            modals: modal::ModalLayer::default(),
             messages: VecDeque::new(),
             input: InputState::default(),
             status: "Ready".to_string(),

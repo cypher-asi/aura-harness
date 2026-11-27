@@ -180,13 +180,12 @@ fn assert_projects_match(registry: &AgentRegistry, file: &serde_json::Value) {
     }
 }
 
-/// The version, active agent, prefixes and highest numbers of `registry`
-/// are those of `file`.
+/// The active agent, prefixes and highest numbers of `registry` are those
+/// of `file`, and its version is the current one: an older file is
+/// brought up to date when it is loaded.
 fn assert_meta_matches(registry: &AgentRegistry, file: &serde_json::Value) {
-    assert_eq!(
-        u64::from(registry.file.version),
-        file["version"].as_u64().unwrap()
-    );
+    assert!(u64::from(REGISTRY_VERSION) >= file["version"].as_u64().unwrap());
+    assert_eq!(registry.file.version, REGISTRY_VERSION);
     assert_eq!(registry.file.active, json_str(file, "active"));
     assert_eq!(
         Some(registry.active().zns_id.clone()),

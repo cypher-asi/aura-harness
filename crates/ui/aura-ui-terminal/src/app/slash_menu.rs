@@ -188,7 +188,7 @@ impl App {
     fn slash_menu_allowed(&self) -> bool {
         !self.input.slash_dismissed
             && !self.terminal_mode
-            && matches!(self.state, AppState::Idle | AppState::Processing)
+            && matches!(self.state(), AppState::Idle | AppState::Processing)
     }
 
     /// Commands matching the `/word` being typed. Empty while the menu is

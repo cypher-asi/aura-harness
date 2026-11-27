@@ -107,6 +107,9 @@ impl AgentRegistry {
         if self.file.version < 3 {
             self.hide_empty_projects();
         }
+        if self.file.version < 4 {
+            self.rename_channel_coordinators();
+        }
         if self.file.version < REGISTRY_VERSION {
             self.file.version = REGISTRY_VERSION;
             changed = true;

@@ -35,6 +35,7 @@ mod line_edit;
 mod list_state;
 mod members;
 pub mod mentions;
+mod modal;
 mod model_picker;
 mod mouse;
 mod notifications;
@@ -128,6 +129,7 @@ use input_state::InputState;
 use kernel_link::KernelLink;
 use list_state::ListState;
 pub use members::{MemberRow, RecordsTab};
+pub use modal::{Dialog, ModalKind};
 pub use model_picker::{ModelPicker, ModelTab, PickerLayout, PickerTarget};
 use notifications::Notifications;
 pub use panel_areas::PanelAreas;
@@ -221,8 +223,13 @@ pub enum AppState {
 
 /// Main application struct managing UI state.
 pub struct App {
-    /// Current application state
-    pub(super) state: AppState,
+    /// What the chat is doing: idle, at work, waiting on an approval, or
+    /// asking for a sign-in on the input line. A dialog open over it is
+    /// kept apart, in `modals`, so a turn moving on leaves the dialog be.
+    pub(super) chat_state: AppState,
+    /// The dialog open over the screen, under an approval or not, where
+    /// the modal on top was drawn, and the help dialog's scroll
+    pub(super) modals: modal::ModalLayer,
     /// Conversation messages
     pub(super) messages: VecDeque<Message>,
     /// The input box: its text, cursor, histories, menus, images and

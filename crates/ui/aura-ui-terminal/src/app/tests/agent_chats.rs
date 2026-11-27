@@ -31,7 +31,7 @@ fn test_enter_on_active_agent_sends_nothing() {
 #[test]
 fn test_agent_switch_allowed_while_processing() {
     let (mut app, mut rx) = app_with_agents();
-    app.state = AppState::Processing;
+    app.chat_state = AppState::Processing;
 
     app.handle_command("/agent 2");
 

@@ -87,7 +87,7 @@ fn newline_keys_on_an_empty_line_break_it_from_any_panel() {
 #[test]
 fn newline_keys_do_not_break_login_prompts() {
     let mut app = App::new();
-    app.state = AppState::LoginEmail;
+    app.chat_state = AppState::LoginEmail;
     type_chars(&mut app, "me@x.io");
 
     app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
@@ -128,12 +128,12 @@ fn up_and_down_move_between_lines_at_the_same_column() {
 fn up_and_down_recall_history_from_the_first_and_last_lines() {
     let mut app = App::new();
     submit(&mut app, "older");
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
     type_chars(&mut app, "one");
     app.handle_key(shift_enter());
     type_chars(&mut app, "two");
     app.handle_key(key(KeyCode::Enter));
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
     assert_eq!(app.input(), "");
 
     // Recalled, the two-line message has the cursor at its end; Up walks
@@ -155,7 +155,7 @@ fn up_and_down_recall_history_from_the_first_and_last_lines() {
 fn down_on_the_last_line_of_a_typed_draft_keeps_it() {
     let mut app = App::new();
     submit(&mut app, "older");
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
     type_chars(&mut app, "one");
     app.handle_key(shift_enter());
     type_chars(&mut app, "two");
@@ -314,23 +314,30 @@ fn clicks_beside_the_stop_button_do_not_cancel() {
 }
 
 #[test]
-fn the_stop_button_cancels_a_turn_waiting_for_approval() {
+fn a_press_on_the_stop_button_under_an_approval_denies_the_call() {
     use crossterm::event::{MouseButton, MouseEventKind};
 
-    let (mut app, mut rx, mut terminal, _) = busy_app_with_stop_button();
+    let (mut app, mut rx, mut terminal, stop) = busy_app_with_stop_button();
     app.process_command(approval_request("req-1", ""));
     assert_eq!(app.state(), AppState::AwaitingApproval);
     draw(&mut app, &mut terminal);
-    let stop = app.input_stop_area().expect("still busy");
 
+    // The backdrop hides the button: the press is off the approval.
     app.handle_mouse(mouse(
         MouseEventKind::Down(MouseButton::Left),
         stop.x,
         stop.y,
     ));
-    assert!(matches!(rx.try_recv(), Ok(UiEvent::Cancel(id)) if id == "aa"));
+    let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, UiEvent::Deny(id) if id == "req-1")),
+        "{events:?}"
+    );
+    assert!(!events.iter().any(|e| matches!(e, UiEvent::Cancel(_))));
     assert!(app.pending_approval().is_none());
-    assert_eq!(app.state(), AppState::Idle);
+    assert_eq!(app.state(), AppState::Processing, "the turn goes on");
 }
 
 #[test]

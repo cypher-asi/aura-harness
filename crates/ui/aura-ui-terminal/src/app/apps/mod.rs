@@ -6,8 +6,10 @@
 //! - PROJECTS shows the listed agent it was left on; failing that the
 //!   agent on screen if listed, the one under its highlight, or the first.
 //! - AGENTS shows the latest instance of the permanent agent picked in it
-//!   (a click; Enter still starts a new one), or the highlighted one when
-//!   none was picked, or says it has none.
+//!   (a click; Enter still starts a new one, but for `coordinator`, which
+//!   only a channel starts), or the highlighted one when none was picked,
+//!   or says it has none. A channel's members count as instances too,
+//!   though the projects list leaves them out (see `roster`).
 //! - BENCH shows the benchmark, the new-benchmark form or the agent of a
 //!   benchmark it was left on, else the highlighted benchmark, else the
 //!   newest (see `bench`).
@@ -419,42 +421,6 @@ impl App {
             .clone()
             .filter(|name| self.definitions.items.iter().any(|d| d.name == *name))
             .or_else(|| self.selected_definition_name())
-    }
-
-    /// Latest instance of the permanent agent `name`, listed or archived:
-    /// the one that last did something, a listed one on a tie.
-    #[must_use]
-    pub(crate) fn latest_instance(&self, name: &str) -> Option<&str> {
-        let listed = self.agents.iter().map(|agent| (agent, true));
-        let archived = self.archived.items.iter().map(|agent| (agent, false));
-        listed
-            .chain(archived)
-            .filter(|(agent, _)| agent.definition.as_deref() == Some(name))
-            .max_by_key(|(agent, listed)| (agent.last_active_ms, *listed))
-            .map(|(agent, _)| agent.id.as_str())
-    }
-
-    /// Show the latest instance of the permanent agent `name` in AGENTS,
-    /// or that it has none.
-    pub(super) fn open_definition(&mut self, name: &str) {
-        self.apps.roster = Some(name.to_string());
-        if let Some(id) = self.latest_instance(name).map(str::to_string) {
-            self.switch_on_screen(&id);
-        }
-    }
-
-    /// Whether the agent on screen is an instance of the permanent agent
-    /// AGENTS shows.
-    fn roster_shows_instance(&self) -> bool {
-        let Some(name) = self.apps.roster.as_deref() else {
-            return false;
-        };
-        self.agents
-            .iter()
-            .chain(self.archived.items.iter())
-            .any(|agent| {
-                agent.id == self.active_agent_id && agent.definition.as_deref() == Some(name)
-            })
     }
 
     /// The session put the agent on screen; `switched` when it was not on

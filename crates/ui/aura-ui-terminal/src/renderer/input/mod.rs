@@ -425,11 +425,11 @@ fn place_cursor(
     text: &TextArea,
 ) {
     // A cursor scrolled out of view stays hidden rather than being drawn
-    // on a row it is not on.
+    // on a row it is not on, and a modal hides the input and its cursor.
     let (first, visible) = (shown.top, shown.visible);
     let (row, col) = cursor;
     let cursor_shown = (first..first + visible).contains(&row);
-    if cursor_shown && !app.status().contains("Thinking") {
+    if cursor_shown && !app.status().contains("Thinking") && app.modal().is_none() {
         let y = text.y + u16::try_from(row - first).unwrap_or(0);
         let x = text
             .x

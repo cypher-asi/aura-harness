@@ -169,7 +169,7 @@ fn test_agent_picker_stays_out_of_agent_new_and_esc() {
 fn test_agent_picker_adds_while_busy() {
     let (mut app, mut rx) = app_with_definitions();
     app.focus = PanelFocus::Chat;
-    app.state = AppState::Processing;
+    app.chat_state = AppState::Processing;
     type_chars(&mut app, "/agent ");
     app.handle_key(key(KeyCode::Enter));
     assert!(matches!(
@@ -186,7 +186,7 @@ fn test_recalled_slash_command_keeps_history_navigation() {
     app.handle_key(key(KeyCode::Enter));
     type_chars(&mut app, "hello");
     app.handle_key(key(KeyCode::Enter));
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
 
     app.handle_key(key(KeyCode::Up));
     app.handle_key(key(KeyCode::Up));

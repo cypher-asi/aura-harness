@@ -90,7 +90,7 @@ fn test_spawn_command_matches_name_case_insensitively() {
 #[test]
 fn test_spawn_allowed_while_processing() {
     let (mut app, mut rx) = app_with_definitions();
-    app.state = AppState::Processing;
+    app.chat_state = AppState::Processing;
 
     app.handle_key(key(KeyCode::Enter));
 
@@ -230,6 +230,78 @@ fn test_spawning_from_roster_shows_projects() {
     assert_eq!(app.agents_tab(), AgentsTab::Projects);
 }
 
+/// The channel `#zode`, coordinated by `co`, an instance of `coordinator`
+/// the projects list leaves out.
+fn coordinated_zode() -> crate::events::ChannelSummary {
+    crate::events::ChannelSummary {
+        members: vec![instance("co", "coordinator", 10)],
+        ..zode("co")
+    }
+}
+
+/// AGENTS in front, listing `coordinator` and `reviewer`, with `channels`.
+fn app_with_coordinator(
+    channels: Vec<crate::events::ChannelSummary>,
+) -> (App, mpsc::Receiver<UiEvent>) {
+    let (mut app, rx) = app_with_agents();
+    let definition = |name: &str| crate::events::AgentDefinitionSummary {
+        name: name.to_string(),
+        ..Default::default()
+    };
+    app.process_command(UiCommand::SetAgentDefinitions(vec![
+        definition("coordinator"),
+        definition("reviewer"),
+    ]));
+    app.process_command(UiCommand::SetChannels(channels));
+    app.focus = PanelFocus::Swarm;
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.agents_tab(), AgentsTab::Roster);
+    (app, rx)
+}
+
+#[test]
+fn test_the_agents_app_opens_a_channel_coordinator_the_projects_list_leaves_out() {
+    let (mut app, mut rx) = app_with_coordinator(vec![coordinated_zode()]);
+
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "co"));
+    assert_eq!(app.active_agent_id(), "co");
+    assert!(!app.app_empty());
+
+    // The session confirming it keeps AGENTS in front, showing it.
+    app.process_command(UiCommand::SetActiveAgent("co".to_string()));
+    assert_eq!(app.agents_tab(), AgentsTab::Roster);
+    assert_eq!(app.active_agent_id(), "co");
+    assert!(!app.app_empty());
+}
+
+#[test]
+fn test_enter_on_coordinator_opens_its_latest_instead_of_starting_one() {
+    let (mut app, mut rx) = app_with_coordinator(Vec::new());
+    assert!(app.app_empty());
+    assert_eq!(
+        app.app_empty_message(),
+        "No coordinator has run yet. Make a channel to start one."
+    );
+
+    // With no channel there is none to open: it says how to start one.
+    app.handle_key(key(KeyCode::Enter));
+    assert!(rx.try_recv().is_err(), "nothing is started");
+    assert_eq!(app.agents_tab(), AgentsTab::Roster);
+    assert!(matches!(
+        app.notification(),
+        Some((text, NotificationType::Warning)) if text.contains("Make a channel")
+    ));
+
+    // A channel's coordinator opens, as a click would, and AGENTS stays.
+    app.process_command(UiCommand::SetChannels(vec![coordinated_zode()]));
+    app.handle_key(key(KeyCode::Enter));
+    assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "co"));
+    assert!(rx.try_recv().is_err(), "no InstantiateDefinition");
+    assert_eq!(app.agents_tab(), AgentsTab::Roster);
+    assert_eq!(app.active_agent_id(), "co");
+    assert!(!app.app_empty());
+}
+
 #[test]
 fn test_clicking_tab_bar_switches_tabs() {
     let (mut app, _rx) = app_with_agents();
@@ -300,7 +372,7 @@ fn test_mouse_move_hovers_clickable_items() {
     app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 8, 5));
     assert_eq!(app.hover(), None);
 
-    app.state = AppState::AwaitingApproval;
+    app.chat_state = AppState::AwaitingApproval;
     app.handle_mouse(mouse(MouseEventKind::Moved, 5, 5));
     assert_eq!(app.hover(), None);
 

@@ -4,7 +4,7 @@
 //! drops the image, so what is sent is exactly what the input shows.
 
 use super::image_preview::{ImagePreview, ImageView};
-use super::{App, AppState, NotificationType};
+use super::{App, AppState, Dialog, ModalKind, NotificationType};
 use crate::clipboard::Clipboard;
 use crate::events::ImageAttachment;
 use base64::Engine;
@@ -357,6 +357,7 @@ impl App {
     pub(crate) fn paste_clipboard(&mut self, clipboard: std::io::Result<Clipboard>) {
         self.ticks.redraw = true;
         match clipboard {
+            Ok(Clipboard::Image(_)) if self.modal().is_some() => {}
             Ok(Clipboard::Image(bytes)) => {
                 if let Err(problem) = self.attach_image(&bytes) {
                     self.notifications.current = Some((problem, NotificationType::Warning));
@@ -383,28 +384,29 @@ impl App {
     /// attaches the image; other text is inserted at the cursor, newlines
     /// included, instead of sending the message at the first one.
     pub fn handle_paste(&mut self, text: &str) {
+        if let Some(modal) = self.modal() {
+            // Of the modals, only the channel form has a field to paste into.
+            if modal == ModalKind::Dialog(Dialog::ChannelForm) {
+                self.notifications.current = None;
+                self.paste_into_channel_form(text);
+            }
+            return;
+        }
         if self.detail.view.is_some() {
             return;
         }
         self.notifications.current = None;
         self.clear_selection();
-        match self.state {
-            AppState::Idle | AppState::Processing => {
-                if let Some(path) = pasted_image_path(text) {
-                    self.attach_image_file(&path);
-                } else {
-                    self.insert_text(&text.replace("\r\n", "\n").replace('\r', "\n"));
-                }
-            }
-            AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode => {
-                self.insert_text(text.trim().replace(['\r', '\n'], "").as_str());
-            }
-            AppState::ChannelForm => self.paste_into_channel_form(text),
-            AppState::AwaitingApproval
-            | AppState::ShowingHelp
-            | AppState::ShowingProjectInfo
-            | AppState::SelectingModel
-            | AppState::SelectingFolder => {}
+        let prompt = matches!(
+            self.chat_state,
+            AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode
+        );
+        if prompt {
+            self.insert_text(text.trim().replace(['\r', '\n'], "").as_str());
+        } else if let Some(path) = pasted_image_path(text) {
+            self.attach_image_file(&path);
+        } else {
+            self.insert_text(&text.replace("\r\n", "\n").replace('\r', "\n"));
         }
         self.sync_mentions();
     }

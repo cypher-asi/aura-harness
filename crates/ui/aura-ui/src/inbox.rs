@@ -33,7 +33,7 @@ const NAME_OPEN: &str = "(inbox ";
 ///
 /// ```text
 /// PRC1: Fix the tokenizer
-/// (inbox assignment 3f9a2c1b from PRC1, #site coordinator)
+/// (inbox assignment 3f9a2c1b from PRC1, coordinator)
 /// ```
 ///
 /// A reply's first line says `REN4 replied: …`. Line breaks in the

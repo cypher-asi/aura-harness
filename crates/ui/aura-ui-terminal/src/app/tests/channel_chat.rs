@@ -108,7 +108,7 @@ fn test_a_message_to_members_does_not_wait_on_the_coordinator() {
     let (_dir, mut app) = app_in_channel("co");
     type_keys(&mut app, "@RE36 look");
     app.handle_key(KeyEvent::from(KeyCode::Enter));
-    assert_ne!(app.state, AppState::Processing);
+    assert_ne!(app.state(), AppState::Processing);
     assert!(app.pending.just_queued.is_none());
     assert!(
         app.notifications

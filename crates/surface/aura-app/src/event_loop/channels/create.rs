@@ -33,7 +33,7 @@ pub(crate) async fn create_channel(
             check_project(&registry, project_id)
                 .with_context(|| format!("creating channel #{slug}"))?;
         }
-        let draft = registry.coordinator_draft(&slug, home);
+        let draft = registry.coordinator_draft(home);
         let row = registry.record_for(&draft);
         (draft, row)
     };

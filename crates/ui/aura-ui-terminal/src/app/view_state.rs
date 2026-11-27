@@ -34,7 +34,7 @@ impl App {
         let groups = GroupState {
             open: &self.chat.group_open,
             expand_all: self.chat.activity_expanded,
-            turn_live: self.state == AppState::Processing,
+            turn_live: self.chat_state == AppState::Processing,
         };
         let cache = if self.terminal_mode {
             self.chat.terminal_lines.set_prompt(&self.shell_prompt);

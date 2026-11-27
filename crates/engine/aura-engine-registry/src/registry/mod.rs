@@ -39,8 +39,9 @@ const LEGACY_IDENTITY_FILE: &str = "agent_identity.txt";
 const DESKTOP_TABS_FILE: &str = "desktop_tabs";
 /// Registries written before projects were their own entries are
 /// version 0. From version 3 a project with every agent archived stays
-/// listed.
-const REGISTRY_VERSION: u32 = 3;
+/// listed. From version 4 a channel's coordinator is named `coordinator`
+/// rather than `#<slug> coordinator`.
+const REGISTRY_VERSION: u32 = 4;
 const DEFAULT_AGENT_NAME: &str = "Terminal Agent";
 /// Name of the agent created with a new project.
 const DEFAULT_PROJECT_AGENT: &str = "Agent";

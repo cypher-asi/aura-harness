@@ -12,13 +12,13 @@
 use super::hud::truncate;
 use super::text::display_width;
 use crate::app::{AppState, SubmenuEntry, WorkspaceTarget};
-use crate::components::{cell_style, CellState};
+use crate::components::{cell_style, popup_block, CellState};
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
     style::Style,
     text::Line,
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 
@@ -211,9 +211,7 @@ fn row_line(theme: &Theme, text: String, selected: bool) -> Line<'static> {
 }
 
 fn draw_box(frame: &mut Frame, theme: &Theme, area: Rect, lines: Vec<Line<'_>>) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.colors.muted));
+    let block = popup_block(None, None, theme);
     frame.render_widget(Clear, area);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }

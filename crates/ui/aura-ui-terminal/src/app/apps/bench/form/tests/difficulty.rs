@@ -44,7 +44,7 @@ fn a_difficulty_row_cycles_models_and_enter_opens_the_model_selector() {
 
     let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
     assert!(app.bench_form_key(key(KeyCode::Enter)));
-    assert_eq!(app.state, AppState::SelectingModel);
+    assert_eq!(app.state(), AppState::SelectingModel);
     assert_eq!(
         app.account.model_picker.target(),
         PickerTarget::BenchDifficulty {
@@ -57,7 +57,7 @@ fn a_difficulty_row_cycles_models_and_enter_opens_the_model_selector() {
         app.handle_key(key(KeyCode::Char(c)));
     }
     app.handle_key(key(KeyCode::Enter));
-    assert_eq!(app.state, AppState::Idle);
+    assert_eq!(app.state(), AppState::Idle);
     assert_eq!(app.bench.form.a_models[0], DEEPSEEK);
     assert_eq!(app.bench.form.field, FormField::AMedium, "on to the next");
     assert_eq!(
@@ -79,7 +79,7 @@ fn typing_on_a_difficulty_row_opens_the_selector_filtered() {
     app.bench.form.field = FormField::BHard;
     app.input.text = "gpt".to_string();
     assert!(app.bench_fill_field());
-    assert_eq!(app.state, AppState::SelectingModel);
+    assert_eq!(app.state(), AppState::SelectingModel);
     assert_eq!(app.account.model_picker.filter(), "gpt");
     assert!(app.input.text.is_empty());
     app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -103,14 +103,14 @@ fn the_selector_refuses_a_model_that_needs_a_sign_in_for_a_row() {
     app.bench.form.a = BY_DIFFICULTY.to_string();
     app.open_bench_model_picker(FormField::AMedium, "");
     app.pick_bench_model(FormField::AMedium, "openrouter/qwen/qwen3-coder");
-    assert_eq!(app.state, AppState::SelectingModel, "stays open");
+    assert_eq!(app.state(), AppState::SelectingModel, "stays open");
     assert!(app.bench.form.a_models[1].is_empty());
     assert!(app.notifications.current.as_ref().is_some_and(|(text, _)| {
         text == "Qwen3 Coder needs a sign-in first: /login openrouter"
     }));
 
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    assert_eq!(app.state, AppState::Idle, "Esc leaves the row as it was");
+    assert_eq!(app.state(), AppState::Idle, "Esc leaves the row as it was");
     assert!(app.bench.form.a_models[1].is_empty());
 }
 

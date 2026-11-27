@@ -26,6 +26,7 @@ mod commands_and_shell;
 mod ctrl_g_editor;
 mod drag_and_click;
 mod folding;
+mod modals;
 mod model_selector;
 mod multi_line_input;
 mod pasted_images;

@@ -1,7 +1,7 @@
 //! Session commands: help, the conversation, its reports and its history.
 
 use crate::{
-    app::{hud, App, AppState, NotificationType},
+    app::{hud, App, AppState, Dialog, NotificationType},
     components::{Message, MessageRole},
     events::{RewindScope, UiEvent},
 };
@@ -10,7 +10,7 @@ impl App {
     /// Run `cmd` when it is a session command; whether it was one.
     pub(super) fn session_command(&mut self, cmd: &str, arg: &str) -> bool {
         match cmd {
-            "help" | "?" => self.state = AppState::ShowingHelp,
+            "help" | "?" => self.open_dialog(Dialog::Help),
             "clear" => self.clear_command(),
             "status" | "s" => self.send_command_event(UiEvent::ShowStatus),
             "history" | "h" => self.send_command_event(UiEvent::ShowHistory(None)),
@@ -189,7 +189,7 @@ impl App {
                 NotificationType::Success,
             ));
         } else {
-            self.state = AppState::Processing;
+            self.chat_state = AppState::Processing;
             self.status = "Summarizing history...".to_string();
         }
     }
@@ -213,7 +213,7 @@ impl App {
                 NotificationType::Success,
             ));
         } else {
-            self.state = AppState::Processing;
+            self.chat_state = AppState::Processing;
             self.status = "Studying the project...".to_string();
         }
     }

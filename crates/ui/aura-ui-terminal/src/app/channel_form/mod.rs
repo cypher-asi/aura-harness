@@ -5,7 +5,7 @@
 //! channel's agents work in, a chooser of "None" and every listed
 //! project, in list order.
 //!
-//! Keys, as the form's hint lines say:
+//! Keys:
 //!
 //! - Tab or Down goes to the next field, Shift+Tab or Up to the one
 //!   before; both wrap.
@@ -13,13 +13,13 @@
 //!   the next one, wrapping; other typing is ignored there.
 //! - Enter goes to the next field, and on the last one (Project)
 //!   submits. Ctrl+Enter submits from any field.
-//! - Esc closes the form and sends nothing.
+//! - Esc closes the form and sends nothing, as does a press off it.
 //!
 //! The slug must match `[a-z0-9-]{1,40}`. Uppercase letters typed into it
 //! are lowercased as they are typed, so `Release` becomes `release`; any
-//! other character is kept, so the inline hint can say why the slug is
-//! refused. A submit with a bad slug sends nothing and puts the cursor
-//! back in the slug. An empty title becomes the slug.
+//! other character is kept, so the form can say why the slug is refused.
+//! A submit with a bad slug sends nothing and puts the cursor back in the
+//! slug. An empty title becomes the slug.
 //!
 //! A new channel's project starts as the one of the agent that was on
 //! screen before CHANNELS took over, when that project is listed. The
@@ -37,7 +37,7 @@
 //! "None" clears the project.
 
 use super::line_edit::edit_line;
-use super::{App, AppState};
+use super::{App, Dialog};
 use crate::events::{ChannelProjectView, ChannelSummary, ProjectSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub(crate) use field::ChannelField;
@@ -357,10 +357,7 @@ impl App {
     /// the agent on screen before CHANNELS chosen.
     pub(crate) fn start_new_channel(&mut self) {
         let project = self.project_before_channels();
-        self.open_channel_form(
-            ChannelForm::create(&self.project_list.projects, project),
-            "New channel",
-        );
+        self.open_channel_form(ChannelForm::create(&self.project_list.projects, project));
     }
 
     /// Open the form on listed channel `channel_id`, filled with its
@@ -371,15 +368,12 @@ impl App {
             return;
         };
         let form = ChannelForm::edit(channel, &self.project_list.projects);
-        let status = format!("Edit #{}", channel.slug);
-        self.open_channel_form(form, &status);
+        self.open_channel_form(form);
     }
 
-    fn open_channel_form(&mut self, form: ChannelForm, status: &str) {
-        self.context_menu = None;
+    fn open_channel_form(&mut self, form: ChannelForm) {
+        self.open_dialog(Dialog::ChannelForm);
         self.channel_form = Some(form);
-        self.state = AppState::ChannelForm;
-        self.status = status.to_string();
     }
 
     /// The listed project of the agent on screen before CHANNELS took
@@ -409,9 +403,7 @@ impl App {
 
     /// Close the form without sending anything.
     fn close_channel_form(&mut self) {
-        self.channel_form = None;
-        self.state = AppState::Idle;
-        self.status = "Ready".to_string();
+        self.close_dialog();
     }
 
     /// Paste `text` into the form's focused field.
@@ -424,7 +416,7 @@ impl App {
     /// Keys while the form is open; see the module docs.
     pub(super) fn handle_channel_form_key(&mut self, key: KeyEvent) {
         let Some(form) = self.channel_form.as_mut() else {
-            self.state = AppState::Idle;
+            self.close_dialog();
             return;
         };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);

@@ -332,7 +332,7 @@ impl App {
     /// call asking), so the picker is not re-synced before they show.
     #[must_use]
     pub fn mention_matches(&self) -> &[MentionCandidate] {
-        let typing = matches!(self.state, AppState::Idle | AppState::Processing);
+        let typing = matches!(self.state(), AppState::Idle | AppState::Processing);
         if typing && self.input.mentions.query.is_some() {
             &self.input.mentions.matches
         } else {
@@ -352,7 +352,7 @@ impl App {
     /// Bring the `@` picker in line with the input: open it on an `@word`
     /// at the cursor, re-rank when the word changed, close it otherwise.
     pub(super) fn sync_mentions(&mut self) {
-        let active = matches!(self.state, AppState::Idle | AppState::Processing)
+        let active = matches!(self.state(), AppState::Idle | AppState::Processing)
             && self.detail.view.is_none();
         let word = active
             .then(|| mention_at(&self.input.text, self.input.cursor_pos))

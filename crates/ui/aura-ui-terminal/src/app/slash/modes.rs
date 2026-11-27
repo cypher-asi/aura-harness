@@ -1,7 +1,7 @@
 //! Mode commands: plan mode, building plans, work modes and approval levels.
 
 use crate::{
-    app::{App, AppState, NotificationType},
+    app::{App, NotificationType},
     components::{Message, MessageRole},
     events::UiEvent,
     mode_command::{parse_approval_command, ApprovalLevel, PermissionMode, SlashModeCommand},
@@ -22,10 +22,7 @@ impl App {
 
     /// Whether a turn owns the session, so the mode can't change under it.
     fn turn_running(&self) -> bool {
-        matches!(
-            self.state,
-            AppState::Processing | AppState::AwaitingApproval
-        )
+        self.is_busy()
     }
 
     /// `/plan`: enter plan mode, or leave it when the agent is already there.

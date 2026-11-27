@@ -45,7 +45,7 @@ impl App {
     }
 
     fn cmd_prompt_link_code(&mut self, provider: &str) {
-        self.state = AppState::LinkCode;
+        self.chat_state = AppState::LinkCode;
         self.input.text.clear();
         self.input.cursor_pos = 0;
         self.status = format!("{provider} — paste the code from the sign-in page");
@@ -53,8 +53,8 @@ impl App {
 
     fn cmd_end_link(&mut self) {
         self.pending.model = None;
-        if self.state == AppState::LinkCode {
-            self.state = AppState::Idle;
+        if self.chat_state == AppState::LinkCode {
+            self.chat_state = AppState::Idle;
             self.input.text.clear();
             self.input.cursor_pos = 0;
         }

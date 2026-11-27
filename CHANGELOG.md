@@ -7,6 +7,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Dialogs share one look, over a dark screen
+
+##### Changed
+
+- The approval, help, model selector, project folder browser, project
+  details and channel form are drawn alike: a box in the middle of the
+  screen, titled in capitals on its top border, over a dark screen that
+  hides everything under it, pictures, the input's cursor and the
+  desktop's panel bars included.
+- Dialogs show no key hints. `/help` lists the dialogs' keys under IN
+  DIALOGS, and scrolls with the arrows, PgUp/PgDn and the wheel. A list
+  longer than its dialog shows a scrollbar on the box's right border
+  instead of `↑ more` and `↓ more` rows.
+- Clicking off a dialog closes it as Esc does: an approval is denied,
+  the channel form and the folder browser are cancelled. The click goes
+  no further, so nothing under the dialog is clicked.
+- A notice raised while a dialog is open, such as a folder that can't
+  be opened, shows in the dialog. A refused channel slug says why there.
+- A dialog opened during a turn stays open when the turn ends, and
+  closing it goes back to what the chat is doing. An approval that comes
+  while a dialog is open shows over it; once it is answered, the dialog
+  is back as it was left.
+- The `/` and `@` menus and the right-click menu share the dialogs'
+  frame and highlighted row.
+
 ### BENCH rows name what ran, and every list lines up
 
 ##### Changed
@@ -66,6 +91,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The switch lights up like a button under the pointer, one column past
   each side of its label, and those columns take the click too. It
   doesn't light while it shows a move or on another user's agent.
+
+### The projects list's cloud is gray
+
+##### Changed
+
+- The `☁` after a cloud agent's name in the PROJECTS tab is gray instead
+  of white. Another user's cloud agent keeps its dimmer `☁ Alice`.
 
 ### A channel member's own chat
 

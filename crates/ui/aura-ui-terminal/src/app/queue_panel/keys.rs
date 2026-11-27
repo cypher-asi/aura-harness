@@ -34,7 +34,7 @@ impl App {
         let enters = key.code == KeyCode::Up
             && key.modifiers == KeyModifiers::SHIFT
             && self.focus == PanelFocus::Chat
-            && matches!(self.state, AppState::Idle | AppState::Processing)
+            && matches!(self.state(), AppState::Idle | AppState::Processing)
             && !self.queue().is_empty();
         if !enters {
             return None;

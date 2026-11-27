@@ -294,6 +294,37 @@ fn the_graph_canvas_zooms_around_the_pointer() {
     assert_eq!(stage.shell.tabs.front().tui.flow().zoom(), FLOW_MIN_ZOOM);
 }
 
+#[test]
+fn a_press_on_the_graph_canvas_under_an_approval_denies_it_instead_of_panning() {
+    let mut stage = graph_at_home();
+    stage
+        .shell
+        .tabs
+        .front_mut()
+        .tui
+        .zoom_flow(2.0, Some((0.0, 0.0)));
+    stage.draw();
+    let from = canvas_spots(&stage)(0.5, 0.5);
+    stage.shell.commands([UiCommand::RequestApproval {
+        id: "req-1".to_string(),
+        tool: "run_command".to_string(),
+        description: "cargo test".to_string(),
+        always: String::new(),
+    }]);
+    stage.draw();
+    let tui = &stage.shell.tabs.front().tui;
+    assert!(tui.flow_canvas_clip().is_empty(), "the backdrop hides it");
+
+    let before = pan(&stage);
+    stage.drag(from, Point::new(from.x - 30.0, from.y));
+    assert_eq!(pan(&stage), before, "the canvas stays put");
+    let tui = &stage.shell.tabs.front().tui;
+    assert!(
+        tui.pending_approval().is_none(),
+        "the press denied the call"
+    );
+}
+
 fn pan(stage: &Stage) -> (f32, f32) {
     stage.shell.tabs.front().tui.flow().pan()
 }

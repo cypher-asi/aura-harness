@@ -376,7 +376,7 @@ pub fn truncate_line(text: &str, width: usize) -> String {
 
 /// `text` broken at spaces into lines at most `width` columns wide; a
 /// word longer than a line is broken where it reaches the edge.
-fn wrap(text: &str, width: usize) -> Vec<String> {
+pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut lines = Vec::new();
     let mut line = String::new();

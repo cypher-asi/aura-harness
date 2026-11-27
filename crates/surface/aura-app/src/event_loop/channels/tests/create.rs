@@ -24,7 +24,7 @@ async fn create_channel_writes_the_channel_and_its_coordinator_together() {
         coordinator.definition.as_deref(),
         Some(COORDINATOR_DEFINITION)
     );
-    assert_eq!(coordinator.name, "#site coordinator");
+    assert_eq!(coordinator.name, "coordinator");
     assert!(coordinator.code.is_some());
     assert!(coordinator.project_id.is_some());
     assert_eq!(coordinator.folder.as_deref(), Some(folder.as_path()));
@@ -90,7 +90,7 @@ async fn channel_prompt_gives_the_coordinator_the_channel_and_how_it_works() {
     assert!(prompt.starts_with("<channel>\nYou coordinate the channel #site: Website relaunch\n"));
     assert!(prompt.contains("Ship the new marketing site."), "{prompt}");
     assert!(
-        prompt.contains(&format!("- {code} #site coordinator (you)\n")),
+        prompt.contains(&format!("- {code} coordinator (you)\n")),
         "{prompt}"
     );
     assert!(

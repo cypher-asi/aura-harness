@@ -5,7 +5,6 @@ mod agents;
 mod bench_panel;
 mod benchmarks;
 mod boot;
-mod channel_form;
 mod channel_side;
 mod chat_lines;
 mod chat_panel;
@@ -28,6 +27,7 @@ mod input;
 mod markdown;
 mod members;
 mod mention_menu;
+mod modals;
 mod overlays;
 mod plan_doc;
 mod plans;
@@ -211,7 +211,8 @@ fn render_chat_overlays(frame: &mut Frame, chat: Rect, app: &mut App, theme: &Th
 }
 
 /// The to-do drawer, the benchmark and queue panels, the input, the
-/// footer and the notice.
+/// footer and the notice. Under a modal the notice is the modal's status
+/// instead.
 fn render_below_chat(frame: &mut Frame, layout: &FrameLayout, app: &mut App, theme: &Theme) {
     let chat_column = &layout.chat_column;
     todo_drawer::render(frame, chat_column[1], app, theme);
@@ -224,6 +225,9 @@ fn render_below_chat(frame: &mut Frame, layout: &FrameLayout, app: &mut App, the
     app.set_input_rows(drawn.rows);
     let footer_gap = hud::render_footer(frame, inset_edges(chat_column[5]), app, theme);
     app.set_footer_area(inset_edges(chat_column[5]));
+    if app.modal().is_some() {
+        return;
+    }
     let (records, sandbox) = split_right_column(layout.right, app);
     let notice_area = layout.under_right.unwrap_or(footer_gap);
     if let Some(read) = hud::render_notice(frame, (notice_area, sandbox.or(records)), app, theme) {
@@ -231,14 +235,12 @@ fn render_below_chat(frame: &mut Frame, layout: &FrameLayout, app: &mut App, the
     }
 }
 
-/// The menus, pickers and overlays drawn over everything else.
+/// The menus, then the modal on top, which darkens all of it.
 fn render_popups(frame: &mut Frame, chat: Rect, app: &mut App, theme: &Theme) {
     slash_menu::render_slash_menu(frame, chat, app, theme);
     mention_menu::render_mention_menu(frame, chat, app, theme);
     context_menu::render_context_menu(frame, app, theme);
-    overlays::render_folder_picker(frame, app, theme);
-    channel_form::render_channel_form(frame, app, theme);
-    overlays::render_overlays(frame, app, theme);
+    modals::render_modal_layer(frame, app, theme);
 }
 
 /// Drop what was drawn over from this frame's clickable areas, and take

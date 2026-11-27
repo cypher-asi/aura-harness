@@ -390,11 +390,7 @@ impl<'s> Swarm<'s> {
         } else {
             cloud.map(|(text, foreign)| RowBadge {
                 text,
-                color: if *foreign {
-                    colors.faint
-                } else {
-                    colors.primary
-                },
+                color: if *foreign { colors.faint } else { colors.muted },
             })
         }
     }

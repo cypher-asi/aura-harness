@@ -1,5 +1,5 @@
 use super::markdown::{parse_content_segments, ContentSegment};
-use super::text::{centered_rect, display_width, wrap_words};
+use super::text::{display_width, wrap_words};
 use crate::components::truncate_record_info;
 use crate::events::CallUsage;
 use crate::Theme;
@@ -28,6 +28,7 @@ mod drag_scroll;
 mod input_box;
 mod input_overlays;
 mod list_rows;
+mod modals;
 mod model_selector;
 mod notifications;
 mod panel_buttons;

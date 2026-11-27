@@ -2,7 +2,7 @@
 //! details.
 
 use crate::app::folder_picker::FolderPicker;
-use crate::app::{App, AppState, NotificationType};
+use crate::app::{App, Dialog, NotificationType};
 use crate::events::{ProjectSummary, UiEvent};
 use std::path::PathBuf;
 
@@ -16,9 +16,8 @@ impl App {
             .unwrap_or_else(|| PathBuf::from("/"));
         match FolderPicker::open(start) {
             Ok(picker) => {
+                self.open_dialog(Dialog::FolderPicker);
                 self.project_list.folder_picker = Some(picker);
-                self.state = AppState::SelectingFolder;
-                self.status = "Project folder".to_string();
             }
             Err(e) => {
                 self.notifications.current = Some((
@@ -36,9 +35,7 @@ impl App {
 
     /// Close the folder browser and open the folder as a project.
     pub(in crate::app) fn choose_project_folder(&mut self, folder: PathBuf) {
-        self.project_list.folder_picker = None;
-        self.state = AppState::Idle;
-        self.status = "Ready".to_string();
+        self.close_dialog();
         if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::CreateProject { folder });
         }
@@ -46,9 +43,7 @@ impl App {
 
     /// Close the folder browser without creating a project.
     pub(in crate::app) fn cancel_folder_picker(&mut self) {
-        self.project_list.folder_picker = None;
-        self.state = AppState::Idle;
-        self.status = "Ready".to_string();
+        self.close_dialog();
         self.notifications.current = Some(("Cancelled".to_string(), NotificationType::Warning));
     }
 
@@ -104,7 +99,7 @@ impl App {
     /// The project whose details are shown, while they are.
     #[must_use]
     pub fn project_info(&self) -> Option<&ProjectSummary> {
-        if self.state != AppState::ShowingProjectInfo {
+        if self.dialog() != Some(Dialog::ProjectInfo) {
             return None;
         }
         let key = self.project_list.project_info.as_deref()?;
@@ -128,8 +123,8 @@ impl App {
             ));
             return;
         }
+        self.open_dialog(Dialog::ProjectInfo);
         self.project_list.project_info = Some(key.to_string());
-        self.state = AppState::ShowingProjectInfo;
     }
 
     /// Show the details of the project the active agent is in.
@@ -141,11 +136,5 @@ impl App {
                     Some(("No project is open".to_string(), NotificationType::Warning));
             }
         }
-    }
-
-    /// Close the project details.
-    pub(in crate::app) fn close_project_info(&mut self) {
-        self.project_list.project_info = None;
-        self.state = AppState::Idle;
     }
 }

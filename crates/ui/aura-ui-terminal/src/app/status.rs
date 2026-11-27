@@ -46,16 +46,10 @@ impl App {
         self.ticks.verbose
     }
 
-    /// Get the current application state.
-    #[must_use]
-    pub const fn state(&self) -> AppState {
-        self.state
-    }
-
     /// Check if currently processing a request.
     #[must_use]
     pub fn is_processing(&self) -> bool {
-        self.state == AppState::Processing
+        self.chat_state == AppState::Processing
     }
 
     /// Whether the agent on screen has a turn in flight, including one
@@ -63,7 +57,7 @@ impl App {
     #[must_use]
     pub fn is_busy(&self) -> bool {
         matches!(
-            self.state,
+            self.chat_state,
             AppState::Processing | AppState::AwaitingApproval
         )
     }
@@ -79,7 +73,7 @@ impl App {
     /// approval, or while reply text is streaming into the chat.
     #[must_use]
     pub fn working_label(&self) -> Option<String> {
-        if self.state != AppState::Processing {
+        if self.chat_state != AppState::Processing {
             return None;
         }
         let reply_streaming = self
@@ -189,7 +183,7 @@ impl App {
     /// flight may still add to. Its summary line spins while it grows.
     #[must_use]
     pub fn ends_in_live_group(&self) -> bool {
-        self.state == AppState::Processing
+        self.chat_state == AppState::Processing
             && self.messages.len() >= 2
             && self
                 .messages

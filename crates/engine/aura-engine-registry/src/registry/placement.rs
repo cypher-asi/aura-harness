@@ -18,21 +18,23 @@ impl AgentRegistry {
         self.channel_members.extend(members);
     }
 
-    /// A fresh coordinator for the channel `slug`, working in `home`, not
-    /// yet registered: an instance of
-    /// [`crate::definitions::COORDINATOR_DEFINITION`] named
-    /// `#<slug> coordinator`. Its code is given by [`Self::adopt`]. For a
+    /// A fresh channel coordinator, working in `home`, not yet
+    /// registered: an instance of
+    /// [`crate::definitions::COORDINATOR_DEFINITION`] named just
+    /// `coordinator`, as the channel it runs already says which one it
+    /// is. Its code is given by [`Self::adopt`]. For a
     /// [`CoordinatorHome::Folder`] the launch project is made in memory
     /// when missing, as for other new agents, and saved with the next
     /// write. A [`CoordinatorHome::Project`] is not checked here: the
     /// caller makes sure the project is listed.
-    pub fn coordinator_draft(&mut self, slug: &str, home: CoordinatorHome) -> RegisteredAgent {
+    pub fn coordinator_draft(&mut self, home: CoordinatorHome) -> RegisteredAgent {
         let placed = self.home_of(home);
+        let definition = crate::definitions::COORDINATOR_DEFINITION;
         RegisteredAgent {
-            definition: Some(crate::definitions::COORDINATOR_DEFINITION.to_string()),
+            definition: Some(definition.to_string()),
             project_id: placed.0,
             folder: placed.1,
-            ..Self::new_agent(format!("#{slug} coordinator"))
+            ..Self::new_agent(definition.to_string())
         }
     }
 

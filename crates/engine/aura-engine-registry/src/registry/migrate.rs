@@ -8,6 +8,7 @@ use super::{
     canonical, AgentRegistry, AgentRegistryError, Project, RegisteredAgent, RegistryFile,
     DESKTOP_TABS_FILE, LEGACY_IDENTITY_FILE, MIGRATED_REGISTRY_FILE, REGISTRY_FILE,
 };
+use crate::definitions::COORDINATOR_DEFINITION;
 
 impl AgentRegistry {
     /// Turn a version 0 registry, where the agent heading a project held
@@ -41,6 +42,29 @@ impl AgentRegistry {
             }
         }
     }
+
+    /// Before version 4 a channel's coordinator was named
+    /// `#<slug> coordinator`; now it is just `coordinator`. Only instances
+    /// of the coordinator definition with a name of the old form are
+    /// renamed, so a name the user chose stays. Codes come from the
+    /// definition, not the name, so they do not change.
+    pub(super) fn rename_channel_coordinators(&mut self) {
+        for agent in &mut self.file.agents {
+            if is_old_coordinator_name(agent) {
+                COORDINATOR_DEFINITION.clone_into(&mut agent.name);
+            }
+        }
+    }
+}
+
+/// Whether `agent` is a coordinator still named `#<slug> coordinator`.
+fn is_old_coordinator_name(agent: &RegisteredAgent) -> bool {
+    agent.definition.as_deref() == Some(COORDINATOR_DEFINITION)
+        && agent
+            .name
+            .strip_prefix('#')
+            .and_then(|rest| rest.strip_suffix(" coordinator"))
+            .is_some_and(|slug| !slug.is_empty())
 }
 
 /// Registries written before `member_of` existed linked agents added to a

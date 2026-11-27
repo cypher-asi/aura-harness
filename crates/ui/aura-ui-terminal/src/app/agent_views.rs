@@ -105,14 +105,6 @@ const fn is_busy(state: AppState) -> bool {
     matches!(state, AppState::Processing | AppState::AwaitingApproval)
 }
 
-/// Whether `state` is a prompt or overlay rather than the chat itself.
-const fn is_modal(state: AppState) -> bool {
-    !matches!(
-        state,
-        AppState::Idle | AppState::Processing | AppState::AwaitingApproval
-    )
-}
-
 /// Whether the input line holds an answer to a prompt (an email, a
 /// password, a sign-in code) instead of the chat's draft.
 const fn input_is_prompt_answer(state: AppState) -> bool {
@@ -213,7 +205,7 @@ impl App {
     #[must_use]
     pub fn agent_busy(&self, agent_id: &str) -> bool {
         if agent_id == self.active_agent_id {
-            is_busy(self.state)
+            is_busy(self.chat_state)
         } else {
             self.switching
                 .views
@@ -233,7 +225,8 @@ impl App {
             return None;
         }
         self.leave_queue_panel();
-        if !input_is_prompt_answer(self.state) {
+        let prompt = input_is_prompt_answer(self.chat_state);
+        if !prompt {
             self.swap_draft(&previous, agent_id);
         }
         let mut view = self.switching.views.remove(agent_id).unwrap_or_default();
@@ -241,10 +234,10 @@ impl App {
         let tab = mem::replace(&mut view.chat_tab, self.chat_tab());
         self.switching.list_places_due = view.list_places.replace(self.list_places());
         self.swap_chat(&mut view);
-        view.busy = is_busy(self.state);
+        view.busy = is_busy(self.chat_state);
         self.switching.views.insert(previous, view);
-        if !is_modal(self.state) {
-            self.state = self.chat_state(busy);
+        if !prompt {
+            self.chat_state = self.chat_state_for(busy);
         }
         self.close_detail();
         self.clear_selection();
@@ -283,7 +276,7 @@ impl App {
 
     /// State of the chat swapped in, whose agent is `busy` or not. A turn
     /// waiting for an approval shows its prompt.
-    fn chat_state(&self, busy: bool) -> AppState {
+    fn chat_state_for(&self, busy: bool) -> AppState {
         if !self.pending.approvals.is_empty() {
             AppState::AwaitingApproval
         } else if busy {
@@ -387,23 +380,23 @@ impl App {
     /// the time being, then tell what came of it.
     fn process_offscreen_command(&mut self, agent_id: &str, command: UiCommand, asks: bool) {
         let mut view = self.switching.views.remove(agent_id).unwrap_or_default();
-        let state = self.state;
+        let state = self.chat_state;
         let notification = self.notifications.current.take();
         let redraw = self.ticks.redraw;
         let was_busy = view.busy;
         self.swap_chat(&mut view);
-        self.state = self.chat_state(was_busy);
+        self.chat_state = self.chat_state_for(was_busy);
 
         self.process_command(command);
 
-        let busy = is_busy(self.state);
+        let busy = is_busy(self.chat_state);
         if busy {
             self.ticks.processing_since.get_or_insert_with(Instant::now);
         } else {
             self.ticks.processing_since = None;
         }
         let note = self.notifications.current.take();
-        self.state = state;
+        self.chat_state = state;
         self.swap_chat(&mut view);
         view.busy = busy;
         self.switching.views.insert(agent_id.to_string(), view);

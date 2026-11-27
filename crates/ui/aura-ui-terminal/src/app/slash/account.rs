@@ -1,7 +1,7 @@
 //! Account commands: logging in and out, the model and its thinking level.
 
 use crate::{
-    app::{model_picker, App, AppState, NotificationType},
+    app::{model_picker, App, AppState, Dialog, NotificationType},
     components::{Message, MessageRole},
     events::UiEvent,
 };
@@ -70,7 +70,7 @@ impl App {
 
     /// Ask the event loop to link a personal plan.
     fn start_link(&mut self, provider: &str, paste: bool) {
-        self.state = AppState::Idle;
+        self.close_dialog();
         self.status = format!("Linking {provider}...");
         if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::LinkSubscription {
@@ -82,7 +82,8 @@ impl App {
 
     /// Enter the email/password login flow.
     pub(in crate::app) fn start_login(&mut self) {
-        self.state = AppState::LoginEmail;
+        self.close_dialog();
+        self.chat_state = AppState::LoginEmail;
         self.account.login_email.clear();
         self.input.text.clear();
         self.input.cursor_pos = 0;
@@ -101,7 +102,7 @@ impl App {
         self.account
             .model_picker
             .open(&self.account.models, &self.account.current_model);
-        self.state = AppState::SelectingModel;
+        self.open_dialog(Dialog::ModelSelector);
     }
 
     /// Select `id` for the next turn. Models whose sign-in is missing
@@ -127,7 +128,7 @@ impl App {
             }
             return;
         }
-        self.state = AppState::Idle;
+        self.close_dialog();
         if id != self.account.current_model {
             if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(UiEvent::SelectModel(id.to_string()));

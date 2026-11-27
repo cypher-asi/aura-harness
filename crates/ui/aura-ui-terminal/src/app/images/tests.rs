@@ -64,3 +64,29 @@ fn pending_placements_cover_the_picture_not_its_caption() {
         }
     );
 }
+
+#[test]
+fn a_modal_hides_the_pictures_under_it() {
+    let img = image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 10, 10, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut app = App::new();
+    app.attach_image(png.get_ref()).unwrap();
+    let preview = Arc::clone(&app.input.images[0].preview);
+    let tile = ratatui::layout::Rect {
+        x: 3,
+        y: 5,
+        width: preview.thumbnail_width() + 6,
+        height: u16::try_from(preview.thumbnail().len()).unwrap() + 1,
+    };
+    app.set_pending_image_areas(vec![(tile, 1)]);
+    assert_eq!(app.visible_image_placements().len(), 1);
+
+    app.open_dialog(Dialog::Help);
+    assert!(
+        app.visible_image_placements().is_empty(),
+        "the terminal would draw them over the backdrop"
+    );
+    app.close_dialog();
+    assert_eq!(app.visible_image_placements().len(), 1);
+}

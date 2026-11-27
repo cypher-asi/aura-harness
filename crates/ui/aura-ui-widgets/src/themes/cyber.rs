@@ -13,6 +13,7 @@
 //! | Silver      | #b3b3b3  | (179, 179, 179)| Secondary text, the verb of a step      |
 //! | Gray        | #808080  | (128, 128, 128)| Muted text, focused borders             |
 //! | Dim gray    | #5a5a5a  | (90, 90, 90)   | Borders, markers, the footer            |
+//! | Void        | #0a0a0a  | (10, 10, 10)   | Backdrop under a dialog                 |
 //! | Graphite    | #191919  | (25, 25, 25)   | Background                              |
 //! | Dark gray   | #242424  | (36, 36, 36)   | List cell, the user's messages, code    |
 //! | Charcoal    | #2e2e2e  | (46, 46, 46)   | List cell under the pointer             |
@@ -52,6 +53,9 @@ pub const GRAY: Color = Color::Rgb(128, 128, 128);
 /// Dim gray - Borders, markers and the footer (#5a5a5a)
 pub const DIM_GRAY: Color = Color::Rgb(90, 90, 90);
 
+/// Void - Backdrop under a dialog (#0a0a0a)
+pub const VOID: Color = Color::Rgb(10, 10, 10);
+
 /// Graphite - Background (#191919)
 pub const BLACK: Color = Color::Rgb(25, 25, 25);
 
@@ -83,6 +87,7 @@ pub fn cyber_theme() -> Theme {
         colors: ThemeColors {
             // Base colors
             background: BLACK, // #191919 - graphite
+            backdrop: VOID,    // #0a0a0a - around an open dialog
             foreground: WHITE, // #ffffff - white text
             text: LIGHT_GRAY,  // #f2f2f2 - chat reply body
 
@@ -128,6 +133,7 @@ mod tests {
         assert_eq!(theme.colors.pending, WHITE);
         assert_eq!(theme.colors.selection, SLATE);
         assert_eq!(theme.colors.on_selection, WHITE);
+        assert_eq!(theme.colors.backdrop, VOID);
     }
 
     #[test]

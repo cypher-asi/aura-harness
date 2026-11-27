@@ -167,7 +167,7 @@ fn test_approval_prompt_offers_three_answers() {
         always: "`cargo test` commands in this project".to_string(),
     });
     let screen = render_rows(&mut app, 120).join("\n");
-    assert!(screen.contains("Approval Required"), "{screen}");
+    assert!(screen.contains("APPROVAL REQUIRED"), "{screen}");
     assert!(screen.contains("run_command wants to:"), "{screen}");
     assert!(screen.contains("cargo test -p aura-terminal"), "{screen}");
     assert!(screen.contains("[Y] Allow once"), "{screen}");
@@ -175,7 +175,8 @@ fn test_approval_prompt_offers_three_answers() {
         screen.contains("[A] Always allow `cargo test` commands in this project"),
         "{screen}"
     );
-    assert!(screen.contains("[N] Deny (Esc)"), "{screen}");
+    assert!(screen.contains("[N] Deny"), "{screen}");
+    assert!(!screen.contains("Esc"), "no key hints: {screen}");
 }
 
 #[test]
@@ -195,13 +196,14 @@ fn test_help_lists_mode_command_and_shift_tab() {
                 + "\n"
         })
         .collect();
+    assert!(screen.contains(" HELP "), "{screen}");
     assert!(screen.contains("/mode [name]"), "{screen}");
     assert!(
-        screen.contains("/model [opus] /thinking [level]  Model, thinking"),
+        screen.contains(&format!("{:<24}{}", "/model [opus]", "Pick the model")),
         "fits the help box on one line: {screen}"
     );
     assert!(screen.contains("Shift+Tab"), "{screen}");
-    assert!(screen.contains("Press any key to close"), "{screen}");
+    assert!(!screen.contains("Press any key"), "no key hints: {screen}");
 }
 
 #[test]

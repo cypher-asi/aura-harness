@@ -54,7 +54,7 @@ fn test_approval_state() {
         description: "Write file".to_string(),
         always: String::new(),
     });
-    app.state = AppState::AwaitingApproval;
+    app.chat_state = AppState::AwaitingApproval;
 
     app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()));
     assert!(app.pending.approvals.is_empty());
@@ -78,7 +78,7 @@ fn test_initial_state_is_idle() {
 #[test]
 fn test_state_transition_to_processing() {
     let mut app = App::new();
-    app.state = AppState::Processing;
+    app.chat_state = AppState::Processing;
     assert_eq!(app.state(), AppState::Processing);
 }
 
@@ -91,7 +91,7 @@ fn test_state_transition_to_awaiting_approval() {
         description: "Write file".to_string(),
         always: String::new(),
     });
-    app.state = AppState::AwaitingApproval;
+    app.chat_state = AppState::AwaitingApproval;
     assert_eq!(app.state(), AppState::AwaitingApproval);
     assert!(app.pending_approval().is_some());
 }
@@ -99,15 +99,15 @@ fn test_state_transition_to_awaiting_approval() {
 #[test]
 fn test_state_transition_showing_help() {
     let mut app = App::new();
-    app.state = AppState::ShowingHelp;
+    app.open_dialog(Dialog::Help);
     assert_eq!(app.state(), AppState::ShowingHelp);
 }
 
 #[test]
 fn test_processing_to_idle() {
     let mut app = App::new();
-    app.state = AppState::Processing;
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Processing;
+    app.chat_state = AppState::Idle;
     assert_eq!(app.state(), AppState::Idle);
 }
 

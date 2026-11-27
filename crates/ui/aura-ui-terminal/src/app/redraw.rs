@@ -29,7 +29,7 @@ impl App {
             for approval in std::mem::take(&mut self.pending.approvals) {
                 self.mark_awaiting_approval(&approval.id, false);
             }
-            self.state = AppState::Idle;
+            self.chat_state = AppState::Idle;
             self.status = "Cancelled".to_string();
             if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(UiEvent::Cancel(self.active_agent_id.clone()));
@@ -87,10 +87,7 @@ impl App {
         self.refresh_live_log();
         self.refresh_repo_tab();
 
-        if matches!(
-            self.state,
-            AppState::Processing | AppState::AwaitingApproval
-        ) {
+        if self.is_busy() {
             self.ticks.processing_since.get_or_insert_with(Instant::now);
         } else {
             self.ticks.processing_since = None;

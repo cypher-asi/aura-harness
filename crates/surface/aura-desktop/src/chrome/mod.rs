@@ -118,23 +118,33 @@ impl Model {
     }
 }
 
-/// Whether every cell of `area` is blank.
+/// Whether every cell of `area` is blank and unpainted.
 fn is_blank(area: Rect, buffer: &Buffer) -> bool {
-    area.positions()
-        .all(|at| buffer.cell(at).is_some_and(|cell| cell.symbol() == " "))
+    area.positions().all(|at| {
+        buffer
+            .cell(at)
+            .is_some_and(|cell| cell.symbol() == " " && unpainted(cell))
+    })
 }
 
-/// Whether a bar's rows hold only its frame.
+/// Whether a bar's rows hold only its frame, unpainted.
 fn is_empty(bar: Rect, buffer: &Buffer) -> bool {
     let inside = bar.x + 1..bar.right().saturating_sub(1);
     (bar.y..bar.bottom()).all(|y| {
         inside.clone().all(|x| {
             buffer.cell((x, y)).is_some_and(|cell| {
                 let symbol = cell.symbol();
-                symbol == " " || (y == bar.y && symbol == "─")
+                unpainted(cell) && (symbol == " " || (y == bar.y && symbol == "─"))
             })
         })
     })
+}
+
+/// Whether nothing painted `cell`'s background. The backdrop behind a
+/// dialog paints every cell around it, though it leaves them blank, and
+/// the chrome under it must not show.
+fn unpainted(cell: &ratatui::buffer::Cell) -> bool {
+    cell.bg == ratatui::style::Color::Reset
 }
 
 #[derive(Debug, Clone, PartialEq)]

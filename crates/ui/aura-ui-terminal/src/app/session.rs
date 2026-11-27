@@ -106,7 +106,7 @@ impl App {
     pub const fn input_is_command(&self) -> bool {
         self.terminal_mode
             && !matches!(
-                self.state,
+                self.state(),
                 AppState::LoginEmail
                     | AppState::LoginPassword
                     | AppState::LinkCode

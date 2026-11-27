@@ -71,7 +71,7 @@ fn test_switching_to_the_current_mode_sends_nothing() {
 fn test_plan_works_mid_turn_but_build_waits() {
     let (mut app, mut rx) = app_with_events();
     app.process_command(UiCommand::SetPlan(Some(sample_plan())));
-    app.state = AppState::Processing;
+    app.chat_state = AppState::Processing;
 
     app.handle_command("/build");
     assert!(rx.try_recv().is_err());
@@ -101,7 +101,7 @@ fn test_plan_with_a_message_sends_it_in_plan_mode() {
 
     // Already in plan mode, it stays there rather than toggling out.
     app.process_command(UiCommand::SetMode(crate::PermissionMode::Plan));
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
     submit(&mut app, "/PLAN  add\nlogout ");
     assert!(matches!(
         rx.try_recv(),
@@ -210,7 +210,7 @@ fn saying_implement_in_plan_mode_builds_the_plan() {
         rx.try_recv(),
         Ok(UiEvent::UserMessage { text, .. }) if text == "implement"
     ));
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
 
     app.process_command(UiCommand::SetPlan(Some(sample_plan())));
     submit(&mut app, "  Implement it! ");
@@ -222,7 +222,7 @@ fn saying_implement_in_plan_mode_builds_the_plan() {
     // Longer messages are feedback on the plan.
     submit(&mut app, "implement it with a trait instead");
     assert!(matches!(rx.try_recv(), Ok(UiEvent::UserMessage { .. })));
-    app.state = AppState::Idle;
+    app.chat_state = AppState::Idle;
 
     // Outside plan mode "implement" is an ordinary message.
     app.process_command(UiCommand::SetMode(crate::PermissionMode::Agent));

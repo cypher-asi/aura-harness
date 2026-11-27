@@ -33,7 +33,8 @@ impl App {
             self.mark_awaiting_approval(&approval.id, true);
             self.pending.approvals.push_back(approval);
         }
-        self.state = AppState::AwaitingApproval;
+        // Over any dialog open, which is back once the call is answered.
+        self.chat_state = AppState::AwaitingApproval;
     }
 
     /// Drop the prompt for approval `id`, which stopped waiting; the turn
@@ -62,8 +63,8 @@ impl App {
     pub(in crate::app) fn after_approval_closed(&mut self) {
         if let Some(next) = self.pending.approvals.front() {
             self.status = format!("Waiting for approval to run {}", next.tool);
-        } else if self.state == AppState::AwaitingApproval {
-            self.state = AppState::Processing;
+        } else if self.chat_state == AppState::AwaitingApproval {
+            self.chat_state = AppState::Processing;
         }
     }
 }

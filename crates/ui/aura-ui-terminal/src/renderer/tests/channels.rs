@@ -223,20 +223,12 @@ fn test_the_new_channel_form_draws_the_project_chooser() {
     app.start_new_channel();
     let rows = render_rows(&mut app, 140);
     let screen = rows.join("\n");
-    assert!(screen.contains("┌ New channel ─"), "{screen}");
+    assert!(screen.contains("┌ NEW CHANNEL ─"), "{screen}");
     let label = info_row(&rows, "Project");
     let chooser = info_row(&rows, "‹ None ›");
-    let hint = info_row(&rows, "None — agents work in the channel's own folder");
-    assert!(
-        label < chooser && chooser < hint,
-        "{label} {chooser} {hint}"
-    );
-    for keys in [
-        "←→ choose project",
-        "submits on Project",
-        "Ctrl+Enter submit",
-    ] {
-        assert!(screen.contains(keys), "{keys}:\n{screen}");
+    assert!(label < chooser, "{label} {chooser}");
+    for hint in ["agents work in", "choose project", "Ctrl+Enter", "Esc"] {
+        assert!(!screen.contains(hint), "no hints, {hint}:\n{screen}");
     }
 }
 
@@ -267,8 +259,8 @@ fn test_the_edit_form_is_titled_by_the_slug_and_shows_the_channels_project() {
     app.start_edit_channel("c1");
     let rows = render_rows(&mut app, 140);
     let screen = rows.join("\n");
-    assert!(screen.contains("┌ Edit #zode ─"), "{screen}");
-    assert!(!screen.contains("┌ New channel ─"), "{screen}");
+    assert!(screen.contains("┌ EDIT #zode ─"), "{screen}");
+    assert!(!screen.contains("NEW CHANNEL"), "{screen}");
     assert!(screen.contains("‹ zodeproj ›"), "{screen}");
     assert!(
         !screen.contains(crate::app::channel_form::SLUG_HINT),

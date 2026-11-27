@@ -13,10 +13,11 @@
 //! | White       | #ffffff  | `WHITE`    | Titles, emphasized text            |
 //! | Gray        | #808080  | `GRAY`     | Muted text, secondary info         |
 //! | Dim gray    | #5a5a5a  | `DIM_GRAY` | Borders, markers, the footer       |
+//! | Void        | #0a0a0a  | `VOID`     | Backdrop under a dialog            |
 //! | Graphite    | #191919  | `BLACK`    | Background                         |
 
 mod cyber;
 mod theme;
 
-pub use cyber::{cyber_theme, BLACK, BLUE, CYAN, DIM_GRAY, GRAY, PURPLE, RED, WHITE};
+pub use cyber::{cyber_theme, BLACK, BLUE, CYAN, DIM_GRAY, GRAY, PURPLE, RED, VOID, WHITE};
 pub use theme::{BorderStyle, Theme, ThemeColors};

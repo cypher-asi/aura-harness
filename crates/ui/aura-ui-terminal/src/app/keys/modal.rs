@@ -1,5 +1,5 @@
-//! Keys of the modal states: the folder browser, tool approval, login and
-//! the model selector.
+//! Keys of the modals and prompts: the folder browser, tool approval,
+//! login and the model selector.
 
 use crate::app::folder_picker::FolderPicker;
 use crate::app::model_picker::PAGE_STEP;
@@ -8,22 +8,32 @@ use crate::{events::UiEvent, terminal::KeyResult};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use std::{io, path::PathBuf};
 
+/// How the user answered a tool call waiting for approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answer {
+    /// Allow this call
+    Once,
+    /// Allow this call and the ones like it, in this project
+    Always,
+    Deny,
+}
+
 impl App {
     /// Handle key while the new-project folder browser is open.
-    pub(super) fn handle_folder_picker_key(&mut self, key: KeyEvent) -> KeyResult {
+    pub(super) fn handle_folder_picker_key(&mut self, key: KeyEvent) {
         let Some(picker) = self.project_list.folder_picker.as_mut() else {
-            self.state = AppState::Idle;
-            return KeyResult::continue_running();
+            self.close_dialog();
+            return;
         };
         if picker.new_folder().is_some() {
             if let Err(problem) = new_folder_key(picker, key) {
                 self.notifications.current = Some((problem, NotificationType::Warning));
             }
-            return KeyResult::continue_running();
+            return;
         }
         if key.code == KeyCode::Esc {
             self.cancel_folder_picker();
-            return KeyResult::continue_running();
+            return;
         }
         match browse_folder_key(picker, key) {
             Ok(Some(folder)) => self.choose_project_folder(folder),
@@ -35,42 +45,51 @@ impl App {
                 ));
             }
         }
-        KeyResult::continue_running()
     }
 
     /// Handle key in approval mode: `y` allows the call once, `a` always
     /// (in this project), `n` or Esc denies it. The turn goes on either
     /// way; Ctrl+C cancels it instead.
-    pub(super) fn handle_approval_key(&mut self, key: KeyEvent) -> KeyResult {
+    pub(super) fn handle_approval_key(&mut self, key: KeyEvent) {
         let always_offered = self
             .pending
             .approvals
             .front()
             .is_some_and(|a| !a.always.is_empty());
         let answer = match key.code {
-            KeyCode::Char('y' | 'Y') => "Approved",
-            KeyCode::Char('a' | 'A') if always_offered => "Always allowed",
-            KeyCode::Char('n' | 'N') | KeyCode::Esc => "Denied",
-            _ => return KeyResult::continue_running(),
+            KeyCode::Char('y' | 'Y') => Answer::Once,
+            KeyCode::Char('a' | 'A') if always_offered => Answer::Always,
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => Answer::Deny,
+            _ => return,
         };
+        self.answer_approval(answer);
+    }
+
+    /// Deny the call waiting for approval on top, as `n` does.
+    pub(in crate::app) fn deny_approval(&mut self) {
+        self.answer_approval(Answer::Deny);
+    }
+
+    /// Answer the call waiting for approval on top, then show the next
+    /// one waiting, or go back to the turn.
+    fn answer_approval(&mut self, answer: Answer) {
         if let Some(approval) = self.pending.approvals.pop_front() {
             self.mark_awaiting_approval(&approval.id, false);
-            let event = match key.code {
-                KeyCode::Char('y' | 'Y') => UiEvent::Approve(approval.id),
-                KeyCode::Char('a' | 'A') => UiEvent::ApproveAlways(approval.id),
-                _ => UiEvent::Deny(approval.id),
+            let (event, said) = match answer {
+                Answer::Once => (UiEvent::Approve(approval.id), "Approved"),
+                Answer::Always => (UiEvent::ApproveAlways(approval.id), "Always allowed"),
+                Answer::Deny => (UiEvent::Deny(approval.id), "Denied"),
             };
             if let Some(tx) = &self.link.event_tx {
                 let _ = tx.try_send(event);
             }
-            self.status = format!("{answer}, continuing...");
+            self.status = format!("{said}, continuing...");
         }
         if self.pending.approvals.is_empty() {
-            self.state = AppState::Processing;
+            self.chat_state = AppState::Processing;
         } else {
             self.after_approval_closed();
         }
-        KeyResult::continue_running()
     }
 
     /// Handle key during login flow (email or password entry).
@@ -86,7 +105,7 @@ impl App {
     }
 
     fn cancel_login(&mut self) {
-        self.state = AppState::Idle;
+        self.chat_state = AppState::Idle;
         self.status = "Ready".to_string();
         self.input.text.clear();
         self.input.cursor_pos = 0;
@@ -108,15 +127,15 @@ impl App {
             return;
         }
 
-        match self.state {
+        match self.chat_state {
             AppState::LoginEmail => {
                 self.account.login_email = value.trim().to_string();
-                self.state = AppState::LoginPassword;
+                self.chat_state = AppState::LoginPassword;
                 self.status = "Login — enter password".to_string();
             }
             AppState::LoginPassword => {
                 let email = std::mem::take(&mut self.account.login_email);
-                self.state = AppState::Processing;
+                self.chat_state = AppState::Processing;
                 self.status = "Authenticating...".to_string();
                 if let Some(tx) = &self.link.event_tx {
                     let _ = tx.try_send(UiEvent::LoginCredentials {
@@ -126,7 +145,7 @@ impl App {
                 }
             }
             AppState::LinkCode => {
-                self.state = AppState::Idle;
+                self.chat_state = AppState::Idle;
                 self.status = "Linking...".to_string();
                 if let Some(tx) = &self.link.event_tx {
                     let _ = tx.try_send(UiEvent::LinkCode(value.trim().to_string()));
@@ -137,13 +156,13 @@ impl App {
     }
 
     /// Handle key while the model selector is open.
-    pub(super) fn handle_model_selector_key(&mut self, key: KeyEvent) -> KeyResult {
+    pub(super) fn handle_model_selector_key(&mut self, key: KeyEvent) {
         let models = &self.account.models;
         let picker = &mut self.account.model_picker;
         match key.code {
             KeyCode::Esc => {
                 if !picker.clear_filter() {
-                    self.state = AppState::Idle;
+                    self.close_dialog();
                 }
             }
             KeyCode::Up => picker.move_by(models, -1),
@@ -166,7 +185,6 @@ impl App {
             }
             _ => {}
         }
-        KeyResult::continue_running()
     }
 
     /// Take the highlighted model of the selector for what it was opened
@@ -182,38 +200,31 @@ impl App {
                     self.pick_bench_model(field, &id);
                 }
             }
-            (None, _) if picker.filter().is_empty() => self.state = AppState::Idle,
+            (None, _) if picker.filter().is_empty() => self.close_dialog(),
             (None, _) => {}
         }
     }
 
-    /// A mouse event while the model selector is open: a click on a model
-    /// picks it, as Enter would, a click outside the selector closes it,
-    /// and the wheel moves the highlight.
-    pub(in crate::app) fn model_selector_mouse(
-        &mut self,
-        kind: MouseEventKind,
-        column: u16,
-        row: u16,
-    ) {
-        let layout = &self.account.model_picker_layout;
-        let inside = crate::app::contains(Some(layout.modal), column, row);
-        match kind {
-            MouseEventKind::Down(MouseButton::Left) if !inside => self.state = AppState::Idle,
-            MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(index) = layout.model_at(row) {
-                    self.account
-                        .model_picker
-                        .select(&self.account.models, index);
-                    self.pick_in_model_selector();
-                }
-            }
-            MouseEventKind::ScrollUp => self.account.model_picker.move_by(&self.account.models, -1),
-            MouseEventKind::ScrollDown => {
-                self.account.model_picker.move_by(&self.account.models, 1);
-            }
-            _ => {}
+    /// A press inside the model selector: one on a model picks it, as
+    /// Enter would.
+    pub(in crate::app) fn model_selector_click(&mut self, kind: MouseEventKind, row: u16) {
+        if kind != MouseEventKind::Down(MouseButton::Left) {
+            return;
         }
+        if let Some(index) = self.account.model_picker_layout.model_at(row) {
+            self.account
+                .model_picker
+                .select(&self.account.models, index);
+            self.pick_in_model_selector();
+        }
+    }
+
+    /// Move the model selector's highlight a row down, or up.
+    pub(in crate::app) fn move_model_selector(&mut self, down: bool) {
+        let step = if down { 1 } else { -1 };
+        self.account
+            .model_picker
+            .move_by(&self.account.models, step);
     }
 }
 

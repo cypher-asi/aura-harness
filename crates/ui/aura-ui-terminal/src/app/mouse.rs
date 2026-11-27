@@ -130,32 +130,26 @@ impl App {
         }
     }
 
-    /// What takes the event before anything on screen: the stop button,
-    /// the placement switch, the model selector or a state other than
-    /// idle or processing, and an open context menu. Returns whether one
-    /// took it.
+    /// What takes the event before anything on screen: the modal on top,
+    /// the stop button, the placement switch, a sign-in prompt, and an
+    /// open context menu. Returns whether one took it.
     fn mouse_taken_first(&mut self, mouse: MouseEvent) -> bool {
-        // First, so the button works while an approval waits too; an
-        // open context menu takes the click instead, as it may cover it.
+        // The modal takes every event whole: a press that closes it must
+        // not also land on what is under it.
+        if let Some(modal) = self.modal() {
+            self.modal_mouse(modal, mouse);
+            return true;
+        }
+        // An open context menu takes the click instead, as it may cover
+        // the button.
         if self.context_menu.is_none() && self.click_stop_button(mouse) {
             return true;
         }
         if self.context_menu.is_none() && self.click_placement_switch(mouse) {
             return true;
         }
-        // The selector takes the click whole: one that picks a model and
-        // closes it must not also land on what is under it.
-        let selecting = self.state == AppState::SelectingModel;
-        if selecting {
-            self.model_selector_mouse(mouse.kind, mouse.column, mouse.row);
-        }
-        if selecting || (self.state != AppState::Idle && self.state != AppState::Processing) {
-            self.hover = None;
-            self.context_menu = None;
-            self.project_list.project_press = None;
-            self.select.scrollbar_grab = None;
-            self.drop_queue_press();
-            self.drop_todo_drawer_hover();
+        if self.state() != AppState::Idle && self.state() != AppState::Processing {
+            self.release_pointer();
             return true;
         }
         if self.context_menu_mouse(mouse.kind, mouse.column, mouse.row) {

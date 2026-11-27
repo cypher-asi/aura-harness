@@ -48,16 +48,16 @@ fn test_new_channel_row_opens_the_form() {
     );
     let text = drawn_text(&mut app);
     for label in [
-        "New channel",
+        "NEW CHANNEL",
         "Slug",
         "Title",
         "Description",
         "Project",
         "‹ None ›",
-        "Esc cancel",
     ] {
         assert!(text.contains(label), "{label}:\n{text}");
     }
+    assert!(!text.contains("Esc cancel"), "no key hints:\n{text}");
     assert!(rx.try_recv().is_err(), "opening sends nothing");
 }
 
@@ -283,7 +283,7 @@ fn test_edit_channel_opens_the_form_filled_in_on_the_title() {
     assert_eq!(form.focus(), ChannelField::Title);
     assert_eq!(form_project(&app), Some("p2".to_string()));
     let text = drawn_text(&mut app);
-    assert!(text.contains(" Edit #zode "), "{text}");
+    assert!(text.contains(" EDIT #zode "), "{text}");
     assert!(rx.try_recv().is_err(), "opening sends nothing");
 }
 

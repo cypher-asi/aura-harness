@@ -47,6 +47,7 @@ impl Theme {
             "minimal",
             ThemeColors {
                 background: Color::Rgb(26, 26, 26),
+                backdrop: Color::Rgb(10, 10, 10),
                 foreground: Color::White,
                 text: Color::Rgb(210, 210, 210),
                 primary: Color::White,
@@ -72,6 +73,7 @@ impl Theme {
             "matrix",
             ThemeColors {
                 background: Color::Black,
+                backdrop: Color::Rgb(0, 0, 0),
                 foreground: Color::Rgb(0, 255, 0),
                 text: Color::Rgb(0, 200, 0),
                 primary: Color::Rgb(0, 255, 0),
@@ -97,6 +99,7 @@ impl Theme {
             "synthwave",
             ThemeColors {
                 background: Color::Rgb(26, 26, 46),
+                backdrop: Color::Rgb(13, 13, 26),
                 foreground: Color::White,
                 text: Color::Rgb(220, 220, 232),
                 primary: Color::Rgb(255, 46, 151),  // hot pink
@@ -162,6 +165,7 @@ impl Default for Theme {
 /// | Silver      | #b3b3b3  | Secondary text                     |
 /// | Gray        | #808080  | Muted text, secondary info         |
 /// | Dim gray    | #5a5a5a  | Borders, markers, the footer       |
+/// | Void        | #0a0a0a  | Backdrop under a dialog            |
 /// | Graphite    | #191919  | Background                         |
 /// | Dark gray   | #242424  | List cell, shaded messages         |
 /// | Charcoal    | #2e2e2e  | List cell under the pointer        |
@@ -170,6 +174,9 @@ impl Default for Theme {
 pub struct ThemeColors {
     /// Background color (#191919 graphite)
     pub background: Color,
+    /// What fills the screen around an open dialog, darker than
+    /// `background` so nothing underneath shows (#0a0a0a void)
+    pub backdrop: Color,
     /// Foreground/primary text color (#ffffff white)
     pub foreground: Color,
     /// Body text of chat replies, a step softer than `foreground` so bold
@@ -330,6 +337,7 @@ mod tests {
     fn test_custom_theme() {
         let colors = ThemeColors {
             background: Color::Black,
+            backdrop: Color::Black,
             foreground: Color::White,
             text: Color::Gray,
             primary: Color::Blue,
@@ -363,6 +371,24 @@ mod tests {
                 assert!(g > r && g > b);
             }
             _ => panic!("Expected RGB color for matrix theme"),
+        }
+    }
+
+    #[test]
+    fn test_every_backdrop_is_darker_than_its_background() {
+        let luma = |color: Color| match color {
+            Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b),
+            Color::Black => 0,
+            other => panic!("{other:?} has no fixed brightness"),
+        };
+        for name in ["cyber", "matrix", "synthwave", "minimal"] {
+            let colors = Theme::by_name(name).colors;
+            assert!(
+                luma(colors.backdrop) <= luma(colors.background),
+                "{name}: {:?} over {:?}",
+                colors.backdrop,
+                colors.background
+            );
         }
     }
 

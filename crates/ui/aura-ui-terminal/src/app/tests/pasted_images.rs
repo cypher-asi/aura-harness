@@ -95,7 +95,7 @@ fn test_images_that_are_too_big_or_too_many_are_refused() {
 fn test_images_for_a_busy_agent_are_queued() {
     let (tx, mut rx) = mpsc::channel(8);
     let mut app = App::new().with_event_sender(tx);
-    app.state = AppState::Processing;
+    app.chat_state = AppState::Processing;
     paste_image(&mut app);
     app.handle_key(KeyEvent::from(KeyCode::Enter));
     assert!(app
@@ -128,7 +128,7 @@ fn test_pasted_text_keeps_its_newlines_instead_of_sending() {
     assert_eq!(app.input(), "line one\nline two");
     assert!(rx.try_recv().is_err(), "nothing was sent");
 
-    app.state = AppState::LinkCode;
+    app.chat_state = AppState::LinkCode;
     app.input.text.clear();
     app.input.cursor_pos = 0;
     app.handle_paste("  code-123\n");

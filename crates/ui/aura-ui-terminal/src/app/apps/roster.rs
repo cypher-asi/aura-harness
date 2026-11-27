@@ -1,11 +1,35 @@
 //! The AGENTS app: the roster of permanent agents, and selecting,
 //! spawning, editing, and deleting them.
+//!
+//! An instance of a permanent agent is any agent made from it: a listed
+//! one, an archived one, or a member of a channel, which the projects
+//! list leaves out unless its channel works in a project. Each
+//! channel's coordinator is an instance of `coordinator`, which only
+//! making a channel starts: Enter on it opens its latest instance, as a
+//! click does, instead of asking the session for a new one.
 
 use crate::app::{contains, AgentsTab, App, NotificationType};
-use crate::events::{AgentDefinitionSummary, UiEvent};
+use crate::events::{AgentDefinitionSummary, AgentSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use std::path::PathBuf;
+
+/// The permanent agent every channel's coordinator is an instance of.
+const COORDINATOR_DEFINITION: &str = "coordinator";
+
+/// What AGENTS says about `coordinator` with no instance: only making a
+/// channel starts one.
+const NO_COORDINATOR: &str = "No coordinator has run yet. Make a channel to start one.";
+
+/// What the chat says in AGENTS when the permanent agent `name` has no
+/// instance.
+pub(super) fn no_instance_message(name: &str) -> String {
+    if name == COORDINATOR_DEFINITION {
+        NO_COORDINATOR.to_string()
+    } else {
+        format!("No {name} agent has run yet. Enter on it starts one.")
+    }
+}
 
 impl App {
     /// Permanent agents shown in the panel.
@@ -92,12 +116,71 @@ impl App {
     }
 
     /// Spawn the highlighted permanent agent, or create one on the
-    /// "+ New agent" row.
+    /// "+ New agent" row. `coordinator` is not spawned: its latest
+    /// instance opens, as a click does.
     pub(in crate::app) fn activate_definition_row(&mut self) {
         match self.selected_definition_name() {
+            Some(name) if name == COORDINATOR_DEFINITION => self.open_coordinator(),
             Some(name) => self.instantiate_definition(&name),
             None => self.edit_definition(None),
         }
+    }
+
+    /// Open the latest channel coordinator in AGENTS, or say that making
+    /// a channel starts one. The session refuses to start one by itself.
+    fn open_coordinator(&mut self) {
+        self.open_definition(COORDINATOR_DEFINITION);
+        if self.latest_instance(COORDINATOR_DEFINITION).is_none() {
+            self.notifications.current =
+                Some((NO_COORDINATOR.to_string(), NotificationType::Warning));
+        }
+    }
+
+    /// Every agent that can be an instance of a permanent agent, each
+    /// once, with whether it is listed: the listed ones, the archived
+    /// ones, then the channel members neither of those holds.
+    fn known_agents(&self) -> impl Iterator<Item = (&AgentSummary, bool)> + '_ {
+        let listed = self.agents.iter().map(|agent| (agent, true));
+        let archived = self.archived.items.iter().map(|agent| (agent, false));
+        let members = self
+            .channels()
+            .iter()
+            .flat_map(|channel| channel.members.iter())
+            .filter(|member| !self.is_listed(&member.id) && !self.is_archived_agent(&member.id))
+            .map(|member| (member, false));
+        listed.chain(archived).chain(members)
+    }
+
+    /// Latest instance of the permanent agent `name`, listed, archived or
+    /// in a channel: the one that last did something, a listed one on a
+    /// tie.
+    #[must_use]
+    pub(crate) fn latest_instance(&self, name: &str) -> Option<&str> {
+        self.known_agents()
+            .filter(|(agent, _)| agent.definition.as_deref() == Some(name))
+            .max_by_key(|(agent, listed)| (agent.last_active_ms, *listed))
+            .map(|(agent, _)| agent.id.as_str())
+    }
+
+    /// Show the latest instance of the permanent agent `name` in AGENTS,
+    /// or that it has none. A channel's member comes on screen as CHANNELS
+    /// puts its coordinator there, though the projects list leaves it out.
+    pub(in crate::app) fn open_definition(&mut self, name: &str) {
+        self.apps.roster = Some(name.to_string());
+        if let Some(id) = self.latest_instance(name).map(str::to_string) {
+            self.switch_on_screen(&id);
+        }
+    }
+
+    /// Whether the agent on screen is an instance of the permanent agent
+    /// AGENTS shows.
+    pub(super) fn roster_shows_instance(&self) -> bool {
+        let Some(name) = self.apps.roster.as_deref() else {
+            return false;
+        };
+        self.known_agents().any(|(agent, _)| {
+            agent.id == self.active_agent_id && agent.definition.as_deref() == Some(name)
+        })
     }
 
     /// Start an instance of the permanent agent `name` and switch to it.

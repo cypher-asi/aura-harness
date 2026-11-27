@@ -81,7 +81,7 @@ impl App {
             }
             AgentsTab::Roster => match self.apps.roster.as_deref() {
                 Some(name) if self.latest_instance(name).is_none() => {
-                    format!("No {name} agent has run yet. Enter on it starts one.")
+                    super::roster::no_instance_message(name)
                 }
                 _ => "Pick a permanent agent on the left to open its latest chat.".to_string(),
             },

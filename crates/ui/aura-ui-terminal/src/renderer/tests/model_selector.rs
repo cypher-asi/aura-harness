@@ -80,7 +80,7 @@ fn test_clicking_a_difficulty_row_then_a_model_picks_it_from_the_selector() {
 
     let buffer = render_buffer(&mut app, 160);
     assert!(
-        row_of(&buffer, "Model for medium work · arm B") < row_of(&buffer, "DeepSeek V3.2"),
+        row_of(&buffer, "MODEL FOR MEDIUM WORK · ARM B") < row_of(&buffer, "DeepSeek V3.2"),
         "the selector is up"
     );
     let row = row_of(&buffer, "DeepSeek V3.2");
@@ -177,10 +177,10 @@ fn render_rows_tall(app: &mut crate::App, width: u16, height: u16) -> Vec<String
 fn test_model_selector_shows_tabs_and_counts() {
     let mut app = model_selector_app(3);
     let screen = render_rows_tall(&mut app, 100, 30).join("\n");
-    assert!(screen.contains("Select model"), "{screen}");
+    assert!(screen.contains("SELECT MODEL"), "{screen}");
     assert!(screen.contains("Ready (3)"), "{screen}");
     assert!(screen.contains("Sign in (1)"), "{screen}");
-    assert!(screen.contains("Type to filter"), "{screen}");
+    assert!(!screen.contains("Type to filter"), "no key hints: {screen}");
     assert!(screen.contains("● Model 00"), "{screen}");
     assert!(
         !screen.contains("Claude Sonnet 4.6"),
@@ -193,20 +193,30 @@ fn test_model_selector_scrolls_to_keep_the_cursor_in_view() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let mut app = model_selector_app(60);
-    let screen = render_rows_tall(&mut app, 100, 20).join("\n");
+    let rows = render_rows_tall(&mut app, 100, 20);
+    let screen = rows.join("\n");
     assert!(screen.contains("Model 00"), "{screen}");
-    assert!(screen.contains("↓ more"), "{screen}");
     assert!(!screen.contains("Model 59"), "{screen}");
+    let thumb_beside = |rows: &[String], text: &str| {
+        rows.iter()
+            .find(|row| row.contains(text))
+            .is_some_and(|row| row.trim_end().ends_with('┃'))
+    };
+    assert!(
+        thumb_beside(&rows, "Local"),
+        "the scrollbar's thumb is at the top: {screen}"
+    );
 
     app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::empty()));
-    let screen = render_rows_tall(&mut app, 100, 20).join("\n");
+    let rows = render_rows_tall(&mut app, 100, 20);
+    let screen = rows.join("\n");
     assert!(screen.contains("›   Model 59"), "{screen}");
-    assert!(screen.contains("↑ more"), "{screen}");
-    assert!(!screen.contains("│    Model 00"), "{screen}");
+    assert!(!screen.contains("Model 00"), "{screen}");
     assert!(
-        !screen.contains("↓ more"),
-        "nothing is hidden below: {screen}"
+        thumb_beside(&rows, "Model 59"),
+        "the scrollbar's thumb is at the bottom: {screen}"
     );
+    assert!(!screen.contains("more"), "no more-rows: {screen}");
 }
 
 #[test]
@@ -220,7 +230,7 @@ fn test_model_selector_sign_in_tab_shows_the_login_to_run() {
         screen.contains("›   Claude Sonnet 4.6  /login claude"),
         "{screen}"
     );
-    assert!(!screen.contains("│    Model 00"), "{screen}");
+    assert!(!screen.contains("Model 00"), "{screen}");
 }
 
 #[test]
@@ -233,7 +243,7 @@ fn test_model_selector_filters_as_you_type() {
         screen.contains("Model 10") && screen.contains("Model 11"),
         "{screen}"
     );
-    assert!(!screen.contains("│    Model 02"), "{screen}");
+    assert!(!screen.contains("Model 02"), "{screen}");
 
     type_text(&mut app, "zz");
     let screen = render_rows_tall(&mut app, 100, 30).join("\n");

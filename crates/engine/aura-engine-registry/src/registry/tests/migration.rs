@@ -45,7 +45,99 @@ fn a_version_0_registry_becomes_one_project_per_folder() {
 
     let body = stored_body(dir.path());
     assert!(!body.contains("member_of"), "{body}");
-    assert!(body.contains("\"version\": 3"), "{body}");
+    assert!(body.contains("\"version\": 4"), "{body}");
+}
+
+/// Store `file` in `dir`'s database as an older release left it, without
+/// bringing it up to date.
+fn write_store(dir: &Path, file: &RegistryFile) {
+    let rocks = shared_store(&dir.join(DB_DIR)).unwrap();
+    let (diff, _) = persist::Persisted::default().diff(persist::to_rows(file));
+    AgentStore::for_store(&rocks).apply(&diff).unwrap();
+}
+
+/// A version 3 registry with a channel coordinator named the old way,
+/// and agents whose names look like it but that are not coordinators or
+/// were named otherwise.
+fn version_3_with_coordinators(launch: &Path) -> RegistryFile {
+    let coordinator = Some(crate::definitions::COORDINATOR_DEFINITION);
+    let agent = |zns: &str, name: &str, definition: Option<&str>, code: &str| RegisteredAgent {
+        zns_id: zns.to_string(),
+        definition: definition.map(str::to_string),
+        project_id: Some("p".to_string()),
+        code: Some(code.to_string()),
+        ..AgentRegistry::new_agent(name.to_string())
+    };
+    RegistryFile {
+        version: 3,
+        projects: vec![Project {
+            id: "p".to_string(),
+            folder: launch.canonicalize().unwrap(),
+            created_at: at(0),
+            removed: false,
+        }],
+        agents: vec![
+            agent("0://terminal/main", "Terminal Agent", None, "AGE1"),
+            agent(
+                "0://terminal/site",
+                "#site coordinator",
+                coordinator,
+                "COO1",
+            ),
+            agent("0://terminal/plain", "#site coordinator", None, "AGE2"),
+            agent(
+                "0://terminal/rev",
+                "#ops coordinator",
+                Some("reviewer"),
+                "REV1",
+            ),
+            agent("0://terminal/mine", "my coordinator", coordinator, "COO2"),
+        ],
+        ..RegistryFile::default()
+    }
+}
+
+#[test]
+fn a_version_3_store_renames_channel_coordinators_and_keeps_codes() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = tempfile::tempdir().unwrap();
+    write_store(dir.path(), &version_3_with_coordinators(launch.path()));
+
+    let expected = [
+        ("Terminal Agent", "AGE1"),
+        ("coordinator", "COO1"),
+        ("#site coordinator", "AGE2"),
+        ("#ops coordinator", "REV1"),
+        ("my coordinator", "COO2"),
+    ]
+    .map(|(name, code)| (name.to_string(), code.to_string()));
+    let named = |registry: &AgentRegistry| -> Vec<(String, String)> {
+        registry
+            .agents()
+            .iter()
+            .map(|a| (a.name.clone(), code_of(a).to_string()))
+            .collect()
+    };
+    let registry = open(dir.path(), launch.path());
+    assert_eq!(named(&registry), expected);
+    assert_eq!(registry.file.version, REGISTRY_VERSION);
+    drop(registry);
+
+    // Saved renamed: the store's row has the new name, and loading again
+    // changes nothing.
+    let body = stored_body(dir.path());
+    assert!(body.contains("\"version\": 4"), "{body}");
+    let rocks = shared_store(&dir.path().join(DB_DIR)).unwrap();
+    let rows = AgentStore::for_store(&rocks).load().unwrap().agents;
+    drop(rocks);
+    let site = rows
+        .iter()
+        .find(|r| r.zns_id == "0://terminal/site")
+        .unwrap();
+    assert_eq!(site.name, "coordinator");
+    assert_eq!(site.code.as_deref(), Some("COO1"));
+    assert_eq!(named(&open(dir.path(), launch.path())), expected);
+    assert_eq!(stored_body(dir.path()), body);
 }
 
 /// Write a version 0 registry, with projects in `site` and `docs`, and the
