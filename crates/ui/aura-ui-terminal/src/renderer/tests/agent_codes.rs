@@ -34,7 +34,7 @@ fn no_agent_row_shows_a_code_at_the_right_edge() {
     let bb = line_with(&rows, "Researcher");
     // Neither the root agent nor its spawn shows its code; the time alone
     // ends the row and both names line up.
-    assert!(rows[aa].contains(" 3m  │"), "{:?}", rows[aa]);
+    assert!(rows[aa].contains(" 3m │"), "{:?}", rows[aa]);
     assert!(!rows[aa].contains("REN36"), "{:?}", rows[aa]);
     assert!(!rows[bb].contains("AGE1"), "{:?}", rows[bb]);
     // The time is the last text before the panel's right border; the
@@ -77,7 +77,7 @@ fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_the_time
 
     app.handle_mouse(moved(name, line));
     let hovered = render_rows(&mut app, 120);
-    assert!(hovered[line].contains(" ✕ 3m  │"), "{:?}", hovered[line]);
+    assert!(hovered[line].contains(" ✕ 3m │"), "{:?}", hovered[line]);
     let glyph_at = |row: &str, column: usize| row.chars().nth(column);
     assert_eq!(
         glyph_at(&hovered[line], offset(AgentButton::Archive)),
@@ -100,7 +100,7 @@ fn hovered_agent_row_draws_its_button_where_the_hit_test_puts_it_beside_the_time
 #[test]
 fn a_tree_row_keeps_its_whole_width_at_narrow_widths() {
     use crate::app::{AgentButton, AgentRowEnd};
-    use crate::components::{cell_style, tree_row, CellState, StatusIcon, ROW_INSET};
+    use crate::components::{cell_style, tree_row, CellState, StatusIcon};
     let theme = test_theme();
     let text = |line: &ratatui::text::Line<'_>| -> String {
         line.spans
@@ -109,10 +109,10 @@ fn a_tree_row_keeps_its_whole_width_at_narrow_widths() {
             .collect()
     };
     let buttons = AgentButton::ALL.map(|button| (button, theme.colors.muted));
-    // The inset, the icon column and its pad, ` ✕`, ` 3m` and the inset
-    // again is 12 columns. Below that the fixed parts alone are wider than
-    // the row, which no row layout cuts.
-    let around = ROW_INSET + crate::animation::AURA_WIDTH + 1 + 2 + 3 + ROW_INSET;
+    // ` `, the icon column and its pad, ` ✕`, then ` 3m ` is 10 columns.
+    // Below that the fixed parts alone are wider than the row, which no
+    // row layout cuts.
+    let around = 1 + crate::animation::AURA_WIDTH + 1 + 2 + 4;
     for width in around..=around + 10 {
         let end = AgentRowEnd::agent(Some("3m"));
         for buttons in [&buttons[..], &[]] {
@@ -128,7 +128,7 @@ fn a_tree_row_keeps_its_whole_width_at_narrow_widths() {
                 buttons,
             );
             let line_text = text(&line);
-            assert!(line_text.ends_with(" 3m  "), "{line_text:?}");
+            assert!(line_text.ends_with(" 3m "), "{line_text:?}");
             assert_eq!(
                 line.width(),
                 width,
@@ -166,26 +166,26 @@ fn agent_rows_without_codes_are_laid_out_as_before() {
             buttons,
         ))
     };
-    let lead = format!("  {}", " ".repeat(AURA_WIDTH + 1));
+    let lead = format!(" {}", " ".repeat(AURA_WIDTH + 1));
     assert_eq!(
         row(Some("3m"), &[]),
-        format!("{lead}{:<14} 3m  ", "Researcher")
+        format!("{lead}{:<16} 3m ", "Researcher")
     );
-    assert_eq!(row(None, &[]), format!("{lead}{:<19}", "Researcher"));
+    assert_eq!(row(None, &[]), format!("{lead}{:<20}", "Researcher"));
     assert_eq!(
         row(Some("3m"), &buttons),
-        format!("{lead}{:<12} ✕ 3m  ", "Researcher")
+        format!("{lead}{:<14} ✕ 3m ", "Researcher")
     );
     assert_eq!(
         row(None, &buttons),
-        format!("{lead}{:<15} ✕  ", "Researcher")
+        format!("{lead}{:<17} ✕ ", "Researcher")
     );
 
     // In the panel, a coded agent gets the same rows as one without.
     let mut app = app_with_coded_agents(Some("REN36"), Some("AGE1"));
     let rows = render_rows(&mut app, 120);
     let aa = &rows[line_with(&rows, "Terminal Ag")];
-    assert!(aa.contains(" 3m  │"), "{aa:?}");
+    assert!(aa.contains(" 3m │"), "{aa:?}");
     let bb = &rows[line_with(&rows, "Researcher")];
     let after_name = &bb[bb.find("Researcher").unwrap() + "Researcher".len()..];
     let pad = after_name.find('│').expect("border");

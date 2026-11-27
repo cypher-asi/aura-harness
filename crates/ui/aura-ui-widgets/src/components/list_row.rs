@@ -15,12 +15,11 @@ fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
-/// The blanks a list row keeps at each end, inside the panel's borders.
-/// The row's fill runs across them, from one border to the other.
-pub(super) const INSET: &str = "  ";
+/// The blank a list row starts with, inside the panel's border.
+const INSET: &str = " ";
 
-/// Columns of [`INSET`]: where a row's icon column starts, and how far
-/// its time or code ends from the right edge.
+/// Columns of [`INSET`]: where a row's icon column starts, and the blank
+/// a row's time or code leaves before the right border.
 pub const ROW_INSET: usize = INSET.len();
 
 /// What sits in the icon column of a projects-list row.
@@ -38,7 +37,7 @@ impl StatusIcon {
     }
 }
 
-/// `  icon name      time  `, filled with the row's background (if it has
+/// ` icon name      time `, filled with the row's background (if it has
 /// one) from one panel border to the other. The icon column is wide enough
 /// for the aura ring, so names line up whatever icon a row shows. `depth`
 /// indents the row two columns per level.
@@ -169,9 +168,9 @@ fn indented_row<'a>(
     let icon_width = display_width(&icon.glyph);
     let icon_pad = AURA_WIDTH.saturating_sub(icon_width) + 1;
     // Buttons sit just left of the time and code, laid out from the same
-    // pieces as `agent_button_offset`, so the time and code stay put when
-    // the pointer brings the buttons.
-    let time = end.time_cell();
+    // pieces as `agent_button_offset`. Rows without buttons keep the
+    // same time and code, so neither moves when the pointer comes.
+    let time = end.time_cell(!buttons.is_empty());
     let code = end.code_cell();
     let buttons: Vec<Span<'a>> = buttons
         .iter()
@@ -184,8 +183,7 @@ fn indented_row<'a>(
             + icon_pad
             + button_width
             + display_width(&time)
-            + display_width(&code)
-            + ROW_INSET,
+            + display_width(&code),
     );
     let icon_color = cell.icon.unwrap_or(icon.color);
     let mut spans = vec![
@@ -201,7 +199,6 @@ fn indented_row<'a>(
     if !code.is_empty() {
         spans.push(Span::styled(code, fill.fg(cell.time)));
     }
-    spans.push(Span::styled(INSET, fill));
     Line::from(spans)
 }
 

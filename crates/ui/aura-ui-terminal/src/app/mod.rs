@@ -332,9 +332,9 @@ pub struct App {
     pub(super) log: run_log::LogState,
 }
 
-/// Columns at the right end of a project's row that add an agent to the
-/// project when clicked: the " +" and the row's inset after it.
-pub(crate) const PROJECT_ADD_WIDTH: u16 = 4;
+/// Columns of the " + " at the right end of a project's row, which adds an
+/// agent to the project when clicked.
+pub(crate) const PROJECT_ADD_WIDTH: u16 = 3;
 
 pub(crate) use crate::components::{agent_button_at, AgentButton, AgentRowEnd};
 

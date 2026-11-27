@@ -116,10 +116,8 @@ pub(super) fn agent_ids(app: &App) -> Vec<&str> {
     app.agents().iter().map(|a| a.id.as_str()).collect()
 }
 
-/// Press or move the left button on `row`, past a top-level agent's fold
-/// marker.
 pub(super) fn left(app: &mut App, kind: fn(MouseButton) -> MouseEventKind, row: u16) {
-    app.handle_mouse(mouse(kind(MouseButton::Left), 6, row));
+    app.handle_mouse(mouse(kind(MouseButton::Left), 5, row));
 }
 
 // ========================================================================

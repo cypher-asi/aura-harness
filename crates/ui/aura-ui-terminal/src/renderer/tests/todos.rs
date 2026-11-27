@@ -5,7 +5,7 @@ use super::*;
 /// fold toggle at the right.
 fn todo_drawer_header(rows: &[String]) -> Option<usize> {
     rows.iter()
-        .rposition(|row| row.contains("to-do") && (row.contains(" —  │") || row.contains(" +  │")))
+        .rposition(|row| row.contains("to-do") && (row.contains(" — │") || row.contains(" + │")))
 }
 
 /// Whether any row above `end` shows a to-do's box.
@@ -110,7 +110,7 @@ fn test_todos_command_folds_the_drawer_and_brings_back_a_finished_list() {
     let rows = render_rows(&mut app, 160);
     let screen = rows.join("\n");
     let header = todo_drawer_header(&rows).unwrap_or_else(|| panic!("no drawer:\n{screen}"));
-    assert!(rows[header].contains(" +  │"), "folded: {:?}", rows[header]);
+    assert!(rows[header].contains(" + │"), "folded: {:?}", rows[header]);
     assert!(!screen.contains("Run the tests"), "{screen}");
     assert!(
         rows[header + 1].contains('├'),
@@ -191,7 +191,7 @@ fn test_an_open_channel_shows_its_coordinators_todos_in_the_drawer() {
     run_slash(&mut app, "/todos");
     let rows = render_rows(&mut app, 160);
     let header = todo_drawer_header(&rows).expect("folded drawer");
-    assert!(rows[header].contains(" +  │"), "{:?}", rows[header]);
+    assert!(rows[header].contains(" + │"), "{:?}", rows[header]);
 
     // CHANNELS with no channel open shows no agent, so no drawer.
     app.close_channel();

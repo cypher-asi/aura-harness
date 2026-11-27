@@ -4,11 +4,11 @@
 //!
 //! ```text
 //! ├──────────────────────────────────────────────┤
-//! │  2 Queued                                 —  │
-//! │  first queued message text, cut to fit…      │
-//! │  second queued             Send Now ⏎  ✎  ✕  │
+//! │ 2 Queued                                   — │
+//! │ first queued message text, cut to fit…       │
+//! │ second queued    Send Now ⏎  ✎  ✕            │
 //! ├──────────────────────────────────────────────┤
-//! │  → Add a follow-up                           │
+//! │ → Add a follow-up                            │
 //! ```
 //!
 //! The header gives the count and a toggle, `—` to fold the panel to the
@@ -17,8 +17,6 @@
 //! Only messages have `✎`. Past [`MAX_VISIBLE_ROWS`] entries a `+N more`
 //! row counts the rest, and the rows on screen follow the keyboard. While
 //! an entry is dragged its row stays lit and a rail marks where it lands.
-//! A lit row's fill runs from one border to the other; its text keeps a
-//! row's inset from each.
 //!
 //! The panel records where it drew its header, rows and actions on the
 //! [`App`] for the mouse.
@@ -30,7 +28,6 @@ use super::input::join_divider;
 use super::text::display_width;
 use crate::app::queue_panel::{QueueAreas, QueuePart, QueueRowArea, QueueSpot, MAX_VISIBLE_ROWS};
 use crate::app::PanelFocus;
-use crate::components::ROW_INSET;
 use crate::{App, Theme};
 use ratatui::{
     layout::Rect,
@@ -50,8 +47,8 @@ const EDIT: &str = "✎";
 /// The remove action's glyph.
 const REMOVE: &str = "✕";
 /// Columns from the send-now label's start to the row's end: the label,
-/// two spaces, `✎`, two spaces, `✕` and the row's inset.
-const ACTIONS_WIDTH: u16 = 18;
+/// two spaces, `✎`, two spaces, `✕` and the closing pad.
+const ACTIONS_WIDTH: u16 = 17;
 /// Narrowest text the row keeps beside its actions; narrower rows leave
 /// the actions to the keyboard.
 const MIN_TEXT_WIDTH: u16 = 8;
@@ -127,7 +124,7 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
         let hidden = len.saturating_sub(areas.rows.len());
         if hidden > 0 && y < inner.bottom() {
             let more = Line::from(Span::styled(
-                format!("{}+{hidden} more", " ".repeat(ROW_INSET)),
+                format!(" +{hidden} more"),
                 Style::default().fg(theme.colors.muted),
             ));
             frame.render_widget(Paragraph::new(more), Rect { y, ..header });
@@ -136,17 +133,16 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
     app.set_queue_areas(areas);
 }
 
-/// `  2 Queued` at the left and the toggle at the right.
+/// ` 2 Queued` at the left and the toggle at the right.
 fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
-    let inset = " ".repeat(ROW_INSET);
-    let count = format!("{inset}{} Queued", app.queue().len());
+    let count = format!(" {} Queued", app.queue().len());
     let toggle = if app.queue_collapsed() { "+" } else { "—" };
     let toggle_color = if app.queue_hover() == Some(QueueSpot::Header) {
         theme.colors.foreground
     } else {
         theme.colors.muted
     };
-    let fixed = display_width(&count) + display_width(toggle) + ROW_INSET;
+    let fixed = display_width(&count) + display_width(toggle) + 1;
     let fill = usize::from(width).saturating_sub(fixed);
     Line::from(vec![
         Span::styled(
@@ -157,7 +153,7 @@ fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
         ),
         Span::raw(" ".repeat(fill)),
         Span::styled(toggle, Style::default().fg(toggle_color)),
-        Span::raw(inset),
+        Span::raw(" "),
     ])
 }
 
@@ -191,7 +187,7 @@ fn render_row(
     let (bg, text_fg) = row_colors(look, item.editable, theme);
     let base = bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
 
-    let has_actions = row.width >= ACTIONS_WIDTH + MIN_TEXT_WIDTH + 3;
+    let has_actions = row.width >= ACTIONS_WIDTH + MIN_TEXT_WIDTH + 2;
     let show_actions = has_actions && (look.selected || look.lit);
     let (send_now, edit, remove) = action_rects(row, show_actions, item.editable);
     let area = QueueRowArea {
@@ -202,19 +198,14 @@ fn render_row(
         remove,
     };
 
-    let inset = u16::try_from(ROW_INSET).unwrap_or(u16::MAX);
-    let tail = if show_actions {
-        ACTIONS_WIDTH + 1
-    } else {
-        inset
-    };
-    let text_width = usize::from(row.width.saturating_sub(inset + tail));
+    let tail = if show_actions { ACTIONS_WIDTH + 1 } else { 1 };
+    let text_width = usize::from(row.width.saturating_sub(1 + tail));
     let text = truncate(&item.text.replace('\n', "↵"), text_width);
     let pad = text_width.saturating_sub(display_width(&text));
     let lead = if look.drop_target {
-        Span::styled(format!("{DROP_RAIL} "), base.fg(colors.success))
+        Span::styled(DROP_RAIL, base.fg(colors.success))
     } else {
-        Span::styled(" ".repeat(ROW_INSET), base)
+        Span::styled(" ", base)
     };
     let mut spans = vec![
         lead,
@@ -224,7 +215,7 @@ fn render_row(
     if show_actions {
         spans.extend(action_spans(look, base, item.editable, theme));
     }
-    spans.push(Span::styled(" ".repeat(ROW_INSET), base));
+    spans.push(Span::styled(" ", base));
     frame.render_widget(Paragraph::new(Line::from(spans)), row);
     Some(area)
 }
@@ -257,13 +248,13 @@ fn action_rects(
             ..row
         }),
         (show_actions && editable).then(|| Rect {
-            x: right - 7,
+            x: right - 6,
             width: 3,
             ..row
         }),
         show_actions.then(|| Rect {
-            x: right - 4,
-            width: 4,
+            x: right - 3,
+            width: 3,
             ..row
         }),
     )
@@ -351,8 +342,7 @@ mod tests {
         let rows = rows(&mut app);
 
         let (header, header_row) = row_with(&rows, "3 Queued").expect("header");
-        assert!(header_row.contains("│  3 Queued"), "{header_row:?}");
-        assert!(header_row.contains(" —  │"), "{header_row:?}");
+        assert!(header_row.contains(" — │"), "{header_row:?}");
         let (first, _) = row_with(&rows, "first message").expect("first row");
         let (second, _) = row_with(&rows, "second message").expect("second row");
         let (third, _) = row_with(&rows, "/compact").expect("third row");
@@ -384,7 +374,7 @@ mod tests {
         let rows = rows(&mut app);
 
         let (_, header) = row_with(&rows, "1 Queued").expect("header");
-        assert!(header.contains(" +  │"), "{header:?}");
+        assert!(header.contains(" + │"), "{header:?}");
         assert!(row_with(&rows, "first message").is_none());
     }
 
@@ -431,7 +421,7 @@ mod tests {
         let rows = rows(&mut app);
 
         let (_, label) = row_with(&rows, "/compact").expect("label row");
-        assert!(label.contains("Send Now ⏎     ✕  │"), "{label:?}");
+        assert!(label.contains("Send Now ⏎     ✕"), "{label:?}");
         assert!(
             row_with(&rows, "Esc back").is_none(),
             "no keys in the header"

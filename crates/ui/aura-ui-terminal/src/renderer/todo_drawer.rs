@@ -4,17 +4,14 @@
 //!
 //! ```text
 //! ├──────────────────────────────────────────────┤
-//! │  ⬢ Working on 4 to-dos  1/4               —  │
-//! │  ☒ Read the parser                           │
-//! │  ▣ Write the lexer                           │
-//! │  ☐ Run the tests                             │
-//! │  +1 more                                     │
+//! │ ⬢ Working on 4 to-dos  1/4                 — │
+//! │ ☒ Read the parser                            │
+//! │ ▣ Write the lexer                            │
+//! │ ☐ Run the tests                              │
+//! │ +1 more                                      │
 //! ├──────────────────────────────────────────────┤
-//! │  → Add a follow-up                           │
+//! │ → Add a follow-up                            │
 //! ```
-//!
-//! Its rows keep a row's inset from each border, as the panels' do, but
-//! no blank row on top: the drawer is as tall as its rows.
 //!
 //! The header gives the count, `done/total` and a toggle, `—` to fold
 //! the drawer to the header, `+` to open it. Folded, the item in
@@ -31,7 +28,6 @@ use super::hud::{checklist_header, todo_line, truncate, MAX_TODO_ROWS};
 use super::input::join_divider;
 use super::text::display_width;
 use crate::app::{AppState, PanelFocus};
-use crate::components::ROW_INSET;
 use crate::events::TodoState;
 use crate::{App, Theme};
 use ratatui::{
@@ -103,33 +99,32 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
         .iter()
         .position(|todo| todo.state == TodoState::InProgress)
         .map_or(0, |at| at.min(len - shown));
-    let inset = " ".repeat(ROW_INSET);
-    let text_room = usize::from(header.width).saturating_sub(2 * ROW_INSET);
+    // A column clear of each border.
+    let text_room = usize::from(header.width.saturating_sub(2));
     let mut y = header.y + 1;
     for todo in todos.iter().skip(first).take(shown) {
         let mut line = todo_line(todo, text_room, theme);
-        line.spans.insert(0, Span::raw(inset.clone()));
+        line.spans.insert(0, Span::raw(" "));
         frame.render_widget(Paragraph::new(line), Rect { y, ..header });
         y += 1;
     }
     let hidden = len - shown;
     if hidden > 0 && y < inner.bottom() {
         let more = Line::from(Span::styled(
-            format!("{inset}+{hidden} more"),
+            format!(" +{hidden} more"),
             Style::default().fg(theme.colors.muted),
         ));
         frame.render_widget(Paragraph::new(more), Rect { y, ..header });
     }
 }
 
-/// `  ⬢ Working on 3 to-dos  1/3` at the left, with the item in progress
+/// ` ⬢ Working on 3 to-dos  1/3` at the left, with the item in progress
 /// when folded, and the toggle at the right.
 fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
     let hud = app.hud();
     let working = app.state() == AppState::Processing;
     let shimmer = (working && theme.animate_spinners).then(|| app.animation_frame());
-    let inset = " ".repeat(ROW_INSET);
-    let mut spans = vec![Span::raw(inset.clone())];
+    let mut spans = vec![Span::raw(" ")];
     spans.extend(checklist_header(hud, theme, working, shimmer).spans);
     let (done, total) = hud.todo_progress();
     spans.push(Span::styled(
@@ -147,8 +142,8 @@ fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
     let width = usize::from(width);
     let used =
         |spans: &[Span<'_>]| -> usize { spans.iter().map(|s| display_width(&s.content)).sum() };
-    // The toggle, a space before it and the row's inset.
-    let tail = display_width(toggle) + 1 + ROW_INSET;
+    // The toggle, a space before it and the closing pad.
+    let tail = display_width(toggle) + 2;
     let current = hud
         .todos
         .iter()
@@ -164,11 +159,11 @@ fn header_line(app: &App, width: u16, theme: &Theme) -> Line<'static> {
             ));
         }
     }
-    let fill = width.saturating_sub(used(&spans) + display_width(toggle) + ROW_INSET);
+    let fill = width.saturating_sub(used(&spans) + display_width(toggle) + 1);
     spans.extend([
         Span::raw(" ".repeat(fill)),
         Span::styled(toggle, Style::default().fg(toggle_color)),
-        Span::raw(inset),
+        Span::raw(" "),
     ]);
     Line::from(spans)
 }
@@ -221,7 +216,7 @@ mod tests {
     /// The drawer's header: the last row with its toggle.
     fn header(rows: &[String]) -> Option<(usize, &String)> {
         rows.iter().enumerate().rev().find(|(_, row)| {
-            row.contains("to-do") && (row.contains(" —  │") || row.contains(" +  │"))
+            row.contains("to-do") && (row.contains(" — │") || row.contains(" + │"))
         })
     }
 
@@ -260,21 +255,21 @@ mod tests {
         let rows = rows(&mut app);
 
         let (at, header_row) = header(&rows).expect("header");
-        assert!(header_row.contains("│  ⬢ 3 to-dos  1/3"), "{header_row:?}");
+        assert!(header_row.contains("│ ⬢ 3 to-dos  1/3"), "{header_row:?}");
         assert!(!header_row.contains("Working"), "idle: {header_row:?}");
         assert!(rows[at - 1].contains('├'), "{:?}", rows[at - 1]);
         assert!(
-            rows[at + 1].contains("│  ☒ Read the parser"),
+            rows[at + 1].contains("│ ☒ Read the parser"),
             "{:?}",
             rows[at + 1]
         );
         assert!(
-            rows[at + 2].contains("│  ▣ Write the lexer"),
+            rows[at + 2].contains("│ ▣ Write the lexer"),
             "{:?}",
             rows[at + 2]
         );
         assert!(
-            rows[at + 3].contains("│  ☐ Run the tests"),
+            rows[at + 3].contains("│ ☐ Run the tests"),
             "{:?}",
             rows[at + 3]
         );
@@ -317,7 +312,7 @@ mod tests {
 
         let rows = rows(&mut app);
         let (at, header_row) = header(&rows).expect("header");
-        assert!(header_row.contains(" +  │"), "{header_row:?}");
+        assert!(header_row.contains(" + │"), "{header_row:?}");
         assert!(
             header_row.contains("1/3  Write the lexer"),
             "the item in progress follows the count: {header_row:?}"
@@ -372,7 +367,7 @@ mod tests {
         assert!(rows[at + 1].contains("☒ Step 5 "), "{:?}", rows[at + 1]);
         assert!(row_with(&rows, "▣ Step 12").is_some());
         assert!(rows[at + 10].contains("☐ Step 14"), "{:?}", rows[at + 10]);
-        assert!(rows[at + 11].contains("│  +5 more"), "{:?}", rows[at + 11]);
+        assert!(rows[at + 11].contains("│ +5 more"), "{:?}", rows[at + 11]);
         assert!(row_with(&rows, "Step 4 ").is_none());
     }
 

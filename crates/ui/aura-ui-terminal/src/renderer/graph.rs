@@ -8,7 +8,7 @@ use super::header::HeaderInfo;
 use super::side_list::render_empty;
 use super::text::display_width;
 use crate::app::graph::GraphRow;
-use crate::components::{truncate_record_info, ROW_INSET};
+use crate::components::truncate_record_info;
 use crate::events::{TraceNode, TraceNodeStatus};
 use crate::{App, Theme};
 use ratatui::{
@@ -57,8 +57,6 @@ fn tree_prefix(row: &GraphRow) -> String {
     out
 }
 
-/// A row of the tree, `width` columns wide so the selection's fill runs
-/// from one border to the other, its text kept a row's inset from both.
 fn tree_line<'a>(
     row: &GraphRow,
     node: &TraceNode,
@@ -68,9 +66,9 @@ fn tree_line<'a>(
     theme: &Theme,
 ) -> Line<'a> {
     let (glyph, color) = status_glyph(node.status, theme);
-    let prefix = format!("{}{}", " ".repeat(ROW_INSET), tree_prefix(row));
+    let prefix = tree_prefix(row);
     let marker = if linked { "↔ " } else { "" };
-    let used = display_width(&prefix) + 2 + display_width(marker) + ROW_INSET;
+    let used = display_width(&prefix) + 2 + display_width(marker);
     let label = truncate_record_info(&node.label, width.saturating_sub(used).max(1));
     let rest = width.saturating_sub(used + display_width(&label) + 1);
     let detail = if node.detail.is_empty() || rest < 4 {
@@ -96,8 +94,6 @@ fn tree_line<'a>(
     });
     spans.push(Span::styled(label, label_style));
     spans.push(Span::styled(detail, Style::default().fg(muted)));
-    let filled: usize = spans.iter().map(Span::width).sum();
-    spans.push(Span::raw(" ".repeat(width.saturating_sub(filled))));
     let line = Line::from(spans);
     if selected {
         line.style(

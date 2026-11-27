@@ -116,7 +116,7 @@ fn row<'a>(screen: &'a str, needle: &str) -> &'a str {
 fn rule_row(screen: &str) -> usize {
     screen
         .lines()
-        .position(|line| line.contains("│  ────────"))
+        .position(|line| line.contains("│ ────────"))
         .unwrap_or_else(|| panic!("no rule:\n{screen}"))
 }
 

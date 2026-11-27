@@ -9,7 +9,7 @@ mod runs;
 mod summary;
 mod table;
 
-use super::chrome::{body_block, inset_lines, pad_sides, pad_top};
+use super::chrome::{body_block, pad_top};
 use crate::app::{BenchMode, FormField};
 use crate::{App, Theme};
 use detail::detail_lines;
@@ -41,16 +41,19 @@ pub(super) fn render_benchmarks(
     app.set_chat_width(inner.width);
     app.set_chat_text_area(inner);
     let rows = pad_top(inner);
-    let padded = pad_sides(rows);
+    let padded = Rect {
+        x: rows.x.saturating_add(1),
+        width: rows.width.saturating_sub(2),
+        ..rows
+    };
     if padded.width < 12 || padded.height == 0 {
         return;
     }
     let width = usize::from(padded.width);
     let frame_no = theme.animate_spinners.then(|| app.animation_frame());
     let state = app.bench();
-    // The form wraps, so it keeps to the text area; the detail's tables
-    // fit the width, and wrapping would only break them, so their lines
-    // take the full rows and the picked run is lit border to border.
+    // The form wraps; the detail's tables fit the width, and wrapping
+    // would only break them.
     let wrap = state.mode == Some(BenchMode::Form);
     let mut form_rows = None;
     let (lines, scroll) = if wrap {
@@ -58,25 +61,23 @@ pub(super) fn render_benchmarks(
         form_rows = Some(rows);
         (lines, 0)
     } else {
-        let (lines, scroll) = match state.shown() {
+        match state.shown() {
             Some(view) => {
                 let lines = detail_lines(view, state.run, theme, width, frame_no);
                 let last = u16::try_from(lines.len().saturating_sub(1)).unwrap_or(u16::MAX);
                 (lines, state.scroll.min(last))
             }
             None => (vec![muted_line("That benchmark is gone.", theme)], 0),
-        };
-        (inset_lines(lines), scroll)
+        }
     };
     set_form_rows(app, padded, form_rows.unwrap_or_default());
     app.clamp_bench_scroll(scroll);
-    let text = if wrap { padded } else { rows };
-    app.set_chat_rows(Some((text, usize::from(scroll))));
+    app.set_chat_rows(Some((rows, usize::from(scroll))));
     let mut paragraph = Paragraph::new(lines).scroll((scroll, 0));
     if wrap {
         paragraph = paragraph.wrap(Wrap { trim: false });
     }
-    frame.render_widget(paragraph, text);
+    frame.render_widget(paragraph, padded);
 }
 
 /// Hand the pointer the form's field `rows`, each the line of `padded`

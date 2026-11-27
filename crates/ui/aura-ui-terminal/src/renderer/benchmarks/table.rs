@@ -198,7 +198,7 @@ impl<'c> Layout<'c> {
         if let Some((_, (text, style), frame)) = live.filter(|(_, (text, _), _)| !text.is_empty()) {
             self.push_status(&mut spans, &cols_in, (text, *style), frame);
         }
-        Line::from(spans).style(picked.unwrap_or_default())
+        Line::from(spans)
     }
 
     fn cell_spans(

@@ -267,9 +267,9 @@ mod tests {
     fn directories_show_their_fold_state() {
         let theme = Theme::cyber();
         let mut dir = row("src", SandboxEntryKind::Dir);
-        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with("  ▸"));
+        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▸"));
         dir.expanded = true;
-        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with("  ▾"));
+        assert!(text(&sandbox_line(&dir, CellState::Normal, 40, &theme)).starts_with(" ▾"));
     }
 
     #[test]

@@ -73,7 +73,7 @@ fn a_click_opens_a_plan_and_its_fold_glyph_folds_it() {
     app.process_command(UiCommand::SetPlans(vec![plan("a", &[Todo])]));
     app.set_task_rows_area(Rect::new(10, 5, 30, 8), 0);
 
-    app.click_task_row(12, 5);
+    app.click_task_row(11, 5);
     assert!(app.detail_view().is_none());
     assert_eq!(shape(app.task_list()), ["+a"]);
     app.click_task_row(20, 5);

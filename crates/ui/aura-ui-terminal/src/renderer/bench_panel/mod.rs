@@ -3,28 +3,26 @@
 //!
 //! ```text
 //! ├──────────────────────────────────────────────────────────┤
-//! │  COMPARE #2 ×   COMPARE #3                            —  │
-//! │  ├ Work     5 example tasks · swe_bench_pro_hard         │
-//! │  ├ Arms     A gate  vs  B opus-5-5                       │
-//! │  ├ Setup    3/5 tasks ready · 1 fetching                 │
-//! │  └ Spent    A $0.42 · B $1.10                            │
-//! │  Running · 4 working · 11 of 30 done · 1 failed          │
-//! │  ██████████▓▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  36%  │
+//! │ COMPARE #2 ×   COMPARE #3                             —  │
+//! │ ├ Work     5 example tasks · swe_bench_pro_hard          │
+//! │ ├ Arms     A gate  vs  B opus-5-5                        │
+//! │ ├ Setup    3/5 tasks ready · 1 fetching                  │
+//! │ └ Spent    A $0.42 · B $1.10                             │
+//! │ Running · 4 working · 11 of 30 done · 1 failed           │
+//! │ ██████████▓▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  36%   │
 //! ```
 //!
 //! A tab for each benchmark, the picked one lit with its `×`; what it
 //! runs; what it is doing, lit by a band of light while it goes on; and a
 //! bar of its runs, ended ones in the color of how they ended. Folded, it
-//! keeps the tabs and the bar. Like the to-do drawer it keeps a row's
-//! inset from each border, with no blank row on top.
+//! keeps the tabs and the bar.
 
 use super::benchmarks::{fit, money, setup_counts, short_model, task_prefix, under_way};
-use super::chrome::{border_color, pad_sides, PAD_SIDE};
+use super::chrome::border_color;
 use super::input::join_divider;
 use super::text::display_width;
 use crate::app::bench_progress::{BenchPanelAreas, BenchTabArea};
 use crate::app::PanelFocus;
-use crate::components::ROW_INSET;
 use crate::events::{BenchCost, BenchLiveRun, BenchPhase, BenchView};
 use crate::{App, Theme};
 use ratatui::{
@@ -86,11 +84,12 @@ pub(super) fn render(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme
         header_line(&tabs, &view.id, header, app.bench_panel_collapsed(), theme);
     frame.render_widget(Paragraph::new(line), header);
 
-    let body = pad_sides(Rect {
+    let body = Rect {
+        x: inner.x.saturating_add(1),
         y: inner.y.saturating_add(1),
+        width: inner.width.saturating_sub(2),
         height: inner.height.saturating_sub(1),
-        ..inner
-    });
+    };
     let lines = body_lines(&view, body, app.bench_panel_collapsed(), lit, theme);
     frame.render_widget(Paragraph::new(lines), body);
 
@@ -137,7 +136,7 @@ fn body_lines(
     lines
 }
 
-/// `  COMPARE #2 ×   COMPARE #3        —  `: a tab per benchmark, the
+/// ` COMPARE #2 ×   COMPARE #3        — `: a tab per benchmark, the
 /// picked one lit with its `×`, tabs past the width counted, and the
 /// toggle at the right.
 fn header_line(
@@ -148,15 +147,14 @@ fn header_line(
     theme: &Theme,
 ) -> (Line<'static>, Vec<BenchTabArea>, Rect) {
     let muted = Style::default().fg(theme.colors.muted);
-    let toggle_width = 2 + PAD_SIDE;
     let toggle = Rect {
-        x: row.right().saturating_sub(toggle_width),
-        width: toggle_width.min(row.width),
+        x: row.right().saturating_sub(3),
+        width: 3.min(row.width),
         ..row
     };
-    let mut spans = vec![Span::raw(" ".repeat(ROW_INSET))];
+    let mut spans = vec![Span::raw(" ")];
     let mut areas = Vec::new();
-    let mut x = row.x.saturating_add(PAD_SIDE);
+    let mut x = row.x.saturating_add(1);
     for (shown, (id, name)) in tabs.iter().enumerate() {
         let label = name.to_uppercase();
         let is_picked = id == picked;
@@ -213,18 +211,13 @@ fn push_tab(spans: &mut Vec<Span<'static>>, label: String, is_picked: bool, them
     }
 }
 
-/// Blank up to `before` columns, then the toggle, `+` to unfold or `—` to
-/// fold, between a space and the row's inset.
+/// Blank up to `before` columns, then the toggle: `+` to unfold, `—` to fold.
 fn push_toggle(spans: &mut Vec<Span<'static>>, before: u16, collapsed: bool, muted: Style) {
     let used: usize = spans.iter().map(|s| display_width(&s.content)).sum();
     let fill = usize::from(before).saturating_sub(used);
     spans.push(Span::raw(" ".repeat(fill)));
     spans.push(Span::styled(
-        format!(
-            " {}{}",
-            if collapsed { "+" } else { "—" },
-            " ".repeat(ROW_INSET)
-        ),
+        format!(" {} ", if collapsed { "+" } else { "—" }),
         muted,
     ));
 }

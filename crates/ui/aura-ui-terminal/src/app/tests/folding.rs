@@ -119,27 +119,27 @@ fn clicking_an_agents_marker_folds_it_and_its_name_opens_it() {
         app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), column, row));
     };
 
-    // bb's marker sits after the row's inset and one level of guides.
-    click(&mut app, 7, 6);
+    // bb's marker sits after one space and one level of guides.
+    click(&mut app, 6, 6);
     assert!(app.agent_folded(1));
     assert!(rx.try_recv().is_err(), "the marker switches no agent");
-    click(&mut app, 9, 6);
+    click(&mut app, 8, 6);
     assert!(!app.agent_folded(1));
 
     // Past the marker the row switches to the agent as before.
-    click(&mut app, 11, 6);
+    click(&mut app, 10, 6);
     assert!(!app.agent_folded(1));
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
 
     // A leaf's icon column is no button.
-    click(&mut app, 11, 7);
+    click(&mut app, 10, 7);
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "cc"));
 
     // A top-level agent's marker folds it rather than starting a drag.
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 3, 5));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 5));
     assert!(app.agent_folded(0));
-    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 3, 12));
-    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 3, 12));
+    app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 2, 12));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 2, 12));
     assert!(!app.project_dragging());
     assert_eq!(agent_ids(&app), ["aa", "bb", "cc", "dd", "ee"]);
     assert!(rx.try_recv().is_err());
@@ -233,8 +233,8 @@ fn clicking_a_fold_marker_keeps_a_wheel_scrolled_list_put() {
     assert_eq!(app.agents_scroll(), 3, "a2, a3 and bb on screen");
 
     // bb is on the third row; its marker after one level of guides.
-    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 7, 6));
-    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 7, 6));
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 6, 6));
+    app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 6, 6));
     assert!(app.agent_folded(4));
     app.sync_agents_scroll(3);
     assert_eq!(app.agents_scroll(), 3);
@@ -277,20 +277,20 @@ fn a_busy_agents_ring_is_its_fold_button() {
         app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), column, 6));
         app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), column, 6));
     };
-    // bb's ring takes offsets 6 and 7 of the rows, starting at column 1,
-    // and the spare column after it offset 8; no arrow is drawn in either
+    // bb's ring takes offsets 5 and 6 of the rows, starting at column 1,
+    // and the spare column after it offset 7; no arrow is drawn in either
     // state, but all three fold and open it.
-    click(&mut app, 7);
+    click(&mut app, 6);
     assert!(app.agent_folded(1), "the ring folds an open agent");
-    click(&mut app, 7);
+    click(&mut app, 6);
     assert!(!app.agent_folded(1), "and opens a folded one");
-    click(&mut app, 9);
+    click(&mut app, 8);
     assert!(app.agent_folded(1));
-    click(&mut app, 9);
+    click(&mut app, 8);
     assert!(!app.agent_folded(1));
     assert!(rx.try_recv().is_err(), "the ring switches no agent");
     // Past the icon column the row still switches to the agent.
-    click(&mut app, 11);
+    click(&mut app, 10);
     assert!(matches!(rx.try_recv(), Ok(UiEvent::SelectAgent(id)) if id == "bb"));
 }
 

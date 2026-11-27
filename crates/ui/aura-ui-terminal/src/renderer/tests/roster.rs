@@ -358,7 +358,7 @@ fn roster_rows_end_in_their_abbreviation_lined_up_at_the_far_right() {
     ] {
         let end = end_of(name);
         assert!(
-            end.ends_with(&format!(" {abbreviation}  ")),
+            end.ends_with(&format!(" {abbreviation} ")),
             "{name}: {end:?}"
         );
         assert!(
@@ -368,7 +368,7 @@ fn roster_rows_end_in_their_abbreviation_lined_up_at_the_far_right() {
     }
     let column = |name: &str| {
         let row = &rows[line_with(&rows, &format!("@  {name}"))];
-        char_column(row, name) + name.len() + end_of(name).len() - 5
+        char_column(row, name) + name.len() + end_of(name).len() - 4
     };
     assert_eq!(column("rust-engineer"), column("reviewer"));
     assert_eq!(column("reviewer"), column("explorer"));
@@ -400,12 +400,10 @@ fn roster_rows_end_in_their_abbreviation_lined_up_at_the_far_right() {
 #[test]
 fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
     use crate::animation::AURA_WIDTH;
-    use crate::components::ROW_INSET;
     let app = roster_app(&[("rust-engineer", Some("REN")), ("reviewer", Some("REV"))]);
     let theme = test_theme();
-    // The inset, the icon column and its pad, then ` REV` and the inset
-    // again.
-    let around = ROW_INSET + AURA_WIDTH + 1 + 4 + ROW_INSET;
+    // ` `, the icon column and its pad, then ` REV `.
+    let around = 1 + AURA_WIDTH + 1 + 5;
     for width in around..=around + 20 {
         let inner = Rect::new(0, 0, u16::try_from(width).unwrap(), 10);
         let lines = super::super::agents::roster::build_definition_lines(&app, inner, &theme);
@@ -417,8 +415,8 @@ fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
             panic!("{texts:?}");
         };
         if width >= around + 4 {
-            assert!(engineer.ends_with(" REN  "), "{engineer:?}");
-            assert!(reviewer.ends_with(" REV  "), "{reviewer:?}");
+            assert!(engineer.ends_with(" REN "), "{engineer:?}");
+            assert!(reviewer.ends_with(" REV "), "{reviewer:?}");
             assert!(
                 engineer.contains("rust-engineer") || engineer.contains('…'),
                 "the name is cut first: {engineer:?}"
@@ -428,10 +426,7 @@ fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
             assert!(!reviewer.contains("REV"), "{reviewer:?}");
         }
         let lead = " ".repeat(AURA_WIDTH);
-        assert!(
-            new_agent.starts_with(&format!("  +{lead}")),
-            "{new_agent:?}"
-        );
+        assert!(new_agent.starts_with(&format!(" +{lead}")), "{new_agent:?}");
         assert!(!new_agent.contains("RE"), "{new_agent:?}");
     }
 
@@ -442,9 +437,9 @@ fn a_narrow_roster_cuts_the_name_then_drops_the_abbreviation() {
         &plain, inner, &theme,
     ));
     let lead = " ".repeat(AURA_WIDTH);
-    let name_width = 24 - ROW_INSET - 1 - AURA_WIDTH - ROW_INSET;
-    assert_eq!(texts[0], format!("  @{lead}{:<name_width$}  ", "reviewer"));
-    assert_eq!(texts[1], format!("  +{lead}{:<name_width$}  ", "New agent"));
+    let name_width = 24 - 2 - AURA_WIDTH;
+    assert_eq!(texts[0], format!(" @{lead}{:<name_width$}", "reviewer"));
+    assert_eq!(texts[1], format!(" +{lead}{:<name_width$}", "New agent"));
 }
 
 #[test]

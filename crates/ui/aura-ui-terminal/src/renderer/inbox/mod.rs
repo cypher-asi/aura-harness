@@ -2,10 +2,10 @@
 //! of the run on screen.
 //!
 //! ```text
-//!   ● ▾ Review parser changes (3)   Lead ↔ scout  12:04
-//!         Lead → scout   Please check the tokenizer…  12:01
-//!       ↩ scout → Lead   Found two issues: …          12:03
-//!     ▸ Benchmark run (1)           Lead → bench  11:50
+//!  ● ▾ Review parser changes (3)   Lead ↔ scout  12:04
+//!        Lead → scout   Please check the tokenizer…  12:01
+//!      ↩ scout → Lead   Found two issues: …          12:03
+//!    ▸ Benchmark run (1)           Lead → bench  11:50
 //! ```
 //!
 //! A thread row is the unread dot in the accent color (or a space), the
@@ -19,20 +19,19 @@ use super::side_list::{name_style, render_empty, Tone};
 use super::text::display_width;
 use crate::app::ThreadView;
 use crate::app::{HoverTarget, InboxRow, PanelFocus};
-use crate::components::{cell_style, truncate_record_info, CellState, ROW_INSET};
+use crate::components::{cell_style, truncate_record_info, CellState};
 use crate::events::MailView;
 use crate::{App, Theme};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use ratatui::{layout::Rect, text::Line, Frame};
 
-/// Columns before a thread's subject: the row's inset, then `● ▾ `.
-const THREAD_PREFIX: usize = ROW_INSET + 4;
+/// Columns before a thread's subject: ` ● ▾ `.
+const THREAD_PREFIX: usize = 5;
 
-/// Columns before a message's reply marker (or the two spaces in its
-/// place): as many as before a thread's subject, so the names sit two
-/// columns deeper than it.
-const MESSAGE_INDENT: usize = THREAD_PREFIX;
+/// Columns before a message's names: the thread prefix, two more of
+/// indent, then the reply marker or two spaces.
+const MESSAGE_INDENT: &str = "     ";
 
 /// The fewest subject columns a thread row keeps before it drops its
 /// participants.
@@ -172,7 +171,7 @@ struct ThreadRow<'a> {
     expanded: bool,
 }
 
-/// `  ● ▾ subject (3)      Lead ↔ scout  12:04  `, `width` columns wide.
+/// ` ● ▾ subject (3)      Lead ↔ scout  12:04 `, `width` columns wide.
 /// The subject is cut to fit; a row too narrow for the participants
 /// beside at least [`MIN_SUBJECT`] subject columns keeps only the time.
 fn thread_row_line(row: &ThreadRow<'_>, width: usize, styles: &RowStyles) -> Line<'static> {
@@ -180,10 +179,9 @@ fn thread_row_line(row: &ThreadRow<'_>, width: usize, styles: &RowStyles) -> Lin
     let arrow = if row.expanded { '▾' } else { '▸' };
     let count = format!(" ({})", row.count);
     let fixed = THREAD_PREFIX + display_width(&count) + 2;
-    let inset = " ".repeat(ROW_INSET);
     let end = [
-        format!("{}  {}{inset}", row.participants, row.time),
-        format!("{}{inset}", row.time),
+        format!("{}  {} ", row.participants, row.time),
+        format!("{} ", row.time),
     ]
     .into_iter()
     .find(|end| width >= fixed + MIN_SUBJECT + display_width(end))
@@ -193,7 +191,7 @@ fn thread_row_line(row: &ThreadRow<'_>, width: usize, styles: &RowStyles) -> Lin
     let used = THREAD_PREFIX + display_width(&subject) + display_width(&count);
     let padding = width.saturating_sub(used + display_width(&end));
     Line::from(vec![
-        Span::styled(inset, styles.fill),
+        Span::styled(" ", styles.fill),
         Span::styled(dot, styles.accent),
         Span::styled(format!(" {arrow} "), styles.muted),
         Span::styled(subject, styles.text),
@@ -211,13 +209,13 @@ struct MessageRow<'a> {
     reply: bool,
 }
 
-/// `      ↩ scout → Lead   Found two issues: …   12:03  `, `width`
-/// columns wide. The names are cut first to leave the time; the preview
-/// takes what is left, and is dropped below [`MIN_PREVIEW`] columns.
+/// `     ↩ scout → Lead   Found two issues: …   12:03 `, `width` columns
+/// wide. The names are cut first to leave the time; the preview takes
+/// what is left, and is dropped below [`MIN_PREVIEW`] columns.
 fn message_row_line(row: &MessageRow<'_>, width: usize, styles: &RowStyles) -> Line<'static> {
     let marker = if row.reply { "↩ " } else { "  " };
-    let indent = MESSAGE_INDENT + display_width(marker);
-    let end = format!("  {}{}", row.time, " ".repeat(ROW_INSET));
+    let indent = display_width(MESSAGE_INDENT) + display_width(marker);
+    let end = format!("  {} ", row.time);
     let names_room = width.saturating_sub(indent + display_width(&end)).max(1);
     let names = truncate_record_info(&row.names, names_room);
     let rest = width.saturating_sub(indent + display_width(&names) + display_width(&end));
@@ -230,7 +228,7 @@ fn message_row_line(row: &MessageRow<'_>, width: usize, styles: &RowStyles) -> L
         .unwrap_or_default();
     let padding = rest.saturating_sub(display_width(&preview));
     Line::from(vec![
-        Span::styled(" ".repeat(MESSAGE_INDENT), styles.fill),
+        Span::styled(MESSAGE_INDENT, styles.fill),
         Span::styled(marker, styles.muted),
         Span::styled(names, styles.muted),
         Span::styled(preview, styles.text),

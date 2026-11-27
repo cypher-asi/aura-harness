@@ -3,16 +3,13 @@
 //! selection is under the rows.
 //!
 //! ```text
-//!   agents                     0s        1m        2m             cost   time
-//!   ▾ ✗ coding/fix-shell-bug A 2/2 · B 1/2  ────────────────     $0.41  2m40s
-//!       ✓ a-1 gate              ┃━━◆━━━┃━━┄┄                     $0.08  1m02s ✓
-//!       ✗ b-1 opus              ┃━━━━━━━━━━━━━━━✗━━━━            $0.21  2m40s ✗
-//!   b-1 · opus · 3 turns · 41 calls · $0.21 · 2m40s · check failed
-//!   turn 2 of 3 · run the tests again · 1m10s
+//!  agents                     0s        1m        2m             cost   time
+//!  ▾ ✗ coding/fix-shell-bug A 2/2 · B 1/2  ────────────────     $0.41  2m40s
+//!      ✓ a-1 gate              ┃━━◆━━━┃━━┄┄                     $0.08  1m02s ✓
+//!      ✗ b-1 opus              ┃━━━━━━━━━━━━━━━✗━━━━            $0.21  2m40s ✗
+//!  b-1 · opus · 3 turns · 41 calls · $0.21 · 2m40s · check failed
+//!  turn 2 of 3 · run the tests again · 1m10s
 //! ```
-//!
-//! Everything is laid out in the chat panel's text area, inside its
-//! padding; only a selected row's fill runs out to the left border.
 
 use super::chrome::{render_scrollbar, ScrollView};
 use super::graph::status_glyph;
@@ -36,7 +33,8 @@ const FACTS: u16 = 17;
 /// Fewest columns between two time labels on the axis.
 const TICK_ROOM: f64 = 10.0;
 
-/// Draw the timeline in `inner`, the text area of the chat panel `area`.
+/// Draw the timeline in `inner`, the inside of the chat panel `area`
+/// below its blank top row.
 pub(super) fn render_timeline(
     frame: &mut Frame,
     area: Rect,
@@ -58,7 +56,6 @@ pub(super) fn render_timeline(
         buffer: frame.buffer_mut(),
         theme,
         view,
-        border: area.x + 1,
     };
     draw.axis(inner, label, state.timeline().start_ms, facts > 0);
     draw.rows(app, inner, label, facts);
@@ -194,9 +191,6 @@ struct Draw<'a> {
     buffer: &'a mut Buffer,
     theme: &'a Theme,
     view: TimelineView,
-    /// The column inside the panel's left border, where a selected row's
-    /// fill starts
-    border: u16,
 }
 
 impl Draw<'_> {
@@ -275,7 +269,7 @@ impl Draw<'_> {
             } else {
                 "Nothing recorded yet."
             };
-            self.text(inner.x, view.rows_top, text, inner.width, self.muted());
+            self.text(inner.x + 1, view.rows_top, text, inner.width, self.muted());
         }
     }
 
@@ -283,9 +277,10 @@ impl Draw<'_> {
     fn footer(&mut self, app: &App, inner: Rect) {
         let (first, second) = footer_lines(app);
         let y = inner.bottom() - 2;
+        let width = inner.width.saturating_sub(2);
         let style = Style::default().fg(self.theme.colors.foreground);
-        self.text(inner.x, y, &first, inner.width, style);
-        self.text(inner.x, y + 1, &second, inner.width, self.muted());
+        self.text(inner.x + 1, y, &first, width, style);
+        self.text(inner.x + 1, y + 1, &second, width, self.muted());
     }
 
     /// The header: `agents`, the time from the run's start along the bars,
@@ -297,7 +292,7 @@ impl Draw<'_> {
     )]
     fn axis(&mut self, inner: Rect, label: u16, start_ms: u64, facts: bool) {
         let muted = self.muted();
-        self.text(inner.x, inner.y, "agents", label, muted);
+        self.text(inner.x + 1, inner.y, "agents", label, muted);
         let (from, to) = self.view.window;
         let per_column = (to - from) / f64::from(self.view.bar_width);
         let want = per_column * TICK_ROOM;
@@ -328,22 +323,20 @@ impl Draw<'_> {
         }
     }
 
-    /// `  ▾ ✓ a-1 gate`: indent, fold marker, status, name and note, in the
-    /// `width` columns from `x`. A selected row's fill starts at the
-    /// border.
+    /// `  ▾ ✓ a-1 gate`: indent, fold marker, status, name and note.
     fn label(&mut self, x: u16, y: u16, width: u16, row: &TimelineRow, selected: bool) {
         let fill = if selected {
             self.selection()
         } else {
             Style::default()
         };
-        for column in self.border.min(x)..x + width {
+        for column in x..x + width {
             self.put(column, y, " ", fill);
         }
         let indent = u16::try_from(row.depth * 2)
             .unwrap_or(u16::MAX)
             .min(width / 2);
-        let mut at = x + indent;
+        let mut at = x + 1 + indent;
         let end = x + width;
         if row.folds {
             let marker = if row.folded { "▸" } else { "▾" };

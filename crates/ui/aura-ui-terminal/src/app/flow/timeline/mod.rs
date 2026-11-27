@@ -425,7 +425,7 @@ impl TimelineState {
         }
         let index = self.scroll + usize::from(into);
         let it = self.timeline.rows.get(index)?;
-        let marker = view.area.x + u16::try_from(it.depth * 2).unwrap_or(u16::MAX);
+        let marker = view.area.x + 1 + u16::try_from(it.depth * 2).unwrap_or(u16::MAX);
         if it.folds && (marker..=marker + 1).contains(&column) {
             return Some(Err(index));
         }

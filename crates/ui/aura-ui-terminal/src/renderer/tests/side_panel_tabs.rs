@@ -210,7 +210,7 @@ fn test_tasks_tab_lists_plans_with_their_todos_above_their_tasks() {
         rows[auth + 2]
     );
     assert!(
-        rows[auth + 3].contains("✓  Write the login handler"),
+        rows[auth + 3].contains("✓  Write the login handler  →"),
         "the task doing a todo sits under it, titled by the todo: {}",
         rows[auth + 3]
     );
@@ -316,7 +316,7 @@ fn test_active_plan_shows_in_the_side_panel_not_above_the_input() {
     );
     let plan_row = rows
         .iter()
-        .find(|r| r.contains("Edit the MNDA"))
+        .find(|r| r.contains("Edit the MNDA requirement"))
         .unwrap_or_else(|| panic!("plan missing from:\n{screen}"));
     assert!(
         plan_row.find("Edit the MNDA").unwrap() > plan_row.len() / 2,

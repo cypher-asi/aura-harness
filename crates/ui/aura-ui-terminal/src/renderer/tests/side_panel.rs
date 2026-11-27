@@ -248,7 +248,7 @@ fn test_side_panel_tabs_fill_the_bar_without_counts() {
 }
 
 #[test]
-fn test_a_picked_row_is_lit_border_to_border_with_its_text_two_columns_in() {
+fn test_a_picked_row_is_lit_border_to_border_under_a_blank_row() {
     use crate::app::{PaneTab, PanelFocus, SidePanelTab};
     use crate::components::ROW_INSET;
     use crate::events::{ProcessStatus, ProcessSummary, UiCommand};

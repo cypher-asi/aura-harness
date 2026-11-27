@@ -5,14 +5,14 @@
 //! one picked, with `‹` and `›` where it is cut.
 //!
 //! ```text
-//!    All  Changes  Commits  Pushes │ Branches  Tags
-//!   ↑  main  2 ahead of origin/main         a1b2c3d4
-//!   ▾  Uncommitted changes                   2 files
-//!     M  src/lib.rs                           staged
-//!     ?  notes.txt
-//!   ○  Add the REPO tab  a1b2c3d4 · main          now
-//!   ↑  Pushed 2 commits to origin/main             5m
-//!   ●  Fix the parser  e5f6a7b8                    2h
+//!  All  Changes  Commits  Pushes │ Branches  Tags
+//!  ↑  main  2 ahead of origin/main         a1b2c3d4
+//!  ▾  Uncommitted changes                   2 files
+//!    M  src/lib.rs                           staged
+//!    ?  notes.txt
+//!  ○  Add the REPO tab  a1b2c3d4 · main          now
+//!  ↑  Pushed 2 commits to origin/main             5m
+//!  ●  Fix the parser  e5f6a7b8                    2h
 //! ```
 
 mod rows;
@@ -20,7 +20,7 @@ mod strip;
 #[cfg(test)]
 mod tests;
 
-use super::chrome::{pad_sides, Body, ScrollView};
+use super::chrome::{Body, ScrollView};
 use super::side_list::render_empty;
 use crate::app::repo_tab::RepoFilter;
 use crate::app::{HoverTarget, PanelFocus};
@@ -56,7 +56,7 @@ pub(super) fn render_repo(
         height: inner.height.min(1),
         ..inner
     };
-    strip::render_strip(frame, pad_sides(strip), app, theme);
+    strip::render_strip(frame, strip, app, theme);
 
     let list = Rect {
         y: inner.y + strip.height,

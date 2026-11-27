@@ -94,12 +94,15 @@ themes keep working:
   is wide, so that matches panels stacked on rows that touch. The side
   columns end level with the input box; the footer sits under the Chat
   column alone.
-- **Padding**: a panel's body starts one blank row under its top border
-  and keeps two columns from each side border, so its text sits as far
-  from the sides as from the top. Fills (a selected or hovered row)
-  still run border to border; only their text moves in. The sections
+- **Padding**: a panel's body starts one blank row under its top border.
+  Documents (an info tab such as POLICIES, HOST or a channel's INFO, and
+  a record, file or thread opened over the chat) also keep their text
+  two columns from each side border, as far from the sides as from the
+  top. Everything else keeps its own side columns: a list's rows start a
+  blank column in and their fills run border to border, and the chat,
+  the terminal, LOG, TIME and the benchmarks keep theirs. The sections
   under the chat (the to-do drawer, the benchmark and queue panels and
-  the input box) keep the two columns but no blank row.
+  the input box) get no blank row.
 
 ### Panel Headers
 
@@ -151,10 +154,10 @@ time. Counts, participants, names and times are `muted`; the subject
 and preview are `foreground`. Rows highlight like MEMBERS rows.
 
 ```text
-  ● ▾ Review parser changes (3)   Lead ↔ scout  12:04
-        Lead → scout   Please check the tokenizer…  12:01
-      ↩ scout → Lead   Found two issues: …          12:03
-    ▸ Benchmark run (1)           Lead → bench  11:50
+ ● ▾ Review parser changes (3)   Lead ↔ scout  12:04
+       Lead → scout   Please check the tokenizer…  12:01
+     ↩ scout → Lead   Found two issues: …          12:03
+   ▸ Benchmark run (1)           Lead → bench  11:50
 ```
 
 Opening a thread or a message shows the conversation over the chat,
@@ -196,8 +199,7 @@ What the rows are depends on what the tab shows:
 
 - **Lists** (SANDBOX, REPO, PROCESSES, TRACE, TASKS, KERNEL, MEMBERS, INBOX,
   a channel's MEMBERS) draw one `components::list_row` row per thing: its
-  status glyph, its name and its details on the right. A row's fill runs
-  border to border, its text two columns in from each. ↑↓ move the
+  status glyph, its name and its details on the right. ↑↓ move the
   selection and ⏎ opens it.
 - **Info bodies** (POLICIES, HOST, a channel's INFO, the RECORD and
   PROCESS views, a project's info box) describe one thing as a document
@@ -237,14 +239,14 @@ Under `All` the branch's sync comes first, then the uncommitted changes
 under a fold arrow, then the timeline, newest first.
 
 ```text
-   All  Changes  Commits  Pushes │ Branches  Tags
-  ↑  main  2 ahead of origin/main         a1b2c3d4
-  ▾  Uncommitted changes                   2 files
-    M  src/lib.rs                           staged
-    ?  notes.txt
-  ○  Add the REPO tab  a1b2c3d4 · main          now
-  ↑  Pushed 2 commits to origin/main             5m
-  ●  Fix the parser  e5f6a7b8                    2h
+ All  Changes  Commits  Pushes │ Branches  Tags
+ ↑  main  2 ahead of origin/main         a1b2c3d4
+ ▾  Uncommitted changes                   2 files
+   M  src/lib.rs                           staged
+   ?  notes.txt
+ ○  Add the REPO tab  a1b2c3d4 · main          now
+ ↑  Pushed 2 commits to origin/main             5m
+ ●  Fix the parser  e5f6a7b8                    2h
 ```
 
 - **Sync**: `↑` `↓` `↕` in `warning` while the branch and its upstream
@@ -270,11 +272,11 @@ under a fold arrow, then the timeline, newest first.
 │                                              │
 │  ⬢ Thinking… 12s                             │
 ├──────────────────────────────────────────────┤
-│  ⬢ Working on 2 to-dos  1/2               —  │
-│  ☒ Read the handler                          │
-│  ▣ Fix the redirect                          │
+│ ⬢ Working on 2 to-dos  1/2                 — │
+│ ☒ Read the handler                           │
+│ ▣ Fix the redirect                           │
 ├──────────────────────────────────────────────┤
-│  →  Add a follow-up                          │
+│ →  Add a follow-up                           │
 └──────────────────────────────────────────────┘
  qwen3:4b · 23% context used · 2 calls  ● Ready
 ```

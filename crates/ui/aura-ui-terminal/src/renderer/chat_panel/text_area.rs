@@ -1,21 +1,25 @@
 //! Where the chat's and the terminal's text sits in the panel's body, and
 //! the blank rows kept below the conversation.
 
-use crate::renderer::chrome::pad_sides;
 use ratatui::layout::Rect;
 
 /// The text area of the chat and the terminal in `area`, the body's rows
-/// below its blank top row. The terminal keeps to the panel's side
-/// padding, so output starts at the top left like a terminal's; the chat
-/// keeps to it as well, stops at [`MAX_CHAT_WIDTH`] columns so long lines
-/// stay readable, then gives up [`CHAT_NARROW_PERCENT`] of that width and
-/// sits centered, with equal padding on both sides.
+/// below its blank top row. The terminal keeps a single column
+/// on each side, so output starts at the top left like a terminal's; the
+/// chat is inset further, stops at [`MAX_CHAT_WIDTH`] columns so long
+/// lines stay readable, then gives up [`CHAT_NARROW_PERCENT`] of that
+/// width and sits centered, with equal padding on both sides.
 pub(in crate::renderer) fn terminal_text_area(area: Rect, terminal: bool) -> Rect {
-    let padded = pad_sides(area);
     if terminal {
-        return padded;
+        return Rect {
+            x: area.x.saturating_add(1),
+            width: area.width.saturating_sub(2),
+            ..area
+        };
     }
-    let width = narrowed(padded.width.min(MAX_CHAT_WIDTH));
+    let inset = chat_inset(area.width);
+    let base = area.width.saturating_sub(inset * 2).min(MAX_CHAT_WIDTH);
+    let width = narrowed(base);
     // Center the narrowed text so the blank space on either side matches.
     let left = (area.width - width) / 2;
     Rect {
@@ -49,4 +53,14 @@ const CHAT_ROOM_PERCENT: usize = 25;
 /// a short panel keeps its few rows for text.
 pub(in crate::renderer) const fn breathing_room(height: usize) -> usize {
     height * CHAT_ROOM_PERCENT / 100
+}
+
+/// Columns of blank space on each side of the chat: two, or one on narrow
+/// panels where every column of text counts.
+const fn chat_inset(width: u16) -> u16 {
+    if width < 40 {
+        1
+    } else {
+        2
+    }
 }

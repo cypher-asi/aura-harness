@@ -33,11 +33,11 @@ fn test_typing_sits_in_a_box_under_the_chat_panel() {
 
     let (_, chat_border, chat_right) = chat_panel(&rows);
     let chars: Vec<char> = input_row.chars().collect();
-    let typing = chat_border + 5;
+    let typing = chat_border + 4;
     let typed: String = chars[typing..typing + 5].iter().collect();
     let lead: String = chars[chat_border..typing].iter().collect();
     assert_eq!(typed, "hello", "{input_row:?}");
-    assert_eq!(lead, "│  → ", "{input_row:?}");
+    assert_eq!(lead, "│ → ", "{input_row:?}");
     assert_eq!(chars[chat_right], '│', "{input_row:?}");
 }
 
@@ -79,7 +79,7 @@ fn test_prompt_pushes_typing_right_without_gutter() {
     let rows = render_rows(&mut app, 120);
     let input_row = &rows[rows.len() - INPUT_FROM_BOTTOM];
 
-    assert!(input_row.starts_with(" │  → hello"), "{input_row:?}");
+    assert!(input_row.starts_with(" │ → hello"), "{input_row:?}");
 }
 
 #[test]
@@ -92,18 +92,14 @@ fn test_busy_input_shows_a_stop_button_at_the_right_edge() {
     let (_, chat_left, chat_right) = chat_panel(&rows);
     let chars: Vec<char> = rows[y].chars().collect();
     let in_box = columns(&chars, chat_left, chat_right + 1);
-    assert!(in_box.ends_with(" ■ Stop  │"), "{in_box:?}");
-    assert!(in_box.starts_with("│  → "), "{in_box:?}");
+    assert!(in_box.ends_with(" ■ Stop │"), "{in_box:?}");
+    assert!(in_box.starts_with("│ → "), "{in_box:?}");
 
     let stop = app.input_stop_area().expect("the button's cells");
     assert_eq!((usize::from(stop.y), stop.width, stop.height), (y, 6, 1));
     let (x, end) = (usize::from(stop.x), usize::from(stop.right()));
     assert_eq!(columns(&chars, x, end), "■ Stop");
-    assert_eq!(
-        end + 2,
-        chat_right,
-        "two columns of padding before the border"
-    );
+    assert_eq!(end + 1, chat_right, "a column of padding before the border");
 }
 
 #[test]
@@ -132,7 +128,7 @@ fn test_typing_beside_the_stop_button_wraps_before_it() {
     let rows = render_rows(&mut app, 120);
     let last = rows.len() - INPUT_FROM_BOTTOM;
     let (_, chat_left, chat_right) = chat_panel(&rows);
-    let typing = chat_left + 5;
+    let typing = chat_left + 4;
     let stop = app.input_stop_area().expect("the button's cells");
     let (x, y) = (usize::from(stop.x), usize::from(stop.y));
     assert!(y < last, "the text wraps onto more rows: {rows:#?}");
@@ -173,14 +169,14 @@ fn test_typed_newlines_grow_the_input_box_a_row_each() {
     let (rows, (x, y)) = render_with_cursor(&mut app, 120);
     let n = rows.len();
     let (_, chat_left, chat_right) = chat_panel(&rows);
-    let typing = chat_left + 5;
+    let typing = chat_left + 4;
     let in_box = |row: &String| -> String {
         let chars: Vec<char> = row.chars().collect();
         columns(&chars, chat_left, chat_right + 1)
     };
-    assert!(in_box(&rows[n - 5]).starts_with("│  → a "), "{rows:#?}");
-    assert!(in_box(&rows[n - 4]).starts_with("│    b "), "{rows:#?}");
-    assert!(in_box(&rows[n - 3]).starts_with("│    c "), "{rows:#?}");
+    assert!(in_box(&rows[n - 5]).starts_with("│ → a "), "{rows:#?}");
+    assert!(in_box(&rows[n - 4]).starts_with("│   b "), "{rows:#?}");
+    assert!(in_box(&rows[n - 3]).starts_with("│   c "), "{rows:#?}");
     let divider: Vec<char> = rows[n - 6].chars().collect();
     assert_eq!(
         (divider[chat_left], divider[chat_right]),
@@ -195,7 +191,7 @@ fn test_typed_newlines_grow_the_input_box_a_row_each() {
     assert_eq!(super::super::input::input_rows(area, &app, 20), 4);
     let (rows, (x, y)) = render_with_cursor(&mut app, 120);
     let n = rows.len();
-    assert!(in_box(&rows[n - 4]).starts_with("│    c "), "{rows:#?}");
+    assert!(in_box(&rows[n - 4]).starts_with("│   c "), "{rows:#?}");
     assert!(in_box(&rows[n - 3]).trim_matches('│').trim().is_empty());
     assert_eq!((usize::from(x), usize::from(y)), (typing, n - 3));
     assert!(!rows.join("\n").contains('↵'));
@@ -398,12 +394,12 @@ fn test_terminal_types_at_the_input_line_after_the_shell_prompt() {
 
     let (_, chat_left, _) = chat_panel(&rows);
     let input_y = rows.len() - INPUT_FROM_BOTTOM;
-    let typed: String = rows[input_y].chars().skip(chat_left + 3).collect();
+    let typed: String = rows[input_y].chars().skip(chat_left + 2).collect();
     let prompt = "[n3o@arch-aura aura-harness]$ ";
     assert!(typed.starts_with(&format!("{prompt}ls")), "{typed:?}");
     assert_eq!(
         (usize::from(x), usize::from(y)),
-        (chat_left + 3 + prompt.len() + 2, input_y)
+        (chat_left + 2 + prompt.len() + 2, input_y)
     );
     let pane = rows[..input_y].join("\n");
     assert!(!pane.contains("]$ "), "{pane}");

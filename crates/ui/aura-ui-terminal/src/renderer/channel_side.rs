@@ -217,11 +217,7 @@ fn status_row<'a>(
     theme: &Theme,
 ) -> Line<'a> {
     let fill = bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let lead = format!(
-        "{}{guides}{}",
-        " ".repeat(ROW_INSET),
-        " ".repeat(AURA_WIDTH + 1)
-    );
+    let lead = format!("{:ROW_INSET$}{guides}{}", "", " ".repeat(AURA_WIDTH + 1));
     let lead_width = display_width(&lead);
     // The row keeps its blanks at the right end, as the name's row does.
     let status = truncate_record_info(status, width.saturating_sub(lead_width + ROW_INSET));

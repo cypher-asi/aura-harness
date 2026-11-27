@@ -1,8 +1,7 @@
 //! Draw the chat panel's LOG tab: a header of three lines (the run's
 //! status, title and `Copy log`; its totals and where the log is stored;
 //! a rule), the heads of the tokens, cost and time columns, then the
-//! run's panels that fold open and shut, whose rows run from one border
-//! to the other so the picked one's fill meets both.
+//! run's panels that fold open and shut.
 //!
 //! Until the log arrives the tab is blank: no title, no loading line. The
 //! log, or a notice saying why there is none, then fades in
@@ -13,7 +12,7 @@ mod body;
 mod header;
 mod rows;
 
-use super::chrome::{body_block, inset_lines, pad_sides, pad_top};
+use super::chrome::{body_block, pad_top};
 use crate::animation::fade_in;
 use crate::app::run_log::{LogPanel, LogState};
 use crate::{App, Theme};
@@ -66,8 +65,7 @@ pub(super) fn render_run_log(
     theme: &Theme,
     is_focused: bool,
 ) {
-    let rows = reset_chat(frame, area, app, theme, is_focused);
-    let padded = pad_sides(rows);
+    let padded = reset_chat(frame, area, app, theme, is_focused);
     if padded.width < 16 || padded.height < TOP_LINES + 2 {
         app.run_log_mut().set_hits(Vec::new(), None);
         return;
@@ -91,13 +89,12 @@ pub(super) fn render_run_log(
 
     let (mut top, button) = header_lines(state, view, padded, spinner, theme);
     top.push(column_heads(width, theme));
-    let (lines, owners, selected_line) = document(state, width, spinner, theme);
-    let mut lines = inset_lines(lines);
+    let (mut lines, owners, selected_line) = document(state, width, spinner, theme);
     if let Some(progress) = fade {
         fade_in(&mut top, progress, theme);
         fade_in(&mut lines, progress, theme);
     }
-    let body = draw_top(frame, (rows, padded), top);
+    let body = draw_top(frame, padded, top);
     let scroll = follow_scroll(state, selected_line, lines.len(), usize::from(body.height));
     let hits = visible_hits(owners, scroll, body);
     let offset = u16::try_from(scroll).unwrap_or(u16::MAX);
@@ -111,7 +108,8 @@ pub(super) fn render_run_log(
 }
 
 /// Draw the panel's border and clear what the chat tab left in `app`;
-/// returns the inner area below its blank top row.
+/// returns the inner area below its blank top row, less a column each
+/// side.
 fn reset_chat(
     frame: &mut Frame,
     area: Rect,
@@ -127,12 +125,17 @@ fn reset_chat(
     app.set_chat_code_copies(Vec::new());
     app.set_chat_width(inner.width);
     app.set_chat_text_area(inner);
-    pad_top(inner)
+    let rows = pad_top(inner);
+    Rect {
+        x: rows.x.saturating_add(1),
+        width: rows.width.saturating_sub(2),
+        ..rows
+    }
 }
 
-/// Draw the header and column heads on top of `padded`, the text area of
-/// `rows`; returns the rows under them, for the panels.
-fn draw_top(frame: &mut Frame, (rows, padded): (Rect, Rect), top: Vec<Line<'static>>) -> Rect {
+/// Draw the header and column heads on top of `padded`; returns the rect
+/// under them, for the panels.
+fn draw_top(frame: &mut Frame, padded: Rect, top: Vec<Line<'static>>) -> Rect {
     frame.render_widget(
         Paragraph::new(top),
         Rect {
@@ -141,9 +144,9 @@ fn draw_top(frame: &mut Frame, (rows, padded): (Rect, Rect), top: Vec<Line<'stat
         },
     );
     Rect {
-        y: rows.y + TOP_LINES,
-        height: rows.height.saturating_sub(TOP_LINES),
-        ..rows
+        y: padded.y + TOP_LINES,
+        height: padded.height.saturating_sub(TOP_LINES),
+        ..padded
     }
 }
 

@@ -8,7 +8,7 @@
 //! finished). Info tabs are [`crate::components::Info`] documents. No tab
 //! spells out its keys.
 
-use crate::components::{truncate_record_info, ROW_INSET};
+use crate::components::truncate_record_info;
 use crate::{SideScope, Theme};
 use ratatui::{
     layout::Rect,
@@ -55,15 +55,17 @@ pub(super) fn name_style(tone: Tone, theme: &Theme) -> Style {
     })
 }
 
-/// A tab's empty state: one muted line, kept a row's inset from either
-/// side of `width` and cut to fit with an ellipsis rather than wrapped.
-/// Lists that build their own lines use this too, so every empty state
-/// reads the same way.
+/// Columns kept clear on each side of a panel's empty message.
+pub(super) const EMPTY_INDENT: usize = 2;
+
+/// A tab's empty state: one muted line, indented two columns, cut to
+/// `width` with an ellipsis rather than wrapped. Lists that build their
+/// own lines use this too, so every empty state reads the same way.
 pub(super) fn empty_line(text: &str, width: u16, theme: &Theme) -> Line<'static> {
-    let room = usize::from(width).saturating_sub(2 * ROW_INSET);
+    let room = usize::from(width).saturating_sub(EMPTY_INDENT);
     let text = truncate_record_info(text, room);
     Line::from(Span::styled(
-        format!("{}{text}", " ".repeat(ROW_INSET)),
+        format!("{}{text}", " ".repeat(EMPTY_INDENT)),
         Style::default().fg(theme.colors.muted),
     ))
 }
@@ -124,7 +126,7 @@ mod tests {
         let rows: Vec<String> = (0..3)
             .map(|y| (0..12).map(|x| buffer[(x, y)].symbol()).collect())
             .collect();
-        assert_eq!(rows[0], "  No mess…  ", "clear on both sides: {rows:?}");
+        assert_eq!(rows[0], "  No messag…", "{rows:?}");
         assert!(rows[1].trim().is_empty(), "{rows:?}");
         assert!(rows[2].trim().is_empty(), "{rows:?}");
     }

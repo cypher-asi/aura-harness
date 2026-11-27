@@ -2,7 +2,6 @@
 //! PROJECTS tab.
 
 use crate::app::ProjectListRow;
-use crate::components::ROW_INSET;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -51,14 +50,13 @@ pub(super) fn drop_line_at(rows: &[ProjectListRow], edge: usize) -> Option<DropL
     above.map(DropLine::Under)
 }
 
-/// A horizontal rule `width` columns wide, inset like the list's rows.
+/// A horizontal rule `width` columns wide, padded like the list's rows.
 fn drop_rule(width: usize, color: Color) -> Line<'static> {
-    let inset = " ".repeat(ROW_INSET);
-    let rule = DROP_RULE.repeat(width.saturating_sub(2 * ROW_INSET));
+    let rule = DROP_RULE.repeat(width.saturating_sub(2));
     Line::from(vec![
-        Span::raw(inset.clone()),
+        Span::raw(" "),
         Span::styled(rule, Style::default().fg(color)),
-        Span::raw(inset),
+        Span::raw(" "),
     ])
 }
 
