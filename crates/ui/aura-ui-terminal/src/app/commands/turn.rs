@@ -56,6 +56,7 @@ impl App {
         }
         self.chat.streaming_content.clear();
         self.finish_live_activity();
+        self.show_early_policies();
         // A dialog stays open, and a sign-in prompt keeps the input.
         if matches!(
             self.chat_state,
@@ -85,6 +86,7 @@ impl App {
 
     fn cmd_clear_conversation(&mut self) {
         self.messages.clear();
+        self.chat.early_policies.clear();
     }
 
     fn cmd_load_conversation(&mut self, history: Vec<MessageData>) {
