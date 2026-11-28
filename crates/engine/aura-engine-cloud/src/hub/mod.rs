@@ -377,19 +377,52 @@ fn choose_binary(env: Option<&Path>, home: &Path, current_exe: Option<PathBuf>) 
     }
 }
 
-/// The agents the placements saved in `home` (the hub's folder) say run
-/// on a cloud machine: the placed agents and the agents they spawned
-/// there. Read without a hub, so a placed agent is known as one while the
-/// hub is down. Empty when nothing is saved or it can't be read.
+/// An agent the placements saved in a hub's folder put on a cloud
+/// machine, as a hub that is down still knows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedPlacement {
+    /// The placed agent whose machine it runs on: itself, or the one
+    /// that spawned it there.
+    pub root: AgentId,
+    /// The user who placed that agent.
+    pub owner: Owner,
+    /// That user's display name, when it was saved.
+    pub owner_name: Option<String>,
+}
+
+/// The agents the placements saved in `home` (the hub's folder) put on a
+/// cloud machine: the placed agents and the agents they spawned there,
+/// each with who placed it. Read without a hub, so a cloud agent is
+/// known as one while the hub is down. Empty when nothing is saved or it
+/// can't be read.
+#[must_use]
+pub fn saved_placements(home: &Path) -> HashMap<AgentId, SavedPlacement> {
+    let saved = load_placements(&home.join("placements.json"));
+    let mut placements = HashMap::new();
+    for (hex, placed) in &saved.agents {
+        let Ok(root) = AgentId::from_hex(hex) else {
+            continue;
+        };
+        let place = SavedPlacement {
+            root,
+            owner: placed.owner(),
+            owner_name: placed.owner_name.clone(),
+        };
+        let children = placed
+            .children
+            .iter()
+            .filter_map(|child| AgentId::from_hex(child).ok());
+        for agent in std::iter::once(root).chain(children) {
+            placements.insert(agent, place.clone());
+        }
+    }
+    placements
+}
+
+/// The agents [`saved_placements`] names.
 #[must_use]
 pub fn saved_cloud_agents(home: &Path) -> HashSet<AgentId> {
-    let saved = load_placements(&home.join("placements.json"));
-    saved
-        .agents
-        .iter()
-        .flat_map(|(hex, placed)| std::iter::once(hex).chain(placed.children.iter()))
-        .filter_map(|hex| AgentId::from_hex(hex).ok())
-        .collect()
+    saved_placements(home).into_keys().collect()
 }
 
 fn load_placements(path: &Path) -> PlacementFile {

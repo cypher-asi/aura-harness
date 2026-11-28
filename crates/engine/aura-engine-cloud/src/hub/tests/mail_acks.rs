@@ -107,6 +107,17 @@ fn saved_placements_name_cloud_agents_without_a_hub() {
     std::fs::write(dir.path().join("placements.json"), saved.to_string()).expect("write");
     let agents = saved_cloud_agents(dir.path());
     assert_eq!(agents, [placed, child].into_iter().collect());
+    let saved = saved_placements(dir.path());
+    assert_eq!(
+        saved[&child].root, placed,
+        "a spawn runs on its placer's machine"
+    );
+    assert_eq!(saved[&placed].root, placed);
+    assert_eq!(
+        saved[&child].owner,
+        Owner::Local,
+        "files from before owners"
+    );
     let empty = tempfile::tempdir().expect("tempdir");
     assert!(saved_cloud_agents(empty.path()).is_empty());
 }
