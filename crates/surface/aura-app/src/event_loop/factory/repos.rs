@@ -28,7 +28,20 @@ pub(super) async fn forge_of(top: &Path) -> Option<Arc<dyn Forge>> {
     let url = String::from_utf8_lossy(&output.stdout);
     let slug = RepoSlug::from_remote_url(&url)?;
     info!(repo = %slug, "The merge queue lands this repo through its pull requests");
-    Some(Arc::new(GhForge::new(slug)))
+    let forge = GhForge::new(slug).with_token_source(Arc::new(github_token));
+    Some(Arc::new(forge))
+}
+
+/// The token the queue's `gh` gets, in the REPO tab's order: none while
+/// `GH_TOKEN` or `GITHUB_TOKEN` is set (`gh` reads those itself), else
+/// the token stored in the Integrations panel, else none (`gh`'s own
+/// sign-in). Read on each call, so a token stored later is used.
+fn github_token() -> Option<String> {
+    let set = |name| std::env::var(name).is_ok_and(|value: String| !value.trim().is_empty());
+    if set("GH_TOKEN") || set("GITHUB_TOKEN") {
+        return None;
+    }
+    crate::integrations::get().and_then(|integrations| integrations.github_token())
 }
 
 /// Whether `repo` has a queue file.
