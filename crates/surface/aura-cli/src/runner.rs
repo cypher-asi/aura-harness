@@ -413,18 +413,26 @@ async fn run_terminal(
     approval: Option<aura_core_modes::ApprovalLevel>,
 ) -> anyhow::Result<()> {
     let theme = Theme::by_name(&args.theme);
-    let options = session::SessionOptions {
+    let mut options = session::SessionOptions {
         approval,
         ..args.session_options()
     };
+    // Read before the session starts, so it opens on the chat the user
+    // was in: that chat comes first, and once.
+    let selection_file = aura_ui_terminal::LastSelection::file_in(&session::data_dir(&options));
+    let saved = last_selection::load(selection_file.clone()).await;
+    options.open_on = session::OpenOn::from_last(
+        saved.channels_in_front,
+        saved.channel.as_deref(),
+        saved.latest_agent(),
+    );
     let session = session::start(&options, requested_mode).await?;
-    let selection_file = aura_ui_terminal::LastSelection::file_in(&session.data_dir);
 
     let mut app = App::new()
         .with_event_sender(session.events.clone())
         .with_command_receiver(session.commands)
         .with_alert_settings(AlertSettings::from_env());
-    app.restore_selection(last_selection::load(selection_file.clone()).await);
+    app.restore_selection(saved);
     if args.verbose {
         app.set_verbose(true);
     }

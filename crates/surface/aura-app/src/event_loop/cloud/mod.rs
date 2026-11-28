@@ -95,8 +95,8 @@ use owners::refusal_for;
 pub(super) use placement::{
     handle_host_action, handle_set_placement, handle_setup, on_archive, refresh_reach,
 };
-pub(super) use publish::start;
 use publish::start_publisher;
+pub(super) use publish::{mark_saved_agents, start};
 #[cfg(test)]
 pub(super) use submit::refused;
 pub(super) use submit::{new_session, start_queued, submit};
