@@ -84,9 +84,37 @@ pub(super) struct TurnExtras {
     /// Where the turn notes, for the agent's rows and its peers, that it
     /// waits for the one already under way on its machine
     pub(super) waiting: Option<WaitingMark>,
-    /// Woken once the machine took the turn, so the loop saves the run
-    /// it runs in, to follow it again after a restart
-    pub(super) run_started: Option<Arc<tokio::sync::Notify>>,
+    /// Set on a turn an earlier run of Aura asked for: when it turns out
+    /// cut short, its agent carries on instead of giving up what it owes
+    pub(super) cut_short: Option<CutShort>,
+}
+
+/// How an agent whose followed turn was cut short carries on: the
+/// harness notice it is sent, which starts its next turn once the loop
+/// frees it. What it owes stays owed.
+pub(super) struct CutShort {
+    pub(super) notices: crate::event_loop::notices::NoticeSender,
+    pub(super) agent: AgentId,
+    /// The prompt asking it to carry on
+    pub(super) resume: String,
+}
+
+/// What the chat says as an agent cut short carries on.
+const CARRIES_ON: &str = "↻ Carrying on after the app restarted";
+
+impl CutShort {
+    /// Ask the agent to carry on.
+    pub(super) fn carry_on(&self) {
+        let notice = crate::event_loop::notices::Notice {
+            to: self.agent,
+            shown: CARRIES_ON.to_string(),
+            prompt: self.resume.clone(),
+            inbox: None,
+        };
+        if self.notices.send(notice).is_err() {
+            tracing::warn!(agent = %self.agent, "The terminal is shutting down; the agent is not asked to carry on");
+        }
+    }
 }
 
 impl TurnExtras {
@@ -197,11 +225,6 @@ pub(super) async fn forward(
         }
         if let Some(mark) = &extras.waiting {
             mark.set(says_waiting(&event)).await;
-        }
-        if let (Some(started), RemoteEvent::Status(status)) = (&extras.run_started, &event) {
-            if status == crate::cloud::hub::WORKING {
-                started.notify_one();
-            }
         }
         chat.end_wake(&event).await;
         chat.close_open(&event).await;

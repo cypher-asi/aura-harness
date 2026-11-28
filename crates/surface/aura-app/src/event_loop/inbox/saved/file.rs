@@ -148,12 +148,10 @@ pub(super) struct SavedNotice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct SavedRunning {
     pub agent: String,
-    /// On a cloud machine, not here
+    /// On a cloud machine, not here: the cloud hub's own turn mark
+    /// follows it ([`crate::cloud::CloudHub::follow_turn`])
     #[serde(default)]
     pub cloud: bool,
-    /// The cloud turn's run on its node, when known
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
 }
 
 /// What the inbox's threads carried.

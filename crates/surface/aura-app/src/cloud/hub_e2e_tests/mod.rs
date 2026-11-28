@@ -28,7 +28,6 @@ use super::test_node::TestNode;
 use super::{CloudHub, PatchOutcome, PlaceRequest, RemoteEvent};
 
 mod machine;
-mod reattach;
 mod record;
 mod restart;
 mod session;

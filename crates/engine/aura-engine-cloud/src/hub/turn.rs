@@ -9,7 +9,7 @@ use aura_core_protocol::{
     InboundMessage, OutboundMessage, RuntimeRequest, SessionUsage, UserMessage,
 };
 use aura_core_types::AgentId;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::SinkExt;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
@@ -19,7 +19,7 @@ use super::marks::TurnMark;
 use super::node_client::{NodeClient, NODE_TIMEOUT};
 use super::request::{chat_request, TurnAsk};
 
-use super::{CloudHub, MIRROR_EVERY, TURN_TIMEOUT};
+use super::{CloudHub, TURN_TIMEOUT};
 
 /// What a cloud agent's turn shows, as it streams.
 #[derive(Debug, Clone, PartialEq)]
@@ -343,77 +343,6 @@ pub(super) async fn connect_run(node: &NodeClient, run_id: &str) -> CloudResult<
             op: "attach to the turn",
             after: NODE_TIMEOUT,
         }),
-    }
-}
-
-/// A turn's open event stream.
-pub(super) struct TurnStream<'a> {
-    pub(super) hub: &'a CloudHub,
-    pub(super) node: &'a NodeClient,
-    pub(super) agent: AgentId,
-    pub(super) url: String,
-    pub(super) sink: &'a mut NodeSink,
-    pub(super) stream: &'a mut NodeStream,
-    pub(super) tx: &'a mpsc::Sender<RemoteEvent>,
-    /// Whether any of the turn's events was shown yet
-    pub(super) relayed: bool,
-}
-
-impl TurnStream<'_> {
-    /// Show the stream's events until the turn ends, mirroring the
-    /// record as it runs. The caller keeps the stream, so it can tell
-    /// whether it showed anything ([`Self::relayed`]).
-    pub(super) async fn relay_mut(&mut self, cancel: CancellationToken) -> CloudResult<()> {
-        let mut mirror = tokio::time::interval(MIRROR_EVERY);
-        mirror.tick().await;
-        loop {
-            tokio::select! {
-                () = cancel.cancelled() => {
-                    let cancel = serde_json::to_string(&InboundMessage::Cancel).unwrap_or_default();
-                    let _ = self.sink.send(Message::Text(cancel.into())).await;
-                    return Err(CloudError::BadState { machine: self.node.node().into(), state: "cancelled".into(), op: "finish the turn" });
-                }
-                _ = mirror.tick() => {
-                    if let Err(err) = self.hub.mirror_from(self.node, self.agent).await {
-                        tracing::debug!(error = %err, "mirror during a turn failed");
-                    }
-                }
-                frame = self.stream.next() => {
-                    let Some(frame) = frame else {
-                        return Err(CloudError::Node { node: self.node.node().into(), op: "stream", message: "closed before the turn ended".into() });
-                    };
-                    let frame = frame.map_err(|err| CloudError::Transport { endpoint: self.url.clone(), message: err.to_string() })?;
-                    if let Some(end) = self.take_frame(frame).await {
-                        return end;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Show one frame; `Some` when the turn is over.
-    async fn take_frame(&mut self, frame: Message) -> Option<CloudResult<()>> {
-        let Message::Text(text) = frame else {
-            return None;
-        };
-        let Ok(message) = serde_json::from_str::<OutboundMessage>(&text) else {
-            return None;
-        };
-        let event = map_outbound(message);
-        self.relayed |= event.is_some();
-        match event {
-            Some(RemoteEvent::Failed(err)) => Some(Err(CloudError::Node {
-                node: self.node.node().into(),
-                op: "turn",
-                message: err,
-            })),
-            Some(event @ RemoteEvent::Done { .. }) => {
-                let _ = self.tx.send(event).await;
-                Some(Ok(()))
-            }
-            Some(event) => self.tx.send(event).await.is_err().then_some(Ok(())),
-            None => None,
-        }
     }
 }
 

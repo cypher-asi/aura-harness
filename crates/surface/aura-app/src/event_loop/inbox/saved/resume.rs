@@ -1,8 +1,13 @@
 //! After a restart: who carries on, and how. The peers are told first,
-//! then each turn the restart cut short is followed again on its cloud
-//! machine or resumed here with a prompt that names what it still owes,
-//! then every idle agent that owes reports is asked to carry on, and
-//! last the restored queues start.
+//! then each turn the restart cut short is resumed with a prompt that
+//! names what it still owes, then every idle agent that owes reports is
+//! asked to carry on, and last the restored queues start.
+//!
+//! A cloud turn its machine ran on is not resumed here: the cloud hub
+//! marks every turn it asks for and follows the unfinished ones as it
+//! comes up, before this runs (`cloud::follow`). Such an agent is running
+//! by then, and every step here skips agents that run. So a turn is
+//! taken up once, and its report answered once.
 //!
 //! # Invariants
 //!
@@ -18,7 +23,6 @@
 use super::queue_items::dropped_images_note;
 use super::*;
 use crate::event_loop::handlers::system_message;
-use file::SavedRunning;
 use std::collections::HashSet;
 
 /// What a chat says of a turn the quit cut short that doesn't resume on
@@ -36,9 +40,9 @@ pub(in crate::event_loop) async fn resume_saved(state: &mut LoopState<'_>, resum
     // Routing between members needs their peers before anything runs.
     crate::event_loop::cloud::refresh_reach(state).await;
     let mut resumed = HashSet::new();
-    for (agent, saved) in running {
+    for (agent, _) in running {
         if resumed.insert(agent) && !is_busy(state, agent) {
-            resume_turn(state, agent, saved).await;
+            resume_turn(state, agent).await;
         }
     }
     let owing: Vec<AgentId> = state
@@ -65,20 +69,16 @@ pub(in crate::event_loop) async fn resume_saved(state: &mut LoopState<'_>, resum
     }
 }
 
-/// `agent`'s turn was under way when the app quit, as `saved` says:
-/// follow it again on its machine, else have it carry on, else say so.
-async fn resume_turn(state: &mut LoopState<'_>, agent: AgentId, saved: SavedRunning) {
+/// `agent`'s turn was under way when the app quit: have it carry on, or
+/// say so. A cloud turn its machine still has was taken up already by the
+/// cloud hub's own follow ([`crate::cloud::CloudHub::follow_turn`]), as
+/// the hub came up: the caller skips agents that run.
+async fn resume_turn(state: &mut LoopState<'_>, agent: AgentId) {
     // Parked, or its factory work is queued again and starts it.
     if lock(&state.hub.inbox.state).parked.contains(&agent)
         || state.hub.factory_flows.resumes_after_restart(agent)
     {
         return;
-    }
-    if let Some(run) = saved.run.filter(|_| saved.cloud) {
-        let resume = resume_prompt_for(state, agent, true);
-        if crate::event_loop::cloud::reattach::reattach(state, agent, run, resume).await {
-            return;
-        }
     }
     if resumes_on_its_own(state, agent) {
         carry_on(state, agent, true).await;

@@ -155,30 +155,3 @@ impl TestNode {
         })
     }
 }
-
-/// A model that answers `reply` once `gate` lets each call through, so a
-/// test can hold a node's turn in the middle.
-pub(crate) struct GatedModel {
-    pub(crate) reply: MockProvider,
-    pub(crate) gate: Arc<tokio::sync::Semaphore>,
-}
-
-#[async_trait::async_trait]
-impl ModelProvider for GatedModel {
-    fn name(&self) -> &'static str {
-        "mock"
-    }
-
-    async fn complete(
-        &self,
-        request: aura_model::ModelRequest,
-    ) -> Result<aura_model::ModelResponse, aura_model::ReasonerError> {
-        let permit = self.gate.acquire().await;
-        drop(permit);
-        self.reply.complete(request).await
-    }
-
-    async fn health_check(&self) -> bool {
-        true
-    }
-}

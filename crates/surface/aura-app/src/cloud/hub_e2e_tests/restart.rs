@@ -180,3 +180,40 @@ async fn a_machine_put_to_sleep_with_all_of_it_copied_is_left_asleep_by_the_next
     );
     hub.shutdown();
 }
+
+#[tokio::test]
+async fn a_turn_whose_stream_dropped_is_followed_once_and_ends_once_across_reopens() {
+    let p = placed_slow(MODEL_LATENCY_MS).await;
+    p.import().await;
+    // Its stream drops mid-turn as Aura quits.
+    let mark = left_running(&p).await;
+
+    let hub = p.restarted().await;
+    assert_eq!(
+        hub.unfinished_turns(),
+        vec![(p.agent, mark.clone())],
+        "one turn to follow"
+    );
+    let mut events = hub.follow_turn(p.agent, mark, CancellationToken::new());
+    let ends = tokio::time::timeout(PATIENCE, async {
+        let mut ends = Vec::new();
+        while let Some(event) = events.recv().await {
+            if matches!(event, RemoteEvent::Done(_) | RemoteEvent::Failed(_)) {
+                ends.push(event);
+            }
+        }
+        ends
+    })
+    .await
+    .expect("the followed turn ends");
+    assert!(
+        matches!(ends.as_slice(), [RemoteEvent::Done(_)]),
+        "one end: {ends:?}"
+    );
+    hub.shutdown();
+
+    // Reopened again: nothing is left to follow, so nothing ends twice.
+    let again = p.restarted().await;
+    assert!(again.unfinished_turns().is_empty());
+    again.shutdown();
+}

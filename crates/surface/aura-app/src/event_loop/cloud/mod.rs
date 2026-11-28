@@ -59,7 +59,7 @@ mod boot;
 mod ended;
 #[cfg(test)]
 mod ended_tests;
-mod follow;
+pub(in crate::event_loop) mod follow;
 #[cfg(test)]
 mod follow_tests;
 pub(in crate::event_loop) mod forward;
@@ -69,7 +69,6 @@ mod moving;
 mod offline;
 mod placement;
 mod publish;
-pub(in crate::event_loop) mod reattach;
 mod spawns;
 #[cfg(test)]
 mod spawns_tests;
@@ -239,6 +238,11 @@ impl CloudState {
     /// Forget `agent`'s local session if it is older than its record.
     pub(super) fn take_stale(&self, agent: AgentId) -> bool {
         self.shared.stale.lock().remove(&agent)
+    }
+
+    /// The agents with a cloud turn (or `/new`) under way.
+    pub(in crate::event_loop) fn cloud_turn_agents(&self) -> Vec<AgentId> {
+        self.shared.running.lock().keys().copied().collect()
     }
 
     /// Whether `agent` has a cloud turn (or `/new`) under way.
