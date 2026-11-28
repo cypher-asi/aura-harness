@@ -3,7 +3,9 @@
 //!
 //! A fragment's age is when git added it (`git log --diff-filter=A`); one
 //! not committed yet counts as newest. Without `--write` nothing changes:
-//! the entries that would go under `[Unreleased]` are printed.
+//! the entries that would go under `[Unreleased]` are printed. Every mode
+//! first checks that no fragment's entry is already in CHANGELOG.md;
+//! `--check` does only that.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +13,7 @@ use std::process::Command;
 
 use anyhow::Context as _;
 use aura_exec_merge_queue::changelog::{
-    assemble, newest_first, paths_in, section, Fragment, CHANGELOG_FILE, FRAGMENT_DIR,
+    assemble, check, newest_first, paths_in, section, Fragment, CHANGELOG_FILE, FRAGMENT_DIR,
 };
 
 use crate::cli::ChangelogArgs;
@@ -32,6 +34,20 @@ fn run(args: &ChangelogArgs) -> anyhow::Result<()> {
     let top = repo_top(&start)?;
     let dir = top.join(FRAGMENT_DIR);
     let fragments = Fragment::read_dir(&dir)?;
+    let path = top.join(CHANGELOG_FILE);
+    let changelog =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    // Every mode checks first: a duplicate would be listed twice.
+    check(&changelog, &fragments)?;
+    if args.check {
+        println!(
+            "{} changelog fragments in {}; none is already in {}.",
+            fragments.len(),
+            dir.display(),
+            path.display()
+        );
+        return Ok(());
+    }
     if fragments.is_empty() {
         println!("No changelog fragments in {}.", dir.display());
         return Ok(());
@@ -41,9 +57,6 @@ fn run(args: &ChangelogArgs) -> anyhow::Result<()> {
         println!("{}", section(&fragments)?);
         return Ok(());
     }
-    let path = top.join(CHANGELOG_FILE);
-    let changelog =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let assembled = assemble(&changelog, &fragments)?;
     std::fs::write(&path, assembled).with_context(|| format!("writing {}", path.display()))?;
     for fragment in paths_in(&dir, &fragments) {

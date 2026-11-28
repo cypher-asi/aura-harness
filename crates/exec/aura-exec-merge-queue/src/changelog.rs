@@ -25,12 +25,18 @@
 //!   caller puts the newest first).
 //! - `README.md` in the folder is not a fragment, nor is any file that
 //!   doesn't end in `.md`.
+//! - An entry lives in one place: a fragment whose `### ` title is also
+//!   an entry under `[Unreleased]` is a duplicate ([`duplicates`]), and
+//!   assembly refuses it rather than list the change twice. Edits that
+//!   bypass `git_ship` (direct merges, hand-resolved conflicts) can add
+//!   one; [`check`] and `aura changelog --check` find them.
 //!
 //! ## Failure modes
 //!
-//! A changelog with no `## [Unreleased]` heading, an empty fragment, or
-//! one that doesn't start with a `### ` title fails assembly with the
-//! fragment's name; nothing is written then.
+//! A changelog with no `## [Unreleased]` heading, an empty fragment, one
+//! that doesn't start with a `### ` title, or one that duplicates an
+//! `[Unreleased]` entry fails assembly with the fragment's name; nothing
+//! is written then.
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -64,6 +70,29 @@ pub enum ChangelogError {
     /// A fragment doesn't start with a `### ` title.
     #[error("changelog fragment {0} must start with a `### ` title")]
     NoTitle(String),
+    /// Entries are both in fragments and under `[Unreleased]`.
+    #[error(
+        "{} already under `{UNRELEASED}` in {CHANGELOG_FILE}; keep each entry in one place \
+         (delete it from {CHANGELOG_FILE} and keep the fragment): {}",
+        if .0.len() == 1 { "a fragment's entry is" } else { "fragments' entries are" },
+        .0.iter().map(Duplicate::to_string).collect::<Vec<_>>().join("; ")
+    )]
+    Duplicates(Vec<Duplicate>),
+}
+
+/// An entry that is both in a fragment and under `[Unreleased]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Duplicate {
+    /// The fragment's file name
+    pub fragment: String,
+    /// The entry's `### ` title, as the fragment has it
+    pub title: String,
+}
+
+impl std::fmt::Display for Duplicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{FRAGMENT_DIR}/{} \"{}\"", self.fragment, self.title)
+    }
 }
 
 /// One fragment: its file name in [`FRAGMENT_DIR`] and its text.
@@ -177,9 +206,9 @@ pub fn section(fragments: &[Fragment]) -> Result<String, ChangelogError> {
 /// `[Unreleased]` section. Unchanged when there are none.
 ///
 /// # Errors
-/// There is no `## [Unreleased]` heading, or a fragment is empty or has
-/// no title.
+/// As [`check`].
 pub fn assemble(changelog: &str, fragments: &[Fragment]) -> Result<String, ChangelogError> {
+    check(changelog, fragments)?;
     let block = section(fragments)?;
     let (before, after) = split_at_unreleased(changelog)?;
     if block.is_empty() {
@@ -196,6 +225,71 @@ pub fn assemble(changelog: &str, fragments: &[Fragment]) -> Result<String, Chang
         out.push_str(rest);
     }
     Ok(out)
+}
+
+/// Check that `fragments` can go into `changelog`: it has a
+/// `## [Unreleased]` heading, every fragment has a title, and no entry is
+/// in both ([`duplicates`]).
+///
+/// # Errors
+/// There is no `## [Unreleased]` heading, a fragment is empty or has no
+/// title, or entries are duplicated ([`ChangelogError::Duplicates`]).
+pub fn check(changelog: &str, fragments: &[Fragment]) -> Result<(), ChangelogError> {
+    section(fragments)?;
+    let found = duplicates(changelog, fragments)?;
+    if found.is_empty() {
+        Ok(())
+    } else {
+        Err(ChangelogError::Duplicates(found))
+    }
+}
+
+/// The fragment entries whose `### ` title is also an entry under
+/// `changelog`'s `[Unreleased]`, in fragment order. Titles match ignoring
+/// case and runs of whitespace.
+///
+/// # Errors
+/// `changelog` has no `## [Unreleased]` heading.
+pub fn duplicates(
+    changelog: &str,
+    fragments: &[Fragment],
+) -> Result<Vec<Duplicate>, ChangelogError> {
+    let (_, after) = split_at_unreleased(changelog)?;
+    // `[Unreleased]` ends at the next `## ` heading, the latest release.
+    let section = after
+        .find("\n## ")
+        .and_then(|end| after.get(..end))
+        .unwrap_or(after);
+    let unreleased: std::collections::HashSet<String> = titles(section).map(normalized).collect();
+    let mut found = Vec::new();
+    for fragment in fragments {
+        for title in titles(&fragment.text) {
+            if unreleased.contains(&normalized(title)) {
+                found.push(Duplicate {
+                    fragment: fragment.name.clone(),
+                    title: title.to_string(),
+                });
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The `### ` entry titles in `text`.
+fn titles(text: &str) -> impl Iterator<Item = &str> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("### "))
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+}
+
+/// `title` lower-cased with its whitespace runs made single spaces.
+fn normalized(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// `changelog` cut at the end of its `## [Unreleased]` heading line.
