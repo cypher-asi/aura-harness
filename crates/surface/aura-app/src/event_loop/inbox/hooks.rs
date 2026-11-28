@@ -5,6 +5,7 @@
 use super::*;
 use crate::cloud::hub::{MailDesk, Reach};
 use aura_engine::RemoteMail;
+use std::fmt::Write as _;
 
 /// What `list_agents` and `get_agent_state` say about `peer`.
 pub(super) fn peer_row(hub: &AgentHub, peer: &Peer) -> serde_json::Value {
@@ -38,6 +39,44 @@ pub(super) fn peer_row(hub: &AgentHub, peer: &Peer) -> serde_json::Value {
 
 fn unknown_agent(target: &str) -> String {
     format!("unknown agent '{target}'; call list_agents to see the agents you can reach")
+}
+
+/// [`unknown_agent`] for a caller in `circle`, listing the codes of the
+/// peers it does reach: its channel's members first.
+fn unknown_in(target: &str, circle: &Circle) -> String {
+    if circle.peers.is_empty() {
+        return unknown_agent(target);
+    }
+    let codes = |related: fn(Relation) -> bool| -> Vec<&str> {
+        circle
+            .peers
+            .iter()
+            .filter(|peer| related(peer.relation))
+            .map(|peer| peer.agent.short())
+            .collect()
+    };
+    let members = codes(|r| r != Relation::Project);
+    let project = codes(|r| r == Relation::Project);
+    let mut said = format!("unknown agent '{target}'");
+    if !members.is_empty() {
+        let _ = write!(
+            said,
+            "; the members of #{} are: {}",
+            circle.slug(),
+            members.join(", ")
+        );
+    }
+    if !project.is_empty() {
+        let _ = write!(said, "; in your project: {}", project.join(", "));
+    }
+    said.push_str(". Address them by code or agent id");
+    said
+}
+
+/// Whether `error` says its target is unknown, so a better one may
+/// replace it.
+fn is_unknown(error: &str) -> bool {
+    error.starts_with("unknown agent")
 }
 
 /// An agent's `send_to_agent`, `list_agents` and `get_agent_state`: they
@@ -75,6 +114,15 @@ impl PeerHooks {
         Some(send(&hub, &circle, InboxKind::Request, peer, subject, text, None).map(|_| ()))
     }
 
+    /// The error for a `target` neither the caller's peers nor its host
+    /// know: the peers' codes when it has a circle, else `error` as it is.
+    async fn unknown(&self, target: &str, error: String) -> String {
+        match self.circle().await {
+            Some((_, circle)) if !circle.peers.is_empty() => unknown_in(target, &circle),
+            _ => error,
+        }
+    }
+
     fn host(&self, target: &str) -> Result<&AgentHooks, String> {
         self.host.as_deref().ok_or_else(|| unknown_agent(target))
     }
@@ -98,9 +146,14 @@ impl AgentControlHook for PeerHooks {
         {
             return sent;
         }
-        self.host(target_agent_id)?
-            .deliver_message_in_thread(message, subject)
-            .await
+        let sent = match self.host.as_deref() {
+            Some(host) => host.deliver_message_in_thread(message, subject).await,
+            None => Err(unknown_agent(target_agent_id)),
+        };
+        match sent {
+            Err(error) if is_unknown(&error) => Err(self.unknown(target_agent_id, error).await),
+            other => other,
+        }
     }
 
     async fn lifecycle(
@@ -199,7 +252,9 @@ impl MailDesk for MachineMail {
             .and_then(|circle| Some((circle, circle.find(&to)?)));
         let Some((circle, peer)) = peer else {
             warn!(from = %mail.from.to_hex(), %to, "A cloud member mailed an agent it doesn't reach");
-            return Err(unknown_agent(&to));
+            return Err(circle
+                .as_ref()
+                .map_or_else(|| unknown_agent(&to), |circle| unknown_in(&to, circle)));
         };
         let subject = Some(mail.subject.as_str()).filter(|subject| !subject.is_empty());
         let sent = send(
