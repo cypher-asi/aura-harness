@@ -1,6 +1,7 @@
 //! CLI argument definitions and parsing.
 
 mod auth;
+mod changelog;
 mod cloud;
 mod eval;
 mod gate;
@@ -10,6 +11,7 @@ mod run;
 mod runs;
 
 pub use auth::{AuthCommand, AuthSubcommand, LoginArgs, LogoutArgs};
+pub use changelog::ChangelogArgs;
 pub use cloud::{CloudCommand, CloudSubcommand, NodeCommand, NodeSubcommand};
 pub use eval::{DatasetCommand, DatasetSubcommand, EvalCommand, EvalSubcommand};
 pub use gate::{GateCommand, GateSubcommand};
@@ -106,6 +108,9 @@ pub enum Commands {
     Gate(GateCommand),
     /// Run agents on their own boxd cloud machines.
     Cloud(CloudCommand),
+    /// Show the `changelog.d/` fragments as CHANGELOG.md entries;
+    /// `--write` puts them in, for a release.
+    Changelog(ChangelogArgs),
     /// What a cloud machine's node runs for its hub, over boxd's `Exec`.
     #[command(hide = true)]
     Node(NodeCommand),

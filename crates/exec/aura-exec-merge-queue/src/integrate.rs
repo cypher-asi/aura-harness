@@ -23,8 +23,10 @@
 //!
 //! ## Failure modes
 //!
-//! A conflict, a failed check, a missing branch or commit, or a git error
-//! fails the entry with its reason. A target that moved while the entry
+//! A conflict only in generated files (the changelog, lockfiles) is
+//! resolved mechanically and the merge goes on to the checks
+//! ([`crate::resolve`]). Any other conflict, a failed check, a missing
+//! branch or commit, or a git error fails the entry with its reason. A target that moved while the entry
 //! was checked is retried from the fetch, up to [`LAND_ATTEMPTS`] times.
 
 use crate::checks::run_check;
@@ -32,6 +34,7 @@ use crate::config::QueueConfig;
 use crate::entry::{short_sha, MergeEntry};
 use crate::error::QueueError;
 use crate::git;
+use crate::resolve::{self, conflict_reason, Settled};
 use crate::state::RunOutcome;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -191,23 +194,46 @@ impl GitIntegrator {
             timeout,
         )
         .await?;
+        let mut how = format!("merged with {}", short_sha(target));
         if !merged.ok {
-            let conflicts = git::run(
-                &worktree,
-                &["diff", "--name-only", "--diff-filter=U"],
-                timeout,
-            )
-            .await?;
-            git::run(&worktree, &["merge", "--abort"], timeout).await?;
-            return Err(Stop::Fail(conflict_reason(
-                &self.config.target,
-                target,
-                &conflicts.stdout,
-                &merged.stderr,
-            )));
+            let resolved = self.settle(&worktree, target, &merged.stderr).await?;
+            how.push_str(&format!("; resolved {} mechanically", resolved.join(", ")));
         }
         let landing = git::ok(&worktree, &["rev-parse", "HEAD"], timeout).await?;
-        Ok((landing, format!("merged with {}", short_sha(target))))
+        Ok((landing, how))
+    }
+
+    /// Settle the conflicted merge in `worktree` ([`resolve::settle`]):
+    /// the generated files it resolved, or the entry fails with the
+    /// conflicted files after the merge is aborted.
+    async fn settle(&self, worktree: &Path, target: &str, stderr: &str) -> Step<Vec<String>> {
+        let timeout = self.config.git_timeout;
+        let listed = git::run(
+            worktree,
+            &["diff", "--name-only", "--diff-filter=U"],
+            timeout,
+        )
+        .await?;
+        let conflicted: Vec<String> = listed
+            .stdout
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect();
+        let settled = resolve::settle(worktree, &conflicted, &self.config).await;
+        let (real, generated) = match settled {
+            Ok(Settled::Resolved(files)) => return Ok(files),
+            Ok(Settled::Conflict { real, generated }) => (real, generated),
+            Err(error) => (vec![error.to_string()], Vec::new()),
+        };
+        git::run(worktree, &["merge", "--abort"], timeout).await?;
+        Err(Stop::Fail(conflict_reason(
+            &self.config.target,
+            target,
+            &real,
+            &generated,
+            stderr,
+        )))
     }
 
     /// Run the checks the target's config file sets (else the inferred
@@ -396,24 +422,6 @@ fn checkout_of(listed: &str, branch: &str) -> Option<PathBuf> {
         }
     }
     None
-}
-
-/// Why merging with `target`, the tip of branch `name`, stopped, naming
-/// the conflicted files.
-fn conflict_reason(name: &str, target: &str, conflicts: &str, stderr: &str) -> String {
-    let files: Vec<&str> = conflicts.lines().filter(|line| !line.is_empty()).collect();
-    if files.is_empty() {
-        let said = stderr.lines().last().unwrap_or("merge failed");
-        return format!(
-            "merging with {name} at {} failed: {said}",
-            short_sha(target)
-        );
-    }
-    format!(
-        "conflicts with {name} at {} in {}; pull {name}, resolve them and push again",
-        short_sha(target),
-        files.join(", ")
-    )
 }
 
 #[cfg(test)]
