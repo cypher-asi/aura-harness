@@ -13,3 +13,14 @@
 - A channel's HISTORY keeps at most 2,000 summaries in memory beside the
   channel store, and a run's trace no longer keeps every turn's cache-hit
   and blocked tool ids.
+
+### Idle agents no longer keep their sessions for the whole run
+
+##### Fixed
+
+- The app kept the model conversation and kernel of every agent it had
+  opened, and of every finished subagent, until it quit, archived agents
+  included. It now keeps the 16 most recently left idle, saves and lets
+  go of older ones that have nothing under way, and lets go of an
+  archived agent's at once. They reopen from their checkpoint when the
+  agent works or is shown again, with the same conversation and to-dos.

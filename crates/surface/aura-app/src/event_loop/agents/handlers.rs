@@ -225,6 +225,7 @@ pub(crate) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &
         Ok(()) => {
             info!(%agent_id, %name, stopped = stopped.len(), "Archived agent");
             super::worktrees::release(&state.hub, &subtree).await;
+            super::super::idle_sessions::release_sessions(state, &subtree).await;
             after_list_shrank(state, &subtree).await;
             let message = if stopped.is_empty() {
                 format!("Archived {name}")
