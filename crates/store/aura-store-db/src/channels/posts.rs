@@ -30,6 +30,7 @@ impl ChannelStore {
             mentions: new.mentions,
             reply_to: new.reply_to,
             at_ms: new.at_ms,
+            planner: new.planner,
         };
         let what = format!("post {seq} of channel {channel_id}");
         let value = self.encode(&post, &what)?;
