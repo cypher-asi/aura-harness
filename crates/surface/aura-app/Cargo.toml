@@ -59,6 +59,8 @@ tar = { workspace = true }
 walkdir = { workspace = true }
 parking_lot = { workspace = true }
 which = { workspace = true }
+# Zeroizes the local store's key once its cipher is built.
+zeroize = { workspace = true }
 
 # Lowers the agents' threads below the UI's (`priority`).
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -68,6 +70,8 @@ rustix = { version = "1.1", default-features = false, features = ["std", "proces
 walkdir = { workspace = true }
 
 [dev-dependencies]
+# `test-support` lets the local store's tests stop a migration midway.
+aura-store-db = { path = "../../store/aura-store-db", features = ["test-support"] }
 # `test-support` lets the app's tests fill Gate's table by hand.
 aura-gate = { path = "../../gate/aura-gate", features = ["test-support"] }
 # `test-support` lets the app's tests read the registry's store.
