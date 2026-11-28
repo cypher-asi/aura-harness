@@ -76,7 +76,7 @@ impl App {
         if self.update_tool(id, |step| step.policy = Some(decision.clone())) {
             return;
         }
-        if std::env::var_os("OLD_POLICY").is_none() && self.is_busy() {
+        if self.is_busy() {
             self.chat.early_policies.push(EarlyPolicy {
                 id: id.to_string(),
                 tool: tool.to_string(),

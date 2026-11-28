@@ -250,6 +250,7 @@ fn mode_matrix_matches_the_gate_table() {
         ("git_commit", none(), [true, false, false, false]),
         ("run_command", cmd(), [true, true, false, false]),
         ("git_push", none(), [true, false, false, false]),
+        ("git_ship", none(), [true, false, false, false]),
         ("create_task", none(), [true, false, false, false]),
         ("spawn_agent", none(), [true, false, false, false]),
         ("task", none(), [true, false, false, false]),

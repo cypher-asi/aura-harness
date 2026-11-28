@@ -1,7 +1,7 @@
 //! The agent's turn: where it starts in the chat, and the kernel records it
 //! wrote.
 
-use super::{App, NotificationType, PanelFocus};
+use super::{App, NotificationType};
 use crate::components::Message;
 use crate::events::MessageRole;
 
@@ -32,8 +32,6 @@ impl App {
             ));
             return;
         };
-        self.records.selected = index;
-        self.records.tab = super::RecordsTab::Kernel;
-        self.focus = PanelFocus::Records;
+        self.show_kernel_record(index);
     }
 }

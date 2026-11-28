@@ -1,0 +1,89 @@
+//! `/plan` in a channel's chat. A coordinator can't read the code or write
+//! a plan, so a new member of its channel plans instead: it starts in plan
+//! mode with its own chat on screen, gets the request there, and builds
+//! the plan from that chat once told to.
+
+use super::*;
+use crate::event_loop::agent_events::AgentUi;
+use crate::event_loop::handlers::system_message;
+use crate::event_loop::steering::SteerSource;
+use crate::event_loop::{agents, deliver_with_images, modes};
+use aura_ui::events::ImageAttachment;
+use aura_ui::PermissionMode;
+
+/// The permanent agent a planner is an instance of: the default agent,
+/// which can build the plan it writes.
+pub(crate) const PLANNER_DEFINITION: &str = "engineer";
+
+/// What the chat of a planner in a channel whose agents run in the cloud
+/// says about where it works.
+pub(crate) const PLANS_HERE: &str = "Plan mode holds only on this computer, so this planner \
+     works here instead of on a cloud machine, and builds its plan here too.";
+
+/// Whether `agent_id` is a channel's coordinator, which never plans
+/// itself.
+pub(crate) fn is_coordinator_agent(hub: &AgentHub, agent_id: AgentId) -> bool {
+    lock(&hub.registry)
+        .find(agent_id)
+        .is_some_and(|agent| is_coordinator(agent.definition.as_deref()))
+}
+
+/// Plan `text` in a new member of the channel `coordinator` runs: add the
+/// member, put its chat on screen, switch it to plan mode and give it
+/// `text` with `images`. An empty `text` leaves it waiting in plan mode
+/// for the request. Plan mode holds only on this computer, so in a
+/// channel whose agents run in the cloud the planner stays here, and its
+/// chat says so.
+///
+/// The channels list goes out before the member comes on screen: the UI
+/// keeps a channel open only for one of its members, so it must know the
+/// planner is one. What fails is shown as an error; a member that was
+/// added stays in the channel.
+pub(crate) async fn start_planner(
+    state: &mut LoopState<'_>,
+    coordinator: AgentId,
+    text: String,
+    images: Vec<ImageAttachment>,
+) {
+    let planner = match add_planner(&state.hub, coordinator).await {
+        Ok(planner) => planner.agent_id(),
+        Err(error) => {
+            handlers::show_error(state, format!("Could not start a planner: {error:#}")).await;
+            return;
+        }
+    };
+    info!(
+        coordinator = %coordinator.to_hex(),
+        planner = %planner.to_hex(),
+        "Planning in a new member of the channel"
+    );
+    state.hub.send_agent_list().await;
+    agents::handle_select_agent(state, &planner.to_hex()).await;
+    // A session that would not open was reported by the switch.
+    let Some(kernel) = state.kernel_for(planner) else {
+        return;
+    };
+    if !modes::switch_mode(state, planner, &kernel, PermissionMode::Plan).await {
+        return;
+    }
+    if lock(&state.hub.cloud_starts).remove(&planner) {
+        AgentUi::new(state.commands.clone(), planner)
+            .send(system_message(PLANS_HERE.to_string()))
+            .await;
+    }
+    if !text.trim().is_empty() {
+        deliver_with_images(state, planner, SteerSource::User, text, images, false).await;
+    }
+}
+
+/// Add a new member to the channel `coordinator` runs, an instance of
+/// [`PLANNER_DEFINITION`] ([`add_agent`], on a blocking thread).
+async fn add_planner(hub: &Arc<AgentHub>, coordinator: AgentId) -> anyhow::Result<RegisteredAgent> {
+    if lock(&hub.definitions).get(PLANNER_DEFINITION).is_none() {
+        bail!("there is no permanent agent `{PLANNER_DEFINITION}` to plan with");
+    }
+    let hub = Arc::clone(hub);
+    tokio::task::spawn_blocking(move || add_agent(&hub, coordinator, PLANNER_DEFINITION))
+        .await
+        .context("the task adding the planner stopped")?
+}

@@ -104,8 +104,11 @@ async fn forward_events_sends_a_waiting_delta_while_the_stream_stays_open() {
         .await
         .unwrap();
 
+    let sent = tokio::time::timeout(Duration::from_secs(1), outbound_rx.recv())
+        .await
+        .expect("sent while the block goes on");
     assert!(matches!(
-        outbound_rx.recv().await,
+        sent,
         Some(OutboundMessage::ThinkingDelta(delta)) if delta.thinking == "Let me look"
     ));
     assert!(!forward_handle.is_finished(), "the block goes on");
@@ -185,6 +188,44 @@ async fn forward_events_flushes_text_before_non_text_event() {
     assert!(matches!(
         outbound_rx.recv().await,
         Some(OutboundMessage::TextDelta(delta)) if delta.text == "after"
+    ));
+    assert!(outbound_rx.recv().await.is_none());
+}
+
+/// A model call's end goes out after the text it wrote, so a client can
+/// show the next call's text as a reply of its own.
+#[tokio::test]
+async fn forward_events_ends_each_model_call_after_its_text() {
+    let (event_tx, event_rx) = mpsc::channel(8);
+    let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+    let forward_handle = tokio::spawn(forward_events_to_ws(event_rx, outbound_tx));
+
+    for event in [
+        AgentLoopEvent::TextDelta("first".to_string()),
+        AgentLoopEvent::IterationComplete {
+            iteration: 0,
+            input_tokens: 100,
+            output_tokens: 10,
+        },
+        AgentLoopEvent::TextDelta("second".to_string()),
+    ] {
+        event_tx.send(event).await.unwrap();
+    }
+    drop(event_tx);
+    forward_handle.await.expect("stream forward task joins");
+
+    assert!(matches!(
+        outbound_rx.recv().await,
+        Some(OutboundMessage::TextDelta(delta)) if delta.text == "first"
+    ));
+    assert!(matches!(
+        outbound_rx.recv().await,
+        Some(OutboundMessage::IterationComplete(end))
+            if end.iteration == 0 && end.input_tokens == 100 && end.output_tokens == 10
+    ));
+    assert!(matches!(
+        outbound_rx.recv().await,
+        Some(OutboundMessage::TextDelta(delta)) if delta.text == "second"
     ));
     assert!(outbound_rx.recv().await.is_none());
 }

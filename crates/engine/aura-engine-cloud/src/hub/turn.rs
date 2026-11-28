@@ -54,6 +54,8 @@ pub enum RemoteEvent {
     },
     /// The chat's title, written on the machine from the turn's prompt.
     Title(String),
+    /// A model call of the turn ended. Reply text after it is a new reply.
+    ModelCallEnd,
     /// The turn ended, with the session's usage and context so far.
     Done(Box<SessionUsage>),
     /// The turn failed.
@@ -352,6 +354,7 @@ pub fn map_outbound(message: OutboundMessage) -> Option<RemoteEvent> {
         },
         OutboundMessage::AssistantMessageEnd(end) => RemoteEvent::Done(Box::new(end.usage)),
         OutboundMessage::ChatTitle(title) => RemoteEvent::Title(title.title),
+        OutboundMessage::IterationComplete(_) => RemoteEvent::ModelCallEnd,
         OutboundMessage::Error(err) if !err.recoverable => RemoteEvent::Failed(err.message),
         _ => return None,
     })

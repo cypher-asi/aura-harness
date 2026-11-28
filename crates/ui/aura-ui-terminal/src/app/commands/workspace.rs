@@ -18,6 +18,7 @@ impl App {
             UiCommand::SetPlans(plans) => self.task_list.set_plans(plans),
             UiCommand::SetTasks(tasks) => self.task_list.set_tasks(tasks),
             UiCommand::UpsertTask(task) => self.task_list.upsert(task),
+            UiCommand::UpsertPlan(plan) => self.task_list.upsert_plan(plan),
             other => return Some(other),
         }
         None

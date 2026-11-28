@@ -23,8 +23,22 @@ use crate::sandbox::strip_unc_prefix;
 
 /// Subcommands the executor is permitted to invoke. Any other value is
 /// rejected with [`GitToolError::DisallowedSubcommand`].
-pub(crate) const ALLOWED_SUBCOMMANDS: &[&str] =
-    &["add", "commit", "push", "diff", "rev-parse", "remote"];
+///
+/// `fetch` and `merge` exist for `git_ship`, which pulls the merge
+/// queue's target branch into the agent's branch before pushing it:
+/// `fetch origin refs/heads/<target>` then `merge --no-edit FETCH_HEAD`
+/// (or `merge --abort` after a conflict). Both are called with fixed
+/// arguments only; the target is checked as a branch name first.
+pub(crate) const ALLOWED_SUBCOMMANDS: &[&str] = &[
+    "add",
+    "commit",
+    "push",
+    "diff",
+    "rev-parse",
+    "remote",
+    "fetch",
+    "merge",
+];
 
 fn ensure_allowed(subcmd: &str) -> Result<(), GitToolError> {
     if ALLOWED_SUBCOMMANDS.contains(&subcmd) {
@@ -98,6 +112,16 @@ pub(super) async fn run_git_expect_ok(
         });
     }
     Ok(output)
+}
+
+/// The commit `HEAD` points at (`git rev-parse HEAD`).
+pub(super) async fn head_commit(
+    workspace: &std::path::Path,
+    timeout: Duration,
+) -> Result<String, GitToolError> {
+    let out =
+        run_git_expect_ok(workspace, "rev-parse", &["HEAD"], timeout, "rev-parse HEAD").await?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Read `git log HEAD --not --remotes=<remote> --pretty=format:'%H %s'`

@@ -9,8 +9,8 @@ impl App {
         match cmd {
             UiCommand::SetChannels(channels) => self.set_channels(channels),
             UiCommand::SetChannelTasks { .. } => {
-                // The channel app shows only its chat, members and info;
-                // members' tasks are seen from PROJECTS.
+                // The channel app shows only its chat, members, info and
+                // merge queue; members' tasks are seen from PROJECTS.
             }
             UiCommand::ChannelPost { channel_id, post } => self.add_channel_post(channel_id, post),
             UiCommand::SetChannelPosts { channel_id, posts } => {
@@ -19,6 +19,9 @@ impl App {
             UiCommand::AddMail(mail) => self.add_mail(mail),
             UiCommand::SetThreadSubject { thread_id, subject } => {
                 self.set_thread_subject(thread_id, &subject);
+            }
+            UiCommand::SetMergeQueue { channel_id, queue } => {
+                self.set_merge_queue(channel_id, queue);
             }
             other => return Some(other),
         }

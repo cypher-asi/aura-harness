@@ -1,8 +1,8 @@
 //! Forwarding agent-loop events onto the WebSocket wire protocol.
 
 use crate::protocol::{
-    ErrorMsg, OutboundMessage, TextDelta, ThinkingDelta, ToolCallSnapshot, ToolResultMsg,
-    ToolUseStart,
+    ErrorMsg, IterationComplete, OutboundMessage, TextDelta, ThinkingDelta, ToolCallSnapshot,
+    ToolResultMsg, ToolUseStart,
 };
 use async_trait::async_trait;
 use aura_agent::{map_agent_loop_event, AgentLoopEvent, DebugEvent, TurnEventSink};
@@ -135,9 +135,6 @@ impl OutboundMessageSink<'_> {
         &mut self,
         events: &mut mpsc::Receiver<AgentLoopEvent>,
     ) -> Option<AgentLoopEvent> {
-        if std::env::var_os("OLD_NODE").is_some() {
-            return events.recv().await;
-        }
         while let Some(flush_at) = self.flush_at {
             match timeout_at(flush_at, events.recv()).await {
                 Ok(event) => return event,
@@ -301,11 +298,25 @@ impl TurnEventSink for OutboundMessageSink<'_> {
         .await;
     }
 
+    async fn on_iteration_complete(
+        &mut self,
+        iteration: usize,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        self.push(OutboundMessage::IterationComplete(IterationComplete {
+            iteration: iteration as u64,
+            input_tokens,
+            output_tokens,
+        }))
+        .await;
+    }
+
     // The following variants are intentional no-ops on the WS wire —
-    // `ToolComplete`, `IterationComplete`, `ThinkingComplete`,
-    // `StepComplete`, `Warning`, `Debug`. The trait
-    // defaults cover them, but the mapper's exhaustive match still
-    // forces a decision here whenever the event enum changes.
+    // `ToolComplete`, `ThinkingComplete`, `StepComplete`, `Warning`,
+    // `Debug`. The trait defaults cover them, but the mapper's
+    // exhaustive match still forces a decision here whenever the event
+    // enum changes.
     async fn on_debug(&mut self, _event: DebugEvent) {}
 }
 

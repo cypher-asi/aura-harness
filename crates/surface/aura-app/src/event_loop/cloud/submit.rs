@@ -16,6 +16,11 @@ pub(in crate::event_loop) async fn submit(
     agent: AgentId,
     work: Work,
 ) -> Option<Work> {
+    if let Some(root) = state.cloud.machine_root(agent) {
+        let note = spawned_on_machine(state, agent, root);
+        system(state, agent, note).await;
+        return None;
+    }
     if state.cloud.is_moving(agent) {
         info!(%agent, "Agent is moving between machines; queueing work");
         state.queued.push_back(agent, work);
@@ -113,6 +118,8 @@ async fn run_prompt(
         titles,
         context_limit: model.as_deref().map(aura_engine::context_window_for_model),
     };
+    crate::event_loop::factory::hooks::plan_first_in_cloud(&state.hub, agent);
+    state.hub.factory_flows.note_prompt(agent, &prompt.text);
     let ask = TurnAsk {
         prompt: prompt.text,
         model,
@@ -229,6 +236,11 @@ async fn turn_titles(
 /// the machine if it sleeps, and the hub copies it here. Returns whether
 /// the node was asked; a failure is said in the agent's chat.
 pub(in crate::event_loop) async fn new_session(state: &mut LoopState<'_>, agent: AgentId) -> bool {
+    if let Some(root) = state.cloud.machine_root(agent) {
+        let note = spawned_on_machine(state, agent, root);
+        system(state, agent, note).await;
+        return false;
+    }
     if state.cloud.is_moving(agent) {
         system(
             state,

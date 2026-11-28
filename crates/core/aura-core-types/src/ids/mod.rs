@@ -234,7 +234,10 @@ macro_rules! define_id {
 
 define_id!(
     /// A 32-byte blake3 hash used for transaction chaining.
-    Hash, 32, "crate::serde_helpers::hex_bytes_32", truncate = 16
+    Hash,
+    32,
+    "crate::serde_helpers::hex_bytes_32",
+    truncate = 16
 );
 
 impl Hash {
@@ -264,8 +267,15 @@ impl Hash {
 
 define_id!(
     /// Agent identifier - 32 bytes, derived from identity hash or UUID.
-    AgentId, 32, "crate::serde_helpers::hex_bytes_32", truncate = 16
+    AgentId,
+    32,
+    "crate::serde_helpers::hex_bytes_32",
+    truncate = 16
 );
+
+/// Start of the ZNS id of an agent another agent spawned,
+/// `0://spawn/<agent id hex>`: it names the id its spawner gave it.
+pub const SPAWN_ZNS_PREFIX: &str = "0://spawn/";
 
 impl AgentId {
     /// Create an `AgentId` from a UUID v4.
@@ -282,6 +292,24 @@ impl AgentId {
     pub fn generate() -> Self {
         Self::from_uuid(uuid::Uuid::new_v4())
     }
+
+    /// The id of the agent with ZNS id `zns_id`: the one a spawned
+    /// agent's [`SPAWN_ZNS_PREFIX`] id names, else the blake3 hash of
+    /// `zns_id`.
+    #[must_use]
+    pub fn of_zns(zns_id: &str) -> Self {
+        zns_id
+            .strip_prefix(SPAWN_ZNS_PREFIX)
+            .and_then(|hex| Self::from_hex(hex).ok())
+            .unwrap_or_else(|| Self(*blake3::hash(zns_id.as_bytes()).as_bytes()))
+    }
+
+    /// The ZNS id of the spawned agent with this id, which
+    /// [`Self::of_zns`] maps back to it.
+    #[must_use]
+    pub fn spawn_zns(&self) -> String {
+        format!("{SPAWN_ZNS_PREFIX}{}", self.to_hex())
+    }
 }
 
 // ============================================================================
@@ -290,7 +318,10 @@ impl AgentId {
 
 define_id!(
     /// Action identifier - 16 bytes, generated per action.
-    ActionId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    ActionId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl ActionId {
@@ -308,7 +339,10 @@ impl ActionId {
 
 define_id!(
     /// Process identifier - 16 bytes, generated per async process.
-    ProcessId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    ProcessId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl ProcessId {
@@ -326,7 +360,10 @@ impl ProcessId {
 
 define_id!(
     /// Fact identifier - 16 bytes.
-    FactId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    FactId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl FactId {
@@ -344,7 +381,10 @@ impl FactId {
 
 define_id!(
     /// Agent event identifier - 16 bytes.
-    AgentEventId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    AgentEventId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl AgentEventId {
@@ -362,7 +402,10 @@ impl AgentEventId {
 
 define_id!(
     /// Procedure identifier - 16 bytes.
-    ProcedureId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    ProcedureId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl ProcedureId {

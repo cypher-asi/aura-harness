@@ -2,7 +2,8 @@
 //! agent on screen, MEMBERS the agents that agent's run brought in,
 //! POLICIES the policy its kernel enforces (see [`super::policies`]), and
 //! INBOX the messages the run's agents sent each other (see
-//! [`super::inbox`]).
+//! [`super::inbox`]). While a channel is open the panel lists none of
+//! them, only the channel's TASKS (see [`RecordsTab::ChannelTasks`]).
 //!
 //! Members come from the process table ([`UiCommand::SetProcesses`]). Every
 //! `task` spawn and background agent it lists is kept here, so an agent
@@ -14,81 +15,15 @@
 //! [`UiCommand::SetProcesses`]: crate::events::UiCommand::SetProcesses
 
 use super::{
-    contains, follow_selection, processes::SIDE_PAGE, tab_at, tab_bar::TabLayout, App, DetailView,
-    NotificationType, PanelFocus,
+    contains, follow_selection, processes::SIDE_PAGE, tab_at, App, DetailView, NotificationType,
+    PanelFocus,
 };
 use crate::events::{ProcessKind, ProcessStatus, ProcessSummary};
 use aura_core_types::time::now_ms;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
+pub use records_tab::RecordsTab;
 pub(crate) use run::Members;
-
-/// Views of the Kernel panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RecordsTab {
-    /// The kernel's records of the agent on screen.
-    #[default]
-    Kernel,
-    /// The agents the run of the agent on screen brought in.
-    Members,
-    /// The policy the kernel of the agent on screen enforces.
-    Policies,
-    /// The messages the agents of that run sent each other, by thread.
-    Inbox,
-}
-
-impl RecordsTab {
-    pub const ALL: [Self; 4] = [Self::Kernel, Self::Members, Self::Policies, Self::Inbox];
-
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Kernel => "KERNEL",
-            Self::Members => "MEMBERS",
-            Self::Policies => "POLICIES",
-            Self::Inbox => "INBOX",
-        }
-    }
-
-    /// Label for header bars too narrow for `label`.
-    #[must_use]
-    pub const fn short_label(self) -> &'static str {
-        match self {
-            Self::Kernel => "KRN",
-            Self::Members => "MEM",
-            Self::Policies => "POL",
-            Self::Inbox => "INB",
-        }
-    }
-
-    /// The tab after this one, wrapping around, as Shift+Right goes.
-    const fn next(self) -> Self {
-        match self {
-            Self::Kernel => Self::Members,
-            Self::Members => Self::Policies,
-            Self::Policies => Self::Inbox,
-            Self::Inbox => Self::Kernel,
-        }
-    }
-
-    /// The tab before this one, wrapping around, as Shift+Left goes.
-    const fn prev(self) -> Self {
-        match self {
-            Self::Kernel => Self::Inbox,
-            Self::Members => Self::Kernel,
-            Self::Policies => Self::Members,
-            Self::Inbox => Self::Policies,
-        }
-    }
-
-    /// The tabs' cells in a header bar `width` columns wide, with the open
-    /// tab's count after them. The renderer draws the bar with this layout
-    /// and clicks are mapped back through it.
-    #[must_use]
-    pub fn layout(width: u16) -> TabLayout<Self> {
-        TabLayout::with_info(Self::ALL, Self::label, Self::short_label, width)
-    }
-}
 
 /// One row of the MEMBERS tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,12 +54,43 @@ impl App {
         self.records.tab
     }
 
+    /// Show `tab`. A channel's tab is only shown while a channel is open,
+    /// and the Kernel panel's only while none is; asked for in the wrong
+    /// one, nothing changes.
     pub(super) fn show_records_tab(&mut self, tab: RecordsTab) {
+        if tab.is_channel_tab() != self.channel_open() {
+            return;
+        }
         let opened = tab != self.records.tab;
         self.records.tab = tab;
         if opened && tab == RecordsTab::Policies {
             self.request_policies();
         }
+    }
+
+    /// Highlight kernel record `index` on the KERNEL tab, focused, as a
+    /// jump from a turn, a flow card or a graph node does. Returns
+    /// whether it shows: in CHANNELS, and in BENCH but on an agent of a
+    /// benchmark, the Kernel panel is not on screen, and this only says
+    /// so.
+    pub(super) fn show_kernel_record(&mut self, index: usize) -> bool {
+        if self.agent_panels_hidden() {
+            self.notify_no_agent_panels();
+            return false;
+        }
+        self.records.selected = index;
+        self.show_records_tab(RecordsTab::Kernel);
+        self.focus = PanelFocus::Records;
+        true
+    }
+
+    /// The Kernel panel's tab under a screen cell, as its bar lays them
+    /// out with a channel open or not.
+    pub(super) fn record_tab_at(&self, column: u16, row: u16) -> Option<RecordsTab> {
+        let channel_open = self.channel_open();
+        tab_at(self.areas.record_tabs, column, row, |width| {
+            RecordsTab::layout(width, channel_open)
+        })
     }
 
     /// Show the Kernel panel's MEMBERS tab, focused, as `/members` does.
@@ -255,7 +221,7 @@ impl App {
     /// Clicking a tab shows it; clicking a row acts on the open list.
     pub(super) fn click_records_panel(&mut self, column: u16, row: u16) {
         if contains(self.areas.record_tabs, column, row) {
-            if let Some(tab) = tab_at(self.areas.record_tabs, column, row, RecordsTab::layout) {
+            if let Some(tab) = self.record_tab_at(column, row) {
                 self.show_records_tab(tab);
             }
             return;
@@ -275,6 +241,7 @@ impl App {
                     self.click_inbox_row(index);
                 }
             }
+            RecordsTab::ChannelTasks => self.click_task_row(column, row),
         }
     }
 
@@ -285,8 +252,8 @@ impl App {
 
     /// Keys of the Kernel panel that would otherwise go to the input, used
     /// while it is empty: Shift+Left/Right switch its tab, on the MEMBERS
-    /// tab Home/End jump and `o` opens the member's chat, and on the
-    /// POLICIES tab Home/End jump.
+    /// tab Home/End jump and `o` opens the member's chat, on the POLICIES
+    /// tab Home/End jump, and a channel's TASKS takes the TASKS tab's.
     pub(super) fn handle_records_shortcut(&mut self, key: KeyEvent) -> bool {
         if key
             .modifiers
@@ -297,10 +264,11 @@ impl App {
         if key.modifiers.contains(KeyModifiers::SHIFT)
             && matches!(key.code, KeyCode::Left | KeyCode::Right)
         {
+            let channel_open = self.channel_open();
             let tab = if key.code == KeyCode::Right {
-                self.records.tab.next()
+                self.records.tab.next(channel_open)
             } else {
-                self.records.tab.prev()
+                self.records.tab.prev(channel_open)
             };
             self.show_records_tab(tab);
             return true;
@@ -310,6 +278,9 @@ impl App {
         }
         if self.records.tab == RecordsTab::Inbox {
             return self.handle_inbox_shortcut(key);
+        }
+        if self.records.tab == RecordsTab::ChannelTasks {
+            return self.handle_tasks_shortcut(key);
         }
         if self.records.tab != RecordsTab::Members {
             return false;
@@ -384,6 +355,7 @@ impl App {
     }
 }
 
+mod records_tab;
 mod run;
 #[cfg(test)]
 mod tests;

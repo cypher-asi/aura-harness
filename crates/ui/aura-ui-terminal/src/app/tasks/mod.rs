@@ -56,12 +56,17 @@
 //! listed, with every task under them, and only the plans those tasks
 //! work on or whose todos they do. The plan being worked on is always
 //! listed.
+//!
+//! While a channel is open the side panel has no TASKS tab: the same
+//! tree shows in the Record panel's place as the channel's TASKS (see
+//! [`super::RecordsTab::ChannelTasks`]), listing every plan and task in
+//! the channel's folder whatever the scope.
 
 use std::collections::HashMap;
 
 use super::processes::SIDE_PAGE;
 use super::side_scope::AgentFilter;
-use super::{follow_selection, App};
+use super::{follow_selection, App, PanelFocus, RecordsTab};
 use crate::events::{PlanView, TaskView, TodoView};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -336,6 +341,15 @@ impl TaskList {
         self.rebuild(keep);
     }
 
+    /// Replace the listed copy of `plan`, or add it on top, without
+    /// marking it as the one being worked on: a plan another agent wrote
+    /// or moved on.
+    pub fn upsert_plan(&mut self, plan: PlanView) {
+        let keep = self.selected_key();
+        self.put_plan(plan);
+        self.rebuild(keep);
+    }
+
     /// Mark `plan` as the one being worked on, replacing its listed copy,
     /// or adding it on top when it isn't listed. `None` leaves the plans
     /// as they are with none marked.
@@ -343,12 +357,17 @@ impl TaskList {
         let keep = self.selected_key();
         self.current_plan = plan.map(|plan| plan.path.clone());
         if let Some(plan) = plan {
-            match self.plans.iter_mut().find(|p| p.path == plan.path) {
-                Some(listed) => *listed = plan.clone(),
-                None => self.plans.insert(0, plan.clone()),
-            }
+            self.put_plan(plan.clone());
         }
         self.rebuild(keep);
+    }
+
+    /// Replace the listed copy of `plan`, or add it on top.
+    fn put_plan(&mut self, plan: PlanView) {
+        match self.plans.iter_mut().find(|p| p.path == plan.path) {
+            Some(listed) => *listed = plan,
+            None => self.plans.insert(0, plan),
+        }
     }
 
     /// The highlighted row, by what it shows.
@@ -372,6 +391,19 @@ impl App {
     #[must_use]
     pub const fn task_list(&self) -> &TaskList {
         &self.task_list
+    }
+
+    /// Whether the panel the TASKS tree is drawn in has the focus: the
+    /// Record panel's place while an open channel's TASKS shows there,
+    /// else the side panel.
+    #[must_use]
+    pub(crate) fn tasks_focused(&self) -> bool {
+        let panel = if self.records.tab == RecordsTab::ChannelTasks {
+            PanelFocus::Records
+        } else {
+            PanelFocus::Sandbox
+        };
+        self.focus == panel
     }
 
     /// Keep the highlighted row inside `visible` rows, returning the first

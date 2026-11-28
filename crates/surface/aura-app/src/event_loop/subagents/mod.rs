@@ -398,10 +398,17 @@ pub struct AgentHub {
     /// as it starts each turn and hears it end; the agent lists and
     /// peers read it as working.
     pub(crate) cloud_turns: Mutex<HashSet<AgentId>>,
+    /// Agents cloud agents spawned on their machines that work there now,
+    /// as the machines last said. The cloud publisher writes it; read as
+    /// [`Self::cloud_turns`] is.
+    pub(crate) machine_working: Mutex<HashSet<AgentId>>,
     /// Replies the channels wait for and what each coordinator has seen.
     pub(crate) channel_chat: super::channels::ChannelChat,
     /// What agents owe each other through their inboxes.
     pub(crate) inbox: super::inbox::Inbox,
+    /// Where each channel member is in the software factory's plan, build,
+    /// ship flow.
+    pub(crate) factory_flows: super::factory::Flows,
     /// The chats of the agents shown last, as read from their records
     pub(super) shown_chats: Mutex<crate::record_loader::ByHead<Vec<MessageData>>>,
     /// The Record panel rows of the agents shown last

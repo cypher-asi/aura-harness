@@ -16,6 +16,14 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
         UiEvent::CloudSetup => cloud::handle_setup(state).await,
         UiEvent::ListSandbox(dir) => cloud::list_sandbox(state, dir),
         UiEvent::ReadSandboxFile(path) => cloud::read_sandbox_file(state, path),
+        channel_event => channel(state, channel_event).await,
+    }
+}
+
+/// Making, opening, changing and archiving channels, and `/plan` in a
+/// channel's chat.
+async fn channel(state: &mut LoopState<'_>, event: UiEvent) {
+    match event {
         UiEvent::CreateChannel {
             slug,
             title,
@@ -50,6 +58,14 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
             channels::handle_update(state, &channel_id, edit).await;
         }
         UiEvent::ArchiveChannel(channel_id) => channels::handle_archive(state, &channel_id).await,
+        UiEvent::PlanInChannel {
+            agent_id,
+            text,
+            images,
+        } => {
+            let coordinator = state.agent_or_active(&agent_id);
+            channels::start_planner(state, coordinator, text, images).await;
+        }
         // `domain_of` routes no other event here.
         _ => {}
     }

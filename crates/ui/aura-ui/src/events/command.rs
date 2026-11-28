@@ -446,6 +446,10 @@ pub enum UiCommand {
     /// A task in the active agent's workspace was started or moved on
     UpsertTask(TaskView),
 
+    /// A plan in the active agent's workspace was written or moved on,
+    /// by that agent or another working there
+    UpsertPlan(PlanView),
+
     /// Where an agent runs, for its footer switch
     SetPlacement {
         /// Agent (hex id)
@@ -481,5 +485,12 @@ pub enum UiCommand {
         /// Channel id
         channel_id: String,
         posts: Vec<ChannelPostView>,
+    },
+
+    /// The merge queue of a channel's repo, for its QUEUE tab
+    SetMergeQueue {
+        /// Channel id
+        channel_id: String,
+        queue: crate::events::MergeQueueView,
     },
 }

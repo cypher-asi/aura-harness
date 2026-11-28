@@ -62,6 +62,7 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
 
         "git_push"
         | "git_commit_push"
+        | "git_ship"
         | "post_to_feed"
         | "record_usage"
         | "create_task"

@@ -14,7 +14,7 @@ async fn git_push_without_origin_says_so() {
         .expect("seed commit");
     let err = git_push_impl(
         dir.path(),
-        to_branch("main"),
+        to_branch("work"),
         PushPolicy::single(Duration::from_secs(5)),
     )
     .await

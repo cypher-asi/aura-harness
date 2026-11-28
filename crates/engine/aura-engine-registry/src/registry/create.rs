@@ -6,7 +6,7 @@ use chrono::Utc;
 use std::path::{Path, PathBuf};
 
 use super::{
-    code, AgentRegistry, AgentRegistryError, IdCache, Opened, Project, RegisteredAgent,
+    code, AgentRegistry, AgentRegistryError, IdCache, Opened, Project, RegisteredAgent, Spawned,
     COMPARE_ARM_ZNS_PREFIX, COMPARE_ZNS_PREFIX, DEFAULT_PROJECT_AGENT, HEADLESS_AGENT_NAME,
     HEADLESS_ZNS_ID,
 };
@@ -222,6 +222,40 @@ impl AgentRegistry {
             parent,
             project_id,
             ..self.new_instance(definition)
+        })
+    }
+
+    /// Register `spawned`, an agent spawned where no registry saw it, under
+    /// its spawner and in its spawner's project, keeping the id it was
+    /// given: its ZNS id names it ([`AgentId::spawn_zns`]). A `task`
+    /// subagent is named and coded as an instance of its kind (`explore
+    /// #3`, `EXP3`), as one spawned here is of its permanent agent; any
+    /// other spawn keeps its name. An agent registered already, archived
+    /// or not, is returned as it is.
+    ///
+    /// # Errors
+    /// Returns an error if the registry cannot be written.
+    pub fn adopt_spawn(
+        &mut self,
+        spawned: &Spawned<'_>,
+    ) -> Result<RegisteredAgent, AgentRegistryError> {
+        if let Some(known) = self.find(spawned.agent_id) {
+            return Ok(known.clone());
+        }
+        let fresh = match spawned.kind {
+            Some(kind) => self.new_instance(kind),
+            None => Self::new_agent(spawned.name.to_string()),
+        };
+        self.push(RegisteredAgent {
+            zns_id: spawned.agent_id.spawn_zns(),
+            parent: Some(spawned.parent.to_string()),
+            project_id: self.project_id_of_zns(spawned.parent),
+            subtitle: spawned
+                .subtitle
+                .map(str::trim)
+                .filter(|subtitle| !subtitle.is_empty())
+                .map(str::to_string),
+            ..fresh
         })
     }
 

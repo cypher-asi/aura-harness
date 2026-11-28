@@ -21,12 +21,21 @@ fn foreign_label(
     (owner != *current).then(|| owner_label(hub, agent))
 }
 
+/// The agent placed on the machine `agent` runs on: the one that spawned
+/// it there, or `agent` itself.
+fn placed_for(cloud: Option<&Arc<CloudHub>>, agent: AgentId) -> AgentId {
+    cloud
+        .and_then(|hub| hub.machine_root(agent))
+        .unwrap_or(agent)
+}
+
 pub(super) fn placement_state(
     cloud: Option<&Arc<CloudHub>>,
     shared: &Shared,
     agent: AgentId,
     current: &aura_core_auth::Owner,
 ) -> PlacementState {
+    let agent = placed_for(cloud, agent);
     let moving = shared.moving.lock().contains(&agent);
     let placement = match cloud.map_or(Placement::Local, |hub| hub.placement_of(agent)) {
         Placement::Local => PlacementView::Local,
@@ -53,8 +62,12 @@ pub(super) async fn build_view(
     sampler: &mut Option<aura_engine_cloud::host::HostSampler>,
 ) -> Option<HostView> {
     let (project_agents, folder) = project_agents(hub, agent);
-    let mut view = match cloud.and_then(|c| c.fleet().view(&agent.to_hex()).map(|v| (c, v))) {
-        Some((cloud, machine)) => cloud_agent_view(cloud, agent, &machine),
+    let placed = placed_for(cloud, agent);
+    let mut view = match cloud.and_then(|c| c.fleet().view(&placed.to_hex()).map(|v| (c, v))) {
+        Some((cloud, machine)) => HostView {
+            agent_id: agent.to_hex(),
+            ..cloud_agent_view(cloud, placed, &machine)
+        },
         None => local_agent_view(cloud, agent, folder, sampler).await?,
     };
     let (rows, costs) = project_rows(hub, cloud, shared, current, &project_agents);
@@ -167,10 +180,12 @@ fn project_rows(
     let mut costs = Vec::new();
     let rows = project_agents
         .iter()
-        .map(
-            |(id, name)| match cloud.and_then(|c| c.fleet().view(&id.to_hex()).map(|v| (c, v))) {
+        .map(|(id, name)| {
+            let placed = placed_for(cloud, *id);
+            match cloud.and_then(|c| c.fleet().view(&placed.to_hex()).map(|v| (c, v))) {
                 Some((cloud, machine)) => {
-                    let cost = cloud.cost(*id);
+                    // A machine's cost is counted once, on the agent placed on it.
+                    let cost = (placed == *id).then(|| cloud.cost(*id)).flatten();
                     if let Some(cost) = &cost {
                         costs.push((owner_label(cloud, *id), cost.clone()));
                     }
@@ -179,7 +194,7 @@ fn project_rows(
                         name,
                         &machine,
                         cost.as_ref(),
-                        foreign_label(Some(cloud), *id, current),
+                        foreign_label(Some(cloud), placed, current),
                     )
                 }
                 None => host_info::local_row(
@@ -187,8 +202,8 @@ fn project_rows(
                     name,
                     hub.is_running(*id) || shared.running.lock().contains_key(id),
                 ),
-            },
-        )
+            }
+        })
         .collect::<Vec<HostRow>>();
     (rows, costs)
 }

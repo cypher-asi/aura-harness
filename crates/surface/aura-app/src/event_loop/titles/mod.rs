@@ -302,7 +302,7 @@ pub(super) fn bench_title(source: &BenchSource, task: &str) -> String {
 /// A subtask name made from the start of its task `prompt`: the first
 /// line without a leading filler verb ("Implement the engine core" names
 /// "Engine core"), cut shorter than a chat title.
-fn fallback_subtitle(prompt: &str) -> String {
+pub(super) fn fallback_subtitle(prompt: &str) -> String {
     let line = prompt
         .lines()
         .map(str::trim)

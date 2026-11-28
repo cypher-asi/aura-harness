@@ -92,9 +92,7 @@ pub(super) async fn forward(
     // A prompt typed into the chat put it to work already; one from the
     // channel or the queue did not, and an idle chat folds each group of
     // steps as soon as none of them runs.
-    if std::env::var_os("OLD_CLOUD_TURN").is_none() {
-        ui.send(UiCommand::TurnStarted { prompt: None }).await;
-    }
+    ui.send(UiCommand::TurnStarted { prompt: None }).await;
     let mut chat = TurnChat {
         ui,
         cancel,
@@ -187,6 +185,8 @@ impl TurnChat<'_> {
         match event {
             RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
             RemoteEvent::Boot(_) | RemoteEvent::Title(_) => {}
+            // `close_open` ended the reply the call wrote.
+            RemoteEvent::ModelCallEnd => {}
             RemoteEvent::Text(text) => self.append_text(text).await,
             RemoteEvent::Thinking(text) => self.append_thinking(text).await,
             event @ (RemoteEvent::ToolStart { .. }

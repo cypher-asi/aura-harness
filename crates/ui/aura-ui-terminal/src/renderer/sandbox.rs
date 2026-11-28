@@ -2,11 +2,12 @@
 //! TASKS header bar over the file tree of the active agent's workspace,
 //! its repo's timeline, the Processes list, the trace feed, or its tasks
 //! grouped under their plans. While a channel is open the bar lists only
-//! the channel's MEMBERS and INFO (see `channel_side`), and the panel
-//! fills the right column. Outside a channel the bar ends in HOST's 🖥
-//! tab, a `*` button that lists the whole project's processes, steps,
-//! plans and tasks instead of the active agent's, then a ⤢ button that
-//! maximizes the panel over the Record panel, or restores it.
+//! the channel's MEMBERS and INFO (see `channel_side`), below the
+//! channel's TASKS in the Record panel's place. Outside a channel the bar
+//! ends in HOST's 🖥 tab, a `*` button that lists the whole project's
+//! processes, steps, plans and tasks instead of the active agent's, then
+//! a ⤢ button that maximizes the panel over the Record panel, or restores
+//! it.
 
 use super::chrome::{render_body_block, Body, ScrollView};
 use super::header::{self, PanelHeader};
@@ -23,9 +24,8 @@ pub(super) fn render_sandbox_panel(frame: &mut Frame, area: Rect, app: &mut App,
     let hosted = app.host_chrome();
     let panel = area;
     let (bar, area) = header::split(area, hosted);
-    // An open channel's panel fills the column until it closes, and lists
-    // only the channel's own tabs, so the expand and scope buttons, agent
-    // features, are left out.
+    // An open channel's panel lists only the channel's own tabs, so the
+    // expand and scope buttons, agent features, are left out.
     let channel_open = app.channel_open();
     let layout = |width| SidePanelTab::layout(width, channel_open);
     let icon_tab = SidePanelTab::icon_tab(channel_open);
@@ -103,6 +103,9 @@ fn render_tab(frame: &mut Frame, area: Rect, body: Rect, app: &mut App, theme: &
         }
         SidePanelTab::ChannelInfo => {
             super::channel_side::render_channel_info(frame, area, body, app, theme);
+        }
+        SidePanelTab::ChannelQueue => {
+            super::channel_queue::render_channel_queue(frame, area, body, app, theme);
         }
     }
 }

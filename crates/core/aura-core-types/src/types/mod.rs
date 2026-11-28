@@ -315,6 +315,14 @@ mod tests {
         let identity = Identity::new("0://TestAgent", "Test Agent");
         assert!(!identity.zns_id.is_empty());
         assert_eq!(identity.name, "Test Agent");
+        assert_eq!(identity.agent_id, AgentId::new(identity.identity_hash));
+    }
+
+    #[test]
+    fn a_spawned_agents_identity_has_the_id_its_zns_id_names() {
+        let child = AgentId::generate();
+        let identity = Identity::new(child.spawn_zns(), "explore");
+        assert_eq!(identity.agent_id, child);
     }
 
     #[test]

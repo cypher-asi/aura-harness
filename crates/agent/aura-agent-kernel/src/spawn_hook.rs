@@ -17,7 +17,7 @@ use aura_core_types::{
     ToolState, Transaction, TransactionType, UserToolDefaults,
 };
 use aura_exec_traits::{ChildAgentSpec, SpawnError, SpawnHook, SpawnOutcome};
-use aura_store_db::Store;
+use aura_store_db::{ReadStore, Store};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -75,11 +75,9 @@ impl SpawnHook for KernelSpawnHook {
 
         self.check_child_tools(parent_agent_id, originating_user_id, &child)?;
 
-        let zns_id = format!("0://spawn/{}", child_agent_id.to_hex());
-        let mut identity = Identity::new(&zns_id, &child.name);
-        identity.agent_id = child_agent_id;
-        identity = identity.with_permissions(child.permissions.clone());
-        identity = identity.with_tool_permissions(child.tool_permissions.clone());
+        let identity = Identity::new(child_agent_id.spawn_zns(), &child.name)
+            .with_permissions(child.permissions.clone())
+            .with_tool_permissions(child.tool_permissions.clone());
 
         let identity_payload = ChildIdentityPayload {
             identity,
@@ -186,6 +184,35 @@ impl KernelSpawnHook {
     }
 }
 
+/// How an agent was spawned, as the identity row [`KernelSpawnHook`]
+/// writes at the head of its record says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnedAs {
+    /// The name it was spawned with.
+    pub name: String,
+    /// Its role: `subagent:<kind>` for a `task`.
+    pub role: String,
+    /// The agent that spawned it.
+    pub parent: Option<AgentId>,
+}
+
+/// [`SpawnedAs`] for `agent`, from the identity row at the head of its
+/// record. `None` when the record doesn't start with one (or can't be
+/// read): the agent was not spawned, or its record has not arrived yet.
+#[must_use]
+pub fn spawned_as<S: ReadStore + ?Sized>(store: &S, agent: AgentId) -> Option<SpawnedAs> {
+    let first = store.scan_record(agent, 1, 1).ok()?.into_iter().next()?;
+    if first.tx.tx_type != TransactionType::System {
+        return None;
+    }
+    let row: ChildIdentityPayload = serde_json::from_slice(&first.tx.payload).ok()?;
+    (row.identity.agent_id == agent).then_some(SpawnedAs {
+        name: row.identity.name,
+        role: row.role,
+        parent: row.parent_agent_id,
+    })
+}
+
 fn identity_from_payload(payload: &[u8]) -> Option<Identity> {
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
     value
@@ -277,6 +304,52 @@ mod tests {
             serde_json::json!(outcome.child_agent_id)
         );
         assert_ne!(outcome.delegate_tx_hash, aura_core_types::Hash::default());
+    }
+
+    #[tokio::test]
+    async fn the_child_identity_row_names_its_id_and_how_it_was_spawned() {
+        use aura_store_db::{RocksStore, Store};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn Store> = Arc::new(RocksStore::open(dir.path(), false).unwrap());
+        let parent = AgentId::generate();
+        let child = AgentId::generate();
+        KernelSpawnHook::new(store.clone())
+            .spawn_child(
+                &parent,
+                None,
+                ChildAgentSpec {
+                    name: "explore".into(),
+                    role: "subagent:explore".into(),
+                    permissions: AgentPermissions::ceo_preset(),
+                    tool_permissions: None,
+                    parent_tool_permissions: None,
+                    system_prompt_override: None,
+                    preassigned_agent_id: Some(child),
+                    initial_prompt: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let entries = store.scan_record(child, 1, 1).unwrap();
+        let identity = identity_from_payload(&entries[0].tx.payload).unwrap();
+        assert_eq!(identity.zns_id, child.spawn_zns());
+        assert_eq!(identity.agent_id, child);
+        assert_eq!(
+            spawned_as(store.as_ref(), child),
+            Some(SpawnedAs {
+                name: "explore".into(),
+                role: "subagent:explore".into(),
+                parent: Some(parent),
+            })
+        );
+        assert_eq!(
+            spawned_as(store.as_ref(), parent),
+            None,
+            "a record that starts with something else"
+        );
     }
 
     #[tokio::test]

@@ -2,7 +2,8 @@
 //! active agent's, with the agents it spawned, or every agent's in its
 //! project. The TASKS tab lists the plans those agents' tasks work on.
 //! The `*` button at the right end of the panel's header bar switches
-//! every tab at once.
+//! every tab at once. An open channel's TASKS lists the whole project's,
+//! whatever the button says.
 
 use std::collections::HashSet;
 
@@ -130,11 +131,18 @@ impl App {
 
     /// Filter every side-panel list for the scope, the active agent and
     /// the agents listed now, and list the members of the active agent's
-    /// run again.
+    /// run again. While a channel is open its TASKS lists every plan and
+    /// task the session sends, which are the whole project's: the agent
+    /// on screen is one of the channel's, working in its folder.
     pub(super) fn refresh_side_scope(&mut self) {
         let agents = self.scope_agents();
         self.trace_feed.set_filter(agents.clone());
-        self.task_list.set_filter(agents.clone());
+        let tasks = if self.channel_open() {
+            None
+        } else {
+            agents.clone()
+        };
+        self.task_list.set_filter(tasks);
         self.side.process_filter = agents;
         self.reshow_processes();
         self.refresh_members();
