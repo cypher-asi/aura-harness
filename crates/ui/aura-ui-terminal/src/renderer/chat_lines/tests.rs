@@ -86,7 +86,8 @@ fn a_live_group_drawn_from_its_kept_steps_matches_one_laid_out_afresh() {
     let open = HashMap::new();
     let groups = GroupState {
         open: &open,
-        expand_all: false,
+        // Open (as `Ctrl+O` opens it): a running group is folded otherwise.
+        expand_all: true,
         turn_live: true,
     };
     let size = (60, Measure::GRID);
@@ -143,7 +144,8 @@ fn a_live_group_keeps_its_finished_steps_but_not_running_ones() {
     let open = HashMap::new();
     let live = GroupState {
         open: &open,
-        expand_all: false,
+        // Open (as `Ctrl+O` opens it): a running group is folded otherwise.
+        expand_all: true,
         turn_live: true,
     };
     let size = (60, Measure::GRID);
@@ -216,7 +218,8 @@ fn a_running_tool_drawn_from_its_kept_parts_matches_one_laid_out_afresh() {
     let open = HashMap::new();
     let groups = GroupState {
         open: &open,
-        expand_all: false,
+        // Open (as `Ctrl+O` opens it): a running group is folded otherwise.
+        expand_all: true,
         turn_live: true,
     };
     let size = (70, Measure::GRID);

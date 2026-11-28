@@ -2,11 +2,15 @@ use super::*;
 
 /// How the user who placed `agent` is named here.
 fn owner_label(hub: &CloudHub, agent: AgentId) -> String {
-    hub.owner_name_of(agent)
-        .unwrap_or_else(|| match hub.owner_of(agent) {
-            Some(aura_core_auth::Owner::Zos { .. }) => "another user".to_string(),
-            _ => "local profile".to_string(),
-        })
+    owner_text(hub.owner_of(agent).as_ref(), hub.owner_name_of(agent))
+}
+
+/// How `owner`, saved as `name`, is named here.
+fn owner_text(owner: Option<&aura_core_auth::Owner>, name: Option<String>) -> String {
+    name.unwrap_or_else(|| match owner {
+        Some(aura_core_auth::Owner::Zos { .. }) => "another user".to_string(),
+        _ => "local profile".to_string(),
+    })
 }
 
 /// The owner's name when `agent` was placed by someone other than
@@ -35,6 +39,11 @@ pub(super) fn placement_state(
     agent: AgentId,
     current: &aura_core_auth::Owner,
 ) -> PlacementState {
+    if cloud.is_none() {
+        if let Some(saved) = shared.saved.lock().get(&agent).cloned() {
+            return saved_state(&saved, shared, current);
+        }
+    }
     let agent = placed_for(cloud, agent);
     let moving = shared.moving.lock().contains(&agent);
     let placement = match cloud.map_or(Placement::Local, |hub| hub.placement_of(agent)) {
@@ -50,6 +59,27 @@ pub(super) fn placement_state(
         machine_state: machine.map(|view| view.state.label().to_string()),
         cloud_ready: cloud.is_some() || aura_config::cloud().is_configured(),
         owner: foreign_label(cloud, agent, current),
+    }
+}
+
+/// Where an agent the hub's saved placements name runs, while the hub
+/// is down: in the cloud, as the hub would say once it is up. Nothing is
+/// known of its machine meanwhile.
+fn saved_state(
+    saved: &aura_engine_cloud::hub::SavedPlacement,
+    shared: &Shared,
+    current: &aura_core_auth::Owner,
+) -> PlacementState {
+    let placement = PlacementView::Cloud;
+    let moving = shared.moving.lock().contains(&saved.root);
+    PlacementState {
+        placement,
+        moving: moving.then(|| placement.moving_label().to_string()),
+        asleep: false,
+        machine_state: None,
+        cloud_ready: aura_config::cloud().is_configured(),
+        owner: (saved.owner != *current)
+            .then(|| owner_text(Some(&saved.owner), saved.owner_name.clone())),
     }
 }
 

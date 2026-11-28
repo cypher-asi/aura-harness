@@ -17,13 +17,16 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use std::collections::HashMap;
 
-/// How much of a group to show: what the user chose, else everything under
-/// `Ctrl+O` or while it runs.
-pub(super) fn group_view(open: Option<bool>, expand_all: bool, live: bool) -> GroupView {
+/// How much of a group to show: what the user chose (a click on it,
+/// remembered while the chat is open), else everything under `Ctrl+O`,
+/// else its summary alone. A running group is no exception: its steps and
+/// what they print stay folded until asked for, for a local agent and a
+/// cloud one alike, and for a turn the chat reattached to.
+pub(super) const fn group_view(open: Option<bool>, expand_all: bool) -> GroupView {
     match open {
         Some(true) => GroupView::Full,
         Some(false) => GroupView::Collapsed,
-        None if expand_all || live => GroupView::Full,
+        None if expand_all => GroupView::Full,
         None => GroupView::Collapsed,
     }
 }
@@ -90,12 +93,15 @@ pub(super) fn group_lines(
         &tally, view, live, &progress, spinner, width, theme,
     ));
     if view == GroupView::Collapsed {
-        toggles.push(ToggleRow {
-            line: lines.len(),
-            target: group,
-            open: false,
-        });
-        lines.push(collapsed_steps(steps.len(), theme));
+        // A running group's summary counts its steps already.
+        if !live {
+            toggles.push(ToggleRow {
+                line: lines.len(),
+                target: group,
+                open: false,
+            });
+            lines.push(collapsed_steps(steps.len(), theme));
+        }
     } else {
         push_steps(
             (&mut lines, &mut toggles),
@@ -131,9 +137,8 @@ fn push_steps(
     (place, keeping, preview): (&TurnPlace<'_>, bool, bool),
     (width, theme, spinner): (usize, &Theme, &str),
 ) {
-    let mut number = place.first_step;
     let last = place.first_step + steps.len().saturating_sub(1);
-    for (&(member, step), kept) in steps.iter().zip(drawn) {
+    for (number, (&(member, step), kept)) in (place.first_step..).zip(steps.iter().zip(drawn)) {
         let step_number = StepNumber::new(number, last);
         toggles.push(ToggleRow {
             line: lines.len(),
@@ -157,7 +162,6 @@ fn push_steps(
             place,
             (width, theme),
         );
-        number += 1;
     }
 }
 

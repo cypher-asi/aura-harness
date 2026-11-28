@@ -167,3 +167,87 @@ fn a_planning_cloud_agent_shows_its_plan_badge_then_its_cloud() {
         .expect("the cloud after it");
     assert_eq!(cloud.fg, colors.muted, "the cloud keeps its own gray");
 }
+
+/// The placement the app sends a cloud agent: from the hub's saved
+/// placements while the hub is down (`up` false: nothing known of its
+/// machine), or from the hub once it is up.
+fn placed_by_hub(app: &mut crate::App, agent_id: &str, up: bool) {
+    app.process_command(UiCommand::SetPlacement {
+        agent_id: agent_id.to_string(),
+        state: PlacementState {
+            placement: PlacementView::Cloud,
+            machine_state: up.then(|| "running".to_string()),
+            cloud_ready: up,
+            ..PlacementState::default()
+        },
+    });
+}
+
+/// The channels app with `#zode` open, its member `r1` (`RUS2`) a
+/// rust-engineer.
+fn channel_with_member() -> crate::App {
+    let mut app = channels_app();
+    let mut channels = app.channels().to_vec();
+    let member = |id: &str, code: &str, definition: &str| AgentSummary {
+        id: id.to_string(),
+        name: code.to_string(),
+        definition: Some(definition.to_string()),
+        code: Some(code.to_string()),
+        ..AgentSummary::default()
+    };
+    channels[0].members = vec![
+        member("co", "CO", "coordinator"),
+        member("r1", "RUS2", "rust-engineer"),
+    ];
+    app.process_command(UiCommand::SetChannels(channels));
+    app.open_channel_by_id("c1");
+    app
+}
+
+/// PROJECTS with `rus` and its subagent `sub`, and the local `here`.
+fn projects_with_subagent() -> crate::App {
+    let mut app = crate::App::new();
+    let agent = |id: &str, name: &str, depth| AgentSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        depth,
+        ..AgentSummary::default()
+    };
+    app.process_command(UiCommand::SetAgents(vec![
+        agent("rus", "Rustacean", 0),
+        agent("sub", "Subtask", 1),
+        agent("here", "Local", 0),
+    ]));
+    app.process_command(UiCommand::SetActiveAgent("here".to_string()));
+    app
+}
+
+#[test]
+fn saved_cloud_agents_show_their_cloud_with_the_hub_down_and_keep_it_when_it_comes_up() {
+    let mut channel = channel_with_member();
+    let mut projects = projects_with_subagent();
+    for up in [false, true] {
+        for id in ["rus", "sub"] {
+            placed_by_hub(&mut projects, id, up);
+        }
+        placed_by_hub(&mut channel, "r1", up);
+        let rows = render_rows(&mut projects, 140);
+        for name in ["Rustacean", "Subtask"] {
+            assert!(
+                row(&rows, name).contains('☁'),
+                "up {up}: {}",
+                row(&rows, name)
+            );
+        }
+        assert!(
+            !row(&rows, "Local").contains('☁'),
+            "up {up}: not saved, local"
+        );
+        let rows = render_rows(&mut channel, 140);
+        assert!(
+            row(&rows, "RUS2").contains('☁'),
+            "up {up}: {}",
+            row(&rows, "RUS2")
+        );
+    }
+}

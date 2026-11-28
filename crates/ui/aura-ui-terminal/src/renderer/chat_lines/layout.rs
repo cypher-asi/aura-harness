@@ -63,8 +63,7 @@ impl<'a> Stale<'a> {
             .iter()
             .any(|m| m.is_live_activity() || m.is_live_boot())
             || (is_group && groups.turn_live && last);
-        let view =
-            is_group.then(|| group_view(groups.open.get(&key).copied(), groups.expand_all, live));
+        let view = is_group.then(|| group_view(groups.open.get(&key).copied(), groups.expand_all));
 
         let mut hasher = std::hash::DefaultHasher::new();
         for member in members {
