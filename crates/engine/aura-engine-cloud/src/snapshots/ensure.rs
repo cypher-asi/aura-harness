@@ -16,10 +16,12 @@ use crate::boot::{human_bytes, BootReporter, BootStage};
 use crate::boxd::CALL_TIMEOUT;
 use crate::delta::{self, HistoryBundle};
 use crate::error::{CloudError, CloudResult};
+use crate::exec_errors::is_transient;
 use crate::names::{self, BASE_SNAPSHOT};
 use crate::provider::MachineOrigin;
 
 /// What a project snapshot is built from.
+#[derive(Clone)]
 struct ProjectSource {
     /// The base snapshot the builder is made from.
     base: String,
@@ -71,6 +73,8 @@ impl SnapshotBuilder {
     ///
     /// As [`Self::ensure_base`].
     pub async fn ensure_base_reported(&self, boot: &BootReporter) -> CloudResult<SnapshotRecord> {
+        let gate = self.gate(BASE_SNAPSHOT);
+        let _building = wait_for(&gate, BASE_SNAPSHOT, boot).await;
         let local = self.local_binary().await?;
         // The binary itself is part of the base: a new build of the same
         // version must still reach new machines.
@@ -193,6 +197,8 @@ impl SnapshotBuilder {
         boot: &BootReporter,
     ) -> CloudResult<SnapshotRecord> {
         let base = self.ensure_base_reported(boot).await?;
+        let gate = self.gate(project_id);
+        let _building = wait_for(&gate, &names::project_snapshot(project_id), boot).await;
         let command =
             build_command.map_or_else(|| default_build_command(project_dir), str::to_string);
         let fingerprint = fingerprint_project(project_dir, &base.fingerprint, &command).await?;
@@ -222,7 +228,30 @@ impl SnapshotBuilder {
             history,
             command,
         };
-        self.build_project(project_id, source, boot).await
+        self.build_project_retried(project_id, source, boot).await
+    }
+
+    /// [`Self::build_project`], once more on a fresh builder when the
+    /// first build failed for the machine's sake, not the code's
+    /// ([`is_transient`]): killed for memory, out of disk, a download.
+    async fn build_project_retried(
+        &self,
+        project_id: &str,
+        source: ProjectSource,
+        boot: &BootReporter,
+    ) -> CloudResult<SnapshotRecord> {
+        let again = source.clone();
+        match self.build_project(project_id, source, boot).await {
+            Err(err) if is_transient(&err) => {
+                tracing::warn!(project = project_id, error = %err, "snapshot build failed for the machine; trying once more");
+                boot.fact(
+                    "snapshot",
+                    format!("the build failed for its machine, trying once more: {err}"),
+                );
+                self.build_project(project_id, again, boot).await
+            }
+            outcome => outcome,
+        }
     }
 
     /// Build `project_id`'s snapshot from `source`: its history cloned on
@@ -344,6 +373,23 @@ fn project_steps(bundle: Vec<u8>, clone: String, command: &str) -> Vec<Step> {
             timeout: STEP_TIMEOUT,
         },
     ]
+}
+
+/// Hold `gate`, the one of `snapshot`, saying on `boot` when another
+/// start is building it: this one then reuses what it built.
+async fn wait_for<'a>(
+    gate: &'a tokio::sync::Mutex<()>,
+    snapshot: &str,
+    boot: &BootReporter,
+) -> tokio::sync::MutexGuard<'a, ()> {
+    if let Ok(held) = gate.try_lock() {
+        return held;
+    }
+    boot.fact(
+        "snapshot",
+        format!("{snapshot}: another agent's start is building it; waiting to reuse it"),
+    );
+    gate.lock().await
 }
 
 /// Why a snapshot is built now rather than reused.

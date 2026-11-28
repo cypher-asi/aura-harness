@@ -40,6 +40,7 @@ use crate::{
 use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::time::Instant;
+mod shed;
 
 /// The chat of an agent that is not on screen.
 pub(crate) struct AgentView {
@@ -74,6 +75,8 @@ pub(crate) struct AgentView {
     sandbox_scroll: usize,
     /// Where the side panel's lists were, once the agent was on screen
     list_places: Option<ListPlaces>,
+    /// Whether the chat was let go of off screen (see `shed`)
+    shed: bool,
 }
 
 impl Default for AgentView {
@@ -100,6 +103,7 @@ impl Default for AgentView {
             sandbox: SandboxTree::default(),
             sandbox_scroll: 0,
             list_places: None,
+            shed: false,
         }
     }
 }
@@ -109,13 +113,11 @@ const fn is_busy(state: AppState) -> bool {
     matches!(state, AppState::Processing | AppState::AwaitingApproval)
 }
 
-/// Whether the input line holds an answer to a prompt (an email, a
-/// password, a sign-in code) instead of the chat's draft.
+/// Whether the input holds a prompt's answer (an email, a password, a
+/// code, a key), not the chat's draft.
 const fn input_is_prompt_answer(state: AppState) -> bool {
-    matches!(
-        state,
-        AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode
-    )
+    use AppState::{IntegrationInput as Key, LinkCode as Code, LoginEmail, LoginPassword};
+    matches!(state, LoginEmail | LoginPassword | Code | Key)
 }
 
 impl App {
@@ -248,14 +250,20 @@ impl App {
         if !prompt {
             self.swap_draft(&previous, agent_id);
         }
+        let outgoing_partial = self.switching.reload_after_turn.take() == Some(previous.clone());
         let mut view = self.switching.views.remove(agent_id).unwrap_or_default();
         let busy = view.busy;
+        let incoming_partial = view.shed && busy;
         let tab = mem::replace(&mut view.chat_tab, self.chat_tab());
         self.switching.list_places_due = view.list_places.replace(self.list_places());
         self.put_channel_chat_place_away();
         self.swap_chat(&mut view);
         view.busy = is_busy(self.chat_state);
+        view.shed = outgoing_partial;
+        self.note_left_screen(&previous);
         self.switching.views.insert(previous, view);
+        self.switching.reload_after_turn = incoming_partial.then(|| agent_id.to_string());
+        self.shed_views(None);
         if !prompt {
             self.chat_state = self.chat_state_for(busy);
         }
@@ -420,6 +428,9 @@ impl App {
         self.swap_chat(&mut view);
         view.busy = busy;
         self.switching.views.insert(agent_id.to_string(), view);
+        if !busy {
+            self.shed_views(Some(agent_id));
+        }
         self.ticks.redraw = redraw;
 
         let name = self.agent_name(agent_id);

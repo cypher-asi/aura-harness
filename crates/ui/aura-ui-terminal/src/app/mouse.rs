@@ -171,6 +171,11 @@ impl App {
     fn mouse_on_chrome(&mut self, mouse: MouseEvent) -> bool {
         let (column, row) = (mouse.column, mouse.row);
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && self.click_context_ring(column, row)
+        {
+            return true;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
             && contains(self.areas.side_toggle, column, row)
         {
             self.toggle_side_column();

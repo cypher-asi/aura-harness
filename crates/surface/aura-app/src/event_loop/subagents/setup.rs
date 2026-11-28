@@ -8,6 +8,16 @@ const MACHINE_PEERS: &str = "\n\nYou run on a cloud machine: to reach the agents
 your channel, give `send_to_agent` the `agent_id` that `list_agents` shows for each, not \
 its code.";
 
+/// The channel posts' summaries, kept in the data directory of `parts`.
+fn post_summaries(
+    parts: &AgentHubParts,
+) -> Arc<crate::event_loop::channels::summaries::PostSummaries> {
+    Arc::new(crate::event_loop::channels::summaries::PostSummaries::new(
+        parts.channels.clone(),
+        Some(parts.registry.data_dir()),
+    ))
+}
+
 impl AgentHub {
     /// Build the hub. `factory` receives the dispatcher that kernels must
     /// install so their `task` calls spawn permanent agents.
@@ -49,10 +59,7 @@ impl AgentHub {
         notices: NoticeSender,
         notice_rx: mpsc::UnboundedReceiver<Notice>,
     ) -> Self {
-        let post_summaries = Arc::new(crate::event_loop::channels::summaries::PostSummaries::new(
-            parts.channels.clone(),
-            Some(parts.registry.data_dir()),
-        ));
+        let post_summaries = post_summaries(&parts);
         Self {
             registry: Mutex::new(parts.registry),
             definitions: Mutex::new(parts.definitions),
@@ -92,6 +99,7 @@ impl AgentHub {
             channels: parts.channels,
             channel_chat: crate::event_loop::channels::ChannelChat::default(),
             inbox: crate::event_loop::inbox::Inbox::default(),
+            loop_work: crate::event_loop::pacing::LoopWork::paced(),
             standing: crate::event_loop::standing::Standings::default(),
             factory_flows: crate::event_loop::factory::Flows::default(),
             status: status::AgentStatus::default(),

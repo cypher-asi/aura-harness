@@ -316,3 +316,19 @@ async fn a_typed_message_is_summarized_under_its_prompt_key() {
         [("c1".to_string(), prompt_key(LONG), summary)]
     );
 }
+
+#[tokio::test]
+async fn memory_holds_a_bounded_share_and_the_store_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let summaries = kept_in(&dir);
+    let key = |n: usize| key_of(&format!("message {n}"));
+    for n in 0..=MAX_KEPT {
+        summaries.put(key(n), format!("s{n}")).await;
+    }
+    assert!(lock(&summaries.kept).len() <= MAX_KEPT);
+    assert_eq!(
+        summaries.get(&key(0)).await.as_deref(),
+        Some("s0"),
+        "read from the store"
+    );
+}

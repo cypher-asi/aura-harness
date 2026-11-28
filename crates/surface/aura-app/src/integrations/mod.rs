@@ -16,16 +16,21 @@
 //! - The GitHub token stored here is also kept for the REPO tab, which
 //!   reads it after `GH_TOKEN` and `GITHUB_TOKEN`.
 
+use aura_agent_kernel::ToolModeClass;
 use aura_engine_integrations::builtin::{builtin, BuiltinOptions};
 use aura_engine_integrations::{
-    IntegrationId, MemorySecrets, Registry, SealedSecrets, Secret, SecretStore, SECRETS_FILE,
-    SETTINGS_FILE,
+    tool_name, IntegrationId, MemorySecrets, Registry, SealedSecrets, Secret, SecretStore,
+    SECRETS_FILE, SETTINGS_FILE,
 };
-use aura_exec_tools::ToolExecutor;
-use std::collections::HashSet;
+use aura_exec_tools::{Tool, ToolExecutor};
+use aura_model::ToolDefinition;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock};
 use tracing::{info, warn};
+
+mod ui;
+pub(crate) use ui::act;
 
 /// The folder in the data directory integrations keep their files in.
 pub const DIR: &str = "integrations";
@@ -40,6 +45,8 @@ pub struct Integrations {
     connected: RwLock<HashSet<IntegrationId>>,
     /// GitHub's stored token, for the REPO tab
     github_token: RwLock<Option<Secret>>,
+    /// What each integration's last action said, for the panel
+    notes: RwLock<std::collections::HashMap<String, (bool, String)>>,
 }
 
 /// Open this process's integrations under `data_dir`, once; later calls
@@ -57,6 +64,29 @@ pub fn open(data_dir: &Path) -> Arc<Integrations> {
 /// The process's integrations, if [`open`] ran.
 pub fn get() -> Option<&'static Arc<Integrations>> {
     SERVICE.get()
+}
+
+/// [`Integrations::tool_classes`] of the process's integrations; empty
+/// when [`open`] didn't run.
+#[must_use]
+pub fn tool_classes() -> BTreeMap<String, ToolModeClass> {
+    get().map(|i| i.tool_classes()).unwrap_or_default()
+}
+
+/// `tools` with the integration tools agent `agent` may use now
+/// appended ([`Integrations::tool_definitions`]), skipping names already
+/// there.
+#[must_use]
+pub fn with_tools_for(mut tools: Vec<ToolDefinition>, agent: &str) -> Vec<ToolDefinition> {
+    let Some(integrations) = get() else {
+        return tools;
+    };
+    for definition in integrations.tool_definitions(agent, None) {
+        if !tools.iter().any(|tool| tool.name == definition.name) {
+            tools.push(definition);
+        }
+    }
+    tools
 }
 
 impl Integrations {
@@ -88,6 +118,7 @@ impl Integrations {
             registry: Arc::new(registry),
             connected: RwLock::default(),
             github_token: RwLock::default(),
+            notes: RwLock::default(),
         }
     }
 
@@ -121,16 +152,51 @@ impl Integrations {
         *write(&self.github_token) = token;
     }
 
-    /// Register on `executor` the tools agent `agent` (hex id) may use
-    /// of the integrations connected at the last refresh.
+    /// Register on `executor` the tools agent `agent` (hex id) may use,
+    /// of every integration, connected or not: an executor lives as long
+    /// as its kernel, and an integration connected later must be callable
+    /// once its tools are offered ([`Self::tool_definitions`]). Every call
+    /// checks connection and access again.
     pub fn register_tools(&self, executor: &mut ToolExecutor, agent: &str, channel: Option<&str>) {
-        let connected = read(&self.connected).clone();
-        for tool in self
-            .registry
-            .tools_where((agent, channel), |id| connected.contains(id))
-        {
+        for tool in self.registry.tools_where((agent, channel), |_| true) {
             executor.register(Box::new(tool));
         }
+    }
+
+    /// The model-facing definitions of the tools agent `agent` (hex id)
+    /// may use of the integrations connected at the last refresh: what a
+    /// turn offers the model, so a newly connected integration shows up
+    /// on the next turn.
+    #[must_use]
+    pub fn tool_definitions(&self, agent: &str, channel: Option<&str>) -> Vec<ToolDefinition> {
+        let connected = read(&self.connected).clone();
+        self.registry
+            .tools_where((agent, channel), |id| connected.contains(id))
+            .iter()
+            .map(Tool::definition)
+            .collect()
+    }
+
+    /// The mode class of every integration tool, for the kernel's mode
+    /// gate and the approval prompts: `Read` tools are invocations, which
+    /// plan and ask mode allow and the `ask` level runs without asking;
+    /// the rest are network calls.
+    #[must_use]
+    pub fn tool_classes(&self) -> BTreeMap<String, ToolModeClass> {
+        self.registry
+            .list()
+            .iter()
+            .flat_map(|manifest| {
+                manifest.tools.iter().map(|spec| {
+                    let class = if spec.effect.is_read() {
+                        ToolModeClass::Invoke
+                    } else {
+                        ToolModeClass::Network
+                    };
+                    (tool_name(&manifest.id, &spec.name), class)
+                })
+            })
+            .collect()
     }
 
     /// The GitHub token the Integrations panel stored, if any.

@@ -19,8 +19,7 @@ pub enum UiCommand {
     /// Set the status message
     SetStatus(String),
 
-    /// Append text to the current streaming message.
-    /// This is used for real-time streaming output from the model.
+    /// Append text to the current streaming message (the model's output).
     AppendText(String),
 
     /// Start a new streaming message (clears any pending streaming content).
@@ -44,8 +43,7 @@ pub enum UiCommand {
         sources: Vec<SourceUsage>,
     },
 
-    /// Append text to the current thinking block.
-    /// This is used for real-time display of extended thinking.
+    /// Append text to the current thinking block (extended thinking, live).
     AppendThinking(String),
 
     /// Start a new thinking block.
@@ -459,12 +457,12 @@ pub enum UiCommand {
 
     /// The HOST tab of the agent on screen
     SetHost(Box<crate::host::HostView>),
-
     /// The REPO tab of an agent; dropped unless it is the one on screen
     SetRepo(Box<crate::repo::RepoView>),
-
     /// Every channel that is not archived, in list order
     SetChannels(Vec<ChannelSummary>),
+    /// The session finished what it does at startup in the background
+    StartupDone,
 
     /// Every task of a channel's agents, newest first
     SetChannelTasks {
@@ -492,6 +490,8 @@ pub enum UiCommand {
         channel_id: String,
         summaries: Vec<(u64, String)>,
     },
+    /// Every integration, in the Integrations panel's order
+    SetIntegrations(Vec<crate::events::IntegrationView>),
     /// The merge queue of a channel's repo, for its QUEUE tab
     SetMergeQueue {
         channel_id: String,

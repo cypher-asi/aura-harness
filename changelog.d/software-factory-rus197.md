@@ -26,3 +26,27 @@
 - `.aura/tasks/*.json`, the task records the app writes for the TASKS
   tab, are no longer tracked: they are ignored and were removed from
   the index. The files stay on disk, so the TASKS tab is unchanged.
+
+### Restarting reconnects to running cloud turns
+
+##### Fixed
+
+- When the app restarts while cloud agents work, it reconnects to their
+  running machines instead of waking them. Their chat and channel row
+  say "Reconnecting…", not "Waking cloud machine". The agent on screen
+  is reconnected first, at most eight at a time, in the background. A
+  machine that can't be reached is tried again with backoff before its
+  turn is reported lost. A sleeping machine with no work is left asleep.
+
+### The context ring and panel
+
+##### Added
+
+- The footer's context share has a ring that fills as the window does
+  (`○ ◔ ◑ ◕ ●`). Clicking it, or `/context`, opens a CONTEXT panel
+  showing what fills the window: system prompt, tools, MCP tools,
+  subagents, skills, messages and free space. Each part shows its tokens
+  and share, with a stacked bar above. The total is the model's own
+  count of its last call. The parts are measured from their text, and
+  messages are the rest. `/context text` still writes the old report
+  into the chat. The desktop app draws the rings too.

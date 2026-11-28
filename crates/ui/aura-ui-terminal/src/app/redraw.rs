@@ -86,6 +86,9 @@ impl App {
         self.ask_sandbox_listings();
         self.refresh_live_log();
         self.refresh_repo_tab();
+        if !self.is_busy() {
+            self.reload_shed_chat();
+        }
 
         if self.is_busy() {
             self.ticks.processing_since.get_or_insert_with(Instant::now);

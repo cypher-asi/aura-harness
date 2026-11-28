@@ -12,6 +12,7 @@ fn test_theme() -> Theme {
     Theme::cyber()
 }
 
+mod integrations_panel;
 mod support;
 use support::*;
 
@@ -37,6 +38,7 @@ mod chat_links;
 mod chat_messages;
 mod chat_view;
 mod cloud_badges;
+mod context_panel;
 mod copy_buttons;
 mod drag_scroll;
 mod input_box;

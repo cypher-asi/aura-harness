@@ -213,15 +213,44 @@ their glyphs, and on a bar narrower still `⤢` goes.
 │ SBX │REPO │ PRC │TRACE│TASKS│ 🖥  │ * │ ⤢ │
 ```
 
-The agents panel's bar ends the same way in BENCH, drawn as its icon
-`🔧` in a cell of its own against the border, after ARCHIVE. While the
-pointer is over an icon tab, its name (`Bench`, `Host`) shows on the row
-under the bar, right-aligned under the icon and shaded like a hovered
-button.
+The agents panel's bar ends the same way in two icon tabs, each in a
+cell of its own after ARCHIVE: INTEGRATIONS' `🔌`, then BENCH's `🔧`
+against the border. Both light as the labelled tabs do when shown or
+under the pointer. While the pointer is over an icon tab, its name
+(`Integrations`, `Bench`, `Host`) shows on the row under the bar,
+right-aligned under the icon and shaded like a hovered button.
 
 ```text
-│ CHN │ PRJ │AGT │ARC │ 🔧 │
+│ CHN │ PRJ │AGT │ARC │ 🔌 │ 🔧 │
 ```
+
+### Integrations
+
+INTEGRATIONS lists every integration (`docs/integrations.md`). Each is
+a dot, its icon and name, and its description under it, muted; a blank
+row goes between them. The dot is its state: `●` in `success`
+connected, `○` in `muted` not connected, `●` in `error` failed, `●` in
+`warning` while a Connect or Test runs. The selected one, its name bold,
+also shows its status (in `success` connected, `error` failed, else
+`muted`), its last action's result, what it provides, and its actions
+in the primary colour, flowing onto more rows in a narrow column:
+
+```text
+ ● ⑂ GitHub
+     Repositories, pull requests and pushes
+     gh login; GitHub App set for cloud pushes
+     signed in as octocat
+     Provides  pull requests on the REPO tab
+     Connect  Configure  Test
+     Disconnect
+
+ ○ ☁ boxd
+     Cloud machines for cloud agents
+```
+
+A click on an action runs it, and so do `c` `e` `t` `d`. Connect asks
+for the key in the input, masked like a password; a CLI login says what
+to run instead.
 
 ### Panel Bodies
 
@@ -327,8 +356,28 @@ under a fold arrow, then the timeline, newest first.
 ├──────────────────────────────────────────────┤
 │  →  Add a follow-up                          │
 └──────────────────────────────────────────────┘
- qwen3:4b · 23% context used · 2 calls  ● Ready
+ qwen3:4b · ◔ 23% context used · 2 calls  ● Ready
 ```
+
+- **Context ring**: with the model's window known, the footer's context
+  share leads with a ring that fills clockwise by quarters: `○` up to
+  12%, `◔` to 37%, `◑` to 62%, `◕` to 87%, then `●`. It takes the share's
+  colour: `muted`, `warning` from 75%, `error` from 90%. A click on it,
+  or `/context`, opens the **CONTEXT** panel, a modal whose meta line
+  repeats the ring and share (`◔ 25% of 200k`). The panel has three
+  sections:
+  - **USED**: the model's own count of the last call, with a stacked bar
+    as wide as the body.
+  - **PARTS**: one row per part with any tokens: system prompt, tools,
+    MCP tools, subagents, skills, messages, free space. Each row is the
+    part's `■` in its colour, its name, its tokens and its share of the
+    window in `muted`. The bar draws each part's share in the same
+    colour (`secondary`, `primary`, `pending`, `warning`, `text`,
+    `success`), and free space as `░` in `faint`.
+  - **PROJECT INSTRUCTIONS**: the instruction files, when known.
+
+  Before any call has been counted, USED is the loop's estimate, and it
+  says so. `/context text` writes the old report into the chat.
 
 - The conversation is inset two columns, starts a row below the border
   and runs at most 110 columns wide.
@@ -573,5 +622,6 @@ window tab is the status accent. It draws `⬢ ☐ ☒ ▣` itself, since Geist
 Mono has no glyphs for them, and HOST's `🖥` as a square box left of the
 `*` box with a screen on a stand centered in it, across and down, and
 BENCH's `🔧` as a square box at the agents bar's end with an upright
-open-end wrench centered in it. Hovering either shows its name in a box
+open-end wrench centered in it, and INTEGRATIONS' `🔌` as the same box
+just left of it with an upright plug (two prongs, a body and a cord). Hovering either shows its name in a box
 under it, over the grid.

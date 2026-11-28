@@ -238,7 +238,7 @@ fn test_context_and_cost_commands_write_to_the_chat() {
         ..ContextView::default()
     }));
 
-    run_slash(&mut app, "/context");
+    run_slash(&mut app, "/context text");
     run_slash(&mut app, "/cost");
     let texts: Vec<String> = app
         .messages()

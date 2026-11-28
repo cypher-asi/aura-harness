@@ -1,10 +1,15 @@
 //! Switching which agent is on screen: the chats and drafts of the agents
 //! not shown, and how far the chat on screen is in getting its history.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use super::{agent_views, queue_panel, side_scope};
+
+/// Agents most recently on screen whose chats are kept whole off screen,
+/// so going back and forth between a few costs no reload (see
+/// `agent_views::shed`).
+pub(crate) const KEPT_VIEWS: usize = 4;
 
 /// The state kept while switching which agent is on screen.
 pub(crate) struct AgentSwitch {
@@ -31,6 +36,12 @@ pub(crate) struct AgentSwitch {
     /// Where the side panel's lists were when the agent just put on
     /// screen was last shown, put back once they are filtered for it
     pub(super) list_places_due: Option<side_scope::ListPlaces>,
+    /// The agents most recently on screen, newest first, whose views are
+    /// kept whole off screen (see `agent_views::shed`)
+    pub(super) recent: VecDeque<String>,
+    /// The agent on screen whose chat was shed and shows only the turn
+    /// running, to ask for its history when the turn ends
+    pub(super) reload_after_turn: Option<String>,
 }
 
 impl Default for AgentSwitch {
@@ -47,6 +58,8 @@ impl Default for AgentSwitch {
             confirmed_agent: String::new(),
             drafts: HashMap::new(),
             list_places_due: None,
+            recent: VecDeque::new(),
+            reload_after_turn: None,
         }
     }
 }

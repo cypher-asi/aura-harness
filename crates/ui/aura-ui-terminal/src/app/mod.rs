@@ -63,6 +63,7 @@ mod chat_hits;
 mod chat_jump;
 pub(crate) mod chat_links;
 mod chat_view;
+mod context_panel;
 mod detail;
 mod detail_state;
 mod hit_targets;
@@ -113,6 +114,7 @@ use crate::{
 use account::Account;
 use agent_switch::AgentSwitch;
 pub use approval::PendingApproval;
+pub(crate) use apps::integrations::IntegrationButton;
 #[cfg(test)]
 pub(crate) use apps::HistoryKind;
 pub use apps::{
@@ -223,12 +225,16 @@ pub enum AppState {
     LoginPassword,
     /// Plan link flow: waiting for the pasted sign-in code
     LinkCode,
+    /// The Integrations panel asked for a key or a setting's value
+    IntegrationInput,
     /// Model selector overlay is open
     SelectingModel,
     /// Folder browser for a new project is open
     SelectingFolder,
     /// A project's details are shown over the screen
     ShowingProjectInfo,
+    /// Showing what fills the context window
+    ShowingContext,
     /// The channel form is open, making or editing a channel
     ChannelForm,
 }
@@ -339,6 +345,8 @@ pub struct App {
     pub(super) flow: flow::FlowState,
     /// Benchmarks, and the one shown in the BENCH tab
     pub(super) bench: BenchState,
+    /// The Integrations panel's list
+    pub(super) integrations: apps::integrations::IntegrationsState,
     /// Run log shown by the chat panel's LOG tab
     pub(super) log: run_log::LogState,
 }

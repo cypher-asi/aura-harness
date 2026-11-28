@@ -1,10 +1,9 @@
 //! Integration tools as agent tools: [`IntegrationTool`] is an
 //! `aura-exec-tools` [`Tool`] named `<id>_<tool>`.
 //!
-//! The kernel's mode gate does not know these names, so it treats them
-//! as network tools: they run in agent mode only, whatever their
-//! [`crate::ToolEffect`]. Letting `Read` tools run in plan and ask mode
-//! needs the gate to learn them (`docs/integrations.md`, later work).
+//! The kernel's mode gate learns these names from the app, by
+//! [`crate::ToolEffect`]: `Read` tools run in plan and ask mode and
+//! don't ask; the others are network tools, agent mode only.
 
 use crate::id::IntegrationId;
 use crate::manifest::{Manifest, ToolSpec};

@@ -101,6 +101,16 @@ fn fill_agents(app: &mut App, tab: AgentsTab) -> List {
                 .collect();
             app.process_command(UiCommand::SetArchivedAgents(archived));
         }
+        AgentsTab::Integrations => {
+            let integrations = (0..ROWS)
+                .map(|n| crate::events::IntegrationView {
+                    id: format!("svc{n}"),
+                    name: format!("Service {n:02}"),
+                    ..crate::events::IntegrationView::default()
+                })
+                .collect();
+            app.process_command(UiCommand::SetIntegrations(integrations));
+        }
     }
     app.show_agents_tab(tab);
     app.focus = PanelFocus::Swarm;
@@ -110,6 +120,7 @@ fn fill_agents(app: &mut App, tab: AgentsTab) -> List {
         AgentsTab::Roster => |app| Some(app.definitions.selected),
         AgentsTab::Bench => |app| Some(app.selected_bench()),
         AgentsTab::Archive => |app| Some(app.archived.selected),
+        AgentsTab::Integrations => |app| Some(app.selected_integration()),
     };
     List {
         name: format!("{tab:?}"),
@@ -353,12 +364,13 @@ fn fill_dialog(app: &mut App, dialog: Dialog, dir: &std::path::Path) -> List {
             app.show_project_info("p1");
         }
         Dialog::ChannelForm => app.start_new_channel(),
+        Dialog::Context => drop(app.handle_command("/context")),
     }
     let highlight: fn(&App) -> Option<usize> = match dialog {
         Dialog::ModelSelector => |app| Some(app.model_picker().cursor()),
         Dialog::FolderPicker => |app| app.folder_picker().map(|picker| picker.selected()),
         // A document that scrolls, a page of facts, a form.
-        Dialog::Help | Dialog::ProjectInfo | Dialog::ChannelForm => |_| None,
+        Dialog::Help | Dialog::ProjectInfo | Dialog::ChannelForm | Dialog::Context => |_| None,
     };
     List {
         name: format!("{dialog:?}"),

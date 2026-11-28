@@ -38,14 +38,17 @@ async fn serve(status: u16, body: &'static str) -> String {
 }
 
 #[test]
-fn github_and_boxd_are_listed_through_the_registry() {
+fn github_boxd_and_runpod_are_listed_through_the_registry() {
     let registry = registry(builtin(BuiltinOptions::default()));
     let listed: Vec<(&str, &str)> = registry
         .list()
         .iter()
         .map(|m| (m.id.as_str(), m.name.as_str()))
         .collect();
-    assert_eq!(listed, [("github", "GitHub"), ("boxd", "boxd")]);
+    assert_eq!(
+        listed,
+        [("github", "GitHub"), ("boxd", "boxd"), ("runpod", "Runpod")]
+    );
     let github = registry.get("github").unwrap().manifest();
     assert!(matches!(&github.auth, AuthKind::CliLogin { login, .. } if login == "gh auth login"));
     assert_eq!(github.auth.key().unwrap().env, ["GH_TOKEN", "GITHUB_TOKEN"]);
