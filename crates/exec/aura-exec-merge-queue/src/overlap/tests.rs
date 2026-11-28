@@ -92,7 +92,6 @@ fn open_work_is_the_latest_of_each_branch_not_yet_merged() {
     assert_eq!(branches, ["aura/failed", "aura/queued"]);
 }
 
-
 #[test]
 fn overlaps_share_files_someone_writes_with_other_owners_only() {
     let subject = work(

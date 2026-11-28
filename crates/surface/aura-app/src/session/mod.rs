@@ -196,7 +196,8 @@ async fn open_workspace(
     // The registry lives in the record store's database, so open that
     // first: RocksDB allows one handle per process on it.
     let store_path = session_helpers::resolve_store_path(&data_dir);
-    let store = session_helpers::open_store(&store_path)
+    let store = crate::local_store::open(&data_dir, &store_path)
+        .await
         .with_context(|| format!("opening {}", store_path.display()))?;
     let agents = aura_store_db::AgentStore::for_store(&store);
     let mut registry =

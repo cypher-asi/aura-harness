@@ -30,6 +30,7 @@ pub mod file_checkpoints;
 mod harness;
 pub mod headless;
 pub mod isolation;
+pub mod local_store;
 mod long_run;
 pub mod model_selection;
 pub mod priority;

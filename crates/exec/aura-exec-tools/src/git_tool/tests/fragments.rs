@@ -17,7 +17,11 @@ fn request(message: &str) -> ShipRequest<'_> {
 /// and a `changelog.d/` folder when `fragments` is set.
 async fn repo_with_changelog(fragments: bool) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
     let (parent, repo, origin) = repo_with_bare_origin().await;
-    std::fs::write(repo.join("CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n").unwrap();
+    std::fs::write(
+        repo.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n",
+    )
+    .unwrap();
     if fragments {
         std::fs::create_dir(repo.join("changelog.d")).unwrap();
         std::fs::write(repo.join("changelog.d/README.md"), "How\n").unwrap();
