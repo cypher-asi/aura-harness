@@ -39,6 +39,21 @@ fn noop_script(dir: &std::path::Path) -> PathBuf {
     p
 }
 
+/// How the hook runs `script`. On Unix through `sh`, which only reads
+/// it: executing a file this process just wrote races with other tests
+/// forking meanwhile, whose children briefly hold it open for writing,
+/// and the exec then fails with "text file busy" (it failed a merge queue
+/// run so). On Windows the script itself.
+#[cfg(unix)]
+fn noop_command(script: &std::path::Path) -> (String, Vec<String>) {
+    ("sh".into(), vec![script.to_string_lossy().into_owned()])
+}
+
+#[cfg(windows)]
+fn noop_command(script: &std::path::Path) -> (String, Vec<String>) {
+    (script.to_string_lossy().into_owned(), Vec::new())
+}
+
 #[test]
 fn engine_fires_event_with_no_registrations_returns_empty_summary() {
     let engine = HookEngine::default();
@@ -59,13 +74,14 @@ fn engine_fires_event_with_no_registrations_returns_empty_summary() {
 fn engine_fires_event_with_env_injection() {
     let dir = TempDir::new().expect("temp dir");
     let script = noop_script(dir.path());
+    let (command, args) = noop_command(&script);
 
     let engine = HookEngine::default();
     engine.register(RegisteredHook {
         plugin_id: "test-plug".into(),
         event: HookEvent::SessionStart,
-        command: script.to_string_lossy().into_owned(),
-        args: vec![],
+        command,
+        args,
         plugin_root: dir.path().to_path_buf(),
         env: BTreeMap::new(),
     });

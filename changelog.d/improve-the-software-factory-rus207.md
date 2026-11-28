@@ -126,3 +126,12 @@
     like tests.
   - A wrong match: the `changes.rs` check read flags such as `--binary`
     as git subcommands.
+
+### A plugin hook test no longer fails at random
+
+##### Fixed
+
+- `hook_event_smoke::engine_fires_event_with_env_injection` failed a
+  merge queue run under the full test load: it ran a script it had just
+  written, which fails with "text file busy" while another test's fork
+  briefly holds the file. The test now runs the script through `sh`.
