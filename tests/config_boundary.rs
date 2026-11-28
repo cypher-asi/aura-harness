@@ -221,10 +221,7 @@ fn visit_rust_sources(root: &Path, visitor: &mut dyn FnMut(&Path, &str)) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if path
-                .file_name()
-                .is_some_and(|n| n == "target" || n == ".aura-shared-target")
-            {
+            if path.file_name().is_some_and(|n| n == "target") {
                 continue;
             }
             visit_rust_sources(&path, visitor);

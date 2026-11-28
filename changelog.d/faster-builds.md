@@ -14,3 +14,7 @@
 - The everyday commands in `docs/development.md` and `.cursor/rules.md`
   drop `--all-features`, which rebuilt the whole workspace only to add the
   TypeScript bindings export.
+- Each checkout builds into its own `target/` instead of a folder shared
+  by every checkout, so worktrees building at once no longer wait on each
+  other or pick up each other's builds. Run `scripts/setup-sccache.sh`
+  once per machine to share compiled dependencies between checkouts.
