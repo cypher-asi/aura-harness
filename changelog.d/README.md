@@ -23,6 +23,12 @@ newest first (by when git added each fragment). `aura changelog --write`
 puts them at the top of `[Unreleased]` in `CHANGELOG.md` and deletes the
 fragments; commit both in one commit.
 
+An entry lives in one place. `aura changelog --check` fails, and so
+does the repo test `tests/changelog_fragments.rs`, when a fragment's
+`### ` title is also an entry under `[Unreleased]` in `CHANGELOG.md`;
+preview and `--write` refuse it too. Fix it by deleting the entry from
+`CHANGELOG.md` and keeping the fragment.
+
 `git_ship` stops before pushing a branch that edits `CHANGELOG.md` in a
 repo with this folder, unless the same branch deletes fragments (a
 release). See `docs/development.md`.

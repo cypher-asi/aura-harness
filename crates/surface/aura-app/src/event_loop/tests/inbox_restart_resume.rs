@@ -5,9 +5,8 @@
 use super::inbox::{assign_footer, assign_footer_asking, channel_with_member, code, SLOW_FOOTER};
 use super::inbox_restart::restart;
 use super::*;
-use crate::cloud::hub::RUN_GONE;
 use crate::cloud::RemoteEvent;
-use crate::event_loop::cloud::reattach::follow_events;
+use crate::event_loop::cloud::follow::{follow_events, mark_running};
 use crate::event_loop::inbox::{self as owed, HubLink, PeerHooks, THREAD_REQUESTS};
 use crate::event_loop::subagents::lock;
 use crate::event_loop::turns::{Prompt, Work};
@@ -359,11 +358,16 @@ async fn a_cloud_turn_followed_after_a_restart_reports_when_it_ends() {
     assert!(report.prompt.ends_with(&task_report_line("3", true)));
 }
 
+/// How the cloud hub's follow ends a turn that ended while no app
+/// watched it and left no reply ([`crate::cloud::CloudHub::follow_turn`]).
+const ENDED_UNSEEN: &str = "it ended while no app watched it, without a reply";
+
 #[tokio::test]
-async fn a_cloud_turn_whose_run_is_gone_reports_if_it_finished_else_carries_on() {
+async fn a_cloud_turn_that_ended_unseen_reports_if_it_replied_else_carries_on() {
+    // A reply in its record: the follow ends it as done.
     let finished = vec![Message::assistant("Footer fixed.".to_string())];
     let (coordinator, sent, owed) =
-        followed(finished, vec![RemoteEvent::Failed(RUN_GONE.into())]).await;
+        followed(finished, vec![RemoteEvent::Done(Box::default())]).await;
     assert_eq!(owed, 0);
     let [report] = sent.try_into().unwrap();
     assert_eq!(report.to, coordinator);
@@ -381,12 +385,78 @@ async fn a_cloud_turn_whose_run_is_gone_reports_if_it_finished_else_carries_on()
             input: serde_json::json!({ "path": "footer.html" }),
         }],
     )];
-    let (_, sent, owed) = followed(mid_tool, vec![RemoteEvent::Failed(RUN_GONE.into())]).await;
+    let (_, sent, owed) = followed(mid_tool, vec![RemoteEvent::Failed(ENDED_UNSEEN.into())]).await;
     assert_eq!(owed, 1, "not given up");
+    assert!(
+        !sent.iter().any(|n| n.inbox.is_some()),
+        "no report: {:?}",
+        sent.iter().map(|n| &n.prompt).collect::<Vec<_>>()
+    );
     assert!(
         sent.iter()
             .any(|n| n.inbox.is_none() && n.prompt == "Carry on: the app restarted."),
         "{:?}",
         sent.iter().map(|n| &n.prompt).collect::<Vec<_>>()
     );
+}
+
+#[tokio::test]
+async fn a_cloud_turn_whose_stream_dropped_is_followed_once_and_reports_once_after_reopening() {
+    let (fixture, _commands) = fixture();
+    let coordinator = channel_with_member(&fixture).await;
+    let member = fixture.second;
+    let mut notices = fixture.hub.take_notices();
+    let mut b = borrowed(&fixture);
+    let mut state = loop_state(&fixture, &mut b);
+    owed::restore_saved(&mut state).await;
+    assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
+    let assignment = notices.try_recv().unwrap();
+    owed::delivered(&state.hub, member, &assignment.prompt);
+    let reply = vec![
+        Message::user(assignment.prompt.clone()),
+        Message::assistant("Footer fixed.".to_string()),
+    ];
+    let checkpoint = SessionCheckpoint::new(1_000, 0, reply, Vec::new(), SessionUsage::default());
+    let sessions = state.hub.factory.checkpoints.clone().unwrap();
+    sessions.save(member, &checkpoint).await.unwrap();
+
+    // Its cloud turn runs as the app quits; the new process holds none.
+    mark_running(&state, member, true);
+    let resume = restart(&mut state, &mut notices).await;
+    mark_running(&state, member, false);
+    assert_eq!(state.hub.inbox.owed_by(member), 1);
+
+    // The cloud hub's follow takes the turn up as the hub comes up,
+    // before the resume step runs.
+    let mut ended = state.cloud.take_ended();
+    let (tx, rx) = mpsc::channel(16);
+    follow_events(&state, member, rx, "Carry on: the app restarted.".into()).await;
+    owed::resume_saved(&mut state, resume).await;
+    assert!(!state.hub.is_running(member), "not run a second time here");
+    assert!(notices.try_recv().is_err(), "not asked to carry on");
+
+    // Its stream dropped and was attached to again, then it ends.
+    for event in [
+        RemoteEvent::Status("Reconnecting to the cloud machine".into()),
+        RemoteEvent::Copied,
+        RemoteEvent::Done(Box::default()),
+    ] {
+        tx.send(event).await.unwrap();
+    }
+    drop(tx);
+    let end = tokio::time::timeout(Duration::from_secs(10), ended.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    crate::event_loop::cloud::handle_ended(&mut state, end).await;
+
+    let sent: Vec<notices::Notice> = std::iter::from_fn(|| notices.try_recv().ok()).collect();
+    let [report] = sent.try_into().unwrap();
+    assert_eq!(report.to, coordinator);
+    assert!(
+        report.prompt.ends_with(&task_report_line("3", true)),
+        "{}",
+        report.prompt
+    );
+    assert_eq!(state.hub.inbox.owed_by(member), 0);
 }

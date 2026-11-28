@@ -34,7 +34,6 @@ use file::{SavedNotice, SavedRunning, Snapshot};
 use snapshot::LoopPart;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::Notify;
 
 mod file;
 mod queue_items;
@@ -44,7 +43,7 @@ mod snapshot;
 mod tests;
 
 pub(crate) use file::SAVED_FILE;
-pub(in crate::event_loop) use resume::resume_saved;
+pub(in crate::event_loop) use resume::{resume_prompt_for, resume_saved};
 pub(in crate::event_loop) use snapshot::Resume;
 
 /// Where the inbox is kept, what was last written there, and what is
@@ -63,27 +62,12 @@ pub(crate) struct Keeper {
     outbox: Mutex<Vec<SavedNotice>>,
     /// The loop's part as of its last save
     loop_part: Mutex<LoopPart>,
-    /// Wakes the loop to save: a cloud turn's run started
-    poke: Arc<Notify>,
 }
 
 impl Keeper {
     /// The next write's number.
     fn next_write(&self) -> u64 {
         self.handed.fetch_add(1, Ordering::Relaxed) + 1
-    }
-}
-
-impl Inbox {
-    /// What wakes the loop to save, for a cloud turn to say its run
-    /// started.
-    pub(crate) fn save_poke(&self) -> Arc<Notify> {
-        Arc::clone(&self.saved.poke)
-    }
-
-    /// Wait until something asks the loop to save ([`Self::save_poke`]).
-    pub(crate) async fn save_poked(&self) {
-        self.saved.poke.notified().await;
     }
 }
 
@@ -210,18 +194,16 @@ fn loop_part(state: &LoopState<'_>) -> LoopPart {
         .map(|agent| SavedRunning {
             agent: agent.to_hex(),
             cloud: false,
-            run: None,
         })
         .collect();
     running.extend(
         state
             .cloud
-            .turns_under_way()
+            .cloud_turn_agents()
             .into_iter()
-            .map(|(agent, run)| SavedRunning {
+            .map(|agent| SavedRunning {
                 agent: agent.to_hex(),
                 cloud: true,
-                run,
             }),
     );
     running.sort_by(|a, b| a.agent.cmp(&b.agent));

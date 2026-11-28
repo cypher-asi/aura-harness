@@ -182,10 +182,7 @@ fn a_tree_row_keeps_its_width_with_the_plan_badge_and_drops_it_when_too_narrow()
     use crate::components::{cell_style, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE};
     let theme = test_theme();
     assert_eq!(display_width(PLAN_BADGE), PLAN_BADGE_WIDTH);
-    let badge = RowBadge {
-        text: PLAN_BADGE,
-        color: theme.colors.success,
-    };
+    let badge = RowBadge::new(PLAN_BADGE, theme.colors.success);
     let row = |width: usize, badge: Option<RowBadge<'_>>| {
         let cell = cell_style(&theme, CellState::Normal, Style::default());
         let icon = StatusIcon::new("", theme.colors.muted);

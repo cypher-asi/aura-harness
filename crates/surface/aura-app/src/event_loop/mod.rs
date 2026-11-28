@@ -392,7 +392,6 @@ async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
             Some(outcome) = inbox.link_rx.recv() => {
                 auth::handle_link_outcome(state, outcome).await;
             }
-            () = hub.inbox.save_poked() => {}
             () = inbox.quit.cancelled() => break,
             event = state.events.recv() => {
                 let Some(event) = event else { break };

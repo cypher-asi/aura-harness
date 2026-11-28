@@ -3,10 +3,8 @@
 
 pub(in crate::renderer) use super::drop_marks::DROP_RAIL;
 use super::drop_marks::{drop_line_at, mark_drop};
-use super::{draw_list, split_pinned, working_icon, FAILED_ICON};
-use crate::components::{
-    cell_style, format_ago, list_row, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE,
-};
+use super::{agent_badge, draw_list, split_pinned, working_icon, FAILED_ICON};
+use crate::components::{cell_style, format_ago, list_row, tree_row, CellState, StatusIcon};
 use crate::renderer::chrome::ScrollView;
 use crate::{
     animation::AURA_WIDTH,
@@ -342,7 +340,7 @@ impl<'s> Swarm<'s> {
         });
         let buttons: &[_] = if state.pointer_on_row { &buttons } else { &[] };
         let cloud = app.cloud_badge(&agent.id);
-        let badge = self.agent_badge(agent.plan_mode, cloud.as_ref());
+        let badge = agent_badge(self.theme, agent.plan_mode, cloud.as_ref());
         let end = AgentRowEnd::agent(ago.as_deref());
         tree_row(
             self.width,
@@ -376,27 +374,6 @@ impl<'s> Swarm<'s> {
             StatusIcon::new(FAILED_ICON, crate::renderer::failure_color(self.theme))
         } else {
             StatusIcon::new(marker.unwrap_or(""), self.theme.colors.muted)
-        }
-    }
-
-    /// Plan mode wins the badge; otherwise a cloud agent shows
-    /// a cloud, dimmed with its owner's name for another user's.
-    fn agent_badge<'b>(
-        &self,
-        plan_mode: bool,
-        cloud: Option<&'b (String, bool)>,
-    ) -> Option<RowBadge<'b>> {
-        let colors = &self.theme.colors;
-        if plan_mode {
-            Some(RowBadge {
-                text: PLAN_BADGE,
-                color: colors.success,
-            })
-        } else {
-            cloud.map(|(text, foreign)| RowBadge {
-                text,
-                color: if *foreign { colors.faint } else { colors.muted },
-            })
         }
     }
 

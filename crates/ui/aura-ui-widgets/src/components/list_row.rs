@@ -142,6 +142,26 @@ const MIN_NAME_BESIDE_BADGE: usize = 2;
 pub struct RowBadge<'a> {
     pub text: &'a str,
     pub color: Color,
+    /// A second marker right after it, in its own color: a cloud agent's
+    /// cloud after its plan-mode `(P)`, so neither hides the other
+    pub then: Option<(&'a str, Color)>,
+}
+
+impl<'a> RowBadge<'a> {
+    /// `text` in `color`, with no second marker.
+    #[must_use]
+    pub const fn new(text: &'a str, color: Color) -> Self {
+        Self {
+            text,
+            color,
+            then: None,
+        }
+    }
+
+    /// Columns the badge takes, both markers counted.
+    fn width(&self) -> usize {
+        display_width(self.text) + self.then.map_or(0, |(text, _)| display_width(text))
+    }
 }
 
 /// The text of a projects-list row: its name, then an optional badge and
@@ -215,8 +235,8 @@ fn label_spans<'a>(
     // narrower than its fixed parts has no name columns at all.
     let badge = label
         .badge
-        .filter(|badge| text_width >= display_width(badge.text) + MIN_NAME_BESIDE_BADGE);
-    let badge_width = badge.map_or(0, |badge| display_width(badge.text));
+        .filter(|badge| text_width >= badge.width() + MIN_NAME_BESIDE_BADGE);
+    let badge_width = badge.map_or(0, |badge| badge.width());
     let name_width = text_width.saturating_sub(badge_width);
     let name = truncate_agent_name(label.name, name_width);
     let rest = name_width.saturating_sub(display_width(&name));
@@ -229,6 +249,9 @@ fn label_spans<'a>(
     let mut spans = vec![Span::styled(name, fill.patch(cell.text))];
     if let Some(badge) = badge {
         spans.push(Span::styled(badge.text.to_string(), fill.fg(badge.color)));
+        if let Some((text, color)) = badge.then {
+            spans.push(Span::styled(text.to_string(), fill.fg(color)));
+        }
     }
     spans.extend([
         Span::styled(detail, fill.fg(cell.time)),
