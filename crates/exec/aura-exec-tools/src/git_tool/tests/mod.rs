@@ -109,6 +109,7 @@ fn to_branch(branch: &str) -> PushTarget<'_> {
     }
 }
 
+mod branches;
 mod commit;
 mod fragments;
 mod push;

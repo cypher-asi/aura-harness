@@ -46,6 +46,9 @@ pub struct ShipRequest<'a> {
     pub timeout: Duration,
     /// Budget of the network steps; `fetch` uses its per-attempt timeout.
     pub push_policy: PushPolicy,
+    /// The task, naming the new branch when the current one was merged
+    /// already ([`super::branches::follow_up_branch`])
+    pub task: Option<&'a str>,
 }
 
 /// A finished `git_ship`.
@@ -116,6 +119,10 @@ pub async fn git_ship_impl(
     let folder_lock = ship_lock(workspace);
     let _shipping = folder_lock.lock().await;
     let commit = git_commit_impl(workspace, request.message, request.timeout).await?;
+    let branch = match follow_up(workspace, &branch, &request).await? {
+        Some(moved) => moved,
+        None => branch,
+    };
 
     let has_origin = match remote_url(workspace, request.timeout).await {
         Ok(_) => true,
@@ -153,6 +160,34 @@ pub async fn git_ship_impl(
         head: pushed.head.clone(),
         pushed: Some(pushed),
     })
+}
+
+/// The new branch a ship of follow-up work on a merged `branch` moves
+/// to, checked against the pin; `None` when it stays.
+async fn follow_up(
+    workspace: &Path,
+    branch: &str,
+    request: &ShipRequest<'_>,
+) -> Result<Option<String>, GitToolError> {
+    if remote_url(workspace, request.timeout).await.is_err() {
+        return Ok(None);
+    }
+    let moved = super::branches::follow_up_branch(
+        workspace,
+        branch,
+        request.target,
+        request.task,
+        request.push_policy.per_attempt_timeout,
+    )
+    .await?;
+    if let Some(moved) = &moved {
+        let target = PushTarget {
+            branch: Some(moved),
+            ..request.push
+        };
+        resolve_branch(target, Some(moved))?;
+    }
+    Ok(moved)
 }
 
 /// The lock the ships of `workspace` take, one per folder in this

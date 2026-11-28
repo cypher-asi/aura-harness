@@ -56,7 +56,7 @@ pub fn tool_mode_class(tool: &str) -> Option<ToolModeClass> {
         | "delete_spec"
         | "create_plan" => C::MarkdownDocument,
 
-        "git_commit" => C::WorkspaceMutation,
+        "git_commit" | "git_start_task" => C::WorkspaceMutation,
 
         "run_command" | "job_kill" => C::Subprocess,
 

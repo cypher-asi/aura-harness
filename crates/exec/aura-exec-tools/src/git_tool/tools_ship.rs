@@ -41,6 +41,12 @@ impl Tool for GitShipTool {
                         "type": "string",
                         "description": "Branch the merge queue merges into, pulled before the \
                             push. Defaults to the repo's queue target."
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "A few words naming the task. When your branch was \
+                            merged already, your new commits move to a fresh branch named \
+                            after it."
                     }
                 }
             }),
@@ -69,6 +75,7 @@ impl Tool for GitShipTool {
             },
             timeout: workspace_timeout(ctx),
             push_policy: push_policy_for(ctx),
+            task: opt_str(&args, "task"),
         };
         log_ship_dispatch(ctx, &request);
         match git_ship_impl(&workspace, request).await {

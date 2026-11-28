@@ -148,6 +148,30 @@ How shipping is started:
   says so. `git_ship` calls of one folder also run one at a time, so two
   members never race on its index.
 
+### One branch per task
+
+Code: `crates/exec/aura-exec-tools/src/git_tool/branches.rs` and
+`tools_start.rs`.
+
+- `git_start_task { task }` fetches the target and checks out a new
+  branch `aura/<task slug>-<agent code>` at `origin/<target>`. A name
+  that exists here or on origin gets `-2`, `-3`, ... before the code, so
+  no branch is ever reused. It refuses, naming them, while uncommitted
+  changes or commits origin doesn't have would be left behind.
+- The agent code comes from the machine's pinned branch, else from the
+  current `aura/...-<code>` branch.
+- A cloud machine is still placed on one branch, but may push that one
+  and any other `aura/<slug>-<same code>` (`allowed_by_pin`). Another
+  agent's branch, the protected branches and the queue's target stay
+  refused.
+- **Follow-up work.** When `git_ship` finds the branch's last push is
+  already on the target and new commits sit on top, it moves them to a
+  fresh branch first (named after its optional `task`, else the old
+  name with a number) and ships that. A merged branch is never pushed
+  again.
+- The factory rules and the `<cloud_git>` note tell agents to start each
+  task with `git_start_task` and never to merge a PR themselves.
+
 ## 3. No push skips the queue
 
 Pushes from `run_command` are blocked, not detected: a push that already

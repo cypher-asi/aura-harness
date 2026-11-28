@@ -332,7 +332,7 @@ pub(super) fn resolve_branch(
     };
     check_branch_name(&branch)?;
     if let Some(only) = target.only_branch {
-        if branch != only {
+        if !super::branches::allowed_by_pin(&branch, only) {
             return Err(GitToolError::BranchNotAllowed {
                 branch,
                 allowed: only.to_string(),

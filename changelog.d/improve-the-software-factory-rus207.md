@@ -40,3 +40,20 @@
   queue put a merge on it is still a fast-forward.
 - `run_command` refuses `gh api` calls that merge a PR, as it already
   refused `gh pr merge`.
+
+### Every task gets its own branch
+
+##### Added
+
+- `git_start_task` starts a task on a fresh branch,
+  `aura/<task>-<your code>`, off the latest main. A name already taken
+  gets a number, so no branch is reused, and it refuses while
+  uncommitted or unpushed work would be left behind.
+
+##### Changed
+
+- A cloud machine may push any branch of its own agent, not only the one
+  it was placed on, so it no longer piles every task onto one branch.
+  Another agent's branch and main are still refused.
+- Shipping more work on a branch that was merged already moves the new
+  commits to a fresh branch first.
