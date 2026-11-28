@@ -44,6 +44,7 @@ pub(super) fn typed_items(
             HistoryItem {
                 seq: key,
                 kind: HistoryKind::Typed,
+                planner: None,
                 text: message.content().to_string(),
                 summary: summaries.and_then(|known| known.get(&key)).cloned(),
                 at_ms: message.timestamp_ms(),
@@ -52,8 +53,8 @@ pub(super) fn typed_items(
         .collect()
 }
 
-/// `posts` (newest first) and `typed` (oldest first) in one list, newest
-/// first, leaving out a typed message that is also one of the posts.
+/// `posts` and `typed`, in any order, in one list, newest first, leaving
+/// out a typed message that is also one of the posts.
 pub(super) fn merge_newest_first(
     posts: Vec<HistoryItem>,
     typed: Vec<HistoryItem>,
@@ -69,17 +70,29 @@ pub(super) fn merge_newest_first(
     all
 }
 
-/// Whether `post` and `typed` are one message sent both ways.
+/// Whether `post` and `typed` are one message sent both ways. A `/plan`
+/// request never reaches the coordinator, so it is never one.
 fn is_same_message(post: &HistoryItem, typed: &HistoryItem) -> bool {
-    post.text.trim() == typed.text.trim() && post.at_ms.abs_diff(typed.at_ms) <= SAME_MESSAGE_MS
+    post.kind == HistoryKind::Post
+        && post.text.trim() == typed.text.trim()
+        && post.at_ms.abs_diff(typed.at_ms) <= SAME_MESSAGE_MS
 }
 
 impl App {
     /// The chat block of the typed message keyed `key` sent at `at_ms`,
-    /// when the channel's chat is on screen and holds it: the id of its
-    /// message, the one nearest `at_ms` when it was sent more than once.
-    pub(crate) fn typed_message_block(&self, key: u64, at_ms: u64) -> Option<u64> {
-        self.coordinated_channel()?;
+    /// when its chat is on screen and holds it: the channel's chat, or
+    /// with `member` that member's own. The id of its message, the one
+    /// nearest `at_ms` when it was sent more than once.
+    pub(crate) fn typed_message_block(
+        &self,
+        key: u64,
+        at_ms: u64,
+        member: Option<&str>,
+    ) -> Option<u64> {
+        match member {
+            Some(member) => (self.member_chat()?.id == member).then_some(())?,
+            None => self.coordinated_channel().map(|_| ())?,
+        }
         self.messages
             .iter()
             .filter(|message| is_typed(message) && prompt_key(message.content()) == key)

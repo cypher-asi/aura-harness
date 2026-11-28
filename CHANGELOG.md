@@ -23,6 +23,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   summaries are kept in memory only. The 2,000-entry cap is gone: rows
   are small and a message is still summarized once.
 
+### HISTORY lists your /plan requests
+
+##### Fixed
+
+- A channel's HISTORY tab now lists what you typed with `/plan`. The
+  request goes to a new planner's own chat, not the channel's, so it
+  was missing. It is listed by time among your other messages and
+  summarized the same way when long; Enter or a click opens the
+  planner's chat and jumps to the request there. The channel's chat
+  still doesn't show it, and the coordinator's turns don't read it. If
+  the planner has left the channel, HISTORY says so.
+
 ### Channel members no longer stall silently
 
 ##### Fixed

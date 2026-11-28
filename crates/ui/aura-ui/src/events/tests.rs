@@ -227,6 +227,7 @@ fn channel_views_round_trip_through_json() {
             mentions: vec!["a".into()],
             reply_to: Some(2),
             at_ms: 1_700_000_000_000,
+            planner: Some("p".into()),
         };
         let json = serde_json::to_string(&post).unwrap();
         assert_eq!(
