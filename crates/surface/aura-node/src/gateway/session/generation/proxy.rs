@@ -10,6 +10,7 @@ use super::sse::{
 };
 use super::{GENERATION_CONNECT_TIMEOUT, GENERATION_REQUEST_TIMEOUT};
 use crate::protocol::{GenerationErrorMsg, OutboundMessage};
+use aura_core_types::ErrorChain;
 use futures_util::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -75,6 +76,7 @@ fn build_client(ctx: &GenerationProxyCtx<'_>) -> Option<reqwest::Client> {
     {
         Ok(c) => Some(c),
         Err(e) => {
+            let e = ErrorChain(&e);
             error!(
                 %session_id,
                 %request_id,
@@ -172,6 +174,7 @@ fn handle_send_result(
     match resp {
         Ok(r) => Some(r),
         Err(e) => {
+            let e = ErrorChain(&e);
             error!(
                 %session_id,
                 %request_id,
@@ -403,6 +406,7 @@ impl<'c, 'a> StreamPump<'c, 'a> {
             mode,
             ..
         } = self.ctx;
+        let e = ErrorChain(e);
         error!(
             %session_id,
             %request_id,

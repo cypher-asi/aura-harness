@@ -12,6 +12,7 @@ use crate::anthropic::provider::{millis_as_u64, RequestRoutingContext};
 use crate::anthropic::{AnthropicProvider, ApiError};
 use crate::error::ReasonerError;
 use crate::{ModelContentProfile, ModelRequest};
+use aura_core_types::ErrorChain;
 use serde::Serialize;
 use std::time::{Duration, Instant};
 use tracing::{debug, error};
@@ -263,9 +264,9 @@ fn serialize_body<B: Serialize>(json_body: &B) -> Result<Vec<u8>, ApiError> {
 /// Log and render a send that never got a response, then classify it.
 fn report_transport_failure(e: &reqwest::Error, send_started_at: Instant) -> ApiError {
     let elapsed_ms = millis_as_u64(send_started_at.elapsed().as_millis());
-    error!(error = %e, "Model provider API request failed");
+    error!(error = %ErrorChain(e), "Model provider API request failed");
     let is_timeout = e.is_timeout();
-    let err_str = e.to_string();
+    let err_str = ErrorChain(e).to_string();
     let class = if is_timeout { "timeout" } else { "transport" };
     let status_text = if is_timeout {
         "request timed out"

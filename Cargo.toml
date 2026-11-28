@@ -177,7 +177,12 @@ tokio-util = { version = "0.7", features = ["rt"] }
 
 # HTTP
 axum = { version = "0.7", features = ["ws"] }
-reqwest = { version = "0.11", features = ["json"] }
+# rustls on ring, the TLS stack tonic and tungstenite already use, instead of
+# OpenSSL; native roots trust the same system store OpenSSL did. `charset` and
+# `system-proxy` are defaults that `default-features = false` would drop.
+# `http2` stays off: with it, rustls would negotiate HTTP/2 with every server
+# that offers it, where OpenSSL always spoke HTTP/1.1.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "charset", "system-proxy"] }
 tower = { version = "0.5", features = ["util", "limit"] }
 tower-http = { version = "0.6", features = ["trace", "cors", "timeout", "limit"] }
 tower_governor = { version = "0.5", features = ["axum"] }

@@ -16,6 +16,7 @@ pub use search::{
     SearxngSearch, TavilySearch, WebSearchSettings, WebSearchTool, WEB_SEARCH_TOOL_NAME,
 };
 
+use aura_core_types::ErrorChain;
 use reqwest::Url;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
@@ -187,7 +188,7 @@ pub(crate) fn fetch_client(allow_private: bool) -> Result<reqwest::Client, WebEr
         .redirect(policy)
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|e| WebError::Client(e.to_string()))
+        .map_err(|e| WebError::Client(ErrorChain(&e).to_string()))
 }
 
 /// Client for search APIs.
@@ -198,7 +199,7 @@ pub(crate) fn api_client() -> Result<reqwest::Client, WebError> {
         .redirect(reqwest::redirect::Policy::limited(3))
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|e| WebError::Client(e.to_string()))
+        .map_err(|e| WebError::Client(ErrorChain(&e).to_string()))
 }
 
 /// Read at most `cap` bytes of the body. Returns the bytes and whether

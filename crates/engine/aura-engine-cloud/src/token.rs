@@ -13,6 +13,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aura_config::{BoxdApiKey, BoxdCredential, BoxdToken};
+use aura_core_types::ErrorChain;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
@@ -90,7 +91,9 @@ impl TokenSource {
         let http = reqwest::Client::builder()
             .timeout(EXCHANGE_TIMEOUT)
             .build()
-            .map_err(|err| CloudError::Auth(format!("could not build HTTP client: {err}")))?;
+            .map_err(|err| {
+                CloudError::Auth(format!("could not build HTTP client: {}", ErrorChain(&err)))
+            })?;
         Ok(Self {
             credential,
             exchange_url: exchange_url.into(),
@@ -147,7 +150,9 @@ impl TokenSource {
             .json(&body)
             .send()
             .await
-            .map_err(|err| CloudError::Auth(format!("{}: {err}", self.exchange_url)))?;
+            .map_err(|err| {
+                CloudError::Auth(format!("{}: {}", self.exchange_url, ErrorChain(&err)))
+            })?;
         let status = response.status();
         if !status.is_success() {
             // The body may echo request details; keep only the status.
@@ -156,10 +161,9 @@ impl TokenSource {
                 self.exchange_url
             )));
         }
-        response
-            .json::<ExchangeAnswer>()
-            .await
-            .map_err(|err| CloudError::Auth(format!("unreadable token answer: {err}")))
+        response.json::<ExchangeAnswer>().await.map_err(|err| {
+            CloudError::Auth(format!("unreadable token answer: {}", ErrorChain(&err)))
+        })
     }
 }
 

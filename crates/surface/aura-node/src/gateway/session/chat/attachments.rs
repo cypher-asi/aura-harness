@@ -1,6 +1,7 @@
 //! Turning a [`UserMessage`] and its attachments into a model [`Message`].
 
 use crate::protocol::{MessageAttachment, UserMessage};
+use aura_core_types::ErrorChain;
 use aura_model::{ContentBlock, ImageSource, Message, Role};
 use base64::Engine;
 use tracing::warn;
@@ -104,9 +105,9 @@ async fn fetch_attachment_data(url: &str) -> Result<String, String> {
     }
     let bytes = reqwest::get(url)
         .await
-        .map_err(|e| format!("fetch failed: {e}"))?
+        .map_err(|e| format!("fetch failed: {}", ErrorChain(&e)))?
         .bytes()
         .await
-        .map_err(|e| format!("read failed: {e}"))?;
+        .map_err(|e| format!("read failed: {}", ErrorChain(&e)))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }

@@ -8,7 +8,8 @@ use super::trusted::{select_runtime_integration, trusted_runtime_spec};
 use super::ToolResolver;
 use crate::error::ToolError;
 use aura_core_types::{
-    InstalledToolDefinition, InstalledToolRuntimeExecution, ToolAuth, ToolCall, ToolResult,
+    ErrorChain, InstalledToolDefinition, InstalledToolRuntimeExecution, ToolAuth, ToolCall,
+    ToolResult,
 };
 use aura_exec_traits::ExecuteContext;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
@@ -91,11 +92,14 @@ impl ToolResolver {
                 .await
                 .map_err(|e| ToolError::ExternalToolCallbackUnreachable {
                     url: tool.endpoint.clone(),
-                    reason: e.to_string(),
+                    reason: ErrorChain(&e).to_string(),
                 })?;
         let status = response.status();
         let body = response.text().await.map_err(|e| {
-            ToolError::ExternalToolError(format!("reading installed tool response failed: {e}"))
+            ToolError::ExternalToolError(format!(
+                "reading installed tool response failed: {}",
+                ErrorChain(&e)
+            ))
         })?;
 
         if status.is_success() {

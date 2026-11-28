@@ -8,6 +8,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use aura_core_types::ErrorChain;
 use serde::{Deserialize, Serialize};
 
 /// Where a task's fixture starts from.
@@ -131,7 +132,8 @@ impl RepoSource {
             "https://codeload.github.com/{owner}/{name}/tar.gz/{}",
             self.commit
         );
-        let download = |e: reqwest::Error| io::Error::other(format!("downloading {url}: {e}"));
+        let download =
+            |e: reqwest::Error| io::Error::other(format!("downloading {url}: {}", ErrorChain(&e)));
         let archive = reqwest::get(&url)
             .await
             .and_then(reqwest::Response::error_for_status)

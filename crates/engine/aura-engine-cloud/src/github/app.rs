@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use aura_config::GithubAppConfig;
 use aura_core_types::time::now_ms;
+use aura_core_types::ErrorChain;
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -82,7 +83,7 @@ impl GithubApp {
             .build()
             .map_err(|err| GithubError::Transport {
                 op: "client setup",
-                message: err.to_string(),
+                message: ErrorChain(&err).to_string(),
             })?;
         Ok(Self {
             config,
@@ -170,7 +171,7 @@ impl GithubApp {
             .await
             .map_err(|err| GithubError::Transport {
                 op,
-                message: err.to_string(),
+                message: ErrorChain(&err).to_string(),
             })?;
         let status = response.status().as_u16();
         let body = response
@@ -178,7 +179,7 @@ impl GithubApp {
             .await
             .map_err(|err| GithubError::Transport {
                 op,
-                message: err.to_string(),
+                message: ErrorChain(&err).to_string(),
             })?;
         Ok((status, Zeroizing::new(body)))
     }

@@ -13,6 +13,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use aura_core_types::ErrorChain;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use serde_json::Value;
@@ -70,7 +71,7 @@ impl OpenAiResponsesProvider {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .build()
-            .map_err(|e| ReasonerError::Internal(format!("http client: {e}")))?;
+            .map_err(|e| ReasonerError::Internal(format!("http client: {}", ErrorChain(&e))))?;
         Ok(Self {
             client,
             base_url: base_url.into().trim_end_matches('/').to_string(),
@@ -110,7 +111,7 @@ impl OpenAiResponsesProvider {
         let response = tokio::time::timeout(IDLE_TIMEOUT, builder.send())
             .await
             .map_err(|_| ReasonerError::Timeout)?
-            .map_err(|e| ReasonerError::Request(e.without_url().to_string()))?;
+            .map_err(|e| ReasonerError::Request(ErrorChain(&e.without_url()).to_string()))?;
         if response.status().is_success() {
             return Ok(response);
         }
@@ -246,7 +247,9 @@ fn sse_stream(response: reqwest::Response, model: &str) -> StreamEventStream {
                         .extend(chunk.iter().copied().filter(|&b| b != b'\r'));
                     s.drain_blocks(false);
                 }
-                Ok(Some(Err(e))) => s.end(&format!("ChatGPT stream: {}", e.without_url())),
+                Ok(Some(Err(e))) => {
+                    s.end(&format!("ChatGPT stream: {}", ErrorChain(&e.without_url())));
+                }
                 Ok(None) => s.end("ChatGPT stream ended before the response completed"),
                 Err(_) => s.end("ChatGPT stream idle for too long"),
             }
@@ -288,7 +291,7 @@ impl ModelProvider for OpenAiResponsesProvider {
         let body: Value = response
             .json()
             .await
-            .map_err(|e| ReasonerError::Parse(format!("ChatGPT response: {e}")))?;
+            .map_err(|e| ReasonerError::Parse(format!("ChatGPT response: {}", ErrorChain(&e))))?;
         let events = Decoder::new(request.model.as_str()).response_object(&body);
         Ok(Box::pin(futures_util::stream::iter(
             std::iter::once(meta).chain(events).map(Ok),

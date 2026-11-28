@@ -2,6 +2,7 @@ use super::RequestRoutingContext;
 use crate::anthropic::ApiError;
 use crate::error::ReasonerError;
 use crate::ModelContentProfile;
+use aura_core_types::ErrorChain;
 use std::time::Duration;
 use tracing::error;
 
@@ -298,7 +299,19 @@ pub(super) fn parse_retry_after_prose(text: &str) -> Option<Duration> {
 /// distinguishes transport failures from builder, redirect, status and JSON
 /// decoding failures; the latter are permanent and must not be retried.
 pub(super) fn is_retryable_transport_error(error: &reqwest::Error) -> bool {
-    error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
+    error.is_timeout()
+        || error.is_connect()
+        || error.is_request()
+        || error.is_body()
+        || is_body_read_failure(error)
+}
+
+/// reqwest reports a body that broke off while `json()` or `bytes()` read
+/// it as a decode error, the same kind as JSON that does not parse; only
+/// the latter has a `serde_json::Error` behind it.
+fn is_body_read_failure(error: &reqwest::Error) -> bool {
+    error.is_decode()
+        && std::error::Error::source(error).is_some_and(|source| !source.is::<serde_json::Error>())
 }
 
 pub(super) fn classify_transport_error(error: &reqwest::Error, context: &str) -> ApiError {
@@ -306,7 +319,7 @@ pub(super) fn classify_transport_error(error: &reqwest::Error, context: &str) ->
     let reason = if error.is_timeout() {
         ReasonerError::Timeout
     } else {
-        ReasonerError::Request(format!("{context}: {error}"))
+        ReasonerError::Request(format!("{context}: {}", ErrorChain(error)))
     };
     if retryable {
         ApiError::Transport(reason)

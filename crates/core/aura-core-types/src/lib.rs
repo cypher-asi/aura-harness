@@ -45,7 +45,7 @@ mod types;
 
 pub use ids::{RunId, SessionId, ToolCallId, TransactionId, TurnId, UserId};
 
-pub use error::{AuraError, Result};
+pub use error::{AuraError, ErrorChain, Result};
 pub use ids::{
     ActionId, AgentEventId, AgentId, FactId, Hash, ProcedureId, ProcessId, SPAWN_ZNS_PREFIX,
 };

@@ -39,7 +39,9 @@ use aura_core_types::{
     Action, ActionKind, Effect, EffectKind, EffectStatus, InstalledToolDefinition, ToolCall,
     ToolResult,
 };
-use aura_core_types::{AgentPermissions, AgentToolPermissions, ToolDefinition, UserToolDefaults};
+use aura_core_types::{
+    AgentPermissions, AgentToolPermissions, ErrorChain, ToolDefinition, UserToolDefaults,
+};
 use aura_exec_traits::{ExecuteContext, Executor, ExecutorError, SpawnHook};
 use bytes::Bytes;
 use reqwest::Client;
@@ -101,7 +103,7 @@ impl ToolResolver {
             .build()
             .unwrap_or_else(|e| {
                 warn!(
-                    error = %e,
+                    error = %ErrorChain(&e),
                     "failed to build timed reqwest client for ToolResolver; falling back to default client without timeouts"
                 );
                 Client::new()

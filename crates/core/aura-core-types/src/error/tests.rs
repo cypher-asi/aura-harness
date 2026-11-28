@@ -318,3 +318,36 @@ fn test_from_serde_json_preserves_source() {
         _ => panic!("Expected Deserialization error"),
     }
 }
+
+#[derive(Debug)]
+struct Layer(&'static str, Option<Box<dyn std::error::Error + 'static>>);
+
+impl std::fmt::Display for Layer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for Layer {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.1.as_deref()
+    }
+}
+
+#[test]
+fn error_chain_shows_every_source() {
+    let root = std::io::Error::other("connection refused");
+    let client = Layer("client error (Connect)", Some(Box::new(root)));
+    let err = Layer("error sending request", Some(Box::new(client)));
+    assert_eq!(
+        ErrorChain(&err).to_string(),
+        "error sending request: client error (Connect): connection refused"
+    );
+}
+
+#[test]
+fn error_chain_skips_a_source_its_parent_already_shows() {
+    let root = std::io::Error::other("file not found");
+    let err = Layer("read failed: file not found", Some(Box::new(root)));
+    assert_eq!(ErrorChain(&err).to_string(), "read failed: file not found");
+}

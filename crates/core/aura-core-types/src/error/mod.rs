@@ -261,5 +261,31 @@ impl From<serde_json::Error> for AuraError {
     }
 }
 
+/// Shows an error followed by each of its sources: `outer: inner: root`.
+///
+/// reqwest and hyper keep the cause of a failed request (a refused
+/// connection, a DNS or TLS failure, the JSON error behind a decode
+/// failure) in `source()` rather than in their own message, so `{error}`
+/// alone says only that the request failed.
+pub struct ErrorChain<'a>(pub &'a (dyn std::error::Error + 'static));
+
+impl std::fmt::Display for ErrorChain<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut shown = self.0.to_string();
+        f.write_str(&shown)?;
+        let mut source = self.0.source();
+        while let Some(error) = source {
+            let message = error.to_string();
+            // Errors that already print their source would show it twice.
+            if !shown.ends_with(&message) {
+                write!(f, ": {message}")?;
+            }
+            shown = message;
+            source = error.source();
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use aura_core_auth::{CredentialResolver, InferenceCredential, ProviderKind};
+use aura_core_types::ErrorChain;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
@@ -109,7 +110,7 @@ fn list_client() -> Result<reqwest::Client, ReasonerError> {
     reqwest::Client::builder()
         .timeout(LIST_TIMEOUT)
         .build()
-        .map_err(|e| ReasonerError::Internal(format!("http client: {e}")))
+        .map_err(|e| ReasonerError::Internal(format!("http client: {}", ErrorChain(&e))))
 }
 
 fn with_credential_headers(
@@ -131,7 +132,7 @@ async fn fetch_list<T: DeserializeOwned>(
     let response = request
         .send()
         .await
-        .map_err(|e| ReasonerError::Request(e.without_url().to_string()))?;
+        .map_err(|e| ReasonerError::Request(ErrorChain(&e.without_url()).to_string()))?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -143,7 +144,7 @@ async fn fetch_list<T: DeserializeOwned>(
     response
         .json()
         .await
-        .map_err(|e| ReasonerError::Parse(format!("{label}: {e}")))
+        .map_err(|e| ReasonerError::Parse(format!("{label}: {}", ErrorChain(&e))))
 }
 
 #[derive(Deserialize)]

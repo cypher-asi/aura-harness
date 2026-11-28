@@ -4,6 +4,7 @@
 use crate::error::IntegrationError;
 use crate::id::IntegrationId;
 use crate::secret::Secret;
+use aura_core_types::ErrorChain;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
@@ -175,7 +176,7 @@ impl IntegrationContext {
         // Without the URL: some services take keys in query strings.
         IntegrationError::Network {
             id: self.id.clone(),
-            message: error.without_url().to_string(),
+            message: ErrorChain(&error.without_url()).to_string(),
         }
     }
 }

@@ -8,7 +8,9 @@
 
 use crate::error::ToolError;
 use aura_core_types::{InstalledToolRuntimeAuth, InstalledToolRuntimeIntegration};
-use reqwest::header::{HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT,
+};
 use reqwest::{RequestBuilder, Url};
 use std::collections::HashMap;
 
@@ -29,6 +31,17 @@ pub(super) fn apply_runtime_headers(
         request = request.header(header_name, header_value);
     }
     Ok(request)
+}
+
+/// `request` with `value` as its only `Content-Type`, in place of the JSON
+/// default above and any static one. reqwest's `json()` and `form()` set
+/// the header only when it is missing, so a form body would otherwise go
+/// out labelled as JSON.
+pub(super) fn replace_content_type(request: RequestBuilder, value: &'static str) -> RequestBuilder {
+    request.headers(HeaderMap::from_iter([(
+        CONTENT_TYPE,
+        HeaderValue::from_static(value),
+    )]))
 }
 
 pub(super) fn apply_runtime_auth(

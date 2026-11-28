@@ -25,3 +25,10 @@
   instead of one per file, so `cargo test --workspace` links 18
   integration-test binaries where it linked 63. Run one file's tests with
   `cargo test -p <crate> --test it <file>::`.
+- HTTP requests go through reqwest 0.12 on rustls, the TLS stack the rest
+  of aura already used, instead of reqwest 0.11 on OpenSSL. Builds drop a
+  second copy of hyper, h2 and http along with OpenSSL, and the Docker
+  images no longer install `libssl-dev`. Certificates are still checked
+  against the system's trust store, and requests still use HTTP/1.1.
+  Request errors name their cause (a refused connection, a DNS, TLS or
+  JSON error) as before.

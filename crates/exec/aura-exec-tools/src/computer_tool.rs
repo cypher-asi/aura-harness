@@ -27,7 +27,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use aura_core_types::{Capability, ToolDefinition, ToolResult};
+use aura_core_types::{Capability, ErrorChain, ToolDefinition, ToolResult};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -125,7 +125,7 @@ impl ComputerTool {
             .build()
             .unwrap_or_else(|e| {
                 warn!(
-                    error = %e,
+                    error = %ErrorChain(&e),
                     "failed to build timed computer-use HTTP client; falling back to default"
                 );
                 Client::new()
@@ -356,11 +356,17 @@ impl ComputerTool {
             .send()
             .await
             .map_err(|e| {
-                ToolError::CommandFailed(format!("computer executor request failed: {e}"))
+                ToolError::CommandFailed(format!(
+                    "computer executor request failed: {}",
+                    ErrorChain(&e)
+                ))
             })?;
         let status = resp.status();
         let bytes = resp.bytes().await.map_err(|e| {
-            ToolError::CommandFailed(format!("read computer executor response: {e}"))
+            ToolError::CommandFailed(format!(
+                "read computer executor response: {}",
+                ErrorChain(&e)
+            ))
         })?;
         if bytes.len() > MAX_RESPONSE_BYTES {
             return Err(ToolError::SizeLimitExceeded {
