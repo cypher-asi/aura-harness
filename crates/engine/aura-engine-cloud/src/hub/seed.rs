@@ -55,7 +55,7 @@ impl CloudHub {
     /// Bring the machine's workspace to the project here: the commits
     /// made since the snapshot's `snapshot_commit`, the agent's branch at
     /// HEAD, and the uncommitted changes on top.
-    async fn sync_files(
+    pub(super) async fn sync_files(
         &self,
         request: &PlaceRequest,
         view: &MachineView,
@@ -67,7 +67,6 @@ impl CloudHub {
         boot.fact("snapshot commit", short_commit(snapshot_commit));
         let dir = request.project_dir.clone();
         let base = snapshot_commit.to_string();
-        let with_changes = !request.clean;
         let packed = boot
             .wait(
                 BootStage::SyncFiles,
@@ -76,7 +75,7 @@ impl CloudHub {
                     short_commit(snapshot_commit)
                 ),
                 None,
-                tokio::task::spawn_blocking(move || pack_project(&dir, &base, with_changes)),
+                tokio::task::spawn_blocking(move || pack_project(&dir, &base)),
             )
             .await
             .map_err(|err| {
@@ -84,15 +83,15 @@ impl CloudHub {
             })??;
         boot.fact("head", short_commit(&packed.head));
         let has_bundle = self.upload_commits(view, packed.bundle, boot).await?;
-        let has_delta = self
-            .upload_changes(view, packed.archive, packed.changed, boot)
-            .await?;
+        report_uncommitted(packed.changed, boot);
         let script = workspace::start_branch(&BranchStart {
             branch,
             head: &packed.head,
             remote_url,
             bundle: has_bundle,
-            delta: has_delta,
+            // Never the hub's uncommitted work: a ship on the machine
+            // commits every change it finds, and would push that too.
+            delta: false,
             clean: request.clean,
         })?;
         let stdout = self
@@ -128,32 +127,6 @@ impl CloudHub {
             ),
         );
         self.upload_file(view, workspace::HEAD_BUNDLE, bytes, boot)
-            .await?;
-        Ok(true)
-    }
-
-    /// Upload the archive of `changed` uncommitted files, if any.
-    /// Returns whether there was one.
-    async fn upload_changes(
-        &self,
-        view: &MachineView,
-        archive: Option<Vec<u8>>,
-        changed: usize,
-        boot: &BootReporter,
-    ) -> CloudResult<bool> {
-        let Some(bytes) = archive else {
-            boot.fact("changes", "none uncommitted");
-            return Ok(false);
-        };
-        boot.fact(
-            "changes",
-            format!(
-                "{} uncommitted file(s), {} packed",
-                changed,
-                human_bytes(bytes.len() as u64)
-            ),
-        );
-        self.upload_file(view, workspace::DELTA_ARCHIVE, bytes, boot)
             .await?;
         Ok(true)
     }
@@ -304,6 +277,18 @@ impl CloudHub {
     }
 }
 
+/// Say how many uncommitted files of the hub's project stay on the hub.
+/// Machines start from commits only, so no ship of theirs can push the
+/// hub's unfinished work.
+fn report_uncommitted(changed: usize, boot: &BootReporter) {
+    let said = if changed == 0 {
+        "none uncommitted".to_string()
+    } else {
+        format!("{changed} uncommitted file(s) stay on the hub; commit them to share them")
+    };
+    boot.fact("changes", said);
+}
+
 /// Show what the machine's pull from GitHub did, when it ran.
 fn report_pull(stdout: &str, boot: &BootReporter) {
     if let Some(pulled) = workspace::parse_pulled(stdout) {
@@ -312,9 +297,7 @@ fn report_pull(stdout: &str, boot: &BootReporter) {
 }
 
 /// The project in `dir` packed for a machine whose snapshot is at `base`.
-/// The project at `dir` for a new machine whose snapshot is at `base`:
-/// the commits since, and, `with_changes`, its uncommitted changes.
-fn pack_project(dir: &Path, base: &str, with_changes: bool) -> CloudResult<PackedProject> {
+fn pack_project(dir: &Path, base: &str) -> CloudResult<PackedProject> {
     let head = delta::head_commit(dir)?;
     let bundle = if head == base {
         None
@@ -323,15 +306,9 @@ fn pack_project(dir: &Path, base: &str, with_changes: bool) -> CloudResult<Packe
     };
     let changes = delta::collect(dir, &head)?;
     let changed = changes.files.len() + changes.deleted.len();
-    let archive = if changes.is_empty() || !with_changes {
-        None
-    } else {
-        Some(delta::pack(dir, &changes)?)
-    };
     Ok(PackedProject {
         head,
         bundle,
         changed,
-        archive,
     })
 }

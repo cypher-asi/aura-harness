@@ -69,12 +69,18 @@ pub(crate) fn push_in(command: &UiCommand) -> Option<QueuedPush> {
         } => {
             let at = open.iter().position(|open| open == id)?;
             open.remove(at);
-            success
-                .then(|| QueuedPush::from_tool_output(result))
-                .flatten()
+            success.then(|| push_of(result)).flatten()
         }
         _ => None,
     }
+}
+
+/// The push a push tool's successful `result` reports: its queue marker,
+/// else, from a node before the merge queue, the branch and newest commit
+/// it pushed ([`QueuedPush::from_legacy_output`]), so no push from aura
+/// skips the queue.
+pub(crate) fn push_of(result: &str) -> Option<QueuedPush> {
+    QueuedPush::from_tool_output(result).or_else(|| QueuedPush::from_legacy_output(result))
 }
 
 /// Hand the push in `command` of `agent`'s chat, if any, to the factory.

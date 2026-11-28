@@ -12,11 +12,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ##### Fixed
 
 - A new channel member's cloud machine starts its branch from
-  `origin`'s latest main. Before, it started from this computer's
-  checkout, unpushed commits and uncommitted files included (the
-  machine's base read "aura: hub working tree"), so a member worked on
-  top of other agents' open changes, and its ship carried them. A move
-  you make with `/cloud` still takes your open work along.
+  `origin`'s latest main. Before, it started at this computer's HEAD,
+  with commits not pushed yet, so a member worked on top of other
+  agents' unshipped commits, and its ship carried them. A move you make
+  with `/cloud` still takes your commits along.
 - An agent that already has a cloud machine, one this computer lost
   track of, isn't given a second one: its start fails, in red, naming
   the machine.

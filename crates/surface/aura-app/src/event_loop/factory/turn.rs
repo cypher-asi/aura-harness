@@ -100,7 +100,7 @@ pub(crate) fn pushes(messages: &[Message], prompt: Option<&str>) -> Vec<QueuedPu
     let pushes = turn_calls(messages, prompt)
         .into_iter()
         .filter(|(name, _)| is_push_tool(name))
-        .filter_map(|(_, text)| QueuedPush::from_tool_output(&text))
+        .filter_map(|(_, text)| super::observe::push_of(&text))
         .collect();
     super::observe::distinct(pushes)
 }
@@ -154,6 +154,22 @@ mod tests {
         let calls = turn_calls(&messages, None);
         assert_eq!(calls, [("read_file".to_string(), "x".to_string())]);
         assert!(pushes(&messages, None).is_empty());
+    }
+
+    #[test]
+    fn a_push_from_a_node_before_the_queue_is_queued_without_a_marker() {
+        let old = r#"{"pushed":true,"remote":"origin","branch":"aura/re-re36","commits":[{"sha":"bbb222","message":"m"}]}"#;
+        let mut messages = vec![text(Role::User, "task")];
+        messages.extend(call("1", "git_commit_push", old, false));
+        let found = pushes(&messages, None);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].branch, "aura/re-re36");
+        assert_eq!(found[0].head, "bbb222");
+        assert_eq!(found[0].remote.as_deref(), Some("origin"));
+        // The same text from another tool is not a push.
+        let mut forged = vec![text(Role::User, "task")];
+        forged.extend(call("2", "run_command", old, false));
+        assert!(pushes(&forged, None).is_empty());
     }
 
     #[test]

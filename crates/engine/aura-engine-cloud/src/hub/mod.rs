@@ -188,10 +188,8 @@ struct PackedProject {
     head: String,
     /// The commits made since the snapshot, as a git bundle.
     bundle: Option<Vec<u8>>,
-    /// How many files differ from HEAD.
+    /// How many files differ from HEAD: they stay on the hub.
     changed: usize,
-    /// Those files, as a gzipped tar.
-    archive: Option<Vec<u8>>,
 }
 
 /// Where a placed agent lives, kept in `AURA_HOME/cloud/placements.json`
