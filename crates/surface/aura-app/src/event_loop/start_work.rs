@@ -50,6 +50,8 @@ pub(super) async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, wor
             let Some(launch) = turn_task(state, &mut session, &ui, &cancel, prompt, shown).await
             else {
                 state.idle.insert(agent_id, session);
+                let why = "its local model is not running";
+                super::inbox::give_up_unstarted(state, agent_id, why);
                 return;
             };
             launch
@@ -78,7 +80,8 @@ pub(super) async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, wor
 }
 
 /// The idle session of `agent_id`, or one opened from the record; `None`
-/// after telling `ui` why it couldn't be opened.
+/// after telling `ui` why it couldn't be opened, and those waiting on
+/// the agent's work ([`super::inbox::give_up_unstarted`]).
 async fn take_session(
     state: &mut LoopState<'_>,
     agent_id: AgentId,
@@ -89,6 +92,8 @@ async fn take_session(
         None => match agents::open_session(state, agent_id) {
             Ok(session) => Some(session),
             Err(problem) => {
+                let why = format!("its session could not be opened: {problem}");
+                super::inbox::give_up_unstarted(state, agent_id, &why);
                 ui.send(UiCommand::ShowError(problem)).await;
                 ui.send(UiCommand::Complete).await;
                 None
@@ -150,6 +155,9 @@ async fn turn_task(
     if local_model_unavailable(state, ui).await {
         return None;
     }
+    // What it owes waits on this turn now, not on the user.
+    state.hub.inbox.unpark(agent_id);
+    state.hub.standing.started(agent_id);
     // In the prompt rather than the system prompt, which stays the
     // same between turns so the provider's prompt cache covers it.
     if prompt.mentions {

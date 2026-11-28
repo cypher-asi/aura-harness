@@ -47,7 +47,7 @@ async fn the_hub_hears_when_a_hosted_record_grows() {
     watcher.abort();
 }
 
-fn run_of(
+pub(super) fn run_of(
     state: &RouterState,
     run_id: &str,
     agent: AgentId,

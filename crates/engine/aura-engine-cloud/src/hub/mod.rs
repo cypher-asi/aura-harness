@@ -47,6 +47,7 @@
 //! - [`setup`]: `aura cloud setup`, which puts a boxd API key in
 //!   `AURA_HOME/.env`.
 
+mod busy;
 mod lifecycle;
 mod links;
 mod machine_files;

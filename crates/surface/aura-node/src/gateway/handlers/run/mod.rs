@@ -86,6 +86,7 @@ async fn start_chat_run(
     mut req: RuntimeRequest,
     auth_token: Option<String>,
 ) -> Result<(StatusCode, Json<RuntimeRunResponse>), (StatusCode, Json<serde_json::Value>)> {
+    busy::refuse_busy_agent(&state, &req)?;
     // Make sure the chat-session helpers see the resolved JWT, not
     // whatever the body originally carried (the header version takes
     // precedence per the conventional axum auth flow).
@@ -474,5 +475,6 @@ pub(in crate::gateway) async fn run_stop_handler(
     ))
 }
 
+mod busy;
 #[cfg(test)]
 mod tests;
