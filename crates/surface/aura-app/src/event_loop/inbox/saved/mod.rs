@@ -1,21 +1,24 @@
-//! The inbox kept between runs: the reports agents owe, the inbox
-//! messages waiting in their queues, and the ones sent but not yet given
-//! to their agent, in [`SAVED_FILE`] in the app's data directory.
+//! What agents owe and what they were doing, kept between runs in
+//! [`SAVED_FILE`] in the app's data directory: the reports owed, every
+//! agent's queued work, the inbox mail not yet delivered (the outbox),
+//! the turns under way, the inbox's threads and the agents the user
+//! parked.
 //!
-//! The event loop restores them as it starts ([`restore_saved`], then
-//! [`resume_saved`]), saves them whenever they change ([`keep_saved`]),
-//! and once more as it shuts down ([`flush_saved`]). So after a restart
-//! a member's next turn that ends well still reports to whoever assigned
-//! the work, with the todo it closes, and the stall sweep sees what is
-//! owed. What was settled before the save (answered, given up, dropped
-//! as withdrawn) is not in the file, and an entry taken back stays
-//! withdrawn.
+//! The event loop restores it as it starts ([`restore_saved`]), then
+//! resumes what the restart cut short ([`resume_saved`]): members carry
+//! on on their own, cloud turns are followed again on their machines,
+//! and the reports go back to whoever assigned the work, with the todo
+//! each closes. It saves after every event that changed it, waiting for
+//! the write ([`save_now`]), and the tools that file mail save before
+//! they tell the sender it went ([`persist`]). So a crash loses nothing
+//! a sender was told about.
 //!
 //! # Invariants
 //!
 //! * The file is read and written on blocking threads, never on the
 //!   async runtime's.
-//! * Writes are numbered: an older one never replaces a newer one.
+//! * Writes are numbered under one lock as their snapshot is taken: an
+//!   older snapshot never replaces a newer one.
 //! * Entries for agents that are gone, archived or removed are dropped
 //!   on restore.
 //! * A hub with no file path (most tests) keeps nothing.
@@ -23,32 +26,45 @@
 //! # Failure modes
 //!
 //! See [`file`]: a bad file is an empty inbox, with a warning. A failed
-//! write is logged and retried at the next change.
+//! write is logged and retried at the next change; the tool that asked
+//! for it still succeeds.
 
 use super::*;
-use crate::event_loop::queue::WorkQueues;
-use file::{SavedKind, SavedNotice, SavedOwed, SavedQueued, SavedRequest, Snapshot};
+use file::{SavedNotice, SavedRunning, Snapshot};
+use snapshot::LoopPart;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::Notify;
 
 mod file;
+mod queue_items;
+mod resume;
+mod snapshot;
 #[cfg(test)]
 mod tests;
 
 pub(crate) use file::SAVED_FILE;
+pub(in crate::event_loop) use resume::resume_saved;
+pub(in crate::event_loop) use snapshot::Resume;
 
-/// Where the inbox is kept, and what was last written there.
+/// Where the inbox is kept, what was last written there, and what is
+/// kept only for the file.
 #[derive(Default)]
 pub(crate) struct Keeper {
     /// The file; unset until the loop restores it
     path: OnceLock<PathBuf>,
-    /// The last snapshot handed to a write
+    /// The last snapshot handed to a write; held while one is taken
     last: Mutex<Option<Snapshot>>,
     /// Number of the last write handed out
     handed: AtomicU64,
     /// Number of the last write done; held while writing
     written: Mutex<u64>,
+    /// Inbox mail sent and not yet given to its agent, oldest first
+    outbox: Mutex<Vec<SavedNotice>>,
+    /// The loop's part as of its last save
+    loop_part: Mutex<LoopPart>,
+    /// Wakes the loop to save: a cloud turn's run started
+    poke: Arc<Notify>,
 }
 
 impl Keeper {
@@ -58,20 +74,48 @@ impl Keeper {
     }
 }
 
-/// What a restore puts back, its agents known to be live.
-#[derive(Debug, Default)]
-struct Restored {
-    owed: Vec<(AgentId, Owed)>,
-    queued: Vec<(AgentId, String, Request)>,
-    notices: Vec<Notice>,
+impl Inbox {
+    /// What wakes the loop to save, for a cloud turn to say its run
+    /// started.
+    pub(crate) fn save_poke(&self) -> Arc<Notify> {
+        Arc::clone(&self.saved.poke)
+    }
+
+    /// Wait until something asks the loop to save ([`Self::save_poke`]).
+    pub(crate) async fn save_poked(&self) {
+        self.saved.poke.notified().await;
+    }
 }
 
-/// As the loop starts: read the saved inbox and put it back. Owed
-/// reports go ahead of any the agent owes already, queued messages to
-/// the back of their agents' queues, and undelivered messages are sent
-/// again. Returns the agents that got queued work back, for
-/// [`resume_saved`].
-pub(in crate::event_loop) async fn restore_saved(state: &mut LoopState<'_>) -> Vec<AgentId> {
+/// Send `notice`, an inbox message, to the loop, keeping it in the
+/// outbox until the loop gives it to its agent ([`delivered`]).
+///
+/// # Errors
+/// When the loop is gone: the terminal is shutting down.
+pub(super) fn send(hub: &AgentHub, notice: Notice) -> Result<(), ()> {
+    if let Some(kind) = notice.inbox {
+        lock(&hub.inbox.saved.outbox).push(snapshot::saved_notice(&notice, kind));
+    }
+    hub.notices.send(notice).map_err(|_| ())
+}
+
+/// The loop is giving `notice` to its agent: it leaves the outbox.
+pub(in crate::event_loop) fn delivered(hub: &AgentHub, to: AgentId, prompt: &str) {
+    let to = to.to_hex();
+    let mut outbox = lock(&hub.inbox.saved.outbox);
+    if let Some(at) = outbox
+        .iter()
+        .position(|saved| saved.to == to && saved.prompt == prompt)
+    {
+        outbox.remove(at);
+    }
+}
+
+/// As the loop starts: read the saved file and put it back. Owed
+/// reports go ahead of any the agent owes already, queued work to the
+/// back of its agent's queue, and undelivered mail is sent again. Starts
+/// nothing: [`resume_saved`] does, with what this returns.
+pub(in crate::event_loop) async fn restore_saved(state: &mut LoopState<'_>) -> Resume {
     let path = lock(&state.hub.registry).data_dir().join(SAVED_FILE);
     let keeper = &state.hub.inbox.saved;
     let path = keeper.path.get_or_init(|| path).clone();
@@ -80,169 +124,109 @@ pub(in crate::event_loop) async fn restore_saved(state: &mut LoopState<'_>) -> V
         warn!(error = %e, "Reading the saved inbox failed; starting with an empty one");
         Snapshot::default()
     });
-    let restored = live_entries(&state.hub, snapshot);
-    put_back(state, restored)
-}
-
-/// The entries of `snapshot` whose agents are live on `hub`.
-fn live_entries(hub: &AgentHub, snapshot: Snapshot) -> Restored {
-    let registry = lock(&hub.registry);
-    let live = |hex: &str| {
-        AgentId::from_hex(hex).ok().filter(|id| {
-            registry
-                .find(*id)
-                .is_some_and(|a| !a.archived && !a.removed)
-        })
+    // Until the loop saves its own part, saves off the loop keep these.
+    *lock(&keeper.loop_part) = LoopPart {
+        queued: snapshot.queued.clone(),
+        running: snapshot.running.clone(),
     };
-    let owed = snapshot.owed.into_iter().filter_map(|saved| {
-        let (agent, from) = (live(&saved.agent)?, live(&saved.from)?);
-        Some((agent, owed_of(saved, from)))
-    });
-    let queued = snapshot
-        .queued
-        .into_iter()
-        .filter_map(|saved| Some((live(&saved.agent)?, saved.text, request_of(saved.request))));
-    let notices = snapshot.notices.into_iter().filter_map(|saved| {
-        Some(Notice {
-            to: live(&saved.to)?,
-            shown: saved.shown,
-            prompt: saved.prompt,
-            inbox: Some(kind_of(saved.kind)),
-        })
-    });
-    Restored {
-        owed: owed.collect(),
-        queued: queued.collect(),
-        notices: notices.collect(),
-    }
+    let restored = snapshot::live_entries(&state.hub, snapshot);
+    snapshot::put_back(state, restored)
 }
 
-/// Put `restored` back on the loop of `state`. Returns the agents that
-/// got queued work back.
-fn put_back(state: &mut LoopState<'_>, restored: Restored) -> Vec<AgentId> {
-    let Restored {
-        owed,
-        queued,
-        notices,
-    } = restored;
-    let counts = (owed.len(), queued.len(), notices.len());
-    merge_owed(&state.hub.inbox, owed);
-    let mut agents = Vec::new();
-    for (agent, text, request) in queued {
-        let work = Work::Prompt {
-            prompt: Prompt::inbox(text, request),
-            shown: false,
-        };
-        state.queued.push_back(agent, work);
-        if !agents.contains(&agent) {
-            agents.push(agent);
-        }
-    }
-    for notice in notices {
-        if state.hub.notices.send(notice).is_err() {
-            warn!("A saved inbox message could not be sent again: the terminal is shutting down");
-        }
-    }
-    if counts != (0, 0, 0) {
-        info!(
-            owed = counts.0,
-            queued = counts.1,
-            undelivered = counts.2,
-            "Restored the saved inbox"
-        );
-    }
-    agents
-}
-
-/// Add `restored` to what `inbox` owes, each agent's restored reports
-/// ahead of its own, skipping any it owes already.
-fn merge_owed(inbox: &Inbox, restored: Vec<(AgentId, Owed)>) {
-    let mut state = lock(&inbox.state);
-    let mut by_agent: Vec<(AgentId, Vec<Owed>)> = Vec::new();
-    for (agent, owed) in restored {
-        match by_agent.iter_mut().find(|(id, _)| *id == agent) {
-            Some((_, list)) => list.push(owed),
-            None => by_agent.push((agent, vec![owed])),
-        }
-    }
-    for (agent, mut list) in by_agent {
-        let current = state.owed.remove(&agent).unwrap_or_default();
-        list.retain(|owed| !current.iter().any(|known| known.id == owed.id));
-        list.extend(current);
-        if !list.is_empty() {
-            state.owed.insert(agent, list);
+/// Save if anything changed since the last save, and wait for the
+/// write. The loop runs it after every event.
+pub(in crate::event_loop) async fn save_now(state: &LoopState<'_>) {
+    if let Some(write) = keep_saved(state) {
+        if let Err(e) = write.await {
+            warn!(error = %e, "Saving the inbox did not finish");
         }
     }
 }
 
-/// Once the loop has started: start the work restored for `agents`
-/// that has nothing running, and tell the placed members their peers
-/// now rather than at the first stall sweep.
-pub(in crate::event_loop) async fn resume_saved(state: &mut LoopState<'_>, agents: Vec<AgentId>) {
-    for agent in agents {
-        let busy = state.hub.is_running(agent)
-            || state.cloud.is_running(agent)
-            || state.cloud.is_moving(agent);
-        if !busy {
-            crate::event_loop::start_next(state, agent).await;
-        }
-        crate::event_loop::hud::send_queued(state, agent).await;
-    }
-    crate::event_loop::cloud::refresh_reach(state).await;
-}
-
-/// Save the inbox if it changed since the last save. The write runs on
-/// a blocking thread; the loop needn't wait for it, and gets its handle
-/// only for tests. `None` when nothing is written.
+/// [`save_now`] without waiting: the write's handle, `None` when
+/// nothing changed.
 pub(in crate::event_loop) fn keep_saved(
     state: &LoopState<'_>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    let keeper = &state.hub.inbox.saved;
-    keeper.path.get()?;
-    let snapshot = snapshot(&state.hub.inbox, &state.queued, Vec::new());
-    {
-        let mut last = lock(&keeper.last);
-        if last.as_ref() == Some(&snapshot) {
-            return None;
-        }
-        *last = Some(snapshot.clone());
-    }
-    let number = keeper.next_write();
+    state.hub.inbox.saved.path.get()?;
+    let part = loop_part(state);
+    let (number, snapshot) = take(&state.hub, Some(part))?;
     let hub = Arc::clone(&state.hub);
     Some(tokio::task::spawn_blocking(move || {
         write(&hub.inbox.saved, number, &snapshot);
     }))
 }
 
-/// As the loop shuts down, before its queues are dropped: save the
-/// inbox with the inbox messages still in `notice_rx`, and wait for the
-/// write. Other notices there are dropped, as they would be anyway.
-pub(in crate::event_loop) async fn flush_saved(
-    state: &LoopState<'_>,
-    notice_rx: &mut UnboundedReceiver<Notice>,
-) {
-    let keeper = &state.hub.inbox.saved;
-    if keeper.path.get().is_none() {
+/// As the loop shuts down, before it stops what runs: save, with the
+/// turns still under way, and wait for the write.
+pub(in crate::event_loop) async fn flush_saved(state: &LoopState<'_>) {
+    save_now(state).await;
+}
+
+/// Off the loop, once mail was filed: save the inbox with the loop's
+/// part as of its last save, and wait for the write, so the sender is
+/// told the mail went only once it is on disk.
+pub(super) async fn persist(hub: &Arc<AgentHub>) {
+    let Some((number, snapshot)) = take(hub, None) else {
         return;
-    }
-    let mut undelivered = Vec::new();
-    while let Ok(notice) = notice_rx.try_recv() {
-        if let Some(kind) = notice.inbox {
-            undelivered.push(SavedNotice {
-                to: notice.to.to_hex(),
-                shown: notice.shown,
-                prompt: notice.prompt,
-                kind: saved_kind(kind),
-            });
-        }
-    }
-    let snapshot = snapshot(&state.hub.inbox, &state.queued, undelivered);
-    *lock(&keeper.last) = Some(snapshot.clone());
-    let number = keeper.next_write();
-    let hub = Arc::clone(&state.hub);
+    };
+    let hub = Arc::clone(hub);
     let wrote = tokio::task::spawn_blocking(move || write(&hub.inbox.saved, number, &snapshot));
     if let Err(e) = wrote.await {
-        warn!(error = %e, "The last save of the inbox did not finish");
+        warn!(error = %e, "Saving the inbox did not finish");
+    }
+}
+
+/// Take a snapshot with `part`, or the loop's last one, and its write
+/// number, unless it is what was last written.
+fn take(hub: &AgentHub, part: Option<LoopPart>) -> Option<(u64, Snapshot)> {
+    let keeper = &hub.inbox.saved;
+    keeper.path.get()?;
+    let mut last = lock(&keeper.last);
+    let part = match part {
+        Some(part) => {
+            lock(&keeper.loop_part).clone_from(&part);
+            part
+        }
+        None => lock(&keeper.loop_part).clone(),
+    };
+    let snapshot = snapshot::build(&hub.inbox, &part);
+    if last.as_ref() == Some(&snapshot) {
+        return None;
+    }
+    *last = Some(snapshot.clone());
+    Some((keeper.next_write(), snapshot))
+}
+
+/// The loop's part now: every queue, and the turns under way here and
+/// on cloud machines.
+fn loop_part(state: &LoopState<'_>) -> LoopPart {
+    let items = state.queued.items();
+    let mut running: Vec<SavedRunning> = state
+        .hub
+        .running_agents()
+        .into_iter()
+        .map(|agent| SavedRunning {
+            agent: agent.to_hex(),
+            cloud: false,
+            run: None,
+        })
+        .collect();
+    running.extend(
+        state
+            .cloud
+            .turns_under_way()
+            .into_iter()
+            .map(|(agent, run)| SavedRunning {
+                agent: agent.to_hex(),
+                cloud: true,
+                run,
+            }),
+    );
+    running.sort_by(|a, b| a.agent.cmp(&b.agent));
+    LoopPart {
+        queued: queue_items::saved_items(&items),
+        running,
     }
 }
 
@@ -264,99 +248,13 @@ fn write(keeper: &Keeper, number: u64, snapshot: &Snapshot) {
     }
 }
 
-/// What the file keeps of `inbox`, the inbox messages in `queues`, and
-/// `notices`, in a stable order and within its limits.
-fn snapshot(inbox: &Inbox, queues: &WorkQueues, notices: Vec<SavedNotice>) -> Snapshot {
-    let owed: Vec<SavedOwed> = {
-        let state = lock(&inbox.state);
-        let mut agents: Vec<(&AgentId, &Vec<Owed>)> = state.owed.iter().collect();
-        agents.sort_by_cached_key(|(agent, _)| agent.to_hex());
-        agents
-            .into_iter()
-            .flat_map(|(agent, list)| list.iter().map(|owed| saved_owed(*agent, owed)))
-            .collect()
-    };
-    let mut prompts = queues.inbox_prompts();
-    prompts.sort_by_cached_key(|(agent, _)| agent.to_hex());
-    let queued = prompts
-        .into_iter()
-        .map(|(agent, prompt)| SavedQueued {
-            agent: agent.to_hex(),
-            text: prompt.text.clone(),
-            request: saved_request(prompt.request),
-        })
-        .collect();
-    Snapshot {
-        owed,
-        queued,
-        notices,
-        ..Snapshot::default()
-    }
-    .capped()
-}
-
-fn saved_owed(agent: AgentId, owed: &Owed) -> SavedOwed {
-    SavedOwed {
-        agent: agent.to_hex(),
-        id: owed.id.clone(),
-        kind: saved_kind(owed.kind),
-        from: owed.from.to_hex(),
-        thread: owed.thread.clone(),
-        subject: owed.subject.clone(),
-        todo: owed.todo.clone(),
-        withdrawn: owed.withdrawn,
-    }
-}
-
-fn owed_of(saved: SavedOwed, from: AgentId) -> Owed {
-    Owed {
-        id: saved.id,
-        kind: kind_of(saved.kind),
-        from,
-        thread: saved.thread,
-        subject: saved.subject,
-        todo: saved.todo,
-        withdrawn: saved.withdrawn,
-    }
-}
-
-const fn saved_kind(kind: InboxKind) -> SavedKind {
-    match kind {
-        InboxKind::Assignment => SavedKind::Assignment,
-        InboxKind::Request => SavedKind::Request,
-        InboxKind::Reply => SavedKind::Reply,
-    }
-}
-
-const fn kind_of(kind: SavedKind) -> InboxKind {
-    match kind {
-        SavedKind::Assignment => InboxKind::Assignment,
-        SavedKind::Request => InboxKind::Request,
-        SavedKind::Reply => InboxKind::Reply,
-    }
-}
-
-const fn saved_request(request: Request) -> SavedRequest {
-    match request {
-        Request::New => SavedRequest::New,
-        Request::Build => SavedRequest::Build,
-        Request::Resume => SavedRequest::Resume,
-    }
-}
-
-const fn request_of(request: SavedRequest) -> Request {
-    match request {
-        SavedRequest::New => Request::New,
-        SavedRequest::Build => Request::Build,
-        SavedRequest::Resume => Request::Resume,
-    }
-}
-
 #[cfg(test)]
 impl Inbox {
     /// Forget everything, as a restart does.
     pub(crate) fn forget_all(&self) {
         *lock(&self.state) = State::default();
         *lock(&self.saved.last) = None;
+        lock(&self.saved.outbox).clear();
+        *lock(&self.saved.loop_part) = LoopPart::default();
     }
 }

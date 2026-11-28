@@ -1,10 +1,9 @@
 //! The event loop's side of cloud agents: the footer switch, `/cloud`,
 //! the HOST tab and the turns of agents that run on boxd machines.
 //!
-//! The [`CloudHub`] is built on first use, so a boxd key added to `.env`
-//! (or by `/cloud setup`) works without a restart. Everything slow (a
-//! snapshot build, a hand-off, a turn) runs on a task of its own; the
-//! loop only keeps who is moving and who is working.
+//! The [`CloudHub`] is built on first use, so a boxd key added later
+//! works without a restart. Everything slow (a build, a hand-off, a turn)
+//! runs on a task of its own; the loop keeps who moves and who works.
 //!
 //! ## Invariants
 //!
@@ -66,6 +65,7 @@ mod member_start;
 mod moving;
 mod placement;
 mod publish;
+pub(in crate::event_loop) mod reattach;
 mod spawns;
 #[cfg(test)]
 mod spawns_tests;

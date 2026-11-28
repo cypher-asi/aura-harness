@@ -47,6 +47,7 @@ mod helpers;
 mod inbox;
 mod inbox_mid_turn;
 mod inbox_restart;
+mod inbox_restart_resume;
 mod messages;
 mod open_plan;
 mod provider;
