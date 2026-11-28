@@ -406,6 +406,10 @@ under a fold arrow, then the timeline, newest first.
 │                                                      │
 │  Plans that read like a document                     │
 │                                                      │
+│  created 14:32 · 2h ago  by RUS199 rust-engineer     │
+│  asked by COO2 in #aura                              │
+│  status building 2/5  machine aura-rus199-12b4       │
+│                                                      │
 │  Change the guidance the agent gets for writing...   │
 │                                                      │
 │  TODOS  2/5                                          │
@@ -428,6 +432,17 @@ under a fold arrow, then the timeline, newest first.
   set like a reply. The text uses the chat's own column, with the same
   side padding, width limit and centering, so it does not move sideways
   when a plan opens over the chat.
+- **Plan header**: under the title, after a blank row, come the plan's
+  facts as `label value` pairs. The label is `muted` and the value
+  `secondary`. An id is `muted` and a failed status is `error`. Pairs
+  sit two columns apart. Who and when start one group: created,
+  updated, by, asked by, assigned. Status, machine, branch, PR, project
+  and model start a second group on a row of its own. A pair that does
+  not fit moves to the next row whole, and one wider than the column
+  has its value cut with `…`. Times read `14:32 · 2h ago`, with the date
+  in front when it is not today. A fact with no source is left out, so
+  a plan from before these were recorded shows only its status. The
+  rows stay on the grid, like the `TODOS` label.
 - Flowing text is prose, so the desktop sets it in its proportional face
   with inline code in monospace; code blocks, tables and rules stay on
   the grid.

@@ -7,6 +7,9 @@
 //! │                                                           │
 //! │  Plans that read like a document                          │
 //! │                                                           │
+//! │  created 14:32 · 2h ago  by RUS199 rust-engineer          │
+//! │  status building 2/5  machine local  project aura         │
+//! │                                                           │
 //! │  Change the guidance the agent gets for writing plans...  │
 //! │                                                           │
 //! │  TODOS  2/5                                               │
@@ -36,7 +39,7 @@ use super::markdown::{parse_content_segments, render_markdown_flow, ContentSegme
 use super::plans::{marker, todo_style};
 use super::segments::render_code_segment;
 use super::text::Measure;
-use crate::app::{PlanDoc, ProseRow};
+use crate::app::{PlanDoc, PlanFacts, ProseRow};
 use crate::{App, Theme};
 use ratatui::{
     buffer::Buffer,
@@ -53,14 +56,24 @@ const FOCUS_CONTEXT: usize = 2;
 /// Columns before a todo's text: its box and a space.
 const TODO_INDENT: u16 = 2;
 
-/// Lay `doc` out for `width` columns in `measure`'s face, unless it
-/// already is.
-fn ensure_layout(doc: &mut PlanDoc, width: usize, measure: Measure, theme: &Theme) {
-    let key = (width, measure.is_grid(), theme.name.clone());
+/// Lay `doc` out with its `facts` for `width` columns in `measure`'s
+/// face, unless it already is.
+fn ensure_layout(
+    doc: &mut PlanDoc,
+    (width, facts): (usize, &PlanFacts),
+    measure: Measure,
+    theme: &Theme,
+) {
+    let key = (
+        width,
+        measure.is_grid(),
+        theme.name.clone(),
+        meta::key(facts),
+    );
     if doc.layout.key.as_ref() == Some(&key) {
         return;
     }
-    let laid = layout(doc, width, measure, theme);
+    let laid = layout(doc, (width, facts), measure, theme);
     doc.layout.lines = laid.lines;
     doc.layout.prose = laid.prose;
     doc.layout.todo_rows = laid.todo_rows;
@@ -98,8 +111,13 @@ impl Laid {
     }
 }
 
-/// The rows of `doc` for a panel `width` columns wide.
-fn layout(doc: &PlanDoc, width: usize, measure: Measure, theme: &Theme) -> Laid {
+/// The rows of `doc` with its `facts` for a panel `width` columns wide.
+fn layout(
+    doc: &PlanDoc,
+    (width, facts): (usize, &PlanFacts),
+    measure: Measure,
+    theme: &Theme,
+) -> Laid {
     let width = width.max(1);
     let mut laid = Laid::default();
 
@@ -109,6 +127,7 @@ fn layout(doc: &PlanDoc, width: usize, measure: Measure, theme: &Theme) -> Laid 
     let (lines, prose) =
         render_markdown_flow(&escape_heading(&doc.title), width, title, theme, measure);
     laid.extend(lines, prose);
+    meta::push_facts(&mut laid, facts, width, theme);
 
     if !doc.overview.is_empty() {
         laid.gap();
@@ -267,8 +286,10 @@ pub(super) fn draw_plan(
 ) -> Option<DrawnPlan> {
     let measure = Measure::prose(app.prose_measure(), theme);
     let rows = text_column(area, rows, hosted, theme);
+    let now = chrono::Local::now().fixed_offset();
+    let facts = app.plan_view().map(|doc| app.plan_facts(doc, &now))?;
     let (doc, scroll) = app.plan_view_mut()?;
-    ensure_layout(doc, usize::from(rows.width), measure, theme);
+    ensure_layout(doc, (usize::from(rows.width), &facts), measure, theme);
     let total = doc.layout.lines.len();
     let visible = usize::from(rows.height);
     let max_scroll = total.saturating_sub(visible);
@@ -353,5 +374,9 @@ fn draw_rows(
     prose_rows
 }
 
+mod meta;
+
+#[cfg(test)]
+mod meta_tests;
 #[cfg(test)]
 mod tests;

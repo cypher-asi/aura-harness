@@ -21,7 +21,7 @@ fn texts(lines: &[Line<'_>]) -> Vec<String> {
 fn a_plan_lays_out_as_a_document_without_its_source() {
     let doc = PlanDoc::parse(PLAN, Path::new("/x/a.plan.md"), ".aura/plans/a.plan.md");
     let theme = Theme::cyber();
-    let laid = layout(&doc, 60, Measure::GRID, &theme);
+    let laid = layout(&doc, (60, &PlanFacts::default()), Measure::GRID, &theme);
     let rows = texts(&laid.lines);
     let all = rows.join("\n");
     assert_eq!(rows[0], "Read plans", "{all}");
@@ -66,7 +66,7 @@ fn screen(app: &mut App) -> String {
     screen_at(app, 120)
 }
 
-fn screen_at(app: &mut App, width: u16) -> String {
+pub(super) fn screen_at(app: &mut App, width: u16) -> String {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
     terminal
@@ -83,7 +83,7 @@ fn screen_at(app: &mut App, width: u16) -> String {
         .join("\n")
 }
 
-fn app_with(text: &str) -> (App, tempfile::TempDir) {
+pub(super) fn app_with(text: &str) -> (App, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".aura/plans")).unwrap();
     std::fs::write(dir.path().join(".aura/plans/a.plan.md"), text).unwrap();
