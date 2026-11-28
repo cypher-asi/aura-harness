@@ -940,6 +940,7 @@ dependencies = [
 name = "aura-engine-registry"
 version = "0.1.0"
 dependencies = [
+ "aura-config",
  "aura-context-skills",
  "aura-core-types",
  "aura-exec-tools",

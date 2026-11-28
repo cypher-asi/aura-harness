@@ -27,6 +27,8 @@ uuid = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
+# The skill-size test estimates tokens as the context breakdown does.
+aura-config = { path = "../../config/aura-config" }
 tempfile = { workspace = true }
 
 [lints]
