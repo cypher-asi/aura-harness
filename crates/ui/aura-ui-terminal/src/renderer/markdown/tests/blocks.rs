@@ -70,6 +70,28 @@ fn rules_part_blocks_without_blank_lines() {
 }
 
 #[test]
+fn in_a_reply_each_line_of_text_is_a_paragraph() {
+    let reply = "one\ntwo\n\nthree\n- a\n- b\n> c\n> d\nfour";
+    let (rendered, flow) = super::super::render_markdown_linked(
+        reply,
+        40,
+        (base(), &theme()),
+        Measure::GRID,
+        Breaks::Paragraphs,
+    );
+    assert_eq!(
+        texts(&rendered.lines),
+        ["one", "", "two", "", "three", "", "• a", "• b", "", "│ c", "│ d", "", "four"]
+    );
+    assert_eq!(flow[1], Some(0), "the blank row is prose");
+    assert_eq!(
+        texts(&render("one\ntwo", 40)),
+        ["one", "two"],
+        "elsewhere a line break is a row"
+    );
+}
+
+#[test]
 fn blank_lines_between_blocks_are_prose() {
     let (lines, flow) =
         super::super::render_markdown_flow("text\n- item", 40, base(), &theme(), Measure::GRID);

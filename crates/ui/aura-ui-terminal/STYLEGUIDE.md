@@ -315,7 +315,8 @@ under a fold arrow, then the timeline, newest first.
 ```
 - **User messages**: a `muted` `→ ` prompt, then `foreground` text
 - **Replies**: `text`, list markers `muted`, inline code `secondary` on
-  `surface`
+  `surface`; each line of text is a paragraph, a blank row above it
+  even where the reply put no empty line before it
 - **Fields**: a list item that starts with a short label (`- Path: …`)
   has the label `muted`; blank lines between two such items are not
   drawn, and where the first label of a run of them comes back, a blank

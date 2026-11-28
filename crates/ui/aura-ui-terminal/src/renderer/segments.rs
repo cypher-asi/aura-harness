@@ -1,6 +1,6 @@
 //! Text and code segment rendering for the chat panel.
 
-use super::markdown::{render_markdown_linked, wrap_spans};
+use super::markdown::{render_markdown_linked, wrap_spans, Breaks};
 use super::text::{display_width, wrap_words, Measure};
 use crate::app::format::{format_partial_cost, format_tokens};
 use crate::app::{CodeCopyHit, CopyText, LinkHit};
@@ -162,7 +162,13 @@ pub(super) fn render_text_segment(
     let (prompt, prompt_color, msg_color) = message_style(role, theme);
     if role == MessageRole::Assistant {
         let base_style = Style::default().fg(msg_color);
-        let (markdown, flow) = render_markdown_linked(text, width, (base_style, theme), measure);
+        let (markdown, flow) = render_markdown_linked(
+            text,
+            width,
+            (base_style, theme),
+            measure,
+            Breaks::Paragraphs,
+        );
         lines.extend(markdown.lines);
         return (flow, markdown.links);
     }
@@ -203,7 +209,8 @@ fn user_markdown_lines(
     let indent_cols = u16::try_from(indent).unwrap_or(u16::MAX);
     let base = Style::default().fg(text_color);
     let room = width.saturating_sub(indent).max(1);
-    let (markdown, mut flow) = render_markdown_linked(text, room, (base, theme), measure);
+    let (markdown, mut flow) =
+        render_markdown_linked(text, room, (base, theme), measure, Breaks::Lines);
     let links = markdown
         .links
         .into_iter()

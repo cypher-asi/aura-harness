@@ -33,6 +33,17 @@ pub(crate) use wrap::wrap_spans;
 /// Bullet glyphs by nesting depth, cycling for deeper lists.
 const BULLETS: [&str; 3] = ["•", "◦", "▪"];
 
+/// What a line break between two lines of text means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Breaks {
+    /// The text goes on on the next row, as written
+    Lines,
+    /// The next line is a paragraph of its own, a blank row above it: an
+    /// agent's reply often writes each paragraph on one line, with no
+    /// empty line between them
+    Paragraphs,
+}
+
 /// Render a markdown text segment (no fenced code) into lines that fit
 /// `width` display columns. A `width` of 0 disables wrapping.
 pub fn render_markdown(text: &str, width: usize, base: Style, theme: &Theme) -> Vec<Line<'static>> {
@@ -50,16 +61,20 @@ pub(crate) fn render_markdown_flow(
     theme: &Theme,
     measure: Measure,
 ) -> (Vec<Line<'static>>, Vec<Option<u16>>) {
-    let (rendered, flow) = render_markdown_linked(text, width, (base, theme), measure);
+    let (rendered, flow) =
+        render_markdown_linked(text, width, (base, theme), measure, Breaks::Lines);
     (rendered.lines, flow)
 }
 
-/// [`render_markdown_flow`], with where the links a click opens fell.
+/// [`render_markdown_flow`], with `breaks` saying what a line break
+/// between two lines of text means, and where the links a click opens
+/// fell.
 pub(crate) fn render_markdown_linked(
     text: &str,
     width: usize,
     (base, theme): (Style, &Theme),
     measure: Measure,
+    breaks: Breaks,
 ) -> (Rendered, Vec<Option<u16>>) {
     let expanded: Vec<Cow<'_, str>> = text.lines().map(expand_tabs).collect();
     let lines: Vec<&str> = expanded.iter().map(AsRef::as_ref).collect();
@@ -82,7 +97,7 @@ pub(crate) fn render_markdown_linked(
         } else {
             Block::of(lines[i], previous)
         };
-        let parted = plan[i].gap || Block::parts(previous, block);
+        let parted = plan[i].gap || Block::parts(previous, block, breaks);
         if parted && out.lines.last().is_some_and(|last| last.width() > 0) {
             out.lines.push(Line::default());
             flow.push(Some(0));
@@ -141,10 +156,12 @@ impl Block {
 
     /// Whether a blank row goes between a line of block `previous` and
     /// the next line, of block `next`, when the line before has text: a
-    /// heading gets one after a rule too.
-    fn parts(previous: Option<Self>, next: Option<Self>) -> bool {
+    /// heading gets one after a rule too, and with [`Breaks::Paragraphs`]
+    /// a line of text gets one after another.
+    fn parts(previous: Option<Self>, next: Option<Self>, breaks: Breaks) -> bool {
         match (previous, next) {
             (_, Some(Self::Heading)) => true,
+            (Some(Self::Paragraph), Some(Self::Paragraph)) => breaks == Breaks::Paragraphs,
             (Some(previous), Some(next)) => previous != next,
             _ => false,
         }
