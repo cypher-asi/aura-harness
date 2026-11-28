@@ -240,9 +240,9 @@ right-aligned under the icon and shaded like a hovered button.
 
 INTEGRATIONS lists every integration (`docs/integrations.md`). Each is
 a dot, its icon and name, and its description under it, muted; a blank
-row goes between them. The dot is its state: `●` in `success`
-connected, `○` in `muted` not connected, `●` in `error` failed, `●` in
-`warning` while a Connect or Test runs. The selected one, its name bold,
+row goes between them. The dot is the shared `StatusDot` (`aura-ui-widgets`), as MEMBERS and
+QUEUE draw it: `●` in `success` connected, `faint` not connected,
+`error` failed, `warning` while a Connect or Test runs. The selected one, its name bold,
 also shows its status (in `success` connected, `error` failed, else
 `muted`), its last action's result, what it provides, and its actions
 in the primary colour, flowing onto more rows in a narrow column:
@@ -256,7 +256,7 @@ in the primary colour, flowing onto more rows in a narrow column:
      Connect  Configure  Test
      Disconnect
 
- ○ ☁ boxd
+ ● ☁ boxd
      Cloud machines for cloud agents
 ```
 

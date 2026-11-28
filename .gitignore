@@ -44,3 +44,4 @@ coverage/
 # Task records the app writes for the TASKS tab (event_loop/tasks):
 # per-machine runtime state, not source.
 .aura/tasks/*.json
+dhat-heap*.json

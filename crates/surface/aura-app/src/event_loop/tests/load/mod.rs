@@ -33,6 +33,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 mod budget;
+#[cfg(feature = "dhat-heap")]
+mod heap;
 mod measure;
 mod ui;
 
@@ -234,11 +236,15 @@ async fn clock(
     span: Duration,
 ) -> crate::event_loop::timing::Kept {
     tokio::time::sleep(WARM_UP).await;
+    #[cfg(feature = "dhat-heap")]
+    heap::snapshot("warm-up");
     hub.loop_work.timings.enable();
     hub.loop_work.timings.take();
     measuring.store(true, Ordering::Relaxed);
     tokio::time::sleep(span).await;
     measuring.store(false, Ordering::Relaxed);
+    #[cfg(feature = "dhat-heap")]
+    heap::snapshot("the end of the span");
     let kept = hub.loop_work.timings.take();
     stop.store(true, Ordering::Relaxed);
     quit.cancel();
@@ -378,6 +384,8 @@ async fn the_app_with_many_agents() {
             .unwrap_or(10),
     );
     for n in env_list("AURA_LOAD_AGENTS", &[10, 50, 200]) {
+        #[cfg(feature = "dhat-heap")]
+        let _profiler = heap::profile(n);
         let measured = run(n, span).await;
         println!("{}", report(&measured));
     }
