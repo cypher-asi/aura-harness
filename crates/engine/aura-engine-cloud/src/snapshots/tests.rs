@@ -46,7 +46,7 @@ fn git(dir: &Path, args: &[&str]) {
         .success());
 }
 
-fn project() -> tempfile::TempDir {
+pub(super) fn project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     git(dir.path(), &["init", "-q"]);
     git(dir.path(), &["config", "user.email", "t@t"]);
@@ -58,7 +58,7 @@ fn project() -> tempfile::TempDir {
     dir
 }
 
-fn builder(fake: &FakeProvider, home: &Path) -> (SnapshotBuilder, Arc<MemoryLedger>) {
+pub(super) fn builder(fake: &FakeProvider, home: &Path) -> (SnapshotBuilder, Arc<MemoryLedger>) {
     builder_with(fake, home, AuraBinary::Installed)
 }
 

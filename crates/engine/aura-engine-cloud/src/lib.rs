@@ -57,6 +57,7 @@ pub mod boxd;
 pub mod cost;
 pub mod delta;
 pub mod error;
+pub mod exec_errors;
 pub mod fake;
 pub mod fleet;
 pub mod github;
