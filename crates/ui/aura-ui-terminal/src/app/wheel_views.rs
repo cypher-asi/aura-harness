@@ -8,7 +8,8 @@
 //! another agent) or any key is pressed; then the list follows its
 //! highlight again.
 //!
-//! PROJECTS keeps its own flag for this (`ProjectList::scroll_detached`);
+//! PROJECTS and a channel's HISTORY keep their own flag for this
+//! (`ProjectList::scroll_detached`, `HistoryState::follow`);
 //! the documents that scroll by lines (POLICIES, HOST, a channel's INFO
 //! and QUEUE) have no highlight to follow.
 
@@ -181,6 +182,9 @@ impl App {
             SidePanelTab::Host => return self.scroll_host(delta),
             SidePanelTab::ChannelInfo => return self.scroll_channel_info(delta),
             SidePanelTab::ChannelQueue => return self.scroll_channel_queue(delta),
+            // Two rows an item, like MEMBERS: an item a notch. HISTORY
+            // keeps its own flag (`HistoryState::follow`).
+            SidePanelTab::ChannelHistory => return self.scroll_channel_history(delta.signum()),
             SidePanelTab::ChannelMembers => {
                 let scroll = self.channels.member_scroll;
                 let list = WheelList::ChannelMembers;
@@ -201,6 +205,7 @@ impl App {
     pub(super) fn follow_highlights(&mut self) {
         self.panels.wheel.clear();
         self.project_list.scroll_detached = false;
+        self.follow_channel_history();
     }
 }
 

@@ -70,9 +70,10 @@ fn test_an_open_channel_lists_queue_right_after_info() {
     let mut app = channels_app();
     app.open_channel_by_id("c1");
     let rows = render_rows(&mut app, 140);
-    let (bar, widths) = header_bar(&rows, "MEMBERS");
+    // Five tabs: at this width MEMBERS and HISTORY take their short labels.
+    let (bar, widths) = header_bar(&rows, "MBR");
     let row = &rows[bar];
-    let members = char_column(row, "MEMBERS");
+    let members = char_column(row, "MBR");
     let info = char_column(row, "INFO");
     let queue = char_column(row, "QUEUE");
     assert!(members < info && info < queue, "{row}");
@@ -187,7 +188,7 @@ fn test_queue_tab_is_picked_by_click_and_shift_arrows_cycle_the_channel_tabs() {
     }
     assert_eq!(app.focus(), PanelFocus::Sandbox);
     let mut shown = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..5 {
         let _ = app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
         shown.push(app.side_tab());
     }
@@ -195,6 +196,7 @@ fn test_queue_tab_is_picked_by_click_and_shift_arrows_cycle_the_channel_tabs() {
         shown,
         [
             SidePanelTab::Tasks,
+            SidePanelTab::ChannelHistory,
             SidePanelTab::ChannelMembers,
             SidePanelTab::ChannelInfo,
             SidePanelTab::ChannelQueue

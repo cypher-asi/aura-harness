@@ -1,11 +1,11 @@
 //! The rows of the to-do drawer: its count, the items still open with the
-//! agent on each, the "Task history" row and, opened, the closed items.
+//! agent on each, the "Finished to-dos" row and, opened, the closed items.
 //!
 //! ```text
 //! ⬢ 2 active · 5 done
 //! ◐ Fix the redirect             → FEN6 · working 4m
 //! ☐ Run the tests                → REV6 · idle
-//! ▸ Task history  5
+//! ▸ Finished to-dos  5
 //! ```
 //!
 //! An item's agent is never left out for lack of room: its text is cut
@@ -24,7 +24,7 @@ use std::time::Duration;
 /// Narrowest an item's text is cut to before its agent's status goes.
 const MIN_TEXT: usize = 8;
 /// What the history row is called.
-pub(super) const HISTORY: &str = "Task history";
+pub(super) const HISTORY: &str = "Finished to-dos";
 
 /// One row of the drawer under its header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,7 +238,7 @@ pub(super) fn short_duration(elapsed: Duration) -> String {
     }
 }
 
-/// `▸ Task history  5` folded, `▾ Task history` `open`, in `muted`.
+/// `▸ Finished to-dos  5` folded, `▾ Finished to-dos` `open`, in `muted`.
 fn history_line(app: &App, open: bool, theme: &Theme) -> Line<'static> {
     let closed = app
         .hud()

@@ -14,6 +14,10 @@ pub enum SidePanelTab {
     /// The merges of the open channel's merge queue, newest first.
     /// Listed only while a channel is open, after INFO.
     ChannelQueue,
+    /// Every message the user posted in the open channel, newest first;
+    /// each one jumps the chat to it. Listed only while a channel is
+    /// open, last, after TASKS.
+    ChannelHistory,
     /// File tree of the active agent's workspace.
     #[default]
     Sandbox,
@@ -59,12 +63,14 @@ impl SidePanelTab {
     ];
 
     /// The tabs listed while a channel is open: the channel's own, then
-    /// TASKS, and none of the agent app's others.
-    const IN_CHANNEL: [Self; 4] = [
+    /// TASKS, then the user's messages, and none of the agent app's
+    /// others.
+    const IN_CHANNEL: [Self; 5] = [
         Self::ChannelMembers,
         Self::ChannelInfo,
         Self::ChannelQueue,
         Self::Tasks,
+        Self::ChannelHistory,
     ];
 
     /// The tabs the header bar lists, in order, with a channel open or
@@ -84,7 +90,7 @@ impl SidePanelTab {
     pub const fn is_channel_tab(self) -> bool {
         matches!(
             self,
-            Self::ChannelMembers | Self::ChannelInfo | Self::ChannelQueue
+            Self::ChannelMembers | Self::ChannelInfo | Self::ChannelQueue | Self::ChannelHistory
         )
     }
 
@@ -94,6 +100,7 @@ impl SidePanelTab {
             Self::ChannelMembers => "MEMBERS",
             Self::ChannelInfo => "INFO",
             Self::ChannelQueue => "QUEUE",
+            Self::ChannelHistory => "HISTORY",
             Self::Sandbox => "SANDBOX",
             Self::Repo => "REPO",
             Self::Processes => "PROCESSES",
@@ -142,6 +149,8 @@ impl SidePanelTab {
             Self::ChannelMembers => "MBR",
             Self::ChannelInfo => "INF",
             Self::ChannelQueue => "QUE",
+            // HOST is HST.
+            Self::ChannelHistory => "HIS",
             Self::Sandbox => "SBX",
             Self::Repo => "RPO",
             Self::Processes => "PRC",

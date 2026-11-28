@@ -58,6 +58,7 @@ pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
 mod chat_hits;
+mod chat_jump;
 pub(crate) mod chat_links;
 mod chat_view;
 mod detail;
@@ -114,7 +115,7 @@ pub use apps::{
     AgentsTab, ArchiveRow, BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice,
     AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
-pub(crate) use apps::{ChannelWelcome, CHANNEL_MEMBER_ROWS};
+pub(crate) use apps::{ChannelWelcome, HistoryItem, CHANNEL_MEMBER_ROWS, HISTORY_ROWS};
 pub(crate) use chat_links::is_openable_url;
 pub use chat_tabs::ChatTab;
 use chat_view::ChatView;

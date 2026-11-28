@@ -409,6 +409,8 @@ pub struct AgentHub {
     /// Where each channel member is in the software factory's plan, build,
     /// ship flow.
     pub(crate) factory_flows: super::factory::Flows,
+    /// One-line summaries of the user's long channel posts, kept on disk
+    pub(crate) post_summaries: Arc<super::channels::summaries::PostSummaries>,
     /// The chats of the agents shown last, as read from their records
     pub(super) shown_chats: Mutex<crate::record_loader::ByHead<Vec<MessageData>>>,
     /// The Record panel rows of the agents shown last
