@@ -14,6 +14,7 @@
 //! then renamed over it, so a crash leaves the old file or the new one,
 //! never half of either.
 
+pub(super) use crate::event_loop::factory::saved::{SavedFlow, MAX_FLOWS};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -186,6 +187,9 @@ pub(super) struct Snapshot {
     /// Hex ids of the agents the user stopped to carry on
     #[serde(default)]
     pub parked: Vec<String>,
+    /// The software factory's stages ([`crate::event_loop::factory`])
+    #[serde(default)]
+    pub flows: Vec<SavedFlow>,
 }
 
 impl Default for Snapshot {
@@ -198,6 +202,7 @@ impl Default for Snapshot {
             running: Vec::new(),
             threads: SavedThreads::default(),
             parked: Vec::new(),
+            flows: Vec::new(),
         }
     }
 }
@@ -213,6 +218,7 @@ impl Snapshot {
         self.threads.requests.truncate(MAX_THREADS);
         self.threads.subjects.truncate(MAX_THREADS);
         self.threads.reports.truncate(MAX_THREADS);
+        self.flows.truncate(MAX_FLOWS);
         if before != self.sizes() {
             warn!(
                 owed = before[0],
@@ -224,7 +230,7 @@ impl Snapshot {
         self
     }
 
-    fn sizes(&self) -> [usize; 6] {
+    fn sizes(&self) -> [usize; 7] {
         [
             self.owed.len(),
             self.queued.len(),
@@ -232,6 +238,7 @@ impl Snapshot {
             self.threads.requests.len(),
             self.threads.subjects.len(),
             self.threads.reports.len(),
+            self.flows.len(),
         ]
     }
 }

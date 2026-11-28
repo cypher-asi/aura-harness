@@ -5,8 +5,9 @@
 use super::DekProvider;
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use aura_store_db::seal_key::{create_key_file, decode_key_hex, encode_key_hex, KEY_HEX_LEN};
 use aura_store_db::SealCipher;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing::info;
 use zeroize::Zeroizing;
@@ -122,10 +123,9 @@ pub(super) fn decode_dek(body: &[u8]) -> anyhow::Result<Zeroizing<[u8; 32]>> {
         .map(str::trim)
         .map_err(|_| anyhow::anyhow!("DEK is neither 32 raw bytes nor text-encoded"))?;
 
-    if text.len() == 64 {
-        if let Ok(bytes) = hex_decode(text) {
-            out.copy_from_slice(&bytes);
-            return Ok(out);
+    if text.len() == KEY_HEX_LEN {
+        if let Ok(key) = decode_key_hex(text) {
+            return Ok(key);
         }
     }
 
@@ -138,27 +138,6 @@ pub(super) fn decode_dek(body: &[u8]) -> anyhow::Result<Zeroizing<[u8; 32]>> {
     }
 
     bail!("DEK has invalid length/encoding (expected 32 raw bytes, 64 hex chars, or base64)")
-}
-
-/// Minimal hex decoder (avoids adding a `hex` dependency to this crate).
-fn hex_decode(text: &str) -> anyhow::Result<Zeroizing<Vec<u8>>> {
-    fn nibble(c: u8) -> anyhow::Result<u8> {
-        match c {
-            b'0'..=b'9' => Ok(c - b'0'),
-            b'a'..=b'f' => Ok(c - b'a' + 10),
-            b'A'..=b'F' => Ok(c - b'A' + 10),
-            _ => bail!("invalid hex character"),
-        }
-    }
-    let raw = text.as_bytes();
-    if raw.len() % 2 != 0 {
-        bail!("odd-length hex string");
-    }
-    let mut out = Zeroizing::new(Vec::with_capacity(raw.len() / 2));
-    for pair in raw.chunks_exact(2) {
-        out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
-    }
-    Ok(out)
 }
 
 /// Dev-mode DEK source: a local key file (64 hex chars), generated with a
@@ -188,7 +167,7 @@ impl DekProvider for LocalKeyFileDekProvider {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let key = SealCipher::generate_key();
-                let encoded = Zeroizing::new(to_hex(&key));
+                let encoded = encode_key_hex(&key);
                 if let Some(parent) = self.path.parent() {
                     if !parent.as_os_str().is_empty() {
                         std::fs::create_dir_all(parent).with_context(|| {
@@ -196,7 +175,7 @@ impl DekProvider for LocalKeyFileDekProvider {
                         })?;
                     }
                 }
-                write_key_file(&self.path, encoded.as_bytes())
+                create_key_file(&self.path, encoded.as_bytes())
                     .with_context(|| format!("writing key file {}", self.path.display()))?;
                 info!(path = %self.path.display(), "generated new dev-mode state key file");
                 Ok(key)
@@ -211,36 +190,4 @@ impl DekProvider for LocalKeyFileDekProvider {
     fn describe(&self) -> String {
         format!("key-file:{}", self.path.display())
     }
-}
-
-fn to_hex(bytes: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(64);
-    for b in bytes {
-        let _ = write!(s, "{b:02x}");
-    }
-    s
-}
-
-/// Persist the dev key file with tight permissions (`0600` on Unix; on
-/// Windows NTFS ACLs are inherited from the parent directory, matching
-/// how the node's `auth_token` file is handled).
-fn write_key_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    #[cfg(unix)]
-    let mut f = {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)?
-    };
-    #[cfg(not(unix))]
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
-    f.write_all(contents)?;
-    f.sync_all()
 }

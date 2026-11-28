@@ -2,7 +2,7 @@
 //! under way), and putting one back after a restart.
 
 use super::file::{
-    SavedKind, SavedNotice, SavedOwed, SavedQueued, SavedRunning, SavedThreads, Snapshot,
+    SavedFlow, SavedKind, SavedNotice, SavedOwed, SavedQueued, SavedRunning, SavedThreads, Snapshot,
 };
 use super::queue_items::work_of;
 use super::*;
@@ -13,6 +13,8 @@ use super::*;
 pub(super) struct LoopPart {
     pub(super) queued: Vec<SavedQueued>,
     pub(super) running: Vec<SavedRunning>,
+    /// The software factory's stages
+    pub(super) flows: Vec<SavedFlow>,
 }
 
 /// What the file keeps of `inbox`, its outbox and `part`, in a stable
@@ -36,6 +38,7 @@ pub(super) fn build(inbox: &Inbox, part: &LoopPart) -> Snapshot {
         running: part.running.clone(),
         threads,
         parked,
+        flows: part.flows.clone(),
         ..Snapshot::default()
     }
     .capped()
@@ -79,6 +82,8 @@ pub(super) struct Restored {
     pub(super) subjects: Vec<((AgentId, AgentId), String)>,
     pub(super) reports: Vec<(AgentId, (bool, String))>,
     pub(super) parked: Vec<AgentId>,
+    /// The software factory's stages, put back once the queues are
+    pub(super) flows: Vec<SavedFlow>,
 }
 
 /// The entries of `snapshot` whose agents are live on `hub`.
@@ -111,28 +116,36 @@ pub(super) fn live_entries(hub: &AgentHub, snapshot: Snapshot) -> Restored {
         .running
         .into_iter()
         .filter_map(|saved| Some((live(&saved.agent)?, saved)));
-    let SavedThreads {
-        requests,
-        subjects,
-        reports,
-    } = snapshot.threads;
-    let subjects = subjects
-        .into_iter()
-        .filter_map(|(low, high, subject)| Some(((live(&low)?, live(&high)?), subject)));
-    let reports = reports
-        .into_iter()
-        .filter_map(|(agent, ok, said)| Some((live(&agent)?, (ok, said))));
-    let parked = snapshot.parked.iter().filter_map(|hex| live(hex));
-    Restored {
+    let mut restored = Restored {
         owed: owed.collect(),
         queued: queued.collect(),
         outbox: outbox.collect(),
         running: running.collect(),
-        requests,
-        subjects: subjects.collect(),
-        reports: reports.collect(),
-        parked: parked.collect(),
-    }
+        parked: snapshot.parked.iter().filter_map(|hex| live(hex)).collect(),
+        flows: snapshot.flows,
+        ..Restored::default()
+    };
+    live_threads(&mut restored, snapshot.threads, &live);
+    restored
+}
+
+/// Put the threads of `saved` whose agents `live` accepts in `restored`.
+fn live_threads(
+    restored: &mut Restored,
+    saved: SavedThreads,
+    live: &dyn Fn(&str) -> Option<AgentId>,
+) {
+    restored.requests = saved.requests;
+    restored.subjects = saved
+        .subjects
+        .into_iter()
+        .filter_map(|(low, high, subject)| Some(((live(&low)?, live(&high)?), subject)))
+        .collect();
+    restored.reports = saved
+        .reports
+        .into_iter()
+        .filter_map(|(agent, ok, said)| Some((live(&agent)?, (ok, said))))
+        .collect();
 }
 
 /// What [`put_back`] leaves for the resume step.
@@ -166,27 +179,26 @@ pub(super) fn put_back(state: &mut LoopState<'_>, restored: Restored) -> Resume 
         subjects,
         reports,
         parked,
+        flows,
     } = restored;
     let counts = (owed.len(), queued.len(), outbox.len(), running.len());
     merge_owed(&state.hub.inbox, owed);
-    {
-        let mut inbox = lock(&state.hub.inbox.state);
-        for (thread, carried) in requests {
-            inbox.requests.entry(thread).or_insert(carried);
-        }
-        for (pair, subject) in subjects {
-            inbox.subjects.entry(pair).or_insert(subject);
-        }
-        for (agent, report) in reports {
-            inbox.reports.entry(agent).or_insert(report);
-        }
-        inbox.parked.extend(parked);
-    }
+    put_threads(&state.hub.inbox, (requests, subjects, reports), parked);
     let mut resume = Resume {
         running,
         ..Resume::default()
     };
     requeue(state, queued, &mut resume);
+    // After the queues: a planning turn the inbox queued again isn't
+    // queued twice.
+    let hub = Arc::clone(&state.hub);
+    let resumed =
+        crate::event_loop::factory::saved::put_back(state, flows, |hex| live_agent(&hub, hex));
+    for agent in resumed {
+        if !resume.queued.contains(&agent) {
+            resume.queued.push(agent);
+        }
+    }
     for notice in outbox {
         if super::send(&state.hub, notice).is_err() {
             warn!("A saved inbox message could not be sent again: the terminal is shutting down");
@@ -202,6 +214,38 @@ pub(super) fn put_back(state: &mut LoopState<'_>, restored: Restored) -> Resume 
         );
     }
     resume
+}
+
+/// What threads carried: requests by thread, subjects by pair, reports.
+type Threads = (
+    Vec<(String, u32)>,
+    Vec<((AgentId, AgentId), String)>,
+    Vec<(AgentId, (bool, String))>,
+);
+
+/// Put `threads` and `parked` back in `inbox`, keeping what it has.
+fn put_threads(inbox: &Inbox, (requests, subjects, reports): Threads, parked: Vec<AgentId>) {
+    let mut inbox = lock(&inbox.state);
+    for (thread, carried) in requests {
+        inbox.requests.entry(thread).or_insert(carried);
+    }
+    for (pair, subject) in subjects {
+        inbox.subjects.entry(pair).or_insert(subject);
+    }
+    for (agent, report) in reports {
+        inbox.reports.entry(agent).or_insert(report);
+    }
+    inbox.parked.extend(parked);
+}
+
+/// `hex` as the id of an agent live on `hub`.
+fn live_agent(hub: &AgentHub, hex: &str) -> Option<AgentId> {
+    let registry = lock(&hub.registry);
+    AgentId::from_hex(hex).ok().filter(|id| {
+        registry
+            .find(*id)
+            .is_some_and(|a| !a.archived && !a.removed)
+    })
 }
 
 /// Queue `queued` again, noting in `resume` who got work back and which

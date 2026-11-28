@@ -149,3 +149,32 @@ async fn entries_for_agents_gone_or_archived_are_dropped_on_restore() {
     let texts: Vec<&str> = restored.queued.iter().map(|q| q.1.text.as_str()).collect();
     assert_eq!(texts, ["kept"]);
 }
+
+#[test]
+fn the_factory_stages_round_trip_and_a_file_from_before_them_has_none() {
+    use crate::event_loop::factory::saved::{SavedFlow, SavedStage, MAX_FLOWS};
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join(file::SAVED_FILE);
+    let flow = |n: usize| SavedFlow {
+        agent: format!("{n:064x}"),
+        stage: SavedStage::Building,
+        plan: Some(".aura/plans/footer.plan.md".to_string()),
+        prompt: None,
+        pending: true,
+        running: false,
+    };
+    let snapshot = Snapshot {
+        flows: (0..MAX_FLOWS + 5).map(flow).collect(),
+        ..sample()
+    }
+    .capped();
+    assert_eq!(snapshot.flows.len(), MAX_FLOWS, "bounded, oldest kept");
+    file::save(&path, &snapshot).unwrap();
+    assert_eq!(file::load(&path), snapshot);
+
+    // A file written before the stages were kept reads with none.
+    let mut old: serde_json::Value = serde_json::to_value(sample()).unwrap();
+    old.as_object_mut().unwrap().remove("flows");
+    std::fs::write(&path, old.to_string()).unwrap();
+    assert_eq!(file::load(&path), sample());
+}

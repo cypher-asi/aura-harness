@@ -68,7 +68,10 @@ pub(in crate::event_loop) async fn resume_saved(state: &mut LoopState<'_>, resum
 /// `agent`'s turn was under way when the app quit, as `saved` says:
 /// follow it again on its machine, else have it carry on, else say so.
 async fn resume_turn(state: &mut LoopState<'_>, agent: AgentId, saved: SavedRunning) {
-    if lock(&state.hub.inbox.state).parked.contains(&agent) {
+    // Parked, or its factory work is queued again and starts it.
+    if lock(&state.hub.inbox.state).parked.contains(&agent)
+        || state.hub.factory_flows.resumes_after_restart(agent)
+    {
         return;
     }
     if let Some(run) = saved.run.filter(|_| saved.cloud) {

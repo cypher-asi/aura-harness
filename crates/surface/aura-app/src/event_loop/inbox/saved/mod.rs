@@ -128,6 +128,7 @@ pub(in crate::event_loop) async fn restore_saved(state: &mut LoopState<'_>) -> R
     *lock(&keeper.loop_part) = LoopPart {
         queued: snapshot.queued.clone(),
         running: snapshot.running.clone(),
+        flows: snapshot.flows.clone(),
     };
     let restored = snapshot::live_entries(&state.hub, snapshot);
     snapshot::put_back(state, restored)
@@ -227,6 +228,7 @@ fn loop_part(state: &LoopState<'_>) -> LoopPart {
     LoopPart {
         queued: queue_items::saved_items(&items),
         running,
+        flows: crate::event_loop::factory::saved::saved_flows(state),
     }
 }
 

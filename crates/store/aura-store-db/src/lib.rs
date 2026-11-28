@@ -26,6 +26,8 @@ pub mod processes;
 mod record_log_bridge;
 mod rocks_store;
 pub mod seal;
+pub mod seal_key;
+pub mod seal_migration;
 mod store;
 pub mod traces;
 pub mod vault;

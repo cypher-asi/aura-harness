@@ -356,6 +356,21 @@ fn choose_binary(env: Option<&Path>, home: &Path, current_exe: Option<PathBuf>) 
     }
 }
 
+/// The agents the placements saved in `home` (the hub's folder) say run
+/// on a cloud machine: the placed agents and the agents they spawned
+/// there. Read without a hub, so a placed agent is known as one while the
+/// hub is down. Empty when nothing is saved or it can't be read.
+#[must_use]
+pub fn saved_cloud_agents(home: &Path) -> HashSet<AgentId> {
+    let saved = load_placements(&home.join("placements.json"));
+    saved
+        .agents
+        .iter()
+        .flat_map(|(hex, placed)| std::iter::once(hex).chain(placed.children.iter()))
+        .filter_map(|hex| AgentId::from_hex(hex).ok())
+        .collect()
+}
+
 fn load_placements(path: &Path) -> PlacementFile {
     std::fs::read(path)
         .ok()

@@ -224,6 +224,15 @@ impl WorkQueues {
             .flat_map(|(agent, queue)| queue.iter().map(move |queued| (*agent, &queued.work)))
             .collect()
     }
+
+    /// Whether `agent`'s queue holds a prompt saying `text`.
+    pub(super) fn has_prompt(&self, agent: AgentId, text: &str) -> bool {
+        self.by_agent.get(&agent).is_some_and(|queue| {
+            queue.iter().any(
+                |queued| matches!(&queued.work, Work::Prompt { prompt, .. } if prompt.text == text),
+            )
+        })
+    }
 }
 
 /// `queued` as the UI shows it: a message's text, or a label naming the

@@ -130,9 +130,7 @@ pub(crate) async fn after_local_turn(
     };
     let next = state.hub.factory_flows.turn_ended(agent, end);
     let work = match &next {
-        Next::Build(path) => Some(Work::Build {
-            path: Some(path.clone()),
-        }),
+        Next::Build(path) => Some(build_work(false, path)),
         Next::AskToShip if shares_folder(&state.hub, agent, &folder) => {
             state.hub.factory_flows.leave(agent);
             let line = "Built. Not shipped on its own: other members work in this folder, \
@@ -190,10 +188,7 @@ pub(crate) fn after_cloud_turn(
     let work = match &next {
         Next::Build(path) => {
             leave_plan_mode(&state.hub, agent);
-            Some(Work::Prompt {
-                prompt: Prompt::build(build_plan_prompt(path)),
-                shown: false,
-            })
+            Some(build_work(true, path))
         }
         Next::AskToShip => {
             let offers = crate::event_loop::cloud::node_offers_ship(state, agent);
@@ -212,9 +207,24 @@ pub(crate) fn after_cloud_turn(
     next.defers_answer()
 }
 
+/// The turn building the plan at `path`: the `/build` work for a local
+/// agent, the build prompt for a `cloud` one, whose machine has the plan.
+pub(in crate::event_loop) fn build_work(cloud: bool, path: &str) -> Work {
+    if cloud {
+        Work::Prompt {
+            prompt: Prompt::build(build_plan_prompt(path)),
+            shown: false,
+        }
+    } else {
+        Work::Build {
+            path: Some(path.to_string()),
+        }
+    }
+}
+
 /// The turn asking an agent to ship what it built, with `git_ship` when
 /// its node `offers_ship`, else with `git_commit_push`.
-fn ship_work(offers_ship: bool) -> Work {
+pub(in crate::event_loop) fn ship_work(offers_ship: bool) -> Work {
     Work::Prompt {
         prompt: Prompt::inbox(ship_prompt(offers_ship).to_string(), Request::Resume),
         shown: false,

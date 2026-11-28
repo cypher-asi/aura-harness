@@ -69,6 +69,9 @@ async fn a_member_cut_short_by_a_quit_carries_on_after_reopening_and_reports() {
     assign_footer_asking(&fixture, coordinator, &code(&fixture, member), SLOW_FOOTER).await;
     notices::handle_notice(&mut state, notices.try_recv().unwrap()).await;
     assert!(state.hub.is_running(member), "the assignment is under way");
+    // Out of the software factory's flow, whose own restart is tested in
+    // `factory_restart`: here the turn itself resumes.
+    state.hub.factory_flows.leave(member);
     owed::save_now(&state).await;
     assert!(
         saved_text(&state).contains(&format!("\"running\":[{{\"agent\":\"{}\"", member.to_hex())),

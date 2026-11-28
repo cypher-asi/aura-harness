@@ -91,10 +91,10 @@ pub const DEFAULT_CDH_URL: &str = "http://127.0.0.1:8006";
 /// attestation-agent / CDH may come up after the harness container.
 pub const DEFAULT_DEK_FETCH_TIMEOUT_SECS: u64 = 120;
 
-/// Non-secret marker file written in the state dir on sealed boot so later
-/// phases (encrypt-in-place migration, R2) can detect sealed vs plaintext
-/// state without attempting a decrypt.
-pub const SEALED_MARKER_FILENAME: &str = ".aura-sealed";
+/// Non-secret marker file written in the state dir on sealed boot so the
+/// encrypt-in-place migration (R2) can detect sealed vs plaintext state
+/// without attempting a decrypt. Shared with the local app.
+pub use aura_store_db::seal_migration::SEALED_MARKER_FILENAME;
 
 /// Resolved sealing configuration (from env in production).
 #[derive(Debug, Clone)]
@@ -306,33 +306,21 @@ pub async fn fetch_dek_with_retry(
 }
 
 /// Contents of the non-secret `.aura-sealed` marker file.
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct SealedMarker {
-    /// Sealed on-disk format version (see `aura_store_db::seal`).
-    pub version: u8,
-    /// AEAD algorithm identifier.
-    pub cipher: String,
-    /// DEK key id the state is sealed under (non-secret).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_id: Option<String>,
-}
+pub use aura_store_db::seal_migration::SealedMarker;
 
-/// Write the `.aura-sealed` marker into `data_dir` (idempotent).
+/// Write the `.aura-sealed` marker into `data_dir` (idempotent), with a
+/// key check sealed under `cipher` so a wrong DEK is refused on the next
+/// boot.
 ///
 /// # Errors
 /// Returns an error if the directory or file cannot be written.
-pub fn write_sealed_marker(data_dir: &Path, key_id: Option<&str>) -> anyhow::Result<()> {
-    let marker = SealedMarker {
-        version: aura_store_db::SEAL_VERSION,
-        cipher: "aes-256-gcm".to_string(),
-        key_id: key_id.map(str::to_string),
-    };
-    std::fs::create_dir_all(data_dir)
-        .with_context(|| format!("creating state dir {}", data_dir.display()))?;
-    let path = data_dir.join(SEALED_MARKER_FILENAME);
-    std::fs::write(&path, serde_json::to_vec_pretty(&marker)?)
-        .with_context(|| format!("writing sealed marker {}", path.display()))?;
-    Ok(())
+pub fn write_sealed_marker(
+    data_dir: &Path,
+    key_id: Option<&str>,
+    cipher: &SealCipher,
+) -> anyhow::Result<()> {
+    aura_store_db::seal_migration::write_marker(data_dir, key_id, cipher)
+        .context("writing the sealed marker")
 }
 
 /// Resolve sealed mode from the environment and, when requested, fetch the
@@ -396,7 +384,7 @@ pub async fn prepare_with_config(
         );
     }
 
-    write_sealed_marker(data_dir, config.key_id.as_deref())?;
+    write_sealed_marker(data_dir, config.key_id.as_deref(), &cipher)?;
     info!("sealed state-at-rest enabled (AES-256-GCM)");
     Ok(Some(cipher))
 }

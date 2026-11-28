@@ -136,6 +136,37 @@ impl SecretSlot {
         }
     }
 
+    /// Like [`Self::read`], but a machine without a keyring backend
+    /// counts as an answer: the fallback file is then the only place the
+    /// secret can be, so no file means no secret. Other keyring failures
+    /// are errors unless the file holds the secret.
+    pub(crate) fn read_answered(&self) -> Result<Option<String>, AuthError> {
+        let Some(user) = &self.keyring_user else {
+            return Ok(load_from_path(&self.path));
+        };
+        let mut read = keyring_entry(user).and_then(|e| e.get_password());
+        for _ in 0..KEYRING_READ_RETRIES {
+            match &read {
+                Err(e) if !is_no_storage_access(e) && !is_no_entry(e) => {
+                    std::thread::sleep(KEYRING_RETRY_DELAY);
+                    read = keyring_entry(user).and_then(|e| e.get_password());
+                }
+                _ => break,
+            }
+        }
+        match read {
+            Ok(secret) => Ok(Some(secret)),
+            Err(e) if is_no_entry(&e) => Ok(load_from_path(&self.path)),
+            Err(e) if is_no_storage_access(&e) => {
+                debug!(error = %e, "OS keyring unavailable; reading the fallback file");
+                Ok(load_from_path(&self.path))
+            }
+            Err(e) => load_from_path(&self.path)
+                .map(Some)
+                .ok_or_else(|| AuthError::CredentialKeyring(e.to_string())),
+        }
+    }
+
     /// Delete the secret from both backends. Succeeds when absent.
     pub(crate) fn clear(&self) -> Result<(), AuthError> {
         if let Some(user) = &self.keyring_user {
@@ -377,6 +408,15 @@ mod tests {
     fn test_load_from_path_missing_returns_none() {
         let dir = TempDir::new().unwrap();
         assert!(load_from_path(&dir.path().join("nope.json")).is_none());
+    }
+
+    #[test]
+    fn test_read_answered_file_slot_is_absent_then_found() {
+        let dir = TempDir::new().unwrap();
+        let slot = SecretSlot::file(dir.path().join("key"));
+        assert_eq!(slot.read_answered().unwrap(), None);
+        slot.save("abc").unwrap();
+        assert_eq!(slot.read_answered().unwrap().as_deref(), Some("abc"));
     }
 
     #[cfg(unix)]

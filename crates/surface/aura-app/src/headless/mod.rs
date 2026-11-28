@@ -344,12 +344,14 @@ async fn open_stores(
     // RocksDB allows one process per store, so a terminal open on the
     // same data directory makes this fail rather than share it. The
     // registry lives in the same database, so it is opened first.
-    let store = session_helpers::open_store(&store_path).with_context(|| {
-        format!(
-            "opening {} (is a terminal or another `aura -p` using this data directory?)",
-            store_path.display()
-        )
-    })?;
+    let store = crate::local_store::open(data_dir, &store_path)
+        .await
+        .with_context(|| {
+            format!(
+                "opening {} (is a terminal or another `aura -p` using this data directory?)",
+                store_path.display()
+            )
+        })?;
     let registry = AgentRegistry::open(
         aura_store_db::AgentStore::for_store(&store),
         data_dir,
