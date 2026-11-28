@@ -144,7 +144,7 @@ impl App {
     }
 
     /// Hand `url` to the system's opener, saying so when it fails.
-    fn open_link(&mut self, url: &str) {
+    pub(in crate::app) fn open_link(&mut self, url: &str) {
         // Links that may not open get no hit when drawn; this keeps the
         // rule where the URL leaves the app, whatever drew the hit.
         if !is_openable_url(url) {

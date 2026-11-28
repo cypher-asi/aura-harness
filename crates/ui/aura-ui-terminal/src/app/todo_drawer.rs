@@ -15,12 +15,17 @@
 //!
 //! The drawer lists only the items still open. The closed ones (done and
 //! cancelled) sit under its "Finished to-dos" row, folded by default: a
-//! click on that row, `Alt+H` or `/todos history` opens or folds it.
+//! click on that row, `Alt+H` or `/todos history` opens or folds it. An
+//! opened history starts the drawer at its row, so the closed items show
+//! however many are still open, and the wheel over the drawer's rows
+//! scrolls them; elsewhere the wheel is the chat's.
 //!
 //! Mouse: a left press on the header row folds or opens the drawer, one
-//! on the history row its history. A pointer move over the header lights
-//! its toggle and is never used up, so the rest of the screen still sees
-//! where the pointer went.
+//! on the history row its history, one on an item opens the agent it was
+//! given to (nothing for an item given to no agent). The drawer has no
+//! highlight, so no key opens an item. A pointer move over the header
+//! lights its toggle and is never used up, so the rest of the screen
+//! still sees where the pointer went.
 //!
 //! Each item still open shows the agent it was given to ([`TodoAgent`]):
 //! its code, whether it works, and how long the item has been in
@@ -59,6 +64,14 @@ pub(crate) struct TodoDrawer {
     history_open: bool,
     /// Where the history row was drawn in the last frame
     history_row: Option<Rect>,
+    /// First entry shown while the history is open: the history row when
+    /// it opens, then wherever the wheel moves it
+    history_scroll: usize,
+    /// Where the rows the wheel scrolls were drawn in the last frame;
+    /// `None` while they all fit or the history is folded
+    scroll_rows: Option<Rect>,
+    /// Each item's rows in the last frame, with the agent it was given to
+    item_hits: Vec<(Rect, Option<String>)>,
     /// When each item was first seen in progress, by agent and text
     started: HashMap<(String, String), Instant>,
 }
@@ -155,13 +168,43 @@ impl App {
     }
 
     /// Open or fold the history of closed items (`Alt+H`, `/todos
-    /// history`, a click on its row). Returns whether there was one.
+    /// history`, a click on its row). Returns whether there was one. An
+    /// opened history starts at its own row, so its items show at once.
     pub(crate) fn toggle_todo_history(&mut self) -> bool {
         if !self.hud.todos.iter().any(|todo| todo.state.is_closed()) {
             return false;
         }
-        self.todo_drawer.history_open = !self.todo_drawer.history_open;
+        let drawer = &mut self.todo_drawer;
+        drawer.history_open = !drawer.history_open;
+        drawer.history_scroll = if drawer.history_open {
+            self.hud
+                .todos
+                .iter()
+                .filter(|t| !t.state.is_closed())
+                .count()
+        } else {
+            0
+        };
         true
+    }
+
+    /// First entry the drawer shows while its history is open.
+    #[must_use]
+    pub(crate) const fn todo_history_scroll(&self) -> usize {
+        self.todo_drawer.history_scroll
+    }
+
+    /// Record the drawer's first entry as drawn, kept inside its entries,
+    /// and where its scrolled rows were drawn (`None` when they all fit).
+    pub(crate) fn set_todo_history_scroll(&mut self, first: usize, rows: Option<Rect>) {
+        self.todo_drawer.history_scroll = first;
+        self.todo_drawer.scroll_rows = rows;
+    }
+
+    /// Record where each item's rows were drawn this frame, with the
+    /// agent it was given to.
+    pub(crate) fn set_todo_item_hits(&mut self, hits: Vec<(Rect, Option<String>)>) {
+        self.todo_drawer.item_hits = hits;
     }
 
     /// Record where the drawer drew its history row this frame.
@@ -212,8 +255,24 @@ impl App {
         })
     }
 
+    /// The agent `assignee` names, as `(id, name)`: among the open
+    /// channel's members first, then every agent listed.
+    pub(in crate::app) fn assignee_agent(&self, assignee: &str) -> Option<(String, String)> {
+        let assignee = assignee.trim();
+        if assignee.is_empty() {
+            return None;
+        }
+        let members = self
+            .open_channel()
+            .map(|channel| channel.members.as_slice());
+        find_assignee(members.unwrap_or_default(), assignee)
+            .or_else(|| find_assignee(&self.agents, assignee))
+            .map(|agent| (agent.id.clone(), agent.name.clone()))
+    }
+
     /// Take a mouse event aimed at the drawer. Returns whether the drawer
-    /// used it: only a left press on its header or its history row.
+    /// used it: a left press on its header, its history row or an item,
+    /// or the wheel over rows it scrolls.
     pub(super) fn todo_drawer_mouse(
         &mut self,
         kind: MouseEventKind,
@@ -235,12 +294,44 @@ impl App {
                 self.todo_drawer.hovered = true;
                 true
             }
+            MouseEventKind::Down(MouseButton::Left) => self.click_todo_item(column, row),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if super::contains(self.todo_drawer.scroll_rows, column, row) =>
+            {
+                let scroll = &mut self.todo_drawer.history_scroll;
+                *scroll = if kind == MouseEventKind::ScrollUp {
+                    scroll.saturating_sub(1)
+                } else {
+                    scroll.saturating_add(1)
+                };
+                true
+            }
             MouseEventKind::Moved | MouseEventKind::Up(_) => {
                 self.todo_drawer.hovered = on_header;
                 false
             }
             _ => false,
         }
+    }
+
+    /// A left press on an item opens the agent it was given to. An item
+    /// given to no agent, or to one not listed, opens nothing, but the
+    /// press is still the drawer's.
+    fn click_todo_item(&mut self, column: u16, row: u16) -> bool {
+        let Some(assignee) = self
+            .todo_drawer
+            .item_hits
+            .iter()
+            .find(|(area, _)| super::contains(Some(*area), column, row))
+            .map(|(_, assignee)| assignee.clone())
+        else {
+            return false;
+        };
+        self.clear_selection();
+        if let Some((id, name)) = assignee.as_deref().and_then(|a| self.assignee_agent(a)) {
+            self.open_assigned_agent(&id, &name);
+        }
+        true
     }
 }
 

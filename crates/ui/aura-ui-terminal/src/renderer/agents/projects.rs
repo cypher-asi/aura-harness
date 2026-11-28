@@ -24,7 +24,7 @@ pub(super) fn render_projects(
     app: &mut App,
     theme: &Theme,
 ) {
-    let (rows, pinned) = split_pinned(body);
+    let (rows, pinned) = split_pinned(app, area, body);
     let visible = usize::from(rows.height);
     app.set_agent_rows_area(rows);
     app.set_new_project_area(pinned);

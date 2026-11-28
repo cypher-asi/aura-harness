@@ -26,7 +26,7 @@ pub(super) fn render_members(
         return;
     }
 
-    let body = Body::new(area, inner, is_focused);
+    let body = Body::list(app, area, inner, is_focused);
     let visible = body.visible();
     let scroll = app.sync_members_scroll(visible);
     let hovered = match app.hover() {

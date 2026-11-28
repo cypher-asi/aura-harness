@@ -42,14 +42,17 @@ impl Windows {
 }
 
 /// The view each of `channels` gets of `queue`, merging into `target`,
-/// at its own window; the queue is read once per distinct window.
+/// at its own window, with the repo's page on GitHub for QUEUE to link
+/// branches under; the queue is read once per distinct window.
 pub(crate) async fn views(
     queue: &MergeQueue,
     target: &str,
     channels: Vec<String>,
     windows: &Windows,
 ) -> Vec<(String, MergeQueueView)> {
-    let repo = queue.repo().top.display().to_string();
+    let top = &queue.repo().top;
+    let repo = top.display().to_string();
+    let web = crate::event_loop::repo::github_page(top).await;
     let mut read: HashMap<usize, MergeQueueView> = HashMap::new();
     let mut out = Vec::with_capacity(channels.len());
     for channel_id in channels {
@@ -58,7 +61,7 @@ pub(crate) async fn views(
             Entry::Occupied(known) => known.get().clone(),
             Entry::Vacant(slot) => {
                 let page = queue.page(window).await;
-                let mut view = queue_view(target, &repo, &page.entries, page.older);
+                let mut view = queue_view(target, &repo, &page.entries, page.older, web.clone());
                 view.broken = page.held;
                 slot.insert(view).clone()
             }

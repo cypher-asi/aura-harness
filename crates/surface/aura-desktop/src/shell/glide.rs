@@ -219,6 +219,9 @@ impl Shell {
     pub(super) fn cell_at(&self, in_grid: Point) -> Position {
         let area = self.grid_area();
         let cell = self.metrics.cell_at(area, self.cols, self.rows, in_grid);
+        let origin = self.metrics.origin(area, self.cols);
+        let bands = self.tabs.front().tui.list_bands();
+        let cell = crate::paint::cell_in_bands(bands, self.metrics, cell, in_grid.y - origin.y);
         let by = self.glide.by.round();
         let Some(view) = self.tabs.front().tui.chat_scroll().filter(|_| by > 0.0) else {
             return cell;

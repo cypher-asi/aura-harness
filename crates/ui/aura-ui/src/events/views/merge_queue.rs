@@ -92,4 +92,79 @@ pub struct MergeQueueView {
     /// checks: shown above every entry
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broken: Option<String>,
+    /// The repo's page on github.com (`https://github.com/owner/repo`),
+    /// when its remote is there: QUEUE links each branch under it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<String>,
+}
+
+impl MergeQueueView {
+    /// The page of `branch` on github.com, under [`Self::web`]: `None`
+    /// without a repo page, for an empty branch, or for one with a part
+    /// that is no plain path segment.
+    #[must_use]
+    pub fn branch_url(&self, branch: &str) -> Option<String> {
+        let web = self.web.as_deref()?.trim_end_matches('/');
+        if !web.starts_with("https://github.com/") || branch.trim().is_empty() {
+            return None;
+        }
+        let mut path = String::new();
+        for segment in branch.trim().split('/') {
+            if segment.is_empty() || segment == "." || segment == ".." {
+                return None;
+            }
+            path.push('/');
+            path.push_str(&encode_segment(segment));
+        }
+        Some(format!("{web}/tree{path}"))
+    }
+}
+
+/// `segment` with every byte but an unreserved one percent-encoded.
+fn encode_segment(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue(web: Option<&str>) -> MergeQueueView {
+        MergeQueueView {
+            web: web.map(str::to_string),
+            ..MergeQueueView::default()
+        }
+    }
+
+    #[test]
+    fn a_branch_links_to_its_tree_on_github() {
+        let queue = queue(Some("https://github.com/o/r"));
+        assert_eq!(
+            queue.branch_url("aura/x").as_deref(),
+            Some("https://github.com/o/r/tree/aura/x")
+        );
+        assert_eq!(
+            queue.branch_url("feat/a b#c").as_deref(),
+            Some("https://github.com/o/r/tree/feat/a%20b%23c")
+        );
+    }
+
+    #[test]
+    fn no_link_without_a_github_page_or_a_plain_branch() {
+        assert_eq!(queue(None).branch_url("aura/x"), None);
+        let elsewhere = queue(Some("https://gitlab.com/o/r"));
+        assert_eq!(elsewhere.branch_url("aura/x"), None);
+        let github = queue(Some("https://github.com/o/r/"));
+        for branch in ["", "a//b", "../x", "a/./b"] {
+            assert_eq!(github.branch_url(branch), None, "{branch:?}");
+        }
+    }
 }

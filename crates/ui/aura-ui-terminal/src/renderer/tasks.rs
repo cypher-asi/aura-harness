@@ -87,7 +87,7 @@ pub(super) fn render_tasks(
         return;
     }
 
-    let body = Body::new(area, inner, is_focused);
+    let body = Body::list(app, area, inner, is_focused);
     let scroll = app.sync_tasks_scroll(body.visible());
     app.set_task_rows_area(body.rows(), scroll);
     let hovered = match app.hover() {

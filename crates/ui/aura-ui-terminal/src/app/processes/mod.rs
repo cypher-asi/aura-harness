@@ -344,7 +344,8 @@ impl App {
             SidePanelTab::Tasks => self.click_task_row(column, row),
             SidePanelTab::ChannelMembers => self.click_channel_member(column, row),
             SidePanelTab::ChannelHistory => self.click_channel_history(column, row),
-            SidePanelTab::ChannelInfo | SidePanelTab::ChannelQueue => {}
+            SidePanelTab::ChannelQueue => self.click_channel_queue(column, row),
+            SidePanelTab::ChannelInfo => {}
         }
     }
 

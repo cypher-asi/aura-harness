@@ -118,8 +118,10 @@ pub fn render(frame: &mut Frame, app: &mut App, theme: &Theme) {
     let layout = frame_layout(frame.area(), app);
     app.set_prose_rows(Vec::new());
     app.clear_chat_scroll();
+    app.clear_list_bands();
     let panels = (layout.swarm, layout.chat_column[0], layout.right);
     let chat = render_content_panels(frame, panels, app, theme);
+    app.capture_list_bands(frame.buffer_mut());
     // After the panels, which start this frame's clickable areas afresh.
     render_header(frame, layout.header, app, theme);
     render_chat_overlays(frame, chat, app, theme);
@@ -262,6 +264,7 @@ fn render_popups(frame: &mut Frame, chat: Rect, app: &mut App, theme: &Theme) {
 /// the flow canvas's marks from the buffer.
 fn drop_covered(frame: &mut Frame, app: &mut App) {
     app.drop_covered_prose(frame.buffer_mut());
+    app.cover_list_bands(frame.buffer_mut());
     app.drop_covered_code_copies(frame.buffer_mut());
     app.drop_covered_links(frame.buffer_mut());
     app.drop_covered_chat(frame.buffer_mut());

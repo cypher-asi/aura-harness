@@ -56,6 +56,7 @@ fn zode_queue() -> crate::events::MergeQueueView {
         ],
         older: 0,
         broken: None,
+        web: None,
     }
 }
 
@@ -94,7 +95,7 @@ fn test_queue_tab_lists_every_merge_newest_first() {
     let mut app = queue_app();
     send_zode_queue(&mut app);
     let rows = render_rows_sized(&mut app, 140, TALL);
-    let header = line_with(&rows, "Merges into main");
+    let header = line_with(&rows, "MERGES INTO  main");
     assert!(line_with(&rows, "/src/zode") > header);
     let running = line_with(&rows, "RUNNING");
     let failed = line_with(&rows, "FAILED");
@@ -105,8 +106,13 @@ fn test_queue_tab_lists_every_merge_newest_first() {
         (failed, "fix/escapes", "q2abc1"),
         (merged, "docs/readme", "q1abc1"),
     ] {
-        assert!(rows[row].contains(branch), "{}", rows[row]);
         assert!(rows[row].contains(head), "{}", rows[row]);
+        assert!(!rows[row].contains(branch), "{}", rows[row]);
+        assert!(
+            rows[row + 1].contains(branch),
+            "its own line: {}",
+            rows[row + 1]
+        );
     }
     let queued = local(QUEUED_AT);
     let queued_row = line_with(&rows, &queued);
@@ -123,25 +129,126 @@ fn test_queue_tab_lists_every_merge_newest_first() {
     assert_eq!(rows.iter().filter(|r| r.contains("Attempts")).count(), 1);
 }
 
-#[test]
-fn test_queue_tab_colours_each_merge_by_its_state() {
-    let mut app = queue_app();
-    send_zode_queue(&mut app);
-    let theme = test_theme();
+/// The screen of `app`, tall enough for the whole queue.
+fn queue_buffer(app: &mut crate::App, theme: &crate::Theme) -> ratatui::buffer::Buffer {
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, TALL)).unwrap();
     terminal
-        .draw(|frame| super::super::render(frame, &mut app, &theme))
+        .draw(|frame| super::super::render(frame, app, theme))
         .unwrap();
-    let buffer = terminal.backend().buffer().clone();
-    let fg_of = |text: &str| {
-        let row = row_of(&buffer, text);
-        find_cell(&buffer, row, text).unwrap().1.fg
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn test_queue_tab_marks_each_merge_by_a_dot() {
+    let mut app = queue_app();
+    send_zode_queue(&mut app);
+    let theme = test_theme();
+    let buffer = queue_buffer(&mut app, &theme);
+    for (state, color) in [
+        ("MERGED", theme.colors.success),
+        ("FAILED", theme.colors.error),
+        ("RUNNING", theme.colors.warning),
+    ] {
+        let row = row_of(&buffer, state);
+        let (x, cell) = find_cell(&buffer, row, state).unwrap();
+        assert_eq!(
+            cell.fg,
+            Some(theme.colors.secondary),
+            "{state} is a section title"
+        );
+        let dot = &buffer[(x - 2, row)];
+        assert_eq!(dot.symbol(), "●", "{state}");
+        assert_eq!(dot.fg, color, "{state} dot");
+    }
+    let detail = row_of(&buffer, "cargo test failed");
+    let (_, cell) = find_cell(&buffer, detail, "cargo test failed").unwrap();
+    assert_eq!(
+        cell.fg,
+        Some(theme.colors.muted),
+        "what happened is not red"
+    );
+}
+
+#[test]
+fn test_queue_tab_has_no_bold_or_colored_text() {
+    use ratatui::style::Modifier;
+    let mut app = queue_app();
+    send_zode_queue(&mut app);
+    let theme = test_theme();
+    let buffer = queue_buffer(&mut app, &theme);
+    // No bold and no colored text anywhere on the tab: only the dots.
+    let (x0, top) = {
+        let row = row_of(&buffer, "MERGES INTO");
+        (find_cell(&buffer, row, "MERGES INTO").unwrap().0, row)
     };
-    assert_eq!(fg_of("MERGED"), Some(theme.colors.success));
-    assert_eq!(fg_of("FAILED"), Some(theme.colors.error));
-    assert_eq!(fg_of("RUNNING"), Some(theme.colors.warning));
-    assert_eq!(fg_of("cargo test failed"), Some(theme.colors.error));
+    let plain = [
+        theme.colors.foreground,
+        theme.colors.muted,
+        theme.colors.secondary,
+        ratatui::style::Color::Reset,
+    ];
+    for y in top..row_of(&buffer, "docs/readme") + 3 {
+        for x in x0..buffer.area.width {
+            let cell = &buffer[(x, y)];
+            if cell.symbol() == "│" {
+                break;
+            }
+            assert!(!cell.modifier.contains(Modifier::BOLD), "bold at {x},{y}");
+            if cell.symbol().trim().is_empty() || cell.symbol() == "●" {
+                continue;
+            }
+            assert!(
+                plain.contains(&cell.fg),
+                "{:?} colored at {x},{y}",
+                cell.symbol()
+            );
+        }
+    }
+}
+
+/// `#zode`'s queue, in a repo on GitHub, drawn on a tall screen; returns
+/// the screen and the row and column the branch `branch` starts at.
+fn linked_queue(app: &mut crate::App, web: Option<&str>, branch: &str) -> (u16, u16) {
+    app.process_command(crate::events::UiCommand::SetMergeQueue {
+        channel_id: "c1".to_string(),
+        queue: crate::events::MergeQueueView {
+            web: web.map(str::to_string),
+            ..zode_queue()
+        },
+    });
+    let rows = render_rows_sized(app, 140, TALL);
+    let row = line_with(&rows, branch);
+    let column = char_column(&rows[row], branch);
+    (u16::try_from(column).unwrap(), u16::try_from(row).unwrap())
+}
+
+#[test]
+fn test_a_click_on_a_branch_opens_it_on_github() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = queue_app();
+    let at = linked_queue(&mut app, Some("https://github.com/o/r"), "fix/escapes");
+    mouse_at(&mut app, MouseEventKind::Down(MouseButton::Left), at);
+    assert_eq!(
+        app.opened_links(),
+        ["https://github.com/o/r/tree/fix/escapes"]
+    );
+    // The header above it is no link.
+    mouse_at(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        (at.0, at.1 - 1),
+    );
+    assert_eq!(app.opened_links().len(), 1);
+}
+
+#[test]
+fn test_a_branch_of_a_repo_off_github_opens_nothing() {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let mut app = queue_app();
+    let at = linked_queue(&mut app, None, "fix/escapes");
+    mouse_at(&mut app, MouseEventKind::Down(MouseButton::Left), at);
+    assert!(app.opened_links().is_empty());
 }
 
 #[test]
@@ -150,20 +257,18 @@ fn test_queue_tab_without_merges_says_where_they_come_from() {
     let mut app = queue_app();
     let screen = render_rows(&mut app, 140).join("\n");
     assert!(screen.contains("No merges yet."), "{screen}");
-    assert!(!screen.contains("Merges into"), "{screen}");
+    assert!(!screen.contains("MERGES INTO"), "{screen}");
 
     app.process_command(UiCommand::SetMergeQueue {
         channel_id: "c1".to_string(),
         queue: MergeQueueView {
             target: "main".to_string(),
             repo: "/src/zode".to_string(),
-            entries: Vec::new(),
-            older: 0,
-            broken: None,
+            ..MergeQueueView::default()
         },
     });
     let rows = render_rows(&mut app, 140);
-    let header = line_with(&rows, "Merges into main");
+    let header = line_with(&rows, "MERGES INTO  main");
     assert!(line_with(&rows, "No merges yet.") > header);
 }
 
@@ -180,7 +285,7 @@ fn test_an_empty_queue_names_its_own_target() {
         },
     });
     let screen = render_rows(&mut app, 200).join("\n");
-    assert!(screen.contains("Merges into trunk"), "{screen}");
+    assert!(screen.contains("MERGES INTO  trunk"), "{screen}");
     let queue = app.open_channel_queue().cloned();
     let lines = super::super::channel_queue::queue_lines(queue.as_ref(), 400, &test_theme());
     let text: String = lines.iter().map(ToString::to_string).collect();

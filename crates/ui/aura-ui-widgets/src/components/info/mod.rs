@@ -21,6 +21,7 @@
 //! what failed ([`Value::Error`]). Nothing else is colored: section titles
 //! never take the accent.
 
+use super::StatusDot;
 use crate::themes::Theme;
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -145,6 +146,43 @@ impl<'t> Info<'t> {
             ));
         }
         self.lines.push(Line::from(spans));
+    }
+
+    /// A section's title led by a status dot, after a blank row unless it
+    /// opens the document, then its muted `note`: `● MERGED  a1b2c3d`.
+    /// The dot is the one colored cell; the title keeps the `secondary`
+    /// of every section title and is never bold.
+    pub fn marked_section(&mut self, dot: StatusDot, title: &str, note: Option<&str>) {
+        if !self.lines.is_empty() {
+            self.blank();
+        }
+        let lead = StatusDot::GLYPH.width() + 1;
+        let title = truncate_line(title, self.width.saturating_sub(lead));
+        let room = self.width.saturating_sub(lead + title.width() + 2);
+        let mut spans = vec![
+            dot.span(self.theme),
+            Span::raw(" "),
+            Span::styled(title, Style::default().fg(self.theme.colors.secondary)),
+        ];
+        if let Some(note) = note.filter(|note| room > 0 && !note.trim().is_empty()) {
+            spans.push(Span::styled(
+                format!("  {}", truncate_line(note, room)),
+                self.muted(),
+            ));
+        }
+        self.lines.push(Line::from(spans));
+    }
+
+    /// `  text`, indented like an item, in `foreground` and underlined: a
+    /// line the pointer opens. Returns its index among the document's
+    /// lines, for the caller to find it under the pointer.
+    pub fn link(&mut self, text: &str) -> usize {
+        let text = truncate_line(text, self.width.saturating_sub(INDENT.len()));
+        self.lines.push(Line::from(vec![
+            Span::raw(INDENT),
+            Span::styled(text, self.plain().add_modifier(Modifier::UNDERLINED)),
+        ]));
+        self.lines.len() - 1
     }
 
     /// `  label     value`: the muted label in its column, then the value,

@@ -103,3 +103,53 @@ fn test_channel_info_shows_a_missing_project_by_name_without_a_folder() {
     assert_eq!(cell, "(missing project)", "{}", rows[project]);
     assert!(!rows.join("\n").contains("No project"));
 }
+
+#[test]
+fn test_channel_info_top_is_a_header_with_its_details_indented() {
+    use ratatui::style::Modifier;
+    let mut app = channel_info_app(None);
+    let rows = render_rows(&mut app, 140);
+    let header = info_row(&rows, "CHANNEL ");
+    let column = rows[header].find("CHANNEL").unwrap();
+    let at = |row: usize| {
+        rows[row][column..]
+            .split('│')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    assert!(
+        at(header + 1).starts_with("  #zode"),
+        "{:?}",
+        at(header + 1)
+    );
+    assert!(
+        at(header + 2).starts_with("  Zode release"),
+        "{:?}",
+        at(header + 2)
+    );
+    assert!(
+        at(header + 3).starts_with("  Ship it"),
+        "{:?}",
+        at(header + 3)
+    );
+    assert!(
+        at(header + 4).trim().is_empty(),
+        "a blank row, then COORDINATOR"
+    );
+    assert!(at(header + 5).starts_with("COORDINATOR"));
+
+    // Nothing on INFO is bold, the title included.
+    let buffer = render_buffer(&mut app, 140);
+    let x = u16::try_from(rows[header][..column].chars().count()).unwrap();
+    for y in header..header + 12 {
+        for x in x..x + 30 {
+            let cell = &buffer[(x, u16::try_from(y).unwrap())];
+            assert!(
+                !cell.modifier.contains(Modifier::BOLD),
+                "bold at {x},{y}: {:?}",
+                rows[y]
+            );
+        }
+    }
+}

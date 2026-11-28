@@ -38,6 +38,7 @@ impl Shell {
             tab.terminal.backend_mut().resize(cols, rows, pixels);
         }
         let (tui, tui_theme) = (&mut tab.tui, &self.tui_theme);
+        tui.set_list_pitch(self.metrics.list_pitch());
         // This frame shows whatever changed so far.
         tui.take_redraw();
         // The grid backend's error type is `Infallible`.

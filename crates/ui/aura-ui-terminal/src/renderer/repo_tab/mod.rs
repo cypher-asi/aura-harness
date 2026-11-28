@@ -70,7 +70,7 @@ pub(super) fn render_repo(
 /// bordered by `area`, and record where they went.
 fn render_list(frame: &mut Frame, area: Rect, list: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Sandbox;
-    let body = Body::new(area, list, is_focused);
+    let body = Body::list(app, area, list, is_focused);
     let visible = body.visible();
     let scroll = app.sync_repo_scroll(visible);
     let hovered = match app.hover() {
