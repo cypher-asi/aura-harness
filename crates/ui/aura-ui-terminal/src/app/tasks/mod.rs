@@ -1,8 +1,16 @@
 //! The TASKS side tab: the work agents did or are doing in the active
-//! agent's workspace, grouped under the plan it works on. Each plan is a
-//! foldable header with its todos; the plan being worked on comes first,
-//! then the other plans newest first. Work on no listed plan goes last
-//! under a `No Plan` header, shown only when it has rows.
+//! agent's workspace, grouped under the plan it works on, and the groups
+//! under the day their work last moved on, newest first, headed as the
+//! Archive heads its days. Each plan is a foldable header with its todos;
+//! within a day the plan being worked on comes first, then the other
+//! plans by when they last moved on. Work on no listed plan goes last in
+//! each day, under a `No Plan` header, shown only when it has rows.
+//!
+//! A plan's group goes under the day its file or a task in it last
+//! changed, whole, however many days its work took. So do an agent's
+//! requests of no plan whose todo lists share an item, as one list
+//! carried over from request to request. Work of no known time goes
+//! last, under `EARLIER`. The highlight passes over the days' headers.
 //!
 //! What the user asked is not listed: a request (a task no other task
 //! handed out) has no row. Its todo list is listed instead, item by item,
@@ -30,6 +38,7 @@
 //! under its header's fold arrow, rounds and their items included.
 //!
 //! ```text
+//! TODAY                               a day
 //! ▾  Auth rework              1/3     a plan
 //! ☒  Add session table                its todos
 //! ▣  Write the login handler
@@ -45,6 +54,8 @@
 //!   ✓  Find the uses  → explorer
 //! ☐  Rename the crate
 //! ✓  Fix the typo  → coder            a task doing no item
+//! YESTERDAY
+//! ▸  Parser cleanup           ✓ 5/5   a plan done that day
 //! ```
 //!
 //! Plans being worked on, with todos left or with work still open, start
@@ -67,10 +78,12 @@ use super::processes::SIDE_PAGE;
 use super::side_scope::AgentFilter;
 use super::{follow_selection, App};
 use crate::events::{PlanView, TaskView, TodoView};
+use chrono::NaiveDate;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
 mod actions;
+mod days;
 mod group_body;
 mod grouping;
 mod items;
@@ -80,8 +93,16 @@ mod selection;
 /// `None` when nothing is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskRow {
-    /// A group's header: a plan, or `None` for the No Plan group
-    Plan { plan: Option<usize>, open: bool },
+    /// The header of the local day the groups under it last moved on;
+    /// `None` for work of no known time
+    Day { day: Option<NaiveDate> },
+    /// A group's header, under `day`: a plan, or `None` for that day's
+    /// No Plan group
+    Plan {
+        plan: Option<usize>,
+        day: Option<NaiveDate>,
+        open: bool,
+    },
     /// A todo of an open plan
     Todo {
         plan: usize,
@@ -129,24 +150,24 @@ pub enum Doing {
 impl TaskRow {
     /// Index of the task the row belongs to: the task itself, the
     /// request an item was last listed by, or a round's first request;
-    /// `None` on plans and todos.
+    /// `None` on days, plans and todos.
     #[must_use]
     pub const fn task(self) -> Option<usize> {
         match self {
             Self::Task { task, .. } | Self::Item { task, .. } => Some(task),
             Self::Round { first, .. } => Some(first),
-            Self::Plan { .. } | Self::Todo { .. } => None,
+            Self::Day { .. } | Self::Plan { .. } | Self::Todo { .. } => None,
         }
     }
 
-    /// Index of the plan of a plan header or todo; `None` on the No Plan
-    /// header, rounds, items and tasks.
+    /// Index of the plan of a plan header or todo; `None` on days, the
+    /// No Plan header, rounds, items and tasks.
     #[must_use]
     pub const fn plan(self) -> Option<usize> {
         match self {
             Self::Plan { plan, .. } => plan,
             Self::Todo { plan, .. } => Some(plan),
-            Self::Round { .. } | Self::Task { .. } | Self::Item { .. } => None,
+            Self::Day { .. } | Self::Round { .. } | Self::Task { .. } | Self::Item { .. } => None,
         }
     }
 
@@ -156,16 +177,22 @@ impl TaskRow {
     pub const fn depth(self) -> usize {
         match self {
             Self::Task { depth, .. } => depth,
-            Self::Plan { .. } | Self::Round { .. } | Self::Todo { .. } | Self::Item { .. } => 0,
+            Self::Day { .. }
+            | Self::Plan { .. }
+            | Self::Round { .. }
+            | Self::Todo { .. }
+            | Self::Item { .. } => 0,
         }
     }
 
-    /// Whether what is under the row shows; `None` when nothing is.
+    /// Whether what is under the row shows; `None` when nothing is, as
+    /// under a day's header, which does not fold.
     #[must_use]
     pub const fn fold(self) -> Option<bool> {
         match self {
             Self::Plan { open, .. } | Self::Round { open, .. } => Some(open),
             Self::Todo { fold, .. } | Self::Item { fold, .. } | Self::Task { fold, .. } => fold,
+            Self::Day { .. } => None,
         }
     }
 }
@@ -175,7 +202,8 @@ impl TaskRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RowKey {
     Plan(String),
-    NoPlan,
+    /// A day's No Plan group
+    NoPlan(Option<NaiveDate>),
     Todo(String, usize),
     /// An item, by agent id and content
     Item(String, String),
@@ -201,8 +229,9 @@ pub struct TaskList {
     current_plan: Option<String>,
     /// Plans the user folded (`false`) or opened (`true`), by path
     plan_folds: HashMap<String, bool>,
-    /// Whether the user folded (`false`) or opened the No Plan group
-    no_plan_open: Option<bool>,
+    /// No Plan groups the user folded (`false`) or opened (`true`), by
+    /// day
+    no_plan_folds: HashMap<Option<NaiveDate>, bool>,
     /// Which of `plans` are listed for the scoped tasks
     plans_shown: Vec<bool>,
     /// Todos the user folded (`false`) or opened (`true`), by plan path
@@ -393,14 +422,19 @@ impl App {
     }
 
     /// Keep the highlighted row inside `visible` rows, returning the first
-    /// row to draw.
+    /// row to draw. When it is the first row of a day and comes in from
+    /// above, the day's header comes in with it.
     pub fn sync_tasks_scroll(&mut self, visible: usize) -> usize {
-        self.side.tasks_scroll = follow_selection(
-            self.side.tasks_scroll,
-            self.task_list.selected,
-            visible,
-            self.task_list.rows.len(),
-        );
+        let list = &self.task_list;
+        let selected = list.selected;
+        let scroll = follow_selection(self.side.tasks_scroll, selected, visible, list.rows.len());
+        let header_above = selected
+            .checked_sub(1)
+            .filter(|&above| matches!(list.rows.get(above), Some(TaskRow::Day { .. })));
+        self.side.tasks_scroll = match header_above {
+            Some(header) if scroll == selected && visible > 1 => header,
+            _ => scroll,
+        };
         self.side.tasks_scroll
     }
 

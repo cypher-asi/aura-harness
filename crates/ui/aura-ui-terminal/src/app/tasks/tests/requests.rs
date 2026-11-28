@@ -13,7 +13,7 @@ fn requests_have_no_row_their_items_and_parts_do_at_the_left_edge() {
             ),
         ],
     );
-    assert_eq!(shape(&list), ["-No Plan", "x", "y", "@p"]);
+    assert_eq!(shape(&list), ["=Earlier", "-No Plan", "x", "y", "@p"]);
     assert!(
         list.rows().iter().all(|row| row.depth() == 0),
         "icons sit under the header's arrow"
@@ -47,8 +47,8 @@ fn an_agents_list_is_merged_across_its_requests_newest_state_wins() {
             ),
         ],
     );
-    assert_eq!(shape(&list), ["-No Plan", "a", "b", "c"]);
-    let TaskRow::Item { task, item, .. } = list.rows()[2] else {
+    assert_eq!(shape(&list), ["=Earlier", "-No Plan", "a", "b", "c"]);
+    let TaskRow::Item { task, item, .. } = list.rows()[3] else {
         panic!("an item row");
     };
     assert_eq!(list.item(task, item).map(|i| i.state), Some(Done));
@@ -63,7 +63,7 @@ fn the_agent_last_at_work_comes_first() {
             request("old", "a", vec![item("a's", Todo, None)]),
         ],
     );
-    assert_eq!(shape(&list), ["-No Plan", "b's", "a's"]);
+    assert_eq!(shape(&list), ["=Earlier", "-No Plan", "b's", "a's"]);
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn a_task_sits_one_level_under_the_item_it_does_even_after_the_list_moves_on() {
     let list = list_of(Vec::new(), tasks);
     assert_eq!(
         shape(&list),
-        ["-No Plan", "-x", "  @p1", "y", "@p2"],
+        ["=Earlier", "-No Plan", "-x", "  @p1", "y", "@p2"],
         "p1 does x, which the later list carries without the link"
     );
 }
@@ -100,7 +100,7 @@ fn a_tasks_own_parts_nest_under_it_and_its_items_are_not_listed() {
             request("r", "lead", Vec::new()),
         ],
     );
-    assert_eq!(shape(&list), ["-No Plan", "-@p", "  @q"]);
+    assert_eq!(shape(&list), ["=Earlier", "-No Plan", "-@p", "  @q"]);
 }
 
 #[test]
@@ -112,15 +112,18 @@ fn done_items_fold_their_tasks_and_folds_stick() {
         ]
     };
     let mut app = app_on_tasks(Vec::new(), tasks());
-    assert_eq!(shape(app.task_list()), ["-No Plan", "+x"]);
+    assert_eq!(shape(app.task_list()), ["=Earlier", "-No Plan", "+x"]);
 
     press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Right);
-    assert_eq!(shape(app.task_list()), ["-No Plan", "-x", "  @p1"]);
+    assert_eq!(
+        shape(app.task_list()),
+        ["=Earlier", "-No Plan", "-x", "  @p1"]
+    );
     app.process_command(UiCommand::SetTasks(tasks()));
     assert_eq!(
         shape(app.task_list()),
-        ["-No Plan", "-x", "  @p1"],
+        ["=Earlier", "-No Plan", "-x", "  @p1"],
         "the fold survives updates"
     );
     assert_eq!(selected_shape(&app), "-x", "and so does the highlight");
@@ -129,7 +132,7 @@ fn done_items_fold_their_tasks_and_folds_stick() {
     press(&mut app, KeyCode::Left);
     assert_eq!(
         shape(app.task_list()),
-        ["-No Plan", "+x"],
+        ["=Earlier", "-No Plan", "+x"],
         "Left on a task with nothing under it folds the item it is under"
     );
     assert_eq!(selected_shape(&app), "+x");
@@ -152,6 +155,9 @@ fn a_new_request_keeps_the_highlight_on_its_item() {
         "other",
         vec![item("z", Todo, None)],
     )));
-    assert_eq!(shape(app.task_list()), ["-No Plan", "z", "x", "y"]);
+    assert_eq!(
+        shape(app.task_list()),
+        ["=Earlier", "-No Plan", "z", "x", "y"]
+    );
     assert_eq!(selected_shape(&app), "y");
 }

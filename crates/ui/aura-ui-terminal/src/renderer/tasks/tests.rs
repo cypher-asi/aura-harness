@@ -51,6 +51,7 @@ fn plans_of_other_agents_only_say_so_when_no_task_is_hidden() {
             assignee: None,
             task: Some("tb".into()),
         }],
+        changed_ms: None,
     }]));
     assert!(app.task_list().rows().is_empty());
     assert_eq!(app.task_list().hidden(), 0);
@@ -105,16 +106,17 @@ fn row_icons_sit_under_the_headers_arrow_and_tasks_one_level_in() {
             .position(|c| c == glyph)
             .unwrap_or_else(|| panic!("no {glyph} in:\n{screen}"))
     };
-    assert!(lines[0].contains("No Plan"), "{screen}");
-    assert!(lines[1].contains("Write the parser  → coder"), "{screen}");
+    assert_eq!(lines[0].trim_end(), " EARLIER", "{screen}");
+    assert!(lines[1].contains("No Plan"), "{screen}");
+    assert!(lines[2].contains("Write the parser  → coder"), "{screen}");
     assert!(
-        lines[2].contains("Write the parser  → coder"),
+        lines[3].contains("Write the parser  → coder"),
         "a task is titled by the item it does: {screen}"
     );
     assert!(!screen.contains("Parse "), "{screen}");
-    assert_eq!(column(lines[1], '▣'), column(lines[0], '▾'), "{screen}");
+    assert_eq!(column(lines[2], '▣'), column(lines[1], '▾'), "{screen}");
     assert_eq!(
-        column(lines[2], '✓').saturating_sub(column(lines[0], '▾')),
+        column(lines[3], '✓').saturating_sub(column(lines[1], '▾')),
         2,
         "{screen}"
     );
@@ -173,6 +175,7 @@ fn two_rounds() -> App {
         path: ROUND_PLAN.into(),
         name: "ch".into(),
         todos: vec![round_todo("new", TodoState::Pending, None)],
+        changed_ms: None,
     }]));
     app.process_command(UiCommand::SetTasks(vec![
         round_build("b2", vec![round_todo("new", TodoState::Pending, None)]),
@@ -193,16 +196,16 @@ fn two_rounds() -> App {
 #[test]
 fn an_earlier_round_lists_its_items_and_a_replaced_failure_is_muted() {
     let mut app = two_rounds();
-    let buffer = buffer_of(&mut app, 6);
+    let buffer = buffer_of(&mut app, 7);
     let screen = text_of(&buffer);
     let lines: Vec<&str> = screen.lines().collect();
     assert!(
-        lines[2].contains("asked b1") && lines[2].contains("0/1"),
+        lines[3].contains("asked b1") && lines[3].contains("0/1"),
         "{screen}"
     );
-    assert!(lines[3].contains("▣  Add the store"), "{screen}");
-    assert!(lines[4].contains("✗  Add the store  → coder"), "{screen}");
+    assert!(lines[4].contains("▣  Add the store"), "{screen}");
     assert!(lines[5].contains("✗  Add the store  → coder"), "{screen}");
+    assert!(lines[6].contains("✗  Add the store  → coder"), "{screen}");
     assert!(!screen.contains("Work ONLY"), "{screen}");
 
     let theme = Theme::default();
@@ -212,6 +215,31 @@ fn an_earlier_round_lists_its_items_and_a_replaced_failure_is_muted() {
             .find(|cell| cell.symbol() == "✗")
             .map_or_else(|| panic!("no ✗ on row {y}:\n{screen}"), |cell| cell.fg)
     };
-    assert_eq!(icon_color(4), theme.colors.muted, "t1 was replaced by t2");
-    assert_eq!(icon_color(5), theme.colors.error, "t2 is the newest try");
+    assert_eq!(icon_color(5), theme.colors.muted, "t1 was replaced by t2");
+    assert_eq!(icon_color(6), theme.colors.error, "t2 is the newest try");
+}
+
+#[test]
+fn work_of_today_goes_under_today_in_muted_capitals_at_the_icon_column() {
+    let mut app = App::new();
+    let now = aura_core_types::time::now_ms();
+    let tasks = coder_tasks()
+        .into_iter()
+        .map(|task| TaskView {
+            updated_ms: now,
+            ..task
+        })
+        .collect();
+    app.process_command(UiCommand::SetTasks(tasks));
+    let buffer = buffer_of(&mut app, 4);
+    let screen = text_of(&buffer);
+    let lines: Vec<&str> = screen.lines().collect();
+    assert_eq!(lines[0].trim_end(), " TODAY", "{screen}");
+    let arrow = lines[1].chars().position(|c| c == '▾');
+    assert_eq!(
+        arrow,
+        Some(1),
+        "the header starts where the icons do: {screen}"
+    );
+    assert_eq!(buffer[(1, 0)].fg, Theme::default().colors.muted);
 }

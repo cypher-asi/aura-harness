@@ -9,6 +9,7 @@ use TodoState::{Completed as Done, InProgress as Doing, Pending as Todo};
 mod support;
 use support::*;
 
+mod by_day;
 mod plan_files;
 mod plans;
 mod requests;

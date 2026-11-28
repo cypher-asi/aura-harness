@@ -18,6 +18,7 @@ fn plan(path: &str, todos: &[&str]) -> PlanView {
                 task: None,
             })
             .collect(),
+        changed_ms: None,
     }
 }
 
@@ -82,24 +83,29 @@ fn test_the_channels_tasks_list_every_agents_work_in_its_folder() {
 fn test_the_channels_tasks_take_the_keys_and_the_wheel() {
     let (mut app, _rx) = channel_with_tasks();
     app.focus = PanelFocus::Sandbox;
-    assert_eq!(app.task_list().rows().len(), 3, "the plan and its todos");
+    assert_eq!(
+        app.task_list().rows().len(),
+        4,
+        "the day, the plan and its todos"
+    );
+    assert_eq!(app.task_list().selected(), 1, "the plan, past the day");
 
     app.handle_key(key(KeyCode::Down));
-    assert_eq!(app.task_list().selected(), 1);
-    app.handle_key(key(KeyCode::End));
     assert_eq!(app.task_list().selected(), 2);
+    app.handle_key(key(KeyCode::End));
+    assert_eq!(app.task_list().selected(), 3);
     app.handle_key(key(KeyCode::Home));
-    assert_eq!(app.task_list().selected(), 0);
+    assert_eq!(app.task_list().selected(), 1);
     app.handle_key(key(KeyCode::Char(' ')));
-    assert_eq!(app.task_list().rows().len(), 1, "Space folds the plan");
+    assert_eq!(app.task_list().rows().len(), 2, "Space folds the plan");
     app.handle_key(key(KeyCode::Right));
-    assert_eq!(app.task_list().rows().len(), 3, "Right opens it");
+    assert_eq!(app.task_list().rows().len(), 4, "Right opens it");
     assert!(app.input().is_empty(), "no key was typed");
 
     app.scroll_panel_down(PanelFocus::Sandbox, 2);
-    assert_eq!(app.task_list().selected(), 2);
+    assert_eq!(app.task_list().selected(), 3);
     app.scroll_panel_up(PanelFocus::Sandbox, 1);
-    assert_eq!(app.task_list().selected(), 1);
+    assert_eq!(app.task_list().selected(), 2);
 
     app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers, "the last tab");
@@ -118,10 +124,17 @@ fn test_clicking_and_hovering_a_row_of_the_channels_tasks() {
     assert_eq!(app.focus(), PanelFocus::Sandbox);
     assert_eq!(app.task_list().selected(), 2);
 
-    // The plan's fold glyph folds it.
+    // The day's header above the plan is neither lit nor clicked.
     let fold = rows.x + u16::try_from(crate::components::ROW_INSET).unwrap_or(0);
+    app.handle_mouse(mouse(MouseEventKind::Moved, todo.0, rows.y));
+    assert_eq!(app.hover(), None);
     click_at(&mut app, (fold, rows.y));
-    assert_eq!(app.task_list().rows().len(), 1);
+    assert_eq!(app.task_list().selected(), 2);
+    assert_eq!(app.task_list().rows().len(), 4);
+
+    // The plan's fold glyph folds it.
+    click_at(&mut app, (fold, rows.y + 1));
+    assert_eq!(app.task_list().rows().len(), 2);
 }
 
 #[test]

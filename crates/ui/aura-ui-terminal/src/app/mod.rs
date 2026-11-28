@@ -16,6 +16,7 @@ mod commands;
 mod slash;
 pub(crate) use slash::plan_ranges;
 mod context_menu;
+pub(crate) mod days;
 pub mod file_view;
 pub mod flow;
 pub mod folder_picker;

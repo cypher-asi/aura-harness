@@ -1,7 +1,9 @@
 //! Which tasks and plans are listed, the group each task's tree goes
-//! in, and the rows of every group.
+//! in, and the rows of every group under its day.
 
 use std::collections::{HashMap, HashSet};
+
+use chrono::NaiveDate;
 
 use super::{RowKey, TaskList, TaskRow};
 use crate::events::{PlanView, TaskView};
@@ -204,28 +206,42 @@ impl TaskList {
     pub(super) fn build_rows(&self) -> Vec<TaskRow> {
         let placed = self.place_tasks();
         let lookups = (&placed.index, &placed.children);
+        let tops = (placed.groups.as_slice(), placed.no_plan.as_slice());
         let mut rows = Vec::new();
         let mut seen = HashSet::new();
-        for plan in self.plan_order() {
-            let body = self.group_body(Some(plan), &placed.groups[plan], lookups, &mut seen);
-            let open = self.is_plan_open(&self.plans[plan], body.has_open_task);
+        let mut day = None;
+        for section in self.sections(&self.plan_order(), tops, &placed.children) {
+            let body = self.group_body(section.group, &section.tops, lookups, &mut seen);
+            let open = match section.group.and_then(|plan| self.plans.get(plan)) {
+                Some(plan) => self.is_plan_open(plan, body.has_open_task),
+                None if body.rows.is_empty() => continue,
+                None => self.is_no_plan_open(section.day),
+            };
+            if day != Some(section.day) {
+                day = Some(section.day);
+                rows.push(TaskRow::Day { day: section.day });
+            }
             rows.push(TaskRow::Plan {
-                plan: Some(plan),
+                plan: section.group,
+                day: section.day,
                 open,
             });
             if open {
                 rows.extend(body.rows);
             }
         }
-        let body = self.group_body(None, &placed.no_plan, lookups, &mut seen);
-        if !body.rows.is_empty() {
-            let open = self.reveal || self.no_plan_open.unwrap_or(true);
-            rows.push(TaskRow::Plan { plan: None, open });
-            if open {
-                rows.extend(body.rows);
-            }
-        }
         rows
+    }
+
+    /// The plan whose group the tree rooted at `root` is listed in
+    /// (`None` for No Plan), and the day it is listed under.
+    pub(super) fn section_of(&self, root: usize) -> Option<(Option<usize>, Option<NaiveDate>)> {
+        let placed = self.place_tasks();
+        let tops = (placed.groups.as_slice(), placed.no_plan.as_slice());
+        self.sections(&self.plan_order(), tops, &placed.children)
+            .into_iter()
+            .find(|section| section.tops.contains(&root))
+            .map(|section| (section.group, section.day))
     }
 
     /// The listed tasks by where their rows go.

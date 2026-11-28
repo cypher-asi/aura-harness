@@ -12,6 +12,10 @@ pub struct PlanView {
     pub name: String,
     /// Steps, in order
     pub todos: Vec<TodoView>,
+    /// When its file last changed, in ms since the epoch; `None` when
+    /// not known, as for a plan read on a cloud agent's machine
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_ms: Option<u64>,
 }
 
 impl PlanView {

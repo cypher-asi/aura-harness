@@ -1,36 +1,49 @@
 //! TASKS tab: the work agents did or are doing, grouped under the plan it
-//! works on. Each plan's header shows its todo progress, then its todos.
-//! Work of no listed plan goes last, under
-//! `No Plan`. Requests have no row: their todo items are listed, and a
-//! task handed out sits one level under the todo or item it does, titled
-//! by it. Builds of a todo list the plan no longer has are listed under
-//! an earlier round's header (see [`crate::app::tasks`]). Every other
-//! row's icon sits under its header's fold arrow.
+//! works on, the groups under the day they last moved on, headed in
+//! muted capitals as the Archive heads its days. Each plan's header shows
+//! its todo progress, then its todos. Work of no listed plan goes last in
+//! each day, under `No Plan`. Requests have no row: their todo items are
+//! listed, and a task handed out sits one level under the todo or item it
+//! does, titled by it. Builds of a todo list the plan no longer has are
+//! listed under an earlier round's header (see [`crate::app::tasks`]).
+//! Every other row's icon sits under its header's fold arrow.
 //!
 //! ```text
+//!  TODAY
 //!  ▾  Auth rework                 1/3
 //!  ☒  Add session table
 //!  ▣  Write the login handler
 //!    ⢎⡱ Write the login handler  → coder
 //!  ☐  Wire the middleware
 //!  ▸  Build the auth              4/4
-//!  ▸  Parser cleanup              5/5
 //!  ▾  No Plan
 //!  ☒  Find the uses  → explorer
 //!    ✓  Find the uses  → explorer
 //!  ✓  Fix the typo  → coder
+//!  YESTERDAY
+//!  ▸  Parser cleanup            ✓ 5/5
 //! ```
 
 use super::agents::aura_icon;
 use super::chrome::{Body, ScrollView};
 use super::plans::{marker, marker_color, todo_style};
 use super::side_list::{name_style, render_empty, render_hidden, Tone};
+use crate::app::days::day_name;
 use crate::app::tasks::{TaskList, TaskRow};
 use crate::app::{HoverTarget, PanelFocus};
-use crate::components::{cell_style, list_row, list_row_with_detail, CellState, StatusIcon};
+use crate::components::{
+    cell_style, list_row, list_row_with_detail, truncate_record_info, CellState, StatusIcon,
+    ROW_INSET,
+};
 use crate::events::{PlanView, TaskState, TaskView, TodoView};
 use crate::{App, Theme};
-use ratatui::{layout::Rect, style::Modifier, text::Line, Frame};
+use chrono::{Local, NaiveDate};
+use ratatui::{
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    Frame,
+};
 
 /// Label of the header of the tasks that work on no listed plan.
 const NO_PLAN: &str = "No Plan";
@@ -142,7 +155,8 @@ fn row_line(
 ) -> Line<'static> {
     let depth = row.depth();
     match row {
-        TaskRow::Plan { plan, open } => {
+        TaskRow::Day { day } => day_line(day, width, theme),
+        TaskRow::Plan { plan, open, .. } => {
             let fold = StatusIcon::new(if open { "▾" } else { "▸" }, theme.colors.muted);
             match plan.and_then(|plan| list.plans().get(plan)) {
                 Some(plan) => plan_line(plan, fold, (width, state), theme),
@@ -183,6 +197,18 @@ fn row_line(
             })
         }
     }
+}
+
+/// The header of `day`, from the icon column on, in muted capitals as
+/// the Archive draws its days. It is named as of now, so `TODAY` turns
+/// `YESTERDAY` at midnight with nothing else changing.
+fn day_line(day: Option<NaiveDate>, width: usize, theme: &Theme) -> Line<'static> {
+    let label = day_name(day, Local::now().date_naive()).to_uppercase();
+    let label = truncate_record_info(&label, width.saturating_sub(2 * ROW_INSET));
+    Line::from(Span::styled(
+        format!("{:ROW_INSET$}{label}", ""),
+        Style::default().fg(theme.colors.muted),
+    ))
 }
 
 /// A plan's header: its fold glyph, its name and its todo progress.
