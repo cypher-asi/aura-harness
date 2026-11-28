@@ -1,8 +1,10 @@
 //! The build and test checks an entry must pass before it lands.
 //!
 //! A check runs as `sh -c <command>` in the queue's worktree, in a process
-//! group of its own on Unix, so a timeout kills everything it started
-//! (cargo, its rustc and test processes), not only the shell. Its output
+//! group of its own on Unix. Whenever the check ends, or its future is
+//! dropped (the processor shut down, or the entry's own time limit cut
+//! it off), a [`GroupGuard`] kills that whole group, so nothing it started
+//! (cargo, its rustc and test processes) keeps running in the worktree. Its output
 //! goes to a log file rather than memory; only the end of it is read back
 //! for a failure's reason.
 
@@ -48,14 +50,20 @@ pub async fn run_check(
     let mut child = spawn(dir, command, log)
         .await
         .map_err(|e| failure(format!("could not start: {e}")))?;
+    // Dropped on every way out of here, a cancelled future included.
+    let group = GroupGuard::of(&child);
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => status,
         Ok(Err(e)) => return Err(failure(format!("could not wait for it: {e}"))),
         Err(_) => {
-            kill_group(&mut child).await;
+            drop(group);
+            // Already dead is fine: the group kill got it; this reaps sh.
+            let _ = child.kill().await;
             return Err(failure(format!("timed out after {}s", timeout.as_secs())));
         }
     };
+    // Whatever the shell left running in the background goes with it.
+    drop(group);
     if status.success() {
         return Ok(());
     }
@@ -85,19 +93,36 @@ async fn spawn(dir: &Path, command: &str, log: &Path) -> std::io::Result<Child> 
     child.spawn()
 }
 
-/// Kill `child`'s process group (Unix) and `child`, and reap it.
-async fn kill_group(child: &mut Child) {
+/// Kills a check's process group when dropped. `kill_on_drop` alone only
+/// kills the shell, not what it started.
+pub(crate) struct GroupGuard {
     #[cfg(unix)]
-    if let Some(pid) = child
-        .id()
-        .and_then(|id| i32::try_from(id).ok())
-        .and_then(rustix::process::Pid::from_raw)
-    {
-        // The group may be gone already; the kill below still reaps sh.
-        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    group: Option<rustix::process::Pid>,
+}
+
+impl GroupGuard {
+    /// The guard of `child`'s group (it leads one: `process_group(0)`).
+    pub(crate) fn of(child: &Child) -> Self {
+        #[cfg(not(unix))]
+        let _ = child;
+        Self {
+            #[cfg(unix)]
+            group: child
+                .id()
+                .and_then(|id| i32::try_from(id).ok())
+                .and_then(rustix::process::Pid::from_raw),
+        }
     }
-    // Already dead is fine: the group kill got it.
-    let _ = child.kill().await;
+}
+
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(group) = self.group.take() {
+            // ESRCH: the group is gone already, which is the point.
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
+    }
 }
 
 /// The last [`TAIL_BYTES`] of `log`, empty when it can't be read.
@@ -184,6 +209,41 @@ mod tests {
             .unwrap_err();
         assert!(failure.reason.ends_with("200000"), "{}", failure.reason);
         assert!(failure.reason.len() < TAIL_CHARS + 100);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_check_whose_future_is_dropped_takes_its_processes_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("still-running");
+        let command = format!("(sleep 1; touch {}) & wait", marker.display());
+        let log = dir.path().join("check.log");
+        // Like a shutdown or the entry's time limit: the check's future is
+        // dropped while it runs, its own timeout far away.
+        let cut = tokio::time::timeout(
+            Duration::from_millis(100),
+            run_check(dir.path(), &command, Duration::from_secs(60), &log),
+        )
+        .await;
+        assert!(cut.is_err(), "the check was cut off");
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        assert!(
+            !marker.exists(),
+            "the check's child outlived its dropped future"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn what_a_passing_check_left_in_the_background_is_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("still-running");
+        let command = format!("(sleep 1; touch {}) >/dev/null 2>&1 &", marker.display());
+        let log = dir.path().join("check.log");
+        let passed = run_check(dir.path(), &command, Duration::from_secs(10), &log).await;
+        assert_eq!(passed, Ok(()));
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        assert!(!marker.exists(), "a background child outlived its check");
     }
 
     #[test]
