@@ -45,6 +45,7 @@
 //! breaking the public API at that boundary.
 
 pub mod activation;
+pub mod bundle;
 pub mod error;
 pub mod install;
 pub mod loader;

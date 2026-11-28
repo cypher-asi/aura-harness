@@ -55,8 +55,24 @@ pub fn inject_skill_index(system_prompt: &mut String, skills: &[SkillPromptEntry
     system_prompt.push_str(&xml);
 }
 
+/// What `load_skill` returns for `skill` and, when given, one `file` of
+/// its folder: the file's text, else the skill's full instructions with
+/// the reference files it can load.
+///
+/// # Errors
+/// When `file` leaves the folder or can't be read.
+pub fn load_skill_text(skill: &SkillPromptEntry<'_>, file: Option<&str>) -> Result<String, String> {
+    let Some(file) = file.map(str::trim).filter(|file| !file.is_empty()) else {
+        return Ok(render_loaded_skill(skill));
+    };
+    let relative = crate::bundle::inside(file)
+        .ok_or_else(|| format!("`{file}` is not a path inside the skill's folder"))?;
+    crate::bundle::read_text(&skill.dir_path.join(relative))
+        .map_err(|why| format!("can't load `{file}` of skill `{}`: {why}", skill.name))
+}
+
 /// What `load_skill` returns for `skill`: its full instructions, with
-/// its path and delegation target.
+/// its path, delegation target and reference files.
 #[must_use]
 pub fn render_loaded_skill(skill: &SkillPromptEntry<'_>) -> String {
     let mut buf = format!(
@@ -69,6 +85,14 @@ pub fn render_loaded_skill(skill: &SkillPromptEntry<'_>) -> String {
         let _ = write!(buf, "\n\n{}", skill.body);
     }
     push_target_note(&mut buf, skill);
+    let references = crate::bundle::reference_files(skill.dir_path);
+    if !references.is_empty() {
+        let _ = write!(
+            buf,
+            "\n\nReference files, loaded with `{LOAD_SKILL_TOOL_NAME}` and `file`: {}",
+            references.join(", ")
+        );
+    }
     buf.push_str("\n</skill>");
     buf
 }

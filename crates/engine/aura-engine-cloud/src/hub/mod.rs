@@ -83,6 +83,7 @@ mod request;
 mod seed;
 mod session;
 pub mod setup;
+mod skills;
 mod state;
 pub mod store;
 #[doc(hidden)]
@@ -95,7 +96,8 @@ pub use self::outcomes::{CommitsOutcome, PatchOutcome, PullOutcome};
 pub use self::persist::SyncStatus;
 pub use self::reach::{MailDesk, Reach};
 pub use self::reconnect::{RECONNECTED, RECONNECTING, RECONNECTS_AT_ONCE, RECONNECT_DELAYS};
-pub use self::request::{cloud_policy, TurnAsk};
+pub use self::request::{cloud_policy, TurnAsk, TurnSkills};
+pub use self::skills::SkillsDelivery;
 pub use self::turn::{map_outbound, RemoteEvent, WORKING};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -353,6 +355,8 @@ pub struct CloudHub {
     /// Runs whose turn the hub stopped watching without knowing it ended:
     /// their marks stay ([`Self::end_turn_mark`]).
     unsettled: Mutex<HashSet<String>>,
+    /// The skills last sent to each agent's node ([`skills`]).
+    skills_sent: Mutex<HashMap<String, skills::Sent>>,
     stop: CancellationToken,
 }
 

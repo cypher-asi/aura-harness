@@ -130,7 +130,13 @@ impl Node {
         store: &Arc<RocksStore>,
         seal_cipher: Option<&Arc<SealCipher>>,
     ) -> Arc<RwLock<SkillManager>> {
-        let skill_loader = SkillLoader::with_defaults(Some(self.config.workspaces_path()), None);
+        let mut skill_loader =
+            SkillLoader::with_defaults(Some(self.config.workspaces_path()), None);
+        // The skills its hub sends (`PUT /v1/cloud/skills/:agent_id`).
+        skill_loader
+            .config_mut()
+            .extra_dirs
+            .push(self.config.data_dir.join(crate::gateway::HUB_SKILLS_DIR));
         let skill_install_store = Arc::new(SkillInstallStore::with_cipher(
             store.db_handle().clone(),
             seal_cipher.cloned(),

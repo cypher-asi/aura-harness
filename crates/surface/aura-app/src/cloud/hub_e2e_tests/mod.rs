@@ -31,6 +31,7 @@ mod machine;
 mod record;
 mod restart;
 mod session;
+mod skills;
 
 const MACHINE: &str = "aura-re36-0001";
 const ZNS: &str = "0://terminal/re36";

@@ -11,6 +11,7 @@
 //! | `POST /v1/sync/session/:agent_id/new` | hub | start a new session (`/new`) |
 //! | `GET /v1/sync/traces?agent=` | hub | the agent's newest trace runs, whole |
 //! | `GET /v1/workspace/patch` | hub | the agent's work as a patch |
+//! | `PUT /v1/cloud/skills/:agent_id` | hub | the agent's skill folders, for `load_skill` |
 //! | `POST /v1/mesh/mail` | hub, peers | one message for an agent here |
 //! | `WS /v1/mesh` | hub | mail both ways, directory, host stats, keep-alive |
 //!
@@ -50,6 +51,7 @@ use crate::gateway::RouterState;
 mod keepalive;
 mod mesh;
 mod patch;
+mod skills;
 mod sync;
 #[cfg(test)]
 mod tests;
@@ -58,6 +60,8 @@ mod watch;
 pub(in crate::gateway) use keepalive::keep_awake;
 pub(in crate::gateway) use mesh::{mesh_mail_handler, mesh_ws_handler};
 pub(in crate::gateway) use patch::workspace_patch_handler;
+pub(in crate::gateway) use skills::skills_put_handler;
+pub use skills::HUB_SKILLS_DIR;
 pub(in crate::gateway) use sync::{
     host_handler, sync_import_handler, sync_seal_handler, sync_session_get_handler,
     sync_session_new_handler, sync_session_put_handler, sync_traces_handler,

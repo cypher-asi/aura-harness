@@ -27,6 +27,19 @@ pub struct TurnAsk {
     /// Tools the node offers that the agent may not call, as its
     /// permanent agent leaves them out.
     pub tools_off: Vec<String>,
+    /// The agent's skills, sent to its node before the turn when they
+    /// changed; `system_prompt` then carries none of their text.
+    pub skills: Option<TurnSkills>,
+}
+
+/// An agent's skills for its cloud turn ([`CloudHub::run_turn`](super::CloudHub::run_turn)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnSkills {
+    /// Their folders, for the node to list them and serve `load_skill`
+    pub bundle: aura_core_protocol::cloud::SkillBundle,
+    /// The turn's system prompt with every skill's text in it, for a node
+    /// that can't take the folders
+    pub full_system_prompt: String,
 }
 
 /// The chat run request for `ask`, a turn of `agent`.

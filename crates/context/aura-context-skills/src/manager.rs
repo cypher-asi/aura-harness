@@ -121,19 +121,26 @@ impl SkillManager {
         skills.iter().map(crate::registry::skill_to_meta).collect()
     }
 
-    /// The full instructions of skill `name`, when it is installed for
-    /// `agent_id` and the model may invoke it.
+    /// The full instructions of skill `name`, or one `file` of its folder,
+    /// when it is installed for `agent_id` and the model may invoke it.
     ///
     /// # Errors
     ///
-    /// [`SkillError::NotFound`] when the agent has no such skill.
-    pub fn load_agent_skill(&self, agent_id_str: &str, name: &str) -> Result<String, SkillError> {
+    /// [`SkillError::NotFound`] when the agent has no such skill, and
+    /// [`SkillError::Activation`] when `file` can't be loaded.
+    pub fn load_agent_skill(
+        &self,
+        agent_id_str: &str,
+        name: &str,
+        file: Option<&str>,
+    ) -> Result<String, SkillError> {
         let skills = self.agent_skills_full(agent_id_str);
-        skills
+        let skill = skills
             .iter()
             .find(|skill| skill.frontmatter.name == name)
-            .map(|skill| crate::on_demand::render_loaded_skill(&prompt_entry(skill)))
-            .ok_or_else(|| SkillError::NotFound(name.to_string()))
+            .ok_or_else(|| SkillError::NotFound(name.to_string()))?;
+        crate::on_demand::load_skill_text(&prompt_entry(skill), file)
+            .map_err(SkillError::Activation)
     }
 
     /// Return model-invocable [`SkillMeta`] for only the skills installed for
