@@ -170,6 +170,11 @@ pub struct SubagentDispatchRequest {
     /// list and task record follow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo_id: Option<String>,
+    /// A few words naming what the child works on ("Merge queue store
+    /// tests"), shown as its title in the agents list. `None` leaves the
+    /// host to name it from its prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Terminal state of a foreground subagent task.

@@ -5,9 +5,12 @@
 //! `Agent 2`. The call goes through the agent's kernel like every model
 //! call, after the turn, while the turn's task still owns the session.
 //!
-//! Subtasks get a subtitle the same way: when a `task` call spawns an
-//! instance of a permanent agent, the same model names the subtask from
-//! its prompt, shown as `<code>: <subtask>` (`REN36: Fix parser escapes`).
+//! Subtasks get a subtitle, shown as `<code>: <subtask>` (`REN36: Parser
+//! escapes`): the description the `task` call gave, else one the same
+//! model writes from the subtask's prompt, else one made from the
+//! prompt's first meaningful sentence ([`subtask`]). Agents a cloud
+//! agent spawned on its machine skip the model: they are named from the
+//! description or the prompt as they are listed here.
 //!
 //! INBOX threads named after the first line of their opening message (a
 //! `task` prompt, or a message sent without a subject) get a subject the
@@ -17,7 +20,7 @@
 
 use super::subagents::AgentHub;
 use aura_agent::titles::{
-    cut_at_word, fallback_title, sanitize, MAX_SIDE_CHARS, MAX_TITLE_CHARS, TITLE_TIMEOUT,
+    fallback_title, sanitize, MAX_SIDE_CHARS, MAX_TITLE_CHARS, TITLE_TIMEOUT,
 };
 use aura_agent::{AgentLoopConfig, KernelModelGateway};
 use aura_context_prompts::auxiliary::chat_title::{
@@ -29,6 +32,7 @@ use aura_core_types::{AgentId, BenchSource};
 use aura_model::{Message, ModelProvider, Role};
 use aura_ui::UiCommand;
 use std::sync::Arc;
+pub(super) use subtask::{described_subtitle, fallback_subtitle, subtitle_of_spawn};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -37,27 +41,9 @@ const TITLE_MODEL_ENV: &str = "AURA_TITLE_MODEL";
 /// Longest subtask name kept, in characters. Subtask rows sit indented in
 /// the tree after the helper's code, so they get less room than chats.
 const MAX_SUBTITLE_CHARS: usize = 28;
-/// Longest subtask name made from the prompt when the model gives none.
-const MAX_SUBTITLE_FALLBACK_CHARS: usize = 24;
 /// Longest INBOX thread subject kept, in characters. Thread rows share
 /// their width with a count, the participants and a time.
 const MAX_SUBJECT_CHARS: usize = 48;
-/// Leading verbs a subtask name made from its prompt drops: they open most
-/// task prompts ("Implement the ...") and say nothing about the subtask.
-const FILLER_VERBS: &[&str] = &[
-    "implement",
-    "add",
-    "fix",
-    "finish",
-    "create",
-    "update",
-    "write",
-    "build",
-    "make",
-];
-/// Articles dropped after a filler verb.
-const ARTICLES: &[&str] = &["the", "a", "an"];
-
 /// What a generated title names, which sets its prompt and length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TitleKind {
@@ -299,66 +285,6 @@ pub(super) fn bench_title(source: &BenchSource, task: &str) -> String {
     }
 }
 
-/// A subtask name made from the start of its task `prompt`: the first
-/// line without a leading filler verb ("Implement the engine core" names
-/// "Engine core"), cut shorter than a chat title.
-pub(super) fn fallback_subtitle(prompt: &str) -> String {
-    let line = prompt
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("");
-    let words: Vec<&str> = line.split_whitespace().collect();
-    let is = |word: &str, list: &[&str]| list.iter().any(|w| word.eq_ignore_ascii_case(w));
-    let mut start = 0;
-    if words.first().is_some_and(|w| is(w, FILLER_VERBS)) {
-        start = 1;
-        if words.get(1).is_some_and(|w| is(w, ARTICLES)) {
-            start = 2;
-        }
-    }
-    // Keep the verb when nothing would be left without it.
-    let rest = if start < words.len() {
-        &words[start..]
-    } else {
-        &words[..]
-    };
-    let mut title = trim_dangling(&cut_at_word(&rest.join(" "), MAX_SUBTITLE_FALLBACK_CHARS));
-    if start > 0 && start < words.len() {
-        title = capitalize(&title);
-    }
-    if title.is_empty() {
-        "Subtask".to_string()
-    } else {
-        title
-    }
-}
-
-/// `text` without the articles, prepositions and conjunctions a cut left
-/// dangling at its end ("Engine core in the" reads "Engine core"). Keeps
-/// at least the first word.
-fn trim_dangling(text: &str) -> String {
-    const DANGLING: &[&str] = &[
-        "the", "a", "an", "in", "of", "for", "to", "and", "or", "with", "on", "at", "from", "by",
-    ];
-    let mut words: Vec<&str> = text.split_whitespace().collect();
-    while words.len() > 1
-        && words
-            .last()
-            .is_some_and(|w| DANGLING.iter().any(|d| w.eq_ignore_ascii_case(d)))
-    {
-        words.pop();
-    }
-    words.join(" ")
-}
-
-/// `text` with its first character upper-cased.
-fn capitalize(text: &str) -> String {
-    let mut chars = text.chars();
-    chars.next().map_or_else(String::new, |first| {
-        first.to_uppercase().chain(chars).collect()
-    })
-}
-
+mod subtask;
 #[cfg(test)]
 mod tests;

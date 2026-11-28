@@ -30,8 +30,11 @@ You label subtasks that a coding agent hands to helper agents, for a narrow \
 sidebar tree. Reply with only the label: 1 to 3 words in sentence case naming \
 the thing being worked on, such as \"Parser escapes\", \"Auth retries\", \
 \"Inbox tests\" or \"Engine core\". Drop filler verbs like implement, add, \
-fix, finish, update or create, and articles like \"the\". No quotes, no \
-trailing punctuation, no prefix like \"Title:\".";
+fix, finish, update or create, and articles like \"the\". Task prompts \
+often open with boilerplate such as workspace paths, \"In the Rust \
+workspace ...\", \"You are working in ...\" or rules about tools and \
+committing: ignore it and name the work itself. No quotes, no trailing \
+punctuation, no prefix like \"Title:\".";
 
 /// The user message for the subtask title call: the task prompt the
 /// helper was given, already shortened by the caller.

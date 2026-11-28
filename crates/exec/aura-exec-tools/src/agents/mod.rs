@@ -33,7 +33,7 @@ pub use get_agent_state::{GetAgentStateInput, GetAgentStateTool};
 pub use list_agents::{ListAgentsInput, ListAgentsTool};
 pub use send_to_agent::{SendToAgentInput, SendToAgentTool};
 pub use spawn_agent::{SpawnAgentInput, SpawnAgentOutcome, SpawnAgentTool};
-pub use task::{TaskInput, TaskTool};
+pub use task::{TaskInput, TaskTool, TASK_DESCRIPTION_HELP};
 
 use crate::tool::Tool;
 use aura_core_types::{Capability, ToolDefinition};

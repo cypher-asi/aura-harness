@@ -228,6 +228,7 @@ fn task_child_plan(
         kind: Some(kind),
         timeout: Some(Duration::from_millis(timeout_ms)),
         policy: access.policy,
+        description: request.description.clone(),
     }
 }
 
