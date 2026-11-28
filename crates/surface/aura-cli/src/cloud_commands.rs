@@ -19,12 +19,47 @@ fn aura_home() -> anyhow::Result<std::path::PathBuf> {
 pub(crate) async fn cmd_cloud(args: CloudCommand) -> anyhow::Result<()> {
     match args.action {
         CloudSubcommand::Setup => cloud_setup().await,
-        CloudSubcommand::Status => cloud_status(),
+        CloudSubcommand::Status => cloud_status().await,
     }
 }
 
-/// `aura cloud setup`: sign in to boxd and save the key.
+/// The data directory a session here would use, whose Integrations
+/// panel may hold boxd's key: `AURA_DATA_DIR`, else `./aura_data`.
+fn data_dir() -> std::path::PathBuf {
+    std::env::var_os("AURA_DATA_DIR").map_or_else(
+        || std::path::PathBuf::from("./aura_data"),
+        std::path::PathBuf::from,
+    )
+}
+
+/// The cloud settings with the Integrations panel's stored boxd key over
+/// the environment's, and where the key came from.
+async fn resolved_config() -> anyhow::Result<(
+    aura_config::CloudConfig,
+    aura_app::integrations::cloud::BoxdKeySource,
+)> {
+    tokio::task::spawn_blocking(|| {
+        let config = aura_config::CloudConfig::reload().context("reading the cloud settings")?;
+        Ok(aura_app::integrations::cloud::cloud_config_in(
+            &data_dir(),
+            config,
+        ))
+    })
+    .await
+    .context("reading the cloud settings")?
+}
+
+/// `aura cloud setup`: sign in to boxd and save the key, unless the
+/// Integrations panel already stored one (it wins over `.env`).
 async fn cloud_setup() -> anyhow::Result<()> {
+    let (_, source) = resolved_config().await?;
+    if source == aura_app::integrations::cloud::BoxdKeySource::Integrations {
+        println!(
+            "boxd's key is stored in the Integrations panel and cloud mode uses it; \
+             nothing to set up. Disconnect boxd there to set up a new one."
+        );
+        return Ok(());
+    }
     let env_file = aura_home()?.join(".env");
     println!(
         "Signing in to boxd; the API key goes to {} (mode 600).",
@@ -39,9 +74,10 @@ async fn cloud_setup() -> anyhow::Result<()> {
 
 /// `aura cloud status`: the settings, where the key came from and the
 /// placed agents.
-fn cloud_status() -> anyhow::Result<()> {
-    let config = aura_config::CloudConfig::reload().context("reading the cloud settings")?;
+async fn cloud_status() -> anyhow::Result<()> {
+    let (config, source) = resolved_config().await?;
     print_credential(&config);
+    println!("boxd key from: {source}");
     print_env_report();
     print_settings(&config);
     let placements = aura_home()?.join("cloud").join("placements.json");

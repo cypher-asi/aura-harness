@@ -11,6 +11,7 @@ use tempfile::TempDir;
 mod lifecycle;
 mod naming;
 mod prompts;
+mod skills;
 mod spawn;
 mod support;
 

@@ -369,6 +369,8 @@ impl AgentHub {
             .unwrap_or_default();
         if let Some(name) = definition.as_deref() {
             if let Some(found) = lock(&self.definitions).get(name) {
+                // In full: the cloud machine has none of this computer's
+                // skill folders to load them from.
                 found.extend_system_prompt(&mut prompt, &lock(&self.skills));
             }
         }
@@ -455,7 +457,7 @@ impl AgentHub {
         if !coordinator {
             tools = definition_tools(definition, &tools, top_level);
         }
-        definition.extend_system_prompt(&mut config.system_prompt, &lock(&self.skills));
+        self.push_definition_skills(definition, &mut config.system_prompt, &mut tools);
         if let Some(model) = &definition.model {
             base.limits.configure(&mut config, model);
         }

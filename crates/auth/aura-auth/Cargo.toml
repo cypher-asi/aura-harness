@@ -16,6 +16,10 @@ aura-auth-zos = { path = "../aura-auth-zos" }
 aura-auth-chatgpt = { path = "../aura-auth-chatgpt" }
 aura-auth-claude = { path = "../aura-auth-claude" }
 aura-auth-openrouter = { path = "../aura-auth-openrouter" }
+# Sealing the fallback credentials files: the local store's AES-256-GCM
+# `SealCipher` and key-file format (#93).
+aura-store-db = { path = "../../store/aura-store-db" }
+zeroize = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

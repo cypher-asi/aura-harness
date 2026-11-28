@@ -74,6 +74,7 @@ pub use host::{TerminalAgents, TerminalChildKernels};
 pub use inbox::{AssignTool, HubLink, PeerHooks};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
+pub use subagents::DefinitionSkills;
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 pub use trace::Traces;
 

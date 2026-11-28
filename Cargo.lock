@@ -498,6 +498,7 @@ dependencies = [
  "aura-auth-openrouter",
  "aura-auth-zos",
  "aura-core-auth",
+ "aura-store-db",
  "axum",
  "chrono",
  "dirs",
@@ -511,6 +512,7 @@ dependencies = [
  "tracing",
  "uuid",
  "workspace-hack",
+ "zeroize",
 ]
 
 [[package]]
@@ -938,6 +940,7 @@ dependencies = [
 name = "aura-engine-registry"
 version = "0.1.0"
 dependencies = [
+ "aura-config",
  "aura-context-skills",
  "aura-core-types",
  "aura-exec-tools",

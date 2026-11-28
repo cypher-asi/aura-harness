@@ -33,14 +33,28 @@ pub(in crate::event_loop) fn give_up(state: &LoopState<'_>, agent_id: AgentId, w
     give_up_seen(&state.hub, agent_id, messages, why);
 }
 
-/// Answer each request `agent_id` owes whose message is in `messages`,
-/// its conversation after a turn that ended well, with the last thing it
-/// said after it. Requests whose messages it hasn't seen yet stay owed.
+/// Answer each request `agent_id` owes that the turn which ended well
+/// with `messages`, its conversation, answers ([`take_answered`]), with
+/// the last thing it said. Requests no turn has started on stay owed.
 pub(crate) fn answer_seen(hub: &AgentHub, agent_id: AgentId, messages: &[Message]) {
-    for (owed, at) in take_seen(hub, agent_id, messages) {
-        let said = messages
-            .get(at + 1..)
-            .and_then(last_words)
+    answer_turn(hub, agent_id, messages, None);
+}
+
+/// [`answer_seen`] for a cloud turn, whose reply streamed here as `said`
+/// (its last text, after its last tool call): those are its last words,
+/// whatever the copy of its conversation, which can be the one an
+/// earlier turn left when this turn's copy failed, holds.
+pub(crate) fn answer_turn(
+    hub: &AgentHub,
+    agent_id: AgentId,
+    messages: &[Message],
+    said: Option<&str>,
+) {
+    let streamed = said.filter(|said| !said.trim().is_empty());
+    for (owed, at) in take_answered(hub, agent_id, messages) {
+        let said = streamed
+            .map(str::to_string)
+            .or_else(|| words_since(messages, at))
             .unwrap_or_else(|| "(finished without a word)".to_string());
         reply(hub, agent_id, &owed, true, &said);
     }
@@ -58,9 +72,9 @@ pub(crate) fn give_up_seen(
     why: &str,
 ) {
     let dropped: Vec<(Owed, Option<String>)> = match messages {
-        Some(messages) => take_seen(hub, agent_id, messages)
+        Some(messages) => take_answered(hub, agent_id, messages)
             .into_iter()
-            .map(|(owed, at)| (owed, messages.get(at + 1..).and_then(last_words)))
+            .map(|(owed, at)| (owed, words_since(messages, at)))
             .collect(),
         None => take_oldest(hub, agent_id)
             .into_iter()
@@ -122,23 +136,30 @@ fn stopped(why: &str, said: Option<&str>) -> String {
     }
 }
 
-/// Take the requests `agent_id` owes whose messages are in `messages`,
-/// each with where its message is.
-fn take_seen(hub: &AgentHub, agent_id: AgentId, messages: &[Message]) -> Vec<(Owed, usize)> {
+/// Take the requests `agent_id` owes that its turn ending with
+/// `messages` answers, each with where its message is, if it is still
+/// there: those a turn started on ([`super::take_up`]), and those whose
+/// message is in `messages`. A taken one's message may be gone: a
+/// compaction summarizes older messages away, and a cloud turn's copy
+/// may be an earlier turn's.
+fn take_answered(
+    hub: &AgentHub,
+    agent_id: AgentId,
+    messages: &[Message],
+) -> Vec<(Owed, Option<usize>)> {
     let mut state = lock(&hub.inbox.state);
     let Some(owed) = state.owed.get_mut(&agent_id) else {
         return Vec::new();
     };
     let mut seen = Vec::new();
-    owed.retain(
-        |request| match asked_at(messages, &inbox::marker(request.kind, &request.id)) {
-            Some(at) => {
-                seen.push((request.clone(), at));
-                false
-            }
-            None => true,
-        },
-    );
+    owed.retain(|request| {
+        let at = asked_at(messages, &inbox::marker(request.kind, &request.id));
+        if at.is_none() && !request.taken {
+            return true;
+        }
+        seen.push((request.clone(), at));
+        false
+    });
     if owed.is_empty() {
         state.owed.remove(&agent_id);
     }
@@ -165,6 +186,22 @@ fn asked_at(messages: &[Message], marker: &str) -> Option<usize> {
     messages
         .iter()
         .rposition(|m| m.role == Role::User && m.text_content().contains(marker))
+}
+
+/// The last thing the model said after its request's message at `at`,
+/// else (the message is gone) after the turn's last prompt: never what
+/// an earlier turn said.
+fn words_since(messages: &[Message], at: Option<usize>) -> Option<String> {
+    let from = at.or_else(|| last_prompt_at(messages))?;
+    messages.get(from + 1..).and_then(last_words)
+}
+
+/// Where the last user message with text is in `messages`: the prompt
+/// the turn worked on last (tool results carry no text).
+fn last_prompt_at(messages: &[Message]) -> Option<usize> {
+    messages
+        .iter()
+        .rposition(|m| m.role == Role::User && !m.text_content().trim().is_empty())
 }
 
 /// The last thing the model said in `messages`, if anything.

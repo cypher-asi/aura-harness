@@ -125,6 +125,35 @@ fn secrets_are_private_files() {
     assert_eq!(mode, 0o600);
     let index = std::fs::read_to_string(dir.path().join("auth/index.json")).unwrap();
     assert!(!index.contains("secret"), "index must not hold tokens");
+    let bytes = std::fs::read(&secret).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("secret"),
+        "the token file is sealed"
+    );
+    assert_eq!(vault.tokens(&l).unwrap().access_token, "secret");
+}
+
+#[test]
+fn a_plain_token_file_from_before_still_signs_in_and_is_sealed() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = Vault::files_at(dir.path());
+    let l = link("l1", Owner::Local, ProviderKind::Claude);
+    vault.put_link(&l, &tokens("first")).unwrap();
+    // A token file written before sealing, plain.
+    let secret = dir.path().join("auth/secrets/l1.json");
+    let plain = serde_json::to_string(&tokens("plain-old")).unwrap();
+    std::fs::write(&secret, &plain).unwrap();
+    let fresh = Vault::files_at(dir.path());
+    assert_eq!(fresh.tokens(&l).unwrap().access_token, "plain-old");
+    let bytes = std::fs::read(&secret).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("plain-old"),
+        "migrated"
+    );
+    assert_eq!(
+        Vault::files_at(dir.path()).tokens(&l).unwrap().access_token,
+        "plain-old"
+    );
 }
 
 #[test]
