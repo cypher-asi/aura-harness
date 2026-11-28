@@ -69,6 +69,8 @@ mod moving;
 mod offline;
 mod placement;
 mod publish;
+#[cfg(test)]
+mod saved_tests;
 mod spawns;
 #[cfg(test)]
 mod spawns_tests;
@@ -122,6 +124,9 @@ struct Shared {
     hub: Mutex<Option<Arc<CloudHub>>>,
     /// Agents being moved, each held by a [`MoveMark`].
     moving: Mutex<HashSet<AgentId>>,
+    /// The cloud agents the hub's saved placements name, marked while the
+    /// hub is down ([`offline::load_saved`])
+    saved: Mutex<std::collections::HashMap<AgentId, aura_engine_cloud::hub::SavedPlacement>>,
     /// New members whose cloud start failed, and why, until the loop hears
     /// their move ended
     failed_starts: Mutex<std::collections::HashMap<AgentId, String>>,
