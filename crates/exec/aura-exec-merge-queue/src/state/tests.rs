@@ -178,7 +178,7 @@ fn a_new_push_restarts_the_wait() {
 }
 
 #[test]
-fn pruning_drops_the_oldest_finished_entries_only() {
+fn archiving_takes_the_oldest_finished_entries_only() {
     let mut state = QueueState::default();
     for n in 0..4 {
         let id = state
@@ -189,9 +189,13 @@ fn pruning_drops_the_oldest_finished_entries_only() {
         state.finish(&id, merged("m"), at(n));
     }
     state.enqueue(request("waiting", "h"), at(9));
-    state.prune(2);
-    let branches: Vec<&str> = state.entries.iter().map(|e| e.branch.as_str()).collect();
-    assert_eq!(branches, ["b2", "b3", "waiting"]);
+    let taken = state.take_archivable(2);
+    let names = |entries: &[MergeEntry]| -> Vec<String> {
+        entries.iter().map(|e| e.branch.clone()).collect()
+    };
+    assert_eq!(names(&taken), ["b0", "b1"]);
+    assert_eq!(names(&state.entries), ["b2", "b3", "waiting"]);
+    assert!(state.take_archivable(2).is_empty());
 }
 
 #[test]
@@ -201,4 +205,31 @@ fn state_round_trips_through_json() {
     state.claim_next(at(1));
     let json = serde_json::to_string(&state).unwrap();
     assert_eq!(serde_json::from_str::<QueueState>(&json).unwrap(), state);
+}
+
+#[test]
+fn an_entry_put_back_after_a_crash_waits_from_then() {
+    let mut state = QueueState::default();
+    state.enqueue(request("a", "h"), at(0));
+    state.claim_next(at(1));
+    // The hub was down for two days; recovery puts the entry back.
+    let back = at(0) + Duration::hours(48);
+    state.recover(back, 3);
+    let ttl = Duration::hours(24);
+    assert!(state.expire(back + Duration::hours(1), ttl).is_empty());
+    let expired = state.expire(back + Duration::hours(25), ttl);
+    assert_eq!(expired.len(), 1);
+}
+
+#[test]
+fn a_state_file_from_before_history_loads() {
+    let json = r#"{"version":1,"next_seq":2,"entries":[{"id":"q1","branch":"a","head":"h",
+        "status":"queued","enqueued_at":"2026-11-27T10:00:00Z"}]}"#;
+    let state: QueueState = serde_json::from_str(json).unwrap();
+    assert_eq!(state.history, HistoryMark::default());
+    assert_eq!(state.entries[0].updated_at, None);
+    assert_eq!(
+        state.entries[0].waiting_since(),
+        state.entries[0].enqueued_at
+    );
 }
