@@ -17,8 +17,11 @@
 //! # Invariants
 //!
 //! * The agent on screen, an agent at work (here or in the cloud), one
-//!   with work queued, one building a plan, and a session without a
-//!   checkpoint store are never let go of.
+//!   with work queued, one building a plan, one that owes reports through
+//!   its inbox (`inbox::answer` and `give_up` read its messages to tell
+//!   which it saw), one in a factory flow (`factory::hooks::after_turn`
+//!   reads its messages), and a session without a checkpoint store are
+//!   never let go of.
 //! * A session is let go of only after its checkpoint is saved: a failed
 //!   save is logged and the record still has the conversation.
 
@@ -83,6 +86,9 @@ fn is_settled(state: &LoopState<'_>, agent_id: AgentId) -> bool {
         && !state.hub.is_running(agent_id)
         && !state.cloud.is_running(agent_id)
         && state.queued.len(agent_id) == 0
+        && state.hub.inbox.owed_by(agent_id) == 0
+        && state.hub.factory_flows.stage(agent_id).is_none()
+        && !state.hub.factory_flows.resumes_after_restart(agent_id)
         && !session.building_plan
         && has_checkpoints(session)
 }
