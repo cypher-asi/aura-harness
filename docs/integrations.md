@@ -202,9 +202,10 @@ The plug icon `🔌` in the agents panel's header, just left of BENCH's
 wrench, opens INTEGRATIONS in the terminal and in the desktop app. It
 uses the same icon cell, tooltip and active state as BENCH.
 
-- **Each row:** a dot for its state (`●` connected in the success colour,
-  `○` not connected, `●` failed in the error colour, `●` busy in the
-  warning colour), then its icon, name and description.
+- **Each row:** the shared `StatusDot` (`aura-ui-widgets`, as MEMBERS and
+  QUEUE draw it) for its state, `Ok` connected, `Off` not connected,
+  `Failed`, or `Busy` while a Connect or Test runs, then its icon, name
+  and description.
 - **The selected row** adds its status, its last action's result, what it
   provides, and its actions: **Connect**, **Configure**, **Test** and
   **Disconnect**. Click one, or press `c` `e` `t` `d`.
