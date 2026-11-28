@@ -135,16 +135,14 @@ async fn run(state: &mut LoopState<'_>, hub: Arc<CloudHub>, agent: AgentId, work
     }
 }
 
-/// Send `prompt` to cloud agent `agent` as a turn, unless its model's plan
-/// is not linked here.
-async fn run_prompt(
-    state: &mut LoopState<'_>,
-    hub: Arc<CloudHub>,
-    agent: AgentId,
-    prompt: Prompt,
+/// Show `prompt` in `agent`'s chat `ui` unless it is `shown` already, saying
+/// that its images stay here.
+async fn show_prompt(
+    state: &LoopState<'_>,
+    (agent, ui): (AgentId, &AgentUi),
+    prompt: &Prompt,
     shown: bool,
 ) {
-    let ui = AgentUi::new(state.commands.clone(), agent);
     if !shown {
         ui.send(UiCommand::ShowMessage(MessageData::new(
             MessageRole::User,
@@ -160,6 +158,19 @@ async fn run_prompt(
         )
         .await;
     }
+}
+
+/// Send `prompt` to cloud agent `agent` as a turn, unless its model's plan
+/// is not linked here.
+async fn run_prompt(
+    state: &mut LoopState<'_>,
+    hub: Arc<CloudHub>,
+    agent: AgentId,
+    prompt: Prompt,
+    shown: bool,
+) {
+    let ui = AgentUi::new(state.commands.clone(), agent);
+    show_prompt(state, (agent, &ui), &prompt, shown).await;
     let current = state.models.current().to_string();
     let linked = state.auth.linked_plans(&state.auth.owner());
     if let Some(note) = plan_refusal(&current, &linked) {

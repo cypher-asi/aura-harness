@@ -50,6 +50,8 @@ async fn follow(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, mark
         reload: Some(chat_reload(Arc::clone(&state.hub), ui.clone(), agent)),
         from_record: true,
         waiting: None,
+        // Its run is known already; the save after this event keeps it.
+        run_started: None,
     };
     ui.send(UiCommand::ShowMessage(MessageData::new(
         MessageRole::System,

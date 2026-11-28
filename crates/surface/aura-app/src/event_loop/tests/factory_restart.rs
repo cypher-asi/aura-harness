@@ -287,7 +287,7 @@ async fn a_member_waiting_on_a_reply_keeps_planning_without_new_work() {
     let _lost = notices.try_recv().unwrap();
     // It planned, asked a question, and waits for the answer.
     state.hub.factory_flows.assign(member);
-    assert!(state.hub.factory_flows.begin(member));
+    assert!(state.hub.factory_flows.begin(member).is_some());
     owed::save_now(&state).await;
     state.hub.factory_flows.forget_all();
     assert!(
