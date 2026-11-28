@@ -142,11 +142,20 @@ impl Directory {
 /// Ids seen from one node: a set for lookups, an order for eviction.
 type SeenIds = (HashSet<u64>, VecDeque<u64>);
 
-/// Mail ids the hub sends, and the ids it has seen from each node.
+/// Where a request is known by: the node that sent it, and its id.
+type MailKey = (String, u64);
+
+/// Requests sent on to another node and not acknowledged yet, by key,
+/// with their order for eviction.
+type InFlight = (HashMap<MailKey, MeshMail>, VecDeque<MailKey>);
+
+/// Mail ids the hub sends, the ids it has seen from each node, and the
+/// requests it sent on that wait for their node's ack.
 #[derive(Debug, Default)]
 pub struct MailBook {
     next_id: Mutex<u64>,
     seen: Mutex<HashMap<String, SeenIds>>,
+    in_flight: Mutex<InFlight>,
 }
 
 impl MailBook {
@@ -157,7 +166,36 @@ impl MailBook {
         Self {
             next_id: Mutex::new(first_mail_id()),
             seen: Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(InFlight::default()),
         }
+    }
+
+    /// Remember request `mail`, sent on to the node holding its
+    /// recipient, until that node acknowledges it ([`Self::acked`]). The
+    /// oldest are forgotten past [`DEDUP_WINDOW`].
+    pub fn sent_on(&self, mail: &MeshMail) {
+        let key = (mail.from_node.clone(), mail.id);
+        let mut in_flight = self.in_flight.lock();
+        let (by_key, order) = &mut *in_flight;
+        if by_key.insert(key.clone(), mail.clone()).is_none() {
+            order.push_back(key);
+        }
+        while order.len() > DEDUP_WINDOW {
+            if let Some(old) = order.pop_front() {
+                by_key.remove(&old);
+            }
+        }
+    }
+
+    /// The request sent on as `id` from `from_node`, now that its node
+    /// acknowledged it; `None` for mail not sent on, or acked already.
+    pub fn acked(&self, from_node: &str, id: u64) -> Option<MeshMail> {
+        let key = (from_node.to_string(), id);
+        let mut in_flight = self.in_flight.lock();
+        let (by_key, order) = &mut *in_flight;
+        let mail = by_key.remove(&key)?;
+        order.retain(|queued| *queued != key);
+        Some(mail)
     }
 
     /// Forget `mail`, so a resend is handled again (its delivery failed).

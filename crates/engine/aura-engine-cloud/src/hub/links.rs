@@ -16,6 +16,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
 use super::node_client::NodeClient;
+use crate::fleet::VmFleet;
 
 use super::turn::{ws_request, ws_url, NodeSink, NodeSocket, NodeStream};
 use super::{CloudHub, Link};
@@ -118,8 +119,14 @@ impl CloudHub {
     }
 
     /// Send `frame` toward the node holding `agent`: its socket, or a
-    /// direct call when the socket is down.
+    /// direct call when the socket is down. A request sent on the socket
+    /// is remembered until its node acks it ([`Self::mail_acked`]).
     fn forward(&self, agent: &str, frame: MeshFrame) {
+        if let MeshFrame::Mail(mail) = &frame {
+            if mail.kind == MeshMailKind::Request {
+                self.mail.sent_on(mail);
+            }
+        }
         let sent = self
             .links
             .lock()
@@ -131,26 +138,68 @@ impl CloudHub {
         let MeshFrame::Mail(mail) = frame else {
             return;
         };
+        // Answered by the call itself, not by an ack on the socket.
+        self.mail.acked(&mail.from_node, mail.id);
         self.send_direct(agent, mail);
     }
 
-    /// Wake the machine of `agent` and hand it `mail` over HTTPS.
+    /// The node holding the recipient acked mail the hub sent on: when it
+    /// refused a request (its agent is sealed there, say), tell the
+    /// request's sender, as a refusal here is told.
+    pub(super) fn mail_acked(&self, from_node: &str, id: u64, delivered: bool, why: Option<&str>) {
+        let Some(mail) = self.mail.acked(from_node, id) else {
+            return;
+        };
+        if !delivered {
+            self.tell_refused(&mail, why.unwrap_or(REFUSED_THERE));
+        }
+    }
+
+    /// Wake the machine of `agent` and hand it `mail` over HTTPS. When
+    /// that fails, or the machine refuses it, the sender of a request is
+    /// told ([`Self::tell_refused`]).
     fn send_direct(&self, agent: &str, mail: MeshMail) {
         let fleet = Arc::clone(&self.fleet);
         let agent = agent.to_string();
+        let teller = self.refusal_teller(&mail);
         tokio::spawn(async move {
-            if let Err(err) = fleet.ensure_awake(&agent).await {
-                tracing::warn!(agent = %agent, error = %err, "could not wake a machine for mail");
-                return;
-            }
-            let (Some(view), Some(token)) = (fleet.view(&agent), fleet.node_token(&agent)) else {
-                return;
+            let why = match deliver_direct(&fleet, &agent, &mail).await {
+                Ok(()) => return,
+                Err(why) => why,
             };
-            let node = NodeClient::new(view.machine.name.clone(), view.machine.url(), token);
-            if let Err(err) = node.mail(&mail).await {
-                tracing::warn!(agent = %agent, error = %err, "could not deliver mail to a cloud agent");
+            tracing::warn!(agent = %agent, error = %why, "could not deliver mail to a cloud agent");
+            if let Some(teller) = teller {
+                teller.tell(&why);
             }
         });
+    }
+}
+
+/// Why the node holding an agent refused mail, when its ack says no more.
+const REFUSED_THERE: &str = "its machine refused it";
+
+/// Hand `mail` to the node of `agent` over HTTPS, waking its machine
+/// first. `Err` is why it was not delivered.
+async fn deliver_direct(fleet: &VmFleet, agent: &str, mail: &MeshMail) -> Result<(), String> {
+    fleet
+        .ensure_awake(agent)
+        .await
+        .map_err(|err| format!("its machine could not be woken: {err}"))?;
+    let (Some(view), Some(token)) = (fleet.view(agent), fleet.node_token(agent)) else {
+        return Err("its machine is gone".to_string());
+    };
+    let node = NodeClient::new(view.machine.name.clone(), view.machine.url(), token);
+    let answer = node
+        .mail(mail)
+        .await
+        .map_err(|err| format!("its machine could not be reached: {err}"))?;
+    match serde_json::from_value::<MeshFrame>(answer) {
+        Ok(MeshFrame::MailAck {
+            delivered: false,
+            error,
+            ..
+        }) => Err(error.unwrap_or_else(|| REFUSED_THERE.to_string())),
+        _ => Ok(()),
     }
 }
 
@@ -329,6 +378,12 @@ impl LinkSocket<'_> {
                 let ack = hub.take_mail(&mail).await;
                 let _ = self.sink.send(Message::Text(ack.to_text().into())).await;
             }
+            MeshFrame::MailAck {
+                from_node,
+                id,
+                delivered,
+                error,
+            } => hub.mail_acked(&from_node, id, delivered, error.as_deref()),
             MeshFrame::HostStats(stats) => hub.track(hex, stats),
             // Only the link's agent, and the agents it spawned
             // there, are copied from its node.
