@@ -107,6 +107,10 @@ fn connected_and_not_connected_integrations_are_listed_with_their_dots() {
     let (column, _) = find_cell(&buffer, dot_row, "●").unwrap();
     let theme = test_theme();
     assert_eq!(buffer[(column, dot_row)].fg, theme.colors.success);
+    // Not connected is the shared dot's Off: hollow, muted.
+    let boxd_row = row_of(&buffer, "☁ boxd");
+    let (column, _) = find_cell(&buffer, boxd_row, "○").unwrap();
+    assert_eq!(buffer[(column, boxd_row)].fg, theme.colors.muted);
 }
 
 #[test]

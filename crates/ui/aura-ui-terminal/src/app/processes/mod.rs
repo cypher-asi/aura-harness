@@ -416,7 +416,8 @@ impl App {
             SidePanelTab::ChannelHistory => self
                 .channel_history_row_at(column, row)
                 .map(HoverTarget::ChannelHistoryRow),
-            SidePanelTab::ChannelInfo | SidePanelTab::ChannelQueue => None,
+            SidePanelTab::ChannelQueue => self.hovered_channel_queue(column, row),
+            SidePanelTab::ChannelInfo => None,
         }
     }
 }

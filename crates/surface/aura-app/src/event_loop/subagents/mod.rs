@@ -96,6 +96,7 @@ mod running;
 mod setup;
 mod spawn;
 mod status;
+pub(crate) use status::LiveState;
 mod subtask;
 mod task_run;
 mod task_tool;

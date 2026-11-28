@@ -486,6 +486,7 @@ pub(super) fn rows(
                 starting: false,
                 waiting: false,
                 reconnecting: false,
+                start_step: None,
             };
             (agent_id, row)
         })
