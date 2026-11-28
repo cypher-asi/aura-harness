@@ -81,23 +81,68 @@ impl CloudHub {
 
     /// Fetch the commits on `placed`'s branch that the project here
     /// lacks into the project's branch of the same name.
+    ///
+    /// The agent's branches are its pinned one and every task branch it
+    /// made beside it (`git_start_task`): those the push guard lets it
+    /// push ([`aura_exec_tools::git_tool::allowed_by_pin`]), so the hub and the
+    /// guard agree on what is the agent's. Each is fetched onto the
+    /// project's branch of the same name; what happened to each is in the
+    /// outcome.
     pub(super) async fn fetch_commits(&self, hex: &str, placed: &PlacedAgent) -> CommitsOutcome {
-        let Some(branch) = placed.branch.clone() else {
+        let Some(pin) = placed.branch.clone() else {
             return CommitsOutcome::None;
         };
         let Some(view) = self.fleet.view(hex) else {
             return CommitsOutcome::None;
         };
-        match self.fetch_branch(hex, placed, &view, &branch).await {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                tracing::warn!(agent = %hex, error = %err, "could not fetch the agent's commits");
-                CommitsOutcome::Kept {
-                    branch,
-                    reason: err.to_string(),
+        let branches = self.agent_branches(&view, &pin).await;
+        let mut outcomes = Vec::with_capacity(branches.len());
+        for branch in branches {
+            let outcome = match self.fetch_branch(hex, placed, &view, &branch).await {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    tracing::warn!(agent = %hex, %branch, error = %err, "could not fetch the agent's commits");
+                    CommitsOutcome::Kept {
+                        branch,
+                        reason: err.to_string(),
+                    }
                 }
-            }
+            };
+            outcomes.push(outcome);
         }
+        CommitsOutcome::combined(outcomes)
+    }
+
+    /// The branches on `view`'s machine that are the agent's: `pin` first,
+    /// then its task branches by name. Just `pin` when they can't be
+    /// listed (a machine from before task branches lists only it anyway).
+    async fn agent_branches(&self, view: &MachineView, pin: &str) -> Vec<String> {
+        let provider = self.fleet.provider();
+        let listed = provider
+            .exec(
+                &view.machine.name,
+                &workspace::list_branches(),
+                None,
+                GIT_SCRIPT_TIMEOUT,
+            )
+            .await;
+        let mut names: Vec<String> = match listed {
+            Ok(out) if out.success() => workspace::parse_branches(&out.stdout_text())
+                .into_iter()
+                .filter(|name| name != pin && aura_exec_tools::git_tool::allowed_by_pin(name, pin))
+                .collect(),
+            Ok(out) => {
+                tracing::warn!(machine = %view.machine.name, stderr = %out.stderr_tail(200), "could not list the agent's branches; fetching its pinned one");
+                Vec::new()
+            }
+            Err(err) => {
+                tracing::warn!(machine = %view.machine.name, error = %err, "could not list the agent's branches; fetching its pinned one");
+                Vec::new()
+            }
+        };
+        names.sort();
+        names.insert(0, pin.to_string());
+        names
     }
 
     async fn fetch_branch(
@@ -109,9 +154,15 @@ impl CloudHub {
     ) -> CloudResult<CommitsOutcome> {
         let provider = self.fleet.provider();
         let machine = &view.machine.name;
-        // The bundle leaves out what the hub last took; only while it
-        // still has it.
-        let fetched = still_here(placed).await;
+        // The bundle leaves out what the hub last took of the pinned
+        // branch, while it still has it; a task branch is bundled past
+        // the hub's HEAD.
+        let pinned = placed.branch.as_deref() == Some(branch);
+        let fetched = if pinned {
+            still_here(placed).await
+        } else {
+            None
+        };
         let Some(commits) =
             bundle_branch(provider.as_ref(), machine, branch, fetched.as_deref()).await?
         else {
@@ -121,7 +172,7 @@ impl CloudHub {
             .download(machine, workspace::OUT_BUNDLE, delta::MAX_DELTA_BYTES)
             .await?;
         let fetched = self.fetch_bundle(hex, placed, branch, bytes).await?;
-        Ok(self.branch_outcome(hex, branch.to_string(), commits, fetched))
+        Ok(self.branch_outcome(hex, (branch.to_string(), pinned), commits, fetched))
     }
 
     /// Save the machine's bundle under `hex`'s folder and fetch `branch`
@@ -164,19 +215,23 @@ impl CloudHub {
     }
 
     /// What fetching `branch` did; keeps the new tip when it moved.
+    /// What fetching `branch` came to; the pinned one's tip is kept for
+    /// the next fetch to start from.
     fn branch_outcome(
         &self,
         hex: &str,
-        branch: String,
+        (branch, pinned): (String, bool),
         commits: u64,
         fetched: BranchFetch,
     ) -> CommitsOutcome {
         match fetched {
             BranchFetch::Updated { tip } => {
-                if let Some(placed) = self.placements.lock().agents.get_mut(hex) {
-                    placed.fetched_tip = Some(tip);
+                if pinned {
+                    if let Some(placed) = self.placements.lock().agents.get_mut(hex) {
+                        placed.fetched_tip = Some(tip);
+                    }
+                    self.save_placements();
                 }
-                self.save_placements();
                 CommitsOutcome::Fetched { branch, commits }
             }
             BranchFetch::CheckedOut => CommitsOutcome::Kept {
