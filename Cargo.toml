@@ -200,7 +200,10 @@ tower_governor = { version = "0.5", features = ["axum"] }
 governor = "0.8"
 
 # Storage
-rocksdb = "0.24"
+# Snappy is RocksDB's default compression and the store sets LZ4 on some
+# column families; zstd is built for the workspace anyway. zlib and bzip2,
+# compiled from C for RocksDB alone, are never selected.
+rocksdb = { version = "0.24", default-features = false, features = ["snappy", "lz4", "zstd", "bindgen-runtime"] }
 
 # Host facts for the HOST tab and cloud nodes (cross-platform: the
 # desktop app also runs on Windows and macOS).
