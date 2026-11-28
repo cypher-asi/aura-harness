@@ -361,6 +361,8 @@ fn forge_stop(error: ForgeError) -> Stop {
                 retry_at: now + FORGE_RETRY,
                 target_tip: None,
                 tests: Vec::new(),
+                excerpt: None,
+                suspects: Vec::new(),
             }))
         }
         ForgeError::Failed(why) => Stop::fail(FailureKind::Refused, why),

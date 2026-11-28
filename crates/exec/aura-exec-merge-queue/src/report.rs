@@ -96,6 +96,24 @@ pub struct Hold {
     /// Tests that fail on the plain target too
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests: Vec<String>,
+    /// What those tests printed on the target
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    /// The target's commits since it last passed, newest first: what may
+    /// have broken it
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suspects: Vec<Suspect>,
+}
+
+/// A commit on the target that may have broken it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Suspect {
+    /// The commit
+    pub sha: String,
+    /// Its author
+    pub author: String,
+    /// Its subject line
+    pub subject: String,
 }
 
 /// What a [`Hold`] waits for.
@@ -105,6 +123,8 @@ pub enum HoldKind {
     /// The forge (GitHub) couldn't be reached or refused the queue's
     /// credentials; nothing is wrong with the entry
     ForgeUnavailable,
-    /// The target itself fails the checks
+    /// The target itself fails the checks. Only the entries that ran
+    /// into it wait (parked until the target moves); others still run,
+    /// so the fix can land.
     TargetBroken,
 }

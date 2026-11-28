@@ -56,6 +56,7 @@ fn entry(branch: &str, head: &str, remote: Option<&str>) -> MergeEntry {
         files: Vec::new(),
         pr: None,
         failure: None,
+        parked_at: None,
     }
 }
 

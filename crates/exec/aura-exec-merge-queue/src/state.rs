@@ -22,7 +22,7 @@
 //!   says how much of that file is committed.
 
 use crate::entry::{EntryId, MergeEntry, MergeRequest, MergeStatus};
-use crate::report::{Failure, Hold, PrRef};
+use crate::report::{Failure, Hold, HoldKind, PrRef};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,10 @@ pub struct QueueState {
     /// Why no entry starts for now, when the queue is held
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hold: Option<Hold>,
+    /// The target fails its own checks, as an entry found; its parked
+    /// entries wait for the target to move
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broken: Option<Hold>,
 }
 
 /// How far the history file is committed: entries and bytes.
@@ -65,6 +69,7 @@ impl Default for QueueState {
             entries: Vec::new(),
             history: HistoryMark::default(),
             hold: None,
+            broken: None,
         }
     }
 }
@@ -155,6 +160,7 @@ impl QueueState {
             files: Vec::new(),
             pr: None,
             failure: None,
+            parked_at: None,
         });
         Enqueued::Added(id)
     }
@@ -182,7 +188,7 @@ impl QueueState {
         let entry = self
             .entries
             .iter_mut()
-            .find(|entry| entry.status == MergeStatus::Queued)?;
+            .find(|entry| entry.status == MergeStatus::Queued && entry.parked_at.is_none())?;
         entry.status = MergeStatus::Running;
         entry.started_at = Some(now);
         entry.updated_at = Some(now);
@@ -223,8 +229,16 @@ impl QueueState {
                 entry.finished_at = None;
                 entry.attempts = entry.attempts.saturating_sub(1);
                 entry.detail = Some(format!("waiting: {}", hold.reason));
+                let parked = hold.kind == HoldKind::TargetBroken;
+                if parked {
+                    entry.parked_at.clone_from(&hold.target_tip);
+                }
                 let entry = entry.clone();
-                self.hold = Some(hold);
+                if parked {
+                    self.broken = Some(hold);
+                } else {
+                    self.hold = Some(hold);
+                }
                 return Some(entry);
             }
         }
@@ -310,18 +324,48 @@ impl QueueState {
             .count()
     }
 
-    /// End the hold when the target's tip is now `tip` and the hold
-    /// waits for the target to move; returns whether it ended.
-    pub fn release_hold(&mut self, tip: &str) -> bool {
-        let moved = self
-            .hold
-            .as_ref()
-            .and_then(|hold| hold.target_tip.as_deref())
-            .is_some_and(|held_at| held_at != tip);
-        if moved {
+    /// The target's tip is `tip` at `now`: end the hold and the broken
+    /// target's report when the target moved, and let the parked entries
+    /// run again once it moved or the broken report's retry time came.
+    /// Returns whether anything changed.
+    pub fn release_hold(&mut self, tip: &str, now: DateTime<Utc>) -> bool {
+        let moved = |hold: &Option<Hold>| {
+            hold.as_ref()
+                .and_then(|hold| hold.target_tip.as_deref())
+                .is_some_and(|held_at| held_at != tip)
+        };
+        let mut changed = false;
+        if moved(&self.hold) {
             self.hold = None;
+            changed = true;
         }
-        moved
+        let retry = self
+            .broken
+            .as_ref()
+            .is_some_and(|hold| now >= hold.retry_at);
+        if moved(&self.broken) || retry {
+            self.broken = None;
+            changed = true;
+        }
+        for entry in &mut self.entries {
+            let parked = entry.parked_at.as_deref();
+            if parked.is_some_and(|at| at != tip || retry) {
+                entry.parked_at = None;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Whether the queue waits on the target's tip: a hold or a broken
+    /// target to end, or parked entries to let go.
+    #[must_use]
+    pub fn waits_on_target(&self) -> bool {
+        self.hold
+            .as_ref()
+            .is_some_and(|hold| hold.target_tip.is_some())
+            || self.broken.is_some()
+            || self.entries.iter().any(|entry| entry.parked_at.is_some())
     }
 
     /// Whether an entry waits to run.

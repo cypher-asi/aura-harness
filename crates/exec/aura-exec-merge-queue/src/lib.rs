@@ -27,6 +27,7 @@
 //! - [`integrate`]: landing one entry with git, through its PR when the
 //!   repo is on a [`forge`].
 //! - [`forge`]: the PRs of a repo on GitHub.
+//! - [`failure`]: the failing tests and their output, from a check's log.
 //! - [`report`]: an entry's PR, why it failed, and why the queue holds.
 //! - [`resolve`]: settling a merge that conflicted only in generated files.
 //! - [`changelog`]: changelog fragments, assembled at release time.
@@ -38,6 +39,7 @@ mod checks;
 mod config;
 mod entry;
 mod error;
+pub mod failure;
 pub mod forge;
 mod git;
 mod history;
@@ -60,7 +62,7 @@ pub use error::QueueError;
 pub use integrate::{GitIntegrator, Integrator, RepoPaths};
 pub use lock::FileLock;
 pub use processor::{Limits, MergeQueue, Processor, QueueEvent, QueuePage};
-pub use report::{Failure, FailureKind, Hold, HoldKind, PrRef};
+pub use report::{Failure, FailureKind, Hold, HoldKind, PrRef, Suspect};
 pub use state::{Enqueued, HistoryMark, QueueState, RunOutcome};
 pub use store::QUEUE_FILE;
 pub use target::resolve_target;

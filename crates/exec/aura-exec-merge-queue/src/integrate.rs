@@ -45,6 +45,7 @@ use std::sync::Arc;
 
 pub use crate::repo::RepoPaths;
 
+mod diagnose;
 mod land;
 mod pull_request;
 mod worktree;
@@ -103,6 +104,9 @@ pub struct GitIntegrator {
     config: QueueConfig,
     /// Where the repo's PRs live; entries land by push without one
     forge: Option<Arc<dyn Forge>>,
+    /// The target's tip after this integrator's last merge: the newest
+    /// commit known to pass the checks
+    last_green: std::sync::Mutex<Option<String>>,
 }
 
 impl GitIntegrator {
@@ -113,7 +117,16 @@ impl GitIntegrator {
             repo,
             config,
             forge: None,
+            last_green: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The newest target commit known to pass the checks.
+    fn last_green(&self) -> Option<String> {
+        self.last_green
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// This integrator, landing pushed entries through their PRs on
@@ -300,20 +313,29 @@ impl GitIntegrator {
         let config = self.checks_at(target, &worktree).await?;
         let log = self.repo.check_log();
         let mut passed = Vec::new();
+        let mut flaky = None;
         for (name, command) in [("build", &config.build), ("test", &config.test)] {
             let Some(command) = command.as_deref() else {
                 continue;
             };
-            run_check(&worktree, command, config.check_timeout, &log)
-                .await
-                .map_err(|failure| check_failed(name, &failure))?;
+            if let Err(failure) = run_check(&worktree, command, config.check_timeout, &log).await {
+                let stop = check_failed(name, &failure);
+                if name != "test" {
+                    return Err(stop);
+                }
+                flaky = Some(self.diagnose(command, &config, target, stop).await?);
+            }
             passed.push(name);
         }
-        Ok(if passed.is_empty() {
+        let mut said = if passed.is_empty() {
             "no build or test configured".to_string()
         } else {
             format!("{} passed", passed.join(" and "))
-        })
+        };
+        if let Some(flaky) = flaky {
+            said.push_str(&format!("; {flaky}"));
+        }
+        Ok(said)
     }
 
     /// The config with the checks of the target commit `target`'s config
@@ -350,7 +372,16 @@ impl Integrator for GitIntegrator {
     async fn integrate(&self, entry: &MergeEntry) -> RunOutcome {
         for _ in 0..LAND_ATTEMPTS {
             match self.attempt(entry).await {
-                Ok(outcome) => return outcome,
+                Ok(outcome) => {
+                    if let RunOutcome::Merged { merged, .. } = &outcome {
+                        *self
+                            .last_green
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some(merged.clone());
+                    }
+                    return outcome;
+                }
                 Err(Stop::Fail(failure)) => return RunOutcome::Failed(*failure),
                 Err(Stop::Hold(hold)) => return RunOutcome::Held(*hold),
                 Err(Stop::Moved) => {

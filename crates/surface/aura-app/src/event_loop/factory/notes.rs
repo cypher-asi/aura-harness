@@ -2,7 +2,9 @@
 //! push and for an entry that ended, the prompt a failed entry's agent
 //! acts on, and the line for a queue that holds.
 
-use aura_exec_merge_queue::{Enqueued, FailureKind, Hold, HoldKind, MergeEntry, MergeStatus};
+use aura_exec_merge_queue::{
+    short_sha, Enqueued, FailureKind, Hold, HoldKind, MergeEntry, MergeStatus, Suspect,
+};
 
 /// Most characters of a failure's output the agent's prompt quotes.
 const PROMPT_EXCERPT_CHARS: usize = 3_000;
@@ -97,6 +99,64 @@ pub(super) fn held_line(entry: &MergeEntry, hold: &Hold) -> String {
     )
 }
 
+/// A commit that may have broken the target, and the agent whose queue
+/// entry merged it; `None` for one merged outside the queue.
+pub(super) struct Named<'a> {
+    pub suspect: &'a Suspect,
+    pub agent: Option<String>,
+}
+
+/// What the channel's coordinator and the suspects are told when the
+/// target fails its own checks: which tests, their output, and the
+/// commits since it last passed. `to_suspect` adds that their merge is
+/// one of them and asks for the fix.
+pub(super) fn broken_target_prompt(
+    target: &str,
+    hold: &Hold,
+    named: &[Named<'_>],
+    to_suspect: bool,
+) -> String {
+    let mut prompt = format!(
+        "The merge queue found {target} broken: {}\n\nNo entry is blamed for it; the entries \
+         that hit it wait until {target} moves.\n",
+        hold.reason
+    );
+    if !hold.tests.is_empty() {
+        prompt.push_str(&format!(
+            "\nFailing on {target} itself: {}\n",
+            hold.tests.join(", ")
+        ));
+    }
+    if let Some(excerpt) = &hold.excerpt {
+        let start = excerpt.chars().count().saturating_sub(PROMPT_EXCERPT_CHARS);
+        let excerpt: String = excerpt.chars().skip(start).collect();
+        prompt.push_str(&format!("\nOutput:\n```text\n{excerpt}\n```\n"));
+    }
+    if !named.is_empty() {
+        prompt.push_str(&format!(
+            "\nCommits on {target} since it last passed, newest first:\n"
+        ));
+        for one in named {
+            let who = one.agent.as_deref().map_or_else(
+                || format!("merged outside the queue by {}", one.suspect.author),
+                |agent| format!("merged through the queue for {agent}"),
+            );
+            prompt.push_str(&format!(
+                "- {} {} ({who})\n",
+                short_sha(&one.suspect.sha),
+                one.suspect.subject
+            ));
+        }
+    }
+    prompt.push_str(if to_suspect {
+        "\nYour merge is one of these. Check whether it broke them; if so, start a branch with \
+         git_start_task, fix it, and ship it: the fix goes through the queue first."
+    } else {
+        "\nMake sure one member fixes it on a fresh branch and ships it; tell the others to wait."
+    });
+    prompt
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +240,55 @@ mod tests {
         );
         assert!(prompt.contains("-  changelog"), "{prompt}");
         assert!(prompt.contains("failing tests pass"), "{prompt}");
+    }
+
+    #[test]
+    fn a_broken_target_names_its_tests_and_who_merged_what() {
+        let suspects = [
+            Suspect {
+                sha: "aaaaaaaa1111".to_string(),
+                author: "n3o".to_string(),
+                subject: "Merge branch 'main'".to_string(),
+            },
+            Suspect {
+                sha: "bbbbbbbb2222".to_string(),
+                author: "bot".to_string(),
+                subject: "Merge pull request #84".to_string(),
+            },
+        ];
+        let hold = Hold {
+            reason: "main at aaaaaaaa fails cli_golden_top_level_help on its own".to_string(),
+            kind: HoldKind::TargetBroken,
+            since: chrono::Utc::now(),
+            retry_at: chrono::Utc::now(),
+            target_tip: Some("aaaaaaaa1111".to_string()),
+            tests: vec!["cli_golden_top_level_help".to_string()],
+            excerpt: Some("+  changelog".to_string()),
+            suspects: suspects.to_vec(),
+        };
+        let named = [
+            Named {
+                suspect: &suspects[0],
+                agent: None,
+            },
+            Named {
+                suspect: &suspects[1],
+                agent: Some("RUS204".to_string()),
+            },
+        ];
+        let prompt = broken_target_prompt("main", &hold, &named, true);
+        assert!(prompt.contains("No entry is blamed"), "{prompt}");
+        assert!(
+            prompt.contains("Failing on main itself: cli_golden_top_level_help"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("merged outside the queue by n3o"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("through the queue for RUS204"), "{prompt}");
+        assert!(prompt.contains("git_start_task"), "{prompt}");
+        assert!(!broken_target_prompt("main", &hold, &named, false).contains("Your merge"));
     }
 
     #[test]

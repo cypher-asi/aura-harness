@@ -238,11 +238,17 @@ fn a_state_file_from_before_history_loads() {
 fn hold(retry_at: i64, target_tip: Option<&str>) -> Hold {
     Hold {
         reason: "main is broken".to_string(),
-        kind: crate::report::HoldKind::TargetBroken,
+        kind: if target_tip.is_some() {
+            HoldKind::TargetBroken
+        } else {
+            HoldKind::ForgeUnavailable
+        },
         since: at(0),
         retry_at: at(retry_at),
         target_tip: target_tip.map(str::to_string),
         tests: vec!["cli_golden_top_level_help".to_string()],
+        excerpt: None,
+        suspects: Vec::new(),
     }
 }
 
@@ -270,16 +276,19 @@ fn a_hold_on_the_target_ends_when_the_target_moves() {
     state.enqueue(request("a", "h1"), at(0));
     let first = state.claim_next(at(1)).unwrap();
     state.finish(&first.id, RunOutcome::Held(hold(10_000, Some("t1"))), at(2));
-    assert!(!state.release_hold("t1"), "same tip: still held");
-    assert_eq!(state.claim_next(at(3)), None);
-    assert!(state.release_hold("t2"));
+    assert!(!state.release_hold("t1", at(3)), "same tip: still held");
+    assert_eq!(state.claim_next(at(3)), None, "parked");
+    assert!(state.broken.is_some());
+    assert!(state.release_hold("t2", at(3)));
+    assert!(state.broken.is_none());
     assert_eq!(state.claim_next(at(4)).unwrap().branch, "a");
 }
 
 #[test]
 fn a_held_queue_round_trips_through_json() {
     let state = QueueState {
-        hold: Some(hold(5, Some("t1"))),
+        hold: Some(hold(5, None)),
+        broken: Some(hold(5, Some("t1"))),
         ..QueueState::default()
     };
     let text = serde_json::to_string(&state).unwrap_or_default();
@@ -288,4 +297,20 @@ fn a_held_queue_round_trips_through_json() {
     let old: QueueState =
         serde_json::from_str(r#"{"version":1,"next_seq":1,"entries":[]}"#).unwrap_or_default();
     assert!(old.hold.is_none(), "files from before holds load");
+}
+
+#[test]
+fn a_broken_target_parks_only_its_entry_so_the_fix_still_lands() {
+    let mut state = QueueState::default();
+    state.enqueue(request("a", "h1"), at(0));
+    state.enqueue(request("fix", "h2"), at(1));
+    let first = state.claim_next(at(2)).unwrap();
+    state.finish(&first.id, RunOutcome::Held(hold(10_000, Some("t1"))), at(3));
+    let next = state.claim_next(at(4)).unwrap();
+    assert_eq!(next.branch, "fix", "the entry behind it runs");
+    state.finish(&next.id, merged("t2"), at(5));
+    assert!(state.waits_on_target());
+    assert!(state.release_hold("t2", at(6)), "the fix moved the target");
+    assert_eq!(state.claim_next(at(7)).unwrap().branch, "a", "tried again");
+    assert!(!state.waits_on_target());
 }

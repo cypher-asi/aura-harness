@@ -57,3 +57,22 @@
   Another agent's branch and main are still refused.
 - Shipping more work on a branch that was merged already moves the new
   commits to a fresh branch first.
+
+### A broken main is found and reported, not blamed on the next push
+
+##### Fixed
+
+- When a test failed on a push's merge, the queue failed the push, even
+  when main itself failed that test (as when the CLI's help snapshot went
+  stale on main and every push after it bounced). Now the failing tests
+  run once more, then on main alone. A test that passes the second time
+  merges as flaky and is named. A test that fails on main too parks the
+  push without blame until main moves, while the fix still lands, and
+  the channel's coordinator and the agents whose merges may have broken
+  it are told which tests fail, their output, and the commits since main
+  last passed.
+
+##### Changed
+
+- The QUEUE tab shows a broken main above every merge, and a failed
+  merge's failing tests and their diff first, then its PR.

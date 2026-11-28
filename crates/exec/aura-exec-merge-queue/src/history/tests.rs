@@ -22,6 +22,7 @@ fn entry(seq: u64) -> MergeEntry {
         files: Vec::new(),
         pr: None,
         failure: None,
+        parked_at: None,
     }
 }
 

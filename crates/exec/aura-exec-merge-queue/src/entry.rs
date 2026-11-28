@@ -208,6 +208,10 @@ pub struct MergeEntry {
     /// Why it failed, in detail: the files or tests and their output
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<crate::report::Failure>,
+    /// The target's tip it waits to move from: its tests failed on the
+    /// target too ([`crate::HoldKind::TargetBroken`])
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_at: Option<String>,
 }
 
 impl MergeEntry {
@@ -316,6 +320,7 @@ mod tests {
                 excerpt: Some("-old\n+new".to_string()),
                 ..crate::report::Failure::default()
             }),
+            parked_at: Some("feedc0de".to_string()),
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert_eq!(serde_json::from_str::<MergeEntry>(&json).unwrap(), entry);

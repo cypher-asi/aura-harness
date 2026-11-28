@@ -188,9 +188,14 @@ impl MergeQueue {
         let store = self.inner.store.clone();
         let read = blocking(move || {
             let (state, _) = store.load()?;
-            let page = page_of(&state, finished, |skip, take| {
+            let mut page = page_of(&state, finished, |skip, take| {
                 store.history().newest(state.history, skip, take)
             })?;
+            page.held = state
+                .broken
+                .as_ref()
+                .or(state.hold.as_ref())
+                .map(|hold| hold.reason.clone());
             Ok((state, page))
         })
         .await;
@@ -317,6 +322,8 @@ pub struct QueuePage {
     pub entries: Vec<MergeEntry>,
     /// Finished entries older than these
     pub older: u64,
+    /// Why the queue holds or the target is broken, when it is
+    pub held: Option<String>,
 }
 
 /// The page of `state` with its newest `finished` finished entries,
@@ -353,6 +360,7 @@ fn page_of(
     Ok(QueuePage {
         entries: archived,
         older,
+        held: None,
     })
 }
 
@@ -438,10 +446,7 @@ impl Processor {
     pub async fn release_hold(&self) {
         let queue = &self.queue;
         let held = queue.inner.seen.lock().await.clone();
-        let Some(hold) = &held.hold else {
-            return;
-        };
-        if hold.target_tip.is_none() {
+        if !held.waits_on_target() {
             return;
         }
         let remote = held
@@ -452,7 +457,10 @@ impl Processor {
         let Some(tip) = queue.inner.integrator.target_tip(remote.as_deref()).await else {
             return;
         };
-        match queue.change(move |state| state.release_hold(&tip)).await {
+        match queue
+            .change(move |state| state.release_hold(&tip, Utc::now()))
+            .await
+        {
             Ok(true) => {
                 tracing::info!("The target moved; the merge queue goes on");
                 queue.announce(QueueEvent::Changed);

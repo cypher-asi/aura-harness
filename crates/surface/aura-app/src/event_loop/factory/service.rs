@@ -12,22 +12,26 @@
 //!   which starts a turn for it to fix and ship again; every change goes
 //!   to the QUEUE tab of each channel on the repo.
 
-use super::notes::{failure_prompt, held_line, outcome_line, queued_note};
+use super::notes::{
+    broken_target_prompt, failure_prompt, held_line, outcome_line, queued_note, Named,
+};
 use super::observe::{self, ObservedPush};
 use super::pages::{self, Windows};
+use super::repos::{
+    channel_folders, channels_on, coordinators_on, forge_of, has_queue_file, project_folders,
+};
 use crate::event_loop::agent_events::AgentUi;
 use crate::event_loop::handlers::system_message;
 use crate::event_loop::notices::Notice;
 use crate::event_loop::subagents::{lock, AgentHub};
 use aura_core_types::AgentId;
-use aura_exec_merge_queue::forge::{Forge, GhForge, RepoSlug};
 use aura_exec_merge_queue::{
-    Enqueued, GitIntegrator, Hold, Limits, MergeEntry, MergeQueue, MergeRequest, MergeStatus,
-    Origin, QueueConfig, QueueEvent, RepoPaths,
+    Enqueued, GitIntegrator, Hold, HoldKind, Limits, MergeEntry, MergeQueue, MergeRequest,
+    MergeStatus, Origin, QueueConfig, QueueEvent, RepoPaths,
 };
 use aura_ui::UiCommand;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -47,6 +51,8 @@ pub(crate) struct QueueService {
     queues: Mutex<HashMap<PathBuf, Arc<RepoQueue>>>,
     /// How much history each channel's QUEUE tab shows
     windows: Windows,
+    /// The broken target tips reported already, once each
+    reported: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 /// Start the merge queues: hear every push from now on, and resume the
@@ -108,6 +114,7 @@ impl QueueService {
             quit,
             queues: Mutex::default(),
             windows: Windows::default(),
+            reported: std::sync::Mutex::default(),
         })
     }
 
@@ -263,7 +270,12 @@ impl QueueService {
                 Ok(QueueEvent::Finished(entry)) => {
                     self.send_back(&entry, &repo_queue.target).await;
                 }
-                Ok(QueueEvent::Held { entry, hold }) => self.tell_held(&entry, &hold).await,
+                Ok(QueueEvent::Held { entry, hold }) => {
+                    self.tell_held(&entry, &hold).await;
+                    if hold.kind == HoldKind::TargetBroken {
+                        self.report_broken(&repo_queue, &hold).await;
+                    }
+                }
                 Ok(QueueEvent::Changed) | Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => return,
             }
@@ -312,6 +324,56 @@ impl QueueService {
             .await;
     }
 
+    /// Report the broken target `hold` names, once per tip: to the
+    /// coordinator of each channel on the repo, and to the agents whose
+    /// queue entries merged a suspect commit.
+    async fn report_broken(&self, repo_queue: &RepoQueue, hold: &Hold) {
+        let tip = hold.target_tip.clone().unwrap_or_default();
+        let common = repo_queue.queue.repo().common.display().to_string();
+        let first = lock(&self.reported).insert(format!("{common}@{tip}"));
+        if !first {
+            return;
+        }
+        let entries = repo_queue.queue.entries().await;
+        let merged_by = |sha: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.merged.as_deref() == Some(sha))
+                .map(|entry| entry.origin.clone())
+        };
+        let origins: Vec<_> = hold.suspects.iter().map(|s| merged_by(&s.sha)).collect();
+        let named = named_suspects(hold, &origins);
+        let target = &repo_queue.target;
+        let shown = format!("Merge queue: {target} is broken; {}", hold.reason);
+        warn!(%target, %tip, "The merge queue found the target broken");
+        let coordinators = coordinators_on(&self.hub, &repo_queue.queue.repo().common).await;
+        let suspects = origins
+            .iter()
+            .flatten()
+            .filter_map(|origin| origin.agent.as_deref())
+            .filter_map(|hex| AgentId::from_hex(hex).ok());
+        let mut told = Vec::new();
+        for (to, to_suspect) in coordinators
+            .into_iter()
+            .map(|id| (id, false))
+            .chain(suspects.map(|id| (id, true)))
+        {
+            if told.contains(&to) {
+                continue;
+            }
+            told.push(to);
+            let notice = Notice {
+                to,
+                shown: shown.clone(),
+                prompt: broken_target_prompt(target, hold, &named, to_suspect),
+                inbox: None,
+            };
+            if self.hub.notices.send(notice).is_err() {
+                warn!(%to, "The loop is gone; a broken target was not reported");
+            }
+        }
+    }
+
     /// Send `repo_queue` to the QUEUE tab of every channel on its repo,
     /// each as much of its history as the tab shows.
     async fn publish(&self, repo_queue: &RepoQueue) {
@@ -331,73 +393,21 @@ impl QueueService {
     }
 }
 
-/// The forge the PRs of the repo at `top` live on: GitHub through `gh`
-/// (its own sign-in, or `GH_TOKEN`/`GITHUB_TOKEN`) when `origin` is on
-/// github.com; `None` lands entries by push.
-async fn forge_of(top: &Path) -> Option<Arc<dyn Forge>> {
-    let mut command = tokio::process::Command::new("git");
-    command
-        .args(["remote", "get-url", "origin"])
-        .current_dir(top)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let timeout = std::time::Duration::from_secs(15);
-    let output = tokio::time::timeout(timeout, command.output())
-        .await
-        .ok()?
-        .ok()?;
-    let url = String::from_utf8_lossy(&output.stdout);
-    let slug = RepoSlug::from_remote_url(&url)?;
-    info!(repo = %slug, "The merge queue lands this repo through its pull requests");
-    Some(Arc::new(GhForge::new(slug)))
-}
-
-/// Whether `repo` has a queue file.
-async fn has_queue_file(repo: &RepoPaths) -> bool {
-    let file = repo.queue_dir().join(aura_exec_merge_queue::QUEUE_FILE);
-    tokio::fs::try_exists(&file).await.unwrap_or(false)
-}
-
-/// The folders of the channels' projects.
-async fn project_folders(hub: &AgentHub) -> Vec<PathBuf> {
-    let mut folders: Vec<PathBuf> = channel_folders(hub)
-        .await
-        .into_iter()
-        .map(|(_, folder)| folder)
-        .collect();
-    folders.sort();
-    folders.dedup();
-    folders
-}
-
-/// Each channel with a project, and its project's folder.
-async fn channel_folders(hub: &AgentHub) -> Vec<(String, PathBuf)> {
-    let summaries = crate::event_loop::channels::channel_summaries(hub)
-        .await
-        .unwrap_or_default();
-    summaries
-        .into_iter()
-        .filter_map(|channel| {
-            let folder = channel.project?.folder;
-            (!folder.is_empty()).then(|| (channel.id, PathBuf::from(folder)))
+/// `hold`'s suspects, each with the agent whose entry merged it
+/// (`origins`, in the same order).
+fn named_suspects<'a>(hold: &'a Hold, origins: &[Option<Origin>]) -> Vec<Named<'a>> {
+    hold.suspects
+        .iter()
+        .zip(origins)
+        .map(|(suspect, origin)| Named {
+            suspect,
+            agent: origin.as_ref().map(|o| {
+                o.agent_name
+                    .clone()
+                    .unwrap_or_else(|| "an agent".to_string())
+            }),
         })
         .collect()
-}
-
-/// The channels whose project is in the repo whose common git dir is
-/// `common`.
-async fn channels_on(hub: &AgentHub, common: &Path) -> Vec<String> {
-    let mut found = Vec::new();
-    for (channel_id, folder) in channel_folders(hub).await {
-        if RepoPaths::of(&folder)
-            .await
-            .is_ok_and(|repo| repo.common == common)
-        {
-            found.push(channel_id);
-        }
-    }
-    found
 }
 
 /// Who `agent` is, for its queue entries.

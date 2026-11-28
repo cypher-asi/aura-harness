@@ -347,6 +347,25 @@ Crate: `crates/exec/aura-exec-merge-queue`.
   - **Branch protection.** A status alone doesn't stop someone merging
     by hand. Protect the target and require the `aura/merge-queue`
     status; see `docs/software-factory-review.md` for the command.
+- **A failing test is diagnosed before anyone is blamed**
+  (`integrate/diagnose.rs`, `failure.rs`). When the test check fails, the
+  failing tests are read from its log (libtest's `test x ... FAILED` and
+  `---- x stdout ----` blocks) and, for a `cargo test` command:
+  1. they run once more on the same merge (`-- --exact <names>`); if
+     they pass, the entry merges and its note names them as flaky;
+  2. else they run on the plain target. If they fail there too, the
+     target is broken: the entry goes back to its place uncharged and is
+     parked until the target moves (or 2 hours pass), and the queue
+     reports it (`QueueEvent::Held`, `HoldKind::TargetBroken`) with the
+     tests, their output on the target, and the target's first-parent
+     commits since the queue last merged (its last 5 after a restart) as
+     suspects. Other entries still run, so the fix can land;
+  3. else the entry broke them, and fails naming them, with their output.
+  The hub sends the report once per broken tip to the coordinator of
+  each channel on the repo and to the agents whose queue entries merged
+  a suspect commit; a commit merged outside the queue is named as such
+  with its author (`notes::broken_target_prompt`).
+  Output that names no tests fails the entry as before.
 - **Results:**
   - A failed entry goes back to the agent that pushed it as a notice. The
     notice starts a turn that names the PR, the conflicting files or the
@@ -397,6 +416,11 @@ app, which draws the same tabs.
   - the number of attempts, when it is more than one;
   - the merged sha;
   - the detail, which for a failed entry is the reason.
+- A broken target comes first, above every block, in the error colour.
+- A failed merge shows its failing tests and their output (the
+  assertion or snapshot diff, up to 24 lines), or the files that
+  conflicted, right under its state line, before its other facts. Its
+  PR's address comes after the merged sha.
 - The tab is reached by clicking it, by Shift+Left/Right, or with the
   mouse wheel and keys for scrolling.
 
