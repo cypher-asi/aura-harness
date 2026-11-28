@@ -11,7 +11,7 @@ use ratatui::{text::Line, Frame};
 const KEYS_WIDTH: usize = 24;
 
 /// The commands.
-const COMMANDS: [(&str, &str); 30] = [
+const COMMANDS: [(&str, &str); 31] = [
     ("/help", "Show this help"),
     ("/new", "New session (reset context)"),
     ("/resume [n]", "List or resume earlier sessions"),
@@ -23,6 +23,7 @@ const COMMANDS: [(&str, &str); 30] = [
     ("/compact [focus]", "Summarize older history now"),
     ("/init", "Write or improve AGENTS.md"),
     ("/todos", "Fold or open the to-do drawer"),
+    ("/todos history", "Open or fold the finished to-dos (Alt+H)"),
     ("/cost", "Tokens and cost of the session"),
     ("/agent [n|name]", "Add an agent, or switch"),
     ("/agent new [name]", "Create and switch to agent"),

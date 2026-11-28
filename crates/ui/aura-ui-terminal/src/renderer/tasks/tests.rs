@@ -112,7 +112,7 @@ fn row_icons_sit_under_the_headers_arrow_and_tasks_one_level_in() {
         "a task is titled by the item it does: {screen}"
     );
     assert!(!screen.contains("Parse "), "{screen}");
-    assert_eq!(column(lines[1], '▣'), column(lines[0], '▾'), "{screen}");
+    assert_eq!(column(lines[1], '◐'), column(lines[0], '▾'), "{screen}");
     assert_eq!(
         column(lines[2], '✓').saturating_sub(column(lines[0], '▾')),
         2,
@@ -200,7 +200,7 @@ fn an_earlier_round_lists_its_items_and_a_replaced_failure_is_muted() {
         lines[2].contains("asked b1") && lines[2].contains("0/1"),
         "{screen}"
     );
-    assert!(lines[3].contains("▣  Add the store"), "{screen}");
+    assert!(lines[3].contains("◐  Add the store"), "{screen}");
     assert!(lines[4].contains("✗  Add the store  → coder"), "{screen}");
     assert!(lines[5].contains("✗  Add the store  → coder"), "{screen}");
     assert!(!screen.contains("Work ONLY"), "{screen}");
