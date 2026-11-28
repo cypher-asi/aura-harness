@@ -224,9 +224,8 @@ fn system_prompt_includes_rules() {
     assert!(prompt.contains("Rule one."));
 }
 
-/// Characters per token, as the context breakdown estimates them
-/// (`aura_config::CHARS_PER_TOKEN`).
-const CHARS_PER_TOKEN: usize = 4;
+/// Characters per token, as the context breakdown estimates them.
+const CHARS_PER_TOKEN: usize = aura_config::CHARS_PER_TOKEN;
 
 /// A SKILL.md body of about `chars` characters: numbered steps, as a
 /// real skill's instructions run.
