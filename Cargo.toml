@@ -136,6 +136,16 @@ codegen-units = 1
 inherits = "release"
 lto = "fat"
 
+# Release optimizations without cross-crate LTO and the single codegen
+# unit, compiled incrementally: scripts/build-cloud-binary.sh uses it for
+# the cloud binary you rebuild after every node change, and `--release`
+# when the binary ships.
+[profile.cloud-dev]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"

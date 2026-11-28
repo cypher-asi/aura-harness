@@ -32,3 +32,7 @@
   against the system's trust store, and requests still use HTTP/1.1.
   Request errors name their cause (a refused connection, a DNS, TLS or
   JSON error) as before.
+- `scripts/build-cloud-binary.sh` builds with a new `cloud-dev` profile:
+  release optimizations without cross-crate LTO, compiled incrementally,
+  so the rebuild after a node change takes about 30 s instead of 3
+  minutes. Pass `--release` for a binary you ship.
