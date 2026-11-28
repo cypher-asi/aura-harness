@@ -78,7 +78,7 @@ fn test_thinking_level_outlasts_the_stats_after_a_turn() {
 
     let wider = footer(&mut app, 160);
     assert!(
-        wider.contains("ASK · qwen3:4b · auto thinking · 62% context used"),
+        wider.contains("ASK · qwen3:4b · auto thinking · ◑ 62% context used"),
         "{wider:?}"
     );
     assert!(

@@ -109,14 +109,21 @@ the integration id. Variants include `NotConnected`, `Timeout { after }`,
   example, `runpod` + `list_pods` becomes `runpod_list_pods`.
 - `IntegrationTool` (`src/tools.rs`) implements `aura-exec-tools`'s
   `Tool`, so it registers on an agent's `ToolExecutor` like any built-in.
-- An agent only gets these tools while the integration is connected and
-  its `Access` allows the agent or the agent's channel. Every call checks
-  both again, so a disconnect or an access change takes effect at once,
-  even for a kernel built earlier.
-- The kernel's mode gate classifies tools by name and treats names it
-  doesn't know as network calls. So integration tools run **in agent mode
-  only**, whatever their `effect`. Letting `Read` tools run in plan and
-  ask mode needs the gate to learn them (see "Later" below).
+- Each agent's executor gets the tools its `Access` allows when its
+  kernel is built, connected or not. The model is offered them each turn
+  only while the integration is connected (`Integrations::tool_definitions`,
+  appended to the turn's tool list), so one connected mid-session shows
+  up on the next turn. Every call checks connection and access again, so
+  a disconnect or an access change takes effect at once.
+- The `effect` decides the mode gate and the approval prompt
+  (`Integrations::tool_classes`, fed into `PolicyConfig::tool_classes`
+  and `modes::user_defaults`):
+  - `Read` tools are invocations, like `web_search`: they run in agent,
+    plan and ask mode, and don't ask at any approval level.
+  - `Write`, `Spends` and `Destroys` tools are network calls: agent mode
+    only, and they ask under `ask` and `strict`.
+  - A built-in tool's own class always wins; a name in neither is a
+    network call.
 
 ### Credentials
 
@@ -283,9 +290,10 @@ uses the same icon cell, tooltip and active state as BENCH.
 
 ## Runpod
 
-The Runpod tools live in `aura-exec-tools/src/runpod`; the adapter that
-registers them on this model (and shows Runpod in the Integrations
-panel) follows in its own change.
+The tools live in `aura-exec-tools/src/runpod`; the adapter
+(`aura-engine-integrations/src/builtin/runpod.rs`) puts them on this
+model, so Runpod is in the Integrations panel and agents get its tools
+once it is connected.
 
 Runpod rents GPUs by the hour (pods) and by the second (serverless
 endpoints). The Runpod tools let agents find GPUs, start and stop pods,
@@ -318,8 +326,9 @@ The health check calls `GET /v2/account` and shows whether the key works.
 | `runpod_run_job` | Run a job on a serverless endpoint, waiting for it or not | spends |
 | `runpod_terminate_pod` | Delete a pod and its disk | destroys |
 
-Under the `ask` and `strict` approval levels, the spending and destroying
-tools ask before they run. Every request times out (20 s, or the job wait
+The read tools run without asking, and in plan and ask mode too. Under
+the `ask` and `strict` approval levels the spending and destroying tools
+ask before they run, and they run in agent mode only. Every request times out (20 s, or the job wait
 for `runpod_run_job`), and every result is capped at 32 KiB.
 
 ### Spending limits
@@ -349,16 +358,11 @@ These are not done yet:
   keychain) is still plain `0600` JSON and should be sealed the same way.
 - **aura-os trusted integrations** (`resolver/trusted`) and **plugin
   connectors** should be listed through the same registry.
-- **The mode gate and approvals should learn integration tools.** Today
-  the kernel treats any tool it doesn't know as a network call, so every
-  integration tool, a `Read` one included, runs in agent mode only and
-  asks under `ask` and `strict`. The registry should hand each tool's
-  `ToolEffect` to the kernel, so `Read` tools run without asking and
-  `Spends`/`Destroys` ones always ask.
-- **Integration tools in the model's tool list.** The list is built once
-  at startup (`harness::agent_tools`), and executors get the tools from
-  the connected snapshot. Listing them per turn, so that one connected
-  mid-session reaches the model at once, is still to do.
+- **Access changed mid-session.** An agent whose kernel was built before
+  its access allowed an integration gets the tools with its next kernel.
+- **`aura -p`, `task` subagents and compare runs.** `aura -p` doesn't
+  open the integrations, and `task` subagent turns and compare attempts
+  don't append their tools to the model's list yet; agents' own turns do.
 - **Channel access in the app.** Kernels pass no channel id yet, so
   `Access::Only { channels }` only applies where a caller passes one.
 - **boxd's sealed key in cloud mode.** Cloud mode still reads its key from

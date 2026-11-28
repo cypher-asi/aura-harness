@@ -65,7 +65,9 @@ pub(super) fn context_view(result: &AgentLoopResult, limit: Option<u64>) -> Cont
     let breakdown = &result.context_breakdown;
     ContextView {
         system_tokens: breakdown.system_prompt_tokens,
-        tools_tokens: breakdown.tools_tokens + breakdown.mcp_tokens + breakdown.subagents_tokens,
+        tools_tokens: breakdown.tools_tokens,
+        mcp_tokens: breakdown.mcp_tokens,
+        subagents_tokens: breakdown.subagents_tokens,
         skills_tokens: breakdown.skills_tokens,
         conversation_tokens: breakdown.conversation_tokens,
         total_tokens: result.estimated_context_tokens,
@@ -82,7 +84,9 @@ pub(super) fn remote_context_view(
     let breakdown = &usage.context_breakdown;
     ContextView {
         system_tokens: breakdown.system_prompt_tokens,
-        tools_tokens: breakdown.tools_tokens + breakdown.mcp_tokens + breakdown.subagents_tokens,
+        tools_tokens: breakdown.tools_tokens,
+        mcp_tokens: breakdown.mcp_tokens,
+        subagents_tokens: breakdown.subagents_tokens,
         skills_tokens: breakdown.skills_tokens,
         conversation_tokens: breakdown.conversation_tokens,
         total_tokens: usage.estimated_context_tokens,
@@ -256,10 +260,10 @@ mod tests {
         };
         let view = remote_context_view(&usage, Some(200_000));
         assert_eq!(view.system_tokens, 2_000);
-        assert_eq!(
-            view.tools_tokens, 1_500,
-            "tools, MCP and subagents together"
-        );
+        // Each its own part of the CONTEXT panel.
+        assert_eq!(view.tools_tokens, 1_000);
+        assert_eq!(view.mcp_tokens, 300);
+        assert_eq!(view.subagents_tokens, 200);
         assert_eq!(view.skills_tokens, 500);
         assert_eq!(view.conversation_tokens, 5_000);
         assert_eq!(view.total_tokens, 9_000);
