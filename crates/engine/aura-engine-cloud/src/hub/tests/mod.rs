@@ -136,6 +136,18 @@ async fn adopt_machine(
     project: &Path,
     branch: Option<&str>,
 ) -> PlacedAgent {
+    let domain = "aura-sc01-0101.boxd.sh";
+    adopt_machine_at(hub, fake, (agent, project, branch), domain).await
+}
+
+/// [`adopt_machine`] on a machine whose node answers at `domain` (a
+/// `http://` one for a node a test serves).
+async fn adopt_machine_at(
+    hub: &CloudHub,
+    fake: &FakeProvider,
+    (agent, project, branch): (AgentId, &Path, Option<&str>),
+    domain: &str,
+) -> PlacedAgent {
     use crate::{MachineInfo, MachineStatus};
     let name = "aura-sc01-0101";
     fake.insert_machine(MachineInfo {
@@ -146,7 +158,7 @@ async fn adopt_machine(
         vcpu: 4,
         memory_bytes: 0,
         disk_bytes: 0,
-        domain: format!("{name}.boxd.sh"),
+        domain: domain.to_string(),
         public_ip: String::new(),
         ssh_port: 0,
         isolated: true,

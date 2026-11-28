@@ -399,10 +399,24 @@ to open a pull request. Three things keep them in the queue:
    start on a node without `git_ship`, and the machine does no work, the
    hub uploads its own cloud build, installs it once it starts on the
    machine, restarts the node and claims it again
-   (`fleet/update.rs`, `CloudHub::current_node`). A running turn is
-   never cut off: a busy machine waits for its next turn. The node's
-   store stays on disk, so the conversation survives. If the update
-   fails, the old node keeps running.
+   (`fleet/update.rs`, `hub/node_update.rs`). The node's store stays on
+   disk, so the conversation survives. If the update fails, the old node
+   keeps running. A turn is never cut off by it:
+   - **One update at a time.** A per-agent lock serializes updates, and
+     the busy check and the update's own busy count are taken under one
+     lock, so no turn this hub starts can begin during the update.
+   - **The node is asked.** A turn the node started itself (for mail, or
+     a spawned agent) isn't counted by the hub. So before restarting,
+     the hub asks the node (`GET /v1/cloud/processes`). A node too old
+     to answer counts as idle only once its hub socket has reported that
+     nothing runs. If the node can't be reached, there's no update.
+   - **Marks outlive lost watches.** A turn's mark goes only when its run
+     is known to have ended: its end was seen, the node says the run is
+     gone, or the hub stopped it. When the hub stops watching for another
+     reason (the machine couldn't be woken, the node stopped answering,
+     the 6-hour limit passed and the stop didn't take), the turn is
+     reported failed but its mark stays (`CloudHub::unsettled_run`). The
+     node isn't restarted under it, and a later turn's mark replaces it.
 2. **The ship prompt fits the node.** Before asking a cloud agent to
    ship, the hub checks whether its node offered `git_ship`. If not, it
    asks for `git_commit_push` and says not to open a pull request
