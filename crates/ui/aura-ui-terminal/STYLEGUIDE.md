@@ -69,7 +69,8 @@ themes keep working:
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
 - **Failed agent**: an agent that errored out is drawn in the Stop
-  button's red until its next turn starts. It errors out by failing to
+  button's red until a new start or turn begins, never beside one: its
+  rows and what its peers hear come from the one live state. It errors out by failing to
   start (its session won't open, its local model is down, the cloud
   refuses it), by failing to get a cloud machine, by a turn that ends
   in an error, or by stalling (the stall sweep gave up on it). All four
@@ -77,6 +78,8 @@ themes keep working:
   - On PROJECTS its name is red and its icon column shows `!` in red.
   - On a channel's MEMBERS the `!` replaces the `@` and its second row
     reads `Failed: <why>` in red, cut to fit, in place of its title.
+    Pointed at or selected, the whole reason shows under the row,
+    wrapped, in red on `surface_hover`.
   - Its chat shows the whole reason as an error: `✗ ` then the reason,
     both in red. Other harness notes keep `* ` in `muted`.
 
@@ -85,7 +88,10 @@ themes keep working:
   agent fails uses it and the same `!`.
 - **Starting**: a channel member whose cloud machine is starting reads
   `Starting in the cloud…` in `muted` on its MEMBERS row, so a member
-  still starting can't be mistaken for an idle one.
+  still starting can't be mistaken for an idle one. Once its start
+  panel is at a step, the row reads `Starting 5/9 · 1m 26s · Preparing
+  project snapshot`: the step's place and time first, so a narrow row
+  keeps them, the whole line under the row when pointed at.
 - **Cloud**: an agent that runs in the cloud has `☁` after its name in
   `muted` on every row it is on (PROJECTS, a channel's MEMBERS, its
   subagents), dimmer with the owner's name for another user's, whatever

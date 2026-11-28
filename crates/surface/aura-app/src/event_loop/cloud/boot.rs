@@ -13,6 +13,9 @@ pub(super) struct BootConsoleUi {
     id: String,
     title: String,
     begun: Arc<AtomicBool>,
+    /// The agent whose start this console shows, whose rows follow its
+    /// steps ([`Self::tracking_start`])
+    start: Option<(Arc<AgentHub>, AgentId)>,
 }
 
 impl BootConsoleUi {
@@ -26,6 +29,43 @@ impl BootConsoleUi {
             ),
             title: title.to_string(),
             begun: Arc::default(),
+            start: None,
+        }
+    }
+
+    /// Also put each step this console shows on `agent`'s rows, as its
+    /// start reaches it.
+    pub(super) fn tracking_start(mut self, hub: Arc<AgentHub>, agent: AgentId) -> Self {
+        self.start = Some((hub, agent));
+        self
+    }
+
+    /// Note the plan and the stage `events` reach on the started agent's
+    /// rows, and send the rows when that changed them.
+    async fn track_steps(&self, events: &[BootEvent]) {
+        let Some((hub, agent)) = &self.start else {
+            return;
+        };
+        let mut changed = false;
+        for event in events {
+            changed |= match event {
+                BootEvent::Plan(stages) => hub.status.plan_start(
+                    *agent,
+                    stages.iter().map(|stage| stage.key().to_string()).collect(),
+                ),
+                BootEvent::Stage {
+                    stage,
+                    state: StageState::Started,
+                } => hub.status.start_stage(
+                    *agent,
+                    (stage.key(), stage.label()),
+                    aura_core_types::time::now_ms(),
+                ),
+                _ => false,
+            };
+        }
+        if changed {
+            hub.send_agent_list().await;
         }
     }
 
@@ -50,6 +90,7 @@ impl BootConsoleUi {
 
     pub(super) async fn show(&self, events: Vec<BootEvent>) {
         self.begin().await;
+        self.track_steps(&events).await;
         for update in boot_updates(events) {
             self.send(update).await;
         }
@@ -127,4 +168,19 @@ pub(super) fn boot_updates(events: Vec<BootEvent>) -> Vec<BootUpdate> {
         updates.push(update);
     }
     updates
+}
+
+/// Show `events` on a start console of `agent`, its rows following its
+/// steps, as a cloud start does.
+#[cfg(test)]
+pub(in crate::event_loop) async fn show_start_events(
+    hub: &Arc<AgentHub>,
+    agent: AgentId,
+    events: Vec<BootEvent>,
+) {
+    let ui = AgentUi::new(hub.commands().clone(), agent);
+    BootConsoleUi::new(ui, "Starting in the cloud")
+        .tracking_start(Arc::clone(hub), agent)
+        .show(events)
+        .await;
 }

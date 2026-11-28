@@ -83,7 +83,7 @@ const WORKING: &str = "Working…";
 const IDLE: &str = "Idle";
 
 /// What a member starting on its cloud machine is doing.
-const STARTING: &str = "Starting in the cloud…";
+pub(super) const STARTING: &str = "Starting in the cloud…";
 
 /// What a member whose turn waits for the one already under way on its
 /// machine is doing.
@@ -138,6 +138,14 @@ pub(super) fn render_channel_members(
         first: first * CHANNEL_MEMBER_ROWS,
     };
     body.draw(frame, lines, view, theme);
+    let rows = body.rows();
+    super::member_tooltip::render_member_tooltip(
+        frame,
+        rows,
+        (&channel.members, &shown, first),
+        app,
+        theme,
+    );
 }
 
 /// Member `index` of `members`, on two rows: the permanent agent it is an
@@ -240,7 +248,10 @@ fn member_status(app: &App, member: &AgentSummary, theme: &Theme) -> (String, Co
         );
     }
     if member.starting && !app.agent_thinking(member) {
-        return (STARTING.to_string(), theme.colors.muted);
+        return (
+            super::member_tooltip::starting_status(member),
+            theme.colors.muted,
+        );
     }
     if member.waiting {
         return (WAITING.to_string(), theme.colors.muted);

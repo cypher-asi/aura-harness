@@ -81,6 +81,8 @@ mod tests;
 mod turn_marks;
 mod view;
 
+#[cfg(test)]
+pub(super) use boot::show_start_events;
 use boot::BootConsoleUi;
 pub(super) use ended::handle_ended;
 pub(in crate::event_loop) use machine::node_offers_ship;
