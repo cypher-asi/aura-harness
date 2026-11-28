@@ -371,6 +371,25 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_up_and_down_reach_the_tui_input_ends() {
+        assert_eq!(
+            press(Key::Named(NamedKey::ArrowUp), None, CTRL),
+            [(KeyCode::Up, KeyModifiers::CONTROL)]
+        );
+        let mut stage = stage();
+        stage.seed(false);
+        stage.shell.frame(stage.now);
+        stage.type_text("first");
+        stage.key(SHIFT, Press::of(NamedKey::Enter));
+        stage.type_text("last");
+        stage.key(CTRL, Press::of(NamedKey::ArrowUp));
+        stage.type_text(">");
+        stage.key(CTRL, Press::of(NamedKey::ArrowDown));
+        stage.type_text("<");
+        assert_eq!(stage.shell.tabs.front_mut().tui.input(), ">first\nlast<");
+    }
+
+    #[test]
     fn a_key_brings_the_cursor_back() {
         let mut stage = stage();
         stage.seed(false);

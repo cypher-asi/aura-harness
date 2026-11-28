@@ -11,8 +11,9 @@ use std::time::Duration;
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Most bytes read from a clipboard tool. Anything larger is far past the
-/// image size limit, so there is no point holding it in memory.
-const MAX_READ_BYTES: u64 = 32 * 1024 * 1024;
+/// image size limit and the input's text limit, so it is refused rather
+/// than held in memory, and never handed on cut short.
+pub const MAX_READ_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Image types asked for, in order of preference.
 const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -141,6 +142,8 @@ fn first_text(tools: &[(&str, &[&str])]) -> io::Result<Option<String>> {
     for (program, args) in tools {
         match capture(program, args) {
             Ok(out) => return Ok(Some(String::from_utf8_lossy(&out).into_owned())),
+            // Too much to paste is the answer, not a tool that is missing.
+            Err(e) if e.kind() == io::ErrorKind::FileTooLarge => return Err(e),
             Err(e) => last_error = Some(e),
         }
     }
@@ -189,8 +192,9 @@ fn capture(program: &str, args: &[&str]) -> io::Result<Vec<u8>> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut out = Vec::new();
+        // One byte past the cap tells a full clipboard from one cut short.
         let result = stdout
-            .take(MAX_READ_BYTES)
+            .take(MAX_READ_BYTES + 1)
             .read_to_end(&mut out)
             .map(|_| out);
         let _ = tx.send(result);
@@ -207,15 +211,39 @@ fn capture(program: &str, args: &[&str]) -> io::Result<Vec<u8>> {
         ));
     };
     let out = read?;
-    // A tool still writing past the cap would block on a full pipe forever.
-    if out.len() as u64 >= MAX_READ_BYTES {
-        let _ = child.kill();
+    if over_cap(&out) {
+        // A tool still writing past the cap would block on a full pipe
+        // forever. Its exit is of no interest: the read is refused.
+        if let Err(error) = child.kill() {
+            tracing::debug!(%program, %error, "Could not stop a clipboard tool past the cap");
+        }
+        if let Err(error) = child.wait() {
+            tracing::debug!(%program, %error, "Could not reap a clipboard tool past the cap");
+        }
+        return Err(too_large());
     }
     let status = child.wait()?;
-    if !status.success() && (out.len() as u64) < MAX_READ_BYTES {
+    if !status.success() {
         return Err(io::Error::other(format!("{program} exited with {status}")));
     }
     Ok(out)
+}
+
+/// Whether a clipboard tool printed more than [`MAX_READ_BYTES`].
+fn over_cap(out: &[u8]) -> bool {
+    out.len() as u64 > MAX_READ_BYTES
+}
+
+/// The error for a clipboard past [`MAX_READ_BYTES`]: what it holds is
+/// refused whole, never pasted cut short.
+fn too_large() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::FileTooLarge,
+        format!(
+            "the clipboard holds more than {} MB; nothing was pasted",
+            MAX_READ_BYTES / (1024 * 1024)
+        ),
+    )
 }
 
 /// Put `text` on the clipboard.
@@ -324,5 +352,15 @@ mod tests {
         assert!(capture("false", &[]).is_err());
         let missing = capture("aura-no-such-clipboard-tool", &[]).unwrap_err();
         assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn a_clipboard_past_the_cap_is_refused_not_cut() {
+        let cap = usize::try_from(MAX_READ_BYTES).unwrap();
+        assert!(!over_cap(&vec![b'x'; cap]), "exactly the cap is whole");
+        assert!(over_cap(&vec![b'x'; cap + 1]));
+        let error = too_large();
+        assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+        assert!(error.to_string().contains("nothing was pasted"), "{error}");
     }
 }

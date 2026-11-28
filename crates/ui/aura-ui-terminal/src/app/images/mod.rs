@@ -406,7 +406,13 @@ impl App {
         } else if let Some(path) = pasted_image_path(text) {
             self.attach_image_file(&path);
         } else {
-            self.insert_text(&text.replace("\r\n", "\n").replace('\r', "\n"));
+            let text = if text.contains('\r') {
+                std::borrow::Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+            } else {
+                std::borrow::Cow::Borrowed(text)
+            };
+            // The notice it leaves says how much went in, or why none did.
+            self.insert_pasted(&text);
         }
         self.sync_mentions();
     }

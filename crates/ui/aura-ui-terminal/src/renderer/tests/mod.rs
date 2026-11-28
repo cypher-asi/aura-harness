@@ -21,6 +21,7 @@ mod agent_error_red;
 mod agent_failures;
 mod agents_header;
 mod bench_icon;
+mod big_paste;
 mod channel_history;
 mod channel_history_typed;
 mod channel_info;
