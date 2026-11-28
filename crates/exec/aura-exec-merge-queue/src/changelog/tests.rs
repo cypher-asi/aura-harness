@@ -1,7 +1,8 @@
 use super::*;
 use std::collections::HashMap;
 
-const LOG: &str = "# Changelog\n\nIntro.\n\n## [Unreleased]\n\n### Older change\n\n##### Fixed\n\n- old\n";
+const LOG: &str =
+    "# Changelog\n\nIntro.\n\n## [Unreleased]\n\n### Older change\n\n##### Fixed\n\n- old\n";
 
 fn fragment(name: &str, text: &str) -> Fragment {
     Fragment {
@@ -30,7 +31,10 @@ fn fragments_go_at_the_top_of_unreleased_in_the_order_given() {
 fn an_empty_unreleased_section_takes_the_fragments() {
     let log = "# Changelog\n\n## [Unreleased]\n";
     let assembled = assemble(log, &[fragment("a.md", "### Only\n\n- a")]).unwrap();
-    assert_eq!(assembled, "# Changelog\n\n## [Unreleased]\n\n### Only\n\n- a\n");
+    assert_eq!(
+        assembled,
+        "# Changelog\n\n## [Unreleased]\n\n### Only\n\n- a\n"
+    );
 }
 
 #[test]
@@ -91,7 +95,10 @@ fn newest_first_puts_uncommitted_fragments_on_top() {
 #[test]
 fn a_branch_names_its_fragment() {
     for (branch, name) in [
-        ("aura/fewer-merge-conflicts-rus204", "fewer-merge-conflicts-rus204.md"),
+        (
+            "aura/fewer-merge-conflicts-rus204",
+            "fewer-merge-conflicts-rus204.md",
+        ),
         ("fix x", "fix-x.md"),
         ("feature/a.b_c", "a.b_c.md"),
         ("///", "change.md"),

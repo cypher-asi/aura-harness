@@ -70,10 +70,7 @@ fn world(files: &[(&str, &str)]) -> World {
     let hub = root.path().join("hub");
     let agent = root.path().join("agent");
     for clone in [&hub, &agent] {
-        git(
-            root.path(),
-            &["clone", "-q", bare, clone.to_str().unwrap()],
-        );
+        git(root.path(), &["clone", "-q", bare, clone.to_str().unwrap()]);
     }
     World {
         _root: root,
@@ -237,10 +234,7 @@ const MANIFEST: &str = "[package]\nname = \"t\"\nversion = \"0.1.0\"\nedition = 
 [dependencies]\n# a's\n\n# -\n# -\n# -\n# -\n\n[dev-dependencies]\n# b's\n";
 
 fn with_dependency(after: &str, name: &str) -> String {
-    MANIFEST.replace(
-        after,
-        &format!("{after}\n{name} = {{ path = \"{name}\" }}"),
-    )
+    MANIFEST.replace(after, &format!("{after}\n{name} = {{ path = \"{name}\" }}"))
 }
 
 fn path_crate(name: &str) -> [(String, String); 2] {

@@ -291,7 +291,10 @@ fn changelog_previews_unless_asked_to_write() {
         }
         _ => panic!("not the changelog command"),
     }
-    match parse(&["changelog", "--write", "--repo", "/r"]).unwrap().command {
+    match parse(&["changelog", "--write", "--repo", "/r"])
+        .unwrap()
+        .command
+    {
         Some(Commands::Changelog(args)) => {
             assert!(args.write);
             assert_eq!(args.repo, Some(PathBuf::from("/r")));
