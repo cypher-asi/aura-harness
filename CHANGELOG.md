@@ -94,6 +94,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   waits for the request. In a channel whose agents run in the cloud,
   the planner works on this computer, where plan mode holds.
 
+### Channel members show a cloud for cloud agents
+
+##### Added
+
+- A channel's MEMBERS tab shows the `☁` the PROJECTS list uses after a
+  member that runs in the cloud, gray for your own agent and dimmer,
+  with the owner's name, for another user's. A long name is cut so the
+  cloud still shows.
+- Clicking the input box focuses the Chat panel, so its border lights
+  up and keys go to the input.
+
 ### A cloud agent's chat shows its work as it goes
 
 ##### Fixed

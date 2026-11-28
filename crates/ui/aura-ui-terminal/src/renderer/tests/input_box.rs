@@ -370,6 +370,23 @@ fn test_wheel_over_a_short_input_leaves_it_alone() {
 }
 
 #[test]
+fn test_clicking_the_input_box_focuses_the_chat_panel() {
+    use crate::app::PanelFocus;
+    use crossterm::event::{MouseButton, MouseEventKind};
+
+    let mut app = app_with_model(None);
+    app.focus = PanelFocus::Swarm;
+    render_rows(&mut app, 120);
+    let input = app.areas.input.expect("input drawn");
+    mouse_at(
+        &mut app,
+        MouseEventKind::Down(MouseButton::Left),
+        (input.x + 4, input.y + 1),
+    );
+    assert_eq!(app.focus(), PanelFocus::Chat);
+}
+
+#[test]
 fn test_terminal_types_at_the_input_line_after_the_shell_prompt() {
     use crossterm::event::{KeyCode, KeyEvent};
 
