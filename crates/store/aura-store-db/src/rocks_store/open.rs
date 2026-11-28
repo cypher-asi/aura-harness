@@ -14,7 +14,7 @@ use tracing::{debug, warn};
 
 /// The column families this version of the store knows about, in the
 /// order they are opened.
-const EXPECTED_COLUMN_FAMILIES: [&str; 23] = [
+pub(super) const EXPECTED_COLUMN_FAMILIES: [&str; 23] = [
     cf::RECORD,
     cf::AGENT_META,
     cf::INBOX,

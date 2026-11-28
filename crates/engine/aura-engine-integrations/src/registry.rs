@@ -154,6 +154,17 @@ impl Registry {
         config
     }
 
+    /// The credential stored for `id`, read now: blocking file IO, for
+    /// code that runs off the async threads (cloud mode reading boxd's
+    /// key). Not the environment's; [`Self::context`] adds that.
+    ///
+    /// # Errors
+    /// `id` is unknown or the store can't be read.
+    pub fn stored_secret(&self, id: &str) -> Result<Option<Secret>, IntegrationError> {
+        let integration = self.find(id)?;
+        self.secrets.get(&integration.manifest().id)
+    }
+
     async fn stored(&self, id: &IntegrationId) -> Result<Option<Secret>, IntegrationError> {
         let (secrets, id) = (Arc::clone(&self.secrets), id.clone());
         blocking(move || secrets.get(&id)).await

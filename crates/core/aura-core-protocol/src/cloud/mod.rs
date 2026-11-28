@@ -6,6 +6,8 @@
 //! - [`sync`]: bodies of the `/v1/sync/*`, `/v1/node/*` and
 //!   `/v1/workspace/patch` calls the hub makes to move an agent's
 //!   single writer and pull its work back.
+//! - [`skills`]: the skill folders the hub sends a node, so the node
+//!   serves `load_skill` for the agent's skills.
 //! - [`host`]: what `GET /v1/host` reports about the machine a node runs
 //!   on, also used for this machine in the HOST tab.
 //!
@@ -16,6 +18,7 @@
 
 pub mod host;
 pub mod mesh;
+pub mod skills;
 pub mod sync;
 
 pub use host::{HostAddress, HostStats, SnapshotOrigin};
@@ -23,6 +26,7 @@ pub use mesh::{
     MeshAgent, MeshFrame, MeshMail, MeshMailKind, MeshPeer, MeshProcess, MESH_PROCESS_AGENT,
     MESH_PROTOCOL,
 };
+pub use skills::{SkillBundle, SkillFile, SkillFolder, SkillsSynced};
 pub use sync::{
     GitClaim, NodeClaim, NodeClaimed, PlanTemplate, RecordPage, SealResponse, SessionSaved,
     SessionStarted, SyncImport, SyncImported, TracePage, WorkspacePatch, NODE_PROTOCOL,

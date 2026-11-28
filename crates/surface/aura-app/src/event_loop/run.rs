@@ -115,7 +115,10 @@ pub(super) async fn run_loop(
 /// Handle `arrived`. Returns whether the loop is to stop.
 async fn handle(state: &mut LoopState<'_>, inbox: &Inbox, arrived: Arrived) -> bool {
     match arrived {
-        Arrived::Sweep => stalls::sweep(state).await,
+        Arrived::Sweep => {
+            stalls::sweep(state).await;
+            recover::tick(state).await;
+        }
         Arrived::Done(done) => handle_work_done(state, *done).await,
         Arrived::CloudEnded(ended) => cloud::handle_ended(state, ended).await,
         Arrived::SpawnFinished => {

@@ -35,6 +35,11 @@ use std::time::Instant;
 mod budget;
 #[cfg(feature = "dhat-heap")]
 mod heap;
+// The `aura` binary's allocator, so resident memory reads as it would
+// there: the system allocator keeps far more after freeing.
+#[cfg(all(feature = "load-mimalloc", not(feature = "dhat-heap")))]
+#[global_allocator]
+static MIMALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod measure;
 mod ui;
 
@@ -202,6 +207,8 @@ struct Measured {
     waits: Vec<Duration>,
     ui: ui::UiStats,
     rss: (Option<f64>, Option<f64>),
+    /// What `RocksDB` held natively at the end
+    native: aura_store_db::NativeMemory,
     span: Duration,
 }
 
@@ -324,6 +331,7 @@ async fn run(n: usize, span: Duration) -> Measured {
         waits: kept.waits,
         ui,
         rss: (rss_before, rss_mib()),
+        native: fixture.store.native_memory(),
         span,
     }
 }
@@ -365,13 +373,31 @@ fn report(measured: &Measured) -> String {
         sorted.last().copied().unwrap_or(0),
         measured.ui.longest_gap.as_secs_f64() * 1000.0
     );
+    memory_lines(&mut out, measured);
+    out
+}
+
+/// The memory lines of `measured`'s report: resident, and what RocksDB
+/// holds natively.
+fn memory_lines(out: &mut String, measured: &Measured) {
     let _ = writeln!(
-        out,
+        *out,
         "memory: resident {:.0} MiB before, {:.0} MiB after",
         measured.rss.0.unwrap_or(0.0),
         measured.rss.1.unwrap_or(0.0)
     );
-    out
+    let native = &measured.native;
+    #[allow(clippy::cast_precision_loss)]
+    let mib = |bytes: u64| bytes as f64 / (1024.0 * 1024.0);
+    let _ = writeln!(
+        *out,
+        "memory: RocksDB native {:.1} MiB: block cache {:.1} (pinned {:.1}), memtables {:.1}, table readers {:.1}",
+        mib(native.total()),
+        mib(native.block_cache),
+        mib(native.block_cache_pinned),
+        mib(native.memtables),
+        mib(native.table_readers)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

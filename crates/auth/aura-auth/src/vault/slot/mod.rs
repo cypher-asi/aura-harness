@@ -19,12 +19,16 @@
 //! - **Atomicity.** A crash mid-write cannot leave a truncated JSON
 //!   that looks like a corrupted secret: the final file is either the
 //!   previous version or the new one. See [`atomic_write_private`].
-//! - **Plaintext at rest.** The fallback file is still plaintext. Full
-//!   encryption-at-rest (DPAPI / `age`) is a follow-up.
+//! - **At rest.** A vault slot's fallback file is sealed
+//!   ([`super::sealed`]); a plain one from before is migrated on its
+//!   first read. A [`crate::KeychainSecret`]'s fallback (the local
+//!   store's own key) stays plain: sealing a key with another key in a
+//!   file beside it would add nothing.
 //! - **Windows ACL.** `share_mode(0)` blocks concurrent opens while
 //!   the tmp file is live but does not tighten the DACL — the file
 //!   still inherits the parent directory's ACL. Tracked as a TODO below.
 
+use super::sealed::{staged_path, FileSeal, Opened};
 use crate::error::AuthError;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -53,6 +57,8 @@ pub(crate) enum Read {
 pub(crate) struct SecretSlot {
     keyring_user: Option<String>,
     path: PathBuf,
+    /// Seals the fallback file; `None` keeps it plain
+    seal: Option<FileSeal>,
 }
 
 impl SecretSlot {
@@ -61,6 +67,7 @@ impl SecretSlot {
         Self {
             keyring_user: Some(user.into()),
             path,
+            seal: None,
         }
     }
 
@@ -69,6 +76,64 @@ impl SecretSlot {
         Self {
             keyring_user: None,
             path,
+            seal: None,
+        }
+    }
+
+    /// This slot with its fallback file sealed by `seal`.
+    pub(crate) fn sealed(mut self, seal: FileSeal) -> Self {
+        self.seal = Some(seal);
+        self
+    }
+
+    /// Write `secret` to the fallback file: sealed when the slot seals.
+    fn write_file(&self, secret: &str) -> Result<(), AuthError> {
+        let Some(seal) = &self.seal else {
+            return save_to_path(&self.path, secret);
+        };
+        let sealed = seal.seal(secret)?;
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| AuthError::CredentialIo {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
+        }
+        atomic_write_private(&self.path, &sealed).map_err(|e| AuthError::CredentialIo {
+            path: self.path.clone(),
+            source: e,
+        })
+    }
+
+    /// The fallback file's secret. A sealed file that can't be opened is
+    /// an error; a plain one from before is returned and sealed in place
+    /// ([`FileSeal::migrate`]), or left as it is when that fails.
+    fn read_file(&self) -> Result<Option<String>, AuthError> {
+        let Some(seal) = &self.seal else {
+            return Ok(load_from_path(&self.path));
+        };
+        let bytes = match std::fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(AuthError::CredentialIo {
+                    path: self.path.clone(),
+                    source: e,
+                })
+            }
+        };
+        match seal.open(&self.path, &bytes)? {
+            Opened::Sealed(secret) => Ok(Some(secret)),
+            Opened::Plain(plain) => {
+                match seal.migrate(&self.path, &plain, atomic_write_private) {
+                    Ok(()) => debug!(path = %self.path.display(), "Credentials file sealed"),
+                    Err(e) => warn!(
+                        path = %self.path.display(),
+                        error = %e,
+                        "Could not seal the plain credentials file; it is kept, and sealing is tried again next time"
+                    ),
+                }
+                Ok(Some(plain.to_string()))
+            }
         }
     }
 
@@ -76,7 +141,7 @@ impl SecretSlot {
     /// backend exists.
     pub(crate) fn save(&self, secret: &str) -> Result<(), AuthError> {
         let Some(user) = &self.keyring_user else {
-            return save_to_path(&self.path, secret);
+            return self.write_file(secret);
         };
         match keyring_entry(user).and_then(|e| e.set_password(secret)) {
             Ok(()) => {
@@ -90,10 +155,10 @@ impl SecretSlot {
                     error = %e,
                     path = %self.path.display(),
                     "OS keyring unavailable; falling back to on-disk credentials file. \
-                     This is a DEGRADED MODE — the secret is written in plaintext. \
+                     This is a DEGRADED MODE — the secret is sealed with a key file beside it. \
                      Install a secret-service daemon (gnome-keyring / KWallet) to re-enable keyring storage."
                 );
-                save_to_path(&self.path, secret)
+                self.write_file(secret)
             }
             Err(e) => Err(AuthError::CredentialKeyring(e.to_string())),
         }
@@ -102,10 +167,14 @@ impl SecretSlot {
     /// Read the secret, probing the file when the keyring has no entry
     /// so users are not logged out by a keyring rollout.
     pub(crate) fn read(&self) -> Read {
-        let from_file = |unanswered: bool| match load_from_path(&self.path) {
-            Some(secret) => Read::Found(secret),
-            None if unanswered => Read::Unanswered,
-            None => Read::Absent,
+        let from_file = |unanswered: bool| match self.read_file() {
+            Ok(Some(secret)) => Read::Found(secret),
+            Ok(None) if unanswered => Read::Unanswered,
+            Ok(None) => Read::Absent,
+            Err(e) => {
+                warn!(error = %e, "Could not read the credentials file");
+                Read::Unanswered
+            }
         };
         let Some(user) = &self.keyring_user else {
             return from_file(false);
@@ -142,7 +211,7 @@ impl SecretSlot {
     /// are errors unless the file holds the secret.
     pub(crate) fn read_answered(&self) -> Result<Option<String>, AuthError> {
         let Some(user) = &self.keyring_user else {
-            return Ok(load_from_path(&self.path));
+            return self.read_file();
         };
         let mut read = keyring_entry(user).and_then(|e| e.get_password());
         for _ in 0..KEYRING_READ_RETRIES {
@@ -156,12 +225,13 @@ impl SecretSlot {
         }
         match read {
             Ok(secret) => Ok(Some(secret)),
-            Err(e) if is_no_entry(&e) => Ok(load_from_path(&self.path)),
+            Err(e) if is_no_entry(&e) => self.read_file(),
             Err(e) if is_no_storage_access(&e) => {
                 debug!(error = %e, "OS keyring unavailable; reading the fallback file");
-                Ok(load_from_path(&self.path))
+                self.read_file()
             }
-            Err(e) => load_from_path(&self.path)
+            Err(e) => self
+                .read_file()?
                 .map(Some)
                 .ok_or_else(|| AuthError::CredentialKeyring(e.to_string())),
         }
@@ -188,8 +258,9 @@ impl SecretSlot {
                 })
             }
         }
-        // Best-effort: nuke any leftover tmp file from a crashed write.
+        // Best-effort: nuke any leftover tmp or staged file from a crash.
         let _ = std::fs::remove_file(tmp_path_for(&self.path));
+        let _ = std::fs::remove_file(staged_path(&self.path));
         Ok(())
     }
 }
@@ -344,105 +415,4 @@ fn open_private_for_write(path: &Path) -> io::Result<std::fs::File> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_tmp_path_for_appends_suffix() {
-        let p = Path::new("/a/b/credentials.json");
-        assert_eq!(tmp_path_for(p), Path::new("/a/b/credentials.json.tmp"));
-    }
-
-    #[test]
-    fn test_atomic_write_creates_file() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("creds.json");
-        atomic_write_private(&path, b"hello").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
-    }
-
-    #[test]
-    fn test_atomic_write_overwrites_existing() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("creds.json");
-        std::fs::write(&path, b"old contents that are longer than new").unwrap();
-        atomic_write_private(&path, b"new").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
-    }
-
-    #[test]
-    fn test_atomic_write_cleans_up_tmp_on_success() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("creds.json");
-        atomic_write_private(&path, b"payload").unwrap();
-        let tmp = tmp_path_for(&path);
-        assert!(
-            !tmp.exists(),
-            "tmp file should be renamed away on success, but {tmp:?} still exists"
-        );
-    }
-
-    #[test]
-    fn test_atomic_write_clobbers_stale_tmp() {
-        // A previous crashed write can leave <path>.tmp behind.
-        // atomic_write_private must clobber it, not fail.
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("creds.json");
-        let tmp = tmp_path_for(&path);
-        std::fs::write(&tmp, b"stale leftover from prior crash").unwrap();
-        atomic_write_private(&path, b"fresh").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh");
-        assert!(!tmp.exists());
-    }
-
-    #[test]
-    fn test_save_and_load_from_path_round_trip() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("nested").join("credentials.json");
-        save_to_path(&path, "{\"a\":1}").unwrap();
-        assert_eq!(load_from_path(&path).as_deref(), Some("{\"a\":1}"));
-    }
-
-    #[test]
-    fn test_load_from_path_missing_returns_none() {
-        let dir = TempDir::new().unwrap();
-        assert!(load_from_path(&dir.path().join("nope.json")).is_none());
-    }
-
-    #[test]
-    fn test_read_answered_file_slot_is_absent_then_found() {
-        let dir = TempDir::new().unwrap();
-        let slot = SecretSlot::file(dir.path().join("key"));
-        assert_eq!(slot.read_answered().unwrap(), None);
-        slot.save("abc").unwrap();
-        assert_eq!(slot.read_answered().unwrap().as_deref(), Some("abc"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_unix_perms_on_final_file_are_0600() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("creds.json");
-        atomic_write_private(&path, b"x").unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "final file should be 0600, got {mode:o}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_unix_perms_on_tmp_file_are_0600() {
-        // We can't observe the tmp file after rename, so we stub in a
-        // pre-existing tmp and check its mode right after the
-        // inner open_private_for_write call by invoking it directly.
-        use std::os::unix::fs::PermissionsExt;
-        let dir = TempDir::new().unwrap();
-        let tmp = dir.path().join("creds.json.tmp");
-        {
-            let _f = open_private_for_write(&tmp).unwrap();
-        }
-        let mode = std::fs::metadata(&tmp).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "tmp file should be 0600, got {mode:o}");
-    }
-}
+mod tests;

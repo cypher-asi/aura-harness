@@ -89,6 +89,12 @@ pub(super) struct TurnExtras {
     /// Set on a turn an earlier run of Aura asked for: when it turns out
     /// cut short, its agent carries on instead of giving up what it owes
     pub(super) cut_short: Option<CutShort>,
+    /// The reply text the turn streamed since its last tool call: its
+    /// last words once it ends, which answer what it was asked
+    pub(super) said: String,
+    /// Why the turn's conversation could not be copied here, once the
+    /// hub says so ([`RemoteEvent::CopyFailed`])
+    pub(super) copy_failed: Option<String>,
 }
 
 /// How an agent whose followed turn was cut short carries on: the
@@ -208,10 +214,16 @@ pub(super) async fn forward(
         }
         chat.end_wake(&event).await;
         chat.close_open(&event).await;
+        // A failed turn's copy is tried before its failure is sent.
+        if let RemoteEvent::CopyFailed(why) = event {
+            extras.copy_failed = Some(why);
+            continue;
+        }
         if matches!(event, RemoteEvent::Copied) {
             extras.show_record().await;
             continue;
         }
+        note_said(&mut extras.said, &event);
         if let Some(ended) = chat.show(event, extras.context_limit).await {
             end = ended;
             break;
@@ -222,6 +234,16 @@ pub(super) async fn forward(
     }
     chat.finish(extras).await;
     end
+}
+
+/// Keep in `said` the reply text `event` adds: a tool call starts the
+/// turn's words afresh, so what is left at its end is its last message.
+fn note_said(said: &mut String, event: &RemoteEvent) {
+    match event {
+        RemoteEvent::Text(text) => said.push_str(text),
+        RemoteEvent::ToolStart { .. } => said.clear(),
+        _ => {}
+    }
 }
 
 /// What a cloud turn has open in its chat.
@@ -308,7 +330,10 @@ impl TurnChat<'_> {
         let ui = self.ui;
         match event {
             RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
-            RemoteEvent::Boot(_) | RemoteEvent::Title(_) | RemoteEvent::Copied => {}
+            RemoteEvent::Boot(_)
+            | RemoteEvent::Title(_)
+            | RemoteEvent::Copied
+            | RemoteEvent::CopyFailed(_) => {}
             // `close_open` ended the reply the call wrote.
             RemoteEvent::ModelCallEnd => {}
             RemoteEvent::Text(text) => self.append_text(text).await,

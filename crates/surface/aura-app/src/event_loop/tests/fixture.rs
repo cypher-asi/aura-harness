@@ -16,6 +16,8 @@ pub(super) struct Fixture {
     pub(super) workspace: std::path::PathBuf,
     /// Every request the hub's kernels sent
     pub(super) sent: SentLog,
+    /// The store the hub's kernels write, for what it holds natively
+    pub(super) store: Arc<RocksStore>,
     pub(super) _dirs: Vec<TempDir>,
 }
 
@@ -74,6 +76,7 @@ pub(super) fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCo
         data,
         db,
         workspace,
+        store,
         ..
     } = env;
     let fixture = Fixture {
@@ -88,6 +91,7 @@ pub(super) fn fixture_with_gate(gate: GateLive) -> (Fixture, mpsc::Receiver<UiCo
         files,
         workspace: workspace.path().canonicalize().unwrap(),
         sent,
+        store,
         _dirs: vec![data, db, workspace],
     };
     (fixture, commands)

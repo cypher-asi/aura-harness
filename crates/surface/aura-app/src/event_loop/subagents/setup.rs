@@ -1,10 +1,10 @@
 use super::*;
 use crate::cloud::hub::TurnAsk;
-use aura_context_prompts::system::sections::plan_mode;
+pub(super) use aura_context_prompts::system::sections::plan_mode;
 
 /// Said after a cloud member's `<channel>` block: its machine finds the
 /// agents of its channel by id alone.
-const MACHINE_PEERS: &str = "\n\nYou run on a cloud machine: to reach the agents of \
+pub(super) const MACHINE_PEERS: &str = "\n\nYou run on a cloud machine: to reach the agents of \
 your channel, give `send_to_agent` the `agent_id` that `list_agents` shows for each, not \
 its code.";
 
@@ -103,6 +103,7 @@ impl AgentHub {
             standing: crate::event_loop::standing::Standings::default(),
             factory_flows: crate::event_loop::factory::Flows::default(),
             status: status::AgentStatus::default(),
+            recovery: crate::event_loop::recover::Recovery::default(),
             post_summaries,
             shown_chats: Mutex::default(),
             shown_records: Mutex::default(),
@@ -350,7 +351,8 @@ impl AgentHub {
 
     /// What a turn of `agent_id` on its cloud machine adds to the node's
     /// own prompt and tools, so it works as a turn here would: its
-    /// project's instructions, its permanent agent's prompt and skills,
+    /// project's instructions, its permanent agent's prompt and skills
+    /// (sent to its node as folders when it can take them),
     /// plan mode's instructions and its channel's block, and the tools
     /// its permanent agent leaves out, turned off. Everything else the
     /// turn asks for is left at its default.
@@ -363,28 +365,13 @@ impl AgentHub {
                 registry.is_top_level_agent(agent_id),
             )
         };
-        let mut prompt = folder
-            .map(|folder| self.instructions.for_workspace(&folder).text.clone())
-            .unwrap_or_default();
-        if let Some(name) = definition.as_deref() {
-            if let Some(found) = lock(&self.definitions).get(name) {
-                found.extend_system_prompt(&mut prompt, &lock(&self.skills));
-            }
-        }
-        if self.mode_of(agent_id) == PermissionMode::Plan {
-            prompt.push_str("\n\n");
-            prompt.push_str(&plan_mode::render(self.plan_build(agent_id)));
-        }
-        if let Some(channel) = crate::event_loop::channels::channel_prompt(self, agent_id) {
-            prompt.push_str("\n\n");
-            prompt.push_str(&channel);
-            prompt.push_str(MACHINE_PEERS);
-        }
-        let prompt = prompt.trim();
+        let (system_prompt, skills) =
+            self.cloud_prompts(agent_id, definition.as_deref(), folder.as_deref());
         let (_, offered) = self.definition_turn(None, "", top_level);
         let (_, kept) = self.definition_turn(definition.as_deref(), "", top_level);
         TurnAsk {
-            system_prompt: (!prompt.is_empty()).then(|| prompt.to_string()),
+            system_prompt,
+            skills,
             tools_off: offered
                 .into_iter()
                 .map(|tool| tool.name)
@@ -454,7 +441,7 @@ impl AgentHub {
         if !coordinator {
             tools = definition_tools(definition, &tools, top_level);
         }
-        definition.extend_system_prompt(&mut config.system_prompt, &lock(&self.skills));
+        self.push_definition_skills(definition, &mut config.system_prompt, &mut tools);
         if let Some(model) = &definition.model {
             base.limits.configure(&mut config, model);
         }

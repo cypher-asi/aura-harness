@@ -57,6 +57,7 @@ use crate::cloud::{CloudHub, PlaceRequest, RemoteEvent};
 
 mod blocked_starts;
 mod boot;
+mod copy_note;
 mod ended;
 #[cfg(test)]
 mod ended_tests;
@@ -91,7 +92,7 @@ pub(super) use ended::handle_ended;
 pub(in crate::event_loop) use machine::node_offers_ship;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
-pub(super) use member_start::start_in_cloud;
+pub(super) use member_start::{retry_start, start_in_cloud};
 use member_start::{Start, START_TIMEOUT};
 use moving::MoveMark;
 pub(super) use owners::archive_refusal;
@@ -125,8 +126,12 @@ pub(super) struct TurnOutcome {
     /// Why it stopped before finishing; `None` when it finished.
     pub(super) failure: Option<String>,
     /// Its conversation as its machine left it, copied here; `None`
-    /// when the copy failed.
+    /// when the copy failed. A failed copy can also leave the one an
+    /// earlier turn made.
     pub(super) messages: Option<Vec<aura_model::Message>>,
+    /// What it said last, as its reply streamed here; `None` when none
+    /// streamed (a turn followed from its record)
+    pub(super) said: Option<String>,
 }
 
 /// Shared between the loop and its tasks.
@@ -334,7 +339,10 @@ async fn ensure_hub(
             BootStage::Connect,
             "reading the cloud settings",
             None,
-            tokio::task::spawn_blocking(aura_config::CloudConfig::reload),
+            // The panel's stored key over the environment's (blocking IO).
+            tokio::task::spawn_blocking(|| {
+                aura_config::CloudConfig::reload().map(crate::integrations::cloud::cloud_config)
+            }),
         )
         .await
         .map_err(|err| err.to_string())?

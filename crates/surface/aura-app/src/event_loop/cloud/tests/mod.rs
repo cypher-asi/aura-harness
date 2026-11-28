@@ -8,6 +8,7 @@ use super::submit::runs_on_machine;
 use super::*;
 
 mod boot_tests;
+mod copy_note_tests;
 mod forward_tests;
 mod machine_tests;
 mod owner_tests;

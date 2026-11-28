@@ -54,6 +54,7 @@ async-trait = { workspace = true }
 dirs = { workspace = true }
 blake3 = { workspace = true }
 dhat = { version = "0.3", optional = true }
+mimalloc = { workspace = true, optional = true }
 bytes = { workspace = true }
 similar = "2"
 tempfile = { workspace = true }
@@ -79,6 +80,9 @@ walkdir = { workspace = true }
 # Heap-profile the load harness (`event_loop/tests/load/heap.rs`); test
 # builds only, as it replaces the allocator.
 dhat-heap = ["dep:dhat"]
+# Run the load harness on mimalloc, the allocator the `aura` binary
+# ships with (`event_loop/tests/load/mimalloc.rs`); test builds only.
+load-mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 # Serves a claimed cloud node in-process for the hub's client tests.

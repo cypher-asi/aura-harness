@@ -87,6 +87,19 @@ themes keep working:
   The red is `failure_color(theme)` (`renderer/mod.rs`), the one the
   input's `■ Stop` is drawn in, never a red of its own. Any new way an
   agent fails uses it and the same `!`.
+- **Waiting for sign-in**: an agent the model refused for its sign-in
+  (a 401, or a 403 that isn't Cloudflare's) is paused, not failed: its
+  queue and the reports it owes are kept. On PROJECTS its name is in
+  `warning`. On MEMBERS its second row reads `Waiting for sign-in` in
+  `warning`, and pointed at, the line under it says it carries on by
+  itself. Its chat says so as a warning. It carries on on its own once
+  a model call works again or the user signs in.
+- **Retrying**: an agent whose turn failed on an error reaching the
+  model while it owes a report, or whose cloud start failed, reads as a
+  failed agent, with the reason saying when it retries
+  (`Retrying after an error (1/3) in 1 min: …`, `… Retrying the start
+  in 1 min (try 1 of 3); its work waits.`). Past its last retry it
+  fails as above.
 - **Starting**: a channel member whose cloud machine is starting reads
   `Starting in the cloud…` in `muted` on its MEMBERS row, so a member
   still starting can't be mistaken for an idle one. Once its start

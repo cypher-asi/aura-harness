@@ -104,3 +104,34 @@ fn retry_reason_for_labels_transient_5xx_distinctly() {
         "cloudflare_block"
     );
 }
+
+#[test]
+fn a_408_is_retried_like_a_5xx_until_the_cap() {
+    use crate::anthropic::provider::errors::status_error;
+    let status = reqwest::StatusCode::REQUEST_TIMEOUT;
+    let (err, class) = status_error(status, "Request timed out", None);
+    assert_eq!(class, "request_timeout_408");
+    assert!(
+        matches!(err, ApiError::TransientServer { status: 408, .. }),
+        "{err:?}"
+    );
+    let mut last_err = None;
+    let below = classify_retry_action(
+        &err,
+        &policy(2),
+        &failed(1, 1, "primary", DEFAULT_BODY_CAP),
+        &mut last_err,
+    );
+    assert!(matches!(below, RetryAction::Retry { .. }), "{below:?}");
+    let at_cap = classify_retry_action(
+        &err,
+        &policy(2),
+        &failed(2, 1, "primary", DEFAULT_BODY_CAP),
+        &mut last_err,
+    );
+    assert!(matches!(at_cap, RetryAction::Propagate), "{at_cap:?}");
+    assert!(
+        matches!(last_err, Some(ReasonerError::Transient { status: 408, .. })),
+        "{last_err:?}"
+    );
+}

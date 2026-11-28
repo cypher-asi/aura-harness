@@ -27,6 +27,9 @@ pub(in crate::event_loop) enum StartCause {
     Work,
     /// A message the user typed to it: a retry, whatever failed before
     User,
+    /// The recovery trying once more after a failed start, its work kept
+    /// meanwhile ([`crate::event_loop::recover`])
+    Retry,
 }
 
 /// Why a start failed, and whether that was its machine's doing.
@@ -67,7 +70,7 @@ pub(super) async fn may_start(
     agent: AgentId,
     cause: StartCause,
 ) -> bool {
-    if cause == StartCause::User {
+    if matches!(cause, StartCause::User | StartCause::Retry) {
         state.hub.status.unblock_start(agent);
         return true;
     }

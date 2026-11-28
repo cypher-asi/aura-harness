@@ -11,6 +11,7 @@ repository.workspace = true
 doctest = false
 
 [dependencies]
+aura-core-protocol = { path = "../../core/aura-core-protocol" }
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-store-db = { path = "../../store/aura-store-db" }
 aura-model = { path = "../../model/aura-model" }
@@ -27,6 +28,8 @@ uuid = { workspace = true }
 workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [dev-dependencies]
+# The skill-size test estimates tokens as the context breakdown does.
+aura-config = { path = "../../config/aura-config" }
 tempfile = { workspace = true }
 
 [lints]

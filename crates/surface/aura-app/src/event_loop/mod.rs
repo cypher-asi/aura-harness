@@ -43,6 +43,7 @@ pub(crate) mod policies;
 pub(crate) mod processes;
 mod queue;
 pub(crate) mod record_ui;
+pub(crate) mod recover;
 pub(crate) mod repo;
 mod rewind;
 mod run;
@@ -73,6 +74,7 @@ pub use host::{TerminalAgents, TerminalChildKernels};
 pub use inbox::{AssignTool, HubLink, PeerHooks};
 pub use processes::{BackgroundCommands, ProcessTable};
 pub use record_ui::{FanoutObserver, RecordPanelAgent, UiRecordObserver};
+pub use subagents::DefinitionSkills;
 pub use subagents::{AgentHub, AgentHubParts, TurnBase};
 pub use trace::Traces;
 

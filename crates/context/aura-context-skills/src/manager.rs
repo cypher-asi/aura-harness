@@ -101,19 +101,46 @@ impl SkillManager {
         if skills.is_empty() {
             return Vec::new();
         }
-        let entries: Vec<prompt::SkillPromptEntry<'_>> = skills
-            .iter()
-            .map(|s| prompt::SkillPromptEntry {
-                name: &s.frontmatter.name,
-                description: &s.frontmatter.description,
-                body: &s.body,
-                dir_path: &s.dir_path,
-                agent_target_id: s.frontmatter.agent_target_id.as_deref(),
-                agent_target_name: s.frontmatter.agent_target_name.as_deref(),
-            })
-            .collect();
+        let entries: Vec<prompt::SkillPromptEntry<'_>> = skills.iter().map(prompt_entry).collect();
         prompt::inject_full_skills(system_prompt, &entries);
         skills.iter().map(crate::registry::skill_to_meta).collect()
+    }
+
+    /// Append the index of the skills installed for `agent_id` to
+    /// `system_prompt` (names, descriptions and paths, no bodies), as
+    /// [`crate::on_demand`] describes. The agent loads a body with
+    /// [`Self::load_agent_skill`]. Returns metadata for the indexed skills.
+    pub fn inject_agent_skill_index(
+        &self,
+        agent_id_str: &str,
+        system_prompt: &mut String,
+    ) -> Vec<SkillMeta> {
+        let skills = self.agent_skills_full(agent_id_str);
+        let entries: Vec<prompt::SkillPromptEntry<'_>> = skills.iter().map(prompt_entry).collect();
+        crate::on_demand::inject_skill_index(system_prompt, &entries);
+        skills.iter().map(crate::registry::skill_to_meta).collect()
+    }
+
+    /// The full instructions of skill `name`, or one `file` of its folder,
+    /// when it is installed for `agent_id` and the model may invoke it.
+    ///
+    /// # Errors
+    ///
+    /// [`SkillError::NotFound`] when the agent has no such skill, and
+    /// [`SkillError::Activation`] when `file` can't be loaded.
+    pub fn load_agent_skill(
+        &self,
+        agent_id_str: &str,
+        name: &str,
+        file: Option<&str>,
+    ) -> Result<String, SkillError> {
+        let skills = self.agent_skills_full(agent_id_str);
+        let skill = skills
+            .iter()
+            .find(|skill| skill.frontmatter.name == name)
+            .ok_or_else(|| SkillError::NotFound(name.to_string()))?;
+        crate::on_demand::load_skill_text(&prompt_entry(skill), file)
+            .map_err(SkillError::Activation)
     }
 
     /// Return model-invocable [`SkillMeta`] for only the skills installed for
@@ -434,6 +461,18 @@ pub struct AgentSkillPermissions {
     pub extra_paths: Vec<std::path::PathBuf>,
     /// Shell commands the agent is allowed to run.
     pub extra_commands: Vec<String>,
+}
+
+/// `skill` as the prompt renderers take it.
+fn prompt_entry(skill: &Skill) -> prompt::SkillPromptEntry<'_> {
+    prompt::SkillPromptEntry {
+        name: &skill.frontmatter.name,
+        description: &skill.frontmatter.description,
+        body: &skill.body,
+        dir_path: &skill.dir_path,
+        agent_target_id: skill.frontmatter.agent_target_id.as_deref(),
+        agent_target_name: skill.frontmatter.agent_target_name.as_deref(),
+    }
 }
 
 #[cfg(test)]

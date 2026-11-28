@@ -44,6 +44,16 @@ impl KernelParts {
         event_loop::KernelFactory::new(store, build).with_file_checkpoints(files)
     }
 
+    /// Register the tools only the app has: todos, `assign` and
+    /// `load_skill`.
+    fn register_own_tools(&self, executor: &mut ToolExecutor) {
+        executor.register(Box::new(TodoWriteTool));
+        executor.register(Box::new(event_loop::AssignTool::new(self.hub.clone())));
+        executor.register(Box::new(aura_exec_tools::skills::LoadSkillTool::new(
+            Arc::new(event_loop::DefinitionSkills::new(self.hub.clone())),
+        )));
+    }
+
     /// The kernel for `agent_id`, spawned by `parent_chain` (nearest
     /// first), with its tools run in `folder` (`None`: the launch folder).
     fn kernel(
@@ -81,8 +91,7 @@ impl KernelParts {
         executor = executor
             .with_agent_control_hook(peers.clone())
             .with_agent_read_hook(peers);
-        executor.register(Box::new(TodoWriteTool));
-        executor.register(Box::new(event_loop::AssignTool::new(self.hub.clone())));
+        self.register_own_tools(&mut executor);
         self.web_tools.register(&mut executor);
         if let Some(integrations) = crate::integrations::get() {
             integrations.register_tools(&mut executor, &agent_id.to_hex(), None);

@@ -129,3 +129,32 @@ fn a_starting_member_keeps_the_screen_moving_so_its_time_counts_up() {
         .unwrap();
     assert!(!row.contains("@  rust-engineer"), "{row}");
 }
+
+#[test]
+fn a_member_waiting_for_sign_in_says_so_in_warning_not_failed() {
+    let mut app = channel_with(AgentSummary {
+        waiting_for_sign_in: true,
+        ..AgentSummary::default()
+    });
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 30)).unwrap();
+    terminal
+        .draw(|frame| super::super::render(frame, &mut app, &test_theme()))
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let screen: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    let (y, row) = screen
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.contains("Waiting for sign-in"))
+        .unwrap_or_else(|| panic!("{}", screen.join("\n")));
+    assert!(!row.contains("Failed"), "{row}");
+    let x = row[..row.find("Waiting").unwrap()].chars().count();
+    let color = buffer[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())].fg;
+    assert_eq!(color, test_theme().colors.warning);
+}

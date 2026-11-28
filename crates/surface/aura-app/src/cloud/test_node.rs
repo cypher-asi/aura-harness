@@ -27,6 +27,8 @@ pub(crate) struct TestNode {
     pub(crate) store: Arc<dyn Store>,
     /// `http://127.0.0.1:<port>`.
     pub(crate) base: String,
+    /// Its skills, when it takes them ([`Self::serve_skilled`])
+    pub(crate) skills: Option<Arc<std::sync::RwLock<aura_context_skills::SkillManager>>>,
 }
 
 impl TestNode {
@@ -48,8 +50,24 @@ impl TestNode {
         dir: &Path,
         provider: Arc<dyn ModelProvider + Send + Sync>,
     ) -> Self {
-        let store: Arc<dyn Store> =
-            Arc::new(RocksStore::open(dir.join("db"), false).expect("store"));
+        Self::serve_on(dir, provider, false).await
+    }
+
+    /// [`Self::serve`] with skills: it takes the skills its hub sends, in
+    /// `hub-skills` in its folder, as a node from this build does.
+    pub(crate) async fn serve_skilled(dir: &Path, reply: &str) -> Self {
+        let model = MockProvider::simple_response(reply);
+        Self::serve_on(dir, Arc::new(model), true).await
+    }
+
+    async fn serve_on(
+        dir: &Path,
+        provider: Arc<dyn ModelProvider + Send + Sync>,
+        skilled: bool,
+    ) -> Self {
+        let rocks = Arc::new(RocksStore::open(dir.join("db"), false).expect("store"));
+        let skill_manager = skilled.then(|| skill_manager(&rocks, dir));
+        let store: Arc<dyn Store> = rocks;
         let scheduler = Arc::new(Scheduler::new(
             Arc::clone(&store),
             Arc::clone(&provider),
@@ -74,7 +92,7 @@ impl TestNode {
             automaton_controller: None,
             automaton_bridge: None,
             memory_manager: None,
-            skill_manager: None,
+            skill_manager: skill_manager.clone(),
             secrets_vault: None,
             process_store: None,
             trigger_registrar: None,
@@ -89,7 +107,12 @@ impl TestNode {
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
         });
-        Self { state, store, base }
+        Self {
+            state,
+            store,
+            base,
+            skills: skill_manager,
+        }
     }
 
     /// Claim it for a hub holding `token`.
@@ -154,4 +177,20 @@ impl TestNode {
             output
         })
     }
+}
+
+/// A node's skill manager, finding only the skills its hub sends.
+fn skill_manager(
+    rocks: &RocksStore,
+    dir: &Path,
+) -> Arc<std::sync::RwLock<aura_context_skills::SkillManager>> {
+    use aura_context_skills::{loader::SkillLoaderConfig, SkillInstallStore, SkillLoader};
+    let loader = SkillLoader::new(SkillLoaderConfig {
+        extra_dirs: vec![dir.join(aura_node::test_support::HUB_SKILLS_DIR)],
+        ..SkillLoaderConfig::default()
+    });
+    let installs = Arc::new(SkillInstallStore::new(rocks.db_handle().clone()));
+    Arc::new(std::sync::RwLock::new(
+        aura_context_skills::SkillManager::with_install_store(loader, installs),
+    ))
 }

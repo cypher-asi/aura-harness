@@ -158,6 +158,12 @@ fn register_session_tools(
         }
     }
 
+    if let Some(skills) = crate::gateway::session::skills::SessionSkills::of(session, ctx) {
+        resolver.register(Box::new(aura_exec_tools::skills::LoadSkillTool::new(
+            Arc::new(skills),
+        )));
+    }
+
     if let Some(ref controller) = ctx.automaton_controller {
         let project_id = session.project_id.clone().unwrap_or_default();
         let workspace_root = session.project_path.clone();

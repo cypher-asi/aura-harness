@@ -283,6 +283,9 @@ fn command_reply(last: Option<&str>) -> Option<MockProvider> {
 /// The work's answers that are neither scripted nor commands: a failure
 /// on "explode", a disowning reply, a repaired reply, and the chat title.
 fn fallback_reply(request: &ModelRequest, last: Option<&str>, auxiliary: bool) -> Reply {
+    if let Some(trouble) = super::recovery::trouble_reply(request, last).filter(|_| !auxiliary) {
+        return Some(Err(trouble));
+    }
     if last.is_some_and(|text| text.contains("explode")) {
         return Some(Err(ReasonerError::Api {
             status: 400,

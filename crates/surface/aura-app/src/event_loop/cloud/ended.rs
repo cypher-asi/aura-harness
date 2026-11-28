@@ -18,6 +18,13 @@ pub(in crate::event_loop) async fn handle_ended(state: &mut LoopState<'_>, ended
     if let Some(outcome) = outcome {
         lock(&state.hub.cloud_turns).remove(&agent);
         let ok = outcome.failure.is_none();
+        if !interrupted && held(state, agent, outcome.failure.as_deref()).await {
+            agents::send_agent_list(state).await;
+            return;
+        }
+        if ok {
+            crate::event_loop::recover::model_worked(state, agent).await;
+        }
         let messages = outcome.messages.as_deref().unwrap_or_default();
         let waits = crate::event_loop::factory::hooks::after_cloud_turn(
             state,
@@ -34,6 +41,19 @@ pub(in crate::event_loop) async fn handle_ended(state: &mut LoopState<'_>, ended
         refresh_machine_plans(state, agent);
     }
     crate::event_loop::start_next(state, agent).await;
+}
+
+/// Whether `agent`'s cloud turn, which failed because of `failure` if at
+/// all, is held for the recovery instead of failed: its trouble a pause
+/// or a retry may get past. A held turn settles nothing; its queue waits.
+async fn held(state: &LoopState<'_>, agent: AgentId, failure: Option<&str>) -> bool {
+    let Some(why) = failure.filter(|why| *why != super::submit::STOPPED) else {
+        return false;
+    };
+    match crate::event_loop::recover::Trouble::of_message(why) {
+        Some(trouble) => crate::event_loop::recover::hold_turn(state, agent, &trouble).await,
+        None => false,
+    }
 }
 
 /// How a cloud turn's asks are settled.
@@ -54,18 +74,22 @@ struct Settle {
 async fn settle(state: &LoopState<'_>, agent: AgentId, outcome: TurnOutcome, how: Settle) {
     let Settle { interrupted, waits } = how;
     let messages = outcome.messages.as_deref();
+    let said = outcome.said.as_deref();
     match (outcome.failure, messages) {
         (None, Some(messages)) => {
             channels::post_replies_from(state, agent, messages).await;
             // A plan turn's answer waits for the turns the factory adds.
             if !waits {
-                inbox::answer_seen(&state.hub, agent, messages);
+                inbox::answer_turn(&state.hub, agent, messages, said);
             }
         }
-        // Nothing tells what the turn answered: it still owes it all, as
-        // an agent here whose session is gone does.
+        // Without a copy, what the turn was started on is still known,
+        // and its reply streamed here: that answers it. The rest waits.
         (None, None) => {
-            warn!(%agent, "A cloud turn's conversation was not copied here; its answers wait");
+            warn!(%agent, "A cloud turn's conversation was not copied here; answering from its stream");
+            if !waits && said.is_some() {
+                inbox::answer_turn(&state.hub, agent, &[], said);
+            }
         }
         // Once the user stopped the turn, the failure it ends with is that
         // stop, whatever it was doing then.
