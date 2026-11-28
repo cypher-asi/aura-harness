@@ -52,7 +52,7 @@ fn has(service: &Integrations, agent: &str, tool: &str) -> bool {
 }
 
 #[tokio::test]
-async fn github_and_boxd_are_listed_after_the_service_own_integrations() {
+async fn the_built_ins_are_listed_after_the_service_own_integrations() {
     let service = service(Arc::default());
     let ids: Vec<&str> = service
         .registry()
@@ -60,17 +60,30 @@ async fn github_and_boxd_are_listed_after_the_service_own_integrations() {
         .iter()
         .map(|m| m.id.as_str())
         .collect();
-    assert_eq!(ids, ["echo-svc", "github", "boxd"]);
+    assert_eq!(ids, ["echo-svc", "github", "boxd", "runpod"]);
+}
+
+fn offered(service: &Integrations, agent: &str) -> Vec<String> {
+    service
+        .tool_definitions(agent, None)
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect()
 }
 
 #[tokio::test]
 async fn a_connected_integrations_tools_reach_allowed_agents_only() {
     let service = service(Arc::default());
     service.refresh().await;
-    assert!(
-        !has(&service, "agent-a", "echo_svc_say"),
-        "not connected yet"
-    );
+    assert!(offered(&service, "agent-a").is_empty(), "not connected yet");
+    // Registered anyway, so connecting later needs no new kernel; the
+    // call itself is refused until then.
+    assert!(has(&service, "agent-a", "echo_svc_say"));
+    let early = service
+        .registry()
+        .call("echo-svc", "say", serde_json::json!({}), ("agent-a", None))
+        .await;
+    assert!(early.is_err());
 
     let registry = service.registry();
     registry
@@ -78,7 +91,7 @@ async fn a_connected_integrations_tools_reach_allowed_agents_only() {
         .await
         .unwrap();
     service.refresh().await;
-    assert!(has(&service, "agent-a", "echo_svc_say"));
+    assert_eq!(offered(&service, "agent-a"), ["echo_svc_say"]);
 
     registry
         .set_access(
@@ -92,6 +105,8 @@ async fn a_connected_integrations_tools_reach_allowed_agents_only() {
         .unwrap();
     assert!(!has(&service, "agent-a", "echo_svc_say"));
     assert!(has(&service, "agent-b", "echo_svc_say"));
+    assert!(offered(&service, "agent-a").is_empty());
+    assert_eq!(offered(&service, "agent-b"), ["echo_svc_say"]);
 }
 
 #[tokio::test]
@@ -136,4 +151,24 @@ async fn the_panel_shows_each_actions_result_and_a_failure_as_failed() {
     assert_eq!(boxd.takes_key.as_deref(), Some("API key"));
     let github = panel.iter().find(|view| view.id == "github").unwrap();
     assert_eq!(github.login.as_deref(), Some("gh auth login"));
+    let runpod = panel.iter().find(|view| view.id == "runpod").unwrap();
+    assert_eq!(runpod.takes_key.as_deref(), Some("API key"));
+    assert_eq!(runpod.tools.len(), 10);
+    assert!(runpod.tools.iter().any(|tool| tool == "runpod_create_pod"));
+}
+
+#[test]
+fn runpod_reads_are_invocations_and_the_rest_network_calls() {
+    let classes = service(Arc::default()).tool_classes();
+    assert_eq!(classes["runpod_list_pods"], ToolModeClass::Invoke);
+    assert_eq!(classes["runpod_balance"], ToolModeClass::Invoke);
+    assert_eq!(classes["echo_svc_say"], ToolModeClass::Invoke);
+    for risky in [
+        "runpod_create_pod",
+        "runpod_pod_action",
+        "runpod_run_job",
+        "runpod_terminate_pod",
+    ] {
+        assert_eq!(classes[risky], ToolModeClass::Network, "{risky}");
+    }
 }

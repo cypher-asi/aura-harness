@@ -181,13 +181,39 @@ pub struct ToolSpec {
     pub timeout: Option<Duration>,
 }
 
-/// What a tool does to the service.
+/// What a tool does to the service. The kernel's mode gate and the
+/// approval prompts follow it: `Read` tools run in plan and ask mode and
+/// don't ask under the `ask` approval level; the others run in agent
+/// mode only and ask unless the level is `yolo`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolEffect {
     /// Only reads
     Read,
     /// Creates, changes or deletes something
     Write,
+    /// Can spend the user's money (starts paid compute)
+    Spend,
+    /// Destroys something for good (and its data)
+    Destroy,
+}
+
+impl ToolEffect {
+    /// Whether calls only read.
+    #[must_use]
+    pub const fn is_read(self) -> bool {
+        matches!(self, Self::Read)
+    }
+
+    /// A short word for the panel.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Spend => "spends money",
+            Self::Destroy => "destroys",
+        }
+    }
 }
 
 /// Whether an integration's credential may reach cloud machines.

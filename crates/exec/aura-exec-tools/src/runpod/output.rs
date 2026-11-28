@@ -18,6 +18,16 @@ pub(crate) fn render(value: &Value) -> String {
     cap_bytes(&text, MAX_OUTPUT_BYTES)
 }
 
+/// `value` itself when it renders within [`MAX_OUTPUT_BYTES`]; otherwise
+/// its rendering, cut with a note, as a string.
+pub(crate) fn bounded(value: Value) -> Value {
+    let text = serde_json::to_string(&value).unwrap_or_default();
+    if text.len() <= MAX_OUTPUT_BYTES {
+        return value;
+    }
+    Value::String(render(&value))
+}
+
 /// `text` cut to at most `max` bytes on a character boundary, with a note
 /// when anything was cut.
 pub(crate) fn cap_bytes(text: &str, max: usize) -> String {

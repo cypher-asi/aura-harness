@@ -1,4 +1,4 @@
-//! The integrations aura ships with: [`GitHub`] and [`Boxd`].
+//! The integrations aura ships with: [`GitHub`], [`Boxd`] and [`Runpod`].
 //!
 //! Both only describe and check what aura already uses; how GitHub and
 //! boxd work today (the `gh` CLI or `GH_TOKEN` for the REPO tab, the
@@ -8,9 +8,11 @@
 
 mod boxd;
 mod github;
+mod runpod;
 
 pub use self::boxd::Boxd;
 pub use self::github::GitHub;
+pub use self::runpod::Runpod;
 
 use crate::integration::Integration;
 use std::sync::Arc;
@@ -29,5 +31,6 @@ pub fn builtin(options: BuiltinOptions) -> Vec<Arc<dyn Integration>> {
     vec![
         Arc::new(GitHub::new(options.github_app)),
         Arc::new(Boxd::new()),
+        Arc::new(Runpod::new()),
     ]
 }

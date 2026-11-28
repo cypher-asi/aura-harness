@@ -32,7 +32,15 @@ pub use error::RunpodError;
 pub use health::{health_check, Health};
 pub use key::{ApiKey, ApiKeySource, EnvApiKey, StaticApiKey, RUNPOD_API_KEY_ENV};
 pub use limits::SpendLimits;
+pub use output::MAX_OUTPUT_BYTES;
 pub use tools::{runpod_tools, RunpodOp, RunpodTool, ToolKind};
+
+/// `value` when it fits in [`MAX_OUTPUT_BYTES`], else its rendering cut
+/// with a note: what a caller returning JSON hands on.
+#[must_use]
+pub fn bounded(value: serde_json::Value) -> serde_json::Value {
+    output::bounded(value)
+}
 
 use std::time::Duration;
 
