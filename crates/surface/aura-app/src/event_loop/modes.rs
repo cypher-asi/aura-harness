@@ -25,6 +25,7 @@
 
 use super::agent_events::AgentUi;
 use super::handlers::system_message;
+use super::subagents::AgentHub;
 use super::LoopState;
 use aura_agent_kernel::{tool_mode_class, Kernel, ToolModeClass};
 use aura_core_types::{AgentId, ToolState, UserToolDefaults};
@@ -168,6 +169,35 @@ pub(super) async fn switch_mode(
     switch(state, agent_id, kernel, to, PLAN_NOTE).await
 }
 
+/// Take `agent`, whose kernel isn't here (a cloud agent's runs on its
+/// machine), out of plan mode into the mode it had before, as its next
+/// turn's request to its machine then says. Its chat and every row it is
+/// on show the new mode at once. Returns whether it was in plan mode.
+pub(crate) async fn leave_plan_mode_of(hub: &AgentHub, agent: AgentId) -> bool {
+    if hub.mode_of(agent) != PermissionMode::Plan {
+        return false;
+    }
+    let back = hub.exit_plan_mode(agent);
+    let approval = hub.permissions_of(agent).approval;
+    hub.set_permissions(agent, Permissions::new(back, approval));
+    info!(%agent, mode = %back, "Left plan mode");
+    AgentUi::new(hub.commands().clone(), agent)
+        .send(UiCommand::SetMode(back))
+        .await;
+    hub.send_agent_list().await;
+    true
+}
+
+/// Whether a call of `tool` is implementation, not planning: it edits a
+/// file, commits or pushes. A cloud machine doesn't hold an agent to plan
+/// mode's ceiling, so its planning turns can do this.
+pub(crate) fn implements(tool: &str) -> bool {
+    matches!(
+        tool_mode_class(tool),
+        Some(ToolModeClass::FileWrite | ToolModeClass::WorkspaceMutation)
+    ) || matches!(tool, "git_push" | "git_commit_push" | "git_ship")
+}
+
 /// [`switch_mode`] to plan mode for the reason `note` gives, which the
 /// agent's chat shows instead of what it says when the user switches.
 pub(super) async fn enter_plan_mode(
@@ -220,6 +250,10 @@ async fn switch(
     info!(%agent_id, from = %from.name(), to = %to.name(), "Changed permissions");
     announce_switch(state, &ui, agent_id, (from, to), plan_note).await;
     super::policies::send_policies_of(state, agent_id).await;
+    if from.mode != to.mode {
+        // Every row the agent is on marks plan mode, not only its chat.
+        state.hub.send_agent_list().await;
+    }
     true
 }
 
