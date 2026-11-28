@@ -102,7 +102,7 @@ impl SnapshotBuilder {
 
     /// The binary to upload, read and inspected off the async runtime;
     /// `None` when the base packages install it.
-    async fn local_binary(&self) -> CloudResult<Option<LocalBinary>> {
+    pub(crate) async fn local_binary(&self) -> CloudResult<Option<LocalBinary>> {
         match &self.binary {
             AuraBinary::Upload(path) => {
                 let path = path.clone();

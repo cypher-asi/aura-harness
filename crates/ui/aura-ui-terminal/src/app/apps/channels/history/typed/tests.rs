@@ -4,6 +4,7 @@ fn item(kind: HistoryKind, text: &str, at_ms: u64) -> HistoryItem {
     HistoryItem {
         seq: prompt_key(text),
         kind,
+        planner: None,
         text: text.to_string(),
         summary: None,
         at_ms,

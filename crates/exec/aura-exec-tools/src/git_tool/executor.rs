@@ -29,6 +29,10 @@ use crate::sandbox::strip_unc_prefix;
 /// `fetch origin refs/heads/<target>` then `merge --no-edit FETCH_HEAD`
 /// (or `merge --abort` after a conflict). Both are called with fixed
 /// arguments only; the target is checked as a branch name first.
+///
+/// `reset` only ever runs as `reset -q HEAD -- <paths>`, to leave out of
+/// a commit the hub's uncommitted work a cloud machine was seeded with
+/// ([`super::seed`]); it never moves a branch or touches the worktree.
 pub(crate) const ALLOWED_SUBCOMMANDS: &[&str] = &[
     "add",
     "commit",
@@ -38,6 +42,7 @@ pub(crate) const ALLOWED_SUBCOMMANDS: &[&str] = &[
     "remote",
     "fetch",
     "merge",
+    "reset",
 ];
 
 fn ensure_allowed(subcmd: &str) -> Result<(), GitToolError> {

@@ -233,8 +233,9 @@ What the rows are depends on what the tab shows:
   selection and ⏎ opens it.
 - **A channel's HISTORY** (its tabs: MEMBERS, INFO, QUEUE, TASKS,
   HISTORY) lists every message the user sent in the channel, newest
-  first: those posted to members and those typed to the coordinator
-  (read from its chat; a message sent to both is listed once), under a `muted` bold `Your messages` heading with a `faint`
+  first: those posted to members, those typed to the coordinator
+  (read from its chat; a message sent to both is listed once) and its
+  `/plan` requests, which the channel's chat never shows, under a `muted` bold `Your messages` heading with a `faint`
   `· N`. Each takes two rows: the message on one line in `foreground`,
   line breaks folded into spaces, then its local time in `muted` (`20:31`
   today, `11-27 20:31` before). A message over 80 characters shows its
@@ -243,7 +244,8 @@ What the rows are depends on what the tab shows:
   `list_row` does. ⏎ or a click jumps the chat back to the message: it
   scrolls so the message starts a row below the top and lights its rows
   in `selection` on `on_selection` for 1.2 seconds; the focus stays on
-  the list. The wheel scrolls the list only, never the highlight.
+  the list. A `/plan` request opens its planner's own chat instead,
+  jumped and lit the same way, or says the planner has left. The wheel scrolls the list only, never the highlight.
 - **Info bodies** (POLICIES, HOST, a channel's INFO, the RECORD and
   PROCESS views, a project's info box) describe one thing as a document
   built with `components::Info`. The whole document scrolls with ↑↓,

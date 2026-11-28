@@ -3,6 +3,17 @@ use aura_model::{ModelRequest, ModelResponse, ReasonerError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+/// A channel store in `dir`.
+fn store_in(dir: &Path) -> ChannelStore {
+    ChannelStore::for_store(&aura_store_db::RocksStore::open(dir, false).unwrap())
+}
+
+/// Summaries kept in a channel store in `dir.path()/db`, and moved from
+/// an old file in `dir`.
+fn kept_in(dir: &tempfile::TempDir) -> PostSummaries {
+    PostSummaries::new(Some(store_in(&dir.path().join("db"))), Some(dir.path()))
+}
+
 const LONG: &str = "Please make every link in the footer open in a new tab, and while you are \
                     there check the privacy link points at the new policy page";
 
@@ -83,7 +94,7 @@ async fn sent(rx: &mut mpsc::Receiver<UiCommand>) -> Vec<(String, u64, String)> 
 #[tokio::test]
 async fn a_long_post_is_summarized_once_and_a_short_one_never() {
     let dir = tempfile::tempdir().unwrap();
-    let summaries = Arc::new(PostSummaries::new(Some(dir.path())));
+    let summaries = Arc::new(kept_in(&dir));
     let stub = Stub::answering(Some("Footer links open in new tabs"));
     let (tx, mut rx) = mpsc::channel(16);
     let posts = vec![(1, "Thanks!".to_string()), (2, LONG.to_string())];
@@ -121,11 +132,13 @@ async fn a_long_post_is_summarized_once_and_a_short_one_never() {
 #[tokio::test]
 async fn kept_summaries_survive_a_restart() {
     let dir = tempfile::tempdir().unwrap();
-    let first = PostSummaries::new(Some(dir.path()));
-    first.put(key_of(LONG), "Footer links".to_string()).await;
-    assert!(dir.path().join(SUMMARY_FILE).exists());
+    {
+        let first = kept_in(&dir);
+        first.put(key_of(LONG), "Footer links".to_string()).await;
+    }
+    assert!(!dir.path().join(SUMMARY_FILE).exists(), "no plaintext file");
 
-    let restarted = Arc::new(PostSummaries::new(Some(dir.path())));
+    let restarted = Arc::new(kept_in(&dir));
     let (tx, mut rx) = mpsc::channel(16);
     // No way to ask: only what was kept shows.
     summarize_posts(
@@ -144,7 +157,7 @@ async fn kept_summaries_survive_a_restart() {
 
 #[tokio::test]
 async fn a_failed_call_sends_nothing_and_can_be_tried_again() {
-    let summaries = Arc::new(PostSummaries::new(None));
+    let summaries = Arc::new(PostSummaries::new(None, None));
     let failing = Stub::answering(None);
     let (tx, mut rx) = mpsc::channel(16);
     let posts = vec![(3, LONG.to_string())];
@@ -164,7 +177,7 @@ async fn a_failed_call_sends_nothing_and_can_be_tried_again() {
 
 #[tokio::test]
 async fn a_text_being_summarized_is_not_asked_for_again() {
-    let summaries = Arc::new(PostSummaries::new(None));
+    let summaries = Arc::new(PostSummaries::new(None, None));
     let slow = Arc::new(Stub {
         reply: Some("Footer links"),
         calls: AtomicUsize::new(0),
@@ -188,18 +201,57 @@ async fn a_text_being_summarized_is_not_asked_for_again() {
 }
 
 #[tokio::test]
-async fn the_file_keeps_at_most_its_cap_and_an_unreadable_one_counts_as_empty() {
+async fn an_old_plaintext_file_is_moved_into_the_store_and_deleted() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(SUMMARY_FILE), "not json").unwrap();
-    let summaries = PostSummaries::new(Some(dir.path()));
-    assert_eq!(summaries.get(&key_of(LONG)).await, None);
-    for n in 0..=MAX_SUMMARIES {
-        summaries.put(format!("k{n}"), format!("s{n}")).await;
+    let file = dir.path().join(SUMMARY_FILE);
+    let old = format!(
+        r#"{{"entries":[{{"key":"{}","summary":"Footer links"}},{{"key":"k0","summary":"bad key"}}]}}"#,
+        key_of(LONG)
+    );
+    std::fs::write(&file, old).unwrap();
+    std::fs::write(dir.path().join("channel-post-summaries.json.tmp"), "half").unwrap();
+    {
+        let summaries = kept_in(&dir);
+        assert_eq!(
+            summaries.get(&key_of(LONG)).await.as_deref(),
+            Some("Footer links")
+        );
     }
-    assert_eq!(summaries.get("k0").await, None, "the oldest went first");
-    assert_eq!(summaries.get("k1").await.as_deref(), Some("s1"));
-    let kept = read(&dir.path().join(SUMMARY_FILE));
-    assert_eq!(kept.len(), MAX_SUMMARIES);
+    assert!(!file.exists(), "the plaintext file is gone");
+    assert!(!dir.path().join("channel-post-summaries.json.tmp").exists());
+    // Read straight from the store, as the next run does.
+    let store = store_in(&dir.path().join("db"));
+    let moved = store.post_summary(&key_of(LONG)).unwrap();
+    assert_eq!(moved.as_deref(), Some("Footer links"));
+}
+
+#[tokio::test]
+async fn an_unreadable_old_file_is_deleted_and_counts_as_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(SUMMARY_FILE);
+    std::fs::write(&file, "not json").unwrap();
+    let summaries = kept_in(&dir);
+    assert_eq!(summaries.get(&key_of(LONG)).await, None);
+    assert!(!file.exists());
+    summaries.put(key_of(LONG), "Footer links".into()).await;
+    assert!(
+        !file.exists(),
+        "summaries are never written to a file again"
+    );
+}
+
+#[tokio::test]
+async fn without_a_store_summaries_stay_in_memory_and_the_old_file_is_left() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(SUMMARY_FILE);
+    std::fs::write(&file, r#"{"entries":[]}"#).unwrap();
+    let summaries = PostSummaries::new(None, Some(dir.path()));
+    summaries.put(key_of(LONG), "Footer links".into()).await;
+    assert_eq!(
+        summaries.get(&key_of(LONG)).await.as_deref(),
+        Some("Footer links")
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), r#"{"entries":[]}"#);
 }
 
 #[test]
@@ -253,7 +305,7 @@ fn the_coordinators_typed_messages_are_listed_under_their_prompt_key() {
 
 #[tokio::test]
 async fn a_typed_message_is_summarized_under_its_prompt_key() {
-    let summaries = Arc::new(PostSummaries::new(None));
+    let summaries = Arc::new(PostSummaries::new(None, None));
     let stub = Stub::answering(Some("Footer links open in new tabs"));
     let (tx, mut rx) = mpsc::channel(16);
     let typed = vec![(prompt_key(LONG), LONG.to_string())];

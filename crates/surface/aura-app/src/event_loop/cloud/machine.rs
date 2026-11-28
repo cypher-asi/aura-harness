@@ -215,3 +215,13 @@ pub(super) fn machine_rows(agent: &str, rows: &[MeshProcess]) -> Vec<ProcessSumm
         })
         .collect()
 }
+
+/// Whether cloud agent `agent`'s node offered `git_ship` at its last
+/// claim. `false` without a hub or a claim: the fallback prompt works on
+/// every node.
+pub(in crate::event_loop) fn node_offers_ship(state: &LoopState<'_>, agent: AgentId) -> bool {
+    state
+        .cloud
+        .hub()
+        .is_some_and(|hub| hub.node_offers(&agent.to_hex(), aura_core_protocol::cloud::SHIP_TOOL))
+}

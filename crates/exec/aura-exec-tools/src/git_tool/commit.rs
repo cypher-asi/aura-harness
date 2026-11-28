@@ -1,7 +1,8 @@
 //! `git_commit_impl` — the underlying implementation behind
 //! [`crate::git_tool::GitCommitTool`].
 //!
-//! Stages every tracked change (`git add -A`), checks for staged
+//! Stages every tracked change (`git add -A`) but the hub's uncommitted
+//! work a cloud machine was seeded with ([`super::seed`]), checks for staged
 //! content (`git diff --cached --quiet`), and creates a commit with the
 //! provided message. Returns the new SHA, or `None` when there is
 //! nothing to commit.
@@ -30,6 +31,8 @@ pub async fn git_commit_impl(
     }
 
     run_git_expect_ok(workspace, "add", &["-A"], timeout, "add").await?;
+    // A machine seeded with the hub's uncommitted work never commits it.
+    super::seed::unstage_hub_seed(workspace, timeout).await?;
 
     let diff = spawn_git(
         workspace,

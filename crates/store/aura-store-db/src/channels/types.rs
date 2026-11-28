@@ -178,6 +178,11 @@ pub struct ChannelPost {
     pub reply_to: Option<u64>,
     /// When it was posted, milliseconds since the Unix epoch.
     pub at_ms: u64,
+    /// For the user's `/plan` request, the member started to plan it. Such
+    /// a post is not part of the channel's conversation: only its HISTORY
+    /// lists it. Absent in rows written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner: Option<AgentId>,
 }
 
 /// What [`ChannelStore::append_post`](super::ChannelStore::append_post)
@@ -194,4 +199,8 @@ pub struct NewPost {
     pub reply_to: Option<u64>,
     /// When it was posted, milliseconds since the Unix epoch.
     pub at_ms: u64,
+    /// For a `/plan` request, the member planning it
+    /// ([`ChannelPost::planner`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner: Option<AgentId>,
 }

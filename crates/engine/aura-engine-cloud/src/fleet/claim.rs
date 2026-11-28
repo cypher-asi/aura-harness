@@ -87,7 +87,7 @@ impl VmFleet {
             git: target.git,
         };
         let claimed = self.send_claim(&target.machine, &claim).await?;
-        self.mark_claimed(agent, node_token, claimed.protocol);
+        self.mark_claimed(agent, node_token, &claimed);
         self.row(
             &target.ledger,
             &VmPayload {
@@ -194,17 +194,19 @@ impl VmFleet {
                 port: crate::machine_env::NODE_PORT,
                 sealed: claim.seal.len(),
                 protocol: 0,
+                tools: Vec::new(),
             }),
         )
     }
 
-    /// `agent`'s node holds `node_token` now and speaks `protocol`: its
+    /// `agent`'s node holds `node_token` now and answered `claimed`: its
     /// machine is up and ready for work.
-    fn mark_claimed(&self, agent: &str, node_token: BoxdToken, protocol: u32) {
+    fn mark_claimed(&self, agent: &str, node_token: BoxdToken, claimed: &NodeClaimed) {
         let mut machines = self.machines.lock();
         if let Some(entry) = machines.get_mut(agent) {
             entry.node_token = Some(node_token);
-            entry.node_protocol = protocol;
+            entry.node_protocol = claimed.protocol;
+            entry.node_tools.clone_from(&claimed.tools);
             entry.state = VmState::Ready;
             entry.machine.status = MachineStatus::Running;
             entry.idle_since = Instant::now();
@@ -256,6 +258,7 @@ impl VmFleet {
                 idle_since: Instant::now(),
                 node_token: None,
                 node_protocol: 0,
+                node_tools: Vec::new(),
                 usage: None,
                 seen_ms: now_ms(),
             },

@@ -19,6 +19,11 @@
 //!     and deletes them.
 //!   * `l/{channel_id}`: when the channel's coordinator last read its
 //!     activity, JSON Unix milliseconds.
+//!   * `h/{key}`: the one-line summary a channel's HISTORY tab shows for
+//!     a long message the user sent, a JSON string. `key` is 1 to 64
+//!     lowercase hex digits, the caller's hash of the message text, so the
+//!     same message in any channel shares one summary. Summaries are the
+//!     user's words, so they are sealed like posts.
 //! * [`crate::cf::CHANNEL_MEMBERS`]:
 //!   * `m/{channel_id}/` followed by the 32 raw bytes of the agent id: a
 //!     JSON [`MemberRecord`].
@@ -95,6 +100,7 @@ mod members;
 mod posts;
 mod rows;
 mod store;
+mod summaries;
 mod types;
 mod validate;
 

@@ -76,6 +76,7 @@ mod view;
 
 use boot::BootConsoleUi;
 pub(super) use ended::handle_ended;
+pub(in crate::event_loop) use machine::node_offers_ship;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
 pub(super) use member_start::start_in_cloud;
@@ -86,7 +87,9 @@ pub(super) use placement::{
 };
 pub(super) use publish::start;
 use publish::start_publisher;
-pub(super) use submit::{new_session, refused, start_queued, submit};
+#[cfg(test)]
+pub(super) use submit::refused;
+pub(super) use submit::{new_session, start_queued, submit};
 use view::{build_view, placement_state};
 
 /// What a cloud task tells the loop it is done with.
