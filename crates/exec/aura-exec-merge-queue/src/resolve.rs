@@ -136,7 +136,12 @@ pub async fn settle(
             });
         }
     }
-    git::ok(worktree, &["commit", "--no-edit", "--quiet"], config.git_timeout).await?;
+    git::ok(
+        worktree,
+        &["commit", "--no-edit", "--quiet"],
+        config.git_timeout,
+    )
+    .await?;
     Ok(Settled::Resolved(generated))
 }
 
