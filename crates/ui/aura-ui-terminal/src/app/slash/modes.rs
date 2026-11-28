@@ -27,8 +27,13 @@ impl App {
 
     /// `/plan`: enter plan mode, or leave it when the agent is already there.
     /// The event loop knows the mode from before plan mode, so the same
-    /// command restores it.
+    /// command restores it. In a channel's chat it starts a planner
+    /// ([`Self::request_channel_plan`]).
     pub(in crate::app) fn request_plan_toggle(&mut self) {
+        if self.coordinated_channel().is_some() {
+            self.request_channel_plan(String::new());
+            return;
+        }
         if let Some(tx) = &self.link.event_tx {
             let _ = tx.try_send(UiEvent::TogglePlan(self.active_agent_id.clone()));
         }
@@ -45,6 +50,25 @@ impl App {
                 mode: PermissionMode::Plan,
             });
         }
+    }
+
+    /// `/plan [message]` in a channel's chat: a new member of the channel
+    /// writes the plan, in plan mode, in its own chat, which the session
+    /// puts on screen. `message`, if any, is its first request; the
+    /// coordinator's chat shows nothing of it. The planner's chat shows
+    /// it, with its images, once its turn starts.
+    pub(in crate::app) fn request_channel_plan(&mut self, message: String) {
+        let (images, previews) = self.take_images(&message);
+        self.queue_image_previews(&message, previews);
+        self.notifications.current = Some((
+            "Starting a planner for the channel".to_string(),
+            NotificationType::Success,
+        ));
+        self.try_send_event(UiEvent::PlanInChannel {
+            agent_id: self.active_agent_id.clone(),
+            text: message,
+            images,
+        });
     }
 
     /// Ask the event loop to switch the active agent to `mode`. The badge

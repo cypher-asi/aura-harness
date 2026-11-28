@@ -79,6 +79,33 @@ mod forward_tests {
         );
     }
 
+    /// A prompt from the channel or the queue finds the chat idle, and an
+    /// idle chat folds each group of steps as soon as none of them runs.
+    #[tokio::test]
+    async fn a_cloud_turn_puts_its_chat_to_work_until_it_ends() {
+        let (ui, mut rx) = chat();
+        let (tx, mut events) = mpsc::channel(8);
+        tx.send(RemoteEvent::Thinking("hmm".into())).await.unwrap();
+        tx.send(done(10)).await.unwrap();
+        drop(tx);
+
+        let end = forward(
+            &ui,
+            &mut events,
+            &mut TurnExtras::default(),
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(end, TurnEnd::Done);
+        let sent = commands(&mut rx);
+        assert!(
+            matches!(sent.first(), Some(UiCommand::TurnStarted { prompt: None })),
+            "{sent:?}"
+        );
+        ends_the_turn(&sent);
+    }
+
     #[tokio::test]
     async fn a_finished_cloud_turn_completes_the_chat() {
         let (ui, mut rx) = chat();
@@ -272,6 +299,29 @@ mod forward_tests {
     }
 
     #[tokio::test]
+    async fn each_model_call_writes_a_reply_of_its_own() {
+        let (ui, mut rx) = chat();
+        let (tx, mut events) = mpsc::channel(8);
+        for event in [
+            RemoteEvent::Text("Built it.".into()),
+            RemoteEvent::ModelCallEnd,
+            RemoteEvent::Text("Nothing is blocked.".into()),
+        ] {
+            tx.send(event).await.unwrap();
+        }
+        drop(tx);
+        let cancel = CancellationToken::new();
+        forward(&ui, &mut events, &mut TurnExtras::default(), &cancel).await;
+
+        let sent = commands(&mut rx);
+        let starts = sent
+            .iter()
+            .filter(|command| matches!(command, UiCommand::StartStreaming))
+            .count();
+        assert_eq!(starts, 2, "a reply per model call: {sent:?}");
+    }
+
+    #[tokio::test]
     async fn without_a_title_from_the_machine_the_prompt_names_the_chat() {
         for last in [done(10), RemoteEvent::Failed("boom".into())] {
             let (ui, _rx) = chat();
@@ -352,7 +402,12 @@ mod machine_tests {
         assert_eq!(rows[2].parent_chain, ["aa"]);
         assert_eq!(rows[2].status, ProcessStatus::Idle);
 
-        assert!(rows.iter().all(|row| row.jump_agent_id == "aa"));
+        let jumps: Vec<&str> = rows.iter().map(|row| row.jump_agent_id.as_str()).collect();
+        assert_eq!(
+            jumps,
+            ["aa", "bb", "cc"],
+            "a spawned agent opens its own chat"
+        );
         assert!(rows.iter().all(|row| !row.killable));
     }
 }

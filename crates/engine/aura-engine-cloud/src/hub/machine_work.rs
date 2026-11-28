@@ -57,6 +57,19 @@ impl CloudHub {
             .collect()
     }
 
+    /// The agents placed agents spawned on their machines that are
+    /// working there, as the machines last said.
+    #[must_use]
+    pub fn working_spawns(&self) -> HashSet<AgentId> {
+        self.work
+            .lock()
+            .values()
+            .flat_map(|work| &work.rows)
+            .filter(|row| row.is_agent() && row.is_running())
+            .filter_map(|row| AgentId::from_hex(&row.agent_id).ok())
+            .collect()
+    }
+
     /// `hex`'s turn is streamed from `run` on its node until the guard
     /// drops.
     pub(super) fn streaming_turn(&self, hex: &str, run: String) -> StreamedTurn<'_> {

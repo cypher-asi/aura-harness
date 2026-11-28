@@ -1,7 +1,7 @@
 //! Channels, an app of their own beside the agents: the agents panel's
 //! CHANNELS tab lists them, the chat panel holds the open channel's
-//! conversation and nothing else, and the right column is one panel with
-//! the channel's MEMBERS and INFO tabs.
+//! conversation and nothing else, and the right column has the channel's
+//! TASKS above a panel with its MEMBERS and INFO tabs.
 //!
 //! The agents panel's tab picks the app on screen (see `apps`). A channel
 //! is open only while CHANNELS shows:
@@ -28,13 +28,15 @@
 //! that drops out of `SetChannels` closes here without telling it: the
 //! session already knows it is gone.
 //!
-//! While a channel is open the right column is one tall side panel with
-//! only MEMBERS and INFO (see [`App::side_maximized`]). The user's own
-//! layout flags are left alone, and the side tab shown before the channel
-//! opened comes back when it closes, so leaving gives back exactly the
-//! layout there was. With CHANNELS showing and no channel open there is
-//! nothing to show beside the list: the right column hides, and the chat
-//! asks for a channel to be picked.
+//! While a channel is open the Record panel's place holds the channel's
+//! TASKS: every plan and task in the channel's project, by every agent
+//! working there (see [`RecordsTab::ChannelTasks`]). Below it the side
+//! panel lists only MEMBERS and INFO. The user's own layout flags are
+//! left alone, and the tabs shown before the channel opened come back
+//! when it closes, so leaving gives back exactly the layout there was.
+//! With CHANNELS showing and no channel open there is nothing to show
+//! beside the list: the right column hides, and the chat asks for a
+//! channel to be picked.
 
 mod list;
 mod side;
@@ -42,7 +44,7 @@ mod side;
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
 
 use crate::app::scroll::InfoScroll;
-use crate::app::{AgentsTab, App, ChatTab, SidePanelTab};
+use crate::app::{AgentsTab, App, ChatTab, RecordsTab, SidePanelTab};
 use crate::events::{ChannelPostView, ChannelSummary, UiEvent};
 use ratatui::layout::Rect;
 use std::collections::HashMap;
@@ -80,6 +82,9 @@ pub(crate) struct ChannelState {
     /// The side tab shown before the channel opened, shown again when it
     /// closes
     side_tab_before: Option<SidePanelTab>,
+    /// The Kernel panel's tab shown before the channel opened, shown
+    /// again when it closes
+    records_tab_before: Option<RecordsTab>,
 }
 
 impl ChannelState {
@@ -308,6 +313,7 @@ impl App {
         self.switch_app(AgentsTab::Channels);
         if self.channels.open.is_none() {
             self.channels.side_tab_before = Some(self.side.tab);
+            self.channels.records_tab_before = Some(self.records.tab);
         }
         self.channels.open = Some(id.to_string());
         if self.apps.channel.as_deref() != Some(id) {
@@ -319,6 +325,8 @@ impl App {
         self.channels.selected = row;
         self.channels.forget_areas();
         self.show_side_tab(SidePanelTab::ChannelMembers);
+        self.show_records_tab(RecordsTab::ChannelTasks);
+        self.refresh_side_scope();
         self.show_channel_chat();
         // The coordinator comes on screen now, as a listed agent does when
         // clicked, rather than once the session answers: until then the
@@ -345,11 +353,17 @@ impl App {
     }
 
     /// Undo what opening the channel did to the panels, now that
-    /// `channels.open` is `None`: show the side tab there was before it.
+    /// `channels.open` is `None`: show the tabs there were before it, and
+    /// TASKS lists the side panel's scope again.
     fn left_channel(&mut self) {
         self.channels.forget_areas();
         self.channels.awaiting_member = false;
         let before = self.channels.side_tab_before.take().unwrap_or_default();
         self.show_side_tab(before);
+        // Set rather than shown: the agent the app goes to is not on
+        // screen yet, and POLICIES must not ask for the policies of the
+        // one leaving.
+        self.records.tab = self.channels.records_tab_before.take().unwrap_or_default();
+        self.refresh_side_scope();
     }
 }

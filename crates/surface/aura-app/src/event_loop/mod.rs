@@ -168,7 +168,7 @@ impl LoopState<'_> {
     pub(super) fn kernel_for(&self, agent_id: AgentId) -> Option<Arc<Kernel>> {
         // A cloud agent's writer is its machine's kernel; nothing here
         // may write for it (rewinds, sign-in notices) until it is back.
-        if self.cloud.is_cloud(agent_id) || self.cloud.is_moving(agent_id) {
+        if self.cloud.node_writes(agent_id) {
             return None;
         }
         self.idle

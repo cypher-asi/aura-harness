@@ -25,7 +25,11 @@
 //!
 //! A request or an assignment is answered on its own: when the turn that
 //! saw it ends, the agent's last words go back as a reply, which closes
-//! the todo it was for. Coordinators answer nobody on their own, as what
+//! the todo it was for. Work that stops early tells the sender so, with
+//! what the agent said before it stopped. A turn the user stops to carry
+//! on (Esc, sending a queued message now, killing its Processes row)
+//! doesn't stop the work: what it owes waits for the agent's next turn
+//! that ends well. Coordinators answer nobody on their own, as what
 //! they write goes to their channel, and replies are never answered. One
 //! thread between two agents carries at most [`THREAD_REQUESTS`]
 //! requests, so two agents can't keep each other busy forever.
@@ -115,6 +119,8 @@ struct State {
     subjects: HashMap<(AgentId, AgentId), String>,
     /// Each agent's last reply: whether it finished, and what it said
     reports: HashMap<AgentId, (bool, String)>,
+    /// Agents whose running turn the user stopped ([`Inbox::interrupt`])
+    interrupted: HashSet<AgentId>,
 }
 
 /// A request or assignment an agent owes an answer to.
@@ -127,6 +133,21 @@ struct Owed {
     subject: String,
     /// The sender's todo it is for
     todo: Option<String>,
+}
+
+impl Inbox {
+    /// Note that the user stopped `agent`'s running turn to carry on, not
+    /// to give up: what the turn owes waits for its next turn that ends
+    /// well instead of being given up on.
+    pub(crate) fn interrupt(&self, agent: AgentId) {
+        lock(&self.state).interrupted.insert(agent);
+    }
+
+    /// Whether the turn of `agent` that just ended was stopped by the
+    /// user ([`Self::interrupt`]). Forgets it either way.
+    pub(crate) fn take_interrupted(&self, agent: AgentId) -> bool {
+        lock(&self.state).interrupted.remove(&agent)
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,8 @@
 //! Tool calls, shell commands and boot consoles shown live in the chat.
 
+use std::mem;
+
+use crate::app::chat_view::EarlyPolicy;
 use crate::app::App;
 use crate::components::{
     elapsed_ms, Activity, BootConsole, Message, MessageRole, ToolStatus, ToolStep,
@@ -13,6 +16,7 @@ impl App {
         match cmd {
             UiCommand::ShowTool(data) => {
                 self.add_activity(Activity::tool(&data.id, &data.name, &data.args));
+                self.attach_early_policy(&data.id);
             }
             UiCommand::UpdateToolArgs { id, args } => self.cmd_update_tool_args(&id, args),
             UiCommand::ToolPolicy { id, tool, decision } => {
@@ -65,12 +69,44 @@ impl App {
     }
 
     /// Keep the policy decision with its tool call, so a run of calls
-    /// stays one block; a call that isn't shown gets a `policy:` line.
+    /// stays one block. While a turn runs, a call not shown yet may still
+    /// come and the decision waits for it; otherwise it gets a `policy:`
+    /// line.
     fn cmd_tool_policy(&mut self, id: &str, tool: &str, decision: String) {
-        let line = format!("policy: {tool} {decision}");
-        if !self.update_tool(id, |step| step.policy = Some(decision)) {
-            self.add_message(Message::new(MessageRole::System, &line));
+        if self.update_tool(id, |step| step.policy = Some(decision.clone())) {
+            return;
         }
+        if self.is_busy() {
+            self.chat.early_policies.push(EarlyPolicy {
+                id: id.to_string(),
+                tool: tool.to_string(),
+                decision,
+            });
+        } else {
+            self.add_policy_line(tool, &decision);
+        }
+    }
+
+    /// Give the call `id`, just shown, the decision that came before it.
+    fn attach_early_policy(&mut self, id: &str) {
+        let early = &mut self.chat.early_policies;
+        let Some(at) = early.iter().position(|policy| policy.id == id) else {
+            return;
+        };
+        let decision = early.remove(at).decision;
+        self.update_tool(id, |step| step.policy = Some(decision));
+    }
+
+    /// Show the decisions whose calls never came as `policy:` lines.
+    pub(super) fn show_early_policies(&mut self) {
+        for policy in mem::take(&mut self.chat.early_policies) {
+            self.add_policy_line(&policy.tool, &policy.decision);
+        }
+    }
+
+    fn add_policy_line(&mut self, tool: &str, decision: &str) {
+        let line = format!("policy: {tool} {decision}");
+        self.add_message(Message::new(MessageRole::System, &line));
     }
 
     fn cmd_tool_retrying(&mut self, id: &str, attempt: u32, max_attempts: u32) {

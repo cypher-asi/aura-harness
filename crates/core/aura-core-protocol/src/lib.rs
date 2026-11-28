@@ -86,10 +86,10 @@ pub use runtime_request::{
 pub use server::{
     AssistantMessageEnd, AssistantMessageStart, ChatTitle, ContextBreakdown, ErrorMsg, FileDiff,
     FileOp, FilesChanged, GenerationCompleted, GenerationErrorMsg, GenerationPartialImage,
-    GenerationProgressMsg, GenerationStart, OutboundMessage, PolicyCheckWire, PolicyRuleWire,
-    ProgressMsg, SessionReady, SessionUsage, SkillInfo, SubagentSpawned, SubagentStatus, TextDelta,
-    ThinkingDelta, ToolApprovalPrompt, ToolCallSnapshot, ToolInfo, ToolPolicyDecision,
-    ToolResultMsg, ToolUseStart,
+    GenerationProgressMsg, GenerationStart, IterationComplete, OutboundMessage, PolicyCheckWire,
+    PolicyRuleWire, ProgressMsg, SessionReady, SessionUsage, SkillInfo, SubagentSpawned,
+    SubagentStatus, TextDelta, ThinkingDelta, ToolApprovalPrompt, ToolCallSnapshot, ToolInfo,
+    ToolPolicyDecision, ToolResultMsg, ToolUseStart,
 };
 pub use version::{ProtocolVersion, PROTOCOL_VERSION};
 

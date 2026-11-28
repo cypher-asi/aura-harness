@@ -213,3 +213,61 @@ fn test_clicking_a_long_tool_result_opens_it_in_the_file_view() {
     assert_eq!(view.extension(), "log");
     assert!(!app.messages()[0].is_expanded());
 }
+
+const FULL_ACCESS: &str = "allowed by user_default.full_access";
+
+fn list_files_policy(id: &str) -> UiCommand {
+    UiCommand::ToolPolicy {
+        id: id.to_string(),
+        tool: "list_files".to_string(),
+        decision: FULL_ACCESS.to_string(),
+    }
+}
+
+/// A cloud turn's copied record can bring a call's decision before its
+/// stream brings the call; a `policy:` line for it would split the turn's
+/// run of calls.
+#[test]
+fn test_a_policy_ahead_of_its_call_waits_for_it() {
+    let mut app = App::new();
+    app.process_command(UiCommand::TurnStarted { prompt: None });
+    app.process_command(list_files_policy("t1"));
+    app.process_command(tool_data("t1", "list_files"));
+
+    let [Activity::Tool(tool)] = activities(&app)[..] else {
+        panic!("expected one tool block");
+    };
+    assert_eq!(tool.policy.as_deref(), Some(FULL_ACCESS));
+    assert_eq!(app.messages().len(), 1, "and no policy line");
+}
+
+#[test]
+fn test_a_policy_whose_call_never_comes_shows_as_the_turn_ends() {
+    let mut app = App::new();
+    app.process_command(UiCommand::TurnStarted { prompt: None });
+    app.process_command(list_files_policy("t1"));
+    assert!(app.messages().is_empty(), "the call may still come");
+
+    app.process_command(UiCommand::Complete);
+    let lines: Vec<&str> = app.messages().iter().map(Message::content).collect();
+    assert_eq!(lines, [format!("policy: list_files {FULL_ACCESS}")]);
+}
+
+#[test]
+fn test_a_policy_ahead_of_its_call_waits_in_its_agent_s_chat() {
+    let mut app = App::new();
+    app.process_command(UiCommand::SetActiveAgent("aa".to_string()));
+    app.process_command(UiCommand::TurnStarted { prompt: None });
+    app.process_command(for_agent("bb", UiCommand::TurnStarted { prompt: None }));
+    app.process_command(for_agent("bb", list_files_policy("t1")));
+    app.process_command(UiCommand::Complete);
+    assert!(app.messages().is_empty(), "not the shown chat's to end");
+
+    app.process_command(for_agent("bb", tool_data("t1", "list_files")));
+    app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
+    let [Activity::Tool(tool)] = activities(&app)[..] else {
+        panic!("expected one tool block");
+    };
+    assert_eq!(tool.policy.as_deref(), Some(FULL_ACCESS));
+    assert_eq!(app.messages().len(), 1, "and no policy line");
+}

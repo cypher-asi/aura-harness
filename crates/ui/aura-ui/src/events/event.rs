@@ -418,6 +418,19 @@ pub enum UiEvent {
 
     /// User archived a channel (channel id)
     ArchiveChannel(String),
+
+    /// User ran `/plan` in a channel's chat. The coordinator doesn't plan:
+    /// a new member of the channel writes the plan in plan mode, in a chat
+    /// of its own that the session puts on screen.
+    PlanInChannel {
+        /// Coordinator whose chat it was typed in (hex id)
+        agent_id: String,
+        /// What to plan; empty leaves the planner waiting for it
+        text: String,
+        /// Images pasted into the message; `text` holds an `[image N]`
+        /// chip for each
+        images: Vec<ImageAttachment>,
+    },
 }
 
 /// What `/rewind` puts back.

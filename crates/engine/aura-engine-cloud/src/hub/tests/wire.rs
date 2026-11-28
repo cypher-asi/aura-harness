@@ -50,6 +50,12 @@ fn stream_frames_map_to_events() {
             name: "read_file".into()
         })
     );
+    let call_end = OutboundMessage::IterationComplete(aura_core_protocol::IterationComplete {
+        iteration: 0,
+        input_tokens: 100,
+        output_tokens: 10,
+    });
+    assert_eq!(map_outbound(call_end), Some(RemoteEvent::ModelCallEnd));
     let fatal = OutboundMessage::Error(ErrorMsg {
         code: "x".into(),
         message: "boom".into(),

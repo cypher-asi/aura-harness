@@ -7,6 +7,13 @@ pub(in crate::event_loop) async fn handle_set_placement(
     placement: PlacementView,
 ) {
     let agent = state.agent_or_active(agent_hex);
+    if let Some(root) = state.cloud.machine_root(agent) {
+        // The switch showed a move when it was clicked; put it right.
+        state.cloud.shared.publish_now();
+        let note = spawned_on_machine(state, agent, root);
+        system(state, agent, note).await;
+        return;
+    }
     if turned_down(state, agent).await {
         return;
     }
@@ -277,7 +284,7 @@ pub(in crate::event_loop) async fn handle_host_action(
     action: HostAction,
 ) {
     let agent = state.agent_or_active(agent_hex);
-    let Some(hub) = state.cloud.hub().filter(|hub| hub.is_placed(agent)) else {
+    let (Some(hub), Some(placed)) = (state.cloud.hub(), state.cloud.machine_of(agent)) else {
         system(
             state,
             agent,
@@ -286,13 +293,13 @@ pub(in crate::event_loop) async fn handle_host_action(
         .await;
         return;
     };
-    if let Some(refusal) = foreign_owner(state, &hub, agent) {
+    if let Some(refusal) = foreign_owner(state, &hub, placed) {
         system(state, agent, refusal).await;
         return;
     }
     let ui = AgentUi::new(state.commands.clone(), agent);
     tokio::spawn(async move {
-        let Some(note) = host_action_note(&hub, agent, action, &ui).await else {
+        let Some(note) = host_action_note(&hub, placed, action, &ui).await else {
             return;
         };
         ui.send(UiCommand::ShowMessage(MessageData::new(

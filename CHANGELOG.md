@@ -7,6 +7,113 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A member's report survives a turn the user stops
+
+##### Fixed
+
+- Stopping a channel member's turn yourself (Esc, sending a queued
+  message now, killing its PROCESSES row) no longer gives up on the
+  work it was assigned. The coordinator used to get only "Stopped
+  before finishing: it was stopped", and nothing the member did after.
+  Now the member still owes the report, and its next turn that ends
+  well sends it, with its last words. This holds for cloud members too.
+- Work that really stops (a failure, archiving the agent) still reports
+  that it stopped, now with what the member said last before it did.
+
+### A cloud agent's subagents are listed under it
+
+##### Fixed
+
+- The agents a cloud agent spawns on its machine are listed under it,
+  as a local agent's are: in PROJECTS, and in its channel's MEMBERS as
+  its subagents. A `task` is named for its kind and first prompt
+  ("EXP1: Engine core"), and each spins while its machine says it
+  works. They were only copied here, so an agent launched in a channel
+  showed none of the subagents it started. Their chat follows the
+  machine's copy, HOST shows the machine they run on, and their row in
+  the machine's list opens their chat. They carry on only on that
+  machine: a message to one says to ask the agent that spawned it, or
+  to bring that agent back with `/local`.
+
+### A channel shows its project's plans and tasks
+
+##### Added
+
+- An open channel has TASKS above MEMBERS and INFO: every plan and task
+  in the channel's folder, by any agent working there, in the channel
+  or not. It works as an agent's TASKS does: ↑↓, Home, End and the
+  wheel move, Space folds, `p` opens the row's plan and `t` the task
+  doing a todo, and a click or Enter opens a plan, or a task's agent: a
+  member as its chat in the channel, any other agent in the tab that
+  lists it. Its bar counts the tasks being worked on, else the plans.
+- A plan another agent writes, or moves on through its todos, shows in
+  TASKS at once when that agent works in the folder of the agent on
+  screen. Before, TASKS caught up only when the agent on screen
+  changed.
+
+##### Changed
+
+- A channel's MEMBERS and INFO take the bottom half of the right
+  column, under TASKS. The hamburger hides and shows both.
+
+### A channel's reports read as paragraphs
+
+##### Fixed
+
+- Each model call of a turn writes a reply of its own. When a turn
+  called the model again without a tool call in between, after a nudge
+  or a notice sent into the turn, the second answer ran on into the
+  first with no space: "…say if you want that instead.RUS197 is still
+  building…".
+- So does an agent in the cloud: its machine sends `iteration_complete`
+  on the turn's stream as each model call ends, and the chat starts a
+  new reply after it. It takes a rebuilt cloud binary
+  (`scripts/build-cloud-binary.sh`); an agent placed before still runs
+  its replies together until it is placed again.
+- A channel's coordinator is no longer sent back to its todo list each
+  time it answers. Its todos are its members' work, which it can't
+  carry on with, so every turn ended with the same status a second
+  time ("Nothing is blocked…").
+- A coordinator writes a few short paragraphs with a blank line between
+  them. Told to write "at most three short lines", it put each point on
+  a line of its own, and the chat drew them one under the other with no
+  space, so a wrapped line could not be told from the next point. A
+  `coordinator.md` nobody edited is brought up to date.
+
+### /plan in a channel plans in a new member
+
+##### Changed
+
+- `/plan` in a channel's chat starts a planner instead of putting the
+  coordinator, which can't read the code, in plan mode: a new
+  `engineer` member of the channel, in plan mode, whose chat opens over
+  the channel's with your request (and any pasted images) as its first
+  message. It writes the plan there and builds it when you say
+  "implement" or run `/build` in its chat; Esc goes back to the
+  channel's chat. Bare `/plan`, or `/mode plan`, opens a planner that
+  waits for the request. In a channel whose agents run in the cloud,
+  the planner works on this computer, where plan mode holds.
+
+### A cloud agent's chat shows its work as it goes
+
+##### Fixed
+
+- A cloud agent working on a message from its channel or its queue
+  shows its turn as a local agent does: its thinking and steps stay
+  open under a working line that counts the time, and fold when the
+  turn ends. Only a prompt typed into its chat told the chat the agent
+  was working, so each step folded the moment it finished and its
+  thinking blinked in and out.
+- A cloud machine sends what the model writes within 33 ms rather
+  than holding it for 512 bytes, so a short thought streams instead of
+  arriving whole just before its tool call. It takes a rebuilt cloud
+  binary (`scripts/build-cloud-binary.sh`); an agent placed before
+  keeps the old pace until it is placed again.
+- A tool call's policy decision stays on the call when the record
+  copied from the machine brings the decision before the stream brings
+  the call, instead of showing as a separate `policy:` line. One whose
+  call never comes still shows as that line when the turn ends.
+
 ### A channel lists its coordinator, and chats open in their tab
 
 ##### Fixed
@@ -231,6 +338,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A member dropped from the channel while its chat is open gives way
   to the coordinator even when the session can't be told at once, so
   it never stays on screen under the channel's name.
+- The member chat's bar is lit only while the chat has the focus,
+  like the chat's own frame. Opening a member from MEMBERS leaves the
+  focus there, and the bar was lit anyway.
 
 ### ARCHIVE headers spell out the date
 
