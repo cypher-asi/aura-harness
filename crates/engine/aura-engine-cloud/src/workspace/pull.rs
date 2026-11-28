@@ -5,8 +5,9 @@
 //! ([`super::fork_branch`]). Either can be behind GitHub: the merge
 //! queue lands other agents' work on `origin`'s main, not in the hub's
 //! checkout. So before an agent works, its machine fetches
-//! `origin/<target>` and merges it into the agent's branch
-//! ([`pull_latest`]).
+//! `origin/<target>`, the queue's target the hub resolved
+//! (`aura_exec_merge_queue::resolve_target`), and merges it into the
+//! agent's branch ([`pull_latest`]).
 //!
 //! ## Invariants
 //!
@@ -23,7 +24,8 @@
 use super::{branch, BASE_IDENT};
 use crate::error::CloudResult;
 
-/// Branch a new machine pulls from `origin`: the merge queue's target.
+/// Branch a new machine pulls from `origin` when its project's merge
+/// queue names no other target.
 pub const PULL_BRANCH: &str = "main";
 /// Prefix of the line [`pull_latest`] prints.
 pub const PULLED: &str = "aura-pull: ";

@@ -98,6 +98,9 @@ pub(crate) struct ChannelState {
     merge_queues: HashMap<String, MergeQueueView>,
     /// How far the QUEUE side tab is scrolled
     queue_scroll: InfoScroll,
+    /// The channel whose QUEUE tab last asked for older merges, and how
+    /// many merges it showed then: it asks once per page shown
+    older_asked: Option<(String, usize)>,
     /// The HISTORY side tab: where it is, and its summaries
     history: history::HistoryState,
     /// The side tab shown before the channel opened, shown again when it

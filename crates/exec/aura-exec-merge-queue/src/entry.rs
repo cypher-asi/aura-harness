@@ -154,6 +154,12 @@ pub struct MergeEntry {
     /// When it was merged or failed
     #[serde(default)]
     pub finished_at: Option<DateTime<Utc>>,
+    /// When anything about it last changed: queued, pushed again,
+    /// started, put back after a crash or finished. Waiting is measured
+    /// from here ([`crate::QueueState::expire`]); none in files from
+    /// before it was kept
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
     /// How many times it started running
     #[serde(default)]
     pub attempts: u32,
@@ -166,6 +172,15 @@ pub struct MergeEntry {
 }
 
 impl MergeEntry {
+    /// When its wait started: its last change, else its last push, else
+    /// when it was queued.
+    #[must_use]
+    pub fn waiting_since(&self) -> DateTime<Utc> {
+        self.updated_at
+            .or(self.pushed_at)
+            .unwrap_or(self.enqueued_at)
+    }
+
     /// Short form of `head`, for messages.
     #[must_use]
     pub fn short_head(&self) -> &str {
@@ -223,6 +238,7 @@ mod tests {
             pushed_at: None,
             started_at: None,
             finished_at: None,
+            updated_at: None,
             attempts: 2,
             detail: Some("tests failed".to_string()),
             merged: None,

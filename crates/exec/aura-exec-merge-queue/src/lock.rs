@@ -12,7 +12,7 @@
 
 use crate::error::QueueError;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// How often [`FileLock::exclusive`] tries a held lock again.
@@ -21,7 +21,6 @@ const RETRY: Duration = Duration::from_millis(20);
 /// An exclusive lock on one file.
 #[derive(Debug)]
 pub struct FileLock {
-    path: PathBuf,
     // Held for the lock: closing the file releases it.
     _file: File,
 }
@@ -38,10 +37,7 @@ impl FileLock {
         }
         Ok(os::try_lock(path)
             .map_err(|e| QueueError::io(path, e))?
-            .map(|file| Self {
-                path: path.to_path_buf(),
-                _file: file,
-            }))
+            .map(|file| Self { _file: file }))
     }
 
     /// Take the lock on `path`, waiting up to `wait` for its holder.
@@ -65,12 +61,6 @@ impl FileLock {
             }
             std::thread::sleep(RETRY);
         }
-    }
-
-    /// The locked file.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 }
 

@@ -88,8 +88,11 @@ pub(crate) fn record(agent: AgentId, command: &UiCommand) {
 pub(crate) fn report(push: ObservedPush) {
     match PUSHES.get() {
         Some(sink) => {
-            // The service is gone only while the app shuts down.
-            let _ = sink.send(push);
+            // The service is gone only while the app shuts down, when no
+            // push needs merging any more.
+            if let Err(lost) = sink.send(push) {
+                tracing::debug!(agent = %lost.0.agent, "The merge queue has stopped; a push was not queued");
+            }
         }
         None => {
             tracing::warn!(agent = %push.agent, branch = %push.push.branch, "A push was made before the merge queue started");

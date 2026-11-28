@@ -166,15 +166,27 @@ Crate: `crates/exec/aura-exec-merge-queue`.
   - each entry in total: 3 hours. An entry cut off by that limit is checked
     first: if the target already holds its commit (the push landed just
     before the cut), it counts as merged;
-  - an entry may wait for up to 24 hours after its branch's last push
-    before it expires;
-  - the 1,000 newest finished entries are kept.
+  - an entry may wait for up to 24 hours after its last change (queued,
+    pushed again, or put back after a crash) before it expires.
+- **History:** every finished entry is kept. The queue file keeps the 100
+  newest; older ones move, under the queue file's lock, to
+  `<git-common-dir>/aura/merge-history.jsonl`, one JSON line each. The
+  queue file records how much of that file is committed, so a crash
+  between the two writes never duplicates or loses an entry. The QUEUE
+  tab gets the newest 100 and `N older merges` under them; scrolling to
+  that line asks for the next 100 (`UiEvent::LoadOlderMerges`), read
+  backwards from the end of the history file.
 - **Landing an entry** (`integrate`):
   1. Fetch the target and the entry's branch into private
      `refs/aura-queue/*` refs.
-  2. Check out the entry's exact head in the queue's own worktree
-     (`<git-common-dir>/aura/merge-worktree`). The worktree is reset and
-     cleaned each time; ignored build caches are kept.
+  2. Check out the entry's exact head in the queue's own worktree, which
+     lives outside `.git` in a per-repo work folder under the user's cache
+     folder (`~/.cache/aura/merge-queue/<repo>-<hash>/worktree` on Linux),
+     with the check log beside it. The worktree is reset and cleaned each
+     time; ignored build caches are kept. The worktree queues used to keep
+     in `<git-common-dir>/aura/merge-worktree` is removed with `git
+     worktree remove` (or deleted and pruned) the first time the new one
+     is made.
   3. Fast-forward if the head is already based on the target. Otherwise
      merge it with the target: one merge commit, the target first. The
      queue merges rather than rebases, because `git_ship` already merged
@@ -213,8 +225,14 @@ test = "cargo test --workspace"    # "" turns the test check off
 check_timeout_secs = 3600
 ```
 
-`target` is read from the hub's checkout when the queue opens. The other
-keys are read from the target branch's commit, per entry. Without the
+`target` is read from the file as committed on `main` (the local branch,
+else `origin/main`; `aura_exec_merge_queue::resolve_target`), so an
+uncommitted edit in a checkout can't move it and every worktree agrees.
+A repo with no `main` reads its working tree's file. The queue, `git_ship`
+(when the call names no target), the push guard, new cloud machines and
+the QUEUE tab all use that one answer. The push guard refuses both it and
+the target a workspace's own uncommitted file names. The other keys are
+read from the target branch's commit, per entry. Without the
 file, the checks are inferred from the merged tree's files:
 
 - `Cargo.toml`: `cargo build --workspace --all-targets` and
@@ -250,16 +268,17 @@ views in `aura_ui::events::{MergeQueueView, MergeEntryView}`.
 A machine starts from its project's snapshot plus the hub's HEAD and
 uncommitted changes, or, for a fork, from its parent's disk. Either can be
 behind GitHub, because the merge queue lands other agents' work on
-`origin`'s main and not in the hub's checkout. So every new agent's
-machine pulls the latest main from GitHub on top of what it has, before
-the agent's first turn:
+`origin`'s target branch and not in the hub's checkout. So every new
+agent's machine pulls the latest target (main unless the committed
+config names another; the hub resolves it when it places the agent)
+from GitHub on top of what it has, before the agent's first turn:
 
 1. The agent's branch is checked out at the hub's HEAD, `origin` is set to
    the project's GitHub repository, and the hub's uncommitted changes are
    unpacked (`workspace::start_branch`). A fork instead moves its parent's
    disk to its own branch (`workspace::fork_branch`).
-2. `git fetch origin main` runs with the machine's credentials (from its
-   claim), bounded by 120 seconds. Then `origin/main` is merged into the
+2. `git fetch origin <target>` runs with the machine's credentials (from
+   its claim), bounded by 120 seconds. Then `origin/<target>` is merged into the
    agent's branch. That is a fast-forward when the branch has nothing of
    its own (`workspace::pull::pull_latest`).
 3. Only then is the working tree marked as the base the hub takes
@@ -303,4 +322,4 @@ origin/main at 1a2b3c4d", "up to date with origin/main" or "skipped: …").
 | How many processors? | One per repo, enforced in the process and across processes. |
 | What happens on failure? | The entry is marked failed with its reason, and the reason goes to the owning agent, which is prompted to fix and re-ship. It also shows in the channel's QUEUE tab. |
 | Which branches are protected? | `main` and `master`. Agents can never push them. |
-| What does a new cloud machine start on? | The hub's HEAD and uncommitted changes, with GitHub's latest `main` merged on top. If the merge isn't clean, it starts on the hub's code alone and says why. |
+| What does a new cloud machine start on? | The hub's HEAD and uncommitted changes, with GitHub's latest merge queue target (`main` by default) merged on top. If the merge isn't clean, it starts on the hub's code alone and says why. |
