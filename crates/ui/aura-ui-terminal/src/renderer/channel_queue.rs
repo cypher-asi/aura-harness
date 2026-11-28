@@ -16,6 +16,7 @@
 //!   Queued    11-27 20:31
 //!   Finished  11-27 20:33
 //!   Attempts  2
+//!   Overlaps  q4 feat/lexer (RE37): src/parser.rs
 //!   cargo test failed: parser::escapes
 //! ```
 //!
@@ -158,7 +159,8 @@ fn entry_head(entry: &MergeEntryView, width: usize, theme: &Theme) -> Line<'stat
 
 /// An entry's facts under its first line: who pushed it, when it was
 /// queued and finished, its attempts when it ran more than once, what the
-/// target moved to, and what happened.
+/// target moved to, the other work that changes the same files, and what
+/// happened.
 fn entry_facts(entry: &MergeEntryView, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let mut info = Info::new(width, theme).wrap_values();
     if let Some(agent) = entry.agent.as_deref().filter(|agent| !agent.is_empty()) {
@@ -173,6 +175,10 @@ fn entry_facts(entry: &MergeEntryView, width: usize, theme: &Theme) -> Vec<Line<
     }
     if let Some(merged) = entry.merged.as_deref().filter(|sha| !sha.is_empty()) {
         info.fact("Merged", merged, Value::Quiet);
+    }
+    for (at, overlap) in entry.overlaps.iter().enumerate() {
+        let label = if at == 0 { "Overlaps" } else { "" };
+        info.fact(label, overlap, Value::Flag);
     }
     if let Some(detail) = entry.detail.as_deref().filter(|d| !d.trim().is_empty()) {
         let kind = if entry.state == MergeStateView::Failed {

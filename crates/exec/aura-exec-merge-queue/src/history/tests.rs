@@ -19,6 +19,7 @@ fn entry(seq: u64) -> MergeEntry {
         // Long enough that a page spans blocks.
         detail: Some("x".repeat(700)),
         merged: None,
+        files: Vec::new(),
     }
 }
 

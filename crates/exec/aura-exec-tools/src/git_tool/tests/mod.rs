@@ -110,6 +110,7 @@ fn to_branch(branch: &str) -> PushTarget<'_> {
 }
 
 mod commit;
+mod fragments;
 mod push;
 mod push_policy;
 mod seed;

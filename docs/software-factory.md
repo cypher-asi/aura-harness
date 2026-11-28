@@ -385,6 +385,78 @@ to open a pull request. Three things keep them in the queue:
     keeps the old shared folder. There the hub still doesn't ask an
     agent to ship in a folder another member shares.
 
+## 8. Fewer conflicts between parallel agents
+
+Parallel branches used to conflict in the same few places. Nearly every
+merge conflicted in `CHANGELOG.md`, because each branch added its entry
+at the top of `[Unreleased]`. Three things now keep that churn down.
+
+### Changelog fragments
+
+- A change adds its entry as its own file,
+  `changelog.d/<last segment of its branch>.md`, and never edits
+  `CHANGELOG.md`. No other branch writes that file, so entries can't
+  conflict. The format is in [`changelog.d/README.md`](../changelog.d/README.md).
+- The fragments are put into `CHANGELOG.md` at release time, not by the
+  queue: `aura changelog` shows the entries they make, newest first by
+  when git added them, and `aura changelog --write` writes them under
+  `## [Unreleased]` and deletes them. So what lands is always exactly
+  the agent's merge, checked. Code:
+  `aura-exec-merge-queue::changelog` (pure) and
+  `aura-cli/src/changelog_commands.rs`.
+- `git_ship` enforces it (`git_tool/fragments.rs`). After the pull it
+  diffs the fetched target against `HEAD`. If the repo has
+  `changelog.d/` and the branch edits `CHANGELOG.md` without deleting a
+  fragment (a release), it stops before pushing with
+  `ChangelogEdited`, naming the fragment to write. A repo without
+  `changelog.d/` ships as before.
+- `FACTORY_RULES` and the cloud agent's `<cloud_git>` note tell agents
+  the same.
+
+### The queue resolves generated files itself
+
+When merging the target into an entry conflicts (`integrate.rs`,
+`merge_commit`), `resolve::settle` looks at the conflicted files.
+Generated files are matched by name at any depth:
+
+| File | Resolution |
+|---|---|
+| `CHANGELOG.md` | Union of both sides (`git merge-file --union` on the three stages), so both new entries stay |
+| `Cargo.lock` | The target's side, then `cargo metadata --format-version 1` in its folder brings it up to date with the merged manifests |
+| `package-lock.json` | The target's side, then `npm install --package-lock-only --ignore-scripts` |
+
+- If every conflict is in one of them, they are resolved, added and
+  committed with the queue's merge message, and the entry goes on to the
+  checks as usual. The build and tests still run on exactly the commit
+  that lands. The entry's detail says "resolved CHANGELOG.md mechanically".
+- If any other file conflicts, the merge is aborted and the entry fails.
+  The reason lists the real files first and says the generated ones would
+  have been resolved. It goes back to the agent as before, which pulls
+  main, resolves and ships again.
+- A generated file that can't be resolved mechanically (deleted on one
+  side, or its regenerate command fails) counts as a real conflict, and
+  the reason says why.
+
+### Overlap warnings
+
+- When a push is queued, the hub records which files the entry changes
+  (`MergeEntry::files`, from `git diff --name-only <target>...<head>`,
+  `overlap::changed_files`). Generated files don't count.
+- The work in flight is every queued or running entry, and every branch
+  whose last entry failed and hasn't merged since: its agent is fixing
+  it (`overlap::open_work`). Each local channel member's worktree on a
+  branch other than the target counts too, with its committed and
+  uncommitted changes. A cloud member's work counts once it is pushed.
+- When the new entry shares files with any of them, both owning agents
+  get a notice naming the other agent, its branch and the shared files,
+  and asking them to agree who lands first (`send_to_agent`). A pair is
+  told once per process, so re-pushing the same overlap stays quiet.
+  Code: `aura-app/src/event_loop/factory/overlap.rs`.
+- The QUEUE tab lists an entry's overlaps under it ("Overlaps", one line
+  per other piece of work: its entry or branch, its agent and the
+  shared files).
+- Nothing is blocked. Overlap is a reason to talk, not to wait.
+
 ## Defaults chosen
 
 | Question | Default |

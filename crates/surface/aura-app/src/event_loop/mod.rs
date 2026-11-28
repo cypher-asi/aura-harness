@@ -343,15 +343,21 @@ async fn send_startup(state: &mut LoopState<'_>, active: AgentId) {
     handlers::announce_models(state).await;
 }
 
+/// The stall sweep's timer: its first tick a sweep from now. A loop busy
+/// past a sweep runs one late sweep, not a burst of them: strikes count
+/// minutes, and a burst would count several at once.
+fn sweep_timer() -> tokio::time::Interval {
+    let first_sweep = tokio::time::Instant::now() + stalls::SWEEP_EVERY;
+    let mut sweeps = tokio::time::interval_at(first_sweep, stalls::SWEEP_EVERY);
+    sweeps.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    sweeps
+}
+
 /// Handle what arrives until the UI quits or goes away.
 async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
     let hub = Arc::clone(&state.hub);
     let mut cloud_ended = state.cloud.take_ended();
-    let first_sweep = tokio::time::Instant::now() + stalls::SWEEP_EVERY;
-    let mut sweeps = tokio::time::interval_at(first_sweep, stalls::SWEEP_EVERY);
-    // A loop busy past a sweep runs one late sweep, not a burst of them:
-    // strikes count minutes, and a burst would count several at once.
-    sweeps.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut sweeps = sweep_timer();
     loop {
         tokio::select! {
             _ = sweeps.tick() => {
