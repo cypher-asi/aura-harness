@@ -149,3 +149,11 @@ getrandom = { version = "0.3", default-features = false, features = ["std", "was
 windows-sys-d4189bed749088b6 = { package = "windows-sys", version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Win32_Graphics_Gdi", "Win32_Networking_WinSock", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 ### END HAKARI SECTION
+
+# Outside the hakari section, so `cargo hakari generate` keeps it. The crate
+# has no code, and depends on crates only to turn their features on, so
+# none of its dependencies is "used": cargo's lint for that would flag
+# them all. Its own table also stops cargo asking it to inherit
+# `[workspace.lints]`, which are for code.
+[lints.cargo]
+unused_dependencies = "allow"
