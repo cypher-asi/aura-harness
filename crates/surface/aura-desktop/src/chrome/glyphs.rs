@@ -68,6 +68,43 @@ pub(super) fn wrench(out: &mut Vec<Quad>, rect: Rectangle, size: (f32, f32), ink
     fill(out, x, neck, handle, top + height - neck, ink);
 }
 
+/// A plug standing up in the middle of `rect`: two prongs over a body
+/// as wide as [`wrench`]'s head, and a cord under its middle. As wide as
+/// [`computer`]'s screen, `2 * arm + line` pixels, and a third taller;
+/// its width and height take the box's parity, so its margins match.
+pub(super) fn plug(out: &mut Vec<Quad>, rect: Rectangle, size: (f32, f32), ink: Color) {
+    let (arm, line) = size;
+    let mut width = 2.0 * arm + line;
+    if (rect.width - width).rem_euclid(2.0) != 0.0 {
+        width -= 1.0;
+    }
+    let mut height = (width * 4.0 / 3.0).round();
+    if (rect.height - height).rem_euclid(2.0) != 0.0 {
+        height -= 1.0;
+    }
+    let centered = |wanted: f32| wanted + (width - wanted).rem_euclid(2.0);
+    let cord = centered(line);
+    let prong = line.max(1.0);
+    let prongs = (height * 0.3).round().max(2.0 * line);
+    let body = (height * 0.4).round().max(3.0 * line);
+    let left = rect.x + ((rect.width - width) / 2.0).floor();
+    let top = rect.y + ((rect.height - height) / 2.0).floor();
+    // The prongs a third of the way in from each side.
+    let inset = (width / 4.0).round();
+    fill(out, left + inset, top, prong, prongs, ink);
+    fill(out, left + width - inset - prong, top, prong, prongs, ink);
+    fill(out, left, top + prongs, width, body, ink);
+    let neck = top + prongs + body;
+    fill(
+        out,
+        left + (width - cord) / 2.0,
+        neck,
+        cord,
+        top + height - neck,
+        ink,
+    );
+}
+
 /// Three bars centered in `rect`, about `arm` pixels each way from the
 /// middle, strokes `line` pixels thick. The glyph is laid out from the
 /// box's edges rather than from a rounded middle, which lands half a

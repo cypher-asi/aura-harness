@@ -114,7 +114,10 @@ const fn is_busy(state: AppState) -> bool {
 const fn input_is_prompt_answer(state: AppState) -> bool {
     matches!(
         state,
-        AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode
+        AppState::LoginEmail
+            | AppState::LoginPassword
+            | AppState::LinkCode
+            | AppState::IntegrationInput
     )
 }
 
