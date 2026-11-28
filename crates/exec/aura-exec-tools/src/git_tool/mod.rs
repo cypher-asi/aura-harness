@@ -72,6 +72,7 @@ use crate::error::ToolError;
 mod commit;
 mod commit_push;
 mod executor;
+mod fragments;
 mod push;
 mod redact;
 mod sandbox;
@@ -157,6 +158,17 @@ pub enum GitToolError {
     )]
     MergeConflict { target: String, files: Vec<String> },
 
+    /// The branch edits `CHANGELOG.md` in a repo that keeps changelog
+    /// fragments in `changelog.d/`. Committed, not pushed.
+    #[error(
+        "not pushed: this repo keeps changelog entries in changelog.d/, and your branch edits \
+         CHANGELOG.md, which makes every parallel branch conflict. Move your entry into a new \
+         file {fragment} (a `### Title`, then `##### Fixed`/`Added`/`Changed` and bullets), \
+         restore CHANGELOG.md as main has it (`git checkout origin/main -- CHANGELOG.md`), \
+         and call git_ship again"
+    )]
+    ChangelogEdited { fragment: String },
+
     /// The agent changed files that carry the hub's uncommitted work its
     /// cloud machine was seeded with, so they can't be committed without
     /// pushing that work too. Nothing was committed.
@@ -225,6 +237,7 @@ impl From<GitToolError> for ToolError {
             err @ (GitToolError::NoOrigin
             | GitToolError::Unauthorized { .. }
             | GitToolError::MergeConflict { .. }
+            | GitToolError::ChangelogEdited { .. }
             | GitToolError::SeededHubChanges { .. }) => Self::CommandFailed(err.to_string()),
             GitToolError::RemoteStorageExhausted { op, stderr } => Self::CommandFailed(format!(
                 "git {op} failed: remote storage exhausted ({stderr}). \
@@ -353,19 +366,24 @@ pub(crate) fn check_not_protected(branch: &str) -> Result<(), GitToolError> {
     Ok(())
 }
 
-/// Refuse `branch` when the merge queue config in `workspace`
-/// (`.aura/merge-queue.toml`) names it as the queue's target: like the
-/// [`PROTECTED_BRANCHES`], it only changes through the queue.
+/// Refuse `branch` when it is the merge queue's target for the repo of
+/// `workspace` ([`aura_exec_merge_queue::resolve_target`], as committed on
+/// main), or the target the workspace's own `.aura/merge-queue.toml`
+/// names: like the [`PROTECTED_BRANCHES`], it only changes through the
+/// queue. Refusing both can only refuse more, never let a push through.
 pub(crate) async fn check_not_queue_target(
     workspace: &std::path::Path,
     branch: &str,
 ) -> Result<(), GitToolError> {
-    let path = workspace.join(aura_exec_merge_queue::config::CONFIG_PATH);
-    // No config (or an unreadable one) names no other target.
-    let Ok(text) = tokio::fs::read_to_string(&path).await else {
-        return Ok(());
-    };
-    if aura_exec_merge_queue::config::target_in(&text).as_deref() == Some(branch) {
+    let resolved = aura_exec_merge_queue::resolve_target(workspace).await;
+    let path = workspace.join(aura_exec_merge_queue::CONFIG_PATH);
+    // No config (or an unreadable one) in the workspace names no other
+    // target.
+    let working = tokio::fs::read_to_string(&path)
+        .await
+        .ok()
+        .and_then(|text| aura_exec_merge_queue::target_in(&text));
+    if resolved == branch || working.as_deref() == Some(branch) {
         return Err(GitToolError::ProtectedBranch {
             branch: branch.to_string(),
         });

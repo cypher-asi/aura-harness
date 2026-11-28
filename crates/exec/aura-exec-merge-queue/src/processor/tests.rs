@@ -40,10 +40,7 @@ impl Integrator for Hangs {
 }
 
 fn repo(dir: &Path) -> RepoPaths {
-    RepoPaths {
-        top: dir.to_path_buf(),
-        common: dir.join(".git"),
-    }
+    RepoPaths::new(dir.to_path_buf(), dir.join(".git"), &dir.join("work"))
 }
 
 fn request(branch: &str) -> MergeRequest {
@@ -307,4 +304,42 @@ async fn a_running_entry_is_left_alone_while_its_processor_lives() {
     let entries = first.entries().await;
     assert_eq!(entries[0].status, MergeStatus::Running);
     assert_eq!(entries.len(), 2);
+}
+
+#[tokio::test]
+async fn every_finished_entry_is_kept_and_paged_newest_first() {
+    let dir = tempfile::tempdir().unwrap();
+    let limits = Limits {
+        keep_finished: 100,
+        ..Limits::default()
+    };
+    let queue = MergeQueue::open(repo(dir.path()), Arc::new(Recorder::default()), limits)
+        .await
+        .unwrap();
+    let (processor, _) = processor(&queue).await;
+    for n in 0..250 {
+        queue.enqueue(request(&format!("b{n:03}"))).await.unwrap();
+        processor.process_next().await.unwrap();
+    }
+    queue.enqueue(request("waiting")).await.unwrap();
+    assert_eq!(queue.entries().await.len(), 101, "the queue file keeps 100");
+
+    let branches = |page: &QueuePage| -> Vec<String> {
+        page.entries.iter().map(|e| e.branch.clone()).collect()
+    };
+    let first = queue.page(100).await;
+    assert_eq!(first.older, 150);
+    assert_eq!(first.entries.len(), 101);
+    assert_eq!(branches(&first)[0], "b150");
+    assert_eq!(branches(&first)[100], "waiting");
+
+    let all = queue.page(400).await;
+    assert_eq!(all.older, 0);
+    let mut expected: Vec<String> = (0..250).map(|n| format!("b{n:03}")).collect();
+    expected.push("waiting".to_string());
+    assert_eq!(branches(&all), expected, "every merge, oldest first");
+
+    let few = queue.page(10).await;
+    assert_eq!((few.entries.len(), few.older), (11, 240));
+    assert_eq!(branches(&few)[0], "b240");
 }

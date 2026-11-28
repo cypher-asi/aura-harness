@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::host::{AgentEnv, HostInner, LifecycleAction};
 use super::inbox::MessageKind;
+use super::peer_names;
 
 /// Agent tool hooks acting for one caller.
 #[derive(Clone)]
@@ -102,25 +103,58 @@ impl AgentHooks {
         }
     }
 
-    /// `target` as an agent another node holds.
-    fn remote_target(host: &HostInner, target: &str) -> Option<AgentId> {
-        AgentId::from_hex(target.trim())
+    /// The agents other nodes hold that the caller's tree reaches, as
+    /// `list_agents` shows them.
+    fn remote_peers(&self, host: &HostInner) -> Vec<serde_json::Value> {
+        let root = host.root_of(self.caller).unwrap_or(self.caller);
+        host.remote_peers(root)
+    }
+
+    /// `target` as an agent another node holds: its hex id, or the code
+    /// or name it goes by among the agents the caller reaches
+    /// ([`peer_names`]). An error when that names several.
+    fn remote_target(&self, host: &HostInner, target: &str) -> Result<Option<AgentId>, String> {
+        if let Some(id) = AgentId::from_hex(target.trim())
             .ok()
             .filter(|id| host.is_remote(*id))
+        {
+            return Ok(Some(id));
+        }
+        match peer_names::find_peer(&self.remote_peers(host), target) {
+            peer_names::Named::One(id) => Ok(Some(id)),
+            peer_names::Named::Several(found) => Err(peer_names::ambiguous(target, &found)),
+            peer_names::Named::None => Ok(None),
+        }
     }
 
     /// What `list_agents` says of `target`, an agent another node holds
     /// that the caller's tree reaches.
     fn remote_peer(&self, host: &HostInner, target: &str) -> Option<serde_json::Value> {
-        let id = Self::remote_target(host, target)?.to_hex();
-        let root = host.root_of(self.caller).unwrap_or(self.caller);
-        host.remote_peers(root)
+        let id = self.remote_target(host, target).ok().flatten()?.to_hex();
+        self.remote_peers(host)
             .into_iter()
             .find(|peer| peer["agent_id"].as_str() == Some(id.as_str()))
     }
 
+    /// The error for a `target` the caller reaches nothing by, listing
+    /// the agents of its tree and the directory it does reach.
+    fn unknown_to(&self, target: &str) -> String {
+        let Ok(host) = self.host() else {
+            return peer_names::unknown(target, &[]);
+        };
+        let root = host.root_of(self.caller).unwrap_or(self.caller);
+        let mut peers: Vec<serde_json::Value> = host
+            .tree(root)
+            .iter()
+            .filter(|info| info.agent_id != self.caller)
+            .map(super::host::AgentInfo::to_json)
+            .collect();
+        peers.extend(self.remote_peers(&host));
+        peer_names::unknown(target, &peer_names::reachable(&peers))
+    }
+
     fn unknown(target: &str) -> String {
-        format!("unknown agent '{target}'; call list_agents to see the agents you can reach")
+        peer_names::unknown(target, &[])
     }
 }
 
@@ -167,7 +201,7 @@ impl AgentControlHook for AgentHooks {
         let target_agent_id = message.target_agent_id;
         let target = match self.local_target(&host, target_agent_id)? {
             Some(target) => Some(target),
-            None => Self::remote_target(&host, target_agent_id),
+            None => self.remote_target(&host, target_agent_id)?,
         };
         if let Some(target) = target {
             return host.deliver_message(
@@ -180,7 +214,7 @@ impl AgentControlHook for AgentHooks {
         }
         match self.env().and_then(|env| env.remote_control) {
             Some(remote) => remote.deliver_message_in_thread(message, subject).await,
-            None => Err(Self::unknown(target_agent_id)),
+            None => Err(self.unknown_to(target_agent_id)),
         }
     }
 

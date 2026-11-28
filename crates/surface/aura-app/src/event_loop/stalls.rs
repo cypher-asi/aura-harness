@@ -13,11 +13,13 @@
 //!   left alone until its next work starts ([`super::inbox::Inbox::park`]).
 //! * A sweep never starts work for an agent that is working or moving.
 
+use super::agent_events::AgentUi;
 use super::delivery::{deliver, start_next};
 use super::steering::SteerSource;
 use super::subagents::lock;
 use super::LoopState;
 use aura_core_types::AgentId;
+use aura_ui::UiCommand;
 use std::collections::HashSet;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -52,7 +54,7 @@ pub(super) async fn sweep(state: &mut LoopState<'_>) {
         }
         match state.hub.standing.strike(agent) {
             (count, false) if count >= RETRY_AFTER => retry(state, agent, &asks).await,
-            (count, true) if count >= RETRY_AFTER => give_up(state, agent),
+            (count, true) if count >= RETRY_AFTER => give_up(state, agent).await,
             _ => {}
         }
     }
@@ -94,11 +96,24 @@ pub(super) fn carry_on(asks: &[(String, String)]) -> String {
     text
 }
 
-/// Give up what `agent` owes: retrying it did not help. Its row and its
-/// peers show it stalled until its next turn starts.
-fn give_up(state: &LoopState<'_>, agent: AgentId) {
+/// Give up what `agent` owes: retrying it did not help. Its chat says why
+/// in red, and its rows show it stalled, in red too, from now until its
+/// next turn starts.
+async fn give_up(state: &LoopState<'_>, agent: AgentId) {
     warn!(%agent, "Stall sweep: still idle after a retry; its reports are given up");
     super::inbox::give_up_all(&state.hub, agent, WENT_IDLE);
     state.hub.status.fail(agent, WENT_IDLE);
+    // A failed member's plan or build won't carry on: its next task
+    // starts the software factory afresh, as after a failed cloud start.
+    state.hub.factory_flows.leave(agent);
     state.hub.standing.stall(agent);
+    AgentUi::new(state.commands.clone(), agent)
+        .send(UiCommand::ShowError(stalled_note()))
+        .await;
+    super::agents::send_agent_list(state).await;
+}
+
+/// What a stalled agent's chat says.
+pub(super) fn stalled_note() -> String {
+    format!("Stalled: {WENT_IDLE}. Its reports were given up.")
 }

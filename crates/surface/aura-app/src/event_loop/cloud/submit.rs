@@ -45,8 +45,7 @@ pub(in crate::event_loop) async fn submit(
     }
     let hub = state.cloud.hub()?;
     if let Some(refusal) = foreign_owner(state, &hub, agent) {
-        crate::event_loop::inbox::give_up_unstarted(state, agent, &refusal);
-        system(state, agent, refusal).await;
+        refused(state, agent, refusal).await;
         return None;
     }
     if state.cloud.is_running(agent) {
@@ -91,6 +90,17 @@ async fn start_before(state: &mut LoopState<'_>, agent: AgentId, work: Work) {
         state.queued.push_back(agent, work);
         crate::event_loop::hud::send_queued(state, agent).await;
     }
+}
+
+/// The cloud turned `agent`'s work away, `why`: give up what it owes when
+/// nothing else of its answers ([`crate::event_loop::inbox::give_up_unstarted`]),
+/// say why in its chat in red, and show its rows as they are now.
+pub(in crate::event_loop) async fn refused(state: &LoopState<'_>, agent: AgentId, why: String) {
+    crate::event_loop::inbox::give_up_unstarted(state, agent, &why);
+    AgentUi::new(state.commands.clone(), agent)
+        .send(UiCommand::ShowError(why))
+        .await;
+    crate::event_loop::agents::send_agent_list(state).await;
 }
 
 /// Start the work queued for `agent` where it runs now, through
@@ -150,8 +160,7 @@ async fn run_prompt(
     let current = state.models.current().to_string();
     let linked = state.auth.linked_plans(&state.auth.owner());
     if let Some(note) = plan_refusal(&current, &linked) {
-        crate::event_loop::inbox::give_up_unstarted(state, agent, &note);
-        system(state, agent, note).await;
+        refused(state, agent, note).await;
         return;
     }
     let model = (!current.is_empty() && current != "gate" && !current.starts_with("local/"))
@@ -163,6 +172,10 @@ async fn run_prompt(
     let extras = TurnExtras {
         titles,
         context_limit: model.as_deref().map(aura_engine::context_window_for_model),
+        waiting: Some(super::forward::WaitingMark {
+            hub: Arc::clone(&state.hub),
+            agent,
+        }),
     };
     crate::event_loop::factory::hooks::plan_first_in_cloud(&state.hub, agent);
     state.hub.factory_flows.note_prompt(agent, &prompt.text);

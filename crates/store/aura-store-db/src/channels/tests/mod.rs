@@ -4,5 +4,6 @@ mod faults;
 mod links;
 mod members;
 mod posts;
+mod summaries;
 mod support;
 mod update;

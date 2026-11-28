@@ -26,18 +26,27 @@ impl CloudHub {
         remote_url: Option<&str>,
         boot: &BootReporter,
     ) -> CloudResult<()> {
+        // The branch the project's merge queue lands on, as committed on
+        // main: what the machine pulls from GitHub before the agent works.
+        let target = aura_exec_merge_queue::resolve_target(&request.project_dir).await;
+        boot.fact("merge target", target.clone());
+        let to = Target {
+            branch,
+            target: &target,
+            remote_url,
+        };
         match snapshot_commit {
             Some(commit) => {
                 boot.run(
                     BootStage::SyncFiles,
-                    self.sync_files(request, view, commit, branch, remote_url, boot),
+                    self.sync_files(request, view, commit, to, boot),
                 )
                 .await?;
             }
             None => {
                 boot.run(BootStage::SyncFiles, async {
                     boot.fact("files", "the parent's, on a branch of its own");
-                    let script = workspace::fork_branch(branch)?;
+                    let script = workspace::fork_branch(branch, &target)?;
                     self.run_script(view, BootStage::SyncFiles, "branch the fork", &script, boot)
                         .await
                         .map(|stdout| report_pull(&stdout, boot))
@@ -60,10 +69,14 @@ impl CloudHub {
         request: &PlaceRequest,
         view: &MachineView,
         snapshot_commit: &str,
-        branch: &str,
-        remote_url: Option<&str>,
+        to: Target<'_>,
         boot: &BootReporter,
     ) -> CloudResult<()> {
+        let Target {
+            branch,
+            target,
+            remote_url,
+        } = to;
         boot.fact("snapshot commit", short_commit(snapshot_commit));
         let dir = request.project_dir.clone();
         let base = snapshot_commit.to_string();
@@ -87,17 +100,19 @@ impl CloudHub {
         let script = workspace::start_branch(&BranchStart {
             branch,
             head: &packed.head,
+            target,
             remote_url,
             bundle: has_bundle,
             // Never the hub's uncommitted work: a ship on the machine
             // commits every change it finds, and would push that too.
             delta: false,
+            clean: request.clean,
         })?;
         let stdout = self
             .run_script(
                 view,
                 BootStage::SyncFiles,
-                "start the agent's branch and pull the latest main",
+                &format!("start the agent's branch and pull the latest {target}"),
                 &script,
                 boot,
             )
@@ -274,6 +289,15 @@ impl CloudHub {
             .scan_record(agent, from, super::node_client::PAGE)
             .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))
     }
+}
+
+/// Where a new machine's workspace goes: the agent's branch, the merge
+/// queue target pulled onto it, and `origin`.
+#[derive(Clone, Copy)]
+pub(super) struct Target<'a> {
+    pub(super) branch: &'a str,
+    pub(super) target: &'a str,
+    pub(super) remote_url: Option<&'a str>,
 }
 
 /// Say how many uncommitted files of the hub's project stay on the hub.

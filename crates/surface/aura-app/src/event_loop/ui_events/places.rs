@@ -42,6 +42,9 @@ async fn channel(state: &mut LoopState<'_>, event: UiEvent) {
         }
         UiEvent::OpenChannel(channel_id) => channels::handle_open(state, &channel_id).await,
         UiEvent::CloseChannel => channels::handle_close(state),
+        UiEvent::LoadOlderMerges { channel_id } => {
+            crate::event_loop::factory::service::load_older(&channel_id);
+        }
         UiEvent::UpdateChannel {
             channel_id,
             title,

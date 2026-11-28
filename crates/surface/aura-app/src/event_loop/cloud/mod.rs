@@ -60,7 +60,7 @@ mod boot;
 mod ended;
 #[cfg(test)]
 mod ended_tests;
-mod forward;
+pub(in crate::event_loop) mod forward;
 mod machine;
 mod member_start;
 mod moving;
@@ -87,6 +87,8 @@ pub(super) use placement::{
 };
 pub(super) use publish::start;
 use publish::start_publisher;
+#[cfg(test)]
+pub(super) use submit::refused;
 pub(super) use submit::{new_session, start_queued, submit};
 use view::{build_view, placement_state};
 

@@ -201,6 +201,19 @@ async fn switch(
     true
 }
 
+/// What entering plan mode tells the user: the software factory builds
+/// the plan on its own (`factory`), else the user says when.
+pub(super) const fn plan_mode_note(factory: bool) -> &'static str {
+    if factory {
+        "Plan mode: the agent researches and writes a plan instead of changing code. Once the \
+         plan is written, the software factory builds and ships it on its own."
+    } else {
+        "Plan mode: the agent researches and writes a plan instead of changing code. /plan \
+         again returns to the previous mode. Say \"implement\" or run /build to implement the \
+         plan."
+    }
+}
+
 /// Show what changed between `from` and `to` (mode and/or approval).
 async fn announce_switch(
     state: &LoopState<'_>,
@@ -218,13 +231,9 @@ async fn announce_switch(
         )))
         .await;
         if to.mode == PermissionMode::Plan {
-            ui.send(system_message(
-                "Plan mode: the agent researches and writes a plan instead of changing code. \
-                 /plan again returns to the previous mode. Say \"implement\" or run /build to \
-                 implement the plan."
-                    .to_string(),
-            ))
-            .await;
+            let factory = state.hub.factory_flows.stage(agent_id).is_some();
+            ui.send(system_message(plan_mode_note(factory).to_string()))
+                .await;
         }
     }
     if from.approval != to.approval {

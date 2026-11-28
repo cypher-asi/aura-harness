@@ -72,6 +72,7 @@ pub mod store;
 pub mod test_support;
 mod turn;
 
+pub use self::busy::WAITING;
 pub use self::outcomes::{CommitsOutcome, PatchOutcome, PullOutcome};
 pub use self::persist::SyncStatus;
 pub use self::reach::{MailDesk, Reach};
@@ -164,6 +165,11 @@ pub struct PlaceRequest {
     pub owner: Owner,
     /// That user's display name, for "placed by" notices here.
     pub owner_name: Option<String>,
+    /// Start the agent's branch from `origin`'s latest main, without this
+    /// computer's unpushed commits or uncommitted changes: a channel
+    /// member works on its own task, not on whatever is open here. A move
+    /// the user makes (`false`) takes their work along.
+    pub clean: bool,
 }
 
 /// What a new machine gets of its project's GitHub repository.

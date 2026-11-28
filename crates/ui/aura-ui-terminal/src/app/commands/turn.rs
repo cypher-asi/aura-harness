@@ -44,17 +44,7 @@ impl App {
     }
 
     fn cmd_complete(&mut self) {
-        if let Some(last_msg) = self.messages.back_mut() {
-            if last_msg.is_streaming() {
-                last_msg.set_streaming(false);
-                if !self.chat.streaming_content.is_empty() {
-                    last_msg.set_content(&self.chat.streaming_content);
-                } else if last_msg.content().is_empty() {
-                    self.messages.pop_back();
-                }
-            }
-        }
-        self.chat.streaming_content.clear();
+        self.end_live_reply(false);
         self.finish_live_activity();
         self.show_early_policies();
         // A dialog stays open, and a sign-in prompt keeps the input.

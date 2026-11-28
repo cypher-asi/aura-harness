@@ -19,23 +19,35 @@ const BUSY_RETRY: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const BUSY_RETRY: Duration = Duration::from_millis(20);
 
-/// What a turn's chat says while it waits.
-pub(super) const WAITING: &str = "Waiting for the turn already running on its machine";
+/// Longest a turn waits for the one already under way on its machine.
+/// Past it the turn fails, so a machine stuck on a turn shows as a
+/// failure its peers and the stall sweep see, rather than as a turn that
+/// runs until the six-hour turn timeout.
+#[cfg(not(test))]
+const BUSY_LIMIT: Duration = Duration::from_secs(20 * 60);
+#[cfg(test)]
+const BUSY_LIMIT: Duration = Duration::from_millis(200);
+
+/// What a turn's chat says while it waits, the status that tells a front
+/// end the turn waits on its machine.
+pub const WAITING: &str = "Waiting for the turn already running on its machine";
 
 /// Start the chat run `request` asks for on `node` once its agent has no
 /// turn under way there, showing on `tx` that it waits. Returns the
-/// node's answer. The caller's own deadline bounds the wait.
+/// node's answer. The wait is bounded by [`BUSY_LIMIT`].
 ///
 /// # Errors
 ///
-/// When the node can't be asked or refuses the run, or `cancel` stops
-/// the wait.
+/// When the node can't be asked or refuses the run, `cancel` stops the
+/// wait, nothing takes the turn's events any more, or the other turn
+/// is still under way after [`BUSY_LIMIT`].
 pub(super) async fn start_when_free(
     node: &NodeClient,
     request: &RuntimeRequest,
     tx: &mpsc::Sender<RemoteEvent>,
     cancel: &CancellationToken,
 ) -> CloudResult<serde_json::Value> {
+    let deadline = tokio::time::Instant::now() + BUSY_LIMIT;
     let mut told = false;
     loop {
         let run = match node.start_run(request).await? {
@@ -45,18 +57,32 @@ pub(super) async fn start_when_free(
         if !told {
             told = true;
             tracing::info!(node = node.node(), %run, "the agent has a turn under way on its machine; waiting for it");
-            let _ = tx.send(RemoteEvent::Status(WAITING.into())).await;
+            // A closed channel means the turn's events go nowhere: its
+            // run would stream to no one, so it doesn't start.
+            if tx.send(RemoteEvent::Status(WAITING.into())).await.is_err() {
+                return Err(stopped(node, "no longer watched"));
+            }
         }
         tokio::select! {
-            () = cancel.cancelled() => {
-                return Err(CloudError::BadState {
-                    machine: node.node().into(),
-                    state: "cancelled".into(),
-                    op: "wait for the turn under way",
+            () = cancel.cancelled() => return Err(stopped(node, "cancelled")),
+            () = tokio::time::sleep_until(deadline) => {
+                tracing::warn!(node = node.node(), %run, limit = ?BUSY_LIMIT, "the turn under way on its machine did not end; giving up");
+                return Err(CloudError::Timeout {
+                    op: "wait for the turn under way on its machine",
+                    after: BUSY_LIMIT,
                 });
             }
             () = tokio::time::sleep(BUSY_RETRY) => {}
         }
+    }
+}
+
+/// Why a wait for the turn under way on `node` stopped, `state`.
+fn stopped(node: &NodeClient, state: &str) -> CloudError {
+    CloudError::BadState {
+        machine: node.node().into(),
+        state: state.into(),
+        op: "wait for the turn under way",
     }
 }
 
@@ -141,9 +167,48 @@ mod tests {
             stopper.cancel();
         });
         let waited = start_when_free(&node, &request, &tx, &cancel).await;
-        assert!(waited.is_err());
+        assert!(
+            matches!(&waited, Err(CloudError::BadState { state, .. }) if state == "cancelled"),
+            "{waited:?}"
+        );
         let after = asked.load(Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(asked.load(Ordering::SeqCst), after, "it stopped asking");
+    }
+
+    #[tokio::test]
+    async fn a_machine_that_stays_busy_fails_the_turn_after_its_own_limit() {
+        let (node, asked) = node(usize::MAX).await;
+        let request = chat_request(AgentId::new([1; 32]), &TurnAsk::default());
+        let (tx, _rx) = mpsc::channel(8);
+        let started = tokio::time::Instant::now();
+        let waited = start_when_free(&node, &request, &tx, &CancellationToken::new()).await;
+        assert!(
+            matches!(waited, Err(CloudError::Timeout { after, .. }) if after == BUSY_LIMIT),
+            "{waited:?}"
+        );
+        assert!(started.elapsed() >= BUSY_LIMIT, "it waited its limit");
+        assert!(
+            started.elapsed() < BUSY_LIMIT * 5,
+            "and not much longer: {:?}",
+            started.elapsed()
+        );
+        let after = asked.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(asked.load(Ordering::SeqCst), after, "it stopped asking");
+    }
+
+    #[tokio::test]
+    async fn a_turn_no_one_watches_does_not_wait_or_start() {
+        let (node, asked) = node(usize::MAX).await;
+        let request = chat_request(AgentId::new([1; 32]), &TurnAsk::default());
+        let (tx, rx) = mpsc::channel(8);
+        drop(rx);
+        let waited = start_when_free(&node, &request, &tx, &CancellationToken::new()).await;
+        assert!(
+            matches!(&waited, Err(CloudError::BadState { state, .. }) if state == "no longer watched"),
+            "{waited:?}"
+        );
+        assert_eq!(asked.load(Ordering::SeqCst), 1, "asked once, then stopped");
     }
 }

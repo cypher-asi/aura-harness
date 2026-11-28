@@ -7,7 +7,10 @@ use super::*;
 use crate::events::{AgentSummary, UiCommand};
 
 /// The cell `needle` starts at, on the first row with it.
-fn cell_at<'a>(buffer: &'a ratatui::buffer::Buffer, needle: &str) -> &'a ratatui::buffer::Cell {
+pub(super) fn cell_at<'a>(
+    buffer: &'a ratatui::buffer::Buffer,
+    needle: &str,
+) -> &'a ratatui::buffer::Cell {
     let y = row_of(buffer, needle);
     let row: String = (0..buffer.area.width)
         .map(|x| buffer[(x, y)].symbol())
@@ -18,7 +21,10 @@ fn cell_at<'a>(buffer: &'a ratatui::buffer::Buffer, needle: &str) -> &'a ratatui
 
 /// The cell left of the one `needle` starts at: its icon column, past
 /// the gap between them.
-fn icon_before<'a>(buffer: &'a ratatui::buffer::Buffer, needle: &str) -> &'a ratatui::buffer::Cell {
+pub(super) fn icon_before<'a>(
+    buffer: &'a ratatui::buffer::Buffer,
+    needle: &str,
+) -> &'a ratatui::buffer::Cell {
     let y = row_of(buffer, needle);
     let row: String = (0..buffer.area.width)
         .map(|x| buffer[(x, y)].symbol())
@@ -62,7 +68,7 @@ fn a_failed_agent_shows_red_on_its_projects_row() {
 
 /// The channels app with a member that failed and one starting in the
 /// cloud.
-fn members_with_failure_and_start() -> crate::App {
+pub(super) fn members_with_failure_and_start() -> crate::App {
     let member = |id: &str, code: &str| AgentSummary {
         id: id.to_string(),
         name: code.to_string(),
@@ -114,4 +120,38 @@ fn a_failed_member_says_why_in_red_and_a_starting_one_says_it_starts() {
         !rows.iter().any(|row| row.contains("Footer links")),
         "the failure shows in place of the title"
     );
+}
+
+#[test]
+fn a_member_whose_turn_waits_on_its_busy_machine_says_so() {
+    let mut app = channels_app();
+    let mut channels = app.channels().to_vec();
+    channels[0].members = vec![
+        AgentSummary {
+            id: "co".to_string(),
+            name: "Coordinator".to_string(),
+            definition: Some("coordinator".to_string()),
+            ..AgentSummary::default()
+        },
+        AgentSummary {
+            id: "r1".to_string(),
+            name: "REN3".to_string(),
+            definition: Some("rust-engineer".to_string()),
+            code: Some("REN3".to_string()),
+            title: Some("Footer links".to_string()),
+            running: true,
+            waiting: true,
+            ..AgentSummary::default()
+        },
+    ];
+    app.process_command(UiCommand::SetChannels(channels));
+    app.open_channel_by_id("c1");
+    let buffer = render_buffer(&mut app, 160);
+    let waiting = cell_at(&buffer, "Waiting for its machine…");
+    assert_eq!(waiting.fg, test_theme().colors.muted);
+    let screen: String = (0..buffer.area.height)
+        .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+        .map(|at| buffer[at].symbol().to_string())
+        .collect();
+    assert!(!screen.contains("Footer links"), "in place of its title");
 }

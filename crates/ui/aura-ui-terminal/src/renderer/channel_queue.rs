@@ -16,11 +16,14 @@
 //!   Queued    11-27 20:31
 //!   Finished  11-27 20:33
 //!   Attempts  2
+//!   Overlaps  q4 feat/lexer (RE37): src/parser.rs
 //!   cargo test failed: parser::escapes
 //! ```
 //!
 //! Without a queue, or with nothing in it, a note says where merges come
-//! from.
+//! from. The session sends the newest merges a page at a time: under the
+//! last one shown, `N older merges` says how many more there are, and
+//! scrolling to it asks for the next page.
 
 use super::chrome::Body;
 use crate::app::PanelFocus;
@@ -36,9 +39,21 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-/// What QUEUE says while no merge has been queued.
-pub(super) const NO_MERGES: &str = "No merges yet. Every push from an agent of this channel \
-lands here and merges into its target branch one at a time.";
+/// What QUEUE says while no merge has been queued into `target`, the
+/// queue's target branch; the branch goes unnamed while unknown.
+pub(super) fn no_merges(target: Option<&str>) -> String {
+    let into = target
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map_or_else(
+            || "its target branch".to_string(),
+            |target| format!("`{target}`"),
+        );
+    format!(
+        "No merges yet. Every push from an agent of this channel lands here and merges into \
+         {into} one at a time."
+    )
+}
 
 /// Draw the open channel's merge queue into `inner`, the body below the
 /// tab bar of the panel bordered by `area`. Without an open channel there
@@ -55,8 +70,12 @@ pub(super) fn render_channel_queue(
     }
     let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
     let lines = queue_lines(app.open_channel_queue(), body.text_width(), theme);
-    let first = app.sync_channel_queue_scroll(lines.len(), body.visible());
+    let (total, visible) = (lines.len(), body.visible());
+    let first = app.sync_channel_queue_scroll(total, visible);
     body.draw_document(frame, lines, first, theme);
+    if first + visible >= total {
+        app.queue_end_reached();
+    }
 }
 
 /// The QUEUE tab's lines, `width` columns wide.
@@ -79,7 +98,7 @@ pub(super) fn queue_lines(
         if queue.is_some() {
             info.blank();
         }
-        info.note(NO_MERGES);
+        info.note(&no_merges(queue.map(|queue| queue.target.as_str())));
         return info.into_lines();
     }
     let mut lines = info.into_lines();
@@ -90,7 +109,22 @@ pub(super) fn queue_lines(
         lines.push(entry_head(entry, width, theme));
         lines.extend(entry_facts(entry, width, theme));
     }
+    if let Some(older) = queue.map(|queue| queue.older).filter(|&older| older > 0) {
+        lines.push(Line::default());
+        let mut info = Info::new(width, theme);
+        info.note(&older_merges(older));
+        lines.extend(info.into_lines());
+    }
     lines
+}
+
+/// The line under the merges shown while older ones are not: scrolling
+/// to it loads the next page.
+fn older_merges(older: u64) -> String {
+    match older {
+        1 => "1 older merge".to_string(),
+        n => format!("{n} older merges"),
+    }
 }
 
 /// An entry's first line: its state in its colour, its branch, then the
@@ -125,7 +159,8 @@ fn entry_head(entry: &MergeEntryView, width: usize, theme: &Theme) -> Line<'stat
 
 /// An entry's facts under its first line: who pushed it, when it was
 /// queued and finished, its attempts when it ran more than once, what the
-/// target moved to, and what happened.
+/// target moved to, the other work that changes the same files, and what
+/// happened.
 fn entry_facts(entry: &MergeEntryView, width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let mut info = Info::new(width, theme).wrap_values();
     if let Some(agent) = entry.agent.as_deref().filter(|agent| !agent.is_empty()) {
@@ -140,6 +175,10 @@ fn entry_facts(entry: &MergeEntryView, width: usize, theme: &Theme) -> Vec<Line<
     }
     if let Some(merged) = entry.merged.as_deref().filter(|sha| !sha.is_empty()) {
         info.fact("Merged", merged, Value::Quiet);
+    }
+    for (at, overlap) in entry.overlaps.iter().enumerate() {
+        let label = if at == 0 { "Overlaps" } else { "" };
+        info.fact(label, overlap, Value::Flag);
     }
     if let Some(detail) = entry.detail.as_deref().filter(|d| !d.trim().is_empty()) {
         let kind = if entry.state == MergeStateView::Failed {

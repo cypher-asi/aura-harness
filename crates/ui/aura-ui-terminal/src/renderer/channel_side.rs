@@ -82,6 +82,10 @@ const IDLE: &str = "Idle";
 /// What a member starting on its cloud machine is doing.
 const STARTING: &str = "Starting in the cloud…";
 
+/// What a member whose turn waits for the one already under way on its
+/// machine is doing.
+const WAITING: &str = "Waiting for its machine…";
+
 /// Before why a member's work failed.
 const FAILED: &str = "Failed";
 
@@ -193,7 +197,7 @@ fn member_icon(app: &App, (member, index): (&AgentSummary, usize), theme: &Theme
     if app.agent_thinking(member) || app.channel_member_hides_working(index) {
         working_icon(app, theme)
     } else if member.error.is_some() {
-        StatusIcon::new(FAILED_ICON, theme.colors.error)
+        StatusIcon::new(FAILED_ICON, crate::renderer::failure_color(theme))
     } else if let Some(folded) = app.channel_member_fold(index) {
         StatusIcon::new(if folded { "▸" } else { "▾" }, theme.colors.muted)
     } else if member.depth == 0 {
@@ -225,15 +229,22 @@ fn member_name(member: &AgentSummary) -> &str {
 }
 
 /// What a member's second row says, and in which color: why its work
-/// failed, in red; that it is starting on its cloud machine; else its
+/// failed, in red; that it is starting on its cloud machine, or that its
+/// turn waits for the one already under way there; else its
 /// title, else the subtask it was spawned for, else whether it is
 /// working, in gray.
 fn member_status(app: &App, member: &AgentSummary, theme: &Theme) -> (String, Color) {
     if let Some(why) = &member.error {
-        return (format!("{FAILED}: {why}"), theme.colors.error);
+        return (
+            format!("{FAILED}: {why}"),
+            crate::renderer::failure_color(theme),
+        );
     }
     if member.starting && !app.agent_thinking(member) {
         return (STARTING.to_string(), theme.colors.muted);
+    }
+    if member.waiting {
+        return (WAITING.to_string(), theme.colors.muted);
     }
     let said = member
         .title

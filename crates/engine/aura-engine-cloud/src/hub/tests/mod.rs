@@ -98,6 +98,7 @@ fn request_in(project: &Path) -> PlaceRequest {
         fork_from: None,
         owner: Owner::Local,
         owner_name: None,
+        clean: false,
     }
 }
 

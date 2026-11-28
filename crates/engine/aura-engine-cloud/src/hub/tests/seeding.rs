@@ -57,8 +57,11 @@ async fn a_new_machine_starts_from_commits_only_and_has_nothing_to_ship() {
         &request_in(&project),
         &view,
         &head,
-        "aura/scout-sc01",
-        None,
+        super::super::seed::Target {
+            branch: "aura/scout-sc01",
+            target: "main",
+            remote_url: None,
+        },
         &boot,
     )
     .await

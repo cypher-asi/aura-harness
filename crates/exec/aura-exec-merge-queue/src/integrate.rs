@@ -16,15 +16,17 @@
 //! - Nothing lands unless every check passed on exactly the commit that
 //!   lands. The checks are those of the target's own config file
 //!   ([`QueueConfig::with_checks`]), read per entry.
-//! - All work happens in the queue's worktree (under the repo's common
-//!   git dir) and in private `refs/aura-queue/*` refs; agents' workspaces
+//! - All work happens in the queue's worktree (in its work folder outside
+//!   `.git`, see [`RepoPaths`]) and in private `refs/aura-queue/*` refs; agents' workspaces
 //!   and the user's checkout are never touched, except that a local
 //!   target checked out clean is fast-forwarded like `git pull` would.
 //!
 //! ## Failure modes
 //!
-//! A conflict, a failed check, a missing branch or commit, or a git error
-//! fails the entry with its reason. A target that moved while the entry
+//! A conflict only in generated files (the changelog, lockfiles) is
+//! resolved mechanically and the merge goes on to the checks
+//! ([`crate::resolve`]). Any other conflict, a failed check, a missing
+//! branch or commit, or a git error fails the entry with its reason. A target that moved while the entry
 //! was checked is retried from the fetch, up to [`LAND_ATTEMPTS`] times.
 
 use crate::checks::run_check;
@@ -32,16 +34,19 @@ use crate::config::QueueConfig;
 use crate::entry::{short_sha, MergeEntry};
 use crate::error::QueueError;
 use crate::git;
+use crate::resolve::{self, conflict_reason, Settled};
 use crate::state::RunOutcome;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
+
+pub use crate::repo::RepoPaths;
+
+mod worktree;
 
 /// How many times an entry is tried again when the target moved under it.
 pub const LAND_ATTEMPTS: u32 = 3;
 const TARGET_REF: &str = "refs/aura-queue/target";
 const ENTRY_REF: &str = "refs/aura-queue/entry";
-/// Where a check's output goes, in the queue's directory.
-const CHECK_LOG: &str = "check.log";
 
 /// Lands entries. The queue's processor runs one at a time.
 #[async_trait]
@@ -70,41 +75,6 @@ impl From<QueueError> for Stop {
 }
 
 type Step<T> = Result<T, Stop>;
-
-/// The repo a queue lands entries in.
-#[derive(Debug, Clone)]
-pub struct RepoPaths {
-    /// Top of the repo's main worktree
-    pub top: PathBuf,
-    /// The repo's common git dir
-    pub common: PathBuf,
-}
-
-impl RepoPaths {
-    /// Where the queue keeps its file, lock and worktree.
-    #[must_use]
-    pub fn queue_dir(&self) -> PathBuf {
-        self.common.join("aura")
-    }
-
-    /// The queue's own worktree.
-    #[must_use]
-    pub fn worktree(&self) -> PathBuf {
-        self.queue_dir().join("merge-worktree")
-    }
-
-    /// The repo `dir` is in.
-    ///
-    /// # Errors
-    /// `dir` is not in a git repository.
-    pub async fn of(dir: &Path) -> Result<Self, QueueError> {
-        let timeout = crate::config::GIT_TIMEOUT;
-        Ok(Self {
-            top: git::main_top(dir, timeout).await?,
-            common: git::common_dir(dir, timeout).await?,
-        })
-    }
-}
 
 /// Lands entries with git, as [`QueueConfig`] says.
 pub struct GitIntegrator {
@@ -177,36 +147,6 @@ impl GitIntegrator {
         Ok(tip.stdout)
     }
 
-    /// Put the queue's worktree at `target`, clean, creating it if needed.
-    async fn prepare_worktree(&self, target: &str) -> Step<()> {
-        let worktree = self.repo.worktree();
-        let timeout = self.config.git_timeout;
-        if !worktree.join(".git").exists() {
-            let top = &self.repo.top;
-            git::run(top, &["worktree", "prune"], timeout).await?;
-            let path = worktree.display().to_string();
-            git::ok(
-                top,
-                &["worktree", "add", "--detach", &path, target],
-                timeout,
-            )
-            .await?;
-            return Ok(());
-        }
-        // A merge a crash left open; there is usually none.
-        git::run(&worktree, &["merge", "--abort"], timeout).await?;
-        git::ok(
-            &worktree,
-            &["checkout", "--detach", "--force", target],
-            timeout,
-        )
-        .await?;
-        git::ok(&worktree, &["reset", "--hard", target], timeout).await?;
-        // Ignored files (build caches) stay, so the next build is quick.
-        git::ok(&worktree, &["clean", "-fd"], timeout).await?;
-        Ok(())
-    }
-
     /// Merge the entry with `target` in the worktree. Returns the commit
     /// to land and how it got there; `None` when it adds nothing.
     async fn merge(&self, entry: &MergeEntry, target: &str) -> Step<Option<(String, String)>> {
@@ -254,23 +194,46 @@ impl GitIntegrator {
             timeout,
         )
         .await?;
+        let mut how = format!("merged with {}", short_sha(target));
         if !merged.ok {
-            let conflicts = git::run(
-                &worktree,
-                &["diff", "--name-only", "--diff-filter=U"],
-                timeout,
-            )
-            .await?;
-            git::run(&worktree, &["merge", "--abort"], timeout).await?;
-            return Err(Stop::Fail(conflict_reason(
-                &self.config.target,
-                target,
-                &conflicts.stdout,
-                &merged.stderr,
-            )));
+            let resolved = self.settle(&worktree, target, &merged.stderr).await?;
+            how.push_str(&format!("; resolved {} mechanically", resolved.join(", ")));
         }
         let landing = git::ok(&worktree, &["rev-parse", "HEAD"], timeout).await?;
-        Ok((landing, format!("merged with {}", short_sha(target))))
+        Ok((landing, how))
+    }
+
+    /// Settle the conflicted merge in `worktree` ([`resolve::settle`]):
+    /// the generated files it resolved, or the entry fails with the
+    /// conflicted files after the merge is aborted.
+    async fn settle(&self, worktree: &Path, target: &str, stderr: &str) -> Step<Vec<String>> {
+        let timeout = self.config.git_timeout;
+        let listed = git::run(
+            worktree,
+            &["diff", "--name-only", "--diff-filter=U"],
+            timeout,
+        )
+        .await?;
+        let conflicted: Vec<String> = listed
+            .stdout
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect();
+        let settled = resolve::settle(worktree, &conflicted, &self.config).await;
+        let (real, generated) = match settled {
+            Ok(Settled::Resolved(files)) => return Ok(files),
+            Ok(Settled::Conflict { real, generated }) => (real, generated),
+            Err(error) => (vec![error.to_string()], Vec::new()),
+        };
+        git::run(worktree, &["merge", "--abort"], timeout).await?;
+        Err(Stop::Fail(conflict_reason(
+            &self.config.target,
+            target,
+            &real,
+            &generated,
+            stderr,
+        )))
     }
 
     /// Run the checks the target's config file sets (else the inferred
@@ -278,7 +241,7 @@ impl GitIntegrator {
     async fn check(&self, target: &str) -> Step<String> {
         let worktree = self.repo.worktree();
         let config = self.checks_at(target, &worktree).await?;
-        let log = self.repo.queue_dir().join(CHECK_LOG);
+        let log = self.repo.check_log();
         let mut passed = Vec::new();
         for (name, command) in [("build", &config.build), ("test", &config.test)] {
             let Some(command) = command.as_deref() else {
@@ -459,24 +422,6 @@ fn checkout_of(listed: &str, branch: &str) -> Option<PathBuf> {
         }
     }
     None
-}
-
-/// Why merging with `target`, the tip of branch `name`, stopped, naming
-/// the conflicted files.
-fn conflict_reason(name: &str, target: &str, conflicts: &str, stderr: &str) -> String {
-    let files: Vec<&str> = conflicts.lines().filter(|line| !line.is_empty()).collect();
-    if files.is_empty() {
-        let said = stderr.lines().last().unwrap_or("merge failed");
-        return format!(
-            "merging with {name} at {} failed: {said}",
-            short_sha(target)
-        );
-    }
-    format!(
-        "conflicts with {name} at {} in {}; pull {name}, resolve them and push again",
-        short_sha(target),
-        files.join(", ")
-    )
 }
 
 #[cfg(test)]

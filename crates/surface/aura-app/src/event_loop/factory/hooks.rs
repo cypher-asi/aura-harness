@@ -23,8 +23,8 @@ use tracing::info;
 
 /// What an agent is told once it built its plan without shipping.
 pub(crate) const SHIP_PROMPT: &str = "Your plan is built. Ship it now: call git_ship with a \
-    short commit message. It commits every change, pulls main, pushes your branch and puts it in \
-    the merge queue. Then end your turn with your report.";
+    short commit message. It commits every change, pulls the merge queue's target branch, pushes \
+    your branch and puts it in the merge queue. Then end your turn with your report.";
 
 /// What a cloud agent is told instead when its machine's node offers no
 /// `git_ship` (one from before the merge queue, until the hub updates
