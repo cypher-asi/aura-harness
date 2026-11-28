@@ -33,6 +33,8 @@ pub(crate) enum HoverTarget {
     BenchRow(usize),
     /// A member row of an open channel's MEMBERS side tab.
     ChannelMemberRow(usize),
+    /// An item of a channel's HISTORY side tab
+    ChannelHistoryRow(usize),
     /// A row in the Archive.
     ArchivedRow(usize),
     /// A row in the sandbox tree.

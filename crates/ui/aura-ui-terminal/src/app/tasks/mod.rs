@@ -72,11 +72,12 @@
 //! and lists every plan and task in the channel's folder, whatever the
 //! side panel's scope.
 
+use crate::app::wheel_views::WheelList;
 use std::collections::HashMap;
 
 use super::processes::SIDE_PAGE;
 use super::side_scope::AgentFilter;
-use super::{follow_selection, App};
+use super::App;
 use crate::events::{PlanView, TaskView, TodoView};
 use chrono::NaiveDate;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -427,7 +428,16 @@ impl App {
     pub fn sync_tasks_scroll(&mut self, visible: usize) -> usize {
         let list = &self.task_list;
         let selected = list.selected;
-        let scroll = follow_selection(self.side.tasks_scroll, selected, visible, list.rows.len());
+        let scroll = self.panels.wheel.place(
+            WheelList::Tasks,
+            (self.side.tasks_scroll, selected),
+            (visible, list.rows.len()),
+        );
+        if self.panels.wheel.is_detached(WheelList::Tasks) {
+            // Left where the wheel put it.
+            self.side.tasks_scroll = scroll;
+            return scroll;
+        }
         let header_above = selected
             .checked_sub(1)
             .filter(|&above| matches!(list.rows.get(above), Some(TaskRow::Day { .. })));

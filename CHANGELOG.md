@@ -25,6 +25,53 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The highlight passes over the day headers, which take no clicks.
   Each day's No Plan folds on its own.
 
+### A plan says where it came from
+
+##### Added
+
+- The PLAN view shows a plan's facts under its title. These are when it
+  was created and last updated, which agent wrote it and who asked for
+  it, its channel, the machine it was written on, its status and
+  progress, its branch and PR, its project and its model.
+- `create_plan` records `created_at`, `updated_at`, `author`, `model` and
+  `machine` in the plan's frontmatter. A rewrite keeps the creation time,
+  the author and the machine. Plans from before still load, and they
+  show only the facts the app can work out.
+
+### A cloud channel's members start in the cloud or fail, in red
+
+##### Fixed
+
+- A new member of a channel whose agents run in the cloud now works
+  only on a cloud machine. Before, it could sit idle forever, owing its
+  report: its first work waited for a machine start with no deadline,
+  and a start that never finished left it waiting. A start that takes
+  longer than 20 minutes now fails. A start that fails, or can't begin
+  (no project folder to start from, no connection to the cloud), fails
+  the member too, instead of quietly running it on this computer. Its
+  queued work is dropped, and whoever assigned it the work gets
+  `ok=false` with the reason right away.
+- An agent whose turn failed, or whose cloud start failed, shows it in
+  red, the Stop button's color, on its PROJECTS row and its channel
+  MEMBERS row, until its next turn starts. Its chat says why.
+
+##### Added
+
+- A member whose cloud machine is starting reads "Starting in the
+  cloud…" on MEMBERS instead of "Idle".
+
+### An empty channel opens on a welcome
+
+##### Added
+
+- A channel with nothing in it yet shows its slug in large block
+  letters, then a welcome from its coordinator. The welcome says what
+  the channel is for, from its description or title, and how to get
+  started. The banner shrinks, breaks at hyphens, or falls back to the
+  bold `#slug` to fit a narrow or short panel. It is only drawn, never
+  posted, so it reaches no agent and costs no model call. The first
+  message takes its place.
+
 ### Subagents are titled by the work they do
 
 ##### Fixed

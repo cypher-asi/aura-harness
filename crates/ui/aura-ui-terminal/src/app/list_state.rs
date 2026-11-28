@@ -1,7 +1,5 @@
 //! A list of items with a highlighted row and a scroll position.
 
-use super::follow_selection;
-
 /// Items of a list, the highlighted one and the first row shown.
 #[derive(Debug, Clone)]
 pub(crate) struct ListState<T> {
@@ -38,11 +36,5 @@ impl<T> ListState<T> {
     /// The highlighted item, if the highlight is on one.
     pub(crate) fn selected_item(&self) -> Option<&T> {
         self.items.get(self.selected)
-    }
-
-    /// Scroll as little as needed to keep the highlighted item inside a
-    /// view `visible_rows` tall, one row per item.
-    pub(crate) fn follow_selection(&mut self, visible_rows: usize) {
-        self.scroll = follow_selection(self.scroll, self.selected, visible_rows, self.len());
     }
 }

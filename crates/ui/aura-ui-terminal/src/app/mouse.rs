@@ -8,6 +8,13 @@ use super::{
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Position;
 
+/// Rows a notch of the wheel scrolls a panel.
+const WHEEL_ROWS: usize = 3;
+
+/// [`WHEEL_ROWS`], signed, for the lists.
+#[allow(clippy::cast_possible_wrap)]
+const WHEEL_DELTA: isize = WHEEL_ROWS as isize;
+
 impl App {
     /// The wheel over the input box scrolls its text a row per notch
     /// while it has more rows than the box shows. Returns whether it did,
@@ -302,11 +309,7 @@ impl App {
     /// The wheel over `panel` scrolls the detail view, the flow view or
     /// the panel.
     fn wheel_panel(&mut self, panel: PanelFocus, mouse: MouseEvent) {
-        let step = if panel == PanelFocus::Swarm {
-            self.agents_panel_wheel_step()
-        } else {
-            3
-        };
+        let step = WHEEL_ROWS;
         let over_detail = panel == PanelFocus::Chat && self.detail.view.is_some();
         if matches!(
             mouse.kind,
@@ -322,8 +325,9 @@ impl App {
                 self.clear_selection();
                 self.scroll_flow(mouse.kind, mouse.modifiers, step);
             }
-            MouseEventKind::ScrollUp => self.scroll_panel_up(panel, step),
-            MouseEventKind::ScrollDown => self.scroll_panel_down(panel, step),
+            // Lists scroll their rows and keep their highlight.
+            MouseEventKind::ScrollUp => self.wheel_panel_rows(panel, -WHEEL_DELTA),
+            MouseEventKind::ScrollDown => self.wheel_panel_rows(panel, WHEEL_DELTA),
             _ => {}
         }
         self.hover = self.hover_target(mouse.column, mouse.row);

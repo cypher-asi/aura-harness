@@ -62,6 +62,23 @@ pub fn mail_subject_user_prompt(text: &str) -> String {
     format!("Message:\n{text}\n\nWrite its subject.")
 }
 
+/// System prompt for the one-line summary of a long message the user
+/// posted in a channel, shown in the channel's HISTORY list.
+pub const POST_SUMMARY_SYSTEM_PROMPT: &str = "\
+You summarize a message a user sent to a team of coding agents, for one row \
+of a narrow list of the user's past messages. Reply with only the summary: \
+one line of at most 10 words in sentence case saying what the user asked \
+for or said, such as \"Make the footer links open in new tabs\" or \"Plan \
+the parser rewrite, tests first\". Keep names of files, crates and agents. \
+No quotes, no trailing period, no prefix like \"Summary:\".";
+
+/// The user message for the post summary call: the post, already
+/// shortened by the caller.
+#[must_use]
+pub fn post_summary_user_prompt(text: &str) -> String {
+    format!("Message:\n{text}\n\nSummarize it in one line.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

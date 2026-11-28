@@ -17,8 +17,10 @@ use support::*;
 
 mod agent_codes;
 mod agent_commands;
+mod agent_failures;
 mod agents_header;
 mod bench_icon;
+mod channel_history;
 mod channel_info;
 mod channel_member_chat;
 mod channel_member_folds;
@@ -26,6 +28,7 @@ mod channel_members;
 mod channel_queue;
 mod channel_side_toggle;
 mod channel_tasks;
+mod channel_welcome;
 mod channels;
 mod chat_links;
 mod chat_messages;

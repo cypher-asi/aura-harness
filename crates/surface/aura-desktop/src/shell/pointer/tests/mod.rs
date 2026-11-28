@@ -11,6 +11,7 @@ use winit::keyboard::{ModifiersState, NamedKey};
 
 mod canvas;
 mod chat;
+mod lists;
 mod menus;
 mod support;
 mod window;

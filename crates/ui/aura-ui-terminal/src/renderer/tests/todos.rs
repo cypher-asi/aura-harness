@@ -133,7 +133,7 @@ fn test_todos_command_folds_the_drawer_and_brings_back_a_finished_list() {
     let rows = render_rows(&mut app, 160);
     let screen = rows.join("\n");
     assert!(todo_drawer_header(&rows).is_some(), "{screen}");
-    assert!(screen.contains("▾ Task history"), "{screen}");
+    assert!(screen.contains("▾ Finished to-dos"), "{screen}");
     assert!(screen.contains("✓ Read the parser  done"), "{screen}");
     assert!(
         screen.contains("⊘ Drop the old lexer  cancelled"),
@@ -282,7 +282,7 @@ fn test_each_assigned_todo_names_its_member_with_its_status() {
         "{screen}"
     );
     assert!(
-        row("Task history").contains("▸ Task history  1"),
+        row("Finished to-dos").contains("▸ Finished to-dos  1"),
         "{screen}"
     );
     assert!(!screen.contains("Read the parser"), "{screen}");

@@ -69,6 +69,7 @@ mod list;
 mod load;
 mod plan;
 mod prompt;
+pub(crate) mod summaries;
 mod update;
 
 pub(crate) use chat::{

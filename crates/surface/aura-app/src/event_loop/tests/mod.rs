@@ -30,6 +30,7 @@ mod channel_chat;
 mod channel_plan;
 mod channels_projects;
 mod channels_projects_zode;
+mod cloud_members;
 mod commands_and_cancel;
 mod compare_runs;
 mod delegation;

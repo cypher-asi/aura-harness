@@ -62,6 +62,17 @@ themes keep working:
 - **Ready (`●`)** and **working (`⬢`)**: `success`
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
+- **Failed agent**: an agent whose last turn failed, or a channel member
+  whose cloud machine could not start, is drawn in `error`, the red of
+  the input's `■ Stop`, until its next turn starts. On PROJECTS its
+  name is `error` and its icon column shows `!` in `error`. On a
+  channel's MEMBERS the `!` replaces the `@` and its second row reads
+  `Failed: <why>` in `error`, cut to fit, in place of its title. Its
+  chat shows the whole reason as an error. Any new way an agent fails
+  (a stall, say) uses the same red and the same `!`.
+- **Starting**: a channel member whose cloud machine is starting reads
+  `Starting in the cloud…` in `muted` on its MEMBERS row, so a member
+  still starting can't be mistaken for an idle one.
 - **Benchmarks** never use `warning`: a stopped or cancelled benchmark,
   a run that errored and the detail's notes read in the accent, and a
   failed check is an accent `▓` in the progress bar.
@@ -213,6 +224,18 @@ What the rows are depends on what the tab shows:
   a channel's MEMBERS) draw one `components::list_row` row per thing: its
   status glyph, its name and its details on the right. ↑↓ move the
   selection and ⏎ opens it.
+- **A channel's HISTORY** (its tabs: MEMBERS, INFO, QUEUE, TASKS,
+  HISTORY) lists every message the user posted in the channel, newest
+  first, under a `muted` bold `Your messages` heading with a `faint`
+  `· N`. Each takes two rows: the message on one line in `foreground`,
+  line breaks folded into spaces, then its local time in `muted` (`20:31`
+  today, `11-27 20:31` before). A message over 80 characters shows its
+  one-line model summary once it comes, until then the message cut at a
+  word with `…`. The highlight and the pointer light the item as a
+  `list_row` does. ⏎ or a click jumps the chat back to the message: it
+  scrolls so the message starts a row below the top and lights its rows
+  in `selection` on `on_selection` for 1.2 seconds; the focus stays on
+  the list. The wheel scrolls the list only, never the highlight.
 - **Info bodies** (POLICIES, HOST, a channel's INFO, the RECORD and
   PROCESS views, a project's info box) describe one thing as a document
   built with `components::Info`. The whole document scrolls with ↑↓,
@@ -286,7 +309,7 @@ under a fold arrow, then the timeline, newest first.
 ├──────────────────────────────────────────────┤
 │  ⬢ Working on 1 active · 1 done           —  │
 │ ◐ Fix the redirect     → FEN6 · working 4m   │
-│ ▸ Task history  1                            │
+│ ▸ Finished to-dos  1                            │
 ├──────────────────────────────────────────────┤
 │  →  Add a follow-up                          │
 └──────────────────────────────────────────────┘
@@ -315,6 +338,36 @@ under a fold arrow, then the timeline, newest first.
 │                                              │
 └──────────────────────────────────────────────┘
 ```
+- **Empty channel**: a channel's own chat with no post and no message
+  shows its slug as a banner, a blank row, then its coordinator's
+  welcome, flush with where the conversation starts:
+
+  ```text
+  │  ██████    ██    ████    ██████                │
+  │      ██  ██  ██  ██  ██  ██                    │
+  │    ██    ██  ██  ██  ██  ████                  │
+  │  ██      ██  ██  ██  ██  ██                    │
+  │  ██████    ██    ████    ██████                │
+  │                                                │
+  │  Welcome to #zode: Ship it.                    │
+  │                                                │
+  │  I'm COO2, the coordinator. Tell me what you   │
+  │  need and I'll hand it to an agent, then       │
+  │  report back here.                             │
+  │                                                │
+  │  Mention a member with @CODE to talk to it     │
+  │  directly.                                     │
+  ```
+
+  The banner is drawn in `primary` with the built-in 3×5 pixel font
+  (`renderer/channel_welcome/font.rs`, `a-z`, `0-9` and `-`), and takes
+  the biggest form that fits the width and the rows left after the
+  welcome. In order, those forms are large (`██` pixels, 5 rows), small
+  (half blocks `▀▄█`, 3 rows), small broken after the slug's hyphens
+  (at most 3 lines, a blank row apart), and the plain `#slug` in bold
+  `foreground`, cut with `…`. The welcome is `text` and its last line
+  `muted`. It is drawn, not posted: the first message replaces it, and
+  a member's own chat never shows it.
 - **User messages**: a `muted` `→ ` prompt, then `foreground` text
 - **Replies**: `text`, list markers `muted`, inline code `secondary` on
   `surface`
@@ -341,7 +394,7 @@ under a fold arrow, then the timeline, newest first.
   to: its code, whether it works, and how long the item has been in
   progress. The item's text is cut before the agent is; a narrow row
   keeps `→ CODE`. Done and cancelled items sit under a `muted`
-  `▸ Task history  N` row, folded by default; a click on it, `Alt+H` or
+  `▸ Finished to-dos  N` row, folded by default; a click on it, `Alt+H` or
   `/todos history` opens it (`▾`), listing each with its agent and
   `done` or `cancelled`. Up to ten rows show, starting at the item in
   progress so it stays in view and keeping the history row, with a
@@ -376,6 +429,10 @@ under a fold arrow, then the timeline, newest first.
 │                                                      │
 │  Plans that read like a document                     │
 │                                                      │
+│  created 14:32 · 2h ago  by RUS199 rust-engineer     │
+│  asked by COO2 in #aura                              │
+│  status building 2/5  machine aura-rus199-12b4       │
+│                                                      │
 │  Change the guidance the agent gets for writing...   │
 │                                                      │
 │  TODOS  2/5                                          │
@@ -398,6 +455,17 @@ under a fold arrow, then the timeline, newest first.
   set like a reply. The text uses the chat's own column, with the same
   side padding, width limit and centering, so it does not move sideways
   when a plan opens over the chat.
+- **Plan header**: under the title, after a blank row, come the plan's
+  facts as `label value` pairs. The label is `muted` and the value
+  `secondary`. An id is `muted` and a failed status is `error`. Pairs
+  sit two columns apart. Who and when start one group: created,
+  updated, by, asked by, assigned. Status, machine, branch, PR, project
+  and model start a second group on a row of its own. A pair that does
+  not fit moves to the next row whole, and one wider than the column
+  has its value cut with `…`. Times read `14:32 · 2h ago`, with the date
+  in front when it is not today. A fact with no source is left out, so
+  a plan from before these were recorded shows only its status. The
+  rows stay on the grid, like the `TODOS` label.
 - Flowing text is prose, so the desktop sets it in its proportional face
   with inline code in monospace; code blocks, tables and rules stay on
   the grid.
@@ -408,6 +476,10 @@ under a fold arrow, then the timeline, newest first.
 
 - **Selected item**: `selection` fill, `on_selection` text
 - **Hover state**: `surface_hover` fill
+- **The wheel** scrolls a list's rows and never moves its highlight, so it
+  never opens a channel or an agent; keys and clicks do. A list scrolled
+  past its highlight stays put until the highlight moves or a key is
+  pressed, then shows the highlight again.
 - **Clickable text** (records link, collapsed steps): `muted`
 - **Links** in the chat: `muted`, with the ` (url)` after a label, and
   not underlined at rest. The pointer over a link underlines every row of

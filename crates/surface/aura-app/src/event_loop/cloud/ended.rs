@@ -9,6 +9,11 @@ use crate::event_loop::{agents, channels, inbox};
 pub(in crate::event_loop) async fn handle_ended(state: &mut LoopState<'_>, ended: Ended) {
     let turn_ended = matches!(ended, Ended::Turn(..));
     let (agent, outcome) = state.cloud.free(ended);
+    // A new member whose machine didn't start fails: nothing it was sent
+    // runs here instead.
+    if !turn_ended && super::member_start::settle_start(state, agent).await {
+        return;
+    }
     let interrupted = turn_ended && state.hub.inbox.take_interrupted(agent);
     if let Some(outcome) = outcome {
         lock(&state.hub.cloud_turns).remove(&agent);
@@ -68,6 +73,12 @@ async fn settle(state: &LoopState<'_>, agent: AgentId, outcome: TurnOutcome, how
             info!(%agent, "The user stopped the cloud turn; its inbox answers wait for the next one");
         }
         (Some(why), messages) => {
+            if why != super::submit::STOPPED {
+                state
+                    .hub
+                    .status
+                    .fail(agent, &format!("Its turn failed: {why}"));
+            }
             channels::drop_unanswered_from(state, agent, messages);
             inbox::give_up_seen(&state.hub, agent, messages, &why);
         }

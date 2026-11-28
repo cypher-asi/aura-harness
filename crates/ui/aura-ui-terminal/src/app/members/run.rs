@@ -23,7 +23,7 @@ pub(crate) struct Members {
     /// Highlighted row
     pub(super) selected: usize,
     /// First row on screen
-    pub(super) scroll: usize,
+    pub(in crate::app) scroll: usize,
 }
 
 /// Hex id of the agent a process row of a `task` spawn or a background

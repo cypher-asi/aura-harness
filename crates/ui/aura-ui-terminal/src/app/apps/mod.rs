@@ -53,7 +53,7 @@ pub use bench::{
     BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
 pub(super) use channels::ChannelState;
-pub(crate) use channels::CHANNEL_MEMBER_ROWS;
+pub(crate) use channels::{ChannelWelcome, HistoryItem, CHANNEL_MEMBER_ROWS, HISTORY_ROWS};
 
 use super::{contains, tab_at, App, ChatTab, HoverTarget, LastSelection, ProjectPick};
 use crate::terminal::KeyResult;
@@ -182,15 +182,6 @@ impl App {
             }
             AgentsTab::Bench => self.move_bench_highlight(delta),
             AgentsTab::Archive => self.move_archived_by(delta),
-        }
-    }
-
-    /// Rows one wheel notch moves in the agents panel: one for the apps
-    /// whose wheel moves the highlight, three for scrolling PROJECTS.
-    pub(super) const fn agents_panel_wheel_step(&self) -> usize {
-        match self.agents_tab {
-            AgentsTab::Projects => 3,
-            _ => 1,
         }
     }
 
