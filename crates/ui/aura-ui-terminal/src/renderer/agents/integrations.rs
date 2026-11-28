@@ -19,6 +19,7 @@
 //! the warning colour.
 
 use crate::app::IntegrationButton;
+use crate::components::StatusDot;
 use crate::events::{IntegrationState, IntegrationView};
 use crate::renderer::text::display_width;
 use crate::{App, Theme};
@@ -33,14 +34,16 @@ use ratatui::{
 /// Columns before a row's second line, under its name.
 const INDENT: &str = "     ";
 
-/// The dot for `state` and its colour.
+/// The dot for `state` and its colour: the shared status dot, so an
+/// integration reads as a merge in QUEUE does.
 pub(crate) fn state_dot(state: IntegrationState, theme: &Theme) -> (&'static str, Color) {
-    match state {
-        IntegrationState::Connected => ("●", theme.colors.success),
-        IntegrationState::NotConnected => ("○", theme.colors.muted),
-        IntegrationState::Failed => ("●", theme.colors.error),
-        IntegrationState::Busy => ("●", theme.colors.warning),
-    }
+    let dot = match state {
+        IntegrationState::Connected => StatusDot::Ok,
+        IntegrationState::NotConnected => StatusDot::Off,
+        IntegrationState::Failed => StatusDot::Failed,
+        IntegrationState::Busy => StatusDot::Busy,
+    };
+    (dot.glyph(), dot.color(theme))
 }
 
 /// Draw the list into `body`, recording where rows and actions fell.

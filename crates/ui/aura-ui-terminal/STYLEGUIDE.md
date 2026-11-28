@@ -61,11 +61,12 @@ themes keep working:
 ### Status Indicators
 
 - **Ready (`●`)** and **working (`⬢`)**: `success`
-- **Status dot**: an entry's state as `●` alone in its color, the text
-  beside it uncolored: `success` done or up, `warning` under way,
-  `muted` waiting, `error` failed, `faint` off. Every dot comes from
-  `components::StatusDot` (a channel's QUEUE, the integrations), so a
-  state is the same color everywhere.
+- **Status dot**: an entry's state as one glyph in one color, the text
+  beside it uncolored. Filled `●` means it is there: `success` done or
+  connected, `warning` under way, `muted` waiting, `error` failed. Hollow
+  `○` in `muted` means not there or not set up. Every dot comes from
+  `components::StatusDot` (a channel's QUEUE, the Integrations panel),
+  so a state looks the same everywhere.
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
 - **Failed agent**: an agent that errored out is drawn in the Stop
@@ -236,7 +237,9 @@ INTEGRATIONS lists every integration (`docs/integrations.md`). Each is
 a dot, its icon and name, and its description under it, muted; a blank
 row goes between them. The dot is its state: `●` in `success`
 connected, `○` in `muted` not connected, `●` in `error` failed, `●` in
-`warning` while a Connect or Test runs. The selected one, its name bold,
+`warning` while a Connect or Test runs: the shared
+`components::StatusDot` (`Ok`, `Off`, `Failed`, `Busy`), as a channel's
+QUEUE marks its merges. The selected one, its name bold,
 also shows its status (in `success` connected, `error` failed, else
 `muted`), its last action's result, what it provides, and its actions
 in the primary colour, flowing onto more rows in a narrow column:

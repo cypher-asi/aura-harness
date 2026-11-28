@@ -156,7 +156,7 @@ impl<'t> Info<'t> {
         if !self.lines.is_empty() {
             self.blank();
         }
-        let lead = StatusDot::GLYPH.width() + 1;
+        let lead = dot.glyph().width() + 1;
         let title = truncate_line(title, self.width.saturating_sub(lead));
         let room = self.width.saturating_sub(lead + title.width() + 2);
         let mut spans = vec![
