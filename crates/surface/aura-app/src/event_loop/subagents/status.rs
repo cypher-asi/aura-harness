@@ -30,6 +30,9 @@ pub(crate) struct AgentStatus {
     reconnecting: Mutex<HashSet<AgentId>>,
     /// The steps of each start under way, and the one it is at
     steps: Mutex<HashMap<AgentId, StartSteps>>,
+    /// Members whose last start failed for good, why, and when a start
+    /// last tried ([`Self::blocked_start`])
+    blocked: Mutex<HashMap<AgentId, (String, u64)>>,
 }
 
 /// A start's plan, by stage key and label, and the step it is at.
@@ -110,6 +113,35 @@ impl AgentStatus {
             since_ms: now_ms,
         });
         true
+    }
+
+    /// Note that `agent`'s start, tried at `now_ms`, failed `why` for a
+    /// reason a new try won't fix by itself.
+    pub(crate) fn block_start(&self, agent: AgentId, why: &str, now_ms: u64) {
+        lock(&self.blocked).insert(agent, (why.to_string(), now_ms));
+    }
+
+    /// `agent` may start again: it started, or the user retries it.
+    pub(crate) fn unblock_start(&self, agent: AgentId) {
+        lock(&self.blocked).remove(&agent);
+    }
+
+    /// Why `agent` must not start at `now_ms`, if its last start failed
+    /// for good less than `after_ms` ago. Past that, one try is let
+    /// through and the clock starts again.
+    pub(crate) fn blocked_start(
+        &self,
+        agent: AgentId,
+        now_ms: u64,
+        after_ms: u64,
+    ) -> Option<String> {
+        let mut blocked = lock(&self.blocked);
+        let (why, tried) = blocked.get_mut(&agent)?;
+        if now_ms.saturating_sub(*tried) >= after_ms {
+            *tried = now_ms;
+            return None;
+        }
+        Some(why.clone())
     }
 
     /// The step `agent`'s start is at, while it starts.

@@ -89,7 +89,12 @@ async fn is_withdrawn(state: &LoopState<'_>, agent: AgentId, work: &Work) -> boo
 async fn start_before(state: &mut LoopState<'_>, agent: AgentId, work: Work) {
     lock(&state.hub.cloud_starts).remove(&agent);
     info!(%agent, "A cloud channel's member has no machine here; starting one before its work");
-    if super::start_in_cloud(state, agent).await {
+    // A message the user typed is a retry, whatever failed before.
+    let cause = match &work {
+        Work::Prompt { prompt, .. } if prompt.mentions => super::StartCause::User,
+        _ => super::StartCause::Work,
+    };
+    if super::start_in_cloud(state, agent, cause).await {
         state.queued.push_back(agent, work);
         crate::event_loop::hud::send_queued(state, agent).await;
     }

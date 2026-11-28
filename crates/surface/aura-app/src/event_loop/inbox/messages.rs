@@ -232,7 +232,12 @@ pub(in crate::event_loop) async fn deliver(
     // A member that can't have its machine fails, and its senders are
     // told: the message must not run here instead.
     if lock(&state.hub.cloud_starts).remove(&to)
-        && !crate::event_loop::cloud::start_in_cloud(state, to).await
+        && !crate::event_loop::cloud::start_in_cloud(
+            state,
+            to,
+            crate::event_loop::cloud::StartCause::Work,
+        )
+        .await
     {
         return;
     }
