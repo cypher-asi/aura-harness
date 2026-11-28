@@ -156,6 +156,35 @@ hub.
 - Running past the limit is `IntegrationError::Timeout`. A status that
   runs past it shows as `Misconfigured` instead of hanging the panel.
 
+## GitHub and boxd
+
+The first two integrations live in `src/builtin/` and are listed by
+`builtin(BuiltinOptions { github_app })`. Neither changes how its service
+works today: each only describes what aura already uses, checks it, and
+adds a sealed place for a token or key entered in the panel.
+
+| | GitHub (`github`) | boxd (`boxd`) |
+|---|---|---|
+| Sign-in | `CliLogin { gh auth login }`, or a token (`GH_TOKEN`, `GITHUB_TOKEN`, or stored) | `ApiKey` (`BOXD_TOKEN`, `BOXD_API_KEY`, which `.env` sets at startup, or stored) |
+| Status (local) | A token (stored, then env), else `gh auth token` succeeding, run with a time limit and its output dropped. It adds "GitHub App set for cloud pushes" when `AURA_GITHUB_APP_*` is set | A key from the store or the environment |
+| Test | `GET <api_url>/user`, else `gh api user` | An API key (`bxd_…`) is exchanged at `<console_url>/api/v1/auth/token`, as cloud mode does; a `BOXD_TOKEN` is used as is |
+| Config | `api_url` (default `https://api.github.com`) | `console_url` (default `https://app.boxd.sh`) |
+| Tools | none yet | none |
+| Cloud | `Never`: the GitHub App's installation tokens still reach machines through `aura-engine-cloud` (host-bound secrets) | `Never`: boxd's key stays on the hub |
+
+### In the app
+
+`aura-app/src/integrations/` owns the process's `Registry`:
+- It opens right after the local store, whose key it seals with. When the
+  key can't be read, credentials are kept in memory for the session, with
+  a WARN; they are never written in plain text.
+- Kernels are built synchronously, so the service keeps a snapshot of
+  which integrations are connected (`refresh`, at startup and after every
+  change). Each agent's executor gets the tools that snapshot and the
+  agent's `Access` allow. Each call checks both again.
+- The REPO tab reads GitHub's stored token after `GH_TOKEN` and
+  `GITHUB_TOKEN`.
+
 ## How to add an integration
 
 1. **Write the manifest and the trait.** In a module of your own, either
@@ -293,5 +322,15 @@ These are not done yet:
   connectors** should be listed through the same registry.
 - **The mode gate should learn integration tools**, so `Read` tools run
   in plan and ask mode.
+- **Integration tools in the model's tool list.** The list is built once
+  at startup (`harness::agent_tools`), and executors get the tools from
+  the connected snapshot. Listing them per turn, so that one connected
+  mid-session reaches the model at once, is still to do.
+- **Channel access in the app.** Kernels pass no channel id yet, so
+  `Access::Only { channels }` only applies where a caller passes one.
+- **boxd's sealed key in cloud mode.** Cloud mode still reads its key from
+  the environment and `.env`. A key stored in the panel shows as
+  connected and passes Test, but cloud mode starts with it only once
+  `aura cloud setup` and `CloudConfig` read the sealed store.
 - **OAuth sign-in flows** (`AuthKind::OAuth` is declared only), and
   **GitHub agent tools** (pull requests, issues).

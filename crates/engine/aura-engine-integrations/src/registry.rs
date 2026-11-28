@@ -379,6 +379,29 @@ impl Registry {
         tools
     }
 
+    /// [`Self::tools_for`] without calls, for code that can't wait:
+    /// the tools of the integrations `connected` says are connected (a
+    /// snapshot of [`Self::status`]) that `agent` may use. Each call
+    /// still checks connection and access again.
+    pub fn tools_where(
+        self: &Arc<Self>,
+        (agent, channel): (&str, Option<&str>),
+        connected: impl Fn(&IntegrationId) -> bool,
+    ) -> Vec<IntegrationTool> {
+        self.integrations
+            .iter()
+            .map(|integration| integration.manifest())
+            .filter(|manifest| {
+                connected(&manifest.id) && self.access(&manifest.id).allows(agent, channel)
+            })
+            .flat_map(|manifest| {
+                manifest.tools.iter().map(move |spec| {
+                    IntegrationTool::new(Arc::clone(self), manifest, spec, (agent, channel))
+                })
+            })
+            .collect()
+    }
+
     /// Run `id`'s tool `tool` for `agent` in `channel`: checked against
     /// its access and connection again, within the tool's time limit.
     ///
