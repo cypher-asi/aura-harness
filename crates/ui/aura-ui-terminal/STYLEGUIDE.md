@@ -80,6 +80,10 @@ themes keep working:
 - **Starting**: a channel member whose cloud machine is starting reads
   `Starting in the cloud…` in `muted` on its MEMBERS row, so a member
   still starting can't be mistaken for an idle one.
+- **Cloud**: an agent that runs in the cloud has `☁` after its name in
+  `muted` on every row it is on (PROJECTS, a channel's MEMBERS, its
+  subagents), dimmer with the owner's name for another user's, whatever
+  it is doing. Plan mode's `(P)` comes first and the cloud after it.
 - **Benchmarks** never use `warning`: a stopped or cancelled benchmark,
   a run that errored and the detail's notes read in the accent, and a
   failed check is an accent `▓` in the progress bar.

@@ -35,6 +35,7 @@ mod channels;
 mod chat_links;
 mod chat_messages;
 mod chat_view;
+mod cloud_badges;
 mod copy_buttons;
 mod drag_scroll;
 mod input_box;
