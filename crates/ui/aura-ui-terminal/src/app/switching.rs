@@ -170,7 +170,9 @@ impl App {
                 self.open_ancestors(index);
             }
         }
-        self.project_list.scroll_detached = false;
+        self.panels
+            .wheel
+            .release(crate::app::wheel_views::WheelList::Projects);
         self.select_visible_active();
         self.follow_active_agent(switched);
     }
