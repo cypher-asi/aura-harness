@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Channel post summaries are kept sealed
+
+##### Security
+
+- The one-line summaries a channel's HISTORY tab shows for the user's
+  long messages are now kept in the channel store, sealed like the posts
+  they summarize (`h/{blake3 of the text}` rows), instead of in the
+  plaintext `channel-post-summaries.json` in the data directory. An
+  existing file is moved into the store on first use and then deleted;
+  if the move fails it is left for the next run. Without a channel store
+  summaries are kept in memory only. The 2,000-entry cap is gone: rows
+  are small and a message is still summarized once.
+
 ### HISTORY lists the messages you typed to the coordinator
 
 ##### Fixed

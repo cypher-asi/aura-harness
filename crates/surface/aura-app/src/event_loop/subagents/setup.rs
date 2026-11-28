@@ -49,6 +49,7 @@ impl AgentHub {
         notice_rx: mpsc::UnboundedReceiver<Notice>,
     ) -> Self {
         let post_summaries = Arc::new(crate::event_loop::channels::summaries::PostSummaries::new(
+            parts.channels.clone(),
             Some(parts.registry.data_dir()),
         ));
         Self {
