@@ -40,6 +40,7 @@ impl CloudHub {
                     let script = workspace::fork_branch(branch)?;
                     self.run_script(view, BootStage::SyncFiles, "branch the fork", &script, boot)
                         .await
+                        .map(|stdout| report_pull(&stdout, boot))
                 })
                 .await?;
             }
@@ -92,14 +93,17 @@ impl CloudHub {
             bundle: has_bundle,
             delta: has_delta,
         })?;
-        self.run_script(
-            view,
-            BootStage::SyncFiles,
-            "start the agent's branch",
-            &script,
-            boot,
-        )
-        .await
+        let stdout = self
+            .run_script(
+                view,
+                BootStage::SyncFiles,
+                "start the agent's branch and pull the latest main",
+                &script,
+                boot,
+            )
+            .await?;
+        report_pull(&stdout, boot);
+        Ok(())
     }
 
     /// Upload the bundle of commits made since the snapshot, if any.
@@ -185,6 +189,7 @@ impl CloudHub {
     }
 
     /// Run `script` on the machine, streaming its output to `stage`.
+    /// Returns its standard output.
     async fn run_script(
         &self,
         view: &MachineView,
@@ -192,7 +197,7 @@ impl CloudHub {
         what: &str,
         script: &str,
         boot: &BootReporter,
-    ) -> CloudResult<()> {
+    ) -> CloudResult<String> {
         let provider = self.fleet.provider();
         let machine = &view.machine.name;
         boot.log(stage, false, format!("$ {what}"));
@@ -213,7 +218,7 @@ impl CloudHub {
             .await?;
         lines.finish();
         if out.success() {
-            Ok(())
+            Ok(String::from_utf8_lossy(&out.stdout).into_owned())
         } else {
             Err(CloudError::ExecFailed {
                 machine: machine.clone(),
@@ -294,6 +299,13 @@ impl CloudHub {
         self.store
             .scan_record(agent, from, super::node_client::PAGE)
             .map_err(|e| CloudError::io("read record", std::io::Error::other(e.to_string())))
+    }
+}
+
+/// Show what the machine's pull from GitHub did, when it ran.
+fn report_pull(stdout: &str, boot: &BootReporter) {
+    if let Some(pulled) = workspace::parse_pulled(stdout) {
+        boot.fact("github", pulled.to_string());
     }
 }
 

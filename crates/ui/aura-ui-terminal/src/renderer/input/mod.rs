@@ -18,11 +18,16 @@
 //! ```text
 //! │  →  Add a follow-up          ■ Stop  │
 //! ```
+//!
+//! In the terminal the prompt has no box: it follows the output in the
+//! Chat body, as a terminal's does (see `chat_panel::terminal`).
 
+mod inline;
 mod spans;
 #[cfg(test)]
 mod wrap_tests;
 
+pub(super) use inline::show_input;
 pub(super) use spans::{chat_spans, prompt_spans, prose_spans};
 
 use super::text::display_width;
@@ -280,15 +285,29 @@ pub(super) struct InputDrawn {
     pub(super) rows: Option<InputRows>,
 }
 
+/// Narrowest input, its borders, padding and two columns of text.
+pub(super) const MIN_WIDTH: u16 = 2 * (1 + PAD) + 2;
+
 /// Render the input box into `area`, whose height is the rows of text
 /// it gets (see [`input_rows`]) and the bottom border's. The row above
 /// `area` is the Chat body's bottom border, already drawn.
 pub(super) fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) -> InputDrawn {
-    if area.height < BOX_ROWS + 1 || area.width < 2 * (1 + PAD) + 2 {
+    if area.height < BOX_ROWS + 1 || area.width < MIN_WIDTH {
         return InputDrawn::default();
     }
     let inner = render_box(frame, area, app, theme);
+    render_text(frame, area, inner, app, theme)
+}
 
+/// The prompt, the typed text, the placeholder, the stop button and the
+/// cursor, in `inner`, the cells of `area` inside its sides.
+pub(super) fn render_text(
+    frame: &mut Frame,
+    area: Rect,
+    inner: Rect,
+    app: &App,
+    theme: &Theme,
+) -> InputDrawn {
     let plan = plan(area, app, theme);
     let wrap_width = plan.width;
     let right = inner.x + inner.width;

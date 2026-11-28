@@ -274,25 +274,6 @@ fn divider_row(rows: &[String]) -> usize {
         .unwrap()
 }
 
-/// Draw `app` and return the screen rows and where the cursor is.
-fn render_with_cursor(app: &mut crate::App, width: u16) -> (Vec<String>, (u16, u16)) {
-    let mut terminal =
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
-    terminal
-        .draw(|frame| super::super::render(frame, app, &test_theme()))
-        .unwrap();
-    let cursor = terminal.get_cursor_position().unwrap();
-    let buffer = terminal.backend().buffer();
-    let rows = (0..buffer.area.height)
-        .map(|y| {
-            (0..buffer.area.width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect()
-        })
-        .collect();
-    (rows, (cursor.x, cursor.y))
-}
-
 /// A draft of `n` rows, "row 1" to "row n", one per line.
 fn numbered_rows(n: usize) -> String {
     (1..=n)
@@ -396,18 +377,19 @@ fn test_terminal_types_at_the_input_line_after_the_shell_prompt() {
     type_text(&mut app, "$ls");
     let (rows, (x, y)) = render_with_cursor(&mut app, 120);
 
-    let (_, chat_left, _) = chat_panel(&rows);
-    let input_y = rows.len() - INPUT_FROM_BOTTOM;
-    let typed: String = rows[input_y].chars().skip(chat_left + 3).collect();
+    let (tabs, chat_left, _) = chat_panel(&rows);
     let prompt = "[n3o@arch-aura aura-harness]$ ";
+    // An empty terminal's prompt is its body's first row.
+    let input_y = tabs + 4;
+    let typed: String = rows[input_y].chars().skip(chat_left + 3).collect();
     assert!(typed.starts_with(&format!("{prompt}ls")), "{typed:?}");
     assert_eq!(
         (usize::from(x), usize::from(y)),
         (chat_left + 3 + prompt.len() + 2, input_y)
     );
-    let pane = rows[..input_y].join("\n");
-    assert!(!pane.contains("]$ "), "{pane}");
-    assert!(!pane.contains("Esc returns to chat"), "no keys: {pane}");
+    let screen = rows.join("\n");
+    assert_eq!(screen.matches("]$ ").count(), 1, "{screen}");
+    assert!(!screen.contains("Esc returns to chat"), "no keys: {screen}");
 
     app.handle_key(KeyEvent::from(KeyCode::Backspace));
     app.handle_key(KeyEvent::from(KeyCode::Backspace));
@@ -424,7 +406,7 @@ fn test_terminal_input_is_highlighted_as_a_command() {
     let mut app = app_with_model(None);
     type_text(&mut app, "$ls -la");
     let buffer = render_buffer(&mut app, 120);
-    let y = buffer.area.height - 3;
+    let y = row_of(&buffer, "]$ ls -la");
 
     let (_, program) = find_cell(&buffer, y, "ls -la").unwrap();
     assert_eq!(program.fg, Some(theme.colors.success));

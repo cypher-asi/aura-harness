@@ -93,6 +93,10 @@ const RETIRED_SEEDS: &[(&str, &str)] = &[
         COORDINATOR_DEFINITION,
         "a861b09a8d8705ef2a184ee24f6f16b9ba4880a8302f7d4f61d34fc50c4eae31",
     ),
+    (
+        COORDINATOR_DEFINITION,
+        "71a0b1bf1bd11c0d72143a0b38b72db8bad7dd0b4096087bc5e0576dc2c820ce",
+    ),
 ];
 
 #[derive(Debug, Deserialize)]

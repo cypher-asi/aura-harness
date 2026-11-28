@@ -79,6 +79,7 @@ impl App {
         self.messages.clear();
         self.scroll_offset = 0;
         self.chat.streaming_content.clear();
+        self.chat.early_policies.clear();
         let jobs = std::mem::take(&mut self.hud.jobs);
         let instructions = self.hud.instructions.take();
         self.hud = hud::Hud {

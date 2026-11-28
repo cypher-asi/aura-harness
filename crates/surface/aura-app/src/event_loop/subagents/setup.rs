@@ -82,9 +82,11 @@ impl AgentHub {
             hidden_members: Mutex::new(channel_sets.hidden),
             cloud_starts: Mutex::default(),
             cloud_turns: Mutex::default(),
+            machine_working: Mutex::default(),
             channels: parts.channels,
             channel_chat: crate::event_loop::channels::ChannelChat::default(),
             inbox: crate::event_loop::inbox::Inbox::default(),
+            factory_flows: crate::event_loop::factory::Flows::default(),
             shown_chats: Mutex::default(),
             shown_records: Mutex::default(),
         }
@@ -231,6 +233,10 @@ impl AgentHub {
         let instructions = self.instructions.for_workspace(workspace);
         let (mut config, tools) = self.definition_turn(definition, &instructions.text, top_level);
         self.long_run.apply(&mut config);
+        if crate::event_loop::channels::is_coordinator(definition) {
+            // Its todos are its members' work, which it can't carry on with.
+            config.continue_open_todos = false;
+        }
         (config, tools)
     }
 

@@ -27,6 +27,7 @@ mod pointer;
 mod present;
 mod refresh;
 mod screen;
+mod selection;
 mod signals;
 #[cfg(test)]
 mod snapshot;
@@ -49,6 +50,7 @@ use aura_ui_terminal::ProseRow;
 use pointer::Pointer;
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Rect};
+use selection::SelectionFile;
 use stats::Stats;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -82,6 +84,8 @@ pub struct Options {
     pub verbose: bool,
     /// Where the split of projects over tabs is kept between runs.
     pub tabs_file: Option<PathBuf>,
+    /// Where what the tabs had selected is kept between runs.
+    pub selection_file: Option<PathBuf>,
 }
 
 /// What the shell asks of the window it is in.
@@ -115,6 +119,7 @@ pub struct Shell {
     tabs_file: Option<PathBuf>,
     /// The split of projects over tabs as last written to `tabs_file`.
     saved: Arrangement,
+    selection: SelectionFile,
     tui_theme: aura_ui_terminal::Theme,
     palette: Palette,
     /// The font size chosen, before the display's scale
@@ -172,10 +177,13 @@ impl Shell {
             .map(router::load_arrangement)
             .unwrap_or_default();
         let font_size = theme::initial_font_size();
+        let mut tabs = Tabs::new(events, settings, saved.clone());
+        let selection = SelectionFile::open(options.selection_file.clone(), &mut tabs);
         Self {
-            tabs: Tabs::new(events, settings, saved.clone()),
+            tabs,
             tabs_file: options.tabs_file.clone(),
             saved,
+            selection,
             palette: Palette::from_theme(&tui_theme),
             tui_theme,
             font_size,

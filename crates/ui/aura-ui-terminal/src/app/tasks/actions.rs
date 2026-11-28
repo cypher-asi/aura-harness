@@ -1,10 +1,27 @@
-//! What the TASKS tab's rows open, and clicks on them.
+//! What the TASKS tab's rows open, and clicks and keys on them.
 
 use super::TaskRow;
 use crate::app::processes::on_row_icon;
 use crate::app::{contains, App, NotificationType, SideScope};
+use crossterm::event::{KeyCode, KeyEvent};
 
 impl App {
+    /// Keys of the TASKS tree that would otherwise go to the input, used
+    /// while it is empty: Home/End jump, Space folds, `p` opens the row's
+    /// plan and `t` highlights the task doing its todo. Returns whether
+    /// `key` was one.
+    pub(in crate::app) fn handle_tasks_shortcut(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Home => self.task_list.select(0),
+            KeyCode::End => self.task_list.select(usize::MAX),
+            KeyCode::Char(' ') => self.task_list.toggle_selected(),
+            KeyCode::Char('p') => self.open_selected_row_plan(),
+            KeyCode::Char('t') => self.jump_to_todo_task(),
+            _ => return false,
+        }
+        true
+    }
+
     /// Open the highlighted row: a plan's file, at the todo for a todo;
     /// the agent of a task, of the request an item is on, or of a round's
     /// first request. The No Plan header has nothing to open, so it folds.
@@ -19,7 +36,9 @@ impl App {
         }
     }
 
-    /// Show the agent doing the highlighted task in the chat.
+    /// Show the agent doing the highlighted task in the chat. A member of
+    /// the open channel opens as its MEMBERS row does, as a member's chat
+    /// in the channel; any other agent takes the agent app to it.
     pub(in crate::app) fn open_selected_task_agent(&mut self) {
         let Some(task) = self.task_list.selected_task() else {
             return;
@@ -35,7 +54,13 @@ impl App {
             return;
         }
         let target = task.agent_id.clone();
-        self.request_agent_switch(target);
+        let member = self
+            .open_channel()
+            .and_then(|channel| channel.members.iter().position(|m| m.id == target));
+        match member {
+            Some(index) => self.open_channel_member(index),
+            None => self.request_agent_switch(target),
+        }
     }
 
     /// Open the plan of the highlighted row: the plan itself on a header

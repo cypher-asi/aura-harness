@@ -243,7 +243,7 @@ fn tool_arg_summary(name: &str, input: &serde_json::Value) -> Option<String> {
             str_field("path")
         }
         "search_code" | "find_files" => str_field("pattern"),
-        "git_commit" | "git_commit_push" => str_field("message"),
+        "git_commit" | "git_commit_push" | "git_ship" => str_field("message"),
         "git_push" => str_field("branch"),
         "run_command" => run_command_summary(input),
         _ => None,

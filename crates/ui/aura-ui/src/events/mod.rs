@@ -38,6 +38,7 @@ pub use views::hud::{
     TodoView,
 };
 pub use views::mail::MailView;
+pub use views::merge_queue::{MergeEntryView, MergeQueueView, MergeStateView};
 pub use views::messages::{
     ActivityData, FileDiffData, ImageAttachment, MessageData, MessageRole, ModelOptionView,
     ToolData,

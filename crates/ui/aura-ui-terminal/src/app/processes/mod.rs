@@ -178,6 +178,7 @@ impl App {
                     SidePanelTab::Tasks => self.task_list.select(index),
                     SidePanelTab::ChannelMembers => self.select_channel_member(index),
                     SidePanelTab::ChannelInfo => self.handle_channel_info_key(key),
+                    SidePanelTab::ChannelQueue => self.handle_channel_queue_key(key),
                 }
             }
             (SidePanelTab::Sandbox, KeyCode::Char(' ')) => self.sandbox.toggle_selected(),
@@ -186,9 +187,7 @@ impl App {
             (SidePanelTab::Repo, KeyCode::Char(']')) => self.step_repo_filter(true),
             (SidePanelTab::Repo, KeyCode::Char('o')) => self.open_selected_repo_page(),
             (SidePanelTab::Repo, KeyCode::Char('r')) => self.request_repo(true),
-            (SidePanelTab::Tasks, KeyCode::Char(' ')) => self.task_list.toggle_selected(),
-            (SidePanelTab::Tasks, KeyCode::Char('p')) => self.open_selected_row_plan(),
-            (SidePanelTab::Tasks, KeyCode::Char('t')) => self.jump_to_todo_task(),
+            (SidePanelTab::Tasks, _) => return self.handle_tasks_shortcut(key),
             (SidePanelTab::Processes, KeyCode::Char('o')) => self.jump_to_selected_owner(),
             (SidePanelTab::Processes, KeyCode::Char('k') | KeyCode::Delete) => {
                 self.request_kill_selected();
@@ -332,7 +331,7 @@ impl App {
             }
             SidePanelTab::Tasks => self.click_task_row(column, row),
             SidePanelTab::ChannelMembers => self.click_channel_member(column, row),
-            SidePanelTab::ChannelInfo => {}
+            SidePanelTab::ChannelInfo | SidePanelTab::ChannelQueue => {}
         }
     }
 
@@ -400,7 +399,7 @@ impl App {
             SidePanelTab::ChannelMembers => self
                 .channel_member_row_at(column, row)
                 .map(HoverTarget::ChannelMemberRow),
-            SidePanelTab::ChannelInfo => None,
+            SidePanelTab::ChannelInfo | SidePanelTab::ChannelQueue => None,
         }
     }
 }

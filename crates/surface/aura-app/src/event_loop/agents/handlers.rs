@@ -207,6 +207,11 @@ pub(crate) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &
         show_error(state, refusal).await;
         return;
     }
+    // Archiving gives up on what they owe, even on a turn the user
+    // already stopped.
+    for &id in &subtree {
+        state.hub.inbox.take_interrupted(id);
+    }
     let stopped = stop_busy(state, &subtree).await;
     super::super::cloud::on_archive(state, &subtree);
     let archived = lock(&state.hub.registry).archive(agent_id);

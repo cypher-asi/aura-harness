@@ -105,6 +105,13 @@ async fn plan_work(
     agent_id: AgentId,
     work: Work,
 ) -> Option<Work> {
+    // A new task of a channel member plans first, rather than building
+    // or carrying on an old plan.
+    if matches!(work, Work::Prompt { .. })
+        && super::factory::hooks::plan_first(state, session).await
+    {
+        return Some(work);
+    }
     match work {
         Work::Prompt { prompt, shown }
             if plan_mode::asks_to_build(
@@ -136,6 +143,7 @@ async fn turn_task(
 ) -> Option<Launch> {
     let agent_id = session.agent_id();
     info!(%agent_id, text = %prompt.text, "Processing user message");
+    state.hub.factory_flows.note_prompt(agent_id, &prompt.text);
     // A local model with no server used to sit there until the
     // 10-minute request timeout; the probe answers in well under a
     // second.
@@ -240,7 +248,10 @@ async fn build_work(
     path: Option<String>,
     shown: bool,
 ) -> Option<Work> {
-    let text = plan_mode::start_build(state, session, path).await?;
+    let Some(text) = plan_mode::start_build(state, session, path).await else {
+        super::factory::hooks::build_gave_up(state, session);
+        return None;
+    };
     Some(Work::Prompt {
         prompt: Prompt::build(text),
         shown,

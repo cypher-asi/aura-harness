@@ -296,7 +296,23 @@ under a fold arrow, then the timeline, newest first.
 - **Room below**: once the conversation reaches the bottom, a quarter of
   the chat's rows stay blank under its last line, so new text scrolls up
   with space below it instead of running into the border. The terminal
-  pane's output runs to the bottom row.
+  pane's output runs down to its prompt.
+- **Terminal**: the TERMINAL tab is a terminal in the Chat body, with no
+  input box under the panel. Each command shows as the shell
+  prompt and the command, its output under it, then the prompt where the
+  next command is typed, highlighted as a command, on the row after the
+  last line, lined up with the output. Once the output fills the body it
+  scrolls up and the prompt keeps the body's last rows. While a command
+  runs, `■ Stop` sits at the prompt row's right end. A view over the chat
+  brings the input box back for as long as it covers the terminal.
+
+```text
+│  [u@h aura]$ echo hi                         │
+│  hi                                          │
+│  [u@h aura]$ ls█                             │
+│                                              │
+└──────────────────────────────────────────────┘
+```
 - **User messages**: a `muted` `→ ` prompt, then `foreground` text
 - **Replies**: `text`, list markers `muted`, inline code `secondary` on
   `surface`
@@ -325,7 +341,8 @@ under a fold arrow, then the timeline, newest first.
 - **Input box**: as wide as the Chat panel, bordered like it, with a
   `muted` `→ ` prompt and a `muted` placeholder (`Ask anything`, then
   `Add a follow-up`) set one column past the cursor so the cursor never
-  covers its first letter. Shell and login prompts replace the arrow.
+  covers its first letter. Login prompts replace the arrow. The terminal
+  has none: its prompt follows its output (see **Terminal**).
 - **Footer**: the mode outside agent mode, the approval level, the model
   and what the agent has used in `muted`, separated by `faint` dots,
   with the status at the right, on the screen's last row. Parts that

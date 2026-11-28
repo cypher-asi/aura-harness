@@ -5,7 +5,7 @@ use super::layout::CardKind;
 use super::FlowState;
 use crate::app::file_view::FileView;
 use crate::app::trace_json::{node_json, NodeLink};
-use crate::app::{App, DetailView, NotificationType, PanelFocus, RecordsTab};
+use crate::app::{App, DetailView, NotificationType};
 use crate::events::{FlowNode, TraceNode};
 
 impl App {
@@ -48,10 +48,9 @@ impl App {
             })
             .flatten();
         if let Some(index) = found {
-            self.records.selected = index;
-            self.records.tab = RecordsTab::Kernel;
-            self.focus = PanelFocus::Records;
-            self.open_detail(DetailView::Record);
+            if self.show_kernel_record(index) {
+                self.open_detail(DetailView::Record);
+            }
             return;
         }
         let message = if agent_id == self.active_agent_id {

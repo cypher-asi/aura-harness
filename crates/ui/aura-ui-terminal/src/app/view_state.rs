@@ -53,6 +53,19 @@ impl App {
         self.terminal_mode
     }
 
+    /// Whether the terminal runs inline in the chat panel, as a terminal
+    /// does: the prompt and what is typed follow the output in the
+    /// panel's body, and no input box sits under the panel. A view over
+    /// the body, a benchmark in its place, or an app with nothing to
+    /// show keeps the box, so the prompt is never hidden under them.
+    #[must_use]
+    pub(crate) fn terminal_inline(&self) -> bool {
+        self.chat_tab() == super::ChatTab::Terminal
+            && self.detail_view().is_none()
+            && !self.bench_draws_center()
+            && !self.app_empty()
+    }
+
     /// Whether the open pane has nothing to show.
     #[must_use]
     pub fn pane_is_empty(&self) -> bool {
@@ -146,20 +159,25 @@ impl App {
     }
 
     /// Check if the Record panel is visible. It hides while the side
-    /// panel is maximized over it, and with no agent on screen.
+    /// panel is maximized over it, and with no agent on screen. While a
+    /// channel is open it holds the channel's TASKS, shown with the
+    /// channel's side panel whatever the user did to the Kernel panel,
+    /// unless the hamburger button hid them both.
     #[must_use]
     pub fn record_panel_visible(&self) -> bool {
-        self.panels.record_visible
-            && !self.panels.chat_expanded
-            && !self.side_maximized()
-            && !self.no_agent_on_screen()
+        let shown = if self.channel_open() {
+            !self.panels.channel_side_hidden
+        } else {
+            self.panels.record_visible && !self.side_maximized()
+        };
+        shown && !self.panels.chat_expanded && !self.no_agent_on_screen()
     }
 
     /// Whether the side panel, shown, takes the Record panel's room too:
-    /// the user maximized it, or the channel app is on screen, which has
-    /// no Record panel and whose own panel fills the right column.
+    /// the user maximized it. The channel app's panels share the column
+    /// whatever the agent's did.
     pub(super) const fn side_maximized(&self) -> bool {
-        self.channel_app() || (self.panels.side_expanded && self.panels.sandbox_visible)
+        !self.channel_app() && self.panels.side_expanded && self.panels.sandbox_visible
     }
 
     /// Check if the Swarm panel is visible.
@@ -205,8 +223,8 @@ impl App {
     }
 
     /// Maximize the side panel over the Record panel, focused, or put it
-    /// back below it with the split it had. The channel app's panel fills
-    /// the column anyway, so there this does nothing.
+    /// back below it with the split it had. The channel app's panels
+    /// have no such button, so there this does nothing.
     pub fn toggle_side_expanded(&mut self) {
         if self.channel_app() {
             return;
@@ -232,7 +250,7 @@ impl App {
     ///
     /// Only the panels' own flags change, so `/kernel`, `/files` and the
     /// tabs that open the Record panel show the column again as usual.
-    /// In a channel the button hides or shows the channel's panel alone,
+    /// In a channel the button hides or shows the channel's panels alone,
     /// leaving the agent panels' flags and what they remember as they were.
     pub fn toggle_side_column(&mut self) {
         if self.channel_open() {
@@ -265,12 +283,13 @@ impl App {
         }
     }
 
-    /// [`Self::toggle_side_column`] in a channel: hide the channel's panel,
-    /// its room going to the chat, or show it again. While the chat is
-    /// expanded the panel is not on screen, so the button restores the
-    /// chat and shows the panel, as it does for the agent's column.
+    /// [`Self::toggle_side_column`] in a channel: hide the channel's
+    /// panels, TASKS and the side panel below it, their room going to
+    /// the chat, or show them again. While the chat is expanded they are
+    /// not on screen, so the button restores the chat and shows them, as
+    /// it does for the agent's column.
     fn toggle_channel_side(&mut self) {
-        if self.sandbox_panel_visible() {
+        if self.side_column_shown() {
             self.panels.channel_side_hidden = true;
             self.keep_channel_focus_on_screen();
             return;
@@ -280,9 +299,9 @@ impl App {
     }
 
     /// In the channel app, move the focus to the chat when it is on a
-    /// panel not on screen: the channel's panel the hamburger button hid,
-    /// or the agent panels the app leaves away. Keys would otherwise move
-    /// a highlight or switch a tab no one sees. Called wherever the
+    /// panel not on screen: the channel's panels the hamburger button
+    /// hid, or the agent panels the app leaves away. Keys would otherwise
+    /// move a highlight or switch a tab no one sees. Called wherever the
     /// channel's layout can change under the focus, and before each key.
     /// The agent apps keep the focus they have.
     pub(super) fn keep_channel_focus_on_screen(&mut self) {

@@ -11,6 +11,10 @@
 //!   [`BASE_REF`].
 //! - **A fork** ([`fork_branch`]) keeps its parent's disk and moves to a
 //!   branch of its own.
+//! - **Latest code** ([`pull::pull_latest`]): either way, the machine then
+//!   pulls `origin`'s main from GitHub into the agent's branch, so it
+//!   starts on the code the merge queue landed, not only on what the hub
+//!   had.
 //! - **Pull** ([`mark_pulled`]) moves [`BASE_REF`] to the tree the hub
 //!   took, and [`bundle_branch`] packs the branch's commits the hub
 //!   doesn't have.
@@ -27,6 +31,9 @@
 
 use crate::error::{CloudError, CloudResult};
 use crate::names;
+
+pub mod pull;
+pub use pull::{parse_pulled, pull_latest, PULLED, PULL_BRANCH};
 
 /// Where a snapshot build's bundle is uploaded.
 pub const SNAPSHOT_BUNDLE: &str = "/tmp/aura-project.bundle";
@@ -186,8 +193,9 @@ pub struct BranchStart<'a> {
 
 /// Shell run in a new agent's machine: fetch the hub's newer commits,
 /// check the agent's branch out at the hub's HEAD, unpack the hub's
-/// uncommitted changes (left uncommitted) and mark it all as
-/// [`BASE_REF`].
+/// uncommitted changes (left uncommitted), pull the latest
+/// [`PULL_BRANCH`] from GitHub on top ([`pull_latest`]) and mark it all
+/// as [`BASE_REF`].
 ///
 /// # Errors
 ///
@@ -217,14 +225,21 @@ pub fn start_branch(start: &BranchStart<'_>) -> CloudResult<String> {
     } else {
         String::new()
     };
+    let pull = if start.remote_url.is_some() {
+        pull_latest(PULL_BRANCH)?
+    } else {
+        String::new()
+    };
     Ok(format!(
         "set -e; cd \"$AURA_WORKSPACE\"; {fetch}git update-ref {HUB_HEAD_REF} {head}; \
-         git checkout -q -f -B '{name}' {head}; {origin}{delta}{}",
+         git checkout -q -f -B '{name}' {head}; {origin}{delta}{pull}{}",
         mark_base("aura: hub working tree")
     ))
 }
 
-/// Shell run in a fork: the parent's disk, on the child's own branch.
+/// Shell run in a fork: the parent's disk, on the child's own branch,
+/// with the latest [`PULL_BRANCH`] pulled from GitHub on top
+/// ([`pull_latest`]).
 ///
 /// # Errors
 ///
@@ -232,7 +247,8 @@ pub fn start_branch(start: &BranchStart<'_>) -> CloudResult<String> {
 pub fn fork_branch(name: &str) -> CloudResult<String> {
     let name = branch(name)?;
     Ok(format!(
-        "set -e; cd \"$AURA_WORKSPACE\"; git checkout -q -B '{name}'"
+        "set -e; cd \"$AURA_WORKSPACE\"; git checkout -q -B '{name}'; {}",
+        pull_latest(PULL_BRANCH)?
     ))
 }
 

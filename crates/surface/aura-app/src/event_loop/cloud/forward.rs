@@ -81,14 +81,18 @@ impl TurnEnd {
     }
 }
 
-/// Show a cloud turn's events in its agent's chat, until the turn ends.
-/// A turn ended by `cancel` says so, without an error.
+/// Show a cloud turn's events in its agent's chat, which works on the
+/// turn until it ends. A turn ended by `cancel` says so, without an error.
 pub(super) async fn forward(
     ui: &AgentUi,
     rx: &mut tokio::sync::mpsc::Receiver<RemoteEvent>,
     extras: &mut TurnExtras,
     cancel: &CancellationToken,
 ) -> TurnEnd {
+    // A prompt typed into the chat put it to work already; one from the
+    // channel or the queue did not, and an idle chat folds each group of
+    // steps as soon as none of them runs.
+    ui.send(UiCommand::TurnStarted { prompt: None }).await;
     let mut chat = TurnChat {
         ui,
         cancel,
@@ -181,6 +185,8 @@ impl TurnChat<'_> {
         match event {
             RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
             RemoteEvent::Boot(_) | RemoteEvent::Title(_) => {}
+            // `close_open` ended the reply the call wrote.
+            RemoteEvent::ModelCallEnd => {}
             RemoteEvent::Text(text) => self.append_text(text).await,
             RemoteEvent::Thinking(text) => self.append_thinking(text).await,
             event @ (RemoteEvent::ToolStart { .. }
@@ -248,9 +254,9 @@ impl TurnChat<'_> {
         if self.streaming {
             self.ui.send(UiCommand::FinishStreaming).await;
         }
-        // The chat entered Processing when the prompt was sent. Status text
-        // alone leaves it there, so the working line keeps saying Thinking
-        // after the turn is over.
+        // Status text alone leaves the chat in Processing, where `forward`
+        // put it, so the working line would keep saying Thinking after the
+        // turn is over.
         self.ui.send(UiCommand::Complete).await;
     }
 }

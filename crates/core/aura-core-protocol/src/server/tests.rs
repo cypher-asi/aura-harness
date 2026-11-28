@@ -12,6 +12,22 @@ fn a_chat_title_is_its_own_message_on_the_turn_s_stream() {
 }
 
 #[test]
+fn each_model_call_of_a_turn_ends_with_its_own_message() {
+    let json = serde_json::to_string(&OutboundMessage::IterationComplete(IterationComplete {
+        iteration: 1,
+        input_tokens: 100,
+        output_tokens: 10,
+    }))
+    .expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"type":"iteration_complete","iteration":1,"input_tokens":100,"output_tokens":10}"#
+    );
+    let back: OutboundMessage = serde_json::from_str(&json).expect("deserialize");
+    assert!(matches!(back, OutboundMessage::IterationComplete(i) if i.iteration == 1));
+}
+
+#[test]
 fn tool_result_without_image_omits_image_fields() {
     // The string-only path must serialize byte-identically to the
     // pre-image contract: no `image_base64` / `image_media_type`

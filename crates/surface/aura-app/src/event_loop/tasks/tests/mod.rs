@@ -300,3 +300,31 @@ async fn a_second_spawn_for_a_todo_replaces_the_link() {
     tasks.set_items(lead, two_todos()).await;
     assert_eq!(request_item_tasks(dir.path()), vec![None, Some(newer)]);
 }
+
+#[tokio::test]
+async fn a_plan_shows_in_the_tasks_of_the_agent_on_screen_in_its_folder() {
+    let (here, elsewhere) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (tasks, mut rx, shown) = board();
+    let coordinator = agent(1);
+    let plan = PlanView {
+        path: ".aura/plans/auth.plan.md".to_string(),
+        name: "Auth".to_string(),
+        todos: vec![item("Add the table", TodoState::Completed)],
+    };
+    tasks.show_plan(here.path(), plan.clone()).await;
+    assert!(rx.try_recv().is_err(), "no agent on screen");
+
+    shown.set(coordinator);
+    tasks.send_all(coordinator, here.path()).await;
+    while rx.try_recv().is_ok() {}
+    tasks.show_plan(here.path(), plan.clone()).await;
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(UiCommand::ForAgent { agent_id, command })
+            if agent_id == coordinator.to_hex()
+                && matches!(&*command, UiCommand::UpsertPlan(view) if *view == plan)
+    ));
+
+    tasks.show_plan(elsewhere.path(), plan).await;
+    assert!(rx.try_recv().is_err(), "a plan of another folder");
+}

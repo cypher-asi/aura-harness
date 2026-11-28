@@ -1,6 +1,7 @@
 //! TASKS tab: the work agents did or are doing, grouped under the plan it
-//! works on. Each plan's header shows its todo progress, then its todos.
-//! Work of no listed plan goes last, under
+//! works on, in the side panel or, while a channel is open, in the Record
+//! panel's place. Each plan's header shows its todo progress, then its
+//! todos. Work of no listed plan goes last, under
 //! `No Plan`. Requests have no row: their todo items are listed, and a
 //! task handed out sits one level under the todo or item it does, titled
 //! by it. Builds of a todo list the plan no longer has are listed under
@@ -26,7 +27,7 @@ use super::chrome::{Body, ScrollView};
 use super::plans::{marker, marker_color, todo_style};
 use super::side_list::{name_style, render_empty, render_hidden, Tone};
 use crate::app::tasks::{TaskList, TaskRow};
-use crate::app::{HoverTarget, PanelFocus};
+use crate::app::HoverTarget;
 use crate::components::{cell_style, list_row, list_row_with_detail, CellState, StatusIcon};
 use crate::events::{PlanView, TaskState, TaskView, TodoView};
 use crate::{App, Theme};
@@ -57,7 +58,7 @@ pub(super) fn render_tasks(
     app: &mut App,
     theme: &Theme,
 ) {
-    let is_focused = app.focus() == PanelFocus::Sandbox;
+    let is_focused = app.tasks_focused();
     let list = app.task_list();
     if list.rows().is_empty() {
         // Hidden tasks are named first: the plans are left out with them.

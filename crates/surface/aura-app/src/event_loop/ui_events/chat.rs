@@ -52,16 +52,20 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
     }
 }
 
-/// Cancel the work of `agent_id`.
+/// Cancel the work of `agent_id`. The user stopping a turn isn't giving
+/// up on what it was asked: its inbox answers wait for the next turn.
 async fn cancel(state: &mut LoopState<'_>, agent_id: AgentId) {
     debug!(%agent_id, "Cancel received");
     // A call waiting for an answer holds the turn; deny it so the
     // turn sees the cancellation.
     state.approvals.cancel_agent(agent_id).await;
     if state.cloud.cancel(agent_id) {
+        state.hub.inbox.interrupt(agent_id);
         return;
     }
-    if !state.hub.cancel(agent_id) {
+    if state.hub.cancel(agent_id) {
+        state.hub.inbox.interrupt(agent_id);
+    } else {
         AgentUi::new(state.commands.clone(), agent_id)
             .send(UiCommand::SetStatus("Cancelled".to_string()))
             .await;

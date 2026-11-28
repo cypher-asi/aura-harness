@@ -47,6 +47,7 @@ members = [
     "crates/exec/aura-exec-traits",
     "crates/exec/aura-exec-domain-http",
     "crates/exec/aura-exec-tools",
+    "crates/exec/aura-exec-merge-queue",
     "crates/agent/aura-agent-subagent",
     "crates/agent/aura-agent-steering",
     "crates/agent/aura-agent-kernel",
