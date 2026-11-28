@@ -48,11 +48,15 @@ An integration is two things:
     - `CliLogin { program, login, token }`, a CLI sign-in such as
       `gh auth login`, optionally also taking a token;
     - `OAuth { authorize_url, scopes }`, declared only for now.
-  - `config: Vec<ConfigField { key, label, kind, required, default }>`,
-    where `kind` is `Text`, `Url`, `Bool` or `Choice(..)`. Values are
-    checked against their kind when set.
+  - `config: Vec<ConfigField { key, label, kind, required, default, advanced }>`
+    (`ConfigField::new` sets the common defaults), where `kind` is `Text`,
+    `Url`, `Bool`, `Choice(..)` or `Number { min, max, integer }`. Values
+    are checked against their kind when set. An `advanced` field (an API
+    URL override, say) is hidden in the panel until it is set.
   - `tools: Vec<ToolSpec { name, description, input_schema, effect, timeout }>`,
-    where `effect` is `Read` or `Write`.
+    where `effect` is `Read`, `Write`, `Spends` or `Destroys`. `timeout`
+    replaces the registry's limit for that tool (a job that waits for its
+    result).
   - `cloud: CloudDelivery`, either `Never` (the default) or
     `HostBound { env }` (see below).
 - **An [`Integration`]** (`src/integration.rs`), a trait:
@@ -61,7 +65,7 @@ An integration is two things:
     or `Misconfigured { why }`. It is local and quick, with no network.
     The default, `default_status`, is "connected when a credential is
     there", and says where the credential came from;
-  - `health(&ctx) -> Result<HealthReport>`: one real call that proves the
+  - `health(&ctx) -> Result<HealthReport { summary, detail }>`: one real call that proves the
     credential and config work. It is the panel's **Test**, and what
     **Connect** runs before storing anything;
   - `call_tool(&ctx, tool, args) -> Result<Value>`: runs a tool by its
@@ -345,8 +349,12 @@ These are not done yet:
   keychain) is still plain `0600` JSON and should be sealed the same way.
 - **aura-os trusted integrations** (`resolver/trusted`) and **plugin
   connectors** should be listed through the same registry.
-- **The mode gate should learn integration tools**, so `Read` tools run
-  in plan and ask mode.
+- **The mode gate and approvals should learn integration tools.** Today
+  the kernel treats any tool it doesn't know as a network call, so every
+  integration tool, a `Read` one included, runs in agent mode only and
+  asks under `ask` and `strict`. The registry should hand each tool's
+  `ToolEffect` to the kernel, so `Read` tools run without asking and
+  `Spends`/`Destroys` ones always ask.
 - **Integration tools in the model's tool list.** The list is built once
   at startup (`harness::agent_tools`), and executors get the tools from
   the connected snapshot. Listing them per turn, so that one connected

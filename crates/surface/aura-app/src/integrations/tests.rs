@@ -136,4 +136,21 @@ async fn the_panel_shows_each_actions_result_and_a_failure_as_failed() {
     assert_eq!(boxd.takes_key.as_deref(), Some("API key"));
     let github = panel.iter().find(|view| view.id == "github").unwrap();
     assert_eq!(github.login.as_deref(), Some("gh auth login"));
+    assert!(
+        github.config.is_empty(),
+        "the unset API URL override is hidden"
+    );
+    assert_eq!(
+        boxd.config.len(),
+        0,
+        "a rejected value is not saved, so still hidden"
+    );
+    let set = IntegrationAction::Configure {
+        key: "api_url".to_string(),
+        value: "https://ghe.example.com/api/v3".to_string(),
+    };
+    assert!(service.run("github", set).await.unwrap().0);
+    let panel = service.panel().await;
+    let github = panel.iter().find(|view| view.id == "github").unwrap();
+    assert_eq!(github.config.len(), 1, "shown once set");
 }
