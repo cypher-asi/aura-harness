@@ -21,6 +21,7 @@ fn channel_tasks_app() -> crate::App {
             todo("Add session table", TodoState::Completed),
             todo("Write the login handler", TodoState::Pending),
         ],
+        changed_ms: None,
     }]));
     app
 }

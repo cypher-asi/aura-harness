@@ -9,7 +9,7 @@
 //! work" is a map lookup.
 
 use super::standing::QueueCounts;
-use super::turns::{Prompt, Work};
+use super::turns::Work;
 use aura_core_types::AgentId;
 use aura_ui::events::QueuedItemView;
 use std::collections::{HashMap, VecDeque};
@@ -214,9 +214,17 @@ impl WorkQueues {
             .unwrap_or_default()
     }
 
-    /// The queued messages that came through the inbox, each with its
-    /// agent, every agent's oldest first: what survives a restart
-    /// ([`super::inbox`]). Messages with images are left out.
+    /// Every queued item with its agent, the agents in hex order and each
+    /// queue oldest first: what survives a restart ([`super::inbox`]).
+    pub(super) fn items(&self) -> Vec<(AgentId, &Work)> {
+        let mut agents: Vec<(&AgentId, &VecDeque<Queued>)> = self.by_agent.iter().collect();
+        agents.sort_by_cached_key(|(agent, _)| agent.to_hex());
+        agents
+            .into_iter()
+            .flat_map(|(agent, queue)| queue.iter().map(move |queued| (*agent, &queued.work)))
+            .collect()
+    }
+
     /// Whether `agent`'s queue holds a prompt saying `text`.
     pub(super) fn has_prompt(&self, agent: AgentId, text: &str) -> bool {
         self.by_agent.get(&agent).is_some_and(|queue| {
@@ -224,20 +232,6 @@ impl WorkQueues {
                 |queued| matches!(&queued.work, Work::Prompt { prompt, .. } if prompt.text == text),
             )
         })
-    }
-
-    pub(super) fn inbox_prompts(&self) -> Vec<(AgentId, &Prompt)> {
-        let prompts = self.by_agent.iter().flat_map(|(agent, queue)| {
-            queue.iter().filter_map(move |queued| match &queued.work {
-                Work::Prompt { prompt, .. }
-                    if prompt.images.is_empty() && aura_ui::inbox::fold(&prompt.text).is_some() =>
-                {
-                    Some((*agent, prompt))
-                }
-                _ => None,
-            })
-        });
-        prompts.collect()
     }
 }
 

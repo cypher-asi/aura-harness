@@ -20,6 +20,7 @@ fn sample_plan() -> crate::events::PlanView {
             assignee: None,
             task: None,
         }],
+        changed_ms: None,
     }
 }
 

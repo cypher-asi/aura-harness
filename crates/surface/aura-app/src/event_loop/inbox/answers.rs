@@ -219,7 +219,7 @@ fn reply(hub: &AgentHub, agent_id: AgentId, owed: &Owed, ok: bool, said: &str) {
         prompt,
         inbox: Some(InboxKind::Reply),
     };
-    if hub.notices.send(notice).is_err() {
+    if super::saved::send(hub, notice).is_err() {
         warn!(agent = %agent_id.to_hex(), "Inbox reply after the event loop ended; dropped");
     }
 }

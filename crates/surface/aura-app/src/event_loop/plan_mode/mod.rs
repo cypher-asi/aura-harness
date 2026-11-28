@@ -61,7 +61,22 @@ use tracing::{info, warn};
 /// `None` when it can't be read.
 pub(crate) fn plan_view(workspace: &Path, path: &str) -> Option<PlanView> {
     let plan = plan_file(workspace, path)?;
-    Some(view_of(path, plan, &PlanTasks::load(workspace)))
+    let changed = changed_at(workspace, path);
+    Some(view_of(path, plan, &PlanTasks::load(workspace), changed))
+}
+
+/// When the file at `path` (relative to `workspace`) last changed, when
+/// that can be read.
+fn changed_at(workspace: &Path, path: &str) -> Option<SystemTime> {
+    std::fs::metadata(workspace.join(path))
+        .and_then(|meta| meta.modified())
+        .ok()
+}
+
+/// `time` in ms since the epoch; `None` before it.
+fn epoch_ms(time: SystemTime) -> Option<u64> {
+    let since = time.duration_since(SystemTime::UNIX_EPOCH).ok()?;
+    u64::try_from(since.as_millis()).ok()
 }
 
 /// The plan file at `path` (relative to `workspace`), when `path` names a
@@ -99,7 +114,7 @@ pub(crate) fn machine_plan_views(
             }
         };
         let finished = is_finished(&plan);
-        let view = view_of(path, plan, &tasks);
+        let view = view_of(path, plan, &tasks, None);
         if active == Some(path.as_str()) && !finished {
             strip = Some(view.clone());
         }
@@ -113,14 +128,11 @@ pub(crate) fn plan_views(workspace: &Path) -> Vec<PlanView> {
     let Ok(entries) = std::fs::read_dir(workspace.join(PLANS_DIR)) else {
         return Vec::new();
     };
-    let plans: Vec<(SystemTime, String, PlanFile)> = entries
+    let plans: Vec<(Option<SystemTime>, String, PlanFile)> = entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = format!("{PLANS_DIR}/{}", entry.file_name().to_str()?);
-            let changed = entry
-                .metadata()
-                .and_then(|meta| meta.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
+            let changed = entry.metadata().and_then(|meta| meta.modified()).ok();
             let plan = plan_file(workspace, &path)?;
             Some((changed, path, plan))
         })
@@ -131,9 +143,9 @@ pub(crate) fn plan_views(workspace: &Path) -> Vec<PlanView> {
     // Each plan links its todos to the tasks doing them; the task folder
     // can hold hundreds, so it is read once for all of them.
     let tasks = PlanTasks::load(workspace);
-    let mut views: Vec<(SystemTime, PlanView)> = plans
+    let mut views: Vec<(Option<SystemTime>, PlanView)> = plans
         .into_iter()
-        .map(|(changed, path, plan)| (changed, view_of(&path, plan, &tasks)))
+        .map(|(changed, path, plan)| (changed, view_of(&path, plan, &tasks, changed)))
         .collect();
     views.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
     views.into_iter().map(|(_, view)| view).collect()
@@ -153,10 +165,11 @@ pub(crate) fn plan_view_among(
         .or_else(|| plan_view(workspace, path))
 }
 
-fn view_of(path: &str, plan: PlanFile, tasks: &PlanTasks) -> PlanView {
+fn view_of(path: &str, plan: PlanFile, tasks: &PlanTasks, changed: Option<SystemTime>) -> PlanView {
     PlanView {
         path: path.to_string(),
         name: plan.meta.name,
+        changed_ms: changed.and_then(epoch_ms),
         todos: plan
             .meta
             .todos
@@ -308,7 +321,8 @@ pub(super) async fn start_build(
     session.todos = todo_items(&plan);
     session.active_plan = Some(path.clone());
     session.building_plan = true;
-    let view = view_of(&path, plan, &PlanTasks::load(&workspace));
+    let changed = changed_at(&workspace, &path);
+    let view = view_of(&path, plan, &PlanTasks::load(&workspace), changed);
     ui.send(system_message(format!("Building {}", view.name)))
         .await;
     ui.send(UiCommand::SetTodos(todo_views(&session.todos)))
@@ -370,7 +384,8 @@ pub(super) async fn continue_build(
         ui.send(UiCommand::SetTodos(todo_views(&session.todos)))
             .await;
     }
-    let view = view_of(path, plan, &PlanTasks::load(&workspace));
+    let changed = changed_at(&workspace, path);
+    let view = view_of(path, plan, &PlanTasks::load(&workspace), changed);
     ui.send(UiCommand::SetPlan(Some(view))).await;
     true
 }

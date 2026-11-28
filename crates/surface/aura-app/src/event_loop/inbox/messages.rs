@@ -119,9 +119,7 @@ impl Envelope<'_> {
             prompt,
             inbox: Some(kind),
         };
-        hub.notices
-            .send(notice)
-            .map_err(|_| "the terminal is shutting down".to_string())
+        super::saved::send(hub, notice).map_err(|()| "the terminal is shutting down".to_string())
     }
 }
 
@@ -224,6 +222,7 @@ pub(in crate::event_loop) async fn deliver(
     let Notice {
         to, shown, prompt, ..
     } = notice;
+    super::saved::delivered(&state.hub, to, &prompt);
     info!(agent = %to, %shown, "Delivering an inbox message");
     if kind == InboxKind::Assignment {
         crate::event_loop::factory::hooks::on_assignment(state, to);

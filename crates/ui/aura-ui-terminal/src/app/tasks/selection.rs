@@ -1,6 +1,8 @@
 //! Moving the highlight, folding and opening rows, and finding a row
 //! again by what it shows.
 
+use chrono::NaiveDate;
+
 use super::{RowKey, TaskList, TaskRow};
 use crate::events::{PlanView, TaskView};
 
@@ -38,14 +40,33 @@ fn containers(rows: &[TaskRow], at: usize) -> Vec<usize> {
 }
 
 impl TaskList {
-    /// Move the highlight by `delta` rows.
+    /// Move the highlight by `delta` rows, past a day's header the way
+    /// it moves.
     pub fn move_by(&mut self, delta: isize) {
-        self.select(self.selected.saturating_add_signed(delta));
+        self.select_toward(self.selected.saturating_add_signed(delta), delta < 0);
     }
 
-    /// Highlight row `index` (clamped).
+    /// Highlight row `index` (clamped), or the row under it when it is a
+    /// day's header.
     pub fn select(&mut self, index: usize) {
-        self.selected = index.min(self.rows.len().saturating_sub(1));
+        self.select_toward(index, false);
+    }
+
+    /// Highlight row `index` (clamped), or, on a day's header, the nearest
+    /// row past it: above it going `up`, else below, turning back at
+    /// either end of the list.
+    fn select_toward(&mut self, index: usize, up: bool) {
+        let last = self.rows.len().saturating_sub(1);
+        let index = index.min(last);
+        let is_header = |at: &usize| matches!(self.rows.get(*at), Some(TaskRow::Day { .. }));
+        let above = || (0..=index).rev().find(|at| !is_header(at));
+        let below = || (index..=last).find(|at| !is_header(at));
+        let found = if up {
+            above().or_else(below)
+        } else {
+            below().or_else(above)
+        };
+        self.selected = found.unwrap_or(index);
     }
 
     /// Highlight task `id`, opening its group, its round, the todo or
@@ -67,14 +88,10 @@ impl TaskList {
                 .get(self.selected)
                 .is_some_and(|&row| self.row_is(row, &key));
         }
-        let Some(root) = self.listed_root(id) else {
+        let Some((group, day)) = self.listed_root(id).and_then(|root| self.section_of(root)) else {
             self.rebuild(None);
             return false;
         };
-        let group = self
-            .tasks
-            .get(root)
-            .and_then(|root| self.plan_index().group_of(root));
         let group_key = match group.and_then(|plan| self.plans.get(plan)) {
             Some(plan) => {
                 let path = plan.path.clone();
@@ -82,8 +99,8 @@ impl TaskList {
                 RowKey::Plan(path)
             }
             None => {
-                self.no_plan_open = Some(true);
-                RowKey::NoPlan
+                self.no_plan_folds.insert(day, true);
+                RowKey::NoPlan(day)
             }
         };
         self.rebuild(Some(group_key.clone()));
@@ -161,9 +178,12 @@ impl TaskList {
         let plan_path = |plan: usize| self.plans.get(plan).map(|plan| plan.path.clone());
         let task_id = |task: usize| self.tasks.get(task).map(|task| task.id.clone());
         match row {
-            TaskRow::Plan { plan: None, .. } => {
-                self.no_plan_open = Some(open);
-                Some(RowKey::NoPlan)
+            TaskRow::Day { .. } => None,
+            TaskRow::Plan {
+                plan: None, day, ..
+            } => {
+                self.no_plan_folds.insert(day, open);
+                Some(RowKey::NoPlan(day))
             }
             TaskRow::Plan {
                 plan: Some(plan), ..
@@ -234,6 +254,12 @@ impl TaskList {
                 .unwrap_or_else(|| self.is_current(plan) || plan.has_open_todos() || has_open_task)
     }
 
+    /// Whether the No Plan group of `day` is open: as the user left it,
+    /// else open.
+    pub(super) fn is_no_plan_open(&self, day: Option<NaiveDate>) -> bool {
+        self.reveal || self.no_plan_folds.get(&day).copied().unwrap_or(true)
+    }
+
     /// Whether todo `todo` of `plan` shows the tasks nested under it: as
     /// the user left it, else while the todo is not closed.
     pub(super) fn is_todo_open(&self, plan: &PlanView, todo: usize) -> bool {
@@ -270,7 +296,10 @@ impl TaskList {
         let row = *self.rows.get(self.selected)?;
         let plan_path = |plan: usize| self.plans.get(plan).map(|plan| plan.path.clone());
         match row {
-            TaskRow::Plan { plan: None, .. } => Some(RowKey::NoPlan),
+            TaskRow::Day { .. } => None,
+            TaskRow::Plan {
+                plan: None, day, ..
+            } => Some(RowKey::NoPlan(day)),
             TaskRow::Plan {
                 plan: Some(plan), ..
             } => plan_path(plan).map(RowKey::Plan),
@@ -296,7 +325,12 @@ impl TaskList {
         let plan_is =
             |plan: usize, path: &str| self.plans.get(plan).is_some_and(|p| p.path == path);
         match (row, key) {
-            (TaskRow::Plan { plan: None, .. }, RowKey::NoPlan) => true,
+            (
+                TaskRow::Plan {
+                    plan: None, day, ..
+                },
+                RowKey::NoPlan(wanted),
+            ) => day == *wanted,
             (
                 TaskRow::Plan {
                     plan: Some(plan), ..

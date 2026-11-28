@@ -38,6 +38,13 @@ fn plan_views_lists_readable_plans_newest_first() {
     assert_eq!(names, ["New", "Old"]);
     assert_eq!(plans[0].path, ".aura/plans/new_00000002.plan.md");
     assert_eq!(plans[0].todos[0].state, TodoState::Completed);
+
+    // Each carries when its file changed, as does a plan read alone.
+    let now = epoch_ms(SystemTime::now()).unwrap();
+    let age_secs = |plan: &PlanView| (now - plan.changed_ms.unwrap()) / 1000;
+    assert!((300..305).contains(&age_secs(&plans[1])), "{plans:?}");
+    let alone = plan_view(dir.path(), &plans[0].path).unwrap();
+    assert_eq!(alone.changed_ms, plans[0].changed_ms);
 }
 
 /// Write 20 plans of the given todos into `workspace`'s plans dir.
@@ -145,6 +152,10 @@ fn plans_read_on_a_machine_are_viewed_from_their_text() {
     let names: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
     assert_eq!(names, ["Open", "Done"]);
     assert_eq!(views[0].todos[0].state, TodoState::InProgress);
+    assert!(
+        views.iter().all(|view| view.changed_ms.is_none()),
+        "a machine's plans come with no file times"
+    );
     assert_eq!(strip.map(|v| v.path), Some(open.to_string()));
 
     let (_, strip) = machine_plan_views(dir.path(), &plans, Some(done));

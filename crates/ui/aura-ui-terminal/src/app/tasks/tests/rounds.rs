@@ -60,17 +60,20 @@ fn stale_of(list: &TaskList, id: &str) -> Option<bool> {
 fn builds_of_a_list_the_plan_dropped_make_a_folded_round_at_the_left_edge() {
     let (ch, tasks) = rewritten();
     let mut list = list_of(vec![ch], tasks);
-    assert_eq!(shape(&list), ["-ch", "#ch 0", "#ch 1", "~+b1", "@r1"]);
-    let TaskRow::Round { progress, .. } = list.rows()[3] else {
+    assert_eq!(
+        shape(&list),
+        ["=Earlier", "-ch", "#ch 0", "#ch 1", "~+b1", "@r1"]
+    );
+    let TaskRow::Round { progress, .. } = list.rows()[4] else {
         panic!("a round row");
     };
     assert_eq!(progress, (3, 3), "the items merged across b1 and b2");
 
-    list.select(3);
+    list.select(4);
     list.toggle_selected();
     assert_eq!(
         shape(&list),
-        ["-ch", "#ch 0", "#ch 1", "~-b1", "+old a", "+old b", "old c", "@r1"]
+        ["=Earlier", "-ch", "#ch 0", "#ch 1", "~-b1", "+old a", "+old b", "old c", "@r1"]
     );
     assert!(
         list.rows().iter().all(|row| row.depth() == 0),
@@ -86,8 +89,8 @@ fn every_try_at_a_rounds_item_nests_under_it_and_only_the_newest_is_not_stale() 
     assert_eq!(
         shape(&list),
         [
-            "-ch", "#ch 0", "#ch 1", "~-b1", "-old a", "  @t1", "  @t2", "  @t3", "+old b",
-            "old c", "@r1"
+            "=Earlier", "-ch", "#ch 0", "#ch 1", "~-b1", "-old a", "  @t1", "  @t2", "  @t3",
+            "+old b", "old c", "@r1"
         ]
     );
     assert_eq!(shape(&list)[list.selected()], "  @t1");
@@ -114,7 +117,7 @@ fn lists_sharing_no_item_make_separate_rounds_newest_first() {
         build("b1", vec![item("x", Done, None)]),
     ];
     let list = list_of(vec![plan("ch", &[Todo])], tasks);
-    assert_eq!(shape(&list), ["-ch", "#ch 0", "~+b2", "~+b1"]);
+    assert_eq!(shape(&list), ["=Earlier", "-ch", "#ch 0", "~+b2", "~+b1"]);
 }
 
 #[test]
@@ -137,7 +140,7 @@ fn round_folds_stick_and_left_on_its_item_folds_it() {
     assert_eq!(selected_shape(&app), "~+b1");
     assert_eq!(
         shape(app.task_list()),
-        ["-ch", "#ch 0", "#ch 1", "~+b1", "@r1"]
+        ["=Earlier", "-ch", "#ch 0", "#ch 1", "~+b1", "@r1"]
     );
 }
 
@@ -153,7 +156,10 @@ fn tasks_doing_the_same_todo_as_a_plans_todo_nest_under_it() {
             build("b", Vec::new()),
         ],
     );
-    assert_eq!(shape(&list), ["-ch", "#-ch 0", "  @n1", "  @n2"]);
+    assert_eq!(
+        shape(&list),
+        ["=Earlier", "-ch", "#-ch 0", "  @n1", "  @n2"]
+    );
     assert_eq!(stale_of(&list, "n1"), Some(true));
     assert_eq!(stale_of(&list, "n2"), Some(false));
 }

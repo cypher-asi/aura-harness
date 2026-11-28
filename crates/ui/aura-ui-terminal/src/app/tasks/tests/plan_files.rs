@@ -32,7 +32,7 @@ fn p_opens_a_tasks_plan_at_its_todo_and_says_when_there_is_none() {
         handed,
         request("r", "lead", vec![item("x", Todo, None)]),
     ]));
-    assert_eq!(shape(app.task_list()), ["-No Plan", "x", "@pa"]);
+    assert_eq!(shape(app.task_list()), ["=Earlier", "-No Plan", "x", "@pa"]);
 
     press(&mut app, KeyCode::Char('p'));
     assert_eq!(notice(&app), Some("No plan to open"));
@@ -46,7 +46,7 @@ fn enter_on_a_plan_header_opens_its_file_and_on_a_todo_at_the_todo() {
     let (mut app, _dir) =
         app_with_plan_file("---\nname: a\ntodos:\n- content: a 0\n- content: a 1\n---\n");
     app.process_command(UiCommand::SetPlans(vec![plan("a", &[Todo, Todo])]));
-    assert_eq!(shape(app.task_list()), ["-a", "#a 0", "#a 1"]);
+    assert_eq!(shape(app.task_list()), ["=Earlier", "-a", "#a 0", "#a 1"]);
 
     press(&mut app, KeyCode::Enter);
     assert_eq!(
@@ -73,10 +73,10 @@ fn a_click_opens_a_plan_and_its_fold_glyph_folds_it() {
     app.process_command(UiCommand::SetPlans(vec![plan("a", &[Todo])]));
     app.set_task_rows_area(Rect::new(10, 5, 30, 8), 0);
 
-    app.click_task_row(11, 5);
+    app.click_task_row(11, 6);
     assert!(app.detail_view().is_none());
-    assert_eq!(shape(app.task_list()), ["+a"]);
-    app.click_task_row(20, 5);
+    assert_eq!(shape(app.task_list()), ["=Earlier", "+a"]);
+    app.click_task_row(20, 6);
     assert!(matches!(app.detail_view(), Some(DetailView::Plan(_))));
 }
 

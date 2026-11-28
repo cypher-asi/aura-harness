@@ -25,7 +25,7 @@ use ratatui::{
     Frame,
 };
 
-/// Most todo items listed at once.
+/// Most rows the to-do drawer lists under its header, two an item.
 pub(super) const MAX_TODO_ROWS: usize = 10;
 
 /// Columns kept clear between the stats and the status at the right.

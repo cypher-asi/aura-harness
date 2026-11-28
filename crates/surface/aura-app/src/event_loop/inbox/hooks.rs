@@ -111,7 +111,12 @@ impl PeerHooks {
     ) -> Option<Result<(), String>> {
         let (hub, circle) = self.circle().await?;
         let peer = circle.find(target)?;
-        Some(send(&hub, &circle, InboxKind::Request, peer, subject, text, None).map(|_| ()))
+        let sent = send(&hub, &circle, InboxKind::Request, peer, subject, text, None).map(|_| ());
+        // The sender is told it went once it is on disk.
+        if sent.is_ok() {
+            super::saved::persist(&hub).await;
+        }
+        Some(sent)
     }
 
     /// The error for a `target` neither the caller's peers nor its host
@@ -267,10 +272,13 @@ impl MailDesk for MachineMail {
             None,
         );
         match &sent {
-            Ok(_) => hub
-                .inbox
-                .refusals
-                .delivered((mail.from, mail.to), &mail.subject),
+            Ok(_) => {
+                hub.inbox
+                    .refusals
+                    .delivered((mail.from, mail.to), &mail.subject);
+                // Its machine is acked once the mail is on disk here.
+                super::saved::persist(&hub).await;
+            }
             Err(error) => {
                 warn!(from = %mail.from.to_hex(), %to, %error, "A cloud member's request was refused");
             }

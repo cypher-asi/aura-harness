@@ -15,7 +15,7 @@ impl App {
             Some(TaskRow::Task { .. } | TaskRow::Item { .. } | TaskRow::Round { .. }) => {
                 self.open_selected_task_agent();
             }
-            None => {}
+            Some(TaskRow::Day { .. }) | None => {}
         }
     }
 
@@ -143,12 +143,19 @@ impl App {
         }
     }
 
+    /// The row at (`column`, `row`) on screen; `None` off the rows and
+    /// on a day's header, which is neither lit nor clicked.
     pub(in crate::app) fn task_row_at(&self, column: u16, row: u16) -> Option<usize> {
         let rows = self
             .areas
             .task_rows
             .filter(|&rows| contains(Some(rows), column, row))?;
         let index = self.areas.tasks_scroll + usize::from(row - rows.y);
-        (index < self.task_list.rows.len()).then_some(index)
+        let is_row = self
+            .task_list
+            .rows
+            .get(index)
+            .is_some_and(|row| !matches!(row, TaskRow::Day { .. }));
+        is_row.then_some(index)
     }
 }

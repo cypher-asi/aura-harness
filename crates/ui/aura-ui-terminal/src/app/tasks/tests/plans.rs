@@ -21,7 +21,7 @@ fn the_build_adds_no_items_and_its_tasks_go_under_the_todos_they_do() {
     let list = list_of(vec![auth], tasks);
     assert_eq!(
         shape(&list),
-        ["-auth", "#-auth 0", "  @p1", "#auth 1", "@p2"]
+        ["=Earlier", "-auth", "#-auth 0", "  @p1", "#auth 1", "@p2"]
     );
     assert!(list.is_hidden_build("build"));
     assert!(!list.is_hidden_build("p1"), "only the request is hidden");
@@ -33,7 +33,7 @@ fn a_build_whose_plan_is_not_listed_lists_its_items_under_no_plan() {
     let list = list_of(vec![plan("other", &[Todo])], tasks);
     assert_eq!(
         shape(&list),
-        ["-other", "#other 0", "-No Plan", "own 0", "@p1", "@p2"]
+        ["=Earlier", "-other", "#other 0", "-No Plan", "own 0", "@p1", "@p2"]
     );
     assert!(!list.is_hidden_build("build"));
 }
@@ -53,7 +53,7 @@ fn plans_with_open_work_start_open_and_done_ones_folded() {
     );
     assert_eq!(
         shape(&list),
-        ["-todos", "#todos 0", "-task", "#task 0", "+done"]
+        ["=Earlier", "-todos", "#todos 0", "-task", "#task 0", "+done"]
     );
 }
 
@@ -61,7 +61,7 @@ fn plans_with_open_work_start_open_and_done_ones_folded() {
 fn the_current_plan_comes_first_and_starts_open_even_when_done() {
     let mut list = list_of(vec![plan("a", &[Todo]), plan("b", &[Done])], Vec::new());
     list.set_current_plan(Some(&plan("b", &[Done])));
-    assert_eq!(shape(&list), ["-b", "#b 0", "-a", "#a 0"]);
+    assert_eq!(shape(&list), ["=Earlier", "-b", "#b 0", "-a", "#a 0"]);
     list.set_current_plan(Some(&plan("c", &[Todo])));
     assert_eq!(list.plans()[0].path, path("c"), "a new plan goes on top");
 }
@@ -77,16 +77,16 @@ fn selecting_a_folded_task_opens_its_group_and_item() {
     );
     list.select(0);
     list.toggle_selected();
-    assert_eq!(shape(&list), ["+No Plan"]);
+    assert_eq!(shape(&list), ["=Earlier", "+No Plan"]);
     assert!(list.select_task("p1"));
-    assert_eq!(shape(&list), ["-No Plan", "-x", "  @p1"]);
-    assert_eq!(list.selected(), 2);
+    assert_eq!(shape(&list), ["=Earlier", "-No Plan", "-x", "  @p1"]);
+    assert_eq!(list.selected(), 3);
     assert!(!list.select_task("missing"));
     assert!(
         !list.select_task("r"),
         "a request has no row; its group's header is highlighted"
     );
-    assert_eq!(list.selected(), 0);
+    assert_eq!(list.selected(), 1);
 }
 
 #[test]
@@ -102,7 +102,10 @@ fn t_selects_the_task_doing_a_todo_or_item_or_says_why_not() {
     let mut app = app_on_tasks(vec![auth], tasks);
     assert_eq!(
         shape(app.task_list()),
-        ["-auth", "#-auth 0", "  @p1", "#auth 1", "@p2", "-No Plan", "-x", "  @p3", "y"]
+        [
+            "=Earlier", "-auth", "#-auth 0", "  @p1", "#auth 1", "@p2", "-No Plan", "-x", "  @p3",
+            "y"
+        ]
     );
 
     press(&mut app, KeyCode::Char('t'));
@@ -136,21 +139,24 @@ fn enter_and_clicks_show_the_agent_and_fold_on_the_icon() {
     ]));
     app.show_side_tab(SidePanelTab::Tasks);
     app.set_task_rows_area(Rect::new(10, 5, 30, 8), 0);
-    assert_eq!(shape(app.task_list()), ["-No Plan", "-x", "  @p"]);
+    assert_eq!(
+        shape(app.task_list()),
+        ["=Earlier", "-No Plan", "-x", "  @p"]
+    );
 
     // Column 1 of the rows holds every icon at the left edge.
-    app.click_task_row(11, 6);
-    assert_eq!(shape(app.task_list()), ["-No Plan", "+x"]);
-    app.click_task_row(20, 6);
+    app.click_task_row(11, 7);
+    assert_eq!(shape(app.task_list()), ["=Earlier", "-No Plan", "+x"]);
+    app.click_task_row(20, 7);
     assert_eq!(
         switched(&mut rx).as_deref(),
         Some("lead"),
         "an item shows the agent of its request"
     );
-    app.click_task_row(20, 5);
+    app.click_task_row(20, 6);
     assert_eq!(
         shape(app.task_list()),
-        ["+No Plan"],
+        ["=Earlier", "+No Plan"],
         "No Plan folds anywhere"
     );
 }

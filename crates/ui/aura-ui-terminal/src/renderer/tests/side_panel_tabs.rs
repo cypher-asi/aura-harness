@@ -121,11 +121,13 @@ fn auth_and_parser_plans() -> Vec<crate::events::PlanView> {
                     ..todo("Write the login handler", TodoState::InProgress)
                 },
             ],
+            changed_ms: None,
         },
         PlanView {
             path: ".aura/plans/parser_00000002.plan.md".into(),
             name: "Parser cleanup".into(),
             todos: vec![todo("Split the lexer", TodoState::Completed)],
+            changed_ms: None,
         },
     ]
 }
@@ -307,6 +309,7 @@ fn test_active_plan_shows_in_the_side_panel_not_above_the_input() {
             todo("Add setInviteMnda", TodoState::Pending),
             todo("Typecheck and lint", TodoState::Pending),
         ],
+        changed_ms: None,
     })));
     let rows = render_rows(&mut app, 160);
     let screen = rows.join("\n");

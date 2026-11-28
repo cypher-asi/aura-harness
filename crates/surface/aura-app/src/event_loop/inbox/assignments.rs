@@ -78,11 +78,23 @@ impl Tool for AssignTool {
 
 /// Hand the work `args` describe from the coordinator `caller` to a member
 /// of its channel: the one `to` names, else a new one started from the
-/// permanent agent `agent`. Returns what the coordinator is told.
+/// permanent agent `agent`. Returns what the coordinator is told, once
+/// what changed is on disk, so a crash loses nothing it was told.
 ///
 /// # Errors
 /// What the coordinator is told when nothing was assigned.
 pub(crate) async fn assign(
+    hub: &Arc<AgentHub>,
+    caller: AgentId,
+    args: AssignArgs,
+) -> Result<String, String> {
+    let said = assign_now(hub, caller, args).await;
+    super::saved::persist(hub).await;
+    said
+}
+
+/// [`assign`], before it is saved.
+async fn assign_now(
     hub: &Arc<AgentHub>,
     caller: AgentId,
     args: AssignArgs,

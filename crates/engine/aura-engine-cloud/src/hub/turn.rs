@@ -67,7 +67,7 @@ impl CloudHub {
     /// that sleeps shows itself waking; the events all reach the turn's
     /// stream before anything else does. A node older than this hub is
     /// refused ([`CloudHub::current_node`]).
-    async fn wake_for_turn(
+    pub(super) async fn wake_for_turn(
         &self,
         hex: &str,
         tx: &mpsc::Sender<RemoteEvent>,
@@ -133,16 +133,7 @@ impl CloudHub {
                 op: "turn",
                 after: TURN_TIMEOUT,
             }));
-            if let Err(err) = hub.mirror_from(&node, agent).await {
-                tracing::warn!(agent = %hex, error = %err, "could not copy the turn's record");
-            }
-            // The machine stays awake for these: the guard is still held.
-            if let Err(err) = hub.copy_session(&node, agent).await {
-                tracing::debug!(agent = %hex, error = %err, "could not copy the session checkpoint");
-            }
-            if let Err(err) = hub.copy_traces(&node, agent).await {
-                tracing::debug!(agent = %hex, error = %err, "could not copy the trace runs");
-            }
+            hub.finish_on_node(&node, agent).await;
             drop(guard);
             if let Err(err) = turn {
                 let _ = tx.send(RemoteEvent::Failed(err.to_string())).await;
@@ -150,7 +141,25 @@ impl CloudHub {
         });
         rx
     }
+
+    /// Copy what `agent`'s turn on `node` left: its record, its session
+    /// checkpoint and its trace runs. Hold the machine awake around it.
+    pub(super) async fn finish_on_node(&self, node: &NodeClient, agent: AgentId) {
+        let hex = agent.to_hex();
+        if let Err(err) = self.mirror_from(node, agent).await {
+            tracing::warn!(agent = %hex, error = %err, "could not copy the turn's record");
+        }
+        if let Err(err) = self.copy_session(node, agent).await {
+            tracing::debug!(agent = %hex, error = %err, "could not copy the session checkpoint");
+        }
+        if let Err(err) = self.copy_traces(node, agent).await {
+            tracing::debug!(agent = %hex, error = %err, "could not copy the trace runs");
+        }
+    }
 }
+
+/// What a turn's stream says once its machine took the turn.
+pub const WORKING: &str = "Working in the cloud";
 
 /// `https://x` → `wss://x`.
 pub(super) fn ws_url(base: &str, path: &str) -> String {
@@ -234,9 +243,7 @@ async fn stream_turn(
             endpoint: url.clone(),
             message: err.to_string(),
         })?;
-    let _ = tx
-        .send(RemoteEvent::Status("Working in the cloud".into()))
-        .await;
+    let _ = tx.send(RemoteEvent::Status(WORKING.into())).await;
     TurnStream {
         hub,
         node,
@@ -245,6 +252,7 @@ async fn stream_turn(
         sink: &mut sink,
         stream: &mut stream,
         tx,
+        relayed: false,
     }
     .relay(cancel)
     .await
@@ -269,20 +277,28 @@ fn stream_path(started: &serde_json::Value) -> CloudResult<String> {
 }
 
 /// A turn's open event stream.
-struct TurnStream<'a> {
-    hub: &'a CloudHub,
-    node: &'a NodeClient,
-    agent: AgentId,
-    url: String,
-    sink: &'a mut NodeSink,
-    stream: &'a mut NodeStream,
-    tx: &'a mpsc::Sender<RemoteEvent>,
+pub(super) struct TurnStream<'a> {
+    pub(super) hub: &'a CloudHub,
+    pub(super) node: &'a NodeClient,
+    pub(super) agent: AgentId,
+    pub(super) url: String,
+    pub(super) sink: &'a mut NodeSink,
+    pub(super) stream: &'a mut NodeStream,
+    pub(super) tx: &'a mpsc::Sender<RemoteEvent>,
+    /// Whether any of the turn's events was shown yet
+    pub(super) relayed: bool,
 }
 
 impl TurnStream<'_> {
     /// Show the stream's events until the turn ends, mirroring the
     /// record as it runs.
-    async fn relay(mut self, cancel: CancellationToken) -> CloudResult<()> {
+    pub(super) async fn relay(mut self, cancel: CancellationToken) -> CloudResult<()> {
+        self.relay_mut(cancel).await
+    }
+
+    /// [`Self::relay`], leaving the stream to the caller, which can then
+    /// tell whether it showed anything ([`Self::relayed`]).
+    pub(super) async fn relay_mut(&mut self, cancel: CancellationToken) -> CloudResult<()> {
         let mut mirror = tokio::time::interval(MIRROR_EVERY);
         mirror.tick().await;
         loop {
@@ -318,7 +334,9 @@ impl TurnStream<'_> {
         let Ok(message) = serde_json::from_str::<OutboundMessage>(&text) else {
             return None;
         };
-        match map_outbound(message) {
+        let event = map_outbound(message);
+        self.relayed |= event.is_some();
+        match event {
             Some(RemoteEvent::Failed(err)) => Some(Err(CloudError::Node {
                 node: self.node.node().into(),
                 op: "turn",

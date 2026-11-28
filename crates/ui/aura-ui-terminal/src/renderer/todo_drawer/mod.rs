@@ -5,9 +5,11 @@
 //! ```text
 //! ├──────────────────────────────────────────────┤
 //! │  ⬢ Working on 2 active · 1 done           —  │
-//! │ ◐ Write the lexer       → FEN6 · working 4m  │
-//! │ ☐ Run the tests         → REV6 · idle        │
-//! │ ▸ Finished to-dos  1                            │
+//! │ ◐ Write the lexer                            │
+//! │   FEN6 · working 4m                          │
+//! │ ☐ Run the tests                              │
+//! │   REV6 · idle                                │
+//! │ ▸ Finished to-dos  1                         │
 //! ├──────────────────────────────────────────────┤
 //! │  → Add a follow-up                           │
 //! ```
@@ -19,12 +21,13 @@
 //! The header counts the items still open and those done, then a toggle,
 //! `—` to fold the drawer to the header, `+` to open it. Folded, the item
 //! in progress follows the count, so the current step stays in sight.
-//! Open, each item still open is one row, with the agent it was given to
-//! ([`rows`]). Closed items only show under the "Finished to-dos" row, once
-//! it is opened. Past [`MAX_TODO_ROWS`] rows, or past the rows the screen
-//! leaves it, the rows on screen start at the item in progress so it
-//! stays in view, keep the history row, and a `+N more` row counts the
-//! rest.
+//! Open, each item still open takes two rows, as a member does on the
+//! side panel: its text, then in gray the agent it was given to and how
+//! that agent is doing ([`rows`]). Closed items only show under the
+//! "Finished to-dos" row, once it is opened. Past [`MAX_TODO_ROWS`] rows,
+//! or past the rows the screen leaves it, the items on screen start at
+//! the item in progress so it stays in view, keep the history row, and a
+//! `+N more` row counts the rest.
 //!
 //! The drawer records where it drew its header and its history row on
 //! the [`App`] for the mouse.
@@ -54,8 +57,8 @@ const BORDER_ROWS: u16 = 1;
 const MIN_FOLDED_TEXT: usize = 8;
 
 /// Rows the drawer wants: none when it has nothing to show, the header
-/// alone when folded, else the header, the items on screen and a
-/// `+N more` row when some are hidden.
+/// alone when folded, else the header, the rows of the items on screen
+/// and a `+N more` row when some are hidden.
 #[must_use]
 pub(super) fn height(app: &App) -> u16 {
     if !app.todo_drawer_shown() {
@@ -64,10 +67,9 @@ pub(super) fn height(app: &App) -> u16 {
     if app.todo_drawer_folded() {
         return BORDER_ROWS + 1;
     }
-    let len = rows::entries(app).len();
-    let shown = len.min(MAX_TODO_ROWS);
-    let more = usize::from(len > shown);
-    u16::try_from(shown + more)
+    let entries = rows::entries(app);
+    let (shown, more) = rows::fit(&entries, MAX_TODO_ROWS);
+    u16::try_from(rows::rows_of(&entries, &shown) + usize::from(more))
         .unwrap_or(u16::MAX)
         .saturating_add(BORDER_ROWS + 1)
 }
@@ -116,13 +118,19 @@ fn draw_rows(
     let mut history = None;
     for &index in &shown {
         let entry = entries[index];
-        if matches!(entry, rows::Entry::History(_)) {
+        if matches!(entry, rows::Entry::History(_)) && y < bottom {
             history = Some(Rect { y, ..header });
         }
-        let mut line = rows::entry_line(app, entry, text_room, theme);
-        line.spans.insert(0, Span::raw(" "));
-        frame.render_widget(Paragraph::new(line), Rect { y, ..header });
-        y += 1;
+        // An item the screen cuts short keeps its first row; past `bottom`
+        // are the border and the input.
+        for mut line in rows::entry_lines(app, entry, text_room, theme) {
+            if y >= bottom {
+                break;
+            }
+            line.spans.insert(0, Span::raw(" "));
+            frame.render_widget(Paragraph::new(line), Rect { y, ..header });
+            y += 1;
+        }
     }
     let hidden = entries.len() - shown.len();
     if more && hidden > 0 && y < bottom {
