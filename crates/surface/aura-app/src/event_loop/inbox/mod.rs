@@ -88,7 +88,7 @@ mod peers;
 #[cfg(test)]
 mod tests;
 
-pub(super) use answers::{answer, answer_seen, give_up, give_up_seen};
+pub(super) use answers::{answer, answer_seen, give_up, give_up_all, give_up_seen};
 pub use assignments::AssignTool;
 #[cfg(test)]
 pub(crate) use assignments::{assign, AssignArgs};

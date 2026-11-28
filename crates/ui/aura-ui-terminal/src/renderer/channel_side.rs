@@ -53,7 +53,7 @@
 //! ```
 
 use super::agents::projects::spawn_guides;
-use super::agents::working_icon;
+use super::agents::{working_icon, FAILED_ICON};
 use super::chrome::{Body, ScrollView};
 use super::modals::placement_name;
 use super::side_list::render_empty;
@@ -78,6 +78,12 @@ use ratatui::{
 const WORKING: &str = "Working…";
 /// What a member's second row says while it waits with no title.
 const IDLE: &str = "Idle";
+
+/// What a member starting on its cloud machine is doing.
+const STARTING: &str = "Starting in the cloud…";
+
+/// Before why a member's work failed.
+const FAILED: &str = "Failed";
 
 /// Draw the open channel's members into `inner`, the body below the tab
 /// bar of the panel bordered by `area`. Without an open channel there is
@@ -167,11 +173,12 @@ fn member_rows<'a>(
         &end,
         &[],
     );
-    let status = cell_style(theme, state, Style::default().fg(theme.colors.muted));
+    let (said, color) = member_status(app, member, theme);
+    let status = cell_style(theme, state, Style::default().fg(color));
     let status_row = status_row(
         width,
         &status_guides(&guides),
-        &member_status(app, member),
+        &said,
         (status.bg, status.text),
         theme,
     );
@@ -185,6 +192,8 @@ fn member_rows<'a>(
 fn member_icon(app: &App, (member, index): (&AgentSummary, usize), theme: &Theme) -> StatusIcon {
     if app.agent_thinking(member) || app.channel_member_hides_working(index) {
         working_icon(app, theme)
+    } else if member.error.is_some() {
+        StatusIcon::new(FAILED_ICON, theme.colors.error)
     } else if let Some(folded) = app.channel_member_fold(index) {
         StatusIcon::new(if folded { "▸" } else { "▾" }, theme.colors.muted)
     } else if member.depth == 0 {
@@ -215,10 +224,18 @@ fn member_name(member: &AgentSummary) -> &str {
     }
 }
 
-/// What a member's second row says: its title, else the subtask it was
-/// spawned for, else whether it is working.
-fn member_status(app: &App, member: &AgentSummary) -> String {
-    member
+/// What a member's second row says, and in which color: why its work
+/// failed, in red; that it is starting on its cloud machine; else its
+/// title, else the subtask it was spawned for, else whether it is
+/// working, in gray.
+fn member_status(app: &App, member: &AgentSummary, theme: &Theme) -> (String, Color) {
+    if let Some(why) = &member.error {
+        return (format!("{FAILED}: {why}"), theme.colors.error);
+    }
+    if member.starting && !app.agent_thinking(member) {
+        return (STARTING.to_string(), theme.colors.muted);
+    }
+    let said = member
         .title
         .as_deref()
         .or(member.subtitle.as_deref())
@@ -234,7 +251,8 @@ fn member_status(app: &App, member: &AgentSummary) -> String {
                 status.to_string()
             },
             str::to_string,
-        )
+        );
+    (said, theme.colors.muted)
 }
 
 /// The guides of a member's second row, from `guides`, its first row's:

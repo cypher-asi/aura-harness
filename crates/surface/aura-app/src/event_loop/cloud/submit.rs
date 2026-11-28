@@ -7,6 +7,9 @@ use crate::event_loop::turns::Prompt;
 use aura_agent::checkpoint::{Checkpoints, SessionCheckpoint};
 use tokio::sync::mpsc;
 
+/// Why a cloud turn that was cancelled ended: not a failure of its own.
+pub(super) const STOPPED: &str = "it was stopped";
+
 /// Prompts and commands for a cloud agent, or for one being moved.
 /// Returns the work when it is for the local kernel after all. Work for
 /// a moving agent, or a cloud agent with a turn running, waits in its
@@ -151,6 +154,7 @@ async fn start_turn(
         .lock()
         .insert(agent, cancel.clone());
     lock(&state.hub.cloud_turns).insert(agent);
+    state.hub.status.clear(agent);
     crate::event_loop::agents::send_agent_list(state).await;
     let mut row = crate::event_loop::handlers::turn_summary(
         agent,
@@ -172,7 +176,7 @@ async fn start_turn(
         );
         let copied = copied_session(&ui, &mut rx, sessions, agent).await;
         let failure = match end {
-            _ if stopped => Some("it was stopped".to_string()),
+            _ if stopped => Some(STOPPED.to_string()),
             TurnEnd::Done => None,
             TurnEnd::Failed(why) => Some(why),
         };

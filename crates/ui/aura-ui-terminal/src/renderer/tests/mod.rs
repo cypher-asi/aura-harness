@@ -17,6 +17,7 @@ use support::*;
 
 mod agent_codes;
 mod agent_commands;
+mod agent_failures;
 mod agents_header;
 mod bench_icon;
 mod channel_history;

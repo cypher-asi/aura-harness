@@ -90,6 +90,7 @@ impl AgentHub {
             channel_chat: crate::event_loop::channels::ChannelChat::default(),
             inbox: crate::event_loop::inbox::Inbox::default(),
             factory_flows: crate::event_loop::factory::Flows::default(),
+            status: status::AgentStatus::default(),
             post_summaries,
             shown_chats: Mutex::default(),
             shown_records: Mutex::default(),

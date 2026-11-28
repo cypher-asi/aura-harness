@@ -227,8 +227,12 @@ pub(in crate::event_loop) async fn deliver(
     if kind == InboxKind::Assignment {
         crate::event_loop::factory::hooks::on_assignment(state, to);
     }
-    if lock(&state.hub.cloud_starts).remove(&to) {
-        crate::event_loop::cloud::start_in_cloud(state, to).await;
+    // A member that can't have its machine fails, and its senders are
+    // told: the message must not run here instead.
+    if lock(&state.hub.cloud_starts).remove(&to)
+        && !crate::event_loop::cloud::start_in_cloud(state, to).await
+    {
+        return;
     }
     if kind != InboxKind::Assignment {
         if let Some(steering) = state.hub.steering(to) {
