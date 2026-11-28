@@ -90,6 +90,8 @@ pub struct ModelPicker {
     filter: String,
     cursor: usize,
     target: PickerTarget,
+    /// The list's first row shown, as last drawn or as the wheel left it
+    scroll: usize,
 }
 
 impl ModelPicker {
@@ -161,6 +163,17 @@ impl ModelPicker {
             .unwrap_or(0);
     }
 
+    /// The list's first row shown.
+    pub(crate) const fn scroll(&self) -> usize {
+        self.scroll
+    }
+
+    /// Show the list from row `scroll`, as the wheel or the next frame
+    /// put it.
+    pub(crate) const fn set_scroll(&mut self, scroll: usize) {
+        self.scroll = scroll;
+    }
+
     /// Reset for a fresh open: show the tab holding `current`, clear the
     /// filter and highlight `current` (or the first row). The pick is the
     /// session's model.
@@ -177,6 +190,7 @@ impl ModelPicker {
                 }
             });
         self.filter.clear();
+        self.scroll = 0;
         self.cursor = self
             .visible(models)
             .iter()

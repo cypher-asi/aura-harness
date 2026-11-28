@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
+mod picker_wheel;
 mod support;
 mod wheel_lists;
 use support::*;

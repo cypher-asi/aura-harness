@@ -34,7 +34,10 @@ pub(super) fn render(frame: &mut Frame, app: &mut App, theme: &Theme) -> ModalAr
         .iter()
         .position(|(_, idx)| *idx == Some(picker.cursor()))
         .unwrap_or(0);
-    let first = window_start(total, visible, cursor_row);
+    // The wheel leaves the list where it put it until the cursor moves.
+    let last = total.saturating_sub(visible);
+    let first =
+        app.model_picker_first((cursor_row, last), window_start(total, visible, cursor_row));
     let mut lines = vec![
         tab_row(app, picker, theme),
         filter_line(picker, width, theme),
@@ -55,6 +58,7 @@ pub(super) fn render(frame: &mut Frame, app: &mut App, theme: &Theme) -> ModalAr
     });
     let area = modal.render(frame.buffer_mut(), screen, lines);
     let rows = clickable_rows(hits, area);
+    app.keep_model_picker_scroll(cursor_row, first);
     app.set_model_picker_layout(PickerLayout {
         modal: area.frame,
         rows,
