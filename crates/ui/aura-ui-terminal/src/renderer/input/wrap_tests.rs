@@ -3,7 +3,7 @@ use ratatui::text::Span;
 
 fn rows(text: &str, width: usize) -> Vec<String> {
     let starts = row_starts(text, width);
-    split_rows(vec![Span::raw(text.to_string())], &starts)
+    split_rows(&[Span::raw(text)], &starts, 0..starts.len())
         .iter()
         .map(|row| row.iter().map(|s| s.content.as_ref()).collect())
         .collect()

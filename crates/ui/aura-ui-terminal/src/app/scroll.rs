@@ -126,6 +126,9 @@ impl App {
         self.scroll_panel_down(self.focus, lines);
     }
 
+    /// Move `panel` `lines` up as the keys do: the chat scrolls, and a
+    /// list's highlight moves. Never for the wheel, which scrolls a list's
+    /// rows and leaves its highlight alone (`App::wheel_panel_rows`).
     pub(super) fn scroll_panel_up(&mut self, panel: PanelFocus, lines: usize) {
         match panel {
             PanelFocus::Chat if self.flow.is_open() => {
@@ -166,6 +169,7 @@ impl App {
         }
     }
 
+    /// [`Self::scroll_panel_up`], down. Not for the wheel either.
     pub(super) fn scroll_panel_down(&mut self, panel: PanelFocus, lines: usize) {
         match panel {
             PanelFocus::Chat if self.flow.is_open() => {
