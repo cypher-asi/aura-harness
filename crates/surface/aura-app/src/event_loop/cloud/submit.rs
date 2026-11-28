@@ -22,6 +22,9 @@ pub(in crate::event_loop) async fn submit(
     if is_withdrawn(state, agent, &work).await {
         return None;
     }
+    if !super::offline::connect_for(state, agent).await {
+        return None;
+    }
     if let Some(root) = state.cloud.machine_root(agent) {
         let note = spawned_on_machine(state, agent, root);
         system(state, agent, note).await;
