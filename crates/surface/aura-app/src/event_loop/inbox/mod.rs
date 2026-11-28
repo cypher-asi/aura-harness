@@ -87,6 +87,7 @@ mod assignments;
 mod hooks;
 mod messages;
 mod peers;
+mod starts;
 #[cfg(test)]
 mod tests;
 mod withdraw;
@@ -98,10 +99,11 @@ pub use assignments::AssignTool;
 #[cfg(test)]
 pub(crate) use assignments::{assign, AssignArgs};
 pub use hooks::PeerHooks;
-pub(super) use hooks::{reach_of, MachineMail};
+pub(super) use hooks::{reach_of, refresh_reach, MachineMail};
 pub(super) use messages::deliver;
 use messages::{mail_view, new_id, send, shown};
 use peers::{circle, Circle, Named, Peer, Relation};
+pub(super) use starts::give_up_unstarted;
 pub(super) use withdraw::take_withdrawn;
 
 /// Requests one thread between two agents carries; then they have to
@@ -127,6 +129,9 @@ struct State {
     reports: HashMap<AgentId, (bool, String)>,
     /// Agents whose running turn the user stopped ([`Inbox::interrupt`])
     interrupted: HashSet<AgentId>,
+    /// Agents the user stopped to carry on, whose reports wait for their
+    /// next work ([`Inbox::park`]); the stall sweep leaves them be.
+    parked: HashSet<AgentId>,
 }
 
 /// A request or assignment an agent owes an answer to.
@@ -157,9 +162,37 @@ impl Inbox {
     pub(crate) fn take_interrupted(&self, agent: AgentId) -> bool {
         lock(&self.state).interrupted.remove(&agent)
     }
+
+    /// Note that `agent`'s reports wait, on purpose, for the work the
+    /// user starts next: the user stopped its turn to carry on.
+    pub(crate) fn park(&self, agent: AgentId) {
+        lock(&self.state).parked.insert(agent);
+    }
+
+    /// `agent`'s next work starts: its reports wait on that now.
+    pub(crate) fn unpark(&self, agent: AgentId) {
+        lock(&self.state).parked.remove(&agent);
+    }
+
+    /// The agents that owe answers, with the subjects and markers of
+    /// what they owe, leaving out those [`Self::park`] parked.
+    pub(crate) fn owing(&self) -> Vec<(AgentId, Vec<(String, String)>)> {
+        let state = lock(&self.state);
+        state
+            .owed
+            .iter()
+            .filter(|(agent, owed)| !owed.is_empty() && !state.parked.contains(agent))
+            .map(|(agent, owed)| {
+                let asks = owed
+                    .iter()
+                    .map(|owed| (owed.subject.clone(), inbox::marker(owed.kind, &owed.id)))
+                    .collect();
+                (*agent, asks)
+            })
+            .collect()
+    }
 }
 
-#[cfg(test)]
 impl Inbox {
     /// How many answers `agent` owes.
     pub(crate) fn owed_by(&self, agent: AgentId) -> usize {

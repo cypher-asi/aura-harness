@@ -45,6 +45,7 @@ pub(in crate::event_loop) async fn submit(
     }
     let hub = state.cloud.hub()?;
     if let Some(refusal) = foreign_owner(state, &hub, agent) {
+        crate::event_loop::inbox::give_up_unstarted(state, agent, &refusal);
         system(state, agent, refusal).await;
         return None;
     }
@@ -149,6 +150,7 @@ async fn run_prompt(
     let current = state.models.current().to_string();
     let linked = state.auth.linked_plans(&state.auth.owner());
     if let Some(note) = plan_refusal(&current, &linked) {
+        crate::event_loop::inbox::give_up_unstarted(state, agent, &note);
         system(state, agent, note).await;
         return;
     }
@@ -186,6 +188,9 @@ async fn start_turn(
     ask: TurnAsk,
     mut extras: TurnExtras,
 ) {
+    // What it owes waits on this turn now, not on the user.
+    state.hub.inbox.unpark(agent);
+    state.hub.standing.started(agent);
     // Stopped from the chat or its PROCESSES row alike.
     let cancel = CancellationToken::new();
     state

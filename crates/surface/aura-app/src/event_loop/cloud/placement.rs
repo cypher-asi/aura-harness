@@ -115,6 +115,14 @@ async fn move_to_cloud(
     place(state, hub, request, console, (mark, Start::Move));
 }
 
+/// Bring the reach of every placed channel member up to date
+/// ([`crate::event_loop::inbox::refresh_reach`]), when the hub is up.
+pub(in crate::event_loop) async fn refresh_reach(state: &LoopState<'_>) {
+    if let Some(hub) = state.cloud.hub() {
+        crate::event_loop::inbox::refresh_reach(&state.hub, &hub).await;
+    }
+}
+
 /// Place the agent `request` asks for on a cloud machine, showing the
 /// move on `console` and holding its `mark` until the move ends. Work
 /// sent meanwhile waits in its queue; the loop starts it once it hears

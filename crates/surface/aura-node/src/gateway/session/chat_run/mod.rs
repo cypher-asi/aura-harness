@@ -290,6 +290,24 @@ pub(crate) fn register_run(
     handle
 }
 
+/// The top-level run of `agent` in `registry` that has a turn under way,
+/// if one has: its agent must not take a turn in a second run meanwhile,
+/// as both would write its record and work in its workspace at once.
+pub(crate) fn busy_run_of(
+    registry: &ChatRunRegistry,
+    agent: aura_core_types::AgentId,
+) -> Option<String> {
+    registry
+        .iter()
+        .find(|run| {
+            let handle = run.value();
+            handle.linkage.is_none()
+                && handle.agent == Some(agent)
+                && handle.activity.current().is_some()
+        })
+        .map(|run| run.key().clone())
+}
+
 /// Spawn a [`super::chat::run_chat_driver`] task that owns `session`
 /// and its turn execution, register it under `run_id`, and return the
 /// shared [`ChatRunHandle`]. The driver runs independently of any
