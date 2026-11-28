@@ -104,6 +104,13 @@ struct FrameLayout {
     under_right: Option<Rect>,
 }
 
+/// The red of an agent that errored out, the Stop button's: its row and
+/// icon on PROJECTS, its row on a channel's MEMBERS and the errors in its
+/// chat all take it, so a failure reads as the button that stops work.
+pub(crate) const fn failure_color(theme: &Theme) -> ratatui::style::Color {
+    theme.colors.error
+}
+
 /// Render the full application UI: the header row, then the panels, with
 /// the input at the bottom of the Chat panel and the footer under it. The
 /// side columns end level with the input.
