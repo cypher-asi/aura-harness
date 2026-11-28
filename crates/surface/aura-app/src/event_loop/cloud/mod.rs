@@ -57,6 +57,7 @@ use crate::cloud::{CloudHub, PlaceRequest, RemoteEvent};
 
 mod blocked_starts;
 mod boot;
+mod copy_note;
 mod ended;
 #[cfg(test)]
 mod ended_tests;
