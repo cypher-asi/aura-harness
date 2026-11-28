@@ -462,6 +462,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "hex",
+ "mimalloc",
  "parking_lot",
  "ratatui",
  "rayon",

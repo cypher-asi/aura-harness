@@ -51,6 +51,7 @@ pub use processes::{
 #[doc(hidden)]
 pub use rocks_store::FaultAt;
 pub use rocks_store::RocksStore;
+pub use rocks_store::NativeMemory;
 /// Re-exported so callers can stage rows of several stores (e.g.
 /// [`AgentStore::stage`]) into one atomic batch.
 pub use rocksdb::WriteBatch;

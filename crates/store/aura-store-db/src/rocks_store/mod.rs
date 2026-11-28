@@ -55,10 +55,12 @@ use std::sync::{Arc, Mutex};
 
 mod append;
 mod fault;
+mod memory;
 mod open;
 mod read_store;
 
 pub use fault::FaultAt;
+pub use memory::NativeMemory;
 pub(crate) use fault::{write_batch_with_fault, FaultWriteError};
 
 /// How many locks record appends are spread over. An agent always takes

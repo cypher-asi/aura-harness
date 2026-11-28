@@ -251,6 +251,25 @@ pub fn validate_name(name: &str) -> Result<(), AgentDefinitionError> {
 pub struct AgentDefinitions {
     dir: PathBuf,
     definitions: Vec<AgentDefinition>,
+    /// The `.md` files read last, with their sizes and change times, and
+    /// what [`Self::reload`] found wrong then: a reload that finds the same
+    /// files unchanged parses none of them again
+    read: Option<(Vec<FileStamp>, Vec<String>)>,
+}
+
+/// A definition file as [`AgentDefinitions::reload`] last saw it.
+type FileStamp = (PathBuf, u64, Option<std::time::SystemTime>);
+
+/// `paths` with their sizes and change times; `None` for a file whose
+/// metadata can't be read, so it is always read again.
+fn stamps(paths: &[PathBuf]) -> Option<Vec<FileStamp>> {
+    paths
+        .iter()
+        .map(|path| {
+            let meta = fs::metadata(path).ok()?;
+            Some((path.clone(), meta.len(), meta.modified().ok()))
+        })
+        .collect()
 }
 
 impl AgentDefinitions {
@@ -272,6 +291,7 @@ impl AgentDefinitions {
         let mut definitions = Self {
             dir,
             definitions: Vec::new(),
+            read: None,
         };
         definitions.reload();
 
@@ -322,6 +342,14 @@ impl AgentDefinitions {
             }
         };
         paths.sort();
+        // Every turn reloads; parsing every file each time only churned
+        // memory. A file edited on disk changes its size or time.
+        let stamped = stamps(&paths);
+        if let (Some(now), Some((before, problems_then))) = (&stamped, &self.read) {
+            if now == before && problems.is_empty() {
+                return problems_then.clone();
+            }
+        }
 
         let mut definitions: Vec<AgentDefinition> = Vec::with_capacity(paths.len());
         for path in paths {
@@ -341,6 +369,7 @@ impl AgentDefinitions {
             }
         }
         self.definitions = definitions;
+        self.read = stamped.map(|stamped| (stamped, problems.clone()));
         problems
     }
 
