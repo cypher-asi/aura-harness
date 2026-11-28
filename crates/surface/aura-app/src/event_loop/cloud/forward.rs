@@ -89,6 +89,9 @@ pub(super) struct TurnExtras {
     /// Set on a turn an earlier run of Aura asked for: when it turns out
     /// cut short, its agent carries on instead of giving up what it owes
     pub(super) cut_short: Option<CutShort>,
+    /// The reply text the turn streamed since its last tool call: its
+    /// last words once it ends, which answer what it was asked
+    pub(super) said: String,
 }
 
 /// How an agent whose followed turn was cut short carries on: the
@@ -140,6 +143,7 @@ pub(in crate::event_loop) async fn forward_marking_waits(
     rx: &mut tokio::sync::mpsc::Receiver<RemoteEvent>,
 ) {
     let mut extras = TurnExtras {
+        said: String::new(),
         waiting: Some(WaitingMark { hub, agent }),
         ..TurnExtras::default()
     };
@@ -212,6 +216,7 @@ pub(super) async fn forward(
             extras.show_record().await;
             continue;
         }
+        note_said(&mut extras.said, &event);
         if let Some(ended) = chat.show(event, extras.context_limit).await {
             end = ended;
             break;
@@ -222,6 +227,16 @@ pub(super) async fn forward(
     }
     chat.finish(extras).await;
     end
+}
+
+/// Keep in `said` the reply text `event` adds: a tool call starts the
+/// turn's words afresh, so what is left at its end is its last message.
+fn note_said(said: &mut String, event: &RemoteEvent) {
+    match event {
+        RemoteEvent::Text(text) => said.push_str(text),
+        RemoteEvent::ToolStart { .. } => said.clear(),
+        _ => {}
+    }
 }
 
 /// What a cloud turn has open in its chat.

@@ -150,14 +150,7 @@ async fn a_cloud_members_turn_answers_its_assignment_when_the_loop_hears_it_ende
             // conversation back as the turn ended.
             subagents::lock(&state.hub.cloud_turns).insert(member);
             assert!(state.hub.is_working(member), "working, on its machine");
-            let messages = vec![
-                aura_model::Message::user(&assignment.prompt),
-                aura_model::Message::assistant(&said),
-            ];
-            let outcome = cloud::TurnOutcome {
-                failure,
-                messages: Some(messages),
-            };
+            let outcome = copied_turn(failure, &assignment.prompt, &said);
             cloud::handle_ended(&mut state, cloud::Ended::Turn(member, Some(outcome))).await;
             assert!(!state.hub.is_working(member));
             assert_eq!(state.hub.inbox.owed_by(member), 0);
@@ -185,6 +178,20 @@ async fn a_cloud_members_turn_answers_its_assignment_when_the_loop_hears_it_ende
         "{failed}"
     );
     assert!(failed.ends_with(&task_report_line("3", false)), "{failed}");
+}
+
+/// A cloud turn that ended as `failure` says, its copy holding `prompt`
+/// and the reply `said`, none of which streamed here.
+fn copied_turn(failure: Option<String>, prompt: &str, said: &str) -> cloud::TurnOutcome {
+    let messages = vec![
+        aura_model::Message::user(prompt),
+        aura_model::Message::assistant(said),
+    ];
+    cloud::TurnOutcome {
+        failure,
+        messages: Some(messages),
+        said: None,
+    }
 }
 
 /// The one text in `texts`.
@@ -332,6 +339,7 @@ async fn a_cloud_turn_the_user_stops_leaves_its_report_to_the_next_turn() {
         let outcome = cloud::TurnOutcome {
             failure: failure.map(str::to_string),
             messages: Some(messages),
+            said: None,
         };
         cloud::Ended::Turn(member, Some(outcome))
     };

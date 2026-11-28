@@ -20,6 +20,7 @@ fn owed(agent: &str, from: &str, id: &str, withdrawn: bool) -> SavedOwed {
         subject: "Footer".to_string(),
         todo: Some("3".to_string()),
         withdrawn,
+        taken: false,
     }
 }
 
@@ -177,4 +178,22 @@ fn the_factory_stages_round_trip_and_a_file_from_before_them_has_none() {
     old.as_object_mut().unwrap().remove("flows");
     std::fs::write(&path, old.to_string()).unwrap();
     assert_eq!(file::load(&path), sample());
+}
+
+#[test]
+fn a_taken_report_stays_taken_across_a_restart_and_an_older_file_reads_untaken() {
+    let taken = SavedOwed {
+        taken: true,
+        ..owed("a", "b", "r1", false)
+    };
+    let json = serde_json::to_value(&taken).unwrap();
+    assert_eq!(json["taken"], serde_json::json!(true));
+    let back: SavedOwed = serde_json::from_value(json).unwrap();
+    assert!(back.taken, "the turn that ends its work still answers it");
+
+    let mut older = serde_json::to_value(owed("a", "b", "r2", false)).unwrap();
+    assert!(older.get("taken").is_none(), "not written when untaken");
+    older.as_object_mut().unwrap().remove("taken");
+    let read: SavedOwed = serde_json::from_value(older).unwrap();
+    assert!(!read.taken);
 }

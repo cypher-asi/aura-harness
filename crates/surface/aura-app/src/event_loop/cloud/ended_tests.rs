@@ -24,6 +24,7 @@ fn an_ended_cloud_turn_frees_its_agent_through_the_loop() {
     let outcome = TurnOutcome {
         failure: Some("boom".into()),
         messages: None,
+        said: None,
     };
     cloud.shared.end_turn(agent, Some(outcome));
     assert!(

@@ -49,6 +49,8 @@ pub(super) async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, wor
     let cancel = CancellationToken::new();
     let launch = match work {
         Work::Prompt { prompt, shown } => {
+            // This turn answers what its prompt asks.
+            super::inbox::take_up(&state.hub, agent_id, &prompt.text);
             let Some(launch) = turn_task(state, &mut session, &ui, &cancel, prompt, shown).await
             else {
                 state.idle.insert(agent_id, session);
