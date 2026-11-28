@@ -279,6 +279,7 @@ async fn a_cloud_turn_refused_its_sign_in_is_paused_and_resumed_not_failed() {
     let outcome = cloud::TurnOutcome {
         failure: Some("API error (status 401): OAuth access token has been revoked".to_string()),
         messages: None,
+        said: None,
     };
     cloud::handle_ended(&mut state, cloud::Ended::Turn(member, Some(outcome))).await;
     assert!(row(&state, member).waiting_for_sign_in);
