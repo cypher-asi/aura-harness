@@ -29,12 +29,14 @@
 mod credentials;
 mod error;
 mod identity;
+mod keychain;
 mod manager;
 mod vault;
 
 pub use credentials::{CredentialStore, StoredSession};
 pub use error::{AuthError, ZosError};
 pub use identity::Identity;
+pub use keychain::KeychainSecret;
 pub use manager::{sign_in_notice, AuthManager, AuthSummary, LinkMode, PendingLink};
 pub use vault::Vault;
 

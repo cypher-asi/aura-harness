@@ -18,8 +18,8 @@
 use crate::event_loop::notices::Notice;
 use crate::event_loop::subagents::{lock, AgentHub};
 use aura_core_types::AgentId;
-use aura_exec_merge_queue::GIT_TIMEOUT;
 use aura_exec_merge_queue::overlap::{self, Overlap, Work};
+use aura_exec_merge_queue::GIT_TIMEOUT;
 use aura_exec_merge_queue::{EntryId, MergeEntry, MergeQueue, RepoPaths};
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};
@@ -88,7 +88,9 @@ async fn local_work(hub: &AgentHub, repo: &RepoPaths, target: &str) -> Vec<Work>
                 files,
             }),
             Ok(_) => {}
-            Err(why) => warn!(folder = %folder.display(), %why, "Could not read a worktree's changes"),
+            Err(why) => {
+                warn!(folder = %folder.display(), %why, "Could not read a worktree's changes");
+            }
         }
     }
     found
@@ -125,7 +127,11 @@ fn notices(subject: &Work, found: &Overlap) -> Vec<Notice> {
     let files = file_list(&found.files);
     let mut out = Vec::new();
     for (mine, theirs) in [(subject, &found.with), (&found.with, subject)] {
-        let Some(to) = mine.agent.as_deref().and_then(|hex| AgentId::from_hex(hex).ok()) else {
+        let Some(to) = mine
+            .agent
+            .as_deref()
+            .and_then(|hex| AgentId::from_hex(hex).ok())
+        else {
             continue;
         };
         let other = theirs.owner();

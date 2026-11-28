@@ -118,7 +118,13 @@ mod tests {
             state.record_files(&id, &head, vec!["src/shared.rs".to_string()]);
         }
         let view = queue_view("main", "/repo", &state.entries, 0);
-        assert_eq!(view.entries[0].overlaps, ["q1 aura/a (RUS1): src/shared.rs"]);
-        assert_eq!(view.entries[1].overlaps, ["q2 aura/b (RUS2): src/shared.rs"]);
+        assert_eq!(
+            view.entries[0].overlaps,
+            ["q1 aura/a (RUS1): src/shared.rs"]
+        );
+        assert_eq!(
+            view.entries[1].overlaps,
+            ["q2 aura/b (RUS2): src/shared.rs"]
+        );
     }
 }
