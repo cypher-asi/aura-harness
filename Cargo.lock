@@ -290,6 +290,7 @@ dependencies = [
  "aura-core-types",
  "aura-desktop",
  "aura-engine-automaton",
+ "aura-exec-merge-queue",
  "aura-exec-tools",
  "aura-model",
  "aura-node",
