@@ -59,7 +59,7 @@ fn test_turn_activity_renders_inline_between_prompt_and_reply() {
 }
 
 #[test]
-fn test_step_group_runs_open_then_collapses_and_clicks_open() {
+fn test_step_group_runs_folded_then_collapses_and_clicks_open() {
     use crate::events::UiCommand;
 
     let mut app = crate::App::new();
@@ -69,13 +69,16 @@ fn test_step_group_runs_open_then_collapses_and_clicks_open() {
     }
     let live = render_rows(&mut app, 120).join("\n");
     assert!(live.contains("Exploring 2 files"), "{live}");
-    assert!(live.contains("Read main.rs"), "{live}");
-    assert!(live.contains("Read lib.rs"), "{live}");
+    assert!(
+        !live.contains("Read main.rs"),
+        "folded while it runs: {live}"
+    );
+    assert!(!live.contains("2 steps"), "its summary alone: {live}");
     let rows: Vec<&str> = live.lines().collect();
     let row = |needle: &str| rows.iter().position(|r| r.contains(needle));
     assert!(
-        row("⬢ Thinking…") > row("Read lib.rs"),
-        "the working line stays below the live steps: {live}"
+        row("⬢ Thinking…") > row("Exploring 2 files"),
+        "the working line stays below the live group: {live}"
     );
 
     app.process_command(UiCommand::Complete);
@@ -196,6 +199,12 @@ fn test_a_live_turn_shows_what_finished_steps_did() {
     });
 
     let live = render_rows(&mut app, 120).join("\n");
+    assert!(
+        !live.contains("fleet/claim.rs"),
+        "folded until opened: {live}"
+    );
+    click_text(&mut app, "step 2");
+    let live = render_rows(&mut app, 120).join("\n");
     assert!(live.contains("claim lives in the fleet"), "{live}");
     assert!(live.contains("fleet/claim.rs"), "{live}");
     assert!(live.contains("Ran rg claim"), "{live}");
@@ -204,7 +213,10 @@ fn test_a_live_turn_shows_what_finished_steps_did() {
     let done = render_rows(&mut app, 120).join("\n");
     assert!(done.contains("Ran 1 command"), "{done}");
     assert!(!done.contains("claim lives in the fleet"), "{done}");
-    assert!(!done.contains("fleet/claim.rs"), "{done}");
+    assert!(
+        !done.contains("fleet/claim.rs"),
+        "open, it shows no previews once done: {done}"
+    );
 }
 
 #[test]
@@ -216,12 +228,15 @@ fn test_live_steps_are_numbered_in_order_then_condense() {
     for i in 1..=6 {
         read_tool(&mut app, &format!("t{i}"), &format!("src/f{i}.rs"));
     }
+    click_text(&mut app, "Exploring 6 files");
     let live = render_rows(&mut app, 120).join("\n");
     assert!(live.contains("Exploring 6 files · step 6"), "{live}");
     for i in 1..=6 {
         assert!(live.contains(&format!("{i} ▸ Read f{i}.rs")), "{live}");
     }
 
+    // Folded again, it stays folded once the turn is done.
+    click_text(&mut app, "Exploring 6 files");
     app.process_command(UiCommand::Complete);
     let done = render_rows(&mut app, 120).join("\n");
     assert!(done.contains("▸ Explored 6 files"), "{done}");
