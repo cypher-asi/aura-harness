@@ -3,7 +3,7 @@
 
 pub(in crate::renderer) use super::drop_marks::DROP_RAIL;
 use super::drop_marks::{drop_line_at, mark_drop};
-use super::{draw_list, split_pinned, working_icon};
+use super::{draw_list, split_pinned, working_icon, FAILED_ICON};
 use crate::components::{
     cell_style, format_ago, list_row, tree_row, CellState, RowBadge, StatusIcon, PLAN_BADGE,
 };
@@ -318,7 +318,9 @@ impl<'s> Swarm<'s> {
         let agent = &app.agents()[index];
         let icon = self.agent_icon(index);
         let ago = agent.last_active_ms.map(|ms| format_ago(ms, self.now_ms));
-        let name = if agent.depth == 0 {
+        let name = if agent.error.is_some() {
+            Style::default().fg(crate::renderer::failure_color(theme))
+        } else if agent.depth == 0 {
             Style::default().fg(theme.colors.foreground)
         } else {
             Style::default().fg(theme.colors.muted)
@@ -367,8 +369,11 @@ impl<'s> Swarm<'s> {
         // A busy agent's spinner sits in the icon column and stands in
         // for its fold marker, open or folded; clicking it still
         // folds, as `fold_marker_at` says.
+        let failed = app.agents().get(index).is_some_and(|a| a.error.is_some());
         if app.agent_row_busy(index) {
             working_icon(app, self.theme)
+        } else if failed {
+            StatusIcon::new(FAILED_ICON, crate::renderer::failure_color(self.theme))
         } else {
             StatusIcon::new(marker.unwrap_or(""), self.theme.colors.muted)
         }

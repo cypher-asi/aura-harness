@@ -131,7 +131,7 @@ fn test_todos_stay_with_their_agent() {
     app.process_command(UiCommand::SetActiveAgent("bb".to_string()));
     // The drawer shows the agent's list by itself, no `/todos` needed.
     let screen = render_rows(&mut app, 160).join("\n");
-    assert!(screen.contains("▣ Background work"), "{screen}");
+    assert!(screen.contains("◐ Background work"), "{screen}");
 }
 
 #[test]
@@ -369,7 +369,7 @@ fn test_tasks_tab_lists_requests_items_not_what_was_asked() {
     let no_plan = row_with("No Plan");
     assert!(rows[no_plan].contains('▾'), "{}", rows[no_plan]);
     assert!(
-        rows[no_plan + 1].contains("☒  Write the parser  → coder"),
+        rows[no_plan + 1].contains("✓  Write the parser  → coder"),
         "{}",
         rows[no_plan + 1]
     );
@@ -382,7 +382,7 @@ fn test_tasks_tab_lists_requests_items_not_what_was_asked() {
     assert_eq!(part, no_plan + 3, "the part doing no item follows them");
     // Every icon sits right under the header's fold arrow.
     let arrow = last_column(&rows, no_plan, '▾');
-    assert_eq!(last_column(&rows, no_plan + 1, '☒'), arrow);
+    assert_eq!(last_column(&rows, no_plan + 1, '✓'), arrow);
     assert_eq!(last_column(&rows, no_plan + 2, '☐'), arrow);
     assert_eq!(last_column(&rows, part, '✓'), arrow);
     assert!(!rows.iter().any(|r| r.contains("p plan")), "no keys");

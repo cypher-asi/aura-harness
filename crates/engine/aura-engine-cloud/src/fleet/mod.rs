@@ -29,9 +29,11 @@
 mod claim;
 mod provision;
 mod teardown;
+mod update;
 mod usage;
 mod wake;
 
+pub use self::update::{NodeUpdate, INSTALL_BINARY};
 pub use self::wake::{IdleMachine, WorkGuard};
 
 use std::collections::HashMap;
@@ -227,6 +229,9 @@ struct Entry {
     node_token: Option<BoxdToken>,
     /// What the node answered its last claim with; 0 until claimed.
     node_protocol: u32,
+    /// The git tools its node offered at its last claim; empty until
+    /// claimed, and from nodes before the merge queue.
+    node_tools: Vec<String>,
     usage: Option<UsageReading>,
     seen_ms: u64,
     /// Whether boxd has the idle settings the machine keeps working by

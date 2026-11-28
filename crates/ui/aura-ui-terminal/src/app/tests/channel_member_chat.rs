@@ -65,7 +65,8 @@ fn test_members_side_tab_moves_its_highlight_and_enter_opens_the_members_chat() 
 fn test_clicking_a_member_opens_its_chat_and_the_coordinators_row_goes_back() {
     let (_dir, mut app, mut rx) = app_in_channel_with_events("co");
     lay_out_member_rows(&mut app);
-    app.click_channel_member(82, 7);
+    // On its name, past `re`'s fold marker.
+    app.click_channel_member(88, 7);
     assert_eq!(switch_request(&mut rx).as_deref(), Some("re"));
     assert_eq!(app.member_chat().map(|m| m.id.as_str()), Some("re"));
     assert!(app.channel_open());

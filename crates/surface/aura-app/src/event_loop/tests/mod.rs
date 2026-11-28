@@ -28,8 +28,10 @@ mod agent_selection;
 mod approval_modes;
 mod channel_chat;
 mod channel_plan;
+mod channel_queue_open;
 mod channels_projects;
 mod channels_projects_zode;
+mod cloud_members;
 mod commands_and_cancel;
 mod compare_runs;
 mod delegation;
@@ -42,15 +44,19 @@ mod gate_review;
 mod gate_routing;
 mod helpers;
 mod inbox;
+mod inbox_restart;
 mod messages;
 mod open_plan;
 mod provider;
 mod queue_edits;
 mod restart;
 mod rewinding;
+mod stall_fixes;
+mod stalls;
 mod subtasks;
 pub(in crate::event_loop) mod support;
 mod typed_tasks;
+mod withdrawn_work;
 
 use fixture::{
     borrowed, completed, drain, fixture, fixture_with_gate, lock_registry_agent, loop_state,

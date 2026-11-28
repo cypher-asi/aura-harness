@@ -108,3 +108,53 @@ fn cloud_turns_never_offer_computer_use() {
         "{text}"
     );
 }
+
+#[tokio::test]
+async fn an_agent_with_a_machine_this_hub_lost_track_of_gets_no_second_one() {
+    use crate::{MachineInfo, MachineStatus};
+    let (hub, fake, dir) = hub();
+    let project = dir.path().join("project");
+    project_repo(&project, None);
+    let request = request_in(&project);
+    let labels = [
+        (names::LABEL_INSTALL, hub.fleet.install().to_string()),
+        (names::LABEL_ROLE, names::ROLE_AGENT.to_string()),
+        (names::LABEL_AGENT, request.agent.to_hex()),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value))
+    .collect();
+    fake.insert_machine(MachineInfo {
+        id: "vm-9".into(),
+        name: "aura-sc01-0909".into(),
+        status: MachineStatus::Running,
+        region: String::new(),
+        vcpu: 2,
+        memory_bytes: 0,
+        disk_bytes: 0,
+        domain: "aura-sc01-0909.boxd.sh".into(),
+        public_ip: String::new(),
+        ssh_port: 0,
+        isolated: true,
+        labels,
+        source: None,
+        created_ms: 0,
+        boot_ms: 0,
+        last_connected_ms: 0,
+    });
+    assert!(
+        !hub.is_placed(request.agent),
+        "this hub has no placement for it"
+    );
+
+    let refused = hub.place(request, &BootReporter::none()).await.unwrap_err();
+    assert!(
+        matches!(&refused, CloudError::AlreadyHasMachine { machine, .. } if machine == "aura-sc01-0909"),
+        "{refused}"
+    );
+    assert!(
+        !fake.calls().iter().any(|call| call.starts_with("Create")),
+        "{:?}",
+        fake.calls()
+    );
+}

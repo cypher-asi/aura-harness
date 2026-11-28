@@ -7,7 +7,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
+mod picker_wheel;
 mod support;
+mod wheel_lists;
 use support::*;
 
 mod activity_blocks;
@@ -17,8 +19,10 @@ mod approvals_and_mentions;
 mod basics;
 mod channel_chat;
 mod channel_form;
+mod channel_history_plan;
 mod channel_member_chat;
 mod channel_member_chat_edges;
+mod channel_member_folds;
 mod channel_menu;
 mod channel_scroll;
 mod channel_side_panel;

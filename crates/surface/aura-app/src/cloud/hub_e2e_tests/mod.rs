@@ -153,6 +153,7 @@ impl Placed {
             fork_from: None,
             owner: Owner::Local,
             owner_name: None,
+            clean: false,
         }
     }
 

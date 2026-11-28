@@ -156,6 +156,7 @@ async fn a_bare_plan_leaves_the_planner_waiting_in_plan_mode() {
         state.hub.factory_flows.stage(planner),
         Some(Stage::Assigned)
     );
+    assert!(site_posts(&fixture).is_empty(), "no request, no plan post");
     let hex = planner.to_hex();
     let sent = drain(&mut commands);
     let told_plan = sent.iter().any(|(to, command)| {
@@ -273,5 +274,45 @@ async fn a_planner_in_a_cloud_channel_plans_here_and_says_why() {
     assert!(
         notes.iter().any(|note| note == channels::PLANS_HERE),
         "{notes:?}"
+    );
+}
+
+/// Every post of `#site`.
+fn site_posts(fixture: &Fixture) -> Vec<aura_store_db::ChannelPost> {
+    let store = fixture.hub.channels.as_ref().unwrap();
+    let channel = store.by_slug("site").unwrap().unwrap();
+    store.posts(&channel.id, None).unwrap()
+}
+
+#[tokio::test]
+async fn a_plan_request_is_kept_for_history_but_left_out_of_the_digest() {
+    let (fixture, mut commands) = fixture();
+    let mut b = borrowed(&fixture);
+    let links = b.links.clone();
+    let mut state = loop_state(&fixture, &mut b);
+    let coordinator = open_site(&fixture, &mut state, &links, PlacementView::Local).await;
+    let _ = drain(&mut commands);
+
+    let asked = "Design the login flow";
+    handle_ui_event(&mut state, plan_in(coordinator, asked), &links).await;
+    let planner = planner_on_screen(&fixture, &state, coordinator);
+
+    let posts = site_posts(&fixture);
+    assert_eq!(posts.len(), 1, "{posts:?}");
+    assert_eq!(posts[0].author, aura_store_db::PostAuthor::User);
+    assert_eq!(posts[0].text, asked);
+    assert_eq!(posts[0].planner, Some(planner));
+    assert_eq!(posts[0].mentions, [planner]);
+    let hex = planner.to_hex();
+    let sent = drain(&mut commands).into_iter().any(|(to, command)| {
+        to == Some(coordinator.to_hex())
+            && matches!(command, UiCommand::ChannelPost { post, .. }
+                if post.planner.as_deref() == Some(hex.as_str()) && post.text == asked)
+    });
+    assert!(sent, "the coordinator's UI gets it, naming its planner");
+    assert_eq!(
+        channels::take_digest(&state.hub, coordinator).await,
+        None,
+        "the coordinator's turns never read it"
     );
 }

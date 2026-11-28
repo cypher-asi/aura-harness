@@ -243,7 +243,7 @@ fn a_fork_pulls_the_latest_main_onto_its_new_branch() {
     }
     let repos = repos();
     repos.main_moves("theirs.txt", "x\n");
-    let said = repos.run(&fork_branch("aura/child-ch01").unwrap());
+    let said = repos.run(&fork_branch("aura/child-ch01", "main").unwrap());
     assert!(said.starts_with("merged origin/main"), "{said}");
     assert_eq!(
         git(&repos.machine, &["branch", "--show-current"]),
@@ -258,9 +258,11 @@ fn a_new_machine_pulls_after_the_hubs_changes_and_before_marking_its_base() {
     let start = BranchStart {
         branch: "aura/a-b",
         head: sha,
+        target: "main",
         remote_url: Some("https://github.com/a/b.git"),
         bundle: false,
         delta: true,
+        clean: false,
     };
     let script = start_branch(&start).unwrap();
     let pull = script.find("git fetch -q --no-tags origin").unwrap();
@@ -278,6 +280,51 @@ fn a_new_machine_pulls_after_the_hubs_changes_and_before_marking_its_base() {
 }
 
 #[test]
+fn a_fork_pulls_the_queue_target_not_main() {
+    if !has_git() {
+        return;
+    }
+    let repos = repos();
+    commit(&repos.other, "trunk.txt", "t\n");
+    git(
+        &repos.other,
+        &["push", "-q", "origin", "HEAD:refs/heads/trunk"],
+    );
+    repos.main_moves("main.txt", "m\n");
+    let said = repos.run(&fork_branch("aura/child-ch01", "trunk").unwrap());
+    assert!(said.starts_with("merged origin/trunk"), "{said}");
+    assert!(repos.machine.join("trunk.txt").exists());
+    assert!(
+        !repos.machine.join("main.txt").exists(),
+        "main is not pulled"
+    );
+}
+
+#[test]
+fn a_new_machine_fetches_its_queue_target() {
+    let start = BranchStart {
+        branch: "aura/a-b",
+        head: "e91dfbe90eb7b51f7b0459ce0c829d439a150396",
+        target: "trunk",
+        remote_url: Some("https://github.com/a/b.git"),
+        bundle: false,
+        delta: false,
+        clean: false,
+    };
+    let script = start_branch(&start).unwrap();
+    assert!(
+        script.contains("+refs/heads/trunk:refs/remotes/origin/trunk"),
+        "{script}"
+    );
+    assert!(!script.contains("refs/heads/main"), "{script}");
+    let evil = BranchStart {
+        target: "a'b",
+        ..start
+    };
+    assert!(start_branch(&evil).is_err());
+}
+
+#[test]
 fn only_a_plain_branch_is_pulled() {
     for evil in ["", "a'b", "$(id)", "-x"] {
         assert!(pull_latest(evil).is_err(), "{evil:?}");
@@ -287,4 +334,74 @@ fn only_a_plain_branch_is_pulled() {
         Some("up to date")
     );
     assert_eq!(parse_pulled("nothing"), None);
+}
+
+#[test]
+fn a_clean_start_takes_origins_main_and_none_of_the_workspaces_own() {
+    if !has_git() {
+        return;
+    }
+    let repos = repos();
+    // What the hub's checkout brought: an unpushed commit, and
+    // uncommitted and untracked work.
+    commit(&repos.machine, "unpushed.txt", "hub only\n");
+    std::fs::write(repos.machine.join("README"), "edited here\n").unwrap();
+    std::fs::write(repos.machine.join("stray.txt"), "untracked\n").unwrap();
+    let shipped = repos.main_moves("theirs.txt", "x\n");
+
+    let said = repos.run(&format!(
+        "set -e; cd \"$AURA_WORKSPACE\"; {}",
+        start_from_latest(PULL_BRANCH, "aura/scout-sc01").unwrap()
+    ));
+    assert!(said.starts_with("started from origin/main at "), "{said}");
+    let m = &repos.machine;
+    assert_eq!(git(m, &["branch", "--show-current"]), "aura/scout-sc01");
+    assert_eq!(repos.head(), shipped, "exactly what origin's main has");
+    assert_eq!(
+        git(m, &["status", "--porcelain"]),
+        "",
+        "nothing of the hub's"
+    );
+    assert!(!m.join("unpushed.txt").exists() && !m.join("stray.txt").exists());
+    assert!(m.join("theirs.txt").exists());
+}
+
+#[test]
+fn a_clean_start_without_origin_stays_where_it_is() {
+    if !has_git() {
+        return;
+    }
+    let repos = repos();
+    git(&repos.machine, &["remote", "remove", "origin"]);
+    let before = repos.head();
+    let said = repos.run(&format!(
+        "set -e; cd \"$AURA_WORKSPACE\"; {}",
+        start_from_latest(PULL_BRANCH, "aura/scout-sc01").unwrap()
+    ));
+    assert_eq!(said, "skipped: no origin");
+    assert_eq!(repos.head(), before);
+}
+
+#[test]
+fn a_clean_new_machine_gets_no_uncommitted_changes_and_starts_from_main() {
+    let start = BranchStart {
+        branch: "aura/a-b",
+        head: "e91dfbe90eb7b51f7b0459ce0c829d439a150396",
+        target: PULL_BRANCH,
+        remote_url: Some("https://github.com/a/b.git"),
+        bundle: false,
+        delta: true,
+        clean: true,
+    };
+    let script = start_branch(&start).unwrap();
+    assert!(
+        !script.contains("aura-delta.tgz"),
+        "the hub's changes stay here"
+    );
+    let started = script.find("checkout -q -f -B 'aura/a-b' 'refs/remotes/origin/main'");
+    assert!(started.unwrap() < script.find(BASE_REF).unwrap());
+    assert!(
+        !script.contains("merge -q --no-edit"),
+        "no merge onto the hub's HEAD"
+    );
 }

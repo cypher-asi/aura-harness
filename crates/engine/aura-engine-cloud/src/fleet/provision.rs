@@ -311,6 +311,7 @@ impl VmFleet {
                 idle_since: Instant::now(),
                 node_token: None,
                 node_protocol: 0,
+                node_tools: Vec::new(),
                 usage: None,
                 seen_ms: now_ms(),
                 idle_set: false,

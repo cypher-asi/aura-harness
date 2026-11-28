@@ -102,9 +102,10 @@ pub(crate) struct GroupGuard {
 
 impl GroupGuard {
     /// The guard of `child`'s group (it leads one: `process_group(0)`).
+    /// Without unix process groups there is nothing to guard, and `child`
+    /// goes unread.
+    #[cfg_attr(not(unix), allow(unused_variables))]
     pub(crate) fn of(child: &Child) -> Self {
-        #[cfg(not(unix))]
-        let _ = child;
         Self {
             #[cfg(unix)]
             group: child

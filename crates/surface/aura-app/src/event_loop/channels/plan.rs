@@ -3,7 +3,8 @@
 //! on screen. Its request is a task like any member's (see
 //! [`crate::event_loop::factory`]): it plans it in plan mode, then builds
 //! the plan and ships it to the merge queue on its own. Nobody has to say
-//! "implement".
+//! "implement". The request is also kept as a plan post of the channel,
+//! for its HISTORY ([`post_plan_request`]).
 
 use super::*;
 use crate::event_loop::agent_events::AgentUi;
@@ -69,6 +70,8 @@ pub(crate) async fn start_planner(
     let Some(kernel) = state.kernel_for(planner) else {
         return;
     };
+    // A planner plans here, in plan mode, in any channel.
+    lock(&state.hub.cloud_members).remove(&planner);
     if lock(&state.hub.cloud_starts).remove(&planner) {
         AgentUi::new(state.commands.clone(), planner)
             .send(system_message(PLANS_HERE.to_string()))
@@ -78,7 +81,9 @@ pub(crate) async fn start_planner(
     if text.trim().is_empty() {
         modes::enter_plan_mode(state, planner, &kernel, PLANNER_WAITS).await;
     } else {
+        // Kept for the channel's HISTORY, which the planner's chat is not.
         // Its work switches it to plan mode as it starts.
+        post_plan_request(state, coordinator, planner, &text).await;
         deliver_with_images(state, planner, SteerSource::User, text, images, false).await;
     }
 }

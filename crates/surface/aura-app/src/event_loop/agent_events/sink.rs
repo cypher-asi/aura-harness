@@ -38,6 +38,18 @@ pub(super) struct UiCommandSink {
     pub(super) turn_tokens: u64,
 }
 
+/// The chat line for a plan `name` written at `path`: built next on its
+/// own when `build` says so, else waiting to be told.
+pub(super) fn plan_ready_note(name: &str, path: &str, build: Build) -> String {
+    let then = match build {
+        Build::WhenAsked => {
+            "Keep chatting to revise it, or say \"implement\" (or run /build) to build it."
+        }
+        Build::RightAway => "It is built next, without waiting for approval.",
+    };
+    format!("Plan ready: {name} ({path}). {then}")
+}
+
 impl UiCommandSink {
     /// Show the plan `create_plan` wrote, as its `output` names it.
     async fn plan_written(&mut self, output: &str) {
@@ -51,13 +63,7 @@ impl UiCommandSink {
         let Some(view) = plan_view(&self.plan.workspace, path) else {
             return;
         };
-        let then = match self.plan.build {
-            Build::WhenAsked => {
-                "Keep chatting to revise it, or say \"implement\" (or run /build) to build it."
-            }
-            Build::RightAway => "It is built next, without waiting for approval.",
-        };
-        let note = format!("Plan ready: {} ({path}). {then}", view.name);
+        let note = plan_ready_note(&view.name, path, self.plan.build);
         self.plan
             .tasks
             .show_plan(&self.plan.workspace, view.clone())

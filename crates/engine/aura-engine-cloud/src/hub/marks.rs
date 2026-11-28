@@ -102,6 +102,16 @@ impl CloudHub {
         }
     }
 
+    /// Whether `hex` has a turn marked under way: one no hub saw end,
+    /// which may still run on its machine.
+    pub(super) fn turn_marked(&self, hex: &str) -> bool {
+        self.placements
+            .lock()
+            .agents
+            .get(hex)
+            .is_some_and(|placed| placed.turn.is_some())
+    }
+
     /// The turns an earlier hub asked machines for and never saw end, by
     /// agent: each still runs on its machine or ended while no hub
     /// watched. Follow each with [`Self::follow_turn`].

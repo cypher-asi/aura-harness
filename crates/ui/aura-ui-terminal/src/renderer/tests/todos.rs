@@ -5,14 +5,14 @@ use super::*;
 /// fold toggle at the right.
 fn todo_drawer_header(rows: &[String]) -> Option<usize> {
     rows.iter()
-        .rposition(|row| row.contains("to-do") && (row.contains(" —  │") || row.contains(" +  │")))
+        .rposition(|row| row.contains("active") && (row.contains(" —  │") || row.contains(" +  │")))
 }
 
 /// Whether any row above `end` shows a to-do's box.
 fn todo_box_above(rows: &[String], end: usize) -> bool {
     rows[..end]
         .iter()
-        .any(|row| row.contains('☐') || row.contains('▣') || row.contains('☒'))
+        .any(|row| row.contains('☐') || row.contains('◐') || row.contains('✓'))
 }
 
 #[test]
@@ -30,20 +30,20 @@ fn the_todo_list_shows_in_the_drawer_and_never_in_the_chat() {
     let header = todo_drawer_header(&rows)
         .unwrap_or_else(|| panic!("no drawer while idle:\n{}", rows.join("\n")));
     assert!(
-        rows[header].contains("⬢ 3 to-dos  1/3"),
+        rows[header].contains("⬢ 2 active · 1 done"),
         "{:?}",
         rows[header]
     );
     assert!(rows[header - 1].contains('├'), "{:?}", rows[header - 1]);
     assert!(!todo_box_above(&rows, header - 1), "{}", rows.join("\n"));
-    assert!(rows[header + 2].contains("▣ Write the lexer"));
+    assert!(rows[header + 1].contains("◐ Write the lexer"));
 
     submit_message(&mut app, "go on");
     let rows = render_rows(&mut app, 160);
     let screen = rows.join("\n");
     let header = todo_drawer_header(&rows).unwrap_or_else(|| panic!("no drawer:\n{screen}"));
     assert!(
-        rows[header].contains("⬢ Working on 3 to-dos  1/3"),
+        rows[header].contains("⬢ Working on 2 active · 1 done"),
         "{:?}",
         rows[header]
     );
@@ -89,7 +89,7 @@ fn a_todo_list_with_every_item_closed_hides_the_drawer() {
     let header =
         todo_drawer_header(&rows).unwrap_or_else(|| panic!("no drawer:\n{}", rows.join("\n")));
     assert!(
-        rows[header].contains("⬢ Working on 2 to-dos"),
+        rows[header].contains("⬢ Working on 1 active · 1 done"),
         "{:?}",
         rows[header]
     );
@@ -123,7 +123,7 @@ fn test_todos_command_folds_the_drawer_and_brings_back_a_finished_list() {
     assert!(screen.contains("☐ Run the tests"), "open again: {screen}");
 
     // A finished list hides the drawer; `/todos` brings its closed items
-    // back, and puts them away again.
+    // back, its history open, and puts them away again.
     app.process_command(UiCommand::SetTodos(vec![
         todo("Read the parser", TodoState::Completed),
         todo("Drop the old lexer", TodoState::Cancelled),
@@ -133,7 +133,12 @@ fn test_todos_command_folds_the_drawer_and_brings_back_a_finished_list() {
     let rows = render_rows(&mut app, 160);
     let screen = rows.join("\n");
     assert!(todo_drawer_header(&rows).is_some(), "{screen}");
-    assert!(screen.contains("☒ Read the parser"), "{screen}");
+    assert!(screen.contains("▾ Finished to-dos"), "{screen}");
+    assert!(screen.contains("✓ Read the parser  done"), "{screen}");
+    assert!(
+        screen.contains("⊘ Drop the old lexer  cancelled"),
+        "{screen}"
+    );
     run_slash(&mut app, "/todos");
     let rows = render_rows(&mut app, 160);
     assert!(todo_drawer_header(&rows).is_none(), "{}", rows.join("\n"));
@@ -172,13 +177,17 @@ fn test_an_open_channel_shows_its_coordinators_todos_in_the_drawer() {
     let screen = rows.join("\n");
     let header = todo_drawer_header(&rows).unwrap_or_else(|| panic!("no drawer:\n{screen}"));
     assert!(
-        rows[header].contains("⬢ 2 to-dos  1/2"),
+        rows[header].contains("⬢ 1 active · 1 done"),
         "{:?}",
         rows[header]
     );
     assert!(
-        rows[header + 2].contains("▣ Review the worker's patch"),
+        rows[header + 1].contains("◐ Review the worker's patch"),
         "{screen}"
+    );
+    assert!(
+        !screen.contains("Hand the parser"),
+        "done goes to the history: {screen}"
     );
     assert!(!todo_box_above(&rows, header - 1), "{screen}");
     let input = rows
@@ -232,4 +241,49 @@ fn test_context_and_cost_commands_write_to_the_chat() {
     assert!(texts[0].contains("tools"), "{texts:?}");
     assert!(texts[0].contains("Prompt cache hits: 80%"), "{texts:?}");
     assert!(texts[1].contains("$0.020"), "{texts:?}");
+}
+
+#[test]
+fn test_each_assigned_todo_names_its_member_with_its_status() {
+    use crate::events::{TodoState, TodoView, UiCommand};
+
+    let mut app = channels_app();
+    let mut channels = app.channels().to_vec();
+    channels[0].members[1].code = Some("WK7".to_string());
+    channels[0].members[1].definition = Some("frontend-engineer".to_string());
+    channels[0].members[1].running = true;
+    app.process_command(UiCommand::SetChannels(channels));
+    app.process_command(UiCommand::SetActiveAgent("co".to_string()));
+    let given = |content: &str, state, to: &str| TodoView {
+        assignee: Some(to.to_string()),
+        ..todo(content, state)
+    };
+    app.process_command(UiCommand::ForAgent {
+        agent_id: "co".to_string(),
+        command: Box::new(UiCommand::SetTodos(vec![
+            // Given by code, and by the permanent agent it was started as.
+            given("Fix the redirect", TodoState::InProgress, "WK7"),
+            given("Style the footer", TodoState::Pending, "frontend-engineer"),
+            given("Read the parser", TodoState::Completed, "WK7"),
+        ])),
+    });
+    let rows = render_rows(&mut app, 160);
+    let screen = rows.join("\n");
+    let row = |needle: &str| {
+        rows.iter()
+            .find(|row| row.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?}:\n{screen}"))
+            .clone()
+    };
+    let fixing = row("Fix the redirect");
+    assert!(fixing.contains("→ WK7 · working 0s"), "{fixing}");
+    assert!(
+        row("Style the footer").contains("→ WK7 · working"),
+        "{screen}"
+    );
+    assert!(
+        row("Finished to-dos").contains("▸ Finished to-dos  1"),
+        "{screen}"
+    );
+    assert!(!screen.contains("Read the parser"), "{screen}");
 }

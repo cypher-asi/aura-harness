@@ -38,6 +38,15 @@ impl CloudHub {
                 name: hex.clone(),
             });
         }
+        // An agent that runs on a machine this hub lost track of must not
+        // get a second one: two copies would work on the same task.
+        if let Some(machine) = self.fleet.machine_listed_for(&hex).await? {
+            tracing::warn!(agent = %hex, %machine, "the agent already has a machine this hub has no placement for");
+            return Err(CloudError::AlreadyHasMachine {
+                agent: request.name.clone(),
+                machine,
+            });
+        }
         let owner_tag = names::owner_tag(&request.owner);
         boot.fact("agent", request.name.clone());
         boot.plan(&PLACE_STAGES);

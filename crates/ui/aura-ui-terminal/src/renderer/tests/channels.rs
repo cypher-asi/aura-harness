@@ -21,6 +21,8 @@ pub(super) fn channels_app() -> crate::App {
         members: vec![member("co", "Coordinator", 0), member("wk", "Worker", 1)],
         ..ChannelSummary::default()
     }]));
+    // These tests are about the worker's rows: show them.
+    app.unfold_channel_members();
     app.select_pane_tab(PaneTab::Agents(AgentsTab::Channels));
     app
 }
@@ -119,8 +121,9 @@ fn test_an_open_channel_keeps_the_list_and_lists_its_members_on_the_right() {
         assert_eq!(at, Some(x), "the status under the name: {status:?}");
     }
     // Only the channel's own tabs, and none of the agent panels.
-    assert!(screen.contains("MEMBERS"), "{screen}");
-    assert!(screen.contains("INFO"), "{screen}");
+    for tab in ["MBR", "INFO", "QUEUE", "TASKS", "HIS"] {
+        assert!(screen.contains(tab), "{tab}: {screen}");
+    }
     for agent_feature in [
         "SANDBOX",
         "PROCESSES",

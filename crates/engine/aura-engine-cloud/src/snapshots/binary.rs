@@ -51,9 +51,9 @@ pub(super) fn printed_protocol(output: &ExecOutput) -> u32 {
 
 /// The aura binary to upload, read once for its digest, its glibc needs
 /// and the upload itself.
-pub(super) struct LocalBinary {
+pub(crate) struct LocalBinary {
     pub(super) path: PathBuf,
-    pub(super) bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
     pub(super) digest: String,
     glibc: Option<GlibcVersion>,
 }
@@ -75,7 +75,7 @@ impl LocalBinary {
 
     /// [`CloudError::IncompatibleBinary`] when the machines' glibc is
     /// too old for it.
-    pub(super) fn ensure_loads_on_machines(&self, home: &Path) -> CloudResult<()> {
+    pub(crate) fn ensure_loads_on_machines(&self, home: &Path) -> CloudResult<()> {
         match self.glibc {
             Some(needs) if needs > MACHINE_GLIBC => Err(CloudError::IncompatibleBinary {
                 path: self.path.clone(),

@@ -65,6 +65,7 @@ mod follow;
 mod follow_tests;
 mod forward;
 mod machine;
+mod member_start;
 mod moving;
 mod placement;
 mod publish;
@@ -78,14 +79,19 @@ mod view;
 
 use boot::BootConsoleUi;
 pub(super) use ended::handle_ended;
+pub(in crate::event_loop) use machine::node_offers_ship;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
+pub(super) use member_start::start_in_cloud;
+use member_start::{within, Start, START_TIMEOUT};
 use moving::MoveMark;
 pub(super) use placement::{
-    handle_host_action, handle_set_placement, handle_setup, on_archive, start_in_cloud,
+    handle_host_action, handle_set_placement, handle_setup, on_archive, refresh_reach,
 };
 pub(super) use publish::start;
 use publish::start_publisher;
+#[cfg(test)]
+pub(super) use submit::refused;
 pub(super) use submit::{new_session, start_queued, submit};
 use view::{build_view, placement_state};
 
@@ -116,6 +122,9 @@ struct Shared {
     hub: Mutex<Option<Arc<CloudHub>>>,
     /// Agents being moved, each held by a [`MoveMark`].
     moving: Mutex<HashSet<AgentId>>,
+    /// New members whose cloud start failed, and why, until the loop hears
+    /// their move ended
+    failed_starts: Mutex<std::collections::HashMap<AgentId, String>>,
     /// Wakes the HOST publisher before its next refresh is due.
     changed: tokio::sync::Notify,
     /// Cloud agents with a turn running, and how to stop it.
@@ -288,12 +297,6 @@ fn cloud_home() -> PathBuf {
         .join("cloud")
 }
 
-fn env_file() -> PathBuf {
-    aura_config::AuraHome::resolve()
-        .map_or_else(|_| PathBuf::from("aura_data"), |home| home.path)
-        .join(".env")
-}
-
 async fn system(state: &LoopState<'_>, agent: AgentId, text: impl Into<String>) {
     AgentUi::new(state.commands.clone(), agent)
         .send(UiCommand::ShowMessage(MessageData::new(
@@ -339,6 +342,9 @@ async fn ensure_hub(
         .map(|agent| agent.agent_id().to_hex())
         .collect();
     hub.start_reported(&keep, boot).await;
+    // Reaches live on the hub only: what members mail goes through the
+    // inbox from the start.
+    crate::event_loop::inbox::refresh_reach(&state.hub, &hub).await;
     *state.cloud.shared.hub.lock() = Some(Arc::clone(&hub));
     state
         .processes

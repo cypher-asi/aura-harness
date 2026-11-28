@@ -406,22 +406,47 @@ impl NodeClient {
         .map(|_| ())
     }
 
-    /// Start a run on the node (`POST /v1/run`); returns its JSON answer
-    /// (`run_id`, `event_stream_url`).
+    /// Start a run on the node (`POST /v1/run`): its JSON answer
+    /// (`run_id`, `event_stream_url`), or [`RunStart::Busy`] when the
+    /// node turns it away because the agent has a turn under way in
+    /// another run.
     ///
     /// # Errors
     ///
-    /// When the node refuses the run.
+    /// When the node can't be asked or refuses the run otherwise.
     pub async fn start_run(
         &self,
         request: &aura_core_protocol::RuntimeRequest,
-    ) -> CloudResult<serde_json::Value> {
-        self.read(
-            "run",
-            self.http
-                .post(format!("{}/v1/run", self.base))
-                .json(request),
-        )
-        .await
+    ) -> CloudResult<RunStart> {
+        let response = self
+            .http
+            .post(format!("{}/v1/run", self.base))
+            .json(request)
+            .bearer_auth(self.token.expose())
+            .send()
+            .await
+            .map_err(|err| self.fail("run", err))?;
+        let status = response.status();
+        if status.is_success() {
+            let started = response.json().await.map_err(|err| self.fail("run", err))?;
+            return Ok(RunStart::Started(started));
+        }
+        let body = response.text().await.unwrap_or_default();
+        let answer: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+        if status == reqwest::StatusCode::CONFLICT && answer["code"] == "agent_busy" {
+            let run = answer["run_id"].as_str().unwrap_or_default().to_string();
+            return Ok(RunStart::Busy(run));
+        }
+        let body: String = body.chars().take(300).collect();
+        Err(self.fail("run", format!("{status}: {body}")))
     }
+}
+
+/// How a node took a run asked for ([`NodeClient::start_run`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunStart {
+    /// Started: its JSON answer (`run_id`, `event_stream_url`).
+    Started(serde_json::Value),
+    /// Turned away: the agent has a turn under way in this run.
+    Busy(String),
 }

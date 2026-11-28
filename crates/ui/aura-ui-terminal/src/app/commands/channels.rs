@@ -21,6 +21,10 @@ impl App {
             UiCommand::SetThreadSubject { thread_id, subject } => {
                 self.set_thread_subject(thread_id, &subject);
             }
+            UiCommand::SetPostSummaries {
+                channel_id,
+                summaries,
+            } => self.set_post_summaries(channel_id, summaries),
             UiCommand::SetMergeQueue { channel_id, queue } => {
                 self.set_merge_queue(channel_id, queue);
             }

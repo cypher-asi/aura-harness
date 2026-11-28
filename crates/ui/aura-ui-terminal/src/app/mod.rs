@@ -59,6 +59,7 @@ pub mod run_log;
 pub mod tasks;
 pub use aura_ui::sandbox;
 mod chat_hits;
+mod chat_jump;
 pub(crate) mod chat_links;
 mod chat_view;
 mod detail;
@@ -83,12 +84,14 @@ mod switching;
 pub mod tab_bar;
 mod ticks;
 pub(crate) mod todo_drawer;
+pub(crate) use todo_drawer::TodoAgent;
 mod tool_view;
 pub mod trace_feed;
 mod trace_json;
 mod turn;
 mod view_state;
 pub mod vim;
+mod wheel_views;
 
 #[cfg(test)]
 mod detail_tests;
@@ -109,11 +112,13 @@ use crate::{
 use account::Account;
 use agent_switch::AgentSwitch;
 pub use approval::PendingApproval;
-pub(crate) use apps::CHANNEL_MEMBER_ROWS;
+#[cfg(test)]
+pub(crate) use apps::HistoryKind;
 pub use apps::{
     AgentsTab, ArchiveRow, BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice,
     AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
+pub(crate) use apps::{ChannelWelcome, HistoryItem, CHANNEL_MEMBER_ROWS, HISTORY_ROWS};
 pub(crate) use chat_links::is_openable_url;
 pub use chat_tabs::ChatTab;
 use chat_view::ChatView;
@@ -144,7 +149,7 @@ pub(crate) use panel_areas::{follow_selection, InputRows, InputView};
 use panel_layout::PanelLayout;
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 use pending::Pending;
-pub(crate) use plan_doc::PlanDoc;
+pub(crate) use plan_doc::{Fact, FactTone, PlanDoc, PlanFacts};
 pub use processes::SidePanelTab;
 use project_list::ProjectList;
 pub use prose::{ProseMeasure, ProseRow};

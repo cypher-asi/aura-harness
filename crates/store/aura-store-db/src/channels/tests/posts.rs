@@ -148,3 +148,28 @@ fn last_read_is_kept_per_channel_and_left_out_of_the_list() {
         ));
     }
 }
+
+#[test]
+fn a_plan_post_keeps_its_planner_and_an_old_row_reads_without_one() {
+    for (mode, store, _dir) in stores() {
+        let channels = ChannelStore::for_store(&store);
+        let p = Posts::append(&channels);
+        let planner = aura_core_types::AgentId::generate();
+        let new = NewPost {
+            mentions: vec![planner],
+            planner: Some(planner),
+            ..post("/plan the footer", 400)
+        };
+        let stored = channels.append_post(&p.a.id, new).unwrap();
+        assert_eq!(stored.planner, Some(planner), "{mode}");
+        let read = channels.posts(&p.a.id, Some(399)).unwrap();
+        assert_eq!(read, vec![stored.clone()], "{mode}");
+
+        let mut old = serde_json::to_value(&stored).unwrap();
+        assert!(old.as_object_mut().unwrap().remove("planner").is_some());
+        let old: ChannelPost = serde_json::from_value(old).unwrap();
+        assert_eq!(old.planner, None, "{mode}");
+        let plain = serde_json::to_value(&p.p100).unwrap();
+        assert!(plain.get("planner").is_none(), "not written when absent");
+    }
+}

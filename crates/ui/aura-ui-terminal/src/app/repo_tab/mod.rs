@@ -26,7 +26,8 @@ mod tests;
 pub use filter::RepoFilter;
 pub use rows::RepoRow;
 
-use super::{follow_selection, App, NotificationType, PanelFocus, SidePanelTab};
+use super::{App, NotificationType, PanelFocus, SidePanelTab};
+use crate::app::wheel_views::WheelList;
 use crate::events::UiEvent;
 use crate::repo::{RepoRequest, RepoView};
 use ratatui::layout::Rect;
@@ -50,7 +51,7 @@ pub(crate) struct RepoTab {
     rows: Vec<RepoRow>,
     selected: usize,
     /// First visible row
-    scroll: usize,
+    pub(in crate::app) scroll: usize,
     /// The agent last asked for, and when
     asked: Option<(String, Instant)>,
     /// Whether that ask is unanswered
@@ -115,11 +116,11 @@ impl App {
     /// Keep the highlighted row inside `visible` rows, returning the first
     /// row to draw.
     pub fn sync_repo_scroll(&mut self, visible: usize) -> usize {
-        self.repo.scroll = follow_selection(
-            self.repo.scroll,
-            self.repo.selected,
-            visible,
-            self.repo_rows().len(),
+        let total = self.repo_rows().len();
+        self.repo.scroll = self.panels.wheel.place(
+            WheelList::Repo,
+            (self.repo.scroll, self.repo.selected),
+            (visible, total),
         );
         self.repo.scroll
     }

@@ -4,18 +4,21 @@
 use super::*;
 
 /// Send every post of the channel `agent_id` coordinates to its chat,
-/// as its conversation loads. Nothing for other agents.
+/// as its conversation loads. Nothing for other agents. Returns the
+/// channel's id and the user's posts (`seq` and text), whose summaries
+/// the HISTORY tab wants.
 pub(crate) async fn send_posts_of(
     commands: &tokio::sync::mpsc::Sender<UiCommand>,
     hub: &AgentHub,
     agent_id: AgentId,
-) {
-    let Some((channel, _)) = coordinated_channel(hub, agent_id).await else {
-        return;
-    };
-    let Some(posts) = read_posts(hub, &channel.id, None).await else {
-        return;
-    };
+) -> Option<(String, Vec<(u64, String)>)> {
+    let (channel, _) = coordinated_channel(hub, agent_id).await?;
+    let posts = read_posts(hub, &channel.id, None).await?;
+    let mine = posts
+        .iter()
+        .filter(|post| post.author == PostAuthor::User)
+        .map(|post| (post.seq, post.text.clone()))
+        .collect();
     let views = {
         let registry = lock(&hub.registry);
         posts
@@ -25,10 +28,11 @@ pub(crate) async fn send_posts_of(
     };
     AgentUi::new(commands.clone(), agent_id)
         .send(UiCommand::SetChannelPosts {
-            channel_id: channel.id,
+            channel_id: channel.id.clone(),
             posts: views,
         })
         .await;
+    Some((channel.id, mine))
 }
 
 /// Posts of channel `channel_id` after `since_ms`; `None` when they cannot
@@ -93,7 +97,11 @@ pub(crate) async fn take_digest(hub: &AgentHub, agent_id: AgentId) -> Option<Str
     };
     save_seen(hub, &channel.id, now).await;
     let posts = read_posts(hub, &channel.id, since).await?;
-    let posts: Vec<_> = posts.into_iter().filter(|p| p.at_ms <= now).collect();
+    // A `/plan` request went to its planner, not the coordinator.
+    let posts: Vec<_> = posts
+        .into_iter()
+        .filter(|p| p.at_ms <= now && p.planner.is_none())
+        .collect();
     let lines: Vec<String> = {
         let registry = lock(&hub.registry);
         posts

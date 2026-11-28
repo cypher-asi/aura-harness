@@ -57,7 +57,7 @@
 //! ```
 
 use super::agents::projects::spawn_guides;
-use super::agents::working_icon;
+use super::agents::{working_icon, FAILED_ICON};
 use super::chrome::{Body, ScrollView};
 use super::modals::placement_name;
 use super::side_list::render_empty;
@@ -82,6 +82,12 @@ use ratatui::{
 const WORKING: &str = "Working…";
 /// What a member's second row says while it waits with no title.
 const IDLE: &str = "Idle";
+
+/// What a member starting on its cloud machine is doing.
+const STARTING: &str = "Starting in the cloud…";
+
+/// Before why a member's work failed.
+const FAILED: &str = "Failed";
 
 /// Draw the open channel's members into `inner`, the body below the tab
 /// bar of the panel bordered by `area`. Without an open channel there is
@@ -113,12 +119,15 @@ pub(super) fn render_channel_members(
         .map(display_width)
         .max()
         .unwrap_or(0);
-    let lines: Vec<Line> = (first..channel.members.len())
-        .flat_map(|index| member_rows(app, (width, code_width), &channel.members, index, theme))
+    let shown = app.shown_channel_members();
+    let lines: Vec<Line> = shown
+        .iter()
+        .skip(first)
+        .flat_map(|&index| member_rows(app, (width, code_width), &channel.members, index, theme))
         .take(visible)
         .collect();
     let view = ScrollView {
-        total: channel.members.len() * CHANNEL_MEMBER_ROWS,
+        total: shown.len() * CHANNEL_MEMBER_ROWS,
         visible,
         first: first * CHANNEL_MEMBER_ROWS,
     };
@@ -127,11 +136,11 @@ pub(super) fn render_channel_members(
 
 /// Member `index` of `members`, on two rows: the permanent agent it is an
 /// instance of, under the guides from the agent that spawned it, after
-/// its `@` (a subagent has none, so its guides run on through the icon
-/// column) or the spinner while it works, and its plan mode or its cloud,
-/// with its code at the right, in a column `code_width` wide; then, in
-/// gray, what it works on. Lit by the keyboard while the panel is
-/// focused, else when it is the agent in the chat.
+/// its icon ([`member_icon`]), and its plan mode or its cloud
+/// ([`member_badge`]), with its code at the right, in a column
+/// `code_width` wide; then, in gray, what it works on. Lit by the keyboard
+/// while the panel is focused, else when it is the agent in the chat, or
+/// the folded member that agent is hidden under.
 fn member_rows<'a>(
     app: &App,
     (width, code_width): (usize, usize),
@@ -143,7 +152,10 @@ fn member_rows<'a>(
     let selected = if app.focus() == PanelFocus::Sandbox {
         app.selected_channel_member() == index
     } else {
-        member.id == app.active_agent_id()
+        members
+            .iter()
+            .position(|member| member.id == app.active_agent_id())
+            .is_some_and(|active| app.shown_channel_member_of(active) == index)
     };
     let hovered = app.hover() == Some(HoverTarget::ChannelMemberRow(index));
     let state = CellState::of(selected, hovered);
@@ -159,7 +171,7 @@ fn member_rows<'a>(
     let name_row = tree_row(
         width,
         (&guides, theme.colors.muted),
-        member_icon(app, member, theme),
+        member_icon(app, (member, index), theme),
         (
             member_name(member),
             member_badge(theme, member.plan_mode, cloud.as_ref()),
@@ -168,22 +180,29 @@ fn member_rows<'a>(
         &end,
         &[],
     );
-    let status = cell_style(theme, state, Style::default().fg(theme.colors.muted));
+    let (said, color) = member_status(app, member, theme);
+    let status = cell_style(theme, state, Style::default().fg(color));
     let status_row = status_row(
         width,
         &status_guides(&guides),
-        &member_status(app, member),
+        &said,
         (status.bg, status.text),
         theme,
     );
     [name_row, status_row]
 }
 
-/// A member's icon column: the spinner while it works, else the `@` of a
-/// member, or nothing for a subagent, whose guides run on through it.
-fn member_icon(app: &App, member: &AgentSummary, theme: &Theme) -> StatusIcon {
-    if app.agent_thinking(member) {
+/// A member's icon column: the spinner while it, or a subagent folded
+/// under it, works; else `▸` over the subagents it folds, `▾` once they
+/// show; else the `@` of a member, or nothing for a subagent, whose
+/// guides run on through it.
+fn member_icon(app: &App, (member, index): (&AgentSummary, usize), theme: &Theme) -> StatusIcon {
+    if app.agent_thinking(member) || app.channel_member_hides_working(index) {
         working_icon(app, theme)
+    } else if member.error.is_some() {
+        StatusIcon::new(FAILED_ICON, crate::renderer::failure_color(theme))
+    } else if let Some(folded) = app.channel_member_fold(index) {
+        StatusIcon::new(if folded { "▸" } else { "▾" }, theme.colors.muted)
     } else if member.depth == 0 {
         StatusIcon::new("@", theme.colors.muted)
     } else {
@@ -223,10 +242,21 @@ fn member_name(member: &AgentSummary) -> &str {
     }
 }
 
-/// What a member's second row says: its title, else the subtask it was
-/// spawned for, else whether it is working.
-fn member_status(app: &App, member: &AgentSummary) -> String {
-    member
+/// What a member's second row says, and in which color: why its work
+/// failed, in red; that it is starting on its cloud machine; else its
+/// title, else the subtask it was spawned for, else whether it is
+/// working, in gray.
+fn member_status(app: &App, member: &AgentSummary, theme: &Theme) -> (String, Color) {
+    if let Some(why) = &member.error {
+        return (
+            format!("{FAILED}: {why}"),
+            crate::renderer::failure_color(theme),
+        );
+    }
+    if member.starting && !app.agent_thinking(member) {
+        return (STARTING.to_string(), theme.colors.muted);
+    }
+    let said = member
         .title
         .as_deref()
         .or(member.subtitle.as_deref())
@@ -242,7 +272,8 @@ fn member_status(app: &App, member: &AgentSummary) -> String {
                 status.to_string()
             },
             str::to_string,
-        )
+        );
+    (said, theme.colors.muted)
 }
 
 /// The guides of a member's second row, from `guides`, its first row's:

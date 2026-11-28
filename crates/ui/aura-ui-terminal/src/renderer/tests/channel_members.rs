@@ -39,6 +39,7 @@ fn members_app() -> crate::App {
         instance("r2", "REN4", None, true),
     ];
     app.process_command(UiCommand::SetChannels(channels));
+    app.unfold_channel_members();
     app.open_channel_by_id("c1");
     app
 }
@@ -74,8 +75,9 @@ fn test_members_show_their_agent_and_what_each_instance_works_on_below() {
         "{}",
         rows[second + 1]
     );
-    // One at work shows the spinner in place of its `@`.
-    assert!(rows[first].contains("@  rust-engineer"), "{}", rows[first]);
+    // One with subagents shows `▾` over them, unfolded, in place of its
+    // `@`; one at work shows the spinner.
+    assert!(rows[first].contains("▾  rust-engineer"), "{}", rows[first]);
     assert!(!rows[second].contains('@'), "{}", rows[second]);
 
     // A subagent nests under its member, its subtask below its row, with

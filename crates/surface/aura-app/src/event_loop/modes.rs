@@ -52,7 +52,8 @@ impl Permissions {
 }
 
 /// What an agent's chat says when the user switches it to plan mode.
-const PLAN_NOTE: &str = "Plan mode: the agent researches and writes a plan instead of changing \
+pub(super) const PLAN_NOTE: &str =
+    "Plan mode: the agent researches and writes a plan instead of changing \
     code. /plan again returns to the previous mode. Say \"implement\" or run /build to implement \
     the plan.";
 

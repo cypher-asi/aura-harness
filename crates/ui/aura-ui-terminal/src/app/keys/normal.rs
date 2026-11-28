@@ -111,6 +111,8 @@ impl App {
             KeyCode::Up => self.switch_agent_by(-1),
             KeyCode::Down => self.switch_agent_by(1),
             KeyCode::Char('t') => self.cycle_thinking(),
+            // The to-do drawer's history of closed items.
+            KeyCode::Char('h') => return self.toggle_todo_history(),
             KeyCode::Char(digit) => {
                 let Some(tab) = AgentsTab::numbered(digit) else {
                     return false;

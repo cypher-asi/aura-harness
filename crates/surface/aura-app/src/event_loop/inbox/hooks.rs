@@ -15,15 +15,21 @@ pub(super) fn peer_row(hub: &AgentHub, peer: &Peer) -> serde_json::Value {
             state.reports.get(&peer.agent.agent_id).cloned(),
         )
     };
+    let working = hub.is_working(peer.agent.agent_id);
+    let standing = crate::event_loop::standing::state_of(hub, peer.agent.agent_id);
     let mut row = serde_json::json!({
         "agent_id": peer.agent.agent_id.to_hex(),
         "code": peer.agent.code,
         "name": peer.agent.name,
         "definition": peer.agent.definition,
         "relation": peer.relation.as_str(),
-        "working": hub.is_working(peer.agent.agent_id),
+        "working": working,
+        "state": standing.state,
         "messages_to_answer": owes,
     });
+    if let Some(why) = standing.why {
+        row["why"] = serde_json::json!(why);
+    }
     if let Some((finished, text)) = report {
         row["last_report"] = serde_json::json!({ "finished": finished, "text": text });
     }
@@ -158,6 +164,25 @@ pub(crate) async fn reach_of(hub: &Arc<AgentHub>, agent: AgentId) -> Option<Vec<
     Some(reach.collect())
 }
 
+/// Bring the reach of every channel member placed on `cloud` up to date
+/// ([`reach_of`]), so the requests each sends its peers go through the
+/// inbox here, never straight to a peer's machine. A reach is otherwise
+/// set only as its member's turn starts, and lives only as long as the
+/// hub: a hub started since, or a member who joined meanwhile, would
+/// leave its mail outside the inbox.
+pub(crate) async fn refresh_reach(hub: &Arc<AgentHub>, cloud: &crate::cloud::CloudHub) {
+    let placed: Vec<AgentId> = lock(&hub.channel_members)
+        .iter()
+        .copied()
+        .filter(|member| cloud.is_placed(*member))
+        .collect();
+    for member in placed {
+        if let Some(peers) = reach_of(hub, member).await {
+            cloud.set_reach(member, peers);
+        }
+    }
+}
+
 /// The requests a channel member sends from its cloud machine to the
 /// agents it reaches ([`reach_of`]), filed as its `send_to_agent` here
 /// files them.
@@ -186,11 +211,64 @@ impl MailDesk for MachineMail {
             &mail.text,
             None,
         );
-        if let Err(error) = &sent {
-            // Its machine drops the refusal: the log is all that is left.
-            warn!(from = %mail.from.to_hex(), %to, %error, "A cloud member's request was refused");
+        match &sent {
+            Ok(_) => hub
+                .inbox
+                .refusals
+                .delivered((mail.from, mail.to), &mail.subject),
+            Err(error) => {
+                warn!(from = %mail.from.to_hex(), %to, %error, "A cloud member's request was refused");
+            }
         }
         sent.map(|_| ())
+    }
+
+    /// Its machine drops the ack, so the sender is told here, as a notice
+    /// into its running turn or the prompt of its next one: once per
+    /// recipient and subject, however often the mail is resent
+    /// ([`super::refusals`]).
+    fn refused(&self, mail: &RemoteMail, why: &str) {
+        let Some(hub) = self.0.upgrade() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        if !hub
+            .inbox
+            .refusals
+            .tell((mail.from, mail.to), &mail.subject, now)
+        {
+            tracing::debug!(from = %mail.from.to_hex(), to = %mail.to.to_hex(), "A refusal its sender was told already; not told again");
+            return;
+        }
+        let to = lock(&hub.registry)
+            .find(mail.to)
+            .map_or_else(|| mail.to.to_hex(), |agent| Named::of(agent).full());
+        if hub
+            .notices
+            .send(refusal(mail.from, &to, &mail.subject, why))
+            .is_err()
+        {
+            warn!(from = %mail.from.to_hex(), %to, "A refusal after the event loop ended; dropped");
+        }
+    }
+}
+
+/// The notice telling `from` that its message to `to` about `subject`
+/// was not delivered, `why`.
+pub(super) fn refusal(from: AgentId, to: &str, subject: &str, why: &str) -> Notice {
+    let about = if subject.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" about \"{}\"", subject.trim())
+    };
+    Notice {
+        to: from,
+        shown: format!("✉ Not delivered to {to}: {why}"),
+        prompt: format!(
+            "Your message to {to}{about} was not delivered: {why}. It did not reach them; \
+             send it again once that is fixed, or tell whoever is waiting on it."
+        ),
+        inbox: None,
     }
 }
 

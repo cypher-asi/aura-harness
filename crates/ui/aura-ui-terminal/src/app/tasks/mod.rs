@@ -40,17 +40,17 @@
 //! ```text
 //! TODAY                               a day
 //! ▾  Auth rework              1/3     a plan
-//! ☒  Add session table                its todos
-//! ▣  Write the login handler
+//! ✓  Add session table                its todos
+//! ◐  Write the login handler
 //!   ⢎⡱ Write the login handler  → coder    the task doing it
 //! ☐  Wire the middleware
 //! ▾  Build the auth           2/2     an earlier round
-//! ☒  Add the login form               its items
+//! ✓  Add the login form               its items
 //!   ✗  Add the login form  → coder    a failed try, stale
 //!   ✓  Add the login form  → coder
-//! ☒  Add the logout button
+//! ✓  Add the logout button
 //! ▾  No Plan
-//! ☒  Find the uses  → explorer        a request's items
+//! ✓  Find the uses  → explorer        a request's items
 //!   ✓  Find the uses  → explorer
 //! ☐  Rename the crate
 //! ✓  Fix the typo  → coder            a task doing no item
@@ -72,11 +72,12 @@
 //! and lists every plan and task in the channel's folder, whatever the
 //! side panel's scope.
 
+use crate::app::wheel_views::WheelList;
 use std::collections::HashMap;
 
 use super::processes::SIDE_PAGE;
 use super::side_scope::AgentFilter;
-use super::{follow_selection, App};
+use super::App;
 use crate::events::{PlanView, TaskView, TodoView};
 use chrono::NaiveDate;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -427,7 +428,15 @@ impl App {
     pub fn sync_tasks_scroll(&mut self, visible: usize) -> usize {
         let list = &self.task_list;
         let selected = list.selected;
-        let scroll = follow_selection(self.side.tasks_scroll, selected, visible, list.rows.len());
+        let scroll = self.panels.wheel.place(
+            WheelList::Tasks,
+            (self.side.tasks_scroll, selected),
+            (visible, list.rows.len()),
+        );
+        if self.panels.wheel.is_detached(WheelList::Tasks) {
+            self.side.tasks_scroll = scroll;
+            return scroll;
+        }
         let header_above = selected
             .checked_sub(1)
             .filter(|&above| matches!(list.rows.get(above), Some(TaskRow::Day { .. })));

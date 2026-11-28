@@ -6,12 +6,11 @@ use super::*;
 use crate::event_loop::inbox::{assign, AssignArgs};
 use aura_exec_tools::todo::task_report_line;
 use aura_store_db::NewChannel;
-use aura_ui::events::MessageRole;
 
 /// A channel `#site` with the fixture's second agent as a member, as
 /// a member joins: top-level, the coordinator having brought it in.
 /// Returns the coordinator.
-async fn channel_with_member(fixture: &Fixture) -> AgentId {
+pub(super) async fn channel_with_member(fixture: &Fixture) -> AgentId {
     let channel = channels::create_channel(
         &fixture.hub,
         NewChannel {
@@ -28,7 +27,7 @@ async fn channel_with_member(fixture: &Fixture) -> AgentId {
     channel.coordinator
 }
 
-fn code(fixture: &Fixture, agent: AgentId) -> String {
+pub(super) fn code(fixture: &Fixture, agent: AgentId) -> String {
     lock_registry_agent(fixture, agent).code.unwrap()
 }
 
@@ -89,12 +88,12 @@ async fn an_assignment_runs_as_the_members_task_and_its_report_reaches_the_coord
 
 /// The coordinator assigns the member whose code is `worker` the footer
 /// links, as todo 3, and says to whom the work went.
-async fn assign_footer(fixture: &Fixture, coordinator: AgentId, worker: &str) -> String {
+pub(super) async fn assign_footer(fixture: &Fixture, coordinator: AgentId, worker: &str) -> String {
     assign_footer_asking(fixture, coordinator, worker, "Make the footer links work.").await
 }
 
 /// [`assign_footer`], asking `prompt`.
-async fn assign_footer_asking(
+pub(super) async fn assign_footer_asking(
     fixture: &Fixture,
     coordinator: AgentId,
     worker: &str,
@@ -109,6 +108,7 @@ async fn assign_footer_asking(
             subject: "Footer".to_string(),
             prompt: prompt.to_string(),
             todo_id: Some("3".to_string()),
+            withdraw: false,
         },
     )
     .await
@@ -130,63 +130,10 @@ async fn run_notice(
 }
 
 #[tokio::test]
-async fn a_new_member_of_a_cloud_channel_without_a_project_works_here_and_says_why() {
-    let (fixture, mut commands) = fixture();
-    let in_cloud = NewChannel {
-        slug: "site".to_string(),
-        title: "Website relaunch".to_string(),
-        placement: aura_store_db::ChannelPlacement::Cloud,
-        ..NewChannel::default()
-    };
-    let channel = channels::create_channel(&fixture.hub, in_cloud)
-        .await
-        .unwrap();
-    let mut notices = fixture.hub.take_notices();
-    let mut b = borrowed(&fixture);
-    let mut done = std::mem::replace(&mut b.done, mpsc::channel(1).1);
-    let mut state = loop_state(&fixture, &mut b);
-
-    let brief = AssignArgs {
-        to: None,
-        agent: Some("reviewer".to_string()),
-        subject: "Footer".to_string(),
-        prompt: "Make the footer links work.".to_string(),
-        todo_id: None,
-    };
-    let said = assign(&fixture.hub, channel.coordinator, brief)
-        .await
-        .unwrap();
-    assert!(said.contains("(new member)"), "{said}");
-    let assignment = notices.try_recv().unwrap();
-    let member = assignment.to;
-    assert!(subagents::lock(&state.hub.cloud_starts).contains(&member));
-
-    run_notice(&mut state, &mut done, assignment, member).await;
-    assert!(subagents::lock(&state.hub.cloud_starts).is_empty());
-    assert!(!state.cloud.is_cloud(member) && !state.cloud.is_moving(member));
-    let member_hex = member.to_hex();
-    let why: Vec<String> = drain(&mut commands)
-        .into_iter()
-        .filter(|(to, _)| to.as_deref() == Some(member_hex.as_str()))
-        .filter_map(|(_, command)| match command {
-            UiCommand::ShowMessage(message) if message.role == MessageRole::System => {
-                Some(message.content)
-            }
-            _ => None,
-        })
-        .collect();
-    // Then the software factory: its task starts with a plan.
-    let [placed, planning] = why.as_slice() else {
-        panic!("{why:?}");
-    };
-    assert!(placed.starts_with("The channel has no project folder for a cloud machine"));
-    assert_eq!(planning, crate::event_loop::factory::hooks::PLANNING_FIRST);
-}
-
-#[tokio::test]
 async fn a_cloud_members_turn_answers_its_assignment_when_the_loop_hears_it_ended() {
     let report_of = |failure: Option<&str>, said: &str| {
         let failure = failure.map(str::to_string);
+        let failure_given = failure.is_some();
         let said = said.to_string();
         async move {
             let (fixture, _commands) = fixture();
@@ -214,6 +161,8 @@ async fn a_cloud_members_turn_answers_its_assignment_when_the_loop_hears_it_ende
             cloud::handle_ended(&mut state, cloud::Ended::Turn(member, Some(outcome))).await;
             assert!(!state.hub.is_working(member));
             assert_eq!(state.hub.inbox.owed_by(member), 0);
+            let red = state.hub.status.failure(member).is_some();
+            assert_eq!(red, failure_given, "a failed turn shows in red");
             let report = notices.try_recv().unwrap();
             assert_eq!(report.to, coordinator);
             report.prompt
@@ -270,7 +219,7 @@ fn assert_prompts_fold(commands: &mut mpsc::Receiver<UiCommand>, chats: [(AgentI
 }
 
 /// An assignment the mock model works on until the test releases it.
-const SLOW_FOOTER: &str = "Make the slow footer links work.";
+pub(super) const SLOW_FOOTER: &str = "Make the slow footer links work.";
 
 /// The report of a member whose turn on [`SLOW_FOOTER`] the user stopped
 /// with `stop`, then carried on with a message: queued before the stop

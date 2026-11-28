@@ -86,6 +86,206 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The highlight passes over the day headers, which take no clicks.
   Each day's No Plan folds on its own.
 
+### A channel member's machine starts from what is shipped
+
+##### Fixed
+
+- A new channel member's cloud machine starts its branch from
+  `origin`'s latest main. Before, it started at this computer's HEAD,
+  with commits not pushed yet, so a member worked on top of other
+  agents' unshipped commits, and its ship carried them. A move you make
+  with `/cloud` still takes your commits along.
+- An agent that already has a cloud machine, one this computer lost
+  track of, isn't given a second one: its start fails, in red, naming
+  the machine.
+
+### An agent that errors out reads in the Stop button's red, in its chat too
+
+##### Fixed
+
+- An error in an agent's chat is now drawn in the Stop button's red after
+  a `✗`, where it was gray like any other note. This holds for every way
+  an agent errors out: it can't start, it can't get a cloud machine, its
+  turn ends in an error, or it stalls.
+- A stalled member's chat now says why, and its rows turn red at once
+  rather than at the next refresh.
+- A cloud agent whose work the cloud turns away (it belongs to another
+  user, or its model's plan isn't linked) now shows that as a red error
+  in its chat, and its rows turn red at once.
+- The rows, their `!` icons, chat errors and the Stop button now take
+  their red from one place, so they can't drift apart.
+
+### The merge queue finishes its review leftovers
+
+##### Fixed
+
+- The queue's target branch is read from `.aura/merge-queue.toml` as
+  committed on `main` (`main` by default). The queue, `git_ship`, the push
+  guard, the QUEUE tab and the agents' prompts all name that branch. An
+  uncommitted edit in some checkout no longer moves it.
+- New and forked cloud machines pull that target from GitHub, not
+  always `main`.
+- The queue's worktree and build output moved out of `.git`, to a
+  per-repo folder under the user's cache folder. The old
+  `.git/aura/merge-worktree` is removed when the new one is made.
+- Every finished merge is kept. Older ones move to
+  `merge-history.jsonl` beside the queue file, and the QUEUE tab loads
+  them 100 at a time as you scroll to "N older merges".
+- A queued entry expires 24 hours after its last change, so one put
+  back after a crash doesn't expire at once.
+
+### Channel post summaries are kept in the channel store
+
+##### Changed
+
+- The one-line summaries a channel's HISTORY tab shows for the user's
+  long messages are now kept in the channel store, beside the posts they
+  summarize (`h/{blake3 of the text}` rows), instead of in a separate
+  `channel-post-summaries.json` in the data directory. They are sealed
+  whenever the store is, as posts are: in a sealed `aura-node` store.
+  The terminal app opens its store unsealed today, so there they are no
+  better protected than its posts. An
+  existing file is moved into the store on first use and then deleted;
+  if the move fails it is left for the next run. Without a channel store
+  summaries are kept in memory only. The 2,000-entry cap is gone: rows
+  are small and a message is still summarized once.
+
+### HISTORY lists your /plan requests
+
+##### Fixed
+
+- A channel's HISTORY tab now lists what you typed with `/plan`. The
+  request goes to a new planner's own chat, not the channel's, so it
+  was missing. It is listed by time among your other messages and
+  summarized the same way when long; Enter or a click opens the
+  planner's chat and jumps to the request there. The channel's chat
+  still doesn't show it, and the coordinator's turns don't read it. If
+  the planner has left the channel, HISTORY says so.
+
+### Channel members no longer stall silently
+
+##### Fixed
+
+- A message one cloud member sends another now always goes through this
+  computer's inbox. Before, a member's peers were known only once its own
+  turn started, were forgotten when the app restarted, and were never
+  known for agents it spawned on its machine. Mail outside that list went
+  straight to the other member's machine. There it either started a turn
+  this computer never saw, so the next message started a second session
+  of the same agent, or it was only written to the agent's log and never
+  read. Peers are now refreshed as the cloud comes up and as members
+  join, and an agent spawned on a member's machine reaches the same
+  peers, its messages sent as the member's.
+- A message that can't be delivered now tells its sender why, in place
+  of a line in the log.
+- A cloud machine no longer starts a second run for an agent that is
+  already mid-turn there. This computer waits for that turn to end
+  ("Waiting for the turn already running on its machine"), then starts
+  its own.
+- Work that can't start at all (its session can't be opened, its local
+  model isn't running, its plan isn't linked for the cloud) gives up the
+  reports it owed, telling whoever waits, and marks the member failed,
+  instead of leaving those reports owed.
+- Once a minute the app looks for members that owe a report but have
+  nothing running or queued. Each is asked once to carry on, then its
+  reports are given up as stalled. Members you stopped yourself are left
+  alone until their next turn.
+
+##### Added
+
+- `list_agents` and `get_agent_state` give each peer a `state`:
+  `working`, `starting in the cloud`, `queued`, `idle`, `failed` or
+  `stalled`, with `why` where it applies.
+
+### HISTORY lists the messages you typed to the coordinator
+
+##### Fixed
+
+- A channel's HISTORY tab now lists every message you sent there. It
+  used to list only messages that mentioned a member, which become
+  channel posts; a message to the coordinator alone stays in its
+  conversation and was missing. Those are listed now among the posts,
+  by time, summarized the same way when long, and Enter or a click
+  jumps the chat back to them, from a member's chat too. A message sent
+  to members and the coordinator at once is listed once. Mail other
+  agents send the coordinator is not listed.
+
+### A cloud channel's member never works here, and work taken back never starts
+
+##### Fixed
+
+- A member of a channel whose agents run in the cloud never works on
+  this computer, in the folder other agents share. That holds even when
+  its machine was never started, its start was lost to a restart, or the
+  cloud isn't connected. Work sent to it first starts (or finds) its
+  machine and waits for it; when that can't be done, the member fails in
+  red and its assigner gets `ok=false` with the reason.
+- `assign` with `withdraw` takes back the work given to a member that it
+  hasn't started, and it never starts. Giving a todo to another member
+  takes it back from the one that had it. Work already under way isn't
+  stopped and still reports.
+- Archiving a member drops the work queued for it, and gives up what it
+  owed with `ok=false`, instead of starting that work later.
+
+### A plan says where it came from
+
+##### Added
+
+- The PLAN view shows a plan's facts under its title. These are when it
+  was created and last updated, which agent wrote it and who asked for
+  it, its channel, the machine it was written on, its status and
+  progress, its branch and PR, its project and its model.
+- `create_plan` records `created_at`, `updated_at`, `author`, `model` and
+  `machine` in the plan's frontmatter. A rewrite keeps the creation time,
+  the author and the machine. Plans from before still load, and they
+  show only the facts the app can work out.
+
+### A cloud channel's members start in the cloud or fail, in red
+
+##### Fixed
+
+- A new member of a channel whose agents run in the cloud now works
+  only on a cloud machine. Before, it could sit idle forever, owing its
+  report: its first work waited for a machine start with no deadline,
+  and a start that never finished left it waiting. A start that takes
+  longer than 20 minutes now fails. A start that fails, or can't begin
+  (no project folder to start from, no connection to the cloud), fails
+  the member too, instead of quietly running it on this computer. Its
+  queued work is dropped, and whoever assigned it the work gets
+  `ok=false` with the reason right away.
+- An agent whose turn failed, or whose cloud start failed, shows it in
+  red, the Stop button's color, on its PROJECTS row and its channel
+  MEMBERS row, until its next turn starts. Its chat says why.
+
+##### Added
+
+- A member whose cloud machine is starting reads "Starting in the
+  cloud…" on MEMBERS instead of "Idle".
+
+### An empty channel opens on a welcome
+
+##### Added
+
+- A channel with nothing in it yet shows its slug in large block
+  letters, then a welcome from its coordinator. The welcome says what
+  the channel is for, from its description or title, and how to get
+  started. The banner shrinks, breaks at hyphens, or falls back to the
+  bold `#slug` to fit a narrow or short panel. It is only drawn, never
+  posted, so it reaches no agent and costs no model call. The first
+  message takes its place.
+
+### Subagents are titled by the work they do
+
+##### Fixed
+
+- A subagent's row names what it works on, such as "EXL1: Merge queue
+  store tests". Before, many rows read "EXL1: In the Rust workspace" or
+  "IMP89: You are working". A `task` call can now give a `description`,
+  which becomes the title, for local and cloud subagents alike. Without
+  one, the title comes from the brief's first sentence that says what
+  to do, skipping workspace paths, "You are ..." lines, section labels
+  and rules. Titles are cut at a word to fit the row.
+
 ### A channel keeps its own scroll
 
 ##### Fixed

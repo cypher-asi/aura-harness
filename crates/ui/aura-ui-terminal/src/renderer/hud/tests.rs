@@ -1,6 +1,5 @@
 use super::notice::columns;
 use super::*;
-use crate::events::TodoState;
 
 #[test]
 fn plan_mode_status_says_how_to_leave() {
@@ -64,73 +63,6 @@ fn the_status_marks_a_partly_priced_total_and_drops_an_unpriced_one() {
     assert_eq!(cost_part(stats(true, 0)).as_deref(), Some("$0.250"));
     assert_eq!(cost_part(stats(true, 2)).as_deref(), Some("$0.250+?"));
     assert_eq!(cost_part(stats(false, 3)), None);
-}
-
-#[test]
-fn checklist_boxes_each_state() {
-    let theme = Theme::default();
-    let todo = |content: &str, state| TodoView {
-        content: content.to_string(),
-        state,
-        assignee: None,
-        task: None,
-    };
-    let hud = Hud {
-        todos: vec![
-            todo("read", TodoState::Completed),
-            todo("fix", TodoState::InProgress),
-            todo("test", TodoState::Pending),
-            todo("drop", TodoState::Cancelled),
-        ],
-        ..Hud::default()
-    };
-    let mut lines = vec![checklist_header(&hud, &theme, true, None)];
-    lines.extend(hud.todos.iter().map(|todo| todo_line(todo, 38, &theme)));
-    let text = |line: &Line<'_>| -> String { line.spans.iter().map(|s| &*s.content).collect() };
-    let rows: Vec<String> = lines.iter().map(text).collect();
-    assert_eq!(
-        rows,
-        [
-            "⬢ Working on 3 to-dos",
-            "☒ read",
-            "▣ fix",
-            "☐ test",
-            "☐ drop"
-        ]
-    );
-    let item = |row: usize| lines[row].spans[1].style;
-    assert_eq!(item(1).fg, Some(theme.colors.faint));
-    assert_eq!(item(2).fg, Some(theme.colors.foreground));
-    assert!(item(2).add_modifier.contains(Modifier::BOLD));
-    assert_eq!(item(3).fg, Some(theme.colors.muted));
-    assert!(item(4).add_modifier.contains(Modifier::CROSSED_OUT));
-}
-
-#[test]
-fn checklist_working_label_shimmers_when_animated() {
-    let theme = Theme::default();
-    let hud = Hud {
-        todos: vec![TodoView {
-            content: "fix".to_string(),
-            state: TodoState::InProgress,
-            assignee: None,
-            task: None,
-        }],
-        ..Hud::default()
-    };
-    let header = |frame| checklist_header(&hud, &theme, true, frame).spans;
-    let text = |spans: &[Span<'_>]| -> String { spans.iter().map(|s| &*s.content).collect() };
-    // Mid-pass, the band lights part of `Working` and leaves the rest.
-    let lit = header(Some(4));
-    assert_eq!(text(&lit), "⬢ Working on 1 to-do");
-    assert!(lit.len() > 3, "band splits the label: {lit:?}");
-    assert!(lit[1..lit.len() - 1]
-        .iter()
-        .all(|s| s.style.add_modifier.contains(Modifier::BOLD)));
-    // Without animation the label is one steady span.
-    let steady = header(None);
-    assert_eq!(steady.len(), 3);
-    assert_eq!(steady[1].style.fg, Some(theme.colors.foreground));
 }
 
 #[test]

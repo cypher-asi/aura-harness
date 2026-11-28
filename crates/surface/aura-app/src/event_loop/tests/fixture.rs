@@ -308,7 +308,7 @@ pub(super) fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopS
         models: ModelSelection::fixed(&fixture.config, "mock-model"),
         active: fixture.first,
         idle: HashMap::from([(fixture.first, session)]),
-        queued: queue::WorkQueues::default(),
+        queued: queue::WorkQueues::counted(fixture.hub.standing.counts()),
         work_done: b.done_tx.clone(),
         in_flight: 0,
         hub: Arc::clone(&fixture.hub),

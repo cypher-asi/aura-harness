@@ -11,13 +11,13 @@
 //! ```text
 //!  TODAY
 //!  ▾  Auth rework                 1/3
-//!  ☒  Add session table
-//!  ▣  Write the login handler
+//!  ✓  Add session table
+//!  ◐  Write the login handler
 //!    ⢎⡱ Write the login handler  → coder
 //!  ☐  Wire the middleware
 //!  ▸  Build the auth              4/4
 //!  ▾  No Plan
-//!  ☒  Find the uses  → explorer
+//!  ✓  Find the uses  → explorer
 //!    ✓  Find the uses  → explorer
 //!  ✓  Fix the typo  → coder
 //!  YESTERDAY

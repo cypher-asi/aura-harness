@@ -119,6 +119,19 @@ const fn input_is_prompt_answer(state: AppState) -> bool {
 }
 
 impl App {
+    /// The messages of `agent_id`'s chat: the one on screen, else the one
+    /// held for it; `None` when none is held.
+    #[must_use]
+    pub(crate) fn chat_messages_of(&self, agent_id: &str) -> Option<&VecDeque<Message>> {
+        if agent_id == self.active_agent_id {
+            return Some(&self.messages);
+        }
+        self.switching
+            .views
+            .get(agent_id)
+            .map(|view| &view.messages)
+    }
+
     /// Exchange the chat on screen with `view`.
     fn swap_chat(&mut self, view: &mut AgentView) {
         mem::swap(&mut self.messages, &mut view.messages);
@@ -203,6 +216,7 @@ impl App {
         self.chat_tab() == ChatTab::Chat
             && (self.chat_loading()
                 || self.chat_fading().is_some()
+                || self.chat_jumping()
                 || self.messages.iter().rev().any(Message::is_live_boot))
     }
 

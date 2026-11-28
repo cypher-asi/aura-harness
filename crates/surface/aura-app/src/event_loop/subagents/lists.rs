@@ -1,4 +1,5 @@
 use super::*;
+use crate::event_loop::titles;
 
 impl AgentHub {
     /// Re-read the permanent agents, returning files that could not be used.
@@ -59,6 +60,7 @@ impl AgentHub {
         for row in &mut rows {
             if let Ok(agent_id) = AgentId::from_hex(&row.id) {
                 self.mark_plan_mode(agent_id, row);
+                self.mark_status(agent_id, row);
             }
         }
         rows
@@ -140,12 +142,13 @@ impl AgentHub {
             }
     }
 
-    /// Name the subtask `child` was spawned for with `prompt`: by the
-    /// title model in the background, through the child's `kernel` with
-    /// `config`'s credentials, or at once from the prompt under a
-    /// benchmark's run, whose agents are named without model calls. The
-    /// same model writes a subject for the INBOX `thread` the task opens,
-    /// when it opens one and mail is collected.
+    /// Name the subtask `child` was spawned for with `prompt`: at once
+    /// with the description the `task` call gave, else by the title model
+    /// in the background, through the child's `kernel` with `config`'s
+    /// credentials, or at once from the prompt under a benchmark's run,
+    /// whose agents are named without model calls. The same model writes
+    /// a subject for the INBOX `thread` the task opens, when it opens one
+    /// and mail is collected.
     pub(super) async fn name_subtask(
         self: &Arc<Self>,
         request: &SubagentDispatchRequest,
@@ -155,27 +158,37 @@ impl AgentHub {
         prompt: &str,
         thread: Option<String>,
     ) {
-        if self.in_bench(request.parent_agent_id) {
-            self.apply_subtitle(child, &crate::event_loop::titles::bench_subtitle(prompt))
-                .await;
+        let in_bench = self.in_bench(request.parent_agent_id);
+        let described = titles::described_subtitle(request.description.as_deref());
+        match &described {
+            Some(subtitle) => self.apply_subtitle(child, subtitle).await,
+            None if in_bench => {
+                self.apply_subtitle(child, &titles::bench_subtitle(prompt))
+                    .await;
+            }
+            None => {}
+        }
+        if in_bench {
             return;
         }
         let classifier = lock(&self.base).gate.classifier.clone();
-        crate::event_loop::titles::spawn_subtitle(
-            Arc::clone(self),
-            child,
-            aura_agent::KernelModelGateway::new(Arc::clone(kernel)),
-            config.clone(),
-            crate::event_loop::titles::title_model(classifier.clone()),
-            prompt.to_string(),
-        );
+        if described.is_none() {
+            titles::spawn_subtitle(
+                Arc::clone(self),
+                child,
+                aura_agent::KernelModelGateway::new(Arc::clone(kernel)),
+                config.clone(),
+                titles::title_model(classifier.clone()),
+                prompt.to_string(),
+            );
+        }
         if let Some(thread) = thread.filter(|_| self.mail_open()) {
-            crate::event_loop::titles::spawn_subject(
+            titles::spawn_subject(
                 self.commands.clone(),
                 thread,
                 aura_agent::KernelModelGateway::new(Arc::clone(kernel)),
                 config.clone(),
-                crate::event_loop::titles::title_model(classifier),
+                titles::title_model(classifier),
                 prompt.to_string(),
             );
         }
@@ -211,6 +224,7 @@ impl AgentHub {
         rows.read_activity(self.factory.store.as_ref(), &mut lock(&self.last_active));
         for (agent_id, row) in rows.listed.iter_mut().chain(rows.archived.iter_mut()) {
             self.mark_plan_mode(*agent_id, row);
+            self.mark_status(*agent_id, row);
         }
         // After the rows are complete, so the members' copies carry the
         // same activity and mode. The member set is copied out so the two

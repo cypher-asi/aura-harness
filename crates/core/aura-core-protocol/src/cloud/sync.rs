@@ -251,7 +251,15 @@ pub struct NodeClaimed {
     /// The [`NODE_PROTOCOL`] the node speaks; 0 from nodes before it.
     #[serde(default)]
     pub protocol: u32,
+    /// The git tools its agents get (`git_ship`, `git_push`, ...). Empty
+    /// from nodes before the merge queue, which have no `git_ship` and
+    /// put no queue marker in their pushes: the hub updates those.
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
+
+/// The tool a node must offer to ship through the merge queue.
+pub const SHIP_TOOL: &str = "git_ship";
 
 #[cfg(test)]
 mod tests {

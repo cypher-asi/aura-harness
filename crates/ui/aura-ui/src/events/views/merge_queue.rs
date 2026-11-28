@@ -58,6 +58,10 @@ pub struct MergeEntryView {
     /// Short sha the target branch moved to
     #[serde(default)]
     pub merged: Option<String>,
+    /// Other work in flight that changes the same files, one line each:
+    /// `q12 aura/x (RUS1): src/a.rs, src/b.rs`
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlaps: Vec<String>,
 }
 
 /// A repo's merge queue.
@@ -67,6 +71,11 @@ pub struct MergeQueueView {
     pub target: String,
     /// Folder of the repo
     pub repo: String,
-    /// Every entry, newest first
+    /// The entries shown, newest first: every waiting and running one,
+    /// and the newest finished ones
     pub entries: Vec<MergeEntryView>,
+    /// Finished merges older than those shown, which
+    /// `UiEvent::LoadOlderMerges` asks for a page at a time
+    #[serde(default)]
+    pub older: u64,
 }

@@ -42,16 +42,23 @@
 //! the list: the right column hides, and the chat asks for a channel to
 //! be picked.
 
+mod fold;
+mod history;
 mod list;
 mod side;
+mod welcome;
 
+pub(crate) use history::{HistoryItem, HISTORY_ROWS};
+#[cfg(test)]
+pub(crate) use history::{HistoryKind, PLANNER_GONE};
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
+pub(crate) use welcome::ChannelWelcome;
 
 use crate::app::scroll::{ChatPlace, InfoScroll};
 use crate::app::{AgentsTab, App, ChatTab, SidePanelTab};
 use crate::events::{ChannelPostView, ChannelSummary, MergeQueueView, UiEvent};
 use ratatui::layout::Rect;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// What the CHANNELS app knows about channels, and where it is in them.
 #[derive(Debug, Default)]
@@ -62,10 +69,14 @@ pub(crate) struct ChannelState {
     open: Option<String>,
     /// Posts of each channel, by `seq`, by channel id
     posts: HashMap<String, Vec<ChannelPostView>>,
+    /// The user's `/plan` requests of each channel, by `seq`, by channel
+    /// id: kept apart from `posts`, as the chat shows none of them and
+    /// only HISTORY lists them
+    plan_posts: HashMap<String, Vec<ChannelPostView>>,
     /// Highlighted row of the list; `list.len()` is "+ New channel"
     selected: usize,
     /// First visible row of the list
-    scroll: usize,
+    pub(in crate::app) scroll: usize,
     /// Where the list's rows were drawn this frame
     rows_area: Option<Rect>,
     /// Where "+ New channel" was drawn this frame
@@ -75,10 +86,14 @@ pub(crate) struct ChannelState {
     /// until it comes the agent before it is still on screen; that agent
     /// is not a member, but it is not the user leaving either.
     awaiting_member: bool,
-    /// Highlighted row of the MEMBERS side tab
+    /// Highlighted member of the MEMBERS side tab, an index into the open
+    /// channel's members; always one that is shown
     member_selected: usize,
-    /// First visible row of the MEMBERS side tab
-    member_scroll: usize,
+    /// First visible row of the MEMBERS side tab, among the members shown
+    pub(in crate::app) member_scroll: usize,
+    /// Members unfolded over their subagents, by id; every other member
+    /// with subagents is folded (see `fold`)
+    unfolded_members: HashSet<String>,
     /// Where the MEMBERS side tab's rows were drawn this frame
     member_rows_area: Option<Rect>,
     /// How far the INFO side tab is scrolled
@@ -87,6 +102,11 @@ pub(crate) struct ChannelState {
     merge_queues: HashMap<String, MergeQueueView>,
     /// How far the QUEUE side tab is scrolled
     queue_scroll: InfoScroll,
+    /// The channel whose QUEUE tab last asked for older merges, and how
+    /// many merges it showed then: it asks once per page shown
+    older_asked: Option<(String, usize)>,
+    /// The HISTORY side tab: where it is, and its summaries
+    history: history::HistoryState,
     /// The side tab shown before the channel opened, shown again when it
     /// closes
     side_tab_before: Option<SidePanelTab>,
@@ -130,17 +150,26 @@ impl ChannelState {
     }
 
     /// Members of the open channel: none with no channel open.
-    fn open_members(&self) -> usize {
+    fn members(&self) -> &[crate::events::AgentSummary] {
         self.open_channel()
-            .map_or(0, |channel| channel.members.len())
+            .map_or(&[], |channel| channel.members.as_slice())
+    }
+
+    /// The open channel's members shown on MEMBERS, as indices into them.
+    fn shown_members(&self) -> Vec<usize> {
+        fold::shown_members(self.members(), &self.unfolded_members)
     }
 
     fn set_selected(&mut self, row: usize) {
         self.selected = row.min(self.list.len());
     }
 
-    fn set_member_selected(&mut self, row: usize) {
-        self.member_selected = row.min(self.open_members().saturating_sub(1));
+    /// Highlight member `index` (clamped), or the folded member it is
+    /// hidden under.
+    fn set_member_selected(&mut self, index: usize) {
+        let members = self.members();
+        let index = index.min(members.len().saturating_sub(1));
+        self.member_selected = fold::shown_member_of(members, &self.unfolded_members, index);
     }
 
     /// Where the views were drawn is only good for the frame that drew
@@ -149,6 +178,17 @@ impl ChannelState {
         self.rows_area = None;
         self.new_channel_area = None;
         self.member_rows_area = None;
+        self.history.forget_area();
+    }
+
+    /// Posts of channel `channel_id`, oldest first.
+    fn posts_of(&self, channel_id: &str) -> &[ChannelPostView] {
+        self.posts.get(channel_id).map_or(&[], Vec::as_slice)
+    }
+
+    /// The user's `/plan` requests in channel `channel_id`, by `seq`.
+    fn plan_posts_of(&self, channel_id: &str) -> &[ChannelPostView] {
+        self.plan_posts.get(channel_id).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -332,6 +372,7 @@ impl App {
             self.channels.member_scroll = 0;
             self.channels.info_scroll = InfoScroll::default();
             self.channels.queue_scroll = InfoScroll::default();
+            self.channels.history.reset();
         }
         self.apps.channel = Some(id.to_string());
         self.channels.selected = row;

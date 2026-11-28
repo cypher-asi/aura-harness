@@ -30,8 +30,11 @@ You label subtasks that a coding agent hands to helper agents, for a narrow \
 sidebar tree. Reply with only the label: 1 to 3 words in sentence case naming \
 the thing being worked on, such as \"Parser escapes\", \"Auth retries\", \
 \"Inbox tests\" or \"Engine core\". Drop filler verbs like implement, add, \
-fix, finish, update or create, and articles like \"the\". No quotes, no \
-trailing punctuation, no prefix like \"Title:\".";
+fix, finish, update or create, and articles like \"the\". Task prompts \
+often open with boilerplate such as workspace paths, \"In the Rust \
+workspace ...\", \"You are working in ...\" or rules about tools and \
+committing: ignore it and name the work itself. No quotes, no trailing \
+punctuation, no prefix like \"Title:\".";
 
 /// The user message for the subtask title call: the task prompt the
 /// helper was given, already shortened by the caller.
@@ -57,6 +60,23 @@ punctuation, no prefix like \"Subject:\".";
 #[must_use]
 pub fn mail_subject_user_prompt(text: &str) -> String {
     format!("Message:\n{text}\n\nWrite its subject.")
+}
+
+/// System prompt for the one-line summary of a long message the user
+/// posted in a channel, shown in the channel's HISTORY list.
+pub const POST_SUMMARY_SYSTEM_PROMPT: &str = "\
+You summarize a message a user sent to a team of coding agents, for one row \
+of a narrow list of the user's past messages. Reply with only the summary: \
+one line of at most 10 words in sentence case saying what the user asked \
+for or said, such as \"Make the footer links open in new tabs\" or \"Plan \
+the parser rewrite, tests first\". Keep names of files, crates and agents. \
+No quotes, no trailing period, no prefix like \"Summary:\".";
+
+/// The user message for the post summary call: the post, already
+/// shortened by the caller.
+#[must_use]
+pub fn post_summary_user_prompt(text: &str) -> String {
+    format!("Message:\n{text}\n\nSummarize it in one line.")
 }
 
 #[cfg(test)]

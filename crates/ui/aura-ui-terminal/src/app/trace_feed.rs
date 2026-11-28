@@ -4,6 +4,7 @@
 //! the side panel's scope lets through. Enter or a click opens the
 //! highlighted step as JSON; `g` opens it in the run graph.
 
+use crate::app::wheel_views::WheelList;
 use std::collections::VecDeque;
 
 use super::file_view::FileView;
@@ -11,7 +12,7 @@ use super::graph::node_title;
 use super::processes::SIDE_PAGE;
 use super::side_scope::AgentFilter;
 use super::trace_json::{node_json, NodeLink};
-use super::{follow_selection, App, DetailView};
+use super::{App, DetailView};
 use crate::events::{TraceNode, TraceNodeStatus, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -249,11 +250,20 @@ impl App {
     /// Keep the highlighted feed row inside `visible` rows, returning the
     /// first row to draw.
     pub fn sync_trace_scroll(&mut self, visible: usize) -> usize {
-        self.side.trace_scroll = follow_selection(
-            self.side.trace_scroll,
-            self.trace_feed.selected,
-            visible,
-            self.trace_feed.len(),
+        // While the highlight follows the newest step it moves as steps
+        // come in; that is not the user moving it, so a list the wheel
+        // scrolled stays where it was left.
+        let feed = &self.trace_feed;
+        let key = if feed.pinned || feed.at_end() {
+            usize::MAX
+        } else {
+            feed.selected
+        };
+        self.side.trace_scroll = self.panels.wheel.place_keyed(
+            WheelList::Trace,
+            key,
+            (self.side.trace_scroll, feed.selected),
+            (visible, feed.len()),
         );
         self.side.trace_scroll
     }
@@ -363,6 +373,29 @@ mod tests {
         feed.select(usize::MAX);
         feed.push("a", "r", &[node("s6", "iteration", TraceNodeStatus::Ok)]);
         assert_eq!(feed.selected(), 3, "the end highlight follows new rows");
+    }
+
+    #[test]
+    fn a_wheeled_feed_stays_put_while_new_steps_come_in() {
+        let mut app = App::new();
+        app.show_side_tab(super::super::SidePanelTab::Trace);
+        let steps: Vec<TraceNode> = (0..40)
+            .map(|n| node(&format!("d{n}"), "decision", TraceNodeStatus::Ok))
+            .collect();
+        app.trace_feed.push("a", "r", &steps);
+        assert_eq!(app.sync_trace_scroll(10), 30, "on the newest step");
+
+        app.wheel_panel_rows(super::super::PanelFocus::Sandbox, -3);
+        assert_eq!(app.sync_trace_scroll(10), 27);
+        // The highlight follows the newest step; the rows stay put.
+        let newest = [node("d40", "decision", TraceNodeStatus::Ok)];
+        app.trace_feed.push("a", "r", &newest);
+        assert_eq!(app.trace_feed.selected(), 40);
+        assert_eq!(app.sync_trace_scroll(10), 27);
+
+        // A key brings the rows back to the highlight.
+        app.follow_highlights();
+        assert_eq!(app.sync_trace_scroll(10), 31);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use crate::event_loop::LoopState;
 use aura_core_types::time::now_ms;
 use aura_core_types::AgentId;
 use aura_store_db::{ChannelPost, ChannelRecord, MemberRecord, NewPost, PostAuthor};
-use aura_ui::events::{ChannelPostAuthor, ChannelPostView, ImageAttachment};
+use aura_ui::events::{prompt_key, ChannelPostAuthor, ChannelPostView, ImageAttachment};
 use aura_ui::UiCommand;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -142,9 +142,9 @@ async fn coordinated_channel(
 /// `UiEvent::UserMessage` to the coordinator `coordinator`: when `text`
 /// mentions members of its channel, post it to the channel and give it
 /// to each of them, and to the coordinator only when it is mentioned
-/// too. Returns `false`, having done nothing, when it mentions no member
-/// (or `coordinator` coordinates no channel): the coordinator takes the
-/// message as usual.
+/// too. Returns `false` when it mentions no member (or `coordinator`
+/// coordinates no channel): the coordinator takes the message as usual,
+/// and in a channel only its HISTORY summary is asked for.
 pub(crate) async fn route_user_message(
     state: &mut LoopState<'_>,
     coordinator: AgentId,
@@ -162,6 +162,10 @@ pub(crate) async fn route_user_message(
         to_coordinator = true;
     }
     if mentioned.is_empty() {
+        // The coordinator takes it, and it stays in its conversation;
+        // HISTORY lists it from there, summarized like a post.
+        let typed = vec![(prompt_key(text), text.to_string())];
+        super::summaries::spawn_for(state, coordinator, &channel.id, typed);
         return false;
     }
     let seq = post_from_user(state, &channel, text, &mentioned).await;
@@ -291,9 +295,12 @@ async fn post_from_user(
         mentions: mentioned.to_vec(),
         reply_to: None,
         at_ms: now_ms(),
+        planner: None,
     };
     let post = append(&state.hub, &channel.id, new).await?;
     send_post(state.commands, &state.hub, channel.coordinator, &post).await;
+    let mine = vec![(post.seq, post.text.clone())];
+    super::summaries::spawn_for(state, channel.coordinator, &channel.id, mine);
     Some(post.seq)
 }
 
@@ -350,6 +357,7 @@ fn post_view(registry: &AgentRegistry, post: &ChannelPost) -> ChannelPostView {
         mentions: post.mentions.iter().map(AgentId::to_hex).collect(),
         reply_to: post.reply_to,
         at_ms: post.at_ms,
+        planner: post.planner.map(|id| id.to_hex()),
     }
 }
 
@@ -362,6 +370,7 @@ impl ChannelChat {
 }
 
 mod digest;
+mod plan_post;
 mod replies;
 #[cfg(test)]
 mod tests;
@@ -369,6 +378,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use digest::render_digest;
 pub(crate) use digest::{send_posts_of, take_digest};
+pub(crate) use plan_post::post_plan_request;
 #[cfg(test)]
 use replies::{answer_to, asked_at};
 pub(crate) use replies::{drop_unanswered, drop_unanswered_from, post_replies, post_replies_from};

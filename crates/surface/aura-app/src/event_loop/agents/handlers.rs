@@ -209,8 +209,14 @@ pub(crate) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &
     }
     // Archiving gives up on what they owe, even on a turn the user
     // already stopped.
+    // Work still queued for them never starts, and what an idle one owes
+    // is given up now; a busy one's is when its turn ends.
     for &id in &subtree {
         state.hub.inbox.take_interrupted(id);
+        state.queued.drop_all(id);
+        if !state.hub.is_working(id) {
+            super::super::inbox::give_up_all(&state.hub, id, super::super::inbox::ARCHIVED);
+        }
     }
     let stopped = stop_busy(state, &subtree).await;
     super::super::cloud::on_archive(state, &subtree);
@@ -218,6 +224,7 @@ pub(crate) async fn handle_archive_agent(state: &mut LoopState<'_>, agent_hex: &
     match archived {
         Ok(()) => {
             info!(%agent_id, %name, stopped = stopped.len(), "Archived agent");
+            super::worktrees::release(&state.hub, &subtree).await;
             after_list_shrank(state, &subtree).await;
             let message = if stopped.is_empty() {
                 format!("Archived {name}")
@@ -238,10 +245,15 @@ pub(crate) async fn handle_restore_agent(state: &mut LoopState<'_>, agent_hex: &
     let restored = lock(&state.hub.registry).restore(agent_id);
     match restored {
         Ok(()) => {
-            let name = lock(&state.hub.registry)
-                .find(agent_id)
-                .map(|a| a.display_name().into_owned())
-                .unwrap_or_default();
+            let (name, subtree) = {
+                let registry = lock(&state.hub.registry);
+                let name = registry
+                    .find(agent_id)
+                    .map(|a| a.display_name().into_owned())
+                    .unwrap_or_default();
+                (name, registry.subtree(agent_id))
+            };
+            super::worktrees::restore(&state.hub, &subtree).await;
             info!(%agent_id, %name, "Restored agent");
             activate_agent(state, agent_id, Chat::Reload).await;
             show_success(state, format!("Restored {name}")).await;

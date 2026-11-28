@@ -47,6 +47,7 @@ use tracing::{debug, info, warn};
 mod activate;
 mod handlers;
 mod kernel;
+mod worktrees;
 pub(crate) use activate::*;
 pub(crate) use handlers::*;
 pub use kernel::*;

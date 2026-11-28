@@ -91,6 +91,35 @@ impl QueuedPush {
         (!push.branch.is_empty() && !push.head.is_empty()).then_some(push)
     }
 
+    /// The push in a result of a push tool from before the merge queue
+    /// (`{"pushed": true, "branch", "commits": [{"sha"}, ...]}`, newest
+    /// commit first), which carries no marker. A cloud machine pushes to
+    /// its `origin`, the project's repository, so that is the remote.
+    /// `None` for anything else, a marked result included, and for a push
+    /// that sent no commits.
+    #[must_use]
+    pub fn from_legacy_output(output: &str) -> Option<Self> {
+        let value: serde_json::Value = serde_json::from_str(output.trim()).ok()?;
+        if value.get(MERGE_QUEUE_KEY).is_some()
+            || value.get("pushed")? != &serde_json::Value::Bool(true)
+        {
+            return None;
+        }
+        let branch = value.get("branch")?.as_str()?.trim();
+        let head = value
+            .get("commits")?
+            .as_array()?
+            .first()?
+            .get("sha")?
+            .as_str()?
+            .trim();
+        (!branch.is_empty() && !head.is_empty()).then(|| Self {
+            branch: branch.to_string(),
+            head: head.to_string(),
+            remote: Some("origin".to_string()),
+        })
+    }
+
     /// The marker as the JSON value a push tool puts under
     /// [`MERGE_QUEUE_KEY`].
     #[must_use]
@@ -154,6 +183,12 @@ pub struct MergeEntry {
     /// When it was merged or failed
     #[serde(default)]
     pub finished_at: Option<DateTime<Utc>>,
+    /// When anything about it last changed: queued, pushed again,
+    /// started, put back after a crash or finished. Waiting is measured
+    /// from here ([`crate::QueueState::expire`]); none in files from
+    /// before it was kept
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
     /// How many times it started running
     #[serde(default)]
     pub attempts: u32,
@@ -163,9 +198,22 @@ pub struct MergeEntry {
     /// Commit the target branch points at after the merge
     #[serde(default)]
     pub merged: Option<String>,
+    /// Files the entry changes against the target, recorded when it was
+    /// queued ([`crate::overlap`]); empty until then
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
 
 impl MergeEntry {
+    /// When its wait started: its last change, else its last push, else
+    /// when it was queued.
+    #[must_use]
+    pub fn waiting_since(&self) -> DateTime<Utc> {
+        self.updated_at
+            .or(self.pushed_at)
+            .unwrap_or(self.enqueued_at)
+    }
+
     /// Short form of `head`, for messages.
     #[must_use]
     pub fn short_head(&self) -> &str {
@@ -211,6 +259,29 @@ mod tests {
     }
 
     #[test]
+    fn a_push_from_before_the_queue_is_read_without_a_marker() {
+        let old = r#"{"pushed":true,"remote":"https://***@github.com/acme/app.git","branch":"aura/re-re36",
+            "commits":[{"sha":"bbb222","message":"second"},{"sha":"aaa111","message":"first"}]}"#;
+        assert_eq!(QueuedPush::from_tool_output(old), None, "no marker");
+        assert_eq!(
+            QueuedPush::from_legacy_output(old),
+            Some(QueuedPush {
+                branch: "aura/re-re36".to_string(),
+                head: "bbb222".to_string(),
+                remote: Some("origin".to_string()),
+            })
+        );
+        for not_one in [
+            r#"{"pushed":true,"branch":"b","commits":[]}"#,
+            r#"{"pushed":false,"branch":"b","commits":[{"sha":"x"}]}"#,
+            r#"{"pushed":true,"branch":"b","commits":[{"sha":"x"}],"merge_queue":{"branch":"b","head":"x"}}"#,
+            "not json",
+        ] {
+            assert_eq!(QueuedPush::from_legacy_output(not_one), None, "{not_one}");
+        }
+    }
+
+    #[test]
     fn entry_round_trips_through_json() {
         let entry = MergeEntry {
             id: EntryId::from_seq(3),
@@ -223,9 +294,11 @@ mod tests {
             pushed_at: None,
             started_at: None,
             finished_at: None,
+            updated_at: None,
             attempts: 2,
             detail: Some("tests failed".to_string()),
             merged: None,
+            files: vec!["src/a.rs".to_string()],
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert_eq!(serde_json::from_str::<MergeEntry>(&json).unwrap(), entry);

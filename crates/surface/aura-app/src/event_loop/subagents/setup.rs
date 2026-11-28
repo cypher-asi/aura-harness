@@ -49,6 +49,10 @@ impl AgentHub {
         notices: NoticeSender,
         notice_rx: mpsc::UnboundedReceiver<Notice>,
     ) -> Self {
+        let post_summaries = Arc::new(crate::event_loop::channels::summaries::PostSummaries::new(
+            parts.channels.clone(),
+            Some(parts.registry.data_dir()),
+        ));
         Self {
             registry: Mutex::new(parts.registry),
             definitions: Mutex::new(parts.definitions),
@@ -82,12 +86,16 @@ impl AgentHub {
             channel_members: Mutex::new(channel_sets.members),
             hidden_members: Mutex::new(channel_sets.hidden),
             cloud_starts: Mutex::default(),
+            cloud_members: Mutex::new(channel_sets.cloud),
             cloud_turns: Mutex::default(),
             machine_working: Mutex::default(),
             channels: parts.channels,
             channel_chat: crate::event_loop::channels::ChannelChat::default(),
             inbox: crate::event_loop::inbox::Inbox::default(),
+            standing: crate::event_loop::standing::Standings::default(),
             factory_flows: crate::event_loop::factory::Flows::default(),
+            status: status::AgentStatus::default(),
+            post_summaries,
             shown_chats: Mutex::default(),
             shown_records: Mutex::default(),
         }

@@ -22,7 +22,8 @@
 //! disk), so it waits for `y`: Shift+Delete, or `/remove-project`.
 
 use crate::app::days::{day_name, day_of};
-use crate::app::{contains, follow_selection, App, NotificationType, ProjectListRow};
+use crate::app::wheel_views::WheelList;
+use crate::app::{contains, App, NotificationType, ProjectListRow};
 use crate::events::{AgentSummary, UiEvent};
 use chrono::{DateTime, Local};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -215,7 +216,16 @@ impl App {
             self.archived.scroll = 0;
             return;
         };
-        let scroll = follow_selection(self.archived.scroll, selected, visible_rows, rows.len());
+        let scroll = self.panels.wheel.place(
+            WheelList::Archive,
+            (self.archived.scroll, selected),
+            (visible_rows, rows.len()),
+        );
+        if self.panels.wheel.is_detached(WheelList::Archive) {
+            // Left where the wheel put it.
+            self.archived.scroll = scroll;
+            return;
+        }
         let header_above = selected
             .checked_sub(1)
             .filter(|&above| matches!(rows.get(above), Some(ArchiveRow::Day(_))));

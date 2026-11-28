@@ -160,7 +160,7 @@ impl CloudHub {
         cancel: &CancellationToken,
     ) -> (Option<String>, StreamEnd) {
         let deadline = tokio::time::Instant::now() + TURN_TIMEOUT;
-        let run_id = match start_run(node, &turn.request).await {
+        let run_id = match start_run(node, &turn.request, tx, cancel).await {
             Ok(run_id) => run_id,
             Err(err) => return (None, StreamEnd::Seen(Err(err))),
         };
@@ -302,9 +302,15 @@ struct TurnPrompt {
     request: RuntimeRequest,
 }
 
-/// Start the chat run `request` asks for on `node`; returns its id.
-async fn start_run(node: &NodeClient, request: &RuntimeRequest) -> CloudResult<String> {
-    let started = node.start_run(request).await?;
+/// Start the chat run `request` asks for on `node` once its agent has no
+/// other turn under way there, showing the wait on `tx`. Returns its id.
+async fn start_run(
+    node: &NodeClient,
+    request: &RuntimeRequest,
+    tx: &mpsc::Sender<RemoteEvent>,
+    cancel: &CancellationToken,
+) -> CloudResult<String> {
+    let started = super::busy::start_when_free(node, request, tx, cancel).await?;
     started
         .get("run_id")
         .and_then(serde_json::Value::as_str)

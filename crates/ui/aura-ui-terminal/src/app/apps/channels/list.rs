@@ -1,7 +1,8 @@
 //! The CHANNELS list: following the agent on screen, the list and its
 //! posts arriving, its rows, archiving a channel, and its keys.
 
-use crate::app::{contains, follow_selection, App, NotificationType};
+use crate::app::wheel_views::WheelList;
+use crate::app::{contains, App, NotificationType};
 use crate::events::{ChannelPostView, ChannelSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -67,8 +68,11 @@ impl App {
     /// "+ New channel" is pinned below them, so it never scrolls.
     pub(crate) fn sync_channels_scroll(&mut self, visible_rows: usize) {
         let state = &mut self.channels;
-        state.scroll =
-            follow_selection(state.scroll, state.selected, visible_rows, state.list.len());
+        state.scroll = self.panels.wheel.place(
+            WheelList::Channels,
+            (state.scroll, state.selected),
+            (visible_rows, state.list.len()),
+        );
     }
 
     /// Record where the list's rows were drawn this frame.
@@ -100,9 +104,8 @@ impl App {
             self.channels.selected = row;
         }
         self.channels.selected = self.channels.selected.min(self.channels.list.len());
-        let members = self.channels.open_members();
-        self.channels.member_selected =
-            self.channels.member_selected.min(members.saturating_sub(1));
+        let selected = self.channels.member_selected;
+        self.channels.set_member_selected(selected);
         self.leave_dropped_member_chat(member_chat_was_open);
         if self.channel_app() && !self.channel_open() {
             if let Some(id) = self.channel_to_show() {
@@ -128,17 +131,28 @@ impl App {
         changed
     }
 
+    /// Keep `posts` as channel `channel_id`'s, filing its `/plan` requests
+    /// apart for HISTORY.
     pub(in crate::app) fn set_channel_posts(
         &mut self,
         channel_id: String,
         posts: Vec<ChannelPostView>,
     ) {
+        let (plans, posts): (Vec<_>, Vec<_>) =
+            posts.into_iter().partition(|post| post.planner.is_some());
+        self.channels.plan_posts.insert(channel_id.clone(), plans);
         self.channels.posts.insert(channel_id, posts);
     }
 
-    /// Add `post` to its channel, or replace the post with its `seq`.
+    /// Add `post` to its channel, or replace the post with its `seq`; a
+    /// `/plan` request is filed apart for HISTORY.
     pub(in crate::app) fn add_channel_post(&mut self, channel_id: String, post: ChannelPostView) {
-        let posts = self.channels.posts.entry(channel_id).or_default();
+        let kept = if post.planner.is_some() {
+            &mut self.channels.plan_posts
+        } else {
+            &mut self.channels.posts
+        };
+        let posts = kept.entry(channel_id).or_default();
         match posts.binary_search_by_key(&post.seq, |known| known.seq) {
             Ok(at) => {
                 if let Some(known) = posts.get_mut(at) {

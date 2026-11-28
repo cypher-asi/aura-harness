@@ -338,3 +338,18 @@ async fn init_asks_the_agent_to_improve_an_existing_agents_md() {
         "the agent's chat learns which instruction files it loads"
     );
 }
+
+#[test]
+fn the_plan_mode_note_fits_the_flow_it_is_in() {
+    let factory = crate::event_loop::factory::hooks::PLANNING_FIRST;
+    assert!(
+        factory.contains("without waiting for approval"),
+        "{factory}"
+    );
+    assert!(
+        !factory.contains("implement") && !factory.contains("/build"),
+        "{factory}"
+    );
+    let by_hand = crate::event_loop::modes::PLAN_NOTE;
+    assert!(by_hand.contains("run /build"), "{by_hand}");
+}
