@@ -268,8 +268,12 @@ impl Tabs {
         }
     }
 
-    /// The first agent listed of the projects in the tab at `index`.
+    /// The agent the tab at `index` was last left on in its projects
+    /// (see `selection`), else the first agent listed of them.
     pub(super) fn first_agent(&self, index: usize) -> Option<String> {
+        if let Some(agent) = self.remembered_in(index) {
+            return Some(agent);
+        }
         self.tabs.get(index)?.projects.iter().find_map(|key| {
             self.agents
                 .iter()

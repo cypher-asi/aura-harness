@@ -15,6 +15,7 @@ pub(super) fn stage() -> Stage {
         theme: "cyber".into(),
         verbose: false,
         tabs_file: None,
+        selection_file: None,
     };
     let now = Instant::now();
     let mut shell = Shell::new(events, &options, now);
