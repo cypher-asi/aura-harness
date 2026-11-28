@@ -91,15 +91,20 @@ impl TestServer {
     }
 }
 
-fn test_node_config(data_dir: &Path, require_auth: bool) -> NodeConfig {
-    let mut config = NodeConfig::from_env();
-    config.data_dir = data_dir.to_path_buf();
-    // A cloud machine sets `AURA_CLOUD_NODE` and `AURA_WORKSPACE` for its
-    // own node. Read into this test server they turn it into a cloud
-    // node that answers 503 where the tests expect 400, so main looked
-    // red on every machine. The test server is never a cloud node.
-    config.cloud_node = false;
-    config.workspace = None;
+pub(crate) fn test_node_config(data_dir: &Path, require_auth: bool) -> NodeConfig {
+    // Built from the defaults, never `NodeConfig::from_env`: the test
+    // server reads no node settings from the machine it runs on. A cloud
+    // machine sets `AURA_CLOUD_NODE`, `AURA_NODE_REQUIRE_AUTH` and
+    // `AURA_WORKSPACE` for its own node, which turned this server into a
+    // cloud node answering 503 where the tests expect 400. A developer's
+    // shell can set `AURA_PROJECT_BASE` (path validation),
+    // `AURA_OS_SERVER_URL` (`send_to_agent` calls out to it) or
+    // `AURA_ALLOW_UNRESTRICTED_FULL_ACCESS`, which the suites assert
+    // against too. See `hermetic_config_ignores_the_machines_node_settings`.
+    let mut config = NodeConfig {
+        data_dir: data_dir.to_path_buf(),
+        ..NodeConfig::default()
+    };
     // Phase 4 (security audit): the router's bearer middleware now
     // does a constant-time compare against `config.auth_token`.
     // Force the deterministic test value so `http_client()` and
@@ -205,4 +210,74 @@ pub async fn start_mock_server() -> TestServer {
     let mock: Arc<dyn ModelProvider + Send + Sync> =
         Arc::new(MockProvider::simple_response("Hello from mock provider."));
     TestServer::start_with_options(Some(mock)).await
+}
+
+/// The node settings a machine's environment may carry, each set to a
+/// value the test server must not take.
+const HOSTILE_ENV: &[(&str, &str)] = &[
+    ("AURA_CLOUD_NODE", "1"),
+    ("AURA_NODE_REQUIRE_AUTH", "1"),
+    ("AURA_NODE_AUTH_TOKEN", "machine-token-0123456789"),
+    ("AURA_WORKSPACE", "/machine/workspace"),
+    ("AURA_DATA_DIR", "/machine/data"),
+    ("AURA_LISTEN_ADDR", "0.0.0.0:8080"),
+    ("AURA_PROJECT_BASE", "/machine/projects"),
+    ("AURA_OS_SERVER_URL", "http://machine:19847"),
+    ("AURA_STORAGE_URL", "http://machine-storage"),
+    ("AURA_NETWORK_URL", "http://machine-network"),
+    ("AURA_SWARM_INTERNAL_TOKEN", "machine-swarm-token"),
+    ("AURA_ALLOW_UNRESTRICTED_FULL_ACCESS", "1"),
+    ("SYNC_WRITES", "1"),
+    ("RECORD_WINDOW_SIZE", "7"),
+];
+
+/// Run under [`HOSTILE_ENV`] by
+/// [`hermetic_config_ignores_the_machines_node_settings`], which sets the
+/// variables for a child process only, as the tests share one.
+#[test]
+#[ignore = "run by hermetic_config_ignores_the_machines_node_settings"]
+fn hermetic_config_probe() {
+    let dir = tempfile::tempdir().unwrap();
+    let defaults = NodeConfig::default();
+    for require_auth in [true, false] {
+        let config = test_node_config(dir.path(), require_auth);
+        assert!(!config.cloud_node);
+        assert_eq!(config.workspace, None);
+        assert_eq!(config.data_dir, dir.path());
+        assert_eq!(config.require_auth, require_auth);
+        let token = if require_auth { E2E_TEST_BEARER } else { "" };
+        assert_eq!(config.auth_token, token);
+        assert_eq!(config.project_base, None);
+        assert_eq!(config.aura_os_server_url, None);
+        assert_eq!(config.aura_storage_url, defaults.aura_storage_url);
+        assert_eq!(config.aura_network_url, defaults.aura_network_url);
+        assert_eq!(config.swarm_internal_token, None);
+        assert_eq!(
+            config.allow_unrestricted_full_access,
+            defaults.allow_unrestricted_full_access
+        );
+        assert_eq!(config.sync_writes, defaults.sync_writes);
+        assert_eq!(config.record_window_size, defaults.record_window_size);
+        assert_eq!(config.bind_addr, defaults.bind_addr);
+    }
+}
+
+#[test]
+fn hermetic_config_ignores_the_machines_node_settings() {
+    let exe = std::env::current_exe().unwrap();
+    let out = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "common::server::hermetic_config_probe",
+            "--ignored",
+        ])
+        .envs(HOSTILE_ENV.iter().copied())
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && shown.contains("1 passed"),
+        "{shown}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
