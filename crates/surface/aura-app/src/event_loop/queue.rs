@@ -93,6 +93,11 @@ impl WorkQueues {
         self.by_agent.is_empty()
     }
 
+    /// Drop the work waiting for `agent_id`.
+    pub(super) fn drop_all(&mut self, agent_id: AgentId) {
+        self.by_agent.remove(&agent_id);
+    }
+
     /// Drop every agent's queue.
     pub(super) fn clear(&mut self) {
         self.by_agent.clear();

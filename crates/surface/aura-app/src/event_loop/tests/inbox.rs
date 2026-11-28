@@ -93,7 +93,7 @@ pub(super) async fn assign_footer(fixture: &Fixture, coordinator: AgentId, worke
 }
 
 /// [`assign_footer`], asking `prompt`.
-async fn assign_footer_asking(
+pub(super) async fn assign_footer_asking(
     fixture: &Fixture,
     coordinator: AgentId,
     worker: &str,
@@ -108,6 +108,7 @@ async fn assign_footer_asking(
             subject: "Footer".to_string(),
             prompt: prompt.to_string(),
             todo_id: Some("3".to_string()),
+            withdraw: false,
         },
     )
     .await
@@ -218,7 +219,7 @@ fn assert_prompts_fold(commands: &mut mpsc::Receiver<UiCommand>, chats: [(AgentI
 }
 
 /// An assignment the mock model works on until the test releases it.
-const SLOW_FOOTER: &str = "Make the slow footer links work.";
+pub(super) const SLOW_FOOTER: &str = "Make the slow footer links work.";
 
 /// The report of a member whose turn on [`SLOW_FOOTER`] the user stopped
 /// with `stop`, then carried on with a message: queued before the stop

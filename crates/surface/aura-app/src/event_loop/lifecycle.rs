@@ -162,6 +162,7 @@ async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failure: Opti
             info!(%agent_id, "The user stopped the turn; its inbox answers wait for the next one");
         } else {
             inbox::give_up(state, agent_id, failure.unwrap_or("it was stopped"));
+            inbox::give_up_if_archived(&state.hub, agent_id);
         }
     }
 }

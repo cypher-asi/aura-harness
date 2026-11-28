@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A cloud channel's member never works here, and work taken back never starts
+
+##### Fixed
+
+- A member of a channel whose agents run in the cloud never works on
+  this computer, in the folder other agents share. That holds even when
+  its machine was never started, its start was lost to a restart, or the
+  cloud isn't connected. Work sent to it first starts (or finds) its
+  machine and waits for it; when that can't be done, the member fails in
+  red and its assigner gets `ok=false` with the reason.
+- `assign` with `withdraw` takes back the work given to a member that it
+  hasn't started, and it never starts. Giving a todo to another member
+  takes it back from the one that had it. Work already under way isn't
+  stopped and still reports.
+- Archiving a member drops the work queued for it, and gives up what it
+  owed with `ok=false`, instead of starting that work later.
+
 ### A cloud channel's members start in the cloud or fail, in red
 
 ##### Fixed
