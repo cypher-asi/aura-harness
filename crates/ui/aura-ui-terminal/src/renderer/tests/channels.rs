@@ -21,6 +21,8 @@ pub(super) fn channels_app() -> crate::App {
         members: vec![member("co", "Coordinator", 0), member("wk", "Worker", 1)],
         ..ChannelSummary::default()
     }]));
+    // These tests are about the worker's rows: show them.
+    app.unfold_channel_members();
     app.select_pane_tab(PaneTab::Agents(AgentsTab::Channels));
     app
 }

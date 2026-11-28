@@ -14,6 +14,7 @@ fn channels_app_with_events() -> (
     let mut channels = channels_app().channels().to_vec();
     channels[0].members[1].code = Some("WK7".to_string());
     app.process_command(UiCommand::SetChannels(channels));
+    app.unfold_channel_members();
     app.select_pane_tab(PaneTab::Agents(AgentsTab::Channels));
     app.process_command(UiCommand::SetActiveAgent("co".to_string()));
     assert_eq!(app.active_agent_id(), "co");
