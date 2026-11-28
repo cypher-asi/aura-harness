@@ -2,8 +2,9 @@
 //! the channel, newest first, each one a jump back to it in the chat.
 //!
 //! The items are the open channel's posts by the user, read from the
-//! posts the chat shows, and the messages the user typed to the
-//! coordinator, read from its chat (see `typed`). A message longer than
+//! posts the chat shows, the messages the user typed to the coordinator,
+//! read from its chat (see `typed`), and the user's `/plan` requests,
+//! kept apart from the chat's posts (see `plan`). A message longer than
 //! [`POST_SUMMARY_MIN_CHARS`] shows the one-line summary the session
 //! sends for it ([`App::set_post_summaries`]), else it is cut at a word.
 //!
@@ -11,7 +12,8 @@
 //! the list follows it. The wheel scrolls the list and leaves the
 //! highlight where it is. Enter, or a click on an item, jumps the chat to
 //! the message ([`App::request_chat_jump`]), going back from a member's
-//! chat to the channel's first; the focus stays on the list.
+//! chat to the channel's first, or for a `/plan` request opening its
+//! planner's chat; the focus stays on the list.
 //!
 //! [`POST_SUMMARY_MIN_CHARS`]: crate::events::POST_SUMMARY_MIN_CHARS
 
@@ -23,6 +25,9 @@ use ratatui::layout::Rect;
 use std::collections::HashMap;
 use typed::{merge_newest_first, typed_items};
 
+mod plan;
+#[cfg(test)]
+pub(crate) use plan::PLANNER_GONE;
 mod typed;
 
 /// Rows each item takes: the message, then when it was sent.
@@ -51,6 +56,8 @@ pub(crate) enum HistoryKind {
     Post,
     /// A message typed to the coordinator, in its conversation
     Typed,
+    /// A `/plan` request, in the chat of the member planning it
+    Plan,
 }
 
 /// One item of the HISTORY tab.
@@ -59,8 +66,10 @@ pub(crate) struct HistoryItem {
     /// The key its summary comes under: a post's place in its channel, a
     /// typed message's [`crate::events::prompt_key`]
     pub seq: u64,
-    /// A post or a typed message
+    /// A post, a typed message or a `/plan` request
     pub kind: HistoryKind,
+    /// For a `/plan` request, the member planning it (hex id)
+    pub planner: Option<String>,
     /// What the user wrote
     pub text: String,
     /// Its summary, once the session sent one
@@ -84,8 +93,9 @@ impl HistoryState {
 }
 
 impl App {
-    /// The HISTORY tab's items: the user's posts in the open channel and
-    /// the messages the user typed to its coordinator, newest first.
+    /// The HISTORY tab's items: the user's posts in the open channel, the
+    /// messages the user typed to its coordinator and the user's `/plan`
+    /// requests, newest first.
     #[must_use]
     pub(crate) fn channel_history(&self) -> Vec<HistoryItem> {
         let Some(channel) = self.open_channel() else {
@@ -96,7 +106,7 @@ impl App {
             .channels
             .posts_of(&channel.id)
             .iter()
-            .rev()
+            .chain(self.channels.plan_posts_of(&channel.id))
             .filter(|post| post.author == ChannelPostAuthor::User)
             .map(|post| item(post, summaries))
             .collect();
@@ -211,10 +221,13 @@ impl App {
         let Some(item) = self.channel_history().get(index).cloned() else {
             return;
         };
-        self.close_member_chat();
+        if item.kind != HistoryKind::Plan {
+            self.close_member_chat();
+        }
         match item.kind {
             HistoryKind::Post => self.request_chat_jump(crate::renderer::post_block_key(item.seq)),
             HistoryKind::Typed => self.request_chat_jump_to_typed(item.seq, item.at_ms),
+            HistoryKind::Plan => self.jump_to_plan_request(&item),
         }
     }
 }
@@ -223,7 +236,12 @@ impl App {
 fn item(post: &ChannelPostView, summaries: Option<&HashMap<u64, String>>) -> HistoryItem {
     HistoryItem {
         seq: post.seq,
-        kind: HistoryKind::Post,
+        kind: if post.planner.is_some() {
+            HistoryKind::Plan
+        } else {
+            HistoryKind::Post
+        },
+        planner: post.planner.clone(),
         text: post.text.clone(),
         summary: summaries.and_then(|known| known.get(&post.seq)).cloned(),
         at_ms: post.at_ms,
