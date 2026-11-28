@@ -324,6 +324,7 @@ pub(super) fn loop_state<'a>(fixture: &'a Fixture, b: &'a mut Borrowed) -> LoopS
         cloud: crate::event_loop::cloud::CloudState::default(),
         open_channel: None,
         side_panels: None,
+        idle_order: std::collections::VecDeque::new(),
     }
 }
 

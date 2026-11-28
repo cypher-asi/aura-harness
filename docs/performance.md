@@ -47,16 +47,32 @@ Ranked by size, before the fix:
    other view lets go of its chat once nothing is under way, and is
    loaded again from the record when shown (`app/agent_views/shed.rs`).
 2. **Idle sessions in the app** (`LoopState::idle`): each agent opened,
-   and each finished subagent, keeps its model conversation and kernel
-   for the rest of the run, archived agents included. That is about as
-   large as the agent's chat, up to its context window. It is not fixed
-   yet: it is in the event loop, which is being reworked for
-   responsiveness.
+   and each finished subagent, kept its model conversation and kernel
+   for the rest of the run, archived agents included: up to its context
+   window per agent. Now the loop keeps the `IDLE_SESSIONS_KEPT` (16)
+   sessions most recently left idle, and saves and lets go of older
+   settled ones; an archived agent's go at once
+   (`event_loop/idle_sessions.rs`). They reopen from their checkpoint.
+   The load harness (below) shows no change in resident memory, because
+   its members' conversations are a few short mock turns; what it saves
+   in real use grows with how long each agent's conversation is.
 3. **Smaller caches**: the HISTORY tab's summaries in memory are now
    capped at 2,000 beside the channel store, and the trace step builder
    clears its cache-hit and blocked tool ids each turn. Already bounded,
    and left alone: the TRACE feed (300), the shown chats and records read
    ahead (8), mail (2,000) and the flow graph.
+
+The load harness's resident memory (`/proc/self/statm`), each N in its
+own process, before and after the idle-session cap:
+
+| Members | Before    | After     |
+|--------:|----------:|----------:|
+| 10      | 62 MiB    | 62 MiB    |
+| 50      | 91 MiB    | 97 MiB    |
+| 200     | 263 MiB   | 263 MiB   |
+
+At 200 members, most of that is the UI and the harness's own feeds, not
+sessions. The 50-member gap is run-to-run noise.
 
 `an_idle_agent_off_screen_holds_little_however_long_its_chat` and
 `a_long_session_grows_with_the_chats_kept_not_with_the_agents` run with
