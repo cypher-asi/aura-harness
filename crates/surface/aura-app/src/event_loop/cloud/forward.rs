@@ -127,9 +127,12 @@ impl TurnExtras {
     }
 }
 
-/// The note that a cloud turn of `agent` waits for the one already under
-/// way on its machine: on while it does, off once anything else of the
-/// turn comes, and off when the turn ends.
+/// What a cloud turn of `agent` notes for its rows and its peers as it
+/// goes: that it waits for the one already under way on its machine (on
+/// while it does, off once anything else of the turn comes, and off when
+/// the turn ends), and that it implements. Its machine doesn't hold it to
+/// plan mode, so a turn asked to plan can start editing, committing or
+/// pushing; it is out of plan mode from that call on.
 pub(super) struct WaitingMark {
     pub(super) hub: Arc<AgentHub>,
     pub(super) agent: AgentId,
@@ -140,6 +143,22 @@ impl WaitingMark {
     async fn set(&self, waiting: bool) {
         if self.hub.status.set_waiting(self.agent, waiting) {
             self.hub.send_agent_list().await;
+        }
+    }
+
+    /// Note what `event` says of the turn.
+    async fn see(&self, event: &RemoteEvent) {
+        self.set(says_waiting(event)).await;
+        if let RemoteEvent::ToolStart { name, .. } = event {
+            if crate::event_loop::modes::implements(name) {
+                // Its task builds now, whether or not a plan was written.
+                let built = self.hub.factory_flows.build_unplanned(self.agent);
+                let left =
+                    crate::event_loop::modes::leave_plan_mode_of(&self.hub, self.agent).await;
+                if built || left {
+                    info!(agent = %self.agent, tool = %name, "A cloud turn asked to plan implements; it builds, out of plan mode");
+                }
+            }
         }
     }
 }
@@ -224,7 +243,7 @@ pub(super) async fn forward(
             continue;
         }
         if let Some(mark) = &extras.waiting {
-            mark.set(says_waiting(&event)).await;
+            mark.see(&event).await;
         }
         chat.end_wake(&event).await;
         chat.close_open(&event).await;

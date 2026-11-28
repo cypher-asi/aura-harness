@@ -50,6 +50,7 @@ mod inbox;
 mod inbox_mid_turn;
 mod inbox_restart;
 mod inbox_restart_resume;
+mod leave_plan_mode;
 mod messages;
 mod offline_cloud;
 mod open_plan;
