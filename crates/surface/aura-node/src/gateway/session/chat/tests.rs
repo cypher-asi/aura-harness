@@ -229,6 +229,10 @@ fn the_cloud_git_note_names_the_branch_and_the_tools() {
         "{note}"
     );
     assert!(
+        note.contains("git_start_task") && note.contains("never merge a PR yourself"),
+        "a fresh branch per task, merged by the queue: {note}"
+    );
+    assert!(
         !note.contains("gh pr create"),
         "pushes go through the queue: {note}"
     );

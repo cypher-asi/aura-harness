@@ -3,6 +3,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, dead_code)]
 
+pub mod forge;
+
 pub use aura_exec_merge_queue::{
     GitIntegrator, Limits, MergeQueue, MergeRequest, MergeStatus, Origin, Processor, QueueConfig,
     QueuedPush, RepoPaths,
@@ -115,6 +117,22 @@ pub async fn queue(world: &World, config: QueueConfig) -> (MergeQueue, Processor
     let repo = repo(world).await;
     let integrator = Arc::new(GitIntegrator::new(repo.clone(), config));
     let queue = MergeQueue::open(repo, integrator, Limits::default())
+        .await
+        .unwrap();
+    let processor = queue.processor().await.unwrap().unwrap();
+    (queue, processor)
+}
+
+/// The hub's queue for `world`, landing through PRs on `forge`, and its
+/// processor.
+pub async fn queue_with_forge(
+    world: &World,
+    config: QueueConfig,
+    forge: Arc<forge::FakeForge>,
+) -> (MergeQueue, Processor) {
+    let repo = repo(world).await;
+    let integrator = GitIntegrator::new(repo.clone(), config).with_forge(forge);
+    let queue = MergeQueue::open(repo, Arc::new(integrator), Limits::default())
         .await
         .unwrap();
     let processor = queue.processor().await.unwrap().unwrap();

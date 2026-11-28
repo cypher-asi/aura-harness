@@ -14,11 +14,15 @@
 //! - An entry's wait counts from its last change ([`MergeEntry::updated_at`]):
 //!   its last push, or recovery putting it back after a crash
 //!   ([`QueueState::expire`]).
+//! - While the queue is held ([`QueueState::hold`]) no entry starts
+//!   before the hold's retry time; the entry that ran into it went back
+//!   to its place without being charged an attempt.
 //! - Finished entries past the newest few leave the state for the
 //!   history file ([`QueueState::take_archivable`]); [`QueueState::history`]
 //!   says how much of that file is committed.
 
 use crate::entry::{EntryId, MergeEntry, MergeRequest, MergeStatus};
+use crate::report::{Failure, Hold, HoldKind, PrRef};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +43,13 @@ pub struct QueueState {
     /// history
     #[serde(default)]
     pub history: HistoryMark,
+    /// Why no entry starts for now, when the queue is held
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<Hold>,
+    /// The target fails its own checks, as an entry found; its parked
+    /// entries wait for the target to move
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broken: Option<Hold>,
 }
 
 /// How far the history file is committed: entries and bytes.
@@ -57,6 +68,8 @@ impl Default for QueueState {
             next_seq: 1,
             entries: Vec::new(),
             history: HistoryMark::default(),
+            hold: None,
+            broken: None,
         }
     }
 }
@@ -91,9 +104,14 @@ pub enum RunOutcome {
         merged: String,
         /// How it merged, for the Queue tab
         note: String,
+        /// The PR it merged through, if any
+        pr: Option<PrRef>,
     },
     /// Not merged, and why.
-    Failed(String),
+    Failed(Failure),
+    /// Not the entry's fault: it goes back to its place, uncharged, and
+    /// the queue waits as the hold says.
+    Held(Hold),
 }
 
 impl QueueState {
@@ -140,6 +158,9 @@ impl QueueState {
             detail: None,
             merged: None,
             files: Vec::new(),
+            pr: None,
+            failure: None,
+            parked_at: None,
         });
         Enqueued::Added(id)
     }
@@ -158,10 +179,16 @@ impl QueueState {
         if self.running().is_some() {
             return None;
         }
+        if let Some(hold) = &self.hold {
+            if now < hold.retry_at || !self.has_queued() {
+                return None;
+            }
+            self.hold = None;
+        }
         let entry = self
             .entries
             .iter_mut()
-            .find(|entry| entry.status == MergeStatus::Queued)?;
+            .find(|entry| entry.status == MergeStatus::Queued && entry.parked_at.is_none())?;
         entry.status = MergeStatus::Running;
         entry.started_at = Some(now);
         entry.updated_at = Some(now);
@@ -185,14 +212,34 @@ impl QueueState {
         entry.finished_at = Some(now);
         entry.updated_at = Some(now);
         match outcome {
-            RunOutcome::Merged { merged, note } => {
+            RunOutcome::Merged { merged, note, pr } => {
                 entry.status = MergeStatus::Merged;
                 entry.merged = Some(merged);
                 entry.detail = Some(note);
+                entry.pr = pr.or(entry.pr.take());
             }
-            RunOutcome::Failed(reason) => {
+            RunOutcome::Failed(failure) => {
                 entry.status = MergeStatus::Failed;
-                entry.detail = Some(reason);
+                entry.detail = Some(failure.reason.clone());
+                entry.pr = failure.pr.clone().or(entry.pr.take());
+                entry.failure = Some(failure);
+            }
+            RunOutcome::Held(hold) => {
+                entry.status = MergeStatus::Queued;
+                entry.finished_at = None;
+                entry.attempts = entry.attempts.saturating_sub(1);
+                entry.detail = Some(format!("waiting: {}", hold.reason));
+                let parked = hold.kind == HoldKind::TargetBroken;
+                if parked {
+                    entry.parked_at.clone_from(&hold.target_tip);
+                }
+                let entry = entry.clone();
+                if parked {
+                    self.broken = Some(hold);
+                } else {
+                    self.hold = Some(hold);
+                }
+                return Some(entry);
             }
         }
         Some(entry.clone())
@@ -275,6 +322,50 @@ impl QueueState {
             .iter()
             .filter(|entry| entry.status.is_finished())
             .count()
+    }
+
+    /// The target's tip is `tip` at `now`: end the hold and the broken
+    /// target's report when the target moved, and let the parked entries
+    /// run again once it moved or the broken report's retry time came.
+    /// Returns whether anything changed.
+    pub fn release_hold(&mut self, tip: &str, now: DateTime<Utc>) -> bool {
+        let moved = |hold: &Option<Hold>| {
+            hold.as_ref()
+                .and_then(|hold| hold.target_tip.as_deref())
+                .is_some_and(|held_at| held_at != tip)
+        };
+        let mut changed = false;
+        if moved(&self.hold) {
+            self.hold = None;
+            changed = true;
+        }
+        let retry = self
+            .broken
+            .as_ref()
+            .is_some_and(|hold| now >= hold.retry_at);
+        if moved(&self.broken) || retry {
+            self.broken = None;
+            changed = true;
+        }
+        for entry in &mut self.entries {
+            let parked = entry.parked_at.as_deref();
+            if parked.is_some_and(|at| at != tip || retry) {
+                entry.parked_at = None;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Whether the queue waits on the target's tip: a hold or a broken
+    /// target to end, or parked entries to let go.
+    #[must_use]
+    pub fn waits_on_target(&self) -> bool {
+        self.hold
+            .as_ref()
+            .is_some_and(|hold| hold.target_tip.is_some())
+            || self.broken.is_some()
+            || self.entries.iter().any(|entry| entry.parked_at.is_some())
     }
 
     /// Whether an entry waits to run.

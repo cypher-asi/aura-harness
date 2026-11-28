@@ -55,8 +55,8 @@ pub use fs_tools::{
     ProcessTags, ThresholdResult, AGENT_ID_VAR, HARNESS_PID_VAR, TOOL_USE_ID_VAR,
 };
 pub use git_tool::{
-    GitCommitPushTool, GitCommitTool, GitPushTool, GitShipTool, GIT_LOCAL_TOOL_NAMES,
-    GIT_REMOTE_TOOL_NAMES, GIT_TOOL_NAMES, PROTECTED_BRANCHES,
+    GitCommitPushTool, GitCommitTool, GitPushTool, GitShipTool, GitStartTaskTool,
+    GIT_LOCAL_TOOL_NAMES, GIT_REMOTE_TOOL_NAMES, GIT_TOOL_NAMES, PROTECTED_BRANCHES,
 };
 pub use http_tool::{HttpAuthSource, HttpMethod, HttpToolDefinition, HttpToolDefinitionBuilder};
 pub use intent_classifier::{ClassifierError, IntentClassifier};
