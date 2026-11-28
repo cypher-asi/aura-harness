@@ -245,6 +245,8 @@ fn a_reload_of_unchanged_files_keeps_what_it_read_and_an_edit_is_picked_up() {
     assert_eq!(extra.description, "Edited, and longer", "an edit is read");
     fs::remove_file(defs_dir.join("broken.md")).unwrap();
     assert!(defs.reload().is_empty(), "a removed file's problem goes");
+}
+
 /// Characters per token, as the context breakdown estimates them
 /// (`aura_config::CHARS_PER_TOKEN`).
 const CHARS_PER_TOKEN: usize = 4;
