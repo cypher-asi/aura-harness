@@ -100,7 +100,8 @@ async fn a_list_asked_for_within_the_interval_goes_from_the_loop_once_it_is_over
         quit.cancel();
         drop(events_tx);
     };
-    tokio::join!(run::run_loop(&mut state, &mut inbox), stop);
+    let mut started = startup::Startup::finished();
+    tokio::join!(run::run_loop(&mut state, &mut inbox, &mut started), stop);
     let sent = drain(&mut commands)
         .into_iter()
         .filter(|(_, command)| matches!(command, UiCommand::SetAgents(_)))

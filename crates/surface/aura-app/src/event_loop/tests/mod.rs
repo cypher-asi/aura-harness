@@ -62,6 +62,7 @@ mod restart;
 mod rewinding;
 mod stall_fixes;
 mod stalls;
+mod startup_steps;
 mod subtasks;
 pub(in crate::event_loop) mod support;
 mod typed_tasks;

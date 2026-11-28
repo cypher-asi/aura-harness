@@ -50,6 +50,7 @@ mod side_panels;
 mod stalls;
 pub(crate) mod standing;
 mod start_work;
+mod startup;
 pub(crate) mod steering;
 pub(crate) mod subagents;
 pub(crate) mod task_check;
@@ -251,13 +252,14 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     };
     factory::service::start(Arc::clone(&state.hub), commands.clone(), inbox.quit.clone());
     state.hub.name_agents();
-    let active = state.active;
-    state.hub.record_panel.set(active);
+    state.hub.record_panel.set(state.active);
+    // Before the loop takes UI events: restored work keeps its place
+    // ahead of new work, and a cloud agent's work never starts here.
     let restored = inbox::restore_saved(&mut state).await;
-    send_startup(&mut state, active).await;
-    inbox::resume_saved(&mut state, restored).await;
+    cloud::mark_saved_agents(&state).await;
+    let mut startup = startup::Startup::new(restored);
 
-    run::run_loop(&mut state, &mut inbox).await;
+    run::run_loop(&mut state, &mut inbox, &mut startup).await;
     state.stop_side_panels();
     inbox::flush_saved(&state).await;
     shut_down(&mut state, &mut inbox.done_rx).await;
@@ -330,20 +332,6 @@ impl<'a> LoopState<'a> {
         };
         (state, process_completions, quit)
     }
-}
-
-/// Send the UI what it shows for `active` when the loop starts.
-async fn send_startup(state: &mut LoopState<'_>, active: AgentId) {
-    agents::send_sandbox_root(state).await;
-    hud::send_session_of(state, active).await;
-    cloud::start(state).await;
-    modes::send_mode(state, active).await;
-    policies::send_policies_of(state, active).await;
-    modes::warn_if_unconfined(state, active).await;
-    hud::send_instructions_of(state, active).await;
-    plan_mode::send_plan_of(state, active).await;
-    state.hub.traces.send_history(active).await;
-    handlers::announce_models(state).await;
 }
 
 // Names the tests use through `use super::*`.

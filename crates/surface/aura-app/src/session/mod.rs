@@ -49,6 +49,9 @@ pub struct SessionOptions {
     /// Approval level agents start at (`--approval`); `None` reads
     /// `AURA_TUI_APPROVAL`, else `yolo`
     pub approval: Option<aura_ui::ApprovalLevel>,
+    /// The chat the UI was in when it last closed, opened first; `None`
+    /// opens on the registry's active agent
+    pub open_on: Option<OpenOn>,
 }
 
 impl Default for SessionOptions {
@@ -58,9 +61,12 @@ impl Default for SessionOptions {
             provider: "anthropic".to_string(),
             allow_unrestricted_full_access: false,
             approval: None,
+            open_on: None,
         }
     }
 }
+
+pub use opening::{data_dir, OpenOn};
 
 /// A running agent session, as seen by the UI driving it.
 pub struct UiSession {
@@ -183,11 +189,7 @@ async fn open_workspace(
     args: &SessionOptions,
     cmd_tx: &mpsc::Sender<UiCommand>,
 ) -> anyhow::Result<(Workspace, Opening)> {
-    let data_dir = args
-        .dir
-        .clone()
-        .or_else(|| std::env::var("AURA_DATA_DIR").ok().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("./aura_data"));
+    let data_dir = data_dir(args);
     // Tools run in the directory the UI was launched from, so typed
     // commands and model tool calls see the user's project rather than an
     // empty per-agent scratch dir under `data_dir`.
@@ -211,7 +213,7 @@ async fn open_workspace(
     // before the active agent is read, which skips archived agents, so the
     // app never opens on an empty chat it just archived.
     record_loader::archive_unstarted_spawns(&mut registry, store.as_ref());
-    let active_agent = registry.active().clone();
+    let active_agent = opening::agent_to_open(&mut registry, &store, args.open_on.as_ref());
     let agent_id = active_agent.identity().agent_id;
     let active_folder = registry.project_folder(agent_id);
     crate::chat_notes::install(crate::chat_notes::ChatNotes::new(&data_dir));
@@ -448,5 +450,6 @@ async fn show_opening(
     let _ = commands.try_send(UiCommand::SetAgentDefinitions(hub.definition_summaries()));
 }
 
+mod opening;
 #[cfg(test)]
 mod tests;

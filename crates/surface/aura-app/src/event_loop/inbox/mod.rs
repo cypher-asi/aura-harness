@@ -109,7 +109,6 @@ use messages::{mail_view, new_id, send, shown};
 use peers::{circle, Circle, Named, Peer, Relation};
 #[cfg(test)]
 pub(super) use saved::save_now;
-#[cfg(test)]
 pub(in crate::event_loop) use saved::Resume;
 #[cfg(test)]
 pub(super) use saved::SAVED_FILE;
