@@ -54,6 +54,7 @@ impl App {
             repo: repo_tab::RepoTab::default(),
             flow: flow::FlowState::default(),
             bench: BenchState::default(),
+            integrations: crate::app::apps::integrations::IntegrationsState::default(),
             log: run_log::LogState::default(),
         }
     }

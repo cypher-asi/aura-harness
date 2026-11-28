@@ -12,6 +12,7 @@ fn test_theme() -> Theme {
     Theme::cyber()
 }
 
+mod integrations_panel;
 mod support;
 use support::*;
 

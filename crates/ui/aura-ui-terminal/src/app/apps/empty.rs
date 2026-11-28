@@ -18,6 +18,7 @@ impl App {
             AgentsTab::Roster => !self.roster_shows_instance(),
             AgentsTab::Bench => !self.bench.showing(),
             AgentsTab::Archive => !self.is_archived_agent(&self.active_agent_id),
+            AgentsTab::Integrations => true,
         }
     }
 
@@ -91,6 +92,9 @@ impl App {
                 "Pick an archived agent on the left to open its chat.".to_string()
             }
             AgentsTab::Projects => String::new(),
+            AgentsTab::Integrations => "Pick an integration on the left: c connects it, e changes \
+                                        a setting, t tests it, d disconnects it."
+                .to_string(),
         }
     }
 
@@ -102,6 +106,7 @@ impl App {
             AgentsTab::Bench => "a benchmark",
             AgentsTab::Archive => "an archived agent",
             AgentsTab::Projects => "an agent",
+            AgentsTab::Integrations => "an integration",
         }
     }
 

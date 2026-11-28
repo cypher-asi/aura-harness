@@ -16,6 +16,9 @@ pub(super) async fn handle(state: &mut LoopState<'_>, event: UiEvent) {
         UiEvent::CloudSetup => cloud::handle_setup(state).await,
         UiEvent::ListSandbox(dir) => cloud::list_sandbox(state, dir),
         UiEvent::ReadSandboxFile(path) => cloud::read_sandbox_file(state, path),
+        UiEvent::Integration { id, action } => {
+            crate::integrations::act(state.commands.clone(), id, action);
+        }
         channel_event => channel(state, channel_event).await,
     }
 }

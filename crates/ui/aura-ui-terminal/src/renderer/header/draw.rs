@@ -1,7 +1,8 @@
 //! Drawing a header bar: its frame, tabs, info cell and buttons.
 
 use super::{
-    close_cell, ExpandButton, PanelHeader, ScopeButton, EXPAND_GLYPH, FRAMED_HEIGHT, RESTORE_GLYPH,
+    close_cell, ExpandButton, IconTab, PanelHeader, ScopeButton, EXPAND_GLYPH, FRAMED_HEIGHT,
+    RESTORE_GLYPH,
 };
 use crate::app::SideScope;
 use crate::components::truncate_record_info;
@@ -65,12 +66,14 @@ impl BarParts {
             .expand
             .and_then(|button| Some((button, button.cell?)));
         let icon_tab = header.icon_tab.and_then(|icon| Some((icon, icon.cell?)));
+        let lead = header.lead_icon.and_then(|icon| icon.cell);
         // A tabbed bar's buttons each sit after a divider of their own, and
         // its tabs stop at the first of those.
         let button_dividers: Vec<u16> = if header.layout.cells.is_empty() {
             Vec::new()
         } else {
             [
+                lead,
                 icon_tab.map(|(_, cell)| cell),
                 scope.map(|(_, cell)| cell),
                 expand.map(|(_, cell)| cell),
@@ -155,7 +158,9 @@ fn draw_tabs<T: Copy + PartialEq>(
         let area = Rect::new(parts.bar.x + cell.start, parts.middle, width, 1);
         draw_centered(buf, area, cell.label, style);
     }
-    draw_icon_tab(buf, header, theme);
+    for icon in [header.lead_icon, header.icon_tab].into_iter().flatten() {
+        draw_icon_tab(buf, header, icon, theme);
+    }
     if let Some((button, cell)) = parts.scope {
         let style = tab_style(button.on, button.hovered, header.focused, theme);
         draw_centered(buf, cell, SideScope::BUTTON, style);
@@ -166,9 +171,10 @@ fn draw_tabs<T: Copy + PartialEq>(
 fn draw_icon_tab<T: Copy + PartialEq>(
     buf: &mut Buffer,
     header: &PanelHeader<'_, T>,
+    icon: IconTab<T>,
     theme: &Theme,
 ) {
-    let Some((icon, cell)) = header.icon_tab.and_then(|icon| Some((icon, icon.cell?))) else {
+    let Some(cell) = icon.cell else {
         return;
     };
     let style = tab_style(
@@ -194,9 +200,10 @@ pub(in crate::renderer) fn render_icon_tooltip<T: Copy + PartialEq>(
     header: &PanelHeader<'_, T>,
     theme: &Theme,
 ) {
-    let Some(icon) = header
-        .icon_tab
-        .filter(|icon| header.hovered == Some(icon.tab))
+    let Some(icon) = [header.lead_icon, header.icon_tab]
+        .into_iter()
+        .flatten()
+        .find(|icon| header.hovered == Some(icon.tab))
     else {
         return;
     };

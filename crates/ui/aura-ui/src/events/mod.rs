@@ -38,6 +38,9 @@ pub use views::hud::{
     ContextView, InstructionFileView, InstructionStatus, JobView, QueuedItemView, TodoState,
     TodoView,
 };
+pub use views::integrations::{
+    IntegrationAction, IntegrationFieldView, IntegrationState, IntegrationView,
+};
 pub use views::mail::MailView;
 pub use views::merge_queue::{MergeEntryView, MergeQueueView, MergeStateView};
 pub use views::messages::{

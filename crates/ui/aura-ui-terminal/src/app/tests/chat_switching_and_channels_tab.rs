@@ -69,7 +69,14 @@ fn test_agents_tabs_put_channels_first_and_open_on_projects() {
     let labels = AgentsTab::ALL.map(AgentsTab::label);
     assert_eq!(
         labels,
-        ["CHANNELS", "PROJECTS", "AGENTS", "BENCH", "ARCHIVE"]
+        [
+            "CHANNELS",
+            "PROJECTS",
+            "AGENTS",
+            "BENCH",
+            "ARCHIVE",
+            "INTEGRATIONS"
+        ]
     );
     assert_eq!(App::new().agents_tab(), AgentsTab::Projects);
 }
