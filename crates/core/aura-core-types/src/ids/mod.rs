@@ -234,7 +234,10 @@ macro_rules! define_id {
 
 define_id!(
     /// A 32-byte blake3 hash used for transaction chaining.
-    Hash, 32, "crate::serde_helpers::hex_bytes_32", truncate = 16
+    Hash,
+    32,
+    "crate::serde_helpers::hex_bytes_32",
+    truncate = 16
 );
 
 impl Hash {
@@ -264,7 +267,10 @@ impl Hash {
 
 define_id!(
     /// Agent identifier - 32 bytes, derived from identity hash or UUID.
-    AgentId, 32, "crate::serde_helpers::hex_bytes_32", truncate = 16
+    AgentId,
+    32,
+    "crate::serde_helpers::hex_bytes_32",
+    truncate = 16
 );
 
 /// Start of the ZNS id of an agent another agent spawned,
@@ -312,7 +318,10 @@ impl AgentId {
 
 define_id!(
     /// Action identifier - 16 bytes, generated per action.
-    ActionId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    ActionId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl ActionId {
@@ -330,7 +339,10 @@ impl ActionId {
 
 define_id!(
     /// Process identifier - 16 bytes, generated per async process.
-    ProcessId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    ProcessId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl ProcessId {
@@ -348,7 +360,10 @@ impl ProcessId {
 
 define_id!(
     /// Fact identifier - 16 bytes.
-    FactId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    FactId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl FactId {
@@ -366,7 +381,10 @@ impl FactId {
 
 define_id!(
     /// Agent event identifier - 16 bytes.
-    AgentEventId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    AgentEventId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl AgentEventId {
@@ -384,7 +402,10 @@ impl AgentEventId {
 
 define_id!(
     /// Procedure identifier - 16 bytes.
-    ProcedureId, 16, "crate::serde_helpers::hex_bytes_16", truncate = 0
+    ProcedureId,
+    16,
+    "crate::serde_helpers::hex_bytes_16",
+    truncate = 0
 );
 
 impl ProcedureId {
