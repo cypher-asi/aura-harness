@@ -121,3 +121,37 @@ fn a_failed_member_says_why_in_red_and_a_starting_one_says_it_starts() {
         "the failure shows in place of the title"
     );
 }
+
+#[test]
+fn a_member_whose_turn_waits_on_its_busy_machine_says_so() {
+    let mut app = channels_app();
+    let mut channels = app.channels().to_vec();
+    channels[0].members = vec![
+        AgentSummary {
+            id: "co".to_string(),
+            name: "Coordinator".to_string(),
+            definition: Some("coordinator".to_string()),
+            ..AgentSummary::default()
+        },
+        AgentSummary {
+            id: "r1".to_string(),
+            name: "REN3".to_string(),
+            definition: Some("rust-engineer".to_string()),
+            code: Some("REN3".to_string()),
+            title: Some("Footer links".to_string()),
+            running: true,
+            waiting: true,
+            ..AgentSummary::default()
+        },
+    ];
+    app.process_command(UiCommand::SetChannels(channels));
+    app.open_channel_by_id("c1");
+    let buffer = render_buffer(&mut app, 160);
+    let waiting = cell_at(&buffer, "Waiting for its machine…");
+    assert_eq!(waiting.fg, test_theme().colors.muted);
+    let screen: String = (0..buffer.area.height)
+        .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+        .map(|at| buffer[at].symbol().to_string())
+        .collect();
+    assert!(!screen.contains("Footer links"), "in place of its title");
+}

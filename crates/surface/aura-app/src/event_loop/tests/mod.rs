@@ -32,6 +32,7 @@ mod channel_queue_open;
 mod channels_projects;
 mod channels_projects_zode;
 mod cloud_members;
+mod cloud_waiting;
 mod commands_and_cancel;
 mod compare_runs;
 mod delegation;

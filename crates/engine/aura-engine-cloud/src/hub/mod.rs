@@ -72,6 +72,7 @@ pub mod store;
 pub mod test_support;
 mod turn;
 
+pub use self::busy::WAITING;
 pub use self::outcomes::{CommitsOutcome, PatchOutcome, PullOutcome};
 pub use self::persist::SyncStatus;
 pub use self::reach::{MailDesk, Reach};
