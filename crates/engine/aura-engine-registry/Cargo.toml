@@ -11,6 +11,7 @@ repository.workspace = true
 doctest = false
 
 [dependencies]
+aura-core-protocol = { path = "../../core/aura-core-protocol" }
 aura-core-types = { path = "../../core/aura-core-types" }
 aura-store-db = { path = "../../store/aura-store-db" }
 aura-model = { path = "../../model/aura-model" }

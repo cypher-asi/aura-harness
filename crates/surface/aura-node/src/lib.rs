@@ -172,7 +172,7 @@ pub use aura_core_protocol::{
 /// What other crates' tests need to serve a node in-process.
 #[doc(hidden)]
 pub mod test_support {
-    pub use crate::gateway::{create_router, RouterState, RouterStateConfig};
+    pub use crate::gateway::{create_router, RouterState, RouterStateConfig, HUB_SKILLS_DIR};
     pub use aura_engine::scheduler::Scheduler;
 
     /// Claim `state`'s cloud node with `claim`, as its claim socket does

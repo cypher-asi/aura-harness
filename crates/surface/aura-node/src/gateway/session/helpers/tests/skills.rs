@@ -60,8 +60,8 @@ fn a_session_lists_its_skills_without_their_bodies() {
 fn load_skill_returns_an_installed_skill_in_full() {
     let (session, ctx) = session_with_a_skill();
     let skills = SessionSkills::of(&session, &ctx).expect("it has skills");
-    assert!(skills.load(None, "deploy").unwrap().contains(BODY));
-    let unknown = skills.load(None, "launch").unwrap_err();
+    assert!(skills.load(None, "deploy", None).unwrap().contains(BODY));
+    let unknown = skills.load(None, "launch", None).unwrap_err();
     assert!(unknown.contains("your skills: deploy"), "{unknown}");
 
     let mut other = Session::new(PathBuf::from("/tmp/aura"));

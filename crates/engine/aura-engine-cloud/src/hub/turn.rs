@@ -119,7 +119,7 @@ impl CloudHub {
     pub fn run_turn(
         self: &Arc<Self>,
         agent: AgentId,
-        ask: TurnAsk,
+        mut ask: TurnAsk,
         cancel: CancellationToken,
     ) -> mpsc::Receiver<RemoteEvent> {
         let (tx, rx) = mpsc::channel(256);
@@ -136,6 +136,7 @@ impl CloudHub {
                     return;
                 }
             };
+            hub.deliver_skills(&node, agent, &mut ask).await;
             let guard = hub.fleet.begin_work(&hex);
             let turn = TurnPrompt {
                 agent,
