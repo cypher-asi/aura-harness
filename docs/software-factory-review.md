@@ -263,15 +263,45 @@ instead of failing entries one after another. The report fixes are on
 
 ## 7. Cloud start failures
 
-**Evidence.** Snapshots for new machines were built from the hub's local
-commit, which was stale. While `main` didn't compile (before #99), every
-new agent's start failed after about 12 minutes, and each message queued
-for that agent started another failing start. The start panel showed
-only the build's warnings, not its `error:` lines.
+**Evidence.** Snapshots for new machines were built from the commit
+checked out in the hub's project folder, not from `origin/main`. The
+user's checkout sat at `bbf6f9b7`, from the window when `main` didn't
+compile (`E0063 missing field run_started`, fixed by #99 `58884b92`),
+probably because uncommitted files made `git pull` refuse to move it.
+A failed build isn't saved, so every start rebuilt that commit on a new
+builder, about 12 minutes each, and each message queued for the agent
+started another. Cargo prints its warnings after its errors and the
+report kept the last 800 bytes, so the start panel showed only
+`unused dependency` warnings.
 
-**Owner.** RUS198 is fixing this (snapshot from `origin/main`, the first
-errors on the start panel, no restart per queued message). #79 already
-starts a member's machine from origin's `main`.
+**Root cause.** The snapshot's commit came from a local checkout
+nobody watched; failures were neither remembered nor reported by their
+first error.
+
+**Fixed (RUS198):**
+
+- #120 (`75ef2964`): failed snapshot and seed steps quote cargo's
+  `error` lines first; a start failure keeps up to 1,200 characters.
+- #132 (`c280f935`): one build per snapshot for agents started together;
+  one retry on a fresh builder when the machine, not the code, failed
+  (killed, out of memory or disk, network); the error and its `Caused
+  by:` lines go in the report.
+- #136 (`7c076d07`): the snapshot builds from origin's merge target,
+  fetched first, with a warning when the hub has commits it leaves out;
+  a commit that failed to compile isn't built again until the target or
+  the lockfiles change; a clean member machine starts at
+  `origin/<target>`.
+- #144 (`8b70e386`): a start that fails for good blocks the member, and
+  work sent to it is turned away at once instead of starting again; a
+  typed message retries at once, other work once every 10 minutes.
+- #140 (`74e41b33`): member rows read one live state, so a new start
+  clears the old red "Failed".
+
+**Still open.** The user's running app predates these: rebuild and
+restart on current `main`, and fix the stale checkout (stash, `git
+switch main`, `git pull --ff-only`). Nothing has run against real boxd,
+only a fake provider and real git. The failure memory and start blocks
+live in memory, so a restart clears them, by design.
 
 ## 8. Unreliable checks
 
