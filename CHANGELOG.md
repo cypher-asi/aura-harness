@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A member's report survives a turn the user stops
+
+##### Fixed
+
+- Stopping a channel member's turn yourself (Esc, sending a queued
+  message now, killing its PROCESSES row) no longer gives up on the
+  work it was assigned. The coordinator used to get only "Stopped
+  before finishing: it was stopped", and nothing the member did after.
+  Now the member still owes the report, and its next turn that ends
+  well sends it, with its last words. This holds for cloud members too.
+- Work that really stops (a failure, archiving the agent) still reports
+  that it stopped, now with what the member said last before it did.
+
 ### A channel lists its coordinator, and chats open in their tab
 
 ##### Fixed

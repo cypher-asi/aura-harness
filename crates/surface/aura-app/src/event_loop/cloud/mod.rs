@@ -248,6 +248,17 @@ impl CloudState {
     }
 }
 
+#[cfg(test)]
+impl CloudState {
+    /// Note a cloud turn of `agent` under way, as submitting one does.
+    pub(super) fn start_turn(&self, agent: AgentId) {
+        self.shared
+            .running
+            .lock()
+            .insert(agent, CancellationToken::new());
+    }
+}
+
 fn cloud_home() -> PathBuf {
     aura_config::AuraHome::resolve()
         .map_or_else(|_| PathBuf::from("aura_data"), |home| home.path)

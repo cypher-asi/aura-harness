@@ -109,13 +109,16 @@ pub(super) async fn submit(state: &mut LoopState<'_>, agent_id: AgentId, work: W
 
 /// Force the oldest queued work of `agent_id` to run now: the running turn
 /// is cancelled, and `handle_work_done` then starts the front of the queue.
-/// The queue itself is kept, so nothing the user queued is dropped.
+/// The queue itself is kept, so nothing the user queued is dropped, and
+/// what the stopped turn was asked through its inbox waits for the next
+/// turn that ends well.
 pub(super) async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId) {
     if state.queued.len(agent_id) == 0 {
         return;
     }
     if state.cloud.cancel(agent_id) {
         info!(%agent_id, "Sending queued work now; stopping the cloud turn");
+        state.hub.inbox.interrupt(agent_id);
         return;
     }
     if !state.hub.is_running(agent_id) {
@@ -126,7 +129,9 @@ pub(super) async fn send_queued_now(state: &mut LoopState<'_>, agent_id: AgentId
     // A call waiting for an answer holds the turn; deny it so the turn
     // sees the cancellation.
     state.approvals.cancel_agent(agent_id).await;
-    state.hub.cancel(agent_id);
+    if state.hub.cancel(agent_id) {
+        state.hub.inbox.interrupt(agent_id);
+    }
 }
 
 /// Start the oldest work waiting for `agent_id`, if any, where it runs
