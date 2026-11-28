@@ -107,7 +107,7 @@ async fn a_second_failure_shows_its_own_reason() {
     let mut state = loop_state(&fixture, &mut b);
 
     // The fixture has no boxd key: the new start fails on its own.
-    assert!(!cloud::start_in_cloud(&mut state, member).await);
+    assert!(!cloud::start_in_cloud(&mut state, member, cloud::StartCause::Work).await);
     let row = agreeing(&state.hub, member);
     let why = row.error.expect("failed again");
     assert!(!why.contains("the old reason"), "{why}");

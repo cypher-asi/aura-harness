@@ -10,10 +10,10 @@
 //! it is dropped, and whoever assigned it work is told at once, with
 //! `ok=false` and the reason.
 
+use super::blocked_starts::may_start;
 use super::placement::{place, place_request};
 use super::*;
 use crate::event_loop::inbox;
-use std::future::Future;
 
 /// Longest a machine may take to start: past it the start fails instead
 /// of leaving the agent moving, its work waiting, forever. A fresh
@@ -35,21 +35,6 @@ pub(super) enum Start {
     Member,
 }
 
-/// `work`, given up as failed after `limit`: its error as text, or that
-/// it took too long.
-pub(super) async fn within<T, E: std::fmt::Display>(
-    limit: Duration,
-    work: impl Future<Output = Result<T, E>>,
-) -> Result<T, String> {
-    match tokio::time::timeout(limit, work).await {
-        Ok(result) => result.map_err(|err| err.to_string()),
-        Err(_) => Err(format!(
-            "the machine did not start within {} minutes",
-            limit.as_secs() / 60
-        )),
-    }
-}
-
 /// Start `agent`, a new member of a channel whose agents run in the
 /// cloud, on a cloud machine of its own before its first work, which
 /// waits in its queue meanwhile. Returns whether the start is under way;
@@ -59,11 +44,17 @@ pub(super) async fn within<T, E: std::fmt::Display>(
 pub(in crate::event_loop) async fn start_in_cloud(
     state: &mut LoopState<'_>,
     agent: AgentId,
+    cause: StartCause,
 ) -> bool {
+    if !may_start(state, agent, cause).await {
+        return false;
+    }
     // A channel without a project it can use keeps its members in the
     // launch project, whose folder is not theirs to take to a machine.
     if lock(&state.hub.hidden_members).contains(&agent) {
         fail_cloud_start(state, agent, NO_PROJECT_FOLDER, None).await;
+        let now = aura_core_types::time::now_ms();
+        state.hub.status.block_start(agent, NO_PROJECT_FOLDER, now);
         return false;
     }
     // A new start: an earlier failure is behind it from now, on its rows
@@ -93,10 +84,17 @@ pub(in crate::event_loop) async fn start_in_cloud(
 pub(in crate::event_loop) async fn settle_start(state: &mut LoopState<'_>, agent: AgentId) -> bool {
     state.hub.status.set_starting(agent, false);
     let failed = state.cloud.shared.failed_starts.lock().remove(&agent);
-    let Some(why) = failed else {
+    let Some(failure) = failed else {
+        state.hub.status.unblock_start(agent);
         return false;
     };
-    fail_cloud_start(state, agent, &why, None).await;
+    fail_cloud_start(state, agent, &failure.why, None).await;
+    // A start its project failed (it doesn't build) fails again the same
+    // way: work sent meanwhile doesn't start it again for nothing.
+    if !failure.transient {
+        let now = aura_core_types::time::now_ms();
+        state.hub.status.block_start(agent, &failure.why, now);
+    }
     true
 }
 
@@ -146,30 +144,28 @@ impl CloudState {
     /// Note that `agent`'s start failed because of `why`, as a failed or
     /// too-slow placement does before its move ends.
     pub(in crate::event_loop) fn fail_test_start(&self, agent: AgentId, why: &str) {
-        self.shared
-            .failed_starts
-            .lock()
-            .insert(agent, why.to_string());
+        self.fail_test_start_as(agent, why, true);
+    }
+
+    /// [`Self::fail_test_start`], for its machine's sake when `transient`,
+    /// else for good (its project doesn't build).
+    pub(in crate::event_loop) fn fail_test_start_as(
+        &self,
+        agent: AgentId,
+        why: &str,
+        transient: bool,
+    ) {
+        let failure = StartFailure {
+            why: why.to_string(),
+            transient,
+        };
+        self.shared.failed_starts.lock().insert(agent, failure);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn a_start_that_never_ends_fails_after_its_limit() {
-        let stuck = std::future::pending::<Result<(), String>>();
-        let failed = within(Duration::from_millis(10), stuck).await;
-        assert_eq!(
-            failed,
-            Err("the machine did not start within 0 minutes".to_string())
-        );
-        let refused = within(START_TIMEOUT, async { Err::<(), _>("boxd said no") }).await;
-        assert_eq!(refused, Err("boxd said no".to_string()));
-        let started = within(START_TIMEOUT, async { Ok::<_, String>(7) }).await;
-        assert_eq!(started, Ok(7));
-    }
 
     #[test]
     fn the_note_says_why_and_that_it_did_not_run_here() {

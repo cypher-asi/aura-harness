@@ -55,6 +55,7 @@ use crate::cloud::host_info;
 use crate::cloud::hub::zns_agent;
 use crate::cloud::{CloudHub, PlaceRequest, RemoteEvent};
 
+mod blocked_starts;
 mod boot;
 mod ended;
 #[cfg(test)]
@@ -81,6 +82,8 @@ mod tests;
 mod turn_marks;
 mod view;
 
+pub(in crate::event_loop) use blocked_starts::StartCause;
+use blocked_starts::{start_within, StartFailure};
 #[cfg(test)]
 pub(super) use boot::show_start_events;
 use boot::BootConsoleUi;
@@ -89,7 +92,7 @@ pub(in crate::event_loop) use machine::node_offers_ship;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
 pub(super) use member_start::start_in_cloud;
-use member_start::{within, Start, START_TIMEOUT};
+use member_start::{Start, START_TIMEOUT};
 use moving::MoveMark;
 pub(super) use owners::archive_refusal;
 use owners::foreign_owner;
@@ -137,7 +140,7 @@ struct Shared {
     saved: Mutex<std::collections::HashMap<AgentId, aura_engine_cloud::hub::SavedPlacement>>,
     /// New members whose cloud start failed, and why, until the loop hears
     /// their move ended
-    failed_starts: Mutex<std::collections::HashMap<AgentId, String>>,
+    failed_starts: Mutex<std::collections::HashMap<AgentId, StartFailure>>,
     /// Wakes the HOST publisher before its next refresh is due.
     changed: tokio::sync::Notify,
     /// Cloud agents with a turn running, and how to stop it.

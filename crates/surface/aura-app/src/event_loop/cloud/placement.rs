@@ -144,7 +144,7 @@ pub(super) fn place(
     tokio::spawn(async move {
         let (boot, events) = BootReporter::channel();
         let shown = console.pump(events);
-        let result = within(START_TIMEOUT, hub.place(request, &boot)).await;
+        let result = start_within(START_TIMEOUT, hub.place(request, &boot)).await;
         drop(boot);
         let _ = shown.await;
         if result.is_ok() {
@@ -156,11 +156,12 @@ pub(super) fn place(
                 "Now running in the cloud on {} ({} vCPU). Its record syncs back here; `/local` brings it back.",
                 view.machine.name, view.machine.vcpu
             )),
-            Err(err) => {
+            Err(failure) => {
+                let note = format!("Could not move the agent to the cloud: {}", failure.why);
                 if start == Start::Member {
-                    shared.failed_starts.lock().insert(agent, err.clone());
+                    shared.failed_starts.lock().insert(agent, failure);
                 }
-                (false, format!("Could not move the agent to the cloud: {err}"))
+                (false, note)
             }
         };
         info!(%agent, %note, "placement");

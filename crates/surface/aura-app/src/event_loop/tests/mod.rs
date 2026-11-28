@@ -26,6 +26,7 @@ use tokio::sync::{Barrier, Semaphore};
 mod agent_lists;
 mod agent_selection;
 mod approval_modes;
+mod blocked_starts;
 mod channel_chat;
 mod channel_plan;
 mod channel_queue_open;
