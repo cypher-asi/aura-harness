@@ -1,8 +1,13 @@
 # Software factory
 
 The user gives a channel requirements. The channel's members plan the
-work, build it and ship it, and a merge queue lands every push on `main`
-one at a time. Nobody has to approve a plan or press merge. Agents ask a
+work, build it and ship it, each task on its own branch, and a merge
+queue lands every push on `main` one at a time **through the branch's
+GitHub PR**: it opens or updates the PR, tests it merged with the latest
+`main`, and merges it pinned to the tested head. Nobody has to approve a
+plan or press merge, and nobody merges a PR by hand. Merging straight
+into `main` without a PR is an opt-in (`land = "push"`, below), and is
+how a repo that isn't on GitHub lands. Agents ask a
 question only when a wrong guess could cause harm, lose data or leave
 major inconsistencies.
 
@@ -11,10 +16,10 @@ flowchart LR
     A[assignment or typed task] --> P[plan mode: create_plan]
     P -- plan written --> B[build the plan]
     P -- asked a question --> P
-    B --> S[git_ship: commit, pull main, push]
+    B --> S[git_ship: commit, pull main, push the task's branch]
     S --> Q[(merge queue)]
-    Q -- merge with main, build, test pass --> M[main fast-forwards]
-    Q -- conflict or failure --> F[reason back to the agent]
+    Q -- open or update the PR, merge with main, build, test pass --> M[PR merged at the tested head]
+    Q -- conflict or failure --> F[PR stays open with a comment; reason back to the agent]
     F --> B
 ```
 
@@ -299,8 +304,10 @@ Crate: `crates/exec/aura-exec-merge-queue`.
      process group of its own, which a timeout kills whole; its output
      goes to `<git-common-dir>/aura/check.log`, and the failure reason
      keeps the end of it.
-  5. Move the target. A pushed entry of a repo on github.com lands
-     through its PR (see "Landing through the PR" below). Otherwise:
+  5. Move the target. By default a pushed entry of a repo on github.com
+     lands through its PR (see "Landing through the PR" below). Only
+     with `land = "push"`, or for a repo not on GitHub, does the queue
+     move the target itself:
      - With a remote: a non-forced `push <sha>:refs/heads/<target>`. If
        the target moved in the meantime, the push is rejected and the
        entry is retried from step 1, up to 3 times. A push cut off by its
@@ -308,26 +315,32 @@ Crate: `crates/exec/aura-exec-merge-queue`.
      - A local target: a compare-and-swap `update-ref`. If the target is
        checked out, it is moved with `merge --ff-only`, but only in a clean
        checkout; a dirty checkout fails the entry.
-- **Landing through the PR** (`integrate/pull_request.rs`, the default
-  for a pushed entry when the hub's queue has a GitHub repo for it;
-  `land = "push"` in the config file turns it off, `land =
-  "pull_request"` makes it required):
+- **Landing through the PR** (`integrate/pull_request.rs`). This is the
+  default (`land = "auto"`): every pushed entry of a repo on GitHub
+  lands through its PR. `land = "pull_request"` makes it required, so an
+  entry the queue has no GitHub repo for fails instead of being pushed;
+  `land = "push"` opts out and merges straight into the target:
   1. The branch's tip as fetched is the head that is tested: a push made
      since the entry was queued is tested too. A tip that no longer holds
      the queued commit (a force-push) fails the entry.
   2. The queue finds the branch's open PR, or opens one titled by the
      branch's first commit, and sets the `aura/merge-queue` commit status
      to pending.
-  3. It merges the latest target in its worktree and runs the checks, as
-     above, generated files resolved the same way.
-  4. A merge commit it made is pushed onto the PR's branch as a
-     fast-forward, so the PR's head is exactly the tested commit. A
+  3. It merges the branch into the latest target in its worktree as a
+     merge commit (always one, the target first, even for a branch based
+     on the target) and runs the checks on it, generated files resolved
+     as above.
+  4. That merge commit is pushed onto the PR's branch as a fast-forward, so the PR's head is exactly the tested commit. A
      rejected push means the branch moved: the entry is tried again from
      the fetch.
   5. With the remote target unchanged (`ls-remote`), it sets the status
-     to success and runs `gh pr merge <n> --merge --match-head-commit
-     <tested sha>`: a normal merge commit, only at that head. A head that
-     moved is tested again, up to 3 times.
+     to success, reads the PR again (closed: the entry fails and the
+     branch is kept; a head that moved is tested again, up to 3 times),
+     and pushes exactly the tested merge commit to the target, without
+     force. GitHub marks the PR merged, since its head is now on the
+     target. The target is never at a commit the checks didn't run on:
+     `gh pr merge` would make a new merge commit of its own on whatever
+     the target is then, which nothing tested.
   6. After a confirmed merge, the branch is deleted on origin with
      `--force-with-lease` on the merged commit, so newer work on it stays.
   - On a conflict, a failed check or a refusal nothing merges: the PR
@@ -335,7 +348,7 @@ Crate: `crates/exec/aura-exec-merge-queue`.
     files or the output, and sets the status to failure. The entry fails
     with the same details (`MergeEntry::failure`, `MergeEntry::pr`).
   - A PR closed by hand while it is tested is abandoned: the entry fails
-    and the branch is deleted.
+    and the branch is kept, so no work is lost.
   - GitHub unreachable, or `gh` not signed in, holds the queue
     (`QueueState::hold`): the entry goes back to its place without an
     attempt counted, nothing starts for 5 minutes, and its agent is told
@@ -351,8 +364,9 @@ Crate: `crates/exec/aura-exec-merge-queue`.
   (`integrate/diagnose.rs`, `failure.rs`). When the test check fails, the
   failing tests are read from its log (libtest's `test x ... FAILED` and
   `---- x stdout ----` blocks) and, for a `cargo test` command:
-  1. they run once more on the same merge (`-- --exact <names>`); if
-     they pass, the entry merges and its note names them as flaky;
+  1. the whole test command runs once more on the same merge; if it
+     passes, the entry merges, and its note and a comment on its PR name
+     the flaky tests;
   2. else they run on the plain target. If they fail there too, the
      target is broken: the entry goes back to its place uncharged and is
      parked until the target moves (or 2 hours pass), and the queue
@@ -382,6 +396,7 @@ target = "main"                    # branch merges land on
 build = "cargo build --workspace"  # "" turns the build check off
 test = "cargo test --workspace"    # "" turns the test check off
 check_timeout_secs = 3600
+land = "auto"                      # through the PR (default); "pull_request" requires it; "push" merges straight into the target
 ```
 
 `target` is read from the file as committed on `main` (the local branch,
@@ -640,7 +655,8 @@ Generated files are matched by name at any depth:
 
 | Question | Default |
 |---|---|
-| Straight into main, or GitHub PRs and GitHub's merge queue? | Straight into the target branch through aura's own queue: a non-forced push after a merge with main and green checks. This needs no GitHub settings, and it works without a remote too. |
+| Straight into main, or GitHub PRs and GitHub's merge queue? | GitHub PRs, landed by aura's own queue (the user's choice, replacing an earlier "straight into main"): it opens or updates each branch's PR, tests it merged with main, and merges it with a normal merge commit pinned to the tested head. Not GitHub's merge queue, which needs Actions. Straight into the target (a non-forced push after green checks) stays as the opt-in `land = "push"`, and is how a repo with no GitHub remote lands. |
+| One branch per what? | Per task: `git_start_task` makes `aura/<task>-<code>` off the latest target, never reused. A machine pushes only branches with its own agent's code, never another agent's or the target. |
 | Is each entry gated on build and tests? | Yes. Configured or inferred build and test must pass on the exact commit that lands. A repo with nothing to check merges unchecked, and says so. |
 | How many processors? | One per repo, enforced in the process and across processes. |
 | What happens on failure? | The entry is marked failed with its reason, and the reason goes to the owning agent, which is prompted to fix and re-ship. It also shows in the channel's QUEUE tab. |
