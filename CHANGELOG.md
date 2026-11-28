@@ -7,6 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A channel member's machine starts from what is shipped
+
+##### Fixed
+
+- A new channel member's cloud machine starts its branch from
+  `origin`'s latest main. Before, it started at this computer's HEAD,
+  with commits not pushed yet, so a member worked on top of other
+  agents' unshipped commits, and its ship carried them. A move you make
+  with `/cloud` still takes your commits along.
+- An agent that already has a cloud machine, one this computer lost
+  track of, isn't given a second one: its start fails, in red, naming
+  the machine.
+
 ### An agent that errors out reads in the Stop button's red, in its chat too
 
 ##### Fixed

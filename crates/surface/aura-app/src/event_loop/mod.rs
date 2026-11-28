@@ -250,10 +250,13 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     state.hub.name_agents();
     let active = state.active;
     state.hub.record_panel.set(active);
+    let restored = inbox::restore_saved(&mut state).await;
     send_startup(&mut state, active).await;
+    inbox::resume_saved(&mut state, restored).await;
 
     run_loop(&mut state, &mut inbox).await;
     state.stop_side_panels();
+    inbox::flush_saved(&state, &mut inbox.notice_rx).await;
     shut_down(&mut state, &mut inbox.done_rx).await;
     publisher.abort();
     state.processes.save();
@@ -304,7 +307,7 @@ impl<'a> LoopState<'a> {
             models,
             active,
             idle: HashMap::from([(active, session)]),
-            queued: queue::WorkQueues::default(),
+            queued: queue::WorkQueues::counted(hub.standing.counts()),
             work_done,
             in_flight: 0,
             processes: Arc::clone(&hub.processes),
@@ -346,6 +349,9 @@ async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
     let mut cloud_ended = state.cloud.take_ended();
     let first_sweep = tokio::time::Instant::now() + stalls::SWEEP_EVERY;
     let mut sweeps = tokio::time::interval_at(first_sweep, stalls::SWEEP_EVERY);
+    // A loop busy past a sweep runs one late sweep, not a burst of them:
+    // strikes count minutes, and a burst would count several at once.
+    sweeps.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             _ = sweeps.tick() => {
@@ -388,6 +394,8 @@ async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
                 }
             }
         }
+        // The write goes on without the loop.
+        drop(inbox::keep_saved(state));
     }
 }
 

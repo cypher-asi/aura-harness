@@ -71,7 +71,7 @@ pub(in crate::event_loop) async fn start_in_cloud(
     let ui = AgentUi::new(state.commands.clone(), agent);
     let console = BootConsoleUi::new(ui, "Starting in the cloud");
     let why = match connect(state, Some(&console)).await {
-        Ok(hub) => match place_request(state, &hub, agent) {
+        Ok(hub) => match place_request(state, &hub, agent, true) {
             Some(request) => {
                 let mark = MoveMark::take(&state.cloud.shared, agent);
                 place(state, hub, request, console, (mark, Start::Member));

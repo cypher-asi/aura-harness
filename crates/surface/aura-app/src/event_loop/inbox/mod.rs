@@ -42,6 +42,7 @@
 //! - `assignments`: `assign`
 //! - `withdraw`: work a coordinator takes back, or hands to another
 //!   member, before it started; it never starts
+//! - `saved`: what is owed, queued and undelivered, kept across restarts
 //!
 //! # Invariants
 //!
@@ -51,8 +52,10 @@
 //! # Failure modes
 //!
 //! A channel that cannot be read leaves its agent without channel peers
-//! (logged): messages to them fail as to an unknown agent. A message sent
-//! as the terminal shuts down is lost.
+//! (logged): messages to them fail as to an unknown agent. What is owed,
+//! and the inbox messages queued or not yet delivered, survive a restart
+//! (`saved`); a message sent after the last save, as the terminal shuts
+//! down, is lost.
 
 use super::agent_events::AgentUi;
 use super::channels;
@@ -84,9 +87,12 @@ use tracing::{info, warn};
 
 mod answers;
 mod assignments;
+mod dropped;
 mod hooks;
 mod messages;
 mod peers;
+mod refusals;
+mod saved;
 mod starts;
 #[cfg(test)]
 mod tests;
@@ -98,11 +104,15 @@ pub(super) use answers::{
 pub use assignments::AssignTool;
 #[cfg(test)]
 pub(crate) use assignments::{assign, AssignArgs};
+pub(super) use dropped::{settle_dropped, REMOVED_BY_USER};
 pub use hooks::PeerHooks;
 pub(super) use hooks::{reach_of, refresh_reach, MachineMail};
 pub(super) use messages::deliver;
 use messages::{mail_view, new_id, send, shown};
 use peers::{circle, Circle, Named, Peer, Relation};
+#[cfg(test)]
+pub(super) use saved::SAVED_FILE;
+pub(super) use saved::{flush_saved, keep_saved, restore_saved, resume_saved};
 pub(super) use starts::give_up_unstarted;
 pub(super) use withdraw::take_withdrawn;
 
@@ -114,6 +124,10 @@ pub(crate) const THREAD_REQUESTS: u32 = 8;
 #[derive(Default)]
 pub(crate) struct Inbox {
     state: Mutex<State>,
+    /// The "not delivered" notices told lately ([`refusals`])
+    refusals: refusals::Refusals,
+    /// Where `state`'s owed reports are kept between runs
+    saved: saved::Keeper,
 }
 
 #[derive(Default)]
@@ -175,20 +189,24 @@ impl Inbox {
     }
 
     /// The agents that owe answers, with the subjects and markers of
-    /// what they owe, leaving out those [`Self::park`] parked.
+    /// what they owe, leaving out those [`Self::park`] parked. Work its
+    /// sender took back ([`withdraw`](withdraw::withdraw)) is not owed
+    /// any more, so the stall sweep never asks for it back.
     pub(crate) fn owing(&self) -> Vec<(AgentId, Vec<(String, String)>)> {
         let state = lock(&self.state);
         state
             .owed
             .iter()
-            .filter(|(agent, owed)| !owed.is_empty() && !state.parked.contains(agent))
+            .filter(|(agent, _)| !state.parked.contains(agent))
             .map(|(agent, owed)| {
-                let asks = owed
+                let asks: Vec<(String, String)> = owed
                     .iter()
+                    .filter(|owed| !owed.withdrawn)
                     .map(|owed| (owed.subject.clone(), inbox::marker(owed.kind, &owed.id)))
                     .collect();
                 (*agent, asks)
             })
+            .filter(|(_, asks)| !asks.is_empty())
             .collect()
     }
 }

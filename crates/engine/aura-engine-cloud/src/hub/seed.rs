@@ -106,6 +106,7 @@ impl CloudHub {
             // Never the hub's uncommitted work: a ship on the machine
             // commits every change it finds, and would push that too.
             delta: false,
+            clean: request.clean,
         })?;
         let stdout = self
             .run_script(

@@ -211,18 +211,35 @@ impl MailDesk for MachineMail {
             &mail.text,
             None,
         );
-        if let Err(error) = &sent {
-            warn!(from = %mail.from.to_hex(), %to, %error, "A cloud member's request was refused");
+        match &sent {
+            Ok(_) => hub
+                .inbox
+                .refusals
+                .delivered((mail.from, mail.to), &mail.subject),
+            Err(error) => {
+                warn!(from = %mail.from.to_hex(), %to, %error, "A cloud member's request was refused");
+            }
         }
         sent.map(|_| ())
     }
 
     /// Its machine drops the ack, so the sender is told here, as a notice
-    /// into its running turn or the prompt of its next one.
+    /// into its running turn or the prompt of its next one: once per
+    /// recipient and subject, however often the mail is resent
+    /// ([`super::refusals`]).
     fn refused(&self, mail: &RemoteMail, why: &str) {
         let Some(hub) = self.0.upgrade() else {
             return;
         };
+        let now = std::time::Instant::now();
+        if !hub
+            .inbox
+            .refusals
+            .tell((mail.from, mail.to), &mail.subject, now)
+        {
+            tracing::debug!(from = %mail.from.to_hex(), to = %mail.to.to_hex(), "A refusal its sender was told already; not told again");
+            return;
+        }
         let to = lock(&hub.registry)
             .find(mail.to)
             .map_or_else(|| mail.to.to_hex(), |agent| Named::of(agent).full());
