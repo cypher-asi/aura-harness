@@ -5,13 +5,14 @@ use aura_ui::events::{MergeEntryView, MergeQueueView, MergeStateView};
 
 /// The view of `entries` (oldest first) of the queue of the repo at
 /// `repo`, merging into `target`, with `older` finished merges not in
-/// them: newest first, each open entry with the work it overlaps
-/// ([`super::overlap::entry_overlaps`]).
+/// them and the repo's page on GitHub, `web`: newest first, each open
+/// entry with the work it overlaps ([`super::overlap::entry_overlaps`]).
 pub(crate) fn queue_view(
     target: &str,
     repo: &str,
     entries: &[MergeEntry],
     older: u64,
+    web: Option<String>,
 ) -> MergeQueueView {
     let mut overlaps = super::overlap::entry_overlaps(entries, repo);
     let entries = entries
@@ -28,6 +29,7 @@ pub(crate) fn queue_view(
         repo: repo.to_string(),
         entries,
         older,
+        web,
     }
 }
 
@@ -83,7 +85,7 @@ mod tests {
                 chrono::Utc::now(),
             );
         }
-        let view = queue_view("main", "/repo", &state.entries, 7);
+        let view = queue_view("main", "/repo", &state.entries, 7, None);
         assert_eq!(view.older, 7);
         assert_eq!(view.target, "main");
         assert_eq!(view.entries[0].branch, "aura/new");
@@ -91,6 +93,13 @@ mod tests {
         assert_eq!(view.entries[0].head, "01234567");
         assert_eq!(view.entries[0].agent.as_deref(), Some("RUS1"));
         assert_eq!(view.entries[0].state, MergeStateView::Queued);
+        assert_eq!(view.web, None);
+        let linked = queue_view("main", "/repo", &state.entries, 7, Some("https://github.com/o/r".into()));
+        assert_eq!(linked.web.as_deref(), Some("https://github.com/o/r"));
+        assert_eq!(
+            linked.branch_url(&linked.entries[0].branch).as_deref(),
+            Some("https://github.com/o/r/tree/aura/new")
+        );
     }
 
     #[test]
@@ -117,7 +126,7 @@ mod tests {
                 .clone();
             state.record_files(&id, &head, vec!["src/shared.rs".to_string()]);
         }
-        let view = queue_view("main", "/repo", &state.entries, 0);
+        let view = queue_view("main", "/repo", &state.entries, 0, None);
         assert_eq!(
             view.entries[0].overlaps,
             ["q1 aura/a (RUS1): src/shared.rs"]

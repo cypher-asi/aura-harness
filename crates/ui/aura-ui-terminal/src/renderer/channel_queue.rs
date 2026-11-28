@@ -1,17 +1,21 @@
 //! The QUEUE tab of an open channel's side panel: every merge of the
-//! merge queue of the channel's repo, newest first, as an info document.
+//! merge queue of the channel's repo, newest first, as an info document
+//! laid out like INFO.
 //!
-//! A header names the branch merges land on and the repo's folder; then
-//! each merge is a block: its state, coloured, with its branch and the
-//! short sha pushed, then who pushed it, when it was queued and finished,
-//! how many times it ran when more than once, the sha the target moved
-//! to, and what happened, wrapped to the column:
+//! A section names the branch merges land on, with the repo's folder
+//! under it; then each merge is a section of its own, headed by a status
+//! dot in its state's color, its state and the short sha pushed. Under
+//! the header come its branch on a line of its own, which opens the
+//! branch on GitHub when the repo is there, then who pushed it, when it
+//! was queued and finished, how many times it ran when more than once,
+//! the sha the target moved to, and what happened, wrapped to the column:
 //!
 //! ```text
-//! Merges into main
-//! ~/code/zode
+//! MERGES INTO  main
+//!   ~/code/zode
 //!
-//! FAILED  feat/parser  a1b2c3d
+//! ● FAILED  a1b2c3d
+//!   feat/parser
 //!   Agent     RE36
 //!   Queued    11-27 20:31
 //!   Finished  11-27 20:33
@@ -20,24 +24,21 @@
 //!   cargo test failed: parser::escapes
 //! ```
 //!
+//! Only the dot is colored, and nothing is bold: the text is
+//! `foreground`, or `muted` for ids, shas and what happened.
+//!
 //! Without a queue, or with nothing in it, a note says where merges come
 //! from. The session sends the newest merges a page at a time: under the
 //! last one shown, `N older merges` says how many more there are, and
 //! scrolling to it asks for the next page.
 
-use super::chrome::Body;
+use super::chrome::{pad_sides, Body};
 use crate::app::PanelFocus;
-use crate::components::{truncate_line, Info, Value};
+use crate::components::{Info, StatusDot, Value};
 use crate::events::{MergeEntryView, MergeQueueView, MergeStateView};
 use crate::{App, Theme};
 use chrono::{DateTime, Local};
-use ratatui::{
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    Frame,
-};
-use unicode_width::UnicodeWidthStr;
+use ratatui::{layout::Rect, text::Line, Frame};
 
 /// What QUEUE says while no merge has been queued into `target`, the
 /// queue's target branch; the branch goes unnamed while unknown.
@@ -55,9 +56,16 @@ pub(super) fn no_merges(target: Option<&str>) -> String {
     )
 }
 
+/// The QUEUE tab's document: its lines, and the lines that open a
+/// branch's page, by index, with the page.
+pub(super) struct QueueDoc {
+    pub lines: Vec<Line<'static>>,
+    pub links: Vec<(usize, String)>,
+}
+
 /// Draw the open channel's merge queue into `inner`, the body below the
-/// tab bar of the panel bordered by `area`. Without an open channel there
-/// is nothing to draw.
+/// tab bar of the panel bordered by `area`, and record where its branch
+/// links went. Without an open channel there is nothing to draw.
 pub(super) fn render_channel_queue(
     frame: &mut Frame,
     area: Rect,
@@ -65,57 +73,94 @@ pub(super) fn render_channel_queue(
     app: &mut App,
     theme: &Theme,
 ) {
+    app.set_channel_queue_links(Vec::new());
     if app.open_channel().is_none() {
         return;
     }
     let body = Body::new(area, inner, app.focus() == PanelFocus::Sandbox);
-    let lines = queue_lines(app.open_channel_queue(), body.text_width(), theme);
-    let (total, visible) = (lines.len(), body.visible());
+    let doc = queue_doc(app.open_channel_queue(), body.text_width(), theme);
+    let (total, visible) = (doc.lines.len(), body.visible());
     let first = app.sync_channel_queue_scroll(total, visible);
-    body.draw_document(frame, lines, first, theme);
+    app.set_channel_queue_links(link_areas(&doc.links, pad_sides(body.rows()), first));
+    body.draw_document(frame, doc.lines, first, theme);
     if first + visible >= total {
         app.queue_end_reached();
     }
 }
 
+/// Where each of `links` is on screen, its document drawn in `rows` from
+/// line `first`: the links scrolled out of `rows` are left out.
+fn link_areas(links: &[(usize, String)], rows: Rect, first: usize) -> Vec<(Rect, String)> {
+    links
+        .iter()
+        .filter_map(|(line, url)| {
+            let offset = u16::try_from(line.checked_sub(first)?).ok()?;
+            (offset < rows.height).then(|| {
+                let area = Rect {
+                    y: rows.y + offset,
+                    height: 1,
+                    ..rows
+                };
+                (area, url.clone())
+            })
+        })
+        .collect()
+}
+
 /// The QUEUE tab's lines, `width` columns wide.
+#[cfg(test)]
 pub(super) fn queue_lines(
     queue: Option<&MergeQueueView>,
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
-    let mut info = Info::new(width, theme);
+    queue_doc(queue, width, theme).lines
+}
+
+/// The QUEUE tab's document, `width` columns wide.
+pub(super) fn queue_doc(queue: Option<&MergeQueueView>, width: usize, theme: &Theme) -> QueueDoc {
+    let mut info = Info::new(width, theme).wrap_values();
     if let Some(queue) = queue {
-        if !queue.target.trim().is_empty() {
-            info.title(&format!("Merges into {}", queue.target));
-        }
-        if !queue.repo.trim().is_empty() {
-            info.note(&queue.repo);
-        }
+        target_section(&mut info, queue);
     }
     let entries = queue.map_or(&[][..], |queue| queue.entries.as_slice());
     if entries.is_empty() {
-        if queue.is_some() {
+        if queue.is_some_and(|queue| !queue.target.trim().is_empty()) {
             info.blank();
         }
         info.note(&no_merges(queue.map(|queue| queue.target.as_str())));
-        return info.into_lines();
+        return QueueDoc {
+            lines: info.into_lines(),
+            links: Vec::new(),
+        };
     }
-    let mut lines = info.into_lines();
+    let mut links = Vec::new();
     for entry in entries {
-        if !lines.is_empty() {
-            lines.push(Line::default());
+        if let Some(link) = entry_lines(&mut info, queue, entry) {
+            links.push(link);
         }
-        lines.push(entry_head(entry, width, theme));
-        lines.extend(entry_facts(entry, width, theme));
     }
     if let Some(older) = queue.map(|queue| queue.older).filter(|&older| older > 0) {
-        lines.push(Line::default());
-        let mut info = Info::new(width, theme);
+        info.blank();
         info.note(&older_merges(older));
-        lines.extend(info.into_lines());
     }
-    lines
+    QueueDoc {
+        lines: info.into_lines(),
+        links,
+    }
+}
+
+/// `MERGES INTO  main`, then the repo's folder under it; nothing for a
+/// queue whose target is not known yet.
+fn target_section(info: &mut Info<'_>, queue: &MergeQueueView) {
+    let target = queue.target.trim();
+    if target.is_empty() {
+        return;
+    }
+    info.section("MERGES INTO", Some(target));
+    if !queue.repo.trim().is_empty() {
+        info.item(queue.repo.trim(), None);
+    }
 }
 
 /// The line under the merges shown while older ones are not: scrolling
@@ -127,42 +172,36 @@ fn older_merges(older: u64) -> String {
     }
 }
 
-/// An entry's first line: its state in its colour, its branch, then the
-/// short sha pushed, muted. The branch is cut first.
-fn entry_head(entry: &MergeEntryView, width: usize, theme: &Theme) -> Line<'static> {
-    let state = entry.state.label();
+/// An entry as its own section: its header, its branch on a line of its
+/// own, then its facts. Returns the branch's line and page when the
+/// branch opens one.
+fn entry_lines(
+    info: &mut Info<'_>,
+    queue: Option<&MergeQueueView>,
+    entry: &MergeEntryView,
+) -> Option<(usize, String)> {
     let head = entry.head.trim();
-    let head_room = if head.is_empty() { 0 } else { head.width() + 2 };
-    let branch_room = width.saturating_sub(state.width() + 2 + head_room);
-    let mut spans = vec![Span::styled(
-        state,
-        Style::default()
-            .fg(state_color(entry.state, theme))
-            .add_modifier(Modifier::BOLD),
-    )];
-    let branch = truncate_line(entry.branch.trim(), branch_room);
-    if !branch.is_empty() {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            branch,
-            Style::default().fg(theme.colors.foreground),
-        ));
-    }
-    if !head.is_empty() && state.width() + 2 + head.width() <= width {
-        spans.push(Span::styled(
-            format!("  {head}"),
-            Style::default().fg(theme.colors.muted),
-        ));
-    }
-    Line::from(spans)
+    let note = (!head.is_empty()).then_some(head);
+    info.marked_section(state_dot(entry.state), entry.state.label(), note);
+    let branch = entry.branch.trim();
+    let link = match queue.and_then(|queue| queue.branch_url(branch)) {
+        Some(url) => Some((info.link(branch), url)),
+        None => {
+            if !branch.is_empty() {
+                info.item(branch, None);
+            }
+            None
+        }
+    };
+    entry_facts(info, entry);
+    link
 }
 
-/// An entry's facts under its first line: who pushed it, when it was
-/// queued and finished, its attempts when it ran more than once, what the
+/// An entry's facts under its branch: who pushed it, when it was queued
+/// and finished, its attempts when it ran more than once, what the
 /// target moved to, the other work that changes the same files, and what
-/// happened.
-fn entry_facts(entry: &MergeEntryView, width: usize, theme: &Theme) -> Vec<Line<'static>> {
-    let mut info = Info::new(width, theme).wrap_values();
+/// happened. None of it is colored.
+fn entry_facts(info: &mut Info<'_>, entry: &MergeEntryView) {
     if let Some(agent) = entry.agent.as_deref().filter(|agent| !agent.is_empty()) {
         info.fact("Agent", agent, Value::Plain);
     }
@@ -178,28 +217,21 @@ fn entry_facts(entry: &MergeEntryView, width: usize, theme: &Theme) -> Vec<Line<
     }
     for (at, overlap) in entry.overlaps.iter().enumerate() {
         let label = if at == 0 { "Overlaps" } else { "" };
-        info.fact(label, overlap, Value::Flag);
+        info.fact(label, overlap, Value::Plain);
     }
     if let Some(detail) = entry.detail.as_deref().filter(|d| !d.trim().is_empty()) {
-        let kind = if entry.state == MergeStateView::Failed {
-            Value::Error
-        } else {
-            Value::Quiet
-        };
-        info.text(detail, kind);
+        info.text(detail, Value::Quiet);
     }
-    info.into_lines()
 }
 
-/// The colour of a merge's state: landed in the accent, failed in the
-/// error colour, running in the info colour, so it stands apart from a
-/// landed one, and waiting muted.
-const fn state_color(state: MergeStateView, theme: &Theme) -> Color {
+/// The dot of a merge's state: landed `Ok`, failed `Failed`, running
+/// `Busy`, so it stands apart from a landed one, and waiting `Waiting`.
+pub(super) const fn state_dot(state: MergeStateView) -> StatusDot {
     match state {
-        MergeStateView::Merged => theme.colors.success,
-        MergeStateView::Failed => theme.colors.error,
-        MergeStateView::Running => theme.colors.warning,
-        MergeStateView::Queued => theme.colors.muted,
+        MergeStateView::Merged => StatusDot::Ok,
+        MergeStateView::Failed => StatusDot::Failed,
+        MergeStateView::Running => StatusDot::Busy,
+        MergeStateView::Queued => StatusDot::Waiting,
     }
 }
 
