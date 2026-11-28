@@ -432,7 +432,13 @@ under a fold arrow, then the timeline, newest first.
   `muted` `→ ` prompt and a `muted` placeholder (`Ask anything`, then
   `Add a follow-up`) set one column past the cursor so the cursor never
   covers its first letter. Login prompts replace the arrow. The terminal
-  has none: its prompt follows its output (see **Terminal**).
+  has none: its prompt follows its output (see **Terminal**). It grows to
+  8 rows, then scrolls: the wheel moves the view and leaves the cursor
+  where it is, and a key that moves the cursor brings the view back to
+  it. ↑/↓ walk the rows; ↑ on a draft's first row only goes to its start
+  (history is for a single-row draft). Ctrl+↑/↓ jump to the input's start
+  or end. A paste goes in whole, up to 4 MB, with a short notice past
+  2,000 characters; a bigger one is refused whole and says so.
 - **Footer**: the mode outside agent mode, the approval level, the model
   and what the agent has used in `muted`, separated by `faint` dots,
   with the status at the right, on the screen's last row. Parts that
