@@ -54,6 +54,9 @@ pub(super) fn message_lines(
         return (laid, more);
     }
     let role = message.role();
+    if let Some(why) = error_text(message) {
+        return alone(error_lines(why, width, theme));
+    }
     let (prompt, prompt_color, msg_color) = message_style(role, theme);
     if is_notice(message) {
         return alone(prefixed_lines(
@@ -118,4 +121,23 @@ pub(super) fn content_lines(
         laid.add(part);
     }
     laid
+}
+
+/// Before an error in the chat, in the Stop button's red.
+pub(in crate::renderer) const ERROR_PROMPT: &str = "✗ ";
+
+/// The lines of an error `why`: `✗ ` then the reason, in the Stop
+/// button's red.
+fn error_lines(why: &str, width: usize, theme: &Theme) -> Vec<ratatui::text::Line<'static>> {
+    let red = crate::renderer::failure_color(theme);
+    prefixed_lines((ERROR_PROMPT, red), why, red, width, Measure::GRID)
+}
+
+/// What an error the harness showed in the chat (a system message made
+/// by `UiCommand::ShowError`) says, past its `error: ` prefix.
+fn error_text(message: &Message) -> Option<&str> {
+    if message.role() != MessageRole::System {
+        return None;
+    }
+    message.content().strip_prefix(crate::events::ERROR_PREFIX)
 }

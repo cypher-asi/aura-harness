@@ -10,8 +10,13 @@
 //!   `None` while one is.
 //! - A finished entry never changes again.
 //! - A branch has at most one queued entry: a new push of a queued branch
-//!   updates its head and keeps its place, and its wait counts from that
-//!   push ([`QueueState::expire`]).
+//!   updates its head and keeps its place.
+//! - An entry's wait counts from its last change ([`MergeEntry::updated_at`]):
+//!   its last push, or recovery putting it back after a crash
+//!   ([`QueueState::expire`]).
+//! - Finished entries past the newest few leave the state for the
+//!   history file ([`QueueState::take_archivable`]); [`QueueState::history`]
+//!   says how much of that file is committed.
 
 use crate::entry::{EntryId, MergeEntry, MergeRequest, MergeStatus};
 use chrono::{DateTime, Duration, Utc};
@@ -29,6 +34,20 @@ pub struct QueueState {
     pub next_seq: u64,
     /// Every entry, oldest first
     pub entries: Vec<MergeEntry>,
+    /// How much of the history file holds archived entries; anything past
+    /// it was written by an archive that never got saved, and is not
+    /// history
+    #[serde(default)]
+    pub history: HistoryMark,
+}
+
+/// How far the history file is committed: entries and bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryMark {
+    /// Entries archived
+    pub count: u64,
+    /// Bytes of the file they take
+    pub bytes: u64,
 }
 
 impl Default for QueueState {
@@ -37,6 +56,7 @@ impl Default for QueueState {
             version: STATE_VERSION,
             next_seq: 1,
             entries: Vec::new(),
+            history: HistoryMark::default(),
         }
     }
 }
@@ -89,6 +109,7 @@ impl QueueState {
                 return Enqueued::Duplicate(entry.id.clone());
             }
             entry.pushed_at = Some(now);
+            entry.updated_at = Some(now);
             entry.head.clone_from(&push.head);
             entry.remote.clone_from(&push.remote);
             entry.origin = request.origin;
@@ -114,6 +135,7 @@ impl QueueState {
             pushed_at: None,
             started_at: None,
             finished_at: None,
+            updated_at: Some(now),
             attempts: 0,
             detail: None,
             merged: None,
@@ -141,6 +163,7 @@ impl QueueState {
             .find(|entry| entry.status == MergeStatus::Queued)?;
         entry.status = MergeStatus::Running;
         entry.started_at = Some(now);
+        entry.updated_at = Some(now);
         entry.attempts += 1;
         entry.detail = None;
         Some(entry.clone())
@@ -159,6 +182,7 @@ impl QueueState {
             .iter_mut()
             .find(|entry| &entry.id == id && entry.status == MergeStatus::Running)?;
         entry.finished_at = Some(now);
+        entry.updated_at = Some(now);
         match outcome {
             RunOutcome::Merged { merged, note } => {
                 entry.status = MergeStatus::Merged;
@@ -182,6 +206,7 @@ impl QueueState {
             if entry.status != MergeStatus::Running {
                 continue;
             }
+            entry.updated_at = Some(now);
             if entry.attempts >= max_attempts {
                 entry.status = MergeStatus::Failed;
                 entry.finished_at = Some(now);
@@ -198,15 +223,16 @@ impl QueueState {
         failed
     }
 
-    /// Fail every entry whose branch was last pushed longer than `ttl`
-    /// before `now` and has waited since. Returns them.
+    /// Fail every queued entry that has waited longer than `ttl` before
+    /// `now` since it last changed ([`MergeEntry::waiting_since`]).
+    /// Returns them.
     pub fn expire(&mut self, now: DateTime<Utc>, ttl: Duration) -> Vec<MergeEntry> {
         let mut expired = Vec::new();
         for entry in &mut self.entries {
-            let pushed = entry.pushed_at.unwrap_or(entry.enqueued_at);
-            if entry.status == MergeStatus::Queued && now - pushed > ttl {
+            if entry.status == MergeStatus::Queued && now - entry.waiting_since() > ttl {
                 entry.status = MergeStatus::Failed;
                 entry.finished_at = Some(now);
+                entry.updated_at = Some(now);
                 entry.detail = Some(format!(
                     "waited in the queue longer than {} hours",
                     ttl.num_hours()
@@ -217,22 +243,37 @@ impl QueueState {
         expired
     }
 
-    /// Keep at most `keep` finished entries, dropping the oldest. Waiting
-    /// and running entries always stay.
-    pub fn prune(&mut self, keep: usize) {
+    /// Take out the oldest finished entries past the newest `keep`, for
+    /// the history file, oldest first. Waiting and running entries always
+    /// stay.
+    pub fn take_archivable(&mut self, keep: usize) -> Vec<MergeEntry> {
         let finished = self
             .entries
             .iter()
             .filter(|entry| entry.status.is_finished())
             .count();
-        let mut drop = finished.saturating_sub(keep);
-        self.entries.retain(|entry| {
-            if drop > 0 && entry.status.is_finished() {
-                drop -= 1;
-                return false;
+        let mut left = finished.saturating_sub(keep);
+        let mut taken = Vec::with_capacity(left);
+        let mut kept = Vec::with_capacity(self.entries.len() - left);
+        for entry in self.entries.drain(..) {
+            if left > 0 && entry.status.is_finished() {
+                left -= 1;
+                taken.push(entry);
+            } else {
+                kept.push(entry);
             }
-            true
-        });
+        }
+        self.entries = kept;
+        taken
+    }
+
+    /// How many entries are finished.
+    #[must_use]
+    pub fn finished_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|entry| entry.status.is_finished())
+            .count()
     }
 
     /// Whether an entry waits to run.

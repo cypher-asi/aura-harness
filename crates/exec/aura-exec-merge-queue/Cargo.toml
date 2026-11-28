@@ -9,6 +9,8 @@ license.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
+# The queue's work folder under the user's cache folder
+dirs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

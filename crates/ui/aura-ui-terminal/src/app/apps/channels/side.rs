@@ -7,7 +7,7 @@ use crate::app::processes::SIDE_PAGE;
 use crate::app::wheel_views::WheelList;
 use crate::app::{contains, App};
 use crate::components::ROW_INSET;
-use crate::events::MergeQueueView;
+use crate::events::{MergeQueueView, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 
@@ -278,6 +278,29 @@ impl App {
     /// show.
     pub(crate) fn sync_channel_queue_scroll(&mut self, total: usize, visible: usize) -> usize {
         self.channels.queue_scroll.sync(total, visible)
+    }
+
+    /// The QUEUE side tab is scrolled to its end: when its queue has
+    /// older merges than it shows, ask the session for the next page,
+    /// once for each page shown.
+    pub(crate) fn queue_end_reached(&mut self) {
+        let Some(id) = self.channels.open.clone() else {
+            return;
+        };
+        let Some(queue) = self.channels.merge_queues.get(&id) else {
+            return;
+        };
+        if queue.older == 0 {
+            return;
+        }
+        let asked = (id, queue.entries.len());
+        if self.channels.older_asked.as_ref() == Some(&asked) {
+            return;
+        }
+        let channel_id = asked.0.clone();
+        if self.try_send_event(UiEvent::LoadOlderMerges { channel_id }) {
+            self.channels.older_asked = Some(asked);
+        }
     }
 
     /// Scroll the QUEUE side tab by `delta` lines, as the wheel does.

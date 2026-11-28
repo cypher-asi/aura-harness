@@ -149,6 +149,9 @@ pub(super) enum Task {
         /// Whether the agent is in plan mode, where a request revises its
         /// open plan (see [`begin_task`])
         planning: bool,
+        /// Whether the software factory builds the plan this turn writes
+        /// on its own, so nobody is asked to say "implement"
+        auto_build: bool,
         agent_loop: Box<AgentLoop>,
         tools: Vec<ToolDefinition>,
         steering: Steering,
@@ -237,6 +240,7 @@ async fn run(
         Task::Turn {
             prompt,
             planning,
+            auto_build,
             agent_loop,
             tools,
             steering,
@@ -246,6 +250,7 @@ async fn run(
             routing,
         } => {
             let turn = TurnParts {
+                auto_build,
                 agent_loop,
                 tools,
                 steering: &steering,
@@ -272,6 +277,8 @@ async fn run(
 
 /// What a turn runs on, besides the session.
 pub(super) struct TurnParts<'a> {
+    /// Whether the software factory builds the plan the turn writes
+    pub auto_build: bool,
     pub agent_loop: Box<AgentLoop>,
     pub tools: Vec<ToolDefinition>,
     pub steering: &'a Steering,
@@ -304,6 +311,7 @@ impl TurnParts<'_> {
                 steering: self.steering,
                 limits: self.limits,
                 recorder: self.recorder.clone(),
+                auto_build: self.auto_build,
             },
         )
         .await

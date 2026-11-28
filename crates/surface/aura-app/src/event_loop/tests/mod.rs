@@ -28,6 +28,7 @@ mod agent_selection;
 mod approval_modes;
 mod channel_chat;
 mod channel_plan;
+mod channel_queue_open;
 mod channels_projects;
 mod channels_projects_zode;
 mod cloud_members;

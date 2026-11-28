@@ -7,6 +7,59 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### An agent that errors out reads in the Stop button's red, in its chat too
+
+##### Fixed
+
+- An error in an agent's chat is now drawn in the Stop button's red after
+  a `✗`, where it was gray like any other note. This holds for every way
+  an agent errors out: it can't start, it can't get a cloud machine, its
+  turn ends in an error, or it stalls.
+- A stalled member's chat now says why, and its rows turn red at once
+  rather than at the next refresh.
+- A cloud agent whose work the cloud turns away (it belongs to another
+  user, or its model's plan isn't linked) now shows that as a red error
+  in its chat, and its rows turn red at once.
+- The rows, their `!` icons, chat errors and the Stop button now take
+  their red from one place, so they can't drift apart.
+
+### The merge queue finishes its review leftovers
+
+##### Fixed
+
+- The queue's target branch is read from `.aura/merge-queue.toml` as
+  committed on `main` (`main` by default). The queue, `git_ship`, the push
+  guard, the QUEUE tab and the agents' prompts all name that branch. An
+  uncommitted edit in some checkout no longer moves it.
+- New and forked cloud machines pull that target from GitHub, not
+  always `main`.
+- The queue's worktree and build output moved out of `.git`, to a
+  per-repo folder under the user's cache folder. The old
+  `.git/aura/merge-worktree` is removed when the new one is made.
+- Every finished merge is kept. Older ones move to
+  `merge-history.jsonl` beside the queue file, and the QUEUE tab loads
+  them 100 at a time as you scroll to "N older merges".
+- A queued entry expires 24 hours after its last change, so one put
+  back after a crash doesn't expire at once.
+- A channel member the software factory builds on its own is no longer
+  told to say "implement" or run `/build`.
+
+### Channel post summaries are kept in the channel store
+
+##### Changed
+
+- The one-line summaries a channel's HISTORY tab shows for the user's
+  long messages are now kept in the channel store, beside the posts they
+  summarize (`h/{blake3 of the text}` rows), instead of in a separate
+  `channel-post-summaries.json` in the data directory. They are sealed
+  whenever the store is, as posts are: in a sealed `aura-node` store.
+  The terminal app opens its store unsealed today, so there they are no
+  better protected than its posts. An
+  existing file is moved into the store on first use and then deleted;
+  if the move fails it is left for the next run. Without a channel store
+  summaries are kept in memory only. The 2,000-entry cap is gone: rows
+  are small and a message is still summarized once.
+
 ### HISTORY lists your /plan requests
 
 ##### Fixed

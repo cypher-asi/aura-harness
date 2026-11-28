@@ -41,7 +41,7 @@ async fn the_sweep_asks_an_idle_member_owing_a_report_to_carry_on_once() {
 
 #[tokio::test]
 async fn the_sweep_reports_a_member_still_idle_after_its_retry_and_leaves_parked_ones_be() {
-    let (fixture, _commands) = fixture();
+    let (fixture, mut commands) = fixture();
     let coordinator = channel_with_member(&fixture).await;
     let member = fixture.second;
     let mut notices = fixture.hub.take_notices();
@@ -78,6 +78,14 @@ async fn the_sweep_reports_a_member_still_idle_after_its_retry_and_leaves_parked
     assert!(report.prompt.ends_with(&task_report_line("3", false)));
     let view = crate::event_loop::standing::state_of(&state.hub, member);
     assert_eq!(view.state, "stalled");
+    // Its chat says why, in red, and its row shows the error at once.
+    let (errors, row) = shown(&mut commands, member);
+    assert_eq!(errors, [crate::event_loop::stalls::stalled_note()]);
+    assert_eq!(
+        row,
+        Some(Some(WENT_IDLE.to_string())),
+        "the lists went out at once"
+    );
 }
 
 #[tokio::test]
@@ -111,4 +119,55 @@ async fn work_that_cannot_start_reports_what_its_agent_owes() {
     let view = crate::event_loop::standing::state_of(&state.hub, member);
     assert_eq!(view.state, "failed");
     assert_eq!(view.why.as_deref(), Some("its local model is not running"));
+}
+
+/// The errors shown in `agent`'s chat so far, and the error its channel
+/// member row carries in the last channel list sent: `None` when none
+/// was sent since.
+fn shown(
+    commands: &mut mpsc::Receiver<UiCommand>,
+    agent: AgentId,
+) -> (Vec<String>, Option<Option<String>>) {
+    let hex = agent.to_hex();
+    let (mut errors, mut row) = (Vec::new(), None);
+    for (to, command) in drain(commands) {
+        match command {
+            UiCommand::ShowError(why) if to.as_deref() == Some(hex.as_str()) => errors.push(why),
+            UiCommand::SetChannels(channels) => {
+                let member = channels
+                    .iter()
+                    .flat_map(|channel| &channel.members)
+                    .find(|member| member.id == hex);
+                row = Some(member.and_then(|member| member.error.clone()));
+            }
+            _ => {}
+        }
+    }
+    (errors, row)
+}
+
+#[tokio::test]
+async fn a_refused_cloud_start_says_why_in_red_and_fails_the_member() {
+    let (fixture, mut commands) = fixture();
+    let coordinator = channel_with_member(&fixture).await;
+    let member = fixture.second;
+    let mut notices = fixture.hub.take_notices();
+    let mut b = borrowed(&fixture);
+    let state = loop_state(&fixture, &mut b);
+    assign_footer(&fixture, coordinator, &code(&fixture, member)).await;
+    let _assignment = notices.try_recv().unwrap();
+    drain(&mut commands);
+
+    let why = "Placed by Alice; sign in as Alice to manage it.";
+    cloud::refused(&state, member, why.to_string()).await;
+    let (errors, row) = shown(&mut commands, member);
+    assert_eq!(errors, [why]);
+    assert_eq!(
+        row,
+        Some(Some(why.to_string())),
+        "the lists went out at once"
+    );
+    let report = notices.try_recv().unwrap();
+    assert_eq!(report.to, coordinator);
+    assert!(report.prompt.contains(why), "{}", report.prompt);
 }

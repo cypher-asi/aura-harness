@@ -7,7 +7,6 @@ use tracing::{info, warn};
 
 use super::push::duration_millis_u64;
 use super::sandbox::{opt_str, push_branch_for, push_policy_for, str_arg, workspace_timeout};
-use super::ship::DEFAULT_TARGET;
 use super::{git_ship_impl, PushTarget, ShipRequest};
 use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext};
@@ -25,9 +24,10 @@ impl Tool for GitShipTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "git_ship".into(),
-            description: "Finish a task: commit every change, pull main into your branch, push \
-                your branch, and put it in the merge queue, which merges it into main once the \
-                build and tests pass. Call it when your task is done."
+            description: "Finish a task: commit every change, pull the merge queue's target \
+                branch (main unless the repo's committed .aura/merge-queue.toml names another) \
+                into your branch, push your branch, and put it in the merge queue, which merges \
+                it into that branch once the build and tests pass. Call it when your task is done."
                 .into(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -40,7 +40,7 @@ impl Tool for GitShipTool {
                     "target": {
                         "type": "string",
                         "description": "Branch the merge queue merges into, pulled before the \
-                            push. Defaults to main."
+                            push. Defaults to the repo's queue target."
                     }
                 }
             }),
@@ -54,9 +54,14 @@ impl Tool for GitShipTool {
         ctx: &ToolContext,
         args: serde_json::Value,
     ) -> Result<ToolResult, ToolError> {
+        let workspace = ctx.sandbox.root().to_path_buf();
+        let target = match opt_str(&args, "target") {
+            Some(target) => target.to_string(),
+            None => aura_exec_merge_queue::resolve_target(&workspace).await,
+        };
         let request = ShipRequest {
             message: str_arg(&args, "message").map_err(ToolError::from)?,
-            target: opt_str(&args, "target").unwrap_or(DEFAULT_TARGET),
+            target: &target,
             push: PushTarget {
                 branch: None,
                 force: false,
@@ -66,8 +71,6 @@ impl Tool for GitShipTool {
             push_policy: push_policy_for(ctx),
         };
         log_ship_dispatch(ctx, &request);
-
-        let workspace = ctx.sandbox.root().to_path_buf();
         match git_ship_impl(&workspace, request).await {
             Ok(shipped) => Ok(ToolResult::success(
                 "git_ship",
