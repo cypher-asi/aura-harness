@@ -44,8 +44,6 @@ yanked = "warn"
 # Phase 9 keeps the Phase 4–6 set; new ignores require a phase
 # reference in the comment block and a follow-up issue.
 ignore = [
-  # `rustls-pemfile` unmaintained; transitive via tonic 0.12's TLS support.
-  "RUSTSEC-2025-0134",
   # `serial` (transitive via portable-pty on Windows). No safe upgrade path.
   "RUSTSEC-2017-0008",
 ]

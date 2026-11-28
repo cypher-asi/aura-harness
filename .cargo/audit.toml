@@ -1,8 +1,8 @@
 # Cargo audit configuration.
 #
-# Phase 8 documented two upstream "unmaintained" advisories that
-# arrive as deep transitive dependencies of crates we cannot upgrade
-# without significant collateral churn. Both are marker advisories
+# The list holds upstream "unmaintained" advisories that arrive as
+# deep transitive dependencies of crates we cannot upgrade without
+# significant collateral churn. They are marker advisories
 # (no known CVE, no known exploitable path); we ignore them
 # explicitly so `cargo audit` stays a green gate while the upstream
 # replacement work tracks separately.
@@ -13,11 +13,6 @@
 # entries the moment we no longer ship the offending version.
 [advisories]
 ignore = [
-    # RUSTSEC-2025-0134 — `rustls-pemfile 2.2.0` is unmaintained.
-    # Pulled in by `tonic 0.12.3`'s TLS support (aura-engine-cloud's
-    # gRPC client); tonic 0.13 and later no longer use it.
-    "RUSTSEC-2025-0134",
-
     # RUSTSEC-2017-0008 — `serial 0.4.0` is unmaintained.
     # Pulled in by `portable-pty 0.8.1` (the embedded PTY layer
     # that the `aura` terminal helper uses for `aura-node` PTY

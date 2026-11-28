@@ -46,7 +46,9 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 # The hub drives each node's run stream and mesh socket.
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
-tonic = { version = "0.12", default-features = false, features = ["transport", "codegen", "prost", "tls", "tls-webpki-roots"] }
+# The client transport only (`channel`): aura serves no gRPC, so tonic's
+# server and its axum router stay out of the build.
+tonic = { version = "0.13", default-features = false, features = ["channel", "codegen", "prost", "tls-ring", "tls-webpki-roots"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 which = { workspace = true }
@@ -55,7 +57,7 @@ workspace-hack = { version = "0.1", path = "../../../workspace-hack" }
 
 [build-dependencies]
 protox = "0.7"
-tonic-build = { version = "0.12", default-features = false, features = ["prost", "transport"] }
+tonic-build = { version = "0.13", default-features = false, features = ["prost", "transport"] }
 
 [dev-dependencies]
 axum = { workspace = true }
