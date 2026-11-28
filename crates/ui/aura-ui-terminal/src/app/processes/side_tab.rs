@@ -34,6 +34,9 @@ pub enum SidePanelTab {
     /// left. Listed in a channel too, last, where it lists the whole
     /// project's work.
     Tasks,
+    /// Every message the user sent in the open channel, newest first.
+    /// Listed only while a channel is open, last, after TASKS.
+    ChannelHistory,
 }
 
 impl SidePanelTab {
@@ -59,12 +62,13 @@ impl SidePanelTab {
     ];
 
     /// The tabs listed while a channel is open: the channel's own, then
-    /// TASKS, and none of the agent app's others.
-    const IN_CHANNEL: [Self; 4] = [
+    /// TASKS, then HISTORY, and none of the agent app's others.
+    const IN_CHANNEL: [Self; 5] = [
         Self::ChannelMembers,
         Self::ChannelInfo,
         Self::ChannelQueue,
         Self::Tasks,
+        Self::ChannelHistory,
     ];
 
     /// The tabs the header bar lists, in order, with a channel open or
@@ -84,7 +88,7 @@ impl SidePanelTab {
     pub const fn is_channel_tab(self) -> bool {
         matches!(
             self,
-            Self::ChannelMembers | Self::ChannelInfo | Self::ChannelQueue
+            Self::ChannelMembers | Self::ChannelInfo | Self::ChannelQueue | Self::ChannelHistory
         )
     }
 
@@ -100,6 +104,7 @@ impl SidePanelTab {
             Self::Host => "HOST",
             Self::Trace => "TRACE",
             Self::Tasks => "TASKS",
+            Self::ChannelHistory => "HISTORY",
         }
     }
 
@@ -148,6 +153,7 @@ impl SidePanelTab {
             Self::Host => "HST",
             Self::Trace => "TRC",
             Self::Tasks => "TSK",
+            Self::ChannelHistory => "HIS",
         }
     }
 

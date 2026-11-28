@@ -82,6 +82,7 @@ fn domain_of(event: &UiEvent) -> Domain {
         E::CreateChannel { .. } | E::OpenChannel(_) | E::CloseChannel => Domain::Places,
         E::UpdateChannel { .. } | E::ArchiveChannel(_) | E::PlanInChannel { .. } => Domain::Places,
         E::ListSandbox(_) | E::ReadSandboxFile(_) => Domain::Places,
+        E::SummarizeMessages { .. } => Domain::Places,
         E::LoginCredentials { .. } | E::Logout | E::Whoami => Domain::Account,
         E::LinkSubscription { .. } | E::LinkCode(_) | E::Unlink(_) => Domain::Account,
     }

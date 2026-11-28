@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use stream::Settled;
+pub(crate) use timeline::post_block_key;
 use timeline::{block_runs, interleave_posts, post_message, turn_places};
 
 /// How the groups of agent steps in the chat are shown.
@@ -323,6 +324,27 @@ impl ChatLineCache {
             let live: HashSet<u64> = self.order.iter().copied().collect();
             self.entries.retain(|id, _| live.contains(id));
         }
+    }
+
+    /// The rows of the block `key` (the id of its first message) in the
+    /// whole chat as of the last [`Self::update`], counted as
+    /// [`Self::blocks`] lays them out; `None` when it is not drawn.
+    pub(crate) fn block_rows(&self, key: u64) -> Option<Range<usize>> {
+        let mut row = 0;
+        let drawn = self
+            .order
+            .iter()
+            .filter_map(|k| self.entries.get(k).map(|b| (*k, b)));
+        for (i, (block_key, block)) in drawn.enumerate() {
+            if i > 0 {
+                row += self.block_gap();
+            }
+            if block_key == key {
+                return Some(row..row + block.lines.len());
+            }
+            row += block.lines.len();
+        }
+        None
     }
 
     /// Blocks in conversation order as of the last [`Self::update`]. A

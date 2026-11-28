@@ -43,10 +43,13 @@
 //! be picked.
 
 mod fold;
+mod history;
 mod list;
 mod side;
 mod welcome;
 
+#[cfg(test)]
+pub(crate) use history::JUMP_HIGHLIGHT;
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
 pub(crate) use welcome::ChannelWelcome;
 
@@ -104,6 +107,8 @@ pub(crate) struct ChannelState {
     /// own chat was scrolled, given back when the channel's chat leaves
     /// the screen
     chat_shown: Option<(String, ChatPlace)>,
+    /// The HISTORY side tab: the user's messages in the open channel
+    history: history::HistoryState,
 }
 
 impl ChannelState {
@@ -165,6 +170,7 @@ impl ChannelState {
         self.rows_area = None;
         self.new_channel_area = None;
         self.member_rows_area = None;
+        self.history.forget_rows_area();
     }
 }
 
@@ -348,6 +354,7 @@ impl App {
             self.channels.member_scroll = 0;
             self.channels.info_scroll = InfoScroll::default();
             self.channels.queue_scroll = InfoScroll::default();
+            self.channels.history.reset();
         }
         self.apps.channel = Some(id.to_string());
         self.channels.selected = row;

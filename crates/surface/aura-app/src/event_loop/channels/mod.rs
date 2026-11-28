@@ -69,6 +69,7 @@ mod list;
 mod load;
 mod plan;
 mod prompt;
+mod summaries;
 mod update;
 
 pub(crate) use chat::{
@@ -97,6 +98,7 @@ pub(crate) use plan::{is_coordinator_agent, start_planner};
 #[cfg(test)]
 pub(crate) use plan::{PLANNER_DEFINITION, PLANS_HERE};
 pub(crate) use prompt::{channel_prompt, is_coordinator};
+pub(crate) use summaries::handle_summarize;
 pub(crate) use update::{archive_channel, update_channel, ChannelEdit, CoordinatorBusy};
 
 /// The channel placement the UI's `placement` stands for.

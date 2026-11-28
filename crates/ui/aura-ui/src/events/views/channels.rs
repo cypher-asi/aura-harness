@@ -83,6 +83,19 @@ pub struct ChannelPostView {
     pub at_ms: u64,
 }
 
+/// Longest message, in characters, a channel's HISTORY tab lists as it
+/// is. A longer one is listed by a one-line summary a small model writes.
+pub const MESSAGE_SUMMARY_THRESHOLD: usize = 80;
+
+/// The one-line summary of a long message the user sent in a channel.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageSummary {
+    /// The message, as sent
+    pub text: String,
+    /// What the HISTORY tab lists it as
+    pub summary: String,
+}
+
 /// One entry of a coordinator's chat: a message of its conversation or a
 /// post of its channel.
 #[derive(Debug, Clone, Copy)]

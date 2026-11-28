@@ -24,8 +24,9 @@ use aura_agent::titles::{
 };
 use aura_agent::{AgentLoopConfig, KernelModelGateway};
 use aura_context_prompts::auxiliary::chat_title::{
-    chat_title_user_prompt, mail_subject_user_prompt, subtask_title_user_prompt,
-    CHAT_TITLE_SYSTEM_PROMPT, MAIL_SUBJECT_SYSTEM_PROMPT, SUBTASK_TITLE_SYSTEM_PROMPT,
+    chat_title_user_prompt, mail_subject_user_prompt, message_summary_user_prompt,
+    subtask_title_user_prompt, CHAT_TITLE_SYSTEM_PROMPT, MAIL_SUBJECT_SYSTEM_PROMPT,
+    MESSAGE_SUMMARY_SYSTEM_PROMPT, SUBTASK_TITLE_SYSTEM_PROMPT,
 };
 use aura_core_types::text::truncate_with_ellipsis;
 use aura_core_types::{AgentId, BenchSource};
@@ -44,6 +45,9 @@ const MAX_SUBTITLE_CHARS: usize = 28;
 /// Longest INBOX thread subject kept, in characters. Thread rows share
 /// their width with a count, the participants and a time.
 const MAX_SUBJECT_CHARS: usize = 48;
+/// Longest summary of a user's message kept, in characters: one row of a
+/// channel's HISTORY tab.
+const MAX_SUMMARY_CHARS: usize = 72;
 /// What a generated title names, which sets its prompt and length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TitleKind {
@@ -53,6 +57,8 @@ enum TitleKind {
     Subtask,
     /// An INBOX thread, from the message that opened it.
     Subject,
+    /// A long message the user sent in a channel, for its HISTORY tab.
+    Summary,
 }
 
 impl TitleKind {
@@ -61,6 +67,7 @@ impl TitleKind {
             Self::Chat => CHAT_TITLE_SYSTEM_PROMPT,
             Self::Subtask => SUBTASK_TITLE_SYSTEM_PROMPT,
             Self::Subject => MAIL_SUBJECT_SYSTEM_PROMPT,
+            Self::Summary => MESSAGE_SUMMARY_SYSTEM_PROMPT,
         }
     }
 
@@ -69,6 +76,7 @@ impl TitleKind {
             Self::Chat => chat_title_user_prompt(prompt, reply),
             Self::Subtask => subtask_title_user_prompt(prompt),
             Self::Subject => mail_subject_user_prompt(prompt),
+            Self::Summary => message_summary_user_prompt(prompt),
         }
     }
 
@@ -77,12 +85,13 @@ impl TitleKind {
             Self::Chat => MAX_TITLE_CHARS,
             Self::Subtask => MAX_SUBTITLE_CHARS,
             Self::Subject => MAX_SUBJECT_CHARS,
+            Self::Summary => MAX_SUMMARY_CHARS,
         }
     }
 
     fn fallback(self, prompt: &str) -> String {
         match self {
-            Self::Chat | Self::Subject => fallback_title(prompt),
+            Self::Chat | Self::Subject | Self::Summary => fallback_title(prompt),
             Self::Subtask => fallback_subtitle(prompt),
         }
     }
@@ -168,6 +177,32 @@ async fn subject_for(
     text: &str,
 ) -> Option<String> {
     ask(TitleKind::Subject, provider, config, model, text, &[]).await
+}
+
+/// The one-line summary `model` writes of `text`, a long message the user
+/// sent in a channel, or `None` when the call fails, says nothing usable
+/// or takes longer than [`TITLE_TIMEOUT`]. The summary is never logged:
+/// it is the user's words.
+pub(super) async fn summary_for(
+    provider: &dyn ModelProvider,
+    config: &AgentLoopConfig,
+    model: &str,
+    text: &str,
+) -> Option<String> {
+    ask(TitleKind::Summary, provider, config, model, text, &[]).await
+}
+
+/// The model that summarizes the user's messages: the cheapest Haiku
+/// among `candidates` (cheapest first, as Gate lists them), else the
+/// model that writes titles ([`title_model`] of `classifier`).
+pub(super) fn summary_model(
+    candidates: &[aura_gate::route::Candidate],
+    classifier: String,
+) -> String {
+    candidates
+        .iter()
+        .find(|candidate| candidate.id.to_ascii_lowercase().contains("haiku"))
+        .map_or_else(|| title_model(classifier), |candidate| candidate.id.clone())
 }
 
 /// The subtitle of a subtask spawned under a benchmark's run: the start of
@@ -257,8 +292,10 @@ async fn ask(
             None
         }
     };
-    if let Some(title) = &titled {
-        info!(%model, %title, "Titled chat");
+    match &titled {
+        Some(_) if kind == TitleKind::Summary => info!(%model, "Summarized a message"),
+        Some(title) => info!(%model, %title, "Titled chat"),
+        None => {}
     }
     titled
 }

@@ -210,9 +210,9 @@ what a click does; its text names things and gives their state.
 What the rows are depends on what the tab shows:
 
 - **Lists** (SANDBOX, REPO, PROCESSES, TRACE, TASKS, KERNEL, MEMBERS, INBOX,
-  a channel's MEMBERS) draw one `components::list_row` row per thing: its
-  status glyph, its name and its details on the right. ↑↓ move the
-  selection and ⏎ opens it.
+  a channel's MEMBERS and HISTORY) draw one `components::list_row` row per
+  thing: its status glyph, its name and its details on the right. ↑↓ move
+  the selection and ⏎ opens it.
 - **Info bodies** (POLICIES, HOST, a channel's INFO, the RECORD and
   PROCESS views, a project's info box) describe one thing as a document
   built with `components::Info`. The whole document scrolls with ↑↓,
@@ -433,6 +433,37 @@ under a fold arrow, then the timeline, newest first.
   the grid.
 - Opening at a todo scrolls it near the top once. `s` shows the source in
   the file view, on that todo's checklist item.
+
+### A Channel's HISTORY
+
+An open channel's tab bar is MEMBERS, INFO, QUEUE, TASKS, then HISTORY,
+last. On a bar too narrow for all five labels they switch to their
+three-letter forms (`MBR INF QUE TSK HIS`), as every bar does.
+
+HISTORY lists every message the user sent in the channel, newest first:
+the prompts typed into the channel's chat and the posts that mention
+members, a post sent on to the coordinator too listed once. Each takes one
+row: what it says in `foreground`, on one line, and when it was sent on the
+right in `muted`, `HH:MM` today and `Nov 27` before.
+
+```text
+ Make parser escapes round trip             14:02
+ @REN3 can you look at the failing test?    13:47
+ Ship the zode crate and its docs          Nov 27
+```
+
+- A message up to `MESSAGE_SUMMARY_THRESHOLD` (80) characters is shown
+  as sent. A longer one shows its one-line summary, which a small model
+  (the cheapest Haiku) writes once and the channel store keeps. Until the
+  summary comes, or if it never does, the message is cut at a word with
+  `…`. Summaries are only asked for while HISTORY is on screen.
+- ⏎ or a click on a row scrolls the channel's chat to the message,
+  coming back from a member's chat first, however far back it is, with
+  a row of context above it. The message's rows are filled with
+  `surface_hover` for 1.5 s (`JUMP_HIGHLIGHT`), then go back to the chat's
+  own background. A message no longer in the chat says so as a warning.
+- The wheel scrolls the rows and leaves the highlight where it is, until
+  a key moves it.
 
 ### Interactive Elements
 

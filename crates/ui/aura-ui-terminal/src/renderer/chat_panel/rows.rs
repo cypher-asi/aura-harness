@@ -59,6 +59,7 @@ pub(super) fn render_chat_lines(
         (tail, hovered_activity),
         theme,
     );
+    super::jump::paint_flash(frame.buffer_mut(), padded, &layout, theme);
     let (fade, packed) = draw_visible(frame, app, (body, padded), visible, (measure, theme));
     highlight_hovered(
         frame.buffer_mut(),
@@ -156,7 +157,7 @@ fn place_links(
 
 /// Where the chat's blocks and its live tail fall in the whole
 /// conversation, and where it is scrolled to.
-struct RowLayout {
+pub(super) struct RowLayout {
     /// Image thumbnails, `line` counted from the conversation's first row
     image_hits: Vec<ImageHit>,
     /// Code blocks' copy buttons, `line` counted from the first row
@@ -174,7 +175,9 @@ struct RowLayout {
     /// Blank rows after the end
     padding: usize,
     /// First row on screen
-    start: usize,
+    pub(super) start: usize,
+    /// Rows lit by a jump from HISTORY
+    pub(super) flash: Option<std::ops::Range<usize>>,
 }
 
 /// Bring the line cache up to date, lay out where its blocks and `tail`
@@ -186,6 +189,7 @@ fn layout_rows(
     theme: &Theme,
     tail: &LiveTail,
 ) -> RowLayout {
+    let wanted = super::jump::wanted(app);
     let (shown, cache, groups) = app.chat_line_cache();
     let width = padded.width as usize;
     let reflowed = cache.update(shown, (width, measure), theme, spinner, &groups);
@@ -198,6 +202,7 @@ fn layout_rows(
         message_rows,
         last_prompt_row,
     } = BlockHits::collect(cache, gap);
+    let jump_rows = super::jump::rows_of(cache, wanted);
     let tail_gap = usize::from(message_rows > 0 && !tail.lines.is_empty());
     let tail_start = message_rows + tail_gap;
     let tail_toggle = push_tail_toggles(&mut toggle_rows, app, tail, tail_start);
@@ -206,6 +211,7 @@ fn layout_rows(
     let padding = end_padding(app.terminal_pane(), last_prompt_row, content, height);
     let total = content + padding;
     let start = app.sync_chat_scroll(total, height, reflowed);
+    let (start, flash) = super::jump::apply(app, jump_rows, start, (total, height));
     app.set_chat_layout(toggle_rows, start);
     app.set_chat_rows(Some((padded, start)));
     RowLayout {
@@ -218,6 +224,7 @@ fn layout_rows(
         total,
         padding,
         start,
+        flash,
     }
 }
 

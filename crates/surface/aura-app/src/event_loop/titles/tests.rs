@@ -176,3 +176,38 @@ async fn an_empty_answer_writes_no_thread_subject() {
     .await;
     assert_eq!(subject, None);
 }
+
+#[test]
+fn summaries_are_written_by_the_cheapest_haiku() {
+    use aura_gate::route::Candidate;
+    let classifier = || "local/qwen".to_string();
+    let listed = [
+        Candidate::from_id("local/qwen"),
+        Candidate::from_id("claude/claude-haiku-4-5"),
+        Candidate::from_id("aura-claude-haiku-4-5"),
+    ];
+    assert_eq!(
+        summary_model(&listed, classifier()),
+        "claude/claude-haiku-4-5"
+    );
+    assert_eq!(
+        summary_model(&listed[..1], classifier()),
+        title_model(classifier())
+    );
+}
+
+#[tokio::test]
+async fn a_summary_is_one_line_cut_to_its_limit() {
+    let long = format!("Ship it\n{}", "word ".repeat(40));
+    let provider = MockProvider::simple_response(&long);
+    let config = AgentLoopConfig::for_agent("aura-claude-opus-4-7");
+    let summary = summary_for(&provider, &config, "claude/claude-haiku-4-5", "text").await;
+    assert_eq!(summary.as_deref(), Some("Ship it"));
+    let provider = MockProvider::simple_response("word ".repeat(40));
+    let summary = summary_for(&provider, &config, "m", "text").await.unwrap();
+    assert!(summary.chars().count() <= MAX_SUMMARY_CHARS);
+    assert_eq!(
+        TitleKind::Summary.system_prompt(),
+        MESSAGE_SUMMARY_SYSTEM_PROMPT
+    );
+}

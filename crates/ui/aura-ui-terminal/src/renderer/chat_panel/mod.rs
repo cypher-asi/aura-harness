@@ -2,6 +2,7 @@
 //! tabs under its header bar.
 
 mod below;
+mod jump;
 mod links;
 mod live_tail;
 mod prose;

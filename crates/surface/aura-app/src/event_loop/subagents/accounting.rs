@@ -31,6 +31,12 @@ impl AgentHub {
         lock(&self.base).gate.classifier.clone()
     }
 
+    /// The base turn config: the terminal's credentials and ids, for a
+    /// model call made outside any turn.
+    pub(crate) fn base_config(&self) -> aura_agent::AgentLoopConfig {
+        lock(&self.base).config.clone()
+    }
+
     /// For pointing an agent loop at a model other than the selected one.
     pub(crate) fn model_limits(&self) -> ModelLimits {
         lock(&self.base).limits

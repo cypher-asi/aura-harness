@@ -109,6 +109,8 @@ use crate::{
 use account::Account;
 use agent_switch::AgentSwitch;
 pub use approval::PendingApproval;
+#[cfg(test)]
+pub(crate) use apps::JUMP_HIGHLIGHT;
 pub use apps::{
     AgentsTab, ArchiveRow, BenchAgent, BenchMode, BenchRow, BenchState, FormField, WorkChoice,
     AUTO_CLASSIFIER, BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,

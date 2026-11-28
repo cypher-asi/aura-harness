@@ -89,6 +89,12 @@ pub(super) fn turn_places<'a>(shown: &[&'a Message], runs: &[Range<usize>]) -> V
 /// of the conversation's messages, which count up from 0.
 const POST_ID: u64 = 1 << 63;
 
+/// The key of the chat block channel post `seq` is drawn in: the id of
+/// its message ([`post_message`]).
+pub(crate) const fn post_block_key(seq: u64) -> u64 {
+    POST_ID | seq
+}
+
 /// The message a channel post is drawn as: the user's as a prompt, an
 /// agent's as a reply, each under its author's label. Its id comes from
 /// the post's `seq` and its revision from what it shows, so the lines laid
@@ -115,7 +121,7 @@ pub(super) fn post_message(post: &ChannelPostView) -> Message {
         .and_then(chrono::DateTime::from_timestamp_millis)
         .unwrap_or_default();
     Message::post(
-        (POST_ID | post.seq, hasher.finish()),
+        (post_block_key(post.seq), hasher.finish()),
         role,
         label,
         (&post.text, at),

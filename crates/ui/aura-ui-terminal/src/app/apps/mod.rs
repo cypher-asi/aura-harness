@@ -53,6 +53,8 @@ pub use bench::{
     BY_DIFFICULTY, DEFAULT_AGAINST, DIFFICULTIES,
 };
 pub(super) use channels::ChannelState;
+#[cfg(test)]
+pub(crate) use channels::JUMP_HIGHLIGHT;
 pub(crate) use channels::{ChannelWelcome, CHANNEL_MEMBER_ROWS};
 
 use super::{contains, tab_at, App, ChatTab, HoverTarget, LastSelection, ProjectPick};

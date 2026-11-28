@@ -8,6 +8,7 @@ use aura_core_types::AgentId;
 pub(super) const CHANNEL_PREFIX: &[u8] = b"c/";
 const SLUG_PREFIX: &[u8] = b"s/";
 const SEEN_PREFIX: &[u8] = b"l/";
+const SUMMARY_PREFIX: &str = "h/";
 pub(super) const LINK_PREFIX: &str = "p/";
 const MEMBER_PREFIX: &str = "m/";
 pub(super) const REVERSE_PREFIX: &[u8] = b"a/";
@@ -22,6 +23,10 @@ pub(super) fn slug_key(slug: &str) -> Vec<u8> {
 
 pub(super) fn seen_key(channel_id: &str) -> Vec<u8> {
     [SEEN_PREFIX, channel_id.as_bytes()].concat()
+}
+
+pub(super) fn summary_key(channel_id: &str, key: &str) -> Vec<u8> {
+    format!("{SUMMARY_PREFIX}{channel_id}/{key}").into_bytes()
 }
 
 pub(super) fn link_prefix(channel_id: &str) -> Vec<u8> {

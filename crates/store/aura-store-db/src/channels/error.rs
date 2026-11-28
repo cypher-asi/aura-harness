@@ -27,6 +27,9 @@ pub enum ChannelError {
     /// A channel id that can't be a key: empty or containing `/`.
     #[error("invalid channel id {0:?}: must be non-empty and contain no '/'")]
     InvalidId(String),
+    /// A message summary key that is not 1 to 64 lowercase hex digits.
+    #[error("invalid message summary key {0:?}: must be 1-64 lowercase hex digits")]
+    InvalidSummaryKey(String),
     /// A project id that is empty or all whitespace.
     #[error("invalid project id {0:?}: must not be empty or blank")]
     InvalidProjectId(String),

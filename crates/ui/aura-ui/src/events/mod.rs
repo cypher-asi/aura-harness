@@ -31,7 +31,7 @@ pub use views::agents::{
 pub use views::boot::{BootHistory, BootLogLine, BootPlanStep, BootStageState, BootUpdate};
 pub use views::channels::{
     merge_timeline, nest_members, ChannelPostAuthor, ChannelPostView, ChannelProjectView,
-    ChannelSummary, TimelineItem,
+    ChannelSummary, MessageSummary, TimelineItem, MESSAGE_SUMMARY_THRESHOLD,
 };
 pub use views::hud::{
     ContextView, InstructionFileView, InstructionStatus, JobView, QueuedItemView, TodoState,

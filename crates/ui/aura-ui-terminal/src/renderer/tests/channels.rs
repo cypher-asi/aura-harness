@@ -95,7 +95,8 @@ fn test_an_open_channel_keeps_the_list_and_lists_its_members_on_the_right() {
     });
     app.process_command(UiCommand::SetChannels(channels));
     app.open_channel_by_id("c1");
-    let rows = render_rows(&mut app, 140);
+    // Wide enough for the five channel tabs' full labels.
+    let rows = render_rows(&mut app, 170);
     let screen = rows.join("\n");
     let at = |needle: &str| {
         rows.iter()

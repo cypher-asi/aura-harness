@@ -86,6 +86,7 @@ impl App {
         self.ask_sandbox_listings();
         self.refresh_live_log();
         self.refresh_repo_tab();
+        self.ask_message_summaries();
 
         if self.is_busy() {
             self.ticks.processing_since.get_or_insert_with(Instant::now);
@@ -148,6 +149,7 @@ impl App {
             || self.log_animating()
             || self.chat_animating()
             || self.placement_switch_animating()
+            || self.history_flashing()
     }
 
     /// Whether a spinner turns for an agent, task or process at work.

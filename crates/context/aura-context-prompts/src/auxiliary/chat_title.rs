@@ -62,6 +62,23 @@ pub fn mail_subject_user_prompt(text: &str) -> String {
     format!("Message:\n{text}\n\nWrite its subject.")
 }
 
+/// System prompt for the one-line summary of a long message the user
+/// sent in a channel, listed on the channel's HISTORY tab.
+pub const MESSAGE_SUMMARY_SYSTEM_PROMPT: &str = "\
+You shorten messages a user sent to a team of coding agents, for a narrow \
+history list. Reply with only the summary: one line of at most 72 \
+characters, in the user's own voice and mood (an instruction stays an \
+instruction, a question stays a question), keeping the names of files, \
+crates and people. No quotes, no prefix like \"Summary:\", no trailing \
+period.";
+
+/// The user message for the message summary call: the message, already
+/// shortened by the caller.
+#[must_use]
+pub fn message_summary_user_prompt(text: &str) -> String {
+    format!("Message:\n{text}\n\nSummarize it in one line.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +101,12 @@ mod tests {
         let prompt = mail_subject_user_prompt("Please review the parser escapes");
         assert!(prompt.contains("Message:\nPlease review the parser escapes"));
         assert!(prompt.ends_with("Write its subject."));
+    }
+
+    #[test]
+    fn message_summary_prompt_holds_the_message() {
+        let prompt = message_summary_user_prompt("Please ship the parser");
+        assert!(prompt.contains("Message:\nPlease ship the parser"));
+        assert!(MESSAGE_SUMMARY_SYSTEM_PROMPT.contains("one line"));
     }
 }

@@ -493,4 +493,7 @@ pub enum UiCommand {
         channel_id: String,
         queue: crate::events::MergeQueueView,
     },
+
+    /// One-line summaries of long messages the user sent, for HISTORY
+    MessageSummaries(Vec<crate::events::MessageSummary>),
 }

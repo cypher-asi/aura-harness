@@ -431,6 +431,16 @@ pub enum UiEvent {
         /// chip for each
         images: Vec<ImageAttachment>,
     },
+
+    /// A channel's HISTORY tab lists long messages the user sent that
+    /// have no summary yet; the session answers with
+    /// [`UiCommand::MessageSummaries`], from its cache or a small model
+    SummarizeMessages {
+        /// Channel id
+        channel_id: String,
+        /// The messages, as sent
+        texts: Vec<String>,
+    },
 }
 
 /// What `/rewind` puts back.

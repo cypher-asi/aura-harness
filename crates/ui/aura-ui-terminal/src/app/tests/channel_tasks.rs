@@ -102,7 +102,11 @@ fn test_the_channels_tasks_take_the_keys_and_the_wheel() {
     assert_eq!(app.task_list().selected(), 1);
 
     app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-    assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers, "the last tab");
+    assert_eq!(
+        app.side_tab(),
+        SidePanelTab::ChannelHistory,
+        "HISTORY is after it"
+    );
 }
 
 #[test]

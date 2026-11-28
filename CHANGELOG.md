@@ -7,6 +7,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A channel's HISTORY tab lists what the user sent
+
+##### Added
+
+- An open channel's right panel has a HISTORY tab after TASKS. It lists
+  every message the user sent in the channel, newest first, with when it
+  was sent. A message over 80 characters is listed by a one-line summary
+  the cheapest Haiku writes once, in the background with a timeout. The
+  summary is cached in the channel store (sealed rows
+  `h/{channel_id}/{blake3 of the text}`), so it survives restarts; until
+  it comes, the message is cut at a word with `…`. Enter or a click
+  scrolls the channel's chat to the message, however far back, and lights
+  it for a moment. The wheel scrolls the list without moving its
+  highlight.
+
 ### An empty channel opens on a welcome
 
 ##### Added

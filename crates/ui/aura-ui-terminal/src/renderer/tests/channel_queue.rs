@@ -69,7 +69,8 @@ fn send_zode_queue(app: &mut crate::App) {
 fn test_an_open_channel_lists_queue_right_after_info() {
     let mut app = channels_app();
     app.open_channel_by_id("c1");
-    let rows = render_rows(&mut app, 140);
+    // Wide enough for the five tabs' full labels.
+    let rows = render_rows(&mut app, 170);
     let (bar, widths) = header_bar(&rows, "MEMBERS");
     let row = &rows[bar];
     let members = char_column(row, "MEMBERS");
@@ -195,9 +196,9 @@ fn test_queue_tab_is_picked_by_click_and_shift_arrows_cycle_the_channel_tabs() {
         shown,
         [
             SidePanelTab::Tasks,
+            SidePanelTab::ChannelHistory,
             SidePanelTab::ChannelMembers,
             SidePanelTab::ChannelInfo,
-            SidePanelTab::ChannelQueue
         ]
     );
 }
