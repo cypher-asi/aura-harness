@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A channel keeps its own scroll
+
+##### Fixed
+
+- A channel's chat is scrolled on its own. Scrolling its coordinator in
+  AGENTS or PROJECTS no longer moves the channel, and scrolling the
+  channel no longer moves the coordinator's own chat.
+- A chat left scrolled up, an agent's or a channel's, comes back on the
+  lines it was left on. It used to land off by however much longer or
+  shorter it was than the chat shown before it. What came in meanwhile
+  is below, as when it comes in on screen.
+
 ### A member's report survives a turn the user stops
 
 ##### Fixed

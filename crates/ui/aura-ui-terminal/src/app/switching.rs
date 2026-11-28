@@ -134,6 +134,7 @@ impl App {
         // leaving: its last log comes back at once, or none.
         self.log.show_agent(agent_id);
         let left_on = self.show_agent_chat(agent_id);
+        self.sync_channel_chat_place();
         if switched && self.bench_app() && self.bench.shown_agent() != Some(agent_id) {
             // Before its tab comes back, which BENCH would refuse; the
             // agent that left gets its own back as BENCH goes.
