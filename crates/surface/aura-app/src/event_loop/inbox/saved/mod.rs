@@ -26,7 +26,6 @@
 //! write is logged and retried at the next change.
 
 use super::*;
-use crate::event_loop::queue::WorkQueues;
 use file::{SavedKind, SavedNotice, SavedOwed, SavedQueued, SavedRequest, Snapshot};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -64,6 +63,8 @@ struct Restored {
     owed: Vec<(AgentId, Owed)>,
     queued: Vec<(AgentId, String, Request)>,
     notices: Vec<Notice>,
+    /// The software factory's stages, put back once the queues are
+    flows: Vec<file::SavedFlow>,
 }
 
 /// As the loop starts: read the saved inbox and put it back. Owed
@@ -114,7 +115,18 @@ fn live_entries(hub: &AgentHub, snapshot: Snapshot) -> Restored {
         owed: owed.collect(),
         queued: queued.collect(),
         notices: notices.collect(),
+        flows: snapshot.flows,
     }
+}
+
+/// `hex` as the id of an agent live on `hub`.
+fn live_agent(hub: &AgentHub, hex: &str) -> Option<AgentId> {
+    let registry = lock(&hub.registry);
+    AgentId::from_hex(hex).ok().filter(|id| {
+        registry
+            .find(*id)
+            .is_some_and(|a| !a.archived && !a.removed)
+    })
 }
 
 /// Put `restored` back on the loop of `state`. Returns the agents that
@@ -124,6 +136,7 @@ fn put_back(state: &mut LoopState<'_>, restored: Restored) -> Vec<AgentId> {
         owed,
         queued,
         notices,
+        flows,
     } = restored;
     let counts = (owed.len(), queued.len(), notices.len());
     merge_owed(&state.hub.inbox, owed);
@@ -150,6 +163,14 @@ fn put_back(state: &mut LoopState<'_>, restored: Restored) -> Vec<AgentId> {
             undelivered = counts.2,
             "Restored the saved inbox"
         );
+    }
+    let hub = Arc::clone(&state.hub);
+    let resumed =
+        crate::event_loop::factory::saved::put_back(state, flows, |hex| live_agent(&hub, hex));
+    for agent in resumed {
+        if !agents.contains(&agent) {
+            agents.push(agent);
+        }
     }
     agents
 }
@@ -199,7 +220,7 @@ pub(in crate::event_loop) fn keep_saved(
 ) -> Option<tokio::task::JoinHandle<()>> {
     let keeper = &state.hub.inbox.saved;
     keeper.path.get()?;
-    let snapshot = snapshot(&state.hub.inbox, &state.queued, Vec::new());
+    let snapshot = snapshot(state, Vec::new());
     {
         let mut last = lock(&keeper.last);
         if last.as_ref() == Some(&snapshot) {
@@ -236,7 +257,7 @@ pub(in crate::event_loop) async fn flush_saved(
             });
         }
     }
-    let snapshot = snapshot(&state.hub.inbox, &state.queued, undelivered);
+    let snapshot = snapshot(state, undelivered);
     *lock(&keeper.last) = Some(snapshot.clone());
     let number = keeper.next_write();
     let hub = Arc::clone(&state.hub);
@@ -264,9 +285,11 @@ fn write(keeper: &Keeper, number: u64, snapshot: &Snapshot) {
     }
 }
 
-/// What the file keeps of `inbox`, the inbox messages in `queues`, and
-/// `notices`, in a stable order and within its limits.
-fn snapshot(inbox: &Inbox, queues: &WorkQueues, notices: Vec<SavedNotice>) -> Snapshot {
+/// What the file keeps of `state`: its inbox, the inbox messages in its
+/// queues, `notices` and the software factory's stages, in a stable order
+/// and within its limits.
+fn snapshot(state: &LoopState<'_>, notices: Vec<SavedNotice>) -> Snapshot {
+    let (inbox, queues) = (&state.hub.inbox, &state.queued);
     let owed: Vec<SavedOwed> = {
         let state = lock(&inbox.state);
         let mut agents: Vec<(&AgentId, &Vec<Owed>)> = state.owed.iter().collect();
@@ -290,6 +313,7 @@ fn snapshot(inbox: &Inbox, queues: &WorkQueues, notices: Vec<SavedNotice>) -> Sn
         owed,
         queued,
         notices,
+        flows: crate::event_loop::factory::saved::saved_flows(state),
         ..Snapshot::default()
     }
     .capped()

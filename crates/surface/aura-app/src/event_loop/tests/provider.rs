@@ -159,7 +159,8 @@ impl GatedProvider {
         if slow {
             self.gate.acquire().await.unwrap().forget();
         }
-        if let Some(response) = scripted(last.unwrap_or_default(), &request) {
+        let asked = last.unwrap_or_default();
+        if let Some(response) = factory_call(asked).or_else(|| scripted(asked, &request)) {
             return scripted_reply(request, response).await;
         }
         if let Some(provider) = command_reply(last) {
@@ -365,6 +366,32 @@ fn scripted(last: &str, request: &ModelRequest) -> Option<MockResponse> {
         return call(
             "run_command",
             serde_json::json!({ "program": "sh", "args": ["-c", script] }),
+        );
+    }
+    None
+}
+
+/// The software factory's calls: "factory: plan the footer fix" writes a
+/// plan with `create_plan`, and the ship prompt calls `git_ship`.
+fn factory_call(last: &str) -> Option<MockResponse> {
+    let call = |name: &str, input: serde_json::Value| {
+        Some(MockResponse::tool_use(format!("toolu_{name}"), name, input))
+    };
+    if last.contains("factory: plan the footer fix") {
+        return call(
+            "create_plan",
+            serde_json::json!({
+                "name": "Footer fix",
+                "overview": "Make the footer links work.",
+                "plan": "## Fix\n\nPoint the footer links at their pages.",
+                "todos": [{ "id": "links", "content": "Fix the footer links" }],
+            }),
+        );
+    }
+    if last.contains("Ship it now: call git_ship") {
+        return call(
+            "git_ship",
+            serde_json::json!({ "message": "Fix the footer links" }),
         );
     }
     None

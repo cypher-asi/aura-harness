@@ -10,6 +10,7 @@
 //! is synced, then renamed over it, so a crash leaves the old file or
 //! the new one, never half of either.
 
+pub(super) use crate::event_loop::factory::saved::{SavedFlow, MAX_FLOWS};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -80,13 +81,16 @@ pub(super) struct SavedNotice {
     pub kind: SavedKind,
 }
 
-/// Everything the file holds.
+/// Everything the file holds. `flows`, the software factory's stages,
+/// came later: a file without them has none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Snapshot {
     pub version: u32,
     pub owed: Vec<SavedOwed>,
     pub queued: Vec<SavedQueued>,
     pub notices: Vec<SavedNotice>,
+    #[serde(default)]
+    pub flows: Vec<SavedFlow>,
 }
 
 impl Default for Snapshot {
@@ -96,6 +100,7 @@ impl Default for Snapshot {
             owed: Vec::new(),
             queued: Vec::new(),
             notices: Vec::new(),
+            flows: Vec::new(),
         }
     }
 }
@@ -104,16 +109,18 @@ impl Snapshot {
     /// The snapshot within [`MAX_OWED`], [`MAX_QUEUED`] and
     /// [`MAX_NOTICES`], keeping the oldest of each. Warns when it cuts.
     pub(super) fn capped(mut self) -> Self {
-        let before = (self.owed.len(), self.queued.len(), self.notices.len());
+        let lengths = |s: &Self| (s.owed.len(), s.queued.len(), s.notices.len(), s.flows.len());
+        let before = lengths(&self);
         self.owed.truncate(MAX_OWED);
         self.queued.truncate(MAX_QUEUED);
         self.notices.truncate(MAX_NOTICES);
-        let after = (self.owed.len(), self.queued.len(), self.notices.len());
-        if before != after {
+        self.flows.truncate(MAX_FLOWS);
+        if before != lengths(&self) {
             warn!(
                 owed = before.0,
                 queued = before.1,
                 notices = before.2,
+                flows = before.3,
                 "The saved inbox is over its limits; the newest entries are not kept"
             );
         }
