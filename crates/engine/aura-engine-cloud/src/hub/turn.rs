@@ -184,8 +184,11 @@ impl CloudHub {
     }
 
     /// Attach to run `run_id` and send it `turn`'s prompt, marking the
-    /// turn once it went out. Returns the socket and the head of the
-    /// record the turn writes after.
+    /// turn before it goes out: a hub that dies as it sends leaves the
+    /// turn marked, for the next to follow, never a turn running unmarked.
+    /// A prompt that could not be sent started no turn: its mark goes.
+    /// Returns the socket and the head of the record the turn writes
+    /// after.
     async fn send_prompt(
         &self,
         node: &NodeClient,
@@ -204,18 +207,31 @@ impl CloudHub {
             attachments: None,
         });
         let text = serde_json::to_string(&message).unwrap_or_default();
-        socket
-            .send(Message::Text(text.into()))
+        let mark = TurnMark::new(run_id, head, &turn.prompt, &turn.request);
+        self.send_marked(turn.agent, mark, socket.send(Message::Text(text.into())))
             .await
             .map_err(|err| CloudError::Transport {
                 endpoint: node.base().to_string(),
                 message: err.to_string(),
             })?;
-        self.mark_turn(
-            turn.agent,
-            TurnMark::new(run_id, head, &turn.prompt, &turn.request),
-        );
         Ok((socket, head))
+    }
+
+    /// Mark `agent`'s turn `mark`, then `send` its prompt. When the send
+    /// fails the turn never started, and its mark goes again.
+    pub(super) async fn send_marked<E>(
+        &self,
+        agent: AgentId,
+        mark: TurnMark,
+        send: impl std::future::Future<Output = Result<(), E>>,
+    ) -> Result<(), E> {
+        let run_id = mark.run_id.clone();
+        self.mark_turn(agent, mark);
+        let sent = send.await;
+        if sent.is_err() {
+            self.end_turn_mark(agent, &run_id);
+        }
+        sent
     }
 
     /// After `agent`'s turn on `run_id` ended as `end` says: copy what it

@@ -217,3 +217,76 @@ async fn a_turn_whose_stream_dropped_is_followed_once_and_ends_once_across_reope
     assert!(again.unfinished_turns().is_empty());
     again.shutdown();
 }
+
+/// A node model that notes, at its first call (once the node got the
+/// prompt), whether the hub's saved placements mark a turn.
+struct MarkSeer {
+    reply: aura_model::MockProvider,
+    placements: Arc<Mutex<Option<PathBuf>>>,
+    marked: Arc<Mutex<Option<bool>>>,
+}
+
+#[async_trait::async_trait]
+impl aura_model::ModelProvider for MarkSeer {
+    fn name(&self) -> &'static str {
+        "mock"
+    }
+
+    async fn complete(
+        &self,
+        request: aura_model::ModelRequest,
+    ) -> Result<aura_model::ModelResponse, aura_model::ReasonerError> {
+        let path = self.placements.lock().clone();
+        if let Some(path) = path {
+            let saved = std::fs::read_to_string(path).unwrap_or_default();
+            self.marked
+                .lock()
+                .get_or_insert(saved.contains("\"run_id\""));
+        }
+        self.reply.complete(request).await
+    }
+
+    async fn health_check(&self) -> bool {
+        true
+    }
+}
+
+#[tokio::test]
+async fn a_turn_is_marked_before_its_machine_gets_the_prompt() {
+    let placements = Arc::new(Mutex::new(None));
+    let marked = Arc::new(Mutex::new(None));
+    let model = MarkSeer {
+        reply: aura_model::MockProvider::simple_response("done"),
+        placements: Arc::clone(&placements),
+        marked: Arc::clone(&marked),
+    };
+    let node_dir = tempfile::tempdir().expect("tempdir");
+    let node = TestNode::serve_with(node_dir.path(), Arc::new(model)).await;
+    let p = placed_on(
+        CloudConfig::defaults(),
+        TestNode::exec_handler,
+        (node, node_dir),
+    )
+    .await;
+    p.import().await;
+    *placements.lock() = Some(p.hub_dir.path().join("cloud/placements.json"));
+
+    let mut events = p.hub.run_turn(p.agent, ask(), CancellationToken::new());
+    let ran = tokio::time::timeout(PATIENCE, async {
+        while let Some(event) = events.recv().await {
+            if let RemoteEvent::Failed(err) = event {
+                panic!("the turn failed: {err}");
+            }
+        }
+    });
+    ran.await.expect("the turn ends");
+    assert_eq!(
+        *marked.lock(),
+        Some(true),
+        "a hub dying as it sent the prompt leaves the turn marked"
+    );
+    assert!(
+        p.hub.unfinished_turns().is_empty(),
+        "its end clears the mark"
+    );
+}
