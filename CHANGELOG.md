@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### An empty channel welcomes you
+
+##### Added
+
+- An open channel with nothing said yet shows its slug in large block
+  letters. Under that is a short welcome from its coordinator: what the
+  channel is for and how to get started. The UI draws it and never
+  posts it, so it wakes no agent and costs no model call. The first
+  message replaces it with the chat. If the panel is too narrow or too
+  short, the letters shrink, then break after the slug's hyphens, then
+  become plain `#slug`.
+
 ### Subagents are titled by the work they do
 
 ##### Fixed
