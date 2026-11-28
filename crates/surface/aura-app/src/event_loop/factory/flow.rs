@@ -90,6 +90,9 @@ pub(crate) fn advance(stage: Option<Stage>, end: TurnEnd<'_>) -> (Option<Stage>,
 #[derive(Debug, Default)]
 pub(crate) struct Flows {
     stages: Mutex<HashMap<AgentId, Stage>>,
+    /// The text each agent's latest turn was started with, which finds
+    /// where that turn starts in its conversation.
+    prompts: Mutex<HashMap<AgentId, String>>,
 }
 
 impl Flows {
@@ -97,6 +100,23 @@ impl Flows {
         self.stages
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// `agent`'s turn starts with `prompt`.
+    pub(crate) fn note_prompt(&self, agent: AgentId, prompt: &str) {
+        self.prompts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(agent, prompt.to_string());
+    }
+
+    /// The text `agent`'s latest turn started with, if known.
+    pub(crate) fn prompt_of(&self, agent: AgentId) -> Option<String> {
+        self.prompts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&agent)
+            .cloned()
     }
 
     /// `agent` got a new task: the work it starts plans first.

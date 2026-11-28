@@ -81,8 +81,9 @@ pub(crate) async fn after_local_turn(state: &mut LoopState<'_>, agent: AgentId, 
     let Some(session) = state.idle.get(&agent) else {
         return false;
     };
-    let wrote = turn::wrote_plan(&session.messages);
-    let shipped = !turn::pushes(&session.messages).is_empty();
+    let prompt = state.hub.factory_flows.prompt_of(agent);
+    let wrote = turn::wrote_plan(&session.messages, prompt.as_deref());
+    let shipped = !turn::pushes(&session.messages, prompt.as_deref()).is_empty();
     let kernel = Arc::clone(&session.kernel);
     let folder = kernel.agent_workspace();
     let end = TurnEnd {
@@ -131,12 +132,13 @@ pub(crate) fn after_cloud_turn(
     ok: bool,
     messages: &[Message],
 ) -> bool {
-    let pushes = turn::pushes(messages);
+    let prompt = state.hub.factory_flows.prompt_of(agent);
+    let pushes = turn::pushes(messages, prompt.as_deref());
     let shipped = !pushes.is_empty();
     for push in pushes {
         observe::report(ObservedPush { agent, push });
     }
-    let wrote = turn::wrote_plan(messages);
+    let wrote = turn::wrote_plan(messages, prompt.as_deref());
     let end = TurnEnd {
         ok,
         wrote_plan: wrote.as_deref(),

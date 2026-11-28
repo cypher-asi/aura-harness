@@ -143,6 +143,7 @@ async fn turn_task(
 ) -> Option<Launch> {
     let agent_id = session.agent_id();
     info!(%agent_id, text = %prompt.text, "Processing user message");
+    state.hub.factory_flows.note_prompt(agent_id, &prompt.text);
     // A local model with no server used to sit there until the
     // 10-minute request timeout; the probe answers in well under a
     // second.
