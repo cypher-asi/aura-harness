@@ -29,7 +29,7 @@ pub(super) fn render_trace_feed(
         return;
     }
 
-    let body = Body::new(area, inner, is_focused);
+    let body = Body::list(app, area, inner, is_focused);
     let visible = body.visible();
     let scroll = app.sync_trace_scroll(visible);
     app.set_trace_rows_area(body.rows(), scroll);

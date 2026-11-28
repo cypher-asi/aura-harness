@@ -37,7 +37,7 @@ pub(super) fn render_channels(
     theme: &Theme,
 ) {
     let is_focused = app.focus() == PanelFocus::Swarm;
-    let (rows_area, bottom_row) = split_pinned(body);
+    let (rows_area, bottom_row) = split_pinned(app, area, body);
     let visible = usize::from(rows_area.height);
     app.set_channel_rows_area(rows_area);
     app.set_new_channel_area(bottom_row);

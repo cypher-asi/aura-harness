@@ -34,6 +34,7 @@ mod kernel_link;
 mod keys;
 mod last_selection;
 mod line_edit;
+mod list_bands;
 mod list_state;
 mod members;
 pub mod mentions;
@@ -152,6 +153,7 @@ use pending::Pending;
 pub(crate) use plan_doc::{Fact, FactTone, PlanDoc, PlanFacts};
 pub use processes::SidePanelTab;
 use project_list::ProjectList;
+pub use list_bands::{ListBand, ListPitch};
 pub use prose::{ProseMeasure, ProseRow};
 use ratatui::{buffer::Buffer, layout::Rect};
 use record_list::RecordList;
@@ -324,6 +326,8 @@ pub struct App {
     pub(super) bench_panel: bench_progress::BenchPanel,
     /// The to-do drawer under the Chat body
     pub(super) todo_drawer: todo_drawer::TodoDrawer,
+    /// The list pitch and this frame's taller lists
+    pub(super) list_bands: list_bands::ListBands,
     /// The panel below the Record panel: its tab, scope, processes and
     /// scroll positions
     pub(super) side: SidePanel,

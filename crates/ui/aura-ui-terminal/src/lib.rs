@@ -59,7 +59,7 @@ pub use app::flow::{
 };
 pub use app::{
     AgentsTab, App, AppState, ArchiveRow, ChatScroll, ChatTab, InboxRow, LastSelection, MemberRow,
-    Pane, PaneChrome, PaneSplits, PaneTab, ProjectPick, ProseMeasure, ProseRow, RecordsTab,
+    Pane, PaneChrome, PaneSplits, PaneTab, ProjectPick, ProseMeasure, ProseRow, ListBand, ListPitch, RecordsTab,
     SidePanelTab, SideScope, WorkspaceMove, WorkspaceTarget, SELECTION_FILE,
 };
 pub use events::{UiCommand, UiEvent};

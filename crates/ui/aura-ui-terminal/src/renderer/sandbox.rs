@@ -124,7 +124,7 @@ fn render_tree(frame: &mut Frame, area: Rect, inner: Rect, app: &mut App, theme:
         return;
     }
 
-    let body = Body::new(area, inner, is_focused);
+    let body = Body::list(app, area, inner, is_focused);
     let visible = body.visible();
     let scroll = app.sync_sandbox_scroll(visible);
     let hovered = match app.hover() {
