@@ -649,7 +649,8 @@ Generated files are matched by name at any depth:
 
 | Question | Default |
 |---|---|
-| Straight into main, or GitHub PRs and GitHub's merge queue? | Straight into the target branch through aura's own queue: a non-forced push after a merge with main and green checks. This needs no GitHub settings, and it works without a remote too. |
+| Straight into main, or GitHub PRs and GitHub's merge queue? | GitHub PRs, landed by aura's own queue (the user's choice, replacing an earlier "straight into main"): it opens or updates each branch's PR, tests it merged with main, and merges it with a normal merge commit pinned to the tested head. Not GitHub's merge queue, which needs Actions. Straight into the target (a non-forced push after green checks) stays as the opt-in `land = "push"`, and is how a repo with no GitHub remote lands. |
+| One branch per what? | Per task: `git_start_task` makes `aura/<task>-<code>` off the latest target, never reused. A machine pushes only branches with its own agent's code, never another agent's or the target. |
 | Is each entry gated on build and tests? | Yes. Configured or inferred build and test must pass on the exact commit that lands. A repo with nothing to check merges unchecked, and says so. |
 | How many processors? | One per repo, enforced in the process and across processes. |
 | What happens on failure? | The entry is marked failed with its reason, and the reason goes to the owning agent, which is prompted to fix and re-ship. It also shows in the channel's QUEUE tab. |
