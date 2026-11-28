@@ -46,9 +46,11 @@ mod fold;
 mod history;
 mod list;
 mod side;
+mod welcome;
 
 pub(crate) use history::{HistoryItem, HISTORY_ROWS};
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
+pub(crate) use welcome::ChannelWelcome;
 
 use crate::app::scroll::{ChatPlace, InfoScroll};
 use crate::app::{AgentsTab, App, ChatTab, SidePanelTab};
@@ -68,7 +70,7 @@ pub(crate) struct ChannelState {
     /// Highlighted row of the list; `list.len()` is "+ New channel"
     selected: usize,
     /// First visible row of the list
-    scroll: usize,
+    pub(in crate::app) scroll: usize,
     /// Where the list's rows were drawn this frame
     rows_area: Option<Rect>,
     /// Where "+ New channel" was drawn this frame
@@ -82,7 +84,7 @@ pub(crate) struct ChannelState {
     /// channel's members; always one that is shown
     member_selected: usize,
     /// First visible row of the MEMBERS side tab, among the members shown
-    member_scroll: usize,
+    pub(in crate::app) member_scroll: usize,
     /// Members unfolded over their subagents, by id; every other member
     /// with subagents is folded (see `fold`)
     unfolded_members: HashSet<String>,

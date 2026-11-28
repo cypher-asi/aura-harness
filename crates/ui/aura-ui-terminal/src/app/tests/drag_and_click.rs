@@ -254,8 +254,9 @@ fn test_click_sandbox_row_selects_and_toggles_dir() {
     assert_eq!(app.sandbox().selected(), 2);
     assert_eq!(app.sandbox().rows().len(), 3);
 
+    // The wheel scrolls the tree and leaves its highlight alone.
     app.handle_mouse(mouse(MouseEventKind::ScrollUp, 85, 15));
-    assert_eq!(app.sandbox().selected(), 0);
+    assert_eq!(app.sandbox().selected(), 2);
 }
 
 #[test]

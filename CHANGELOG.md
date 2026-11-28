@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### An empty channel opens on a welcome
+
+##### Added
+
+- A channel with nothing in it yet shows its slug in large block
+  letters, then a welcome from its coordinator. The welcome says what
+  the channel is for, from its description or title, and how to get
+  started. The banner shrinks, breaks at hyphens, or falls back to the
+  bold `#slug` to fit a narrow or short panel. It is only drawn, never
+  posted, so it reaches no agent and costs no model call. The first
+  message takes its place.
+
 ### Subagents are titled by the work they do
 
 ##### Fixed

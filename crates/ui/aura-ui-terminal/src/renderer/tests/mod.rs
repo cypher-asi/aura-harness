@@ -27,6 +27,7 @@ mod channel_members;
 mod channel_queue;
 mod channel_side_toggle;
 mod channel_tasks;
+mod channel_welcome;
 mod channels;
 mod chat_links;
 mod chat_messages;

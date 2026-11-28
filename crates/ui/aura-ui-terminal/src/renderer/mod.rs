@@ -8,6 +8,7 @@ mod boot;
 mod channel_history;
 mod channel_queue;
 mod channel_side;
+mod channel_welcome;
 mod chat_lines;
 mod chat_panel;
 mod chrome;

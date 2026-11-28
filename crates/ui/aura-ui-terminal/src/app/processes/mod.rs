@@ -3,6 +3,7 @@
 
 use super::{contains, tab_at, App, DetailView, HoverTarget, NotificationType};
 use crate::app::file_view::FileView;
+use crate::app::wheel_views::WheelList;
 use crate::events::{ProcessSummary, UiEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -50,7 +51,12 @@ impl App {
     /// Keep the highlighted process inside a list `visible_rows` tall,
     /// returning the first row to show.
     pub fn sync_processes_scroll(&mut self, visible_rows: usize) -> usize {
-        self.side.processes.follow_selection(visible_rows);
+        let list = &self.side.processes;
+        self.side.processes.scroll = self.panels.wheel.place(
+            WheelList::Processes,
+            (list.scroll, list.selected),
+            (visible_rows, list.len()),
+        );
         self.side.processes.scroll
     }
 

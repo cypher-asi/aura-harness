@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
 mod support;
+mod wheel_lists;
 use support::*;
 
 mod activity_blocks;

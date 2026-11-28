@@ -3,7 +3,8 @@
 //! its document.
 
 use super::processes::SIDE_PAGE;
-use super::{follow_selection, App, PanelFocus, RecordsTab, SidePanelTab};
+use super::{App, PanelFocus, RecordsTab, SidePanelTab};
+use crate::app::wheel_views::WheelList;
 use crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
 use std::mem;
 
@@ -159,7 +160,7 @@ impl App {
                     SidePanelTab::ChannelMembers => self.move_channel_member(delta),
                     SidePanelTab::ChannelInfo => self.scroll_channel_info(delta),
                     SidePanelTab::ChannelQueue => self.scroll_channel_queue(delta),
-                    SidePanelTab::ChannelHistory => self.scroll_channel_history(delta),
+                    SidePanelTab::ChannelHistory => self.move_channel_history(delta),
                 }
             }
         }
@@ -199,7 +200,7 @@ impl App {
                     SidePanelTab::ChannelMembers => self.move_channel_member(delta),
                     SidePanelTab::ChannelInfo => self.scroll_channel_info(delta),
                     SidePanelTab::ChannelQueue => self.scroll_channel_queue(delta),
-                    SidePanelTab::ChannelHistory => self.scroll_channel_history(delta),
+                    SidePanelTab::ChannelHistory => self.move_channel_history(delta),
                 }
             }
         }
@@ -223,11 +224,19 @@ impl App {
     /// Keep the selected record inside a list `visible_rows` tall, returning
     /// the first record to show.
     pub fn sync_records_scroll(&mut self, visible_rows: usize) -> usize {
-        self.records.scroll = follow_selection(
-            self.records.scroll,
-            self.records.selected,
-            visible_rows,
-            self.records.items.len(),
+        // On the newest record the highlight follows new ones as they
+        // come in, which a list the wheel scrolled does not answer to.
+        let (selected, total) = (self.records.selected, self.records.items.len());
+        let key = if selected + 1 >= total {
+            usize::MAX
+        } else {
+            selected
+        };
+        self.records.scroll = self.panels.wheel.place_keyed(
+            WheelList::Kernel,
+            key,
+            (self.records.scroll, selected),
+            (visible_rows, total),
         );
         self.records.scroll
     }
@@ -235,11 +244,10 @@ impl App {
     /// Keep the selected sandbox row inside a tree `visible_rows` tall,
     /// returning the first row to show.
     pub fn sync_sandbox_scroll(&mut self, visible_rows: usize) -> usize {
-        self.side.sandbox_scroll = follow_selection(
-            self.side.sandbox_scroll,
-            self.sandbox.selected(),
-            visible_rows,
-            self.sandbox.rows().len(),
+        self.side.sandbox_scroll = self.panels.wheel.place(
+            WheelList::Sandbox,
+            (self.side.sandbox_scroll, self.sandbox.selected()),
+            (visible_rows, self.sandbox.rows().len()),
         );
         self.side.sandbox_scroll
     }

@@ -327,6 +327,36 @@ under a fold arrow, then the timeline, newest first.
 │                                              │
 └──────────────────────────────────────────────┘
 ```
+- **Empty channel**: a channel's own chat with no post and no message
+  shows its slug as a banner, a blank row, then its coordinator's
+  welcome, flush with where the conversation starts:
+
+  ```text
+  │  ██████    ██    ████    ██████                │
+  │      ██  ██  ██  ██  ██  ██                    │
+  │    ██    ██  ██  ██  ██  ████                  │
+  │  ██      ██  ██  ██  ██  ██                    │
+  │  ██████    ██    ████    ██████                │
+  │                                                │
+  │  Welcome to #zode: Ship it.                    │
+  │                                                │
+  │  I'm COO2, the coordinator. Tell me what you   │
+  │  need and I'll hand it to an agent, then       │
+  │  report back here.                             │
+  │                                                │
+  │  Mention a member with @CODE to talk to it     │
+  │  directly.                                     │
+  ```
+
+  The banner is drawn in `primary` with the built-in 3×5 pixel font
+  (`renderer/channel_welcome/font.rs`, `a-z`, `0-9` and `-`), and takes
+  the biggest form that fits the width and the rows left after the
+  welcome. In order, those forms are large (`██` pixels, 5 rows), small
+  (half blocks `▀▄█`, 3 rows), small broken after the slug's hyphens
+  (at most 3 lines, a blank row apart), and the plain `#slug` in bold
+  `foreground`, cut with `…`. The welcome is `text` and its last line
+  `muted`. It is drawn, not posted: the first message replaces it, and
+  a member's own chat never shows it.
 - **User messages**: a `muted` `→ ` prompt, then `foreground` text
 - **Replies**: `text`, list markers `muted`, inline code `secondary` on
   `surface`
@@ -420,6 +450,10 @@ under a fold arrow, then the timeline, newest first.
 
 - **Selected item**: `selection` fill, `on_selection` text
 - **Hover state**: `surface_hover` fill
+- **The wheel** scrolls a list's rows and never moves its highlight, so it
+  never opens a channel or an agent; keys and clicks do. A list scrolled
+  past its highlight stays put until the highlight moves or a key is
+  pressed, then shows the highlight again.
 - **Clickable text** (records link, collapsed steps): `muted`
 - **Links** in the chat: `muted`, with the ` (url)` after a label, and
   not underlined at rest. The pointer over a link underlines every row of

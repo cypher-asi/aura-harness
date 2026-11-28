@@ -141,6 +141,11 @@ impl App {
         state.scroll = state.scroll.saturating_add_signed(delta);
     }
 
+    /// The HISTORY list follows its highlight again, as any key asks.
+    pub(in crate::app) fn follow_channel_history(&mut self) {
+        self.channels.history.follow = true;
+    }
+
     /// Move the HISTORY highlight `delta` items, the list following it.
     pub(in crate::app) fn move_channel_history(&mut self, delta: isize) {
         let state = &mut self.channels.history;

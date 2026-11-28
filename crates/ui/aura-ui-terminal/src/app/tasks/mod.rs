@@ -61,11 +61,12 @@
 //! and lists every plan and task in the channel's folder, whatever the
 //! side panel's scope.
 
+use crate::app::wheel_views::WheelList;
 use std::collections::HashMap;
 
 use super::processes::SIDE_PAGE;
 use super::side_scope::AgentFilter;
-use super::{follow_selection, App};
+use super::App;
 use crate::events::{PlanView, TaskView, TodoView};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -395,11 +396,10 @@ impl App {
     /// Keep the highlighted row inside `visible` rows, returning the first
     /// row to draw.
     pub fn sync_tasks_scroll(&mut self, visible: usize) -> usize {
-        self.side.tasks_scroll = follow_selection(
-            self.side.tasks_scroll,
-            self.task_list.selected,
-            visible,
-            self.task_list.rows.len(),
+        self.side.tasks_scroll = self.panels.wheel.place(
+            WheelList::Tasks,
+            (self.side.tasks_scroll, self.task_list.selected),
+            (visible, self.task_list.rows.len()),
         );
         self.side.tasks_scroll
     }
