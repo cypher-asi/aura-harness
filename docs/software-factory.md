@@ -326,16 +326,21 @@ Crate: `crates/exec/aura-exec-merge-queue`.
   2. The queue finds the branch's open PR, or opens one titled by the
      branch's first commit, and sets the `aura/merge-queue` commit status
      to pending.
-  3. It merges the latest target in its worktree and runs the checks, as
-     above, generated files resolved the same way.
-  4. A merge commit it made is pushed onto the PR's branch as a
-     fast-forward, so the PR's head is exactly the tested commit. A
+  3. It merges the branch into the latest target in its worktree as a
+     merge commit (always one, the target first, even for a branch based
+     on the target) and runs the checks on it, generated files resolved
+     as above.
+  4. That merge commit is pushed onto the PR's branch as a fast-forward, so the PR's head is exactly the tested commit. A
      rejected push means the branch moved: the entry is tried again from
      the fetch.
   5. With the remote target unchanged (`ls-remote`), it sets the status
-     to success and runs `gh pr merge <n> --merge --match-head-commit
-     <tested sha>`: a normal merge commit, only at that head. A head that
-     moved is tested again, up to 3 times.
+     to success, reads the PR again (closed: the entry fails and the
+     branch is kept; a head that moved is tested again, up to 3 times),
+     and pushes exactly the tested merge commit to the target, without
+     force. GitHub marks the PR merged, since its head is now on the
+     target. The target is never at a commit the checks didn't run on:
+     `gh pr merge` would make a new merge commit of its own on whatever
+     the target is then, which nothing tested.
   6. After a confirmed merge, the branch is deleted on origin with
      `--force-with-lease` on the merged commit, so newer work on it stays.
   - On a conflict, a failed check or a refusal nothing merges: the PR
@@ -343,7 +348,7 @@ Crate: `crates/exec/aura-exec-merge-queue`.
     files or the output, and sets the status to failure. The entry fails
     with the same details (`MergeEntry::failure`, `MergeEntry::pr`).
   - A PR closed by hand while it is tested is abandoned: the entry fails
-    and the branch is deleted.
+    and the branch is kept, so no work is lost.
   - GitHub unreachable, or `gh` not signed in, holds the queue
     (`QueueState::hold`): the entry goes back to its place without an
     attempt counted, nothing starts for 5 minutes, and its agent is told
@@ -359,8 +364,9 @@ Crate: `crates/exec/aura-exec-merge-queue`.
   (`integrate/diagnose.rs`, `failure.rs`). When the test check fails, the
   failing tests are read from its log (libtest's `test x ... FAILED` and
   `---- x stdout ----` blocks) and, for a `cargo test` command:
-  1. they run once more on the same merge (`-- --exact <names>`); if
-     they pass, the entry merges and its note names them as flaky;
+  1. the whole test command runs once more on the same merge; if it
+     passes, the entry merges, and its note and a comment on its PR name
+     the flaky tests;
   2. else they run on the plain target. If they fail there too, the
      target is broken: the entry goes back to its place uncharged and is
      parked until the target moves (or 2 hours pass), and the queue

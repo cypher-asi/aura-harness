@@ -18,7 +18,7 @@ use std::time::Duration;
 
 mod gh;
 
-pub use gh::{GhForge, RepoSlug, TokenSource};
+pub use gh::{origin_slug, GhForge, RepoSlug, TokenSource};
 
 /// How long one forge call may take.
 pub const FORGE_TIMEOUT: Duration = Duration::from_secs(60);

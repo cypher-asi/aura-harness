@@ -4,7 +4,7 @@
 //! When the test check fails on an entry's merge, the failing tests are
 //! read from its log ([`crate::failure`]) and:
 //!
-//! 1. run once more on the same merge: passing now, they are flaky, and
+//! 1. the whole test command runs once more on the same merge: passing now, they are flaky, and
 //!    the entry goes on (its note names them);
 //! 2. else run on the plain target: failing there too, the target is
 //!    broken and the entry is not to blame ([`HoldKind::TargetBroken`],
@@ -56,7 +56,9 @@ impl GitIntegrator {
         failure.tests.clone_from(&tests);
         let worktree = self.repo.worktree();
         let log = self.repo.check_log().with_extension("rerun.log");
-        if run_check(&worktree, &rerun, config.check_timeout, &log)
+        // The whole command again, not only the tests that failed: a pass
+        // of just those could hide a test they break in others.
+        if run_check(&worktree, command, config.check_timeout, &log)
             .await
             .is_ok()
         {
