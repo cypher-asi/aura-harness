@@ -152,3 +152,41 @@ async fn the_coordinators_next_turn_starts_with_the_channel_activity_once() {
     assert!(digest.ends_with("\n\nwhat is the status?"), "{digest}");
     assert_eq!(prompts[1], "and now?", "nothing new since the last turn");
 }
+
+#[tokio::test]
+async fn a_long_message_to_the_coordinator_is_summarized_for_history() {
+    use aura_ui::events::prompt_key;
+    let (fixture, mut commands) = fixture();
+    let (channel, _) = channel_with_member(&fixture).await;
+    let coordinator = channel.coordinator;
+    let mut b = borrowed(&fixture);
+    let mut state = loop_state(&fixture, &mut b);
+    let session = crate::event_loop::agents::open_session(&state, coordinator).unwrap();
+    state.idle.insert(coordinator, session);
+
+    let text = "Please make every link in the footer open in a new tab, and check that \
+                the privacy link points at the new policy page";
+    assert!(!channels::route_user_message(&mut state, coordinator, text, &[], true).await);
+    assert!(posts(&fixture, &channel).is_empty(), "it is no post");
+    let wanted = prompt_key(text);
+    let found = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(command) = commands.recv().await {
+            if let UiCommand::SetPostSummaries {
+                channel_id,
+                summaries,
+            } = command
+            {
+                if summaries.iter().any(|(key, _)| *key == wanted) {
+                    return channel_id;
+                }
+            }
+        }
+        String::new()
+    })
+    .await;
+    assert_eq!(
+        found.ok(),
+        Some(channel.id),
+        "summarized under its prompt key"
+    );
+}

@@ -21,6 +21,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   track of, isn't given a second one: its start fails, in red, naming
   the machine.
 
+### HISTORY lists the messages you typed to the coordinator
+
+##### Fixed
+
+- A channel's HISTORY tab now lists every message you sent there. It
+  used to list only messages that mentioned a member, which become
+  channel posts; a message to the coordinator alone stays in its
+  conversation and was missing. Those are listed now among the posts,
+  by time, summarized the same way when long, and Enter or a click
+  jumps the chat back to them, from a member's chat too. A message sent
+  to members and the coordinator at once is listed once. Mail other
+  agents send the coordinator is not listed.
+
 ### A cloud channel's member never works here, and work taken back never starts
 
 ##### Fixed
