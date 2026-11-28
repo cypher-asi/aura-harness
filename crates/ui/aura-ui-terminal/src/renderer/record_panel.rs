@@ -1,15 +1,12 @@
 //! The Kernel panel: the kernel's records, the run's members, the policy
 //! and the inbox, under a KERNEL | MEMBERS | POLICIES | INBOX header bar.
-//! While a channel is open its place holds the channel's TASKS instead:
-//! every plan and task in the channel's project, drawn as the side
-//! panel's TASKS tab draws them (see `tasks`).
 
 use super::chrome::{render_body_block, Body, ScrollView};
 use super::header::{self, HeaderInfo, PanelHeader};
 use super::side_list::render_empty;
 use super::text::display_width;
 use crate::components::truncate_record_info;
-use crate::events::{RecordStatus, RecordSummary, TaskState};
+use crate::events::{RecordStatus, RecordSummary};
 use crate::{
     app::{HoverTarget, Pane, PanelFocus, RecordsTab},
     App, Theme,
@@ -23,8 +20,7 @@ use ratatui::{
 
 /// Render the Kernel panel: a KERNEL | MEMBERS | POLICIES header bar, with
 /// the open tab's count or permissions after the tabs, over the kernel's
-/// records, the agents of the run, or the policy the kernel enforces. In
-/// a channel, a TASKS bar over the project's plans and tasks.
+/// records, the agents of the run, or the policy the kernel enforces.
 pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme) {
     let is_focused = app.focus() == PanelFocus::Records;
     let hosted = app.host_chrome();
@@ -40,7 +36,7 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     };
     let info = header_info(app, tab, theme);
     let header = PanelHeader {
-        layout: RecordsTab::layout(bar.width, app.channel_open()),
+        layout: RecordsTab::layout(bar.width),
         active: Some(tab),
         hovered,
         title: None,
@@ -67,10 +63,6 @@ pub(super) fn render_record_panel(frame: &mut Frame, area: Rect, app: &mut App, 
     }
     if tab == RecordsTab::Inbox {
         super::inbox::render_inbox(frame, area, inner, app, theme);
-        return;
-    }
-    if tab == RecordsTab::ChannelTasks {
-        super::tasks::render_tasks(frame, area, inner, app, theme);
         return;
     }
 
@@ -100,24 +92,7 @@ fn header_info(app: &App, tab: RecordsTab, theme: &Theme) -> Option<HeaderInfo> 
                 HeaderInfo::count(threads, unit, theme.colors.muted)
             })
         }
-        RecordsTab::ChannelTasks => Some(channel_tasks_info(app, theme)),
     }
-}
-
-/// The channel's TASKS count: the tasks agents are working on while any
-/// are, else the plans.
-fn channel_tasks_info(app: &App, theme: &Theme) -> HeaderInfo {
-    let list = app.task_list();
-    let running = list
-        .scoped_tasks()
-        .filter(|task| task.state == TaskState::Running)
-        .count();
-    if running > 0 {
-        return HeaderInfo::count(running, "RUNNING", theme.colors.primary);
-    }
-    let plans = list.plans().len();
-    let unit = if plans == 1 { "PLAN" } else { "PLANS" };
-    HeaderInfo::count(plans, unit, theme.colors.muted)
 }
 
 /// Draw the kernel's records into `inner`, the body below the tab bar of

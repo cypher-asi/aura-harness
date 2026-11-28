@@ -39,22 +39,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ##### Added
 
-- An open channel has TASKS above MEMBERS and INFO: every plan and task
-  in the channel's folder, by any agent working there, in the channel
-  or not. It works as an agent's TASKS does: ↑↓, Home, End and the
-  wheel move, Space folds, `p` opens the row's plan and `t` the task
-  doing a todo, and a click or Enter opens a plan, or a task's agent: a
-  member as its chat in the channel, any other agent in the tab that
-  lists it. Its bar counts the tasks being worked on, else the plans.
+- An open channel's panel has a TASKS tab, after QUEUE: every plan and
+  task in the channel's folder, by any agent working there, in the
+  channel or not. It works as an agent's TASKS does: ↑↓, Home, End and
+  the wheel move, Space folds, `p` opens the row's plan and `t` the
+  task doing a todo, and a click or Enter opens a plan, or a task's
+  agent: a member as its chat in the channel, any other agent in the
+  tab that lists it.
 - A plan another agent writes, or moves on through its todos, shows in
   TASKS at once when that agent works in the folder of the agent on
   screen. Before, TASKS caught up only when the agent on screen
   changed.
-
-##### Changed
-
-- A channel's MEMBERS and INFO take the bottom half of the right
-  column, under TASKS. The hamburger hides and shows both.
 
 ### A channel's reports read as paragraphs
 

@@ -23,7 +23,6 @@ impl App {
             RecordsTab::Members => self.handle_members_key(key),
             RecordsTab::Policies => self.handle_policies_key(key),
             RecordsTab::Inbox => self.handle_inbox_key(key),
-            RecordsTab::ChannelTasks => self.handle_tasks_key(key),
         }
         KeyResult::continue_running()
     }

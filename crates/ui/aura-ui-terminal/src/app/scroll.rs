@@ -193,7 +193,6 @@ impl App {
             RecordsTab::Members => self.scroll_members(delta),
             RecordsTab::Policies => self.scroll_policies(delta),
             RecordsTab::Inbox => self.scroll_inbox(delta),
-            RecordsTab::ChannelTasks => self.task_list.move_by(delta),
         }
     }
 

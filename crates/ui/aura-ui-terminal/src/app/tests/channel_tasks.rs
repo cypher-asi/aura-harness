@@ -1,5 +1,5 @@
-//! The channel's TASKS, in the Record panel's place while a channel is
-//! open: every plan and task in the channel's folder.
+//! The channel's TASKS tab, its last, after QUEUE: every plan and task in
+//! the channel's folder.
 
 use super::channel_member_chat::{app_in_channel_with_events, switch_request};
 use super::*;
@@ -30,9 +30,9 @@ fn task(id: &str, agent: &str) -> TaskView {
     }
 }
 
-/// `#zode`, coordinated by `bb` and open on it, with a plan of two todos
-/// and a task by each of `aa`, `bb` and `cc`, an agent of no channel
-/// working in the same folder.
+/// `#zode`, coordinated by `bb` and open on it at its TASKS tab, with a
+/// plan of two todos and a task by each of `aa`, `bb` and `cc`, an agent
+/// of no channel working in the same folder.
 fn channel_with_tasks() -> (App, mpsc::Receiver<UiEvent>) {
     let (mut app, mut rx) = app_with_agents();
     app.process_command(UiCommand::SetChannels(vec![zode("bb")]));
@@ -48,6 +48,8 @@ fn channel_with_tasks() -> (App, mpsc::Receiver<UiEvent>) {
         task("tb", "bb"),
         task("tc", "cc"),
     ]));
+    app.show_side_tab(SidePanelTab::Tasks);
+    assert_eq!(app.side_tab(), SidePanelTab::Tasks);
     (app, rx)
 }
 
@@ -79,8 +81,7 @@ fn test_the_channels_tasks_list_every_agents_work_in_its_folder() {
 #[test]
 fn test_the_channels_tasks_take_the_keys_and_the_wheel() {
     let (mut app, _rx) = channel_with_tasks();
-    app.focus = PanelFocus::Records;
-    assert!(app.tasks_focused());
+    app.focus = PanelFocus::Sandbox;
     assert_eq!(app.task_list().rows().len(), 3, "the plan and its todos");
 
     app.handle_key(key(KeyCode::Down));
@@ -93,31 +94,28 @@ fn test_the_channels_tasks_take_the_keys_and_the_wheel() {
     assert_eq!(app.task_list().rows().len(), 1, "Space folds the plan");
     app.handle_key(key(KeyCode::Right));
     assert_eq!(app.task_list().rows().len(), 3, "Right opens it");
-    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
-    assert_eq!(app.records_tab(), RecordsTab::ChannelTasks, "its only tab");
     assert!(app.input().is_empty(), "no key was typed");
 
-    app.scroll_panel_down(PanelFocus::Records, 2);
+    app.scroll_panel_down(PanelFocus::Sandbox, 2);
     assert_eq!(app.task_list().selected(), 2);
-    app.scroll_panel_up(PanelFocus::Records, 1);
+    app.scroll_panel_up(PanelFocus::Sandbox, 1);
     assert_eq!(app.task_list().selected(), 1);
 
-    app.focus = PanelFocus::Sandbox;
-    assert!(!app.tasks_focused(), "MEMBERS has the focus");
+    app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    assert_eq!(app.side_tab(), SidePanelTab::ChannelMembers, "the last tab");
 }
 
 #[test]
 fn test_clicking_and_hovering_a_row_of_the_channels_tasks() {
     let (mut app, _rx) = channel_with_tasks();
-    let screen = drawn_text(&mut app);
-    assert!(screen.contains("TASKS"), "{screen}");
-    let rows = app.areas.task_rows.expect("the tree is drawn on top");
+    drawn_text(&mut app);
+    let rows = app.areas.task_rows.expect("the tree is drawn");
     let todo = (rows.x + 8, rows.y + 2);
 
     app.handle_mouse(mouse(MouseEventKind::Moved, todo.0, todo.1));
     assert_eq!(app.hover(), Some(HoverTarget::TaskRow(2)));
     click_at(&mut app, todo);
-    assert_eq!(app.focus(), PanelFocus::Records);
+    assert_eq!(app.focus(), PanelFocus::Sandbox);
     assert_eq!(app.task_list().selected(), 2);
 
     // The plan's fold glyph folds it.
@@ -136,7 +134,7 @@ fn test_enter_on_a_plan_opens_it_over_the_channels_chat() {
     )
     .unwrap();
     app.process_command(UiCommand::SetSandboxRoot(dir.path().to_path_buf()));
-    app.focus = PanelFocus::Records;
+    app.focus = PanelFocus::Sandbox;
     app.handle_key(key(KeyCode::Enter));
     assert!(
         matches!(app.detail_view(), Some(DetailView::Plan(_))),
@@ -157,16 +155,18 @@ fn test_enter_on_a_members_task_opens_its_chat_in_the_channel() {
         spawned("tr", "re"),
         spawned("tx", "xx"),
     ]));
-    app.focus = PanelFocus::Records;
+    app.show_side_tab(SidePanelTab::Tasks);
+    app.focus = PanelFocus::Sandbox;
     select_task(&mut app, "tr");
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(switch_request(&mut rx).as_deref(), Some("re"));
     assert!(app.channel_open());
     assert_eq!(app.member_chat().map(|m| m.id.as_str()), Some("re"));
     assert_eq!(app.selected_channel_member(), 1, "its MEMBERS row too");
+    assert_eq!(app.side_tab(), SidePanelTab::Tasks, "TASKS stays open");
 
     // An agent of no channel is the agent app's to show.
-    app.focus = PanelFocus::Records;
+    app.focus = PanelFocus::Sandbox;
     select_task(&mut app, "tx");
     app.handle_key(key(KeyCode::Enter));
     assert_eq!(switch_request(&mut rx).as_deref(), Some("xx"));
@@ -182,67 +182,6 @@ fn select_task(app: &mut App, id: &str) {
             .is_some_and(|task| task.id == id)
     });
     assert!(found, "no row for {id}");
-}
-
-#[test]
-fn test_a_kernel_record_jump_in_a_channel_only_says_the_panel_is_away() {
-    let (mut app, _rx) = channel_with_tasks();
-    app.process_command(UiCommand::SetRecords(vec![
-        crate::app::detail_tests::record(1),
-    ]));
-    app.focus = PanelFocus::Chat;
-    app.show_turn_records(0);
-    assert_eq!(app.records_tab(), RecordsTab::ChannelTasks);
-    assert_eq!(app.focus(), PanelFocus::Chat);
-    assert!(app
-        .notification()
-        .is_some_and(|(text, _)| text.contains("PROJECTS")));
-}
-
-#[test]
-fn test_kernel_panel_commands_leave_the_channels_tasks_and_layout_alone() {
-    let (_dir, mut app) = app_in_channel("co");
-    let before = (
-        app.panels.record_visible,
-        app.panels.side_expanded,
-        app.panels.sandbox_visible,
-    );
-    app.show_members();
-    app.show_policies();
-    app.show_inbox();
-    assert_eq!(
-        (
-            app.panels.record_visible,
-            app.panels.side_expanded,
-            app.panels.sandbox_visible,
-        ),
-        before
-    );
-    assert_eq!(app.records_tab(), RecordsTab::ChannelTasks);
-    assert_ne!(app.focus(), PanelFocus::Records);
-}
-
-#[test]
-fn test_the_hamburger_hides_and_shows_both_of_the_channels_panels() {
-    let (mut app, _rx) = channel_with_tasks();
-    app.focus = PanelFocus::Records;
-    app.toggle_side_column();
-    assert!(!app.record_panel_visible());
-    assert!(!app.sandbox_panel_visible());
-    assert_eq!(app.focus(), PanelFocus::Chat, "off the hidden panel");
-
-    app.toggle_side_column();
-    assert!(app.record_panel_visible());
-    assert!(app.sandbox_panel_visible());
-
-    // The agent's own flags hide neither.
-    app.panels.record_visible = false;
-    app.panels.sandbox_visible = true;
-    app.panels.side_expanded = true;
-    assert!(
-        app.record_panel_visible(),
-        "not under a maximized side panel"
-    );
 }
 
 #[test]
@@ -272,20 +211,4 @@ fn test_a_plan_another_agent_writes_or_moves_on_shows_at_once() {
         command: Box::new(UiCommand::UpsertPlan(plan("other.plan.md", &[]))),
     });
     assert_eq!(plan_names(&app).len(), 2);
-}
-
-#[test]
-fn test_the_tasks_tab_is_listed_and_reached_only_in_a_channel() {
-    assert!(!RecordsTab::tabs(false).contains(&RecordsTab::ChannelTasks));
-    for &tab in RecordsTab::tabs(false) {
-        assert!(!tab.next(false).is_channel_tab(), "{tab:?}");
-        assert!(!tab.prev(false).is_channel_tab(), "{tab:?}");
-    }
-    assert_eq!(RecordsTab::Kernel.next(true), RecordsTab::ChannelTasks);
-    assert_eq!(RecordsTab::Inbox.prev(true), RecordsTab::ChannelTasks);
-
-    let (mut app, _rx) = app_with_agents();
-    app.show_records_tab(RecordsTab::ChannelTasks);
-    app.select_pane_tab(PaneTab::Records(RecordsTab::ChannelTasks));
-    assert_eq!(app.records_tab(), RecordsTab::Kernel, "no channel is open");
 }

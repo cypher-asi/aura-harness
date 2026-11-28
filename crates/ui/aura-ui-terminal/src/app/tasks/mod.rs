@@ -57,16 +57,15 @@
 //! work on or whose todos they do. The plan being worked on is always
 //! listed.
 //!
-//! While a channel is open the side panel has no TASKS tab: the same
-//! tree shows in the Record panel's place as the channel's TASKS (see
-//! [`super::RecordsTab::ChannelTasks`]), listing every plan and task in
-//! the channel's folder whatever the scope.
+//! While a channel is open TASKS is the channel's last tab, after QUEUE,
+//! and lists every plan and task in the channel's folder, whatever the
+//! side panel's scope.
 
 use std::collections::HashMap;
 
 use super::processes::SIDE_PAGE;
 use super::side_scope::AgentFilter;
-use super::{follow_selection, App, PanelFocus, RecordsTab};
+use super::{follow_selection, App};
 use crate::events::{PlanView, TaskView, TodoView};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -391,19 +390,6 @@ impl App {
     #[must_use]
     pub const fn task_list(&self) -> &TaskList {
         &self.task_list
-    }
-
-    /// Whether the panel the TASKS tree is drawn in has the focus: the
-    /// Record panel's place while an open channel's TASKS shows there,
-    /// else the side panel.
-    #[must_use]
-    pub(crate) fn tasks_focused(&self) -> bool {
-        let panel = if self.records.tab == RecordsTab::ChannelTasks {
-            PanelFocus::Records
-        } else {
-            PanelFocus::Sandbox
-        };
-        self.focus == panel
     }
 
     /// Keep the highlighted row inside `visible` rows, returning the first
