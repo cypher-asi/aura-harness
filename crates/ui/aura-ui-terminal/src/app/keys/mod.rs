@@ -14,6 +14,9 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyResult {
         self.notifications.current = None;
         self.clear_selection();
+        // A key brings each list scrolled by the wheel back to its
+        // highlight.
+        self.follow_highlights();
         self.keep_channel_focus_on_screen();
         let just_queued = self.pending.just_queued.take();
 

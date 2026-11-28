@@ -89,6 +89,7 @@ mod trace_json;
 mod turn;
 mod view_state;
 pub mod vim;
+mod wheel_views;
 
 #[cfg(test)]
 mod detail_tests;

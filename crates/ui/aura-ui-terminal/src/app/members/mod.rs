@@ -14,9 +14,10 @@
 //! [`UiCommand::SetProcesses`]: crate::events::UiCommand::SetProcesses
 
 use super::{
-    contains, follow_selection, processes::SIDE_PAGE, tab_at, tab_bar::TabLayout, App, DetailView,
-    NotificationType, PanelFocus,
+    contains, processes::SIDE_PAGE, tab_at, tab_bar::TabLayout, App, DetailView, NotificationType,
+    PanelFocus,
 };
+use crate::app::wheel_views::WheelList;
 use crate::events::{ProcessKind, ProcessStatus, ProcessSummary};
 use aura_core_types::time::now_ms;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -178,11 +179,10 @@ impl App {
     /// Keep the highlighted member inside a list `visible_rows` tall,
     /// returning the first row to show.
     pub fn sync_members_scroll(&mut self, visible_rows: usize) -> usize {
-        self.members.scroll = follow_selection(
-            self.members.scroll,
-            self.members.selected,
-            visible_rows,
-            self.members.rows.len(),
+        self.members.scroll = self.panels.wheel.place(
+            WheelList::Members,
+            (self.members.scroll, self.members.selected),
+            (visible_rows, self.members.rows.len()),
         );
         self.members.scroll
     }
