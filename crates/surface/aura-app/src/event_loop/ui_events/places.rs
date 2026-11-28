@@ -66,6 +66,9 @@ async fn channel(state: &mut LoopState<'_>, event: UiEvent) {
             let coordinator = state.agent_or_active(&agent_id);
             channels::start_planner(state, coordinator, text, images).await;
         }
+        UiEvent::SummarizeMessages { agent_id, requests } => {
+            channels::summaries::handle(state, &agent_id, requests);
+        }
         // `domain_of` routes no other event here.
         _ => {}
     }

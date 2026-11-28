@@ -55,6 +55,8 @@ pub(crate) struct ChannelChat {
     /// ([`aura_store_db::ChannelStore::seen`]), so a restart doesn't
     /// repeat what the coordinator already read.
     last_seen_ms: Mutex<HashMap<AgentId, u64>>,
+    /// One-line summaries of the user's long messages, for HISTORY
+    pub(crate) summaries: super::summaries::SummaryCache,
 }
 
 /// A user post a member was asked to answer.

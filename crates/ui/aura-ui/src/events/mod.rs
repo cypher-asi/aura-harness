@@ -47,5 +47,6 @@ pub use views::plans::{PlanView, TaskState, TaskView};
 pub use views::policies::{PolicyView, ToolPolicyState, ToolPolicyView};
 pub use views::processes::{ProcessKind, ProcessStatus, ProcessSummary};
 pub use views::records::{PolicyDetail, RecordStatus, RecordSummary, MAX_RECORDS};
+pub use views::summaries::{MessageSummaryRequest, MessageSummaryView};
 pub use views::trace::{TraceNode, TraceNodeStatus};
 pub use views::usage::{CallStats, CallUsage, SessionTotals, SourceUsage};

@@ -3,6 +3,7 @@
 
 use super::below::{hand_over_scroll, BelowRow};
 use super::breathing_room;
+use super::flash;
 use super::links;
 use super::live_tail::LiveTail;
 use super::prose::{pack_prose_mapped, prose_columns, ColumnMap};
@@ -15,6 +16,7 @@ use crate::{
     App, Theme,
 };
 use ratatui::{buffer::Buffer, layout::Rect, style::Style, text::Line, widgets::Paragraph, Frame};
+use std::ops::Range;
 
 /// The prose rows packed into a proportional face, by their row on
 /// screen, with where each one's columns went.
@@ -175,6 +177,8 @@ struct RowLayout {
     padding: usize,
     /// First row on screen
     start: usize,
+    /// Rows of the message lit up after a jump from HISTORY
+    flash: Option<Range<usize>>,
 }
 
 /// Bring the line cache up to date, lay out where its blocks and `tail`
@@ -186,6 +190,7 @@ fn layout_rows(
     theme: &Theme,
     tail: &LiveTail,
 ) -> RowLayout {
+    let targets = flash::Targets::of(app);
     let (shown, cache, groups) = app.chat_line_cache();
     let width = padded.width as usize;
     let reflowed = cache.update(shown, (width, measure), theme, spinner, &groups);
@@ -198,6 +203,7 @@ fn layout_rows(
         message_rows,
         last_prompt_row,
     } = BlockHits::collect(cache, gap);
+    let spans = targets.spans(cache);
     let tail_gap = usize::from(message_rows > 0 && !tail.lines.is_empty());
     let tail_start = message_rows + tail_gap;
     let tail_toggle = push_tail_toggles(&mut toggle_rows, app, tail, tail_start);
@@ -205,6 +211,7 @@ fn layout_rows(
     let height = padded.height as usize;
     let padding = end_padding(app.terminal_pane(), last_prompt_row, content, height);
     let total = content + padding;
+    let flash = flash::settle_jump(app, spans, (total, height));
     let start = app.sync_chat_scroll(total, height, reflowed);
     app.set_chat_layout(toggle_rows, start);
     app.set_chat_rows(Some((padded, start)));
@@ -218,6 +225,7 @@ fn layout_rows(
         total,
         padding,
         start,
+        flash,
     }
 }
 
@@ -364,6 +372,7 @@ fn highlight_hovered(
     theme: &Theme,
 ) {
     let start = layout.start;
+    flash::paint(buffer, layout.flash.clone(), (padded, start), theme);
     let hovered_image = match hover {
         Some(HoverTarget::ChatImage(message, index)) => Some((message, index)),
         _ => None,

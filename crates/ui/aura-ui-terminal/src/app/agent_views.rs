@@ -203,7 +203,8 @@ impl App {
         self.chat_tab() == ChatTab::Chat
             && (self.chat_loading()
                 || self.chat_fading().is_some()
-                || self.messages.iter().rev().any(Message::is_live_boot))
+                || self.messages.iter().rev().any(Message::is_live_boot)
+                || self.chat_jump_animating())
     }
 
     /// Whether the agent with hex id `agent_id` has a turn in flight.

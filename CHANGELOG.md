@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### A channel's HISTORY tab lists what you sent
+
+##### Added
+
+- A channel's right panel has a HISTORY tab after TASKS. It lists every
+  message you sent in the channel, to the coordinator or to members,
+  oldest first with the newest at the bottom, each with its time.
+  Messages over 80 characters show a one-line summary that Claude Haiku
+  writes once; summaries are kept in `message_summaries.json` in the
+  data directory, so they survive restarts. Until a summary comes, or
+  if the call fails or takes more than 10 seconds, the message shows
+  cut at a word with an ellipsis.
+- Enter or a click on a message scrolls the chat to it, however far back
+  it is, and lights it up for a moment. From a member's chat it goes
+  back to the channel's chat first. The wheel scrolls the list without
+  moving the highlight.
+
 ### Subagents are titled by the work they do
 
 ##### Fixed

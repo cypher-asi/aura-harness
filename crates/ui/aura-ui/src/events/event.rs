@@ -431,6 +431,15 @@ pub enum UiEvent {
         /// chip for each
         images: Vec<ImageAttachment>,
     },
+
+    /// Summarize the user's long channel `requests` in one line each, for
+    /// the HISTORY tab; answered with a [`UiCommand::SetMessageSummary`]
+    /// per request
+    SummarizeMessages {
+        /// The channel's coordinator, whose kernel makes the calls (hex id)
+        agent_id: String,
+        requests: Vec<super::MessageSummaryRequest>,
+    },
 }
 
 /// What `/rewind` puts back.

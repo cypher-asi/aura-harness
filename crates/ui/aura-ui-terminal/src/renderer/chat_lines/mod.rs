@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use stream::Settled;
+pub(crate) use timeline::post_block_key;
 use timeline::{block_runs, interleave_posts, post_message, turn_places};
 
 /// How the groups of agent steps in the chat are shown.
@@ -329,6 +330,28 @@ impl ChatLineCache {
     /// blank line goes between every two.
     pub(crate) fn blocks(&self) -> impl Iterator<Item = &BlockLines> {
         self.order.iter().filter_map(|key| self.entries.get(key))
+    }
+
+    /// The rows of the block keyed `key` (its first message's id), counted
+    /// from the conversation's first row as [`Self::blocks`] lays them out.
+    pub(crate) fn block_span(&self, key: u64) -> Option<Range<usize>> {
+        let gap = self.block_gap();
+        let mut row = 0;
+        for (i, (block_key, block)) in self
+            .order
+            .iter()
+            .filter_map(|k| self.entries.get(k).map(|block| (*k, block)))
+            .enumerate()
+        {
+            if i > 0 {
+                row += gap;
+            }
+            if block_key == key {
+                return Some(row..row + block.lines.len());
+            }
+            row += block.lines.len();
+        }
+        None
     }
 }
 

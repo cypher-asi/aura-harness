@@ -1,7 +1,7 @@
 //! Channels, an app of their own beside the agents: the agents panel's
 //! CHANNELS tab lists them, the chat panel holds the open channel's
 //! conversation and nothing else, and the right column is one panel with
-//! the channel's MEMBERS, INFO, QUEUE and TASKS tabs.
+//! the channel's MEMBERS, INFO, QUEUE, TASKS and HISTORY tabs.
 //!
 //! The agents panel's tab picks the app on screen (see `apps`). A channel
 //! is open only while CHANNELS shows:
@@ -35,7 +35,8 @@
 //! While a channel is open the right column is one tall side panel with
 //! only the channel's MEMBERS, INFO and QUEUE, then TASKS: every plan and
 //! task in the channel's project, by every agent working there (see
-//! [`App::side_maximized`]). The user's own layout flags are left alone,
+//! [`App::side_maximized`]), then HISTORY: every message the user sent
+//! there, each a way back to it in the chat (see `history`). The user's own layout flags are left alone,
 //! and the side tab shown before the channel opened comes back when it
 //! closes, so leaving gives back exactly the layout there was. With
 //! CHANNELS showing and no channel open there is nothing to show beside
@@ -43,9 +44,12 @@
 //! be picked.
 
 mod fold;
+mod history;
 mod list;
 mod side;
 
+#[cfg(test)]
+pub(crate) use history::{one_line, text_digest, CHAT_FLASH};
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
 
 use crate::app::scroll::{ChatPlace, InfoScroll};
@@ -92,6 +96,8 @@ pub(crate) struct ChannelState {
     merge_queues: HashMap<String, MergeQueueView>,
     /// How far the QUEUE side tab is scrolled
     queue_scroll: InfoScroll,
+    /// The HISTORY side tab: the user's messages and their summaries
+    history: history::ChannelHistory,
     /// The side tab shown before the channel opened, shown again when it
     /// closes
     side_tab_before: Option<SidePanelTab>,

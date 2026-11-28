@@ -159,6 +159,7 @@ impl App {
                     SidePanelTab::ChannelMembers => self.move_channel_member(delta),
                     SidePanelTab::ChannelInfo => self.scroll_channel_info(delta),
                     SidePanelTab::ChannelQueue => self.scroll_channel_queue(delta),
+                    SidePanelTab::ChannelHistory => self.wheel_channel_history(delta),
                 }
             }
         }
@@ -198,6 +199,7 @@ impl App {
                     SidePanelTab::ChannelMembers => self.move_channel_member(delta),
                     SidePanelTab::ChannelInfo => self.scroll_channel_info(delta),
                     SidePanelTab::ChannelQueue => self.scroll_channel_queue(delta),
+                    SidePanelTab::ChannelHistory => self.wheel_channel_history(delta),
                 }
             }
         }

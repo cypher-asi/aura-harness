@@ -18,3 +18,4 @@
 
 pub mod chat_title;
 pub mod compaction;
+pub mod message_summary;

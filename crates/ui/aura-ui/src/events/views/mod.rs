@@ -12,5 +12,6 @@ pub(super) mod plans;
 pub(super) mod policies;
 pub(super) mod processes;
 pub(super) mod records;
+pub(super) mod summaries;
 pub(super) mod trace;
 pub(super) mod usage;

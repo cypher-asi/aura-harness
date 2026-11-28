@@ -198,7 +198,7 @@ fn test_a_non_member_on_screen_takes_the_user_back_to_projects() {
     assert!(rx.try_recv().is_err(), "nothing is asked for in its place");
 }
 
-/// Shift+arrows go between the channel's four tabs only, from MEMBERS,
+/// Shift+arrows go between the channel's five tabs only, from MEMBERS,
 /// ending on INFO.
 fn shift_arrows_cycle_the_channel_tabs(app: &mut App) {
     let shift = |code| KeyEvent::new(code, KeyModifiers::SHIFT);
@@ -206,7 +206,9 @@ fn shift_arrows_cycle_the_channel_tabs(app: &mut App) {
         (KeyCode::Right, SidePanelTab::ChannelInfo),
         (KeyCode::Right, SidePanelTab::ChannelQueue),
         (KeyCode::Right, SidePanelTab::Tasks),
+        (KeyCode::Right, SidePanelTab::ChannelHistory),
         (KeyCode::Right, SidePanelTab::ChannelMembers),
+        (KeyCode::Left, SidePanelTab::ChannelHistory),
         (KeyCode::Left, SidePanelTab::Tasks),
         (KeyCode::Left, SidePanelTab::ChannelQueue),
         (KeyCode::Left, SidePanelTab::ChannelInfo),
@@ -247,6 +249,7 @@ fn test_an_open_channel_fills_the_right_column_with_its_tabs() {
             SidePanelTab::ChannelInfo,
             SidePanelTab::ChannelQueue,
             SidePanelTab::Tasks,
+            SidePanelTab::ChannelHistory,
         ]
     );
 
@@ -324,7 +327,11 @@ fn test_channel_side_tabs_are_listed_and_reached_only_in_a_channel() {
         SidePanelTab::ChannelQueue
     );
     assert_eq!(SidePanelTab::ChannelQueue.next(true), SidePanelTab::Tasks);
-    assert_eq!(SidePanelTab::Tasks.next(true), SidePanelTab::ChannelMembers);
+    assert_eq!(SidePanelTab::Tasks.next(true), SidePanelTab::ChannelHistory);
+    assert_eq!(
+        SidePanelTab::ChannelHistory.next(true),
+        SidePanelTab::ChannelMembers
+    );
     assert_eq!(
         SidePanelTab::Sandbox.next(true),
         SidePanelTab::ChannelMembers

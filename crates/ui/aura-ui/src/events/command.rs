@@ -493,4 +493,6 @@ pub enum UiCommand {
         channel_id: String,
         queue: crate::events::MergeQueueView,
     },
+    /// A summary asked for with [`UiEvent::SummarizeMessages`]
+    SetMessageSummary(crate::events::MessageSummaryView),
 }

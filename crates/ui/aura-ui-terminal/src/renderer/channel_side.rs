@@ -1,5 +1,6 @@
 //! The right column's panel while a channel is open: its MEMBERS and its
-//! INFO. Its QUEUE (see `channel_queue`) and TASKS are drawn elsewhere,
+//! INFO. Its QUEUE (see `channel_queue`), TASKS and HISTORY (see
+//! `channel_history`) are drawn elsewhere,
 //! and none of the agent app's other tabs is listed.
 //!
 //! MEMBERS is the coordinator, then the agents it started, each with the

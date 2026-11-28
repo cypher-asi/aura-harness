@@ -24,6 +24,7 @@ impl App {
             UiCommand::SetMergeQueue { channel_id, queue } => {
                 self.set_merge_queue(channel_id, queue);
             }
+            UiCommand::SetMessageSummary(view) => self.set_message_summary(view),
             other => return Some(other),
         }
         None

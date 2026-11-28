@@ -210,7 +210,7 @@ what a click does; its text names things and gives their state.
 What the rows are depends on what the tab shows:
 
 - **Lists** (SANDBOX, REPO, PROCESSES, TRACE, TASKS, KERNEL, MEMBERS, INBOX,
-  a channel's MEMBERS) draw one `components::list_row` row per thing: its
+  a channel's MEMBERS and HISTORY) draw one `components::list_row` row per thing: its
   status glyph, its name and its details on the right. ↑↓ move the
   selection and ⏎ opens it.
 - **Info bodies** (POLICIES, HOST, a channel's INFO, the RECORD and
@@ -242,6 +242,28 @@ RESOURCES  1 near full             section   secondary, then a muted note
   failed is `error`. Only a value that needs attention takes the accent
   (`yolo`, a disk 90% full, a verdict still pending). Section titles,
   labels and the header's info cell never do.
+
+A channel's tabs are MEMBERS, INFO, QUEUE, TASKS, then HISTORY. HISTORY
+lists every message the user sent in the channel, typed to the
+coordinator or posted to members, oldest first and newest at the bottom
+as in the chat. Each row is a `muted` `›`, the message on one line in
+`foreground`, and its time at the right: `HH:MM` today, `MM-DD HH:MM`
+before. A message up to 80 characters (`SUMMARY_THRESHOLD_CHARS`) shows
+as it is; a longer one shows the one-line summary Claude Haiku writes
+for it once, and until that comes, or when none does, the message cut at
+a word with `…`. The list opens on, and follows, the newest message.
+↑↓, PgUp/PgDn and Home/End move the highlight; the wheel scrolls the
+list and leaves the highlight where it is. ⏎ or a click scrolls the
+chat so the message sits near its top, going back from a member's chat
+to the channel's first, and fills the message's rows with `selection`
+for a second and a half. With nothing sent it says `No messages from
+you yet.`
+
+```text
+ ›  Fix the parser escapes                     09:12
+ ›  Add a history tab to the channel panel     10:40
+ ›  @RE36 can you review it?                   10:52
+```
 
 The REPO tab is a list under a one-row strip of filters: `All`, the kinds
 of event the repo has, and past a `faint` `│` its branches, tags and
