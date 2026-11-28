@@ -96,7 +96,7 @@ impl NodeClient {
         &self.token
     }
 
-    fn fail(&self, op: &'static str, message: impl std::fmt::Display) -> CloudError {
+    pub(super) fn fail(&self, op: &'static str, message: impl std::fmt::Display) -> CloudError {
         CloudError::Node {
             node: self.node.clone(),
             op,
@@ -126,6 +126,11 @@ impl NodeClient {
             .json::<T>()
             .await
             .map_err(|err| self.fail(op, ErrorChain(&err)))
+    }
+
+    /// A `method` call to `path` on the node, with its token.
+    pub(super) fn authed(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        (self.http.request(method, format!("{}{path}", self.base))).bearer_auth(self.token.expose())
     }
 
     /// Whether the node answers `/health`.

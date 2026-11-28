@@ -3,7 +3,7 @@
 //! `load_skill` ([`aura_context_skills::on_demand`]).
 
 use super::AgentDefinition;
-use aura_context_skills::on_demand::{inject_skill_index, render_loaded_skill};
+use aura_context_skills::on_demand::{inject_skill_index, load_skill_text};
 use aura_context_skills::prompt::{inject_full_skills, SkillPromptEntry};
 use aura_context_skills::{Skill, SkillManager};
 use tracing::warn;
@@ -17,6 +17,8 @@ pub enum SkillsIn {
     /// Each skill's name, description and path; the instance loads a
     /// body with `load_skill`
     Index,
+    /// None: the node the turn runs on lists the skills it was sent
+    Omit,
 }
 
 impl AgentDefinition {
@@ -41,6 +43,7 @@ impl AgentDefinition {
         match how {
             SkillsIn::Full => inject_full_skills(prompt, &entries),
             SkillsIn::Index => inject_skill_index(prompt, &entries),
+            SkillsIn::Omit => {}
         }
     }
 
@@ -51,15 +54,27 @@ impl AgentDefinition {
         self.skills.iter().any(|name| skills.get(name).is_ok())
     }
 
-    /// The full instructions of the definition's skill `name`.
+    /// The definition's skills as folders, to send a cloud node.
+    #[must_use]
+    pub fn skill_bundle(&self, skills: &SkillManager) -> aura_core_protocol::cloud::SkillBundle {
+        aura_context_skills::bundle::bundle(&self.found_skills(skills))
+    }
+
+    /// The full instructions of the definition's skill `name`, or one
+    /// `file` of its folder.
     ///
     /// # Errors
     /// When the definition has no such skill, or it isn't installed here:
-    /// the message names the skills it can load.
-    pub fn load_skill(&self, skills: &SkillManager, name: &str) -> Result<String, String> {
+    /// the message names the skills it can load. When `file` can't be.
+    pub fn load_skill(
+        &self,
+        skills: &SkillManager,
+        name: &str,
+        file: Option<&str>,
+    ) -> Result<String, String> {
         let found = self.found_skills(skills);
         if let Some(skill) = found.iter().find(|skill| skill.frontmatter.name == name) {
-            return Ok(render_loaded_skill(&entry(skill)));
+            return load_skill_text(&entry(skill), file);
         }
         let names: Vec<&str> = found.iter().map(|s| s.frontmatter.name.as_str()).collect();
         Err(if names.is_empty() {

@@ -333,6 +333,10 @@ pub(super) fn cloud_routes() -> Router<RouterState> {
         .route("/v1/host", get(cloud::host_handler))
         .route("/v1/cloud/processes", get(cloud::processes_handler))
         .route(
+            "/v1/cloud/skills/{agent_id}",
+            put(cloud::skills_put_handler).route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
             "/v1/sync/import",
             post(cloud::sync_import_handler).route_layer(import_limit),
         )
