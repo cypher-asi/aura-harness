@@ -6,6 +6,7 @@ use super::support::{code_of, new_channel, start, take_all, to_member, to_new};
 use crate::event_loop::channels::create_channel;
 use crate::event_loop::mail::MailItem;
 use crate::event_loop::subagents::tests::{fixture, Fixture};
+use aura_store_db::MemberRole;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 /// What assigning a review of the footer, for todo 2, to a new member

@@ -309,3 +309,31 @@ fn test_older_merges_wait_until_the_tab_is_scrolled_to_its_end() {
     render_rows_sized(&mut app, 140, 30);
     assert!(rx.try_recv().is_err(), "the end is not on screen yet");
 }
+
+#[test]
+fn test_queue_tab_lists_an_entrys_overlaps_under_it() {
+    use crate::events::{MergeEntryView, UiCommand};
+    let mut app = queue_app();
+    let mut queue = zode_queue();
+    queue.entries[0] = MergeEntryView {
+        overlaps: vec![
+            "q2 fix/escapes (RE36): src/lexer.rs".to_string(),
+            "worktree feat/tokens (RE37): src/lexer.rs".to_string(),
+        ],
+        ..queue.entries[0].clone()
+    };
+    app.process_command(UiCommand::SetMergeQueue {
+        channel_id: "c1".to_string(),
+        queue,
+    });
+    let rows = render_rows_sized(&mut app, 140, TALL);
+    let running = line_with(&rows, "RUNNING");
+    let failed = line_with(&rows, "FAILED");
+    // The side panel is narrow: each overlap wraps, so look for its start.
+    let first = line_with(&rows, "q2 fix/escapes");
+    let second = line_with(&rows, "worktree");
+    assert!(running < first && first < second && second < failed);
+    assert!(rows[first].contains("Overlaps"), "{}", rows[first]);
+    assert!(!rows[second].contains("Overlaps"), "{}", rows[second]);
+    assert_eq!(rows.iter().filter(|r| r.contains("Overlaps")).count(), 1);
+}

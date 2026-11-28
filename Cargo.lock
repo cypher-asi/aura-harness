@@ -615,6 +615,7 @@ dependencies = [
  "aura-core-modes",
  "aura-core-protocol",
  "aura-core-types",
+ "aura-exec-merge-queue",
  "aura-exec-tools",
  "aura-gate",
  "aura-model",

@@ -58,6 +58,10 @@ pub struct MergeEntryView {
     /// Short sha the target branch moved to
     #[serde(default)]
     pub merged: Option<String>,
+    /// Other work in flight that changes the same files, one line each:
+    /// `q12 aura/x (RUS1): src/a.rs, src/b.rs`
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlaps: Vec<String>,
 }
 
 /// A repo's merge queue.

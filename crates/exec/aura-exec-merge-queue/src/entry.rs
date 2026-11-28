@@ -198,6 +198,10 @@ pub struct MergeEntry {
     /// Commit the target branch points at after the merge
     #[serde(default)]
     pub merged: Option<String>,
+    /// Files the entry changes against the target, recorded when it was
+    /// queued ([`crate::overlap`]); empty until then
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
 
 impl MergeEntry {
@@ -294,6 +298,7 @@ mod tests {
             attempts: 2,
             detail: Some("tests failed".to_string()),
             merged: None,
+            files: vec!["src/a.rs".to_string()],
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert_eq!(serde_json::from_str::<MergeEntry>(&json).unwrap(), entry);

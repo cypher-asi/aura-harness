@@ -28,8 +28,9 @@ const BUSY_LIMIT: Duration = Duration::from_secs(20 * 60);
 #[cfg(test)]
 const BUSY_LIMIT: Duration = Duration::from_millis(200);
 
-/// What a turn's chat says while it waits.
-pub(super) const WAITING: &str = "Waiting for the turn already running on its machine";
+/// What a turn's chat says while it waits, the status that tells a front
+/// end the turn waits on its machine.
+pub const WAITING: &str = "Waiting for the turn already running on its machine";
 
 /// Start the chat run `request` asks for on `node` once its agent has no
 /// turn under way there, showing on `tx` that it waits. Returns the
