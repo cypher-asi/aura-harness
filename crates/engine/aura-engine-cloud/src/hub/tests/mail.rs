@@ -33,10 +33,10 @@ async fn mail_for_a_local_agent_without_a_host_is_refused_and_resends_are_retrie
 /// A desk that keeps what it is handed, or refuses it all with `refuse`,
 /// and keeps what it is told was not delivered.
 #[derive(Default)]
-struct Desk {
-    filed: Mutex<Vec<RemoteMail>>,
-    refuse: Option<String>,
-    refused: Mutex<Vec<(RemoteMail, String)>>,
+pub(super) struct Desk {
+    pub(super) filed: Mutex<Vec<RemoteMail>>,
+    pub(super) refuse: Option<String>,
+    pub(super) refused: Mutex<Vec<(RemoteMail, String)>>,
 }
 
 #[async_trait::async_trait]
