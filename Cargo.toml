@@ -293,6 +293,8 @@ aura-agent-trace = { path = "crates/agent/aura-agent-trace" }
 chrono = { workspace = true }
 aura-engine-automaton = { path = "crates/engine/aura-engine-automaton" }
 aura-exec-tools = { path = "crates/exec/aura-exec-tools" }
+# `tests/changelog_fragments.rs` checks the repo's changelog fragments.
+aura-exec-merge-queue = { path = "crates/exec/aura-exec-merge-queue" }
 aura-core-protocol = { path = "crates/core/aura-core-protocol" }
 aura-core-modes = { path = "crates/core/aura-core-modes" }
 aura-store-record = { path = "crates/store/aura-store-record" }

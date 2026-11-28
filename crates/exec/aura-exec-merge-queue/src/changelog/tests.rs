@@ -115,3 +115,44 @@ fn fragment_paths_are_markdown_files_in_the_folder() {
     assert!(!is_fragment_path("CHANGELOG.md"));
     assert!(!is_fragment_path("docs/changelog.d/fix.md"));
 }
+
+const WITH_RELEASE: &str = "# Changelog\n\n## [Unreleased]\n\n### Already here\n\n- x\n\n\
+                            ## [1.0.0]\n\n### Shipped long ago\n\n- y\n";
+
+#[test]
+fn an_entry_both_in_a_fragment_and_under_unreleased_is_a_duplicate() {
+    let fragments = [
+        fragment("new.md", "### Brand new\n\n- n\n"),
+        fragment("dup.md", "### already   HERE \n\n- x\n"),
+        fragment("old.md", "### Shipped long ago\n\n- y\n"),
+    ];
+    let found = duplicates(WITH_RELEASE, &fragments).unwrap();
+    assert_eq!(
+        found,
+        [Duplicate {
+            fragment: "dup.md".to_string(),
+            title: "already   HERE".to_string(),
+        }],
+        "case and spacing don't matter; released entries don't count"
+    );
+}
+
+#[test]
+fn assembly_and_the_check_refuse_a_duplicate_and_name_it() {
+    let fragments = [fragment("dup.md", "### Already here\n\n- x\n")];
+    for result in [
+        check(WITH_RELEASE, &fragments).map(|()| String::new()),
+        assemble(WITH_RELEASE, &fragments),
+    ] {
+        let err = result.unwrap_err();
+        assert!(matches!(&err, ChangelogError::Duplicates(found) if found.len() == 1));
+        let said = err.to_string();
+        assert!(
+            said.contains("changelog.d/dup.md \"Already here\""),
+            "{said}"
+        );
+        assert!(said.contains("delete it from CHANGELOG.md"), "{said}");
+    }
+    let fine = [fragment("new.md", "### Brand new\n")];
+    assert!(check(WITH_RELEASE, &fine).is_ok());
+}

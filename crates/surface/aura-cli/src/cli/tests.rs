@@ -286,7 +286,7 @@ fn run_subcommand_still_owns_its_dir_flag() {
 fn changelog_previews_unless_asked_to_write() {
     match parse(&["changelog"]).unwrap().command {
         Some(Commands::Changelog(args)) => {
-            assert!(!args.write);
+            assert!(!args.write && !args.check);
             assert!(args.repo.is_none());
         }
         _ => panic!("not the changelog command"),
@@ -301,4 +301,13 @@ fn changelog_previews_unless_asked_to_write() {
         }
         _ => panic!("not the changelog command"),
     }
+}
+
+#[test]
+fn changelog_check_changes_nothing_so_it_cannot_write() {
+    match parse(&["changelog", "--check"]).unwrap().command {
+        Some(Commands::Changelog(args)) => assert!(args.check && !args.write),
+        _ => panic!("not the changelog command"),
+    }
+    assert!(parse(&["changelog", "--check", "--write"]).is_err());
 }
