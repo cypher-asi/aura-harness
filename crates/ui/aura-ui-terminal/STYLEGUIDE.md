@@ -482,7 +482,8 @@ under a fold arrow, then the timeline, newest first.
 - **The wheel** scrolls a list's rows and never moves its highlight, so it
   never opens a channel or an agent; keys and clicks do. A list scrolled
   past its highlight stays put until the highlight moves or a key is
-  pressed, then shows the highlight again.
+  pressed, then shows the highlight again. The lists in dialogs (the
+  model selector, the folder browser) scroll the same way.
 - **Clickable text** (records link, collapsed steps): `muted`
 - **Links** in the chat: `muted`, with the ` (url)` after a label, and
   not underlined at rest. The pointer over a link underlines every row of

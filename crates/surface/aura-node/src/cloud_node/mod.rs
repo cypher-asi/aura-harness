@@ -292,6 +292,10 @@ impl CloudNode {
             port,
             sealed,
             protocol: NODE_PROTOCOL,
+            tools: aura_exec_tools::GIT_TOOL_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
         }
     }
 

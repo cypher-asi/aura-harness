@@ -45,6 +45,8 @@ pub(crate) mod repo;
 mod rewind;
 pub(crate) mod run_command;
 mod side_panels;
+mod stalls;
+pub(crate) mod standing;
 mod start_work;
 pub(crate) mod steering;
 pub(crate) mod subagents;
@@ -342,8 +344,13 @@ async fn send_startup(state: &mut LoopState<'_>, active: AgentId) {
 async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
     let hub = Arc::clone(&state.hub);
     let mut cloud_ended = state.cloud.take_ended();
+    let first_sweep = tokio::time::Instant::now() + stalls::SWEEP_EVERY;
+    let mut sweeps = tokio::time::interval_at(first_sweep, stalls::SWEEP_EVERY);
     loop {
         tokio::select! {
+            _ = sweeps.tick() => {
+                stalls::sweep(state).await;
+            }
             Some(done) = inbox.done_rx.recv() => {
                 handle_work_done(state, done).await;
             }
