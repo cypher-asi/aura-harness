@@ -128,3 +128,50 @@ fn connect_asks_for_the_key_masked() {
     let rows = render_rows(&mut app, 140);
     assert!(rows.iter().all(|row| !row.contains("bxd_secret")), "masked");
 }
+
+/// INTEGRATIONS with `n` integrations, the first selected.
+fn many(n: usize) -> crate::App {
+    let mut app = integrations_app();
+    let rows = (0..n)
+        .map(|i| IntegrationView {
+            id: format!("svc{i}"),
+            name: format!("Service {i:02}"),
+            icon: "◆".to_string(),
+            description: format!("Thing {i:02}"),
+            ..IntegrationView::default()
+        })
+        .collect();
+    app.process_command(UiCommand::SetIntegrations(rows));
+    app
+}
+
+#[test]
+fn the_wheel_scrolls_the_rows_and_a_key_brings_the_highlight_back() {
+    let mut app = many(30);
+    let rows = render_rows(&mut app, 140);
+    assert!(rows.iter().any(|r| r.contains("◆ Service 00")));
+    let (column, row) = {
+        let buffer = render_buffer(&mut app, 140);
+        let row = row_of(&buffer, "◆ Service 00");
+        (5, row)
+    };
+    for _ in 0..4 {
+        mouse_at(&mut app, MouseEventKind::ScrollDown, (column, row));
+    }
+    let rows = render_rows(&mut app, 140);
+    assert!(
+        rows.iter().all(|r| !r.contains("◆ Service 00")),
+        "scrolled past the first"
+    );
+    assert_eq!(app.selected_integration(), 0, "the highlight stays");
+
+    app.handle_key(crossterm::event::KeyEvent::from(
+        crossterm::event::KeyCode::Down,
+    ));
+    let rows = render_rows(&mut app, 140);
+    assert_eq!(app.selected_integration(), 1);
+    assert!(
+        rows.iter().any(|r| r.contains("◆ Service 01")),
+        "a key move follows the highlight again"
+    );
+}

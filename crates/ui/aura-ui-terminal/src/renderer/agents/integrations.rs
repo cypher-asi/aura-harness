@@ -58,6 +58,9 @@ pub(super) fn render_integrations(frame: &mut Frame, body: Rect, app: &mut App, 
         lines.push(Line::styled(text, Style::default().fg(theme.colors.muted)));
     }
     let selected = app.selected_integration();
+    // Rows and buttons are laid out by line from the list's top, then
+    // shifted by the first line shown.
+    let mut block = 0..0;
     for (index, view) in app.integrations().iter().enumerate() {
         if index > 0 {
             lines.push(Line::default());
@@ -65,20 +68,59 @@ pub(super) fn render_integrations(frame: &mut Frame, body: Rect, app: &mut App, 
         let top = lines.len();
         lines.extend(row_lines(view, index == selected, width, theme));
         if index == selected {
-            let y = body.y + u16::try_from(lines.len()).unwrap_or(u16::MAX);
-            lines.extend(action_lines((body.x, y, body.width), &mut buttons, theme));
+            let at = u16::try_from(lines.len()).unwrap_or(u16::MAX);
+            lines.extend(action_lines((body.x, at, body.width), &mut buttons, theme));
+            block = top..lines.len();
         }
         let height = u16::try_from(lines.len() - top).unwrap_or(u16::MAX);
-        let y = body
-            .y
-            .saturating_add(u16::try_from(top).unwrap_or(u16::MAX));
-        rows.push((Rect::new(body.x, y, body.width, height), index));
+        let at = u16::try_from(top).unwrap_or(u16::MAX);
+        rows.push((Rect::new(body.x, at, body.width, height), index));
     }
-    let visible = |rect: &Rect| rect.y < body.bottom();
-    rows.retain(|(rect, _)| visible(rect));
-    buttons.retain(|(rect, _)| visible(rect));
+    let visible = usize::from(body.height);
+    let first = app.place_integrations(block, (visible, lines.len()));
+    let (rows, buttons) = shift_areas(body, first, (rows, buttons));
     app.set_integration_areas(rows, buttons);
+    let lines: Vec<Line<'static>> = lines.into_iter().skip(first).take(visible).collect();
     frame.render_widget(Paragraph::new(lines), body);
+}
+
+/// Where each row's block and each action fell: by line from the list's
+/// top until [`shift_areas`] moves them to the screen.
+type Areas = (Vec<(Rect, usize)>, Vec<(Rect, IntegrationButton)>);
+
+/// The rows' and buttons' areas, laid out by line from the list's top,
+/// moved to the screen with `first` the first line shown; what falls
+/// outside `body` is dropped, and a row cut at the top keeps its visible
+/// part.
+fn shift_areas(body: Rect, first: usize, (rows, buttons): Areas) -> Areas {
+    let first = u16::try_from(first).unwrap_or(u16::MAX);
+    let shown = |rect: Rect| {
+        let y = rect.y.checked_sub(first)?;
+        (y < body.height).then(|| Rect {
+            y: body.y + y,
+            ..rect
+        })
+    };
+    let rows = rows
+        .into_iter()
+        .filter_map(|(rect, index)| {
+            let top = rect.y.max(first);
+            let cut = Rect {
+                y: top,
+                height: (rect.y + rect.height).saturating_sub(top),
+                ..rect
+            };
+            (cut.height > 0)
+                .then_some(cut)
+                .and_then(shown)
+                .map(|r| (r, index))
+        })
+        .collect();
+    let buttons = buttons
+        .into_iter()
+        .filter_map(|(rect, button)| shown(rect).map(|r| (r, button)))
+        .collect();
+    (rows, buttons)
 }
 
 /// A row's lines: its name line and description, and for the selected
