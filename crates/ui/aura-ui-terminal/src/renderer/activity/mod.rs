@@ -1,6 +1,8 @@
 //! Agent activity blocks in the chat: thinking and tool calls, collapsed to
 //! a one-line header or expanded to show everything. Consecutive steps are
 //! drawn as a group under one summary line (`Explored 4 files, 2 searches`).
+//! While that group is still running, a collapsed thought or command keeps
+//! a short tail of what it said or printed.
 
 mod args;
 mod group;
@@ -97,6 +99,9 @@ pub(super) struct Shown {
     pub expanded: bool,
     pub result: usize,
     pub diff: usize,
+    /// Show a short tail of a finished thought or command. A group that
+    /// is still running sets this so the turn shows what its steps did.
+    pub preview: bool,
 }
 
 impl Shown {
@@ -106,6 +111,7 @@ impl Shown {
             expanded: message.is_expanded(),
             result: message.more_lines(MoreSection::Result),
             diff: message.more_lines(MoreSection::Diff),
+            preview: false,
         }
     }
 }
@@ -136,7 +142,7 @@ pub(super) fn activity_lines(
     let body = Body::new(body_indent(number), width);
     match activity {
         Activity::Thinking(step) => (
-            thinking_lines(step, marker, expanded, &body, theme),
+            thinking_lines(step, marker, shown, &body, theme),
             MoreRows::new(),
         ),
         Activity::Tool(step) => {
@@ -277,7 +283,7 @@ impl Body {
 fn thinking_lines(
     step: &ThinkingStep,
     marker: Span<'static>,
-    expanded: bool,
+    shown: Shown,
     body: &Body,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
@@ -305,11 +311,15 @@ fn thinking_lines(
             }
         })
         .collect();
-    if !expanded {
-        if !step.running {
+    if !shown.expanded {
+        let keep = if step.running {
+            LIVE_THINKING_LINES
+        } else if shown.preview {
+            LIVE_PREVIEW_LINES
+        } else {
             return lines;
-        }
-        text = text.split_off(text.len().saturating_sub(LIVE_THINKING_LINES));
+        };
+        text = text.split_off(text.len().saturating_sub(keep));
     } else if text.is_empty() && !step.running {
         lines.push(body.line(
             "the model shared no reasoning text".to_string(),

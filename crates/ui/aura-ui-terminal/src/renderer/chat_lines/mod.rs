@@ -173,13 +173,17 @@ impl StepLines {
         number: Option<StepNumber>,
         keeping: bool,
         (width, theme, spinner): (usize, &Theme, &str),
+        preview: bool,
     ) -> (Vec<Line<'static>>, MoreRows) {
         if let Some((drawn_as, lines, more)) = &self.lines {
             if *drawn_as == number {
                 return (lines.clone(), more.clone());
             }
         }
-        let shown = Shown::of(member);
+        let mut shown = Shown::of(member);
+        // A running group stays open as a list of headers. Keep a tail
+        // of each finished thought and command under its header.
+        shown.preview = preview && !shown.expanded;
         let (lines, more) = match step {
             Activity::Tool(tool) if keeping && step.is_running() => {
                 let parts = match self.running.take() {

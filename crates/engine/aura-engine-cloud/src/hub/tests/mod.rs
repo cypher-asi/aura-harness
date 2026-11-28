@@ -5,7 +5,7 @@ use crate::mesh::Holder;
 use crate::{names, workspace, BootReporter, FakeProvider};
 
 use aura_core_protocol::cloud::{MeshMail, MeshMailKind};
-use aura_core_protocol::{ErrorMsg, OutboundMessage, TextDelta, ToolUseStart};
+use aura_core_protocol::{ErrorMsg, OutboundMessage, TextDelta, ToolOutputMsg, ToolUseStart};
 use aura_core_types::time::now_ms;
 use aura_engine::{MessageKind, RemoteMail, RemoteRouter, ThreadId};
 

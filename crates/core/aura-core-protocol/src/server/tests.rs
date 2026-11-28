@@ -28,6 +28,24 @@ fn each_model_call_of_a_turn_ends_with_its_own_message() {
 }
 
 #[test]
+fn a_running_tool_sends_its_output_as_its_own_message() {
+    let json = serde_json::to_string(&OutboundMessage::ToolOutput(ToolOutputMsg {
+        id: "toolu_1".into(),
+        chunk: "building\n".into(),
+    }))
+    .expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"type":"tool_output","id":"toolu_1","chunk":"building\n"}"#
+    );
+    let back: OutboundMessage = serde_json::from_str(&json).expect("deserialize");
+    assert!(matches!(
+        back,
+        OutboundMessage::ToolOutput(msg) if msg.id == "toolu_1" && msg.chunk == "building\n"
+    ));
+}
+
+#[test]
 fn tool_result_without_image_omits_image_fields() {
     // The string-only path must serialize byte-identically to the
     // pre-image contract: no `image_base64` / `image_media_type`

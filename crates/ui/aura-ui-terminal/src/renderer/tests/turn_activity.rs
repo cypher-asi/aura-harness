@@ -174,6 +174,40 @@ fn test_turn_output_starts_right_under_the_prompt_while_steps_arrive() {
 }
 
 #[test]
+fn test_a_live_turn_shows_what_finished_steps_did() {
+    use crate::events::{ToolData, UiCommand};
+
+    let mut app = crate::App::new();
+    submit_message(&mut app, "where is claim");
+    app.process_command(UiCommand::StartThinking);
+    app.process_command(UiCommand::AppendThinking(
+        "one\ntwo\nthree\nclaim lives in the fleet".to_string(),
+    ));
+    app.process_command(UiCommand::FinishThinking);
+    app.process_command(UiCommand::ShowTool(ToolData {
+        id: "t1".into(),
+        name: "run_command".into(),
+        args: r#"{"shell_script":"rg claim"}"#.into(),
+    }));
+    app.process_command(UiCommand::CompleteTool {
+        id: "t1".into(),
+        result: "a\nb\nc\nfleet/claim.rs".into(),
+        success: true,
+    });
+
+    let live = render_rows(&mut app, 120).join("\n");
+    assert!(live.contains("claim lives in the fleet"), "{live}");
+    assert!(live.contains("fleet/claim.rs"), "{live}");
+    assert!(live.contains("Ran rg claim"), "{live}");
+
+    app.process_command(UiCommand::Complete);
+    let done = render_rows(&mut app, 120).join("\n");
+    assert!(done.contains("Ran 1 command"), "{done}");
+    assert!(!done.contains("claim lives in the fleet"), "{done}");
+    assert!(!done.contains("fleet/claim.rs"), "{done}");
+}
+
+#[test]
 fn test_live_steps_are_numbered_in_order_then_condense() {
     use crate::events::UiCommand;
 

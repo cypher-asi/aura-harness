@@ -73,6 +73,16 @@ fn stream_frames_map_to_events() {
         support_id: None,
     });
     assert_eq!(map_outbound(soft), None);
+    assert_eq!(
+        map_outbound(OutboundMessage::ToolOutput(ToolOutputMsg {
+            id: "1".into(),
+            chunk: "line\n".into(),
+        })),
+        Some(RemoteEvent::ToolOutput {
+            id: "1".into(),
+            chunk: "line\n".into(),
+        })
+    );
 }
 
 #[test]

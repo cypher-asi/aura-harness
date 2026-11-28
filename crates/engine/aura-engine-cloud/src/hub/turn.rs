@@ -43,6 +43,13 @@ pub enum RemoteEvent {
         /// Input JSON.
         input: String,
     },
+    /// Output a tool call printed while it is still running.
+    ToolOutput {
+        /// Tool use id.
+        id: String,
+        /// The next piece of output.
+        chunk: String,
+    },
     /// A tool call finished.
     ToolResult {
         /// Tool use id.
@@ -346,6 +353,10 @@ pub fn map_outbound(message: OutboundMessage) -> Option<RemoteEvent> {
         OutboundMessage::ToolCallSnapshot(snapshot) => RemoteEvent::ToolInput {
             id: snapshot.id,
             input: snapshot.input.to_string(),
+        },
+        OutboundMessage::ToolOutput(output) => RemoteEvent::ToolOutput {
+            id: output.id,
+            chunk: output.chunk,
         },
         OutboundMessage::ToolResult(result) => RemoteEvent::ToolResult {
             id: result.tool_use_id.unwrap_or_default(),

@@ -191,6 +191,7 @@ impl TurnChat<'_> {
             RemoteEvent::Thinking(text) => self.append_thinking(text).await,
             event @ (RemoteEvent::ToolStart { .. }
             | RemoteEvent::ToolInput { .. }
+            | RemoteEvent::ToolOutput { .. }
             | RemoteEvent::ToolResult { .. }) => show_tool(ui, event).await,
             RemoteEvent::Done(usage) => {
                 let limit = context_limit.or_else(|| {
@@ -274,6 +275,9 @@ async fn show_tool(ui: &AgentUi, event: RemoteEvent) {
         }
         RemoteEvent::ToolInput { id, input } => {
             ui.send(UiCommand::UpdateToolArgs { id, args: input }).await;
+        }
+        RemoteEvent::ToolOutput { id, chunk } => {
+            ui.send(UiCommand::ToolOutput { id, chunk }).await;
         }
         RemoteEvent::ToolResult {
             id,

@@ -73,7 +73,10 @@ impl ToolParts {
         let (body, more) = if expanded {
             tool_body(step, diff.as_ref(), body, shown, theme)
         } else {
-            (live_preview(step, body, theme), MoreRows::new())
+            (
+                live_preview(step, body, shown.preview, theme),
+                MoreRows::new(),
+            )
         };
         Self {
             expanded,
@@ -256,17 +259,35 @@ fn push_result(
     }
 }
 
-/// The last lines a running command printed, under its collapsed block,
-/// each cut to one row.
-fn live_preview(step: &ToolStep, body: &Body, theme: &Theme) -> Vec<Line<'static>> {
-    if step.status != ToolStatus::Running {
+/// The last lines a command printed, under its collapsed block, each cut
+/// to one row. While it runs those are what it has printed so far. Once
+/// it has finished, a live group keeps the tail of its result.
+fn live_preview(step: &ToolStep, body: &Body, preview: bool, theme: &Theme) -> Vec<Line<'static>> {
+    let lines: Vec<String> = if step.status == ToolStatus::Running {
+        step.live.tail(LIVE_PREVIEW_LINES)
+    } else if preview && step.name == "run_command" {
+        result_tail(step.result.as_deref().unwrap_or(""), LIVE_PREVIEW_LINES)
+    } else {
         return Vec::new();
-    }
+    };
     let muted = Style::default().fg(theme.colors.muted);
-    step.live
-        .tail(LIVE_PREVIEW_LINES)
+    lines
         .into_iter()
         .map(|line| body.line(truncate(&line, body.width), muted, theme))
+        .collect()
+}
+
+/// The last `n` lines of a finished command's result.
+fn result_tail(result: &str, n: usize) -> Vec<String> {
+    let lines: Vec<&str> = result.lines().collect();
+    lines
+        .into_iter()
+        .rev()
+        .take(n)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(str::to_string)
         .collect()
 }
 
