@@ -8,6 +8,15 @@ fn todo_drawer_header(rows: &[String]) -> Option<usize> {
         .rposition(|row| row.contains("active") && (row.contains(" —  │") || row.contains(" +  │")))
 }
 
+/// The row under the first one showing `needle`: a to-do's second row.
+fn row_below<'a>(rows: &'a [String], needle: &str) -> &'a str {
+    let at = rows
+        .iter()
+        .position(|row| row.contains(needle))
+        .unwrap_or_else(|| panic!("no {needle:?}:\n{}", rows.join("\n")));
+    &rows[at + 1]
+}
+
 /// Whether any row above `end` shows a to-do's box.
 fn todo_box_above(rows: &[String], end: usize) -> bool {
     rows[..end]
@@ -134,11 +143,10 @@ fn test_todos_command_folds_the_drawer_and_brings_back_a_finished_list() {
     let screen = rows.join("\n");
     assert!(todo_drawer_header(&rows).is_some(), "{screen}");
     assert!(screen.contains("▾ Finished to-dos"), "{screen}");
-    assert!(screen.contains("✓ Read the parser  done"), "{screen}");
-    assert!(
-        screen.contains("⊘ Drop the old lexer  cancelled"),
-        "{screen}"
-    );
+    let done = row_below(&rows, "✓ Read the parser");
+    assert!(done.contains("│   Done"), "{done:?}");
+    let dropped = row_below(&rows, "⊘ Drop the old lexer");
+    assert!(dropped.contains("│   Cancelled"), "{dropped:?}");
     run_slash(&mut app, "/todos");
     let rows = render_rows(&mut app, 160);
     assert!(todo_drawer_header(&rows).is_none(), "{}", rows.join("\n"));
@@ -269,21 +277,12 @@ fn test_each_assigned_todo_names_its_member_with_its_status() {
     });
     let rows = render_rows(&mut app, 160);
     let screen = rows.join("\n");
-    let row = |needle: &str| {
-        rows.iter()
-            .find(|row| row.contains(needle))
-            .unwrap_or_else(|| panic!("no {needle:?}:\n{screen}"))
-            .clone()
-    };
-    let fixing = row("Fix the redirect");
-    assert!(fixing.contains("→ WK7 · working 0s"), "{fixing}");
+    let fixing = row_below(&rows, "◐ Fix the redirect");
+    assert!(fixing.contains("│   WK7 · working 0s"), "{fixing}");
     assert!(
-        row("Style the footer").contains("→ WK7 · working"),
+        row_below(&rows, "☐ Style the footer").contains("│   WK7 · working"),
         "{screen}"
     );
-    assert!(
-        row("Finished to-dos").contains("▸ Finished to-dos  1"),
-        "{screen}"
-    );
+    assert!(screen.contains("▸ Finished to-dos  1"), "{screen}");
     assert!(!screen.contains("Read the parser"), "{screen}");
 }
