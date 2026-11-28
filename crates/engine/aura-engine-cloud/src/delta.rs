@@ -29,6 +29,9 @@ use std::process::Command;
 
 use crate::error::{CloudError, CloudResult};
 
+mod source;
+pub use source::{build_source, bundle_source, file_at, resolve_commit, BuildSource};
+
 /// Largest delta archive or history bundle uploaded to a machine.
 pub const MAX_DELTA_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -340,12 +343,22 @@ pub fn bundle_head(project: &Path) -> CloudResult<HistoryBundle> {
 ///
 /// When git fails or the bundle is too large.
 pub fn bundle_since(project: &Path, base: &str) -> CloudResult<Option<Vec<u8>>> {
+    bundle_since_rev(project, "HEAD", base)
+}
+
+/// The commits `rev` (`HEAD` or a ref) has that `base` lacks, as a
+/// bundle; `None` when there are none.
+///
+/// # Errors
+///
+/// When git fails or the bundle is too large.
+pub fn bundle_since_rev(project: &Path, rev: &str, base: &str) -> CloudResult<Option<Vec<u8>>> {
     let not_base = format!("^{base}");
-    let count = git(project, &["rev-list", "--count", "HEAD", &not_base])?;
+    let count = git(project, &["rev-list", "--count", rev, &not_base])?;
     if count.trim() == "0" {
         return Ok(None);
     }
-    bundle(project, &["HEAD", &not_base]).map(Some)
+    bundle(project, &[rev, &not_base]).map(Some)
 }
 
 /// `origin`'s URL, when the project has one.

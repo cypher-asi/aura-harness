@@ -306,7 +306,10 @@ async fn a_project_snapshot_is_built_once_and_reused() {
         "nothing rebuilt"
     );
 
+    // A lockfile change counts once committed: the snapshot builds from
+    // commits, not the working tree.
     std::fs::write(dir.path().join("Cargo.lock"), "v2").expect("write");
+    git(dir.path(), &["commit", "-qam", "lock v2"]);
     builder
         .ensure_project("p1", dir.path(), None, false)
         .await
