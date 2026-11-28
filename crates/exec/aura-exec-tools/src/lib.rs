@@ -36,6 +36,7 @@ mod path_locks;
 pub mod permissions;
 pub mod plan_tools;
 pub mod resolver;
+pub mod runpod;
 mod sandbox;
 pub mod schema;
 pub mod todo;
