@@ -26,7 +26,7 @@ pub use command::UiCommand;
 pub use event::{RewindScope, UiEvent};
 pub use notice::{ERROR_PREFIX, SUCCESS_PREFIX, WARNING_PREFIX};
 pub use views::agents::{
-    empty_projects, starts_project, AgentDefinitionSummary, AgentSummary, ProjectSummary,
+    empty_projects, starts_project, AgentDefinitionSummary, AgentSummary, ProjectSummary, StartStep,
 };
 pub use views::boot::{BootHistory, BootLogLine, BootPlanStep, BootStageState, BootUpdate};
 pub use views::channels::{

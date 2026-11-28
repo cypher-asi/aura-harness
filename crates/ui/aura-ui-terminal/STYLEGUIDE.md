@@ -61,15 +61,17 @@ themes keep working:
 ### Status Indicators
 
 - **Ready (`●`)** and **working (`⬢`)**: `success`
-- **Status dot**: an entry's state as `●` alone in its color, the text
-  beside it uncolored: `success` done or up, `warning` under way,
-  `muted` waiting, `error` failed, `faint` off. Every dot comes from
-  `components::StatusDot` (a channel's QUEUE, the integrations), so a
-  state is the same color everywhere.
+- **Status dot**: an entry's state as one glyph in one color, the text
+  beside it uncolored. Filled `●` means it is there: `success` done or
+  connected, `warning` under way, `muted` waiting, `error` failed. Hollow
+  `○` in `muted` means not there or not set up. Every dot comes from
+  `components::StatusDot` (a channel's QUEUE, the Integrations panel),
+  so a state looks the same everywhere.
 - **Waiting (`◐`)**: `warning`
 - **Error (`✗`)**: `error`
 - **Failed agent**: an agent that errored out is drawn in the Stop
-  button's red until its next turn starts. It errors out by failing to
+  button's red until a new start or turn begins, never beside one: its
+  rows and what its peers hear come from the one live state. It errors out by failing to
   start (its session won't open, its local model is down, the cloud
   refuses it), by failing to get a cloud machine, by a turn that ends
   in an error, or by stalling (the stall sweep gave up on it). All four
@@ -77,6 +79,8 @@ themes keep working:
   - On PROJECTS its name is red and its icon column shows `!` in red.
   - On a channel's MEMBERS the `!` replaces the `@` and its second row
     reads `Failed: <why>` in red, cut to fit, in place of its title.
+    Pointed at or selected, the whole reason shows under the row,
+    wrapped, in red on `surface_hover`.
   - Its chat shows the whole reason as an error: `✗ ` then the reason,
     both in red. Other harness notes keep `* ` in `muted`.
 
@@ -85,7 +89,10 @@ themes keep working:
   agent fails uses it and the same `!`.
 - **Starting**: a channel member whose cloud machine is starting reads
   `Starting in the cloud…` in `muted` on its MEMBERS row, so a member
-  still starting can't be mistaken for an idle one.
+  still starting can't be mistaken for an idle one. Once its start
+  panel is at a step, the row reads `Starting 5/9 · 1m 26s · Preparing
+  project snapshot`: the step's place and time first, so a narrow row
+  keeps them, the whole line under the row when pointed at.
 - **Cloud**: an agent that runs in the cloud has `☁` after its name in
   `muted` on every row it is on (PROJECTS, a channel's MEMBERS, its
   subagents), dimmer with the owner's name for another user's, whatever
@@ -234,9 +241,10 @@ right-aligned under the icon and shaded like a hovered button.
 
 INTEGRATIONS lists every integration (`docs/integrations.md`). Each is
 a dot, its icon and name, and its description under it, muted; a blank
-row goes between them. The dot is the shared `StatusDot` (`aura-ui-widgets`), as MEMBERS and
-QUEUE draw it: `●` in `success` connected, `faint` not connected,
-`error` failed, `warning` while a Connect or Test runs. The selected one, its name bold,
+row goes between them. The dot is the shared `components::StatusDot`
+(`aura-ui-widgets`), as a channel's QUEUE marks its merges: `●` in
+`success` connected, hollow `○` in `muted` not connected, `●` in
+`error` failed, `●` in `warning` while a Connect or Test runs. The selected one, its name bold,
 also shows its status (in `success` connected, `error` failed, else
 `muted`), its last action's result, what it provides, and its actions
 in the primary colour, flowing onto more rows in a narrow column:
@@ -302,11 +310,18 @@ What the rows are depends on what the tab shows:
 - **A channel's QUEUE** is a `MERGES INTO  main` section with the repo's
   folder under it, then a section per merge, newest first, headed by a
   marked section: the status dot, the state and the short sha. The
-  branch has its own indented line, underlined in `foreground` when the
-  repo is on GitHub, and a click on it opens the branch there
+  branch has its own indented line in `foreground`, underlined while the
+  pointer is on it when the repo is on GitHub, as the chat's links are,
+  and a click on it opens the branch there
   (`https://github.com/owner/repo/tree/<branch>`); off GitHub it is
   plain. The facts follow (Agent, Queued, Finished, Attempts, Merged,
-  Overlaps) and what happened, in `muted`. Only the dot has a color:
+  Overlaps) and what happened, in `muted`. Queued and Finished read as
+  people say them (`components::relative_time`): `just now` under a
+  minute, `2 minutes ago` under an hour, `5 h ago` under a day, then
+  `yesterday 14:32`, `Nov 26, 14:32` and `Nov 26 2023, 14:32` from
+  another year. The pointer on a time shows it in full
+  (`2024-11-27 20:31:05 +01:00`). The tab is drawn again when a time
+  next reads differently, never every frame for them. Only the dot has a color:
   no text on QUEUE is bold or colored, a failure's detail included.
 
 ```text

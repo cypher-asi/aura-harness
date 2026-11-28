@@ -15,7 +15,7 @@
 //! ```
 //!
 //! The dot is the shared [`StatusDot`], as MEMBERS and QUEUE draw it:
-//! connected `Ok` (success), not connected `Off` (faint), failed
+//! connected `Ok` (success), not connected `Off` (a hollow `○`, muted), failed
 //! `Failed` (error), a Connect or Test running `Busy` (warning).
 
 use crate::app::IntegrationButton;

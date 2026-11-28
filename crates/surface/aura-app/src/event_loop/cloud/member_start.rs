@@ -66,10 +66,13 @@ pub(in crate::event_loop) async fn start_in_cloud(
         fail_cloud_start(state, agent, NO_PROJECT_FOLDER, None).await;
         return false;
     }
-    state.hub.status.set_starting(agent, true);
+    // A new start: an earlier failure is behind it from now, on its rows
+    // as for its peers.
+    state.hub.status.begin_start(agent);
     state.hub.send_agent_list().await;
     let ui = AgentUi::new(state.commands.clone(), agent);
-    let console = BootConsoleUi::new(ui, "Starting in the cloud");
+    let console = BootConsoleUi::new(ui, "Starting in the cloud")
+        .tracking_start(Arc::clone(&state.hub), agent);
     let why = match connect(state, Some(&console)).await {
         Ok(hub) => match place_request(state, &hub, agent, true) {
             Some(request) => {

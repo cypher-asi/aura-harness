@@ -76,7 +76,7 @@ pub struct AgentSummary {
     #[serde(default)]
     pub title: Option<String>,
     /// Why it stopped working, when its last turn or its start failed:
-    /// its row shows it in red until its next turn starts
+    /// its row shows it in red until a new start or turn begins
     #[serde(default)]
     pub error: Option<String>,
     /// Whether it is starting on a cloud machine of its own, which it
@@ -91,6 +91,23 @@ pub struct AgentSummary {
     /// machine, as it does after a restart
     #[serde(default)]
     pub reconnecting: bool,
+    /// The step its start on a cloud machine has got to, while
+    /// [`Self::starting`]: the same steps its chat's start panel shows
+    #[serde(default)]
+    pub start_step: Option<StartStep>,
+}
+
+/// The step an agent's start on its cloud machine is at.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartStep {
+    /// What the step does (`Preparing project snapshot`)
+    pub label: String,
+    /// Its place in the start's plan, from 1
+    pub index: usize,
+    /// How many steps the plan has
+    pub total: usize,
+    /// When it began, in Unix milliseconds
+    pub since_ms: u64,
 }
 
 impl AgentSummary {

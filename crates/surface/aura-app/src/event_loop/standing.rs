@@ -15,7 +15,7 @@
 //!   waiting on its machine says so: nothing of it runs yet.
 //! * Starting a turn clears a stall: the agent is no longer idle.
 
-use super::subagents::{lock, AgentHub};
+use super::subagents::{lock, AgentHub, LiveState};
 use aura_core_types::AgentId;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -71,7 +71,7 @@ impl Standings {
         }
     }
 
-    fn queued(&self, agent: AgentId) -> Option<usize> {
+    pub(crate) fn queued(&self, agent: AgentId) -> Option<usize> {
         lock(&self.queued).get(&agent).copied()
     }
 
@@ -98,7 +98,7 @@ impl Standings {
         }
     }
 
-    fn is_stalled(&self, agent: AgentId) -> bool {
+    pub(crate) fn is_stalled(&self, agent: AgentId) -> bool {
         lock(&self.stalled).contains(&agent)
     }
 
@@ -137,37 +137,39 @@ const WAITING_WHY: &str =
     "its machine is still running an earlier turn, which must end before this one starts";
 
 /// What `agent`'s peers are told of it: `waiting for its machine`,
-/// `working`, `starting in the cloud`, `stalled` or `failed` (with why),
-/// `queued` or `idle`.
+/// `working`, `starting in the cloud` (at which step), `stalled` or
+/// `failed` (with why), `queued` or `idle`. Its rows show the same
+/// [`AgentHub::live_state`].
 pub(crate) fn state_of(hub: &AgentHub, agent: AgentId) -> StateView {
     let view = |state, why| StateView { state, why };
-    // Its turn counts as working, but nothing of it runs yet.
-    if hub.status.is_waiting(agent) {
-        return view(WAITING_STATE, Some(WAITING_WHY.to_string()));
-    }
-    if hub.is_working(agent) {
-        return view("working", None);
-    }
-    if hub.status.is_starting(agent) || lock(&hub.cloud_starts).contains(&agent) {
-        return view(
-            "starting in the cloud",
-            Some("its work waits until its machine is up".to_string()),
-        );
-    }
-    if let Some(why) = hub.status.failure(agent) {
-        let state = if hub.standing.is_stalled(agent) {
-            "stalled"
-        } else {
-            "failed"
-        };
-        return view(state, Some(why));
-    }
-    match hub.standing.queued(agent) {
-        Some(count) => view(
+    match hub.live_state(agent) {
+        // Its turn counts as working, but nothing of it runs yet.
+        LiveState::Waiting => view(WAITING_STATE, Some(WAITING_WHY.to_string())),
+        LiveState::Reconnecting => view(
+            "working",
+            Some("Aura reconnects to the turn running on its machine".to_string()),
+        ),
+        LiveState::Working => view("working", None),
+        LiveState::Starting(step) => {
+            let at = step.map_or_else(String::new, |step| {
+                format!(
+                    " (at {}, step {} of {})",
+                    step.label, step.index, step.total
+                )
+            });
+            view(
+                "starting in the cloud",
+                Some(format!("its work waits until its machine is up{at}")),
+            )
+        }
+        LiveState::Failed { why, stalled } => {
+            view(if stalled { "stalled" } else { "failed" }, Some(why))
+        }
+        LiveState::Queued(count) => view(
             "queued",
             Some(format!("{count} piece(s) of work wait for it to be free")),
         ),
-        None => view("idle", None),
+        LiveState::Idle => view("idle", None),
     }
 }
 

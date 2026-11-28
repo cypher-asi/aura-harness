@@ -35,6 +35,10 @@ pub(crate) enum HoverTarget {
     ChannelMemberRow(usize),
     /// An item of a channel's HISTORY side tab
     ChannelHistoryRow(usize),
+    /// A branch link of a channel's QUEUE tab, by its place among them
+    ChannelQueueLink(usize),
+    /// A time of a channel's QUEUE tab, by its place among them
+    ChannelQueueTime(usize),
     /// A row in the Archive.
     ArchivedRow(usize),
     /// A row in the sandbox tree.

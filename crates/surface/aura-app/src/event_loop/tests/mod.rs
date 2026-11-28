@@ -53,6 +53,7 @@ mod inbox_mid_turn;
 mod inbox_restart;
 mod inbox_restart_resume;
 mod leave_plan_mode;
+mod live_member_state;
 mod load;
 mod messages;
 mod offline_cloud;
