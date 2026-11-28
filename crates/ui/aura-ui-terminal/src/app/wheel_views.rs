@@ -11,10 +11,13 @@
 //! The model selector and the folder browser, lists in dialogs, are
 //! scrolled the same way (see `modal`).
 //!
-//! PROJECTS and a channel's HISTORY keep their own flag for this
-//! (`ProjectList::scroll_detached`, `HistoryState::follow`);
-//! the documents that scroll by lines (POLICIES, HOST, a channel's INFO
-//! and QUEUE) have no highlight to follow.
+//! Every list goes through here: the wheel calls [`App::wheel_list`] (or
+//! [`WheelViews::detach`]) and never a function that moves a highlight,
+//! and each frame places the list with [`WheelViews::place`]. The
+//! documents that scroll by lines (POLICIES, HOST, a channel's INFO and
+//! QUEUE) have no highlight, so they scroll as they always have.
+//! `app/tests/wheel_every_list.rs` turns the wheel over every tab of
+//! every panel and does not build until a new tab is part of it.
 
 use super::{follow_selection, AgentsTab, App, PanelFocus, RecordsTab, SidePanelTab};
 
@@ -22,6 +25,7 @@ use super::{follow_selection, AgentsTab, App, PanelFocus, RecordsTab, SidePanelT
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WheelList {
     Channels,
+    Projects,
     Roster,
     Bench,
     Archive,
@@ -34,6 +38,7 @@ pub(crate) enum WheelList {
     Trace,
     Tasks,
     ChannelMembers,
+    ChannelHistory,
     /// The model selector's list, in its dialog
     ModelPicker,
     /// The folder browser's list, in its dialog
@@ -212,8 +217,7 @@ impl App {
             SidePanelTab::Host => return self.scroll_host(delta),
             SidePanelTab::ChannelInfo => return self.scroll_channel_info(delta),
             SidePanelTab::ChannelQueue => return self.scroll_channel_queue(delta),
-            // Two rows an item, like MEMBERS: an item a notch. HISTORY
-            // keeps its own flag (`HistoryState::follow`).
+            // Two rows an item, like MEMBERS: an item a notch.
             SidePanelTab::ChannelHistory => return self.scroll_channel_history(delta.signum()),
             SidePanelTab::ChannelMembers => {
                 let scroll = self.channels.member_scroll;
@@ -234,8 +238,6 @@ impl App {
     /// Every list follows its highlight again, as a key press asks.
     pub(super) fn follow_highlights(&mut self) {
         self.panels.wheel.clear();
-        self.project_list.scroll_detached = false;
-        self.follow_channel_history();
     }
 }
 

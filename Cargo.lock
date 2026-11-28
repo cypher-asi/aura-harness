@@ -457,6 +457,7 @@ dependencies = [
  "aura-core-types",
  "aura-engine",
  "aura-engine-cloud",
+ "aura-engine-integrations",
  "aura-engine-registry",
  "aura-exec-merge-queue",
  "aura-exec-tools",
@@ -902,6 +903,24 @@ dependencies = [
  "tracing",
  "uuid",
  "which",
+ "zeroize",
+]
+
+[[package]]
+name = "aura-engine-integrations"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "aura-core-types",
+ "aura-exec-tools",
+ "aura-store-db",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
  "zeroize",
 ]
 

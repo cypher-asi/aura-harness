@@ -44,6 +44,19 @@ pub enum Dialog {
 }
 
 impl Dialog {
+    /// Every dialog, for the tests that go through them all: a dialog
+    /// added belongs here.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Help,
+        Self::ModelSelector,
+        Self::FolderPicker,
+        Self::ProjectInfo,
+        Self::ChannelForm,
+    ];
+}
+
+impl Dialog {
     /// What [`App::state`] says while this dialog is on top.
     const fn state(self) -> AppState {
         match self {

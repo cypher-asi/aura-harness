@@ -84,6 +84,9 @@ impl KernelParts {
         executor.register(Box::new(TodoWriteTool));
         executor.register(Box::new(event_loop::AssignTool::new(self.hub.clone())));
         self.web_tools.register(&mut executor);
+        if let Some(integrations) = crate::integrations::get() {
+            integrations.register_tools(&mut executor, &agent_id.to_hex(), None);
+        }
         let mut executor_router = ExecutorRouter::new();
         executor_router.add_executor(Arc::new(executor));
         let mut config = self.config.clone();

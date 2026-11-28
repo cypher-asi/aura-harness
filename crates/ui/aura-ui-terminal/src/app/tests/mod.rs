@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 mod picker_wheel;
 mod support;
 mod view_shedding;
+mod wheel_every_list;
 mod wheel_lists;
 use support::*;
 

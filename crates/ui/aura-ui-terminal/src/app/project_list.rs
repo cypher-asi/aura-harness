@@ -17,9 +17,6 @@ pub(crate) struct ProjectList {
     pub(crate) selected: usize,
     /// First visible row of the agents list
     pub(crate) scroll: usize,
-    /// The wheel moved the agents list away from the highlight; it stays
-    /// there until a key or click moves the highlight again
-    pub(crate) scroll_detached: bool,
     /// Root-agent ids whose project row is folded shut
     pub(crate) collapsed_projects: HashSet<String>,
     /// Ids of agents folded shut, hiding the agents they spawned

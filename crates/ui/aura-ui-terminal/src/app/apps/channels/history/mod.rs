@@ -18,7 +18,8 @@
 //! [`POST_SUMMARY_MIN_CHARS`]: crate::events::POST_SUMMARY_MIN_CHARS
 
 use crate::app::processes::SIDE_PAGE;
-use crate::app::{contains, follow_selection, App};
+use crate::app::wheel_views::WheelList;
+use crate::app::{contains, App};
 use crate::events::{ChannelPostAuthor, ChannelPostView};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
@@ -40,9 +41,6 @@ pub(crate) struct HistoryState {
     selected: usize,
     /// First item on screen
     scroll: usize,
-    /// Whether the list keeps the highlight in view: set by the keys,
-    /// cleared by the wheel, which scrolls past it
-    follow: bool,
     /// Where the items' rows were drawn this frame
     rows_area: Option<Rect>,
     /// Summaries of long posts, by channel id, then post `seq`
@@ -83,7 +81,6 @@ impl HistoryState {
     pub(super) fn reset(&mut self) {
         self.selected = 0;
         self.scroll = 0;
-        self.follow = true;
         self.rows_area = None;
     }
 
@@ -128,11 +125,11 @@ impl App {
     pub(crate) fn sync_channel_history_scroll(&mut self, len: usize, visible: usize) -> usize {
         let state = &mut self.channels.history;
         state.selected = state.selected.min(len.saturating_sub(1));
-        state.scroll = if state.follow {
-            follow_selection(state.scroll, state.selected, visible, len)
-        } else {
-            state.scroll.min(len.saturating_sub(visible))
-        };
+        let at = (state.scroll, state.selected);
+        state.scroll = self
+            .panels
+            .wheel
+            .place(WheelList::ChannelHistory, at, (visible, len));
         state.scroll
     }
 
@@ -168,20 +165,14 @@ impl App {
     /// Scroll the HISTORY tab `delta` items, as the wheel does, leaving
     /// the highlight where it is.
     pub(in crate::app) fn scroll_channel_history(&mut self, delta: isize) {
-        let state = &mut self.channels.history;
-        state.follow = false;
-        state.scroll = state.scroll.saturating_add_signed(delta);
-    }
-
-    /// The HISTORY list follows its highlight again, as any key asks.
-    pub(in crate::app) fn follow_channel_history(&mut self) {
-        self.channels.history.follow = true;
+        let scroll = self.channels.history.scroll;
+        self.channels.history.scroll = self.wheel_list(WheelList::ChannelHistory, scroll, delta);
     }
 
     /// Move the HISTORY highlight `delta` items, the list following it.
     pub(in crate::app) fn move_channel_history(&mut self, delta: isize) {
+        self.panels.wheel.release(WheelList::ChannelHistory);
         let state = &mut self.channels.history;
-        state.follow = true;
         state.selected = state.selected.saturating_add_signed(delta);
     }
 
@@ -210,9 +201,8 @@ impl App {
 
     /// Highlight item `index` (kept inside the list when drawn).
     pub(in crate::app) fn select_channel_history(&mut self, index: usize) {
-        let state = &mut self.channels.history;
-        state.follow = true;
-        state.selected = index;
+        self.panels.wheel.release(WheelList::ChannelHistory);
+        self.channels.history.selected = index;
     }
 
     /// Jump the channel's chat to item `index`'s message, from a member's

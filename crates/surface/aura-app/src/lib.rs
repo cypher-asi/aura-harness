@@ -29,6 +29,7 @@ pub mod event_loop;
 pub mod file_checkpoints;
 mod harness;
 pub mod headless;
+pub mod integrations;
 pub mod isolation;
 pub mod local_store;
 mod long_run;
