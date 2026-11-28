@@ -74,6 +74,7 @@ impl CloudHub {
             current_owner: Mutex::new(Owner::Local),
             work: Mutex::new(HashMap::new()),
             streaming: Mutex::new(HashMap::new()),
+            skills_sent: Mutex::new(HashMap::new()),
             reconnects: Arc::new(tokio::sync::Semaphore::new(super::RECONNECTS_AT_ONCE)),
             reconnect_delays: Mutex::new(super::RECONNECT_DELAYS.to_vec()),
             updates: Mutex::new(HashMap::new()),

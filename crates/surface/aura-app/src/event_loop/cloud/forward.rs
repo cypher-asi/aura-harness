@@ -92,6 +92,9 @@ pub(super) struct TurnExtras {
     /// The reply text the turn streamed since its last tool call: its
     /// last words once it ends, which answer what it was asked
     pub(super) said: String,
+    /// Why the turn's conversation could not be copied here, once the
+    /// hub says so ([`RemoteEvent::CopyFailed`])
+    pub(super) copy_failed: Option<String>,
 }
 
 /// How an agent whose followed turn was cut short carries on: the
@@ -143,7 +146,6 @@ pub(in crate::event_loop) async fn forward_marking_waits(
     rx: &mut tokio::sync::mpsc::Receiver<RemoteEvent>,
 ) {
     let mut extras = TurnExtras {
-        said: String::new(),
         waiting: Some(WaitingMark { hub, agent }),
         ..TurnExtras::default()
     };
@@ -212,6 +214,11 @@ pub(super) async fn forward(
         }
         chat.end_wake(&event).await;
         chat.close_open(&event).await;
+        // A failed turn's copy is tried before its failure is sent.
+        if let RemoteEvent::CopyFailed(why) = event {
+            extras.copy_failed = Some(why);
+            continue;
+        }
         if matches!(event, RemoteEvent::Copied) {
             extras.show_record().await;
             continue;
@@ -323,7 +330,10 @@ impl TurnChat<'_> {
         let ui = self.ui;
         match event {
             RemoteEvent::Status(status) => ui.send(UiCommand::SetStatus(status)).await,
-            RemoteEvent::Boot(_) | RemoteEvent::Title(_) | RemoteEvent::Copied => {}
+            RemoteEvent::Boot(_)
+            | RemoteEvent::Title(_)
+            | RemoteEvent::Copied
+            | RemoteEvent::CopyFailed(_) => {}
             // `close_open` ended the reply the call wrote.
             RemoteEvent::ModelCallEnd => {}
             RemoteEvent::Text(text) => self.append_text(text).await,

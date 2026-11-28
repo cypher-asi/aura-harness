@@ -150,6 +150,10 @@ pub(crate) fn state_of(hub: &AgentHub, agent: AgentId) -> StateView {
             Some("Aura reconnects to the turn running on its machine".to_string()),
         ),
         LiveState::Working => view("working", None),
+        LiveState::SignIn(why) => view(
+            "waiting for sign-in",
+            Some(format!("{why}; it carries on once a sign-in works again")),
+        ),
         LiveState::Starting(step) => {
             let at = step.map_or_else(String::new, |step| {
                 format!(

@@ -117,6 +117,10 @@ pub(in crate::event_loop) async fn refused(state: &LoopState<'_>, agent: AgentId
 /// next free to; else the first item on this computer. Nothing starts
 /// while it moves.
 pub(in crate::event_loop) async fn start_queued(state: &mut LoopState<'_>, agent: AgentId) {
+    // A held agent's queue waits for the recovery to let it go.
+    if state.hub.recovery.is_held(agent) {
+        return;
+    }
     while !state.cloud.is_running(agent) && !state.cloud.is_moving(agent) {
         let Some(work) = state.queued.pop_front(agent) else {
             return;
@@ -192,6 +196,7 @@ async fn run_prompt(
     }
     let extras = TurnExtras {
         said: String::new(),
+        copy_failed: None,
         titles,
         context_limit: model.as_deref().map(aura_engine::context_window_for_model),
         reload: Some(chat_reload(Arc::clone(&state.hub), ui.clone(), agent)),
@@ -276,6 +281,7 @@ pub(super) fn watch_turn(
     let shared = Arc::clone(&state.cloud.shared);
     let processes = Arc::clone(&state.processes);
     let sessions = state.hub.factory.checkpoints.clone();
+    let code = super::copy_note::agent_code(state, agent);
     tokio::spawn(async move {
         if extras.from_record {
             extras.show_record().await;
@@ -286,7 +292,7 @@ pub(super) fn watch_turn(
             &crate::event_loop::processes::turn_id(agent),
             end.status(stopped),
         );
-        let copied = copied_session(&ui, &mut rx, sessions, agent).await;
+        let copied = copied_session(&ui, &mut rx, sessions, agent, &mut extras.copy_failed).await;
         if extras.from_record {
             extras.show_record().await;
         }
@@ -305,7 +311,14 @@ pub(super) fn watch_turn(
                 return;
             }
         }
-        let messages = copied.map(|checkpoint| checkpoint.messages);
+        // An earlier turn's copy must not settle this one.
+        let messages = match extras.copy_failed.take() {
+            Some(why) => {
+                super::copy_note::report_copy_failed(&ui, &code, &why).await;
+                None
+            }
+            None => copied.map(|checkpoint| checkpoint.messages),
+        };
         let said = Some(std::mem::take(&mut extras.said)).filter(|said| !said.trim().is_empty());
         let outcome = TurnOutcome {
             failure,
@@ -317,14 +330,20 @@ pub(super) fn watch_turn(
 }
 
 /// The session of `agent`'s turn as copied here, with its totals shown
-/// in `ui`. The hub copies it before it lets go of `rx`.
+/// in `ui`. The hub copies it before it lets go of `rx`, and says on it
+/// when it could not, which is kept in `copy_failed`.
 pub(super) async fn copied_session(
     ui: &AgentUi,
     rx: &mut mpsc::Receiver<RemoteEvent>,
     sessions: Option<Checkpoints>,
     agent: AgentId,
+    copy_failed: &mut Option<String>,
 ) -> Option<SessionCheckpoint> {
-    while rx.recv().await.is_some() {}
+    while let Some(event) = rx.recv().await {
+        if let RemoteEvent::CopyFailed(why) = event {
+            *copy_failed = Some(why);
+        }
+    }
     let sessions = sessions?;
     let copied = tokio::task::spawn_blocking(move || sessions.load_current(agent))
         .await

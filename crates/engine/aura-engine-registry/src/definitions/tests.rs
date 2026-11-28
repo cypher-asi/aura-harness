@@ -247,9 +247,8 @@ fn a_reload_of_unchanged_files_keeps_what_it_read_and_an_edit_is_picked_up() {
     assert!(defs.reload().is_empty(), "a removed file's problem goes");
 }
 
-/// Characters per token, as the context breakdown estimates them
-/// (`aura_config::CHARS_PER_TOKEN`).
-const CHARS_PER_TOKEN: usize = 4;
+/// Characters per token, as the context breakdown estimates them.
+const CHARS_PER_TOKEN: usize = aura_config::CHARS_PER_TOKEN;
 
 /// A SKILL.md body of about `chars` characters: numbered steps, as a
 /// real skill's instructions run.
@@ -309,7 +308,7 @@ fn an_index_of_three_skills_costs_a_tenth_of_their_bodies_and_loads_each_in_full
     assert!(def.has_skills(&skills));
     for name in ["deploy", "review", "migrate"] {
         assert!(index.contains(&format!("name=\"{name}\"")));
-        let loaded = def.load_skill(&skills, name).unwrap();
+        let loaded = def.load_skill(&skills, name, None).unwrap();
         assert!(loaded.contains(&skill_body(name, 0)[..10]), "{name}");
         assert!(loaded.len() > 1_900, "{name} in full");
     }
@@ -327,7 +326,7 @@ fn a_definition_loads_only_its_own_skills() {
         Path::new("a.md"),
     )
     .unwrap();
-    let error = def.load_skill(&skills, "other").unwrap_err();
+    let error = def.load_skill(&skills, "other", None).unwrap_err();
     assert!(error.contains("your skills: deploy"), "{error}");
     let none =
         AgentDefinition::parse("---\nname: b\ndescription: B.\n---\n", Path::new("b.md")).unwrap();

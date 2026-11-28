@@ -32,19 +32,28 @@ impl SessionSkills {
 }
 
 impl SkillSource for SessionSkills {
-    fn load(&self, _caller: Option<AgentId>, name: &str) -> Result<String, String> {
+    fn load(
+        &self,
+        _caller: Option<AgentId>,
+        name: &str,
+        file: Option<&str>,
+    ) -> Result<String, String> {
         let mgr = self
             .manager
             .read()
             .map_err(|_| "the skills are unavailable".to_string())?;
-        mgr.load_agent_skill(&self.agent_id, name).map_err(|_| {
-            let names: Vec<String> = mgr
-                .agent_skill_meta(&self.agent_id)
-                .into_iter()
-                .map(|meta| meta.name)
-                .collect();
-            format!("no skill `{name}`; your skills: {}", names.join(", "))
-        })
+        mgr.load_agent_skill(&self.agent_id, name, file)
+            .map_err(|error| {
+                if let aura_context_skills::SkillError::Activation(why) = error {
+                    return why;
+                }
+                let names: Vec<String> = mgr
+                    .agent_skill_meta(&self.agent_id)
+                    .into_iter()
+                    .map(|meta| meta.name)
+                    .collect();
+                format!("no skill `{name}`; your skills: {}", names.join(", "))
+            })
     }
 }
 

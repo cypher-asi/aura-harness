@@ -50,15 +50,37 @@ fn a_local_turn_lists_its_skills_and_offers_load_skill() {
 }
 
 #[test]
-fn a_cloud_turn_still_carries_its_skills_in_full() {
+fn a_cloud_turn_sends_its_skills_as_folders_and_keeps_their_text_for_old_nodes() {
     let fixture = with_a_skilled_definition();
+    let references = fixture.workspace.path().join("skills/deploy/references");
+    std::fs::create_dir_all(&references).unwrap();
+    std::fs::write(references.join("api.md"), "GET /v1/releases").unwrap();
     let agent = lock(&fixture.hub.registry)
         .create_instance("builder", None)
         .unwrap()
         .agent_id();
     let ask = fixture.hub.cloud_turn(agent);
     let prompt = ask.system_prompt.unwrap_or_default();
-    assert!(prompt.contains(DEPLOY_BODY), "the machine can't load it");
+    assert!(prompt.contains("permanent agent \"builder\""), "{prompt}");
+    assert!(!prompt.contains(DEPLOY_BODY), "the node lists them");
+    assert!(!prompt.contains("agent_skills"), "and adds its own list");
+    let skills = ask.skills.expect("its skills go to the node");
+    assert!(
+        skills.full_system_prompt.contains(DEPLOY_BODY),
+        "for an old node"
+    );
+    let [deploy] = skills.bundle.skills.as_slice() else {
+        panic!("one skill: {:?}", skills.bundle.skills);
+    };
+    let paths: Vec<&str> = deploy.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["SKILL.md", "references/api.md"]);
+}
+
+#[test]
+fn a_cloud_turn_without_skills_sends_none() {
+    let fixture = with_a_skilled_definition();
+    let agent = lock(&fixture.hub.registry).active().agent_id();
+    assert_eq!(fixture.hub.cloud_turn(agent).skills, None);
 }
 
 #[tokio::test]
@@ -83,11 +105,11 @@ async fn load_skill_returns_the_callers_skill_in_full() {
         .unwrap();
     assert!(String::from_utf8_lossy(&result.stdout).contains(DEPLOY_BODY));
 
-    let unknown = source.load(Some(agent), "launch").unwrap_err();
+    let unknown = source.load(Some(agent), "launch", None).unwrap_err();
     assert!(unknown.contains("your skills: deploy"), "{unknown}");
     let own = lock(&fixture.hub.registry).active().agent_id();
     assert!(
-        source.load(Some(own), "deploy").is_err(),
+        source.load(Some(own), "deploy", None).is_err(),
         "the user's own agent has none"
     );
 }

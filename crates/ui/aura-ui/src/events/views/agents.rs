@@ -91,6 +91,11 @@ pub struct AgentSummary {
     /// machine, as it does after a restart
     #[serde(default)]
     pub reconnecting: bool,
+    /// Whether the model refused its sign-in and it waits, its work kept,
+    /// for one that works: a later model call that works, or the user
+    /// signing in again
+    #[serde(default)]
+    pub waiting_for_sign_in: bool,
     /// The step its start on a cloud machine has got to, while
     /// [`Self::starting`]: the same steps its chat's start panel shows
     #[serde(default)]

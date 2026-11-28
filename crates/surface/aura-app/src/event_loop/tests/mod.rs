@@ -62,6 +62,7 @@ mod offline_cloud;
 mod open_plan;
 mod provider;
 mod queue_edits;
+mod recovery;
 mod restart;
 mod rewinding;
 mod stall_fixes;

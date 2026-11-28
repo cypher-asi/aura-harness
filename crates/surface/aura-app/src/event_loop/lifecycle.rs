@@ -86,6 +86,7 @@ pub(super) async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) 
         failure,
         unseen,
         refused_models,
+        health,
     } = done;
     if !refused_models.is_empty() {
         for model in &refused_models {
@@ -106,12 +107,16 @@ pub(super) async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) 
     if let Some(session) = session {
         state.idle.insert(agent_id, session);
     }
-    finish_turn(state, agent_id, failure.as_deref()).await;
+    let held = finish_turn(state, agent_id, failure.as_deref(), &health).await;
     if parked {
         super::idle_sessions::left_idle(state, agent_id).await;
     }
+    if health.model_worked {
+        super::recover::model_worked(state, agent_id).await;
+    }
 
-    if let Some(problem) = failure {
+    // A held turn's chat says why it waits instead.
+    if let Some(problem) = failure.filter(|_| !held) {
         let ui = AgentUi::new(state.commands.clone(), agent_id);
         if !local_model_unavailable(state, &ui).await {
             ui.send(UiCommand::ShowError(problem)).await;
@@ -124,13 +129,48 @@ pub(super) async fn handle_work_done(state: &mut LoopState<'_>, done: WorkDone) 
     agents::send_agent_list(state).await;
 }
 
+/// Whether `agent_id`'s turn, which went as `health` says, is held for the
+/// recovery: its trouble one a pause or a retry may get past. A held turn
+/// ends failed in the Processes tab and settles nothing.
+async fn held(
+    state: &mut LoopState<'_>,
+    agent_id: AgentId,
+    health: &super::recover::TurnHealth,
+) -> bool {
+    let Some(trouble) = &health.trouble else {
+        return false;
+    };
+    if !super::recover::hold_turn(state, agent_id, trouble).await {
+        return false;
+    }
+    state
+        .processes
+        .finish(&processes::turn_id(agent_id), ProcessStatus::Failed);
+    true
+}
+
 /// Mark the turn of `agent_id`, which ended with `failure` if any, ended
 /// in the Processes tab, and settle its channel replies and what it owed
 /// through its inbox. A turn the user stopped to carry on leaves what it
-/// owes through its inbox for the next turn that ends well.
-async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failure: Option<&str>) {
+/// owes through its inbox for the next turn that ends well. A turn whose
+/// trouble a pause or a retry may get past (`health`) is held instead,
+/// all it owes kept; returns whether it was.
+async fn finish_turn(
+    state: &mut LoopState<'_>,
+    agent_id: AgentId,
+    failure: Option<&str>,
+    health: &super::recover::TurnHealth,
+) -> bool {
     let cancelled = state.hub.stop_running(agent_id);
     let interrupted = state.hub.inbox.take_interrupted(agent_id) && cancelled;
+    if !cancelled && held(state, agent_id, health).await {
+        return true;
+    }
+    // A model error no pause or retry got past fails a turn that owes a
+    // report: its sender hears why, not what the turn wrote before it.
+    let owes = state.hub.inbox.owed_by(agent_id) > 0;
+    let errored = health.llm_error.as_deref().filter(|_| owes && !cancelled);
+    let failure = failure.or(errored);
     let failed = failure.is_some();
     if let Some(why) = failure {
         state
@@ -170,4 +210,5 @@ async fn finish_turn(state: &mut LoopState<'_>, agent_id: AgentId, failure: Opti
             inbox::give_up_if_archived(&state.hub, agent_id);
         }
     }
+    false
 }

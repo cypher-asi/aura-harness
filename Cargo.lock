@@ -706,6 +706,7 @@ dependencies = [
 name = "aura-context-skills"
 version = "0.1.0"
 dependencies = [
+ "aura-core-protocol",
  "aura-core-types",
  "aura-store-db",
  "chrono",
@@ -941,7 +942,9 @@ dependencies = [
 name = "aura-engine-registry"
 version = "0.1.0"
 dependencies = [
+ "aura-config",
  "aura-context-skills",
+ "aura-core-protocol",
  "aura-core-types",
  "aura-exec-tools",
  "aura-model",

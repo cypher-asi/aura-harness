@@ -221,6 +221,7 @@ impl AgentHub {
         row.start_step = None;
         row.waiting = false;
         row.reconnecting = false;
+        row.waiting_for_sign_in = false;
         match live {
             LiveState::Failed { why, .. } => row.error = Some(why),
             LiveState::Starting(step) => {
@@ -229,6 +230,7 @@ impl AgentHub {
             }
             LiveState::Waiting => row.waiting = true,
             LiveState::Reconnecting => row.reconnecting = true,
+            LiveState::SignIn(_) => row.waiting_for_sign_in = true,
             LiveState::Working | LiveState::Queued(_) | LiveState::Idle => {}
         }
     }
@@ -249,6 +251,9 @@ impl AgentHub {
         }
         if status.is_starting(agent) || lock(&self.cloud_starts).contains(&agent) {
             return LiveState::Starting(status.start_step(agent));
+        }
+        if let Some(why) = self.recovery.sign_in_wait(agent) {
+            return LiveState::SignIn(why);
         }
         if let Some(why) = status.failure(agent) {
             let stalled = self.standing.is_stalled(agent);
@@ -272,6 +277,9 @@ pub(crate) enum LiveState {
     Working,
     /// It starts on a cloud machine of its own, at this step if known
     Starting(Option<StartStep>),
+    /// The model refused its sign-in, for this reason: it waits for one
+    /// that works, its work kept
+    SignIn(String),
     /// Its work failed, or stalled, because of `why`
     Failed {
         /// Why

@@ -41,6 +41,12 @@ fn full_status(member: &AgentSummary) -> Option<String> {
     if let Some(why) = &member.error {
         return Some(format!("Failed: {why}"));
     }
+    if member.waiting_for_sign_in {
+        return Some(format!(
+            "{}: it carries on by itself once a model call works again or you sign in (/login)",
+            super::channel_side::WAITING_FOR_SIGN_IN
+        ));
+    }
     member.starting.then(|| starting_status(member))
 }
 

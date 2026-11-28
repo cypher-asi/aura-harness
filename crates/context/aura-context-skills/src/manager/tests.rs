@@ -120,13 +120,51 @@ fn an_agent_gets_an_index_of_its_skills_and_loads_one_body_on_demand() {
     assert!(!prompt.contains("Tag, build"), "no body in the index");
     assert!(!prompt.contains("unused"), "only the agent's skills");
 
-    let loaded = manager.load_agent_skill(agent_hex, "deploy").unwrap();
+    let loaded = manager.load_agent_skill(agent_hex, "deploy", None).unwrap();
     assert!(loaded.contains("Tag, build, then publish."));
     assert!(
         matches!(
-            manager.load_agent_skill(agent_hex, "unused"),
+            manager.load_agent_skill(agent_hex, "unused", None),
             Err(SkillError::NotFound(_))
         ),
         "a skill not installed for the agent is not loaded"
     );
+}
+
+#[test]
+fn a_hub_bundle_installs_its_skills_and_a_later_one_drops_what_it_left_out() {
+    use aura_core_protocol::cloud::{SkillBundle, SkillFile, SkillFolder};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("hub-skills");
+    let loader = SkillLoader::new(SkillLoaderConfig {
+        extra_dirs: vec![root.clone()],
+        ..SkillLoaderConfig::default()
+    });
+    let mut manager =
+        SkillManager::with_install_store(loader, install_store(&tmp.path().join("db")));
+    let agent = AgentId::new([3; 32]);
+    let hex = agent.to_hex();
+    let folder = |name: &str| SkillFolder {
+        name: name.into(),
+        files: vec![SkillFile {
+            path: "SKILL.md".into(),
+            text: format!("---\nname: {name}\ndescription: d\n---\n{name} steps\n"),
+        }],
+    };
+    let both = SkillBundle::new(vec![folder("deploy"), folder("review")]);
+    crate::bundle::apply(&mut manager, &root, agent, &both).unwrap();
+    assert_eq!(manager.agent_skill_meta(&hex).len(), 2);
+    assert!(manager
+        .load_agent_skill(&hex, "review", None)
+        .unwrap()
+        .contains("review steps"));
+
+    let one = SkillBundle::new(vec![folder("deploy")]);
+    crate::bundle::apply(&mut manager, &root, agent, &one).unwrap();
+    let names: Vec<String> = manager
+        .agent_skill_meta(&hex)
+        .into_iter()
+        .map(|m| m.name)
+        .collect();
+    assert_eq!(names, ["deploy"], "the dropped skill is uninstalled");
 }

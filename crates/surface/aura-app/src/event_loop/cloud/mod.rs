@@ -57,6 +57,7 @@ use crate::cloud::{CloudHub, PlaceRequest, RemoteEvent};
 
 mod blocked_starts;
 mod boot;
+mod copy_note;
 mod ended;
 #[cfg(test)]
 mod ended_tests;
@@ -91,7 +92,7 @@ pub(super) use ended::handle_ended;
 pub(in crate::event_loop) use machine::node_offers_ship;
 use machine::MachineRows;
 pub(super) use machine::{list_sandbox, read_sandbox_file, refresh_machine_plans, MachinePlans};
-pub(super) use member_start::start_in_cloud;
+pub(super) use member_start::{retry_start, start_in_cloud};
 use member_start::{Start, START_TIMEOUT};
 use moving::MoveMark;
 pub(super) use owners::archive_refusal;

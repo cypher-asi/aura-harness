@@ -48,6 +48,7 @@ async fn follow(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, mark
     });
     let extras = TurnExtras {
         said: String::new(),
+        copy_failed: None,
         titles,
         context_limit: mark
             .model
@@ -89,7 +90,6 @@ pub(in crate::event_loop) async fn follow_events(
     note_turn(state, agent, row, &cancel).await;
     let ui = AgentUi::new(state.commands.clone(), agent);
     let extras = TurnExtras {
-        said: String::new(),
         from_record: true,
         cut_short: Some(super::forward::CutShort {
             notices: state.hub.notices.clone(),
@@ -127,6 +127,7 @@ pub(in crate::event_loop) async fn stream_events(
     let ui = AgentUi::new(state.commands.clone(), agent);
     let extras = TurnExtras {
         said: String::new(),
+        copy_failed: None,
         reload: Some(super::forward::chat_reload(
             Arc::clone(&state.hub),
             ui.clone(),
