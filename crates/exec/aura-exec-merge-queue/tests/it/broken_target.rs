@@ -16,6 +16,7 @@ use aura_exec_merge_queue::{HoldKind, QueueEvent};
 use support::*;
 
 const FAKE_CARGO: &str = r#"#!/bin/sh
+[ -f runs.txt ] && echo run >> "$(cat runs.txt)"
 fail() { echo "test $1 ... FAILED"; echo; echo "failures:"; echo; echo "---- $1 stdout ----"; echo "assertion failed: $2"; echo; echo "failures:"; echo "    $1"; exit 101; }
 [ -f broken.txt ] && fail broken_on_main "main is broken"
 [ -f entry-breaks.txt ] && fail entry_case "the entry broke it"
@@ -170,4 +171,44 @@ async fn a_test_only_the_entry_breaks_fails_it_by_name() {
         .excerpt
         .unwrap_or_default()
         .contains("the entry broke it"));
+}
+
+#[tokio::test]
+async fn a_second_entry_on_a_known_broken_tip_parks_without_running_again() {
+    if !has_git() {
+        return;
+    }
+    let world = world();
+    let runs = world.root.path().join("runs");
+    main_with(
+        &world,
+        &[
+            ("broken.txt", "bug\n"),
+            ("runs.txt", runs.to_str().unwrap()),
+        ],
+    );
+    let (queue, processor) = queue(&world, config()).await;
+    for branch in ["aura/a-rus1", "aura/b-rus2"] {
+        let file = format!("{}.txt", &branch[5..6]);
+        queue
+            .enqueue(agent_pushes(&world, branch, &file, "x\n"))
+            .await
+            .unwrap();
+    }
+    let count = || {
+        std::fs::read_to_string(&runs)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+
+    let first = processor.process_next().await.unwrap().unwrap();
+    assert_eq!(first.status, MergeStatus::Queued);
+    let after_first = count();
+    assert_eq!(after_first, 3, "the merge, the whole rerun, the target");
+    let second = processor.process_next().await.unwrap().unwrap();
+
+    assert_eq!(second.branch, "aura/b-rus2");
+    assert_eq!(second.status, MergeStatus::Queued, "{:?}", second.detail);
+    assert_eq!(count(), after_first + 1, "only its own merge ran");
 }

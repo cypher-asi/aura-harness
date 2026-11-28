@@ -107,6 +107,9 @@ pub struct GitIntegrator {
     /// The target's tip after this integrator's last merge: the newest
     /// commit known to pass the checks
     last_green: std::sync::Mutex<Option<String>>,
+    /// The broken target this integrator found last: an entry failing
+    /// the same tests on the same tip parks without running them again
+    known_broken: std::sync::Mutex<Option<Hold>>,
 }
 
 impl GitIntegrator {
@@ -118,6 +121,7 @@ impl GitIntegrator {
             config,
             forge: None,
             last_green: std::sync::Mutex::new(None),
+            known_broken: std::sync::Mutex::new(None),
         }
     }
 

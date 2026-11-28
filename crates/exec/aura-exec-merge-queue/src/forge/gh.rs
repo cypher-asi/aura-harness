@@ -4,14 +4,30 @@
 //! Every call names the repo (`--repo owner/name`), so the CLI never
 //! reads or changes a local checkout, and has a time limit. The token
 //! goes to `gh` alone; it is in no log or error.
+//!
+//! ## What `gh` writes on GitHub (declared in `docs/invariants.md`)
+//!
+//! - `gh pr create`: opens a branch's PR when it has none.
+//! - `gh pr comment`: says on a PR why it didn't merge, or which tests
+//!   were flaky.
+//! - `gh pr close`: closes a PR whose head is on the target already.
+//! - `gh api --method POST .../statuses/<sha>`: the `aura/merge-queue`
+//!   commit status.
+//! - `gh pr merge` ([`Forge::merge`]) exists for the trait, but the
+//!   landing path doesn't call it: the queue pushes its tested merge
+//!   commit to the target itself, so the target is only ever a tested
+//!   commit.
+//!
+//! It reads with `gh pr list` and `gh pr view`. The subcommands are
+//! pinned by a check in `scripts/check_invariants.sh`. Branches are
+//! never written through `gh`: pushes and deletions go through the
+//! queue's own git ([`crate::git`]).
 
 use super::{
-    CheckState, Forge, ForgeError, MergeOutcome, PrRequest, PrState, PullRequest, FORGE_TIMEOUT,
+    CheckState, Forge, ForgeError, MergeOutcome, PrRequest, PullRequest, FORGE_TIMEOUT,
     STATUS_CONTEXT,
 };
-use crate::report::PrRef;
 use async_trait::async_trait;
-use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -85,7 +101,9 @@ pub struct GhForge {
     /// Asked for a token on each call when `token` is unset: a token the
     /// hub stores, which may change while the queue runs
     token_source: Option<TokenSource>,
-    program: PathBuf,
+    /// The `gh` program, named `gh` so `scripts/check_invariants.sh`
+    /// sees where it runs
+    gh: PathBuf,
     timeout: Duration,
 }
 
@@ -118,7 +136,7 @@ impl GhForge {
             slug,
             token: None,
             token_source: None,
-            program: PathBuf::from("gh"),
+            gh: PathBuf::from("gh"),
             timeout: FORGE_TIMEOUT,
         }
     }
@@ -141,7 +159,7 @@ impl GhForge {
     /// This forge, running `program` as `gh` (tests).
     #[must_use]
     pub fn with_program(mut self, program: PathBuf) -> Self {
-        self.program = program;
+        self.gh = program;
         self
     }
 
@@ -153,7 +171,7 @@ impl GhForge {
 
     /// Run `gh <args>` with `stdin`; its standard output.
     async fn gh(&self, args: &[&str], stdin: Option<&str>) -> Result<String, ForgeError> {
-        let mut command = Command::new(&self.program);
+        let mut command = Command::new(&self.gh);
         command
             .args(args)
             .env("GH_PROMPT_DISABLED", "1")
@@ -175,7 +193,7 @@ impl GhForge {
         let what = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
         let run = async {
             let mut child = command.spawn().map_err(|e| {
-                ForgeError::Unavailable(format!("could not run {}: {e}", self.program.display()))
+                ForgeError::Unavailable(format!("could not run {}: {e}", self.gh.display()))
             })?;
             if let (Some(text), Some(mut input)) = (stdin, child.stdin.take()) {
                 input.write_all(text.as_bytes()).await.map_err(|e| {
@@ -309,6 +327,24 @@ impl Forge for GhForge {
         .map(drop)
     }
 
+    async fn close(&self, number: u64, body: &str) -> Result<(), ForgeError> {
+        let repo = self.slug.to_string();
+        self.gh(
+            &[
+                "pr",
+                "close",
+                &number.to_string(),
+                "--repo",
+                &repo,
+                "--comment",
+                body,
+            ],
+            None,
+        )
+        .await
+        .map(drop)
+    }
+
     async fn set_status(&self, sha: &str, state: CheckState, text: &str) -> Result<(), ForgeError> {
         let path = format!("repos/{}/statuses/{sha}", self.slug);
         let state = format!("state={}", state.as_str());
@@ -361,118 +397,9 @@ impl Forge for GhForge {
     }
 }
 
-/// How a merge of a PR whose head was to be `head` went, from the PR as
-/// it is after the call, and what the call said when it failed.
-pub(crate) fn merge_outcome(
-    now: &PullRequest,
-    head: &str,
-    refusal: Option<String>,
-) -> MergeOutcome {
-    match (now.state, &now.merge_commit) {
-        (PrState::Merged, Some(sha)) => MergeOutcome::Merged { sha: sha.clone() },
-        (PrState::Merged, None) => {
-            MergeOutcome::Refused("merged, but GitHub names no merge commit".to_string())
-        }
-        _ if now.head != head => MergeOutcome::HeadMoved {
-            now: now.head.clone(),
-        },
-        (PrState::Closed, _) => {
-            MergeOutcome::Refused("the PR was closed without merging".to_string())
-        }
-        (PrState::Open, _) => MergeOutcome::Refused(
-            refusal.unwrap_or_else(|| "GitHub did not merge it and gave no reason".to_string()),
-        ),
-    }
-}
+mod read;
 
-/// A failed call's error: [`ForgeError::Unavailable`] when GitHub can't
-/// be reached or the credentials are refused, else
-/// [`ForgeError::Failed`].
-pub(crate) fn classify(what: &str, stderr: &str) -> ForgeError {
-    const UNAVAILABLE: &[&str] = &[
-        "gh auth login",
-        "not logged in",
-        "authentication",
-        "bad credentials",
-        "http 401",
-        "resource not accessible",
-        "could not resolve host",
-        "connection refused",
-        "connection reset",
-        "i/o timeout",
-        "tls handshake",
-        "rate limit",
-        "http 502",
-        "http 503",
-        "http 504",
-    ];
-    let lower = stderr.to_ascii_lowercase();
-    let said = format!("{what}: {stderr}");
-    if UNAVAILABLE.iter().any(|marker| lower.contains(marker)) {
-        ForgeError::Unavailable(said)
-    } else {
-        ForgeError::Failed(said)
-    }
-}
-
-/// What `gh pr view/list --json` gives for a PR.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhPr {
-    number: u64,
-    url: String,
-    state: String,
-    head_ref_oid: String,
-    #[serde(default)]
-    merge_commit: Option<GhCommit>,
-}
-
-#[derive(Deserialize)]
-struct GhCommit {
-    oid: String,
-}
-
-impl From<GhPr> for PullRequest {
-    fn from(pr: GhPr) -> Self {
-        let state = match pr.state.as_str() {
-            "MERGED" => PrState::Merged,
-            "CLOSED" => PrState::Closed,
-            _ => PrState::Open,
-        };
-        Self {
-            pr: PrRef {
-                number: pr.number,
-                url: pr.url,
-            },
-            state,
-            head: pr.head_ref_oid,
-            merge_commit: pr.merge_commit.map(|commit| commit.oid),
-        }
-    }
-}
-
-pub(crate) fn parse_pr(json: &str) -> Result<PullRequest, ForgeError> {
-    serde_json::from_str::<GhPr>(json)
-        .map(PullRequest::from)
-        .map_err(|e| ForgeError::Failed(format!("gh printed a PR it shouldn't: {e}")))
-}
-
-pub(crate) fn parse_prs(json: &str) -> Result<Vec<PullRequest>, ForgeError> {
-    serde_json::from_str::<Vec<GhPr>>(json)
-        .map(|prs| prs.into_iter().map(PullRequest::from).collect())
-        .map_err(|e| ForgeError::Failed(format!("gh printed PRs it shouldn't: {e}")))
-}
-
-/// The PR number at the end of its address (`.../pull/12`).
-pub(crate) fn number_in_url(url: &str) -> Option<u64> {
-    let line = url.lines().rev().find(|line| line.contains("/pull/"))?;
-    line.trim()
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()?
-        .parse()
-        .ok()
-}
+pub(crate) use read::{classify, merge_outcome, number_in_url, parse_pr, parse_prs};
 
 #[cfg(test)]
 mod tests;

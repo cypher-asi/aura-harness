@@ -93,7 +93,7 @@ impl GitIntegrator {
             ..entry.clone()
         };
         if self.on_target(head, target).await? {
-            return self.already_landed(forge, pr, target).await;
+            return self.already_landed(forge, entry, pr, head, target).await;
         }
         // Always a merge commit, the target first, even for a branch based
         // on the target: it is what the checks run on, what the PR's
@@ -181,11 +181,25 @@ impl GitIntegrator {
     async fn already_landed(
         &self,
         forge: &dyn Forge,
+        entry: &MergeEntry,
         pr: &PullRequest,
+        head: &str,
         target: &str,
     ) -> Step<RunOutcome> {
-        let merged = forge.pr(pr.pr.number).await.ok();
-        let merged = merged.filter(|now| now.state == PrState::Merged);
+        let number = pr.pr.number;
+        let now = forge.pr(number).await.ok();
+        if now.as_ref().is_some_and(|now| now.state == PrState::Open) {
+            let said = format!(
+                "Already on {} at {}: nothing is left to merge, so the merge queue closes this PR.",
+                self.config.target,
+                short_sha(target)
+            );
+            if let Err(error) = forge.close(number, &said).await {
+                tracing::warn!(%error, pr = number, "Could not close a PR that landed already");
+            }
+        }
+        self.delete_branch(entry, head).await;
+        let merged = now.filter(|now| now.state == PrState::Merged);
         Ok(RunOutcome::Merged {
             merged: merged
                 .and_then(|now| now.merge_commit)
@@ -379,7 +393,7 @@ fn forge_stop(error: ForgeError) -> Stop {
         ForgeError::Unavailable(why) => {
             let now = Utc::now();
             Stop::Hold(Box::new(Hold {
-                reason: format!("GitHub can't be reached or refused the queue's sign-in: {why}"),
+                reason: format!("GitHub can't be reached: {why}"),
                 kind: HoldKind::ForgeUnavailable,
                 since: now,
                 retry_at: now + FORGE_RETRY,

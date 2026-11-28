@@ -89,3 +89,24 @@
   its branch; before, the branch was deleted.
 - A failing test counts as flaky only when the whole test command passes
   when run again, and the PR gets a comment naming the flaky tests.
+
+### The merge queue's GitHub calls are declared, and fewer ways around it
+
+##### Changed
+
+- `run_command` also refuses GitHub API calls that merge or move a
+  branch: `gh api` writes to `/merges` or `/git/refs`, GraphQL
+  `mergePullRequest` and `enablePullRequestAutoMerge`, and the same
+  through `curl` to `api.github.com`. Branch protection stays the real
+  guard.
+- GitHub refusing the queue's credentials (401/403) fails the entry with
+  a message on how to sign the hub in, instead of holding the queue.
+- A PR whose head is already on main is closed with a comment and its
+  branch deleted.
+- A second push that fails the same tests on a main already found broken
+  parks at once, without running them twice more.
+- Starting a task refuses when it can't tell which commits origin lacks,
+  and a follow-up branch name the machine may not push is refused before
+  anything is checked out.
+- Everything the queue writes through `gh` is declared, and the
+  invariant check catches `gh` run through a variable.

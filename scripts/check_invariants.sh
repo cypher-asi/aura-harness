@@ -213,6 +213,36 @@ while IFS= read -r subcommand; do
     fi
 done <<<"$gh_subcommands"
 
+# §1 — `gh` run through a variable: the band above only sees the literal
+# `Command::new("gh")`. Any `"gh"` given as a program's value (a field or
+# variable later passed to `Command::new`) must sit in a declared place:
+#
+#   * `crates/surface/aura-app/src/event_loop/repo/github.rs` — the REPO
+#     tab's PR reads (above).
+#   * `crates/engine/aura-engine-integrations/src/builtin/github.rs` and
+#     `manifest.rs` — GitHub's sign-in status, `gh auth token` and
+#     `gh api user`; the user's own `gh auth login`. No repo write.
+#   * `crates/exec/aura-exec-merge-queue/src/forge/gh.rs` — the merge
+#     queue's PRs. It writes PRs, comments and commit statuses; its
+#     subcommands are pinned by the check after this band.
+#
+# Declared in docs/invariants.md.
+run_band "§1" "\"gh\" as a program outside the declared gh call sites" \
+    '(PathBuf::from|String::from|OsStr::new|OsString::from)\("gh"\)|[a-z_]+:\s*"gh"\.(to_string|to_owned|into)\(\)|with_gh\("gh"|Command::new\(&?(self\.)?gh\)' \
+    '^(crates/surface/aura-app/src/event_loop/repo/github\.rs|crates/engine/aura-engine-integrations/src/builtin/github\.rs|crates/engine/aura-engine-integrations/src/manifest\.rs|crates/exec/aura-exec-merge-queue/src/forge/gh\.rs|.*/tests/|.*test.*\.rs|.*tests.*\.rs)'
+forge_file='crates/exec/aura-exec-merge-queue/src/forge/gh.rs'
+forge_subcommands=$(sed '/^#\[cfg(test)\]/,$d' "$forge_file" \
+    | rg -U -o -r '$1 $2' '\bgh\(\s*&\[\s*"([^"]+)",\s*"([^"]+)"' || true)
+if [[ -z "$forge_subcommands" ]]; then
+    report "§1" "no gh subcommands found to check in ${forge_file}" "$forge_file"
+fi
+while IFS= read -r subcommand; do
+    [[ -z "$subcommand" ]] && continue
+    if [[ ! "$subcommand" =~ ^(pr\ (list|view|create|comment|close|merge)|api\ --method)$ ]]; then
+        report "§1" "gh ${subcommand} is not a subcommand the merge queue declares" "$forge_file"
+    fi
+done <<<"$forge_subcommands"
+
 # §10 — non-kernel, non-store crates must bind to `Arc<dyn ReadStore>`.
 #
 # `Arc<dyn Store>` exposes the sealed `WriteStore` surface. It is only

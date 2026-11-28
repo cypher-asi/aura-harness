@@ -11,6 +11,9 @@
 //!    with the target's commits since it last passed as suspects);
 //! 3. else the entry broke them, and fails with their names and output.
 //!
+//! An entry that fails the same tests on a target tip already found
+//! broken parks at once, without running them again.
+//!
 //! Output that names no tests (not libtest's) fails the entry as before:
 //! running a whole unknown suite three times costs more than it tells.
 
@@ -52,6 +55,10 @@ impl GitIntegrator {
         let Some(rerun) = rerun_command(command, &tests) else {
             return Err(Stop::Fail(failure));
         };
+        if let Some(known) = self.known_broken_at(target, &tests) {
+            tracing::info!(tests = %tests.join(", "), "The target is known broken at this tip; parking");
+            return Err(Stop::Hold(Box::new(known)));
+        }
         failure.excerpt = test_excerpt(&output, &tests).or(failure.excerpt.take());
         failure.tests.clone_from(&tests);
         let worktree = self.repo.worktree();
@@ -68,14 +75,35 @@ impl GitIntegrator {
                 tests.join(", ")
             ));
         }
+        Err(self
+            .rerun_on_target(&rerun, config, target, &tests, failure)
+            .await)
+    }
+
+    /// Run `rerun` (the failing `tests`) on the plain target `target`:
+    /// passing there, the entry broke them (`failure`, reworded); failing
+    /// there too, the target is broken and the queue holds.
+    async fn rerun_on_target(
+        &self,
+        rerun: &str,
+        config: &QueueConfig,
+        target: &str,
+        tests: &[String],
+        mut failure: Box<crate::report::Failure>,
+    ) -> Stop {
+        let worktree = self.repo.worktree();
+        let log = self.repo.check_log().with_extension("rerun.log");
         let timeout = self.config.git_timeout;
-        git::ok(
+        let checked_out = git::ok(
             &worktree,
             &["checkout", "--detach", "--force", target],
             timeout,
         )
-        .await?;
-        if run_check(&worktree, &rerun, config.check_timeout, &log)
+        .await;
+        if let Err(error) = checked_out {
+            return Stop::from(error);
+        }
+        if run_check(&worktree, rerun, config.check_timeout, &log)
             .await
             .is_ok()
         {
@@ -86,12 +114,28 @@ impl GitIntegrator {
                 short_sha(target),
                 failure.reason
             );
-            return Err(Stop::Fail(failure));
+            return Stop::Fail(failure);
         }
         let on_target = read_log(&log).await;
-        Err(Stop::Hold(Box::new(
-            self.broken(target, &tests, &on_target).await,
-        )))
+        let hold = self.broken(target, tests, &on_target).await;
+        *self
+            .known_broken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hold.clone());
+        Stop::Hold(Box::new(hold))
+    }
+
+    /// The broken target found before, when it was at `target` and
+    /// failed every one of `tests` there.
+    fn known_broken_at(&self, target: &str, tests: &[String]) -> Option<Hold> {
+        let known = self
+            .known_broken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()?;
+        let same_tip = known.target_tip.as_deref() == Some(target);
+        let same_tests = tests.iter().all(|test| known.tests.contains(test));
+        (same_tip && same_tests).then_some(known)
     }
 
     /// The hold for a target at `target` that fails `tests`.

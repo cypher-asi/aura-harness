@@ -225,7 +225,12 @@ async fn refuse_unpushed(workspace: &Path, timeout: Duration) -> Result<(), GitT
         timeout,
     )
     .await
-    .unwrap_or_default();
+    .map_err(|error| {
+        GitToolError::WorkLeftBehind(format!(
+            "could not tell which commits origin doesn't have ({error}), so a new branch could \
+             leave them behind"
+        ))
+    })?;
     if unpushed.is_empty() {
         return Ok(());
     }
@@ -240,15 +245,18 @@ async fn refuse_unpushed(workspace: &Path, timeout: Duration) -> Result<(), GitT
 /// `origin/<target>` and new commits sit on top, a fresh name
 /// (from `task` when given, else the old name with a number), checked
 /// out at `HEAD`. `None` when the branch is not merged or has nothing
-/// new, or is no agent branch.
+/// new, or is no agent branch. `allowed` checks the new name (the push
+/// pin, protected branches) before anything is checked out, so a refused
+/// name leaves the workspace where it was.
 ///
 /// # Errors
-/// A git error.
+/// A git error, or what `allowed` refuses.
 pub async fn follow_up_branch(
     workspace: &Path,
     branch: &str,
     target: &str,
     task: Option<&str>,
+    allowed: impl Fn(&str) -> Result<(), GitToolError>,
     timeout: Duration,
 ) -> Result<Option<String>, GitToolError> {
     let Some(code) = agent_code(branch) else {
@@ -286,15 +294,29 @@ pub async fn follow_up_branch(
         return Ok(None);
     }
     let wanted = task.map_or_else(|| branch.to_string(), |task| task_branch(task, code));
-    let mut taken = vec![branch.to_string()];
-    while let Some(candidate) = first_free(&wanted, |name| taken.iter().any(|t| t == name)) {
-        if branch_exists(workspace, &candidate, true, timeout).await? {
-            taken.push(candidate);
-            continue;
+    let Some(candidate) = free_name(workspace, &wanted, branch, timeout).await? else {
+        return Ok(None);
+    };
+    allowed(&candidate)?;
+    git_ok(workspace, "checkout", &["-q", "-b", &candidate], timeout).await?;
+    tracing::info!(from = %branch, to = %candidate, "Follow-up work on a merged branch moved to a new one");
+    Ok(Some(candidate))
+}
+
+/// The first free name from `wanted` on, here and on origin, other than
+/// `current`.
+async fn free_name(
+    workspace: &Path,
+    wanted: &str,
+    current: &str,
+    timeout: Duration,
+) -> Result<Option<String>, GitToolError> {
+    let mut taken = vec![current.to_string()];
+    while let Some(candidate) = first_free(wanted, |name| taken.iter().any(|t| t == name)) {
+        if !branch_exists(workspace, &candidate, true, timeout).await? {
+            return Ok(Some(candidate));
         }
-        git_ok(workspace, "checkout", &["-q", "-b", &candidate], timeout).await?;
-        tracing::info!(from = %branch, to = %candidate, "Follow-up work on a merged branch moved to a new one");
-        return Ok(Some(candidate));
+        taken.push(candidate);
     }
     Ok(None)
 }

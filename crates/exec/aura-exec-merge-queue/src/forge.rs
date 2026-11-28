@@ -108,8 +108,8 @@ pub enum MergeOutcome {
 /// Why a forge call failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ForgeError {
-    /// The forge can't be reached, the CLI is missing, or it refused the
-    /// credentials: not the entry's fault
+    /// The forge can't be reached or the CLI is missing: not the
+    /// entry's fault, so the queue waits
     #[error("GitHub is unavailable: {0}")]
     Unavailable(String),
     /// The call reached the forge and failed
@@ -129,6 +129,9 @@ pub trait Forge: Send + Sync {
 
     /// Comment `body` on PR `number`.
     async fn comment(&self, number: u64, body: &str) -> Result<(), ForgeError>;
+
+    /// Close PR `number` without merging it, saying `body`.
+    async fn close(&self, number: u64, body: &str) -> Result<(), ForgeError>;
 
     /// Set the queue's status ([`STATUS_CONTEXT`]) on commit `sha`.
     async fn set_status(&self, sha: &str, state: CheckState, text: &str) -> Result<(), ForgeError>;
