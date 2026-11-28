@@ -100,9 +100,12 @@ impl TestServer {
                         .next()
                         .unwrap_or_default()
                         .to_string();
+                    let route = format!("{} {path}", request.method);
                     seen.lock().unwrap().push(request);
+                    // `"METHOD /path"` routes win over plain `"/path"` ones.
                     let reply = routes
-                        .get(&path)
+                        .get(&route)
+                        .or_else(|| routes.get(&path))
                         .cloned()
                         .unwrap_or_else(|| Reply::status(404, "not found"));
                     if let Some(delay) = reply.delay {

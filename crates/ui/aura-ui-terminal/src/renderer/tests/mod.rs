@@ -51,6 +51,7 @@ mod plan_badge;
 mod record_info;
 mod reply_footer;
 mod roster;
+mod running_group_fold;
 mod side_panel;
 mod side_panel_tabs;
 mod sign_ins;

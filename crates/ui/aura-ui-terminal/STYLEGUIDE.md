@@ -391,6 +391,18 @@ under a fold arrow, then the timeline, newest first.
   drawn, and where the first label of a run of them comes back, a blank
   row sets the next record apart
 - **Steps**: markers `faint`, the whole line `muted`
+- **Step groups**: a run of steps folds under one summary line. A
+  finished group shows its summary and a `muted` `N steps` row. A
+  running group shows its summary alone, with the spinner, the latest
+  step's number and the time (`⠏ Running 28 commands · step 46 · 3m
+  19s`): no numbered steps and no previews of what they thought or
+  printed, for a local agent, a cloud one, a spawned one and a turn the
+  chat reattached to after a restart. A click on the summary, or
+  `Ctrl+O` for every group, opens it: the numbered steps, and while it
+  runs a short tail of each finished thought and command; the same
+  folds it again. A click is remembered per group while the chat is
+  open. A cloud machine's boot console (`Waking cloud machine`) is a
+  block of its own and keeps its own fold.
 - **Live tail**: while a turn runs, the working line flush with the
   reply: `⬢` in `success`, the label bold `foreground`, the elapsed time
   `muted`. The to-do list is never part of the conversation.
