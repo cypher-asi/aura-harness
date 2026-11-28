@@ -126,7 +126,7 @@ fn fake_gh(dir: &std::path::Path) -> PathBuf {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\necho \"$GH_TOKEN|$*\" >> '{}'\ncase \"$2\" in view) \
+            "#!/bin/sh\n[ -n \"$FAKE_GH_PROBE\" ] && exit 0\necho \"$GH_TOKEN|$*\" >> '{}'\ncase \"$2\" in view) \
              echo '{{\"number\":3,\"url\":\"u\",\"state\":\"MERGED\",\"headRefOid\":\"abc\",\
              \"mergeCommit\":{{\"oid\":\"m3\"}}}}';; esac\n",
             log.display()
@@ -134,6 +134,19 @@ fn fake_gh(dir: &std::path::Path) -> PathBuf {
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Another test's fork may still hold the script open for writing for
+    // a moment ("text file busy"): wait until it runs.
+    for _ in 0..200 {
+        let probe = std::process::Command::new(&script)
+            .env("FAKE_GH_PROBE", "1")
+            .status();
+        match probe {
+            Err(e) if e.raw_os_error() == Some(26) => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            _ => break,
+        }
+    }
     script
 }
 
@@ -168,4 +181,32 @@ async fn a_missing_gh_is_unavailable_not_a_failure() {
     let forge = GhForge::new(RepoSlug::from_remote_url("git@github.com:o/r").unwrap())
         .with_program(PathBuf::from("/nonexistent/gh"));
     assert!(matches!(forge.pr(1).await, Err(ForgeError::Unavailable(_))));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_token_source_is_asked_on_each_call_and_a_fixed_token_wins() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&asked);
+    let source: TokenSource = Arc::new(move || {
+        let n = counter.fetch_add(1, Ordering::SeqCst);
+        Some(format!("stored{n}"))
+    });
+    let slug = RepoSlug::from_remote_url("git@github.com:o/r").unwrap();
+    let forge = GhForge::new(slug.clone())
+        .with_token_source(Arc::clone(&source))
+        .with_program(fake_gh(dir.path()));
+    forge.comment(3, "one").await.unwrap();
+    forge.comment(3, "two").await.unwrap();
+    let fixed = GhForge::new(slug)
+        .with_token(Some("fixed".to_string()))
+        .with_token_source(source)
+        .with_program(fake_gh(dir.path()));
+    fixed.comment(3, "three").await.unwrap();
+    let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
+    let tokens: Vec<&str> = calls.lines().filter_map(|l| l.split('|').next()).collect();
+    assert_eq!(tokens, ["stored0", "stored1", "fixed"]);
 }

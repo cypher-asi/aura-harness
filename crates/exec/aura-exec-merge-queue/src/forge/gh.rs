@@ -73,11 +73,18 @@ impl std::fmt::Display for RepoSlug {
     }
 }
 
+/// Where a [`GhForge`] gets a token on each call; `None` leaves `gh` to
+/// its environment and its own sign-in.
+pub type TokenSource = std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
 /// GitHub through the `gh` CLI.
 #[derive(Clone)]
 pub struct GhForge {
     slug: RepoSlug,
     token: Option<String>,
+    /// Asked for a token on each call when `token` is unset: a token the
+    /// hub stores, which may change while the queue runs
+    token_source: Option<TokenSource>,
     program: PathBuf,
     timeout: Duration,
 }
@@ -99,6 +106,7 @@ impl GhForge {
         Self {
             slug,
             token: None,
+            token_source: None,
             program: PathBuf::from("gh"),
             timeout: FORGE_TIMEOUT,
         }
@@ -108,6 +116,14 @@ impl GhForge {
     #[must_use]
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token.filter(|token| !token.trim().is_empty());
+        self
+    }
+
+    /// This forge, asking `source` for a token on each call it makes
+    /// without a fixed one ([`Self::with_token`] wins).
+    #[must_use]
+    pub fn with_token_source(mut self, source: TokenSource) -> Self {
+        self.token_source = Some(source);
         self
     }
 
@@ -140,7 +156,9 @@ impl GhForge {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        if let Some(token) = &self.token {
+        let asked = || self.token_source.as_ref().and_then(|source| source());
+        let token = self.token.clone().or_else(asked);
+        if let Some(token) = token.filter(|token| !token.trim().is_empty()) {
             command.env("GH_TOKEN", token);
         }
         let what = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
