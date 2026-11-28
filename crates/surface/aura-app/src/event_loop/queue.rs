@@ -8,6 +8,7 @@
 //! An agent with an empty queue has no entry in the map, so "has queued
 //! work" is a map lookup.
 
+use super::standing::QueueCounts;
 use super::turns::Work;
 use aura_core_types::AgentId;
 use aura_ui::events::QueuedItemView;
@@ -46,12 +47,36 @@ impl EditOutcome {
 pub(super) struct WorkQueues {
     by_agent: HashMap<AgentId, VecDeque<Queued>>,
     next_id: u64,
+    /// How long each queue is, kept for the agents' peers as every
+    /// change happens ([`super::standing`]), so no path that changes a
+    /// queue leaves its count behind
+    counts: QueueCounts,
 }
 
 impl WorkQueues {
+    /// Empty queues whose lengths are kept in `counts`.
+    pub(super) fn counted(counts: QueueCounts) -> Self {
+        Self {
+            counts,
+            ..Self::default()
+        }
+    }
+
     fn fresh_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
+    }
+
+    /// Keep `agent_id`'s count as long as its queue now is.
+    fn count(&self, agent_id: AgentId) {
+        let mut counts = self
+            .counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match self.len(agent_id) {
+            0 => counts.remove(&agent_id),
+            len => counts.insert(agent_id, len),
+        };
     }
 
     /// Queue `work` behind what `agent_id` already waits for.
@@ -61,6 +86,7 @@ impl WorkQueues {
             .entry(agent_id)
             .or_default()
             .push_back(Queued { id, work });
+        self.count(agent_id);
     }
 
     /// Queue `work` ahead of what `agent_id` already waits for.
@@ -70,6 +96,7 @@ impl WorkQueues {
             .entry(agent_id)
             .or_default()
             .push_front(Queued { id, work });
+        self.count(agent_id);
     }
 
     /// Take the oldest work of `agent_id`.
@@ -79,6 +106,7 @@ impl WorkQueues {
         if queue.is_empty() {
             self.by_agent.remove(&agent_id);
         }
+        self.count(agent_id);
         next.map(|queued| queued.work)
     }
 
@@ -96,11 +124,16 @@ impl WorkQueues {
     /// Drop the work waiting for `agent_id`.
     pub(super) fn drop_all(&mut self, agent_id: AgentId) {
         self.by_agent.remove(&agent_id);
+        self.count(agent_id);
     }
 
     /// Drop every agent's queue.
     pub(super) fn clear(&mut self) {
         self.by_agent.clear();
+        self.counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     fn position(&self, agent_id: AgentId, id: u64) -> Option<usize> {
@@ -110,19 +143,29 @@ impl WorkQueues {
             .position(|queued| queued.id == id)
     }
 
-    /// Drop entry `id` of `agent_id`. Returns whether it was there.
-    pub(super) fn remove(&mut self, agent_id: AgentId, id: u64) -> bool {
-        let Some(at) = self.position(agent_id, id) else {
-            return false;
-        };
-        let Some(queue) = self.by_agent.get_mut(&agent_id) else {
-            return false;
-        };
-        queue.remove(at);
+    /// Take entry `id` of `agent_id` out of its queue, if it is there.
+    pub(super) fn remove(&mut self, agent_id: AgentId, id: u64) -> Option<Work> {
+        let at = self.position(agent_id, id)?;
+        let queue = self.by_agent.get_mut(&agent_id)?;
+        let removed = queue.remove(at);
         if queue.is_empty() {
             self.by_agent.remove(&agent_id);
         }
-        true
+        self.count(agent_id);
+        removed.map(|queued| queued.work)
+    }
+
+    /// The text of queued message `id` of `agent_id`, if it is one.
+    pub(super) fn text_of(&self, agent_id: AgentId, id: u64) -> Option<String> {
+        let queued = self
+            .by_agent
+            .get(&agent_id)?
+            .iter()
+            .find(|queued| queued.id == id)?;
+        match &queued.work {
+            Work::Prompt { prompt, .. } => Some(prompt.text.clone()),
+            Work::Command { .. } | Work::Compact { .. } | Work::Build { .. } => None,
+        }
     }
 
     /// Move entry `id` of `agent_id` to index `to`, clamped to the queue.
@@ -282,17 +325,17 @@ mod tests {
     fn removing_the_last_entry_drops_the_agents_queue() {
         let mut queues = queue_of(&["only"]);
         let id = id_at(&queues, 0);
-        assert!(queues.remove(agent(), id));
+        assert!(queues.remove(agent(), id).is_some());
         assert!(queues.is_empty());
         assert_eq!(queues.len(agent()), 0);
-        assert!(!queues.remove(agent(), id), "already gone");
+        assert!(queues.remove(agent(), id).is_none(), "already gone");
     }
 
     #[test]
     fn remove_takes_only_the_named_entry() {
         let mut queues = queue_of(&["a", "b", "c"]);
         let id = id_at(&queues, 1);
-        assert!(queues.remove(agent(), id));
+        assert!(queues.remove(agent(), id).is_some());
         assert_eq!(texts(&queues), ["a", "c"]);
     }
 

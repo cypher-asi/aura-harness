@@ -50,6 +50,7 @@ mod provider;
 mod queue_edits;
 mod restart;
 mod rewinding;
+mod stall_fixes;
 mod stalls;
 mod subtasks;
 pub(in crate::event_loop) mod support;

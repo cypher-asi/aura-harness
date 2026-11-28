@@ -18,4 +18,7 @@ pub(in crate::event_loop) fn give_up_unstarted(state: &LoopState<'_>, agent: Age
     warn!(agent = %agent.to_hex(), %why, "Work could not start; its reports are given up");
     answers::give_up_all(&state.hub, agent, why);
     state.hub.status.fail(agent, why);
+    // As a failed cloud start does: no stage of its waits on work that
+    // will not run.
+    state.hub.factory_flows.leave(agent);
 }

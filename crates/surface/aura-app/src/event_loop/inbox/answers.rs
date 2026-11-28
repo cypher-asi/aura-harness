@@ -86,6 +86,16 @@ pub(crate) fn give_up_all(hub: &AgentHub, agent_id: AgentId, why: &str) {
     }
 }
 
+/// Tell the senders of `owed`, requests `agent_id` owed, that no answer
+/// is coming, `why`, nothing of them having run. Work its sender took
+/// back is dropped without a word: the sender knows.
+pub(super) fn give_up_owed(hub: &AgentHub, agent_id: AgentId, owed: &[Owed], why: &str) {
+    let why = capped(why, STOPPED_CHARS);
+    for owed in owed.iter().filter(|owed| !owed.withdrawn) {
+        reply(hub, agent_id, owed, false, &stopped(&why, None));
+    }
+}
+
 /// Why an archived agent's owed work won't be answered.
 pub(crate) const ARCHIVED: &str = "the agent was archived";
 
