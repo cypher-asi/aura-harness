@@ -42,6 +42,7 @@ docker build -t aura . && docker run -p 8080:8080 aura
 | [API](docs/api.md) | Every HTTP and WebSocket endpoint, starting with `POST /v1/run`. |
 | [CLI](docs/cli.md) | The `aura` and `aura-node` binaries, commands and flags. |
 | [Configuration](docs/configuration.md) | Environment variables and authentication. |
+| [Integrations](docs/integrations.md) | The standard way to plug in an external service (GitHub, boxd, RunPod, ...): manifest, credentials, health checks, agent tools. |
 | [Run traces](docs/run-traces.md) | Recorded runs, rewards, the graph view, evals, branching and training-data export. |
 | [Architecture](docs/architecture.md) | The ten-layer crate map, request flow, mode resolution, tool authorization, per-crate reference. |
 | [Invariants](docs/invariants.md) | The 15 guarantees behind the principles and the CI checks that enforce them. |
