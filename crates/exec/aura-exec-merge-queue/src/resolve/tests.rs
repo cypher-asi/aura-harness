@@ -21,7 +21,12 @@ fn generated_files_are_known_by_name_at_any_depth() {
 
 #[test]
 fn conflicted_files_split_into_real_and_generated() {
-    let (real, generated) = split(&strings(&["src/a.rs", "CHANGELOG.md", "Cargo.lock", "b.rs"]));
+    let (real, generated) = split(&strings(&[
+        "src/a.rs",
+        "CHANGELOG.md",
+        "Cargo.lock",
+        "b.rs",
+    ]));
     assert_eq!(real, strings(&["src/a.rs", "b.rs"]));
     assert_eq!(generated, strings(&["CHANGELOG.md", "Cargo.lock"]));
 }

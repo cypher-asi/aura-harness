@@ -40,6 +40,14 @@ pub const ALLOWED_SUBCOMMANDS: &[&str] = &[
     "commit",
 ];
 
+/// What every queue `fetch` passes first. `--refmap=` stops git from also
+/// updating the remote-tracking ref (`refs/remotes/<remote>/<branch>`) of
+/// each branch it fetches: the queue only writes its private
+/// `refs/aura-queue/*` refs. Without it, two queue fetches of one branch
+/// at once (the processor's and an overlap scan's) race for that ref's
+/// lock, and the loser fails ("cannot lock ref").
+pub const FETCH_ARGS: [&str; 3] = ["fetch", "--no-tags", "--refmap="];
+
 /// Author and committer of the queue's merge commits.
 const COMMITTER_NAME: &str = "aura merge queue";
 const COMMITTER_EMAIL: &str = "merge-queue@aura.local";

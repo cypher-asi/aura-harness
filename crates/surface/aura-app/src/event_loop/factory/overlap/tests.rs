@@ -36,11 +36,19 @@ fn both_owners_are_told_with_the_other_named() {
     assert!(sent[0].shown.contains("q2 aura/a"), "{}", sent[0].shown);
     assert!(sent[0].prompt.contains("RUS2"), "{}", sent[0].prompt);
     assert!(sent[0].prompt.contains("src/y.rs"), "{}", sent[0].prompt);
-    assert!(sent[0].prompt.contains("send_to_agent"), "{}", sent[0].prompt);
+    assert!(
+        sent[0].prompt.contains("send_to_agent"),
+        "{}",
+        sent[0].prompt
+    );
     assert!(!sent[0].prompt.contains("src/x.rs"), "only shared files");
     assert_eq!(sent[1].to, AgentId::new([2; 32]));
     assert!(sent[1].prompt.contains("RUS1"), "{}", sent[1].prompt);
-    assert!(sent[1].shown.contains("worktree aura/b"), "{}", sent[1].shown);
+    assert!(
+        sent[1].shown.contains("worktree aura/b"),
+        "{}",
+        sent[1].shown
+    );
     assert!(sent.iter().all(|notice| notice.inbox.is_none()));
 }
 
@@ -61,7 +69,10 @@ fn a_pair_is_told_once_until_its_files_change() {
     let b = work(Some(2), "aura/b", 2, "RUS2", &["a.rs"]);
     assert!(told.first_time(&a, &overlap_of(&a, &b)));
     assert!(!told.first_time(&a, &overlap_of(&a, &b)), "a re-push");
-    assert!(!told.first_time(&b, &overlap_of(&b, &a)), "the other way round");
+    assert!(
+        !told.first_time(&b, &overlap_of(&b, &a)),
+        "the other way round"
+    );
     let b_more = work(Some(2), "aura/b", 2, "RUS2", &["a.rs", "b.rs"]);
     assert!(told.first_time(&a, &overlap_of(&a, &b_more)));
 }
