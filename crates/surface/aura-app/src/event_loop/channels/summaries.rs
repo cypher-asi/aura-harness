@@ -287,7 +287,7 @@ fn migrate_file(store: &ChannelStore, path: &Path) {
             remove(path);
         }
         Err(error) => {
-            warn!(%error, "Could not move the old channel post summaries; trying again next run")
+            warn!(%error, "Could not move the old channel post summaries; trying again next run");
         }
     }
 }
@@ -306,7 +306,7 @@ fn remove(path: &Path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
-            warn!(path = %path.display(), %error, "Could not delete the old channel post summaries")
+            warn!(path = %path.display(), %error, "Could not delete the old channel post summaries");
         }
     }
 }
