@@ -159,10 +159,10 @@ async fn bot_account(Path(login): Path<String>) -> (StatusCode, Json<Value>) {
 
 async fn serve(mock: Shared) -> String {
     let router = Router::new()
-        .route("/repos/:owner/:repo/installation", get(installation))
-        .route("/app/installations/:id/access_tokens", post(access_token))
+        .route("/repos/{owner}/{repo}/installation", get(installation))
+        .route("/app/installations/{id}/access_tokens", post(access_token))
         .route("/app", get(app))
-        .route("/users/:login", get(bot_account))
+        .route("/users/{login}", get(bot_account))
         .with_state(mock);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

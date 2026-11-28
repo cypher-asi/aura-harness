@@ -187,7 +187,7 @@ tokio = { version = "1.35", features = ["full", "test-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # HTTP
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 # rustls on ring, the TLS stack tonic and tungstenite already use, instead of
 # OpenSSL; native roots trust the same system store OpenSSL did. `charset` and
 # `system-proxy` are defaults that `default-features = false` would drop.
@@ -196,7 +196,7 @@ axum = { version = "0.7", features = ["ws"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "charset", "system-proxy"] }
 tower = { version = "0.5", features = ["util", "limit"] }
 tower-http = { version = "0.6", features = ["trace", "cors", "timeout", "limit"] }
-tower_governor = { version = "0.5", features = ["axum"] }
+tower_governor = { version = "0.7", features = ["axum"] }
 governor = "0.8"
 
 # Storage
@@ -225,7 +225,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Testing
 tempfile = "3.10"
 proptest = "1.4"
-tokio-tungstenite = "0.26"
+# The version axum's WebSocket support uses, so only one tungstenite is built.
+tokio-tungstenite = "0.29"
 # Phase 7a: insta snapshot tests for the task-tool SubagentResult
 # byte-identical shape pin (json + redactions for non-deterministic
 # child agent ids).

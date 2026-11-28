@@ -32,6 +32,12 @@
   against the system's trust store, and requests still use HTTP/1.1.
   Request errors name their cause (a refused connection, a DNS, TLS or
   JSON error) as before.
+- Builds compile one version each of crossterm, dashmap, tower, socket2
+  and tungstenite where they compiled two: the workspace moves to
+  crossterm 0.29, dashmap 6, axum 0.8 and tokio-tungstenite 0.29, and
+  tonic 0.13 builds only its gRPC client. RocksDB is built without the
+  zlib and bzip2 codecs, which the store never used. New gateway routes
+  write path parameters in axum 0.8's form, `/agents/{agent_id}`.
 - `scripts/build-cloud-binary.sh` builds with a new `cloud-dev` profile:
   release optimizations without cross-crate LTO, compiled incrementally,
   so the rebuild after a node change takes about 30 s instead of 3

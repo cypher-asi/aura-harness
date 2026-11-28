@@ -129,7 +129,11 @@ async fn run_mesh_socket(state: RouterState, socket: WebSocket) {
 
     let writer = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
-            if sink.send(WsMessage::Text(frame.to_text())).await.is_err() {
+            if sink
+                .send(WsMessage::Text(frame.to_text().into()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }

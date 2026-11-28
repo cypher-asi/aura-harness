@@ -79,7 +79,7 @@ type Captured = (String, String, String);
 async fn spawn_trigger_stub(tx: tokio::sync::mpsc::Sender<Captured>) -> std::net::SocketAddr {
     let stub = Router::new()
         .route(
-            "/internal/agents/:agent_id/process-triggers",
+            "/internal/agents/{agent_id}/process-triggers",
             axum::routing::put(
                 |State(tx): State<tokio::sync::mpsc::Sender<Captured>>,
                  Path(agent_id): Path<String>,

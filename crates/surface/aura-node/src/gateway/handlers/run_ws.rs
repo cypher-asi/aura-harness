@@ -152,7 +152,7 @@ async fn handle_automaton_ws(
 
     let Some(subscription) = bridge.subscribe_events(&automaton_id) else {
         let msg = serde_json::json!({"type": "error", "message": format!("run {automaton_id} not found or already finished")}).to_string();
-        let _: Result<(), _> = ws_tx.send(WsMessage::Text(msg)).await;
+        let _: Result<(), _> = ws_tx.send(WsMessage::Text(msg.into())).await;
         return;
     };
     info!(
@@ -225,7 +225,7 @@ where
         let is_done = matches!(event, aura_engine_automaton::AutomatonEvent::Done);
         match serde_json::to_string(&event) {
             Ok(json) => {
-                if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                if ws_tx.send(WsMessage::Text(json.into())).await.is_err() {
                     return false;
                 }
             }
@@ -256,7 +256,7 @@ async fn forward_live_automaton_events<S>(
                 let is_done = matches!(event, aura_engine_automaton::AutomatonEvent::Done);
                 match serde_json::to_string(&event) {
                     Ok(json) => {
-                        if ws_tx.send(WsMessage::Text(json)).await.is_err() {
+                        if ws_tx.send(WsMessage::Text(json.into())).await.is_err() {
                             break;
                         }
                     }
@@ -270,7 +270,7 @@ async fn forward_live_automaton_events<S>(
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                 let msg = serde_json::json!({"type": "warning", "message": format!("dropped {n} events (client too slow)")});
-                let _ = ws_tx.send(WsMessage::Text(msg.to_string())).await;
+                let _ = ws_tx.send(WsMessage::Text(msg.to_string().into())).await;
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }

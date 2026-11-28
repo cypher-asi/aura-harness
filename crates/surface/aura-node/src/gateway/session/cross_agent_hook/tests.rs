@@ -118,7 +118,7 @@ async fn spawn_capturing_chat_stream_mock(captured: Arc<Mutex<Option<Value>>>) -
 
     let captured_for_route = captured.clone();
     let app = axum::Router::new().route(
-        "/api/agents/:agent_id/events/stream",
+        "/api/agents/{agent_id}/events/stream",
         post(
             move |Path(_agent_id): Path<String>, axum::Json(body): axum::Json<Value>| {
                 let captured = captured_for_route.clone();

@@ -131,7 +131,7 @@ async fn bridge(socket: WebSocket, tcp: TcpStream) {
                 Ok(0) | Err(_) => break,
                 Ok(read) => {
                     if ws_write
-                        .send(Message::Binary(buffer[..read].to_vec()))
+                        .send(Message::Binary(buffer[..read].to_vec().into()))
                         .await
                         .is_err()
                     {
