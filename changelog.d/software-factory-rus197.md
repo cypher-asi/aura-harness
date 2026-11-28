@@ -18,3 +18,11 @@
   the node started itself (for mail, or a spawned agent) count too. It
   keeps a turn's mark when it loses track of the turn before seeing it
   end. Two turns starting at once update the node only once.
+
+### Task records stay out of the repository
+
+##### Changed
+
+- `.aura/tasks/*.json`, the task records the app writes for the TASKS
+  tab, are no longer tracked: they are ignored and were removed from
+  the index. The files stay on disk, so the TASKS tab is unchanged.
