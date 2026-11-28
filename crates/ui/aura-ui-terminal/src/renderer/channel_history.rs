@@ -121,7 +121,7 @@ fn item_rows(
 /// One row: `text` after the inset, padded to `width` on `bg`.
 fn row(text: &str, bg: Option<Color>, style: Style, width: usize) -> Line<'static> {
     let fill = bg.map_or_else(Style::default, |bg| Style::default().bg(bg));
-    let lead = " ".repeat(INSET);
+    let lead = format!("{:INSET$}", "");
     let pad = width.saturating_sub(INSET + display_width(text));
     Line::from(vec![
         Span::styled(lead, fill),

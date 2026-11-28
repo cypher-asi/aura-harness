@@ -4,8 +4,8 @@
 //! and `get_agent_state` ([`PeerHooks`]), and a channel's coordinator
 //! hands them work with `assign` ([`AssignTool`]). An agent's peers:
 //!
-//! - a coordinator's are the other top-level members of its channel;
-//! - a channel member's are the other top-level members of its channel,
+//! - a coordinator's are the other members of its channel;
+//! - a channel member's are the other members of its channel,
 //!   the coordinator among them, and the top-level agents of its project;
 //! - any other top-level agent's are the top-level agents of its project.
 //!
@@ -16,10 +16,10 @@
 //! its turns the machine is told them ([`reach_of`]), and the requests it
 //! sends them come back here to be filed ([`MachineMail`]).
 //!
-//! A message reaches its agent like a harness notice: into its running
-//! turn, else as the prompt of a turn that carries on with its latest
-//! task. An assignment is a task of its own instead, and waits while the
-//! agent is busy. A message's first line says who sent it and what about
+//! A message reaches its agent as the prompt of a turn that carries on
+//! with its latest task; an assignment is a task of its own instead.
+//! Either waits in the agent's queue while the agent is busy: a message
+//! never goes into a running turn, nor stops one. A message's first line says who sent it and what about
 //! and its second names it ([`aura_ui::inbox`]), so chats fold
 //! it to one line. Every message also goes to the INBOX tab.
 //!
@@ -57,12 +57,9 @@
 //! (`saved`); a message sent after the last save, as the terminal shuts
 //! down, is lost.
 
-use super::agent_events::AgentUi;
 use super::channels;
-use super::handlers::system_message;
 use super::mail::{next_mail_id, subject_of};
 use super::notices::Notice;
-use super::steering::SteerSource;
 use super::subagents::{assign_tool_definition, lock, AgentHub};
 use super::turns::{Prompt, Request, Work};
 use super::{submit, LoopState};
@@ -77,7 +74,7 @@ use aura_exec_tools::{
     AgentControlHook, AgentMessage, AgentReadHook, Tool, ToolContext, ToolError,
 };
 use aura_model::{Message, Role};
-use aura_store_db::{ChannelRecord, MemberRecord, MemberRole};
+use aura_store_db::{ChannelRecord, MemberRecord};
 use aura_ui::events::MailView;
 use aura_ui::inbox::{self, InboxKind};
 use serde::Deserialize;

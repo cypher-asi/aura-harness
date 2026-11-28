@@ -22,6 +22,9 @@ pub(in crate::event_loop) async fn submit(
     if is_withdrawn(state, agent, &work).await {
         return None;
     }
+    if !super::offline::connect_for(state, agent).await {
+        return None;
+    }
     if let Some(root) = state.cloud.machine_root(agent) {
         let note = spawned_on_machine(state, agent, root);
         system(state, agent, note).await;
@@ -174,6 +177,10 @@ async fn run_prompt(
         context_limit: model.as_deref().map(aura_engine::context_window_for_model),
         reload: Some(chat_reload(Arc::clone(&state.hub), ui.clone(), agent)),
         from_record: false,
+        waiting: Some(super::forward::WaitingMark {
+            hub: Arc::clone(&state.hub),
+            agent,
+        }),
     };
     crate::event_loop::factory::hooks::plan_first_in_cloud(state, agent, &prompt).await;
     state.hub.factory_flows.note_prompt(agent, &prompt.text);

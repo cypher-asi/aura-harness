@@ -81,6 +81,9 @@ pub(super) struct TurnExtras {
     /// Whether the chat shows the turn from its record: a turn attached
     /// to again, or followed after Aura restarted, streams no reply.
     pub(super) from_record: bool,
+    /// Where the turn notes, for the agent's rows and its peers, that it
+    /// waits for the one already under way on its machine
+    pub(super) waiting: Option<WaitingMark>,
 }
 
 impl TurnExtras {
@@ -91,6 +94,46 @@ impl TurnExtras {
             reload().await;
         }
     }
+}
+
+/// The note that a cloud turn of `agent` waits for the one already under
+/// way on its machine: on while it does, off once anything else of the
+/// turn comes, and off when the turn ends.
+pub(super) struct WaitingMark {
+    pub(super) hub: Arc<AgentHub>,
+    pub(super) agent: AgentId,
+}
+
+impl WaitingMark {
+    /// Note it on or off, `waiting`; the rows show it at once.
+    async fn set(&self, waiting: bool) {
+        if self.hub.status.set_waiting(self.agent, waiting) {
+            self.hub.send_agent_list().await;
+        }
+    }
+}
+
+/// [`forward`] a turn of `agent` from `rx` to `ui`, noting in `hub` while
+/// it waits on its machine, as a cloud turn does: for tests outside this
+/// module.
+#[cfg(test)]
+pub(in crate::event_loop) async fn forward_marking_waits(
+    hub: Arc<AgentHub>,
+    agent: AgentId,
+    ui: &AgentUi,
+    rx: &mut tokio::sync::mpsc::Receiver<RemoteEvent>,
+) {
+    let mut extras = TurnExtras {
+        waiting: Some(WaitingMark { hub, agent }),
+        ..TurnExtras::default()
+    };
+    forward(ui, rx, &mut extras, &CancellationToken::new()).await;
+}
+
+/// Whether `event` says its turn waits for the one under way on its
+/// machine.
+fn says_waiting(event: &RemoteEvent) -> bool {
+    matches!(event, RemoteEvent::Status(status) if status == crate::cloud::hub::WAITING)
 }
 
 /// How a cloud turn's stream ended.
@@ -149,6 +192,9 @@ pub(super) async fn forward(
             }
             continue;
         }
+        if let Some(mark) = &extras.waiting {
+            mark.set(says_waiting(&event)).await;
+        }
         chat.end_wake(&event).await;
         chat.close_open(&event).await;
         if matches!(event, RemoteEvent::Copied) {
@@ -159,6 +205,9 @@ pub(super) async fn forward(
             end = ended;
             break;
         }
+    }
+    if let Some(mark) = &extras.waiting {
+        mark.set(false).await;
     }
     chat.finish(extras).await;
     end

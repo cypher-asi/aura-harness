@@ -190,19 +190,16 @@ pub async fn changed_files(
     };
     let scan = format!("refs/aura-queue/scan/{}", entry.id);
     let (target_ref, head_ref) = (format!("{scan}/target"), format!("{scan}/head"));
-    let fetched = git::ok(
-        top,
-        &[
-            "fetch",
-            "--no-tags",
-            "--no-write-fetch-head",
-            remote,
-            &format!("+refs/heads/{target}:{target_ref}"),
-            &format!("+refs/heads/{}:{head_ref}", entry.branch),
-        ],
-        timeout,
-    )
-    .await;
+    let (target_spec, head_spec) = (
+        format!("+refs/heads/{target}:{target_ref}"),
+        format!("+refs/heads/{}:{head_ref}", entry.branch),
+    );
+    let args = [
+        &git::FETCH_ARGS[..],
+        &["--no-write-fetch-head", remote, &target_spec, &head_spec],
+    ]
+    .concat();
+    let fetched = git::ok(top, &args, timeout).await;
     let files = match fetched {
         Ok(_) => {
             let range = format!("{target_ref}...{}", entry.head);

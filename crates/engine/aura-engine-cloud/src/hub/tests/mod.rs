@@ -221,7 +221,8 @@ fn ack_error(frame: MeshFrame) -> Option<String> {
 
 mod boundaries;
 mod github;
-mod mail;
+pub(super) mod mail;
+mod mail_acks;
 mod seeding;
 mod spawns;
 mod updates;

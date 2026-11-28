@@ -184,18 +184,41 @@ impl CloudHub {
     /// request, so its sender (or the placed agent that spawned it)
     /// hears of it: its machine drops the ack.
     pub(super) fn tell_refused(&self, mail: &MeshMail, why: &str) {
-        if mail.kind != MeshMailKind::Request {
-            return;
+        if let Some(teller) = self.refusal_teller(mail) {
+            teller.tell(why);
         }
-        let (Some(desk), Ok(remote)) = (self.desk.lock().clone(), super::links::remote_mail(mail))
-        else {
-            return;
-        };
-        let remote = match self.sender_of(mail).1 {
+    }
+
+    /// Who to tell, later, that request `mail` was not delivered: `None`
+    /// for anything but a request, or without a desk.
+    pub(super) fn refusal_teller(&self, mail: &MeshMail) -> Option<RefusalTeller> {
+        if mail.kind != MeshMailKind::Request {
+            return None;
+        }
+        let desk = self.desk.lock().clone()?;
+        let remote = super::links::remote_mail(mail).ok()?;
+        // Mail the hub sent for an agent here is that agent's own.
+        let root = (mail.from_node != HUB_NODE)
+            .then(|| self.sender_of(mail).1)
+            .flatten();
+        let remote = match root {
             Some(root) => on_behalf_of(remote, root),
             None => remote,
         };
-        tracing::info!(from = %mail.from, to = %mail.to, %why, "a cloud agent's request was not delivered; telling it");
-        desk.refused(&remote, why);
+        Some(RefusalTeller { desk, remote })
+    }
+}
+
+/// A request that may yet be refused, and the desk that tells its sender.
+pub(super) struct RefusalTeller {
+    desk: Arc<dyn MailDesk>,
+    remote: RemoteMail,
+}
+
+impl RefusalTeller {
+    /// Tell the request's sender it was not delivered, `why`.
+    pub(super) fn tell(&self, why: &str) {
+        tracing::info!(from = %self.remote.from, to = %self.remote.to, %why, "a request was not delivered; telling its sender");
+        self.desk.refused(&self.remote, why);
     }
 }

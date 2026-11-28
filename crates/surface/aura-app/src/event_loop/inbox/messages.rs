@@ -210,12 +210,12 @@ pub(super) fn new_id() -> String {
 }
 
 /// Give the inbox message `notice` of `kind` to its agent. An assignment
-/// is a new task, waiting while the agent is busy. Other messages go into
-/// the agent's running turn if it has one that still takes input, with a
-/// line in its chat; else they start a turn that carries on with its
-/// latest task. A new member of a channel whose agents run in the cloud
-/// first starts moving to a machine of its own, and the message waits
-/// for the move.
+/// is a new task; any other message starts a turn that carries on with
+/// the agent's latest task. Either waits in the agent's queue while it
+/// is busy: a message never goes into a running turn, which would make
+/// the turn carry on past the reply it was writing, and never stops one.
+/// A new member of a channel whose agents run in the cloud first starts
+/// moving to a machine of its own, and the message waits for the move.
 pub(in crate::event_loop) async fn deliver(
     state: &mut LoopState<'_>,
     notice: Notice,
@@ -236,19 +236,6 @@ pub(in crate::event_loop) async fn deliver(
         && !crate::event_loop::cloud::start_in_cloud(state, to).await
     {
         return;
-    }
-    if kind != InboxKind::Assignment {
-        if let Some(steering) = state.hub.steering(to) {
-            if steering
-                .send(SteerSource::Harness, prompt.clone(), prompt.clone())
-                .await
-            {
-                AgentUi::new(state.commands.clone(), to)
-                    .send(system_message(shown))
-                    .await;
-                return;
-            }
-        }
     }
     let request = if kind == InboxKind::Assignment {
         Request::New

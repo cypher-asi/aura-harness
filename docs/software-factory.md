@@ -88,6 +88,30 @@ them).
   - Ask only when a wrong guess is harmful. Otherwise pick the safe
     default and say which one.
 
+### Across restarts
+
+Each member's stage is saved with the reports members owe, in one atomic
+write of `<data dir>/inbox-owed.json` (field `flows`). That write runs on
+a blocking thread after every event the loop handles, and once more as
+the app quits. The file is bounded (1,000 members, 2 MiB of saved
+prompts) and is read as empty, with a warning, when it is corrupt. On
+start, each member continues where it was (`factory/saved.rs`):
+
+| Saved stage | What happens on reopen |
+|---|---|
+| assigned | Nothing extra: the task is the inbox's queued or undelivered message. |
+| planning, turn under way | Plan mode, and the prompt that turn started with runs again. |
+| planning, waiting for a reply | Plan mode; the reply comes back to a planning turn. |
+| building | The build of its plan runs again. |
+| shipping | It is asked to ship again. |
+
+The report its build held back is still owed, and goes out when the flow
+ends. A cloud member whose turn was under way gets nothing re-queued,
+since its turn goes on on its machine and is reattached. Members that
+settled or failed (`Flows::leave`) are not saved, and archived ones are
+dropped. `Flows::resumes_after_restart` tells a turn resumed on reopen
+that the factory has queued that member's work already.
+
 ## 2. Ship: commit, pull main, push
 
 When a task is done, the agent ships it with the `git_ship` tool

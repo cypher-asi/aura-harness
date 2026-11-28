@@ -49,6 +49,7 @@ async fn follow(state: &LoopState<'_>, hub: &Arc<CloudHub>, agent: AgentId, mark
             .map(aura_engine::context_window_for_model),
         reload: Some(chat_reload(Arc::clone(&state.hub), ui.clone(), agent)),
         from_record: true,
+        waiting: None,
     };
     ui.send(UiCommand::ShowMessage(MessageData::new(
         MessageRole::System,

@@ -484,6 +484,7 @@ pub(super) fn rows(
                 // The registry does not know how work went; the hub does.
                 error: None,
                 starting: false,
+                waiting: false,
             };
             (agent_id, row)
         })

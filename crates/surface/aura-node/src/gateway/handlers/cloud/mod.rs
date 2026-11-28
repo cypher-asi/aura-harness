@@ -346,8 +346,11 @@ impl RemoteRouter for MeshRouter {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .map(|peer| {
+                // The code agents address each other by, as the hub's
+                // own `list_agents` shows it.
                 serde_json::json!({
                     "agent_id": peer.agent_id,
+                    "code": aura_engine::code_in_name(&peer.name),
                     "name": peer.name,
                     "node": peer.node_id,
                     "remote": true,

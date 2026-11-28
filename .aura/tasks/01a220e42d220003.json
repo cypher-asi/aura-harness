@@ -114,7 +114,7 @@
     },
     {
       "content": "Restart resilience: running and cloud turns resume on reopen, reports never lost, end-to-end restart test (RUS203)",
-      "state": "pending",
+      "state": "completed",
       "assignee": "RUS203"
     },
     {
@@ -132,7 +132,7 @@
       "assignee": "RUS202"
     }
   ],
-  "summary": "RUS198 merged both remaining harness fixes as PR #94: - **Cloud down:** a cloud agent no longer quietly runs a second copy on your machine. The app now reconnects to the cloud first. If that fails, the agent turns red, says why, and I get a failure report. - **Refused messages:** when another agent's machine refuses a message, the sender is told why, once. That's how REV69's re-review got lost be…",
-  "updated_ms": 1795848451508,
+  "summary": "RUS203 merged PR #96, so restarts no longer lose reports, and agents carry on by themselves when the app reopens. A turn that was running when you quit restarts right away. A cloud agent that kept working while the app was closed is reconnected, or its finished result is collected and reported to me. Queued work and messages come back too, and messages are saved to disk before the sender is told …",
+  "updated_ms": 1795849104302,
   "created_ms": 1795848154402
 }

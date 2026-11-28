@@ -41,31 +41,43 @@ impl App {
         self.add_message(msg);
     }
 
+    /// Where the reply still streaming is. It is the last message until
+    /// something else is shown mid-reply (a notice, an inbox line, an
+    /// error), which goes below it: the rest of the reply still streams
+    /// into it, so the line reads after the whole reply, never inside it.
+    pub(super) fn live_reply(&self) -> Option<usize> {
+        self.messages.iter().rposition(Message::is_streaming)
+    }
+
     fn cmd_append_text(&mut self, text: &str) {
         let before = self.chat.streaming_content.len();
         self.chat.streaming_content.push_str(text);
-        if let Some(last_msg) = self.messages.back_mut() {
-            if !last_msg.is_streaming() {
-                return;
-            }
-            // Copying the whole reply on every delta grows with its length.
-            if last_msg.content().len() == before {
-                last_msg.append(text);
-            } else {
-                last_msg.set_content(&self.chat.streaming_content);
-            }
+        let Some(at) = self.live_reply() else {
+            return;
+        };
+        let reply = &mut self.messages[at];
+        // Copying the whole reply on every delta grows with its length.
+        if reply.content().len() == before {
+            reply.append(text);
+        } else {
+            reply.set_content(&self.chat.streaming_content);
         }
     }
 
     fn cmd_finish_streaming(&mut self) {
-        if let Some(last_msg) = self.messages.back_mut() {
-            if last_msg.is_streaming() {
-                last_msg.set_streaming(false);
-                if self.chat.streaming_content.is_empty() {
-                    self.messages.pop_back();
-                } else {
-                    last_msg.set_content(&self.chat.streaming_content);
-                }
+        self.end_live_reply(true);
+    }
+
+    /// End the reply still streaming with all it streamed. One that
+    /// streamed nothing goes, when `drop_empty` or it has no text at all.
+    pub(super) fn end_live_reply(&mut self, drop_empty: bool) {
+        if let Some(at) = self.live_reply() {
+            let reply = &mut self.messages[at];
+            reply.set_streaming(false);
+            if !self.chat.streaming_content.is_empty() {
+                reply.set_content(&self.chat.streaming_content);
+            } else if drop_empty || reply.content().is_empty() {
+                self.messages.remove(at);
             }
         }
         self.chat.streaming_content.clear();
@@ -154,7 +166,7 @@ impl App {
     /// Show a message sent into the running turn. A reply still streaming
     /// is split around it, so the rest of the reply keeps streaming below.
     fn cmd_user_steered(&mut self, text: &str) {
-        let was_streaming = self.messages.back().is_some_and(Message::is_streaming);
+        let was_streaming = self.live_reply().is_some();
         if was_streaming {
             self.cmd_finish_streaming();
         }

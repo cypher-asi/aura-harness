@@ -434,6 +434,7 @@ impl App {
             (visible, list.rows.len()),
         );
         if self.panels.wheel.is_detached(WheelList::Tasks) {
+            // Left where the wheel put it.
             self.side.tasks_scroll = scroll;
             return scroll;
         }

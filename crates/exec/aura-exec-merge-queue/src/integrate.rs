@@ -116,7 +116,7 @@ impl GitIntegrator {
             let entry_spec = format!("+refs/heads/{}:{ENTRY_REF}", entry.branch);
             git::ok(
                 top,
-                &["fetch", "--no-tags", remote, &target_spec, &entry_spec],
+                &[&git::FETCH_ARGS[..], &[remote, &target_spec, &entry_spec]].concat(),
                 timeout,
             )
             .await?;
@@ -357,9 +357,8 @@ impl GitIntegrator {
         let timeout = self.config.git_timeout;
         let top = &self.repo.top;
         let spec = format!("+refs/heads/{}:{TARGET_REF}", self.config.target);
-        git::ok(top, &["fetch", "--no-tags", remote, &spec], timeout)
-            .await
-            .ok()?;
+        let args = [&git::FETCH_ARGS[..], &[remote, &spec]].concat();
+        git::ok(top, &args, timeout).await.ok()?;
         self.holds(TARGET_REF, commit).await
     }
 

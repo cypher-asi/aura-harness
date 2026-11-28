@@ -63,10 +63,11 @@ mod ended_tests;
 mod follow;
 #[cfg(test)]
 mod follow_tests;
-mod forward;
+pub(in crate::event_loop) mod forward;
 mod machine;
 mod member_start;
 mod moving;
+mod offline;
 mod placement;
 mod publish;
 mod spawns;
@@ -182,6 +183,9 @@ pub(crate) struct CloudState {
     store: Option<Arc<dyn Store>>,
     shared: Arc<Shared>,
     publisher: Option<tokio::task::JoinHandle<()>>,
+    /// The hub's folder, whose saved placements name the cloud agents
+    /// while the hub is down ([`offline`])
+    saved: Option<PathBuf>,
 }
 
 impl CloudState {
@@ -191,6 +195,7 @@ impl CloudState {
             store,
             shared: Arc::default(),
             publisher: None,
+            saved: Some(cloud_home()),
         }
     }
 
@@ -277,17 +282,6 @@ impl CloudState {
 
     fn hub(&self) -> Option<Arc<CloudHub>> {
         self.shared.hub.lock().clone()
-    }
-}
-
-#[cfg(test)]
-impl CloudState {
-    /// Note a cloud turn of `agent` under way, as submitting one does.
-    pub(super) fn start_turn(&self, agent: AgentId) {
-        self.shared
-            .running
-            .lock()
-            .insert(agent, CancellationToken::new());
     }
 }
 

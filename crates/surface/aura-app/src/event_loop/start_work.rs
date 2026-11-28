@@ -32,6 +32,8 @@ pub(super) async fn start_work(state: &mut LoopState<'_>, agent_id: AgentId, wor
         return;
     };
 
+    // Its work runs again: a restore no longer has it pending.
+    state.hub.factory_flows.note_started(agent_id);
     // A session opened from the record has a kernel built in the startup
     // mode; the agent's own mode decides its calls.
     modes::apply(
