@@ -54,6 +54,7 @@ impl RunArgs {
             provider: self.provider.clone(),
             allow_unrestricted_full_access: self.allow_unrestricted_full_access,
             approval: None,
+            open_on: None,
         }
     }
 }

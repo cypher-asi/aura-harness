@@ -36,6 +36,7 @@ pub(crate) mod modes;
 pub(crate) use modes::Permissions;
 pub(crate) mod notices;
 pub(crate) mod os_processes;
+mod pacing;
 pub(crate) mod plan_mode;
 pub(crate) mod policies;
 pub(crate) mod processes;
@@ -43,15 +44,18 @@ mod queue;
 pub(crate) mod record_ui;
 pub(crate) mod repo;
 mod rewind;
+mod run;
 pub(crate) mod run_command;
 mod side_panels;
 mod stalls;
 pub(crate) mod standing;
 mod start_work;
+mod startup;
 pub(crate) mod steering;
 pub(crate) mod subagents;
 pub(crate) mod task_check;
 pub(crate) mod tasks;
+pub(crate) mod timing;
 mod titles;
 pub(crate) mod trace;
 pub(crate) mod turns;
@@ -248,13 +252,14 @@ pub async fn run_event_loop(ctx: EventLoopContext<'_>) -> anyhow::Result<()> {
     };
     factory::service::start(Arc::clone(&state.hub), commands.clone(), inbox.quit.clone());
     state.hub.name_agents();
-    let active = state.active;
-    state.hub.record_panel.set(active);
+    state.hub.record_panel.set(state.active);
+    // Before the loop takes UI events: restored work keeps its place
+    // ahead of new work, and a cloud agent's work never starts here.
     let restored = inbox::restore_saved(&mut state).await;
-    send_startup(&mut state, active).await;
-    inbox::resume_saved(&mut state, restored).await;
+    cloud::mark_saved_agents(&state).await;
+    let mut startup = startup::Startup::new(restored);
 
-    run_loop(&mut state, &mut inbox).await;
+    run::run_loop(&mut state, &mut inbox, &mut startup).await;
     state.stop_side_panels();
     inbox::flush_saved(&state).await;
     shut_down(&mut state, &mut inbox.done_rx).await;
@@ -326,81 +331,6 @@ impl<'a> LoopState<'a> {
             side_panels: None,
         };
         (state, process_completions, quit)
-    }
-}
-
-/// Send the UI what it shows for `active` when the loop starts.
-async fn send_startup(state: &mut LoopState<'_>, active: AgentId) {
-    agents::send_sandbox_root(state).await;
-    hud::send_session_of(state, active).await;
-    cloud::start(state).await;
-    modes::send_mode(state, active).await;
-    policies::send_policies_of(state, active).await;
-    modes::warn_if_unconfined(state, active).await;
-    hud::send_instructions_of(state, active).await;
-    plan_mode::send_plan_of(state, active).await;
-    state.hub.traces.send_history(active).await;
-    handlers::announce_models(state).await;
-}
-
-/// The stall sweep's timer: its first tick a sweep from now. A loop busy
-/// past a sweep runs one late sweep, not a burst of them: strikes count
-/// minutes, and a burst would count several at once.
-fn sweep_timer() -> tokio::time::Interval {
-    let first_sweep = tokio::time::Instant::now() + stalls::SWEEP_EVERY;
-    let mut sweeps = tokio::time::interval_at(first_sweep, stalls::SWEEP_EVERY);
-    sweeps.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    sweeps
-}
-
-/// Handle what arrives until the UI quits or goes away.
-async fn run_loop(state: &mut LoopState<'_>, inbox: &mut Inbox) {
-    let hub = Arc::clone(&state.hub);
-    let mut cloud_ended = state.cloud.take_ended();
-    let mut sweeps = sweep_timer();
-    loop {
-        tokio::select! {
-            _ = sweeps.tick() => {
-                stalls::sweep(state).await;
-            }
-            Some(done) = inbox.done_rx.recv() => {
-                handle_work_done(state, done).await;
-            }
-            Some(ended) = cloud_ended.recv() => {
-                cloud::handle_ended(state, ended).await;
-            }
-            () = hub.spawn_finished.notified() => {
-                state.park_finished_spawns().await;
-                agents::send_agent_list(state).await;
-            }
-            Some(completion_tx) = inbox.process_completions.recv() => {
-                handle_completion(state, completion_tx).await;
-            }
-            Some(notice) = inbox.notice_rx.recv() => {
-                notices::handle_notice(state, notice).await;
-            }
-            Some(item) = inbox.mail_rx.recv() => {
-                if let Some(sender) = item.title_from {
-                    state.hub.title_thread(
-                        sender,
-                        item.view.thread_id.clone(),
-                        item.view.text.clone(),
-                    );
-                }
-                mail::forward(state.commands, item.view).await;
-            }
-            Some(outcome) = inbox.link_rx.recv() => {
-                auth::handle_link_outcome(state, outcome).await;
-            }
-            () = inbox.quit.cancelled() => break,
-            event = state.events.recv() => {
-                let Some(event) = event else { break };
-                if handle_ui_event(state, event, &inbox.link_tx).await {
-                    break;
-                }
-            }
-        }
-        inbox::save_now(state).await;
     }
 }
 

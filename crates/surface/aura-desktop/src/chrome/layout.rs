@@ -140,7 +140,8 @@ impl Layout {
         if bar.scope.is_some_and(|(scope, _)| scope.contains(at)) {
             return Some(Hit::Scope(bar.pane));
         }
-        if let Some((_, tab)) = bar.icon_tab.filter(|(icon, _)| icon.contains(at)) {
+        let icons = [bar.icon_tab, bar.lead_icon_tab].into_iter().flatten();
+        if let Some((_, tab)) = icons.into_iter().find(|(icon, _)| icon.contains(at)) {
             return Some(Hit::Tab(tab));
         }
         let tab = bar.boxes.iter().find_map(|boxed| match boxed.kind {
@@ -328,6 +329,9 @@ pub(super) fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
         .and_then(|expanded| Some((row.square(true)?, expanded)));
     let scope = pane.scope.and_then(|on| row.scope(on));
     let icon_tab = pane.icon_tab.and_then(|tab| row.icon_tab(tab));
+    // The second icon tab goes left of the first: INTEGRATIONS' plug
+    // before BENCH's wrench.
+    let lead_icon_tab = pane.lead_icon_tab.and_then(|tab| row.icon_tab(tab));
     let (boxes, x) = label_boxes(&row, pane);
     let after = if boxes.is_empty() {
         row.start
@@ -346,5 +350,6 @@ pub(super) fn bar_layout(model: &Model, pane: &PaneChrome) -> BarLayout {
         expand,
         scope,
         icon_tab,
+        lead_icon_tab,
     }
 }

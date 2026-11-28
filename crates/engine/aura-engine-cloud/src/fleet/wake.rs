@@ -93,6 +93,40 @@ impl VmFleet {
         })
     }
 
+    /// Reach `agent`'s machine without waking it, to pick up work already
+    /// running there: claim its node when no token is held yet (a hub that
+    /// just started), and nothing else. `Ok(None)` when the machine sleeps,
+    /// so no work can run on it. Takes the same per-agent gate as a wake,
+    /// so it never claims alongside one.
+    ///
+    /// # Errors
+    ///
+    /// When it has no machine, or claiming fails.
+    pub async fn reconnect_reported(
+        &self,
+        agent: &str,
+        boot: &BootReporter,
+    ) -> CloudResult<Option<MachineView>> {
+        let gate = Arc::clone(self.wakes.lock().entry(agent.to_string()).or_default());
+        let _one = gate.lock().await;
+        let target = self.wake_target(agent)?;
+        if target.state == VmState::Destroying {
+            return Err(CloudError::BadState {
+                machine: target.machine.name,
+                state: target.state.label().to_string(),
+                op: "reconnect",
+            });
+        }
+        if target.state.is_asleep() || matches!(target.state, VmState::Error(_)) {
+            return Ok(None);
+        }
+        if !target.claimed {
+            self.claim_reported(agent, &target.machine.name, &[], Accept::Any, boot)
+                .await?;
+        }
+        Ok(self.view(agent))
+    }
+
     fn wake_target(&self, agent: &str) -> CloudResult<WakeTarget> {
         let machines = self.machines.lock();
         let entry = machines.get(agent).ok_or_else(|| CloudError::NotFound {

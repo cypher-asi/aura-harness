@@ -13,7 +13,7 @@ const PUBLISH_EVERY: Duration = Duration::from_secs(3);
 /// The cloud agents the hub saved are marked from the start, before the
 /// hub connects and whether or not it does ([`super::offline::load_saved`]).
 pub(in crate::event_loop) async fn start(state: &mut LoopState<'_>) {
-    super::offline::load_saved(state).await;
+    mark_saved_agents(state).await;
     if state.cloud.publisher.is_none() {
         start_publisher(state);
     }
@@ -23,6 +23,12 @@ pub(in crate::event_loop) async fn start(state: &mut LoopState<'_>) {
             warn!(error = %err, "cloud agents unavailable");
         }
     }
+}
+
+/// Mark the cloud agents the hub saved as cloud agents, before any work
+/// reaches them; again is harmless.
+pub(in crate::event_loop) async fn mark_saved_agents(state: &LoopState<'_>) {
+    super::offline::load_saved(state).await;
 }
 
 pub(super) fn start_publisher(state: &mut LoopState<'_>) {

@@ -417,3 +417,33 @@ fn explain_tool_honours_session_grants_without_recording_any() {
         "explain_tool remembers nothing",
     );
 }
+
+#[test]
+fn configured_tool_classes_reach_the_mode_gate_but_never_override_the_table() {
+    use aura_core_modes::AgentMode::{Agent, Ask, Plan};
+
+    let classes = [
+        ("svc_list".to_string(), ToolModeClass::Invoke),
+        ("svc_delete".to_string(), ToolModeClass::Network),
+        // A configured class can't make a built-in tool more permissive.
+        ("git_push".to_string(), ToolModeClass::Invoke),
+    ];
+    let allows = |mode, tool: &str| {
+        Policy::new(
+            PolicyConfig::default()
+                .with_mode(mode)
+                .with_tool_classes(classes.clone()),
+        )
+        .check(&delegate_proposal(tool, serde_json::json!({})))
+        .allowed
+    };
+    for mode in [Agent, Plan, Ask] {
+        assert!(allows(mode, "svc_list"), "{mode:?}");
+    }
+    assert!(allows(Agent, "svc_delete"));
+    assert!(!allows(Plan, "svc_delete"));
+    assert!(!allows(Ask, "svc_delete"));
+    assert!(!allows(Plan, "git_push"));
+    // Unclassified stays a network tool.
+    assert!(!mode_allows(Plan, "svc_list", serde_json::json!({})));
+}

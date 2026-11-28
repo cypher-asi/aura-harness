@@ -89,6 +89,9 @@ const STARTING: &str = "Starting in the cloud…";
 /// machine is doing.
 const WAITING: &str = "Waiting for its machine…";
 
+/// What a member whose running cloud turn Aura reconnects to is doing.
+const RECONNECTING: &str = "Reconnecting…";
+
 /// Before why a member's work failed.
 const FAILED: &str = "Failed";
 
@@ -224,8 +227,9 @@ fn member_name(member: &AgentSummary) -> &str {
 }
 
 /// What a member's second row says, and in which color: why its work
-/// failed, in red; that it is starting on its cloud machine, or that its
-/// turn waits for the one already under way there; else its
+/// failed, in red; that it is starting on its cloud machine, that its
+/// turn waits for the one already under way there, or that Aura
+/// reconnects to the turn running there; else its
 /// title, else the subtask it was spawned for, else whether it is
 /// working, in gray.
 fn member_status(app: &App, member: &AgentSummary, theme: &Theme) -> (String, Color) {
@@ -240,6 +244,9 @@ fn member_status(app: &App, member: &AgentSummary, theme: &Theme) -> (String, Co
     }
     if member.waiting {
         return (WAITING.to_string(), theme.colors.muted);
+    }
+    if member.reconnecting {
+        return (RECONNECTING.to_string(), theme.colors.muted);
     }
     let said = member
         .title

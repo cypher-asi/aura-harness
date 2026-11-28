@@ -41,6 +41,7 @@ fn fake(id: &str, slow: bool) -> Arc<Fake> {
         kind: FieldKind::Choice(vec!["eu".to_string(), "us".to_string()]),
         required: false,
         default: Some("eu".to_string()),
+        advanced: false,
     }];
     manifest.tools = vec![ToolSpec {
         name: "echo".to_string(),

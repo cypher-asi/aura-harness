@@ -290,7 +290,10 @@ mod tests {
             eprintln!("Landlock unsupported here; skipping");
             return;
         }
-        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let Some(parent) = crate::confine_test::unwritable_parent() else {
+            eprintln!("no folder outside the writable roots here; skipping");
+            return;
+        };
         let workspace = parent.path().join("ws");
         std::fs::create_dir(&workspace).unwrap();
 
@@ -313,7 +316,10 @@ mod tests {
         if !supported() {
             return;
         }
-        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let Some(parent) = crate::confine_test::unwritable_parent() else {
+            eprintln!("no folder outside the writable roots here; skipping");
+            return;
+        };
         let workspace = parent.path().join("ws");
         std::fs::create_dir(&workspace).unwrap();
         assert!(!sh(&workspace, "touch ../outside"));
@@ -448,7 +454,10 @@ mod tests {
         if !supported() {
             return;
         }
-        let parent = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let Some(parent) = crate::confine_test::unwritable_parent() else {
+            eprintln!("no folder outside the writable roots here; skipping");
+            return;
+        };
         let workspace = parent.path().join("ws");
         std::fs::create_dir(&workspace).unwrap();
         let scratch = RunScratch::new(parent.path().join("ws.tmp"));

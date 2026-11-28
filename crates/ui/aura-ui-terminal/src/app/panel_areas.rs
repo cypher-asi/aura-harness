@@ -37,6 +37,8 @@ pub(crate) struct InputView {
 /// Screen areas of the content panels from the last rendered frame.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PanelAreas {
+    /// The context ring and its share in the footer, as last drawn
+    pub context_ring: Option<Rect>,
     /// Agents panel (including border)
     pub swarm: Option<Rect>,
     /// Rows of the agents list inside the panel
@@ -47,6 +49,8 @@ pub struct PanelAreas {
     pub agent_tabs: Option<Rect>,
     /// BENCH's icon, at the right end of the agents panel's header bar
     pub agent_icon_tab: Option<Rect>,
+    /// INTEGRATIONS' icon, left of BENCH's
+    pub agent_lead_icon: Option<Rect>,
     /// Rows of the roster inside the agents panel
     pub definition_rows: Option<Rect>,
     /// "+ New agent", pinned to the bottom of the agents panel

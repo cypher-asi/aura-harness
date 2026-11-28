@@ -203,6 +203,15 @@ fn prompt_and_display(app: &App, command: bool) -> (&str, String, usize) {
             "•".repeat(input.chars().count()),
             before_cursor.chars().count(),
         ),
+        AppState::IntegrationInput => {
+            let prompt = app.integration_prompt();
+            let shown = if app.integration_input_is_secret() {
+                "•".repeat(input.chars().count())
+            } else {
+                input.to_string()
+            };
+            (prompt, shown, before_cursor.chars().count())
+        }
         AppState::LoginPassword => (
             "Password: ",
             "•".repeat(input.chars().count()),

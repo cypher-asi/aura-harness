@@ -37,7 +37,7 @@ fn assert_report(notices: &mut UnboundedReceiver<notices::Notice>, to: AgentId, 
 /// Quit as the app does with `agent` mid-turn: the last save, then its
 /// turn cancelled and its end never handled. The new process runs
 /// nothing and holds nothing; `agent`'s session reopens from its record.
-async fn quit_mid_turn(
+pub(super) async fn quit_mid_turn(
     state: &mut LoopState<'_>,
     done: &mut mpsc::Receiver<WorkDone>,
     notices: &mut UnboundedReceiver<notices::Notice>,

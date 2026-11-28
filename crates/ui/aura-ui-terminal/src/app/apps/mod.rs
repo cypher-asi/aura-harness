@@ -42,6 +42,7 @@ mod bench;
 mod channel_member_chat;
 mod channels;
 mod empty;
+pub(crate) mod integrations;
 mod projects;
 mod remembered;
 mod roster;
@@ -105,17 +106,26 @@ impl App {
         self.areas.agent_icon_tab = area;
     }
 
+    /// Record where INTEGRATIONS' icon was drawn this frame, if it was.
+    pub(crate) fn set_agent_lead_icon_area(&mut self, area: Option<Rect>) {
+        self.areas.agent_lead_icon = area;
+    }
+
     /// Whether a screen cell is on the agents panel's header bar, its
     /// labelled tabs or its icon.
     pub(super) fn on_agent_tabs(&self, column: u16, row: u16) -> bool {
         contains(self.areas.agent_tabs, column, row)
             || contains(self.areas.agent_icon_tab, column, row)
+            || contains(self.areas.agent_lead_icon, column, row)
     }
 
     /// The tab whose label or icon is at a screen cell.
     pub(super) fn agent_tab_at(&self, column: u16, row: u16) -> Option<AgentsTab> {
         if contains(self.areas.agent_icon_tab, column, row) {
             return Some(AgentsTab::ICON_TAB);
+        }
+        if contains(self.areas.agent_lead_icon, column, row) {
+            return Some(AgentsTab::LEAD_ICON_TAB);
         }
         tab_at(self.areas.agent_tabs, column, row, AgentsTab::layout)
     }
@@ -139,6 +149,7 @@ impl App {
             AgentsTab::Roster => self.click_definition_row(column, row),
             AgentsTab::Bench => self.click_bench_row(column, row),
             AgentsTab::Archive => self.click_archived_row(column, row),
+            AgentsTab::Integrations => self.click_integration_row(column, row),
         }
     }
 
@@ -154,6 +165,7 @@ impl App {
             AgentsTab::Roster => self.handle_definitions_shortcut(key),
             AgentsTab::Bench => self.handle_bench_list_key(key),
             AgentsTab::Archive => self.handle_archive_key(key),
+            AgentsTab::Integrations => self.handle_integrations_key(key),
         }
     }
 
@@ -171,6 +183,9 @@ impl App {
             AgentsTab::Archive => {
                 self.handle_archive_key(key);
             }
+            AgentsTab::Integrations => {
+                self.handle_integrations_key(key);
+            }
         }
         KeyResult::continue_running()
     }
@@ -186,6 +201,7 @@ impl App {
             }
             AgentsTab::Bench => self.move_bench_highlight(delta),
             AgentsTab::Archive => self.move_archived_by(delta),
+            AgentsTab::Integrations => self.move_integration_highlight(delta),
         }
     }
 
@@ -203,6 +219,7 @@ impl App {
             AgentsTab::Archive => self
                 .archived_row_at(column, row)
                 .map(HoverTarget::ArchivedRow),
+            AgentsTab::Integrations => None,
         }
     }
 
@@ -215,7 +232,7 @@ impl App {
             AgentsTab::Projects => self.open_project_menu(column, row),
             AgentsTab::Archive => self.open_archive_menu(column, row),
             AgentsTab::Channels => self.open_channel_menu(column, row),
-            AgentsTab::Roster | AgentsTab::Bench => false,
+            AgentsTab::Roster | AgentsTab::Bench | AgentsTab::Integrations => false,
         }
     }
 
@@ -242,6 +259,7 @@ impl App {
                 }
             }
             AgentsTab::Bench => self.show_bench_app(),
+            AgentsTab::Integrations => self.show_integrations_app(),
             AgentsTab::Archive => {
                 if let Some(id) = self.archive_app_agent() {
                     self.switch_on_screen(&id);
@@ -281,7 +299,7 @@ impl App {
     /// only a chat, and BENCH shows benchmarks, but for an agent of one.
     fn has_agent_tabs(&self, tab: AgentsTab) -> bool {
         match tab {
-            AgentsTab::Channels => false,
+            AgentsTab::Channels | AgentsTab::Integrations => false,
             AgentsTab::Bench => self.bench.shown_agent().is_some(),
             AgentsTab::Projects | AgentsTab::Roster | AgentsTab::Archive => true,
         }
@@ -389,7 +407,7 @@ impl App {
             }
             // BENCH gave way to an agent it does not show before its tab
             // came back (`apply_active_agent`).
-            AgentsTab::Bench => return,
+            AgentsTab::Bench | AgentsTab::Integrations => return,
             AgentsTab::Roster => self.roster_shows_instance(),
             AgentsTab::Archive => self.is_archived_agent(&self.active_agent_id),
         };

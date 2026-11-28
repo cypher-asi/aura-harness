@@ -64,7 +64,7 @@ impl App {
         match modal {
             ModalKind::Approval => self.handle_approval_key(key),
             ModalKind::Dialog(Dialog::Help) => self.help_key(key),
-            ModalKind::Dialog(Dialog::ProjectInfo) => self.close_dialog(),
+            ModalKind::Dialog(Dialog::ProjectInfo | Dialog::Context) => self.close_dialog(),
             ModalKind::Dialog(Dialog::ModelSelector) => self.handle_model_selector_key(key),
             ModalKind::Dialog(Dialog::FolderPicker) => self.handle_folder_picker_key(key),
             ModalKind::Dialog(Dialog::ChannelForm) => self.handle_channel_form_key(key),
@@ -77,6 +77,7 @@ impl App {
             AppState::LoginEmail | AppState::LoginPassword | AppState::LinkCode => {
                 self.handle_login_key(key)
             }
+            AppState::IntegrationInput => self.handle_integration_input_key(key),
             _ => self.handle_normal_key(key),
         }
     }

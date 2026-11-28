@@ -11,8 +11,9 @@ const REPLY_CHARS: usize = 6000;
 /// characters.
 const REPORT_CHARS: usize = 300;
 
-/// Longest reason a reply gives for work that stopped, in characters.
-const STOPPED_CHARS: usize = 300;
+/// Longest reason a reply gives for work that stopped, in characters:
+/// room for a failed build's first compiler errors.
+const STOPPED_CHARS: usize = 1200;
 
 /// After `agent_id`'s work ended well: answer what it was asked
 /// ([`answer_seen`]).

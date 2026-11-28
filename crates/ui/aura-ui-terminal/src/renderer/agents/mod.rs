@@ -30,6 +30,7 @@ mod archive;
 mod bench;
 pub(super) mod channels;
 mod drop_marks;
+mod integrations;
 pub(super) mod projects;
 pub(super) mod roster;
 
@@ -60,6 +61,7 @@ pub(super) fn render_agents_panel(frame: &mut Frame, area: Rect, app: &mut App, 
             AgentsTab::Roster => roster::render_roster(frame, area, body, app, theme),
             AgentsTab::Bench => bench::render_bench(frame, area, body, app, theme),
             AgentsTab::Archive => archive::render_archive(frame, area, body, app, theme),
+            AgentsTab::Integrations => integrations::render_integrations(frame, body, app, theme),
         }
     }
     header::render_icon_tooltip(frame, bar, &header, theme);
@@ -72,13 +74,16 @@ fn agents_header(app: &mut App, bar: Rect) -> PanelHeader<'static, AgentsTab> {
     let hosted = app.host_chrome();
     let tab = AgentsTab::ICON_TAB;
     let icon = tab.icon();
-    let end = header::bar_end(bar, (icon, false, false), AgentsTab::layout);
+    let lead_tab = AgentsTab::LEAD_ICON_TAB;
+    let lead = lead_tab.icon();
+    let end = header::bar_end_led(bar, lead, (icon, false, false), AgentsTab::layout);
     if !hosted {
         app.set_agent_tabs_area(Rect {
             width: end.tabs,
             ..bar
         });
         app.set_agent_icon_tab_area(end.icon);
+        app.set_agent_lead_icon_area(end.lead);
     }
     let hovered = match app.hover() {
         Some(HoverTarget::AgentTab(tab)) => Some(tab),
@@ -93,6 +98,12 @@ fn agents_header(app: &mut App, bar: Rect) -> PanelHeader<'static, AgentsTab> {
         close: None,
         expand: None,
         scope: None,
+        lead_icon: lead.map(|icon| header::IconTab {
+            tab: lead_tab,
+            icon,
+            tooltip: lead_tab.tooltip(),
+            cell: end.lead,
+        }),
         icon_tab: icon.map(|icon| header::IconTab {
             tab,
             icon,
