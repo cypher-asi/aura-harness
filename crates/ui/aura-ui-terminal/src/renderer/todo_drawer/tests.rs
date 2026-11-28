@@ -290,3 +290,79 @@ fn a_short_screen_squeezes_the_drawer_and_counts_the_rest() {
     let (prompt, _) = row_with(&rows, "→ ").expect("the input");
     assert!(prompt > more, "the input keeps its place");
 }
+
+/// Four items still open and 29 finished, each given to `RUS3`.
+fn busy_list() -> UiCommand {
+    UiCommand::SetTodos(
+        (0..33)
+            .map(|i| {
+                let state = match i {
+                    0..=28 => TodoState::Completed,
+                    29 => TodoState::InProgress,
+                    _ => TodoState::Pending,
+                };
+                TodoView {
+                    assignee: Some("RUS3".to_string()),
+                    ..todo(&format!("Step {i}"), state)
+                }
+            })
+            .collect(),
+    )
+}
+
+fn wheel(app: &mut App, (column, row): (usize, usize), kind: MouseEventKind) {
+    app.handle_mouse(MouseEvent {
+        kind,
+        column: u16::try_from(column).unwrap(),
+        row: u16::try_from(row).unwrap(),
+        modifiers: KeyModifiers::empty(),
+    });
+}
+
+#[test]
+fn an_opened_history_lists_its_items_even_under_four_open_ones() {
+    let mut app = App::new();
+    app.process_command(busy_list());
+    let folded = rows(&mut app);
+    assert!(row_with(&folded, "▸ Finished to-dos  29").is_some());
+    click_on(&mut app, &folded, "Finished to-dos");
+    let open = rows(&mut app);
+    let (at, _) = row_with(&open, "▾ Finished to-dos").expect("the history row first");
+    assert!(open[at + 1].contains("│ ✓ Step 0 "), "{}", open.join("\n"));
+    assert!(open[at + 2].contains("RUS3 · done"), "{:?}", open[at + 2]);
+    assert!(open[at + 3].contains("✓ Step 1 "), "{:?}", open[at + 3]);
+    let (more, more_row) = row_with(&open, "more").expect("the rest counted");
+    assert!(more > at, "{more_row:?}");
+    let x = open[at].chars().position(|c| c == '▾').unwrap();
+
+    // The wheel over the rows scrolls them, two items down.
+    for _ in 0..2 {
+        wheel(&mut app, (x, at + 2), MouseEventKind::ScrollDown);
+    }
+    let scrolled = rows(&mut app);
+    assert!(row_with(&scrolled, "▾ Finished to-dos").is_none());
+    let (head, _) = header(&scrolled).expect("header");
+    let first = &scrolled[head + 1];
+    assert!(first.contains("✓ Step 1 "), "step 1 first: {first:?}");
+
+    // Far past the end it stops at the last page, the last item in view.
+    for _ in 0..60 {
+        wheel(&mut app, (x, at + 2), MouseEventKind::ScrollDown);
+    }
+    let end = rows(&mut app);
+    assert!(row_with(&end, "✓ Step 28 ").is_some(), "{}", end.join("\n"));
+    wheel(&mut app, (x, at + 2), MouseEventKind::ScrollUp);
+    let back = rows(&mut app);
+    assert!(row_with(&back, "✓ Step 27 ").is_some(), "one notch back from the end");
+}
+
+#[test]
+fn the_wheel_over_a_folded_history_is_the_chats() {
+    let mut app = App::new();
+    app.process_command(busy_list());
+    let before = rows(&mut app);
+    let (at, row) = header(&before).expect("header");
+    let x = row.chars().position(|c| c == '⬢').unwrap();
+    wheel(&mut app, (x, at + 2), MouseEventKind::ScrollDown);
+    assert_eq!(rows(&mut app), before, "the drawer did not move");
+}
