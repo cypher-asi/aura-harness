@@ -48,9 +48,9 @@ mod list;
 mod side;
 mod welcome;
 
-pub(crate) use history::{HistoryItem, HISTORY_ROWS};
+pub(crate) use history::{HistoryItem, HistoryKind, HISTORY_ROWS};
 #[cfg(test)]
-pub(crate) use history::{HistoryKind, PLANNER_GONE};
+pub(crate) use history::PLANNER_GONE;
 pub(crate) use side::CHANNEL_MEMBER_ROWS;
 pub(crate) use welcome::ChannelWelcome;
 

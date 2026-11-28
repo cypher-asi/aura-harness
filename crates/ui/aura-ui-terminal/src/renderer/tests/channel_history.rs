@@ -83,19 +83,84 @@ fn panel(rows: &[String]) -> Vec<String> {
 fn test_history_lists_only_the_users_messages_newest_first_with_their_time() {
     let mut app = history_app(three_posts());
     let rows = panel(&render_rows_sized(&mut app, 160, 50));
-    let heading = row_with(&rows, "Your messages · 2");
     let newest = row_with(&rows, "Please make every link");
     let oldest = row_with(&rows, "Kick off the footer work");
-    assert!(heading < newest && newest < oldest, "{}", rows.join("\n"));
+    assert!(newest < oldest, "{}", rows.join("\n"));
     assert!(
         rows[oldest + 1].contains("01-02"),
         "the date of an older day: {}",
         rows[oldest + 1]
     );
     assert!(
+        !rows.iter().any(|row| row.contains("Your messages")),
+        "no heading, as MEMBERS has none"
+    );
+    assert!(
         !rows.iter().any(|row| row.contains("On it, reading")),
         "agents' posts aren't listed"
     );
+}
+
+#[test]
+fn test_history_rows_read_like_members_rows() {
+    use ratatui::style::Modifier;
+    let mut app = history_app(three_posts());
+    let rows = panel(&render_rows_sized(&mut app, 160, 50));
+    let oldest = row_with(&rows, "Kick off the footer work");
+    let text = &rows[oldest];
+    let mark = text.find('#').expect("the kind in the icon column");
+    let words = text.find("Kick off").unwrap();
+    assert_eq!(text[mark + 1..words].trim(), "", "{text:?}");
+    let detail = &rows[oldest + 1];
+    assert!(detail.contains("· to members"), "{detail:?}");
+    let when = detail.find("01-02").expect("the time");
+    assert_eq!(
+        rows[oldest][..words].chars().count(),
+        detail[..when].chars().count(),
+        "the detail starts under the text"
+    );
+
+    let buffer = {
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(160, 50)).unwrap();
+        terminal
+            .draw(|frame| super::super::render(frame, &mut app, &test_theme()))
+            .unwrap();
+        terminal.backend().buffer().clone()
+    };
+    let theme = test_theme();
+    let y = row_of(&buffer, "Kick off the footer work");
+    let (x, style) = find_cell(&buffer, y, "Kick off the footer work").unwrap();
+    assert_eq!(style.fg, Some(theme.colors.foreground));
+    let (_, time) = find_cell(&buffer, y + 1, "01-02").unwrap();
+    assert_eq!(time.fg, Some(theme.colors.muted));
+    for row in y.saturating_sub(4)..y + 2 {
+        for column in x - 4..x + 20 {
+            let cell = &buffer[(column, row)];
+            assert!(!cell.modifier.contains(Modifier::BOLD), "bold at {column},{row}");
+        }
+    }
+}
+
+#[test]
+fn a_typed_message_and_a_plan_request_say_where_they_went() {
+    use crate::app::{HistoryItem, HistoryKind};
+    let mut channel = channels_app().channels()[0].clone();
+    channel.members[0].code = Some("RUS3".to_string());
+    let planner = channel.members[0].id.clone();
+    let item = |kind, planner: Option<String>| HistoryItem {
+        seq: 1,
+        kind,
+        planner,
+        text: "Split the lexer".to_string(),
+        summary: None,
+        at_ms: 0,
+    };
+    let detail = |kind, planner| {
+        super::super::channel_history::detail_text(&channel, &item(kind, planner))
+    };
+    assert!(detail(HistoryKind::Typed, None).ends_with("· to the coordinator"));
+    assert!(detail(HistoryKind::Plan, Some(planner)).ends_with("· plan · RUS3"));
+    assert!(detail(HistoryKind::Plan, Some("gone".to_string())).ends_with("· plan"));
 }
 
 #[test]
