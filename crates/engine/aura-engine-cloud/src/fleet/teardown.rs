@@ -42,6 +42,30 @@ impl VmFleet {
         Ok(Some(machine.id))
     }
 
+    /// The install this fleet's machines are labeled with.
+    #[cfg(test)]
+    pub(crate) fn install(&self) -> &str {
+        &self.settings.install
+    }
+
+    /// The name of a machine of this install boxd lists for `agent`, if
+    /// any: one already made for it.
+    ///
+    /// # Errors
+    ///
+    /// When the machines can't be listed.
+    pub async fn machine_listed_for(&self, agent: &str) -> CloudResult<Option<String>> {
+        let selector = names::install_selector(&self.settings.install);
+        let machines = self.provider.list(&[selector]).await?;
+        Ok(machines
+            .into_iter()
+            .find(|machine| {
+                machine.labels.get(LABEL_ROLE).map(String::as_str) == Some(ROLE_AGENT)
+                    && machine.labels.get(LABEL_AGENT).map(String::as_str) == Some(agent)
+            })
+            .map(|machine| machine.name))
+    }
+
     /// Destroy machines of this install whose agent is not in `keep`
     /// (archived, removed or unknown agents). Returns their names.
     ///

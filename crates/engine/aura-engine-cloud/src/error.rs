@@ -93,6 +93,17 @@ pub enum CloudError {
         message: String,
     },
     /// The fleet refused an operation in the machine's current state.
+    #[error(
+        "{agent} already has cloud machine {machine}, which this hub has no placement for; \
+         not starting a second one (restarting the app removes machines no agent owns)"
+    )]
+    AlreadyHasMachine {
+        /// The agent's name.
+        agent: String,
+        /// The machine boxd lists for it.
+        machine: String,
+    },
+
     #[error("machine {machine} is {state}: cannot {op}")]
     BadState {
         /// Machine name.
