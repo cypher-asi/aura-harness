@@ -94,6 +94,12 @@ impl TestServer {
 fn test_node_config(data_dir: &Path, require_auth: bool) -> NodeConfig {
     let mut config = NodeConfig::from_env();
     config.data_dir = data_dir.to_path_buf();
+    // A cloud machine sets `AURA_CLOUD_NODE` and `AURA_WORKSPACE` for its
+    // own node. Read into this test server they turn it into a cloud
+    // node that answers 503 where the tests expect 400, so main looked
+    // red on every machine. The test server is never a cloud node.
+    config.cloud_node = false;
+    config.workspace = None;
     // Phase 4 (security audit): the router's bearer middleware now
     // does a constant-time compare against `config.auth_token`.
     // Force the deterministic test value so `http_client()` and
