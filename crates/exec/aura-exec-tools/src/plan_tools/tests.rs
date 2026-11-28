@@ -164,6 +164,7 @@ fn render_shows_title_overview_and_checklist() {
                 todo("c", "third", TodoStatus::Pending),
                 todo("d", "fourth", TodoStatus::Cancelled),
             ],
+            ..PlanMeta::default()
         },
         body: "## Steps\n\nDo it.".into(),
     };
@@ -209,6 +210,7 @@ fn rendered_plans_round_trip() {
             name: "Full".into(),
             overview: "Over\nview".into(),
             todos: vec![todo("a", "multi\n\nline", TodoStatus::Pending)],
+            ..PlanMeta::default()
         },
         body: "# Other\n\ntext".into(),
     };
@@ -224,6 +226,7 @@ fn rendered_plans_round_trip() {
             name: "Tricky".into(),
             overview: format!("mentions\n{HEADER_END}\ninside"),
             todos: vec![],
+            ..PlanMeta::default()
         },
         body: format!("before\n{HEADER_END}\nafter"),
     };

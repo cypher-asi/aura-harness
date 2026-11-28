@@ -146,7 +146,7 @@ pub(crate) use panel_areas::{follow_selection, InputRows, InputView};
 use panel_layout::PanelLayout;
 pub use panes::{Pane, PaneChrome, PaneSplits, PaneTab};
 use pending::Pending;
-pub(crate) use plan_doc::PlanDoc;
+pub(crate) use plan_doc::{Fact, FactTone, PlanDoc, PlanFacts};
 pub use processes::SidePanelTab;
 use project_list::ProjectList;
 pub use prose::{ProseMeasure, ProseRow};

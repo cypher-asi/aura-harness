@@ -24,6 +24,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Archiving a member drops the work queued for it, and gives up what it
   owed with `ok=false`, instead of starting that work later.
 
+### A plan says where it came from
+
+##### Added
+
+- The PLAN view shows a plan's facts under its title. These are when it
+  was created and last updated, which agent wrote it and who asked for
+  it, its channel, the machine it was written on, its status and
+  progress, its branch and PR, its project and its model.
+- `create_plan` records `created_at`, `updated_at`, `author`, `model` and
+  `machine` in the plan's frontmatter. A rewrite keeps the creation time,
+  the author and the machine. Plans from before still load, and they
+  show only the facts the app can work out.
+
 ### A cloud channel's members start in the cloud or fail, in red
 
 ##### Fixed
